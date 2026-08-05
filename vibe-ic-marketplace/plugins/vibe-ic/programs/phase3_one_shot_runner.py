@@ -29210,16 +29210,28 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         written.append(str(pvt_path))
 
     # --- Step 10: GENUINE pre-layout multi-corner STA --------------------
+    # force_prelayout=True: this step is Step 10 (PRE-LAYOUT) by definition, so
+    # it must time the synth netlist even on a re-run in a dir that already
+    # holds a routed netlist + SPEF from a prior round — else the shared
+    # file-existence precedence would emit a POST_ROUTE report here and label it
+    # pre-layout (the contradiction sta_report_check flags).
     per_corner = sta_out / "per_corner"
     if runner_sdc.is_file():
         per_corner.mkdir(parents=True, exist_ok=True)
         if _emit_multi_corner_sta(project, top, pdk, container,
-                                  staged_libs, per_corner, notes):
+                                  staged_libs, per_corner, notes,
+                                  force_prelayout=True):
             written.append(str(per_corner))
     # Compose pre_pnr_timing.rpt from a GENUINE per-corner report (setup-worst
     # SS preferred, else TT/FF/any) — NOT a copy of the post-route sta.rpt.
+    # Re-compose when a stale pre_pnr_timing.rpt from an earlier post-route
+    # round is present: its body would carry STA_BASIS: POST_ROUTE_* under this
+    # step's PRE-LAYOUT header — the precise contradiction sta_report_check
+    # flags. A genuinely pre-layout report (or an absent one) is left alone.
     pre_pnr = sta_out / "pre_pnr_timing.rpt"
-    if not pre_pnr.is_file():
+    _pre_pnr_stale = (pre_pnr.is_file()
+                      and "STA_BASIS: PRE_LAYOUT" not in pre_pnr.read_text())
+    if not pre_pnr.is_file() or _pre_pnr_stale:
         src = None
         for cand in ("sta_SS.rpt", "sta_TT.rpt", "sta_FF.rpt"):
             if (per_corner / cand).is_file():
@@ -31871,9 +31883,11 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
     return out
 
 
-def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
-                                                               Dict[str, Path],
-                                                               str, str]:
+def _multi_corner_sta_inputs(project: Path, top: str,
+                             force_prelayout: bool = False,
+                             ) -> Tuple[Optional[Path],
+                                        Dict[str, Path],
+                                        str, str]:
     """Resolve the netlist + parasitics the per-corner STA must time.
 
     The defect this closes: `_emit_multi_corner_sta`'s docstring claimed the
@@ -31895,6 +31909,13 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
          → true post-route multi-corner timing;
       2. routed netlist with no SPEF → post-route topology, no parasitics;
       3. synth netlist → PRE-LAYOUT ESTIMATE, and the report SAYS SO.
+
+    ``force_prelayout=True`` OVERRIDES the precedence: the pre-layout step
+    (Step 10) demands rung 3 even when a routed netlist exists, because a
+    re-run in a dir that already holds a routed netlist would otherwise emit a
+    post-route report under a pre-layout header. With the flag set there is no
+    routed-netlist stand-in — the synth netlist is the only acceptable basis,
+    and its absence returns ``MISSING`` rather than a mislabelled report.
 
     Returns ``(netlist, spef, basis_id, disclosure)``. The basis is stamped
     into every emitted report so no downstream summary can quote a pre-layout
@@ -31919,6 +31940,30 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
         if cand.is_file():
             spef_map["*"] = cand
             break
+    # Step 10 is the PRE-LAYOUT multi-corner STA BY DEFINITION (the post-route
+    # sign-off is Step 23). When the caller FORCES the pre-layout basis it must
+    # time the pre-PnR synth netlist with NO parasitics EVEN IF a routed netlist
+    # + SPEF already exist from an earlier round in the same dir. Otherwise the
+    # routed netlist wins the file-existence precedence below and the
+    # "pre-layout" report silently becomes a post-route one: a RE-RUN then
+    # publishes POST_ROUTE numbers under a PRE-LAYOUT header — the exact
+    # contradiction `sta_report_check` flags. There is no honest pre-layout
+    # estimate without the synth netlist, so its absence is MISSING, never a
+    # routed-netlist stand-in.
+    if force_prelayout:
+        if synth.is_file():
+            return (synth, {}, "PRE_LAYOUT_ESTIMATE",
+                    f"pre-layout basis FORCED (Step 10) — timed the pre-PnR "
+                    f"synthesis netlist {synth.name} with NO parasitics, "
+                    "ignoring any routed netlist present from an earlier round. "
+                    "This is a PRE-LAYOUT ESTIMATE, NOT post-route sign-off: it "
+                    "excludes placement, CTS, resizing and all interconnect RC, "
+                    "so a corner shown as MET here may VIOLATE on the routed "
+                    "design")
+        return (None, {}, "MISSING",
+                f"pre-layout STA forced but no pre-PnR synth netlist "
+                f"{synth.name} found — a pre-layout estimate cannot be "
+                "substantiated and a routed netlist must NOT stand in for it")
     if routed.is_file():
         if spef_map:
             per_corner = ", ".join(
@@ -31944,16 +31989,21 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
 
 def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                            container: str, libs: List[Path],
-                           out_dir: Path, notes: List[str]) -> bool:
+                           out_dir: Path, notes: List[str],
+                           force_prelayout: bool = False) -> bool:
     """For each Liberty corner run OpenSTA and emit `sta_<CORNER>.rpt`.
 
     Times the ROUTED netlist + extracted SPEF when they exist, falling back to
     the pre-PnR synth netlist ONLY when no routed netlist has been written yet
     — in which case every emitted report is stamped `STA_BASIS:
     PRE_LAYOUT_ESTIMATE` so it can never be read as post-route sign-off
-    (see :func:`_multi_corner_sta_inputs`). Best-effort: failures log WARN but
-    do not block the canonicalize step."""
-    netlist, spef_map, basis, basis_note = _multi_corner_sta_inputs(project, top)
+    (see :func:`_multi_corner_sta_inputs`). ``force_prelayout=True`` (Step 10)
+    pins the basis to the synth netlist regardless of a routed netlist present
+    from an earlier round, and re-emits any per-corner report left with a
+    non-pre-layout basis by that earlier round. Best-effort: failures log WARN
+    but do not block the canonicalize step."""
+    netlist, spef_map, basis, basis_note = _multi_corner_sta_inputs(
+        project, top, force_prelayout=force_prelayout)
     sdc_path = _pl.pnr_dir(project) / "constraint.sdc"
     if netlist is None or not sdc_path.is_file():
         notes.append("multi-corner STA skipped: netlist or SDC missing")
@@ -31963,7 +32013,15 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
     for lib in libs:
         corner = _classify_corner_from_name(lib.name)
         rpt = out_dir / f"sta_{corner}.rpt"
-        if rpt.is_file():
+        # Existence-only reuse is correct for the post-route caller, but a
+        # FORCED pre-layout emit must NOT reuse a stale report left by an
+        # earlier post-route round: on a re-run per_corner/ already holds
+        # POST_ROUTE reports, and skipping them would preserve the exact
+        # mislabel this forces away. Reuse only when the existing report already
+        # carries the basis we are about to stamp; otherwise fall through and
+        # overwrite it.
+        if rpt.is_file() and (not force_prelayout
+                              or f"STA_BASIS: {basis}" in rpt.read_text()):
             any_emitted = True
             continue
         # Build OpenSTA tcl: read_liberty + read_verilog + read_sdc +
