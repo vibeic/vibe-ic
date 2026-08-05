@@ -577,6 +577,42 @@ def test_a_boolean_flag_is_out_of_scope_by_declaration(tmp_path):
     assert rep["argued"] == []
 
 
+def test_include_required_widens_the_population_and_the_default_does_not(tmp_path):
+    """D1's cost, made inspectable rather than argued about in a comment.
+
+    The same corpus, both ways: `report_path(p, "final_summary.md")` is a
+    required parameter and is silent by default. `--include-required` shows it,
+    because a clause that removes 48 of 50 sites on the real corpus should be
+    something a reviewer can look at.
+    """
+    root = _corpus(tmp_path / "r4", {
+        "helper.py": '''
+            ROOT_FILES = ("final_summary.md", "chip_specific_summary.md")
+
+            def report_path(project, filename):
+                """Route a report.
+
+                filename :
+                    `final_summary.md` and `chip_specific_summary.md` are the
+                    two whitelisted root-level files.
+                """
+                if filename in ROOT_FILES:
+                    return project / filename
+                return project / "audit" / filename
+        ''',
+        "user.py": '''
+            from helper import report_path
+
+            def go(p):
+                return report_path(p, "final_summary.md")
+        ''',
+    })
+    assert C.build_report(root)["argued_sites"] == 0
+    wide = C.build_report(root, require_default=False)
+    assert wide["argued_sites"] == 1
+    assert wide["argued"][0]["param"] == "filename"
+
+
 def test_the_gate_reports_its_own_denominator(tmp_path):
     """D3 selects from a population, and the population is the honest upper
     bound on what the gate could ever have looked at. A gate that printed only
