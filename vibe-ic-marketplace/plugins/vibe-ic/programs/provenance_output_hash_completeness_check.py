@@ -43,6 +43,15 @@ Failure modes
 9. PROVENANCE_REMOVAL_FILE_STILL_PRESENT (v0.2.102) — a removal event
    claims to have removed a path that still exists on disk. The removal
    did not actually happen.
+10. PROVENANCE_DECLARATION_SUPERSEDED (DISCLOSED, not a fault) — a
+   PRODUCING entry re-wrote an artefact an earlier entry declared, and
+   said so via `supersedes: {timestamp, tool}`. The earlier declaration
+   is ledger HISTORY, so it is not compared against the file on disk.
+   See "Superseded declarations" below. Only rule 6's removal-event
+   shape (empty `outputs` + a LIST of removed refs) was implemented
+   before; a producing entry carries neither, so every legitimate
+   close-loop re-run faulted twice on history — once as rule 4 and once
+   as rule 6.
 
 7. ATTEST_TIMING_SUSPICIOUS (WARNING, not FAIL) — entry timestamps
    exhibit synthetic patterns. v1.6.32 widened the heuristic beyond
@@ -68,6 +77,31 @@ PROVENANCE_REMOVAL_FILE_STILL_PRESENT). A removal marker with empty
 `removed` list is malformed → PROVENANCE_REMOVAL_EMPTY. This does NOT
 weaken the gate for NORMAL entries: an entry without a removal marker
 that has empty `outputs` still FAILs with PROVENANCE_OUTPUTS_MISSING.
+
+Superseded declarations
+-----------------------
+A step that runs twice re-writes its artefact, and the second entry
+DISCLOSES what it replaced:
+
+    "outputs": {"<path>": "sha256:<new>"},
+    "supersedes": {"timestamp": "<earlier ts>", "tool": "<earlier tool>"}
+
+That is a producing entry, not a removal event, so the removal handling
+above never saw it and the earlier row was still verified against a file
+it no longer describes: PROVENANCE_HASH_MISMATCH plus
+PROVENANCE_HASH_INCONSISTENT, on every close-loop re-run, forever.
+
+Applying the disclosure is the same distinction #434 drew: this marker
+does not suppress the check, it identifies WHICH of two records is the
+live claim. The live one is still verified in full. The exemption is
+narrow by construction, and each narrowing has a reverse test in
+`tests/test_provenance_superseded_declaration.py`:
+only the writer's DICT shape counts; the target must be EARLIER in the
+append-only ledger; only paths BOTH entries declare are exempt; an
+unresolvable reference grants nothing; the digest SHAPE is still
+checked. What stays fatal is the thing the rules exist for — an
+UNDISCLOSED rewrite is still PROVENANCE_HASH_INCONSISTENT, and a live
+digest that disagrees with disk is still PROVENANCE_HASH_MISMATCH.
 
 Publish-time disclosures: a THIRD outcome, not a waiver (#434)
 --------------------------------------------------------------
@@ -386,6 +420,65 @@ def _removal_list(entry: dict) -> Optional[list]:
     return refs
 
 
+# A PRODUCING entry that re-writes an artefact a previous entry already
+# declared carries `supersedes` as a DICT {"timestamp", "tool"} naming the
+# entry it replaces. That is a different shape from the pure removal event
+# above (which has EMPTY `outputs` and a LIST of removed refs), and
+# `_removal_list` therefore returns None for it: a removal marker is looked
+# for in `op`/`type`/`event`, which a producing entry does not carry, and
+# `supersedes` is read only `isinstance(v, list)`.
+#
+# So the reader never applied the disclosure the writer emits. The writer
+# (`phase3_one_shot_runner`, at the `entry["supersedes"] = {...}` site) states
+# the contract in its own comment: "A superseding record says so, so a reader
+# is never left to guess which of two entries for one path is current." This
+# resolver is that reader. Without it, ANY legitimate re-run of a step that
+# re-writes a declared artefact — the normal close-loop case — permanently
+# faults twice: the stale entry's digest no longer matches the file
+# (PROVENANCE_HASH_MISMATCH) and the two entries disagree
+# (PROVENANCE_HASH_INCONSISTENT). Both describe history, not a live claim.
+#
+# The exemption is deliberately narrow, because the failure mode of a fix in
+# this file is silencing the real defect underneath:
+#   * only a DICT `supersedes` carrying BOTH `timestamp` and `tool` counts —
+#     the exact shape the writer emits, not any truthy marker;
+#   * the superseded entry must appear EARLIER in the ledger (append-only),
+#     so a forward reference cannot retroactively silence a later record;
+#   * only paths declared by BOTH entries are exempted, per-path — a path the
+#     old entry alone declared is still verified in full;
+#   * if `supersedes` resolves to no earlier entry, NO exemption is granted
+#     and the stale entry is verified exactly as before;
+#   * the SUPERSEDING entry is never exempted — it is the live claim and its
+#     digest is still verified against the file on disk.
+def _superseded_declarations(entries: List[dict]) -> set:
+    """Return {(entry_index, rel_path)} of declarations that a LATER entry
+    explicitly discloses it has replaced. Such a declaration is history and
+    is not a live claim about the tree."""
+    superseded: set = set()
+    for j, later in enumerate(entries):
+        sup = later.get("supersedes")
+        if not isinstance(sup, dict):
+            continue
+        ts, tl = sup.get("timestamp"), sup.get("tool")
+        if not (isinstance(ts, str) and ts and isinstance(tl, str) and tl):
+            continue
+        new_outputs = later.get("outputs")
+        if not (isinstance(new_outputs, dict) and new_outputs):
+            continue
+        # Resolve to the nearest EARLIER entry the reference names.
+        for k in range(j - 1, -1, -1):
+            older = entries[k]
+            if older.get("timestamp") != ts or older.get("tool") != tl:
+                continue
+            old_outputs = older.get("outputs")
+            if isinstance(old_outputs, dict):
+                for path in new_outputs:
+                    if path in old_outputs:
+                        superseded.add((k, path))
+            break
+    return superseded
+
+
 # A13 (#173) — `ip_catalog_pull` (ip_catalog_pull.py) records the RTL files it
 # copied as an `outputs_sha256` LIST of bare sha256 hex digests plus a
 # `files_pulled` count. That is a legitimate AGGREGATE provenance shape, distinct
@@ -580,6 +673,7 @@ def audit_counted(project: Path, strict_timing: bool = False,
             rel = ref.get("path") if isinstance(ref, dict) else ref
             if isinstance(rel, str) and rel:
                 removed_paths.add(rel)
+    superseded_decls = _superseded_declarations(to_check)
     for i, e in enumerate(to_check):
         tool = e.get("tool", "?")
         outputs = e.get("outputs")
@@ -738,6 +832,25 @@ def audit_counted(project: Path, strict_timing: bool = False,
                            f"a 'sha256:<64-hex>' string"))
                 continue
             declared_hex = claimed.split(":", 1)[1].lower()
+            # This declaration was explicitly replaced by a later entry, so it
+            # describes content this tree no longer holds. Verifying it against
+            # the file on disk asks the wrong question and answers it wrong.
+            # Recorded rather than skipped: an unstated exemption is exactly the
+            # hidden decision this file's DISCLOSED severity exists to prevent.
+            # The digest SHAPE was validated above, so a malformed historical
+            # record still faults; only the on-disk comparison is withheld.
+            if (i, rel_path) in superseded_decls:
+                findings.append(ProvenanceFinding(
+                    entry_index=i, tool=tool,
+                    rule="PROVENANCE_DECLARATION_SUPERSEDED",
+                    severity="DISCLOSED",
+                    detail=(f"output '{rel_path}': this declaration "
+                            f"(sha256:{declared_hex}) is explicitly superseded "
+                            "by a later entry that discloses it replaced this "
+                            "record; it is ledger history, not a live claim "
+                            "about this tree. The superseding entry's digest "
+                            "IS verified against the file on disk.")))
+                continue
             # Cross-entry consistency: same rel_path must declare same
             # hash. (Different tools producing the same artefact would
             # be unusual; the audit chain should reflect a single owner.)
