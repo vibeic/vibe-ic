@@ -548,15 +548,18 @@ def test_pdn_planner_will_not_let_an_empty_obs_section_unblock_a_layer():
 
     Flipping the policy word makes the denial win, L4 comes off the blocked
     list, and the strap lands on it.
+
+    NOTE ON WHAT KIND OF TEST THIS IS. It PASSES against the pre-fix source --
+    `richer` was already the policy there, and the stance only decides which
+    lever the empty record reaches. It is a PIN, not a negative control, and it
+    is verified the way a pin has to be: by making the change it exists to
+    catch (`"richer"` -> `"sparser"`) and watching it go red. Reaching for an
+    `obs_declared` precondition here would have made it "fail pre-fix" on a
+    missing key, which would have dressed a pin up as a control.
     """
     R, T = _phase3_pdn()
     blocks_l4 = _lef_with_obs(T.MACRO_LEF, "L4")
     denies = _lef_with_obs(T.MACRO_LEF)              # OBS present, nothing blocked
-
-    parsed = R._macro_obs_layers_from_lef(denies)
-    entry = parsed["BLOCKA"]
-    assert entry["blocked"] == {} and entry["obs_declared"] is True, \
-        "precondition: this LEF measures no blockage rather than omitting OBS"
 
     declared = _fully_blocked_layers(R, T, blocks_l4, denies)
     assert declared == {"L4"}
