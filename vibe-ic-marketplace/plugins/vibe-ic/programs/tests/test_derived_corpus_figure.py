@@ -363,7 +363,30 @@ def test_the_guard_is_wired_to_something_other_than_its_own_test():
     assert "derived_corpus_figure_check.py" in gates.read_text()
 
 
+def test_this_gate_refuses_an_empty_population(tmp_path):
+    """vibe-ic#564, applied to this PR's own gate.
+
+    "No unrecomputed funnel found" over zero files is not a clean result, it is
+    the absence of one — and the umbrella that aggregates this reads the exit
+    code, not the prose. A gate shipped alongside a rule about honest evidence
+    may not be the thing that returns a clean verdict having read nothing.
+    """
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert guard.main(["--programs", str(empty),
+                       "--root", str(tmp_path)]) == guard.RC_USAGE
+
+
+def test_a_pass_discloses_its_denominator(tmp_path, capsys):
+    """vibe-ic#447 — the verdict line itself must say how much was examined."""
+    _write_corpus(tmp_path, clean='"""A gate with no figures."""\n' + _WALKER)
+    assert guard.main(["--programs", str(tmp_path), "--root", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "[PASS]" in out and "examined 1 file(s)" in out, out
+
+
 def test_exit_codes_are_the_documented_three(tmp_path):
+    _write_corpus(tmp_path, ok='"""A gate."""\n' + _WALKER)
     assert guard.main(["--programs", str(tmp_path), "--root", str(tmp_path)]) == 0
     assert guard.main(["--programs", str(tmp_path / "absent"),
                        "--root", str(tmp_path)]) == guard.RC_USAGE
