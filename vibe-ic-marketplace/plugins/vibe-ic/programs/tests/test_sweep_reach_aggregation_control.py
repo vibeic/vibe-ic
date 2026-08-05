@@ -30,8 +30,9 @@ A control for a rule that the corpus never triggers is a zero over an empty
 set. ``TestTheRuleIsLoadBearingOnTheRealCorpus`` therefore sweeps the REAL
 ``programs/`` tree, accounts for its own reach with ``SweepReach``, and asserts
 that the aggregation's deciding branch was ENTERED on real programs before it
-reads any finding. On this tree it is entered on 6 of 35 driven programs — the
-same 6 that separate 8/35 from 14/35.
+reads any finding. On this tree 13 of the 58 discovered programs produce two
+different per-invocation verdicts, and on 6 of them the SILENT-beats-DISCLOSES
+rule actually changes the answer — the same 6 that separate 8/35 from 14/35.
 
 Fixtures are invented grammar (probe_*.py) with no PDK identity of any kind.
 """
@@ -95,7 +96,7 @@ def _tree(root: Path, **programs: str) -> Path:
 
 
 def _verdicts(root: Path, **programs: str) -> dict:
-    doc = srv.survey(_tree(root, **programs), timeout=60)
+    doc = srv.survey(_tree(root, **programs), timeout=45)
     doc.pop("_reach", None)
     return {r["program"]: r for r in doc["rows"]}
 
@@ -131,7 +132,7 @@ class TestConservativeAggregationHasABidirectionalControl:
     def test_the_two_are_distinguishable_in_the_published_ratio(self, tmp_path):
         """The property, asserted on the headline number rather than on a row."""
         doc = srv.survey(_tree(tmp_path, probe_two_faced=TWO_FACED,
-                               probe_ok=ALWAYS_DISCLOSES), timeout=60)
+                               probe_ok=ALWAYS_DISCLOSES), timeout=45)
         doc.pop("_reach", None)
         assert doc["ratio"] == "1/2", (
             "the two fixtures differ ONLY in whether one argv shape is silent; "
@@ -234,7 +235,7 @@ class TestTheCounterMeasurementIsRederivable:
     def test_empty_corpus_mode_runs_and_publishes_its_own_denominator(self, tmp_path, mode):
         doc = srv.survey(_tree(tmp_path, probe_two_faced=TWO_FACED,
                                probe_ok=ALWAYS_DISCLOSES),
-                         timeout=60, empty_corpus=mode)
+                         timeout=45, empty_corpus=mode)
         doc.pop("_reach", None)
         assert doc["corpus"] == f"empty:{mode}"
         assert doc["discovered"] == 2
@@ -242,7 +243,7 @@ class TestTheCounterMeasurementIsRederivable:
         assert sr.reach_violations(doc) == []
 
     def test_the_populated_corpus_is_the_default_and_is_labelled(self, tmp_path):
-        doc = srv.survey(_tree(tmp_path, probe_ok=ALWAYS_DISCLOSES), timeout=60)
+        doc = srv.survey(_tree(tmp_path, probe_ok=ALWAYS_DISCLOSES), timeout=45)
         doc.pop("_reach", None)
         assert doc["corpus"] == "populated"
 
@@ -253,8 +254,8 @@ class TestTheCounterMeasurementIsRederivable:
         nothing, it cannot even parse its argv. Same program, different claim.
         """
         tree = _tree(tmp_path, probe_two_faced=TWO_FACED)
-        pop = srv.survey(tree, timeout=60)
-        emp = srv.survey(tree, timeout=60, empty_corpus="none")
+        pop = srv.survey(tree, timeout=45)
+        emp = srv.survey(tree, timeout=45, empty_corpus="none")
         assert pop["rows"][0]["verdict"] == "SILENT"
         assert emp["rows"][0]["verdict"] == "NOT_DRIVABLE"
 
@@ -269,7 +270,7 @@ class TestTheRuleIsLoadBearingOnTheRealCorpus:
     """
 
     def test_the_aggregation_decision_point_is_entered_on_real_programs(self):
-        doc = srv.survey(PROGRAMS, timeout=90)
+        doc = srv.survey(PROGRAMS, timeout=45)
         doc.pop("_reach", None)
 
         own = sr.SweepReach(
@@ -309,7 +310,7 @@ class TestTheRuleIsLoadBearingOnTheRealCorpus:
         attempts, so this needs no edit to the shipped file and cannot drift
         away from what the shipped file actually did.
         """
-        doc = srv.survey(PROGRAMS, timeout=90)
+        doc = srv.survey(PROGRAMS, timeout=45)
         doc.pop("_reach", None)
 
         def ratio(favourable: bool) -> str:
