@@ -459,3 +459,77 @@ def test_every_producer_status_is_adjudicated_by_membership():
 def test_the_class_vocabulary_is_closed_and_carries_the_honest_fourth():
     assert set(_BC.BLOCKER_CLASSES) == {
         "PLUGIN_DEFECT", "DESIGN_FACT", "MISSING_CAPABILITY", "UNCLASSIFIED"}
+
+
+# ── 8. the commercial-tool (oss_blocked) narrowing — a gap the review named ──
+#
+# The review of this PR observed that the `oss_blocked` path had NO behavioural
+# coverage: `_classify_one(..., oss=...)` was defined and never called, so
+# `build_blockers`'s `oss_blocked` argument — the whole commercial-tool rule —
+# was never exercised, and deleting the rule outright passed the suite. These
+# two tests exercise it in both directions. The caller-side over-correction (a
+# producer that keys on BARE table membership instead of the run's own deferral
+# decisions) is driven through the real CLI in
+# `test_blocker_list_report_contract.py`, because that wiring lives in
+# `flow_compliance_check.main`, not here.
+def test_a_step_the_run_routed_into_the_oss_deferral_is_a_named_missing_capability():
+    """The producer hands `build_blockers` the map of steps THIS RUN actually
+    routed into its open-source-constraints deferral — and only those. A step
+    in that map is a capability the container does not have, named with the tool
+    that would close it. Deleting the rule drops this to
+    `declared-artefact-absent`/UNCLASSIFIED, so this assertion is what keeps the
+    rule alive."""
+    step = _step(13, "MISSING",
+                 reasons=["no required_outputs found (expected: ['equiv.json'])"])
+    b = _classify_one(step, oss={13: "Formality / Conformal LEC"})[0]
+    assert b["classification"] == "MISSING_CAPABILITY"
+    assert b["basis"] == "commercial-tool-required"
+    assert "Formality / Conformal LEC" in b["why"]
+
+
+def test_the_oss_class_is_driven_by_the_map_the_caller_passes_not_the_step():
+    """REVERSE / OVER-CORRECTION anchor at the unit boundary. The BYTE-IDENTICAL
+    step, absent from the deferral map, must NOT be a missing capability — its
+    class is `declared-artefact-absent`/UNCLASSIFIED. This is the property the
+    caller's narrowing rests on: membership of the step in some table is not, by
+    itself, a capability gap; only the run's decision to defer it is. A wiring
+    that keyed on bare table membership would make this step MISSING_CAPABILITY
+    and is caught end-to-end by
+    `test_membership_in_the_oss_table_alone_...` in the report-contract module."""
+    step = _step(13, "MISSING",
+                 reasons=["no required_outputs found (expected: ['equiv.json'])"])
+    b = _classify_one(step, oss={})[0]
+    assert b["classification"] == "UNCLASSIFIED"
+    assert b["basis"] == "declared-artefact-absent"
+
+
+# ── 9. setup-required — the other rule the review found unexercised ──────────
+def test_setup_required_is_a_named_missing_capability_distinct_from_a_disclosed_gap():
+    """`SKIPPED-SETUP-REQUIRED` — the step could not START because its declared
+    setup is absent on the host. That is a named capability gap, and a DIFFERENT
+    basis from a step that ran and DISCLOSED a gap in place of its artefact.
+    Both are MISSING_CAPABILITY and neither may borrow the other's basis, or the
+    reader cannot tell 'never started' from 'started and self-reported'.
+    Deleting the setup-required rule drops the first to
+    no-rule-matched/UNCLASSIFIED; this pins it."""
+    setup = _step(11, "SKIPPED-SETUP-REQUIRED")
+    disclosed = _step(12, "SKIPPED-CONDITION", self_skip_disclosed=True)
+    b_setup = _BC.build_blockers([setup])[0]
+    b_disc = _BC.build_blockers([disclosed])[0]
+    assert b_setup["classification"] == "MISSING_CAPABILITY"
+    assert b_setup["basis"] == "setup-required"
+    assert b_disc["classification"] == "MISSING_CAPABILITY"
+    assert b_disc["basis"] == "disclosed-capability-gap"
+    assert b_setup["basis"] != b_disc["basis"]
+
+
+def test_an_inapplicable_skip_is_never_read_as_setup_required():
+    """REVERSE. A genuinely-inapplicable `SKIPPED-CONDITION` (an analog step on
+    a digital chip) is not even a blocker, so it can never be mislabelled a
+    setup-required capability gap. The over-correction — reading every skip as
+    'setup missing' — would put ~97 inapplicable skips on the list wearing a
+    MISSING_CAPABILITY badge."""
+    na = _step("A5", "SKIPPED-CONDITION",
+               reasons=["condition not met: analog track skipped via --skip-analog"])
+    assert not _BC.is_blocker(na)
+    assert _BC.build_blockers([na]) == []
