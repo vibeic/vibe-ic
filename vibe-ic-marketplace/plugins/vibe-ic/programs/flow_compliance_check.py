@@ -7784,29 +7784,110 @@ def _check_condition(project: Path, condition: Dict[str, Any]) -> bool:
     # alongside its input lets an unrunnable step still reach its gate and say
     # so, instead of being skipped by condition and read as nothing to report.
     if files and condition.get("any_of", False):
-        if not any(_glob_first(project, pat) for pat in files):
+        if not any(_condition_pattern_satisfied(project, pat)
+                   for pat in files):
             return False
         return True
     if files:
         for pat in files:
-            if _glob_first(project, pat):
-                continue
-            # Auto-derive analog block list from L9 if requested
-            if "analog_block_list" in pat:
-                if _l9_has_analog_modules(project):
-                    continue
-                # v0.2.55 — canonical-path tolerance. The analog runner
-                # writes the block list to the canonical analog dir
-                # (`_pl.analog_dir` = phase3/analog/), but the flow-def
-                # condition historically pins `phase1/analog/`. Accept the
-                # canonical location too, and fall back to L5_ADI_SPEC's
-                # `analog_blocks` array (Phase-1 doc-extraction emits it).
-                # chip-AGNOSTIC: existence of an analog block list anywhere
-                # canonical, never a chip name.
-                if _has_canonical_analog_blocks(project):
-                    continue
-            return False
+            if not _condition_pattern_satisfied(project, pat):
+                return False
     return True
+
+
+def _condition_pattern_satisfied(project: Path, pat: str) -> bool:
+    """True when ONE `files_exist` condition pattern is satisfied.
+
+    For an ordinary pattern this is existence, unchanged.
+
+    THE ANALOG BLOCK LIST IS DECIDED ON CONTENT, NOT EXISTENCE.
+    The A1..A9 + M1..M4 stages are all triggered by
+    `files_exist: [<...>/analog_block_list.json]`. That trigger used to be
+    satisfied by the file merely BEING THERE, which asks "did anything write a
+    block list" — a question ADJACENT to the one the condition exists to answer,
+    "does this design have analog blocks to process". The two diverge on the
+    exact input the flow most wants to reward: a Phase-1 extraction that looked
+    for analog content, found none, and SAID SO by emitting
+
+        {"blocks": [], "no_analog": true}
+
+    Existence-only read that as "analog track applies", so all thirteen analog /
+    mixed-signal steps were expected, none could ever produce an artefact for a
+    design that has no analog block, and each landed as MISSING — i.e. as work
+    that should have happened and did not. A digital project whose Phase 1 wrote
+    NOTHING got SKIPPED-CONDITION for the same steps. The honest disclosure was
+    scored strictly worse than silence, which inverts the incentive the
+    disclosure exists to create.
+
+    Note this function does not introduce the content test; the same module
+    ALREADY has one (`_has_canonical_analog_blocks` requires a non-empty
+    `blocks`/`analog_blocks` and honours `no_analog`). It was sitting two lines
+    below as a FALLBACK, so it was only ever consulted when the file was absent
+    — never in the case it was written for. This makes the primary path agree
+    with the fallback that was already there.
+
+    Direction of the change: this NARROWS the trigger (existence -> existence
+    AND declares >=1 block). It cannot open an analog step that used to run:
+    a block list naming real blocks still triggers the whole track, at the
+    literal declared path or the canonical one, and an L9 `analog_modules`
+    array still triggers it with no block list at all.
+
+    Fail-LOUD on doubt: a block list that cannot be read or parsed is treated as
+    TRIGGERING, exactly as before. Only a list that positively and parseably
+    declares zero blocks stands the track down, so a corrupt or truncated list
+    can never silently delete the analog track.
+
+    chip-AGNOSTIC: JSON structure only — no chip, vendor, PDK or SKU literal.
+    """
+    hits = _glob_first(project, pat)
+    if "analog_block_list" not in pat:
+        return bool(hits)
+
+    for rel in hits:
+        decl = _analog_block_list_declares_blocks(project / rel)
+        if decl is not False:      # True (has blocks) or None (unreadable)
+            return True
+    # No resolved list declares blocks. The two historical fallbacks still
+    # apply, and both are already content-aware.
+    if _l9_has_analog_modules(project):
+        return True
+    # v0.2.55 — canonical-path tolerance. The analog runner writes the block
+    # list to the canonical analog dir (`_pl.analog_dir` = phase3/analog/), but
+    # the flow-def condition historically pins `phase1/analog/`. Accept the
+    # canonical location too, and fall back to L5_ADI_SPEC's `analog_blocks`
+    # array (Phase-1 doc-extraction emits it). chip-AGNOSTIC.
+    if _has_canonical_analog_blocks(project):
+        return True
+    return False
+
+
+def _analog_block_list_declares_blocks(path: Path) -> Optional[bool]:
+    """Does this analog block list declare at least one block?
+
+    True  — a non-empty `blocks` / `analog_blocks` array, and not `no_analog`.
+    False — parsed cleanly and positively declares none.
+    None  — could not be read or parsed; the caller must NOT read that as
+            "no analog". Unreadable is not evidence of absence.
+    """
+    try:
+        d = json.loads(path.read_text())
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    blocks = d.get("blocks")
+    if blocks is None:
+        blocks = d.get("analog_blocks")
+    if not isinstance(blocks, list):
+        # No block array at all — this file is not the shape we can judge.
+        return None
+    # A named block WINS over a `no_analog` flag that contradicts it. The two
+    # disagreeing is a Phase-1 defect, and the non-suppressive reading of a
+    # self-contradictory list is the one that keeps the analog track running so
+    # somebody has to look at it.
+    if len(blocks) > 0:
+        return True
+    return False
 
 
 def _has_canonical_analog_blocks(project: Path) -> bool:
