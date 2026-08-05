@@ -243,3 +243,98 @@ class TestDftPortNamesAreKnownNotSniffed:
         # the netlist non-equivalent to its RTL, which is why both are 0 and
         # why lec_run's negative controls tie them to 1 and expect a failure.
         assert set(sci.FUNCTIONAL_MODE_TIEOFF.values()) == {0}
+
+
+class TestStagedOwnLibertyFallback:
+    """A PDK the container does not ship (sniffs to 'unmapped') stages its own
+    corner libraries under input/pdk/liberty/. Scan insertion must fall back to
+    THAT — the design's own PDK, the same dir STA/pvt read — instead of
+    refusing. Refusing there leaves step 11 MISSING and VOIDS the DFT-dependent
+    tail. Empirically measured: with the staged typical liberty forwarded,
+    `fault chain` built a real 65-internal + 34-boundary scan chain (exit 0) on
+    a design that otherwise reported 'no Liberty configured for pdk unmapped'.
+
+    KILLS the reverse too: this must not become "guess a liberty". Nothing
+    staged -> still refuse; the design's OWN library is not a cross-foundry
+    substitution, an arbitrary guess would be.
+    """
+
+    def _stage_libs(self, root: Path, names):
+        d = root / "input" / "pdk" / "liberty"
+        d.mkdir(parents=True, exist_ok=True)
+        for n in names:
+            (d / n).write_text("/* liberty */\n")
+
+    def test_typical_corner_is_chosen_from_named_corners(self, tmp_path):
+        self._stage_libs(tmp_path,
+                         ["cells_ss.lib", "cells_typ.lib", "cells_ff.lib"])
+        lib, note = sci.staged_own_liberty(tmp_path)
+        assert lib == "/work/input/pdk/liberty/cells_typ.lib"
+        assert "own PDK" in note
+
+    def test_single_staged_library_is_used_unambiguously(self, tmp_path):
+        self._stage_libs(tmp_path, ["only_corner.lib"])
+        lib, note = sci.staged_own_liberty(tmp_path)
+        assert lib == "/work/input/pdk/liberty/only_corner.lib"
+
+    def test_nothing_staged_refuses(self, tmp_path):
+        lib, note = sci.staged_own_liberty(tmp_path)
+        assert lib is None
+
+    def test_ambiguous_multi_without_a_typical_refuses(self, tmp_path):
+        self._stage_libs(tmp_path, ["cornerA.lib", "cornerB.lib"])
+        lib, note = sci.staged_own_liberty(tmp_path)
+        assert lib is None
+        assert "refusing to guess" in note
+
+    def _write_mapped(self, tmp_path):
+        # A netlist mapped to a CUSTOM PDK: real cells (not $_DFF_ generics, so
+        # is_generic_unmapped=False) whose names sniff to NO built-in PDK, so
+        # the pdk stays 'unmapped' and the staged fallback is the code under
+        # test. (`_mapped_netlist` uses sky130 cells, which sniff to 'sky130'
+        # and resolve via SCAN_LIBERTY before the fallback is reached.)
+        nl = tmp_path / "phase2/stage2/synth/spm_synth.v"
+        nl.parent.mkdir(parents=True)
+        nl.write_text(
+            "module spm(clk, d, q);\n input clk; input [3:0] d; output [3:0] q;\n"
+            "  DFFHQD1 _000_ (.CK(clk), .D(d[0]), .Q(q[0]));\n"
+            "  AND2D1 _g0_ (.A1(a), .A2(b), .Z(y));\n"
+            "  DFFHQD1 _001_ (.CK(clk), .D(d[1]), .Q(q[1]));\n"
+            "endmodule\n")
+        return "phase2/stage2/synth/spm_synth.v"
+
+    def test_run_chain_forwards_the_staged_liberty_for_an_unmapped_pdk(
+            self, tmp_path, monkeypatch):
+        # FORWARD: against the pre-fix code this FAILS — run_chain returned
+        # rc=2 at the liberty gate and never reached docker, so `captured`
+        # stays empty and the assertion errors. After the fix it reaches docker
+        # carrying the project's own staged liberty.
+        nl_rel = self._write_mapped(tmp_path)
+        self._stage_libs(tmp_path, ["pdk_typ.lib", "pdk_ff.lib"])
+        captured = {}
+
+        def fake_run_docker(project, cmd, timeout=None, pdk_dir=None, **kw):
+            captured["cmd"] = list(cmd)
+            return 1, "", "stub: docker not run in unit test"
+
+        monkeypatch.setattr(sci._fatpg, "_run_docker", fake_run_docker)
+        rc, rep = sci.run_chain(tmp_path, nl_rel, "clk", "unmapped")
+        assert "cmd" in captured, "run_chain never reached docker (liberty gate refused)"
+        assert "/work/input/pdk/liberty/pdk_typ.lib" in captured["cmd"]
+
+    def test_run_chain_still_refuses_when_nothing_is_staged(
+            self, tmp_path, monkeypatch):
+        # REVERSE: no staged library -> the liberty gate still refuses (rc=2)
+        # and docker is never reached. The fix does not "guess a liberty".
+        nl_rel = self._write_mapped(tmp_path)
+        called = {"docker": False}
+
+        def fake_run_docker(project, cmd, timeout=None, pdk_dir=None, **kw):
+            called["docker"] = True
+            return 0, "", ""
+
+        monkeypatch.setattr(sci._fatpg, "_run_docker", fake_run_docker)
+        rc, rep = sci.run_chain(tmp_path, nl_rel, "clk", "unmapped")
+        assert rc == 2
+        assert rep["stage"] == "liberty"
+        assert called["docker"] is False
