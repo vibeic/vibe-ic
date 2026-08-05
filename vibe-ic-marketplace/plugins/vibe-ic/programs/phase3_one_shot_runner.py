@@ -31942,6 +31942,32 @@ def _multi_corner_sta_inputs(project: Path, top: str) -> Tuple[Optional[Path],
     return (None, {}, "MISSING", "no routed or synth netlist found")
 
 
+def _stamped_sta_basis(rpt: Path) -> Optional[str]:
+    """Return the `STA_BASIS:` a corner report stamps into itself, else None.
+
+    `_emit_multi_corner_sta` stamps every report it writes with the basis it
+    was produced on (`POST_ROUTE_SPEF` / `POST_ROUTE_NO_SPEF` /
+    `PRE_LAYOUT_ESTIMATE`), precisely so a report carries its own limitation
+    rather than relying on a caller to remember it. This reads that stamp back,
+    which is what makes a REUSED report checkable against the basis the inputs
+    currently resolve to.
+
+    Returns None — meaning "unverified", never "agrees" — when the file is
+    unreadable or carries no stamp, so the caller degrades to disclosing
+    uncertainty instead of assuming agreement. Chip/PDK-AGNOSTIC: pure text.
+    """
+    try:
+        text = rpt.read_text(errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("STA_BASIS:"):
+            value = line.split(":", 1)[1].strip()
+            return value or None
+    return None
+
+
 def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                            container: str, libs: List[Path],
                            out_dir: Path, notes: List[str]) -> bool:
@@ -31958,12 +31984,46 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
     if netlist is None or not sdc_path.is_file():
         notes.append("multi-corner STA skipped: netlist or SDC missing")
         return False
-    notes.append(f"multi-corner STA basis={basis}: {basis_note}")
+    notes.append(f"multi-corner STA inputs resolve to basis={basis}: "
+                 f"{basis_note}")
     any_emitted = False
+    # Corner reports REUSED from a previous call, bucketed by whether their own
+    # stamped basis agrees with the basis the inputs now resolve to. See the
+    # `if rpt.is_file()` branch below for why this accounting has to exist.
+    reused_stale: List[str] = []
+    reused_unstamped: List[str] = []
     for lib in libs:
         corner = _classify_corner_from_name(lib.name)
         rpt = out_dir / f"sta_{corner}.rpt"
         if rpt.is_file():
+            # MEASURED DEFECT this closes: this reuse is keyed on the FILENAME
+            # and is blind to the report's own `STA_BASIS`. `_emit_multi_corner_sta`
+            # is called TWICE into the SAME `per_corner/` directory — once for
+            # the PRE-layout multi-corner STA and again after PnR for the
+            # post-route one. The first call's files are already on disk when
+            # the second runs, so the second emits NOTHING, returns True, and
+            # the caller appends a note asserting it performed post-route
+            # multi-corner timing. The reports it "produced" are the pre-layout
+            # ones, stamped `STA_BASIS: PRE_LAYOUT_ESTIMATE`.
+            #
+            # That is the whole failure: the producer answered the ADJACENT
+            # question ("does a file named sta_<CORNER>.rpt exist?") and
+            # published it as the answer to the real one ("has corner STA been
+            # run on THIS basis?"). Downstream, `eda_report_audit` and
+            # `sta_corner_record_completeness_check` consume this tree as the
+            # multi-corner sign-off claim.
+            #
+            # This branch does NOT change which files are written — reuse is
+            # still reuse, no verdict moves, and a stale report is never
+            # silently deleted or overwritten. It only stops the run from
+            # CLAIMING a basis its reports do not carry. Fail-safe by
+            # construction: an unreadable or unstamped report is reported as
+            # unverifiable rather than assumed to agree.
+            _existing = _stamped_sta_basis(rpt)
+            if _existing is None:
+                reused_unstamped.append(rpt.name)
+            elif _existing != basis:
+                reused_stale.append(f"{rpt.name}[{_existing}]")
             any_emitted = True
             continue
         # Build OpenSTA tcl: read_liberty + read_verilog + read_sdc +
@@ -32027,6 +32087,24 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                 f"To upgrade, install OpenSTA in the container.")
         else:
             any_emitted = True
+    # The reports this call REUSED rather than produced, whenever they do not
+    # carry the basis the inputs resolve to. Without this the run publishes
+    # "basis=POST_ROUTE_SPEF … post-route multi-corner timing" over a directory
+    # of PRE_LAYOUT_ESTIMATE reports (see the reuse branch above).
+    if reused_stale:
+        notes.append(
+            "multi-corner STA REUSED pre-existing corner report(s) whose own "
+            f"STA_BASIS DISAGREES with basis={basis}: "
+            f"{', '.join(sorted(reused_stale))}. These were NOT regenerated and "
+            "still carry the basis stamped in them. The basis line above "
+            "describes the INPUTS now on disk, NOT these reports — do not read "
+            f"them as {basis} evidence.")
+    if reused_unstamped:
+        notes.append(
+            "multi-corner STA REUSED pre-existing corner report(s) carrying no "
+            f"STA_BASIS stamp: {', '.join(sorted(reused_unstamped))}. Their "
+            f"basis could NOT be verified against basis={basis}; they are "
+            "UNVERIFIED, which is not the same as agreeing.")
     if not any_emitted:
         # #437(c): remove the work files + dir so an EMPTY per_corner
         # never stands as an unsubstantiated multi-corner claim. The
