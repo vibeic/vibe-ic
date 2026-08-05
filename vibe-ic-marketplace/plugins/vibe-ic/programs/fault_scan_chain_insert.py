@@ -277,6 +277,49 @@ def resolve_liberty(pdk: str, override: str | None) -> tuple[str | None, str]:
                   f"(known: {sorted(SCAN_LIBERTY)}) — pass --liberty")
 
 
+# The project's OWN staged Liberty dir. A design on a PDK not in SCAN_LIBERTY
+# (a foundry PDK the container does not ship, sniffed to 'unmapped') stages its
+# corner libraries here — the SAME dir the pre-layout STA and pvt_matrix steps
+# already read. Using it is NOT the cross-foundry substitution the SCAN_LIBERTY
+# comment forbids: it is the design's own PDK, mounted under /work, so the chain
+# is built from the very cells the netlist is mapped to.
+_STAGED_LIBERTY_DIR = "input/pdk/liberty"
+# Typical (TT) process-corner designators — the corner SCAN_LIBERTY itself pins
+# for every built-in PDK (all its entries are `__tt_`/`_typ_`). Matched with the
+# same general convention used elsewhere; no PDK / vendor cell is hard-coded.
+_TYP_CORNER_RE = re.compile(
+    r"(?:^|[_/\-.\s:,=])(tt|typical|typ|nom)(?:[_/\-.\s:,=]|$)", re.IGNORECASE)
+
+
+def staged_own_liberty(project: Path) -> tuple[str | None, str]:
+    """(container /work Liberty path, note) for the project's OWN staged corner
+    libraries, or (None, note). PURE w.r.t. the project input.
+
+    Picks the TYPICAL corner when the file names disclose one; if exactly one
+    library is staged it is used unambiguously. Two-or-more staged with NO
+    identifiable typical corner is AMBIGUOUS and REFUSES (None) rather than
+    guess a corner — the same refuse-don't-guess stance as `resolve_liberty`.
+    """
+    lib_dir = project / _STAGED_LIBERTY_DIR
+    if not lib_dir.is_dir():
+        return None, f"no {_STAGED_LIBERTY_DIR}/ staged"
+    libs = sorted(lib_dir.glob("*.lib"))
+    if not libs:
+        return None, f"no *.lib in {_STAGED_LIBERTY_DIR}/"
+    typ = [p for p in libs if _TYP_CORNER_RE.search(p.name)]
+    if len(typ) == 1:
+        chosen = typ[0]
+    elif len(libs) == 1:
+        chosen = libs[0]
+    else:
+        return None, (
+            f"{len(libs)} staged libraries and no single TYPICAL corner "
+            f"identifiable by name ({[p.name for p in libs]}) — refusing to "
+            f"guess a corner")
+    return (f"/work/{_STAGED_LIBERTY_DIR}/{chosen.name}",
+            f"project-staged {_STAGED_LIBERTY_DIR}/{chosen.name} (own PDK)")
+
+
 # ---------------------------------------------------------------------------
 # `inout` port handling — `fault chain` cannot parse a bidirectional port
 # ---------------------------------------------------------------------------
@@ -441,6 +484,17 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
             pdk, pdk_cfg = sniffed, _fatpg.PDK_CONFIG[sniffed]
 
     liberty, lib_note = resolve_liberty(pdk, liberty_override)
+    if not liberty:
+        # PDK not in SCAN_LIBERTY and no explicit --liberty: fall back to the
+        # design's OWN staged corner libraries. A foundry PDK the container does
+        # not ship sniffs to 'unmapped', and the runner forwards no --liberty
+        # for it — yet the design stages its libraries under input/pdk/liberty/
+        # (the same dir STA/pvt already read). Without this, scan insertion is
+        # unreachable for every non-built-in PDK that stages its own libs, which
+        # then leaves step 11 MISSING and VOIDS the whole DFT-dependent tail.
+        staged, staged_note = staged_own_liberty(project)
+        if staged:
+            liberty, lib_note = staged, staged_note
     if not liberty:
         return 2, {"stage": "liberty", "netlist": netlist_rel, "pdk": pdk,
                    "error": lib_note}
