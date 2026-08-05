@@ -2269,6 +2269,128 @@ def _reconcile_staged_sdc_drv(sdc_text: str, active_pdk_name: str,
     return _stamp_sdc_provenance(out, active_pdk_name)
 
 
+def _extract_driving_cell_name(line: str) -> Optional[str]:
+    """Return the library-cell name a `set_driving_cell` line names, or None.
+
+    Handles both spellings a reference-flow SDC uses:
+      * explicit  `set_driving_cell [all_inputs] -lib_cell BUF_X2`  → BUF_X2
+      * bare      `set_driving_cell BUF_X2`                          → BUF_X2
+    In the bare form the cell is the first POSITIONAL token (not an option flag,
+    not the VALUE of an option flag, not a `[...]`/`{...}` collection). Best-effort
+    and conservative: an unrecognised shape returns None so the line is left
+    untouched. chip/PDK-AGNOSTIC — no cell-name literal is hardcoded."""
+    m = re.search(r"-lib_cell\s+(\S+)", line)
+    if m:
+        return m.group(1)
+    toks = line.split()
+    prev_opt = False
+    for t in toks[1:]:  # drop the leading `set_driving_cell`
+        if t.startswith("-"):
+            prev_opt = True
+            continue
+        if (t.startswith("[") or t.startswith("{")
+                or "]" in t or "}" in t):
+            prev_opt = False
+            continue
+        if prev_opt:            # this token is an option VALUE, not the cell
+            prev_opt = False
+            continue
+        return t                # first positional token → the cell name
+    return None
+
+
+def _liberty_declares_cell(liberty_path: str, cell_name: str,
+                           container: str = "") -> Optional[bool]:
+    """True/False iff the ACTIVE liberty declares a top-level `cell (<cell_name>)`.
+
+    Returns None when the liberty cannot be read/parsed (UNKNOWN) — the caller
+    then leaves the SDC byte-identical (degrade loudly, never drop a line on a
+    read failure). Matches BOTH the quoted (`cell ("<name>")`, the production
+    spelling) and unquoted (`cell (<name>)`) forms. Reads host-side when the path
+    is a file, else via a container-side grep (the built-in PDK lives in the
+    container fs) — same host/container discipline as `_liberty_drv_limits`.
+    chip/PDK-AGNOSTIC."""
+    if not liberty_path or not cell_name:
+        return None
+    pat = re.compile(r'cell\s*\(\s*"?' + re.escape(cell_name) + r'"?\s*\)')
+    try:
+        hp = Path(liberty_path)
+        if hp.is_file():
+            return bool(pat.search(hp.read_text(errors="replace")))
+        if container:
+            lib_c = _to_container_path(liberty_path, container)
+            rc, gout, _ = _docker_exec(
+                container,
+                "grep -E "
+                + shlex.quote(r'cell *\( *"?' + re.escape(cell_name) + r'"?')
+                + f" {shlex.quote(lib_c)} 2>/dev/null | head -1 || true",
+                timeout=120)
+            return bool((gout or "").strip())
+    except Exception:
+        return None
+    return None
+
+
+def _reconcile_staged_sdc_driving_cell(sdc_text: str, active_liberty: str,
+                                       container: str = "") -> str:
+    """A9 sibling of :func:`_reconcile_staged_sdc_drv` for the driving-cell NAME.
+
+    A staged / design-supplied SDC (e.g. a reference-flow `*.nangate.sdc`) may
+    name a `set_driving_cell` library cell from its ORIGINATING PDK — a Nangate
+    `BUF_X2` in the OpenTitan AES reference flow. Re-used verbatim under a
+    DIFFERENT active PDK, that cell name is ABSENT from the active liberty and
+    OpenSTA/OpenROAD ABORT the entire flow at `read_sdc`:
+
+        [ERROR STA-0453] 'BUF_X2' not found.
+        Error: constraint.sdc, 5 STA-0453
+
+    — floorplan / place / route never run. The DRV-limit reconcile above already
+    re-derives `set_max_transition` / `set_max_capacitance` across PDKs (#169) and
+    re-stamps the SDC with the active PDK's provenance, asserting it is now
+    active-PDK-correct; but it never validates the `set_driving_cell` cell NAME, so
+    a foreign-PDK cell survives into a file the flow labels for the active PDK and
+    which then aborts every active-PDK tool.
+
+    Fix (same doctrine as the DRV-limit DROP path): when the named driving cell is
+    DEFINITIVELY absent from the active liberty, DROP the `set_driving_cell` line
+    and leave a disclosure comment. Dropping a driving-cell aid can only WEAKEN the
+    constraint set — inputs fall back to the tool's default drive — so it can NEVER
+    manufacture a PASS; it only removes the fatal STA-0453. A cell PRESENT in the
+    active liberty is left untouched (a hand-authored active-PDK SDC is never
+    modified). §4.05: never substitutes a fabricated cell. Degrades loudly: an
+    unreadable liberty (UNKNOWN presence) leaves the line untouched. chip/PDK-
+    AGNOSTIC — validates whatever cell the SDC names against whatever liberty is
+    active; no cell/PDK literal is hardcoded."""
+    if not sdc_text or "set_driving_cell" not in sdc_text:
+        return sdc_text
+    out_lines: List[str] = []
+    dropped: List[str] = []
+    for line in sdc_text.split("\n"):
+        if line.lstrip().startswith("set_driving_cell"):
+            cell = _extract_driving_cell_name(line)
+            if cell is not None:
+                present = _liberty_declares_cell(active_liberty, cell, container)
+                if present is False:  # definitively absent (not merely unreadable)
+                    out_lines.append(
+                        f"# A9 driving-cell reconcile: DROPPED `set_driving_cell "
+                        f"... {cell}` — that cell is absent from the ACTIVE PDK "
+                        f"liberty (a foreign-PDK reference-flow cell name). Kept it "
+                        f"would abort read_sdc with STA-0453 and stop the backend. "
+                        f"Inputs fall back to the tool default drive; §4.05 — no "
+                        f"fabricated substitute cell.")
+                    dropped.append(cell)
+                    continue
+        out_lines.append(line)
+    if dropped:
+        try:
+            print("[phase3][sdc-driving-cell] dropped foreign-PDK driving "
+                  f"cell(s) {dropped} absent from the active liberty "
+                  "(would abort read_sdc / STA-0453).", file=sys.stderr)
+        except Exception:
+            pass
+    return "\n".join(out_lines)
+
+
 # ── TAPEOUT-SIGNOFF (DRV) — parity for a DESIGN-SUPPLIED SDC ─────────────────
 # The DRV block above is appended by `_build_auto_silicon_sdc`, which `step_pnr`
 # calls ONLY on the else-branch — i.e. only when the project stages NO
@@ -18422,6 +18544,12 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             project_sdc_silicon.read_text(), str(pdk.liberty))
         _staged_sdc = _reconcile_staged_sdc_drv(
             _staged_sdc, pdk.name, str(pdk.liberty), container)
+        # A9 — reconcile a stale `set_driving_cell` cell NAME the same way the
+        # DRV LIMITS were reconciled above: a foreign-PDK reference-flow SDC
+        # (e.g. a Nangate `BUF_X2`) would otherwise abort read_sdc under the
+        # active PDK (STA-0453) and stop the entire backend before floorplan.
+        _staged_sdc = _reconcile_staged_sdc_driving_cell(
+            _staged_sdc, str(pdk.liberty), container)
         # TAPEOUT-SIGNOFF (DRV) parity — a design-supplied SDC that declares NO
         # set_max_transition / set_max_capacitance reached PnR with no DRV
         # target at all, so repair_design never repaired the slews (the
@@ -29186,6 +29314,8 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                 staged_sdc.read_text(), str(pdk.liberty))
             _txt = _reconcile_staged_sdc_drv(
                 _txt, str(pdk.name), str(pdk.liberty), container)
+            _txt = _reconcile_staged_sdc_driving_cell(
+                _txt, str(pdk.liberty), container)
             _txt, _drv_parity = _ensure_staged_sdc_drv(
                 _txt, str(pdk.liberty), container, project,
                 pdk_name=str(pdk.name))
