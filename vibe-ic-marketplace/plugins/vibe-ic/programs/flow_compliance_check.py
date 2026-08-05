@@ -9748,6 +9748,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         import atexit as _atexit
         _atexit.register(_shutil.rmtree, str(_ro_scratch), True)
 
+    # ── the design this verdict is about, measured BEFORE anything judges it ──
+    #
+    # The tally this program publishes carried no record of its own
+    # population: the same run directory, byte-identical, scored PASS=22 under
+    # 1.9.76 and PASS=6 under a newer plugin, and nothing in the artefact let a
+    # reader tell "the design got worse" from "the ruler got better". Sixteen
+    # of the twenty-two were never real.
+    #
+    # Taken HERE because this is the last moment before any sub-gate writes:
+    # ~250 of them emit `--json` reports into the tree, so a digest taken later
+    # would be a digest of this program's own opinion. The auditor's footprint
+    # is then subtracted by MEASUREMENT (pre/post stat), not by a path
+    # allowlist — `reports/phase3/` holds the DRC and LVS sign-off reports as
+    # well as the checkers' JSON, and excluding it by prefix would blind the
+    # digest to arriving sign-off evidence and make the artefact assert that a
+    # design which really moved had not.
+    #
+    # Every failure mode here degrades to a null digest with a stated reason.
+    # It must never cost the audit or move the verdict: this is a record of
+    # what was measured, not a measurement.
+    _did_scan = None
+    _did_error = None
+    try:
+        if str(PROGRAMS_DIR) not in sys.path:
+            sys.path.insert(0, str(PROGRAMS_DIR))
+        import design_input_digest as _did
+    except Exception as _exc:            # pragma: no cover - import guard
+        _did = None
+        _did_error = f"design_input_digest unavailable: {_exc}"
+    if _did is not None:
+        try:
+            _did_scan = _did.scan_inputs(project)
+        except Exception as _exc:
+            _did_error = f"design-input scan failed: {_exc}"
+
     flow_path = Path(args.flow_def) if args.flow_def else DEFAULT_FLOW_DEF
     if not flow_path.exists():
         print(f"flow_compliance_check: flow def not found: {flow_path}", file=sys.stderr)
@@ -10970,10 +11005,89 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not any((project / c).exists() for c in cands):
                 missing_required.append(label)
 
+        # v1.6.27: route via auto-router so the audit lands at
+        # reports/audit/ (canonical), not stray reports/ root. Resolved HERE,
+        # ahead of the dict, because the footprint subtraction below has to
+        # name it: it is written after the post-scan is taken, so measurement
+        # cannot see it, and leaving it in would make the PREVIOUS run's audit
+        # an input to THIS run's design hash.
+        audit_path = _pl.report_path(project, "phase23_completion_audit.json")
+
+        # ── what this tally was computed OVER ────────────────────────────
+        # Two hashes, because "did the design change?" and "did the ruler
+        # change?" are independent questions with four answers between them.
+        # Both blocks are null-with-a-reason on any failure; neither can move
+        # the verdict.
+        _digest_block: Any = None
+        _measurement_block: Any = None
+        _prior_audit: Any = None
+        # Asked directly, not read back out of the measurement block: the
+        # release that produced an artefact is a fact this file owes its
+        # reader even when the digest could not be computed.
+        try:
+            import plugin_manifest_discovery as _pmd
+            _running_version = _pmd.running_plugin_version()
+        except Exception:
+            _running_version = "UNRESOLVED"
+        # The audit being OVERWRITTEN is the other half of the comparison, and
+        # it is on disk right now. This is the exact shape the finding came
+        # from — the same run directory, re-judged — so the artefact can state
+        # which of the two moved without any consumer coordinating. It is also
+        # where the previous run's footprint is carried from.
+        try:
+            if audit_path.exists():
+                _loaded = json.loads(audit_path.read_text(encoding="utf-8"))
+                if isinstance(_loaded, dict):
+                    _prior_audit = _loaded
+        except (OSError, ValueError):
+            _prior_audit = None
+        _carried = []
+        try:
+            _pb = (_prior_audit or {}).get("design_input_digest") or {}
+            _carried = [p for p in (_pb.get("auditor_written_paths") or [])
+                        if isinstance(p, str)]
+        except Exception:
+            _carried = []
+        if _did is not None and _did_scan is not None:
+            try:
+                _also_written = [str(audit_path.relative_to(project))]
+                if args.json:
+                    _rep = Path(args.json).resolve()
+                    if project in _rep.parents:
+                        _also_written.append(str(_rep.relative_to(project)))
+                _post = _did.scan_inputs(project)
+                _digest_block = _did.build_digest(
+                    _did_scan,
+                    _did.auditor_footprint(_did_scan, _post, _also_written,
+                                           _carried))
+            except Exception as _exc:
+                _digest_block = {"schema_version": _did.SCHEMA_VERSION,
+                                 "sha256": None,
+                                 "unusable_reason": f"digest failed: {_exc}"}
+        elif _did_error:
+            _digest_block = {"schema_version": 1, "sha256": None,
+                             "unusable_reason": _did_error}
+        if _did is not None:
+            try:
+                _measurement_block = _did.build_measurement(
+                    _running_version, flow_path, vars(args))
+            except Exception as _exc:
+                _measurement_block = {"schema_version": _did.SCHEMA_VERSION,
+                                      "id": None,
+                                      "unusable_reason": str(_exc)}
+
         from datetime import datetime, timezone
         audit = {
             "schema_version": 1,
-            "version": "0.119.62",
+            # Was the string literal "0.119.62" from the initial public
+            # release: all 28 tracked audit artefacts carry it, so an audit
+            # written by 1.0.0 and one written by 1.9.79 made byte-identical
+            # claims about which ruler produced them. It is READ now, from the
+            # one manifest `gatekeeper_assign_version --write` owns. #800 did
+            # this for `emitted_by`/`generated_by`/`extracted_by`; the key here
+            # is `version`, which is not in that gate's attribution-key list,
+            # which is how it survived.
+            "version": _running_version,
             "run_at": datetime.now(timezone.utc).isoformat(),
             "phase": args.phase,
             "strict_structural": bool(args.strict_structural),
@@ -11040,13 +11154,39 @@ def main(argv: Optional[List[str]] = None) -> int:
             "blocker_sub_class_counts": blocker_sub_class_counts,
             "blocker_list_error": blocker_list_error,
             "command_argv": list(sys.argv),
+            # THE POPULATION, beside the tally. `design_input_digest` is what
+            # the verdict was computed over; `measurement` is what computed
+            # it. A consumer holding two of these artefacts can state which of
+            # the two moved — which is the one thing no reader of this file
+            # could do before, and the reason a day of inflated PASS counts
+            # was reported as design progress.
+            "design_input_digest": _digest_block,
+            "measurement": _measurement_block,
         }
-        # v1.6.27: route via auto-router so the audit lands at
-        # reports/audit/ (canonical), not stray reports/ root.
-        audit_path = _pl.report_path(project, "phase23_completion_audit.json")
+        # And when there IS a prior audit at this path — the re-judge of one
+        # run directory, exactly the shape the finding came from — the
+        # artefact says it itself rather than waiting for a consumer to.
+        if _did is not None:
+            try:
+                audit["tally_delta"] = _did.classify(_prior_audit, audit)
+            except Exception as _exc:
+                audit["tally_delta"] = {
+                    "classification": "NOT_COMPARABLE",
+                    "statement": f"comparison failed: {_exc}"}
         audit_path.parent.mkdir(parents=True, exist_ok=True)
         audit_path.write_text(
             json.dumps(audit, indent=2, ensure_ascii=False))
+        # Printed, not only serialised: the reader who acts on the tally reads
+        # the log, and a refusal that only exists in a JSON field is a refusal
+        # nobody sees. Advisory — it never moves the verdict or the exit code,
+        # because it is a statement ABOUT the measurement, not one of the
+        # gates being measured.
+        _td = audit.get("tally_delta") or {}
+        if _td.get("classification") in ("MEASUREMENT_CHANGE",
+                                         "UNEXPLAINED_TALLY_MOVE",
+                                         "NOT_ATTRIBUTABLE"):
+            print(f"flow_compliance_check: TALLY_DELTA "
+                  f"{_td.get('classification')} — {_td.get('statement')}")
     except Exception as e:
         # Never let the audit-emission step fail the gate itself.
         # Surface a stderr warning so a human reviewer can spot it.
