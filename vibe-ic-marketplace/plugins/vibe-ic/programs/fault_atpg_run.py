@@ -887,6 +887,54 @@ def _count_yaml_block_items(text: str, key: str) -> int:
     return n
 
 
+# ── A HIGH EXIT CODE IS NOT A DEATH CERTIFICATE ────────────────────────────
+#
+# `128+N means death by signal N` is the convention a SHELL uses to REPORT a
+# child's signal death. It says nothing about a process that calls exit(N)
+# itself with N >= 128, and the elaborator inside the ATPG engine does exactly
+# that: Icarus Verilog exits with its ERROR COUNT.
+#
+#   MEASURED (public, no PDK, no vendor, no design — 153 instantiations of an
+#   undeclared module; see the reproduction shipped with this fix):
+#       $ iverilog -o /dev/null probe.v > log 2>&1 ; echo $?
+#       154
+#       $ tail -3 log
+#       *** These modules were missing:
+#               MISSING_CELL referenced 153 times.
+#
+# So an ATPG input that is missing >= 128 cell models was being classified
+# "killed by signal N", retried _ATPG_MAX_ATTEMPTS times (a deterministic
+# failure retried three times fails three times), and then written up as an
+# engine crash that "must be re-driven, not waived" — while the true cause,
+# `Unknown module type: <cell>`, sat in the log this very function captured.
+#
+# THE DISCRIMINATOR: a process killed by a signal did not live long enough to
+# print a structured diagnosis. When the engine's own error grammar IS present,
+# the exit code is the engine's considered answer, not a death certificate.
+#
+# Deliberately NARROW. Anything ambiguous stays classified as signal death, so
+# a genuine SIGSEGV keeps its retry — see the reverse case in the test.
+# chip-AGNOSTIC and PDK-AGNOSTIC: keyed only on compiler diagnostic grammar.
+_ATPG_SIGNAL_DEATH_FLOOR = 128
+_ATPG_ENGINE_DIAGNOSTIC_RE = re.compile(
+    r"^\s*\d+\s+error\(s\)\s+during\s+elaboration"
+    r"|These modules were missing"
+    r"|Unknown module type",
+    re.MULTILINE,
+)
+
+
+def atpg_exit_is_signal_death(exit_code: int, engine_log: str) -> bool:
+    """True iff `exit_code` should be read as death by signal.
+
+    Below the floor it never is. At or above the floor it is — UNLESS the
+    engine printed its own error diagnosis, which a signal-killed process
+    cannot have done. Pure; no I/O."""
+    if exit_code < _ATPG_SIGNAL_DEATH_FLOOR:
+        return False
+    return not _ATPG_ENGINE_DIAGNOSTIC_RE.search(engine_log or "")
+
+
 def parse_atpg_coverage(cov_text: str, atpg_log: str, atpg_exit: int) -> dict:
     """DFT_FCC / 11-d3 — parse a stuck-at ATPG result and DISCLOSE its sources.
 
@@ -1669,8 +1717,10 @@ def run_fault(
     #     "the OSS tool cannot do this" is a false capability gap.
     #
     # chip-AGNOSTIC and PDK-AGNOSTIC: keyed only on the POSIX convention that
-    # 128+N means death by signal N.
-    _ATPG_SIGNAL_DEATH_FLOOR = 128
+    # 128+N means death by signal N -- AND, since this fix, on the engine's own
+    # diagnostic grammar, because that convention is a shell's reporting
+    # convention and not a property of the exit code. See
+    # atpg_exit_is_signal_death() above.
     _ATPG_MAX_ATTEMPTS = 3
     atpg_attempts: list[int] = []
     ec, out, err = -1, "", ""
@@ -1686,12 +1736,12 @@ def run_fault(
         ec, out, err = _run_docker(project, [atpg_shell], timeout=1800,
                                    pdk_dir=pdk_dir)
         atpg_attempts.append(ec)
-        if ec < _ATPG_SIGNAL_DEATH_FLOOR:
+        if not atpg_exit_is_signal_death(ec, out + "\n" + err):
             break            # clean exit (0 or a considered non-zero) — done
         if (project / cov_out).exists():
             break            # died late but the metadata landed — keep it
     atpg_log = (out + "\n" + err)[-2000:]
-    atpg_signal_death = ec >= _ATPG_SIGNAL_DEATH_FLOOR
+    atpg_signal_death = atpg_exit_is_signal_death(ec, out + "\n" + err)
 
     cov_file = project / cov_out
     cov_text = cov_file.read_text() if cov_file.exists() else ""
