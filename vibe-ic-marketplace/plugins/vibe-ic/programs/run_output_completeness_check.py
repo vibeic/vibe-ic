@@ -109,6 +109,108 @@ exactly one state, each with the evidence it judged on:
                                     abandoned run's own interim file. Length is
                                     not doneness.
 
+  DELIVERABLE_CURRENT_ROUND_AMBIGUOUS
+                                  — the deliverable READS as complete, but it
+                                    carries TWO OR MORE DIFFERENT round tallies
+                                    and does not say, in a form a machine can
+                                    key on, WHICH ONE IS CURRENT and which have
+                                    been WITHDRAWN. FAIL (rc 1), or
+                                    RUN_STILL_IN_PROGRESS (rc 3) when a runner
+                                    is genuinely still live.
+
+                                    Added 2026-08-05 from a MEASURED escape that
+                                    caught the orchestrator TWICE IN ONE HOUR.
+
+                                    (i)  A RESULT.md accumulates rounds. On one
+                                         cell the NEWEST round was written at the
+                                         TOP while older tallies stayed below. A
+                                         reader doing
+                                         ``grep -oE 'PASS=… FAIL=… MISSING=…'
+                                         | tail -1`` got the OLDEST triple in
+                                         the file and reported it as this
+                                         round's result.
+                                    (ii) On another cell a hypothesis tally was
+                                         grepped out of a report whose very next
+                                         paragraph RETRACTED it — "PASS=26 was
+                                         reachable only by disabling a check the
+                                         repo installed deliberately, so I
+                                         retract that number". A RETRACTED
+                                         hypothesis was reported as the fleet's
+                                         best result.
+
+                                    Both are ONE defect in the ARTEFACT, not only
+                                    in the reader: a machine-readable deliverable
+                                    carrying several numbers, with no
+                                    machine-readable statement of which one is
+                                    current and which have been withdrawn. Any
+                                    consumer — a human with grep, a monitor, the
+                                    next agent — will eventually take the wrong
+                                    one, and NOTHING in the document tells it
+                                    that it did.
+
+                                    This is not hypothetical for a human reader
+                                    only. ``result_md_audit_provenance_check``
+                                    parses the same tally out of the same file
+                                    with a bare ``_TALLY_RE.search(text)`` — a
+                                    FIRST-MATCH, POSITIONAL selection — and
+                                    prints it verbatim as ``quoted_tally`` in its
+                                    own JSON and failure text. Driven on the
+                                    retraction case above, that program reported
+                                    ``PASS=26 FAIL=2 MISSING=1``: the withdrawn
+                                    number, quoted by a gate, as fact. Position
+                                    is not authority.
+
+                                    THE RULE (ambiguity is the trigger, not
+                                    multiplicity). A report may carry as many
+                                    rounds as it likes — a score trajectory is
+                                    MANDATED by the benchmark methodology's § 6.
+                                    What it may not do is leave a machine unable
+                                    to tell them apart. So:
+                                      * ONE distinct tally, or none  -> nothing
+                                        is required. The simple case carries NO
+                                        ceremony; 56 of 56 published RESULT.md in
+                                        this repo stay untouched.
+                                      * TWO OR MORE distinct tallies -> exactly
+                                        one must be marked CURRENT and every
+                                        other must be marked NOT-THIS-ROUND,
+                                        with the marker on the TALLY'S OWN LINE.
+                                    Retracting in prose is correct and
+                                    INSUFFICIENT: the retraction has to be as
+                                    machine-visible as the number it retracts,
+                                    or the number outlives it.
+
+                                    The NOT-THIS-ROUND vocabulary carries BOTH
+                                    honest reasons a number sits in the file
+                                    without being the round's result — WITHDRAWN
+                                    / RETRACTED / SUPERSEDED for a claim taken
+                                    back, BASELINE / REFERENCE / PRIOR for a
+                                    figure that was never this round's claim.
+                                    Measured: of the three ambiguous
+                                    deliverables in a 9456-document sweep of one
+                                    host, TWO are a "baseline vs this run"
+                                    comparison, and demanding WITHDRAWN there
+                                    would ask an author to assert something
+                                    false. A rule satisfiable only by lying gets
+                                    worked around, not followed.
+
+                                    Marking everything NOT-THIS-ROUND does NOT
+                                    satisfy the rule — that declares no current
+                                    round, so it is the same undeclared state
+                                    under a different spelling. Nor does a
+                                    status word floating in prose: a marker that
+                                    is not attached to a number declares nothing
+                                    about any number.
+
+                                    HONEST LIMIT, stated because it cannot be
+                                    fixed here: no document convention survives
+                                    ``grep -o`` on the bare tally pattern, which
+                                    DISCARDS the line the marker lives on. What
+                                    this gate can guarantee is that the document
+                                    is self-describing — that a consumer which
+                                    wants the current number HAS a marker to key
+                                    on, and that a line a consumer does read
+                                    carries its own status.
+
   DELIVERABLE_CONTRADICTS_ORCHESTRATOR
                                   — the deliverable READS as complete, but its
                                     own HEADLINE VERDICT claims a PASS while the
@@ -162,7 +264,7 @@ Exit codes
 ----------
     0  COMPLETE (PASS)
     0  ... nothing else maps to 0
-    1  a FAIL classification (any of the four fail states above)
+    1  a FAIL classification (any of the fail states above)
     2  usage error
     3  RUN_STILL_IN_PROGRESS  (distinct NON-FAIL — "in progress", do not block)
 
@@ -240,6 +342,57 @@ _SLOT_DECO_CHARS = "`*_~\"' \t"
 _EMPH_RUN_RE = re.compile(r"(?:\*\*|__)([^*_\n]{1,48}?)(?:\*\*|__)")
 _FENCE_RE = re.compile(r"^\s{0,3}(```|~~~)")
 
+# ── CURRENT-ROUND declaration (the "position is not authority" rule) ────────
+# The tally grammar. Deliberately the SAME shape
+# `result_md_audit_provenance_check._TALLY_RE` consumes, because that program is
+# the in-repo CONSUMER that positionally picks one of these out of a RESULT.md
+# and quotes it as fact. A guard that recognised FEWER tallies than the consumer
+# would pass documents the consumer then misreads, which is the whole defect
+# again one level up. The coupling is asserted behaviourally in the test suite
+# (every document the consumer extracts a tally from, with two distinct tallies
+# present, must be refused here) rather than by importing a private name.
+_TALLY_RE = re.compile(
+    r"PASS\s*=\s*(\d+)\s+FAIL\s*=\s*(\d+)\s+MISSING\s*=\s*(\d+)", re.IGNORECASE)
+
+# Status vocabulary. ALL-CAPS ONLY — the same calibration the INTERIM signals
+# above use, and for the same reason: caps is a deliberate machine marker,
+# lowercase is prose. It also kills the one real false-positive shape in the
+# published corpus, `rerun_v1293_hard94/RESULT.md:7` "…of the CURRENT plugin…",
+# which is an adjective about a plugin, not a claim about a number.
+_STATUS_CURRENT_RE = re.compile(
+    r"\b(CURRENT[_ ]ROUND|CURRENT|LATEST|AUTHORITATIVE)\b")
+# NOT-THIS-ROUND. Two different honest reasons a number is in the file without
+# being the round's result, and the vocabulary names both, because forcing one
+# to wear the other's word would make the marker a lie:
+#   * WITHDRAWN — a claim the author has TAKEN BACK. This is the half the
+#     measured retraction case needs: the retraction has to be as
+#     machine-visible as the number it retracts.
+#   * BASELINE  — a number that was never this round's claim at all. MEASURED:
+#     of the three ambiguous deliverables found in a 9456-document sweep of this
+#     host, TWO are a two-line "baseline vs this run" comparison. Demanding
+#     `WITHDRAWN` on a baseline would ask the author to assert something false
+#     about a perfectly live reference figure, and a rule that can only be
+#     satisfied by lying gets worked around instead of followed.
+_STATUS_NOT_CURRENT_RE = re.compile(
+    r"\b(WITHDRAWN|RETRACTED|SUPERSEDED|OBSOLETE|STALE|HISTORICAL|"
+    r"NOT[_ ]CURRENT|BASELINE|REFERENCE|PRIOR|PREVIOUS)\b")
+# Only PAST-PARTICIPLE / adjectival forms are in that vocabulary. `SUPERSEDES`
+# is excluded on purpose: "these numbers supersede everything below" is written
+# on the CURRENT round's line, and reading it as a withdrawal would mark the
+# live number dead.
+
+# A caps word only counts as a MARKER when it is delimited as one, so that a
+# caps word merely occurring in a sentence on the tally's line cannot decide the
+# tally's status. Either:
+#   M1 it is at line start, or the first non-space character before it is one of
+#      these punctuation/decoration marks (`[CURRENT]`, `— CURRENT`,
+#      `**WITHDRAWN**`, `| CURRENT |`, `<!-- CURRENT -->`, `# WITHDRAWN`), or
+#   M2 it immediately follows the tally itself (`… MISSING=1 WITHDRAWN`), which
+#      no separator precedes but which is unambiguously about that tally.
+_MARKER_LEAD_CHARS = set("[({<|#/`*~—–->:=,;!\"'")
+_MARKER_TRAIL_GAP = 3
+
+
 _RUN_PID_FILE = "run.pid"
 _LOCK_FILE = ".runner.lock"
 
@@ -292,6 +445,7 @@ _EXIT = {
     "NO_OUTPUTS_ONLY_INPUTS": 1,
     "DELIVERABLE_CONTRADICTS_ORCHESTRATOR": 1,
     "DELIVERABLE_SELF_DECLARED_INTERIM": 1,
+    "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS": 1,
 }
 
 # The run-dir subtree that holds a run's INPUTS. A run whose every file lives
@@ -532,6 +686,200 @@ def assess_self_declared_interim(path: Path) -> Dict[str, object]:
     }
 
 
+# ---------------------------------------------------------------------------
+# CURRENT-ROUND declaration probes (PURE — driven through `check()` by the
+# tests, which is what keeps them assertions about the OBSERVABLE property
+# rather than about this particular implementation of it).
+# ---------------------------------------------------------------------------
+def _line_spans(text: str) -> List[tuple]:
+    """`(start_offset, end_offset, lineno)` for every line, 1-based lineno.
+
+    `end_offset` excludes the newline. Used to map a match offset back to the
+    line(s) it sits on.
+    """
+    spans: List[tuple] = []
+    pos = 0
+    for i, ln in enumerate(text.split("\n"), start=1):
+        spans.append((pos, pos + len(ln), i))
+        pos += len(ln) + 1
+    return spans
+
+
+def _marker_window(text: str, start: int, end: int) -> tuple:
+    """The full text of every line the match `[start, end)` touches, plus the
+    match's end offset expressed inside that window.
+
+    A tally is normally on one line. It need not be: ``\\s+`` in the tally
+    grammar matches newlines, so the consumer's ``_TALLY_RE.search(text)`` can
+    match a tally split across lines — and a guard that only scanned line by
+    line would not see the tallies the consumer sees. The window is the lines
+    the match spans, so the marker may sit on any of them.
+    """
+    spans = _line_spans(text)
+    first = next((s for s in spans if s[0] <= start <= s[1]), spans[0])
+    last = next((s for s in reversed(spans) if s[0] <= max(end - 1, start) <= s[1]),
+                first)
+    return text[first[0]:last[1]], end - first[0], first[2]
+
+
+def _markers_on(window: str, pattern: "re.Pattern", tally_end: int) -> List[str]:
+    """Every status word in `window` that is DELIMITED as a marker (M1 or M2 —
+    see `_MARKER_LEAD_CHARS`). A caps word embedded in prose is not a marker."""
+    out: List[str] = []
+    for m in pattern.finditer(window):
+        s = m.start()
+        gap = window[tally_end:s]
+        if 0 <= s - tally_end <= _MARKER_TRAIL_GAP and gap.strip() == "":
+            out.append(m.group(0))                     # M2
+            continue
+        j = s - 1
+        while j >= 0 and window[j] in " \t":
+            j -= 1
+        if j < 0 or window[j] in _MARKER_LEAD_CHARS:   # M1
+            out.append(m.group(0))
+    return out
+
+
+def find_round_tallies(text: str) -> List[Dict[str, object]]:
+    """Every round tally in the deliverable, with the status its own line
+    declares for it.
+
+    Fenced code blocks are NOT excluded, which is a deliberate divergence from
+    the INTERIM probes above. Quoting someone else's "INTERIM" banner is not
+    declaring yourself interim — but quoting a tally IS putting a number in
+    front of a reader, and the consumer that misreads these does not skip
+    fences either. § 6 asks a report to quote its tally line VERBATIM, so
+    fenced tallies are the expected shape, not an edge case.
+    """
+    out: List[Dict[str, object]] = []
+    for m in _TALLY_RE.finditer(text):
+        window, tally_end, lineno = _marker_window(text, m.start(), m.end())
+        cur = _markers_on(window, _STATUS_CURRENT_RE, tally_end)
+        nc = _markers_on(window, _STATUS_NOT_CURRENT_RE, tally_end)
+        if cur and nc:
+            status = "CONFLICTED"
+        elif cur:
+            status = "CURRENT"
+        elif nc:
+            status = "NOT_CURRENT"
+        else:
+            status = "UNMARKED"
+        out.append({
+            "line": lineno,
+            "tally": {"PASS": int(m.group(1)), "FAIL": int(m.group(2)),
+                      "MISSING": int(m.group(3))},
+            "status": status,
+            "markers": cur + nc,
+            "text": " ".join(window.split())[:160],
+        })
+    return out
+
+
+def _tally_key(hit: Dict[str, object]) -> tuple:
+    t = hit["tally"]
+    return (t["PASS"], t["FAIL"], t["MISSING"])
+
+
+def assess_current_round_declaration(path: Path) -> Dict[str, object]:
+    """Can a machine tell WHICH tally in this deliverable is the current one?
+
+    Returns ``{state, ambiguous, distinct, occurrences, reason_fragment}``.
+    ``ambiguous`` is True only when the document presents two or more DIFFERENT
+    tallies and fails to resolve them; a single tally — repeated as often as the
+    report likes — is never ambiguous and is never asked for a marker.
+    """
+    empty = {"state": "NO_TALLY", "ambiguous": False, "distinct": [],
+             "occurrences": [], "reason_fragment": ""}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return empty
+
+    hits = find_round_tallies(text)
+    if not hits:
+        return empty
+
+    # Aggregate per DISTINCT triple, in first-appearance order. Two occurrences
+    # of the SAME numbers are one claim stated twice — a report that puts its
+    # tally in the headline and again in the reproduce section is honest, and
+    # asking it for markers would be ceremony over nothing.
+    order: List[tuple] = []
+    statuses: Dict[tuple, set] = {}
+    lines: Dict[tuple, List[int]] = {}
+    for h in hits:
+        k = _tally_key(h)
+        if k not in statuses:
+            order.append(k)
+            statuses[k] = set()
+            lines[k] = []
+        statuses[k].add(h["status"])
+        lines[k].append(int(h["line"]))
+
+    def _agg(st: set) -> str:
+        if "CONFLICTED" in st or ({"CURRENT", "NOT_CURRENT"} <= st):
+            return "CONFLICTED"
+        if "CURRENT" in st:
+            return "CURRENT"
+        if "NOT_CURRENT" in st:
+            return "NOT_CURRENT"
+        return "UNMARKED"
+
+    distinct = [{"tally": {"PASS": k[0], "FAIL": k[1], "MISSING": k[2]},
+                 "status": _agg(statuses[k]), "lines": lines[k]}
+                for k in order]
+
+    if len(order) <= 1:
+        return {"state": "TALLY_UNAMBIGUOUS", "ambiguous": False,
+                "distinct": distinct, "occurrences": hits,
+                "reason_fragment": ""}
+
+    conflicted = [d for d in distinct if d["status"] == "CONFLICTED"]
+    current = [d for d in distinct if d["status"] == "CURRENT"]
+    unmarked = [d for d in distinct if d["status"] == "UNMARKED"]
+
+    def _fmt(ds: List[dict]) -> str:
+        return "; ".join(
+            f"PASS={d['tally']['PASS']} FAIL={d['tally']['FAIL']} "
+            f"MISSING={d['tally']['MISSING']} [{d['status']}] @ line(s) "
+            f"{','.join(str(n) for n in d['lines'])}" for d in ds)
+
+    if conflicted:
+        return {"state": "TALLY_STATUS_CONFLICT", "ambiguous": True,
+                "distinct": distinct, "occurrences": hits,
+                "reason_fragment": (
+                    f"{len(conflicted)} tally line(s) carry BOTH a CURRENT and a "
+                    f"NOT-CURRENT marker, so the document contradicts itself about "
+                    f"which claim is live: {_fmt(conflicted)}")}
+    if not current:
+        return {"state": "CURRENT_ROUND_UNDECLARED", "ambiguous": True,
+                "distinct": distinct, "occurrences": hits,
+                "reason_fragment": (
+                    f"it presents {len(order)} DIFFERENT tallies and marks none "
+                    f"of them CURRENT — {_fmt(distinct)}. Nothing in the file "
+                    f"says which round is live, so every consumer picks by "
+                    f"POSITION, and position is not authority")}
+    if len(current) > 1:
+        return {"state": "CURRENT_ROUND_MULTIPLY_DECLARED", "ambiguous": True,
+                "distinct": distinct, "occurrences": hits,
+                "reason_fragment": (
+                    f"{len(current)} DIFFERENT tallies are each marked CURRENT — "
+                    f"{_fmt(current)}. A round has one result")}
+    if unmarked:
+        return {"state": "NON_CURRENT_TALLY_UNMARKED", "ambiguous": True,
+                "distinct": distinct, "occurrences": hits,
+                "reason_fragment": (
+                    f"the current round is declared ({_fmt(current)}) but "
+                    f"{len(unmarked)} other tally/tallies sit in the same file "
+                    f"with NO machine-visible status — {_fmt(unmarked)}. A "
+                    f"reader that lands on one of those lines reads a number "
+                    f"that is not this round's result as if it were; saying so "
+                    f"in prose does not reach a machine. Mark each of them "
+                    f"WITHDRAWN (a claim taken back) or BASELINE (a reference "
+                    f"that was never this round's claim), whichever is TRUE")}
+    return {"state": "TALLY_CURRENT_DECLARED", "ambiguous": False,
+            "distinct": distinct, "occurrences": hits, "reason_fragment": ""}
+
+
 def _newest_nonempty(run_dir: Path, globs: List[str]) -> Optional[Path]:
     newest: Optional[Path] = None
     newest_m = -1.0
@@ -684,6 +1032,9 @@ def check(run_dir: Path, *,
     interim = assess_self_declared_interim(deliverable) if dl["exists"] else {
         "readable": False, "banner": [], "headline_placeholder": None,
         "unfilled_slots": [], "self_declared_interim": False}
+    rounds = assess_current_round_declaration(deliverable) if dl["exists"] else {
+        "state": "NO_TALLY", "ambiguous": False, "distinct": [],
+        "occurrences": [], "reason_fragment": ""}
 
     compute_done = bool(fs is not None or orch["verdict"] or arts["any_present"])
 
@@ -709,6 +1060,10 @@ def check(run_dir: Path, *,
         "interim_banner": interim["banner"],
         "headline_placeholder": interim["headline_placeholder"],
         "unfilled_slots": interim["unfilled_slots"],
+        "round_tally_state": rounds["state"],
+        "round_tally_ambiguous": rounds["ambiguous"],
+        "round_tally_distinct": rounds["distinct"],
+        "round_tally_occurrences": len(rounds["occurrences"]),
     }
 
     artifacts_ok = not arts["missing"]
@@ -788,6 +1143,32 @@ def check(run_dir: Path, *,
             f"the run dir are confined to '{Path(census['input_dir']).name}/'. The "
             f"reported verdict is backed by nothing on disk — a run that produced "
             f"no output may never be reported as a result.")
+    elif deliverable_complete and rounds["ambiguous"]:
+        # POSITION IS NOT AUTHORITY. Judged AFTER every classification above so
+        # each of those keeps its exact prior semantics — this branch only
+        # partitions the set that used to fall through to COMPLETE.
+        if live["live"]:
+            # A round still being written may legitimately hold a moment where
+            # the new tally is down and the marker is not yet moved. rc 3 is
+            # still not rc 0, so an "only exit 0 counts" caller refuses to sign
+            # it off; it just is not called a failure while the run is going.
+            who = (f"pid {live['pid']} alive" if live["pid_alive"]
+                   else f"live lock {live['lock']}")
+            state, verdict, reason = "RUN_STILL_IN_PROGRESS", "IN_PROGRESS", (
+                f"{deliverable.name} is present but {rounds['reason_fragment']}; "
+                f"a runner is LIVE ({who}) — the round is still being written, "
+                f"so this is not yet a failure. Re-check after the run exits.")
+        else:
+            state, verdict, reason = (
+                "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS", "FAIL", (
+                    f"{deliverable.name} reads as complete ({dl['bytes']} B, "
+                    f"{dl['content_lines']} content lines) but "
+                    f"{rounds['reason_fragment']}. "
+                    f"[{rounds['state']}] Mark exactly one tally CURRENT and "
+                    f"every other one WITHDRAWN or BASELINE, on the tally's "
+                    f"own line. "
+                    f"A retraction written only in prose does not reach a "
+                    f"machine, and the number outlives it."))
     elif deliverable_complete:
         state, verdict, reason = "COMPLETE", "PASS", (
             f"deliverable {deliverable.name} present ({dl['bytes']} B, "
@@ -867,9 +1248,12 @@ def check(run_dir: Path, *,
 
 def _highlight(rep: CompletenessReport) -> str:
     bar = "!" * 72
+    banner = ("AMBIGUOUS CURRENT ROUND — WHICH NUMBER IS LIVE?"
+              if rep.state == "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS"
+              else "EMPTY / MISSING / STUB DELIVERABLE")
     lines = [
         bar,
-        f"!! EMPTY / MISSING / STUB DELIVERABLE — {rep.state}",
+        f"!! {banner} — {rep.state}",
         f"!! run_dir     : {rep.run_dir}",
         f"!! deliverable : {rep.deliverable}",
         f"!! why         : {rep.reason}",
@@ -894,11 +1278,28 @@ def _highlight(rep: CompletenessReport) -> str:
     for s in (ev.get("unfilled_slots") or []):
         lines.append(f"!! UNFILLED @ line {s['line']}: {s['token']} — "
                      f"{s['text']}")
+    if ev.get("round_tally_ambiguous"):
+        lines.append(f"!! round-tally census [{ev['round_tally_state']}] — "
+                     f"{len(ev['round_tally_distinct'])} DISTINCT tallies in "
+                     f"{ev['round_tally_occurrences']} occurrence(s):")
+        for d in ev["round_tally_distinct"]:
+            t = d["tally"]
+            lines.append(
+                f"!!   PASS={t['PASS']} FAIL={t['FAIL']} MISSING={t['MISSING']}"
+                f"  status={d['status']}  line(s)="
+                f"{','.join(str(n) for n in d['lines'])}")
     for b in rep.blocking:
         lines.append(f"!! {b}")
-    lines.append("!! ACTION      : write the deliverable from the artifacts, "
-                 "then re-run this gate — NO RESULT / empty output = the run "
-                 "FAILED.")
+    if rep.state == "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS":
+        lines.append("!! ACTION      : mark exactly ONE tally CURRENT and every "
+                     "other one WITHDRAWN (taken back) or BASELINE (never this "
+                     "round's claim), on the tally's OWN LINE, then re-run this "
+                     "gate — a number a machine cannot date is a number a "
+                     "machine will misreport.")
+    else:
+        lines.append("!! ACTION      : write the deliverable from the artifacts, "
+                     "then re-run this gate — NO RESULT / empty output = the run "
+                     "FAILED.")
     lines.append(bar)
     return "\n".join(lines)
 
@@ -907,25 +1308,40 @@ def _capture_candidate(rep: CompletenessReport) -> dict:
     """A machine-readable enhancement-capture record (enhancement_emit.py
     schema, Bucket C) so an empty output is captured, never silent."""
     ev = rep.evidence
+    ambiguous_round = rep.state == "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS"
+    why_not_a = (
+        "the gate below IS the deterministic rule; the residual is the "
+        "AUTHORING discipline a program cannot supply — a document that "
+        "accumulates rounds has to say which round is live, and only its author "
+        "knows which one that is."
+        if ambiguous_round else
+        "run_output_completeness_check.py IS the deterministic gate; the "
+        "residual is the ORCHESTRATION discipline a program cannot enforce "
+        "on the agent's turn lifecycle — an agent that detaches a long run "
+        "and idles never gets re-invoked to write the deliverable.")
+    fix = (
+        "Mark exactly ONE tally CURRENT and every other tally WITHDRAWN (a "
+        "claim taken back) or BASELINE (never this round's claim), with the "
+        "marker on the tally's OWN LINE, then re-run this gate. "
+        "Retracting a number in prose is correct and INSUFFICIENT: the "
+        "retraction has to be as machine-visible as the number, or a consumer "
+        "keyed on the number outlives the retraction and reports it as fact."
+        if ambiguous_round else
+        "Run the long tool through the BLOCKING _watchdog.run_supervised "
+        "(returns only on exit/stall) so the agent's turn stays alive to "
+        "completion; the agent's FINAL act before reporting done is to WRITE "
+        "+ SELF-VERIFY the deliverable by running "
+        "run_output_completeness_check on its own run_dir. No RESULT / empty "
+        "output = the run FAILED.")
     return {
         "step": "orchestration.deliverable_finalize",
         "design": Path(rep.run_dir).name or rep.run_dir,
         "bucket": "C",
-        "why_not_bucket_a": (
-            "run_output_completeness_check.py IS the deterministic gate; the "
-            "residual is the ORCHESTRATION discipline a program cannot enforce "
-            "on the agent's turn lifecycle — an agent that detaches a long run "
-            "and idles never gets re-invoked to write the deliverable."),
+        "why_not_bucket_a": why_not_a,
         "failure_mode": rep.state,
         "detected_by": "run_output_completeness_check.py",
         "title": f"{rep.state}: {Path(rep.deliverable).name} — {rep.reason[:120]}",
-        "suggested_fix": (
-            "Run the long tool through the BLOCKING _watchdog.run_supervised "
-            "(returns only on exit/stall) so the agent's turn stays alive to "
-            "completion; the agent's FINAL act before reporting done is to WRITE "
-            "+ SELF-VERIFY the deliverable by running "
-            "run_output_completeness_check on its own run_dir. No RESULT / empty "
-            "output = the run FAILED."),
+        "suggested_fix": fix,
         "backlog_slug": f"empty-run-deliverable-{rep.state.lower()}",
         "backlog_type": "bug",
         "severity": "P1",
@@ -938,6 +1354,8 @@ def _capture_candidate(rep: CompletenessReport) -> dict:
             f"final_summary={ev['final_summary']} "
             f"orchestrator_verdict={ev['orchestrator_verdict']} "
             f"missing_artifacts={ev['missing_artifacts']} "
+            f"round_tally_state={ev.get('round_tally_state')} "
+            f"round_tally_distinct={ev.get('round_tally_distinct')} "
             f"live={ev['liveness']['live']}"),
     }
 
@@ -1005,9 +1423,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     tag = {"PASS": "PASS", "IN_PROGRESS": "IN-PROGRESS", "FAIL": "FAIL"}[rep.verdict]
     print(f"[{tag}] {rep.state} — {rep.reason}")
     if rep.capture_candidate:
+        what = ("this ambiguous round"
+                if rep.state == "DELIVERABLE_CURRENT_ROUND_AMBIGUOUS"
+                else "this empty output")
         print("CAPTURE: emitted an enhancement-capture candidate "
               "(failure_mode=" + rep.state + ") — feed to enhancement_emit.py "
-              "so this empty output is absorbed, not silent.")
+              "so " + what + " is absorbed, not silent.")
     return rep.rc
 
 
