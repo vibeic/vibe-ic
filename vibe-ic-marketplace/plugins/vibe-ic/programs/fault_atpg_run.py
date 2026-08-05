@@ -209,6 +209,35 @@ PDK_CONFIG = {
             "sg13g2_sdfbbp_1"
         ),
     },
+    # NanGate45 / FreePDK45 open academic 45nm stdcell library (OpenROAD's
+    # reference PDK; ships in the container at /foss/pdks/nangate45). Without
+    # this entry a FULLY tech-mapped NanGate45 netlist (NAND2_X1 / DFF_X1 /
+    # SDFF_X1, no Yosys generic primitives) sniffs to None -> the DFT step reads
+    # that None as `generic_unmapped` and refuses scan insertion with
+    # "no Liberty configured for pdk 'unmapped'", even though the netlist is
+    # mapped and the container ships this library's Liberty. That is the exact
+    # "could not NAME the PDK" != "no library-mapped cells" confusion the
+    # `netlist_is_library_mapped` docstring (above) warns about, surfacing on
+    # the resolution side. Adding the entry is the same remedy applied to
+    # ihp-sg13g2 above; it teaches the sniff (via pdk_cell_prefixes) and gives
+    # scan insertion its Liberty (SCAN_LIBERTY in fault_scan_chain_insert.py).
+    #
+    # cell_model is None ON PURPOSE: this build's container ships NO NanGate45
+    # Verilog simulation model (only .lib / .lef / .gds / .cdl), so Fault's
+    # iverilog-based stuck-at fault simulation cannot run. With cell_model=None,
+    # run_fault returns rc=2 "no Verilog cell model resolved" — an HONEST,
+    # disclosed engine-limited skip, NOT a fabricated coverage number and NOT a
+    # crash. This REPLACES the false "unsupported pdk: unmapped" (which wrongly
+    # blamed the netlist) with the true state: NanGate45 IS recognised and
+    # scan-insertable; only its ATPG fault-sim is engine-limited here.
+    "nangate45": {
+        "cell_model": None,
+        "dff_cells": (
+            "DFF_X1,DFF_X2,DFFR_X1,DFFR_X2,DFFS_X1,DFFS_X2,"
+            "DFFRS_X1,DFFRS_X2,SDFF_X1,SDFF_X2,SDFFR_X1,SDFFR_X2,"
+            "SDFFS_X1,SDFFS_X2,SDFFRS_X1,SDFFRS_X2"
+        ),
+    },
 }
 
 # commercial 180nm PDK — used in the v046 aon_timer pilot and the spm
@@ -823,6 +852,20 @@ def pdk_cell_prefixes() -> dict:
                 continue
             if "__" in cell:                     # <lib>__<cell>
                 prefixes.add(cell.split("__", 1)[0] + "__")
+            elif (dsm := re.match(r"(.+_[A-Za-z]+)\d+$", cell)):
+                # FLAT DRIVE-STRENGTH naming `<root>_X<drive>` (NanGate45 /
+                # FreePDK45: DFF_X1, SDFFRS_X2, NAND2_X1). The trailing integer
+                # is a DRIVE STRENGTH, not a cell instance, and there is no
+                # `<lib>_` separator. The plain `<lib>_<cell>` split below would
+                # yield the over-broad `DFF_`, which is a SUBSTRING of the Yosys
+                # generic primitive `$_DFF_P_` — so an UNMAPPED netlist would be
+                # misread as this PDK (a false pass of the sniff). Keep the
+                # drive-strength FAMILY root incl. the `_X` (`DFF_X`, `SDFFRS_X`):
+                # specific to the mapped library, never a substring of `$_DFF_`.
+                # No configured `__`-style PDK reaches here (they take the branch
+                # above); only genuine `_X<n>` families do. Still derived purely
+                # from `dff_cells` — no second table, no vendor/SKU literal.
+                prefixes.add(dsm.group(1))
             elif "_" in cell:                    # <lib>_<cell>
                 prefixes.add(cell.split("_", 1)[0] + "_")
             else:

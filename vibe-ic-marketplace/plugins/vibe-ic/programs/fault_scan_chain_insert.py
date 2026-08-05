@@ -72,6 +72,15 @@ SCAN_LIBERTY = {
               "gf180mcu_fd_sc_mcu7t5v0__tt_025C_1v80.lib"),
     "ihp-sg13g2": ("/foss/pdks/ihp-sg13g2/libs.ref/sg13g2_stdcell/lib/"
                    "sg13g2_stdcell_typ_1p20V_25C.lib"),
+    # NanGate45 / FreePDK45 (OpenROAD reference PDK). The container ships the
+    # typical-corner Liberty; `fault chain` needs exactly this to stitch the
+    # scan chain. Keyed by the same `nangate45` id fault_atpg_run.PDK_CONFIG now
+    # uses, so cell-MODEL and Liberty can never resolve from different libraries
+    # (the two-table invariant ORGANIC #410 established). See the PDK_CONFIG
+    # note there: this makes scan insertion RUN on a mapped NanGate45 netlist
+    # that was previously refused as pdk 'unmapped'.
+    "nangate45": ("/foss/pdks/nangate45/libs.ref/NangateOpenCellLibrary/lib/"
+                  "NangateOpenCellLibrary_typical.lib"),
 }
 
 # `fault chain`'s DFT port option names.  These are OPTION NAMES we pass, so
