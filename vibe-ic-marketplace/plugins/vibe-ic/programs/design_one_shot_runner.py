@@ -10458,8 +10458,61 @@ def _dft_retain_unmeasured(project: Path, dft_dir: Path,
     return retained
 
 
+# The honest label for a netlist that IS technology-mapped but whose library is
+# not one the container configures. It is deliberately NOT `generic_unmapped`:
+# that string is an ATTESTATION downstream (`transition_coverage_check` grants
+# the ENGINE_LIMITED self-skip only when it is present, exactly so a MAPPED
+# netlist cannot claim it), so handing it to a mapped netlist qualifies the
+# design for a leniency its own evidence does not earn.
+_MAPPED_UNKNOWN_LIBRARY = "mapped_unknown_library"
+
+
+def _dft_atpg_pdk_label(pdk: Optional[str], netlist: "Path | None") -> str:
+    """The label published as `pdk_detected` — what was OBSERVED, not what
+    could be named.
+
+    `_dft_atpg_sniff_pdk` returns a bare string, and `""` collapses three
+    different states into one:
+
+      * recognised and nameable            -> the PDK name
+      * recognised but NOT nameable        -> ""   (the SKU lives in a private
+                                                    config, empty in public
+                                                    installs)
+      * mapped to a library absent from `PDK_CONFIG` (NanGate45, any foundry
+        library the container does not ship)  -> ""
+
+    Callers then wrote `pdk or "generic_unmapped"`, so the last two states were
+    published as "the netlist carries no library-mapped cells" — false in both.
+    MEASURED: a fully technology-mapped NanGate45 netlist (`INV_X1`, `NAND2_X1`,
+    `AOI21_X1`, `DFF_X1`; zero `$_*_` primitives) has
+    `is_generic_unmapped() == False` and `sniff_pdk_over_whole_netlist() ==
+    None` — the module's own oracle and the published label contradict each
+    other, and the wrong one reaches the reader.
+
+    FAIL-SAFE: anything that cannot be positively established as mapped keeps
+    the pre-existing `generic_unmapped` label, so no verdict moves. The only
+    direction this can move a verdict is STRICTER — a mapped netlist stops
+    qualifying for the `ENGINE_LIMITED` leniency, which is what that guard was
+    written to prevent.
+
+    chip/PDK-AGNOSTIC: no cell/vendor/SKU literal.
+    """
+    if pdk:
+        return pdk
+    if netlist is None:
+        return "generic_unmapped"
+    try:
+        import fault_atpg_run as _fatpg  # sibling program, same directory
+        if _fatpg.netlist_is_library_mapped(_whole_file_text(netlist)):
+            return _MAPPED_UNKNOWN_LIBRARY
+    except Exception:
+        pass
+    return "generic_unmapped"
+
+
 def _dft_atpg_crash_reason(pdk: Optional[str], exit_code: int,
-                           attempts: Optional[List[int]] = None) -> str:
+                           attempts: Optional[List[int]] = None,
+                           label: Optional[str] = None) -> str:
     """Prose reason for a step-11 ATPG death BY SIGNAL — a CRASH, not a gap.
 
     MEASURED (spm x sky130A, plugin v1.8.50, image 0.2.45): on a clean
@@ -10483,17 +10536,25 @@ def _dft_atpg_crash_reason(pdk: Optional[str], exit_code: int,
     engine defect to be fixed in the tool, and it is named as such.
     chip-AGNOSTIC / PDK-AGNOSTIC.
     """
-    detected = pdk or "generic_unmapped"
+    detected = label or pdk or "generic_unmapped"
     sig = exit_code - 128 if exit_code and exit_code >= 128 else None
     tried = (f" across {len(attempts)} attempt(s) (exits {attempts})"
              if attempts else "")
+    # Only a NAMED pdk is in PDK_CONFIG. Asserting it for a mapped netlist whose
+    # library we could not name would restate the very confusion this label was
+    # introduced to remove.
+    _in_config = (f"{detected} IS in fault_atpg_run.PDK_CONFIG"
+                  if detected not in (_MAPPED_UNKNOWN_LIBRARY,
+                                      "generic_unmapped")
+                  else "its standard-cell library is not one this container "
+                       "configures")
     return (
         f"OSS Fault ATPG CRASHED on a library-mapped {detected} netlist: the "
         f"engine process was killed by a signal (exit {exit_code}"
         + (f" = 128 + SIG{sig}" if sig is not None else "")
         + f"){tried}, so no coverage was produced. This is NOT a capability "
         f"gap and must not be recorded as one: the netlist is library-mapped, "
-        f"{detected} IS in fault_atpg_run.PDK_CONFIG, and the identical call "
+        f"{_in_config}, and the identical call "
         f"on the identical input has been measured to succeed on retry "
         f"(coverage measured, faults_total > 0). It is a REAL DEFECT OF AN "
         f"IMPLEMENTED CAPABILITY — an engine crash to be fixed in the Fault "
@@ -10501,7 +10562,7 @@ def _dft_atpg_crash_reason(pdk: Optional[str], exit_code: int,
     )
 
 
-def _dft_atpg_gap_reason(pdk: Optional[str]) -> str:
+def _dft_atpg_gap_reason(pdk: Optional[str], label: Optional[str] = None) -> str:
     """Prose reason for the step-11 ATPG disclosed-skip, naming THIS run's PDK.
 
     The reason string used to be a constant that said Fault "is not turnkey on
@@ -10520,7 +10581,24 @@ def _dft_atpg_gap_reason(pdk: Optional[str]) -> str:
     library-mapped cells at all, which is the actual condition the OSS engine
     trips on.
     """
-    detected = pdk or "generic_unmapped"
+    detected = label or pdk or "generic_unmapped"
+    if detected == _MAPPED_UNKNOWN_LIBRARY:
+        # The netlist IS technology-mapped. Saying "a library-MAPPED netlist is
+        # required" about a library-mapped netlist told the reader to go and
+        # produce the thing they had already produced, and blamed the OSS
+        # engine for a library-recognition gap. Name what was actually observed.
+        return (
+            "OSS Fault ATPG could not measure sign-off stuck-at coverage on "
+            "this netlist. The netlist IS technology-mapped, but its standard-"
+            "cell library is not one this container configures, so no cell "
+            "model / Liberty could be resolved for it and the engine had no "
+            "runnable input. This is NOT a demonstration that the engine "
+            "cannot do the work and must not be recorded as a capability gap "
+            "of the engine: it is an unconfigured-library gap. Real scan "
+            "insertion DID run (scan_netlist_prelim.v retained). The remedy is "
+            "to configure this library (or pass its Liberty / cell model "
+            "explicitly) — not a different ATPG tool."
+        )
     return (
         "OSS Fault ATPG could not measure sign-off stuck-at coverage on this "
         "netlist (a library-MAPPED netlist with real stdcell DFFs is "
@@ -10803,6 +10881,11 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         # mapped sibling was right there and sniffs cleanly to ihp-sg13g2.
         sniff_netlist, pdk = _dft_atpg_sniff_pdk(
             project, "phase2/stage2/synth/netlist.v")
+        # What gets PUBLISHED as `pdk_detected`. Computed from the netlist that
+        # was actually sniffed, so "I could not name the library" is never
+        # published as "there are no library-mapped cells". See
+        # `_dft_atpg_pdk_label`.
+        pdk_label = _dft_atpg_pdk_label(pdk, sniff_netlist)
         # ── Step 11a — REAL SCAN INSERTION, before ATPG ────────────────────
         # `fault chain` builds an actual scan chain: the flops are stitched
         # sin→sout and the module gains the DFT ports, so the netlist that goes
@@ -11063,7 +11146,8 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                     isinstance(_atpg_ec, int) and _atpg_ec >= 128)
                 if _atpg_sig_death:
                     _reason = _dft_atpg_crash_reason(
-                        pdk, _atpg_ec, cov.get("atpg_attempt_exits"))
+                        pdk, _atpg_ec, cov.get("atpg_attempt_exits"),
+                        pdk_label)
                     _extra_flag = {"engine_crash": True,
                                    "atpg_attempt_exits":
                                        cov.get("atpg_attempt_exits")}
@@ -11081,14 +11165,14 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                         "not_run_stage": "precondition_unmet",
                         "missing_precondition": _ATPG_MAPPED_NETLIST_GLOB}
                 else:
-                    _reason = _dft_atpg_gap_reason(pdk)
+                    _reason = _dft_atpg_gap_reason(pdk, pdk_label)
                     _extra_flag = {
                         "capability_flag": "cap:atpg_signoff_coverage"}
                 _dft_disclose_skip(
                     dft_dir / "dft_atpg_not_run.json",
                     _reason,
                     {**_extra_flag,
-                     "pdk_detected": pdk or "generic_unmapped",
+                     "pdk_detected": pdk_label,
                      "atpg_exit": cov.get("atpg_exit"),
                      "faults_total": cov.get("faults_total"),
                      # DFT_FCC / 11-d3 — the producer's own declaration and
@@ -11149,7 +11233,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 f"gap (vibe-ic#581).",
                 {"budget_exceeded": True,
                  "wall_budget_s": _to,
-                 "pdk_detected": pdk or "generic_unmapped"})
+                 "pdk_detected": pdk_label})
             results.append(StepResult(
                 "dft_insertion", "SKIP", time.time() - t0,
                 f"Fault ATPG exceeded its {_to}s wall budget → disclosed-skip "
