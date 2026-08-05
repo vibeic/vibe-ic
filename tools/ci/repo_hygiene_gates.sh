@@ -288,6 +288,19 @@ run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check
 # after already publishing a wrong value. One vocabulary now (`_prose_polarity`),
 # and this finds the next extractor that does not consult it.
 run "prose extractors read polarity"    "$ROOT" python3 "$PG/prose_polarity_consulted_check.py"
+# The same shape one layer down: a program that parses N sources into records
+# and folds them with `dict.update` lets a source that says NOTHING about a key
+# overwrite one that said something — and which one wins is decided by the order
+# the files sorted in. Measured: six LEFs declared one macro, five with 61-65
+# obstruction rectangles and one with none; `sorted()` put the empty one last,
+# so it won, and a BLOCKING gate passed a layout with 28 real crossings.
+# Renaming a file flipped the verdict. This finds the next one.
+#
+# KNOWN AND DECLARED: this exits 1 on `macro_obs_geometry_intersect_check.py`
+# until the PR that fixes that ORIGINAL instance lands. It is a real defect, so
+# the guard is right to fire; it is not an exception and there is no list to add
+# it to. When that PR merges this goes green with nothing else changed.
+run "per-source record merges"          "$ROOT" python3 "$PG/per_source_record_merge_check.py"
 # vibe-ic#731 — `// This module controls ...` matches `module\s+(\w+)` and mints
 # a module that does not exist: 24 of them, measured, in #729. It is a DATAFLOW
 # question, not a presence one — the defect function CALLS the stripper, for a
