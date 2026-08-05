@@ -45,6 +45,8 @@ import _signoff_drc_format as _sdf  # the ONE producer/dialect answer
 # re-derived, per Bucket-A-ladder step 1 (ALREADY-PROGRAM).
 import sta_corner_record_completeness_check as _sta_slack
 
+import _sta_basis
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -1620,18 +1622,14 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
 # about itself. A post-route summary cannot be substantiated by pre-layout
 # reports, and a pre-layout summary cannot be substantiated by post-route
 # ones. chip/PDK-AGNOSTIC: flow-stage vocabulary only, no chip or tool name.
-_STA_BASIS_SCOPE_TOKENS = {
-    "PRE_LAYOUT": ("pre_pnr", "pre-pnr", "prepnr", "pre_layout", "pre-layout",
-                   "prelayout", "pre_route", "pre-route", "pre_floorplan"),
-    "POST_ROUTE": ("post_route", "post-route", "postroute", "post_pnr",
-                   "post-pnr", "postpnr", "post_layout", "post-layout",
-                   "postlayout"),
-}
-#: The `STA_BASIS: <VALUE>` stamp `_emit_multi_corner_sta` / `_emit_spef_sta`
-#: write into the report body. Read as a PREFIX so a new suffix (the emitter
-#: already ships `POST_ROUTE_SPEF` and `POST_ROUTE_NO_SPEF`) needs no change.
-_STA_BASIS_STAMP_RE = re.compile(r"^\s*#?\s*STA_BASIS\s*:\s*([A-Z_]+)",
-                                 re.M)
+# The token table and the stamp reader now live in `programs/_sta_basis.py`,
+# imported rather than restated. They were duplicated into two other changes,
+# and across a 24-stamp corpus the copies disagreed with this one on 7 — the
+# copies dropped the prefix NORMALISATION and returned the raw capture, so
+# `POST_ROUTE_SPEF` never equalled the canonical `POST_ROUTE` any consumer
+# compares against. Aliased here so every existing reference keeps working.
+_STA_BASIS_SCOPE_TOKENS = _sta_basis.BASIS_TOKENS
+_STA_BASIS_STAMP_RE = _sta_basis.STAMP_RE
 #: A report that says, in its own header, that its number was COPIED or
 #: APPROXIMATED from a post-PnR run. Keyed on the SELF-DISCLOSURE — both a
 #: derivation verb and a post-layout source — never on the emitter's version
@@ -1682,15 +1680,12 @@ def _scope_declared_basis(project_dir: Path) -> Optional[str]:
 
 
 def _report_declared_basis(text: str) -> Optional[str]:
-    """The basis a report DISCLOSES ABOUT ITSELF, from its `STA_BASIS:` stamp."""
-    m = _STA_BASIS_STAMP_RE.search(text)
-    if not m:
-        return None
-    val = m.group(1).upper()
-    for basis, toks in _STA_BASIS_SCOPE_TOKENS.items():
-        if any(val.startswith(t.replace("-", "_").upper()) for t in toks):
-            return basis
-    return None
+    """The basis a report DISCLOSES ABOUT ITSELF, from its `STA_BASIS:` stamp.
+
+    Delegates to `_sta_basis.declared_basis` — the single reader. Kept as a
+    module-level name because three call sites below and several tests import
+    it; the behaviour is unchanged."""
+    return _sta_basis.declared_basis(text)
 
 
 def _self_discloses_post_layout_derivation(text: str) -> bool:
