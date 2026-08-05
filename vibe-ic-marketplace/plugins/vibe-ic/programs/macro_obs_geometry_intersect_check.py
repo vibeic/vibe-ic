@@ -404,10 +404,72 @@ def spans(seg: Dict[str, Any], box: Tuple[float, float, float, float]) -> bool:
             and bx1 <= seg["x1"] <= bx2)
 
 
+def merge_macro_obs(per_file: Sequence[Dict[str, Dict[str, Any]]]
+                    ) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+    """Merge per-file `parse_macro_obs` results, and never let a file that
+    describes NO obstructions erase one that does.
+
+    A plain `dict.update` is last-wins, and discovery order is `sorted()`, so
+    the winner is decided by filename. That is fine while every declaration of
+    a master carries the same geometry. It is not fine when one of them carries
+    none — because "this file does not describe obstructions" and "this macro
+    has no obstructions" are different facts, and last-wins collapses the first
+    onto the second.
+
+    MEASURED on a real post-route project. Six LEFs in one IP directory declare
+    the same macro: five metal-stack variants carrying 61-65 OBS rects, and one
+    antenna-data file carrying zero. `sorted()` puts the antenna file LAST (the
+    byte `a` follows `M`), so it won:
+
+        LEF order                       merged OBS rects   crossings   verdict
+        sorted()      (antenna last)                   0           0   PASS
+        reversed      (antenna first)                 61          28   FAIL
+        antenna excluded                              65          45   FAIL
+
+    The gate reported `[PASS] ... All 79 placed master(s) resolved to a LEF` —
+    a completeness claim that is TRUE and does not mean what it reads as. The
+    master resolved; its obstructions did not load. 45 supply segments spanning
+    a declared obstruction went unreported because of alphabetical order.
+
+    So: an empty declaration never displaces a non-empty one. When two non-empty
+    declarations of one master DISAGREE, that is a real ambiguity this gate
+    cannot settle from LEF alone — it keeps the first and reports the conflict,
+    rather than silently preferring either. Reporting an ambiguity is not the
+    same as resolving it, and pretending to resolve it is how the wrong file
+    wins quietly.
+
+    Returns `(merged, conflicts)`."""
+    merged: Dict[str, Dict[str, Any]] = {}
+    seen_nonempty: Dict[str, Tuple[str, ...]] = {}
+    conflicts: List[Dict[str, Any]] = []
+    for d in per_file:
+        for master, entry in d.items():
+            rects = entry.get("obs") or []
+            if master not in merged:
+                merged[master] = entry
+                if rects:
+                    seen_nonempty[master] = tuple(sorted(map(repr, rects)))
+                continue
+            if not rects:
+                continue          # an empty declaration cannot displace anything
+            prev = seen_nonempty.get(master)
+            if prev is None:
+                merged[master] = entry        # first real geometry for it
+                seen_nonempty[master] = tuple(sorted(map(repr, rects)))
+                continue
+            cur = tuple(sorted(map(repr, rects)))
+            if cur != prev:
+                conflicts.append({
+                    "master": master,
+                    "kept_rect_count": len(merged[master].get("obs") or []),
+                    "other_rect_count": len(rects),
+                })
+    return merged, conflicts
+
+
 def audit(def_text: str, macro_lef_texts: Sequence[str]) -> Dict[str, Any]:
-    obs_by_master: Dict[str, Dict[str, Any]] = {}
-    for t in macro_lef_texts:
-        obs_by_master.update(parse_macro_obs(t))
+    obs_by_master, obs_conflicts = merge_macro_obs(
+        [parse_macro_obs(t) for t in macro_lef_texts])
     with_obs = {m: e for m, e in obs_by_master.items() if e["obs"]}
     um = _UNITS_RE.search(def_text)
     units = int(um.group(1)) if um else 1000
@@ -453,6 +515,10 @@ def audit(def_text: str, macro_lef_texts: Sequence[str]) -> Dict[str, Any]:
         "placed_masters": len(placed_masters),
         "masters_declared_by_lef": sorted(obs_by_master),
         "placed_masters_without_lef": without_lef,
+        # A master two supplied LEFs describe DIFFERENTLY. Not resolvable from
+        # LEF alone, so it is disclosed rather than decided: the reader can see
+        # that a choice existed, which a silent last-wins merge never showed.
+        "obs_declaration_conflicts": obs_conflicts,
     }
 
 
