@@ -22,10 +22,14 @@ But a disposition can say two very different things, in the same voice:
 tree. Nothing invokes `warn_acceptance_policy_check` -- not a flow step, not a
 runner, not a CI script, not a workflow. The named home was never built.
 
-MEASURED at v1.9.79 over the 36 pinned gates: 19 dispositions make no active
-home-claim at all (they say "unwired", "settle X first", "NOT READY" -- honest
-about being parked), 3 make an active claim that is BACKED by a real
-invocation, and **13 make an active claim that nothing in the tree backs**.
+RE-DERIVED 2026-08-05 at b85d68ac -- the tree that carries #804, so this census
+is taken against the umbrella that publishes `registered_gate_count` /
+`invoked_gate_count` / `not_invocable_gate_count` and emits ``INCOMPLETE`` when
+a registered gate never validly invoked. Over the population below: 19
+dispositions make no active home-claim at all (they say "unwired", "settle X
+first", "NOT READY" -- honest about being parked), 3 make an active claim that
+is BACKED by a real invocation, and **14 make an active claim that nothing in
+the tree backs**.
 
 The consequence is this repo's own recurring shape, one level up: the register
 measures *that someone thought about the gate*, and it is read as *the gate is
@@ -44,8 +48,24 @@ instrument). It pins the size of the problem so it cannot grow silently, and it
 prints the residual on every run, pass or fail -- the same shape, and for the
 same reason, as `p0_gate_invocability_drift_check`.
 
-THE PREDICATE, and the two ways it is easy to get wrong
-=======================================================
+THE POPULATION, which is not the pin
+====================================
+The population is EVERY gate the registry writes a disposition about, UNION the
+gates `p0_gate_invocability_drift_check` pins. Not the pin alone -- that was
+this file's own version of the defect it detects. The pin is one list of 36
+names; the dispositions are written by hand into four registers, and nothing
+requires the two to agree. A disposition written for a gate that is NOT in the
+pin -- a gate that got wired and dropped out of the pin while its stale claim
+stayed behind, a register grown for an invocable gate -- was outside the loop
+entirely, so its broken promise could never be counted, printed, or failed on.
+Measured at b85d68ac the two sets happen to line up in the direction that
+matters (32 dispositions, all 36 pinned gates covered, 4 of them with no
+disposition written), and "they happen to line up today" is exactly the property
+a derived population does not have to depend on. `dispositions_outside_pin` is
+printed on every run so the day they diverge is visible rather than silent.
+
+THE PREDICATE, and the three ways it is easy to get wrong
+=========================================================
 `measured (subset of) KNOWN_UNBACKED`. Subset, not a count: a count lets a
 newly-unbacked claim hide behind one that got wired.
 
@@ -69,6 +89,34 @@ half of the same control: if a future edit tightens the detector until nothing
 matches, the residual goes to zero AND those three stop being recognised as
 claims, and `test_a_backed_claim_is_still_recognised_as_a_claim` goes red.
 
+WRONG WAY 3 -- a claim detector that only recognises the phrasings it was built
+from. The first draft required the preposition to sit immediately after the
+verb: ``driven (at|from|by|explicitly)``. `protocol_gap_check`'s disposition
+reads
+
+    "KEEP registered, driven per-protocol from the L-layer spec that states
+     the inter-frame gap."
+
+which is the SAME promise, in the same present tense, as
+`crc_seed_consistency_check`'s "KEEP registered, driven from the
+vector-generation step that produces its input" -- and nothing in the tree
+invokes `protocol_gap_check.py` either (checked over the whole repository: no
+flow step, no runner, no orchestrator, no CI script, no workflow; the
+`eda_rtl_audit` MCP enum names the bare token and supplies only an rtl_dir,
+which cannot satisfy `--end-signal/--bus-idle/--min-cycles`, so it is not the
+L-layer home the disposition names). One hyphenated adverb between the verb and
+its preposition was the whole difference between counted and invisible. The
+detector now allows a short bounded modifier there.
+
+...and the over-correction that widening invites, pinned as its own test:
+`scope_periodic_pulse_check` reads "KEEP registered, driven ONLY WHERE the
+instrument is attached. No CI runner and no per-project umbrella can satisfy
+it." That is the register being honest that no home exists, and a detector
+widened to ``driven .* (at|from|by|where)`` reads it as a promise -- the same
+inversion as WRONG WAY 2, one remove out. The window may not cross a fullstop
+or a comma either, or "Nothing is driven. Everything at this tier is parked."
+and "not driven, and the argv is built by the umbrella" both become claims.
+
 Exit: 0 subset holds, 1 a newly-unbacked claim appeared, 2 could not measure.
 """
 from __future__ import annotations
@@ -90,8 +138,26 @@ REGISTRY_MODULE = "flow_compliance_check.py"
 
 #: An active present-tense claim that the gate IS driven from a named place.
 #: "driven at/from/by/explicitly", "wired into", "READY".
+#:
+#: A short modifier may sit between the verb and its preposition, because the
+#: register writes "driven per-protocol from the L-layer spec" for the same
+#: promise it writes "driven from the vector-generation step" for (WRONG WAY 3).
+#: The window is bounded three ways, and every bound is a false positive it was
+#: measured to prevent:
+#:
+#:   `.;:!?`   a fullstop is not an adverb -- without it, "Nothing is driven.
+#:             Everything at this tier is parked." matches on `driven ... at`;
+#:   `,`       a comma ends the clause -- without it, "driven, and the argv is
+#:             built by the umbrella" matches on `driven ... by`;
+#:   40 chars  a preposition four clauses later is not this verb's.
+#:
+#: What it still must NOT match is `scope_periodic_pulse_check`'s "driven only
+#: where the instrument is attached" -- no `at`/`from`/`by` stands alone in it
+#: ("attached" is not `\bat\b`), and adding `where` to the preposition set is
+#: the over-correction pinned by `test_driven_only_where_is_not_a_home_claim`.
 _ACTIVE_CLAIM = re.compile(
-    r"\bdriven\s+(?:at|from|by|explicitly)\b|\bwired\s+into\b|\bREADY\b")
+    r"\bdriven\b[^.;:!?,]{0,40}?\b(?:at|from|by|explicitly)\b"
+    r"|\bwired\s+into\b|\bREADY\b")
 
 #: ... and the negations that use the same words. Checked FIRST. A disposition
 #: that opens "NOT READY." is the register being honest about a gate it parked;
@@ -108,10 +174,11 @@ DRIVER_GLOBS: Tuple[str, ...] = (
     ".github/workflows/*.yml",
 )
 
-#: MEASURED 2026-08-05 at v1.9.79 over the 36 gates pinned by
-#: `p0_gate_invocability_drift_check.KNOWN_NOT_INVOCABLE`. Each entry's
-#: disposition makes an active home-claim and NO file in `DRIVER_GLOBS`
-#: invokes `<gate>.py`.
+#: MEASURED 2026-08-05, re-derived at b85d68ac (the tree carrying #804), over
+#: the derived population: the 36 gates pinned by
+#: `p0_gate_invocability_drift_check.KNOWN_NOT_INVOCABLE` UNION every gate the
+#: registry writes a disposition about. Each entry's disposition makes an active
+#: home-claim and NO file in `DRIVER_GLOBS` invokes `<gate>.py`.
 #:
 #: This list does not endorse any of them. A name is DELETED when the gate is
 #: wired or its disposition stops claiming a home -- never kept with a note,
@@ -128,6 +195,9 @@ KNOWN_UNBACKED: Tuple[str, ...] = (
     "mask_application_check",
     "output_artifact_check",
     "periodic_signal_required_check",
+    # The 14th, invisible until the claim detector stopped requiring the
+    # preposition to sit immediately after the verb (WRONG WAY 3).
+    "protocol_gap_check",
     "tester_oracle_health_check",
     "tristate_bus_check",
     "warn_acceptance_policy_check",
@@ -223,11 +293,25 @@ def measure(repo_root: Path,
     return unbacked, backed, no_claim
 
 
+def population(pinned: Sequence[str],
+               dispositions: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """``(population, dispositions_outside_pin)``.
+
+    The population is the UNION, not the pin. The pin answers "which gates
+    cannot be invoked"; the registers answer "what did we say about a gate".
+    Nothing keeps the two aligned, so a disposition written about a gate the pin
+    does not list -- a stale claim left behind after the gate got wired, a
+    register grown for an invocable gate -- would be examined by nobody. That is
+    this file's own defect turned on itself: a register read as coverage.
+    """
+    outside = sorted(set(dispositions) - set(pinned))
+    return sorted(set(pinned) | set(dispositions)), outside
+
+
 def _pinned_gates(programs_dir: Path) -> List[str]:
     """`p0_gate_invocability_drift_check.KNOWN_NOT_INVOCABLE`, read not retyped.
 
-    The two ratchets must be over the SAME population or this one silently
-    stops covering a gate the other still pins.
+    One of the two population sources; see `population`.
     """
     src = (programs_dir / "p0_gate_invocability_drift_check.py").read_text(
         errors="replace")
@@ -259,10 +343,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"CANNOT MEASURE: {registry} not found", file=sys.stderr)
         return RC_CANNOT_MEASURE
     try:
-        gates = _pinned_gates(programs_dir)
-    except (OSError, LookupError, ValueError) as exc:
+        pinned = _pinned_gates(programs_dir)
+        dispositions = read_dispositions(registry)
+    except (OSError, LookupError, ValueError, SyntaxError) as exc:
         print(f"CANNOT MEASURE: {exc}", file=sys.stderr)
         return RC_CANNOT_MEASURE
+
+    gates, outside_pin = population(pinned, dispositions)
 
     unbacked, backed, no_claim = measure(repo_root, gates, registry)
     recorded = set(KNOWN_UNBACKED)
@@ -271,10 +358,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # The residual, printed on EVERY run. A number only visible on failure is a
     # number nobody watches.
-    print(f"P0 dispositions over {len(gates)} not-invocable gates: "
+    print(f"P0 dispositions over {len(gates)} gates "
+          f"({len(pinned)} pinned not-invocable, {len(dispositions)} with a "
+          f"written disposition, {len(outside_pin)} of those outside the pin): "
           f"{len(unbacked)} claim a home nothing backs, "
           f"{len(backed)} claim a home that is real, "
           f"{len(no_claim)} make no claim")
+    for gate in outside_pin:
+        print(f"  outside-pin  {gate}")
     for gate in unbacked:
         print(f"  UNBACKED  {gate}")
     for gate in backed:
@@ -285,11 +376,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "program": "p0_disposition_backing_check",
             "summary": {
                 "examined": len(gates),
+                "pinned": len(pinned),
+                "with_disposition": len(dispositions),
+                "dispositions_outside_pin": len(outside_pin),
                 "unbacked": len(unbacked),
                 "backed": len(backed),
                 "no_claim": len(no_claim),
                 "pass": not new,
             },
+            "population": gates,
+            "dispositions_outside_pin": outside_pin,
             "unbacked": unbacked,
             "backed": backed,
             "no_claim": no_claim,
