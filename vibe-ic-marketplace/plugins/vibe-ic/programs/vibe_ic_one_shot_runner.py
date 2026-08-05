@@ -487,7 +487,37 @@ def _resolve_top_name(project: Path, ic_name: str, top_name: str,
     return top_name, override_note
 
 
+
+def _line_buffer_own_stream() -> None:
+    """Make this orchestrator's own prints land in the ORDER THEY HAPPENED.
+
+    Python block-buffers stdout when it is not a tty, so under the redirect
+    every real run uses (`> run.log 2>&1`) the parent's phase banners sat in a
+    4 KB buffer until exit while its children — which inherit the same fd and
+    write to it directly — flushed as they went. The file therefore recorded
+    ALL child output first and ALL banners last.
+
+    MEASURED (sha256 x sky130A, run1.log): `=== PHASE 2 ===` was followed
+    immediately by `DONE` with zero phase-2 output between them, which reads as
+    "phase 2 died instantly". Phase 2 had in fact run its full 3-iteration ECO
+    loop — at lines 109-131, ABOVE its own banner. Reproduced from first
+    principles with a 6-line parent/child script: banners emerge in order with
+    line buffering on and after everything with it off.
+
+    Nothing about the log is wrong except the order, which is the part a reader
+    uses to attribute a failure to a phase. Set once here rather than as
+    `flush=True` on each of the print sites, so a print added later cannot
+    silently reintroduce it.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except Exception:
+            pass          # a stream that cannot be reconfigured keeps its own
+
+
 def main() -> int:
+    _line_buffer_own_stream()
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default=_TOP_NAME_DEFAULT)
