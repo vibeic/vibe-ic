@@ -88,6 +88,10 @@ import _gate_invocation
 # `flow_step_execution_coverage_check` so a tier added here cannot be
 # unknown to the guard that adjudicates dependency ordering.
 import _flow_verdict_tiers as _T
+# The classified blocker list emitted BESIDE the tally. Import-only-downward:
+# this module reads `_flow_verdict_tiers` and nothing from here, so the verdict
+# path above cannot acquire a dependency on a classification.
+import _blocker_classification as _bc
 import fpga_board_capability as _fpga_cap
 
 try:
@@ -10600,6 +10604,65 @@ def main(argv: Optional[List[str]] = None) -> int:
         for adv in advisories:
             print(f"  ⚠ {adv}")
 
+    # ── the classified blocker list, beside the tally ──────────────────────
+    #
+    # THE TALLY IS NOT A MEASUREMENT OF THE DESIGN and this is the part that
+    # is. Measured in one round on one cell: real post-route 3-corner STA —
+    # strictly BETTER evidence — scored 17 PASSes LOWER, and disabling a
+    # deliberate cross-step check scored 2 PASSes HIGHER with the design
+    # untouched. X/Y moved twice, in opposite directions, for reasons that had
+    # nothing to do with the design. What describes the design is which steps
+    # are not green and WHAT EACH ONE IS — plugin defect, design fact, missing
+    # capability — and until this block that classification existed only as
+    # prose an agent might write, in a shape no consumer could read.
+    #
+    # STRICTLY ADDITIVE, and the ordering here is the proof: `overall`,
+    # `counts`, every promotion tier and every exit-code decision are already
+    # settled above. Nothing below is read by any of them. A classification
+    # that could move a verdict would immediately be worth gaming, which is the
+    # disease this exists to diagnose.
+    #
+    # Wrapped, for the same reason the audit emission below is wrapped: a
+    # defect in the classifier must not be able to change what this program
+    # reports about a chip. It is NOT silent — the failure is printed and, when
+    # `--json` is on, recorded in the report, because an empty blocker list
+    # that means "the classifier crashed" and an empty one that means "nothing
+    # is blocked" must not be the same artifact.
+    blocker_list_error = ""
+    # ONLY the steps this run ACTUALLY routed into the open-source-constraints
+    # deferral — never bare membership of `_OPEN_SOURCE_CONTAINER_BLOCKED_STEPS`.
+    # The table says "this step would also need a commercial tool to SIGN OFF",
+    # which is true of steps that are on the blocker list for entirely other
+    # reasons. Measured before narrowing: table membership classified 10 of 41
+    # blockers on the reference run as MISSING_CAPABILITY, four of them
+    # PASS_VOIDED_BY_DEPENDENCY and one a step whose own gate program ran and
+    # returned a verdict. `oss_blocked_skipped` and `os_constraints_deferrals`
+    # are decisions this run made; the table is a lookup that answers a
+    # neighbouring question.
+    _oss_deferred: Dict[Any, str] = {}
+    for _r in oss_blocked_skipped:
+        _oss_deferred[_r.id] = _OPEN_SOURCE_CONTAINER_BLOCKED_STEPS.get(
+            _r.id, "a commercial tool")
+    for _d in os_constraints_deferrals:
+        if _d.get("commercial_tool_required"):
+            _oss_deferred[_d["step_id"]] = _d["commercial_tool_required"]
+    try:
+        blockers = _bc.build_blockers(
+            results,
+            flow_steps=steps,
+            oss_blocked=_oss_deferred,
+            gate_summary_fn=_declared_gate_summary)
+        for _line in _bc.render_lines(blockers):
+            print(_line)
+    except Exception as _bc_exc:  # pragma: no cover - defence in depth
+        blockers = []
+        blocker_list_error = f"{type(_bc_exc).__name__}: {_bc_exc}"
+        print(f"flow_compliance_check: WARN — blocker classification failed "
+              f"({blocker_list_error}); the list below is EMPTY BECAUSE OF "
+              f"THAT, not because nothing is blocked", file=sys.stderr)
+    blocker_class_counts = _bc.class_counts(blockers)
+    blocker_sub_class_counts = _bc.sub_blocker_class_counts(blockers)
+
     if args.json:
         out = {
             "flow": args.flow,
@@ -10628,6 +10691,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             "allow_thin_input": bool(getattr(args, "allow_thin_input", False)),
             "input_doc_count": _count_input_docs(project),
             "ordering_violations": ordering_fail_lines,
+            # THE CLASSIFIED BLOCKER LIST, machine-readable, beside the tally.
+            # `counts` says how many; this says what each one IS, with the rule
+            # that decided it named in `basis` so a reader can audit the
+            # classification instead of trusting it. UNCLASSIFIED is a
+            # first-class answer here: an honest hole is workable, a wrong
+            # class is not.
+            "blocker_schema_version": _bc.SCHEMA_VERSION,
+            "blockers": blockers,
+            "blocker_class_counts": blocker_class_counts,
+            "blocker_sub_class_counts": blocker_sub_class_counts,
+            # Empty string on the normal path. Non-empty means the list above
+            # is empty because the classifier failed, which is a completely
+            # different fact from "nothing is blocked".
+            "blocker_list_error": blocker_list_error,
             "steps": [asdict(r) for r in results],
         }
         Path(args.json).write_text(json.dumps(out, indent=2))
@@ -10777,6 +10854,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "review_required": True}
                 for r in oss_blocked_skipped
             ],
+            # The classified blocker list, in the artifact the mcp-eda
+            # pre-burn guard and the dashboards already read. `failed_gates`
+            # here is a list of NAMES; this is the same population with the
+            # one fact a name does not carry — whether closing it is a plugin
+            # fix, a design FAIL that must never be greened, or a capability
+            # to name.
+            "blocker_schema_version": _bc.SCHEMA_VERSION,
+            "blockers": blockers,
+            "blocker_class_counts": blocker_class_counts,
+            "blocker_sub_class_counts": blocker_sub_class_counts,
+            "blocker_list_error": blocker_list_error,
             "command_argv": list(sys.argv),
         }
         # v1.6.27: route via auto-router so the audit lands at
