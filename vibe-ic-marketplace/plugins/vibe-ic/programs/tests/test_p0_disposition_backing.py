@@ -168,7 +168,7 @@ def _run(root: Path, out: Path):
     return subprocess.run(
         [sys.executable, str(PROGRAMS / "p0_disposition_backing_check.py"),
          "--repo-root", str(root), "--json", str(out)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=30)
 
 
 def test_a_newly_unbacked_claim_fails(tmp_path, monkeypatch):

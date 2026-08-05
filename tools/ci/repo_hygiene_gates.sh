@@ -144,6 +144,22 @@ run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit
 run "openroad TCL deprecations"     "$PLUGIN" python3 programs/openroad_tcl_deprecation_check.py
 run "practical notes specificity"   "$PLUGIN" python3 programs/practical_notes_specificity_check.py
 
+# A disposition in the P0 registers can assert a home ("driven at the final
+# acceptance gate") in the same present tense the one true claim above uses
+# ("READY -- wired into tools/ci/repo_hygiene_gates.sh"), and nothing could tell
+# them apart. Measured at v1.9.79: of the 36 gates the invocability ratchet
+# pins, 3 claim a home that is real, 20 claim none, and 13 claim one that no
+# flow step, runner, CI script or workflow backs.
+#
+# It is a RATCHET, not a wiring: it does not fail the 13 -- turning them red
+# today would block every landing on prose, and each needs its own engineering.
+# It stops a 14th arriving unnoticed and prints the residual on every run.
+#
+# Wired HERE and not in the P0 umbrella for the same reason as the two above:
+# it takes no project, so the per-project umbrella cannot invoke it and it would
+# run nowhere at all -- which is the exact condition it exists to detect.
+run "P0 disposition backing"        "$ROOT" python3 "$PG/p0_disposition_backing_check.py" --repo-root "$ROOT"
+
 # vibe-ic#354 — the image-version gate is BLOCKING. It failed loudly on main
 # for six versions (0.2.29 pinned in 13 places, never published) while nothing
 # enforced it. --require-remote: the pinned tag must actually RESOLVE on ghcr;
