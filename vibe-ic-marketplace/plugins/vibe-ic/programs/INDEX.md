@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1058
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1058)
+- **Total programs (excluding helpers / shims):** 1064
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1064)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1049 |
+| `any` | 1055 |
 
 ## Alphabetical listing
 
@@ -263,6 +263,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `defect_artifact_snapshot` | any | v0.2.98 | Filing-side helper for the field-agent / community-backlog filing flow |
 | `deliverable_verdict_consistency_check` | any | — | a deliverable may not contradict the orchestrator it claims to summarise. |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC. |
+| `derived_corpus_figure_check` | any | — | A checker's docstring may not state a corpus funnel it does not compute. |
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation. |
 | `design_input_digest` | any | — | a published tally must carry a record of WHAT it was computed over, so a reader can tell "the design improved" from "the ruler changed". |
 | `design_one_shot_runner` | any | Wave 45 | the DESIGN one-shot runner (Phase 1 -> Phase 2: (doc|prompt) → L1-L27 JSON → RTL → SOF → <half-duplex-tester>). |
@@ -706,6 +707,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_via_patch_meets_layer_min_width_check` | any | — | a via's metal patch must be at least as wide as that metal layer's own declared minimum width. |
 | `pdk_yosys_flatten_for_quartus` | any | — | v1.6.222 (ORGANIC-20260512-followup-2). |
 | `per_opcode_response_latency_table_check` | any | v0.119.30 | gate (LL-33) catching extractor failures on per-opcode response latency tables. |
+| `per_source_record_merge_check` | any | — | Find per-source record merges whose verdict is decided by filename order. |
 | `perc_corpus_sweep` | any | v0.2.4 | run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS of already-routed designs, deterministically, with NO container needed. |
 | `perc_signoff_check` | any | — | Step 28 PERC / reliability sign-off gate (v2.3 flow-completeness review). |
 | `periodic_signal_required_check` | any | — | Verify that for every protocol-mandated periodic device-side activity (wake pulse, heartbeat, keepalive), the RTL contains a generator mo... |
@@ -763,6 +765,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pnr_doctor` | any | v0.1.96 | OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program). |
 | `pnr_timing_repair_completeness_check` | any | v0.1.26 | chip-AGNOSTIC static audit of an OpenROAD P&R Tcl script for the MANDATORY setup-timing-repair sequence. |
 | `pnr_via_stack_completeness_check` | any | — | chip-AGNOSTIC audit of how many routing layers the PDK actually supports vs how many the PnR flow ended up using. |
+| `policy_direction_pin_check` | any | — | A DIRECTION argued in prose and left unpinned by every test. vibe-ic. |
 | `port_convention_corpus` | any | v0.3.18 | v0.3.18 (ORGANIC #520, Bucket C). |
 | `port_parser` | any | — | the SHARED interface-port reader for the deterministic solvers. |
 | `post_layout_sim_check` | any | — | Verify post-layout gate-level simulation with SDF back-annotation. |
@@ -1133,7 +1136,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1049 programs)
+### `any` (1055 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1369,6 +1372,7 @@ _(no programs in this group)_
 - `defect_artifact_snapshot` — Filing-side helper for the field-agent / community-backlog filing flow  _[v0.2.98]_
 - `deliverable_verdict_consistency_check` — a deliverable may not contradict the orchestrator it claims to summarise.
 - `derived_clock_sdc_required_check` — Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC.
+- `derived_corpus_figure_check` — A checker's docstring may not state a corpus funnel it does not compute.
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation.
 - `design_input_digest` — a published tally must carry a record of WHAT it was computed over, so a reader can tell "the design improved" from "the ruler changed".
 - `design_one_shot_runner` — the DESIGN one-shot runner (Phase 1 -> Phase 2: (doc|prompt) → L1-L27 JSON → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
@@ -1810,6 +1814,7 @@ _(no programs in this group)_
 - `pdk_via_patch_meets_layer_min_width_check` — a via's metal patch must be at least as wide as that metal layer's own declared minimum width.
 - `pdk_yosys_flatten_for_quartus` — v1.6.222 (ORGANIC-20260512-followup-2).
 - `per_opcode_response_latency_table_check` — gate (LL-33) catching extractor failures on per-opcode response latency tables.  _[v0.119.30]_
+- `per_source_record_merge_check` — Find per-source record merges whose verdict is decided by filename order.
 - `perc_corpus_sweep` — run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS of already-routed designs, deterministically, with NO container needed.  _[v0.2.4]_
 - `perc_signoff_check` — Step 28 PERC / reliability sign-off gate (v2.3 flow-completeness review).
 - `periodic_signal_required_check` — Verify that for every protocol-mandated periodic device-side activity (wake pulse, heartbeat, keepalive), the RTL contains a generator mo...
@@ -1867,6 +1872,7 @@ _(no programs in this group)_
 - `pnr_doctor` — OpenROAD P&R-log error classifier (synth-doctor Pattern-B → program).  _[v0.1.96]_
 - `pnr_timing_repair_completeness_check` — chip-AGNOSTIC static audit of an OpenROAD P&R Tcl script for the MANDATORY setup-timing-repair sequence.  _[v0.1.26]_
 - `pnr_via_stack_completeness_check` — chip-AGNOSTIC audit of how many routing layers the PDK actually supports vs how many the PnR flow ended up using.
+- `policy_direction_pin_check` — A DIRECTION argued in prose and left unpinned by every test. vibe-ic.
 - `port_convention_corpus` — v0.3.18 (ORGANIC #520, Bucket C).  _[v0.3.18]_
 - `port_parser` — the SHARED interface-port reader for the deterministic solvers.
 - `post_layout_sim_check` — Verify post-layout gate-level simulation with SDF back-annotation.
