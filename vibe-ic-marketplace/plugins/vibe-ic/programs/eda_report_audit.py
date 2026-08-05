@@ -597,6 +597,23 @@ STRONG_SIGNATURE_GROUPS = {
         ["klayout", "netlistcomparer", "power-only devices dropped",
          "circuits match uniquely"],
     ],
+    # An OpenROAD PSM `analyze_power_grid` IR-drop SUMMARY is legitimately
+    # COMPACT: the runner emits a small structured JSON (engine id + power
+    # nets + worst-drop + verdict), not a multi-KB transcript. So a
+    # genuinely-real report from ANY design fell under the 1024 B floor
+    # (MIN_REPORT_BYTES["ir_drop"]) and was false-rejected as a "hand-typed
+    # stub" — the SAME small-design false-positive already fixed for `sta`
+    # and `lvs` above, but never wired for `ir_drop`, which shares that
+    # floor. Measured: 16 of 16 authentic openroad-psm ir_drop.json across
+    # benchmark-data are <1024 B (197-611 B). The triple below is the
+    # producer's self-identifying output — engine id + the producing
+    # OpenROAD command + the power-net schema field — content a
+    # "violations: 0" stub could not carry without reproducing a real PSM
+    # run. The basic tool-signature requirement still gates. chip-AGNOSTIC:
+    # universal PSM output structure, no chip / net / vendor / node literal.
+    "ir_drop": [
+        ["openroad-psm", "analyze_power_grid", "power_nets"],
+    ],
 }
 
 
