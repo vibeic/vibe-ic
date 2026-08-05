@@ -296,10 +296,15 @@ run "prose extractors read polarity"    "$ROOT" python3 "$PG/prose_polarity_cons
 # so it won, and a BLOCKING gate passed a layout with 28 real crossings.
 # Renaming a file flipped the verdict. This finds the next one.
 #
-# KNOWN AND DECLARED: this exits 1 on `macro_obs_geometry_intersect_check.py`
-# until the PR that fixes that ORIGINAL instance lands. It is a real defect, so
-# the guard is right to fire; it is not an exception and there is no list to add
-# it to. When that PR merges this goes green with nothing else changed.
+# It exits 0 on this tree. That was NOT true when this line was written: the
+# ORIGINAL instance in `macro_obs_geometry_intersect_check.py` was still in
+# flight on its own branch and the gate fired on it, correctly. That branch has
+# landed and the gate went green with nothing else changed — which is the
+# behaviour a guard with no exception list has, and the reason there is none.
+#
+# The gate prints its clause funnel on PASS as well as on FAIL, because an
+# exit 0 whose predicate never reached its decision point reads exactly like a
+# clean corpus and the exit code cannot tell them apart.
 run "per-source record merges"          "$ROOT" python3 "$PG/per_source_record_merge_check.py"
 # vibe-ic#731 — `// This module controls ...` matches `module\s+(\w+)` and mints
 # a module that does not exist: 24 of them, measured, in #729. It is a DATAFLOW
