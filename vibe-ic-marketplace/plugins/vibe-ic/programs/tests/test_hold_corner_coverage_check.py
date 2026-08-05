@@ -341,3 +341,74 @@ class TestTheStanceCannotOutrankTheScript:
         assert "source[tcl] FAIL" in printed
         assert "CONTRADICTION" in printed
         assert json.loads(out.read_text())["contradiction"] is True
+
+
+class TestProcessEqualsBannerIsParsed:
+    """Bidirectional negative control for the ``process=<LABEL>`` hold-view
+    banner (Rule 2). The emitter writes its explicit hold-view line as
+    ``=== HOLD corner: process=FF liberty=... ===``. Before the ``=`` boundary
+    fix, ``_PROC_RE`` (copied from a FILENAME matcher) could not see the ``FF``
+    after ``=``, so a hold sign-off GENUINELY run at FF was reported
+    NO_FEED_CORNER whenever the read_liberty name did not itself encode the
+    corner (the custom-PDK / best-case-liberty shape the published corpus never
+    covered). These tests pin: FF banner -> PASS (was the false FAIL), SS banner
+    -> still FAIL (the wrong-corner defect is NOT swallowed), FF-named liberty
+    -> still PASS (no regression to the existing filename path)."""
+
+    # A hold Tcl whose ONLY FF signal is the emitter's process= banner: the
+    # read_liberty name is corner-less on purpose (a "best case" liberty, as
+    # some PDKs ship, whose filename does not spell ff/ss/tt).
+    _FF_BANNER_ONLY = (
+        "read_liberty /pdk/lib/stdcells_bestcase.lib\n"
+        "read_verilog design.v\n"
+        "link_design top\n"
+        "read_sdc design.sdc\n"
+        "report_checks -path_delay min -group_path_count 3\n"
+        'puts "=== HOLD corner: process=FF liberty=/pdk/lib/stdcells_bestcase.lib, SPEF=x.spef ==="\n'
+    )
+    _SS_BANNER_ONLY = (
+        "read_liberty /pdk/lib/stdcells_worstcase.lib\n"
+        "read_verilog design.v\n"
+        "link_design top\n"
+        "read_sdc design.sdc\n"
+        "report_checks -path_delay min -group_path_count 3\n"
+        'puts "=== HOLD corner: process=SS liberty=/pdk/lib/stdcells_worstcase.lib, SPEF=x.spef ==="\n'
+    )
+
+    def test_ff_process_equals_banner_is_recognized_as_fast(self):
+        # FORWARD: fails against the byte-identical pre-fix file
+        # (NO_FEED_CORNER), passes after the ``=`` boundary is honoured.
+        verdict, rc, report = mod.evaluate(self._FF_BANNER_ONLY)
+        assert verdict == "PASS", report
+        assert rc == 0
+        assert report["corner_basis"] == "declared_hold_view"
+        assert report["judged_corners"] == ["FF"]
+
+    def test_ss_process_equals_banner_still_fails(self):
+        # REVERSE (must still FAIL, BOTH pre- and post-fix): the ``=`` boundary
+        # must not blanket-pass. A hold banner naming the SLOW corner is the
+        # real wrong-corner defect and stays a FAIL — this is the control that
+        # would catch a fix that "widened until everything is green". The
+        # verdict invariant (FAIL) holds against the byte-identical pre-fix file
+        # too (there it fails as NO_FEED_CORNER).
+        verdict, rc, report = mod.evaluate(self._SS_BANNER_ONLY)
+        assert verdict == "FAIL", report
+        assert rc == 1
+
+    def test_ss_process_equals_banner_reason_is_legible_after_fix(self):
+        # After the fix the SS banner fails for the RIGHT reason (the corner is
+        # now visible), not the coincidental NO_FEED_CORNER.
+        verdict, rc, report = mod.evaluate(self._SS_BANNER_ONLY)
+        assert report["judged_corners"] == ["SS"]
+        assert report["reason"] == "HOLD_NOT_AT_FF"
+
+    def test_ff_named_liberty_still_passes_no_regression(self):
+        # REVERSE (must still PASS): the pre-existing filename path — an
+        # ff-named liberty with no banner — is unchanged by the ``=`` addition.
+        tcl = (
+            "read_liberty /pdk/lib/stdcells__ff_1p10v_m40c.lib\n"
+            "report_checks -path_delay min\n"
+        )
+        verdict, rc, report = mod.evaluate(tcl)
+        assert verdict == "PASS", report
+        assert report["hold_feed_corners"] == ["FF"]

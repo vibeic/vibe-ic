@@ -162,10 +162,19 @@ _SLOW = {"ss", "slow_slow", "slowslow", "slow"}
 _TYP = {"tt", "typical", "typ", "nom"}
 
 _PROC_RE = re.compile(
-    r"(?:^|[_/\-.\s:,])"
+    # The boundary class includes ``=`` so a ``key=corner`` token parses. The
+    # emitter writes its EXPLICIT hold-view line (Rule 2) as
+    # ``=== HOLD corner: process=FF liberty=... ===``; this pattern was copied
+    # from corner_coverage_audit.PROCESS_RE, a FILENAME matcher whose class
+    # (``_ / - . whitespace : ,``) never included ``=``, so the emitter's OWN
+    # banner never matched and a hold sign-off genuinely run at FF was reported
+    # NO_FEED_CORNER. The sibling sta_corner_record_completeness_check parses the
+    # same banner with ``process=([\w.+-]+)`` and has no such gap. ``=`` cannot
+    # turn a non-FF hold green: a ``process=SS`` banner still yields only SS.
+    r"(?:^|[_/\-.\s:,=])"
     r"(ss|tt|ff|sf|fs|slow_slow|fast_fast|typical|slowslow|fastfast|"
     r"slow_fast|fast_slow|slowfast|fastslow|slow|fast|typ|nom)"
-    r"(?:[_/\-.\s:,]|$)",
+    r"(?:[_/\-.\s:,=]|$)",
     re.IGNORECASE,
 )
 
