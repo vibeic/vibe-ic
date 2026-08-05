@@ -365,6 +365,66 @@ def test_a_real_pack_does_not_rename_a_design_declared_top(
     assert l9[ptm.REFERENCE_FIELD]["name"] == pack_top
 
 
+def _runner_tail_reconcile(gd):
+    """What the runner does at the tail of the protocol-synth chain.
+
+    Kept as a small local mirror rather than importing the 63k-line
+    runner: it reads the two documents off disk and calls the reconciler,
+    which is exactly the runner's step. It is not a stand-in for the fix
+    — `reconcile` behaves identically whether or not the packs were
+    patched; what changes is whether the packs left it anything to act on.
+    """
+    l9_path = gd / "L9_INTEGRATION_SPEC.json"
+    l9 = json.loads(l9_path.read_text())
+    l1 = json.loads((gd / "L1_DATASHEET.json").read_text())
+    ptm.reconcile(l9, l1.get("ic_name"))
+    l9_path.write_text(json.dumps(l9) + "\n")
+    return l9
+
+
+def test_two_real_packs_end_to_end_the_loser_does_not_keep_the_identifier(
+        tmp_path):
+    """The headline case, driven through both real packs and the runner tail.
+
+    A Bluetooth document mentions start bits and stop bits, so the UART
+    detector fires alongside the BLE detector. The UART pack writes
+    `top_module`; the BLE pack has none and writes only `ic_name`. The
+    committed artefact for `ble` records `top_module: "PC16550D"`.
+    """
+    import importlib
+
+    gd = tmp_path / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(
+        json.dumps(_PRE_PACK_L9) + "\n")
+    for name in ("L1_DATASHEET.json", "L2_FRS.json", "L3_CMD_PROTOCOL.json",
+                 "L4_REGMAP.json", "L5_ADI_SPEC.json", "L6_CONTROL_LOGIC.json",
+                 "L7_TEST_DEBUG.json", "L8_RTL_CONSTANTS.json",
+                 "L8_TIMING_WAVEFORM.json", "L10_TEST_CASES.json",
+                 "L11_OTP_CONTENT.json", "L12_BEHAVIORAL_SEQUENCES.json",
+                 "L13_LAB_CALIBRATION.json", "L17_CHANNEL_CATALOG.json",
+                 "L19_CONSTRAINTS_PDK.json", "L20_POWER_INTENT.json",
+                 "L22_VERIFICATION_PLAN.json", "L23_BRINGUP_PLAN.json"):
+        (gd / name).write_text(json.dumps({"schema_version": 2}) + "\n")
+
+    ble_name = "Bluetooth Low Energy 5.2 (Bluetooth Core Specification)"
+    importlib.import_module("uart_protocol_synth").apply_uart_synth(
+        gd, True, "PC16550D UART")
+    importlib.import_module("ble_protocol_synth").apply_ble_synth(
+        gd, True, ble_name)
+    l9 = _runner_tail_reconcile(gd)
+
+    settled = json.loads((gd / "L1_DATASHEET.json").read_text())["ic_name"]
+    assert settled == ble_name, "fixture precondition: BLE won the identity"
+    assert l9["top_module"] != "PC16550D", (
+        "a Bluetooth design still tops out as a 1980s UART part; "
+        f"L1.ic_name={settled!r}")
+    assert derive_top_module_name({"ic_name": settled}, l9,
+                                  None) != "PC16550D"
+    # and the field is still populated — the gate keeps its credit
+    assert l9["top_module"]
+
+
 def test_l9_field_count_gate_verdict_is_unchanged_by_this_fix(tmp_path):
     """Run the REAL gate predicate on a real pack's L9, both ways."""
     from l_doc_structured_field_count_check import _check_l_doc
