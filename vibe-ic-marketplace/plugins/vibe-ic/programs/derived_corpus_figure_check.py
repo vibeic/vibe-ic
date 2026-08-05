@@ -75,7 +75,10 @@ Exit codes
 ----------
     0  no blocking finding (advisory findings do not change this)
     1  at least one blocking finding
-    2  bad usage / unreadable root
+    2  bad usage, unreadable root, or an EMPTY population -- "no funnel found"
+       over zero files is not a clean result, it is the absence of one, and the
+       umbrella that aggregates this reads the exit code, not the prose
+       (vibe-ic#564). This gate is subject to its own rule.
 
 chip-AGNOSTIC: reads Python source and counts files. No PDK, vendor, process or
 design literal appears here or can affect any result.
@@ -411,10 +414,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(text)
         return rc
 
+    swept = sum(1 for _ in programs.rglob("*.py"))
+    if swept == 0:
+        # vibe-ic#564: a gate that read NOTHING must not exit 0. "No funnel
+        # found" over an empty population is not a clean result, it is the
+        # absence of a result, and the umbrella that aggregates this reads the
+        # exit code rather than the prose.
+        print(f"[ERROR] derived_corpus_figure_check: 0 Python file(s) under "
+              f"{programs} — refusing to report a verdict over an empty "
+              f"population", file=sys.stderr)
+        return RC_USAGE
+
     findings = sweep(root, programs, tuple(args.skip), not args.no_evaluate)
     blocking = [f for f in findings if f["blocking"]]
     advisory = [f for f in findings if not f["blocking"]]
-    swept = sum(1 for _ in programs.rglob("*.py"))
     adopters = sorted({f["file"] for f in findings if f["rule"].startswith("figure-")})
 
     if args.json:
@@ -445,11 +458,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  bindings checked in: {', '.join(adopters)}")
 
     if blocking:
-        print(f"[FAIL] derived_corpus_figure_check: {len(blocking)} stated "
-              f"figure(s) that nothing recomputes")
+        print(f"[FAIL] derived_corpus_figure_check: examined {swept} file(s), "
+              f"{len(blocking)} stated figure(s) that nothing recomputes")
         return RC_FOUND
-    print(f"[PASS] derived_corpus_figure_check: no unrecomputed corpus funnel "
-          f"({len(advisory)} advisory)")
+    print(f"[PASS] derived_corpus_figure_check: examined {swept} file(s), no "
+          f"unrecomputed corpus funnel ({len(advisory)} advisory)")
     return RC_CLEAN
 
 
