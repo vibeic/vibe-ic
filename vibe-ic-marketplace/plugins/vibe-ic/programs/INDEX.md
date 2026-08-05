@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1055
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1055)
+- **Total programs (excluding helpers / shims):** 1056
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1056)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1046 |
+| `any` | 1047 |
 
 ## Alphabetical listing
 
@@ -205,6 +205,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
 | `container_exec_deadline_check` | any | — | A `docker exec` whose deadline bounds the CLIENT and not the tool. |
 | `container_image_provenance` | any | — | record, and on request enforce, which IMAGE the run's `--container` actually executes. |
+| `control_substance_check` | any | — | how many of a change's pre-fix control tests actually OBSERVED A VALUE, and how many only noticed that something was absent. |
 | `conv_encoder_synth` | any | — | DETERMINISTIC solver for the CVDP convolutional encoder family (rate-1/n, constraint length K, generator polynomials stated as binary tap... |
 | `convergence_doctrine_present_check` | any | — | ORGANIC #716 |
 | `conway_2d_synth` | any | — | DETERMINISTIC 2-D cellular-automaton (Conway's Game of Life-class) -> RTL synth. |
@@ -1127,7 +1128,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1046 programs)
+### `any` (1047 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1306,6 +1307,7 @@ _(no programs in this group)_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
 - `container_exec_deadline_check` — A `docker exec` whose deadline bounds the CLIENT and not the tool.
 - `container_image_provenance` — record, and on request enforce, which IMAGE the run's `--container` actually executes.
+- `control_substance_check` — how many of a change's pre-fix control tests actually OBSERVED A VALUE, and how many only noticed that something was absent.
 - `conv_encoder_synth` — DETERMINISTIC solver for the CVDP convolutional encoder family (rate-1/n, constraint length K, generator polynomials stated as binary tap...
 - `convergence_doctrine_present_check` — ORGANIC #716
 - `conway_2d_synth` — DETERMINISTIC 2-D cellular-automaton (Conway's Game of Life-class) -> RTL synth.
