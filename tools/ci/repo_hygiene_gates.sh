@@ -659,6 +659,27 @@ run "flow-gate grid" "$PLUGIN" python3 programs/flow_gate_grid.py
 
 run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_check.py
 
+# A call site writes a literal into a parameter that picks between named
+# alternatives, prose argues WHICH WAY, and no test can see the difference.
+# MEASURED on review: flipping one such word — `on_conflict="richer"` to
+# `"sparser"` — left all 25 tests of the PR that introduced it green, including
+# a test named for the policy, because that test drove the HELPER under both
+# values instead of the CALL SITE under one. A helper test gets greener the more
+# thorough it is and never dies under the flip.
+#
+# This gate performs the flip and runs the tests, because there is no static
+# form of the question: "a test mentions the value" is satisfied by a test that
+# asserts nothing about it.
+#
+# COST: it runs pytest, so it is the slow one here — ~4 min on a quiet host for
+# this corpus (one argued site, 32 candidate test files, two flips plus a
+# baseline narrowed to the file that died). That is disclosed rather than hidden
+# because it is the reason to keep the ARGUED population small and honest.
+#
+# rc=2 (a site it could not decide) BLOCKS, deliberately: this gate exists
+# against checks that go green by declining to look, and that includes itself.
+run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins
+
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
 gate_dispatch_finish
