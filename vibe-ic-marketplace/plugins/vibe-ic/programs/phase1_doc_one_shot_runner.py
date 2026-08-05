@@ -63090,6 +63090,56 @@ def main() -> int:
         print(f"      L10↔L3 sweep FAILED (fail-open): {_sweep_err}",
               file=sys.stderr)
 
+    # LAST word on who named this design's top module. Runs here, after the
+    # whole protocol-synth chain, for the same reason the L4 reconciler below
+    # runs here: the wrong value is not written by any one overlay. Detectors
+    # co-fire — a document that mentions start bits and stop bits trips the
+    # UART detector whatever else it is about — and among the packs that fire,
+    # the one that writes `L9.top_module` need not be the one whose `ic_name`
+    # ends up naming the design. Measured in this repo's own committed
+    # artefacts: `ble` and `io_link` top out as `PC16550D`, `ddr4` as
+    # `DDR3_SDRAM_component`, `ddr5` and `gddr6` as `HBM3_stack_on_interposer`,
+    # `qspi_ospi` as `SPI`, `sas` as `AHCI_HBA`.
+    #
+    # `phase2_scaffold_gen.derive_top_module_name` ranks L9.top_module above
+    # L1.ic_name and sanitizes the winner into the Verilog top-module
+    # identifier, so this is not a labelling question — it decides what the
+    # RTL, the QSF and the full-stack TB all bind to.
+    #
+    # `_pack_top_module.apply` (called by each pack in place of its bare
+    # assignment) leaves the record this reads; `reconcile` compares the
+    # ic_name recorded WITH the claim against the ic_name left standing and
+    # puts the displaced value back when they disagree. It never removes or
+    # empties `top_module` — `l_doc_structured_field_count_check` counts a
+    # non-empty one toward L9's >=3 typed structural fields.
+    # Fail-open: a broken reconcile must not lose an otherwise complete run.
+    try:
+        import _pack_top_module as _ptm_rec
+        _gd_ptm = _pl.generated_docs_dir(project)
+        _l9p_ptm = _gd_ptm / "L9_INTEGRATION_SPEC.json"
+        if _l9p_ptm.is_file():
+            _l9_ptm = json.loads(_l9p_ptm.read_text())
+            _settled_ic = None
+            _l1p_ptm = _gd_ptm / "L1_DATASHEET.json"
+            if _l1p_ptm.is_file():
+                try:
+                    _l1_ptm = json.loads(_l1p_ptm.read_text())
+                    if isinstance(_l1_ptm, dict):
+                        _settled_ic = _l1_ptm.get("ic_name")
+                except (OSError, ValueError):
+                    _settled_ic = None
+            _ptm_change = _ptm_rec.reconcile(_l9_ptm, _settled_ic)
+            if _ptm_change:
+                _stamp.dump(_l9p_ptm, _l9_ptm)
+                print(f"      → L9 top_module {_ptm_change['action']}: "
+                      f"{_ptm_change.get('was')!r} → "
+                      f"{_ptm_change.get('top_module')!r} "
+                      f"(pack ic_name {_ptm_change.get('pack_ic_name')!r} "
+                      f"≠ settled {_ptm_change.get('settled_ic_name')!r})")
+    except Exception as _ptm_err:
+        print(f"      L9 top_module reconcile FAILED (fail-open): "
+              f"{_ptm_err}", file=sys.stderr)
+
     # #516 — LAST word on L4's register-map claims. Runs here, after every
     # L-doc generator, post-emit walker and protocol-synth overlay has had its
     # turn, because the false claim this repairs is not written by any of them
