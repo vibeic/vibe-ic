@@ -29999,8 +29999,26 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(rpt_phase3 / "si_crosstalk.json"))
 
     # --- ORGANIC-20260531: Step 34 metal fill (filler_placement) --------
+    # `filled.def` — and its siblings `metal_fill.{log,done}` and
+    # `reports/density.{rpt,json}` — are computed FROM the routed DEF, so this
+    # guard is DATED against that DEF rather than testing the output's bare
+    # existence. Measured escape: after a die change (core 45126 -> 71930 um^2)
+    # PnR correctly invalidated its own cache and rewrote `<top>.def`, while
+    # `filled.def`, `metal_fill.log` and `density.json` kept the previous
+    # round's mtime ~4h earlier — and `density.json` still quoted the OLD
+    # core's utilization to four significant figures as this round's number.
+    # Same predicate as the sign-off emitters below, deliberately: a flow with
+    # two freshness predicates that answer differently is the defect one level
+    # up.
     filled_def = pnr_out / "filled.def"
-    if primary_def.is_file() and not filled_def.is_file():
+    if primary_def.is_file() and _signoff_regen(filled_def, primary_def):
+        if filled_def.is_file():
+            # DISCLOSE it. The escape was silent — the whole cost of the bug
+            # was that nothing in the run said the fill had not re-run.
+            notes.append(
+                "metal fill RE-RUN: filled.def was older than the routed DEF "
+                "it derives from (superseded floorplan) — the stale fill and "
+                "its density report were NOT reused")
         if _emit_metal_fill(project, top, pdk, container, filled_def, notes):
             written.append(str(filled_def))
             written.append(str(pnr_out / "metal_fill.done"))
