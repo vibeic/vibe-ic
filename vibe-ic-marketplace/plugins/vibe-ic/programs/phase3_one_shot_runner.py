@@ -32304,6 +32304,45 @@ def _measure_posteco_mcorner_ocv(project: Path, top: str, pdk: PdkConfig,
                 else "base_route_spef")
     out["parasitics_source"] = _src
     posteco_rpt = Path(sta_out) / "sta_mcorner_ocv_posteco.rpt"
+    # #766 (d) — A REPORT THAT PREDATES ITS OWN INPUTS IS NOT A MEASUREMENT OF
+    # THEM. The reuse guard below is existence-only, so a
+    # `sta_mcorner_ocv_posteco.rpt` left by an EARLIER round survived into this
+    # one: the re-measurement was skipped and that round's number was parsed and
+    # published as this round's `eco_after`. Worse, `parasitics_source` is
+    # computed above from the inputs this call SELECTED, then recorded as fact —
+    # so the record asserted `eco_reextracted` over a number the previous round
+    # had measured against the BASE route's SPEF. Measured on a real cell: the
+    # stale report published setup -8.31 ns with `parasitics_source:
+    # eco_reextracted` and `measured: true`, where re-emitting over the same
+    # inputs measured -0.44 ns. The 23x error propagated into the ECO_REGRESSED
+    # verdict (-8.220 ns reported for a real -0.350 ns delta) and into the
+    # residual note calling -8.31 ns a "real timing floor".
+    # Same mtime-supersession idiom the metal-fill re-run already uses.
+    if posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0:
+        _rpt_mtime = posteco_rpt.stat().st_mtime
+        _inputs = [Path(eco_v)] + [Path(p) for p in ocv_corner_spefs.values()]
+        if _nom:
+            _inputs.append(Path(_nom))
+        _newer = sorted({p.name for p in _inputs
+                         if p.is_file() and p.stat().st_mtime > _rpt_mtime})
+        if _newer:
+            # Quarantine rather than delete, so a reader can still see the
+            # superseded bytes, under a name nothing globbing `*.rpt` adopts.
+            _q = posteco_rpt.parent / (posteco_rpt.name + ".superseded")
+            try:
+                posteco_rpt.replace(_q)
+                notes.append(
+                    "post-ECO multi-corner OCV: SUPERSEDED a stale "
+                    f"{posteco_rpt.name} that predates {', '.join(_newer)} — "
+                    "it was measured on an EARLIER round's inputs, so reusing "
+                    "it would publish that round's slack as this round's "
+                    f"eco_after under parasitics_source={_src}. Re-measuring.")
+            except OSError as _qe:
+                notes.append(
+                    "post-ECO multi-corner OCV: could NOT quarantine stale "
+                    f"{posteco_rpt.name} ({_qe}) — refusing to adopt it; "
+                    "this measurement is reported as NOT measured.")
+                return out
     if not (posteco_rpt.is_file() and posteco_rpt.stat().st_size > 0):
         _emit_mcorner_ocv_sta(
             project, top, pdk, container, corner_libs, ocv_corner_spefs,
@@ -32481,6 +32520,37 @@ def _reused_report_basis(rpt: Path) -> Tuple[Optional[str], Optional[str]]:
     m = _sta_basis.STAMP_RE.search(text)
     raw = m.group(1) if m else None
     return (raw, _sta_basis.declared_basis(text))
+
+
+# OpenSTA's unresolved-master warning. The phrase "Creating black box" is the
+# stable part across OpenSTA versions; the `Warning 198` number is not matched
+# so a renumbering upstream cannot silently disable this check.
+_STA_BLACKBOX_RE = re.compile(
+    r"module\s+(\S+?)\s+not\s+found\.\s*Creating\s+black\s+box", re.I)
+
+
+def _sta_blackboxed_masters(log_path: Path) -> List[str]:
+    """Cell masters OpenSTA could not resolve against the Liberty it read.
+
+    An instance whose master is absent from every `read_liberty` becomes a
+    BLACK BOX: OpenSTA prints ``Warning 198: … module <M> not found. Creating
+    black box for <inst>.`` and **exits 0**. A black box has no timing arcs, so
+    every path through it is removed from the graph — `report_checks` then
+    prints ``No paths found`` and `report_wns`/`report_tns` print ``0.00``.
+
+    The failure mode this exists to catch is that the resulting artefact is
+    byte-indistinguishable from a genuinely clean corner, and it errs
+    OPTIMISTIC. Returns the sorted distinct master names, empty when the design
+    linked cleanly (so a healthy run is unaffected).
+    """
+    try:
+        txt = log_path.read_text(errors="replace")
+    except OSError:
+        # No log to read is not evidence of black-boxing; the caller's rc /
+        # report-exists tests still apply. Fail OPEN here so this check can
+        # only ever add a finding, never invent one.
+        return []
+    return sorted({m.group(1) for m in _STA_BLACKBOX_RE.finditer(txt)})
 
 
 def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
@@ -32677,6 +32747,7 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"sta -no_init -exit {tcl_c} 2>&1 | tee {out_dir}/sta_{corner}.log"
         )
         rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt])
+        _bb = _sta_blackboxed_masters(out_dir / f"sta_{corner}.log")
         if rc != 0 or not rpt.is_file():
             # #437(c): NO single-corner stand-in. The old fallback copied
             # the single-corner TT report into per_corner/ verbatim —
@@ -32687,6 +32758,33 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                 f"multi-corner STA failed for {corner}: "
                 f"rc={rc} (sta tool may be unavailable). "
                 f"To upgrade, install OpenSTA in the container.")
+        elif _bb:
+            # THE DESIGN DID NOT LINK. `rc == 0` and a written report are NOT
+            # evidence that anything was timed: OpenSTA resolves an instance
+            # whose master is absent from the Liberty it read to a BLACK BOX,
+            # emits `Warning 198 … Creating black box`, and EXITS 0. A black box
+            # carries no timing arcs, so every path through it disappears —
+            # `report_checks` prints "No paths found" and `report_wns`/
+            # `report_tns` print 0.00. That is a COULD-NOT-MEASURE state whose
+            # artefact is indistinguishable from MEASURED-CLEAN, and it reads
+            # OPTIMISTIC: measured on a real cell, the unlinked run reported
+            # wns 0.00 at every corner where the correctly-linked run reported
+            # -33.88 ns. Degrade to ABSENT — the same #437(c) doctrine as the
+            # rc!=0 branch above: a failed corner leaves NO report, never a
+            # falsely-clean one.
+            try:
+                rpt.unlink()
+            except OSError:
+                pass
+            notes.append(
+                f"multi-corner STA UNLINKED for {corner}: OpenSTA exited 0 but "
+                f"resolved {len(_bb)} cell master(s) to a BLACK BOX because they "
+                f"are absent from the Liberty it read "
+                f"({', '.join(_bb[:5])}{' …' if len(_bb) > 5 else ''}). A black "
+                f"box has no timing arcs, so paths through it VANISH and the "
+                f"report's 0.00 slack means UNMEASURED, not clean. No corner "
+                f"report emitted. Check that the Liberty corner set matches the "
+                f"netlist's technology and that every hard-macro .lib is staged.")
         else:
             any_emitted = True
     # The reports this call REUSED rather than produced, whenever they do not

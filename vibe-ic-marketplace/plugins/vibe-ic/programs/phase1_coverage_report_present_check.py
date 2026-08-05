@@ -66,6 +66,73 @@ import _input_ingest as _ingest  # noqa: E402
 # key is now actively forbidden by `phase1_no_waivers_used_check`.
 DEFAULT_THRESHOLD = 100.0
 
+# `reports/extraction_coverage_report.json` has TWO producers in this
+# plugin, they write the SAME path, and they do NOT compute the same
+# ratio:
+#
+#   * phase1_doc_one_shot_runner.py — the Phase-1 front door. Universe =
+#     literals curated from the INPUT documents. Emits
+#     overall.{denominator,numerator,pct} and `per_l_doc`.
+#   * phase1_coverage_report_gen.py — universe = the project's OWN
+#     `extraction_patterns.json` (`total = sum(d["total"] for d in
+#     per_doc)`, and `per_doc` is built FROM those patterns). Emits
+#     overall.{hit,total,pct} and `per_doc`.
+#
+# So whichever producer ran LAST decides this gate. MEASURED on one
+# project, byte-identical L docs and input docs, only the producer
+# differing:  runner 285/287 = 99.3% -> exit 1 ;  gen 285/285 = 100.0%
+# -> exit 0.  A non-waivable gate was flipped to PASS by running a
+# second reporter, with nothing about the design changed.
+#
+# A denominator the project itself authors cannot certify coverage OF
+# the input: adding a literal you know is extracted raises numerator and
+# denominator together and the ratio stays 100%. Note that the
+# remediation this gate prints — "add patterns to
+# `<project>/extraction_patterns.json`" — names exactly the file that
+# sets that denominator.
+#
+# This gate therefore refuses to read a SELF-REFERENTIAL 100% as
+# evidence of input coverage. It is a tightening and only a tightening:
+# no report that used to FAIL can PASS because of it.
+_SELF_REFERENTIAL_PATTERN_SOURCE = "phase1/extraction_patterns.json"
+
+# The one-shot-runner schema keys its ratio on `denominator`/`numerator`;
+# the gen schema keys it on `hit`/`total`. Reading `hit`/`total` out of a
+# runner report yields hit=None and total=<vendor-token count>, a number
+# that is NOT the denominator `pct` was computed from — so the gate used
+# to print a hit/total pair that contradicted its own percentage.
+_PROV_INPUT_ANCHORED = "input_anchored"
+_PROV_SELF_REFERENTIAL = "self_referential"
+_PROV_AUTO_DISCOVERED = "auto_discovered"
+_PROV_UNKNOWN = "unknown"
+
+
+def _report_provenance(report: dict) -> str:
+    """Name the producer whose schema this report carries.
+
+    Structural, not version-stamped: it reads the keys each producer
+    actually writes, so a report that carries neither shape is reported
+    as UNKNOWN rather than silently read as one of them.
+    """
+    overall = report.get("overall") or {}
+    if "denominator" in overall or "numerator" in overall:
+        return _PROV_INPUT_ANCHORED
+    src = report.get("pattern_source")
+    if src == _SELF_REFERENTIAL_PATTERN_SOURCE:
+        return _PROV_SELF_REFERENTIAL
+    if src is not None:
+        return _PROV_AUTO_DISCOVERED
+    return _PROV_UNKNOWN
+
+
+def _ratio_fields(report: dict) -> tuple:
+    """Return the (numerator, denominator) that `overall.pct` was
+    actually computed from, for whichever schema this report carries."""
+    overall = report.get("overall") or {}
+    if _report_provenance(report) == _PROV_INPUT_ANCHORED:
+        return overall.get("numerator"), overall.get("denominator")
+    return overall.get("hit"), overall.get("total")
+
 
 def _phase1_attempted(project: Path) -> bool:
     """Return True if Phase 1 (doc-extraction) appears to have been attempted.
@@ -225,8 +292,11 @@ def _check(project: Path) -> tuple[int, str]:
 
     overall = report.get("overall") or {}
     pct = overall.get("pct")
-    hit = overall.get("hit")
-    total = overall.get("total")
+    # Read the numerator/denominator `pct` was actually computed from,
+    # per producer schema — not `hit`/`total` unconditionally, which are
+    # absent or mean something else in the one-shot-runner report.
+    provenance = _report_provenance(report)
+    hit, total = _ratio_fields(report)
 
     # v1.7.72 — for #499 defect 4. This gate demands 100% coverage, but
     # the ratio it reads is built ONLY from documents that extracted:
@@ -272,24 +342,77 @@ def _check(project: Path) -> tuple[int, str]:
         return 1, f"FAIL — overall.pct not numeric: {pct!r}"
 
     if pct_f >= DEFAULT_THRESHOLD:
+        # A 100% whose denominator the project itself authors is not
+        # evidence of input coverage — see the note on
+        # `_SELF_REFERENTIAL_PATTERN_SOURCE`. Refuse it rather than
+        # certify it. Tightening only: this branch can turn a PASS into
+        # a FAIL and can never turn a FAIL into a PASS.
+        if provenance == _PROV_SELF_REFERENTIAL:
+            return 1, (
+                f"FAIL — Phase 1 (doc-extraction) coverage reports "
+                f"{hit}/{total} = {pct_f}%, but the denominator is "
+                f"SELF-REFERENTIAL: this report was written by "
+                f"phase1_coverage_report_gen.py with "
+                f"`pattern_source={_SELF_REFERENTIAL_PATTERN_SOURCE}`, so "
+                f"its universe is the project's own extraction pattern "
+                f"list — the same file this gate's remediation tells you "
+                f"to edit. Adding a literal you already extract raises "
+                f"numerator and denominator together and the ratio stays "
+                f"100%, so this number cannot certify coverage OF the "
+                f"input documents.\n"
+                f"  The input-anchored coverage figure is the one written "
+                f"by the Phase-1 front door (phase1_doc_one_shot_runner"
+                f".py), which emits overall.denominator/numerator. Re-run "
+                f"Phase 1 so that report is the one on disk, and close the "
+                f"gap it measures. Do NOT waive — there is no waiver for "
+                f"this gate."
+            )
         return 0, (
             f"phase1_coverage_report_present_check: PASS — "
-            f"{hit}/{total} = {pct_f}% (== {DEFAULT_THRESHOLD}%)"
+            f"{hit}/{total} = {pct_f}% (== {DEFAULT_THRESHOLD}%) "
+            f"[provenance={provenance}]"
         )
 
     # Wave 23 (v0.119.55) — HARD FAIL with per-doc breakdown. No waiver.
-    per_doc = report.get("per_doc") or []
-    breakdown_lines = []
-    for d in per_doc:
-        if d.get("pct", 100) < DEFAULT_THRESHOLD:
-            breakdown_lines.append(
-                f"  - {d.get('doc')}: "
-                f"{d.get('hit')}/{d.get('total')} = "
-                f"{d.get('pct')}%"
-            )
-    breakdown = "\n".join(breakdown_lines) or "  (none below threshold)"
+    #
+    # `per_doc` exists ONLY in the phase1_coverage_report_gen.py schema.
+    # The Phase-1 front door writes `per_l_doc` — a different axis (output
+    # L docs, keyed name/evidence_count/todo_count) with no per-document
+    # percentage — and no `per_doc` at all. Reading `per_doc` out of a
+    # front-door report therefore yields [], and the old code rendered
+    # that as "(none below threshold)": an assertion that every document
+    # was examined and none was short, printed in the same breath as an
+    # aggregate that is short. Both cannot be true, and the contradiction
+    # invites exactly the waiver this gate forbids. Say UNAVAILABLE when
+    # it is unavailable — degrade loudly, never silently.
+    per_doc = report.get("per_doc")
+    if not per_doc:
+        breakdown = (
+            "  (UNAVAILABLE — this report carries no `per_doc` breakdown. "
+            f"provenance={provenance}; the Phase-1 front door emits "
+            "`per_l_doc` (output-L-doc evidence counts), which is a "
+            "different axis and carries no per-input-document percentage. "
+            "No per-document gap was examined — this line is NOT a "
+            "statement that every document is at 100%.)"
+        )
+    else:
+        breakdown_lines = []
+        for d in per_doc:
+            if d.get("pct", 100) < DEFAULT_THRESHOLD:
+                breakdown_lines.append(
+                    f"  - {d.get('doc')}: "
+                    f"{d.get('hit')}/{d.get('total')} = "
+                    f"{d.get('pct')}%"
+                )
+        breakdown = "\n".join(breakdown_lines) or (
+            "  (examined "
+            f"{len(per_doc)} document(s); none individually below "
+            f"{DEFAULT_THRESHOLD}% — the shortfall is in the aggregate "
+            "universe, not attributable to a single document)"
+        )
     return 1, (
         f"FAIL — Phase 1 (doc-extraction) coverage {pct_f}% < {DEFAULT_THRESHOLD}% "
+        f"({hit}/{total}, provenance={provenance}) "
         f"(Wave 23: 100% required, NO waiver allowed). "
         f"Per-doc gaps:\n{breakdown}\n"
         f"To resolve, add patterns to `<project>/extraction_patterns.json` "

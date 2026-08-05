@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import glob
 import hashlib
+import io
 import json
 import os
 import re
@@ -801,6 +802,58 @@ def _strip_leading_comment_block(text: str) -> str:
     return ""
 
 
+#: expat's `XML_Parse` takes the buffer length as a C `int`, so a single call
+#: with a body >= 2**31 bytes raises `OverflowError: size does not fit in an
+#: int` — NOT an `ET.ParseError`. `ET.fromstring` hands the whole body to expat
+#: in one such call, so on a KLayout RDB at/over this size it CRASHES its
+#: caller. MEASURED: a 2,480,593,258-byte FreePDK45 sign-off `drc_signoff.rpt`
+#: (nangate45) crashed `_drc_real_violation_count`, so Step-31 Physical
+#: Verification returned "launch-failed CRASHED" — the checker could neither
+#: pass nor FAIL the design. `_count_rdb_items_streaming` streams the same body
+#: through `iterparse`, which feeds expat in sub-INT_MAX chunks.
+_EXPAT_SINGLE_BUFFER_MAX = 2 ** 31 - 1
+
+
+def _count_rdb_items_streaming(body: str) -> Optional[Tuple[int, int]]:
+    """`(user, foundry_stdcell)` KLayout-RDB item counts for a body too large
+    for `ET.fromstring`, or None when unreadable.
+
+    Streams the body through `xml.etree.ElementTree.iterparse`, which reads and
+    feeds expat incrementally so no single `XML_Parse` call ever exceeds the
+    C-int length limit that makes `ET.fromstring` raise `OverflowError` at/over
+    2**31 bytes. The per-item attribution and the terminal None cases are the
+    SAME as the in-memory branch below — only how the bytes reach the parser
+    changes:
+      * `<items>` container absent (bare `<report-database>`) -> None;
+      * truncated / malformed mid-stream -> `ET.ParseError` -> None;
+      * well-formed with N items -> the (user, stdcell) split.
+    `_el.clear()` drops each processed item so memory stays bounded on a
+    multi-million-item report. Pure; no I/O beyond the in-memory buffer.
+    """
+    user = 0
+    stdcell = 0
+    seen_items = False
+    try:
+        for _ev, _el in ET.iterparse(io.StringIO(body), events=("end",)):
+            if _el.tag == "item":
+                _cat = _el.find("category")
+                _rule = _cat.text if _cat is not None else ""
+                _cel = _el.find("cell")
+                _cell = _cel.text if _cel is not None else ""
+                if _drc_item_is_foundry_stdcell(_rule, _cell):
+                    stdcell += 1
+                else:
+                    user += 1
+                _el.clear()
+            elif _el.tag == "items":
+                seen_items = True
+    except ET.ParseError:
+        return None
+    if not seen_items:
+        return None
+    return (user, stdcell)
+
+
 def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
     """Return `(user_routing, foundry_stdcell_excluded)` DRC violation counts in
     a report body, or None if a count cannot be determined. Three dialects,
@@ -882,10 +935,21 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
         # was graded CLEAN if any "N violations"-shaped sentence existed
         # anywhere in the bytes — the exact injection this function was written
         # to close, re-entered through the parse-failure door.
+        # A body at/over expat's single-call length limit crashes
+        # `ET.fromstring` with OverflowError (see `_EXPAT_SINGLE_BUFFER_MAX`);
+        # stream it instead so the checker returns a verdict rather than
+        # crashing. Below the limit the ORIGINAL in-memory path is unchanged,
+        # byte-for-byte, so every existing corpus report is graded identically.
+        if len(body) > _EXPAT_SINGLE_BUFFER_MAX:
+            return _count_rdb_items_streaming(body)
         try:
             root = ET.fromstring(body)
         except ET.ParseError:
             return None
+        except OverflowError:
+            # Under the char threshold but over expat's BYTE limit (a multibyte
+            # encoding), or an allocation ceiling: stream rather than crash.
+            return _count_rdb_items_streaming(body)
         items = root.find(".//items")
         if items is None:
             return None
