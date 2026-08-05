@@ -830,7 +830,12 @@ def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
                           "skipped — RESULT.md path(s) not present on disk")
     if failures:
         return GateResult("run_output_completeness_check", 1,
-                          f"{len(failures)} empty/missing/stub deliverable(s): "
+                          # NOT "empty/missing/stub" — that named three of the
+                          # states this check can return and mis-described
+                          # every other one. The per-file state is already
+                          # appended, so the operator reads the real diagnosis.
+                          f"{len(failures)} deliverable(s) failed the run "
+                          f"output completeness check: "
                           + "; ".join(failures[:6])
                           + (" …" if len(failures) > 6 else ""))
     note = f"{checked} run deliverable(s) complete"
