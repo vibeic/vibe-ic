@@ -33,6 +33,33 @@ that the aggregation's deciding branch was ENTERED on real programs before it
 reads any finding. On this tree it is entered on 6 of 35 driven programs — the
 same 6 that separate 8/35 from 14/35.
 
+HOW THIS FILE FAILS AGAINST THE TREE BEFORE THE CHANGE
+======================================================
+MEASURED on the rebased base (``94b6c495``, this stack's first commit on top of
+``e0a5257b``): 9 fail, 14 pass, 0 collection errors. Classified honestly,
+because a failure count is not evidence:
+
+  4  TAUTOLOGICAL — ``TypeError: survey() got an unexpected keyword argument
+     'empty_corpus'`` x3 and ``KeyError: 'corpus'`` x1. These say the name is
+     new. They prove the switch was added, not that anything behaves better.
+
+  3  SUBSTANTIVE — ``TestAnArgShapeWithNoTargetsIsNotThatShape`` asserts on the
+     return value of ``_invocations``, which exists with the SAME signature on
+     both sides. The pre-change tree disagrees about a VALUE:
+     ``['positional/dirs', 'positional/files']`` where only the first shape
+     still carries a target.
+
+  2  OBSERVED OUTPUT, of a field this change introduces —
+     ``TestTheCorpusLabelReachesTheReportAReaderSees`` compares against the
+     report text the pre-change program really prints. That is an observed
+     value, but the thing missing from it is this change's own line, so it is
+     counted apart from the 3 above rather than with them.
+
+  14 PASS on both sides ON PURPOSE. The aggregation rule and
+     ``absorb_child_rc`` are already CORRECT in the shipped code; this file
+     exists because nothing held them there. Their control is the mutation run
+     in ``TestTheRuleIsLoadBearingOnTheRealCorpus``, not a red-to-green flip.
+
 Fixtures are invented grammar (probe_*.py) with no PDK identity of any kind.
 """
 import json
@@ -257,6 +284,89 @@ class TestTheCounterMeasurementIsRederivable:
         emp = srv.survey(tree, timeout=60, empty_corpus="none")
         assert pop["rows"][0]["verdict"] == "SILENT"
         assert emp["rows"][0]["verdict"] == "NOT_DRIVABLE"
+
+
+# =====================================================================
+class TestAnArgShapeWithNoTargetsIsNotThatShape:
+    """``_invocations``: a labelled shape emptied of its targets is a LIE.
+
+    This is the one rule in this change that lives in a function present, with
+    the same signature, on both sides of it — so its control fails on the
+    pre-change tree by DISAGREEING ABOUT A VALUE rather than by not finding a
+    name. It is the reason the two empty-corpus denominators (29 and 18) are
+    different numbers instead of the same number twice: without the drop, the
+    ``dirs`` corpus also drives a target-less ``…/files`` invocation, which is
+    the ``none`` corpus wearing the ``dirs`` label, and both measurements
+    collapse into the one they were supposed to be contrasted against.
+    """
+
+    POSITIONAL = {"positionals": True, "options": []}
+    OPTIONED = {"positionals": False, "options": ["--paths"]}
+
+    def test_a_files_shape_with_no_files_is_dropped(self):
+        got = sorted(srv._invocations(Path("p.py"), self.POSITIONAL,
+                                      [], ["d0", "d1"]))
+        assert got == ["positional/dirs"], (
+            "a 'files' invocation built from an empty file list carries no "
+            "target at all; driving it and recording its verdict under the "
+            f"files label attributes the no-targets answer to this corpus. {got}")
+
+    def test_the_same_holds_for_an_optioned_shape(self):
+        got = sorted(srv._invocations(Path("p.py"), self.OPTIONED, [], ["d0"]))
+        assert got == ["--paths/dirs"], got
+
+    def test_every_surviving_invocation_actually_carries_a_target(self):
+        """Stated as the property, not as a label list."""
+        for shape in (self.POSITIONAL, self.OPTIONED):
+            for label, cmd in srv._invocations(Path("p.py"), shape,
+                                               ["f0"], ["d0"]).items():
+                assert len(cmd) > 1, (label, cmd)
+            for label, cmd in srv._invocations(Path("p.py"), shape,
+                                               [], ["d0"]).items():
+                assert len(cmd) > 1, (
+                    f"{label} survived with no target after its list was "
+                    f"emptied: {cmd}")
+
+    def test_the_no_targets_corpus_is_still_driven_once(self):
+        """REVERSE direction — the drop must not delete the ``none`` corpus.
+
+        When BOTH lists are empty that is not an accident of one shape being
+        emptied, it is the deliberate 'I was given nothing' corpus, and it has
+        to reach the program or ``--empty-corpus none`` measures nothing.
+        """
+        for shape in (self.POSITIONAL, self.OPTIONED):
+            got = srv._invocations(Path("p.py"), shape, [], [])
+            assert len(got) == 2, got
+            assert all(len(c) == 1 for c in got.values()), got
+
+
+# =====================================================================
+class TestTheCorpusLabelReachesTheReportAReaderSees:
+    """The label has to be in the TEXT the operator reads, not only the JSON.
+
+    A ratio quoted from a terminal is quoted from these lines. Asserting on
+    ``doc['corpus']`` alone would leave the printed report free to omit it.
+    """
+
+    def _run(self, tmp_path, *extra):
+        tree = _tree(tmp_path, probe_ok=ALWAYS_DISCLOSES)
+        return subprocess.run(
+            [sys.executable, str(PROGRAMS / "sweep_reach_survey.py"),
+             "--programs-dir", str(tree), "--timeout", "60", *extra],
+            capture_output=True, text=True, timeout=300,
+            cwd=str(PROGRAMS),
+            env={**os.environ, "PYTHONPATH": str(PROGRAMS)})
+
+    def test_the_populated_report_names_its_corpus(self, tmp_path):
+        out = self._run(tmp_path).stdout
+        assert "corpus: populated" in out, (
+            "the printed report gives a ratio with no statement of which "
+            f"corpus produced it:\n{out}")
+
+    def test_the_empty_report_names_a_different_corpus(self, tmp_path):
+        out = self._run(tmp_path, "--empty-corpus", "dirs").stdout
+        assert "corpus: empty:dirs" in out, out
+        assert "corpus: populated" not in out, out
 
 
 # =====================================================================
