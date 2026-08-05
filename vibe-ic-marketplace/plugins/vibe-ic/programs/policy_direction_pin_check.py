@@ -36,6 +36,25 @@ An ARGUED DIRECTION call site is a call that satisfies all three:
       argument, not a decision, and it is excluded here. Required parameters are
       out of scope by construction.
 
+      D1 IS THE EXPENSIVE CLAUSE AND HERE IS WHAT IT COST, measured on this
+      corpus: without it, 144 parameters and 50 production call sites, 9 of
+      which D3 calls argued. With it, 17 and 2, and 1 argued. The 48 sites it
+      removes are the difference between a finding and a wall, and 8 of the 9
+      it removes from the argued list are one function, `_p0_gate_record`,
+      whose `verdict=` is the verdict being RECORDED rather than a direction
+      being chosen.
+
+      It is not free, and pretending otherwise would be the same dishonesty
+      this gate is about. `_p0_gate_record(verdict="SKIP")` where the branch
+      could have recorded "FAIL" is, to a human reader, exactly the kind of
+      direction this repo cares about -- and D1 drops it because the call site
+      had no choice but to say something. The program cannot tell a value
+      DERIVED from the branch it sits in ("this gate was not invocable, so:
+      NOT_INVOCABLE") from a value CHOSEN against the same inputs ("both
+      directions would run; I picked this one") -- both are a literal in an
+      argument position. `--include-required` prints the wider population so
+      that trade is inspectable instead of buried.
+
   D2  NAMED ALTERNATIVES.  The callee constrains the parameter to a closed set
       of >= 2 string alternatives, and the literal is one of them. Evidence is
       any of: a `Literal[...]` annotation; a membership guard against an inline
@@ -93,7 +112,8 @@ USAGE
 -----
     policy_direction_pin_check.py [PROGRAMS_DIR] [--json OUT]
                                   [--verify-pins] [--max-test-files N]
-                                  [--only SUBSTR] [--pytest-arg ARG]...
+                                  [--only SUBSTR] [--include-required]
+                                  [--pytest-arg ARG]...
 
     Default (no --verify-pins) is the INVENTORY: it prints every argued
     direction site and the ratio, and exits 0. Inventory alone cannot say
@@ -332,8 +352,16 @@ def _iter_python(root: Path) -> List[Path]:
     return sorted(p for p in root.rglob("*.py") if p.is_file())
 
 
-def collect_policy_params(root: Path) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]], Dict[Path, str]]:
-    """Every DEFAULTED, closed-set string parameter defined anywhere in root."""
+def collect_policy_params(root: Path, require_default: bool = True
+                          ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]], Dict[Path, str]]:
+    """Every DEFAULTED, closed-set string parameter defined anywhere in root.
+
+    ``require_default=False`` drops D1 and widens the population to required
+    parameters as well. That is not the blocking population -- see the module
+    docstring for what D1 buys and what it costs -- but it is inspectable,
+    because a clause that removes 48 of 50 sites should be something a reviewer
+    can look at rather than take on trust.
+    """
     defs: List[Dict[str, Any]] = []
     by_name: Dict[str, List[Dict[str, Any]]] = {}
     sources: Dict[Path, str] = {}
@@ -361,7 +389,7 @@ def collect_policy_params(root: Path) -> Tuple[List[Dict[str, Any]], Dict[str, L
             doc = ast.get_docstring(fn) or ""
             for p in every:
                 default_node = defaults.get(p.arg)
-                if p.arg not in defaults:
+                if require_default and p.arg not in defaults:
                     continue                                    # D1
                 default_node = defaults.get(p.arg)
                 alts, evidence = closed_alternatives(fn, p.arg, consts, p.annotation)
@@ -625,8 +653,8 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
 # CLI
 # ---------------------------------------------------------------------------
 
-def build_report(root: Path) -> Dict[str, Any]:
-    defs, by_name, sources = collect_policy_params(root)
+def build_report(root: Path, require_default: bool = True) -> Dict[str, Any]:
+    defs, by_name, sources = collect_policy_params(root, require_default)
     sites = collect_sites(root, by_name, sources)
     production = [s for s in sites if not s["in_tests"]]
     argued = [s for s in production if s["argued"]]
@@ -639,6 +667,7 @@ def build_report(root: Path) -> Dict[str, Any]:
         "argued_sites": len(argued),
         "sites": sites,
         "argued": argued,
+        "require_default": require_default,
     }
 
 
@@ -655,6 +684,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="abstain rather than run more candidate test files than this")
     ap.add_argument("--only", default=None,
                     help="verify only sites whose file path contains this substring")
+    ap.add_argument("--include-required", action="store_true",
+                    help="drop D1 and widen the population to required parameters "
+                         "(inspection only -- see the module docstring)")
     ap.add_argument("--basetemp", default=None, help="pytest --basetemp for the mutation runs")
     ap.add_argument("--pytest-arg", action="append", default=[],
                     help="extra argument forwarded to the mutation pytest runs")
@@ -666,7 +698,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               file=sys.stderr)
         return RC_UNDETERMINED
 
-    report = build_report(root)
+    report = build_report(root, require_default=not args.include_required)
     argued = report["argued"]
 
     print(f"[INFO] policy_direction_pin_check: swept {report['files_swept']} python file(s) "
