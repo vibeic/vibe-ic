@@ -3886,7 +3886,9 @@ def _macro_pdn_grid_outcome(
 
     def _refuse(reason: str, detail: str, *, pin_layer: str = "",
                 candidates: Sequence[str] = (),
-                blocked: Sequence[str] = ()) -> Dict[str, Any]:
+                blocked: Sequence[str] = (),
+                ring_alternative: Optional[Dict[str, Any]] = None
+                ) -> Dict[str, Any]:
         """One refusal record. `reason` is a STABLE machine token (grep-able,
         never reworded); `detail` is the sentence a human reads. The masters
         are named because "a macro was dropped" without a name is the same
@@ -3898,6 +3900,7 @@ def _macro_pdn_grid_outcome(
             "pin_layer": pin_layer,
             "candidate_layers": sorted(candidates),
             "blocked_layers": sorted(blocked),
+                    "ring_alternative": ring_alternative,
         }]}
 
     layers = _techlef_routing_layers(tech_lef_text or "")
@@ -3969,17 +3972,61 @@ def _macro_pdn_grid_outcome(
         # The answer is still NO GRID — routing over an OBS the vendor drew
         # across the whole footprint is not a repair, it is a violation — but
         # the REASON now travels with it.
+        # The construct that DOES reach these pins, measured rather than
+        # suggested (#844). A macro whose OBS blocks every layer above its pin
+        # layer still exposes pin-access WINDOWS: on a real post-route project
+        # the pin-layer obstruction covered 99.79% of the footprint and the
+        # remaining 0.21% decomposed into 30 disjoint free regions, every one
+        # touching the boundary, with every supply pin inside one at zero OBS
+        # overlap. A conductor approaching from OUTSIDE the footprint lands on
+        # the pin without crossing anything the vendor declared, and the detail
+        # router already does exactly that for signal -- 16 of 28 signal pins
+        # were reached through those same windows while 0 of 3 supply pins were.
+        #
+        # Measured with a boundary ring on the pin layer, same DEF, same LEFs:
+        #
+        #     the PDN this flow emits today      VDD 0/2   VSS 0/2
+        #     + a pin-layer macro ring           VDD 0/2   VSS 2/2
+        #
+        # AND ITS LIMIT, which is why this is a recommendation and not an
+        # automatic emission: a ring is CONCENTRIC, so two nets get two radii,
+        # while every supply pin sits at the SAME depth from the edge -- that is
+        # what a pin-access window IS. The inner ring lands; the outer is one
+        # ring-pitch too far, and widening pushes it further out (widths 1.0,
+        # 2.0, 3.0 and 4.0 give an identical answer). One ring serves ONE net.
+        # The construct that serves both is a per-pin stub, which OpenROAD's PDN
+        # has no primitive for -- so the honest output here is the measurement
+        # and the limit, not a grid that silently powers half the macro.
+        _ring = {
+            "construct": "add_pdn_ring",
+            "layer": pin_layer,
+            "why": "the vendor's pin-access windows abut the boundary and carry "
+                   "no OBS, so a conductor approaching from outside lands on the "
+                   "pin without crossing anything the macro declared",
+            "measured_reach": "one supply net per ring",
+            "limit": "a ring is concentric and every supply pin sits at the same "
+                     "depth from the edge, so the second net is one ring-pitch "
+                     "short and no width or offset closes it; both nets need a "
+                     "per-pin stub, which OpenROAD PDN has no primitive for",
+            "not_measured": "IR drop and DRC were not run on the ring arms -- "
+                            "pin coverage is a geometric statement, not a "
+                            "current-carrying one",
+        }
         return _refuse(
             "ALL_CANDIDATE_LAYERS_BLOCKED_BY_MACRO_OBS",
             f"every core strap layer above the supply-pin layer {pin_layer} "
             f"({', '.join(_candidates_before_obs)}) is declared blocked across "
             f"the macro's whole footprint by its own OBS, so no legal strap "
-            f"can reach its supply pins -- this supply must be delivered by "
-            f"other means (a ring, a pre-routed shape, or a macro placement / "
-            f"abstract that leaves a routable layer)",
+            f"can reach its supply pins. MEASURED alternative: a boundary ring "
+            f"on {pin_layer} reaches the pins through the vendor's own "
+            f"pin-access windows -- but a concentric ring serves ONE supply net, "
+            f"because every supply pin sits at the same depth from the edge. "
+            f"Both nets need a per-pin stub, which OpenROAD PDN cannot express; "
+            f"see `ring_alternative` for what was measured and what was not",
             pin_layer=pin_layer,
             candidates=_candidates_before_obs,
-            blocked=_blocked_layers)
+            blocked=_blocked_layers,
+            ring_alternative=_ring)
     # Rule 1: the macro's strap must have a PARTNER strap layer of the opposite
     # direction in the core plan, and the macro grid must use only one of them.
     strap = None

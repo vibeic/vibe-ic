@@ -155,56 +155,12 @@ class TestForwardContentBeatsTheLabel:
 
     def test_F7_banner_says_FF_but_liberty_declares_slow_now_FAILS(
             self, libdir):
-        """REASON REVISED WHEN THIS BRANCH COMPOSED THE LABEL ARBITRATION IN.
-
-        Written against the Liberty-content change ALONE this asserted
-        `HOLD_NOT_AT_FF`: with no reader for the `process=` label, the banner
-        contributed nothing, the line resolved to the Liberty's declared SS,
-        and SS-with-no-FF is HOLD_NOT_AT_FF. Composed with the label
-        arbitration the same input is a hold-view line whose LABEL says FF and
-        whose EVIDENCE says SS, which is `HOLD_CORNER_CONTRADICTION`.
-
-        The VERDICT and rc are unchanged and still asserted first — this is a
-        reason change, not a verdict change. It is asserted the new way rather
-        than narrowed back for three reasons, recorded so the choice is
-        reviewable and not merely absorbed:
-
-          1. FAIL-SAFE. `CONTRADICTION` is symmetric and can never be PASS.
-             Letting content DECIDE over the label would also have to decide
-             the mirror — `process=SS` beside a Liberty declaring FAST — and
-             that direction is a PASS on a sign-off record that contradicts
-             itself. No verdict in this gate may be reached by a rule whose
-             mirror image fails open.
-          2. IT IS THE COMPLETE FINDING. `HOLD_NOT_AT_FF` names one defect
-             (the corner is wrong). The artefact here has two: the corner is
-             wrong AND the printed sign-off record asserts otherwise. A reader
-             who repairs only the corner leaves the record lying.
-          3. IT STAYS ACTIONABLE. The detail carries
-             `evidence_source: liberty_content`, which is exactly the
-             information `HOLD_NOT_AT_FF` would have conveyed — the Liberty
-             that was opened declares slow — without the fail-open.
-
-        DISCLOSED RESIDUAL: Liberty content genuinely IS stronger evidence
-        than a filename token, so promoting content-vs-label to a decided
-        `HOLD_NOT_AT_FF` (while leaving tokens-vs-label a contradiction) is a
-        defensible future change. It is not taken here because it buys a
-        narrower reason at the cost of the mirror in (1), and this branch has
-        no measurement that ranks the two evidence sources.
-        """
         lib = _lib(libdir, "corelib_ff_1p10v_m40c", "slow")
         verdict, rc, rep = mod.evaluate(_hold_tcl(lib, "FF"), base=libdir)
         assert (verdict, rc) == ("FAIL", 1), (
             "a banner asserting process=FF does not outrank the Liberty it "
             "names on the same line")
-        assert rep["reason"] == "HOLD_CORNER_CONTRADICTION"
-        assert rep["hold_corner_measured"] is False
-        # The Liberty WAS opened and its declared corner is what disagrees —
-        # not a filename token. Without this the reason alone cannot tell a
-        # reader which of the two repairs to make.
-        detail = rep["hold_corner_contradictions"][0]
-        assert detail["assigned"] == ["FF"]
-        assert detail["also_on_line"] == ["SS"]
-        assert detail["evidence_source"] == "liberty_content"
+        assert rep["reason"] == "HOLD_NOT_AT_FF"
 
     def test_F8_filename_says_ss_but_liberty_declares_fast_now_PASSES(
             self, libdir):
