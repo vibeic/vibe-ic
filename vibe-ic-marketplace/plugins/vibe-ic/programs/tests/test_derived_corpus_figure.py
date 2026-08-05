@@ -2,11 +2,17 @@
 """A stated justification must be checkable.
 
 The motivating measurement, reproduced in `test_the_motivating_funnel_shape_is_caught`:
-a guard narrowed its predicate from a stated 113 raw matches to 13 to 5. The 13
-and the 5 reproduce exactly. The 113 reproduces under no reading of the clause
-it describes — reconstructions of the same predicate measured 41, 49, 71, 440
-and 595 on this tree. The narrowing is sound; one of the figures offered in
-support of it is not evidence, because a reader cannot get it back out.
+a guard narrowed its predicate from a stated 113 raw matches to 13 to 5.
+
+Measured against b85d68ac on 2026-08-05, and PINNED to it: the 13 reproduces
+EXACTLY. The 113 reproduces under no reading of the clause it describes —
+reconstructions of the same predicate measured 41, 49, 71, 440 and 595, none of
+them 113. The final figure is 3 on that tree and reaches the stated 5 only
+under that guard's own re-annotation of one producer, which is consistent with
+its text; it is recorded here as 3-not-5 rather than rounded to agreement.
+
+The narrowing is sound. One of the figures offered in support of it is not
+evidence, because a reader cannot get it back out.
 
 These tests are written against OBSERVABLE PROPERTIES — what a docstring says
 about this checkout, and what the guard reports for a given corpus — never
@@ -18,7 +24,6 @@ from __future__ import annotations
 
 import ast
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -65,7 +70,10 @@ _WALKER = 'from pathlib import Path\n\n\ndef sweep(r):\n    return list(Path(r).
 
 @pytest.fixture(scope="module")
 def corpus_findings():
-    """One real sweep of programs/, shared — it costs ~25s."""
+    """One real sweep of programs/, shared across this module — it is the
+    slowest thing here, so it is not re-run per test. No duration is stated:
+    it depends on the tree and on host load, and an unmaintained number in a
+    docstring is what this file is about."""
     return guard.sweep(PLUGIN, PROGRAMS)
 
 
@@ -160,15 +168,21 @@ def test_the_sweep_is_not_vacuous_on_the_real_corpus(corpus_findings):
     assert len({f["file"] for f in advisory}) >= 3
 
 
-def test_the_sweep_reaches_the_whole_programs_tree():
-    """Disclose the denominator (vibe-ic#447): a narrowed sweep must not read as full."""
+def test_the_sweep_reaches_the_whole_programs_tree(capsys):
+    """Disclose the denominator (vibe-ic#447): a narrowed sweep must not read as full.
+
+    Driven in-process rather than through `subprocess.run`. A subprocess here
+    would need a bound above `ci_harness_timeout_ceiling_check`'s per-call
+    ceiling, and a test whose own bound can outlive the harness kills the
+    session instead of the test.
+    """
     swept = sum(1 for _ in PROGRAMS.rglob("*.py"))
     assert swept > 3000, swept
-    out = subprocess.run(
-        [sys.executable, str(PROGRAMS / "derived_corpus_figure_check.py"),
-         "--no-evaluate"],
-        capture_output=True, text=True, timeout=900)
-    assert str(swept) in out.stdout, out.stdout[:400]
+    rc = guard.main(["--no-evaluate", "--programs", str(PROGRAMS),
+                     "--root", str(PLUGIN)])
+    out = capsys.readouterr().out
+    assert rc == guard.RC_CLEAN, out[-2000:]
+    assert str(swept) in out, out[:400]
 
 
 # ==========================================================================
