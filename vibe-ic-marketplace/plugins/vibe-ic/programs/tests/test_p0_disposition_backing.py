@@ -389,6 +389,24 @@ def test_missing_registry_cannot_measure(tmp_path):
     assert proc.returncode == B.RC_CANNOT_MEASURE
 
 
+def test_an_unparseable_registry_cannot_measure(tmp_path):
+    """...and rc 2, not rc 1.
+
+    Reading the registry moved ahead of `measure` so the population could be
+    derived from it. `ast.parse` on a half-written module raises `SyntaxError`,
+    which is not an `OSError` or a `LookupError` — uncaught it becomes a
+    traceback and a process exit of 1, and 1 is this program's "a NEW broken
+    promise appeared". A reader cannot tell a real finding from a parse error
+    by the exit code, so it has to be rc 2.
+    """
+    root = _tree(tmp_path, {"a_gate_check": "KEEP registered, unwired."})
+    (root / PLUGIN_REL / "programs" / B.REGISTRY_MODULE).write_text(
+        "_REGISTER = {\n    'a_gate_check': {'disposition': \n")
+    proc = _run(root, tmp_path / "r.json")
+    assert proc.returncode == B.RC_CANNOT_MEASURE, proc.stdout + proc.stderr
+    assert "CANNOT MEASURE" in proc.stderr
+
+
 # ---------------------------------------------------------------------------
 # the live tree — the corpus arm
 # ---------------------------------------------------------------------------
