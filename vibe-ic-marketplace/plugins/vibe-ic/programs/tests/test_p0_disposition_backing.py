@@ -407,6 +407,32 @@ def test_an_unparseable_registry_cannot_measure(tmp_path):
     assert "CANNOT MEASURE" in proc.stderr
 
 
+def test_a_disposition_that_is_not_a_literal_cannot_measure(tmp_path):
+    """A promise made invisible by a FORMATTING choice, not a wording one.
+
+    The `ast` reader evaluates the disposition value as a literal. An f-string,
+    a `"a" + b` concatenation or a bare name is not one, and the value was
+    dropped silently — which files the gate under "wrote no disposition", the
+    exact disappearance this checker exists to stop, reached by a different
+    route. rc 2 with the gate named, never a green rc 0.
+    """
+    programs = tmp_path / PLUGIN_REL / "programs"
+    programs.mkdir(parents=True)
+    (tmp_path / PLUGIN_REL / "flow").mkdir(parents=True)
+    (tmp_path / "tools" / "ci").mkdir(parents=True)
+    (tmp_path / "tools" / "ci" / "hygiene.sh").write_text("#\n")
+    (programs / B.REGISTRY_MODULE).write_text(
+        '_WHERE = "the acceptance step"\n'
+        '_REGISTER = {\n'
+        '    "formatted_gate_check": {"disposition": f"KEEP, driven at {_WHERE}."},\n'
+        '}\n')
+    (programs / "p0_gate_invocability_drift_check.py").write_text(
+        'KNOWN_NOT_INVOCABLE = (\n    "formatted_gate_check",\n)\n')
+    proc = _run(tmp_path, tmp_path / "r.json")
+    assert proc.returncode == B.RC_CANNOT_MEASURE, proc.stdout + proc.stderr
+    assert "formatted_gate_check" in proc.stderr
+
+
 # ---------------------------------------------------------------------------
 # the live tree — the corpus arm
 # ---------------------------------------------------------------------------
