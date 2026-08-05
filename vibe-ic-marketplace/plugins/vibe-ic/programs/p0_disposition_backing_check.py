@@ -225,13 +225,22 @@ def claims_a_home(disposition: str) -> bool:
     return bool(_ACTIVE_CLAIM.search(disposition or ""))
 
 
-def read_dispositions(registry_path: Path) -> Dict[str, str]:
+def read_dispositions(registry_path: Path,
+                      unreadable: Optional[List[str]] = None) -> Dict[str, str]:
     """Every ``{gate: {"disposition": "..."}}`` entry in the registry module.
 
     Walks module-level dict assignments with `ast` and collects any nested dict
     carrying a ``disposition`` key. Register-name-agnostic on purpose: a fifth
     register added later is picked up without editing this file, which is the
     failure mode a hard-coded list of register names would have.
+
+    `unreadable`, if given, collects the gates whose disposition VALUE is not a
+    literal `ast` can evaluate -- an f-string, a `"a" + b` concatenation, a name.
+    That is not a curiosity: dropping such a value silently files the gate under
+    "wrote no disposition", which is the same disappearance this whole checker
+    exists to stop, reached by a formatting choice instead of a wording one. The
+    caller turns a non-empty list into rc 2 -- CANNOT MEASURE, because an
+    unreadable promise is not a read one.
     """
     tree = ast.parse(registry_path.read_text(errors="replace"))
     out: Dict[str, str] = {}
@@ -255,8 +264,10 @@ def read_dispositions(registry_path: Path) -> Dict[str, str]:
                     try:
                         out[key.value] = " ".join(
                             ast.literal_eval(subval).split())
-                    except (ValueError, SyntaxError):
-                        pass
+                    except (ValueError, SyntaxError, TypeError,
+                            MemoryError, RecursionError):
+                        if unreadable is not None:
+                            unreadable.append(key.value)
     return out
 
 
@@ -353,11 +364,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not registry.is_file():
         print(f"CANNOT MEASURE: {registry} not found", file=sys.stderr)
         return RC_CANNOT_MEASURE
+    unreadable: List[str] = []
     try:
         pinned = _pinned_gates(programs_dir)
-        dispositions = read_dispositions(registry)
+        dispositions = read_dispositions(registry, unreadable)
     except (OSError, LookupError, ValueError, SyntaxError) as exc:
         print(f"CANNOT MEASURE: {exc}", file=sys.stderr)
+        return RC_CANNOT_MEASURE
+    if unreadable:
+        # NOT rc 1. A disposition this program could not read is not a
+        # disposition it judged, and "I could not tell" must never leave here
+        # wearing the exit code of "I checked and it is fine".
+        print(f"CANNOT MEASURE: {len(unreadable)} disposition value(s) are not "
+              f"literals this program can read "
+              f"({', '.join(sorted(unreadable))}). Silently dropping them would "
+              f"file the gate under 'wrote no disposition'. Write the "
+              f"disposition as a plain string literal.", file=sys.stderr)
         return RC_CANNOT_MEASURE
 
     gates, outside_pin = population(pinned, dispositions)
