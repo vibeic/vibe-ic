@@ -68,7 +68,7 @@ from pathlib import Path
 from typing import Dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _source_record_merge import merge_source_records  # noqa: E402
+from _source_record_merge import SILENT, merge_source_records  # noqa: E402
 
 RC_OK, RC_CANNOT_CLASSIFY = 0, 2
 
@@ -328,11 +328,20 @@ def main(argv=None) -> int:
     # master unresolved, so a partial erase leaves only a [WARN] on stderr.
     # That is the direction this file's own comment calls "the one failure mode
     # this program must not have".
+    #
+    # `stance=SILENT`, stated rather than defaulted. An empty pin map out of
+    # this parser is ALWAYS the parser having nothing to say -- liberty has no
+    # syntax for "this cell has no pins", so the format cannot express a denial
+    # and the parser cannot produce one. Declaring that is what keeps the empty
+    # out of the INDETERMINATE bucket honestly: it is not unclassified, it is
+    # classified, and it is silence. Silence cannot displace a pin map under
+    # ANY policy, which is the guarantee this site needs.
     directions: Dict[str, Dict[str, str]] = merge_source_records(
         (parse_liberty_pin_directions(p.read_text(errors="replace"))
          for p in (Path(lp) for lp in a.liberty) if p.is_file()),
         on_conflict="richer",
-    )[0]
+        stance=lambda _r: SILENT,
+    ).merged
     if not directions:
         print("[SKIP] atpg_untestable_fault_classify: no liberty resolved, so "
               "no pin DIRECTION is known. Guessing them from pin names would "

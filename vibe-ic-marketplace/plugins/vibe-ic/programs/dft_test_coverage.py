@@ -76,7 +76,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import atpg_untestable_fault_classify as au  # noqa: E402
 import _dft_bit_expand as bx  # noqa: E402
-from _source_record_merge import merge_source_records  # noqa: E402
+from _source_record_merge import SILENT, merge_source_records  # noqa: E402
 
 RC_OK, RC_CANNOT = 0, 2
 
@@ -177,11 +177,16 @@ def compute(cut_netlist: Path, coverage_yml: Path, liberties=None, top=None,
         # would erase another liberty's real pin map purely because it sorted
         # later. An emptied cell drops out of `classify()` entirely, taking its
         # observability edges with it, which INFLATES the reported coverage.
+        # `stance=SILENT` for the same reason as the sibling site in
+        # `atpg_untestable_fault_classify`: liberty cannot say "this cell has
+        # no pins", so an empty map here is the parser's silence and never a
+        # measured zero. Silence cannot displace content under any policy.
         directions = merge_source_records(
             (au.parse_liberty_pin_directions(p.read_text(errors="replace"))
              for p in (Path(lp) for lp in (liberties or [])) if p.is_file()),
             on_conflict="richer",
-        )[0]
+            stance=lambda _r: SILENT,
+        ).merged
     else:
         directions = dict(directions)
     if not directions:

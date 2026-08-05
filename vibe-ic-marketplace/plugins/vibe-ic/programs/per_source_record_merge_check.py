@@ -34,8 +34,13 @@ THE PREDICATE, and why each clause is there
 Fires only when ALL of these hold. Every clause removed a class of legitimate
 merge from a real sweep of this repo; the counts are the measured ones.
 
-  1. ``ACC.update(CALL(...))`` with ACC a plain local name, one positional
-     argument, no keywords.
+  1. ``ACC.update(CALL(...))`` -- or ``ACC |= CALL(...)``, which is the same
+     last-wins merge spelled with one token instead of seven -- with ACC a
+     plain local name and, for the call form, one positional argument and no
+     keywords. Both spellings are matched because a guard that only knows one
+     of them is a guard a one-character edit walks past, and the edit does not
+     even have to be deliberate: ``|=`` is what a reader reaches for when
+     tidying up.
   2. Lexically inside a ``for``, and CALL mentions the loop target or a name
      assigned from it inside the body. This is what makes it ONE SOURCE PER
      ITERATION rather than a single fixed merge.
@@ -76,6 +81,20 @@ allow-list outlives its own truth -- it keeps excusing a site long after the
 reason stopped applying, and it excuses a new site that copies the name. Every
 clause above is a property of the code's shape or of a declared type, so a site
 stops being flagged only by actually changing.
+
+THE SWEEP REPORTS ITS OWN FUNNEL, ON PASS AS WELL AS ON FAIL
+------------------------------------------------------------
+Every run prints how many sites reached each clause. That is not decoration. A
+sweep whose every case abstains at clause 1 exits 0 and reads exactly like a
+sweep that examined the corpus and found it clean -- the decision point was
+never entered, and the exit code cannot tell you so. The funnel can:
+
+    candidates 118 -> source-dependent 47 -> mapping acc 13 -> record-valued 0
+
+says the predicate ran all the way down and 13 real accumulators were examined
+by the load-bearing clause. A line reading ``candidates 0`` says the opposite,
+in the same exit code, and `test_the_sweep_actually_reaches_its_decision_point`
+holds the corpus to the first shape.
 
 Exit codes
 ----------
@@ -259,7 +278,46 @@ def _source_aliases(loop: ast.AST) -> Set[str]:
     return aliases
 
 
-def scan_source(text: str, path: str, index: _ModuleIndex) -> List[Dict[str, Any]]:
+#: The clauses, in the order the predicate applies them. Named here so the
+#: report, the JSON and the test all speak about the same funnel.
+CLAUSES = ("candidates", "source_dependent", "mapping_accumulator",
+           "record_valued_producer")
+
+
+def new_stats() -> Dict[str, int]:
+    return {c: 0 for c in CLAUSES}
+
+
+def _merge_targets(loop: ast.AST) -> List[Tuple[ast.AST, str, ast.Call]]:
+    """Every ``ACC.update(CALL(...))`` and ``ACC |= CALL(...)`` under ``loop``.
+
+    The two spellings are one shape. `dict.__ior__` is last-wins exactly as
+    `dict.update` is, so a site that changed from one to the other would keep
+    the defect and lose the guard -- which is how a guard gets evaded without
+    anyone intending to evade it.
+    """
+    out: List[Tuple[ast.AST, str, ast.Call]] = []
+    for node in ast.walk(loop):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if not (isinstance(fn, ast.Attribute) and fn.attr == "update"):
+                continue
+            if not isinstance(fn.value, ast.Name):
+                continue
+            if len(node.args) != 1 or node.keywords:
+                continue
+            if isinstance(node.args[0], ast.Call):
+                out.append((node, fn.value.id, node.args[0]))
+        elif isinstance(node, ast.AugAssign) and isinstance(node.op, ast.BitOr):
+            if isinstance(node.target, ast.Name) and isinstance(node.value, ast.Call):
+                out.append((node, node.target.id, node.value))
+    return out
+
+
+def scan_source(text: str, path: str, index: _ModuleIndex,
+                stats: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
+    if stats is None:
+        stats = new_stats()
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -290,25 +348,19 @@ def scan_source(text: str, path: str, index: _ModuleIndex) -> List[Dict[str, Any
     findings: List[Dict[str, Any]] = []
     for loop in [n for n in ast.walk(tree) if isinstance(n, (ast.For, ast.AsyncFor))]:
         aliases = _source_aliases(loop)
-        for call in [n for n in ast.walk(loop) if isinstance(n, ast.Call)]:
-            fn = call.func
+        for call, acc, arg in _merge_targets(loop):
             # clause 1
-            if not (isinstance(fn, ast.Attribute) and fn.attr == "update"):
+            if acc in aliases:
                 continue
-            if not isinstance(fn.value, ast.Name):
-                continue
-            acc = fn.value.id
-            if acc in aliases or len(call.args) != 1 or call.keywords:
-                continue
-            arg = call.args[0]
-            if not isinstance(arg, ast.Call):
-                continue
+            stats["candidates"] += 1
             # clause 2
             if not ({n.id for n in ast.walk(arg) if isinstance(n, ast.Name)} & aliases):
                 continue
+            stats["source_dependent"] += 1
             # clause 3
             if accumulator_kind(enclosing_scope(call), acc) != MAPPING:
                 continue
+            stats["mapping_accumulator"] += 1
             # clause 4
             producer, module = arg.func, None
             if isinstance(producer, ast.Attribute) and isinstance(producer.value, ast.Name):
@@ -322,6 +374,7 @@ def scan_source(text: str, path: str, index: _ModuleIndex) -> List[Dict[str, Any
                 index.returns_of(module, func, local_returns))
             if rendered is None:
                 continue
+            stats["record_valued_producer"] += 1
             findings.append({
                 "file": path,
                 "line": call.lineno,
@@ -340,14 +393,16 @@ def scan_source(text: str, path: str, index: _ModuleIndex) -> List[Dict[str, Any
     return findings
 
 
-def sweep(root: Path, skip: Tuple[str, ...] = ()) -> List[Dict[str, Any]]:
+def sweep(root: Path, skip: Tuple[str, ...] = (),
+          stats: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
     index = _ModuleIndex(root)
     out: List[Dict[str, Any]] = []
     for path in sorted(root.rglob("*.py")):
         rel = path.relative_to(root).as_posix()
         if any(rel == s or rel.startswith(s.rstrip("/") + "/") for s in skip):
             continue
-        out.extend(scan_source(path.read_text(errors="replace"), rel, index))
+        out.extend(scan_source(path.read_text(errors="replace"), rel, index,
+                               stats))
     return out
 
 
@@ -368,28 +423,35 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return RC_USAGE
 
-    findings = sweep(root, tuple(args.skip))
+    stats = new_stats()
+    findings = sweep(root, tuple(args.skip), stats)
     swept = sum(1 for _ in root.rglob("*.py"))
     payload = {
         "rule": "empty-record-cannot-erase",
         "root": str(root),
         "python_files_under_root": swept,
         "skipped_prefixes": list(args.skip),
+        "clause_funnel": dict(stats),
         "findings": findings,
         "count": len(findings),
     }
     if args.json:
         Path(args.json).write_text(json.dumps(payload, indent=2))
 
+    # Printed on BOTH exits. An exit 0 whose funnel is all zeroes means the
+    # predicate never reached its decision point, which is a different fact
+    # from a clean corpus and must not be readable as one.
+    funnel = " -> ".join(f"{c.replace('_', '-')} {stats[c]}" for c in CLAUSES)
     if not findings:
         print(f"[PASS] per_source_record_merge_check: {swept} file(s) under "
               f"{root} — no per-source record merge decided by discovery order"
               + (f" (skipped: {', '.join(args.skip)})" if args.skip else ""))
+        print(f"       clause funnel: {funnel}")
         return RC_CLEAN
 
     print(f"[FAIL] per_source_record_merge_check: {len(findings)} per-source "
           f"record merge(s) whose result depends on discovery order "
-          f"({swept} file(s) swept)")
+          f"({swept} file(s) swept; clause funnel: {funnel})")
     for f in findings:
         print(f"  {f['file']}:{f['line']}  {f['code']}")
         print(f"      {f['producer']} -> {f['producer_returns']}; "

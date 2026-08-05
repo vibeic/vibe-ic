@@ -703,6 +703,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_via_patch_meets_layer_min_width_check` | any | — | a via's metal patch must be at least as wide as that metal layer's own declared minimum width. |
 | `pdk_yosys_flatten_for_quartus` | any | — | v1.6.222 (ORGANIC-20260512-followup-2). |
 | `per_opcode_response_latency_table_check` | any | v0.119.30 | gate (LL-33) catching extractor failures on per-opcode response latency tables. |
+| `per_source_record_merge_check` | any | — | Find per-source record merges whose verdict is decided by filename order. |
 | `perc_corpus_sweep` | any | v0.2.4 | run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS of already-routed designs, deterministically, with NO container needed. |
 | `perc_signoff_check` | any | — | Step 28 PERC / reliability sign-off gate (v2.3 flow-completeness review). |
 | `periodic_signal_required_check` | any | — | Verify that for every protocol-mandated periodic device-side activity (wake pulse, heartbeat, keepalive), the RTL contains a generator mo... |
@@ -1802,6 +1803,7 @@ _(no programs in this group)_
 - `pdk_via_patch_meets_layer_min_width_check` — a via's metal patch must be at least as wide as that metal layer's own declared minimum width.
 - `pdk_yosys_flatten_for_quartus` — v1.6.222 (ORGANIC-20260512-followup-2).
 - `per_opcode_response_latency_table_check` — gate (LL-33) catching extractor failures on per-opcode response latency tables.  _[v0.119.30]_
+- `per_source_record_merge_check` — Find per-source record merges whose verdict is decided by filename order.
 - `perc_corpus_sweep` — run the v0.2.4-2.11 PERC-equivalent sign-off chain across a CORPUS of already-routed designs, deterministically, with NO container needed.  _[v0.2.4]_
 - `perc_signoff_check` — Step 28 PERC / reliability sign-off gate (v2.3 flow-completeness review).
 - `periodic_signal_required_check` — Verify that for every protocol-mandated periodic device-side activity (wake pulse, heartbeat, keepalive), the RTL contains a generator mo...

@@ -68,7 +68,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _source_record_merge import merge_source_records  # noqa: E402
+from _source_record_merge import (INDETERMINATE,  # noqa: E402
+                                  merge_source_records)
 
 
 @dataclass
@@ -108,10 +109,34 @@ def parse_bitmap(bitmap_arg: Optional[str],
     # it: that byte's positions are simply never checked, and with other bytes
     # still populated the `empty_bitmap` WARN does not fire either. Silent
     # under-check, decided by argument order.
-    merged, _conflicts = merge_source_records(
+    #
+    # `stance=INDETERMINATE`, and this is the site where that state earns its
+    # keep. `"status_byte": {}` in an L-doc is genuinely ambiguous: the author
+    # may be declaring the byte has no bit-level meaning, or may be naming a
+    # byte whose rows live in the PEER document. No key in the JSON separates
+    # those, and no amount of reading it harder will -- so the honest answer is
+    # to say which one we cannot tell, rather than to pick one quietly.
+    #
+    # It behaves like silence for the ANSWER (an unproven denial is not a
+    # denial, so it cannot erase the peer's rows). It does not behave like
+    # silence for the REPORT: the WARN below names the bytes where a merge went
+    # one way on evidence nobody classified, which is the only thing this
+    # program can truthfully say about them.
+    outcome = merge_source_records(
         (_load_bitmap_from_layer(p) for p in (l3_path, l4_path)
          if p and p.exists()),
-        on_conflict="richer")
+        on_conflict="richer",
+        stance=lambda _r: INDETERMINATE)
+    merged = outcome.merged
+    _unclassified = sorted(
+        str(a["key"]) for a in outcome.absences
+        if a["kind"] == "indeterminate-could-not-erase")
+    if _unclassified:
+        print(f"[WARN] payload_bit_position_check: {len(_unclassified)} byte(s) "
+              f"named with no bit rows by one layer doc and described by the "
+              f"other — the described rows were kept, but nothing in the input "
+              f"says whether the empty one meant 'no bits' or 'bits are stated "
+              f"elsewhere': {', '.join(_unclassified)}", file=sys.stderr)
     for byte_name, bits in merged.items():
         # Layer-over-`--bitmap` precedence is UNCHANGED: a layer that DESCRIBES
         # the byte still wins, exactly as before. Only a layer that merely NAMES

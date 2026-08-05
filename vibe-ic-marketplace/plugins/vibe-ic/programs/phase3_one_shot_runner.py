@@ -3539,6 +3539,16 @@ def _macro_obs_layers_from_lef(lef_text: str) -> Dict[str, Dict[str, Any]]:
     own placement extent. Recorded separately so a caller cannot mistake it for
     a routing blockage and refuse every layer.
 
+    `obs_declared` records whether this LEF carried an `OBS` section AT ALL, and
+    it is the difference between two facts that `blocked == {}` cannot tell
+    apart. A LEF with an OBS section that names no routing layer has MEASURED
+    the macro to obstruct nothing. A LEF with no OBS section — an antenna or
+    pin-only abstract — has said NOTHING about obstructions. Both produce the
+    same empty `blocked`, so without this flag a merge downstream has to treat
+    a measurement and a gap as the same thing, and one of the two directions it
+    could pick is wrong. Costs one bool; it is what lets the caller declare a
+    truthful `stance=`.
+
     Pure LEF grammar, chip-AGNOSTIC. No design, PDK or vendor literal."""
     out: Dict[str, Dict[str, Any]] = {}
     if not isinstance(lef_text, str) or not lef_text:
@@ -3569,7 +3579,8 @@ def _macro_obs_layers_from_lef(lef_text: str) -> Dict[str, Dict[str, Any]]:
                         overlap += a
                     else:
                         blocked[layer] = blocked.get(layer, 0.0) + a
-        out[master] = {"blocked": blocked, "size": size, "overlap_area": overlap}
+        out[master] = {"blocked": blocked, "size": size, "overlap_area": overlap,
+                       "obs_declared": om is not None}
     return out
 
 
@@ -3739,6 +3750,15 @@ def _macro_pdn_grid_outcome(
     # `content=` is required here for exactly that reason: the emptiness is one
     # level down, in `blocked`, and the record's own truthiness cannot see it.
     #
+    # `stance=` separates the two kinds of empty `blocked` this parser emits.
+    # A LEF with an OBS section that names no routing layer MEASURED the macro
+    # to obstruct nothing (DENIES); one with no OBS section at all — an antenna
+    # or pin-only abstract — said nothing about obstructions (SILENT). Silence
+    # can never displace a blockage under any policy; a denial is a competing
+    # measurement and goes through `on_conflict` like any other disagreement.
+    # Without the stance both collapse into "empty" and the policy never gets
+    # to see the difference.
+    #
     # `on_conflict="richer"` -- the OPPOSITE of the sibling rule in
     # `macro_obs_geometry_intersect_check.merge_macro_obs`, and deliberately.
     # That one is a BLOCKING gate, where an over-read FABRICATES a violation
@@ -3747,6 +3767,13 @@ def _macro_pdn_grid_outcome(
     # non-fatal (see the block comment below), while its under-read straps
     # supply straight across metal the macro declares blocked. The asymmetry
     # runs the other way, so the choice does.
+    #
+    # That one word is load-bearing and it is PINNED AT THIS CALL SITE, not
+    # only on the helper: `test_pdn_planner_keeps_the_declared_blockage_when_
+    # two_lefs_disagree` and its denial-shaped sibling both fail if it is
+    # changed to "sparser", because under that policy the planner drops a
+    # blockage a LEF declared and puts a strap on the layer. A policy word no
+    # test can feel is a policy word anyone can flip.
     obs: Dict[str, Dict[str, Any]] = {}
     _obs_per_lef: List[Dict[str, Dict[str, Any]]] = []
     for t in (macro_lef_texts or []):
@@ -3754,7 +3781,9 @@ def _macro_pdn_grid_outcome(
         _obs_per_lef.append(_macro_obs_layers_from_lef(t))
     obs = _srm.merge_source_records(
         _obs_per_lef, content=lambda e: (e or {}).get("blocked"),
-        on_conflict="richer")[0]
+        on_conflict="richer",
+        stance=lambda e: (_srm.DENIES if (e or {}).get("obs_declared")
+                          else _srm.SILENT)).merged
     # NOTHING TO DO — and this is the ONLY branch that may say so. Every other
     # exit below has already seen a hard-macro supply port, i.e. work the grid
     # was supposed to do.
