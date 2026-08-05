@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1055
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1055)
+- **Total programs (excluding helpers / shims):** 1056
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1056)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1046 |
+| `any` | 1047 |
 
 ## Alphabetical listing
 
@@ -262,6 +262,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `deliverable_verdict_consistency_check` | any | — | a deliverable may not contradict the orchestrator it claims to summarise. |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC. |
 | `design_complexity_estimator` | any | — | design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation. |
+| `design_input_digest` | any | — | a published tally must carry a record of WHAT it was computed over, so a reader can tell "the design improved" from "the ruler changed". |
 | `design_one_shot_runner` | any | Wave 45 | the DESIGN one-shot runner (Phase 1 -> Phase 2: (doc|prompt) → L1-L27 JSON → RTL → SOF → <half-duplex-tester>). |
 | `deterministic_rtl_dispatcher` | any | v0.1.9 | Phase-2 program-first RTL router. |
 | `device_response_no_br_check` | any | — | deterministic compliance check derived from <chip-class> v042 fresh-agent debug. |
@@ -1127,7 +1128,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1046 programs)
+### `any` (1047 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1362,6 +1363,7 @@ _(no programs in this group)_
 - `deliverable_verdict_consistency_check` — a deliverable may not contradict the orchestrator it claims to summarise.
 - `derived_clock_sdc_required_check` — Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC.
 - `design_complexity_estimator` — design_complexity_estimator.py -- Heuristic design-complexity score and flow-effort recommendation.
+- `design_input_digest` — a published tally must carry a record of WHAT it was computed over, so a reader can tell "the design improved" from "the ruler changed".
 - `design_one_shot_runner` — the DESIGN one-shot runner (Phase 1 -> Phase 2: (doc|prompt) → L1-L27 JSON → RTL → SOF → <half-duplex-tester>).  _[Wave 45]_
 - `deterministic_rtl_dispatcher` — Phase-2 program-first RTL router.  _[v0.1.9]_
 - `device_response_no_br_check` — deterministic compliance check derived from <chip-class> v042 fresh-agent debug.
