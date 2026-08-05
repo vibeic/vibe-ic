@@ -132,6 +132,51 @@ OE_NAME_RE = re.compile(
 )
 
 
+#: Infixes that carry their own left boundary: the leading '_' IS the token
+#: separator, so a bare substring test is already anchored.
+_OE_SELF_ANCHORED_INFIXES = ('_oe_', '_oen_', '_oeb_')
+
+#: Infixes that do NOT carry a left boundary. These must match at an
+#: underscore-delimited token boundary — see `_infix_at_token_boundary`.
+_OE_TOKEN_INFIXES = ('tri_en', 'tristate_en', 'bus_en', 'drv_en')
+
+
+def _infix_at_token_boundary(low: str, infix: str) -> bool:
+    """True when `infix` occurs in `low` starting at an underscore-delimited
+    token boundary — the start of the identifier, or just after a '_'.
+
+    WHY THIS IS NOT A BARE SUBSTRING TEST. The unanchored infixes name a BUS
+    ('bus_en' = "the bus output-enable"), and a bare `in` test also matches
+    every identifier whose token merely ENDS in those letters: 'bus_en' is a
+    substring of 'dbus_en', 'ibus_en', 'sbus_en', 'abus_en'. Those decompose as
+    dbus/ibus/sbus/abus + '_en' — a data/instruction/system bus REQUEST enable,
+    which is an ordinary synchronous control signal, not an output-enable
+    driving a tristate. Measured: on a RISC-V core with ZERO tristate drivers
+    (no `inout`, no high-Z literal anywhere in 25 files) the bare test reported
+    4 findings, 3 of them HIGH "must be registered to avoid glitches", and
+    exited 1 — including on an INPUT PORT, which by construction is driven from
+    outside the module. Anchoring drops exactly those and keeps every genuine
+    OE: 'bus_en', 'io_bus_en', 'wb_bus_en' still match, and the '_oe'/'_oen'/
+    '_oeb' suffix rule that catches the real-world 3-wire pad convention
+    ('gpio_oe', 'mdio_oe') is untouched.
+
+    A name rule can only ever be a heuristic, so this deliberately does NOT
+    carry the whole gate: `find_oe_declarations` ALSO discovers OE signals
+    STRUCTURALLY from `assign bus = oe ? data : 'bz`, which is name-independent.
+    An identifier this rule now declines still reaches the report when it
+    actually drives a tristate — asserted by the reverse control in
+    `tests/test_oe_pattern_check_token_boundary.py`.
+    """
+    start = 0
+    while True:
+        i = low.find(infix, start)
+        if i < 0:
+            return False
+        if i == 0 or low[i - 1] == '_':
+            return True
+        start = i + 1
+
+
 def is_oe_name(name: str) -> bool:
     """Check if an identifier looks like an output-enable signal by name."""
     low = name.lower()
@@ -142,8 +187,9 @@ def is_oe_name(name: str) -> bool:
     if any(low.startswith(s.lstrip('_') + '_') for s in suffixes):
         return True
     # Infix patterns
-    infixes = ('_oe_', '_oen_', '_oeb_', 'tri_en', 'tristate_en', 'bus_en', 'drv_en')
-    if any(s in low for s in infixes):
+    if any(s in low for s in _OE_SELF_ANCHORED_INFIXES):
+        return True
+    if any(_infix_at_token_boundary(low, s) for s in _OE_TOKEN_INFIXES):
         return True
     # Exact match
     if low in ('oe', 'oen', 'oeb'):
