@@ -38241,6 +38241,13 @@ def main() -> int:
     }
     if verdict_note:
         summary["verdict_note"] = verdict_note
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # A phase3-driven run used to end with NO steps tree (only the top
+    # orchestrator built one), so the backend evidence had no per-step folder
+    # at all. Best-effort and non-gating; the outcome is recorded in
+    # reports/audit/steps_view.json whether it worked or not.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="phase3_one_shot_runner")
     out_path = _pl.report_path(project, "phase3_one_shot.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1065
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1065)
+- **Total programs (excluding helpers / shims):** 1067
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1067)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1056 |
+| `any` | 1058 |
 
 ## Alphabetical listing
 
@@ -610,6 +610,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `manufacturing_fab_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 35 -> 36; v1.6.15 Wave 91: Step 36 -> 37; Step 40 in the phase1_phase2_phase3.... |
 | `marketplace_version_sync_check` | any | — | marketplace_version_sync_check.py |
 | `mask_application_check` | any | — | Verify any AND-mask rule the spec declares is honoured by RTL: the masked value (not the raw byte) is what gets stored AND echoed back in... |
+| `matrix_mutation_ledger` | any | — | a cell may not be called ENFORCED until a NAMED, RUNNABLE mutation has been shown to turn it red. |
 | `mbist_wrapper_gen` | any | — | Memory-BIST (MBIST) March C- wrapper GENERATOR + GATE. |
 | `mcp_execution_verify` | any | — | Deterministic MCP tool execution verifier. |
 | `mdio_protocol_synth` | any | — | IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper. |
@@ -985,6 +986,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `staged_rtl_reused_ip_manifest_emit` | any | — | ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path. |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `step_output_collector` | any | — | materialize a per-STEP output subfolder view. |
+| `step_write_ledger` | any | — | record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED. |
 | `structured_table_extractor` | any | — | ONE general extractor for the whole TABLE tier. |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
 | `sv2v_mixed_driver_fixup` | any | — | deterministic post-pass to repair Verilog produced by sv2v when SystemVerilog hw2reg / packed-struct patterns produce MIXED-DRIVER nets (... |
@@ -1137,7 +1139,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1056 programs)
+### `any` (1058 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1718,6 +1720,7 @@ _(no programs in this group)_
 - `manufacturing_fab_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 35 -> 36; v1.6.15 Wave 91: Step 36 -> 37; Step 40 in the phase1_phase2_phase3....  _[Wave 88]_
 - `marketplace_version_sync_check` — marketplace_version_sync_check.py
 - `mask_application_check` — Verify any AND-mask rule the spec declares is honoured by RTL: the masked value (not the raw byte) is what gets stored AND echoed back in...
+- `matrix_mutation_ledger` — a cell may not be called ENFORCED until a NAMED, RUNNABLE mutation has been shown to turn it red.
 - `mbist_wrapper_gen` — Memory-BIST (MBIST) March C- wrapper GENERATOR + GATE.
 - `mcp_execution_verify` — Deterministic MCP tool execution verifier.
 - `mdio_protocol_synth` — IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper.
@@ -2091,6 +2094,7 @@ _(no programs in this group)_
 - `staged_rtl_reused_ip_manifest_emit` — ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path.
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `step_output_collector` — materialize a per-STEP output subfolder view.
+- `step_write_ledger` — record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED.
 - `structured_table_extractor` — ONE general extractor for the whole TABLE tier.
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.
 - `sv2v_mixed_driver_fixup` — deterministic post-pass to repair Verilog produced by sv2v when SystemVerilog hw2reg / packed-struct patterns produce MIXED-DRIVER nets (...

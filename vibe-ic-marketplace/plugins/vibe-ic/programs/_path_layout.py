@@ -645,8 +645,26 @@ REPORTS_VALID_ROOT_FILES: tuple = (
 
 
 # Top-level whitelist (for the canonical-top-level enforcement gate).
+#
+# `steps/` is the owner's per-STEP publication view
+# (`steps/<phase>/<stage>/<id>_<slug>/`, symlinks only — see
+# `step_output_collector.py` and `emit_steps_view` below). It is a CANONICAL
+# home, not a stray: `flow_compliance_check._glob_first` documents it as "the
+# owner's step-folder design", `rtl_scan_scope` excludes it by name as "the
+# flow's own PUBLICATION VIEW", and `flow_dashboard_web` serves per-step "open"
+# links out of it. It was missing from this tuple only because exactly one
+# runner built it, so nobody had measured the collision. MEASURED on
+# `campaign_v1578/ibex/converge_1.5.78_sky130A_armA_stock` (a real top-runner
+# run that HAS steps/): `top_level_outputs_in_canonical_check` reported
+# `[FAIL] ... stray dir(s): sim, steps`. Now that EVERY orchestrator publishes
+# the view, leaving it off would turn a hygiene gate red on every run — which
+# teaches readers to ignore it. Recording the directory the flow legitimately
+# owns is not widening the gate: `sim/`, `run_logs/`, `rtl/`, `synth/`,
+# `pnr/`, top-level `*.log` and every other stray are still rejected exactly
+# as before (covered by the reverse-case control in
+# tests/test_steps_view_every_orchestrator.py).
 TOP_LEVEL_VALID_DIRS: tuple = (
-    "input", "phase1", "phase2", "phase3", "reports",
+    "input", "phase1", "phase2", "phase3", "reports", "steps",
 )
 TOP_LEVEL_VALID_FILES: tuple = (
     "provenance.jsonl", "rig_topology.json", "waivers.json",
@@ -785,3 +803,154 @@ def emit_final_summary(project, programs_dir=None, timeout=None) -> bool:
         return r.returncode == 0
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# The per-STEP output view: `<project>/steps/<phase>/<stage>/<id>_<slug>/`.
+#
+# WHY THIS HELPER EXISTS. `step_output_collector.materialize` was called from
+# exactly ONE place — `vibe_ic_one_shot_runner`'s finalize — so a run driven
+# straight at phase2 / phase3 / analog (how most cells are actually driven)
+# ended with NO steps tree at all, and its absence was indistinguishable from
+# a run that had nothing to show. MEASURED: a top-runner ibex backend run has
+# `steps/` with 63 step folders; `AI_IC_design/4th_benchmark/sha256_rerun_e2e`,
+# a phase-driven run with a full phase1/phase2/phase3 tree, has none.
+#
+# BEST-EFFORT, IN BOTH DIRECTIONS. Building the VIEW must never fail a run and
+# must never HANG one — hence the subprocess + timeout, the same idiom
+# `emit_final_summary` uses, and a blanket except around the whole body. But
+# the failure must not be SILENT either: a run that produced artefacts and no
+# steps tree used to look exactly like a run whose orchestrator never had the
+# feature. So EVERY call writes `reports/audit/steps_view.json` recording what
+# happened and why. That is the surfacing decision, and the reasoning is:
+#   * raising  — kills a run over bookkeeping. Forbidden.
+#   * a gate   — the view is derived, not evidence; failing a run because a
+#                convenience view could not be built is the same crime.
+#   * a WARN   — scrolls past, survives in no artefact, cannot be queried.
+#   * a RECORD — durable, attributable, costs one small file, and INVERTS the
+#                default: "no steps tree" is now a written statement with a
+#                reason and a runner name instead of an unexplained absence.
+# The stderr WARN is kept as well, for the human watching the run.
+#
+# The record is VERIFIED, NOT REPORTED. After the collector exits 0 this helper
+# stats `steps/index.json` itself and counts the folders; a collector that
+# claims success and leaves no tree is recorded as a failure. `nested_folders`
+# counts entries whose `folder` has the owner-specified two separators
+# (phase/stage/step), so a regression back to a flat `steps/<id>_<slug>/` is
+# visible in the record rather than having to be re-derived from the tree.
+# ---------------------------------------------------------------------------
+STEPS_VIEW_REPORT_NAME = "steps_view.json"
+# The collector is a pure filesystem walk over the run dir; MEASURED at 0.22 s
+# wall (including interpreter start) on an 89 MB / 63-step ibex backend run.
+# The cap exists only so a pathological tree cannot wedge a finalize.
+STEPS_VIEW_TIMEOUT_S = 300
+
+
+def steps_view_report_path(project) -> Path:
+    """Canonical location of the steps-view status record."""
+    return report_path(Path(project), STEPS_VIEW_REPORT_NAME)
+
+
+def emit_steps_view(project, programs_dir=None, runner=None,
+                    timeout=None) -> dict:
+    """Build `<project>/steps/` and record the outcome. NEVER raises.
+
+    Returns the status record (also written to
+    `reports/audit/steps_view.json`). `status` is one of:
+      OK                — tree present, index.json readable, >=1 step folder
+      BUILD_FAILED      — collector errored, or exited 0 with no usable tree
+      TIMEOUT           — collector exceeded `timeout`
+      COLLECTOR_MISSING — step_output_collector.py not next to this module
+    Callers log the record; they must NOT gate on it."""
+    import json
+    import subprocess          # local imports: helper runs once per run
+    import sys
+    import time
+    from pathlib import Path
+
+    project = Path(project)
+    rec: dict = {
+        "program": "steps_view",
+        "runner": runner or "unknown",
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "steps_root": str(project / "steps"),
+        "status": "BUILD_FAILED",
+        "tree_present": False,
+        "n_steps": 0,
+        "n_with_outputs": 0,
+        "nested_folders": 0,
+        "error": None,
+    }
+    try:
+        if programs_dir is None:
+            programs_dir = Path(__file__).resolve().parent
+        collector = Path(programs_dir) / "step_output_collector.py"
+        if not collector.is_file():
+            rec["status"] = "COLLECTOR_MISSING"
+            rec["error"] = f"not found: {collector}"
+        else:
+            if timeout is None:
+                timeout = STEPS_VIEW_TIMEOUT_S
+            proc = None
+            try:
+                proc = subprocess.run(
+                    [sys.executable, str(collector), str(project)],
+                    timeout=timeout, check=False,
+                    capture_output=True, text=True,
+                )
+            except subprocess.TimeoutExpired:
+                rec["status"] = "TIMEOUT"
+                rec["error"] = (f"step_output_collector exceeded {timeout}s "
+                                f"on {project}")
+            except Exception as exc:
+                rec["error"] = f"{type(exc).__name__}: {exc}"
+            if proc is not None:
+                if proc.returncode != 0:
+                    rec["error"] = (
+                        f"step_output_collector rc={proc.returncode}: "
+                        + (proc.stderr or "").strip()[-600:])
+                else:
+                    # Do not take the child's word for it — read the tree.
+                    idx = project / "steps" / "index.json"
+                    try:
+                        steps = json.loads(idx.read_text()).get("steps") or []
+                    except Exception as exc:
+                        rec["error"] = (
+                            "collector exited 0 but steps/index.json is "
+                            f"unreadable: {type(exc).__name__}: {exc}")
+                    else:
+                        rec["n_steps"] = len(steps)
+                        rec["n_with_outputs"] = sum(
+                            1 for s in steps if (s.get("n_outputs") or 0) > 0)
+                        rec["nested_folders"] = sum(
+                            1 for s in steps
+                            if str(s.get("folder") or "").count("/") == 2)
+                        rec["tree_present"] = (project / "steps").is_dir()
+                        if rec["tree_present"] and rec["n_steps"] > 0:
+                            rec["status"] = "OK"
+                        else:
+                            rec["error"] = ("collector exited 0 but left no "
+                                            "step folders")
+    except Exception as exc:      # the helper itself must never raise
+        rec["error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        out = steps_view_report_path(project)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
+        rec["record_path"] = str(out)
+    except Exception as exc:
+        rec["record_error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        if rec["status"] == "OK":
+            print(f"steps view: steps/ — {rec['n_steps']} steps, "
+                  f"{rec['n_with_outputs']} with outputs "
+                  f"({rec['nested_folders']} nested phase/stage/step)")
+        else:
+            print(f"  [WARN] steps view NOT built ({rec['status']}): "
+                  f"{rec.get('error')} — recorded in "
+                  f"reports/audit/{STEPS_VIEW_REPORT_NAME}", file=sys.stderr)
+    except Exception:
+        pass
+    return rec

@@ -13103,6 +13103,15 @@ def main() -> int:
         "steps": [asdict(s) for s in plan],
         "verdict": _aggregate_verdict(plan),
     }
+    # Per-step output view — <project>/steps/<phase>/<stage>/<id>_<slug>/.
+    # phase2 is the most common standalone entry (`/vibe-ic-phase2`, and the
+    # `--skip-phase3` benchmark shape), and it used to leave no steps tree.
+    # Best-effort, non-gating; recorded in reports/audit/steps_view.json
+    # either way. Cheap enough to run here as well as at the chained end —
+    # MEASURED 0.22 s on an 89 MB run dir — and idempotent, so the phase3 /
+    # phase23 / top-orchestrator rebuild simply refreshes it.
+    summary["steps_view"] = _pl.emit_steps_view(
+        project, PROGRAMS_DIR, runner="design_one_shot_runner")
     out = _pl.report_path(project, "phase2_one_shot.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
