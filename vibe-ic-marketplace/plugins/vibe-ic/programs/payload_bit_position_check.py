@@ -98,9 +98,15 @@ def parse_bitmap(bitmap_arg: Optional[str],
             out.update(json.loads(Path(bitmap_arg).read_text()))
         except Exception as e:
             raise SystemExit(2) from e
+    _layers = {}
     for p in (l3_path, l4_path):
         if p and p.exists():
-            out.update(_load_bitmap_from_layer(p))
+            for _b, _bits in _load_bitmap_from_layer(p).items():
+                if _bits or _b not in _layers:
+                    _layers[_b] = _bits
+    for _b, _bits in _layers.items():
+        if _bits or _b not in out:
+            out[_b] = _bits
     return out
 
 

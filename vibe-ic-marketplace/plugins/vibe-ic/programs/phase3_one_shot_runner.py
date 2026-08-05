@@ -3728,7 +3728,9 @@ def _macro_pdn_grid_outcome(
     obs: Dict[str, Dict[str, Any]] = {}
     for t in (macro_lef_texts or []):
         ports.extend(_macro_pg_ports_from_lef(t))
-        obs.update(_macro_obs_layers_from_lef(t))
+        for _m, _e in _macro_obs_layers_from_lef(t).items():
+            if (_e or {}).get("blocked") or _m not in obs:
+                obs[_m] = _e
     # NOTHING TO DO — and this is the ONLY branch that may say so. Every other
     # exit below has already seen a hard-macro supply port, i.e. work the grid
     # was supposed to do.

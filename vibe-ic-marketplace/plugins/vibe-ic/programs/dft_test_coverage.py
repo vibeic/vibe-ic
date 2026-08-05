@@ -174,8 +174,10 @@ def compute(cut_netlist: Path, coverage_yml: Path, liberties=None, top=None,
         for lp in (liberties or []):
             p = Path(lp)
             if p.is_file():
-                directions.update(au.parse_liberty_pin_directions(
-                    p.read_text(errors="replace")))
+                for _c, _pins in au.parse_liberty_pin_directions(
+                        p.read_text(errors="replace")).items():
+                    if _pins or _c not in directions:
+                        directions[_c] = _pins
     else:
         directions = dict(directions)
     if not directions:

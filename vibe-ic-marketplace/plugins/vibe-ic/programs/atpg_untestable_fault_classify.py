@@ -315,8 +315,10 @@ def main(argv=None) -> int:
     for lp in a.liberty:
         p = Path(lp)
         if p.is_file():
-            directions.update(parse_liberty_pin_directions(
-                p.read_text(errors="replace")))
+            for _cell, _pins in parse_liberty_pin_directions(
+                    p.read_text(errors="replace")).items():
+                if _pins or _cell not in directions:
+                    directions[_cell] = _pins
     if not directions:
         print("[SKIP] atpg_untestable_fault_classify: no liberty resolved, so "
               "no pin DIRECTION is known. Guessing them from pin names would "
