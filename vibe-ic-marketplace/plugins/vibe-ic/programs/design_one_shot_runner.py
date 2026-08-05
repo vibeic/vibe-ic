@@ -10777,6 +10777,42 @@ def _derive_dft_reset_name(blob: str) -> Tuple[str, bool]:
     return rst, active_low
 
 
+# Setup/reap margin added on TOP of the producer's own size-scaled wall cap: the
+# producer must, WITHIN the subprocess this runner grants it, enumerate the fault
+# sites, build the 2-frame LOC miter ONCE, run its calibration probe, solve the
+# right-sized sample up to WALL_BUDGET_MAX, AND reap its own Yosys container. That
+# tail is bounded but non-zero, so the outer wall is cap + margin, never == cap.
+_TDF_ATPG_SETUP_REAP_MARGIN_S = 900
+
+
+def _tdf_atpg_subprocess_timeout_s() -> int:
+    """Outer wall (seconds) for the transition/at-speed ATPG subprocess (Step 11
+    / DT1), i.e. the ``timeout=`` this runner passes to ``subprocess.run`` when it
+    invokes ``transition_fault_atpg_run.py``.
+
+    It MUST cover that producer's OWN size-scaled wall. The producer sizes its
+    fault sample to complete within ``_scaled_wall_budget(--timeout floor,
+    scan_flops)`` — 1800 s floor + 3 s/scan-flop, CAPPED at ``WALL_BUDGET_MAX``
+    (7200 s) — and runs its Yosys batch under a docker ``timeout`` of that same
+    scaled wall. If this runner's outer ``subprocess.run`` timeout is BELOW that
+    cap, then on any design large enough to earn more than the floor (any design
+    with scan flops) the runner SIGKILLs the producer mid-batch before it can
+    grade its sized sample: no ``transition_coverage.json`` is ever written, the
+    at-speed sub-check is left with no evidence (a hard FAIL, not a measured
+    number), and — because the reap runs in the producer we just killed — the
+    producer's Yosys container is orphaned and keeps burning CPU. A fixed outer
+    timeout below the producer's cap therefore silently DEFEATS the producer's
+    entire size-scaling. This wall tracks the producer's cap so it cannot drift
+    below it. Chip / PDK / vendor AGNOSTIC — keyed ONLY on the producer's own
+    WALL_BUDGET_MAX plus a fixed setup/reap margin, never on any design or
+    library literal."""
+    try:
+        from transition_fault_atpg_run import WALL_BUDGET_MAX as _cap
+    except Exception:
+        _cap = 7200  # producer default; keep in sync if it ever import-fails
+    return int(_cap) + _TDF_ATPG_SETUP_REAP_MARGIN_S
+
+
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        ic_class: str, full_chip: bool = True
                        ) -> List[StepResult]:
@@ -11308,8 +11344,12 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         if pdk and pdk == _cpdk.COMMERCIAL_PDK_ID:
             tdf_cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve())]
         try:
+            # Outer wall MUST cover the producer's OWN size-scaled wall (capped at
+            # WALL_BUDGET_MAX); a fixed value below that cap SIGKILLs the producer
+            # mid-batch on any flop-bearing design, so it writes no coverage and
+            # leaks its container. See _tdf_atpg_subprocess_timeout_s.
             _tdf_p = subprocess.run(tdf_cmd, capture_output=True, text=True,
-                                    timeout=1800)
+                                    timeout=_tdf_atpg_subprocess_timeout_s())
             if not tdf_json.is_file():
                 # Ran, produced nothing. The producer writes its JSON on every
                 # path it reaches, so reaching none of them is itself the
@@ -11357,10 +11397,13 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             # deletion. TimeoutExpired subclasses SubprocessError (not OSError), so
             # handler ORDER is the fix: this arm must precede `except Exception`.
             #
-            # The wall budget is still a size-independent constant; scaling it (the
-            # other half of #581) needs a measured cells-per-second and is
-            # deliberately NOT attempted here — an invented formula would replace a
-            # wrong constant with an unmeasured one.
+            # The producer NOW scales its own wall with scan-flop count (see
+            # transition_fault_atpg_run._scaled_wall_budget), and this runner's
+            # outer subprocess wall tracks the producer's WALL_BUDGET_MAX cap
+            # (see _tdf_atpg_subprocess_timeout_s), so a wall expiry here is a
+            # genuine budget outcome at the FULL scaled budget — not the old
+            # fixed-1800 s throttle that abandoned the producer before its own
+            # sized batch could finish.
             _to = getattr(exc, "timeout", None)
             _dft_disclose_skip(
                 _tdf_not_run,
