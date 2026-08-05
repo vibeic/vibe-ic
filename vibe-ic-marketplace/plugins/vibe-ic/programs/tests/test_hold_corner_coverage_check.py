@@ -341,3 +341,132 @@ class TestTheStanceCannotOutrankTheScript:
         assert "source[tcl] FAIL" in printed
         assert "CONTRADICTION" in printed
         assert json.loads(out.read_text())["contradiction"] is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A DECLARED CORNER IS THE CLAIM; A CORNER IN A LIBERTY FILENAME IS NOT
+#
+# The emitter writes its hold banner as
+#     === HOLD corner: process=FF liberty=<path> ===
+# and the module docstring names that banner as RULE 2's primary evidence. It
+# could not be read: `=` was absent from `_PROC_RE`'s delimiter class, so
+# `process=FF` yielded NOTHING and the only corner the line produced came from
+# the Liberty FILENAME beside it. On the usual naming conventions the two agree
+# and the gate looks correct. The tests below are the two directions in which
+# they DISAGREE — one produces a false FAIL, the other a false PASS — plus the
+# two cases that must be untouched.
+#
+# BIDIRECTIONAL NEGATIVE CONTROL — measured against the byte-identical pre-fix
+# module (`git show e3aa9b12:…/hold_corner_coverage_check.py`, md5
+# d0390374c2f89145e3c227ceb4367e8d), same test file, `5 failed, 31 passed`:
+#
+#   FAILED  …declared_ff_is_read_when_the_liberty_filename_has_no_corner_token
+#           the false FAIL: rc=1 NO_FEED_CORNER on a banner reading process=FF
+#   FAILED  …a_declared_slow_corner_is_not_masked_by_a_fast_liberty_filename
+#           the false PASS: rc=0 HOLD_AT_FF on a banner reading process=SS
+#   FAILED  …the_delimiter_class_reads_an_equals_assignment      (root cause)
+#   FAILED  …a_declared_slow_corner_alone_still_fails
+#           pre-fix this reached FAIL, but via NO_FEED_CORNER — right verdict,
+#           wrong reason, and the reason is what a reader acts on
+#   FAILED  …an_assignment_to_a_non_corner_word_is_not_a_corner  (helper absent)
+#
+#   passed  …reverse_declared_ff_with_a_matching_filename_still_passes
+#   passed  …a_view_line_without_an_assignment_is_unchanged
+#
+# The last two are the REVERSE cases and they must pass on BOTH sides. They are
+# what stops this fix from being "narrow the rule until the bad case stops
+# firing": the common shape (declaration and filename agreeing at FF) and the
+# space-delimited MCMM shape are pinned unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LIB_WITH_TOKEN = "/pdk/lib/acme_sc__ff_n40C_1v95.lib"
+_LIB_NO_TOKEN = "/pdk/lib/acme_sc_core_lib.lib"
+
+
+def _banner_tcl(process: str, liberty: str) -> str:
+    """The emitter's own hold script shape: a Liberty read, the `=== HOLD
+    corner: process=<X> liberty=<path> ===` banner, and the min report."""
+    return (
+        f"read_liberty {liberty}\n"
+        f'puts $_f "=== HOLD corner: process={process} liberty={liberty}, '
+        f'SPEF=x.spef ==="\n'
+        f"report_checks -path_delay min -digits 3\n"
+    )
+
+
+class TestDeclaredCornerOutranksTheLibertyFilename:
+
+    def test_declared_ff_is_read_when_the_liberty_filename_has_no_corner_token(
+            self):
+        """FALSE FAIL. A PDK whose Liberty filenames carry no corner
+        designator is an ordinary naming convention, not a defect. The banner
+        says `process=FF`; the gate reported `NO_FEED_CORNER` — "no corner
+        could be identified" — while quoting that very line back in
+        `hold_feed_lines`."""
+        verdict, rc, rep = mod.evaluate(_banner_tcl("FF", _LIB_NO_TOKEN))
+        assert (verdict, rc) == ("PASS", 0)
+        assert rep["reason"] == "HOLD_AT_FF"
+        assert rep["judged_corners"] == ["FF"]
+        assert rep["view_line_assigned_corners"] == ["FF"]
+
+    def test_a_declared_slow_corner_is_not_masked_by_a_fast_liberty_filename(
+            self):
+        """FALSE PASS — the defect this gate exists to catch. The script
+        declares `process=SS`, which under-reports hold violations. Reading the
+        union of the line let `_ff_` in the filename supply an FF the
+        declaration never claimed, and the gate returned PASS/`HOLD_AT_FF`
+        under basis `declared_hold_view` — i.e. asserting it had judged the
+        declaration it could not read."""
+        verdict, rc, rep = mod.evaluate(_banner_tcl("SS", _LIB_WITH_TOKEN))
+        assert (verdict, rc) == ("FAIL", 1)
+        assert rep["reason"] == "HOLD_NOT_AT_FF"
+        assert rep["judged_corners"] == ["SS"]
+        assert rep["view_line_assigned_corners"] == ["SS"]
+        # The filename's corner is DISCLOSED, never silently dropped.
+        assert rep["view_line_incidental_corners"] == ["FF"]
+
+    def test_reverse_declared_ff_with_a_matching_filename_still_passes(self):
+        """REVERSE CASE. The overwhelmingly common shape — declaration and
+        filename AGREE at FF — must be untouched. A fix that reached the two
+        cases above by narrowing what counts as evidence would break this
+        one."""
+        verdict, rc, rep = mod.evaluate(_banner_tcl("FF", _LIB_WITH_TOKEN))
+        assert (verdict, rc) == ("PASS", 0)
+        assert rep["reason"] == "HOLD_AT_FF"
+        assert rep["judged_corners"] == ["FF"]
+
+    def test_a_declared_slow_corner_alone_still_fails(self):
+        """REVERSE CASE. Already correct before the fix; must stay correct.
+        Pins that the new assignment path did not become a way to PASS."""
+        verdict, rc, rep = mod.evaluate(_banner_tcl("SS", _LIB_NO_TOKEN))
+        assert (verdict, rc) == ("FAIL", 1)
+        assert rep["reason"] == "HOLD_NOT_AT_FF"
+
+    def test_a_view_line_without_an_assignment_is_unchanged(self):
+        """REVERSE CASE. `set_hold_view -corner ff_view` names its corner
+        space-delimited, with no `=`. Such lines have always resolved through
+        the union rule and must continue to — the fix adds a stronger reading
+        where one exists, it does not remove the fallback."""
+        tcl = ("read_liberty /pdk/lib/acme_sc__ff_n40C_1v95.lib\n"
+               "set_hold_view -corner ff_view\n"
+               "report_checks -path_delay min\n")
+        verdict, rc, rep = mod.evaluate(tcl)
+        assert (verdict, rc) == ("PASS", 0)
+        assert rep["corner_basis"] == "declared_hold_view"
+        assert "view_line_assigned_corners" not in rep
+
+    def test_the_delimiter_class_reads_an_equals_assignment(self):
+        """The one-character root cause, pinned directly so a future edit to
+        `_PROC_RE` cannot silently re-open it."""
+        assert mod._corners_in("process=FF") == ["FF"]
+        assert mod._corners_in("corner=ss,") == ["SS"]
+        # and the pre-existing delimiters keep working
+        assert mod._corners_in("process FF") == ["FF"]
+        assert mod._corners_in("lib__tt_025C.lib") == ["TT"]
+
+    def test_an_assignment_to_a_non_corner_word_is_not_a_corner(self):
+        """`_CORNER_ASSIGN_RE` must not fire on assignments whose value merely
+        STARTS with a corner designator."""
+        assert mod._assigned_corners_in("process=ffast_model") == []
+        assert mod._assigned_corners_in("corner=ssub") == []
+        assert mod._assigned_corners_in("mode=functional") == []
