@@ -211,6 +211,11 @@ _VERSION_READING_PROGRAMS = {
     "caravel_wrapper_emit",
     "drc_fix_planner",
     "eco_status_gen",
+    # The audit artefact's own `version` field. It said "0.119.62" on all 28
+    # tracked audits, across every release from 1.0.0 to 1.9.79 — #800's scan
+    # never saw it because the key is `version`, which is not one of
+    # _ATTRIBUTION_KEYS.
+    "flow_compliance_check",
     "foundry_handoff_pack_gen",
     "hold_fix_planner",
     "ir_drop_triage_classify",
