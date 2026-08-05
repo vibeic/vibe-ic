@@ -42,6 +42,56 @@ from phase2_scaffold_gen import derive_top_module_name  # noqa: E402
 
 
 # --------------------------------------------------------------------------
+# The one enumeration of every protocol pack that writes L9.top_module.
+#
+# `(module, apply_fn, settled_ic_name, pack_reference_top)`. Every pack
+# below routes its reference literal through `_pack_top_module.apply`; the
+# fourth column is the literal that pack supplies. This is the SAME set the
+# field-count sweep enumerates — the two behavioural sweeps below read it so
+# there is one place to add a pack and no pack can be covered by one sweep
+# and silently missed by the other.
+#
+# Provenance of the fourth column: `grep -n "_ptm.apply" *_protocol_synth.py`.
+# --------------------------------------------------------------------------
+_ALL_PACKS = [
+    ("spi_protocol_synth", "apply_spi_synth",
+     "SPI Block (S12SPIV4)", "SPI"),
+    ("uart_protocol_synth", "apply_uart_synth",
+     "PC16550D UART", "PC16550D"),
+    ("sdmmc_protocol_synth", "apply_sdmmc_synth",
+     "SD Memory Card", "SD_Memory_Card"),
+    ("nvme_protocol_synth", "apply_nvme_synth",
+     "NVM Express (NVMe) Base Specification Rev 1.4", "NVMe_Controller"),
+    ("tpm_protocol_synth", "apply_tpm_synth",
+     "TPM 2.0 Library Part 1: Architecture (TCG)",
+     "TPM_2_0_Library_Architecture"),
+    ("modbus_protocol_synth", "apply_modbus_synth",
+     "Modbus Application Protocol V1.1b3 (Modbus.org)", "modbus_server_top"),
+    ("lin_protocol_synth", "apply_lin_synth", "LIN bus 2.2A", "lin_node"),
+    ("dali_protocol_synth", "apply_dali_synth",
+     "DALI (IEC 62386)", "dali_control_gear_top"),
+    ("sata_protocol_synth", "apply_sata_synth",
+     "Serial ATA AHCI 1.3.1", "AHCI_HBA"),
+    ("onfi_protocol_synth", "apply_onfi_synth", "ONFI 4.1", "ONFI_NAND_Target"),
+    ("nfc_protocol_synth", "apply_nfc_synth",
+     "NFC / ISO 14443", "NFC_ISO14443_Stack"),
+    ("ufs_protocol_synth", "apply_ufs_synth",
+     "Universal Flash Storage (JEDEC JESD220, UFS 4.0)", "UFS_Device"),
+    ("zigbee_protocol_synth", "apply_zigbee_synth",
+     "IEEE 802.15.4 + Zigbee LR-WPAN SoC", "ieee802154_zigbee_soc"),
+    ("hbm3_protocol_synth", "apply_hbm3_synth",
+     "High Bandwidth Memory 3 (JEDEC JESD238)", "HBM3_stack_on_interposer"),
+    ("lpddr5_protocol_synth", "apply_lpddr5_synth",
+     "LPDDR5 SDRAM (JEDEC JESD209-5)", "LPDDR5_SDRAM_component"),
+    ("ddr_protocol_synth", "apply_ddr_synth",
+     "DDR3 SDRAM (JEDEC JESD79-3C)", "DDR3_SDRAM_component"),
+    ("rs485_protocol_synth", "apply_rs485_synth", "RS-485 (TIA/EIA-485-A)",
+     "RS485_transceiver (external chip) + "
+     "UART_with_DE/RE#_direction_control (on-chip)"),
+]
+
+
+# --------------------------------------------------------------------------
 # The forward property: a pack's reference name does not become the
 # design's identifier when the design already had one.
 # --------------------------------------------------------------------------
@@ -276,33 +326,7 @@ def _l9_from_pack(pack_module, apply_fn_name, ic_name, tmp_path):
 
 @pytest.mark.parametrize(
     "pack_module,apply_fn,ic_name",
-    [
-        ("spi_protocol_synth", "apply_spi_synth", "SPI Block (S12SPIV4)"),
-        ("uart_protocol_synth", "apply_uart_synth", "PC16550D UART"),
-        ("sdmmc_protocol_synth", "apply_sdmmc_synth", "SD Memory Card"),
-        ("nvme_protocol_synth", "apply_nvme_synth",
-         "NVM Express (NVMe) Base Specification Rev 1.4"),
-        ("tpm_protocol_synth", "apply_tpm_synth",
-         "TPM 2.0 Library Part 1: Architecture (TCG)"),
-        ("modbus_protocol_synth", "apply_modbus_synth",
-         "Modbus Application Protocol V1.1b3 (Modbus.org)"),
-        ("lin_protocol_synth", "apply_lin_synth", "LIN bus 2.2A"),
-        ("dali_protocol_synth", "apply_dali_synth", "DALI (IEC 62386)"),
-        ("sata_protocol_synth", "apply_sata_synth", "Serial ATA AHCI 1.3.1"),
-        ("onfi_protocol_synth", "apply_onfi_synth", "ONFI 4.1"),
-        ("nfc_protocol_synth", "apply_nfc_synth", "NFC / ISO 14443"),
-        ("ufs_protocol_synth", "apply_ufs_synth",
-         "Universal Flash Storage (JEDEC JESD220, UFS 4.0)"),
-        ("zigbee_protocol_synth", "apply_zigbee_synth",
-         "IEEE 802.15.4 + Zigbee LR-WPAN SoC"),
-        ("hbm3_protocol_synth", "apply_hbm3_synth",
-         "High Bandwidth Memory 3 (JEDEC JESD238)"),
-        ("lpddr5_protocol_synth", "apply_lpddr5_synth",
-         "LPDDR5 SDRAM (JEDEC JESD209-5)"),
-        ("ddr_protocol_synth", "apply_ddr_synth",
-         "DDR3 SDRAM (JEDEC JESD79-3C)"),
-        ("rs485_protocol_synth", "apply_rs485_synth", "RS-485 (TIA/EIA-485-A)"),
-    ],
+    [(m, fn, ic) for (m, fn, ic, _top) in _ALL_PACKS],
 )
 def test_l9_field_count_gate_still_passes_for_every_patched_pack(
         pack_module, apply_fn, ic_name, tmp_path):
@@ -318,23 +342,31 @@ def test_l9_field_count_gate_still_passes_for_every_patched_pack(
         f"l_doc_structured_field_count_check loses a typed field")
 
 
-@pytest.mark.parametrize(
-    "pack_module,apply_fn,ic_name,pack_top",
-    [
-        ("spi_protocol_synth", "apply_spi_synth", "SPI Block (S12SPIV4)",
-         "SPI"),
-        ("uart_protocol_synth", "apply_uart_synth", "PC16550D UART",
-         "PC16550D"),
-        ("sata_protocol_synth", "apply_sata_synth", "Serial ATA AHCI 1.3.1",
-         "AHCI_HBA"),
-        ("hbm3_protocol_synth", "apply_hbm3_synth",
-         "High Bandwidth Memory 3 (JEDEC JESD238)",
-         "HBM3_stack_on_interposer"),
-    ],
-)
+@pytest.mark.parametrize("pack_module,apply_fn,ic_name,pack_top", _ALL_PACKS)
 def test_a_real_pack_does_not_rename_a_design_declared_top(
         pack_module, apply_fn, ic_name, pack_top, tmp_path):
-    """R1, end-to-end through the real pack, not through the helper."""
+    """R1, end-to-end through the real pack, not through the helper.
+
+    This is the guard that stands between EVERY pack and the defect, and it
+    is behavioural on purpose. It drives the real pack against an L9 whose
+    own input declared `module my_own_block` (strategy `rtl_filesystem_scan`,
+    a `DESIGN_OWNED_STRATEGY`) and asserts the pack left that name alone.
+
+    Because it reads the OBSERVED end state — what `top_module` holds and
+    what identifier `derive_top_module_name` produces — it catches a raw
+    overwrite regardless of how the source spelled it: `d["top_module"] =`,
+    `d['top_module'] =`, `_force(d, 'top_module', ...)`, an f-string, a
+    concatenation, all land the same runtime value and all fail here. A
+    source-text detector that keys on one quoting of one call site cannot
+    say that; a behavioural one needs no enumeration of spellings. It is
+    also why a DIFFERENT correct fix — one that keeps a local assignment but
+    consults `_pack_top_module.decide` first — passes: the property, not the
+    call site, is what is asserted.
+
+    Extended from 4 packs to all 17 (`_ALL_PACKS`): the four originally
+    listed were the only ones a behavioural test distinguished pre-fix from
+    post-fix, leaving the other 13 guarded by source text alone.
+    """
     import importlib
 
     gd = tmp_path / "generated_docs"
@@ -447,29 +479,74 @@ def test_l9_field_count_gate_verdict_is_unchanged_by_this_fix(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Corpus sweep over the SOURCE: no pack writes the identifier field raw.
+# Behavioural sweep: every pack routes through the one decision, in any
+# quoting style.
+#
+# This REPLACES an earlier source-text regex
+# (`test_no_protocol_pack_assigns_l9_top_module_directly`) that matched only
+# a double-quoted `d["top_module"] =` / `_force(d, "top_module"`. That
+# detector named a spelling, not the fact, and failed in BOTH directions:
+#
+#   * it MISSED the same overwrite written `d['top_module'] = "..."` — a
+#     single quote reintroduced the full defect (a design-declared top
+#     renamed, its `rtl_filesystem_scan` provenance left standing as a false
+#     certificate) while the suite stayed green; and
+#   * it REJECTED a behaviourally-correct fix that kept a local assignment
+#     after consulting `_pack_top_module.decide`.
+#
+# The property is quote-agnostic, so the guard must be too. Driving each
+# real pack and reading the OBSERVED end state cannot be evaded by how the
+# assignment was spelled, and cannot misfire on a different correct routing.
 # --------------------------------------------------------------------------
 
-def test_no_protocol_pack_assigns_l9_top_module_directly():
-    """Every pack routes through the one decision.
+@pytest.mark.parametrize("pack_module,apply_fn,ic_name,pack_top", _ALL_PACKS)
+def test_every_pack_routes_top_module_through_the_one_decision(
+        pack_module, apply_fn, ic_name, pack_top, tmp_path):
+    """R2, end-to-end: a pack that DOES fill an ungoverned top module leaves
+    an honest provenance stamp behind it.
 
-    Sweeps every `*_protocol_synth.py` in `programs/`. A pack that writes
-    a dict literal containing `"top_module"` as part of a whole-L9 seed is
-    NOT flagged: it is constructing a document, not overwriting one, and
-    the two measured seeds of that shape write the runner's canonical
-    `chip_top`, not a reference part name.
+    Complementary direction to `test_a_real_pack_does_not_rename_a_design_
+    declared_top`: here the L9 carries only a phase-1 fallback
+    (`l1_ic_name_fallback`, NOT a `DESIGN_OWNED_STRATEGY`), so the pack is
+    allowed to supply its reference literal. The two facts asserted are the
+    two a raw overwrite — in ANY quoting style — cannot produce:
+
+      * the reference literal is recorded in `REFERENCE_FIELD` (the pack
+        went through `apply`, not around it); and
+      * `top_module_extraction_strategy` is restamped to
+        `PACK_DEFAULT_STRATEGY`, so the document stops asserting the
+        pre-pack provenance it no longer has.
+
+    A raw `d['top_module'] = "<literal>"` sets neither: no `REFERENCE_FIELD`,
+    and the stale `l1_ic_name_fallback` stamp survives. Both assertions fail,
+    for whatever quoting the reintroduction used.
     """
-    import re
+    import importlib
 
-    bad = []
-    pat = re.compile(r'^\s*(?:d\["top_module"\]\s*=|_force\(\s*d,\s*'
-                     r'"top_module")')
-    for path in sorted(_PROGRAMS.glob("*_protocol_synth.py")):
-        for n, line in enumerate(path.read_text().splitlines(), 1):
-            if pat.match(line):
-                bad.append(f"{path.name}:{n}: {line.strip()}")
-    assert not bad, (
-        "these packs assign L9.top_module without going through "
-        "_pack_top_module.apply, so they overwrite a design-declared name "
-        "and leave a provenance stamp that is no longer true:\n  "
-        + "\n  ".join(bad))
+    gd = tmp_path / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(
+        json.dumps(_PRE_PACK_L9) + "\n")
+    for name in ("L1_DATASHEET.json", "L2_FRS.json", "L3_CMD_PROTOCOL.json",
+                 "L4_REGMAP.json", "L5_ADI_SPEC.json", "L6_CONTROL_LOGIC.json",
+                 "L7_TEST_DEBUG.json", "L8_RTL_CONSTANTS.json",
+                 "L8_TIMING_WAVEFORM.json", "L10_TEST_CASES.json",
+                 "L11_OTP_CONTENT.json", "L12_BEHAVIORAL_SEQUENCES.json",
+                 "L13_LAB_CALIBRATION.json", "L17_CHANNEL_CATALOG.json",
+                 "L19_CONSTRAINTS_PDK.json", "L20_POWER_INTENT.json",
+                 "L22_VERIFICATION_PLAN.json", "L23_BRINGUP_PLAN.json"):
+        (gd / name).write_text(json.dumps({"schema_version": 2}) + "\n")
+
+    mod = importlib.import_module(pack_module)
+    getattr(mod, apply_fn)(gd, True, ic_name)
+    l9 = json.loads((gd / "L9_INTEGRATION_SPEC.json").read_text())
+
+    rec = l9.get(ptm.REFERENCE_FIELD)
+    assert isinstance(rec, dict) and rec.get("name") == pack_top, (
+        f"{pack_module} did not record its reference literal {pack_top!r} in "
+        f"{ptm.REFERENCE_FIELD} — it wrote L9.top_module around "
+        f"_pack_top_module.apply, not through it (got {rec!r})")
+    assert l9.get("top_module_extraction_strategy") == ptm.PACK_DEFAULT_STRATEGY, (
+        f"{pack_module} filled L9.top_module but left the provenance stamp at "
+        f"{l9.get('top_module_extraction_strategy')!r}; the document still "
+        f"claims a name it no longer carries (the false-certificate shape)")
