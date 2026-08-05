@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 def _empty(v) -> bool:
@@ -921,7 +923,7 @@ def _l9(gd: Path) -> None:
         "protocol-level normative spec; the integrating SoC / motherboard adds the "
         "platform-specific TPM Interface Specification (LPC / SPI / I2C TIS-PTP) "
         "plus the chassis-level TPM-presence + reset + locality-4 (H-CRTM) wiring.")
-    _force(d, "top_module", "TPM_2_0_Library_Architecture")
+    _identity.offer_reference_top_module(d, "TPM_2_0_Library_Architecture")
     d.setdefault("integration_overview", {
         "interface_choices":  "LPC (4-wire data + LFRAME# + LCLK + LRESET#), SPI (4-wire), I2C (2-wire).",
         "register_file_base": "0xFED40000 (PC platform; per TIS/PTP).",

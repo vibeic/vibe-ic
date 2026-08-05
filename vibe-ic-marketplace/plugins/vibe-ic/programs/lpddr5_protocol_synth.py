@@ -50,6 +50,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 # Canonical product name forced across every doc.
@@ -1023,7 +1025,7 @@ def _l9(gd: Path) -> None:
         "link-ECC + DBI, DVFS, and per-bank state tracking. Concrete LPDDR5 "
         "controller IP appears in mobile SoCs (Snapdragon, Apple M-series, "
         "MediaTek Dimensity, Kirin) and IP vendors (Synopsys, Cadence).")
-    d["top_module"] = "LPDDR5_SDRAM_component"
+    _identity.offer_reference_top_module(d, "LPDDR5_SDRAM_component")
     # FORCE-OVERWRITE shared L9 keys the DDR3 sibling authors.
     d["integration_overview"] = {
         "channel_organization": "Typically two x16 channels per package; per-channel CK/WCK/RDQS/CA/CS/DQ/DMI; two-deck internal organization.",

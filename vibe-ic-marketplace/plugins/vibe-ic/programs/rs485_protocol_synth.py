@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 def _empty(v) -> bool:
@@ -600,7 +602,11 @@ def apply_rs485_synth(generated_docs_dir: Path, is_rs485: bool,
             "half-duplex or full-duplex transceivers connecting multiple nodes in a daisy-chain "
             "topology. Provides robust noise-immune signaling over long distances.")
         # v0.1.88: RS-485 chip-top is the transceiver + DE/RE# direction wrapper, not the UART core.
-        _force(d, "top_module",
+        # vibe-ic#831: that sentence is a description, not an identifier, so it
+        # is offered as documentation only — `offer_reference_top_module`
+        # declines to adopt prose as `top_module` and the design's own name
+        # stands.
+        _identity.offer_reference_top_module(d,
             "RS485_transceiver (external chip) + UART_with_DE/RE#_direction_control (on-chip)")
         d.setdefault("integration_overview", {
             "host_side": "UART TX (D) + UART RX (R) + 2 GPIO direction-control bits (DE active HIGH, RE# active LOW).",

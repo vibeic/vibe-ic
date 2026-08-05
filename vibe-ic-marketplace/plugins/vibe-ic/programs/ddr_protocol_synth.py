@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 from _incidental_mention import AnchoredBlob as _AnchoredBlob
 from _incidental_mention import subject_term as _subject_term
@@ -1224,7 +1226,7 @@ def apply_ddr_synth(generated_docs_dir: Path, is_ddr: bool,
     p = gd / "L9_INTEGRATION_SPEC.json"
     if p.is_file():
         d = _read(p)
-        d["top_module"] = "DDR3_SDRAM_component"
+        _identity.offer_reference_top_module(d, "DDR3_SDRAM_component")
         d.setdefault("module_role",
             "Source-synchronous parallel memory device intended to be paired "
             "with a DDR3 memory controller + PHY. JESD79-3C standardizes the "

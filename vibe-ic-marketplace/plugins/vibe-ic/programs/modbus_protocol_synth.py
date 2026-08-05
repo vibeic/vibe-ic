@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 def _empty(v) -> bool:
@@ -819,7 +821,7 @@ def apply_modbus_synth(generated_docs_dir: Path, is_modbus: bool,
             "processor + ADU framer/parser for one or more of the three published transports "
             "(RTU, ASCII, TCP). Exposes the four data tables plus diagnostic counters and an "
             "optional Encapsulated Interface (FC 0x2B) handler.")
-        d["top_module"] = "modbus_server_top"
+        _identity.offer_reference_top_module(d, "modbus_server_top")
         d.setdefault("integration_overview", {
             "host_side":         "Two memory-mapped regions: (a) configuration/control/status registers, (b) the four MODBUS data tables.",
             "wire_side_rtu":     "UART TX/RX plus optional RTS for RS-485 transceiver direction control.",

@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 def _empty(v) -> bool:
@@ -1014,7 +1016,7 @@ def _l9(gd: Path) -> None:
         "interface, a memory-mapped AHCI register block, a per-port DMA engine + Command "
         "List walker + Received-FIS poster + Task File shadow + interrupt aggregator, and "
         "an integrated SATA Transport / Link / PHY macro per port.")
-    d["top_module"] = "AHCI_HBA"
+    _identity.offer_reference_top_module(d, "AHCI_HBA")
     io = _ensure_dict(d, "integration_overview")
     io.setdefault("system_bus_options",
                   ["PCI", "PCI-X", "PCI-Express", "PCI-like (HyperTransport)"])

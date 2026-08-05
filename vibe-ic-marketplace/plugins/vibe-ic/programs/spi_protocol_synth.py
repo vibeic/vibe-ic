@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 def _empty(v) -> bool:
@@ -633,7 +635,7 @@ def _apply_spi_specific(gd: Path, spi_ic_name: Optional[str]) -> None:
         d = _read(p)
         d.setdefault("module_role",
             "Synchronous serial peripheral block within an MCU; couples to MCU bus on one side (8-bit register file at module-defined offsets) and to 4 external pins on the other.")
-        d["top_module"] = "SPI"
+        _identity.offer_reference_top_module(d, "SPI")
         d.setdefault("integration_overview", {
             "host_bus_side": "8-bit register access at SoC-defined base address + 3-bit module offset.",
             "external_pin_side": "4 pins: MOSI, MISO, SS, SCK.",

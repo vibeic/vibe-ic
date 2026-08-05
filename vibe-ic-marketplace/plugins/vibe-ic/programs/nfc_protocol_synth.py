@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 # ---------------------------------------------------------------------------
@@ -1098,7 +1100,7 @@ def _l9(gd: Path) -> None:
         "(reader) and one or more PICCs within a single 13.56 MHz RF field. "
         "Defines air carrier (Layer 2), anti-collision and selection (Layer 3), "
         "and block transmission protocol (Layer 4).")
-    d["top_module"] = "NFC_ISO14443_Stack"
+    _identity.offer_reference_top_module(d, "NFC_ISO14443_Stack")
     io = _ensure_dict(d, "integration_overview")
     io.setdefault("air_interface_pin_count_picc", 2)
     io.setdefault("air_interface_pin_count_pcd", "2 antenna driver + matching network components")

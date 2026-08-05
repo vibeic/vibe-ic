@@ -65,6 +65,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 def _empty(v) -> bool:
@@ -823,7 +825,7 @@ def _l9(gd: Path) -> None:
         "the UFSHCI register file behind a system bus (AXI/AHB) and a "
         "UniPro+M-PHY hard-macro PHY.")
     # Force-override SD/MMC top_module + integration_overview.
-    d["top_module"] = "UFS_Device"
+    _identity.offer_reference_top_module(d, "UFS_Device")
     for stale in ("integration_overview", "pull_up_resistors"):
         d.pop(stale, None)
     d["integration_overview"] = {

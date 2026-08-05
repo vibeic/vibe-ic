@@ -39,6 +39,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 def _word(token: str, low: str) -> bool:
@@ -691,7 +693,10 @@ def apply_usb_pd_synth(generated_docs_dir, is_usb_pd_flag: bool,
         if not p.is_file():
             continue
         d = json.loads(p.read_text())
-        d.update(canon.get(doc, {}))
+        # vibe-ic#831 — the bulk template carries `top_module`; a plain
+        # dict.update would make it authoritative exactly as a direct
+        # assignment did, so the merge goes through the same chokepoint.
+        _identity.merge_pack_payload(d, canon.get(doc, {}))
         d["ic_name"] = name
         _stamp.dump(p, d)
     for doc in _FIELDS_DOCS:

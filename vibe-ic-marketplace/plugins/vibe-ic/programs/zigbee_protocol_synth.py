@@ -48,6 +48,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 # ----------------------------------------------------------------------
@@ -942,7 +944,7 @@ def _l9(gd: Path) -> None:
     if not p.is_file():
         return
     d = _read(p)
-    d["top_module"] = "ieee802154_zigbee_soc"
+    _identity.offer_reference_top_module(d, "ieee802154_zigbee_soc")
     d["module_role"] = (
         "Top-level IEEE 802.15.4 + Zigbee LR-WPAN SoC: O-QPSK/DSSS radio "
         "interface, MAC engine (CSMA-CA, superframe/GTS, FCS), AES-128 CCM* "

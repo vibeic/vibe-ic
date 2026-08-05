@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Optional
 
 import l_doc_generator_stamp as _stamp
+# vibe-ic#831 — the pack's reference-design name is offered, never stamped.
+import protocol_pack_identity as _identity
 
 
 def _empty(v) -> bool:
@@ -762,7 +764,7 @@ def _l9(gd: Path) -> None:
         "controller IP (e.g. SDHCI) implements this protocol with a host-side "
         "register file behind a system bus (AHB/AXI/PCIe).")
     # Force-overwrite to match gold (parity target).
-    d["top_module"] = "SD_Memory_Card"
+    _identity.offer_reference_top_module(d, "SD_Memory_Card")
     io = _ensure_dict(d, "integration_overview")
     io.setdefault("wire_count_sd_4bit_mode", 9)
     io.setdefault("wire_count_spi_mode",     6)
