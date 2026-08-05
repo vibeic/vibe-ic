@@ -147,13 +147,14 @@ run "practical notes specificity"   "$PLUGIN" python3 programs/practical_notes_s
 # A disposition in the P0 registers can assert a home ("driven at the final
 # acceptance gate") in the same present tense the one true claim above uses
 # ("READY -- wired into tools/ci/repo_hygiene_gates.sh"), and nothing could tell
-# them apart. Measured at v1.9.79: of the 36 gates the invocability ratchet
-# pins, 3 claim a home that is real, 20 claim none, and 13 claim one that no
-# flow step, runner, CI script or workflow backs.
+# them apart. Re-derived at b85d68ac (the tree carrying #804): over the 36 gates
+# the invocability ratchet pins UNION every gate the registers write a
+# disposition about, 3 claim a home that is real, 19 claim none, and 14 claim
+# one that no flow step, runner, CI script or workflow backs.
 #
-# It is a RATCHET, not a wiring: it does not fail the 13 -- turning them red
+# It is a RATCHET, not a wiring: it does not fail the 14 -- turning them red
 # today would block every landing on prose, and each needs its own engineering.
-# It stops a 14th arriving unnoticed and prints the residual on every run.
+# It stops a 15th arriving unnoticed and prints the residual on every run.
 #
 # Wired HERE and not in the P0 umbrella for the same reason as the two above:
 # it takes no project, so the per-project umbrella cannot invoke it and it would

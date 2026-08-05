@@ -358,6 +358,30 @@ def test_a_pinned_gate_with_no_disposition_is_still_examined(tmp_path):
                                    "undocumented_gate_check"]
 
 
+def test_a_gate_in_neither_source_is_not_examined(tmp_path):
+    """REVERSE: the population is the union of TWO sources, not "everything".
+
+    The other over-correction a population widening invites is widening it to
+    the whole 246-gate registry. Two hundred and ten invocable gates about which
+    nobody wrote anything would land in `no_claim`, and the residual would stop
+    meaning "how many recorded decisions are broken promises" — the denominator
+    would grow until the numerator looked small. A gate that is neither pinned
+    nor written about is not in the population.
+    """
+    root = _tree(tmp_path, {
+        "documented_gate_check": "KEEP registered, unwired. Settle the schema.",
+    }, pinned=["documented_gate_check"])
+    (root / PLUGIN_REL / "programs" / "unrelated_gate_check.py").write_text(
+        "# an ordinary invocable gate nobody wrote a disposition about\n")
+    out = tmp_path / "r.json"
+    proc = _run(root, out)
+    assert proc.returncode == B.RC_OK, proc.stdout + proc.stderr
+    payload = json.loads(out.read_text())
+    assert payload["summary"]["examined"] == 1
+    assert "unrelated_gate_check" not in (
+        payload["unbacked"] + payload["backed"] + payload["no_claim"])
+
+
 def test_missing_registry_cannot_measure(tmp_path):
     """Degrade loudly: an unreadable tree is rc 2, never a green rc 0."""
     (tmp_path / PLUGIN_REL / "programs").mkdir(parents=True)
