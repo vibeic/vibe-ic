@@ -5,9 +5,15 @@
 
 That sentence justifies a scope decision with two numbers. The second one
 reproduces exactly. The first one reproduces under no reading of the predicate
-it describes -- reconstructions of the same clause measured 41, 49, 71, 440 and
-595. The conclusion the sentence supports is correct; the sentence is still not
-evidence, because a reader cannot get 113 back out of the program.
+it describes -- reconstructing the same clause against b85d68ac on 2026-08-05
+measured 41, 49, 71, 440 and 595, and none of them is 113. The conclusion the
+sentence supports is correct; the sentence is still not evidence, because a
+reader cannot get 113 back out of the program.
+
+Those five reconstruction figures are PINNED to the date and commit above, by
+this file's own rule. They record what was measured when this gate was argued
+for. They are not a claim about any later tree, and nothing here maintains
+them.
 
 That is the whole rule. A stated justification must be checkable. A funnel
 figure is checkable exactly when the program derives it, and a program that
