@@ -335,6 +335,25 @@ def run(project: Path, gds: Optional[str], config: Optional[str],
     if cfg_path is None or not runner.covers(cfg_path):
         cfg_path = rep.parent / _MATERIALISED_CFG_NAME
         cfg_path.write_text(json.dumps(cfg, indent=2))
+    # SAME MATERIALISATION AS `cfg_path` JUST ABOVE, and for the identical
+    # reason: `engine` resolves to a HOST path under the plugin's OWN
+    # installation (`find_engine`'s vendored-copy branch), which a per-run
+    # container mounts only if the caller happened to bind-mount the plugin
+    # tree too. MEASURED (spm x gf180mcuD/sky130A/ihp-sg13g2, 2026-08-07): a
+    # container whose ONLY mount is the project directory — the flow's own
+    # default, `phase3_one_shot_runner._container_mounts` never mounts the
+    # plugin install path — makes `runner.covers(engine)` False on every
+    # single default run, so density fill silently DISCLOSED_SKIPped on
+    # every PDK and no design this session ever got filled. `metal_fill.py`
+    # is a single self-contained KLayout batch script (env-var driven, no
+    # sibling imports at runtime — see its own module docstring), so copying
+    # it beside the already-materialised config costs nothing semantically
+    # and makes the SAME default container that already runs DRC/LVS/STA
+    # able to run this too.
+    if not runner.covers(engine):
+        materialised_engine = rep.parent / engine.name
+        materialised_engine.write_text(engine.read_text())
+        engine = materialised_engine
     for label, p in (("GDS", gds_path), ("engine", engine),
                      ("output", staged.parent), ("report dir", rep.parent)):
         if not runner.covers(p):
