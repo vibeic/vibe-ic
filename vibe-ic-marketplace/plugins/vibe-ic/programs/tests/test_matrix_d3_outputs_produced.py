@@ -270,8 +270,56 @@ carries a tracked ledger (``step_write_ledger`` landed the same day and no run
 tree has been re-published since), so every cell degrades to the pre-ledger
 behaviour. That is not silent: every verdict detail now ends with a
 ``[write ledger — <root>: not bound (<reason>) ...]`` clause naming each root
-and why, and :data:`LEDGER_BOUND_ROOTS` pins the empty population so the first
-published ledger is a loud, named event rather than a discovery.
+and why, and :func:`ledger_population` DERIVES the bound set from the commit so
+the first published ledger is a loud, named event rather than a discovery.
+
+AND NO LEDGER IS COMMITTED TO CLOSE THAT ZERO — MEASURED 2026-08-06
+------------------------------------------------------------------
+The obvious way to make the binding fire on the repository's own evidence is to
+run the emitter over a published cell and commit the result. It was measured
+first, and it is the wrong kind of evidence twice over.
+
+1. **A committed ledger tells this dimension nothing it cannot recompute.** The
+   ledger's INTERESTING half — the D5 unwitnessed writes, the D7 residual, the
+   ``provenance.jsonl`` window attribution and the contradictions built on it —
+   is derived from mtimes, and ``step_write_ledger.mtime_fidelity`` WITHHOLDS
+   all of it on any tree a checkout produced. Re-emitted over
+   ``/home/reyerchu/_sky130A_r3_run`` (455 files, 44 distinct mtimes, top share
+   0.165 — a live run) and then over the same tree with its mtimes flattened as
+   a clone flattens them, the totals fall ``D5 40 -> 0``, ``D7 335 -> 0``,
+   window attributions ``17 -> 12`` — and **the D3 residual is identical, step
+   for step, spec for spec, reason for reason**. What survives publication is
+   exactly the half D3 consults, and that half is a pure function of the
+   tracked tree and the flow declaration, both of which are already in the
+   commit. Two independent checkouts of one commit emit ledgers whose D3
+   projection is identical and which differ only in ``project``,
+   ``mtime_fidelity.under_vcs``, ``capture.walk_ms``, ``captured_at`` and the
+   280 ``mtime`` fields that record when each checkout happened — five kinds of
+   field about the machine that ran the emitter, and none about the run.
+
+2. **A committed ledger can state a falsehood about the commit that carries
+   it, and this module would believe it.** Staged from the published
+   ``spm/v1.5.66_gf180mcuD``, ledger emitted and committed, then a follow-up
+   commit lands ``phase2/stage1/formal/results.json`` — 620 B, a regular file,
+   tracked at HEAD, at exactly step 5's declared path. Unbound, ``resolve``
+   finds it. Bound, ``resolve`` returns ``None`` and refuses it under
+   :attr:`Rejected.unwritten`, quoting the ledger's ``absent: no path on disk
+   matches this spec`` — a sentence that is false of the commit both files sit
+   in. Nothing re-checks a committed snapshot; the binding only subtracts, so
+   a stale ledger reddens silently and quotes itself as the authority. That is
+   the fixture attestation this module threw out the same morning, arriving
+   from the red side instead of the green.
+
+So the ledger is DERIVED, never committed.
+``test_d3_the_ledger_binding_is_exercised_by_the_repos_own_evidence`` stages a
+tracked-only copy of every admissible in-repo run root, runs the REAL emitter
+over it, commits the ledger there and resolves all 133 declared entries twice —
+1064 ledger-bound resolutions per run, on every host, out of the repository's
+own trees rather than a synthetic probe. :func:`ledger_staleness` is the guard
+for the day somebody commits one anyway, and
+``test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit`` is the control
+that it can find a stale one, because a guard that can only measure zero has
+not been shown to work.
 
 On FIVE REAL RUN DIRECTORIES with a ledger emitted by the real emitter and
 committed — ``/home/reyerchu/_sky130A_r3_run``, ``/home/reyerchu/_r6_sky130A/
@@ -791,9 +839,11 @@ def write_ledger(root: Path) -> Tuple[Optional[Ledger], str]:
 
     A ledger that fails any of these is NOT consulted and the reason is
     returned so it can be printed. Nothing here is ever silent: :func:`resolve`
-    puts the note in the verdict detail and
-    ``test_d3_the_write_ledger_population_is_named_root_by_root`` pins the
-    population root by root.
+    puts the note in the verdict detail, and
+    ``test_d3_the_write_ledger_population_is_derived_from_the_commit`` reports
+    the population root by root — including, and this is the case a pinned
+    population could not see, a root whose COMMIT carries a ledger that lands
+    on the wrong side of rules 1, 3 or 4 and is therefore refused in silence.
     """
     p = root / LEDGER_REL
     try:
@@ -3143,44 +3193,341 @@ def test_d3_an_artefact_the_run_never_wrote_is_not_attributed_to_the_step():
             f"make it count again: {hit} {rej}")
 
 
-#: Which admissible run roots carry a write ledger this dimension will consult.
-#: MEASURED 2026-08-06 and EMPTY: `step_write_ledger` landed the same day and
-#: no committed run tree has been re-published since, so every one of the 63
-#: cells is decided exactly as it was before the binding — degraded on purpose,
-#: and named here rather than left silent. The pin is what makes the first
-#: published ledger a loud, named event: the cell counts in the docstring were
-#: measured WITHOUT one, and a root that starts carrying one must be
-#: re-measured, not discovered later.
-LEDGER_BOUND_ROOTS: Tuple[str, ...] = ()
+def ledger_population() -> Tuple[Dict[str, str], Dict[str, str]]:
+    """``(carried, consulted)`` — the ledger population, DERIVED TWICE.
+
+    ``carried``   run-root label -> the ledger path THE COMMIT carries there.
+    ``consulted`` run-root label -> :func:`write_ledger`'s admitting sentence.
+
+    This used to be a hand-written ``LEDGER_BOUND_ROOTS = ()`` compared against
+    the measurement. It was true when it was written and it could not stay
+    true: a literal population is a statement about the tree on the day
+    somebody typed it, and this repository has been bitten by hardcoded
+    populations repeatedly. Worse, an empty literal cannot tell the two things
+    it most needs to distinguish apart — "no ledger is committed" and "a ledger
+    IS committed and this dimension silently refuses it" both measure ``()``
+    and both pass ``() == ()``. The second is the binding dying quietly, which
+    is the whole failure class the binding was built for.
+
+    So both sides are derived and they are derived from DIFFERENT questions:
+
+    * ``carried`` asks the COMMIT, through :func:`tracked_under`, whether the
+      run root carries :data:`LEDGER_REL` at all. It knows nothing about
+      schemas, rows or symlinks;
+    * ``consulted`` asks :func:`write_ledger`, which applies all four
+      admissibility rules and returns a sentence either way.
+
+    Neither can go stale, and a disagreement between them is the event that
+    matters: a root in ``carried`` and not in ``consulted`` is a committed
+    ledger nothing reads.
+    """
+    carried: Dict[str, str] = {}
+    consulted: Dict[str, str] = {}
+    for label, rr in run_roots().items():
+        if is_tracked(rr.path, LEDGER_REL):
+            carried[label] = f"{rr.path.name}/{LEDGER_REL}"
+        led, note = write_ledger(rr.path)
+        if led is not None:
+            consulted[label] = note
+    return carried, consulted
 
 
-def test_d3_the_write_ledger_population_is_named_root_by_root():
-    """Backward compatibility, stated rather than assumed.
+def ledger_staleness(root: Path) -> Tuple[str, ...]:
+    """Every claim a COMMITTED ledger at *root* makes that its own commit
+    refutes. Empty means the record still describes the tree it ships in.
+
+    A ledger is a SNAPSHOT of a tree, and the tree it snapshots is in the
+    commit — where it moves. A follow-up commit lands a missing artefact; a
+    re-publish stages a newer run. :func:`resolve` never re-checks the
+    snapshot and the binding only ever SUBTRACTS, so a ledger that has gone
+    stale refuses a real, non-empty, tracked file at exactly the declared path
+    and quotes itself as the reason.
+
+    MEASURED 2026-08-06 on a staged copy of ``spm/v1.5.66_gf180mcuD`` — see
+    the module docstring, and
+    ``test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit``, which is
+    the control that this function finds the stale claim it is written to find
+    and reports nothing on a freshly emitted one.
+
+    The check is the LEDGER'S OWN D3 finding put back to the tree: for every
+    spec the ledger records as never written, ask :func:`resolve` with NO step
+    id — the pre-ledger question, "does the commit carry a real artefact at
+    this spec" — and report every YES. That direction only; a ledger that
+    records a spec as produced when the file has since been deleted makes the
+    cell redder through the unchanged rules and needs no help from here.
+    """
+    led, _note = write_ledger(root)
+    if led is None:
+        return ()
+    problems: List[str] = []
+    for step_id, row in sorted(led.rows.items()):
+        for finding in (row.get("findings") or ()):
+            if not isinstance(finding, dict):
+                continue
+            if finding.get("dimension") != "D3" \
+                    or finding.get("rule") != _LEDGER_D3_RULE:
+                continue
+            spec = str(finding.get("spec"))
+            hit, _rej = resolve(root, spec)          # no step id: pure presence
+            if hit is not None:
+                problems.append(
+                    f"step {step_id} spec {spec!r}: the ledger says NOT WRITTEN "
+                    f"({finding.get('reason')}) but the commit that carries the "
+                    f"ledger also carries {hit.path} ({hit.size_bytes} B, a "
+                    f"regular file tracked at HEAD). The record is stale and "
+                    f"this dimension would refuse a real artefact on its word — "
+                    f"re-emit the ledger over the tree as it now is")
+    return tuple(problems)
+
+
+def test_d3_the_write_ledger_population_is_derived_from_the_commit():
+    """Backward compatibility, stated rather than assumed — and re-derived.
 
     "A run with no ledger keeps today's behaviour" is only honest if a reader
-    can see WHICH runs those are and WHY. This asserts the pinned population
-    and, for every root outside it, that :func:`write_ledger` returns a
-    sentence naming the reason — no ledger, untracked, wrong schema, no rows.
+    can see WHICH runs those are and WHY. Four assertions, and the second is
+    the one the old pinned-empty tuple could not make.
     """
-    bound, why = [], {}
-    for label, rr in run_roots().items():
-        led, note = write_ledger(rr.path)
-        why[label] = note
-        if led is not None:
-            bound.append(label)
-    assert tuple(sorted(bound)) == tuple(sorted(LEDGER_BOUND_ROOTS)), (
-        f"the set of run roots whose write ledger decides this dimension "
-        f"changed.\n  measured: {sorted(bound)}\n"
-        f"  pinned:   {sorted(LEDGER_BOUND_ROOTS)}\n"
-        f"  per root: {json.dumps(why, indent=2)}\n"
-        f"Every cell count in this module's docstring was measured against "
-        f"the pinned set. Re-measure them, then move the pin — a population "
-        f"that grows quietly is how a dimension stops describing what it "
-        f"measures.")
+    carried, consulted = ledger_population()
+    why = {label: write_ledger(rr.path)[1] for label, rr in run_roots().items()}
+
+    # 1. Nothing is consulted that the commit does not carry. This is
+    #    `write_ledger` rule 2 asked from the outside: if it ever passed, a
+    #    verdict would be a property of one working tree (#527).
+    ghost = sorted(set(consulted) - set(carried))
+    assert not ghost, (
+        f"this dimension consults a write ledger the commit does not carry at "
+        f"{ghost}. `git clean -xdf` would change a cell's colour and two "
+        f"checkouts of one commit would disagree.\n"
+        f"  per root: {json.dumps(why, indent=2)}")
+
+    # 2. Nothing the commit carries is silently refused. THE HOLE THE OLD PIN
+    #    HAD: `LEDGER_BOUND_ROOTS = ()` measured `()` both when no ledger was
+    #    committed and when one was committed with a schema this module does
+    #    not know, and passed either way — the binding dead and nobody told.
+    dead = sorted(set(carried) - set(consulted))
+    assert not dead, (
+        f"the commit carries a write ledger under {dead} and this dimension "
+        f"does NOT consult it, so the binding is inert exactly where somebody "
+        f"published a record to make it fire.\n"
+        f"  reason, from write_ledger itself: "
+        + json.dumps({k: why[k] for k in dead}, indent=2)
+        + "\nEither fix the record or delete it; a ledger nothing reads is the "
+          "failure this binding exists to end.")
+
+    # 3. Every degrade is a sentence. A cell that quietly falls back to the
+    #    pre-ledger behaviour is indistinguishable from one that was checked.
     for label, note in why.items():
         assert note and note.strip(), (
             f"run root {label!r} has no stated ledger reason; a degrade to "
             f"the pre-ledger behaviour must never be silent")
+
+    # 4. Any ledger that IS committed must still be TRUE OF ITS OWN COMMIT.
+    #    Vacuous today by design — no ledger is committed, and the module
+    #    docstring records why — so `ledger_staleness` is exercised for real by
+    #    `test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit`.
+    for label in sorted(consulted):
+        stale = ledger_staleness(run_roots()[label].path)
+        assert not stale, (
+            f"the committed write ledger under {label!r} is REFUTED by the "
+            f"commit that carries it:\n  " + "\n  ".join(stale))
+
+
+def _staged_root_with_a_real_ledger(src: Path, probe: Path, commit) -> Ledger:
+    """Stage *src*'s COMMITTED tree into probe repo *probe*, emit the REAL
+    ledger there, commit it, and return the admitted record.
+
+    Tracked-only, via :func:`_copy_tracked`: the ledger has to describe the
+    tree a fresh clone would get, not this operator's build products. The
+    emitter is ``step_write_ledger`` itself — a hand-written record here would
+    stop testing the record.
+    """
+    rels = [rel for rel in sorted(tracked_under(src))
+            if (src / rel).is_symlink() or (src / rel).is_file()]
+    n = _copy_tracked(src, probe)
+    assert n == len(rels), (
+        f"_copy_tracked staged {n} paths but {len(rels)} of {src}'s tracked "
+        f"paths are files or symlinks; the commit below would not match the "
+        f"copy")
+    commit(*rels)
+    _emit_ledger(probe)
+    commit(LEDGER_REL)
+    led, note = write_ledger(probe)
+    assert led is not None, (
+        f"the REAL emitter ran over a staged copy of {src} and committed its "
+        f"record, and this module still refuses it: {note}")
+    return led
+
+
+def test_d3_the_ledger_binding_is_exercised_by_the_repos_own_evidence():
+    """The binding runs on THIS REPOSITORY's trees, not only on a probe.
+
+    Every other ledger control here builds a four-file synthetic tree. That
+    proves the RULE and proves nothing about the BLAST RADIUS: "binding to the
+    ledger reddens nothing that was green" was, until now, a number in a
+    docstring measured once by hand on one machine.
+
+    So it is executed. For each admissible in-repo run root: a tracked-only
+    copy, the real emitter, the ledger committed, then every declared entry of
+    every cell resolved TWICE — with the step id (ledger-bound) and without it
+    (the pre-ledger answer) — and any difference reported cell by cell.
+
+    Two ways this could pass while measuring nothing, both closed:
+
+    * the ledger might not be consulted at all (renamed :data:`LEDGER_REL`,
+      bumped schema, drifted specs). ``answered`` counts the entries the
+      ledger actually decided and must be non-zero;
+    * the staged copy might not answer like the root it was copied from.
+      Asserted directly — the unbound answer for every entry must match the
+      one the real root gives.
+
+    MEASURED 2026-08-06: 8 roots x 133 entries = 1064 bound resolutions, 1064
+    answered by the ledger, 0 differences. A difference is not a bug in this
+    test — it is the ledger and the glob disagreeing about one artefact, which
+    is the finding.
+    """
+    roots = run_roots()
+    assert roots, (
+        "no admissible in-repo run root resolves here, so this measurement "
+        "would be vacuous; that is a run-root discovery failure, not a pass")
+    entries = [(cell.step_id, entry) for cell in cells_for(DIM)
+               if F.declares_required_outputs(cell.step_id)
+               for entry in F.required_outputs(cell.step_id)]
+    assert entries, "no cell in this dimension declares a required output"
+
+    answered = 0
+    changed: List[str] = []
+    perturbed: List[str] = []
+    for label, rr in sorted(roots.items()):
+        real = {(sid, entry): (h.path if h else None)
+                for sid, entry in entries
+                for h, _ in [resolve(rr.path, entry, None)]}
+        with _probe_run_root("d3_repo_ledger_") as (probe, commit):
+            led = _staged_root_with_a_real_ledger(rr.path, probe, commit)
+            for sid, entry in entries:
+                say = ledger_says(probe, sid, entry)
+                if say.consulted:
+                    answered += 1
+                bound, rej = resolve(probe, entry, sid)
+                plain, _ = resolve(probe, entry, None)
+                if (plain.path if plain else None) != real[(sid, entry)]:
+                    perturbed.append(
+                        f"{label} step {sid} {entry!r}: staged copy says "
+                        f"{plain.path if plain else None}, the root itself says "
+                        f"{real[(sid, entry)]}")
+                if (bound.path if bound else None) != (plain.path if plain else None):
+                    changed.append(
+                        f"{label} step {sid} {entry!r}: unbound "
+                        f"{plain.path if plain else None} -> ledger-bound "
+                        f"{bound.path if bound else None} "
+                        f"(ledger captured {led.captured_at}); "
+                        f"unwritten={rej.unwritten} unattributed={rej.unattributed}")
+
+    assert not perturbed, (
+        "the tracked-only copy does not answer like the run root it was "
+        "copied from, so nothing measured against it says anything about the "
+        "root:\n  " + "\n  ".join(perturbed[:20]))
+    assert answered, (
+        f"{len(roots)} roots x {len(entries)} entries were resolved with a "
+        f"freshly emitted, committed write ledger in place and the ledger "
+        f"decided NONE of them. The binding is inert — LEDGER_REL, the schema "
+        f"or the declared specs have drifted apart from what the emitter "
+        f"writes — and every control below would still be green.")
+    assert not changed, (
+        f"binding to the run's own write ledger CHANGES {len(changed)} of "
+        f"{len(roots) * len(entries)} resolutions on this repository's own "
+        f"evidence. Each one is the ledger and the glob disagreeing about a "
+        f"single artefact: measure which is right before moving either.\n  "
+        + "\n  ".join(changed[:20]))
+
+
+def test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit():
+    """WHY the ledger above is derived and never committed — measured.
+
+    A ledger is a record about a tree at a moment. Commit it and the tree
+    keeps moving underneath it: the next commit lands the artefact the ledger
+    recorded as never written, and nothing re-reads the snapshot. The binding
+    only subtracts, so the stale record REFUSES a real artefact and quotes
+    itself as the authority — a fixture attestation about the past, which this
+    module rejected the same morning in its green-making direction.
+
+    This drives the whole sequence on the repository's own published cell, and
+    doubles as the bidirectional control for :func:`ledger_staleness`: it must
+    name the stale claim, and must report nothing once the ledger is re-emitted
+    over the tree as it now is.
+    """
+    src = run_roots().get("benchmark-data/ic/spm/v1.5.66_gf180mcuD")
+    assert src is not None, (
+        "the published spm cell does not resolve here; this control needs a "
+        "real published tree, not a synthetic one")
+
+    with _probe_run_root("d3_stale_ledger_") as (probe, commit):
+        _staged_root_with_a_real_ledger(src.path, probe, commit)
+
+        # A spec the ledger records as never written, with no glob in it, so a
+        # later commit can land it VERBATIM the way a re-publish would.
+        target = None
+        for cell in cells_for(DIM):
+            sid = cell.step_id
+            if not F.declares_required_outputs(sid):
+                continue
+            for entry in F.required_outputs(sid):
+                if "*" in entry or len(F.split_any_of(entry)) > 1:
+                    continue
+                say = ledger_says(probe, sid, entry)
+                if say.consulted and say.unwritten is not None:
+                    target = (sid, entry)
+                    break
+            if target:
+                break
+        assert target is not None, (
+            "no declared spec is both literal and recorded as never written "
+            "in this cell's ledger, so the hazard cannot be driven here")
+        sid, entry = target
+
+        assert resolve(probe, entry, sid)[0] is None, "baseline: still absent"
+        assert resolve(probe, entry, None)[0] is None, "baseline: still absent"
+        assert ledger_staleness(probe) == (), (
+            "a ledger just emitted over this tree already disagrees with it")
+
+        # A later commit lands the artefact — exactly the declared path, a
+        # real non-empty regular file, carried by the commit. Every rule this
+        # module applies BEFORE the ledger accepts it.
+        landed = probe / entry
+        landed.parent.mkdir(parents=True, exist_ok=True)
+        landed.write_text(json.dumps({"landed": "by a later commit"}) * 20)
+        commit(entry)
+        assert not landed.is_symlink() and landed.stat().st_size > 0 \
+            and is_tracked(probe, entry)
+
+        plain, _ = resolve(probe, entry, None)
+        assert plain is not None and plain.path == entry, (
+            f"precondition: the pre-ledger question must say YES, else the "
+            f"refusal below proves nothing: {plain}")
+
+        bound, rej = resolve(probe, entry, sid)
+        assert bound is None and rej.unwritten, (
+            f"THE HAZARD DID NOT REPRODUCE. If a committed ledger no longer "
+            f"overrides a real tracked artefact at the declared path, this "
+            f"control has outlived its subject and the module docstring's "
+            f"reason for deriving the ledger has to be re-argued: {bound} {rej}")
+
+        stale = ledger_staleness(probe)
+        assert any(entry in s for s in stale), (
+            f"`ledger_staleness` did not find the claim the commit refutes "
+            f"({entry!r}); the guard cannot be trusted on a root that DOES "
+            f"carry a ledger: {stale}")
+
+        # And the repair, which is the same operation the derivation performs:
+        # re-emit over the tree as it now is.
+        _emit_ledger(probe)
+        commit(LEDGER_REL)
+        bound, rej = resolve(probe, entry, sid)
+        assert bound is not None and bound.path == entry, (
+            f"re-emitting the ledger over the tree that HAS the artefact must "
+            f"make it count again: {bound} {rej}")
+        assert ledger_staleness(probe) == (), (
+            f"a freshly emitted ledger must agree with its own tree: "
+            f"{ledger_staleness(probe)}")
 
 
 # ══════════════════════════════════════════════════════════════════════

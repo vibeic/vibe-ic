@@ -59,13 +59,35 @@ of them fires.
 
 ``W2  produced_consumed_undeclared``  — LOAD_BEARING
     An artefact path that
-      * some program in ``programs/`` **writes** (AST write position), and
+      * the flow **produces** — some program in ``programs/`` writes it (AST
+        write position), OR a run whose write record THIS COMMIT CARRIES was
+        observed writing it (see PRODUCED, MEASURED TWO WAYS below), and
       * some gate — a gate program's own source, or a gate command / condition
         / ``files_exist`` in the yaml — **reads**, and
       * **no** ``required_outputs`` entry anywhere in the flow names.
 
     Produced, depended on, declared by nobody: exactly the artefact whose
     absence is invisible.
+
+    PRODUCED, MEASURED TWO WAYS — AND WHY THE SECOND ONE HAD TO EXIST.
+    Until 2026-08-06 "produced" meant only the first clause, and a path no
+    Python program wrote was dropped with the comment ``externally supplied by
+    design — not an emitted artefact``. That is a CLAIM, and this module's own
+    :data:`RESOLUTION_LIMITS` already contradicted it in writing: a write
+    performed inside a shelled-out OpenROAD/KLayout script is not a Python
+    write position and is invisible here. ``matrix_d7_write_record`` supplies
+    the second oracle — the ``written_never_declared`` residual of
+    ``programs/step_write_ledger.py``, which observes such a write because a
+    container bind mount shares the host inode.
+
+    It may only ever make W2 consider MORE paths, never fewer; the attribution
+    cascade below, the ``declaring_entry`` relaxation, the load-bearing class
+    and the waiver machinery are untouched. Only the producer oracle widened.
+    A record is admissible only when the COMMIT carries it, so no cell's
+    colour becomes a property of one machine (#527); measured on this commit
+    the admissible population is EMPTY and every cell is decided exactly as it
+    was before. What it WILL find, per step, on two real runs, is tabulated in
+    ``matrix_d7_write_record``'s module docstring.
 
     ATTRIBUTION. The producer is usually a one-shot runner, and the runners
     carry no machine-readable step segmentation (see :data:`RESOLUTION_LIMITS`),
@@ -184,6 +206,12 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from matrix_63x8 import flowref as F
 
+#: W2's SECOND producer oracle. Kept in its own module, not inlined here, so
+#: this one stays a pure function of the flow yaml and the program ASTs: the
+#: record reader touches the filesystem and shells out to git, and a reader
+#: needs to see where that boundary is. Nothing else in this module imports it.
+import matrix_d7_write_record as _record
+
 # ──────────────────────────────────────────────────────────────────────
 # Vocabulary
 # ──────────────────────────────────────────────────────────────────────
@@ -253,7 +281,14 @@ RESOLUTION_LIMITS: Tuple[str, ...] = (
     "because that is dimension 3's and dimension 4's question.",
     "A write performed inside a shelled-out tool script (an OpenROAD/KLayout "
     "TCL heredoc embedded as a Python string) is not a Python write "
-    "position and is invisible to this module.",
+    "position and is invisible to this module's AST. Since 2026-08-06 W2 has "
+    "a SECOND producer oracle for exactly this case — the "
+    "written_never_declared residual of a run whose write record the commit "
+    "carries (matrix_d7_write_record) — which observes such a write by lstat, "
+    "through the container bind mount. The limit therefore stands only where "
+    "no admissible record covers the path, which on this commit is "
+    "everywhere: the tracked-record population is empty. It is stated as a "
+    "LIMIT rather than as CLOSED for that reason.",
     "Whether an `optional_program_exit_zero` clause's `condition_files_exist` "
     "was SATISFIED is a property of one run tree, not of the flow. This "
     "module reads the flow, so it can see only that production was declared "
@@ -1035,7 +1070,16 @@ def _w2_population() -> Tuple[Tuple[str, Optional[str], FrozenSet[str], FrozenSe
             continue
         producers = writers_of(path)
         if not producers:
-            continue  # externally supplied by design — not an emitted artefact
+            # "No Python program in programs/ writes it" is NOT "the flow does
+            # not produce it" — RESOLUTION_LIMITS says so about a write inside
+            # a shelled-out tool script. Ask the OTHER oracle: a run whose
+            # write record THIS COMMIT CARRIES, observed by lstat through the
+            # container's bind mount. Only then may the path be dropped as
+            # externally supplied. This can only ever ADD to the population;
+            # every path with a Python producer above reached here unchanged.
+            producers = frozenset(_record.observed_producers_of(path))
+            if not producers:
+                continue  # externally supplied by design — nothing wrote it
         cons = consumers[path]
         decl = same_dir.get(os.path.dirname(path), frozenset())
         both = decl & cons
@@ -1293,6 +1337,12 @@ def clear_flow_caches() -> None:
     ``programs/*.py``, which a yaml swap does not touch, and re-parsing the
     whole program tree per mutation would cost seconds per test for an answer
     that cannot have changed.
+
+    The RECORD index is not cleared here either, for the same reason and one
+    more: it is a function of the COMMIT (``git ls-tree``) and of run trees on
+    disk, neither of which a yaml swap touches, and rebuilding it would shell
+    out to git once per mutation. A control that plants a record clears it
+    itself, through ``matrix_d7_write_record.clear_caches``.
     """
     for fn in (
         output_flag_pairs,

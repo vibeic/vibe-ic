@@ -458,7 +458,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "is a change to the production flow definition."
         ),
         evidence=(
-            "programs/flow_compliance_check.py:2256-2258 (`passed = "
+            "programs/flow_compliance_check.py:2439-2441 (`passed = "
             "len(found) > 0` on the any_of branch, then the return) is the "
             "entire predicate. MEASURED 2026-08-06: this clause handed a "
             "ZERO-BYTE "
@@ -485,7 +485,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "flow-definition change, not a test fixture."
         ),
         evidence=(
-            "programs/flow_compliance_check.py:2256-2258 (`passed = "
+            "programs/flow_compliance_check.py:2439-2441 (`passed = "
             "len(missing) == 0`, then the return — the whole predicate). "
             "MEASURED "
             "2026-08-06: a ZERO-BYTE phase2/stage2/synth/post_dft_netlist.v "
@@ -514,7 +514,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "this suite may take on its own."
         ),
         evidence=(
-            "programs/flow_compliance_check.py:2256-2258 (`passed = "
+            "programs/flow_compliance_check.py:2439-2441 (`passed = "
             "len(missing) == 0`, then the return) for the blocking "
             "term; the advisory clause is `dfm_screen_check . --json "
             "reports/phase2/gates/dfm_screen.json` and is excluded from this "

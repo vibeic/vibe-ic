@@ -2097,15 +2097,110 @@ def _live_artefact_state(p: Path) -> Tuple[bool, str]:
     return False, "other"
 
 
+_GLOB_MAGIC = "*?["
+
+
+def _alt_is_wildcard(alt: str) -> bool:
+    """Does this ONE " OR " alternative name a set, or a path?
+
+    `phase2/stage1/rtl/*.sv` names a set; `phase2/stage1/sim/results.xml`
+    names a path. The distinction decides whether a live file that the step's
+    write record does NOT name may stand in for one that it does — see
+    WHAT A WILDCARD BINDS TO below. Split per ALTERNATIVE, not per spec,
+    because the shipped flow really does mix the two inside one entry (step
+    4: `phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml OR ...`;
+    step 22: `.../parasitic.spef OR .../*.spef`)."""
+    return any(c in alt for c in _GLOB_MAGIC)
+
+
+def _bind_detail(code: str, **kw: Any) -> Dict[str, Any]:
+    """One typed record of HOW a spec resolved, for a machine to act on.
+
+    The prose `note` is for a person; this is the field a caller branches on.
+    Closed vocabulary of `code` (anything else is a bug):
+
+      step_attributed      the record names it, it is still an artefact
+      recorded_set_partial the record names N, M<N survive — satisfied, and
+                           the residual is stated as a NUMBER, not a mood
+      wildcard_unbound     the record names N for a wildcard, ZERO survive,
+                           and the only live matches are files this step
+                           never recorded -> NOT satisfied
+      recorded_but_absent  the record names N, zero survive, nothing else
+                           matches -> not satisfied (pre-existing behaviour)
+      credited_unrecorded_alt  a LITERAL " OR " alternative the spec names by
+                           path is live while the recorded one is not — the
+                           any-of the OR spelling exists for
+      resolver_disagreement the record says not-produced, the project-wide
+                           glob (with its reports/ sweep + analog remap)
+                           found something live
+      not_produced         the record says not-produced and nothing live
+      no_step_record       this run's record does not mention this spec
+      no_binding           this run has no usable record at all (the
+                           BACKWARD-COMPATIBLE path: published cells,
+                           phase-driven runs, corrupt index)
+      audit_created        credited to a file this audit's own gate wrote
+                           (set by the caller, after the gate has run)
+    """
+    d: Dict[str, Any] = {"code": code}
+    d.update(kw)
+    return d
+
+
 def _resolve_required_output(project: Path, sid: Any, spec: str,
                              binding: Dict[str, Any]
-                             ) -> Tuple[bool, List[str], str, Optional[str]]:
+                             ) -> Tuple[bool, List[str], str, Optional[str],
+                                        Dict[str, Any]]:
     """Resolve ONE `required_outputs` entry for ONE step.
 
-    Returns (satisfied, evidence_rels, mode, note) where mode is
+    Returns (satisfied, evidence_rels, mode, note, detail) where mode is
     "step_attributed" or "project_glob". `project_glob` is today's answer,
     unchanged, and always carries a note saying why the step-scoped record
-    could not be used.
+    could not be used. `detail` is the same answer TYPED — see `_bind_detail`.
+
+    WHAT A WILDCARD BINDS TO
+    ========================
+    `phase2/stage1/rtl/*.sv` had no binding force at all: rename the recorded
+    `spm.v` to `spm_copy.v` and step 1 still PASSED, downgraded only to
+    `mode: "mixed"` with a sentence a human was asked to read. Three readings
+    of that pattern, and only one of them survives contact with the flow:
+
+      "exactly the files the record names" — WRONG. A design legitimately
+        gains an RTL file between runs, and set equality would red a step for
+        someone adding a module. Additions are still green here, and the new
+        file still enters the evidence list through the glob union below.
+      "any file at all that matches the glob" — WRONG, and it is the defect.
+        Under it, a file some OTHER step wrote, or a copy someone left
+        behind, discharges this step's declaration. That is what the rename
+        exploited.
+      "the recorded output set still EXISTS, in part or in whole" — the rule
+        implemented here. A wildcard spec whose record names N outputs is
+        satisfied when at least ONE of those N is still an artefact.
+        M-of-N is reported as `recorded_set_partial` with both numbers,
+        because "recorded 5, resolves 4" and "recorded 5, resolves 0" are
+        different facts and only the second is an absence.
+
+    WHY "AT LEAST ONE" AND NOT "ALL N"
+    ----------------------------------
+    Measured on the three real ledger-bearing runs (/home/reyerchu/
+    _sky130A_r3_run, campaign_v1544 gf180mcuD, campaign_v1574 sky130A, ledger
+    generated by `step_write_ledger.emit`): 24 wildcard specs per run, 6-7 of
+    them carrying a record, and the M-of-N state occurs ZERO times — every
+    recorded wildcard output is either wholly present or wholly absent. So
+    "all N" and "at least one" are INDISTINGUISHABLE on every real run
+    available, and the choice must be made on which failure they invent.
+    "All N" reds a step for a partial residual it has no evidence is a defect,
+    and it keys the verdict on a list `step_write_ledger` truncates at
+    `_MAX_LISTED` (4000) on a large SoC. "At least one" closes the measured
+    hole — the demonstrated rename goes MISSING — and hands the residual to
+    the caller as a number instead of spending it on a verdict it cannot
+    justify.
+
+    A LITERAL ALTERNATIVE IS NOT A WILDCARD, and keeps its any-of credit. The
+    " OR " spelling exists for one artefact with two accepted names; a spec
+    that NAMES `results.xml` by path and finds it is satisfied by it whether
+    or not the record happens to name the other alternative. Only the
+    wildcard alternatives lose the right to be discharged by a file the step
+    never recorded writing.
 
     EVIDENCE SHAPE IS PRESERVED, and that is not cosmetic. The pre-change loop
     appended the FIRST hit of EVERY matching " OR " alternative, not one hit
@@ -2119,18 +2214,26 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
     alts = [a.strip() for a in str(spec).split(" OR ") if a.strip()]
     glob_ev: List[str] = []       # exactly what the pre-change loop collected
     glob_hits: List[str] = []     # every hit, for classification
+    literal_hits: List[str] = []  # hits a NON-wildcard alternative NAMED
+    n_wild = 0
     for sp in alts:
+        if _alt_is_wildcard(sp):
+            n_wild += 1
         hits = _glob_first(project, sp)
         if hits:
             glob_ev.append(hits[0])
             glob_hits.extend(hits)
+            if not _alt_is_wildcard(sp):
+                literal_hits.extend(hits)
     glob_sat = bool(glob_hits)
 
     if not binding.get("available"):
-        return glob_sat, glob_ev, "project_glob", binding.get("reason")
+        return (glob_sat, glob_ev, "project_glob", binding.get("reason"),
+                _bind_detail("no_binding", reason=binding.get("reason")))
     rec = (binding.get("rows") or {}).get(str(sid), {}).get(str(spec))
     if rec is None:
-        return glob_sat, glob_ev, "project_glob", "no_step_record"
+        return (glob_sat, glob_ev, "project_glob", "no_step_record",
+                _bind_detail("no_step_record"))
 
     # (a) THE STEP'S OWN RECORD NAMES THE PATH(S). Re-verify live; the record
     #     is a statement about the past and must not outlive the file. Every
@@ -2168,23 +2271,74 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
         _seen: set = set()
         ev = [r for r in list(live_rec) + list(glob_ev)
               if not (r in _seen or _seen.add(r))]
-        return True, ev, "step_attributed", None
+        # Set-backed, not list-scan: `step_write_ledger` lists up to
+        # `_MAX_LISTED` (4000) paths per row and this runs once per spec per
+        # step in a thread pool. An O(n^2) dedup here is 16M comparisons on a
+        # large SoC for a number nobody's verdict depends on.
+        _seen_rec: set = set()
+        _recorded = [r for r in rec["produced"]
+                     if not (r in _seen_rec or _seen_rec.add(r))]
+        _live_set = set(live_rec)
+        _lost = [r for r in _recorded if r not in _live_set]
+        if _lost:
+            # M OF N. Satisfied — the recorded output set still exists in
+            # part, and a design that drops one file of a wildcard set has
+            # not failed to produce the set. Reported as two NUMBERS so a
+            # consumer can act on the residual; a wildcard whose whole
+            # recorded set is gone is the branch below, and it is not this.
+            return True, ev, "step_attributed", (
+                f"{len(live_rec)} of {len(_recorded)} recorded output(s) for "
+                f"this pattern are still artefacts; no longer present: "
+                f"{_lost[:3]}"), _bind_detail(
+                    "recorded_set_partial", recorded=len(_recorded),
+                    live=len(live_rec), lost=_lost[:6],
+                    wildcard_alternatives=n_wild)
+        return True, ev, "step_attributed", None, _bind_detail(
+            "step_attributed", recorded=len(_recorded), live=len(live_rec))
     if rec["produced"]:
         detail = "; ".join(
             f"{r} ({_live_artefact_state(project / r)[1]})"
             for r in rec["produced"][:2])
+        _rec_set = set(rec["produced"])
         alt = [h for h in glob_hits
-               if h not in rec["produced"] and _live_artefact_state(project / h)[0]]
-        if alt:
-            # Do NOT invent an absence: something real matched the project-wide
-            # glob, so today's verdict stands — but it is not this step's
-            # recorded artefact and the report says which one it is. Evidence
-            # is the pre-change list so the integrity scan sees what it saw.
+               if h not in _rec_set and _live_artefact_state(project / h)[0]]
+        _lit_set = set(literal_hits)
+        alt_literal = [h for h in alt if h in _lit_set]
+        if alt_literal:
+            # ANY-OF, and it is the reason " OR " exists. The spec NAMES this
+            # path — it is not a set the step happened to land in — so a live
+            # one discharges the entry whichever alternative the record
+            # happened to resolve. Do NOT invent an absence: today's verdict
+            # stands, disclosed. Evidence is the pre-change list so the
+            # integrity scan sees what it saw.
             return True, glob_ev, "project_glob", (
-                f"step record names {detail}; credited instead to {alt[0]}, "
-                f"matched project-wide")
+                f"step record names {detail}; credited instead to "
+                f"{alt_literal[0]}, a literal alternative this spec names"
+            ), _bind_detail("credited_unrecorded_alt",
+                            recorded=len(rec["produced"]), live=0,
+                            credited=alt_literal[0])
+        if alt:
+            # THE WILDCARD DID NOT BIND. Every live match came from a
+            # wildcard alternative and NONE of them is on this step's write
+            # record: the pattern proves that SOME file of that shape exists
+            # under the project, which is exactly what a file another step
+            # wrote also proves. The step's own recorded output set is gone,
+            # and that is an absence — reported as one instead of as a note.
+            return False, [], "step_attributed", (
+                f"wildcard did not bind: this step's write record names "
+                f"{len(rec['produced'])} output(s) for this pattern "
+                f"({detail}) and none is still an artefact; {alt[0]} matches "
+                f"the pattern but is on no write record of this step, so it "
+                f"evidences that a file of this shape exists, not that THIS "
+                f"step produced one"
+            ), _bind_detail("wildcard_unbound",
+                            recorded=len(rec["produced"]), live=0,
+                            unrecorded_matches=alt[:6],
+                            wildcard_alternatives=n_wild)
         return False, [], "step_attributed", (
-            f"this step's own write record names {detail}")
+            f"this step's own write record names {detail}"
+        ), _bind_detail("recorded_but_absent",
+                        recorded=len(rec["produced"]), live=0)
 
     # (b) THE STEP'S OWN RECORD SAYS NOTHING WAS PRODUCED FOR THIS SPEC.
     reason = rec.get("not_produced") or "not_produced"
@@ -2194,14 +2348,32 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
         # not (the `reports/<subdir>/` sweep fallback, the canonical-analog
         # remap). A disagreement between two resolvers is not evidence of
         # absence, so the green stands and the disagreement is disclosed.
+        #
+        # NOT TIGHTENED with the wildcard rule above, deliberately. Here the
+        # two resolvers disagree about whether ANYTHING was produced, and the
+        # documented reason they can disagree — `_glob_first`'s reports/
+        # sweep and its canonical-analog remap, neither of which
+        # `step_write_ledger._spec_candidates` implements — is a resolver
+        # limitation, not an absence. It occurs ZERO times on the three real
+        # ledger-bearing runs measured, all of them digital; the remap fires
+        # on ANALOG steps and no ledger-bearing analog run exists on this
+        # host to measure it against. Refusing it on that evidence would be
+        # taking an unmeasured risk for free. Typed as its own code so the
+        # decision is a field, not a silence.
         return True, glob_ev, "project_glob", (
             f"resolver disagreement — this step's write record says "
-            f"{reason!r}, the project-wide glob matched {live[0]}")
+            f"{reason!r}, the project-wide glob matched {live[0]}"
+        ), _bind_detail("resolver_disagreement", recorded=0,
+                        not_produced_reason=reason, credited=live[0])
     if glob_sat:
         return False, [], "step_attributed", (
             f"not produced ({reason}); the project-wide glob matched "
-            f"{glob_hits[:1]}, which is not a produced artefact")
-    return False, [], "step_attributed", f"not produced ({reason})"
+            f"{glob_hits[:1]}, which is not a produced artefact"
+        ), _bind_detail("not_produced", recorded=0,
+                        not_produced_reason=reason)
+    return (False, [], "step_attributed", f"not produced ({reason})",
+            _bind_detail("not_produced", recorded=0,
+                         not_produced_reason=reason))
 
 
 def _disclose_output_binding(result: "StepResult") -> "StepResult":
@@ -2219,14 +2391,25 @@ def _disclose_output_binding(result: "StepResult") -> "StepResult":
     if any(r.startswith("OUTPUT ATTRIBUTION:") for r in result.reasons):
         return result                       # both exits can reach this helper
     n, k = b["n_specs"], b["n_step_attributed"]
+    # The typed codes go on the line in BOTH directions. `mixed` used to be a
+    # word whose content lived only in prose; a reader (human or grep) now
+    # gets the closed vocabulary that produced it.
+    codes = [c for c in (b.get("codes") or []) if c != "step_attributed"]
+    tail = f" codes={codes}" if codes else ""
     if b["mode"] == "step_attributed":
         src = b.get("source") or "step record"
         where = ("steps/<phase>/<stage>/<id>_<slug>/written.json"
                  if src == "step_folder" else "reports/write_ledger.json")
+        # A step-attributed verdict can still carry a residual
+        # (`recorded_set_partial`: the record named 5, 4 survive). Printing
+        # notes only on the degraded branch would have made that residual
+        # visible in the JSON and invisible in the report a person reads.
+        notes = "; ".join(b.get("notes") or [])
         result.reasons.append(
             f"OUTPUT ATTRIBUTION: step-attributed ({k}/{n} declared output(s) "
             f"resolved against THIS step's own write record in {where}, "
-            f"re-verified live)")
+            f"re-verified live){tail}"
+            + (f" [{notes[:400]}]" if notes else ""))
         return result
     head = ("PROJECT-WIDE" if k == 0 else f"MIXED ({k}/{n} step-attributed)")
     notes = "; ".join(b.get("notes") or []) or "no reason recorded"
@@ -2234,7 +2417,7 @@ def _disclose_output_binding(result: "StepResult") -> "StepResult":
         f"OUTPUT ATTRIBUTION: {head} — {n - k} of {n} declared output(s) were "
         f"resolved by the project-wide glob, which answers 'a file matching "
         f"this pattern exists somewhere under the project', NOT 'this step "
-        f"produced it' [{notes[:400]}]")
+        f"produced it'{tail} [{notes[:400]}]")
     return result
 
 
@@ -9103,16 +9286,23 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     _binding = _load_step_binding(project) if outputs else None
     _bind_notes: List[str] = []
     _bind_modes: Dict[str, str] = {}
+    _bind_specs: List[Dict[str, Any]] = []
     _n_attr = 0
     _n_glob = 0
     for pat in outputs:
-        _sat, _ev, _mode, _note = _resolve_required_output(
+        _sat, _ev, _mode, _note, _detail = _resolve_required_output(
             project, sid, pat, _binding or {})
         _bind_modes[pat] = _mode
         if _mode == "step_attributed":
             _n_attr += 1
         else:
             _n_glob += 1
+        # TYPED, per spec — the half of `mixed` a machine can branch on.
+        # `mode` alone conflated "this run predates the record" with "the
+        # green rests on a file this step never recorded writing", and the
+        # only place the difference lived was a sentence in `notes`.
+        _bind_specs.append(dict(_detail, spec=pat, mode=_mode,
+                                satisfied=bool(_sat)))
         if _note:
             _bind_notes.append(f"{pat}: {_note}")
         if _sat:
@@ -9134,6 +9324,12 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                      "project_glob" if _n_attr == 0 else "mixed"),
             "n_specs": len(outputs), "n_step_attributed": _n_attr,
             "n_project_glob": _n_glob, "source": _src,
+            # `codes` is the machine handle: a closed vocabulary (see
+            # `_bind_detail`) that says WHICH degradation `mixed` is made of.
+            # A consumer asks `"wildcard_unbound" in codes`, not "does the
+            # note contain the word credited".
+            "codes": sorted({str(d.get("code")) for d in _bind_specs}),
+            "specs": _bind_specs[:16],
             "notes": _bind_notes[:12],
         }
 
@@ -9560,6 +9756,18 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                                        "project_glob"
                                        if _ob["n_step_attributed"] == 0
                                        else "mixed")
+                        # Retyped on `_bind_specs`, the UNTRUNCATED list —
+                        # `_ob["specs"]` is a 16-entry slice of the same dicts
+                        # and recomputing `codes` from the slice would drop
+                        # the code of any spec past the cut.
+                        for _sp in _bind_specs:
+                            if _sp.get("spec") == pat:
+                                _sp["code"] = "audit_created"
+                                _sp["mode"] = "project_glob"
+                                _sp["satisfied"] = True
+                                _sp["credited"] = hits[0]
+                        _ob["codes"] = sorted(
+                            {str(d.get("code")) for d in _bind_specs})
                         _ob["notes"] = (_ob["notes"] + [
                             f"{pat}: credited to an artefact this audit's own "
                             f"gate created during this run"])[:12]

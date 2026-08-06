@@ -137,11 +137,28 @@ steps:
     # A step with NO required_inputs is UNDECLARED, never "has none" — see
     # docs and the check's --json `undeclared` list.
     required_inputs:
+      # THE FIRST TWO ENTRIES ARE DERIVED, NOT STAGED — measured, not assumed.
+      # `phase1/input_doc/` is WRITTEN BY THIS STEP: `phase1_doc_one_shot_runner`
+      # extracts `input/docs/*` into `_path_layout.input_doc_dir()` (its own
+      # `src_dir` / `dst_dir` pair), and `extraction_coverage_check` no-ops when
+      # it already holds `*.txt`. So a declaration naming ONLY those two says D1
+      # reads its own intermediate output, and is satisfiable only AFTER D1 has
+      # run. Measured on pristine trees, `step_preflight.decide` returned REFUSED
+      # for BOTH front doors — a Path-A tree holding only `input/docs/*.md` and a
+      # Path-B tree holding only `input/phase1_prompt.md` — i.e. wiring the
+      # pre-flight to the old declaration would have bricked every first run.
+      # The three STAGED entry points below are the ones the runner's own
+      # `_detect_input_mode` / `step_ingest_render` / `_run_docs_mode` read. The
+      # two derived ones are KEPT because a caller may stage them directly (the
+      # Layout-P canonical entry) and because published cells carry
+      # `phase1/input_doc/` with no `input/docs/` — measured on
+      # benchmark-data/ic/spm/v1.5.65_sky130A.
       - from: external
-        path: "phase1/input_prompt/* OR phase1/input_doc/*"
+        path: "phase1/input_prompt/* OR phase1/input_doc/* OR input/docs/* OR input/phase1_prompt.md OR input/phase1_structured.yaml"
         what: >-
-          the user's natural-language prompt (Path B) or the supplied
-          datasheets / specs (Path A)
+          the user's natural-language prompt or dialogue fact-graph (Path B)
+          or the supplied datasheets / specs (Path A), at any of the staged
+          entry points this runner reads
     skills:
       - datasheet-gen
       - frs-gen

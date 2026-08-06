@@ -24,6 +24,10 @@ Measured, not assumed:
     design_one_shot_runner   step_rtl_gen :2854  step_yosys_synth :8363
                              step_dft_lec_chain :10816
     call sites               :12672 :12951 :13070
+    analog_one_shot_runner   step_for_block — ONE function, dispatched once per
+                             (block, A-step) from `main()`'s double loop
+    phase1_one_shot_runner   _run_docs_mode / step_ingest_render — TWO mode
+                             branches of `main()`, both executing canonical D1
 
 Every one is a separate `plan.append(step_X(...))` inside `main()`. There is no
 common wrapper, and THREE independent reasons say do not add one:
@@ -103,7 +107,13 @@ WHAT REFUSES, AND WHAT DELIBERATELY DOES NOT
     REFUSED              >=1 DUE entry input is absent. The step is NOT called.
     READY                every DUE entry input is present.
     PRODUCER-SKIPPED     the only absences are producer-disclosed skips.
-    NOT-JUDGED           every span member is waived / condition-unmet.
+    NOT-JUDGED           every span member has an UNMET CONDITION — it will
+                         not run at all, so nothing can starve it.
+    WAIVED-ONLY          every span member is WAIVED. The step still RUNS, and
+                         its inputs are still probed and recorded (states
+                         `present-under-waiver` / `absent-under-waiver`) —
+                         never charged. See `_probe_waived` for why both halves
+                         of that are deliberate.
     UNDECLARED           the span declares no required_inputs at all — the data
                          dependency is UNKNOWN, not empty. Runs, and SAYS SO.
     NOT-YET-DUE          every declared entry input is owed by a step this
@@ -218,6 +228,45 @@ RUNNER_PLANS: Dict[str, RunnerPlan] = {
             ("lvs", ("31",)),
         ),
     ),
+    # ── THE OTHER TWO RUNNERS ────────────────────────────────────────────
+    # `flow_gate_enforcement_audit` and `flow_step_executor_coverage_check`
+    # both name FOUR one-shot runners. Two of them dispatched every step of
+    # the A1-A9 / D1 line with no pre-flight at all — measured, at
+    # 855504f5: `grep -c step_preflight` = 13 in design_one_shot_runner, 16
+    # in phase3_one_shot_runner, 0 in each of these two. So a whole track
+    # could be starved of its inputs and still report a verdict about what
+    # it produced, which is the exact defect this module exists to remove.
+    "analog_one_shot_runner": RunnerPlan(
+        name="analog_one_shot_runner",
+        # Phase 1 has already run when the analog track starts: A1 reads D1's
+        # L1_DATASHEET.json + L5_ADI_SPEC.json.
+        inherited_steps=("D1",),
+        # NOT `inherits="design_one_shot_runner"`. The A-track runs PARALLEL to
+        # Phase 2, not after it — `vibe_ic_one_shot_runner` drives it off the
+        # analog block list, and a pure-analog cell has no Phase-2 digital track
+        # at all. Declaring phase 2 as inherited would make every phase-2 step
+        # "due" here and turn an honest NOT-YET-DUE into a REFUSED.
+        inherits=None,
+        # ORDERED, and the order is the runner's own `_AI_STEP_NAMES` tuple.
+        # ONE canonical flow step per site: unlike `step_pnr`, no A-site covers
+        # a span, so `identity` below is a full check rather than a partial one.
+        sites=(
+            ("A1", ("A1",)), ("A2", ("A2",)), ("A3", ("A3",)),
+            ("A4", ("A4",)), ("A5", ("A5",)), ("A6", ("A6",)),
+            ("A7", ("A7",)), ("A8", ("A8",)), ("A9", ("A9",)),
+        ),
+    ),
+    "phase1_one_shot_runner": RunnerPlan(
+        name="phase1_one_shot_runner",
+        # Nothing precedes Phase 1. D1's inputs are the user's own staged
+        # corpus, so `external` is the only producer it can have.
+        inherited_steps=(),
+        inherits=None,
+        # ONE site, gated at BOTH of this dispatcher's mode branches (docs and
+        # prompt). Two branches, one flow step, one question: was anything
+        # staged for the extractor to read?
+        sites=(("doc_extract", ("D1",)),),
+    ),
 }
 
 
@@ -291,6 +340,82 @@ def _unavailable(runner: str, site: str, span: Sequence[str],
         at=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
 
 
+def _probe_waived(project: Path, dec: Decision,
+                  by_id: Dict[str, Dict[str, Any]],
+                  waived: Sequence[str], span: Sequence[str]) -> int:
+    """Probe a WAIVED span member's declared inputs. RECORDS; never refuses.
+
+    WHY A WAIVED STEP IS STILL PRE-FLIGHTED
+    =======================================
+    Until this existed, a waived span member was DROPPED before any input was
+    looked at, and a site whose whole span was waived returned NOT-JUDGED with
+    the words "there is nothing to be starved of". That sentence is false, and
+    the falsehood matters:
+
+      * A WAIVER IS A STATEMENT ABOUT AN OUTPUT. `waivers.json` entries excuse a
+        step from producing its `required_outputs` — "no FPGA board on this
+        host", "PDK substituted". Not one of them says anything about whether
+        the step's INPUTS were on disk. So dropping the step on sight answers a
+        question nobody asked.
+      * THE STEP STILL RUNS. The runners do not read `waivers.json`;
+        `flow_compliance_check` does, at ACCEPTANCE time. So the dispatch this
+        module gates happens either way — the step executes, reads (or fails to
+        read) its inputs, and writes (or does not write) an artefact.
+      * THE TWO FACTS ARE DIFFERENT, AND ONE HIDES THE OTHER. "waived for a
+        stated reason" and "could not read its inputs" are not the same
+        finding, and collapsing them means a run can be starved for its whole
+        analog track while the ledger says the track was merely waived.
+
+    AND WHY IT STILL MAY NOT REFUSE
+    ===============================
+    The opposite error is worse in the other direction. `waivers.json` is
+    HUMAN-AUTHORED and only ever EXCUSES; if a waived step could be REFUSED,
+    then authoring a waiver would newly BLOCK a step that runs today, i.e. an
+    excuse would tighten the flow. That inverts the artefact's whole direction
+    and is a way to fail a cell that was fine. So: probe, record, name the
+    absences in the ledger, and let the step run.
+
+    Returns the number of declared inputs found ABSENT (recorded, not charged).
+    """
+    if not waived:
+        return 0
+    try:
+        import step_required_inputs_check as _ric   # noqa: PLC0415
+        import flow_compliance_check as _fcc        # noqa: PLC0415
+    except Exception:                               # pragma: no cover
+        return 0
+    absent = 0
+    for sid in waived:
+        for e in (by_id.get(sid, {}).get("required_inputs") or []):
+            if str(e.get("from")) in span:
+                continue
+            if str(e.get("from")) == "external" and e.get("check") == "none":
+                continue
+            for producer, spec in _ric.expand(e, by_id):
+                hits: List[str] = []
+                for alt in (p.strip() for p in str(spec).split(" OR ")):
+                    hits = _fcc._glob_first(project, alt)
+                    if hits:
+                        break
+                present = bool(hits)
+                if not present:
+                    absent += 1
+                dec.inputs.append({
+                    "consumer": sid, "from": producer, "path": spec,
+                    "present": present,
+                    "evidence": hits[0] if hits else None,
+                    "state": ("present-under-waiver" if present
+                              else "absent-under-waiver"),
+                    "waived": True,
+                    "not_charged": ("this step is waived; the absence is "
+                                    "RECORDED and deliberately NOT charged to "
+                                    "the dispatch — a waiver excuses an output "
+                                    "and cannot excuse, or create, a missing "
+                                    "input"),
+                })
+    return absent
+
+
 def decide(project: Path, runner: str, site: str,
            flow_def: Optional[Path] = None) -> Decision:
     """The pre-flight, for ONE dispatch site. Reads only; writes nothing."""
@@ -351,8 +476,23 @@ def decide(project: Path, runner: str, site: str,
             f"is therefore PARTIAL for this site — the span's other half is "
             f"produced by the sibling dispatch, not by this one.")
 
-    waivers = _fcc._load_waivers(project)
+    try:
+        waivers = _fcc._load_waivers(project)
+    except SystemExit as exc:
+        # `_load_waivers` EXITS THE PROCESS on a malformed waivers.json. That is
+        # right in `flow_compliance_check`, which is the waiver-schema auditor.
+        # It is wrong HERE: this module runs at the FIRST dispatch of a run, and
+        # killing the run over a defect in a file it neither owns nor audits
+        # would be a brand-new failure mode introduced by a pre-flight. The
+        # schema check still fires, byte-unchanged, where it belongs. The
+        # pre-flight instead reports what is actually true — it could not decide
+        # which span members are live — in its own existing word for that.
+        return _unavailable(runner, site, span,
+                            f"waivers.json could not be loaded ({exc}) — which "
+                            f"span members are live is UNKNOWN, so no absence "
+                            f"could be charged to this dispatch")
     live: List[str] = []
+    waived: List[str] = []
     for sid in span:
         st = by_id[sid]
         cond = st.get("condition")
@@ -367,15 +507,39 @@ def decide(project: Path, runner: str, site: str,
         if wkey in waivers:
             dec.notes.append(
                 f"step {sid}: waived ("
-                f"{waivers[wkey].get('reason', '(no reason)')})")
+                f"{waivers[wkey].get('reason', '(no reason)')}) — probed "
+                f"anyway, see `state: *-under-waiver` below")
+            waived.append(sid)
             continue
         live.append(sid)
 
+    n_waived_absent = _probe_waived(project, dec, by_id, waived, span)
+    if n_waived_absent:
+        dec.notes.append(
+            f"{n_waived_absent} declared input(s) of the WAIVED span member(s) "
+            f"is/are ABSENT — recorded as `absent-under-waiver` and NOT charged "
+            f"to this dispatch.")
+
     if not live:
-        dec.verdict = "NOT-JUDGED"
         dec.allow = True
-        dec.detail = ("every flow step this site executes is waived or has an "
-                      "unmet condition; there is nothing to be starved of.")
+        if waived:
+            # NOT "there is nothing to be starved of". A waived step still ran
+            # and still read something; see `_probe_waived`.
+            dec.verdict = "WAIVED-ONLY"
+            dec.detail = (
+                f"every flow step this site executes is WAIVED ({', '.join(waived)})"
+                + (f" — and {n_waived_absent} of their declared input(s) is/are "
+                   f"ABSENT, recorded but NOT charged: a waiver excuses an "
+                   f"output, it cannot answer whether the step could read."
+                   if n_waived_absent else
+                   " — every declared input of those steps is nevertheless "
+                   "PRESENT, so the waiver is the only reason nothing is "
+                   "judged here."))
+        else:
+            dec.verdict = "NOT-JUDGED"
+            dec.detail = ("every flow step this site executes has an unmet "
+                          "condition — it will not run at all, so there is "
+                          "nothing to be starved of.")
         return dec
 
     declared_any = False
@@ -589,6 +753,12 @@ def gate(project: Path, runner: str, site: str,
     own `StepResult`-shaped refusal row.
     """
     flow_def = kwargs.pop("_preflight_flow_def", None)
+    # WHICH INSTANCE of the site this dispatch was. `analog_one_shot_runner`
+    # dispatches every A-site once PER BLOCK, so without this the ledger would
+    # carry N identical `A2` records with no way to tell which block each was
+    # about. Free text, recorded verbatim in `notes`, read by nothing and
+    # therefore incapable of changing a verdict.
+    note = kwargs.pop("_preflight_note", None)
     # The CALLER's own, already-existing applicability authority. Passed as a
     # non-empty REASON, never a bare bool, and recorded verbatim.
     #
@@ -618,6 +788,8 @@ def gate(project: Path, runner: str, site: str,
                                f"honest work to do — {not_applicable}. The "
                                f"step still runs and its own skip path owns "
                                f"the outcome; no input was probed."))
+        if note:
+            dec.notes.append(str(note))
         print(f"[preflight] {site}: NOT-APPLICABLE — {not_applicable}",
               file=sys.stderr, flush=True)
         result = fn(*args, **kwargs)
@@ -625,6 +797,8 @@ def gate(project: Path, runner: str, site: str,
         return result
 
     dec = decide(Path(project), runner, site, flow_def=flow_def)
+    if note:
+        dec.notes.append(str(note))
 
     if not dec.allow:
         print(f"[preflight] {site}: {dec.detail}", file=sys.stderr, flush=True)

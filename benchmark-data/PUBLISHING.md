@@ -133,7 +133,9 @@ DECISION ∈ STAGED | ROUTED_AWAY | NOT_PUBLISHED
   names where it went; it defaults to `not-retained`, the honest answer when
   nobody has claimed otherwise.
 - **NOT_PUBLISHED** — present in the source run, in a subtree this cell does not
-  publish (PnR scratch, per-step scratch). Not a size decision.
+  publish (PnR scratch; the run's `steps/` view). Not a size decision. The
+  per-STEP evidence itself IS published — as a record, see `STEP_ROUTING.txt`
+  below — but no layout blob is staged a second time through it.
 
 The sha256 is recorded in all three cases, which is what lets a reader tell
 "big, stored elsewhere" from "in the run but out of scope" from "never existed",
@@ -158,6 +160,57 @@ file it summarises.
 > which the program still does not publish — those now appear as
 > `NOT_PUBLISHED` rather than vanishing silently. Widening published scope is
 > an evidence-policy decision, not a size one.
+
+### `STEP_ROUTING.txt` + `steps/` — the per-step evidence, as a RECORD
+
+A cell now carries the flow's per-STEP evidence. It carries the **record**, not
+the run's `steps/` tree:
+
+```
+steps/<phase>/<stage>/<id>_<slug>/STEP_RECORD.json   one per step
+steps/STEP_INDEX.json                                the ordered step list
+STEP_ROUTING.txt                                     flat, greppable, cell root
+
+<phase>/<stage>/<id>_<slug> :: <run-relative path> <bytes>B sha256:<64hex> <DECISION>
+DECISION ∈ IN_CELL | OUT_OF_PUBLISHED_SCOPE | ZERO_BYTE | DANGLING_IN_RUN | ABSENT_IN_RUN
+```
+
+**Why not just copy the tree.** `<run>/steps/` is a VIEW made of symlinks into
+that run directory, and a symlink is a promise about a filesystem, not evidence:
+
+- measured on a CONVERGED run whose directory was later renamed — 63 steps, 90
+  declared outputs, **83 of 83 view symlinks dangling**;
+- measured on the legacy cells that DID commit their steps tree — **142 tracked
+  symlinks under `benchmark-data/**/steps/`, 31 of whose targets the git index
+  does not carry**, so a clean clone receives 31 broken links from a committed
+  cell (the `_published_tree` #404 hole);
+- and a copy that *dereferences* instead duplicates bytes the cell already has
+  at their canonical path — measured 2,787,213 bytes for one spm run, against
+  59,581 bytes for the record that replaces it.
+
+So each declared output is recorded as a **run-relative** path (never the
+collector's host-absolute `abs` field) with its size, its sha256 and where a
+reader of THIS cell can find it — the same doctrine `GDS_MANIFEST.txt` applies
+to geometry. **No symlink is created in a cell and none is copied.**
+
+**What it is FOR.** The declaration is resolved against the run at publish time,
+and the residual is the load-bearing part. On the run measured above, **7
+outputs declared present by 7 steps whose own status is `pass` no longer
+exist** — `phase3/stage3/pnr/{floorplan,placed,post_cts,post_hold,routed,filled}.def`
+and one `.spef`. Copying the view would have shown 83 identical broken links and
+named none of them; the record names the step, the path and the size claimed.
+
+Any OTHER record file a step folder holds (`*.json`/`*.txt`/`*.md`/`*.jsonl`
+that is not a symlink and is under the ceiling) is copied verbatim — that is the
+seam a per-step write-ledger rides through, with no coupling to its schema. The
+collector's own `outputs.json`/`index.json` are replaced, because they describe
+the symlink view.
+
+Emitted even when there is nothing to report: a run that produced no `steps/`
+tree gets a `STEP_ROUTING.txt` saying so, which is a different fact from a cell
+published before this record existed. Like `LAYOUT_ROUTING.txt`, it is NOT
+required by the structure check — existing cells are not made nonconformant by
+its absence.
 
 chip-AGNOSTIC: the IC, PDK and version are parameters/path components; no IC / PDK
 / vendor / SKU literal appears in either program's logic.

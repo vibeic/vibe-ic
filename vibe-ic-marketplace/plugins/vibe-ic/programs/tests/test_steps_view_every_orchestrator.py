@@ -150,9 +150,31 @@ def test_phase1_wires_both_of_its_exits():
 # --------------------------------------------------------------------------
 # 3. END-TO-END through a real orchestrator front door
 # --------------------------------------------------------------------------
+def _stage_one_input(project: Path) -> None:
+    """Give the run ONE staged input.
+
+    The two end-to-end cases below assert `returncode == 0` because their
+    subject is the STEPS-VIEW bookkeeping — "a completed run leaves the tree",
+    and "bookkeeping never kills a run". They used an input-less project as the
+    cheapest way to reach a completed run, and that stopped being a completed
+    run when canonical step D1 gained its `required_inputs` pre-flight: a Phase
+    1 handed nothing to read is now BLOCKED, not a graceful PASS_WITH_WAIVERS.
+
+    Staging one prompt keeps each test measuring exactly what it says it
+    measures. Without it, `rc == 0` would no longer distinguish "bookkeeping
+    did not kill the run" from "the pre-flight refused before bookkeeping ever
+    ran", i.e. the reverse case would stop being able to fail for its own
+    reason.
+    """
+    (project / "input").mkdir(parents=True, exist_ok=True)
+    (project / "input" / "phase1_prompt.md").write_text(
+        "# a 4-bit up counter with a synchronous reset\n")
+
+
 def test_real_orchestrator_run_leaves_the_tree(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
+    _stage_one_input(project)
     cp = subprocess.run(
         [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
          str(project), "--mode", "prompt", "--ic-name", "TST"],
@@ -235,6 +257,7 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
     must still finish with its own exit code — and say so on disk."""
     project = tmp_path / "proj"
     project.mkdir()
+    _stage_one_input(project)
     (project / "steps").write_text("not a directory\n")
 
     cp = subprocess.run(
