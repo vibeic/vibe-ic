@@ -1280,11 +1280,14 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
     written = out.get("written")
     if not written:
         return None
+    declared = out.get("declaration_written")
     return StepResult(
         "rtl_gen", "PASS", time.time() - t0,
         f"deterministic serial-parallel multiplier RTL (program-first; no LLM) "
-        f"-> {Path(written).relative_to(project)}",
-        output_files=[written],
+        f"-> {Path(written).relative_to(project)}"
+        + (f"; L7 declaration -> {Path(declared).relative_to(project)}"
+           if declared else ""),
+        output_files=[written] + ([declared] if declared else []),
         extras={"deterministic_generator": "serial_parallel_mul_synth",
                 "program_first": True, "topology": "serial_parallel",
                 "spec": out.get("spec")})
