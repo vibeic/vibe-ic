@@ -1199,6 +1199,13 @@ def publish(args: argparse.Namespace) -> dict:
     staged.append(_CITATION_ROUTING_FILENAME)
     excluded_total = sum(1 for r in layout_records if r["decision"] == "ROUTED_AWAY")
 
+    # Rewrite the (already-copied) provenance.jsonl with pruned-at-publish
+    # disclosures for every declared output this program decided not to
+    # stage. Must run AFTER every staging decision above (subtrees, GDS,
+    # shared input, step evidence) so "is it staged?" reflects the real,
+    # final tree.
+    provenance_note = _prune_provenance(run_dir, dest, dry)
+
     summary = {
         "ic": args.ic,
         "pdk": args.pdk,
@@ -1215,6 +1222,7 @@ def publish(args: argparse.Namespace) -> dict:
         "oversize_route": route,
         "shared_input": input_result,
         "step_evidence": steps_result,
+        "provenance_pruned": provenance_note,
         "dry_run": dry,
     }
 
@@ -1263,6 +1271,146 @@ def _stage_shared_input(run_dir: Path, args: argparse.Namespace,
         if r["decision"] == "STAGED":
             r["destination"] = "shared-input"
     return f"staged {c} input doc(s) -> {dst}", recs
+
+
+def _git_ignored(dest: Path, rels: set) -> set:
+    """Which of `rels` (paths relative to `dest`) `.gitignore` excludes.
+
+    One batched `git check-ignore --stdin`, not one subprocess per candidate
+    — `rels` is bounded (declared outputs actually present on disk), but a
+    per-file subprocess call does not need to be the default shape here.
+    Fail-open to "nothing is ignored" on any git/subprocess failure: this
+    function only WIDENS what gets pruned, so a failure here means the
+    caller's disk-presence check decides alone — the pre-existing, already-
+    safe behaviour — never a crash and never a false prune.
+    """
+    if not rels:
+        return set()
+    try:
+        cp = subprocess.run(
+            ["git", "check-ignore", "--stdin"], cwd=str(dest),
+            input="\n".join(sorted(rels)), capture_output=True, text=True,
+            timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    # rc 0 = at least one match, 1 = none matched, >1 = a real git error;
+    # stdout is authoritative either way except on a real error.
+    if cp.returncode not in (0, 1):
+        return set()
+    return {ln.strip() for ln in cp.stdout.splitlines() if ln.strip()}
+
+
+_PRUNED_KEY = "outputs_pruned_at_publish"
+_PRUNED_REASON_KEY = "outputs_pruned_reason"
+_PRUNE_REASON = (
+    "declared by the run but outside this cell's published subtrees "
+    "(PnR/synthesis/extraction intermediates — see PUBLISHING.md for what "
+    "this cell ships); the byte-producing invocation is unaffected, this "
+    "output is simply not carried into the published tree")
+
+
+def _prune_provenance(run_dir: Path, dest: Path, dry: bool) -> str:
+    """Annotate `dest/provenance.jsonl` so every declared output NOT staged
+    is DISCLOSED as such, not silently missing.
+
+    THE DEFECT THIS CLOSES: `provenance.jsonl` is copied VERBATIM from the
+    run (`_COPY_FILES`), unchanged by anything this program decides about
+    WHICH subtrees to stage. A step that ran under `phase3/stage3/pnr/` (or
+    `extracted/`, or `sta/`) declares its real, produced outputs there —
+    and this program has never staged that subtree for any cell. The result:
+    `provenance_output_hash_completeness_check` (#434) reads the copied
+    ledger, finds declared outputs neither on disk nor accounted for, and
+    reports PROVENANCE_OUTPUT_FILE_MISSING / _NOT_SHIPPED_UNDISCLOSED — a
+    true finding. MEASURED (spm x sky130A, 2026-08-07): 19 such findings on
+    a cell whose own structure/DRC/LVS/STA self-checks were otherwise clean.
+
+    THE FIX, and why it is safe: for each declared output, check the
+    STAGED tree first (already verified real, never touched) — then the
+    SOURCE run. Only a path that exists in the run but was never staged gets
+    pruned; a path absent from the run too is a different fact (the
+    declaration's own invocation may have failed, or the run genuinely never
+    produced it) and this function leaves it alone rather than guessing.
+    Never touches `inputs`, `exit_code`, or any other field — only ever ADDS
+    the two disclosure keys `provenance_output_hash_completeness_check`
+    already reads (`_publish_disclosures`); it invents no new mechanism.
+
+    "STAGED" MEANS "A CLONE RECEIVES IT", not merely "a file sits at that
+    path on THIS disk" — `dest` is not git-added yet when this runs, and a
+    repo-wide `.gitignore` rule (e.g. `*.log`) can leave a real, byte-correct
+    file copied into `dest` that git will never track. MEASURED: `phase2/
+    stage2/synth/synth.log` copied cleanly (phase2/ IS a staged subtree) and
+    still failed #434's check, because `git ls-files` — what a clone actually
+    receives — never carries it. `git check-ignore` is asked for every
+    disk-present candidate for exactly this reason, batched in one call.
+
+    Fail-safe: any read/parse error leaves the verbatim copy `_COPY_FILES`
+    already wrote untouched and returns a disclosed skip note — never raises,
+    never regresses a publish that would otherwise succeed.
+    """
+    src = run_dir / "provenance.jsonl"
+    dst = dest / "provenance.jsonl"
+    if not src.is_file() or dry:
+        return "no provenance.jsonl to annotate" if not src.is_file() else "dry-run: not annotated"
+    try:
+        lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return f"could not read provenance.jsonl: {exc}"
+    parsed: List[object] = []
+    disk_present_rels: set = set()
+    malformed = False
+    for line in lines:
+        if not line.strip():
+            parsed.append(line)
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            parsed.append(line)         # verbatim — not this function's to fix
+            malformed = True
+            continue
+        parsed.append(entry)
+        outputs = entry.get("outputs") if isinstance(entry, dict) else None
+        if isinstance(outputs, dict):
+            for rel in outputs:
+                if isinstance(rel, str) and rel and (dest / rel).is_file():
+                    disk_present_rels.add(rel)
+    ignored_rels = _git_ignored(dest, disk_present_rels)
+
+    out_lines: List[str] = []
+    pruned_total = 0
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            out_lines.append(entry)     # the verbatim malformed line, as-is
+            continue
+        outputs = entry.get("outputs")
+        if not isinstance(outputs, dict) or not outputs:
+            out_lines.append(json.dumps(entry))
+            continue
+        missing_here: List[str] = []
+        for rel in outputs:
+            if not isinstance(rel, str) or not rel:
+                continue
+            if rel in disk_present_rels and rel not in ignored_rels:
+                continue                # staged AND clone-visible — leave it
+            if (run_dir / rel).is_file():
+                missing_here.append(rel)  # produced, not in the published tree
+            # else: absent even in the source run — a different fact,
+            # left alone; see the docstring.
+        if missing_here:
+            existing = entry.get(_PRUNED_KEY)
+            merged = sorted(set(existing) if isinstance(existing, list) else set()
+                            | set(missing_here))
+            entry[_PRUNED_KEY] = merged
+            entry[_PRUNED_REASON_KEY] = _PRUNE_REASON
+            pruned_total += len(missing_here)
+        out_lines.append(json.dumps(entry))
+    if malformed:
+        return "provenance.jsonl carries malformed line(s); left verbatim"
+    dst.write_text("\n".join(out_lines) + ("\n" if out_lines else ""),
+                   encoding="utf-8")
+    return (f"{pruned_total} declared output(s) across the ledger disclosed "
+            f"as pruned-at-publish (not in this cell's staged subtrees)"
+            if pruned_total else "no declared output needed pruning")
 
 
 def _self_check(dest: Path) -> Tuple[bool, str]:
