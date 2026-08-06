@@ -20505,6 +20505,7 @@ def _v1_9_65_post_emit_l8_pdk_scoped_clock(project: Path) -> bool:
         if not isinstance(domains, list):
             continue
         changed = False
+        repointed_names: Set[str] = set()
         for d in domains:
             if not isinstance(d, dict) or d.get("role") != "primary":
                 continue
@@ -20529,8 +20530,46 @@ def _v1_9_65_post_emit_l8_pdk_scoped_clock(project: Path) -> bool:
             d["evidence"] = {"file": rel, "line": line_no,
                              "matched_substring": row_text[:120]}
             changed = True
+            _nm = (d.get("name") or "").strip()
+            if _nm:
+                repointed_names.add(_nm.lower())
         if not changed:
             continue
+        # ORGANIC-20260805 — mirror the re-point onto the `clocks[]` view of
+        # the SAME physical clock. `_post_emit_seed_l8b_clocks_from_l1_v1_6_571`
+        # already ran (call order: seeder line ~59512, this line ~59791) and
+        # seeded `clocks[]` by INHERITING the period `clock_domains[]` held at
+        # that moment — i.e. the PRE-re-point value. Re-pointing only
+        # `clock_domains[]` therefore leaves the two containers owning the same
+        # name with different periods, which is exactly what
+        # `clock_contract_conflicts` refuses ("two clock records own the name
+        # and pin different periods"). Re-point both, or neither. Chip-AGNOSTIC.
+        clocks = data.get("clocks")
+        if isinstance(clocks, list):
+            for c in clocks:
+                if not isinstance(c, dict):
+                    continue
+                _cn = (c.get("name") or "").strip().lower()
+                if not _cn or _cn not in repointed_names:
+                    continue
+                _prev = c.get("freq_mhz")
+                if _prev is not None and abs(float(_prev) - mhz) < 1e-9:
+                    continue
+                if _prev is not None:
+                    _cc.record_alternate_mention(c, {
+                        "freq_mhz": float(_prev),
+                        "freq_hz": int(float(_prev) * 1e6),
+                        "role": "displaced_by_pdk_scoped_row",
+                        "source": (c.get("evidence") or {}).get("file"),
+                        "extraction_strategy": c.get("extraction_strategy"),
+                    })
+                c["freq_mhz"] = mhz
+                c["freq_hz"] = int(mhz * 1e6)
+                c["period_ns"] = 1000.0 / mhz
+                c["extraction_strategy"] = "clock_domain_pdk_scoped_row"
+                c["pdk_scoped_target"] = _CLI_PDK
+                c["evidence"] = {"file": rel, "line": line_no,
+                                 "matched_substring": row_text[:120]}
         if data.get("clock_mhz") is not None:
             data["clock_mhz"] = mhz
         try:
