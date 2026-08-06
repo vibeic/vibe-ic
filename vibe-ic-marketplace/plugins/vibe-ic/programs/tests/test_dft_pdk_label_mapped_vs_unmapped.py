@@ -53,6 +53,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from _hostpaths import require_repo         # noqa: E402  (real in-repo corpus)
 import fault_atpg_run as fatpg              # noqa: E402
 import design_one_shot_runner as dosr       # noqa: E402
 
@@ -300,3 +301,118 @@ def _accepts_two(fn) -> bool:
         return len(inspect.signature(fn).parameters) >= 2
     except (TypeError, ValueError):
         return False
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SWEEP — the guard's decision point must be REACHABLE through the REAL
+# production path (`_dft_atpg_sniff_pdk`), not only through `_label_under_test`
+# called directly with a hand-set `pdk=""`. Every forward test above proves the
+# LABELLING function is correct in isolation; none of them proves the sniff
+# ever actually HANDS it an unnameable-but-mapped netlist in production.
+#
+# NanGate45 CANNOT BE THE FIXTURE FOR THIS ANYMORE. MEASURED 2026-08-06: an
+# earlier draft of this sweep used `NANGATE45_MAPPED` here too, and it stopped
+# proving anything the same day this file's own core fix landed — v1.9.86
+# ("a fully mapped NanGate45 netlist was labelled `unmapped`, so scan insertion
+# refused") taught `PDK_CONFIG` NanGate45's `dff_cells` so the SCAN-INSERTION
+# side could resolve a real Liberty for it. That is the correct, complementary
+# fix — but it means `_dft_atpg_sniff_pdk` now NAMES NanGate45:
+#
+#     sniff('nangate45 DFF_X1/...') -> pdk == 'nangate45'   (was '' before v1.9.86)
+#
+# so the `mapped_unknown_library` branch this sweep exists to reach is no
+# longer reachable with that fixture at all — `old == new == 'nangate45'`,
+# which is a DIFFERENT branch of this same function (`test_rev_named_pdk_is_
+# passed_through_unchanged`), not evidence the guard is broken. The fixture
+# below uses a purely invented cell-naming convention that resolves to none of
+# the four configured libraries (`fatpg.PDK_CONFIG` — gf180 / sky130 /
+# ihp-sg13g2 / nangate45), so it stays in the branch this test is about
+# regardless of which PDK gains config next.
+
+_SYNTH_REL = "phase2/stage2/synth/netlist.v"
+
+UNCONFIGURED_LIB_MAPPED = """\
+module tinytop(clk, rst, d, q);
+  input clk, rst, d;
+  output q;
+  wire n1, n2, n3;
+  ACME_INV_1   u1 (.A(d),   .Y(n1));
+  ACME_NAND2_1 u2 (.A(n1),  .B(rst), .Y(n2));
+  ACME_AOI21_1 u3 (.A(n2),  .B(d), .C(rst), .Y(n3));
+  ACME_DFF_1   u4 (.D(n3),  .CLK(clk), .Q(q));
+endmodule
+"""
+
+
+def _sweep_labels(root: Path):
+    """(old_label, new_label) for one project root, THROUGH THE PRODUCTION
+    PATH: resolve+sniff the netlist exactly as `step_dft_lec_chain` does
+    (`_dft_atpg_sniff_pdk`), then compare the pre-fix expression
+    (`pdk or "generic_unmapped"`) against the landed helper."""
+    sniff_nl, pdk = dosr._dft_atpg_sniff_pdk(root, _SYNTH_REL)
+    old = pdk or "generic_unmapped"
+    new = _label_under_test(pdk, sniff_nl)
+    return old, new
+
+
+def test_sweep_reaches_its_guard_and_is_false_positive_free(tmp_path_factory):
+    """A SWEEP MUST REACH ITS GUARD — and stay quiet on complete designs.
+
+    Two directions, both asserted:
+
+      (a) REAL in-repo corpus — every checked-in
+          `benchmark-data/**/phase2/stage2/synth/netlist.v` is swept through the
+          identical production resolve+sniff+label path and MUST keep its old
+          label. A relabel here would be a false positive on a legitimately-
+          complete design.
+
+      (b) The guard's decision point is REACHABLE — one injected mapped-but-
+          unconfigured root (`UNCONFIGURED_LIB_MAPPED`, a purely invented
+          library — see the section header above for why NanGate45 no longer
+          serves) flows through the SAME path and its label CHANGES
+          `generic_unmapped -> mapped_unknown_library`. `fired >= 1` is the
+          proof the sweep actually entered the branch it guards, THROUGH THE
+          REAL SNIFF, not by calling the labelling helper directly.
+
+    Precondition asserted inline: `UNCONFIGURED_LIB_MAPPED` must itself sniff
+    to no configured PDK, or this test would silently start measuring the
+    named-PDK branch again the next time a library gains a PDK_CONFIG row —
+    exactly the failure mode that retired the NanGate45 fixture.
+    """
+    corpus = require_repo("benchmark-data")
+    real_roots = sorted({p.parents[3] for p in corpus.rglob("netlist.v")
+                         if str(p).endswith(_SYNTH_REL)})
+    assert real_roots, "no in-repo corpus netlist found to sweep"
+
+    changed, unchanged = [], []
+    for root in real_roots:
+        old, new = _sweep_labels(root)
+        (changed if old != new else unchanged).append(
+            (str(root), old, new))
+
+    # (a) ZERO false positives on real, legitimately-complete designs.
+    assert changed == [], \
+        f"sweep relabelled a real corpus root (false positive): {changed}"
+
+    # (b) The guard's decision point is REACHABLE. Inject one mapped-but-
+    #     unconfigured root and run it through the identical production path.
+    fire_root = _clean_root(tmp_path_factory, "sweepfire")
+    _write(fire_root, "netlist.v", UNCONFIGURED_LIB_MAPPED)
+    f_old, f_new = _sweep_labels(fire_root)
+    fired = [(str(fire_root), f_old, f_new)] if f_old != f_new else []
+
+    assert f_old == "generic_unmapped", (
+        "precondition failed: the fixture's cell names now resolve to a "
+        f"configured PDK ({f_old!r}) — pick a different invented library "
+        "so this test keeps measuring the unconfigured-library branch")
+    assert len(fired) >= 1, (
+        "SWEEP DID NOT FIRE: the mapped-unknown case never entered the "
+        "`mapped_unknown_library` branch — the guard's decision point was "
+        "not reached, so the sweep proves nothing (exit-0 on 0 comparisons).")
+    assert (f_old, f_new) == ("generic_unmapped", "mapped_unknown_library"), \
+        f"guard entered the wrong branch: {f_old!r} -> {f_new!r}"
+
+    # Honest coverage line: what was swept, what stayed quiet, what fired.
+    print(f"SWEEP: real_roots={len(real_roots)} unchanged={len(unchanged)} "
+          f"false_positives={len(changed)} injected_fired={len(fired)} "
+          f"({f_old} -> {f_new} on the invented unconfigured-library root)")
