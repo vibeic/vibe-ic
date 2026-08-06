@@ -307,7 +307,7 @@ def _assert_files_only_gate_matches_claim(step_id) -> None:
     The grammar, and where each half is enforced by the real consumer:
 
       * ACROSS entries the list is **ALL-of-N**. ``flow_compliance_check.py``
-        :8568 states it and :8582-:8598 executes it — one ``missing_entries``
+        :8966 states it and :8980-:8996 executes it — one ``missing_entries``
         append per unsatisfied ENTRY::
 
             # EACH declared entry must be satisfied — the list is ALL-of-N ...
@@ -315,14 +315,14 @@ def _assert_files_only_gate_matches_claim(step_id) -> None:
             missing_entries: List[str] = []
             for pat in outputs:
 
-        and :9051 demotes a passing gate on the strength of that list::
+        and :9479 demotes a passing gate on the strength of that list::
 
             if _T.is_done_claim(result.status) and missing_entries:
                 result.status = "MISSING"
 
       * INSIDE one entry ``" OR "`` is **any-of** — the flow's spelling for one
         artefact with several accepted names or locations. Same consumer,
-        :8586-:8590, first hit wins and the entry is done::
+        :8984-:8988, first hit wins and the entry is done::
 
             for sp in (p.strip() for p in pat.split(" OR ")):
                 if _glob_first(project, sp):
@@ -403,11 +403,11 @@ def _assert_files_only_gate_matches_claim(step_id) -> None:
             f"clause of this step's gate. The gate checks {checked}; the step "
             f"claims to deliver {list(declared)}.\n" + "\n".join(lines) + "\n"
             f"  required_outputs is ALL-of-N across entries "
-            f"(flow_compliance_check.py:8568 states it, :8582-:8598 executes "
-            f"it, :9051 demotes a passing gate to MISSING on it), so each "
+            f"(flow_compliance_check.py:8966 states it, :8980-:8996 executes "
+            f"it, :9479 demotes a passing gate to MISSING on it), so each "
             f"entry above is a SEPARATE deliverable, not an alternative "
             f"spelling of one that is checked. Only ' OR ' INSIDE one entry is "
-            f"any-of (same file, :8586-:8590) and an entry satisfied by any "
+            f"any-of (same file, :8984-:8988) and an entry satisfied by any "
             f"one of its alternatives is NOT reported here.\n"
             f"  Either the gate is not measuring what the step claims, or the "
             f"step is claiming a deliverable that belongs to another step — "
@@ -466,7 +466,7 @@ def _assert_gateless_step_prose_matches_mechanism(step_id) -> None:
         f"step {step_id} / d{DIM} criteria_match: the step's prose names "
         f"{absent} as gate name(s) that appear in the audit JSON's gates[] "
         f"array, but that array is built only from _STRUCTURAL_RTL_GATES "
-        f"(flow_compliance_check.py:7621 -> :7687) and the live registry's "
+        f"(flow_compliance_check.py:8019 -> :8085) and the live registry's "
         f"{len(registry)} members do not include them; "
         f"named-and-present = {[n for n in named if n in registry]}"
     )

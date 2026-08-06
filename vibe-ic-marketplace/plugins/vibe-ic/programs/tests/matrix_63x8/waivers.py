@@ -415,7 +415,7 @@ WAIVERS: Tuple[Waiver, ...] = (
     # the default EMPTY fixture, whose builder is
     # `test_matrix_d2_falsifiable._f_empty` ("""Nothing was produced at
     # all.""", empty body). `flow_compliance_check._check_files_exist` is
-    # `passed = len(missing) == 0` and nothing else (:1841-1845), so on an
+    # `passed = len(missing) == 0` and nothing else (:2239-2243), so on an
     # empty directory that clause is RED by construction — 33/33, 100 %, zero
     # exceptions — while the SAME clause PASSES against a stub: step 21's
     # `files_exist: ['phase3/stage3/pnr/routed.def']` answers PASS to the 25
@@ -458,7 +458,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "is a change to the production flow definition."
         ),
         evidence=(
-            "programs/flow_compliance_check.py:1841-1845 (`passed = "
+            "programs/flow_compliance_check.py:2256-2258 (`passed = "
             "len(found) > 0` on the any_of branch, then the return) is the "
             "entire predicate. MEASURED 2026-08-06: this clause handed a "
             "ZERO-BYTE "
@@ -485,7 +485,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "flow-definition change, not a test fixture."
         ),
         evidence=(
-            "programs/flow_compliance_check.py:1841-1845 (`passed = "
+            "programs/flow_compliance_check.py:2256-2258 (`passed = "
             "len(missing) == 0`, then the return — the whole predicate). "
             "MEASURED "
             "2026-08-06: a ZERO-BYTE phase2/stage2/synth/post_dft_netlist.v "
@@ -514,7 +514,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "this suite may take on its own."
         ),
         evidence=(
-            "programs/flow_compliance_check.py:1841-1845 (`passed = "
+            "programs/flow_compliance_check.py:2256-2258 (`passed = "
             "len(missing) == 0`, then the return) for the blocking "
             "term; the advisory clause is `dfm_screen_check . --json "
             "reports/phase2/gates/dfm_screen.json` and is excluded from this "

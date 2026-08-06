@@ -433,13 +433,13 @@ def classify(flow_yaml: Path) -> list[dict]:
                     and c["surface"] == "predicate"):
                 # Its own sole required_output. This rescues a PREDICATE only.
                 # `check_step` evaluates the step-level `condition` at
-                # flow_compliance_check.py:5200 and RETURNS SKIPPED-CONDITION
-                # at :5219 — before the required_outputs check at :5253. So a
+                # flow_compliance_check.py:5598 and RETURNS SKIPPED-CONDITION
+                # at :5617 — before the required_outputs check at :5651. So a
                 # STEP gated on its own required_output never reaches the
                 # MISSING path that would have made the absence loud, and the
                 # artefact's disappearance is what silences the very step that
                 # was supposed to report it (Step 44 / HTOL). A predicate
-                # condition lives inside the gate, which runs after :5253, so
+                # condition lives inside the gate, which runs after :5651, so
                 # there the required_outputs check really does fire first.
                 reasons[p] = ("T3 own sole required_output, predicate "
                               "surface (required_outputs checked first)")

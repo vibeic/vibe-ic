@@ -224,6 +224,98 @@ or ``.map.rpt`` anywhere) that every checkout answers the same way. The NA
 machinery is removed rather than left unused: a pinned set nothing populates
 asserts ``{} == {}``.
 
+THE WRITE LEDGER — "DID THIS STEP WRITE IT", NOT "DOES A FILE EXIST"
+====================================================================
+Everything above resolves a PATTERN. ``flow_compliance_check._glob_first`` —
+the resolver this module imports on purpose — answers *does something matching
+this glob exist under this root*, and for a ``reports/`` pattern it will answer
+YES out of ``reports/<subdir>/`` when the declared path itself was never
+written. It is not able to answer *did THIS STEP produce it*: it is handed a
+pattern and nothing else.
+
+``programs/step_write_ledger.py`` records the other half — one ``lstat`` walk
+of what the run ACTUALLY wrote, residualled against the declaration, per step,
+with producer attribution from the run's own ``provenance.jsonl`` — and until
+2026-08-06 NO GATE READ IT (``grep -rl 'write_ledger' programs/*.py
+flow/*.yaml`` returned only the two programs that write it). D3 now does.
+
+THE RULE, AND ITS ONE DIRECTION. When an admissible run root carries a write
+ledger, :func:`resolve` consults the ledger's row FOR THE STEP BEING ASKED
+ABOUT, and the ledger may only ever SUBTRACT:
+
+* the ledger records the spec as ``declared_output_not_produced`` -> whatever
+  the glob found is refused, under :attr:`Rejected.unwritten`, quoting the
+  ledger's own reason and — where the run's provenance log claims a digest for
+  a path that is now empty or broken — the CONTRADICTION and the tool that
+  claimed it;
+* the glob's hit is not one of the paths the ledger records that step as
+  having written -> refused under :attr:`Rejected.unattributed`.
+
+It may never ADD. A path the ledger calls produced still has to be non-empty,
+non-symlink and tracked at HEAD; those rules run FIRST and unchanged
+(``test_d3_the_write_ledger_can_only_subtract_evidence`` asserts all three
+against a ledger that records the path as produced). The ledger is also not
+consulted where the question is about the PROJECT rather than about a step —
+the NA-dormancy probe and the waiver-premise guards pass no step id, so a
+ledger can never suppress the artefact that falsifies an NA.
+
+The ledger must itself be TRACKED AT HEAD. It can only redden a cell, so an
+untracked one would let ``git clean -xdf`` change a colour and two checkouts of
+one commit disagree — #527's defect arriving from the other direction.
+
+MEASURED 2026-08-06, AND THE ANSWER IS ZERO — WHICH IS THE POINT
+----------------------------------------------------------------
+On THIS checkout: **0 of the 63 cells change state.** No admissible run root
+carries a tracked ledger (``step_write_ledger`` landed the same day and no run
+tree has been re-published since), so every cell degrades to the pre-ledger
+behaviour. That is not silent: every verdict detail now ends with a
+``[write ledger — <root>: not bound (<reason>) ...]`` clause naming each root
+and why, and :data:`LEDGER_BOUND_ROOTS` pins the empty population so the first
+published ledger is a loud, named event rather than a discovery.
+
+On FIVE REAL RUN DIRECTORIES with a ledger emitted by the real emitter and
+committed — ``/home/reyerchu/_sky130A_r3_run``, ``/home/reyerchu/_r6_sky130A/
+run`` and copies of the in-repo ``spm/v1.5.66_gf180mcuD``,
+``sha256/clean_run_v1427_20260715`` and ``u_hawaii_adc/v1.9.86_sky130A`` — all
+133 declared entries were resolved twice, ledger-bound and unbound:
+
+    run root                              produced  not produced  CHANGED
+    _sky130A_r3_run                             88            45        0
+    _r6_sky130A/run                             97            36        0
+    spm v1.5.66_gf180mcuD                       66            67        0
+    sha256 clean_run_v1427                      64            69        0
+    u_hawaii_adc v1.9.86_sky130A                29           104        0
+
+665 comparisons, zero differences. The two answers agree because both sides
+implement the same doctrine — a symlink is not evidence, a 0-byte file is not
+an artefact — and that agreement is the blast-radius measurement, not a null
+result: binding to the ledger reddens nothing that was green on real data.
+
+WHAT DOES CHANGE ON A REAL RUN IS THE ATTRIBUTION. Re-measured with
+``phase2/stage2/synth/netlist.v`` truncated to 0 bytes on
+``_sky130A_r3_run`` (the corruption the ledger's own docstring records):
+steps 9 and 14 both declare that path and both were ALREADY red, by the
+zero-byte rule. Unbound, the whole message is
+``0-byte matches: {...netlist.v}``. Bound, it also carries
+
+    the run's own write ledger records this declared output as NOT WRITTEN by
+    this step (zero_byte: ...); and the run's provenance log CONTRADICTS the
+    filesystem — provenance claims sha256:ed70a5226c9be057... for a file that
+    is now 0 bytes, claimed producer 'yosys'
+
+— a contradiction against yosys's OWN recorded digest, decidable from lstat
+with nothing hashed, that no glob could ever have stated.
+
+AND THE HOLE THE BINDING CLOSES IS LATENT, NOT IMAGINARY. Counted across the
+same five roots: entries served ONLY by a ``_glob_first`` fallback probe are
+0, 0, 0, 0 and 4. The four are ``u_hawaii_adc``'s A1-A4, and each of them ALSO
+matches directly through the other side of its ``OR``, which is why none of
+them moved. So today no cell rests on a path its own spec does not name — and
+``test_d3_the_write_ledger_binds_production_to_the_step`` shows what happens
+the day one does: a run that wrote ``reports/phase3/lec.json`` and never wrote
+step 13's declared ``reports/lec.json`` is credited with producing it by the
+pre-change file, and is not by this one.
+
 WHAT THIS MODULE DELIBERATELY DOES NOT DO
 =========================================
 * It never reads ``.audit_63x8.json`` verdicts. ``cells_for(3)`` is used only
@@ -375,6 +467,12 @@ from gds_topcell_name_check import parse_structures  # noqa: E402
 # `benchmark_evidence_structure_check` enforces afterwards.
 import benchmark_evidence_publish as _bep  # noqa: E402
 from benchmark_evidence_structure_check import _NAME_RE as _PUBLISHED_NAME_RE  # noqa: E402
+
+# The WRITE LEDGER's own module, imported for its schema string and for
+# nothing else. This module READS a ledger a run left behind; it never builds
+# one — a dimension that manufactured its own evidence at audit time would be
+# the self-certification defect `SELF_CERTIFYING_AUDIT_PROBE` exists to pin.
+import step_write_ledger as _swl  # noqa: E402
 
 DIM = 3
 
@@ -649,6 +747,171 @@ def is_tracked(root: Path, rel: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# The run's OWN write ledger — "did THIS STEP write it", per step
+# ──────────────────────────────────────────────────────────────────────
+#: Where `step_write_ledger.emit()` puts the record. Under `reports/` and not
+#: under `steps/` on purpose: the publisher excludes `steps/` by name, so a
+#: ledger written only there would never reach a published cell.
+LEDGER_REL = "reports/write_ledger.json"
+
+#: The ledger's D3 rule name, quoted from the emitter rather than guessed.
+_LEDGER_D3_RULE = "declared_output_not_produced"
+
+
+@dataclass(frozen=True)
+class Ledger:
+    """One run's write ledger, reduced to what this dimension may consult."""
+    rel: str
+    captured_at: str
+    project: str
+    rows: Dict[str, Dict]          # step id -> the ledger's row for that step
+
+
+@lru_cache(maxsize=64)
+def write_ledger(root: Path) -> Tuple[Optional[Ledger], str]:
+    """``(ledger, note)`` for run root *root*. ``note`` is ALWAYS a sentence.
+
+    Four admissibility rules, and the second is the one that matters.
+
+    1. The file must be a real regular file at :data:`LEDGER_REL`. A symlink is
+       refused for the same reason a symlinked artefact is: it is a promise
+       about a filesystem, not a record.
+    2. **It must be TRACKED AT HEAD.** The ledger can only ever make a cell
+       REDDER, so an untracked one is a lever that turns a verdict on whether
+       somebody happened to run ``step_write_ledger`` in their working tree.
+       ``git clean -xdf`` would then change a colour and two checkouts of one
+       commit would disagree — the exact host-dependence #527 took out of this
+       module, arriving from the other direction. Publishing the run tree (the
+       ledger with it) is what admits it, on every host at once.
+    3. The schema must be the one this module knows
+       (``step_write_ledger.SCHEMA``), imported rather than restated.
+    4. It must carry step rows. A ledger built when the flow yaml was
+       unreadable has none, and an empty record must not read as "every step
+       wrote nothing".
+
+    A ledger that fails any of these is NOT consulted and the reason is
+    returned so it can be printed. Nothing here is ever silent: :func:`resolve`
+    puts the note in the verdict detail and
+    ``test_d3_the_write_ledger_population_is_named_root_by_root`` pins the
+    population root by root.
+    """
+    p = root / LEDGER_REL
+    try:
+        if p.is_symlink():
+            return None, (f"{LEDGER_REL} is a SYMLINK -> {os.readlink(p)}; a "
+                          f"link is a promise about a filesystem, not a record "
+                          f"of what this run wrote — NOT consulted")
+        if not p.is_file():
+            return None, (f"no {LEDGER_REL} — this run left no write ledger, "
+                          f"so production is decided exactly as before")
+    except OSError as exc:
+        return None, f"{LEDGER_REL} is unreadable ({exc}) — NOT consulted"
+    if not is_tracked(root, LEDGER_REL):
+        return None, (f"{LEDGER_REL} exists here but is NOT tracked at HEAD — "
+                      f"NOT consulted. A ledger can only redden a cell, so an "
+                      f"untracked one would make this verdict a property of "
+                      f"one working tree (#527). Commit the run tree to admit "
+                      f"it.")
+    try:
+        doc = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, f"{LEDGER_REL} does not parse ({exc}) — NOT consulted"
+    if not isinstance(doc, dict) or doc.get("schema") != _swl.SCHEMA:
+        return None, (f"{LEDGER_REL} carries schema "
+                      f"{(doc or {}).get('schema') if isinstance(doc, dict) else None!r}, "
+                      f"not {_swl.SCHEMA!r} — NOT consulted")
+    rows = {str(r["id"]): r for r in (doc.get("steps") or [])
+            if isinstance(r, dict) and r.get("id") is not None}
+    if not rows:
+        return None, (f"{LEDGER_REL} carries no step rows (its `declaration` "
+                      f"reads {doc.get('declaration')}) — NOT consulted; an "
+                      f"empty record must not read as 'every step wrote "
+                      f"nothing'")
+    return (Ledger(rel=LEDGER_REL,
+                   captured_at=str(doc.get("captured_at") or "?"),
+                   project=str(doc.get("project") or "?"),
+                   rows=rows),
+            f"{LEDGER_REL} consulted ({len(rows)} step rows, captured "
+            f"{doc.get('captured_at')})")
+
+
+@dataclass(frozen=True)
+class LedgerSay:
+    """What the run's ledger says about ONE step's ONE declared spec."""
+    consulted: bool
+    note: str
+    #: The ledger's own `declared_output_not_produced` finding, or None.
+    unwritten: Optional[Dict] = None
+    #: The paths the ledger records THIS STEP as having produced for the spec.
+    produced_rels: Tuple[str, ...] = ()
+    #: Producer attribution for those paths, as the ledger recorded it.
+    producers: Tuple[str, ...] = ()
+
+
+def _ledger_reason(finding: Dict) -> str:
+    """A ledger D3 finding rendered as one sentence, contradiction included."""
+    bits = [f"the run's own write ledger records this declared output as "
+            f"NOT WRITTEN by this step ({finding.get('reason')}: "
+            f"{finding.get('detail')})"]
+    if finding.get("provenance_contradiction"):
+        bits.append(
+            f"and the run's provenance log CONTRADICTS the filesystem — "
+            f"{finding['provenance_contradiction']}"
+            + (f", claimed producer {finding['claimed_producer']!r}"
+               if finding.get("claimed_producer") else ""))
+    return "; ".join(bits)
+
+
+def ledger_says(root: Path, step_id, entry: str) -> LedgerSay:
+    """The ledger's verdict for (*step_id*, *entry*) in run root *root*.
+
+    Degrades to ``consulted=False`` — today's behaviour — at three named
+    points, because each of them means the ledger cannot answer FOR THIS CELL
+    and a ledger that answered anyway would be inventing:
+
+    * the root carries no admissible ledger (:func:`write_ledger`);
+    * the ledger has no row for this step (it predates the step, or the step
+      declared no ``required_outputs`` when it was captured);
+    * the ledger's row does not mention this spec — the flow yaml has drifted
+      since the run, and a record about a different string is not a record
+      about this one.
+    """
+    led, note = write_ledger(root)
+    if led is None:
+        return LedgerSay(False, note)
+    row = led.rows.get(F.normalize_id(step_id))
+    if row is None:
+        return LedgerSay(False, (
+            f"{LEDGER_REL} (captured {led.captured_at}) records no row for step "
+            f"{step_id} — it predates this step, or the step declared no "
+            f"required_outputs when the run happened; decided as before"))
+    findings = {f.get("spec"): f for f in (row.get("findings") or [])
+                if isinstance(f, dict) and f.get("dimension") == "D3"
+                and f.get("rule") == _LEDGER_D3_RULE}
+    produced: Dict[str, List[str]] = {}
+    attributed: Dict[str, List[str]] = {}
+    for rec in (row.get("produced") or []):
+        if not isinstance(rec, dict):
+            continue
+        produced.setdefault(str(rec.get("spec")), []).append(str(rec.get("rel")))
+        if rec.get("producer"):
+            attributed.setdefault(str(rec.get("spec")), []).append(
+                f"{rec['producer']} ({rec.get('producer_confidence')})")
+    if entry not in findings and entry not in produced:
+        return LedgerSay(False, (
+            f"{LEDGER_REL} (captured {led.captured_at}) covers step {step_id} "
+            f"but not the spec {entry!r} — the flow yaml has drifted since the "
+            f"run; decided as before"))
+    return LedgerSay(
+        True,
+        f"{LEDGER_REL} captured {led.captured_at}",
+        unwritten=findings.get(entry),
+        produced_rels=tuple(sorted(set(produced.get(entry, ())))),
+        producers=tuple(sorted(set(attributed.get(entry, ())))),
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Live resolution of one required_outputs entry
 # ──────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
@@ -669,16 +932,35 @@ class Rejected:
     product no commit carries" and "there is nothing at all" are four different
     findings. Folding them together is how a never-ran tool reads as a clean
     run and how one machine's history reads as a flow's behaviour.
+
+    Two more since the write ledger was wired in, and they are the two the
+    project-wide glob could never state:
+
+    ``unwritten``
+        the run's own ledger records this step's declared output as NEVER
+        WRITTEN — with the reason (absent / zero_byte / dangling_symlink /
+        symlink_alias) and, where the run's provenance log claims a digest for
+        a path that is now empty or broken, the contradiction and the tool
+        that claimed it.
+    ``unattributed``
+        a file matching the glob exists and passes every evidence rule, but
+        the ledger does not record THIS STEP as having written that path. "A
+        file matching this pattern exists somewhere in the project" and "this
+        step produced it" are different claims; this is where they separate.
     """
     empty: Tuple[str, ...] = ()
     symlinked: Tuple[str, ...] = ()
     untracked: Tuple[str, ...] = ()
+    unwritten: Tuple[str, ...] = ()
+    unattributed: Tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
-        return bool(self.empty or self.symlinked or self.untracked)
+        return bool(self.empty or self.symlinked or self.untracked
+                    or self.unwritten or self.unattributed)
 
 
-def resolve(root: Path, entry: str) -> Tuple[Optional[Hit], Rejected]:
+def resolve(root: Path, entry: str,
+            step_id=None) -> Tuple[Optional[Hit], Rejected]:
     """Largest NON-EMPTY, NON-SYMLINK, COMMITTED match for *entry* under *root*.
 
     ``" OR "`` inside an entry is any-of (``F.split_any_of`` reproduces the
@@ -691,6 +973,29 @@ def resolve(root: Path, entry: str) -> Tuple[Optional[Hit], Rejected]:
     match is refused and reported under :attr:`Rejected.untracked`, so the
     message says "a build product nobody committed" instead of implying the
     step produced something reproducible.
+
+    THE WRITE LEDGER — WHAT *step_id* IS FOR
+    ----------------------------------------
+    Everything above answers "does a file matching this glob exist under this
+    root, and is it real". It never answers "did THIS STEP produce it": the
+    resolver takes a pattern, not a step, and ``_glob_first`` will happily
+    serve a hit from the ``reports/<subdir>/`` fallback or from anywhere else
+    the pattern reaches. When a *step_id* is given AND the root carries an
+    admissible write ledger, the ledger's row FOR THAT STEP is consulted and
+    can only ever SUBTRACT:
+
+    * the ledger records the spec as never written -> the hit is refused,
+      whatever the glob found, under :attr:`Rejected.unwritten`;
+    * the ledger records the step as having written some paths and the hit is
+      none of them -> refused under :attr:`Rejected.unattributed`.
+
+    It CANNOT add. A path the ledger records as produced still has to pass the
+    non-empty, non-symlink and tracked-at-HEAD rules above, which are applied
+    first and unchanged — otherwise the ledger would become a way around them,
+    which is precisely what it must not be. And with no *step_id*, or no
+    admissible ledger, this function behaves exactly as it did before: callers
+    that ask a question ABOUT THE PROJECT rather than about a step (the
+    dormancy probe, the waiver-premise guards) pass no *step_id* on purpose.
     """
     assert _GLOB_FIRST is not None, (
         "flow_compliance_check._glob_first is gone; this module resolves "
@@ -721,13 +1026,45 @@ def resolve(root: Path, entry: str) -> Tuple[Optional[Hit], Rejected]:
                 continue
             if best is None or size > best.size_bytes:
                 best = Hit(root="", alternative=alt, path=rel, size_bytes=size)
-    return best, Rejected(tuple(empty), tuple(symlinked), tuple(untracked))
+
+    unwritten: List[str] = []
+    unattributed: List[str] = []
+    if step_id is not None:
+        say = ledger_says(root, step_id, entry)
+        if say.consulted and say.unwritten is not None:
+            # THE BINDING. The glob may have found something; this step's own
+            # run says it did not write it. A file that exists is not the same
+            # fact as a step that produced one.
+            unwritten.append(
+                (f"{best.path} ({best.size_bytes} B) matched the glob, but "
+                 if best is not None else "")
+                + _ledger_reason(say.unwritten))
+            best = None
+        elif say.consulted and best is not None \
+                and best.path not in say.produced_rels:
+            unattributed.append(
+                f"{best.path} ({best.size_bytes} B) matches the pattern, but "
+                f"the run's own write ledger records step {step_id} as having "
+                f"written {list(say.produced_rels)} for this spec — not that "
+                f"path. 'A matching file exists' is not 'this step produced "
+                f"it'.")
+            best = None
+    return best, Rejected(tuple(empty), tuple(symlinked), tuple(untracked),
+                          tuple(unwritten), tuple(unattributed))
 
 
-def resolve_anywhere(entry: str) -> Tuple[Optional[Hit], Dict[str, Rejected]]:
+def resolve_anywhere(entry: str,
+                     step_id=None) -> Tuple[Optional[Hit], Dict[str, Rejected]]:
+    """First admissible root that evidences *entry*, ledger-bound per root.
+
+    The ledger binds PER RUN. A root whose ledger records this step as having
+    written nothing cannot evidence the entry, and the search moves on to the
+    next root — because "this run did not write it" is not "no run ever did",
+    and a root that carries no ledger keeps answering exactly as before.
+    """
     rejected: Dict[str, Rejected] = {}
     for label, rr in run_roots().items():
-        hit, rej = resolve(rr.path, entry)
+        hit, rej = resolve(rr.path, entry, step_id)
         if rej:
             rejected[label] = rej
         if hit is not None:
@@ -736,12 +1073,17 @@ def resolve_anywhere(entry: str) -> Tuple[Optional[Hit], Dict[str, Rejected]]:
 
 
 def _rejected_note(rejected: Dict[str, Rejected]) -> str:
-    """The three near-miss categories, named rather than folded into "missing"."""
+    """The five near-miss categories, named rather than folded into "missing"."""
     bits = []
     for field, label in (("empty", "0-byte matches"),
                          ("symlinked", "symlinked (not produced here)"),
                          ("untracked", "matched but NOT tracked at HEAD — a "
-                                       "local build product, not evidence")):
+                                       "local build product, not evidence"),
+                         ("unwritten", "the run's own write ledger says THIS "
+                                       "STEP never wrote it"),
+                         ("unattributed", "matched, but the run's write ledger "
+                                          "attributes that path to no write by "
+                                          "this step")):
         per_root = {k: list(getattr(v, field)) for k, v in rejected.items()
                     if getattr(v, field)}
         if per_root:
@@ -935,22 +1277,59 @@ def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
     )
 
 
+def _ledger_state(step_id, entry: str) -> str:
+    """One clause naming the ledger state of EVERY admissible root, for the
+    verdict detail.
+
+    Backward compatibility is not allowed to be silent. A run that carries no
+    ledger degrades to the pre-ledger behaviour, and the record has to SAY
+    which roots those are — otherwise a reader of a green cell cannot tell
+    "this step's own run recorded the write" from "nobody ever asked".
+    """
+    roots = run_roots()
+    if not roots:
+        return ""
+    says = {label: ledger_says(rr.path, step_id, entry)
+            for label, rr in roots.items()}
+    bound = {k: v for k, v in says.items() if v.consulted}
+    if not bound:
+        # The common case today, and it must stay READABLE or nobody will read
+        # it: one clause, the reasons de-duplicated, the roots counted.
+        reasons = sorted({v.note.split(" — ")[0].split(";")[0]
+                          for v in says.values()})
+        return (f" [write ledger: none of the {len(roots)} admissible run "
+                f"roots carries one this dimension may consult ({'; '.join(reasons)})"
+                f" — this entry is decided exactly as it was before the "
+                f"ledger existed]")
+    return (" [write ledger — "
+            + "; ".join(f"{k}: BOUND ({v.note})" for k, v in bound.items())
+            + (f"; not bound: {sorted(set(says) - set(bound))}"
+               if len(bound) != len(says) else "")
+            + "]")
+
+
 def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
-    """The verdict for ONE ``required_outputs`` entry, recomputed live."""
+    """The verdict for ONE ``required_outputs`` entry, recomputed live.
+
+    Every ``resolve``/``resolve_anywhere`` call below is passed *step_id*, so
+    each root answers "did THIS STEP write it" whenever it left a write ledger
+    and "does a matching artefact exist here" whenever it did not. The two are
+    told apart in the detail rather than blurred.
+    """
     status = rec.get("status")
 
     if status == "UNPROVEN":
-        hit, rejected = resolve_anywhere(entry)
+        hit, rejected = resolve_anywhere(entry, step_id)
         if hit is not None:
             return EntryVerdict(True, LIVE, (
                 f"recorded UNPROVEN but NOW resolves: {hit.path} "
                 f"({hit.size_bytes} B) in {hit.root!r} — the gap has closed and "
-                f"the waiver must be removed"
+                f"the waiver must be removed" + _ledger_state(step_id, entry)
             ))
         return EntryVerdict(False, LIVE, (
             f"no committed non-empty artefact matches {entry!r} in any of the "
             f"{len(run_roots())} admissible run roots"
-            f"{_rejected_note(rejected)}"
+            f"{_rejected_note(rejected)}{_ledger_state(step_id, entry)}"
         ))
 
     if status == "PRODUCED_LIVE":
@@ -959,15 +1338,16 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
             # the live production was measured in is not here, so this checkout
             # cannot re-run the producer, and a record of somebody else having
             # run it is a claim about the past, not an artefact.
-            hit, rejected = resolve_anywhere(entry)
+            hit, rejected = resolve_anywhere(entry, step_id)
             if hit is not None:
                 return EntryVerdict(True, LIVE, (
                     f"{hit.path} ({hit.size_bytes} B) in {hit.root!r} "
                     f"[recorded base run {rec['base_run']!r} absent here]"
+                    + _ledger_state(step_id, entry)
                 ))
             return EntryVerdict(False, FIXTURE, _unevidenced_detail(
                 entry, rec, f"the recorded base run {rec['base_run']!r}",
-                rejected))
+                rejected) + _ledger_state(step_id, entry))
         ok, detail = produce_live(step_id, entry, rec)
         return EntryVerdict(ok, LIVE, detail)
 
@@ -982,24 +1362,28 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
             ))
         rr = run_roots().get(rec["run"])
         if rr is not None:
-            hit, rejected = resolve(rr.path, entry)
+            hit, rejected = resolve(rr.path, entry, step_id)
             if hit is None:
                 return EntryVerdict(False, LIVE, (
                     f"the recorded run root {rec['run']!r} resolves at {rr.path} "
                     f"but no longer yields a committed non-empty artefact for "
                     f"{entry!r} (recorded: {rec['path']} at {rec['size_bytes']} B)"
                     f"{_rejected_note({rec['run']: rejected})}"
+                    f"{_ledger_state(step_id, entry)}"
                 ))
             return EntryVerdict(True, LIVE,
-                                f"{hit.path} ({hit.size_bytes} B) in {rec['run']!r}")
-        hit, rejected = resolve_anywhere(entry)
+                                f"{hit.path} ({hit.size_bytes} B) in {rec['run']!r}"
+                                + _ledger_state(step_id, entry))
+        hit, rejected = resolve_anywhere(entry, step_id)
         if hit is not None:
             return EntryVerdict(True, LIVE, (
                 f"{hit.path} ({hit.size_bytes} B) in {hit.root!r} "
                 f"[recorded run {rec['run']!r} absent here]"
+                + _ledger_state(step_id, entry)
             ))
         return EntryVerdict(False, FIXTURE, _unevidenced_detail(
-            entry, rec, f"the recorded run root {rec['run']!r}", rejected))
+            entry, rec, f"the recorded run root {rec['run']!r}", rejected)
+            + _ledger_state(step_id, entry))
 
     return EntryVerdict(False, LIVE, f"unrecognised manifest status {status!r}")
 
@@ -1119,6 +1503,13 @@ def test_d3_required_outputs_are_produced(cell):
             f"step is no longer inapplicable and its required_outputs must now "
             f"be measured for real"
         )
+        # DELIBERATELY NOT ledger-bound (no step_id). This probe asks "does
+        # anything at all exist at the declared paths", because an NA that
+        # claims the step never ran must be falsified by an artefact HOWEVER
+        # it got there. Passing step_id here would let a ledger saying "this
+        # step wrote nothing" SUPPRESS the artefact that disproves the NA —
+        # the ledger being used as a way around a rule instead of to sharpen
+        # one, which is the one thing it must never become.
         found = [
             (e, h.path, h.size_bytes)
             for e in F.required_outputs(sid)
@@ -1659,6 +2050,11 @@ def _probe_run_root(prefix: str):
                  "--allow-empty"],
                 cwd=root, check=True, env=env, capture_output=True)
             tracked_under.cache_clear()
+            # The ledger's own admissibility depends on trackedness, so its
+            # memo has to fall with the same commit. Clearing one and not the
+            # other is how a probe silently keeps answering about the previous
+            # commit.
+            write_ledger.cache_clear()
 
         commit()  # give the repo a HEAD, so `git ls-tree HEAD` is meaningful
         yield root, commit
@@ -2449,6 +2845,342 @@ def test_d3_symlinked_artefacts_are_not_counted_as_produced():
         commit("reports/drc.rpt")
         hit, rej = resolve(probe, "reports/drc.rpt")
         assert hit is not None and hit.size_bytes == 4096, (hit, rej)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# THE WRITE LEDGER — controls
+# ──────────────────────────────────────────────────────────────────────
+#: The step and spec the ledger controls below drive. Step 13 declares a FLAT
+#: ``reports/lec.json``, which is what makes it the right subject: a flat
+#: ``reports/`` pattern is exactly the shape ``_glob_first`` serves from its
+#: ``reports/<subdir>/`` fallback, so "a file of that name exists somewhere
+#: under reports/" and "step 13 wrote reports/lec.json" come apart there.
+_LEDGER_PROBE_STEP = "13"
+_LEDGER_PROBE_ENTRY = "reports/lec.json"
+_LEDGER_PROBE_DECOY = "reports/phase3/lec.json"
+
+
+def _ledger_probe_tree(probe: Path) -> None:
+    """A minimal but REAL run tree: runner marker + a provenance log."""
+    (probe / "reports" / "orchestrator").mkdir(parents=True, exist_ok=True)
+    (probe / "provenance.jsonl").write_text(json.dumps({
+        "timestamp": "2026-08-06T00:00:00Z", "tool": "probe_tool",
+        "argv": ["probe_tool"], "inputs": {}, "outputs": {},
+        "exit_code": 0, "duration_s": 1.0,
+    }) + "\n", encoding="utf-8")
+
+
+def _emit_ledger(probe: Path) -> Dict:
+    """Run the REAL emitter over *probe* and return its result dict.
+
+    The ledger under test is never hand-written here. If ``step_write_ledger``
+    changes what it records, these controls change with it or they break —
+    which is the point: a control that asserts against a fixture of the
+    record's shape stops testing the record.
+    """
+    write_ledger.cache_clear()
+    res = _swl.emit(probe)
+    assert res.get("ok"), res
+    return res
+
+
+def test_d3_the_write_ledger_binds_production_to_the_step(monkeypatch):
+    """THE CONTROL for "nothing reads the per-step output folder".
+
+    ``resolve`` takes a PATTERN. ``_glob_first`` answers "does something
+    matching it exist under this root", and for a ``reports/`` pattern it will
+    happily answer YES from ``reports/<subdir>/`` when the declared path itself
+    was never written. That is the substitution this campaign keeps finding: a
+    file that exists standing in for a step that produced one.
+
+    ``step_write_ledger`` records the other half — what the run ACTUALLY
+    wrote, per step — and until now no gate read it
+    (``grep -rl 'write_ledger' programs/*.py flow/*.yaml`` returned only the
+    two programs that WRITE it).
+
+    FORWARD — the run wrote ``reports/phase3/lec.json`` and never wrote step
+    13's declared ``reports/lec.json``. The ledger says so, in its own words
+    (``declared_output_not_produced`` / ``absent``). The pre-fix ``resolve``
+    returns the decoy and the cell reads produced; after, it returns nothing
+    and names the ledger. **This assertion fails against the byte-identical
+    pre-change file.**
+
+    REVERSE A — the SAME probe with the declared path really written and the
+    ledger re-emitted: produced again. A rule that fires on everything is not
+    a rule, and this is what stops "has a ledger" degenerating into "always
+    red".
+
+    REVERSE B — BACKWARD COMPATIBILITY. Delete the ledger, change nothing
+    else: the decoy resolves again, exactly as it did before this change, and
+    the reason is stated in the note rather than left silent. Passes against
+    the pre-change file too, by construction.
+
+    REVERSE C — the ledger is consulted PER STEP. Asked without a step id (the
+    dormancy probe and the waiver-premise guards ask that way on purpose), the
+    same call still resolves the decoy: the ledger sharpens a step's question,
+    it does not censor the project-wide one.
+    """
+    assert _LEDGER_PROBE_ENTRY in F.required_outputs(_LEDGER_PROBE_STEP), (
+        f"step {_LEDGER_PROBE_STEP} no longer declares {_LEDGER_PROBE_ENTRY!r}; "
+        f"this control is stale and must be re-pointed at a flat `reports/` "
+        f"entry the flow actually declares")
+
+    with _probe_run_root("d3_ledger_bind_") as (probe, commit):
+        _ledger_probe_tree(probe)
+        decoy = probe / _LEDGER_PROBE_DECOY
+        decoy.parent.mkdir(parents=True, exist_ok=True)
+        decoy.write_text('{"equivalent": true}\n')
+        commit(_LEDGER_PROBE_DECOY)
+        assert not (probe / _LEDGER_PROBE_ENTRY).exists()
+
+        # Precondition: the flow's OWN resolver DOES serve the decoy for the
+        # declared pattern. Without this the control would prove nothing.
+        assert _GLOB_FIRST(probe, _LEDGER_PROBE_ENTRY) == [_LEDGER_PROBE_DECOY], (
+            "the reports/<subdir>/ fallback no longer serves the decoy, so "
+            "this control no longer exercises the substitution it exists for")
+        hit, _ = resolve(probe, _LEDGER_PROBE_ENTRY)
+        assert hit is not None and hit.path == _LEDGER_PROBE_DECOY, hit
+
+        _emit_ledger(probe)
+        commit(LEDGER_REL)
+
+        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
+        assert say.consulted, say
+        assert say.unwritten is not None, (
+            f"the emitter no longer records step {_LEDGER_PROBE_STEP}'s "
+            f"{_LEDGER_PROBE_ENTRY!r} as never written, so there is nothing "
+            f"for this control to bind to: {say}")
+
+        # ---- FORWARD ------------------------------------------------
+        hit, rej = resolve(probe, _LEDGER_PROBE_ENTRY, _LEDGER_PROBE_STEP)
+        assert hit is None, (
+            f"a file that step {_LEDGER_PROBE_STEP} never wrote was accepted "
+            f"as its produced artefact: {hit}. The run's own write ledger "
+            f"records {_LEDGER_PROBE_ENTRY!r} as "
+            f"{say.unwritten.get('reason')!r}; 'a matching file exists "
+            f"somewhere in the project' is not 'this step produced it'.")
+        assert len(rej.unwritten) == 1 and _LEDGER_PROBE_DECOY in rej.unwritten[0], rej
+        assert "write ledger" in rej.unwritten[0], rej
+        assert rej.empty == () and rej.symlinked == () and rej.untracked == (), (
+            "the ledger refusal must be its own category — 'absent', '0-byte', "
+            "'aliased' and 'this step never wrote it' are different findings: "
+            f"{rej}")
+
+        # ---- REVERSE A: write it for real, re-emit, must go green ----
+        (probe / _LEDGER_PROBE_ENTRY).write_text('{"equivalent": true}\n')
+        commit(_LEDGER_PROBE_ENTRY)
+        _emit_ledger(probe)
+        commit(LEDGER_REL)
+        hit, rej = resolve(probe, _LEDGER_PROBE_ENTRY, _LEDGER_PROBE_STEP)
+        assert hit is not None and hit.path == _LEDGER_PROBE_ENTRY, (
+            f"the step's own ledger records the write and the verdict did not "
+            f"move: {hit} {rej}. A ledger-bound cell must still be able to go "
+            f"green, or it is unfalsifiable in the other direction.")
+
+        # ---- REVERSE B: no ledger at all -> exactly today's behaviour -
+        (probe / _LEDGER_PROBE_ENTRY).unlink()
+        (probe / LEDGER_REL).unlink()
+        commit()
+        subprocess.run(["git", "rm", "-q", "--cached", "--",
+                        _LEDGER_PROBE_ENTRY, LEDGER_REL],
+                       cwd=probe, check=True, capture_output=True,
+                       env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
+                            "GIT_CONFIG_SYSTEM": os.devnull})
+        commit()
+        write_ledger.cache_clear()
+        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
+        assert not say.consulted and "no " + LEDGER_REL in say.note, say
+        hit, rej = resolve(probe, _LEDGER_PROBE_ENTRY, _LEDGER_PROBE_STEP)
+        assert hit is not None and hit.path == _LEDGER_PROBE_DECOY, (
+            f"a run that left NO write ledger must be decided exactly as it "
+            f"was before this change; it was not: {hit} {rej}")
+
+        # ---- REVERSE C: no step id -> the project-wide question ------
+        _emit_ledger(probe)
+        commit(LEDGER_REL)
+        hit, _ = resolve(probe, _LEDGER_PROBE_ENTRY)
+        assert hit is not None and hit.path == _LEDGER_PROBE_DECOY, (
+            "asked WITHOUT a step id the resolver must still answer the "
+            "project-wide question — the NA-dormancy probe and the waiver "
+            "premises depend on it, and a ledger that could suppress an "
+            "artefact there would be a way around a rule, not a sharpening "
+            f"of one: {hit}")
+        _probe_only(monkeypatch, "probe", probe)   # keep run_roots() honest
+
+
+def test_d3_a_write_ledger_the_commit_does_not_carry_is_not_consulted():
+    """An untracked ledger may not decide a cell — and must SAY so.
+
+    The ledger can only make a cell redder. An untracked one would therefore
+    let ``git clean -xdf`` change a verdict and let two checkouts of one
+    commit disagree — #527's defect arriving from the opposite direction, and
+    the reason this module refuses an untracked ARTEFACT too.
+
+    Both directions are asserted: untracked -> not consulted and the decoy
+    still resolves; committed -> consulted and the decoy is refused. So the
+    rule is not "ledgers never bind", it is "a ledger binds once the
+    repository carries it".
+    """
+    with _probe_run_root("d3_ledger_track_") as (probe, commit):
+        _ledger_probe_tree(probe)
+        decoy = probe / _LEDGER_PROBE_DECOY
+        decoy.parent.mkdir(parents=True, exist_ok=True)
+        decoy.write_text('{"equivalent": true}\n')
+        commit(_LEDGER_PROBE_DECOY)
+        _emit_ledger(probe)          # written, NOT committed
+
+        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
+        assert not say.consulted, say
+        assert "NOT tracked at HEAD" in say.note, say
+        hit, _ = resolve(probe, _LEDGER_PROBE_ENTRY, _LEDGER_PROBE_STEP)
+        assert hit is not None, (
+            "an UNTRACKED ledger changed a verdict: the colour of this cell "
+            "would then depend on whether somebody had run step_write_ledger "
+            "in their working tree")
+
+        commit(LEDGER_REL)
+        write_ledger.cache_clear()
+        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
+        assert say.consulted, say
+        hit, rej = resolve(probe, _LEDGER_PROBE_ENTRY, _LEDGER_PROBE_STEP)
+        assert hit is None and rej.unwritten, (hit, rej)
+
+
+def test_d3_the_write_ledger_can_only_subtract_evidence():
+    """The ledger must never become a way around the evidence rules.
+
+    A ledger is a claim by the run about itself. If a cell could go green
+    because a ledger SAYS a step wrote something, the zero-byte rule, the
+    symlink rule and the trackedness rule would all be bypassable by writing a
+    JSON file. So the ledger is consulted only after those rules have already
+    refused, and it is asserted here on all three at once: for each, the
+    ledger records the path as PRODUCED (the emitter's own residual is empty
+    for that spec) and ``resolve`` still refuses, under the ORIGINAL category
+    rather than a ledger one.
+    """
+    entry = _LEDGER_PROBE_ENTRY
+    for label, make in (
+        ("zero_byte", lambda p: p.write_text("")),
+        ("symlink", lambda p: p.symlink_to(Path("..") / "elsewhere" / "src.json")),
+        ("untracked", lambda p: p.write_text('{"equivalent": true}\n')),
+    ):
+        with _probe_run_root(f"d3_ledger_sub_{label}_") as (probe, commit):
+            _ledger_probe_tree(probe)
+            (probe / "elsewhere").mkdir()
+            (probe / "elsewhere" / "src.json").write_text('{"x": 1}\n')
+            target = probe / entry
+            target.parent.mkdir(parents=True, exist_ok=True)
+            make(target)
+            if label != "untracked":
+                commit(entry, "elsewhere/src.json")
+            else:
+                commit("elsewhere/src.json")
+            _emit_ledger(probe)
+            commit(LEDGER_REL)
+
+            say = ledger_says(probe, _LEDGER_PROBE_STEP, entry)
+            assert say.consulted, say
+            if label == "untracked":
+                # The ledger DOES record this one as produced — it has no
+                # notion of trackedness. That is exactly why the rule below
+                # has to run first.
+                assert entry in say.produced_rels, say
+            hit, rej = resolve(probe, entry, _LEDGER_PROBE_STEP)
+            assert hit is None, (
+                f"the {label} rule was bypassed once a write ledger recorded "
+                f"the path: {hit}. The ledger answers 'did this step write "
+                f"it', never 'is this evidence'.")
+            assert rej.unattributed == (), (
+                f"the {label} case must be refused by its OWN rule, not "
+                f"re-labelled as an attribution problem: {rej}")
+
+
+def test_d3_an_artefact_the_run_never_wrote_is_not_attributed_to_the_step():
+    """The second half of the binding: a file that appeared AFTER the run.
+
+    The ledger records what the run wrote. An artefact dropped at a declared
+    path afterwards satisfies every other rule in this module — it is a real,
+    non-empty, committed file at exactly the declared path — and it is still
+    not something the step produced. Before the ledger there was no way to
+    tell the two apart; ``Rejected.unattributed`` is where they separate.
+
+    The reverse case is the same probe with the ledger RE-EMITTED after the
+    file landed: now the run's record does cover it and it counts again. So
+    the rule refuses an unattributed path, not a late one.
+    """
+    entry = _LEDGER_PROBE_ENTRY
+    with _probe_run_root("d3_ledger_attr_") as (probe, commit):
+        _ledger_probe_tree(probe)
+        target = probe / entry
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('{"equivalent": true}\n')
+        commit(entry)
+        _emit_ledger(probe)
+        commit(LEDGER_REL)
+        hit, rej = resolve(probe, entry, _LEDGER_PROBE_STEP)
+        assert hit is not None, (hit, rej)   # baseline: the run wrote it
+
+        # Now REMOVE it from the ledger's world by rewriting the ledger from a
+        # tree that does not have it, then put the file back. The record is
+        # the emitter's own, taken from a real observation — only the order of
+        # events is arranged.
+        target.unlink()
+        _emit_ledger(probe)
+        target.write_text('{"equivalent": true}\n')
+        commit(entry, LEDGER_REL)
+        write_ledger.cache_clear()
+
+        hit, rej = resolve(probe, entry, _LEDGER_PROBE_STEP)
+        assert hit is None and rej.unwritten, (
+            f"a file the run's own ledger does not record this step as having "
+            f"written was still credited to it: {hit} {rej}")
+
+        _emit_ledger(probe)
+        commit(LEDGER_REL)
+        hit, rej = resolve(probe, entry, _LEDGER_PROBE_STEP)
+        assert hit is not None, (
+            f"re-emitting the ledger over a tree that HAS the artefact must "
+            f"make it count again: {hit} {rej}")
+
+
+#: Which admissible run roots carry a write ledger this dimension will consult.
+#: MEASURED 2026-08-06 and EMPTY: `step_write_ledger` landed the same day and
+#: no committed run tree has been re-published since, so every one of the 63
+#: cells is decided exactly as it was before the binding — degraded on purpose,
+#: and named here rather than left silent. The pin is what makes the first
+#: published ledger a loud, named event: the cell counts in the docstring were
+#: measured WITHOUT one, and a root that starts carrying one must be
+#: re-measured, not discovered later.
+LEDGER_BOUND_ROOTS: Tuple[str, ...] = ()
+
+
+def test_d3_the_write_ledger_population_is_named_root_by_root():
+    """Backward compatibility, stated rather than assumed.
+
+    "A run with no ledger keeps today's behaviour" is only honest if a reader
+    can see WHICH runs those are and WHY. This asserts the pinned population
+    and, for every root outside it, that :func:`write_ledger` returns a
+    sentence naming the reason — no ledger, untracked, wrong schema, no rows.
+    """
+    bound, why = [], {}
+    for label, rr in run_roots().items():
+        led, note = write_ledger(rr.path)
+        why[label] = note
+        if led is not None:
+            bound.append(label)
+    assert tuple(sorted(bound)) == tuple(sorted(LEDGER_BOUND_ROOTS)), (
+        f"the set of run roots whose write ledger decides this dimension "
+        f"changed.\n  measured: {sorted(bound)}\n"
+        f"  pinned:   {sorted(LEDGER_BOUND_ROOTS)}\n"
+        f"  per root: {json.dumps(why, indent=2)}\n"
+        f"Every cell count in this module's docstring was measured against "
+        f"the pinned set. Re-measure them, then move the pin — a population "
+        f"that grows quietly is how a dimension stops describing what it "
+        f"measures.")
+    for label, note in why.items():
+        assert note and note.strip(), (
+            f"run root {label!r} has no stated ledger reason; a degrade to "
+            f"the pre-ledger behaviour must never be silent")
 
 
 # ══════════════════════════════════════════════════════════════════════

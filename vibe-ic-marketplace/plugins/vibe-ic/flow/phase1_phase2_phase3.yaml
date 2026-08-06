@@ -124,6 +124,24 @@ steps:
   - id: D1
     name: "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)"
     stage: stage_phase1
+    # ── required_inputs: the DATA half of the step contract ──────────────
+    # `blocks_on` is an ORDERING edge and says nothing about data; this says
+    # what the step READS. `from:` names the producing step and `path:` is
+    # COPIED VERBATIM from that step's own `required_outputs`, so a
+    # mis-attribution cannot land silently — `step_required_inputs_check.py`
+    # exits 2 when a declared input is not one of the named step's declared
+    # outputs. `outputs: all` = every declared output of that step.
+    # `from: external` = not produced inside the flow (user prompt, PDK,
+    # bench hardware); `check: none` marks one with no project-relative path
+    # to probe, declared so it is VISIBLE rather than silently absent.
+    # A step with NO required_inputs is UNDECLARED, never "has none" — see
+    # docs and the check's --json `undeclared` list.
+    required_inputs:
+      - from: external
+        path: "phase1/input_prompt/* OR phase1/input_doc/*"
+        what: >-
+          the user's natural-language prompt (Path B) or the supplied
+          datasheets / specs (Path A)
     skills:
       - datasheet-gen
       - frs-gen
@@ -385,6 +403,9 @@ steps:
   - id: 1
     name: "Spec-to-RTL"
     stage: stage1
+    required_inputs:
+      - from: D1
+        outputs: all
     # AUDIT NOTE (by-design, not a gap): this gate is files_exist-only ON PURPOSE.
     # spec->RTL is the irreducible AI authoring step (open-benchmark-methodology
     # §1: NL->RTL needs an LLM; there is no deterministic spec->RTL checker). The
@@ -421,6 +442,9 @@ steps:
   - id: 2
     name: "🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)"
     stage: stage1
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
     closed_loop:
       fallback_to: 1
       trigger: "Lint error/warning above threshold"
@@ -546,6 +570,11 @@ steps:
   - id: 3
     name: "🔁 CDC / RDC check"
     stage: stage1
+    # prose credits Step 2, but Step 2 declares no RTL output — the path it
+    #  names is Step 1's.
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
     closed_loop:
       fallback_to: 1
       trigger: "CDC/RDC violation requires RTL change"
@@ -580,6 +609,13 @@ steps:
   - id: 4
     name: "🔁 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)"
     stage: stage1
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+      - from: D1
+        path: "phase1/generated_docs/L10_TEST_CASES.json"
+      - from: D1
+        path: "phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"
     closed_loop:
       fallback_to: 1
       trigger: "Test fail traceable to RTL"
@@ -768,6 +804,9 @@ steps:
   - id: 5
     name: "🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)"
     stage: stage1
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
     closed_loop:
       fallback_to: 1
       trigger: "SVA assertion fail"
@@ -839,6 +878,9 @@ steps:
   - id: 6
     name: "FPGA early prototype + verification report audit"
     stage: stage1
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
     skills: [fpga-test-harness]
     mcp_tools: [eda_synth]
     programs:
@@ -963,6 +1005,11 @@ steps:
   - id: 7
     name: "Constraint setup (SDC + PVT matrix)"
     stage: stage2
+    required_inputs:
+      - from: D1
+        path: "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
     skills: [constraint-gen]
     required_outputs:
       - "phase2/stage2/constraints/*.sdc"
@@ -1007,6 +1054,13 @@ steps:
   - id: 8
     name: "🔁 SDC validation"
     stage: stage2
+    required_inputs:
+      - from: 7
+        path: "phase2/stage2/constraints/*.sdc"
+      - from: 7
+        path: "phase2/stage2/constraints/pvt_matrix.json"
+      - from: D1
+        path: "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
     closed_loop:
       fallback_to: 7
       trigger: "SDC syntax/semantic error"
@@ -1073,6 +1127,12 @@ steps:
   - id: 9
     name: "Synthesis (Yosys → mapped netlist)"
     stage: stage2
+    # prose says lint/sim/formal-clean RTL; the RTL artefact is Step 1's.
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+      - from: 7
+        path: "phase2/stage2/constraints/*.sdc"
     skills: [synth-doctor]
     mcp_tools: [eda_synth]
     programs:
@@ -1121,6 +1181,13 @@ steps:
   - id: 10
     name: "🔁 Pre-layout STA (multi-corner)"
     stage: stage2
+    required_inputs:
+      - from: 9
+        path: "phase2/stage2/synth/netlist.v"
+      - from: 7
+        path: "phase2/stage2/constraints/*.sdc"
+      - from: 7
+        path: "phase2/stage2/constraints/pvt_matrix.json"
     closed_loop:
       fallback_to: 7
       trigger: "Setup violation; constraint or phase2/stage2/synth opt re-do"
@@ -1227,6 +1294,9 @@ steps:
   - id: 11
     name: "DFT insertion (scan chain + ATPG + at-speed + BSDL)"
     stage: stage2
+    required_inputs:
+      - from: 9
+        path: "phase2/stage2/synth/netlist.v"
     skills: [dft-insert, atpg]
     mcp_tools: [eda_dft]
     programs:
@@ -1351,6 +1421,12 @@ steps:
   - id: FS1
     name: "ISO-26262 FMEDA diagnostic-coverage (fault-injection; safety designs only)"
     stage: stage2
+    # no flow.html prose exists for FS1. Resolved instead from this step's
+    #  OWN gate command, which names its input verbatim:
+    #  `fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl`.
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
     condition:
       files_exist: ["phase2/stage1/rtl"]
     programs:
@@ -1491,6 +1567,9 @@ steps:
   - id: 12
     name: "Post-DFT optimization (resynth / buffering)"
     stage: stage2
+    required_inputs:
+      - from: 11
+        path: "phase2/stage2/dft/scan_netlist.v"
     # AUDIT NOTE (by-design, not a gap): files_exist-only ON PURPOSE. The post-DFT
     # netlist's correctness is verified at Step 13 Equivalence check
     # (lec_equivalence_check: RTL == post-DFT netlist) — a broken/non-equivalent
@@ -1505,6 +1584,11 @@ steps:
   - id: 13
     name: "🔁 Equivalence check (RTL ≡ post-DFT netlist)"
     stage: stage2
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+      - from: 12
+        path: "phase2/stage2/synth/post_dft_netlist.v"
     closed_loop:
       fallback_to: 9
       trigger: "Non-equivalence: phase2/stage2/synth or DFT changed netlist semantics"
@@ -1527,6 +1611,11 @@ steps:
   - id: A1
     name: "Analog Spec Extraction"
     stage: stage_analog
+    required_inputs:
+      - from: D1
+        path: "phase1/generated_docs/L1_DATASHEET.json"
+      - from: D1
+        path: "phase1/generated_docs/L5_ADI_SPEC.json"
     skills: [analog-spec-extract]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
@@ -1552,6 +1641,9 @@ steps:
   - id: A2
     name: "Analog Topology Selection"
     stage: stage_analog
+    required_inputs:
+      - from: A1
+        path: "phase3/analog/*/spec.json OR phase1/analog/*/spec.json"
     skills: [analog-topology-select]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
@@ -1568,6 +1660,14 @@ steps:
   - id: A3
     name: "Analog Netlist Generation"
     stage: stage_analog
+    required_inputs:
+      - from: A2
+        path: "phase3/analog/*/topology.md OR phase2/analog/*/topology.md"
+      - from: external
+        check: none
+        what: >-
+          the PDK device models / tech decks (PDK_ROOT — outside the project
+          tree)
     skills: [analog-netlist-gen]
     mcp_tools: [eda_xschem_netlist]
     condition:
@@ -1593,6 +1693,11 @@ steps:
   - id: A4
     name: "Analog Corner Sweep (PVT)"
     stage: stage_analog
+    required_inputs:
+      - from: A3
+        path: "phase3/analog/*/*.sp OR phase2/analog/*/*.sp"
+      - from: A1
+        path: "phase3/analog/*/spec.json OR phase1/analog/*/spec.json"
     skills: [analog-sizing-loop]
     mcp_tools: [eda_spice_corner]
     condition:
@@ -1643,6 +1748,11 @@ steps:
   - id: A5
     name: "Analog Layout"
     stage: stage_analog
+    # prose credits A4, but A4 declares corner_results.json — the netlist
+    #  artefact is A3's.
+    required_inputs:
+      - from: A3
+        path: "phase3/analog/*/*.sp OR phase2/analog/*/*.sp"
     skills: [analog-layout]
     mcp_tools: [eda_analog_layout]
     condition:
@@ -1715,6 +1825,9 @@ steps:
   - id: A6
     name: "Analog Physical Verification (per-block DRC + LVS before merge)"
     stage: stage_analog
+    required_inputs:
+      - from: A5
+        path: "phase3/analog/*/layout.mag OR phase3/analog/*/*.gds"
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
     skills: [drc-fix, lvs-triage]
@@ -1747,6 +1860,11 @@ steps:
   - id: A7
     name: "🔁 Post-Layout Resimulation"
     stage: stage_analog
+    # prose credits A5 / A6; A6 declares the clean FLAGS, the layout
+    #  artefact is A5's.
+    required_inputs:
+      - from: A5
+        path: "phase3/analog/*/layout.mag OR phase3/analog/*/*.gds"
     closed_loop:
       fallback_to: A3
       trigger: "Performance degradation > 10% post-extraction"
@@ -1952,6 +2070,9 @@ steps:
   - id: 14
     name: "🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)"
     stage: stage2
+    required_inputs:
+      - from: 9
+        path: "phase2/stage2/synth/netlist.v"
     closed_loop:
       fallback_to: 9
       trigger: "Yosys phase2/stage2/synth script missing -sv/-flatten/hilomap or unresolved zero_ nets"
@@ -1994,6 +2115,11 @@ steps:
   - id: 15
     name: "Floorplan + PDN"
     stage: stage3
+    required_inputs:
+      - from: 12
+        path: "phase2/stage2/synth/post_dft_netlist.v"
+      - from: 7
+        path: "phase2/stage2/constraints/*.sdc"
     mcp_tools: [eda_pnr]
     programs:
       # Wave 82 — `phase3_backend_step` is the per-step dispatcher
@@ -2023,6 +2149,11 @@ steps:
   - id: 16
     name: "Clock planning"
     stage: stage3
+    required_inputs:
+      - from: 15
+        path: "phase3/stage3/pnr/floorplan.def"
+      - from: 7
+        path: "phase2/stage2/constraints/*.sdc"
     skills: [cts-plan]
     programs:
       - clock_plan_check
@@ -2044,6 +2175,11 @@ steps:
   - id: 17
     name: "Placement (global + detailed)"
     stage: stage3
+    required_inputs:
+      - from: 15
+        path: "phase3/stage3/pnr/floorplan.def"
+      - from: 15
+        path: "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
     skills: [placement-optimize]
     programs:
       - placement_legality_check
@@ -2144,6 +2280,9 @@ steps:
   - id: 18
     name: "Spare-cell + ECO-prep insertion (Design-for-ECO)"
     stage: stage3
+    required_inputs:
+      - from: 17
+        path: "phase3/stage3/pnr/placed.def"
     mcp_tools: [eda_pnr]
     programs:
       - spare_cell_coverage_check
@@ -2204,6 +2343,11 @@ steps:
   - id: 19
     name: "CTS (Clock Tree Synthesis)"
     stage: stage3
+    required_inputs:
+      - from: 17
+        path: "phase3/stage3/pnr/placed.def"
+      - from: 16
+        path: "phase3/stage3/cts/clock_plan.json"
     mcp_tools: [eda_pnr]
     programs:
       - cts_quality_check
@@ -2227,6 +2371,9 @@ steps:
   - id: 20
     name: "🔁 Post-CTS hold fixing"
     stage: stage3
+    required_inputs:
+      - from: 19
+        path: "phase3/stage3/pnr/post_cts.def"
     closed_loop:
       fallback_to: 19
       trigger: "Hold violation; insert delay cell or re-CTS"
@@ -2319,6 +2466,9 @@ steps:
   - id: 21
     name: "Routing (global + detailed)"
     stage: stage3
+    required_inputs:
+      - from: 20
+        path: "phase3/stage3/pnr/post_hold.def"
     mcp_tools: [eda_pnr]
     required_outputs:
       - "phase3/stage3/pnr/routed.def"
@@ -2407,6 +2557,9 @@ steps:
   - id: 22
     name: "Parasitic Extraction (RC → SPEF)"
     stage: stage3
+    required_inputs:
+      - from: 21
+        path: "phase3/stage3/pnr/routed.def"
     mcp_tools: [eda_extraction]
     programs:
       - spef_extraction_check
@@ -2548,6 +2701,13 @@ steps:
   - id: 23
     name: "🔁 Post-route STA (multi-corner multi-mode sign-off)"
     stage: stage3
+    required_inputs:
+      - from: 22
+        path: "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
+      - from: 7
+        path: "phase2/stage2/constraints/*.sdc"
+      - from: 7
+        path: "phase2/stage2/constraints/pvt_matrix.json"
     closed_loop:
       fallback_to: 32
       trigger: "Setup/Hold violation; ECO loop required"
@@ -2738,6 +2898,11 @@ steps:
   - id: 24
     name: "🔁 IR Drop (static + dynamic)"
     stage: stage3
+    required_inputs:
+      - from: 21
+        path: "phase3/stage3/pnr/routed.def"
+      - from: 15
+        path: "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
     closed_loop:
       fallback_to: 15
       trigger: "IR drop > 5%; PDN strengthen"
@@ -2778,6 +2943,11 @@ steps:
   - id: 25
     name: "🔁 EM check (electromigration lifetime)"
     stage: stage3
+    required_inputs:
+      - from: 21
+        path: "phase3/stage3/pnr/routed.def"
+      - from: 24
+        outputs: all
     closed_loop:
       fallback_to: 21
       trigger: "EM violation; widen wire or re-route"
@@ -2834,6 +3004,9 @@ steps:
   - id: 26
     name: "🔁 Antenna check (gate-oxide protection)"
     stage: stage3
+    required_inputs:
+      - from: 21
+        path: "phase3/stage3/pnr/routed.def"
     closed_loop:
       fallback_to: 21
       trigger: "Antenna violation; insert diode or re-route"
@@ -2904,6 +3077,9 @@ steps:
   - id: 27
     name: "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)"
     stage: stage3
+    required_inputs:
+      - from: 22
+        path: "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
     closed_loop:
       fallback_to: 21
       trigger: "Crosstalk/noise above limit; shielding/spacing"
@@ -3018,6 +3194,9 @@ steps:
   - id: 28
     name: "🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain)"
     stage: stage3
+    required_inputs:
+      - from: 21
+        path: "phase3/stage3/pnr/routed.def"
     closed_loop:
       fallback_to: 15
       trigger: "ESD ring/topology gap, well-tap gap, or unprotected cross-domain crossing"
@@ -3080,6 +3259,9 @@ steps:
   - id: 29
     name: "Post-Layout Gate-Level Simulation (Post-Sim + SDF)"
     stage: stage3
+    required_inputs:
+      - from: 12
+        path: "phase2/stage2/synth/post_dft_netlist.v"
     mcp_tools: [eda_simulate]
     programs:
       - post_layout_sim_check
@@ -3102,6 +3284,12 @@ steps:
   - id: 30
     name: "Post-Layout SPICE Verification (critical-path correlation + analog)"
     stage: stage3
+    required_inputs:
+      - from: external
+        check: none
+        what: >-
+          the PDK device models / tech decks (PDK_ROOT — outside the project
+          tree)
     skills: [ams-sim]
     mcp_tools: [eda_spice]
     programs:
@@ -3119,6 +3307,9 @@ steps:
   - id: 31
     name: "🔁 Physical Verification (DRC + LVS + ERC + Density)"
     stage: stage3
+    required_inputs:
+      - from: 21
+        path: "phase3/stage3/pnr/routed.def"
     closed_loop:
       fallback_to: 32
       trigger: "DRC/LVS/ERC fail; ECO"
@@ -3458,6 +3649,9 @@ steps:
   - id: 33
     name: "Power analysis (pre/post-layout)"
     stage: stage4
+    required_inputs:
+      - from: 22
+        path: "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
     skills: [power-analysis]
     required_outputs:
       - "reports/phase3/power.rpt"
@@ -3494,6 +3688,11 @@ steps:
   - id: 34
     name: "Metal Fill (ECO-aware density fill insertion)"
     stage: stage4
+    required_inputs:
+      - from: 21
+        path: "phase3/stage3/pnr/routed.def"
+      - from: 18
+        path: "phase3/stage3/pnr/spare_cells.json"
     mcp_tools: [eda_pnr]
     programs:
       - metal_fill_density_check
@@ -3556,6 +3755,9 @@ steps:
   - id: 35
     name: "DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure)"
     stage: stage4
+    required_inputs:
+      - from: 34
+        outputs: all
     programs:
       - dfm_screen_check
     required_outputs:
@@ -3650,6 +3852,9 @@ steps:
   - id: 37
     name: "GDSII output (only if Step 31 PV fully clean)"
     stage: stage4
+    required_inputs:
+      - from: 34
+        path: "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done"
     mcp_tools: [eda_gds]
     required_outputs:
       - "phase3/stage4/gds/*.gds"
@@ -3712,6 +3917,9 @@ steps:
   - id: 38
     name: "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)"
     stage: stage4
+    required_inputs:
+      - from: 37
+        path: "phase3/stage4/gds/*.gds"
     skills: [tapeout-checklist]
     programs:
       - foundry_handoff_package_check
@@ -3745,6 +3953,12 @@ steps:
   - id: 39
     name: "FPGA final sign-off (recompile + on-board test)"
     stage: stage4
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+      - from: external
+        check: none
+        what: "a physical FPGA board on the bench"
     skills: [fpga-test-harness, fpga-signaltap]
     programs:
       # Wave 82 — `bringup_plan_gen` emits the bring-up plan from
@@ -3856,6 +4070,11 @@ steps:
   - id: M1
     name: "Mixed-Signal Top-Level Integration (A+D GDS merge + macro placement)"
     stage: stage_mixed_signal
+    required_inputs:
+      - from: 37
+        path: "phase3/stage4/gds/*.gds"
+      - from: A8
+        outputs: all
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
     skills: [analog-flow-orchestrate, flow-orchestrate]
@@ -3925,6 +4144,9 @@ steps:
   - id: M2
     name: "Mixed-Signal Power Domain + Level Shifter / Isolation Verification"
     stage: stage_mixed_signal
+    required_inputs:
+      - from: M1
+        path: "phase3/mixed_signal/top_merged.gds"
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
     skills: [ir-drop-triage]
@@ -3983,6 +4205,9 @@ steps:
   - id: M3
     name: "Mixed-Signal Verification (AMS co-sim + RNM + interface signal integrity)"
     stage: stage_mixed_signal
+    required_inputs:
+      - from: M1
+        path: "phase3/mixed_signal/top_merged.gds"
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
     skills: [mixed-signal-cosim, ams-sim]
@@ -4001,6 +4226,11 @@ steps:
   - id: M4
     name: "Mixed-Signal Sign-Off (top-level PV + final verdict)"
     stage: stage_mixed_signal
+    # prose says "the merged, co-sim-verified top (M1-M3)"; the only named
+    #  artefact is M1's merged top.
+    required_inputs:
+      - from: M1
+        path: "phase3/mixed_signal/top_merged.gds"
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
     skills: [tapeout-checklist]
@@ -4016,6 +4246,9 @@ steps:
   - id: 40
     name: "Fabrication (foundry mask-set + wafer fab — external)"
     stage: stage5_manufacturing
+    required_inputs:
+      - from: 38
+        outputs: all
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
     programs:
@@ -4034,6 +4267,9 @@ steps:
   - id: 41
     name: "Wafer Sort / Probe Test (ATE + probe card)"
     stage: stage5_manufacturing
+    required_inputs:
+      - from: 40
+        path: "phase3/stage5_manufacturing/wafer_lot_received.json"
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
     programs:
@@ -4048,6 +4284,9 @@ steps:
   - id: 42
     name: "Packaging (assembly: wirebond / FC-CSP / WLCSP)"
     stage: stage5_manufacturing
+    required_inputs:
+      - from: 41
+        outputs: all
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
     programs:
@@ -4061,6 +4300,9 @@ steps:
   - id: 43
     name: "Final Test (ATE: functional + parametric + burn-in)"
     stage: stage5_manufacturing
+    required_inputs:
+      - from: 42
+        path: "phase3/stage5_manufacturing/packaging_log.json"
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
     programs:
@@ -4089,6 +4331,9 @@ steps:
   - id: 44
     name: "Reliability qualification (HTOL / FIT attestation)"
     stage: stage5_manufacturing
+    required_inputs:
+      - from: 43
+        outputs: all
     condition:
       # vibe-ic#220 — scope on the SILICON INTAKE declaration, not on this
       # step's own output.
@@ -4140,6 +4385,9 @@ steps:
   - id: P0
     name: "Structural-RTL pre-flight (chip-AGNOSTIC structural gates)"
     stage: stage1
+    required_inputs:
+      - from: 1
+        path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
     notes: |
       Synthetic preflight stage; the verdict is emitted directly by
       flow_compliance_check.py's `_run_structural_rtl_gates(...)` and

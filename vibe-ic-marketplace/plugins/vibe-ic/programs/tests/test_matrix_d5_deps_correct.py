@@ -121,7 +121,7 @@ every one of them per-step falsifiable:
   D5-EDGE-UNRESOLVED   every ``blocks_on`` entry names a declared step, and does
                        so with the SAME RAW TYPE. ``flow_compliance_check``'s
                        cascade attribution keys ``parents_of`` on the raw id
-                       (flow_compliance_check.py:6567-6575), so
+                       (flow_compliance_check.py:6965-6973), so
                        ``blocks_on: ["9"]`` against ``id: 9`` resolves nowhere
                        and silently drops the edge, while
                        ``flow_step_execution_coverage_check.load_blocks_on``
@@ -130,9 +130,9 @@ every one of them per-step falsifiable:
   D5-DUP-EDGE          no ``blocks_on`` list repeats a parent.
   D5-FORWARD-EDGE      every parent is DECLARED EARLIER in the yaml. The flow is
                        consumed in canonical declaration order
-                       (flow_compliance_check.py:7046-7055) and #503 cascade
+                       (flow_compliance_check.py:7444-7453) and #503 cascade
                        attribution takes the first FAIL per track walking that
-                       same order (flow_compliance_check.py:6672-6690), so a
+                       same order (flow_compliance_check.py:7070-7088), so a
                        parent declared after its child can never cut its child's
                        cascade.
   D5-CYCLE             the step is not reachable from itself over ``blocks_on``.
@@ -540,7 +540,7 @@ def d5_problems(step_id) -> List[str]:
             hint = (
                 f" — a step {norm!r} exists but is declared as "
                 f"{type(F.step_by_id(norm)['id']).__name__}, not "
-                f"{type(raw).__name__}; flow_compliance_check.py:6567-6575 keys "
+                f"{type(raw).__name__}; flow_compliance_check.py:6965-6973 keys "
                 f"the cascade graph on the RAW id, so this edge resolves to "
                 f"nothing there"
                 if F.has_step(norm)
@@ -572,9 +572,9 @@ def d5_problems(step_id) -> List[str]:
                 f"D5-FORWARD-EDGE: step {sid} (yaml declaration index "
                 f"{order[sid]}) blocks_on {parent!r}, which is declared LATER "
                 f"at index {order[parent]}; the flow is evaluated in canonical "
-                f"declaration order (flow_compliance_check.py:7046-7055) and "
+                f"declaration order (flow_compliance_check.py:7444-7453) and "
                 f"#503 cascade attribution takes the first FAIL per track in "
-                f"that same order (flow_compliance_check.py:6672-6690), so "
+                f"that same order (flow_compliance_check.py:7070-7088), so "
                 f"{parent!r} can never cut {sid}'s cascade"
             )
 

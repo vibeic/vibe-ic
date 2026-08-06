@@ -627,7 +627,7 @@ def test_waiver_validator_actually_rejects_a_placeholder():
 #: would go red the next time somebody edits above the line — which is the
 #: defect it exists to detect, not a defect in the mechanism, and it would
 #: teach the next reader that the check is flaky. (Measured the hard way: this
-#: test hard-coded `flow_compliance_check.py:1844` and reddened within the
+#: test hard-coded `flow_compliance_check.py:2242` and reddened within the
 #: hour when a sibling agent edited that file.) The one place a literal line
 #: number is still correct is the registry itself, and the docstring example
 #: the probe above pins.

@@ -1673,6 +1673,27 @@ class StepResult:
     #   {"name": str, "verdict": one of P0_GATE_VERDICTS,
     #    "message": str, "evidence": dict}
     gate_records: Optional[List[Dict[str, Any]]] = None
+    # WHICH QUESTION THIS STEP'S `required_outputs` VERDICT ANSWERS.
+    #
+    # Until this field existed, a `required_outputs` PASS meant only "a file
+    # matching the glob exists somewhere under the project" and was printed
+    # identically whether or not anything tied that file to this step. This
+    # says which of the two it is, per step:
+    #
+    #   {"mode": "step_attributed" | "project_glob" | "mixed",
+    #    "n_specs": int, "n_step_attributed": int, "n_project_glob": int,
+    #    "source": "step_folder" | "run_ledger" | None,
+    #    "notes": [str, ...]}
+    #
+    # `None` means the step declares no `required_outputs` — there was no
+    # resolution to attribute, which is a third state and not a degraded one.
+    # `project_glob` is the BACKWARD-COMPATIBLE path and is never silent: the
+    # `notes` say why (`no_steps_tree` for a published cell or a phase-driven
+    # run, `no_step_record`, a named resolver disagreement), and a PASS-tier
+    # step additionally carries a line in `reasons` so a reader of the TEXT
+    # report can tell a step-attributed PASS from a project-wide one without
+    # opening the JSON.
+    output_binding: Optional[Dict[str, Any]] = None
 
 
 # reports/ subdirs to also probe when a yaml-pattern starts with `reports/`.
@@ -1823,6 +1844,398 @@ def _glob_first(project: Path, pattern: str) -> List[str]:
                 except Exception:
                     pass
     return [str(m.relative_to(project)) for m in matches]
+
+
+# ── STEP-ATTRIBUTED OUTPUT RESOLUTION ───────────────────────────────────────
+#
+# `_glob_first` answers "does a file matching this glob exist SOMEWHERE under
+# the project". `check_step` then reads that answer as "did THIS step produce
+# its declared output". Those are two different questions and the report has
+# never distinguished them: every `required_outputs` PASS in the 63xN matrix
+# looks the same whether the artefact sits where this step writes it or merely
+# somewhere a project-wide glob could reach.
+#
+# `step_output_collector.materialize()` builds `steps/<phase>/<stage>/
+# <id>_<slug>/` per step, and `step_write_ledger` writes the OBSERVATION half
+# beside it (`written.json`, plus the run-level `reports/write_ledger.json`).
+# Until this change NOTHING read either of them —
+#   grep -rl 'write_ledger' programs/*.py flow/*.yaml
+# returned only the two programs that WRITE it. This is the consumer.
+#
+# WHICH FILE IN THE STEP FOLDER IS THE SOURCE, AND WHY NOT THE OTHER ONE
+# ---------------------------------------------------------------------
+# The folder holds two files and only one of them is evidence.
+#
+#   outputs.json  is built from `required_outputs` via
+#                 flow_dashboard_data._resolve_spec. It is a RESTATEMENT of
+#                 the declaration; reading it to check the declaration is
+#                 reading a cache of the question. It also LIES on a real run:
+#                 on /home/reyerchu/_car15_evidence (a converged run,
+#                 phase23_completion_audit = PASS_WITH_WAIVERS) the step
+#                 folders record 90 outputs, and 7 of them — steps 15, 17, 19,
+#                 20, 21, 22 and 34, every one of those folders carrying
+#                 "status": "pass" — name a `rel` that does not exist in the
+#                 run directory at all (floorplan.def, placed.def,
+#                 post_cts.def, post_hold.def, routed.def,
+#                 user_project_wrapper.spef, filled.def). Trusting it would
+#                 have turned 7 currently-MISSING steps GREEN.
+#   written.json  is the lstat observation: kind, size, mtime, and the
+#                 declared-vs-landed residual, per THIS step's own specs.
+#                 That is what this resolver binds to.
+#
+# WHAT "PRODUCED BY THIS STEP" CAN AND CANNOT MEAN HERE
+# ----------------------------------------------------
+# CAN: the resolution is scoped to the step's OWN declaration and the answer
+# is recorded in the step's OWN folder, so a PASS is auditable at the step
+# instead of re-derived from a project-wide scan; and the artefact the PASS
+# rests on is the one that step's record names, re-verified live.
+# CANNOT: name the writing STEP. The flow declares `programs:` / `mcp_tools:`
+# per step; `provenance.jsonl` records EDA BINARIES (yosys/openroad/klayout)
+# and, where it carries a `step` field at all, phase-scoped labels like
+# "phase2:yosys_synth" (ONE distinct non-null value across the 32 records of
+# /home/reyerchu/_sky130A_r3_run). There is no mapping between those
+# vocabularies in this repo and this change does not invent one. So this is
+# STEP-SCOPED ATTRIBUTION, not producer attribution, and it says so in the
+# field name (`output_binding.mode = "step_attributed"`) rather than claiming
+# more.
+#
+# SHARED ARTEFACTS ARE NOT A FAILURE — BY CONSTRUCTION
+# ---------------------------------------------------
+# Some outputs are legitimately written once and read by many. Measured on the
+# shipped flow: of 161 distinct output patterns across 61 steps, exactly TWO
+# are declared by more than one step (`phase2/stage2/synth/netlist.v` by steps
+# 9 and 14; `phase3/mixed_signal/cosim/mixed_signal_results.json` by A9 and
+# M3). Because the unit of attribution is the step's DECLARATION and not a
+# single producer, both declaring steps resolve the same path independently
+# and BOTH stay green — the ledger builds each step's row against the same
+# snapshot. Had this been bound to "exactly one step may claim this write",
+# one of each pair would have gone red for doing nothing wrong. It is not.
+#
+# MONOTONE ON PURPOSE — IT CAN ONLY TAKE AWAY
+# -------------------------------------------
+# Every branch below either returns the project-wide answer unchanged or
+# returns a STRICTER one. There is no path on which a spec the project-wide
+# glob calls MISSING becomes satisfied. A step-folder record can therefore
+# never manufacture a green — which is what the `_car15_evidence` measurement
+# above says it would have done if it could.
+_STEP_BINDING_SCHEMA = 1
+
+
+def _binding_stat_key(project: Path) -> Tuple[Any, ...]:
+    """Cache key that INVALIDATES when the record changes.
+
+    Keyed on (project, stat of steps/index.json, stat of the run ledger)
+    rather than on the path alone: `check_step` is called ~63 times per audit
+    in a thread pool and re-reading 63 `written.json` files per step would be
+    63x the I/O, but a plain path-keyed cache would go stale the moment a
+    caller (a test, a re-run) regenerates the tree inside one process."""
+    def k(p: Path) -> Optional[Tuple[int, int]]:
+        try:
+            st = p.stat()
+        except OSError:
+            return None
+        return (int(st.st_mtime_ns), int(st.st_size))
+    return (str(project),
+            k(project / "steps" / "index.json"),
+            k(project / "reports" / "write_ledger.json"))
+
+
+def _index_ledger_row(row: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """One `written.json` / run-ledger step row -> {spec: verdict}.
+
+    The ledger emits exactly one of the two per declared spec: a `produced`
+    entry (regular file, size > 0) or a D3 `declared_output_not_produced`
+    finding carrying the reason it is not one (`absent` / `zero_byte` /
+    `dangling_symlink` / `symlink_alias`). Both directions are indexed; a spec
+    the row does not mention at all stays ABSENT from this map and is treated
+    as "this step has no record for it", never as "not produced"."""
+    specs: Dict[str, Dict[str, Any]] = {}
+    for entry in (row.get("produced") or []):
+        if not isinstance(entry, dict):
+            continue
+        spec = str(entry.get("spec", ""))
+        rel = entry.get("rel")
+        if not spec or not rel:
+            continue
+        slot = specs.setdefault(spec, {"produced": [], "not_produced": None})
+        slot["produced"].append(str(rel))
+    for finding in (row.get("findings") or []):
+        if not isinstance(finding, dict):
+            continue
+        if finding.get("dimension") != "D3":
+            continue
+        spec = str(finding.get("spec", ""))
+        if not spec:
+            continue
+        slot = specs.setdefault(spec, {"produced": [], "not_produced": None})
+        if slot["not_produced"] is None:
+            slot["not_produced"] = str(finding.get("reason") or "not_produced")
+    return specs
+
+
+@functools.lru_cache(maxsize=32)
+def _load_step_binding_cached(key: Tuple[Any, ...]) -> Dict[str, Any]:
+    project = Path(key[0])
+    steps_root = project / "steps"
+    index_path = steps_root / "index.json"
+
+    def unavailable(reason: str) -> Dict[str, Any]:
+        return {"schema": _STEP_BINDING_SCHEMA, "available": False,
+                "reason": reason, "rows": {}, "sources": {}}
+
+    if not index_path.is_file():
+        # The BACKWARD-COMPATIBLE path, and the common one. Published cells
+        # carry no `steps/` (benchmark_evidence_publish excludes it by name as
+        # "per-step scratch"), and any run driven straight at a phase runner
+        # never built one. Those runs get today's behaviour EXACTLY, and the
+        # verdict records that they did.
+        return unavailable("no_steps_tree")
+    try:
+        index = json.loads(index_path.read_text())
+        folders = {str(s.get("id")): str(s.get("folder"))
+                   for s in (index.get("steps") or [])
+                   if isinstance(s, dict) and s.get("folder")}
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        return unavailable(f"steps_index_unreadable ({type(exc).__name__})")
+
+    rows: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    sources: Dict[str, str] = {}
+    for sid, folder in folders.items():
+        wj = steps_root / folder / "written.json"
+        try:
+            row = json.loads(wj.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(row, dict) or str(row.get("id")) != sid:
+            # A slice whose own `id` does not match the folder it sits in was
+            # grafted from somewhere else. It is not this step's record.
+            continue
+        rows[sid] = _index_ledger_row(row)
+        sources[sid] = "step_folder"
+
+    # Run-level ledger fills gaps. It is the SAME observation written by the
+    # same call (step_write_ledger.emit writes reports/write_ledger.json and
+    # then slices it into the step folders), so it is step-scoped evidence
+    # too — but a reader is told which of the two answered, because "the step
+    # folder said so" and "the run ledger said so" are not the same claim.
+    ledger_path = project / "reports" / "write_ledger.json"
+    if ledger_path.is_file():
+        try:
+            led = json.loads(ledger_path.read_text())
+            for row in (led.get("steps") or []):
+                if not isinstance(row, dict):
+                    continue
+                sid = str(row.get("id"))
+                if sid and sid not in rows:
+                    rows[sid] = _index_ledger_row(row)
+                    sources[sid] = "run_ledger"
+        except (OSError, ValueError, TypeError):
+            pass
+
+    if not rows:
+        return unavailable("steps_tree_without_write_record")
+    return {"schema": _STEP_BINDING_SCHEMA, "available": True, "reason": None,
+            "rows": rows, "sources": sources}
+
+
+def _load_step_binding(project: Path) -> Dict[str, Any]:
+    try:
+        return _load_step_binding_cached(_binding_stat_key(project))
+    except Exception as exc:                                  # noqa: BLE001
+        # An unreadable record degrades to today's behaviour and SAYS SO. It
+        # never fails a step: the thing that would be lost is an attribution,
+        # not a verdict.
+        return {"schema": _STEP_BINDING_SCHEMA, "available": False,
+                "reason": f"binding_unreadable ({type(exc).__name__})",
+                "rows": {}, "sources": {}}
+
+
+def _live_artefact_state(p: Path) -> Tuple[bool, str]:
+    """(is a produced artefact, kind) — decided LIVE, from lstat, right now.
+
+    The step folder's record says WHICH path this step's spec resolved to;
+    this says whether that path is still an artefact. Both halves are needed
+    and neither is sufficient: a record alone is a claim about the past (the
+    `_car15_evidence` folders claim 7 files that are not there), and a live
+    scan alone is the project-wide glob this change exists to replace.
+
+    `produced` mirrors step_write_ledger._classify's rule — a regular file
+    with size > 0 — with ONE deliberate widening: a symlink that RESOLVES to a
+    non-empty regular file counts. The ledger records that as `symlink_alias,
+    produced=False` because an alias is not a write; but `_glob_first` accepts
+    it today (its own docstring: "the owner's step-folder design IS a symlink
+    tree ... the step-folder design is unaffected"), and rejecting it here
+    would be a NEW red on a path whose bytes are really there. Measured across
+    the 20 real run directories on this host that carry a `steps/` tree, ZERO
+    of the 92-106 declared outputs per run is a symlink, so the widening
+    costs nothing measurable and the narrowing would have been an unmeasured
+    risk taken for free. A DANGLING link and a ZERO-BYTE file are not
+    artefacts either way.
+    """
+    try:
+        st = os.lstat(str(p))
+    except OSError:
+        return False, "absent"
+    import stat as _stat
+    if _stat.S_ISLNK(st.st_mode):
+        try:
+            tst = os.stat(str(p))
+        except OSError:
+            return False, "dangling_symlink"
+        if _stat.S_ISDIR(tst.st_mode):
+            return True, "symlink_to_dir"
+        if not _stat.S_ISREG(tst.st_mode):
+            return False, "symlink_to_non_file"
+        return (tst.st_size > 0), (
+            "symlink_alias" if tst.st_size > 0 else "symlink_to_empty_file")
+    if _stat.S_ISREG(st.st_mode):
+        return (st.st_size > 0), ("file" if st.st_size > 0 else "empty_file")
+    if _stat.S_ISDIR(st.st_mode):
+        # `_glob_first` accepts a directory match today; keeping that keeps
+        # this resolver monotone.
+        return True, "dir"
+    return False, "other"
+
+
+def _resolve_required_output(project: Path, sid: Any, spec: str,
+                             binding: Dict[str, Any]
+                             ) -> Tuple[bool, List[str], str, Optional[str]]:
+    """Resolve ONE `required_outputs` entry for ONE step.
+
+    Returns (satisfied, evidence_rels, mode, note) where mode is
+    "step_attributed" or "project_glob". `project_glob` is today's answer,
+    unchanged, and always carries a note saying why the step-scoped record
+    could not be used.
+
+    EVIDENCE SHAPE IS PRESERVED, and that is not cosmetic. The pre-change loop
+    appended the FIRST hit of EVERY matching " OR " alternative, not one hit
+    per spec, and `_evidence_integrity_scan` (#433/#434) then scans each
+    entry — a shorter evidence list is a smaller scan and therefore a WEAKER
+    check. Measured on real runs, 9 specs across four run roots really do
+    contribute more than one entry (step 4's four-way sim spec, step 27's
+    `si_crosstalk.rpt OR .json`, step 34's `filled.def OR metal_fill.done`),
+    so collapsing to one would have quietly reduced what gets scanned.
+    """
+    alts = [a.strip() for a in str(spec).split(" OR ") if a.strip()]
+    glob_ev: List[str] = []       # exactly what the pre-change loop collected
+    glob_hits: List[str] = []     # every hit, for classification
+    for sp in alts:
+        hits = _glob_first(project, sp)
+        if hits:
+            glob_ev.append(hits[0])
+            glob_hits.extend(hits)
+    glob_sat = bool(glob_hits)
+
+    if not binding.get("available"):
+        return glob_sat, glob_ev, "project_glob", binding.get("reason")
+    rec = (binding.get("rows") or {}).get(str(sid), {}).get(str(spec))
+    if rec is None:
+        return glob_sat, glob_ev, "project_glob", "no_step_record"
+
+    # (a) THE STEP'S OWN RECORD NAMES THE PATH(S). Re-verify live; the record
+    #     is a statement about the past and must not outlive the file. Every
+    #     one that survives is evidence, for the reason in the docstring.
+    live_rec: List[str] = []
+    for rel in rec["produced"]:
+        if _live_artefact_state(project / rel)[0] and rel not in live_rec:
+            live_rec.append(rel)
+    if live_rec:
+        # Emit the pre-change evidence SHAPE — the record's paths intersected
+        # with what the old loop would have listed — rather than every path
+        # the record names. Two reasons, both measured. (1) It keeps the
+        # population `_evidence_integrity_scan` reads IDENTICAL, so any verdict
+        # difference this change produces is attributable to the binding and
+        # not to a scan that ran over a different set. (2) The record lists
+        # EVERY match of a wildcard spec: on /home/reyerchu/_car15_evidence
+        # step 1's `phase2/stage1/rtl/*.v` grew the evidence list from 1 entry
+        # to 5, and #525 already had to stop that scan reading whole files
+        # because it dominated audit wall-time on a large SoC. Falling back to
+        # the record's own first path when the two do not intersect keeps the
+        # step-attributed claim honest.
+        # UNION, NOT INTERSECTION. This was
+        #     ev = [r for r in glob_ev if r in live_rec] or live_rec[:1]
+        # and it SHRANK the population `_evidence_integrity_scan` reads, which is
+        # the one thing this binding must never do. MEASURED on a real run: with
+        # `phase2/stage2/synth/area.rpt` truncated to 0 bytes, step 9 went
+        # FAIL (#433, "evidence 0 bytes") -> PASS, because the 0-byte artefact was
+        # not in the ledger's produced list and the intersection dropped it — a
+        # change written to CATCH zero-byte outputs filtered a zero-byte output
+        # out of view.
+        #
+        # A path the glob resolves is a path the scan must judge, whether or not
+        # this step's ledger claims it. The ledger adds attribution; it does not
+        # get to remove evidence.
+        _seen: set = set()
+        ev = [r for r in list(live_rec) + list(glob_ev)
+              if not (r in _seen or _seen.add(r))]
+        return True, ev, "step_attributed", None
+    if rec["produced"]:
+        detail = "; ".join(
+            f"{r} ({_live_artefact_state(project / r)[1]})"
+            for r in rec["produced"][:2])
+        alt = [h for h in glob_hits
+               if h not in rec["produced"] and _live_artefact_state(project / h)[0]]
+        if alt:
+            # Do NOT invent an absence: something real matched the project-wide
+            # glob, so today's verdict stands — but it is not this step's
+            # recorded artefact and the report says which one it is. Evidence
+            # is the pre-change list so the integrity scan sees what it saw.
+            return True, glob_ev, "project_glob", (
+                f"step record names {detail}; credited instead to {alt[0]}, "
+                f"matched project-wide")
+        return False, [], "step_attributed", (
+            f"this step's own write record names {detail}")
+
+    # (b) THE STEP'S OWN RECORD SAYS NOTHING WAS PRODUCED FOR THIS SPEC.
+    reason = rec.get("not_produced") or "not_produced"
+    live = [h for h in glob_hits if _live_artefact_state(project / h)[0]]
+    if live:
+        # The project-wide glob reaches places the ledger's plain glob does
+        # not (the `reports/<subdir>/` sweep fallback, the canonical-analog
+        # remap). A disagreement between two resolvers is not evidence of
+        # absence, so the green stands and the disagreement is disclosed.
+        return True, glob_ev, "project_glob", (
+            f"resolver disagreement — this step's write record says "
+            f"{reason!r}, the project-wide glob matched {live[0]}")
+    if glob_sat:
+        return False, [], "step_attributed", (
+            f"not produced ({reason}); the project-wide glob matched "
+            f"{glob_hits[:1]}, which is not a produced artefact")
+    return False, [], "step_attributed", f"not produced ({reason})"
+
+
+def _disclose_output_binding(result: "StepResult") -> "StepResult":
+    """Put the attribution on the TEXT report, for every step that has one.
+
+    BOTH directions are stated, deliberately. Annotating only the degraded
+    case would make "step-attributed" the meaning of SILENCE, and a reader
+    would be inferring the stronger claim from the absence of a line — which
+    is the shape this repo keeps finding under other names. One line per step
+    that declares outputs (at most 61 on the shipped flow), stating which
+    question the verdict above it answered."""
+    b = result.output_binding
+    if not b or not b.get("n_specs"):
+        return result
+    if any(r.startswith("OUTPUT ATTRIBUTION:") for r in result.reasons):
+        return result                       # both exits can reach this helper
+    n, k = b["n_specs"], b["n_step_attributed"]
+    if b["mode"] == "step_attributed":
+        src = b.get("source") or "step record"
+        where = ("steps/<phase>/<stage>/<id>_<slug>/written.json"
+                 if src == "step_folder" else "reports/write_ledger.json")
+        result.reasons.append(
+            f"OUTPUT ATTRIBUTION: step-attributed ({k}/{n} declared output(s) "
+            f"resolved against THIS step's own write record in {where}, "
+            f"re-verified live)")
+        return result
+    head = ("PROJECT-WIDE" if k == 0 else f"MIXED ({k}/{n} step-attributed)")
+    notes = "; ".join(b.get("notes") or []) or "no reason recorded"
+    result.reasons.append(
+        f"OUTPUT ATTRIBUTION: {head} — {n - k} of {n} declared output(s) were "
+        f"resolved by the project-wide glob, which answers 'a file matching "
+        f"this pattern exists somewhere under the project', NOT 'this step "
+        f"produced it' [{notes[:400]}]")
+    return result
 
 
 def _check_files_exist(project: Path, patterns: List[str], any_of: bool) -> tuple[bool, List[str], List[str]]:
@@ -8677,23 +9090,52 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # area.rpt AND stats.json were both absent and it reported PASS because
     # netlist.v was there. A declared output nobody verifies is not a
     # requirement, and a step that never produced it has not been measured.
+    #
+    # RESOLVED PER STEP (see `_resolve_required_output`). The question asked
+    # of each entry is no longer "does a file matching this glob exist
+    # somewhere under the project" but "does THIS step's own folder record
+    # this artefact as written, and is it still one". A run with no `steps/`
+    # tree — every published cell, every phase-driven run — falls back to the
+    # project-wide glob UNCHANGED and the fallback is recorded in
+    # `output_binding`, never taken silently.
     outputs = step.get("required_outputs", [])
     missing_entries: List[str] = []
+    _binding = _load_step_binding(project) if outputs else None
+    _bind_notes: List[str] = []
+    _bind_modes: Dict[str, str] = {}
+    _n_attr = 0
+    _n_glob = 0
     for pat in outputs:
-        # split "A OR B"
-        hit_any = False
-        for sp in (p.strip() for p in pat.split(" OR ")):
-            if _glob_first(project, sp):
-                hit_any = True
-                break
-        if hit_any:
-            # record evidence
-            for sp in (p.strip() for p in pat.split(" OR ")):
-                for h in _glob_first(project, sp):
-                    result.evidence.append(h)
-                    break
+        _sat, _ev, _mode, _note = _resolve_required_output(
+            project, sid, pat, _binding or {})
+        _bind_modes[pat] = _mode
+        if _mode == "step_attributed":
+            _n_attr += 1
+        else:
+            _n_glob += 1
+        if _note:
+            _bind_notes.append(f"{pat}: {_note}")
+        if _sat:
+            result.evidence.extend(_ev)
         else:
             missing_entries.append(pat)
+    if outputs:
+        _src = None
+        if _binding and _binding.get("available"):
+            _src = (_binding.get("sources") or {}).get(str(sid))
+        elif _binding:
+            # RUN-LEVEL degradation (no steps/ tree at all, unreadable index).
+            # One note, not one per spec: the reason is a property of the run,
+            # and repeating it 14 times for step D1 would bury the per-spec
+            # notes that ARE per-spec under a wall of the same sentence.
+            _bind_notes = [f"whole run: {_binding.get('reason')}"]
+        result.output_binding = {
+            "mode": ("step_attributed" if _n_glob == 0 else
+                     "project_glob" if _n_attr == 0 else "mixed"),
+            "n_specs": len(outputs), "n_step_attributed": _n_attr,
+            "n_project_glob": _n_glob, "source": _src,
+            "notes": _bind_notes[:12],
+        }
 
     # PARTIAL evidence keeps the gate in play. Two different promotions live
     # downstream of here and both must survive: the gate's own per-file
@@ -8823,7 +9265,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                         f"marker owns, so its verdict would restate that "
                         f"absence, not add a finding.")
         return _apply_capability_gap(
-            _evidence_integrity_scan(project, result), sid)
+            _evidence_integrity_scan(project, _disclose_output_binding(result)),
+            sid)
 
     # Now evaluate the gate predicate
     gate = step.get("gate")
@@ -9100,6 +9543,26 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                         for h in _glob_first(project, sp)]
                 if hits:
                     result.evidence.append(hits[0])
+                    # This credit is PROJECT-WIDE by construction and can be
+                    # nothing else: the artefact was absent when the audit
+                    # began, so no write record made before the audit can name
+                    # it. Counted as such so `output_binding` never reports a
+                    # step-attributed total that includes an artefact this
+                    # program itself caused to exist.
+                    if result.output_binding:
+                        _ob = result.output_binding
+                        if _bind_modes.get(pat) == "step_attributed":
+                            _bind_modes[pat] = "project_glob"
+                            _ob["n_step_attributed"] -= 1
+                            _ob["n_project_glob"] += 1
+                        _ob["mode"] = ("step_attributed"
+                                       if _ob["n_project_glob"] == 0 else
+                                       "project_glob"
+                                       if _ob["n_step_attributed"] == 0
+                                       else "mixed")
+                        _ob["notes"] = (_ob["notes"] + [
+                            f"{pat}: credited to an artefact this audit's own "
+                            f"gate created during this run"])[:12]
                     continue
             _still_missing.append(pat)
         missing_entries = _still_missing
@@ -9143,11 +9606,15 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # did not produce it, and reported INCOMPLETE kept its tier.
     if _T.is_done_claim(result.status) and missing_entries:
         result.status = "MISSING"
+        _by_record = [p for p in missing_entries
+                      if _bind_modes.get(p) == "step_attributed"]
         result.reasons.append(
             f"required_outputs missing: {missing_entries} "
             f"(satisfied: {len(outputs) - len(missing_entries)}/{len(outputs)}"
             f" — the gate passed, but every declared output must be produced, "
-            f"not just one)")
+            f"not just one)"
+            + (f" — {len(_by_record)} of them on this step's OWN write record: "
+               f"{_by_record}" if _by_record else ""))
 
     # natural verdict is FAIL or MISSING AND an ENV_UNAVAILABLE-tier
     # waiver matches this step, convert to WAIVED-DEFERRED. The
@@ -9172,7 +9639,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # v0.2.64 (#433/#434) — evidence-integrity scan on the natural PASS,
     # then v0.2.63 (#430) capability-gap conversion (the early
     # required_outputs exit applies the same helpers).
-    result = _evidence_integrity_scan(project, result)
+    result = _evidence_integrity_scan(project, _disclose_output_binding(result))
     return _apply_capability_gap(result, sid)
 
 

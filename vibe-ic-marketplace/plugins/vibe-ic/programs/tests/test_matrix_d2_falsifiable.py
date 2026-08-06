@@ -80,7 +80,7 @@ for 33 of the 129 reds this module used to publish.
 
 Two of the five gate-clause kinds name no program at all. Their whole
 predicate is the consumer's, quoted verbatim from
-``flow_compliance_check._check_files_exist`` (programs/flow_compliance_check.py:1841-1844)::
+``flow_compliance_check._check_files_exist`` (programs/flow_compliance_check.py:2239-2242)::
 
     if any_of:
         passed = len(found) > 0
@@ -884,7 +884,7 @@ def _f_on_board_scenarios_failed(p: Path) -> None:
     Step 39's ``json_field_true`` clause is the one non-exec clause in the
     whole flow that HAS a content predicate — ``_check_json_field_true``
     compares the resolved field with the expected value
-    (programs/flow_compliance_check.py:6614) — so unlike every ``files_exist``
+    (programs/flow_compliance_check.py:7012) — so unlike every ``files_exist``
     clause it can be reddened by something other than an empty directory, and
     leaving it on ``EMPTY`` would have hidden that distinction behind a red
     that meant "no such file".
@@ -1427,7 +1427,7 @@ def _nonexec_artefact_present(project: Path, rel: str) -> bool:
     Asked through ``flow_compliance_check._check_files_exist``, which is the
     consumer's own resolver: it carries the ``reports/<subdir>/`` fallback and
     the canonical-analog-dir remap (``_glob_first``,
-    programs/flow_compliance_check.py:1764-1824), and a second implementation
+    programs/flow_compliance_check.py:1785-1845), and a second implementation
     of those two remaps here is exactly the drift this module refuses
     everywhere else. Nothing is parsed out of the consumer's prose.
     """
@@ -1444,14 +1444,14 @@ def _evaluate_clause(clause, project: Path) -> Tuple[str, str]:
 
     ``files_exist``  — the consumer's entire predicate is
         ``passed = len(missing) == 0`` (or ``len(found) > 0`` for any_of),
-        programs/flow_compliance_check.py:1841-1844. A FAIL therefore says one
+        programs/flow_compliance_check.py:2239-2242. A FAIL therefore says one
         named pattern matched nothing and says nothing else, so it is ALWAYS
         :data:`ABSENCE_RED`. That is not an assumption: every such clause in
         the live flow is satisfied by a ZERO-BYTE file in
         :func:`test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file`.
 
     ``json_field_true`` — has a real content predicate (``v == expect``,
-        programs/flow_compliance_check.py:6614), so its FAIL is split by
+        programs/flow_compliance_check.py:7012), so its FAIL is split by
         whether the artefact is there at all. Present and wrong is a genuine
         demonstration; absent is not.
     """
@@ -1827,7 +1827,7 @@ def _materialise_files_exist(project: Path, clause) -> list:
     """
     written = []
     for pat in clause.files:
-        # The consumer splits alternation on the literal " OR " (:1832-1833);
+        # The consumer splits alternation on the literal " OR " (:2230-2231);
         # satisfying the first alternative satisfies the entry.
         first = pat.split(F.ANY_OF_SEP)[0].strip()
         bad = [ch for ch in "?[" if ch in first]
@@ -1871,7 +1871,7 @@ def test_d2_an_absent_artefact_is_not_falsifiability_evidence(tmp_path):
     assert tier == ABSENCE_RED, (
         f"a {F.K_FILES} clause measured on a tree where nothing exists came "
         f"back {tier!r}. Its whole predicate is `passed = len(missing) == 0` "
-        f"(flow_compliance_check.py:1841-1844), so this FAIL says the path is "
+        f"(flow_compliance_check.py:2239-2242), so this FAIL says the path is "
         f"absent and says nothing else :: {detail}")
     assert tier not in DEMONSTRATIONS, (
         f"{ABSENCE_RED} is being counted as a demonstration of "
@@ -1940,7 +1940,7 @@ def test_d2_a_present_but_wrong_json_field_is_still_a_real_red(tmp_path):
     """The tightening must not swallow the non-exec clause that DOES judge.
 
     ``json_field_true`` compares a value (``v == expect``,
-    flow_compliance_check.py:6614), so unlike ``files_exist`` it can be
+    flow_compliance_check.py:7012), so unlike ``files_exist`` it can be
     reddened by a project that produced its artefact and got the answer wrong.
     Three arms on the one clause the flow declares, so "absent" and "present
     and wrong" cannot be collapsed:
