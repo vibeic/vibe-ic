@@ -134,3 +134,14 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_run_image_propagates_to_
 # what the test asserts about the emitted TCL is not, and that part follows the
 # code, not the anchor.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_spare_tieoff_one_driver_per_spare.py
+
+# vibe-ic#789 — the docstring's "Measured in the shipped image (0.2.63)" section
+# is a real investigation record: asap7.lydrc's layer numbers, the exact GDS
+# layer/datatype pairs a real streamout produced with LEFDEF_MAP="", and the
+# 7,911,144 phantom nangate45 IMPLANT/VT/CONTACT items that DRC run reported.
+# None of it is a live pointer — every test in the file drives `step_gds`
+# against hand-built `PdkConfig` objects and monkeypatched docker/magic calls,
+# never a running container — so nothing here follows VERSION. Advancing the
+# tag would claim those exact numbers were read off an image that never ran
+# them, the same measurement-honesty violation as the entries above.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue789_streamout_layermap_any_signoff_deck.py
