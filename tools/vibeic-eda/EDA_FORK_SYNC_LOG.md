@@ -138,3 +138,44 @@ which is exactly how the defect arose.
 - **DEFERRED** magic → 8.3.680 — 1 upstream commit(s) 8.3.679 → 8.3.680: 0 clearly-safe, 0 already carried, 0 previously decided, 1 need human review — selective-merge assessment filed (not auto-merged) — DIRECTION UNMEASURED for `8.3.680`: 8.3.680 does not resolve in /home/reyerchu/vibe-ic-forks/magic, so the target's direction was NOT measured; it is not established that the newest tagged release is ahead of the ref we ship TARGET DIRECTION NOT ESTABLISHED for `8.3.680`: 8.3.680 does not resolve in /home/reyerchu/vibe-ic-forks/magic, so the target's direction was NOT measured. The target is shown, but it has NOT been shown to be ahead of the ref we ship.
 - **DEFERRED** open_pdks → 1.0.606 — 6 new release(s) → 1.0.606; not offered to the harness: pinned by `OPEN_PDKS_VOLUME_CONTENTS_SHA`, a CONTENTS ASSERTION about a prebuilt artefact — adopting a newer upstream means CUTTING A NEW ARTEFACT, which is a decision, not a merge round
 
+
+## 2026-08-07 — vibeic-eda:0.2.72 → 0.2.73
+
+fork_gap_report had been run with --no-fetch and read as ground truth; its local
+remote-tracking refs were up to 8h stale, so it printed Q1=0 while the fleet page
+(built from discover_forks's own freshly-fetched ledger) correctly showed 117
+commits behind. A live re-fetch confirmed the page: 7 forks were genuinely behind.
+
+- **MERGED** iverilog → 4 commit(s) merged, blob-verified (0 stomps), pushed, pin
+  advanced ef3c73c → 7af4f4e — shipped in 0.2.72
+- **MERGED** verilator → 1 commit merged, blob-verified, pushed, pin advanced
+  3764903 → f6bffca — shipped in 0.2.72
+- **MERGED** magic → 1 commit merged, blob-verified, pushed, pin advanced
+  0da4c3b → cc7d0fe — shipped in 0.2.73
+- **MERGED** slang → 1 commit merged (fast-forward), pushed, pin advanced
+  d69e890 → a3d50cf — shipped in 0.2.73
+- **MERGED** xschem → 4 commit(s) merged across two rounds (3 + 1 residual that
+  landed upstream mid-round), pushed, pin advanced ff2f482 → 482e5d2 — shipped
+  in 0.2.73
+- **MERGED** OpenROAD → 2 commit(s) merged, blob-verified, pushed, pin advanced
+  58dbde4 → 0fbc44b — shipped in 0.2.73
+- **MERGED** OpenROAD-flow-scripts → 7 commit(s), pure mirror (0 commits of
+  ours), fast-forwarded, pin advanced 778c4e5 → 1a48ddd — shipped in 0.2.73
+- **MERGED** yosys → 9 commit(s) merged, blob-verified, pushed, pin advanced
+  41a01ae → 962993c — shipped in 0.2.73
+- **DEFERRED, and NOT a simple "merge upstream"** Trilinos → the ledger's
+  sync_lag=94 measures `vibeic/xyce-trilinos-17.2-epetra-restored` (our pin's
+  actual branch) against raw `upstream/master` — but that branch exists
+  specifically to REVERT a series of upstream commits that removed the Epetra
+  stack Xyce requires (Belos, NOX, Amesos2, TrilinosCouplings). A generic
+  upstream merge there would either conflict with our own reverts or, on paths
+  our reverts didn't touch, silently re-apply the Epetra removal the branch
+  exists to undo. `check_one` confirmed the pin is still CURRENT on that branch
+  (untouched this round) before 0.2.73 was cut, so nothing moved it — correctly.
+  A `master` branch also exists on this fork and tracks raw upstream (used for
+  this investigation), but it is a DIFFERENT line of development, not a newer
+  state of the shipped one; advancing the pin toward it would ship without the
+  Epetra restoration and break Xyce. The real convergence — rebasing the seven
+  Epetra-restore commits onto current upstream 17.2.x — needs a dedicated,
+  human-supervised pass. See vibeic-eda#92 (branch-currency rejection, the
+  mechanism that caught this) and tools/xyce/Dockerfile's TRILINOS_REF comment.
