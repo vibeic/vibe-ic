@@ -1803,6 +1803,56 @@ def _self_discloses_post_layout_derivation(text: str) -> bool:
             and any(s in head for s in _STA_POST_LAYOUT_SOURCES))
 
 
+#: `_report_declared_basis` / `_scope_declared_basis` (this file, via
+#: `_sta_basis`) speak "PRE_LAYOUT" / "POST_ROUTE". `sta_corner_record_
+#: completeness_check` (`_sta_slack`) speaks "PRE_LAYOUT" / "SIGNOFF" for the
+#: identical two concepts. One name each, so a caller crossing the boundary
+#: cannot typo a comparison that silently never matches.
+_BASIS_TO_SLACK_BASIS = {"POST_ROUTE": "SIGNOFF", "PRE_LAYOUT": "PRE_LAYOUT"}
+
+
+def _signoff_basis_corners_elsewhere(project_dir: Path, declared_basis: str) -> int:
+    """How many DISTINCT (axis, corner) pairs has ANY evidence this project's
+    OWN commit carries — not just per_corner/ — actually measured at
+    *declared_basis*?
+
+    WHY THIS EXISTS. `_emit_multi_corner_sta` (the per_corner/ writer) is
+    called twice: once pre-layout (Step 10, unconditional) and once post-route
+    — but the post-route call only fires when the project has STAGED its own
+    `input/pdk/liberty/*.lib`, which no default run does. A default run's real
+    post-route multi-corner sign-off instead comes from
+    `_emit_mcorner_ocv_sta` / the multicorner-SPEF emitter, which resolve their
+    corners through `_resolve_signoff_corner_libs` — the container's own PDK
+    corners, auto-discovered, no staging required — and write
+    `sta_mcorner_ocv.rpt` / the multicorner-SPEF report, NEVER per_corner/. So
+    per_corner/ sits at its Step-10 pre-layout snapshot forever on a default
+    run, while real post-route evidence exists a directory over.
+
+    `sta_corner_record_completeness_check` already reads BOTH sources (that is
+    its entire job — see its own module docstring) and already resolves each
+    corner's basis correctly (an un-stamped `sta_mcorner_ocv.rpt` defaults to
+    its own BASIS_SIGNOFF, since that emitter only ever runs post-route). This
+    reuses that resolution rather than re-deriving it a second, possibly
+    disagreeing way.
+
+    Fail-safe: any exception (unreadable declarations, a project shape this
+    reader does not recognise) returns 0 — the STA_CORNER_BASIS_MISMATCH
+    caller then falls back to per_corner/ alone, exactly today's behaviour.
+    """
+    target = _BASIS_TO_SLACK_BASIS.get(declared_basis)
+    if target is None:
+        return 0
+    try:
+        decl = _sta_slack.read_declarations(project_dir)
+        records = _sta_slack.read_records(project_dir, decl)
+    except Exception:
+        return 0
+    return len({
+        key for key, rec in records.items()
+        if target in (rec.get("basis_used") or {}).values()
+    })
+
+
 def _check_sta(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:sta", passed=False)
     declared_basis = _scope_declared_basis(project_dir)
@@ -2057,11 +2107,25 @@ def _check_sta(project_dir: Path) -> AuditResult:
     _contradicting = (0 if declared_basis is None else sum(
         n for b, n in basis_distinct.items()
         if b not in (declared_basis, "UNDECLARED")))
-    if declared_basis is not None and _contradicting and corner_distinct_matching < 2:
+    if (declared_basis is not None and _contradicting and corner_distinct_matching < 2
+            and _signoff_basis_corners_elsewhere(project_dir, declared_basis) < 2):
         # The item this closes: a POST_ROUTE summary substantiated by
         # PRE_LAYOUT corner reports (and the mirror case). The per_corner
         # directory IS a multi-corner claim — for THIS step it is a broken
         # one, so it fails exactly as an empty dir or identical copies do.
+        #
+        # UNLESS real sign-off evidence exists OUTSIDE per_corner/ — see
+        # `_signoff_basis_corners_elsewhere`, the exception this ONE clause
+        # adds. per_corner/ is populated pre-layout by every run and refreshed
+        # post-route ONLY when a caller stages `input/pdk/liberty/*.lib`
+        # itself; a default run's real post-route multi-corner sign-off lands
+        # in `sta_mcorner_ocv.rpt` / the multicorner-SPEF report instead,
+        # discovered via the container's own PDK corners
+        # (`_resolve_signoff_corner_libs`), and per_corner/ is simply never
+        # touched again. MEASURED (spm x sky130A/gf180mcuD, 2026-08-07): a
+        # real post-route run with `sta_corner: all analyzed sign-off corners
+        # MET` still failed this check on per_corner/'s untouched Step-10
+        # pre-layout snapshot alone.
         corners_ok = False
         result.findings.append(Finding(
             rule="STA_CORNER_BASIS_MISMATCH", severity="ERROR",
