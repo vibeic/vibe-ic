@@ -491,8 +491,15 @@ def test_a_real_grade_is_never_downgraded_by_a_stale_record(tmp_path, step, mod)
     MUTATION THIS CATCHES: consulting the record before the coverage blob.
     """
     R.atpg_disclose_not_run(tmp_path, step, "stale", "precondition_unmet")
+    # v1.5.58_ihp-sg13g2 (still published, untouched by the v1.9.94_sky130A
+    # swap): the fixture needs a REAL, PASS-graded coverage blob, which is a
+    # property of the design/plugin combination that produced it, not of any
+    # one cell's identity. spm's v1.9.94_sky130A record (regenerated the same
+    # session) reports DT2/DT3 as NOT_APPLICABLE for this design under the
+    # current plugin — a real, different verdict, not a fixture regression —
+    # so it can no longer serve as "the real grade" this test needs.
     src = json.loads((PROGS.parent.parent.parent.parent
-                      / "benchmark-data/ic/spm/v1.5.65_sky130A"
+                      / "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2"
                       / R._ATPG_COVERAGE_REL[step]).read_text())
     dst = tmp_path / R._ATPG_COVERAGE_REL[step]
     dst.parent.mkdir(parents=True, exist_ok=True)

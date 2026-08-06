@@ -294,7 +294,7 @@ def test_the_three_spm_cells_carry_the_shipped_width_as_evidence():
     if not _CORPUS.is_dir():
         pytest.skip("published corpus not checked out")
     seen = 0
-    for name in ("spm/v1.5.58_ihp-sg13g2", "spm/v1.5.65_sky130A",
+    for name in ("spm/v1.5.58_ihp-sg13g2", "spm/v1.9.94_sky130A",
                  "spm/v1.5.66_gf180mcuD"):
         d = _CORPUS / name
         if not d.is_dir():

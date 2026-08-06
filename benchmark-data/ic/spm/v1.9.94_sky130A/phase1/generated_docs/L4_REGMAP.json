@@ -1,0 +1,59 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "spm3",
+  "registers": [],
+  "register_cap_v1_7_74": {
+    "cap": 128,
+    "collected": 0,
+    "carried": 0,
+    "dropped": 0,
+    "declared_never_dropped": true,
+    "dropped_names": [],
+    "reason": "every collected register is carried; the cap did not bite"
+  },
+  "no_registers_in_input": false,
+  "otp_layout": {
+    "fields": [],
+    "depth_bytes": 128,
+    "width_bits": 8,
+    "read_map": [],
+    "write_map": [],
+    "lockbits": [],
+    "otp_ip_specs": null,
+    "trim_registers": [],
+    "mask_sources": []
+  },
+  "no_otp_layout_in_input": false,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "input_declared_registers": {
+    "declared": 0,
+    "carried_at_emit": 0,
+    "absent_at_emit": [],
+    "already_carried_by_prose": 0,
+    "appended": 0,
+    "sources": [],
+    "measured_at": "gen_l4_regmap emit",
+    "authority": "descriptive only — l4_regmap_declared_register_coverage_check re-derives both sides independently"
+  },
+  "register_map_present": false,
+  "extraction_evidence": {
+    "input/docs/L5_register_map.md": [],
+    "input/docs/L4_command_protocol.md": [
+      {
+        "literal": "register-map N/A assertion",
+        "label": "input states no SW-visible chip register map"
+      }
+    ]
+  },
+  "_generator": {
+    "plugin": "vibe-ic",
+    "plugin_version": "1.9.94",
+    "l_doc_taxonomy_digest": "e3eeeadc5528",
+    "l_doc_taxonomy_docs": 28,
+    "emitter": "spi_protocol_synth._write"
+  },
+  "base_address": "Defined at SoC level; offsets given relative to module base.",
+  "notes": "Module memory map per spec. Reads from reserved bits return zeros and writes to reserved bits have no effect."
+}

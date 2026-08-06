@@ -138,7 +138,7 @@ def test_end_to_end_a_tampered_artefact_still_fails(tmp_path):
 def test_the_published_cells_that_moved_their_gds_resolve():
     """The three cells that motivated this. Without the digest route they
     report the GDS as undeclared — a FAIL for a publish-time move."""
-    cells = ["spm/v1.5.58_ihp-sg13g2", "spm/v1.5.65_sky130A",
+    cells = ["spm/v1.5.58_ihp-sg13g2", "spm/v1.9.94_sky130A",
              "spm/v1.5.66_gf180mcuD"]
     seen = 0
     for name in cells:
