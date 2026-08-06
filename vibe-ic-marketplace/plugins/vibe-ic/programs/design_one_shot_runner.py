@@ -96,6 +96,7 @@ import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl autho
 import spec_declaration_emit as _decl  # the spec's FREE-CHOICE declaration contract
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
 import rtl_provenance as _rtl_prov  # authored-RTL guard for phase2/stage1/rtl/
+import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 # v0.2.33 (ORGANIC-20260526-sv-synth-frontend) — shared SV-frontend
 # decision logic (same module Phase-3 step_synth delegates to), so the
 # Phase-2 yosys-synth + reference-TB steps reuse the EXACT same rule
@@ -187,11 +188,26 @@ DEVICES_ROOT = _find_devices_root()
 @dataclass
 class StepResult:
     name: str
-    status: str            # PASS / FAIL / SKIP / ECO_LOOP / WAIVED
+    status: str            # PASS / FAIL / SKIP / ECO_LOOP / WAIVED / BLOCKED
     duration_s: float = 0.0
     detail: str = ""
     output_files: List[str] = field(default_factory=list)
     extras: Dict[str, Any] = field(default_factory=dict)
+
+
+def _preflight_refusal(name: str):
+    """This runner's refusal row for `step_preflight.gate`.
+
+    `BLOCKED` carries the same meaning it does in phase3_one_shot_runner: the
+    step was NOT attempted because an INPUT could not support it, so NOTHING is
+    known. It is listed in `_aggregate_verdict._FAIL_STATUSES` — without that
+    it would have fallen through that function's catch-all `return "PASS"` and
+    a refusal would have produced a GREEN run, which is the defect class this
+    whole pre-flight exists to remove.
+    """
+    def _mk(detail: str, extras: Dict[str, Any]) -> StepResult:
+        return StepResult(name, _spf.REFUSAL_STATUS, 0.0, detail, extras=extras)
+    return _mk
 
 
 # v1.6.181 (#72 P1-4) — hint-driven ECO remediation policy.
@@ -12669,7 +12685,16 @@ def main() -> int:
         return 0
 
     # Step 2 — RTL gen
-    plan.append(step_rtl_gen(project, ic_class))
+    # PRE-FLIGHT (canonical step 1). Its declared input is D1's ENTIRE L1-L13
+    # set, so a Phase 1 that produced a partial doc set can no longer be
+    # laundered into "the RTL generator produced nothing". Only THIS dispatch
+    # is gated: the later `step_rtl_gen` calls are ECO-loop RE-runs that fire
+    # after the first one has already read D1, so gating them would re-ask a
+    # question whose answer this call already established.
+    plan.append(_spf.gate(
+        project, "design_one_shot_runner", "rtl_gen",
+        _preflight_refusal("rtl_gen"),
+        step_rtl_gen, project, ic_class))
 
     # Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP CONSUME. When step_rtl_gen
     # WAIVED (reused-IP / catalog-glue) and left rtl/ EMPTY but the design's
@@ -12948,8 +12973,23 @@ def main() -> int:
         last_rtl_hash = new_rtl_hash
 
     # Step 4 — yosys offline synth (Docker fallback if host yosys absent)
-    plan.append(step_yosys_synth(project, args.top_name, args.container,
-                                 ic_class))
+    # PRE-FLIGHT (canonical step 9). Step 9 also declares step 7's
+    # `phase2/stage2/constraints/*.sdc`; NO site in this runner writes that
+    # path (`step_sdc_gen` below emits into fpga_early_dir), so it is reported
+    # NOT-YET-DUE with the order contradiction named, never used to refuse.
+    #
+    # A pure-analog / all-analog-interface design has NO digital RTL track, so
+    # canonical step 1 produces no `phase2/stage1/rtl/*` BY DESIGN and
+    # step_yosys_synth already answers SKIP (deferred to the analog A1..A8
+    # track). Refusing there would turn a legitimate skip into BLOCKED, so the
+    # runner's OWN predicate — the same one the step itself uses — is handed to
+    # the pre-flight instead of a second copy of the judgement.
+    _analog_absent, _analog_reason = _analog_rtl_track_absent(project, ic_class)
+    plan.append(_spf.gate(
+        project, "design_one_shot_runner", "yosys_synth",
+        _preflight_refusal("yosys_synth"),
+        step_yosys_synth, project, args.top_name, args.container, ic_class,
+        _preflight_not_applicable=(_analog_reason if _analog_absent else None)))
 
     # Step 4b — QSF / SDC auto-gen (Wave 72). Runs even when --skip-hardware
     # so the QSF/SDC artefacts are present for downstream lints/audits.
@@ -13067,8 +13107,23 @@ def main() -> int:
     # DFT-inserted and proven equivalent to the RTL. Heavy Fault ATPG is gated
     # off on --skip-phase3 lightweight runs; the fast LEC always runs. Each
     # sub-step is fail-safe (disclosed-skip sentinel, never silent, never faked).
-    plan.extend(step_dft_lec_chain(project, args.top_name, args.container,
-                                   ic_class, full_chip=not args.skip_phase3))
+    # PRE-FLIGHT (canonical steps 11-13). `gate` returns the chain's LIST
+    # unchanged, or a ONE-element list holding the refusal, so `plan.extend`
+    # behaves identically either way.
+    # Same analog deferral as the synth site above: with no digital RTL track
+    # there is no mapped netlist BY DESIGN, and the chain's own SKIP is the
+    # right answer. On a DIGITAL design whose synth produced no netlist the
+    # refusal IS the improvement — it charges the absence to step 9 instead of
+    # letting steps 11-13 report "not applicable" for something that was in
+    # fact starved.
+    _dft_chain = _spf.gate(
+        project, "design_one_shot_runner", "dft_lec_chain",
+        lambda detail, extras: [_preflight_refusal("dft_lec_chain")(
+            detail, extras)],
+        step_dft_lec_chain, project, args.top_name, args.container,
+        ic_class, full_chip=not args.skip_phase3,
+        _preflight_not_applicable=(_analog_reason if _analog_absent else None))
+    plan.extend(_dft_chain)
 
     # Phase 2 only — Phase 3 lives in phase3_one_shot_runner.py and is
     # chained by phase23_one_shot_runner.py.
@@ -13133,7 +13188,13 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # v1.6.153 (#60 P0-4) — STALE_BOARD_DETECTED counts as FAIL.
     # Anti-fabrication rule: a sub-gate that didn't execute in this
     # pipeline cannot contribute to a downstream PASS verdict.
-    _FAIL_STATUSES = ("FAIL", "FAIL_ECO_INERT", "STALE_BOARD_DETECTED")
+    # BLOCKED — "refused for want of a declared input; the step never ran, so
+    # nothing is known". Named EXPLICITLY because everything this function does
+    # not enumerate falls through to the catch-all `return "PASS"` below: a
+    # pre-flight refusal that produced a green run would be strictly worse than
+    # the mis-attribution it was added to prevent.
+    _FAIL_STATUSES = ("FAIL", "FAIL_ECO_INERT", "STALE_BOARD_DETECTED",
+                      "BLOCKED")
     has_fail = any(s.status in _FAIL_STATUSES for s in plan)
     has_waived = any(s.status == "WAIVED" for s in plan)
     if has_fail:

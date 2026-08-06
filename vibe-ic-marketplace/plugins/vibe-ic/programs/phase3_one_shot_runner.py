@@ -80,6 +80,7 @@ import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE 
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
 import _sta_basis  # the ONE reader of the `STA_BASIS:` stamp (no second copy)
+import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -399,6 +400,22 @@ class StepResult:
 # `_aggregate_verdict`.
 _VERDICT_TIERS = ("PASS", "FAIL", "BLOCKED", "SKIP", "WAIVED",
                   "ENV_UNAVAILABLE")
+
+
+def _preflight_refusal(name: str):
+    """Build this runner's OWN refusal row for `step_preflight.gate`.
+
+    `BLOCKED` is deliberate and is the word already defined three comments
+    above: the tool is present, but an INPUT cannot support the operation, so
+    NOTHING is known about the design — and `_aggregate_verdict` names BLOCKED
+    explicitly in its non-green bucket. `extras.finding` is what lets a reader
+    separate "refused for want of input, never ran" from "ran and produced
+    nothing" (`flow_compliance`'s MISSING) and from "ran and did not pass"
+    (FAIL).
+    """
+    def _mk(detail: str, extras: Dict[str, Any]) -> StepResult:
+        return StepResult(name, _spf.REFUSAL_STATUS, 0.0, detail, extras=extras)
+    return _mk
 
 
 # --- per-invocation provenance (vibe-ic#365, third ask) --------------------
@@ -37875,7 +37892,14 @@ def main() -> int:
                 f"netlist already present: {netlist_existing.name} (skipped re-run to preserve provenance; {_synth_prod_msg}){_reuse_note}",
                 [str(netlist_existing)]))
         else:
-            plan.append(step_synth(project, effective_top, pdk, args.container))
+            # PRE-FLIGHT (canonical step 9). Guards the DISPATCH, not the cache
+            # branch above: a cache hit does not read the RTL, so it cannot be
+            # starved of it. A refusal here appends exactly ONE row, so the
+            # `plan[-1]` reads immediately below keep meaning what they meant.
+            plan.append(_spf.gate(
+                project, "phase3_one_shot_runner", "synth",
+                _preflight_refusal("synth"),
+                step_synth, project, effective_top, pdk, args.container))
             # Stamp the producer at the CALL SITE, not inside the step:
             # step_gds alone has two PASS returns and step_synth/step_pnr have
             # many, so a per-return stamp is a class of missed sites waiting to
@@ -37945,9 +37969,17 @@ def main() -> int:
                 if def_existing.is_file():
                     print(f"[pnr] cache invalid — {_cache_msg}",
                           file=sys.stderr)
-                plan.append(step_pnr(project, effective_top, pdk, args.container,
-                                     args.die_um, args.util,
-                                     spare_density=args.spare_density))
+                # PRE-FLIGHT (canonical steps 15-22 — ONE OpenROAD session
+                # covering floorplan/PDN, clock plan, placement, spare cells,
+                # CTS, hold fix, route, extraction). Only the SPAN'S ENTRY
+                # inputs can refuse: 17 reading 15's `pdn.tcl` is a handoff
+                # this very dispatch creates.
+                plan.append(_spf.gate(
+                    project, "phase3_one_shot_runner", "pnr",
+                    _preflight_refusal("pnr"),
+                    step_pnr, project, effective_top, pdk, args.container,
+                    args.die_um, args.util,
+                    spare_density=args.spare_density))
                 # Appends NOTHING — the provenance snapshot below still finds
                 # the PnR row where it expects it.
                 if plan[-1].status == "PASS":
@@ -38069,17 +38101,37 @@ def main() -> int:
                     f"re-run; {_gds_prod_msg})",
                     [str(gds_existing)]))
             else:
-                plan.append(step_gds(project, effective_top, pdk, args.container))
+                # PRE-FLIGHT (canonical step 37 — stream-out). Step 34 (metal
+                # fill) is NOT in this span: MEASURED on spm v1.5.74, filled.def
+                # lands at 12:32:34, AFTER lvs.rpt at 12:32:23 — it is written
+                # by step_canonicalize_artefacts, later than this site. So 37's
+                # only declared input is NOT-YET-DUE here and the pre-flight
+                # says exactly that instead of pretending to have checked it.
+                plan.append(_spf.gate(
+                    project, "phase3_one_shot_runner", "gds",
+                    _preflight_refusal("gds"),
+                    step_gds, project, effective_top, pdk, args.container))
                 if plan[-1].status == "PASS":
                     _write_producer_identity(_pnr_out, "gds")
-        plan.append(step_drc(project, effective_top, pdk, args.container))
+        # PRE-FLIGHT (canonical step 31 — DRC/LVS/ERC/Density, split across the
+        # two dispatches below). Its declared input is step 21's routed.def:
+        # a sign-off that runs with no routed design produces a verdict about
+        # an absence upstream, which is the exact substitution this pre-flight
+        # exists to stop.
+        plan.append(_spf.gate(
+            project, "phase3_one_shot_runner", "drc",
+            _preflight_refusal("drc"),
+            step_drc, project, effective_top, pdk, args.container))
         # ORGANIC #590 — hand step_lvs the pnr outcome so an upstream
         # mid-tcl death SKIPs the compare instead of mislabelling the
         # inevitable mismatch a design/extraction defect.
         _pnr_result = next((s for s in reversed(plan) if s.name == "pnr"),
                            None)
-        plan.append(step_lvs(project, effective_top, pdk, args.container,
-                             upstream_pnr=_pnr_result))
+        plan.append(_spf.gate(
+            project, "phase3_one_shot_runner", "lvs",
+            _preflight_refusal("lvs"),
+            step_lvs, project, effective_top, pdk, args.container,
+            upstream_pnr=_pnr_result))
 
     # v1.6.36 — stage runner outputs at canonical flow-YAML paths.
     # Closes the runner-vs-flow drift waivers from the v10634 benchmark.

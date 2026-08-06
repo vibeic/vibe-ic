@@ -933,11 +933,11 @@ WAIVERS: Tuple[Waiver, ...] = (
             "first; then (b) follows as OR-pairs that can actually fail."
         ),
         evidence=(
-            "producers programs/phase3_one_shot_runner.py:30004 and :30121 "
+            "producers programs/phase3_one_shot_runner.py:30021 and :30138 "
             "(sta_out / 'sta_spef_based.rpt', sta_out / "
-            "'sta_mcorner_ocv.rpt') with mirrors at :30010 and :30151, and "
+            "'sta_mcorner_ocv.rpt') with mirrors at :30027 and :30168, and "
             "the two stance emissions — 'multi_corner_spef_stance.json' at "
-            ":30022-30023, 'mcorner_ocv_stance.json' at :30122-30123 — both "
+            ":28280, 'mcorner_ocv_stance.json' at :28280 — both "
             "guarded by `if primary_def.is_file() and _signoff_regen(...)`; "
             "consumer "
             "programs/sta_corner_record_completeness_check.py:194-223 "
