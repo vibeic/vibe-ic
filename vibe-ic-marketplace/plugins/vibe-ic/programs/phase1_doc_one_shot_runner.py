@@ -47294,6 +47294,29 @@ def _v1_6_581_route_l1_fallback_top_module(
     strategy = l9.get("top_module_extraction_strategy") or ""
     if strategy != "l1_ic_name_fallback":
         return False
+    # The fallback FIRED, so by construction no `module <name>(...)`
+    # declaration was found in the input — `top_module` is a
+    # Verilog-sanitised copy of `L1.ic_name`, not an extracted
+    # identifier. That fact is a property of the STRATEGY and is
+    # independent of where the PINS came from, so the honest flag is
+    # stamped here, BEFORE the pin-preservation early return below.
+    #
+    # Previously the `promoted_from_l1` guard returned before this
+    # line, on the stated assumption that "the honest top-module flag
+    # still applies via the normal no_top_module path". MEASURED: it
+    # does not. That path is
+    #     no_top_module_in_input = _flag_no_X_in_input(
+    #         top_module if not top_module_default_applied else None, …)
+    # and `_flag_no_X_in_input` returns False as soon as the value it
+    # is handed is non-empty. On this branch `top_module` is non-empty
+    # BY CONSTRUCTION, so the flag was pinned to False in exactly the
+    # case it exists to report. A design whose docs never name a top
+    # module then shipped `no_top_module_in_input: false` alongside
+    # `top_module_extraction_strategy: l1_ic_name_fallback` — the
+    # strategy stamp and the flag contradicting each other in the same
+    # record, with every downstream L9-vs-RTL consumer reading the flag.
+    # Chip-AGNOSTIC: provenance-based, no chip-class literal.
+    l9["no_top_module_in_input"] = True
     # Real L1.pin_table promotion → pins are genuine, not a
     # fabricated superset-union. Do NOT clear them.
     if promoted_from_l1:
@@ -47301,7 +47324,6 @@ def _v1_6_581_route_l1_fallback_top_module(
     # Mark + clear. Keep `top_module` (= L1.ic_name) as the
     # tentative label; downstream MUST check
     # `no_top_module_in_input` before relying on top_module_pins.
-    l9["no_top_module_in_input"] = True
     # Clear all three aliases consistently so any consumer that
     # reads `ports` / `top_ports` / `top_module_pins` sees the
     # cleared list.
