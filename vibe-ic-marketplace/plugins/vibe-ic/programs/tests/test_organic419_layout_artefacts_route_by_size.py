@@ -151,7 +151,7 @@ def test_reverting_to_an_extension_only_rule_is_caught(tmp_path):
 # ── the reference cells, which the old rule rejected ────────────────────────
 
 @pytest.mark.parametrize("cell", ["v1.5.58_ihp-sg13g2", "v1.5.65_sky130A",
-                                  "v1.5.66_gf180mcuD"])
+                                  "v1.9.96_gf180mcuD"])
 def test_the_three_reference_cells_pass_their_own_structure_check(cell):
     """Every one of them FAILED on NO_RAW_GEOMETRY before #419, naming the
     .gds/.def/.spef the repository had already decided to accept."""

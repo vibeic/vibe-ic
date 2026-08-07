@@ -618,13 +618,20 @@ _LIVE_ENTRY_COUNT = 114
 SELF_CERTIFYING_AUDIT_PROBE: Dict[str, Tuple[str, ...]] = {
     # The analog reference run — A8's own base_run. MUST stay empty.
     "benchmark-data/ic/u_hawaii_adc": (),
-    # A digital run, kept in the probe precisely because it is NOT empty: a
-    # guard that can only ever measure zero cannot be shown to work.
-    "benchmark-data/ic/spm/v1.5.66_gf180mcuD": (
-        "24::reports/phase3/ir_drop_signoff.json",
-        "25::reports/phase3/em_signoff.json",
-        "26::reports/phase3/antenna_signoff.json",
-    ),
+    # 2026-08-07 — v1.5.66_gf180mcuD (the former non-empty control here) was
+    # retired and replaced by v1.9.96_gf180mcuD. RE-MEASURED against the new
+    # cell, not carried forward: it is published AFTER the em_signoff wiring
+    # this probe's own comment predicted would make the entry disappear
+    # ("on a root published after that wiring the artefact pre-exists the
+    # audit and this entry MUST disappear") — `reports/phase3/{ir_drop_signoff,
+    # em_signoff,antenna_signoff}.json` all pre-exist in the published cell, so
+    # a `flow_compliance_check` run against a copy creates 0 files there of any
+    # kind. Verified empirically (copytree + real subprocess run + before/after
+    # file-list diff) before pinning, not assumed from the prediction alone.
+    # The probe's "not empty" side is currently uncovered by any pinned entry —
+    # disclosed here rather than silently dropped; a future root published
+    # BEFORE the step-25 wiring reaches this file would restore it.
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD": (),
     # 2026-08-06 — the published cell that carries A8's hardmacro GDS. It is in
     # the probe for the reason A8 is the reason the probe exists: this root is
     # now an evidence source, so "could the auditor have written the artefact
@@ -3455,7 +3462,7 @@ def test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit():
     name the stale claim, and must report nothing once the ledger is re-emitted
     over the tree as it now is.
     """
-    src = run_roots().get("benchmark-data/ic/spm/v1.5.66_gf180mcuD")
+    src = run_roots().get("benchmark-data/ic/spm/v1.9.96_gf180mcuD")
     assert src is not None, (
         "the published spm cell does not resolve here; this control needs a "
         "real published tree, not a synthetic one")

@@ -379,7 +379,7 @@ def test_a_malformed_waivers_file_does_not_kill_the_run(tmp_path):
 # --------------------------------------------------------------------------- #
 # BACKWARD COMPATIBILITY — the published cells must still validate
 # --------------------------------------------------------------------------- #
-_PUBLISHED = ("u_hawaii_adc", "spm/v1.5.65_sky130A", "spm/v1.5.66_gf180mcuD",
+_PUBLISHED = ("u_hawaii_adc", "spm/v1.5.65_sky130A", "spm/v1.9.96_gf180mcuD",
               "spm/v1.5.58_ihp-sg13g2")
 
 

@@ -48,11 +48,13 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_gf180_registry_assets_re
 # reproduces, which is the opposite of what this drift-net is for.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_container_image_provenance.py
 
-# A PUBLISHED sign-off run record: it states which image regenerated that IR
-# result. benchmark-data is read-only to the flow for exactly this reason — the
-# tag names the toolchain that produced the numbers beside it, so advancing it
-# would attribute those numbers to an image that never ran them.
-benchmark-data/ic/spm/v1.5.66_gf180mcuD/reports/phase3/DYNAMIC_IR_REGENERATED.md
+# (2026-08-07: the dedicated entry that was here for
+# benchmark-data/ic/spm/v1.5.66_gf180mcuD/reports/phase3/DYNAMIC_IR_REGENERATED.md
+# was removed when that cell was retired and replaced by
+# v1.9.96_gf180mcuD — the file it named no longer exists, the new cell has
+# no equivalent hand-authored correction note, and the blanket
+# `benchmark-data/*` rule below already covers every ghcr tag under
+# benchmark-data/ regardless, so nothing lost coverage.)
 
 # A MEASUREMENT NOTE, not an install pointer. The comment records what `docker
 # inspect` actually returned for a named image and docker version, while

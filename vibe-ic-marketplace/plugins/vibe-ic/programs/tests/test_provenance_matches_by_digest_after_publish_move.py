@@ -139,7 +139,7 @@ def test_the_published_cells_that_moved_their_gds_resolve():
     """The three cells that motivated this. Without the digest route they
     report the GDS as undeclared — a FAIL for a publish-time move."""
     cells = ["spm/v1.5.58_ihp-sg13g2", "spm/v1.9.94_sky130A",
-             "spm/v1.5.66_gf180mcuD"]
+             "spm/v1.9.96_gf180mcuD"]
     seen = 0
     for name in cells:
         d = _CORPUS / name

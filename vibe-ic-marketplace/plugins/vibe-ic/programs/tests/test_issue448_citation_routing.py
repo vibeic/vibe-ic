@@ -118,7 +118,7 @@ def test_the_three_converged_cells_are_measured_not_assumed():
     """Real data, and the numbers that justify separating the two states."""
     import pytest
     cells = ["spm/v1.5.58_ihp-sg13g2", "spm/v1.9.94_sky130A",
-             "spm/v1.5.66_gf180mcuD"]
+             "spm/v1.9.96_gf180mcuD"]
     seen = 0
     for c in cells:
         d = _CORPUS / c

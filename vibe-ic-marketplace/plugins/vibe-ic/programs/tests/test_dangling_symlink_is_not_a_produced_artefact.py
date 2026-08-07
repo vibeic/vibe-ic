@@ -67,7 +67,7 @@ _FLOW = _PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 # benchmark-data lives at the repo root, three levels above the plugin
 # (<repo>/vibe-ic-marketplace/plugins/vibe-ic).
 _REPO = _PLUGIN.parents[2]
-_SPM = _REPO / "benchmark-data" / "ic" / "spm" / "v1.5.66_gf180mcuD"
+_SPM = _REPO / "benchmark-data" / "ic" / "spm" / "v1.9.96_gf180mcuD"
 
 
 def _step(sid):
@@ -121,12 +121,12 @@ def test_step37_dangling_gds_is_not_evidence(tmp_path):
     target exists nowhere must not be reported as the step's evidence."""
     proj = tmp_path / "proj"
     shutil.copytree(_SPM, proj, symlinks=True)
-    gds = proj / "phase3" / "stage4" / "gds" / "spm.gds"
+    gds = proj / "phase3" / "stage4" / "gds" / "chip_top.gds"
     assert gds.is_file(), "fixture wrong: expected a real GDS in the run root"
 
     # The real bits leave the project entirely.
-    shutil.move(str(gds), str(tmp_path / "spm.gds.elsewhere"))
-    os.symlink("../../stage3/pnr/spm.gds", gds)
+    shutil.move(str(gds), str(tmp_path / "chip_top.gds.elsewhere"))
+    os.symlink("../../stage3/pnr/chip_top.gds", gds)
     assert os.path.lexists(gds) and not gds.exists()
 
     s37 = _step(37)
@@ -137,7 +137,7 @@ def test_step37_dangling_gds_is_not_evidence(tmp_path):
         "the broken tape-out GDS link still resolves as a produced artefact")
 
     r = FCC.check_step(proj, s37, {})
-    assert "phase3/stage4/gds/spm.gds" not in r.evidence, (
+    assert "phase3/stage4/gds/chip_top.gds" not in r.evidence, (
         f"step 37 cited a link to a GDS that exists nowhere as its evidence: "
         f"status={r.status!r} evidence={r.evidence}")
 

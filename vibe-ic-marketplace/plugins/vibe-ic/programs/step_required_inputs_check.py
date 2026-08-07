@@ -69,7 +69,7 @@ BACKWARD COMPATIBILITY — EXPLICIT, NEVER SILENT
 ===============================================
 This module reads the CANONICAL `phaseN/` tree. It does NOT require a `steps/`
 tree, and does not read one: a published cell (benchmark-data/ic/spm/
-v1.5.66_gf180mcuD has no `steps/`) and any older run are judged exactly as a
+v1.5.58_ihp-sg13g2 has no `steps/`) and any older run are judged exactly as a
 new run is. The only thing a missing ledger costs is ATTRIBUTION, and the
 record says so in as many words — every JSON report carries
 `degraded.attribution` naming what was unavailable and what the verdict fell

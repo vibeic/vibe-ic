@@ -84,7 +84,7 @@ def test_293_real_converged_reports_show_zero_drv_violations():
     count that would make every promotion look like a regression."""
     root = _PROGRAMS.parents[3] / "benchmark-data" / "ic" / "spm"
     seen = 0
-    for cell in ("v1.5.58_ihp-sg13g2", "v1.5.65_sky130A", "v1.5.66_gf180mcuD"):
+    for cell in ("v1.5.58_ihp-sg13g2", "v1.5.65_sky130A", "v1.9.96_gf180mcuD"):
         rpt = root / cell / "reports" / "phase3" / "sta_mcorner_ocv.rpt"
         if not rpt.is_file():
             continue
