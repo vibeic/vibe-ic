@@ -8861,6 +8861,7 @@ _ORFS_PNR_KNOB_PARAMS: Dict[str, Tuple[str, ...]] = {
     "TNS_END_PERCENT":        ("repair_tns_percent",),
     "CTS_CLUSTER_SIZE":       ("cts_cluster_size",),
     "CTS_CLUSTER_DIAMETER":   ("cts_cluster_diameter",),
+    "CTS_DISTANCE_BETWEEN_BUFFERS": ("cts_distance_between_buffers",),
 }
 _ORFS_NUM_PNR_KNOBS = tuple(_ORFS_PNR_KNOB_PARAMS)
 
@@ -9222,6 +9223,7 @@ def _reference_flow_pnr_mapping(
          "repair_tns_percent":   int   | None,  # repair_timing -repair_tns
          "cts_cluster_size":     int   | None,  # clock_tree_synthesis
          "cts_cluster_diameter": float | None,  #   sink-clustering knobs
+         "cts_distance_between_buffers": float | None,  # H-tree hierarchy depth
          "withheld":             [{...}, ...],  # read, understood, NOT applied
          "notes":                [str, ...]}    # audit trail
 
@@ -9229,6 +9231,15 @@ def _reference_flow_pnr_mapping(
       * TNS_END_PERCENT → repair_timing -repair_tns (the percent of endpoints the
         setup repair chases — 100 = full TNS, not just the single worst path).
       * CTS_CLUSTER_SIZE / CTS_CLUSTER_DIAMETER → TritonCTS sink-clustering.
+      * CTS_DISTANCE_BETWEEN_BUFFERS → TritonCTS -distance_between_buffers, the
+        H-tree's own inter-buffer wire-length trigger. sink_clustering_size alone
+        caps LEAF fanout but does not bound how many leaf clusters the ROOT ends
+        up driving directly — MEASURED (spm x ihp-sg13g2): with clustering capped
+        at 8 sinks/leaf but no distance trigger, TritonCTS still built only a
+        2-level tree (root + leaf), so a design whose sink count exceeds the
+        per-buffer fanout limit squared just moves the same violation from leaf
+        to root. distance_between_buffers forces an intermediate buffered level
+        once accumulated wire length crosses it, independent of sink count.
 
     The ROUTING-RESOURCE-SUPPLY class (`_ORFS_WITHHELD_PNR_KNOBS`:
     CORE_UTILIZATION / FP_CORE_UTIL / PLACE_DENSITY / PLACE_DENSITY_LB_ADDON,
@@ -9260,7 +9271,8 @@ def _reference_flow_pnr_mapping(
     out: Dict[str, object] = {
         "place_density": None, "die_target_util": None,
         "repair_tns_percent": None, "cts_cluster_size": None,
-        "cts_cluster_diameter": None, "notes": notes,
+        "cts_cluster_diameter": None, "cts_distance_between_buffers": None,
+        "notes": notes,
         "rejected": rejected, "withheld": withheld,
     }
     src = sources or {}
@@ -9318,6 +9330,7 @@ def _reference_flow_pnr_mapping(
     tns = _f("TNS_END_PERCENT")
     cluster_size = _f("CTS_CLUSTER_SIZE")
     cluster_diam = _f("CTS_CLUSTER_DIAMETER")
+    dist_buf = _f("CTS_DISTANCE_BETWEEN_BUFFERS")
 
     if tns is not None and 0.0 <= tns <= 100.0:
         out["repair_tns_percent"] = int(round(tns))
@@ -9346,6 +9359,15 @@ def _reference_flow_pnr_mapping(
     elif cluster_diam is not None:
         _reject("CTS_CLUSTER_DIAMETER", cluster_diam,
                 "CTS sink-cluster max diameter must be > 0")
+    if dist_buf is not None and dist_buf > 0:
+        out["cts_distance_between_buffers"] = dist_buf
+        notes.append(
+            f"CTS_DISTANCE_BETWEEN_BUFFERS={dist_buf:g} -> clock_tree_synthesis "
+            f"-distance_between_buffers {dist_buf:g}"
+            f"{_src_suffix('CTS_DISTANCE_BETWEEN_BUFFERS')}")
+    elif dist_buf is not None:
+        _reject("CTS_DISTANCE_BETWEEN_BUFFERS", dist_buf,
+                "CTS inter-buffer distance must be > 0")
     return out
 
 
@@ -9724,7 +9746,8 @@ def _reference_flow_pnr_audit(project: Path) -> Dict[str, object]:
         "rejected": rejected,
         "applied": {k: mapping[k] for k in
                     ("place_density", "die_target_util", "repair_tns_percent",
-                     "cts_cluster_size", "cts_cluster_diameter")},
+                     "cts_cluster_size", "cts_cluster_diameter",
+                     "cts_distance_between_buffers")},
         "notes": list(mapping["notes"]),         # type: ignore[arg-type]
     }
 
@@ -17937,6 +17960,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         repair_tns_percent: Optional[int] = None,
                         cts_cluster_size: Optional[int] = None,
                         cts_cluster_diameter: Optional[float] = None,
+                        cts_distance_between_buffers: Optional[float] = None,
                         sizing_limits_block: str = "",
                         sizing_drv_report_block: str = "") -> str:
     """ORGANIC #581 — the COMPLETE pnr.tcl template as a PURE builder
@@ -18034,6 +18058,25 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
         if cts_cluster_diameter is not None:
             _cts_cluster += (
                 f" -sink_clustering_max_diameter {cts_cluster_diameter:g}")
+        # spm x ihp-sg13g2, 2026-08-07 — MEASURED (live OpenROAD, 3 independent
+        # isolated re-derivations, one with a full 650-check zero-violation
+        # `report_check_types -max_fanout` sweep): `-sink_clustering_size` alone
+        # caps each LEAF buffer's fanout, but TritonCTS's H-tree bisection here
+        # populates only 2 real levels (root + leaf) regardless of clustering
+        # size/levels/buf_list — the ROOT then drives every leaf cluster
+        # directly, reproducing the SAME violation one level up (leaf fanout 16
+        # -> root fanout 16, unchanged). `-distance_between_buffers` is the flag
+        # that actually forces an extra buffered level (confirmed: 10um and
+        # 40um both work on a 156um-square die; a value at ~50% of die span
+        # reverts to the 2-level collapse). An explicit CTS_DISTANCE_BETWEEN_
+        # BUFFERS knob always wins; absent one, default to a value small
+        # relative to any real die (10um — the most rigorously verified value,
+        # zero violators across the full sweep) so the same collapse cannot
+        # silently recur on a design that never tuned this. chip-AGNOSTIC: a
+        # PnR-quality knob, not a per-chip literal.
+        _dist_buf = (cts_distance_between_buffers
+                     if cts_distance_between_buffers is not None else 10.0)
+        _cts_cluster += f" -distance_between_buffers {_dist_buf:g}"
     # approach (a) — multi-corner liberty (ss setup / ff hold) or the
     # byte-identical single tt read_liberty when the caller passed none.
     _corner_lib_stanza = (corner_liberty_block if corner_liberty_block
@@ -19479,6 +19522,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         cts_cluster_size=(_rf_map.get("cts_cluster_size")
                           or _cts_fanout_target),
         cts_cluster_diameter=_rf_map.get("cts_cluster_diameter"),
+        cts_distance_between_buffers=_rf_map.get(
+            "cts_distance_between_buffers"),
         sizing_limits_block=sizing_limits_block,
         sizing_drv_report_block=sizing_drv_report_block))
     cmd = (f"export PATH={TOOLS_IN_CONTAINER}/openroad/bin:"

@@ -503,7 +503,8 @@ class TestFlowBehaviourUnchanged:
         assert a["applied"] == {
             "place_density": None, "die_target_util": None,
             "repair_tns_percent": 100, "cts_cluster_size": 20,
-            "cts_cluster_diameter": 50.0}
+            "cts_cluster_diameter": 50.0,
+            "cts_distance_between_buffers": None}
 
     def test_two_projects_same_config_served_identically(self, tmp_path):
         # chip-AGNOSTIC: the verdict follows the staged config, nothing else.
