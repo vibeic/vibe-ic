@@ -73,6 +73,7 @@ from pathlib import Path
 import _path_layout as _pl
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _container_exec as _CE  # vibe-ic#623 — the deadline goes INSIDE the container
+import pdk_cell_models as _pcm  # ciel version-hash live resolution (gf180)
 
 
 def _resolve_docker_image() -> str:
@@ -1567,6 +1568,17 @@ def run_fault(
         return 2, {"error": "no Verilog cell model resolved: pass "
                             "--cell-model-path or use a PDK with a configured "
                             "cell_model"}
+    if pdk == "gf180" and not cell_model_override:
+        # ciel's gf180mcu path is content-addressed (versions/<hash>/...) and
+        # the hash PDK_CONFIG carries is a point-in-time fallback that goes
+        # stale whenever vibeic-eda's gf180mcu pin advances — see
+        # pdk_cell_models.GF180_CIEL_HASH_FALLBACK. Re-resolve it live against
+        # THIS run's own image/container before trusting it.
+        _parts = cell_model.split(" ")
+        _resolved = _pcm.materialize_gf180_paths(
+            _parts, lambda argv, t: _run_docker(project, argv, timeout=t,
+                                                pdk_dir=pdk_dir))
+        cell_model = " ".join(_resolved)
     # Flop-cell resolution: explicit override wins; else auto-detect from the
     # netlist and union with the PDK-config seed so cut never misses the real
     # flop cell (fixes seed/netlist mismatch, e.g. DFFHQD1 vs seed DFFRQD1).

@@ -52,6 +52,7 @@ from pathlib import Path
 import _path_layout as _pl
 import fault_atpg_run as _fatpg
 import floorplan_contract as _fpc
+import pdk_cell_models as _pcm  # ciel version-hash live resolution (gf180)
 
 
 # ---------------------------------------------------------------------------
@@ -493,6 +494,14 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
             pdk, pdk_cfg = sniffed, _fatpg.PDK_CONFIG[sniffed]
 
     liberty, lib_note = resolve_liberty(pdk, liberty_override)
+    if liberty and pdk == "gf180" and not liberty_override:
+        # Same staleness as fault_atpg_run's cell-model resolution — ciel's
+        # gf180mcu path is content-addressed and SCAN_LIBERTY's hash is a
+        # point-in-time fallback. Re-resolve live before trusting it.
+        liberty = _pcm.materialize_gf180_paths(
+            [liberty],
+            lambda argv, t: _fatpg._run_docker(project, argv, timeout=t,
+                                               pdk_dir=pdk_dir))[0]
     if not liberty:
         # PDK not in SCAN_LIBERTY and no explicit --liberty: fall back to the
         # design's OWN staged corner libraries. A foundry PDK the container does
