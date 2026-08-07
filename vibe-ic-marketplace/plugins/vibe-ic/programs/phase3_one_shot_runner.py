@@ -1999,6 +1999,22 @@ _LIB_DEFAULT_MAX_CAP_RE = re.compile(
     r"default_max_capacitance\s*:\s*([0-9.]+)", re.IGNORECASE)
 _LIB_PIN_MAX_CAP_RE = re.compile(
     r"\bmax_capacitance\s*:\s*([0-9.]+)", re.IGNORECASE)
+# spm x ihp-sg13g2, 2026-08-07: `default_max_transition` / `default_max_capacitance`
+# above already close the slew/cap DRV confounder by reading the ACTIVE liberty
+# unconditionally — `default_max_fanout` did not get the same treatment, and
+# `_l9_declared_max_fanout` (design-declared only) has no PDK-default fallback
+# that covers every PDK: librelane's own shipped `pdk_compat.py` MAX_FANOUT_
+# CONSTRAINT is guarded to `sky130*`/`gf180mcu*` ONLY, so a PDK outside that
+# pair (ihp-sg13g2 measured) gets no cap from EITHER path even though its own
+# liberty declares one. MEASURED: sg13g2_stdcell_typ_1p20V_25C.lib line 36
+# states `default_max_fanout : 8` — a real, characterised, library-wide ceiling
+# on the SAME liberty already used for slew/cap/STA sign-off, not a fabricated
+# design preference — yet CTS built an H-tree leaf (`sg13g2_buf_4`) fanning out
+# to 16 sinks, and post-route sign-off (which DOES read the liberty attribute,
+# same as OpenSTA always has) correctly flagged `-8 (VIOLATED)`. Completing the
+# fallback the same way slew/cap already work closes exactly that gap.
+_LIB_DEFAULT_MAX_FANOUT_RE = re.compile(
+    r"default_max_fanout\s*:\s*([0-9.]+)", re.IGNORECASE)
 
 
 def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, object]:
@@ -2012,7 +2028,15 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
         library (a real PDK-derived drive ceiling — no net should exceed the
         strongest characterised driver's rated load). None if the lib declares
         neither.
-      * ``slew_source`` / ``cap_source`` — where each value came from (disclosure).
+      * ``max_fanout``         — the library-level ``default_max_fanout``, or None
+        if the lib declares none. Unlike slew/cap this has NO per-pin fallback:
+        a per-pin ``max_fanout`` override is a narrower, cell-specific fact the
+        SDC-wide default cannot safely generalise from (a library commonly ships
+        ONE conservative default plus tighter overrides only on unusually weak
+        drivers), so absent a library-wide default this stays honestly None
+        rather than guessing from whichever pin the grep happens to see first.
+      * ``slew_source`` / ``cap_source`` / ``fanout_source`` — where each value
+        came from (disclosure).
       * ``note`` — a human-readable one-liner for the SDC comment.
 
     §4.05: every value is READ from the real liberty; a lib that declares no
@@ -2022,8 +2046,8 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
     Best-effort: any read/parse failure returns all-None (never a fabricated DRV).
     """
     out: Dict[str, object] = {
-        "max_transition_ns": None, "max_capacitance_pf": None,
-        "slew_source": None, "cap_source": None, "note": "",
+        "max_transition_ns": None, "max_capacitance_pf": None, "max_fanout": None,
+        "slew_source": None, "cap_source": None, "fanout_source": None, "note": "",
     }
     if not liberty_path:
         out["note"] = ("no PDK liberty resolved; NO DRV limit emitted "
@@ -2037,13 +2061,14 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
             text = hp.read_text(errors="replace")
             src = str(hp.name)
         elif container:
-            # Container-side: grep only the two DRV token families (a full read of
+            # Container-side: grep only the DRV token families (a full read of
             # a 12 MB liberty over docker exec is wasteful). default_* first hit +
             # every max_capacitance value (we take the max).
             lib_c = _to_container_path(liberty_path, container)
             rc, gout, _ = _docker_exec(
                 container,
                 "grep -iE 'default_max_transition|default_max_capacitance|"
+                "default_max_fanout|"
                 f"max_capacitance' {shlex.quote(lib_c)} 2>/dev/null || true",
                 timeout=120)
             text = gout or ""
@@ -2059,6 +2084,13 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
         try:
             out["max_transition_ns"] = float(m.group(1))
             out["slew_source"] = f"{src}:default_max_transition"
+        except ValueError:
+            pass
+    mf = _LIB_DEFAULT_MAX_FANOUT_RE.search(text)
+    if mf:
+        try:
+            out["max_fanout"] = int(float(mf.group(1)))
+            out["fanout_source"] = f"{src}:default_max_fanout"
         except ValueError:
             pass
     mc = _LIB_DEFAULT_MAX_CAP_RE.search(text)
@@ -2081,10 +2113,11 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
             out["cap_source"] = (f"{src}:max characterised output-pin "
                                  "max_capacitance (PDK-derived ceiling; no "
                                  "library default_max_capacitance declared)")
-    if out["max_transition_ns"] is None and out["max_capacitance_pf"] is None:
-        out["note"] = ("PDK liberty declares neither default_max_transition nor "
-                       "max_capacitance; NO DRV limit emitted (§4.05 — no "
-                       "fabricated limit)")
+    if (out["max_transition_ns"] is None and out["max_capacitance_pf"] is None
+            and out["max_fanout"] is None):
+        out["note"] = ("PDK liberty declares neither default_max_transition, "
+                       "max_capacitance nor default_max_fanout; NO DRV limit "
+                       "emitted (§4.05 — no fabricated limit)")
     else:
         parts = []
         if out["slew_source"]:
@@ -2093,6 +2126,9 @@ def _liberty_drv_limits(liberty_path: str, container: str = "") -> Dict[str, obj
         if out["cap_source"]:
             parts.append(f"max_capacitance={out['max_capacitance_pf']} pF "
                          f"(from {out['cap_source']})")
+        if out["fanout_source"]:
+            parts.append(f"max_fanout={out['max_fanout']} "
+                         f"(from {out['fanout_source']})")
         out["note"] = "DRV limits derived from the PDK liberty: " + "; ".join(parts)
     return out
 
@@ -2480,6 +2516,24 @@ def _ensure_staged_sdc_drv(sdc_text: str, active_liberty: str,
                       or _rtl_replication_fanout_bound(project))
         except Exception:
             fanout = None
+    if not have_fanout and fanout is None:
+        # No design-level cap declared anywhere (L9 / RTL replication bound)
+        # AND no PDK-family default from librelane's shipped pdk_compat.py
+        # (that table is guarded to sky130*/gf180mcu* only — measured
+        # 2026-08-07, ihp-sg13g2 has no entry). Fall back to the ACTIVE
+        # liberty's own `default_max_fanout`, exactly as slew/cap already do
+        # above (`drv.get("max_transition_ns")` / `drv.get("max_capacitance_pf")`
+        # are unconditional liberty reads) — a library-wide characterised
+        # ceiling on the SAME liberty STA sign-off already measures against is
+        # a real fact, not a fabricated design preference (§4.05: reading is
+        # not inventing). A design-declared cap is still NEVER overridden —
+        # this only fires when have_fanout is False and nothing was declared.
+        fanout = drv.get("max_fanout")
+        if fanout is not None:
+            _LAST_FANOUT_SOURCE["note"] = (
+                "no design/RTL/PDK-family cap declared; using the ACTIVE "
+                f"liberty's own {drv.get('fanout_source', 'default_max_fanout')}"
+                " (a real characterised limit, not fabricated)")
 
     if slew is None and cap is None and fanout is None:
         info["note"] = (
@@ -18645,6 +18699,22 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # commands (derive_pll_clocks). For silicon synth (top=chip_top), use
     # a generic minimal SDC tied to chip_top's actual clk port.
     sdc = out_dir / "constraint.sdc"
+    # spm x ihp-sg13g2, 2026-08-07: `set_max_fanout` in the loaded SDC does NOT
+    # make OpenROAD's `clock_tree_synthesis` respect it — CTS's own leaf-level
+    # sink clustering is governed ONLY by `-sink_clustering_size` passed to the
+    # command itself (see `_cts_cluster` below). MEASURED: with `set_max_fanout
+    # 8` correctly present in constraint.sdc (the `_ensure_staged_sdc_drv` /
+    # `_liberty_drv_limits` fallback below), a CTS run with no
+    # `-sink_clustering_size` still built a leaf buffer (`clkbuf_0`) fanning
+    # out to 16 sinks against the SAME liberty's own declared limit of 8 — the
+    # SDC constraint and CTS's own clustering are two independent mechanisms,
+    # and only `set_max_fanout` was closed above. `_cts_fanout_target` carries
+    # the SAME resolved value (design-declared, else liberty-derived) to the
+    # `cts_cluster_size=` kwarg near the bottom of this function, so CTS is
+    # told the identical number the SDC and sign-off already use — set in
+    # BOTH branches below (staged / auto SDC), never fabricated (§4.05: reused
+    # from the same DRV resolution, not invented here).
+    _cts_fanout_target: Optional[int] = None
     project_sdc_silicon = _resolve_staged_silicon_sdc(project)
     if project_sdc_silicon and project_sdc_silicon.is_file():
         # benchmark-spm-asap7 — staged SDCs are ns/pF-authored; rescale
@@ -18675,6 +18745,16 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         _staged_sdc, _drv_parity = _ensure_staged_sdc_drv(
             _staged_sdc, str(pdk.liberty), container, project,
             pdk_name=str(pdk.name))
+        # Read the FINAL effective value back out of the SDC text (not just
+        # `added_max_fanout`, which is None when the design's OWN staged SDC
+        # already declared one — that value must reach CTS too, same as a
+        # liberty-derived fallback would).
+        _cts_fm = _SDC_MAX_FANOUT_RE.search(_staged_sdc)
+        if _cts_fm:
+            try:
+                _cts_fanout_target = int(float(_cts_fm.group(2)))
+            except ValueError:
+                pass
         if _drv_parity.get("note"):
             print(f"[phase3][sdc-drv] {_drv_parity['note']}", file=sys.stderr)
         try:
@@ -18726,6 +18806,19 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             drv_note=str(_drv.get("note") or ""),
             liberty_path=str(pdk.liberty),
             pdk_name=str(pdk.name)))
+        # Same CTS-clustering target as the staged branch above; the
+        # auto-SDC path has no design SDC to declare a fanout cap in, so
+        # priority collapses to L9 / RTL-replication / liberty default —
+        # `_build_auto_silicon_sdc` does not emit `set_max_fanout` text (a
+        # separate, non-blocking gap; CTS reads this value directly, not by
+        # re-parsing the SDC).
+        try:
+            _cts_fanout_target = (
+                _l9_declared_max_fanout(project, str(pdk.name))
+                or _rtl_replication_fanout_bound(project)
+                or _drv.get("max_fanout"))
+        except Exception:
+            _cts_fanout_target = _drv.get("max_fanout")
     # Whichever branch ran, record what the DESIGN staged and what became of
     # it. A machine-readable sibling of the deck's own comment block, so a
     # later reader does not have to parse an SDC to learn that the design's
@@ -19374,7 +19467,17 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         spef_repair_estimate_block=spef_repair_estimate_block,
         openroad_threads=_openroad_thread_count(),
         repair_tns_percent=_rf_map.get("repair_tns_percent"),
-        cts_cluster_size=_rf_map.get("cts_cluster_size"),
+        # A reference-flow-declared knob is an explicit operator choice and
+        # wins outright; absent that, fall back to the same fanout cap the
+        # SDC/sign-off now use (`_cts_fanout_target`, set above in EITHER
+        # branch) so CTS's own leaf clustering does not exceed a limit the
+        # rest of the flow already enforces. `set_max_fanout` in the SDC
+        # alone does not constrain `clock_tree_synthesis` — MEASURED spm x
+        # ihp-sg13g2: the SDC carried it, CTS still built a 16-sink leaf
+        # against the library's declared 8, until this value reached
+        # `-sink_clustering_size` directly.
+        cts_cluster_size=(_rf_map.get("cts_cluster_size")
+                          or _cts_fanout_target),
         cts_cluster_diameter=_rf_map.get("cts_cluster_diameter"),
         sizing_limits_block=sizing_limits_block,
         sizing_drv_report_block=sizing_drv_report_block))
