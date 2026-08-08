@@ -1,0 +1,74 @@
+type: bug
+severity: P0
+component: program:flow_gate_enforcement_audit
+plugin_version: "1.10.4"
+
+title: >-
+  A regex over the flow YAML collapses the nested gate-clause form into one literal gate named
+  "command", so 31 of the flow's 150 gate programs are audited by nothing
+
+pattern: |
+  A census parses a structured configuration file with a regular expression instead of the
+  parser the configuration already has. The grammar has two spellings of the same clause; the
+  regex handles one. Every clause in the other spelling collapses to the same meaningless
+  token, and the census reports a total that looks plausible — so the omission is invisible
+  precisely because the number it produces is not obviously wrong.
+
+  The damage is that every downstream percentage is computed over a population that silently
+  excludes a fifth of the subject, and the excluded fifth is not random: nested clauses are
+  the CONDITIONAL ones, which is where inapplicability, skips and self-disabling conditions
+  live.
+
+  MEASURED against flow/phase1_phase2_phase3.yaml, parsed with PyYAML:
+
+    exec-type gate clauses              159   (flat 128, nested 31)
+    by force  program_exit_zero          97
+              advisory_program_exit_zero 34
+              optional_program_exit_zero 28
+    distinct gate programs              150
+
+    flow_gate_enforcement_audit reports 120 "gates in flow definition"
+      = 119 real programs + 1 literal token "command"
+
+  The regex is `(?:optional_|advisory_)?program_exit_zero:\s*["']?([\w./-]+)` and `\s*`
+  spans the newline, so
+
+      - optional_program_exit_zero:
+          command: "spare_cell_preservation_check ..."
+
+  captures the YAML KEY `command`, not the program. 31 real gate programs are therefore
+  examined by nothing, among them: spare_cell_preservation_check, spare_cell_coverage_check,
+  si_crosstalk_check, si_mcf_sta_check, post_route_signoff_corner_check, gds_antenna_deck_check,
+  clock_plan_check, sdc_validator_check, sdc_exception_correlation_check, eco_loop_audit,
+  yosys_hilomap_required_check, ip_integration_check.
+
+  Two consequences beyond the count. post_route_signoff_corner_check is genuinely wired inline
+  through `_DECLARED_SIGNOFF_GATES` (phase3_one_shot_runner.py:28425) and gets no credit for it,
+  so the audit understates real enforcement as well as overstating it elsewhere. And the audit's
+  only failing condition — declared blocking while audit-only — cannot fire for any of the 31,
+  so a future blocking declaration on a nested clause is structurally undetectable. Checked
+  today: none of the 31 declares an intent, so there is no live contradiction hiding here; the
+  exposure is that there could never be a detected one.
+
+suggested_fix: |
+  Parse the flow with PyYAML and walk the gate tree (`all_of` / `any_of` / nesting), reading
+  both clause spellings — the value form and the `{command:, condition_files_exist:}` form —
+  and take the program from the first token of the command. flow_compliance_check already walks
+  this grammar correctly; sharing that walker is better than re-deriving it, because the two
+  disagreeing about what a gate IS is how this defect arose.
+
+  Add an assertion that makes the failure mode impossible to reintroduce: no gate name may be a
+  bare YAML key of the clause grammar (`command`, `condition_files_exist`, `any_of`, `all_of`).
+  A census that yields one of those has mis-parsed, and should exit non-zero saying so rather
+  than counting it.
+
+  Pin the measured totals as a test fixture — 159 clauses / 150 distinct programs / 97 blocking,
+  28 optional, 34 advisory — recomputed live from the yaml, so the audit's population and the
+  flow's population can never drift again without a red test naming the difference.
+
+id: "ORGANIC-20260808-enforcement-audit-blind-to-a-fifth-of-the-flows-gates"
+submitted_at: "2026-08-08T23:42:00+08:00"
+session_context: >-
+  2026-08-08 adversarial review of the 63x8 flow-gate compliance matrix. Found by noticing that
+  one of the audit's 120 "gates" was named `command`, then re-deriving the true clause census
+  with a YAML parse and diffing the two populations.

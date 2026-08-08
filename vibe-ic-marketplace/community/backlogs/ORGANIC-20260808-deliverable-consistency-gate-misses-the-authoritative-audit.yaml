@@ -1,0 +1,71 @@
+type: bug
+severity: P0
+component: program:deliverable_verdict_consistency_check
+plugin_version: "1.10.4"
+
+title: >-
+  The gate written to stop a deliverable contradicting its run returns PASS on the exact
+  contradiction it was written for, because it never reads the authoritative audit
+
+pattern: |
+  A consistency gate compares two artefacts and declares agreement, while a THIRD artefact
+  in the same tree — the one the publish path treats as authoritative — records the opposite
+  verdict. The gate is not wrong about the pair it compares; it is wrong about which pair
+  decides the question. Choosing the comparands is the whole design of a consistency check,
+  so a gate that picks two agreeing artefacts out of three produces a certificate whose
+  strength is indistinguishable from a rubber stamp, and it does so in the one place a
+  reviewer is most likely to trust it: a program explicitly named after the escape.
+
+  The general rule: when N artefacts describe one run, a consistency gate must either compare
+  against the artefact its own ecosystem treats as authoritative, or state in its verdict
+  which artefacts it did NOT read. Silence about the unread third artefact is what converts
+  a partial comparison into a false certificate.
+
+  MEASURED, on the real published tree of a public open-source benchmark cell:
+
+    reports/orchestrator/vibe_ic_one_shot.json   verdict = PASS_WITH_WAIVERS
+    reports/orchestrator/phase3_one_shot.json    verdict = PASS_WITH_WAIVERS
+    reports/audit/phase23_completion_audit.json  verdict = FAIL
+
+  With the deliverable restored to the wording the repository itself later retracted as a
+  false convergence claim, the gate reports:
+
+    PASS: deliverable_verdict_consistency_check — headline PASS_WITH_WAIVERS agrees in
+    polarity with vibe_ic_one_shot.json verdict 'PASS_WITH_WAIVERS' (PASS)   exit 0
+
+  The program's own docstring names phase23_completion_audit.json in its founding narrative
+  (line 13) and then never reads it: `grep -c phase23_completion_audit` over the source is 1,
+  and that one hit is prose. Meanwhile `benchmark_evidence_publish._audit_verdict` treats that
+  same file as THE verdict source and refuses to publish a non-converged run — so the two
+  programs disagree about which artefact decides convergence, and only the weaker one is a gate.
+
+  The false certificate stood for 6 days in the published tree and was retired by a human
+  reading the artefacts, not by any gate.
+
+suggested_fix: |
+  Make the consistency gate read the same authoritative artefact the publish path already
+  reads. Concretely: add reports/audit/phase23_completion_audit.json as a third comparand, and
+  fail in the escape direction whenever the deliverable claims PASS-polarity over ANY
+  independently-produced non-converged verdict in the tree, not just the orchestrator's. Keep
+  the declared DELIVERABLE_STRICTER asymmetry — under-claiming still must not fail.
+
+  Two properties are what make this a fix and not a re-wording, and both should be pinned by
+  tests: (a) the gate must name, in its own verdict text, every verdict artefact it consulted,
+  so a future reader can tell a two-way comparison from a three-way one without reading the
+  source; (b) the reproduction above must go red — restore the retracted deliverable beside the
+  committed reports/ tree and assert exit 1.
+
+  Separately, nothing re-checks a cell after it lands. benchmark_evidence_publish would have
+  refused this publish, which means the tree reached benchmark-data without it, and no test
+  sweeps committed cells for the same contradiction. A repo-level sweep comparing every
+  published cell's RESULT.md verdict against its own committed phase23_completion_audit.json
+  is the mechanism that would have caught this in 6 minutes instead of 6 days. Measured today
+  over all 5 published cells: 0 escape-direction contradictions and 1 under-claim, so the sweep
+  starts green and is cheap to keep green.
+
+id: "ORGANIC-20260808-deliverable-consistency-gate-misses-the-authoritative-audit"
+submitted_at: "2026-08-08T23:40:00+08:00"
+session_context: >-
+  2026-08-08 adversarial review of the 63x8 flow-gate compliance matrix. Reproduced against the
+  real published artefacts on the maintainer host, with the deliverable restored from git history
+  to its pre-retraction wording; the gate returned exit 0 on the escape it exists to prevent.
