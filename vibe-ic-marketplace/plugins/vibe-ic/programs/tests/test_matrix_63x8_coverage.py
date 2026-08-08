@@ -103,6 +103,7 @@ from typing import Dict, List, Optional, Tuple
 import pytest
 
 from matrix_63x8 import flowref as F
+from matrix_63x8 import substitution as SUB
 from matrix_63x8 import waivers as W
 from matrix_63x8.cells import DIMENSIONS, DIMENSION_NAMES
 
@@ -119,6 +120,26 @@ DIMENSION_MODULE_GLOB = "test_matrix_d[1-8]_*.py"
 _CELL_ID_RE = re.compile(r"^step(.+)$")
 
 VALID_STATES = ("ENFORCED", "WAIVED", "NA")
+
+#: Dimensions that have answered ``matrix_cell_substitution`` — "was this cell's
+#: ENFORCED verdict measured against the step's own mechanism, or against a
+#: stand-in?" — as MEASURED 2026-08-09.
+#:
+#: Pinned in BOTH directions, which is the whole anti-rot mechanism:
+#:
+#:   * a dimension DROPPING its declaration would silently move its substituted
+#:     cells out of the published SUBSTITUTED column and back into the total a
+#:     reader quotes — the exact erasure this contract closes;
+#:   * a dimension GAINING one changes the published split, so the generated
+#:     census table in ``matrix_63x8/README.md`` must be regenerated in the same
+#:     change rather than left asserting a number that no longer reproduces.
+#:
+#: Seven dimensions are deliberately NOT here. The question is open for them and
+#: is not answerable from outside the module that built the predicate — see
+#: ``matrix_63x8/substitution.py``, "WHY UNDECLARED IS A STATE AND NOT A
+#: DEFAULT". Their cells are published as UNDECLARED, never folded into either
+#: answer.
+DIMENSIONS_DECLARING_SUBSTITUTION: Tuple[int, ...] = (8,)
 
 #: ``(steps, dimensions, cells)`` as MEASURED on 2026-07-27.
 #:
@@ -502,6 +523,85 @@ def state_census() -> Dict[Tuple[str, int], str]:
             for (sid, dim) in collected_cells()}
 
 
+@lru_cache(maxsize=1)
+def substitution_census() -> Dict[Tuple[str, int], str]:
+    """``{(step, dim): "OWN" | "SUBSTITUTED" | "UNDECLARED"}`` for every ENFORCED
+    cell. Cells that are WAIVED or NA are absent — they already say they are not
+    enforcing, and giving them a substitution bucket would double-count them.
+
+    Live on every call, like :func:`state_census`: the owning module re-derives
+    its answer from the current tree, and this file only sorts the answers into
+    published columns.
+    """
+    out: Dict[Tuple[str, int], str] = {}
+    for (sid, dim), state in state_census().items():
+        if state != "ENFORCED":
+            continue
+        mod = dimension_modules()[dim]
+        out[(sid, dim)] = SUB.bucket(SUB.disclosure_for(mod, sid, state))
+    return out
+
+
+def test_a_substituted_cell_is_never_counted_as_enforcing_its_own_mechanism():
+    """The finding this contract closes, asserted rather than described.
+
+    Dimension 8 holds every step's gate at a known tier by substituting a
+    stand-in for it, discloses that at length in its own docstring, and until
+    2026-08-09 fed the census a plain ``ENFORCED`` for all 61 cells anyway. One
+    number reached the README; the caveat did not.
+
+    Three properties are pinned here, all live:
+
+      1. every ENFORCED cell lands in exactly one published bucket;
+      2. a bucket is only ever assigned by the module that OWNS the cell —
+         a dimension that has not declared reads UNDECLARED, never OWN, so
+         silence can never be published as a clean bill of health;
+      3. the set of dimensions that HAVE declared matches
+         :data:`DIMENSIONS_DECLARING_SUBSTITUTION`, in both directions.
+
+    (3) is what stops the erasure from coming back: deleting dimension 8's hook
+    would move 45 cells out of the SUBSTITUTED column and back into the number a
+    reader quotes, and it would do so with every other test in this file green.
+    """
+    census = substitution_census()
+    states = state_census()
+    enforced = {k for k, v in states.items() if v == "ENFORCED"}
+    assert set(census) == enforced, (
+        f"substitution census covers {len(census)} cells but "
+        f"{len(enforced)} are ENFORCED; "
+        f"unbucketed: {sorted(enforced - set(census))[:10]}, "
+        f"over-bucketed: {sorted(set(census) - enforced)[:10]}"
+    )
+    bad = {k: v for k, v in census.items() if v not in SUB.BUCKETS}
+    assert not bad, f"cells in no published bucket: {bad}"
+
+    declared = tuple(sorted(
+        d for d in DIMENSIONS if SUB.declares(dimension_modules()[d])))
+    assert declared == DIMENSIONS_DECLARING_SUBSTITUTION, (
+        f"the dimensions declaring {SUB.HOOK}() changed: measured "
+        f"{list(declared)}, pinned {list(DIMENSIONS_DECLARING_SUBSTITUTION)}.\n"
+        f"Dropped: {sorted(set(DIMENSIONS_DECLARING_SUBSTITUTION) - set(declared))} "
+        f"— those cells' substituted enforcement stops being published and "
+        f"folds back into the total a reader quotes.\n"
+        f"Added: {sorted(set(declared) - set(DIMENSIONS_DECLARING_SUBSTITUTION))} "
+        f"— good, and the generated census in matrix_63x8/README.md must be "
+        f"regenerated in the same change "
+        f"(`python3 tools/gen_matrix_63x8_census.py`)."
+    )
+    # A declared dimension whose every cell reads OWN has an inert hook: the
+    # disclosure mechanism exists and reports nothing, which looks identical to
+    # not having it and is how this kind of contract rots.
+    for dim in declared:
+        buckets = [v for (s, d), v in census.items() if d == dim]
+        assert SUB.SUBSTITUTED in buckets or SUB.UNDECLARED_BUCKET in buckets, (
+            f"dimension {dim} declares {SUB.HOOK}() but reports every one of "
+            f"its {len(buckets)} ENFORCED cells as OWN. Either the dimension "
+            f"stopped substituting — in which case say so in its docstring and "
+            f"remove it from DIMENSIONS_DECLARING_SUBSTITUTION — or the hook "
+            f"has been neutralised and is now disclosing nothing."
+        )
+
+
 def test_every_cell_resolves_to_exactly_one_state():
     """ENFORCED + WAIVED + NA == 504, decided by the module that owns the cell."""
     census = state_census()
@@ -822,18 +922,32 @@ def test_cell_ids_are_not_silently_renamed():
 
 
 def test_the_census_is_reported_for_humans(record_property):
-    """Emit the split so a CI reader gets the number without reading the code."""
+    """Emit the split so a CI reader gets the number without reading the code.
+
+    ENFORCED is reported BROKEN DOWN, never as one figure. A single
+    ``ENFORCED=61`` is what let dimension 8's 45 substituted cells travel as
+    enforcement of the gates they name; the caveat existed, in that module's
+    docstring, and this line is where it stopped existing.
+    """
     census = state_census()
+    subs = substitution_census()
     lines = []
     for dim in DIMENSIONS:
         per = [v for (s, d), v in census.items() if d == dim]
+        buckets = [v for (s, d), v in subs.items() if d == dim]
         lines.append(
             f"d{dim} {DIMENSION_NAMES[dim]}: "
-            f"ENFORCED={per.count('ENFORCED')} WAIVED={per.count('WAIVED')} "
+            f"ENFORCED={per.count('ENFORCED')}"
+            f"(own={buckets.count(SUB.OWN_MECHANISM)},"
+            f"substituted={buckets.count(SUB.SUBSTITUTED)},"
+            f"undeclared={buckets.count(SUB.UNDECLARED_BUCKET)}) "
+            f"WAIVED={per.count('WAIVED')} "
             f"NA={per.count('NA')}")
     totals = {s: sum(1 for v in census.values() if v == s) for s in VALID_STATES}
+    split = {b: sum(1 for v in subs.values() if v == b) for b in SUB.BUCKETS}
     summary = (f"{len(census)} cells = {len(F.step_ids())} steps x "
-               f"{len(DIMENSIONS)} dimensions; {totals}")
+               f"{len(DIMENSIONS)} dimensions; {totals}; "
+               f"ENFORCED splits {split}")
     record_property("matrix_63x8_census", summary)
     record_property("matrix_63x8_per_dimension", " | ".join(lines))
     assert len(census) == expected_cells(), summary

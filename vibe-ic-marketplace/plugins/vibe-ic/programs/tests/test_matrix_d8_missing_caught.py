@@ -156,6 +156,14 @@ Three things this module provably does NOT decide:
    real EDA chain, which CI does not have. Dimensions 1, 2 and 4 ask the
    reachability question directly.
 
+   This gap is no longer disclosed HERE and erased THERE. Since 2026-08-09 the
+   module answers :func:`matrix_cell_substitution` for every cell, so the split
+   travels with the census figure instead of living in this paragraph: the
+   generated table in ``matrix_63x8/README.md`` reports the substituted cells in
+   their own column and the total never folds them into "enforcing". Measured
+   the day the contract landed: 16 of the 61 ENFORCED cells run against the
+   step's own gate, 45 against the stand-in.
+
 3. **The ``__WAIVER_HINT__`` (rc=3 / ``PASS_WITH_WAIVERS``) tier.** Producing it
    for real needs a gate program that passed its threshold with a DRC/LVS slot
    credited via a waiver — i.e. a converged tapeout project; no program in
@@ -178,7 +186,7 @@ import tempfile
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pytest
 
@@ -1360,3 +1368,39 @@ def matrix_cell_state(step_id) -> str:
     if W.waiver_for(step_id, DIM) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+def matrix_cell_substitution(step_id) -> Optional[str]:
+    """Was this cell's ENFORCED verdict measured against the step's OWN gate?
+
+    ``None`` for the steps whose real gate reaches a PASS tier on the seeded
+    fixture — those are decided by ``check_step`` driving the gate the flow
+    yaml actually declares. A disclosure for the rest, whose verdict comes from
+    the substituted stand-in described in KNOWN GAP #2.
+
+    The split is RE-DERIVED from :func:`_real_gate_sweep`, the same live
+    measurement ``test_d8_downgrade_is_reachable_through_each_steps_own_real_gate``
+    grades against ``REAL_GATE_PASS_TIER_STEPS``. Reading the pinned tuple
+    directly would make this a fact about a tuple; reading the sweep makes it a
+    fact about the tree, and weakening the sweep still has to get past that
+    test's shrink guard.
+
+    Why it is reported at all: the substitution was always disclosed HERE, in
+    prose, and always erased THERE, in the one census figure a reader quotes.
+    45 of 61 is not a footnote to 61 — it is most of it.
+    """
+    if matrix_cell_state(step_id) != "ENFORCED":
+        return None
+    if F.normalize_id(step_id) in _real_gate_sweep():
+        return None
+    return (
+        "the 61-cell sweep replaces this step's declared gate with the minimal "
+        "stand-in {\"files_exist\": [\"_d8_gate/gate_ok.flag\"]} so the gate "
+        "verdict is held at a known PASS tier and the MISSING downgrade is "
+        "reachable at all; this step's OWN gate FAILs on a synthesized fixture "
+        "(it needs a converged project no CI has), so what this cell proves is "
+        "that the CATCHER downgrades a PASS-tier verdict when a declared "
+        "output vanishes — not that this step's gate ever reaches that tier in "
+        "production. See KNOWN GAP #2 and "
+        "test_d8_downgrade_is_reachable_through_each_steps_own_real_gate."
+    )

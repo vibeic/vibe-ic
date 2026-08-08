@@ -154,6 +154,21 @@ walking up from the plugin root → the vendored `audit_history.json` if present
 If none resolves, every cell reads `ABSENT_FROM_AUDIT` and imports still
 succeed — losing the history must never break a live predicate.
 
+### `substitution.py` — what `ENFORCED` does not say
+`ENFORCED` means a predicate ran and passed. It does not say WHAT it ran
+against. Dimension 8 holds every step's gate at a known tier by substituting a
+minimal stand-in for it — disclosed at length in its own docstring, and erased
+the moment the census added eight rows together.
+
+A dimension module may expose `matrix_cell_substitution(step_id)` beside
+`matrix_cell_state`: `None` for "the step's own mechanism", a disclosure string
+for "a stand-in, and here is which and why". A module that exposes nothing is
+**UNDECLARED**, which is a third state and *not* a synonym for `None` —
+reading silence as "not substituted" would republish the exact defect the
+contract removes. Which dimensions have declared is pinned in
+`test_matrix_63x8_coverage.DIMENSIONS_DECLARING_SUBSTITUTION`, in both
+directions, so a declaration cannot be dropped without the suite saying so.
+
 ### `waivers.py` — the accepted-gap registry
 `WAIVERS` **starts empty**. The eight dimension modules share one worktree, so
 a sibling that needs a waiver **reports it to the orchestrator** rather than
@@ -252,34 +267,57 @@ single-threaded pytest but would **not** be safe under
 `pytest-xdist --dist loadfile` sharing a process, or if the suite ever gains
 thread-parallel test execution.
 
-## The census, as it stands after the VACUOUS_PASS numerator ruling
+## The census
 
 Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
 eight modules through pytest's own machinery and asks each module the state of
 the cells it owns. **504 / 504 cells present, exactly once.**
 
-| dim | question                | ENFORCED | WAIVED | NA |
-|-----|-------------------------|---------:|-------:|---:|
-| 1   | wiring                  | 63       | 0      | 0  |
-| 2   | runnable / falsifiable  | 62       | 0      | 1  |
-| 3   | outputs produced        | 52       | 4      | 7  |
-| 4   | criteria match          | 63       | 0      | 0  |
-| 5   | deps correct            | 62       | 0      | 1  |
-| 6   | skip discipline         | 62       | 1      | 0  |
-| 7   | outputs list complete   | 58       | 4      | 1  |
-| 8   | missing mechanism       | 61       | 0      | 2  |
-| **total** |                   | **483**  | **9**  | **12** |
+The table below is **GENERATED** by `tools/gen_matrix_63x8_census.py` and
+diffed against the tree by `programs/tests/test_matrix_63x8_census_freshness.py`.
+It was hand-written until 2026-08-09, and by then it had drifted: it published
+`483 / 9 / 12` while the reproduce command printed underneath it returned
+`481 / 11 / 12`, with four of the eight rows wrong. A number nobody recomputes
+rots at exactly the rate the tree moves, and every cell under this total was
+already being recomputed live — so the total is now recomputed too.
 
-Reproduce (never quote this table without re-running it):
+The ENFORCED column is printed SPLIT and there is deliberately no single
+"enforcing" figure. Dimension 8 substitutes a stand-in gate for most of its
+cells, says so at length in its own docstring, and that disclosure used to die
+the moment eight rows were added up. See `substitution.py`.
+
+<!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
+
+**504 cells: 481 ENFORCED, 11 WAIVED, 12 NA.**
+
+`ENFORCED` is published SPLIT, because it is not one thing. It means a live predicate ran and passed; it does not say WHAT it ran against, and that turns out to be three different answers:
+
+* **16** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
+* **45** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
+* **420** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
+
+The 11 WAIVED and 12 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
+
+| dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | WAIVED | NA |
+|-----|----------|--------------:|----------------------:|---------------------:|-------:|---:|
+| 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 63 | 0 | 0 |
+| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 60 | 2 | 1 |
+| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 53 | 3 | 7 |
+| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 63 | 0 | 0 |
+| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 61 | 1 | 1 |
+| 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 1 | 0 |
+| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 58 | 4 | 1 |
+| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 16 | 45 | 0 | 0 | 2 |
+| **total** | | **16** | **45** | **420** | **11** | **12** |
+
+Regenerate (never edit this block by hand, and never quote it without re-running):
 
 ```
-cd vibe-ic-marketplace/plugins/vibe-ic && PYTHONPATH=.:programs:programs/tests \
-  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -c \
-  "import sys; sys.path[:0]=['programs','programs/tests']; \
-   import test_matrix_63x8_coverage as CV, collections; \
-   print(collections.Counter(CV.state_census().values()))"
--> Counter({'ENFORCED': 483, 'NA': 12, 'WAIVED': 9})
+python3 tools/gen_matrix_63x8_census.py          # rewrite
+python3 tools/gen_matrix_63x8_census.py --check  # exit 1 on drift
 ```
+
+<!-- END GENERATED CENSUS -->
 
 > **Dimension 6 went back UP, because the defect it was measuring was
 > fixed.** 59/4/0 -> 62/1/0. Leg L3c measures whether a step on the
@@ -419,8 +457,13 @@ the predicate is strong enough to catch every defect of that kind — read the
 owning module's `KNOWN GAP` section before quoting any of these numbers. Three
 that matter most:
 
-* dimension 8's 61 ENFORCED cells run against a **substituted** gate; only the
-  14 steps in `REAL_GATE_PASS_TIER_STEPS` are measured with the step's own gate;
+* dimension 8's ENFORCED cells mostly run against a **substituted** gate; only
+  the steps in `REAL_GATE_PASS_TIER_STEPS` are measured with the step's own
+  gate. This one is no longer a caveat you have to remember while reading the
+  total — it is a column in the generated table above, produced by
+  `matrix_cell_substitution()` on the module that owns those cells, so a
+  reader who quotes the census gets the split whether or not they read this
+  bullet. That is what the other two below still lack;
 * dimension 3's seven `EXTERNALLY_ATTESTED_STEPS` fall back to a committed
   manifest on any host without the campaign's out-of-repo run trees;
 * dimension 6's legs L1 and L2 are structurally inert for most steps; L1b and
