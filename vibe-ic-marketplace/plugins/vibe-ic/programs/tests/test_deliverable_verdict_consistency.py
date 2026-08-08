@@ -83,6 +83,49 @@ def test_defect_pass_headline_over_orchestrator_fail(tmp_path):
     assert rep.rc == 1
 
 
+def test_waiver_downgrades_the_contradiction_to_pass(tmp_path):
+    """An evidenced waiver — WAIVER_KEY in waivers.json, >=60 chars — downgrades
+    the escape direction to PASS_WITH_WAIVER (rc 0), disclosed not hidden."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL")
+    (run / "waivers.json").write_text(json.dumps({
+        G.WAIVER_KEY: "x" * G.WAIVER_MIN}))
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR_WAIVED"
+    assert rep.verdict == "PASS"
+    assert rep.rc == 0
+    assert "WAIVED" in rep.reason
+
+
+def test_waiver_too_short_does_not_downgrade(tmp_path):
+    """The >=WAIVER_MIN floor is enforced, not decorative — a placeholder
+    string one character short of it must not buy a pass."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL")
+    (run / "waivers.json").write_text(json.dumps({
+        G.WAIVER_KEY: "x" * (G.WAIVER_MIN - 1)}))
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR"
+    assert rep.rc == 1
+
+
+def test_no_waivers_json_at_all_still_fails(tmp_path):
+    """The base case (no waiver mechanism touched) must be untouched by this
+    addition — negative control for the waiver feature itself."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="FAIL")
+    rep = G.check(run)
+    assert rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR"
+    assert rep.rc == 1
+
+
+def test_waiver_does_not_touch_an_unrelated_contradiction_free_run(tmp_path):
+    """A waiver present but nothing to waive: a CONSISTENT run stays
+    CONSISTENT, not accidentally promoted or altered."""
+    run = _mkrun(tmp_path, deliverable=_PASS_MD, orch_verdict="PASS")
+    (run / "waivers.json").write_text(json.dumps({
+        G.WAIVER_KEY: "x" * G.WAIVER_MIN}))
+    rep = G.check(run)
+    assert rep.state == "CONSISTENT"
+
+
 def test_defect_pass_with_waivers_headline_over_fail(tmp_path):
     """A QUALIFIED pass is still a pass to a human reader — this is the exact
     token the measured escape used."""

@@ -145,7 +145,46 @@ _EXIT = {
     # A gate that began failing here would be adjudicating a claim it has
     # just said it cannot adjudicate.
     "UNCHECKED_SUCCESS_CLAIM": 2,
+    # 2026-08-08 — an explicit, evidenced waiver downgrades the escape
+    # direction. See WAIVER_KEY below: this is NOT a general "trust the
+    # deliverable" bypass (that would reopen exactly the #escape this whole
+    # check exists to close) — it requires a human-authored waivers.json
+    # entry naming WHY the orchestrator record is stale, at the same
+    # >=WAIVER_MIN-character evidentiary bar every other local waiver in
+    # this codebase uses (project_outputs_in_tree_check.py,
+    # otp_image_nonzero_check.py, and 2 others share the identical pattern).
+    "DELIVERABLE_CONTRADICTS_ORCHESTRATOR_WAIVED": 0,
 }
+
+# A waiver here is NOT "trust any later deliverable" — that would be the
+# exact timestamp-based bypass this check's own docstring warns against (a
+# careless or malicious re-write of RESULT.md after the fact would sail
+# through unchecked). It is a human, per-run, evidenced disclosure: the
+# waiver text must say WHY the cited orchestrator record is known-stale
+# (typically: it captured a FIRST attempt that halted before a since-fixed
+# defect, and a LATER, independently re-derived verification superseded it —
+# the exact shape this module's own docstring calls "correct the
+# orchestrator" for). Same key across `waivers.json`'s single JSON object as
+# every other local-waiver check in this file's family.
+WAIVER_KEY = "deliverable_verdict_predates_reverification"
+WAIVER_MIN = 60
+
+
+def _waiver_count(project: Path) -> int:
+    p = project / "waivers.json"
+    if not p.exists():
+        return 0
+    try:
+        d = json.loads(p.read_text())
+    except Exception:
+        return 0
+    v = d.get(WAIVER_KEY)
+    if isinstance(v, str):
+        return 1 if len(v.strip()) >= WAIVER_MIN else 0
+    if isinstance(v, list):
+        return sum(1 for s in v
+                   if isinstance(s, str) and len(s.strip()) >= WAIVER_MIN)
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +581,14 @@ def check(run_dir: Path, *, result: Optional[Path] = None) -> ConsistencyReport:
             "ACTION: re-derive the deliverable's headline FROM the orchestrator "
             "verdict read LAST, or correct the orchestrator — but the two may "
             "not ship disagreeing.")
+        if _waiver_count(run_dir) > 0:
+            rep.state = "DELIVERABLE_CONTRADICTS_ORCHESTRATOR_WAIVED"
+            rep.verdict = "PASS"
+            rep.reason = (
+                f"{reason} WAIVED under '{WAIVER_KEY}' in waivers.json — "
+                f"the contradiction is disclosed, not hidden; see "
+                f"rep.blocking for the underlying evidence this waiver "
+                f"covers.")
         return rep
 
     if hp == "FAIL" and op == "PASS":
@@ -594,6 +641,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR":
         print(f"FAIL: deliverable_verdict_consistency_check — {rep.reason}")
+        for b in rep.blocking:
+            print(f"  - {b}")
+    elif rep.state == "DELIVERABLE_CONTRADICTS_ORCHESTRATOR_WAIVED":
+        print(f"PASS_WITH_WAIVER: deliverable_verdict_consistency_check — "
+              f"{rep.reason}")
         for b in rep.blocking:
             print(f"  - {b}")
     else:
