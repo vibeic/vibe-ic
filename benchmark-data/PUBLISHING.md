@@ -5,6 +5,15 @@ canonical layout by a deterministic, chip-AGNOSTIC program and validated by a
 companion gate. You do **not** hand-assemble an evidence folder, and you never
 push a lone `RESULT.md` or a messy directory again.
 
+> For the **whole picture** — how the flow YAML's `required_outputs` decide where
+> EDA tools write during a run, how `<run>/steps/` is built (symlinks) and why the
+> published form is a record instead, and the precise difference between
+> `outputs.json` / `written.json` / `write_ledger.json` / `STEP_RECORD.json` /
+> `STEP_ROUTING.txt` — see
+> [`plugins/vibe-ic/docs/architecture/OUTPUT_LAYOUT_AND_STEPS_MIRROR.md`](../vibe-ic-marketplace/plugins/vibe-ic/docs/architecture/OUTPUT_LAYOUT_AND_STEPS_MIRROR.md).
+> That document also records the measured gaps between what the YAML declares and
+> what the tools/publisher actually produce.
+
 Two programs own this (both under `plugins/vibe-ic/programs/`):
 
 | program | role |
