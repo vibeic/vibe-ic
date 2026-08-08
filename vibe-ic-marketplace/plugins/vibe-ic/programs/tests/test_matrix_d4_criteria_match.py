@@ -553,18 +553,32 @@ def test_d4_selfcheck_matcher_discriminates_wrong_directory():
     )
 
 
-def _with_step_12_outputs(tmp_path: Path, outputs: List[str], tag: str) -> Path:
-    """A scratch copy of the flow yaml whose step 12 declares *outputs*.
+def _with_step_12_outputs(
+    tmp_path: Path, outputs: List[str], tag: str, gate_checks: str
+) -> Path:
+    """A scratch copy of the flow yaml whose step 12 declares *outputs* under
+    a SYNTHETIC single-clause, files-only gate that checks *gate_checks*.
 
-    Step 12 is chosen because it is the SIMPLEST files-only gate in the flow —
-    one ``files_exist`` path, one ``required_outputs`` entry, no ``any_of``,
-    no program — so the only variable between the two controls below is the
-    shape of ``required_outputs``. The gate is copied through UNTOUCHED.
+    Step 12 was chosen as the id to graft this onto because it used to BE the
+    simplest files-only gate in the flow. It no longer is: 2026-08-08 gave it
+    a real ``program_exit_zero`` clause
+    (``dft_post_optimization_scan_survival_check``) closing a dimension-2 gap
+    — a genuine, separate fix, not a defect of this control. The gate is
+    therefore no longer "copied through untouched": it is OVERWRITTEN to the
+    one-``files_exist``-path, no-``any_of``, no-program shape this control
+    needs, so the only variable between the two cases below is still the
+    shape of ``required_outputs`` and nothing about step 12's real gate
+    leaks in. *gate_checks* is a single real PATH (never an ``" OR "``
+    entry-DSL string, which ``files_exist`` does not parse) — the caller
+    passes the plain ``netlist`` variable in both the FORWARD and REVERSE
+    case, matching "the gate ... checks only the first path" either way.
     """
     doc = copy.deepcopy(F.load_flow())
     hits = [s for s in doc["steps"] if F.normalize_id(s["id"]) == "12"]
     assert len(hits) == 1, f"expected exactly one step 12, got {len(hits)}"
     hits[0]["required_outputs"] = list(outputs)
+    hits[0]["gate"] = {"files_exist": [gate_checks]}
+    hits[0].pop("programs", None)
     out = tmp_path / f"flow_{tag}.yaml"
     out.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
     return out
@@ -600,23 +614,21 @@ def test_d4_selfcheck_files_only_branch_separates_spelling_from_deliverable(
     netlist = "phase2/stage2/synth/post_dft_netlist.v"
     unread = "reports/phase2/post_dft_area.rpt"
 
-    # Preconditions, asserted so this control self-invalidates loudly if step 12
-    # is re-gated rather than silently measuring a shape that no longer exists.
-    assert not _exec_clauses(12), (
-        "the control is anchored to step 12 BECAUSE it is a files-only gate; "
-        f"it now declares executable clauses {F.gate_commands(12)}"
-    )
-    assert [c.files for c in F.gate_clauses(12)] == [(netlist,)], (
-        f"step 12's gate no longer checks exactly [{netlist!r}]; it checks "
-        f"{[c.files for c in F.gate_clauses(12)]}"
-    )
+    # Precondition, asserted so this control self-invalidates loudly if the
+    # predicate it exercises changes shape. Step 12's own REAL gate is no
+    # longer checked here — 2026-08-08 gave it a genuine exec clause of its
+    # own, so `_with_step_12_outputs` now synthesizes the single-clause,
+    # files-only shape this control needs rather than mirroring it; see that
+    # helper's docstring.
     assert not P.covers(netlist, unread), (
         f"the control needs {unread!r} to be an artefact the gate's "
         f"{netlist!r} does NOT resolve, or the FORWARD case proves nothing"
     )
 
     try:
-        F.set_flow_yaml(_with_step_12_outputs(tmp_path, [netlist, unread], "fwd"))
+        F.set_flow_yaml(
+            _with_step_12_outputs(tmp_path, [netlist, unread], "fwd", netlist)
+        )
         assert F.required_outputs(12) == (netlist, unread)
         # BOTH failure spellings: the branch uses `pytest.fail` (which raises
         # `Failed`, a BaseException — `pytest.raises(Exception)` does NOT catch
@@ -635,7 +647,9 @@ def test_d4_selfcheck_files_only_branch_separates_spelling_from_deliverable(
         )
 
         F.set_flow_yaml(
-            _with_step_12_outputs(tmp_path, [f"{netlist} OR {unread}"], "rev")
+            _with_step_12_outputs(
+                tmp_path, [f"{netlist} OR {unread}"], "rev", netlist
+            )
         )
         assert F.required_outputs(12) == (f"{netlist} OR {unread}",)
         assert F.split_any_of(F.required_outputs(12)[0]) == (netlist, unread)

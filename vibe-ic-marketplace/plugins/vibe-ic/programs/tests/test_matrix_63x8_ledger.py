@@ -67,7 +67,10 @@ CENSUS_GATE_PRESENT = 62
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
 CENSUS_BLOCKS_ON_PRESENT = 62
 CENSUS_BLOCKS_ON_NON_EMPTY = 60
-CENSUS_GATE_PROGRAMS_NON_EMPTY = 60
+# 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
+# (dft_post_optimization_scan_survival_check), closing the files_exist-only
+# gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
+CENSUS_GATE_PROGRAMS_NON_EMPTY = 61
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -315,8 +318,10 @@ def test_blocks_on_targets_all_resolve(raw_steps):
 
 def test_gate_programs_non_empty_exactly_where_the_gate_names_one(raw_steps):
     """Derived live, not hardcoded: a gate yields programs iff it has an exec
-    clause. Steps 1 and 12 have file-existence-only gates and correctly yield
-    none — that is a property of their gate, not an exception list.
+    clause. Step 1 has a file-existence-only gate and correctly yields none —
+    that is a property of its gate, not an exception list. Step 12 gained a
+    real exec clause on 2026-08-08 (dft_post_optimization_scan_survival_check)
+    and now yields one, for the same reason.
     """
     with_exec = set()
     without_exec = set()
@@ -331,7 +336,9 @@ def test_gate_programs_non_empty_exactly_where_the_gate_names_one(raw_steps):
         assert F.gate_programs(key) == (), f"{key}: unexpected gate programs"
 
     assert len(with_exec) == CENSUS_GATE_PROGRAMS_NON_EMPTY
-    assert without_exec == {"1", "12", "P0"}
+    # "12" left this set 2026-08-08: it gained a program_exit_zero exec
+    # clause (dft_post_optimization_scan_survival_check).
+    assert without_exec == {"1", "P0"}
 
 
 def test_every_gate_named_program_resolves_to_a_real_file():

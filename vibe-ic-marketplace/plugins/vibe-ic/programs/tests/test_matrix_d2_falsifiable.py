@@ -904,6 +904,37 @@ def _f_on_board_scenarios_failed(p: Path) -> None:
                        "observed": "0x00", "expected": "0xF2"}]})
 
 
+def _f_post_dft_scan_lost(p: Path) -> None:
+    """Step 11 genuinely inserted a scan chain; Step 12's own output has
+    none — the exact substitution its files_exist-only gate used to miss.
+
+    ``dft_post_optimization_scan_survival_check`` self-skips (rc=2,
+    SKIPPED-CONDITION) when ``phase2/stage2/dft/scan_netlist.v`` itself is
+    absent — vacuous on ``EMPTY``, so this fixture supplies BOTH artefacts:
+    a scan_netlist.v that instantiates a scan flop (scan insertion ran) and
+    a post_dft_netlist.v that instantiates none (a plain buffer only) — the
+    "scan chain vanished between Step 11 and Step 12" arm, chosen over the
+    "byte-identical to the pre-DFT netlist" arm because it does not also
+    require staging Step 9's netlist.v to demonstrate.
+
+    MEASURED, verbatim:
+
+        EMPTY  rc 2  __VACUOUS_HINT__: dft_post_optimization_scan_survival_check …
+        THIS   rc 1  verdict: FAIL
+               scan_netlist.v instantiates 1 DFF-family cell(s) (scan
+               insertion ran), but post_dft_netlist.v instantiates 0 — the
+               scan chain did not survive post-DFT optimization
+    """
+    _w(p, "phase2/stage2/dft/scan_netlist.v",
+       "module top(a, b, c);\n"
+       "  SDFFRQD1 _f0_ (.D(a), .Q(b), .CLK(c));\n"
+       "endmodule\n")
+    _w(p, "phase2/stage2/synth/post_dft_netlist.v",
+       "module top(a, b);\n"
+       "  BUF1 _b0_ (.A(a), .Y(b));\n"
+       "endmodule\n")
+
+
 FIXTURES: Dict[str, Callable[[Path], None]] = {
     "EMPTY": _f_empty,
     "RTL_BAD": _f_rtl_bad,
@@ -928,6 +959,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "PERC_ESD_FAIL": _f_perc_esd_fail,
     "POST_LAYOUT_NO_SPICE": _f_post_layout_no_spice,
     "ON_BOARD_FAILED": _f_on_board_scenarios_failed,
+    "POST_DFT_SCAN_LOST": _f_post_dft_scan_lost,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1000,6 +1032,14 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # board run actually writes, stating that it did not pass.
     ("39", "json_field_true: reports/phase2/fpga/on_board_pass.json:"
            "all_scenarios_passed==True"): "ON_BOARD_FAILED",
+    # 2026-08-08: step 12 gained a real content clause (was absence-only,
+    # see the ABSENCE_ONLY_STEPS docstring). EMPTY answers rc=2
+    # SKIPPED-CONDITION (no scan_netlist.v to compare against) — vacuous,
+    # not a demonstration — so the fixture supplies a project where Step 11
+    # genuinely ran and Step 12's own output lost the scan chain.
+    ("12", "dft_post_optimization_scan_survival_check . --json "
+           "reports/phase2/gates/dft_post_optimization_scan_survival.json"):
+        "POST_DFT_SCAN_LOST",
     ("4", "vacuous_testbench_check . --json "
           "reports/phase2/gates/vacuous_testbench.json"): "TB_BAD",
     ("4", "professional_tb_check . --json "
@@ -2098,14 +2138,27 @@ def test_d2_a_content_earned_program_red_is_still_a_real_red(
 
 #: The cells this repair could NOT close, and the reason, in one place.
 #:
-#: Each of these three steps declares a gate whose every BLOCKING clause is a
+#: 2026-08-08: was ``("1", "12", "35")``. Step 12 closed for real — it gained
+#: ``dft_post_optimization_scan_survival_check`` as a blocking clause (a
+#: genuine content check LEC cannot subsume: scan insertion is functionally
+#: transparent, so LEC would still pass a post-DFT netlist whose scan chain
+#: silently vanished) — so it left this register and its waiver in
+#: ``matrix_63x8/waivers.py`` was removed, not re-worded. Steps 1 and 35 did
+#: NOT close: both carry an explicit, owner-confirmed AUDIT NOTE in the flow
+#: yaml stating the files_exist-only gate is DELIBERATE (Step 1: content
+#: judgement belongs downstream at Steps 2-6 by design; Step 35: promoting
+#: the DFM clause to blocking would fabricate unfixable FAILs, since no
+#: OpenROAD repair pass exists for what it finds) — their waivers were
+#: reworded to say PERMANENT rather than pending, not removed.
+#:
+#: Each remaining step declares a gate whose every BLOCKING clause is a
 #: ``files_exist`` — so by the measurement in
 #: :func:`test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file` the
 #: whole gate is satisfied by empty files and can fail on one input only, the
 #: file not being there. They are WAIVED in ``matrix_63x8/waivers.py`` with
-#: ``strict=True``, so the cell is published as an accepted gap and the waiver
-#: self-destructs the day the step gains a clause that judges content.
-ABSENCE_ONLY_STEPS: Tuple[str, ...] = ("1", "12", "35")
+#: ``strict=True``: a stale entry (the step gains a content clause) reddens
+#: the suite exactly as it did for step 12.
+ABSENCE_ONLY_STEPS: Tuple[str, ...] = ("1", "35")
 
 
 def test_d2_the_waived_cells_are_gated_by_existence_alone():

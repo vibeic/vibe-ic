@@ -443,86 +443,57 @@ WAIVERS: Tuple[Waiver, ...] = (
         step_id="1",
         dim=2,
         reason=(
+            "PERMANENT, by design — not a pending flow-definition decision. "
             "Step 1's gate is ONE clause, `files_exist(any_of): "
             "['phase2/stage1/rtl/*.sv', 'phase2/stage1/rtl/*.v']`, and a "
             "files_exist clause has no predicate but path resolution — the "
             "consumer computes `passed = len(found) > 0` and evaluates "
-            "nothing about the file. Its only FAIL is therefore the path not "
-            "being there, which is what an EMPTY project produces and what "
-            "every gate in the flow would refuse; it is not an answer to "
-            "'can this gate fail?'. Any RTL at all satisfies it, including "
-            "RTL that does not parse. Closing this needs the step to gain a "
-            "clause that judges the RTL — the flow already ships several "
-            "(rtl_hygiene_lint, cdc_async_input_check) wired into step 2 — "
-            "not a new fixture here, and choosing which one belongs on step 1 "
-            "is a change to the production flow definition."
+            "nothing about the file. In isolation that clause cannot fail on "
+            "content. But the flow yaml carries an explicit AUDIT NOTE on "
+            "this step: spec->RTL is the irreducible AI-authoring step (no "
+            "deterministic spec->RTL checker exists), and RTL substance is "
+            "verified DELIBERATELY DOWNSTREAM by Steps 2-6 (lint / CDC / "
+            "simulation / formal) plus the P0 structural-RTL gates — not by "
+            "Step 1 itself. Owner-confirmed 2026-08-08: do not add a "
+            "duplicate content check to Step 1; the separation of concerns "
+            "(Step 1 authors, Step 2 judges) is intentional."
         ),
         evidence=(
+            "flow/phase1_phase2_phase3.yaml, the AUDIT NOTE comment directly "
+            "above step id 1 ('this gate is files_exist-only ON PURPOSE ... "
+            "Do not re-flag as a missing checker'). "
             "programs/flow_compliance_check.py:2439-2441 (`passed = "
-            "len(found) > 0` on the any_of branch, then the return) is the "
-            "entire predicate. MEASURED 2026-08-06: this clause handed a "
-            "ZERO-BYTE "
-            "phase2/stage1/rtl/d2probe.sv answers PASS, and on the EMPTY "
-            "fixture it answers FAIL — the only two inputs it distinguishes. "
-            "Re-executed live by programs/tests/"
-            "test_matrix_d2_falsifiable.py::"
-            "test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file "
+            "len(found) > 0` on the any_of branch) is the entire predicate — "
+            "re-executed live by programs/tests/test_matrix_d2_falsifiable.py"
+            "::test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file "
             "and ::test_d2_the_waived_cells_are_gated_by_existence_alone."
-        ),
-    ),
-    Waiver(
-        step_id="12",
-        dim=2,
-        reason=(
-            "Step 12's gate is ONE clause, `files_exist: "
-            "['phase2/stage2/synth/post_dft_netlist.v']`, with the same "
-            "consequence: the step signs off on a path resolving. A "
-            "post-DFT netlist that is empty, that is the PRE-DFT netlist "
-            "copied over, or that contains no scan chain at all, satisfies "
-            "it — the very substitution a DFT step gets wrong. The flow "
-            "ships programs that could judge it (step 11 declares "
-            "atpg_coverage.rpt beside scan_netlist.v), so the repair is a "
-            "flow-definition change, not a test fixture."
-        ),
-        evidence=(
-            "programs/flow_compliance_check.py:2439-2441 (`passed = "
-            "len(missing) == 0`, then the return — the whole predicate). "
-            "MEASURED "
-            "2026-08-06: a ZERO-BYTE phase2/stage2/synth/post_dft_netlist.v "
-            "PASSES this clause; the EMPTY fixture FAILs it. Step 12 declares "
-            "exactly one blocking clause and zero advisory ones, re-derived "
-            "live from the flow yaml by programs/tests/"
-            "test_matrix_d2_falsifiable.py::"
-            "test_d2_the_waived_cells_are_gated_by_existence_alone."
         ),
     ),
     Waiver(
         step_id="35",
         dim=2,
         reason=(
-            "Step 35 is the sharpest case, because the judging program "
-            "EXISTS and cannot block. Its gate carries `files_exist: "
+            "PERMANENT, by design — not a pending flow-definition decision. "
+            "Step 35's gate carries `files_exist: "
             "['reports/phase3/dfm_screen.json']` plus `dfm_screen_check` "
-            "wired as `advisory_program_exit_zero` — an advisory clause runs "
-            "and reports and can never fail the step (flowref.GateClause."
-            "is_advisory), so the only blocking term is again path "
-            "resolution. A dfm_screen.json reporting a DFM violation and a "
-            "dfm_screen.json that is `{}` are the same verdict to this gate. "
-            "The repair is to promote the existing advisory clause to "
-            "blocking, which is a decision about the production flow and "
-            "about every project that would newly fail it, not a decision "
-            "this suite may take on its own."
+            "wired as `advisory_program_exit_zero`, so the only BLOCKING term "
+            "is path resolution. Promoting the DFM finding to blocking was "
+            "considered and explicitly rejected in the flow yaml's own "
+            "comment on this step: Step 31 owns the litho/min-width RULES and "
+            "Step 34 owns the density EXECUTION gate, and OpenROAD ships no "
+            "via-doubling repair pass — so failing Step 35 on a DFM "
+            "optimisation finding would fabricate a FAIL nobody is allowed to "
+            "fix. Owner-confirmed 2026-08-08: leave the DFM clause advisory."
         ),
         evidence=(
+            "flow/phase1_phase2_phase3.yaml, the comment on step id 35's "
+            "ADVISORY half (#306) naming Step 31/34's ownership and the "
+            "absent OpenROAD repair pass. "
             "programs/flow_compliance_check.py:2439-2441 (`passed = "
-            "len(missing) == 0`, then the return) for the blocking "
-            "term; the advisory clause is `dfm_screen_check . --json "
-            "reports/phase2/gates/dfm_screen.json` and is excluded from this "
-            "dimension by the module's own rule 1 (advisory clauses cannot "
-            "fail the step). MEASURED 2026-08-06: a ZERO-BYTE "
-            "reports/phase3/dfm_screen.json PASSES the blocking clause. "
-            "Both facts re-derived live by programs/tests/"
-            "test_matrix_d2_falsifiable.py::"
+            "len(missing) == 0`) is the blocking term's entire predicate; "
+            "flowref.GateClause.is_advisory excludes the DFM clause from "
+            "this dimension by the module's own rule 1. Re-executed live by "
+            "programs/tests/test_matrix_d2_falsifiable.py::"
             "test_d2_the_waived_cells_are_gated_by_existence_alone and "
             "::test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file."
         ),
@@ -692,6 +663,64 @@ WAIVERS: Tuple[Waiver, ...] = (
         ),
     ),
 
+    # ── dimension 5 — is blocks_on the true dependency graph? ──────────
+    Waiver(
+        step_id="12",
+        dim=5,
+        reason=(
+            "dft_post_optimization_scan_survival_check (step 12's new "
+            "content clause, landed 2026-08-08 to close a dimension-2 gap) "
+            "reads phase2/stage2/synth/netlist.v to detect the 'pre-DFT "
+            "netlist copied over' substitution. That path's TRUE producer, "
+            "step 9, is already inside step 12's blocks_on closure "
+            "(blocks_on=[11], closure includes 9 via 11->10->...->9) — so "
+            "the real dependency is already covered. The finding fires "
+            "because step 14 ALSO declares the identical path in ITS OWN "
+            "required_outputs, even though step 14 does not produce it "
+            "(it audits an input already correctly declared via its own "
+            "required_inputs from step 9) — a pre-existing duplicate "
+            "declaration this fix did not create. depends_on cannot simply "
+            "add step 14: step 14 already has step 12 in its own blocks_on "
+            "ancestry (14 -> ... -> 13 -> 12), so the edge would be "
+            "circular. Removing the duplicate from step 14 was tried and "
+            "reverted: 63x8's own dimension-3/6/8 modules (and two "
+            "ledger census constants) depend on step 14 declaring a "
+            "non-empty required_outputs list for reasons unrelated to this "
+            "fix, and removing it traded one narrow, understood gap for "
+            "four new ones. Closing this needs step 14's duplicate "
+            "declaration reconciled against everything that currently "
+            "reads it — a separate, wider change, not a step-12 fix."
+        ),
+        evidence=(
+            "flow/phase1_phase2_phase3.yaml: step 9's required_outputs "
+            "declares phase2/stage2/synth/netlist.v (the true producer); "
+            "step 14's required_outputs ALSO declares the identical path "
+            "(the duplicate) while step 14's OWN required_inputs already "
+            "correctly cites `from: 9` for the same file. "
+            "programs/dft_post_optimization_scan_survival_check.py reads "
+            "phase2/stage2/synth/netlist.v via `project / \"phase2\" / "
+            "\"stage2\" / \"synth\" / \"netlist.v\"` to compare against "
+            "post_dft_netlist.v. MEASURED 2026-08-08: "
+            "test_matrix_d5_deps_correct.py::derived_dependencies('12') "
+            "returns step 9 (already in closure, no finding) AND step 14 "
+            "(not in closure, D5-MISSING-EDGE, would-cycle) for the same "
+            "artefact — both from `producers()` legitimately returning "
+            "('9', '14') for phase2/stage2/synth/netlist.v. Negative "
+            "control: deleting step 14's required_outputs entry (tested, "
+            "then reverted) makes this cell pass but reddens "
+            "test_matrix_63x8_ledger.py::"
+            "test_required_outputs_non_empty_exactly_where_declared, "
+            "::test_output_entries_classify_into_the_four_kinds, "
+            "::test_accessors_track_a_removed_field, "
+            "test_matrix_d3_outputs_produced.py[step14], "
+            "test_matrix_d6_skip_discipline.py[step14] and "
+            "test_matrix_d8_missing_caught.py::"
+            "test_d8_downgrade_is_reachable_through_each_steps_own_real_gate "
+            "— confirming the duplicate is load-bearing elsewhere and this "
+            "is a real cross-dimension conflict, not a step-12-local one."
+        ),
+    ),
+
     # ── dimension 6 — skip discipline (the ARITHMETIC half) ───────────
     # EMPTY, and that is the point. This block used to hold THREE waivers
     # (FS1, 30, 14) charged by leg L3c of test_matrix_d6_skip_discipline:
@@ -858,9 +887,11 @@ WAIVERS: Tuple[Waiver, ...] = (
             "verification, not a declaration change."
         ),
         evidence=(
-            "producer programs/phase3_one_shot_runner.py:29776-29796 (the "
+            "producer programs/phase3_one_shot_runner.py:29941-29964 (the "
             "`len(corners) < 2` guard around the `rpt_phase3 / "
-            "'single_corner_stance.json'` write); consumer "
+            "'single_corner_stance.json'` write; line number re-verified "
+            "2026-08-08 after v1.9.99's CTS fix shifted earlier-file line "
+            "counts — was 29776-29796); consumer "
             "programs/pvt_matrix_check.py:44-45 then :105. MEASURED "
             "2026-07-28 with flow_compliance_check.check_step over the nine "
             "tracked roots holding phase2/stage2/constraints/pvt_matrix.json: "
@@ -933,13 +964,15 @@ WAIVERS: Tuple[Waiver, ...] = (
             "first; then (b) follows as OR-pairs that can actually fail."
         ),
         evidence=(
-            "producers programs/phase3_one_shot_runner.py:30021 and :30138 "
+            "producers programs/phase3_one_shot_runner.py:30169 and :30286 "
             "(sta_out / 'sta_spef_based.rpt', sta_out / "
-            "'sta_mcorner_ocv.rpt') with mirrors at :30027 and :30168, and "
-            "the two stance emissions — 'multi_corner_spef_stance.json' at "
-            ":28280, 'mcorner_ocv_stance.json' at :28280 — both "
-            "guarded by `if primary_def.is_file() and _signoff_regen(...)`; "
-            "consumer "
+            "'sta_mcorner_ocv.rpt') with mirrors at :30175 and :30316, and "
+            "the two stance emissions — 'multi_corner_spef_stance.json' "
+            "guarded at :30188, 'mcorner_ocv_stance.json' guarded at :30288 "
+            "— both guarded by `if primary_def.is_file() and "
+            "_signoff_regen(...)` (line numbers re-verified 2026-08-08, "
+            "shifted downward by roughly one hundred fifty lines after "
+            "v1.9.99's CTS fix inserted earlier-file content); consumer "
             "programs/sta_corner_record_completeness_check.py:194-223 "
             "(_PROCESS_STANCE_CANDIDATES / _RC_STANCE_CANDIDATES / "
             "_MULTICORNER_CANDIDATES / _MCORNER_OCV_CANDIDATES / "

@@ -1587,15 +1587,26 @@ steps:
     required_inputs:
       - from: 11
         path: "phase2/stage2/dft/scan_netlist.v"
-    # AUDIT NOTE (by-design, not a gap): files_exist-only ON PURPOSE. The post-DFT
-    # netlist's correctness is verified at Step 13 Equivalence check
-    # (lec_equivalence_check: RTL == post-DFT netlist) — a broken/non-equivalent
-    # step-12 netlist FAILs Step 13. Do not re-flag as a missing checker.
+    # AUDIT NOTE (narrowed 2026-08-08, was "files_exist-only ON PURPOSE"): the
+    # post-DFT netlist's FUNCTIONAL correctness is still verified at Step 13
+    # (lec_equivalence_check: RTL == post-DFT netlist) — that half of the old
+    # note still holds. But scan insertion is designed to be functionally
+    # TRANSPARENT (scan mode is not exercised in mission-mode simulation), so
+    # a post-DFT netlist whose scan chain was silently dropped is STILL
+    # equivalent to the RTL — LEC has nothing to disagree with and would not
+    # catch it. dft_post_optimization_scan_survival_check below closes
+    # exactly that gap (empty file / pre-DFT netlist substituted / scan chain
+    # vanished), and only that — it does not duplicate Step 13's functional
+    # equivalence question.
+    programs:
+      - dft_post_optimization_scan_survival_check
     skills: [synth-doctor]
     required_outputs:
       - "phase2/stage2/synth/post_dft_netlist.v"
     gate:
-      files_exist: ["phase2/stage2/synth/post_dft_netlist.v"]
+      all_of:
+        - files_exist: ["phase2/stage2/synth/post_dft_netlist.v"]
+        - program_exit_zero: "dft_post_optimization_scan_survival_check . --json reports/phase2/gates/dft_post_optimization_scan_survival.json"
     blocks_on: [11]
 
   - id: 13

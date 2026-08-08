@@ -210,14 +210,19 @@ from matrix_63x8 import waivers as W
 
 DIM = 5
 
-#: The cells this dimension waives, PINNED as an exact set. EMPTY since
-#: 2026-07-28: all five dimension-5 waivers were closed by declaring the
-#: missing edge (steps 8, DT2), removing a read that was itself the defect
-#: (A5, 18) or reordering the declaration so the flow's only forward edge
-#: disappears (A7). Pinned rather than floored so a waiver-free dimension is a
-#: recorded fact instead of an empty loop reporting green — see
+#: The cells this dimension waives, PINNED as an exact set. Was EMPTY from
+#: 2026-07-28 (all five original dimension-5 waivers were closed by declaring
+#: the missing edge, removing a read that was itself the defect, or
+#: reordering a declaration) until 2026-08-08, when step 12 gained
+#: ``12/d5``: a new content clause (dft_post_optimization_scan_survival_check,
+#: closing a dimension-2 gap) reads an artefact TWO steps declare as their own
+#: required_output (9, the true producer, already in step 12's closure; 14, a
+#: pre-existing duplicate declaration that would be a circular edge) — see the
+#: waiver's own reason/evidence in ``matrix_63x8/waivers.py`` for why the
+#: duplicate was not simply deleted. Pinned rather than floored so a waiver
+#: set is a recorded fact instead of an empty loop reporting green — see
 #: ``test_d5_waivers_meet_the_registry_bar``.
-WAIVED_CELLS_PINNED: frozenset = frozenset()
+WAIVED_CELLS_PINNED: frozenset = frozenset({"12/d5"})
 
 # ══════════════════════════════════════════════════════════════════════
 # Producers — exact, from the yaml
