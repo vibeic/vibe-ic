@@ -15311,6 +15311,25 @@ _MIN_AREA_PATCH_TCL = r"""# ====================================================
 #
 # chip/PDK-AGNOSTIC: every number (AREA, MINWIDTH, SPACING) is read from the
 # active tech LEF. No design, vendor or PDK literal.
+#
+# KNOWN LIMITATION — this geometry model CANNOT SEE `RECT` PATCH SHAPES.
+# `ma_rects_of_net` walks `dbWirePathItr`, which returns a wire's path/via
+# shapes but NOT the `addRect` patches encoded on it. PROBED, not assumed
+# (spm x ihp-sg13g2): for two nets whose DEF carries a routed segment plus
+# several RECT patches, the iterator returned exactly ONE Metal2 shape each —
+# the plain segment. Two consequences, BOTH still open:
+#   (a) the blockage set omits TritonRoute's OWN min-area RECT patches, so a
+#       patch placed here can still land within min SPACING of one. MEASURED:
+#       1 residual M2.b (ours 0.497x0.29 vs TritonRoute's 0.2x0.57 landing
+#       pad, gap 0.125 um against a 0.21 um rule). The STALE-BLOCKAGE-SET fix
+#       below closes ours-vs-OURS collisions only.
+#   (b) every cluster's area is UNDER-counted by whatever RECT patches already
+#       cover it, so some clusters are declared deficient — and patched —
+#       UNNECESSARILY. Tracked separately; do not conflate with (a).
+# `dbWireShapeItr` is NOT exposed to Tcl in this build (probed); `dbWire`
+# offers only raw getOpcode/getData/getSegment. The durable fix is a
+# post-write verify-repair pass over the WRITTEN DEF, whose RECT geometry is
+# fully readable, rather than decoding the wire opcode stream.
 # ============================================================================
 proc ma_rects_of_net {net pinptsVar} {
   # -> dict layerName -> list of {x1 y1 x2 y2}
@@ -15620,6 +15639,10 @@ proc via_enclosure_patch {{marker "VIA_ENCL_PATCH"}} {
         $enc addPoint $cx1 $cy1
         $enc addRect [expr {$a-$cx1}] [expr {$b-$cy1}] [expr {$c-$cx1}] [expr {$e-$cy1}]
         $enc end
+        # STALE-BLOCKAGE-SET (same defect as min_area_patch below): `allnet`
+        # is a 1st-pass snapshot, so a via-enclosure patch was invisible to
+        # every later candidate. Register it as it lands.
+        dict lappend allnet $ln [list $nn $a $b $c $e]
         incr patched; set done 1
         break
       }
@@ -15766,6 +15789,18 @@ proc min_area_patch {{marker "MIN_AREA_PATCH"}} {
           $enc addRect [expr {$px1-$bx2}] [expr {$py1-$by1}] \
                        [expr {$px2-$bx2}] [expr {$py2-$by1}]
           $enc end
+          # STALE-BLOCKAGE-SET: the blockage snapshot `all` is built ONCE, in
+          # the 1st pass, before any patch exists. Register every patch as it
+          # lands so the NEXT candidate is spacing-tested against it too —
+          # otherwise patch N+1 is blind to patch N and the two can land
+          # inside the layer's own min SPACING of each other, which is exactly
+          # the sign-off spacing violation this clash test exists to prevent.
+          # MEASURED (spm x ihp-sg13g2, sign-off KLayout deck): 3 M2.b
+          # violations, ALL of them patch-vs-patch, 3 -> 1 with this line.
+          # Not a rejection: the loop simply advances to the next candidate
+          # growth direction, so the patch COUNT is unchanged (463) and the
+          # min-area requirement is still met — just at a legal position.
+          dict lappend all $ln [list $px1 $py1 $px2 $py2]
           incr patched; set ok 1
           break
         }
