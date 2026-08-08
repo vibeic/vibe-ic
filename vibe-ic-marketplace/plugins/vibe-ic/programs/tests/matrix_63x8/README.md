@@ -255,31 +255,57 @@ thread-parallel test execution.
 ## The census, as it stands after the VACUOUS_PASS numerator ruling
 
 Reported by `programs/tests/test_matrix_63x8_coverage.py`, which collects the
-eight modules through pytest's own machinery and asks each module the state of
-the cells it owns. **504 / 504 cells present, exactly once.**
+eight modules through pytest's own machinery, asks each module the state of the
+cells it owns, and then RUNS those modules and joins the answer against what
+each cell's predicate actually did. **504 / 504 cells present, exactly once.**
 
-| dim | question                | ENFORCED | WAIVED | NA |
-|-----|-------------------------|---------:|-------:|---:|
-| 1   | wiring                  | 63       | 0      | 0  |
-| 2   | runnable / falsifiable  | 62       | 0      | 1  |
-| 3   | outputs produced        | 52       | 4      | 7  |
-| 4   | criteria match          | 63       | 0      | 0  |
-| 5   | deps correct            | 62       | 0      | 1  |
-| 6   | skip discipline         | 62       | 1      | 0  |
-| 7   | outputs list complete   | 58       | 4      | 1  |
-| 8   | missing mechanism       | 61       | 0      | 2  |
-| **total** |                   | **483**  | **9**  | **12** |
+**The census has TWO axes, and the first is not quotable on its own.** A cell's
+STATE says how it is configured; its OUTCOME says what its predicate did on
+this tree, this minute. Until 2026-08-09 only the state was ever reported, and
+the two had drifted: the published table read `ENFORCED 483` while the live
+state census read 481 **and 26 of those 481 cells were failing** — a cell whose
+own predicate is red was being counted as proof of enforcement
+(ORGANIC-20260808). `ENFORCED-CONTRADICTED` is that gap, made visible; it is
+not a fourth state but a *disagreement* between the two axes, and
+`test_no_cell_is_counted_enforced_while_its_predicate_is_red` fails while any
+cell is in it.
 
-Reproduce (never quote this table without re-running it):
+MEASURED 2026-08-09 on commit `dee025059`:
+
+| dim | question                | ENFORCED | ENFORCED-CONTRADICTED | WAIVED | NA |
+|-----|-------------------------|---------:|----------------------:|-------:|---:|
+| 1   | wiring                  | 63       | 0                     | 0      | 0  |
+| 2   | runnable / falsifiable  | 60       | 0                     | 2      | 1  |
+| 3   | outputs produced        | 34       | 19                    | 3      | 7  |
+| 4   | criteria match          | 62       | 1                     | 0      | 0  |
+| 5   | deps correct            | 61       | 0                     | 1      | 1  |
+| 6   | skip discipline         | 62       | 0                     | 1      | 0  |
+| 7   | outputs list complete   | 52       | 6                     | 4      | 1  |
+| 8   | missing mechanism       | 61       | 0                     | 0      | 2  |
+| **total** |                   | **455**  | **26**                | **11** | **12** |
+
+The 26 are real findings the dimension modules are reporting correctly, not
+instrument noise — d3's stale committed write ledger (19), d4's step 1 gate
+reading 1 of its 3 declared `required_outputs` (1), d7's incomplete outputs
+lists (6). Clearing a cell out of that column means fixing its predicate or
+WAIVING it on the record; there is no third door.
+
+Reproduce (never quote this table without re-running it — and the run below
+really executes the eight modules, so it takes ~2 min, not ~10 s):
 
 ```
 cd vibe-ic-marketplace/plugins/vibe-ic && PYTHONPATH=.:programs:programs/tests \
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -c \
   "import sys; sys.path[:0]=['programs','programs/tests']; \
-   import test_matrix_63x8_coverage as CV, collections; \
-   print(collections.Counter(CV.state_census().values()))"
--> Counter({'ENFORCED': 483, 'NA': 12, 'WAIVED': 9})
+   import test_matrix_63x8_coverage as CV; \
+   print(CV.enforcement_counter(CV.enforcement_census()))"
+-> {'ENFORCED': 455, 'WAIVED': 11, 'NA': 12, 'ENFORCED-CONTRADICTED': 26}
 ```
+
+`CV.state_census()` still exists and still answers the CONFIGURATION question —
+the waiver-registry and NA-precondition cross-checks need it — but it reports
+`ENFORCED 481` here, which is the number this section exists to stop anyone
+quoting. Use `enforcement_census()`.
 
 > **Dimension 6 went back UP, because the defect it was measuring was
 > fixed.** 59/4/0 -> 62/1/0. Leg L3c measures whether a step on the
@@ -358,6 +384,16 @@ cd vibe-ic-marketplace/plugins/vibe-ic && PYTHONPATH=.:programs:programs/tests \
 > **Dimension 3 did not move**, and that is the reconciled answer to a
 > convergence pass that reported 53/1/9. Both of its retirements were measured
 > and reverted:
+>
+> **CORRECTION, measured 2026-08-09 on `dee025059`** — this block is a record
+> of a decision taken then, left standing as such, but it no longer describes
+> the tree: the live census reports **A8/d3 as ENFORCED, not WAIVED**, and
+> `matrix_63x8.waivers.WAIVERS` carries no entry for it (which is why
+> `test_state_agrees_with_the_waiver_registry_and_the_collected_marks` is
+> green). The waiver was retired by a later change than this note; who and why
+> is not re-derived here rather than guessed at. Dimension 3 now reads
+> ENFORCED 34 / ENFORCED-CONTRADICTED 19 / WAIVED 3 / NA 7. Do not read the
+> paragraphs below as a statement about the current tree.
 >
 > * **A8** stays WAIVED, with the reason NARROWED. Its `.gds` really did have
 >   no producer — `magic_port_extract_emit.build_gds_write_tcl` had shipped
