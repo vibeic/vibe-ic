@@ -10313,6 +10313,63 @@ def _attribute_cascade_verdicts(
     return info
 
 
+def _published_tree_advisory(project: Path) -> Optional[str]:
+    """Warn when `project` looks like a PUBLISHED benchmark-data evidence
+    folder rather than a live run directory (informational only — changes
+    no verdict, no count, no exit code).
+
+    caravel_user_project/v1.9.43_sky130A shipped a RESULT.md claiming
+    Overall PASS_WITH_WAIVERS side by side with a committed
+    reports/audit/phase23_completion_audit.json recording Overall FAIL from
+    the SAME run. Root cause, confirmed by re-running THIS program against
+    the committed tree: `benchmark-data/PUBLISHING.md` deliberately excludes
+    `phase3/stage3/*` (PnR + extraction working files) and `*.log` from what
+    gets committed ("Excluded by construction" / `NOT_PUBLISHED` routing).
+    Steps whose `files_exist` target lives under `phase3/stage3/*` — pre-
+    and post-route STA, routing, spare-cell insertion, metal fill, SPEF-
+    dependent SI/DRC, foundry handoff — therefore read FAIL or MISSING when
+    THIS checker is re-run against a published tree, independent of whether
+    the run that produced the evidence actually converged. Measured
+    identically against `spm/v1.9.94_sky130A` and `spm/v1.9.96_gf180mcuD`
+    (both independently converged reference cells whose OWN committed
+    `phase23_completion_audit.json` records PASS_WITH_WAIVERS): a fresh
+    re-run of THIS checker against either published tree also reports
+    Overall FAIL on the identical `phase3/stage3/sta/pre_pnr_timing.rpt`
+    absence. A published tree's authoritative verdict is therefore the
+    audit captured at ORIGINAL RUN TIME (already committed at
+    `reports/audit/phase23_completion_audit.json`) — never a re-run of this
+    checker against the published copy, which structurally cannot reproduce
+    a stage3-dependent PASS.
+
+    Detection is chip-AGNOSTIC and purely structural: the GDS_MANIFEST that
+    `benchmark_evidence_publish.py` writes for every published cell is
+    present, and the `phase3/stage3/` subtree that publishing excludes is
+    absent. A live run directory has stage3 present and no manifest, so it
+    never matches.
+    """
+    manifest = project / "phase3" / "stage4" / "gds" / "GDS_MANIFEST.txt"
+    stage3 = project / "phase3" / "stage3"
+    if manifest.is_file() and not stage3.is_dir():
+        return (
+            "PUBLISHED-TREE DETECTED: phase3/stage4/gds/GDS_MANIFEST.txt is "
+            "present and phase3/stage3/ is absent — this project_dir looks "
+            "like a committed benchmark-data evidence folder, not a live "
+            "run directory. Per benchmark-data/PUBLISHING.md, "
+            "phase3/stage3/* (PnR + extraction working files) and *.log "
+            "are intentionally excluded from publish. Any step here whose "
+            "files_exist target lives under phase3/stage3/* (pre/post-route "
+            "STA, routing, spare-cell insertion, metal fill, SPEF-dependent "
+            "SI/DRC, foundry handoff) will read FAIL or MISSING even for a "
+            "genuinely converged run — that is a property of the published "
+            "layout, not evidence of a live regression. The authoritative "
+            "verdict for a published cell is the audit captured at "
+            "original-run time and already committed at "
+            "reports/audit/phase23_completion_audit.json; do not overwrite "
+            "it by re-running this checker against the published tree."
+        )
+    return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("project_dir", nargs="?",
@@ -10877,6 +10934,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # v0.100 H2: advisory — warn if post-route STA passed single-corner only
     advisories: List[str] = []
+
+    # caravel_user_project/v1.9.43_sky130A self-contradiction (RESULT.md
+    # PASS_WITH_WAIVERS beside a committed phase23_completion_audit.json
+    # FAIL) — surface the published-tree caveat before anyone reads a
+    # re-run's FAIL as a live regression. Informational only.
+    _pub_tree_note = _published_tree_advisory(project)
+    if _pub_tree_note:
+        advisories.append(_pub_tree_note)
 
     # #216 — a rejected ENV_UNAVAILABLE waiver is reported, never dropped.
     # Without this the step showed a bare MISSING and the reader could not
