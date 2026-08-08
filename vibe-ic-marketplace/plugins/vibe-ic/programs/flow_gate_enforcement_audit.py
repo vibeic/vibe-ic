@@ -33,6 +33,12 @@ For every `program_exit_zero` gate in the flow definition:
   UNDECLARED  no declaration — the intent is unknown, which is how 66 of 72
               gates ended up de-facto advisory without anyone deciding that
 
+A note on what counts as a declaration (#886): the two lines above MENTION the
+token in prose. Until #886 this audit read them as a declaration about ITSELF,
+because the pattern was unanchored. A declaration must OPEN its line; a mention
+inside a sentence is not one. Several gates say in prose that they carry no
+declaration, and the old pattern read each of those as declaring one.
+
 This program DESCRIBES; it does not change flow behaviour. Turning audit-only
 gates into blocking ones is a deliberate product decision with real blast
 radius (11 gates FAILing in one run means those runs start failing — correctly,
@@ -57,8 +63,15 @@ fewer gates, which is the exact class of lie this program exists to catch.
 
 Exit codes:
     0  audit completed
-    1  a gate DECLARING `ENFORCEMENT: blocking` is only AUDIT_ONLY — a
-       contradiction between stated intent and wiring
+    1  a finding NEW since the recorded baseline. Three shapes, all of them
+       "this gate's enforcement was never decided, or does not match what the
+       gate says about itself":
+         contradiction  declares blocking, wired AUDIT_ONLY
+         orphan         declares an intent and is not in the flow at all
+         undeclared     AUDIT_ONLY and declares nothing (#886). Before #886
+                        only the first shape could fail, so a gate that said
+                        nothing was exempt by construction — 85 of 120 gates
+                        were in that state while this audit printed PASS.
     2  I/O error, or the flow definition could not be parsed
 """
 from __future__ import annotations
@@ -85,7 +98,30 @@ _RUNNERS = ("phase3_one_shot_runner.py", "design_one_shot_runner.py",
 # #306 — `advisory_` is the non-blocking slot; a gate wired there IS wired.
 _GATE_SLOTS = ("program_exit_zero", "optional_program_exit_zero",
                "advisory_program_exit_zero")
-_DECL_RE = re.compile(r"ENFORCEMENT:\s*(blocking|advisory)", re.IGNORECASE)
+# A DECLARATION is a line that IS the declaration — `ENFORCEMENT:` opens the
+# line, allowing only what can legitimately precede it: indentation, a `#`
+# comment marker, or the quote that opens a one-line docstring
+# (`"""ENFORCEMENT: advisory"""`). A MENTION of the token inside prose is not a
+# declaration. Backticks are deliberately NOT in that prefix set: in this repo
+# they are how a docstring quotes the token while talking ABOUT it.
+#
+# #886: the unanchored form read PROSE as intent. The worst case was this very
+# file: the sentence above documenting the convention names both values, and
+# the audit read it as a declaration ABOUT ITSELF. It stayed hidden only
+# because the orphan glob could not reach a `*_audit.py`; widening that glob
+# made the audit report itself as an ORPHAN declaring blocking. Same false
+# positive in `analog_corner_margin_check`, `drc_report_check`,
+# `lvs_report_check`, `professional_tb_check` and `phase3_one_shot_runner`,
+# all of which discuss the token in backticks — several of them precisely to
+# say they carry NO declaration.
+#
+# `[ \t]` and not `\s`: `\s` crosses newlines, so a bare `ENFORCEMENT:` at the
+# end of one line would bind to a `blocking` that is prose on the next.
+# Measured over all 120 in-flow gates: anchoring changes no gate's verdict.
+_DECL_RE = re.compile(
+    r"""^[ \t]*(?:\#[ \t]*)?(?:["']{1,3}[ \t]*)?"""
+    r"""ENFORCEMENT:[ \t]*(blocking|advisory)\b""",
+    re.IGNORECASE | re.MULTILINE)
 # The second channel: intent stated in the JSON the gate emits. Captures the
 # WHOLE right-hand side, not just a leading string literal — see
 # `declared_intent` for why a value-only match reads a conditional expression
@@ -258,6 +294,16 @@ def audit(flow: Path, programs: Path) -> dict:
             "declared": declared_intent(programs, g),
             "slots": sorted(slots[g]),
         })
+    # #886: a gate that is AUDIT_ONLY and declares NOTHING. This class was
+    # structurally exempt from every failing branch below, which is the defect
+    # in one line: the audit could only fail on gates that had already gone to
+    # the trouble of stating an intent, so NOT stating one was the reliable way
+    # to stay clean. 85 of 120 gates were in this class while the audit exited
+    # 0 with a PASS. Silence is not a decision — it is the absence of one.
+    undeclared_audit_only = [
+        {"gate": r["gate"], "enforcement": "AUDIT_ONLY", "declared": None}
+        for r in rows
+        if r["enforcement"] == "AUDIT_ONLY" and not r["declared"]]
     # ORPHANED: a gate program that DECLARES an enforcement intent but is not
     # referenced by the flow definition at all. Worse than AUDIT_ONLY — not
     # even the final compliance audit reaches it, so it runs only if someone
@@ -265,7 +311,12 @@ def audit(flow: Path, programs: Path) -> dict:
     # campaign were never wired into the flow, so they could not fire at all.
     in_flow = {r["gate"] for r in rows}
     orphaned = []
-    for f in sorted(programs.glob("*_check.py")) + sorted(programs.glob("*_disclosure.py")):
+    # #886: the glob used to be `*_check.py` + `*_disclosure.py`, which decided
+    # what could be an orphan by FILENAME. A declaration is the signal, not the
+    # suffix, and the suffix list could not reach `*_audit.py` — so
+    # `silent_decline_audit`, a real orphan, was unreachable by construction.
+    # Every `*.py` is offered to `declared_intent`; it decides.
+    for f in sorted(programs.glob("*.py")):
         stem = f.stem
         if stem in in_flow or f"{stem}.py" in in_flow:
             continue
@@ -286,6 +337,7 @@ def audit(flow: Path, programs: Path) -> dict:
         "contradictions": contradictions,
         "orphaned": orphaned,
         "malformed_clauses": malformed,
+        "undeclared_audit_only": undeclared_audit_only,
         "gates": rows,
     }
 
@@ -338,6 +390,12 @@ def main(argv: Optional[List[str]] = None) -> int:
               "so not even the final audit reaches them:")
         for o in rep["orphaned"]:
             print(f"  {o['gate']}  (declared {o['declared']})")
+    if rep.get("undeclared_audit_only"):
+        print(f"\nUNDECLARED and AUDIT_ONLY — {len(rep['undeclared_audit_only'])} "
+              f"gate(s): no runner invokes them inline, and nothing in the gate "
+              f"says\nthat was intended. Until #886 this class could not fail "
+              f"this audit at all,\nso not declaring an intent was the reliable "
+              f"way to stay clean.")
     # A gate that DECLARES blocking and is wired audit-only, or that declares
     # an intent and is not in the flow at all, is the very defect this audit
     # names — measured in a gate's own terms. Four such gates exist today, two
@@ -347,7 +405,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # this audit blocks anything NEW — the class stops growing without the
     # audit quietly deciding enforcement policy on its own.
     now = sorted([f"contradiction::{c['gate']}" for c in rep["contradictions"]]
-                 + [f"orphan::{o['gate']}" for o in (rep.get("orphaned") or [])])
+                 + [f"orphan::{o['gate']}" for o in (rep.get("orphaned") or [])]
+                 + [f"undeclared::{u['gate']}"
+                    for u in (rep.get("undeclared_audit_only") or [])])
     bl_path = Path(a.baseline) if a.baseline else (
         _HERE / "flow_gate_enforcement_baseline.json")
     prev = None
@@ -373,11 +433,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"recorded, not assumed.")
             return 1
         bl_path.write_text(json.dumps(
-            {"_comment": ("Gates that declare an intent they are not wired "
-                          "for (vibe-ic#306/#316). MAY ONLY SHRINK. Fixing "
+            {"_comment": ("Gates whose enforcement contradicts what they say "
+                          "about themselves, or was never decided at all "
+                          "(vibe-ic#306/#316/#886). MAY ONLY SHRINK. Fixing "
                           "one changes what a real run blocks on — a flow-"
                           "owner decision — so they are recorded, not "
-                          "silently enforced here."),
+                          "silently enforced here. An `undeclared::` entry is "
+                          "paid down by the gate stating an intent, or by a "
+                          "runner invoking it inline; not by deleting it."),
              "previous_size": None if prev is None else len(prev),
              "scope_expanded": a.scope_expanded,
              "known": now}, indent=2, ensure_ascii=False) + "\n")
@@ -394,8 +457,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         for k in paid:
             print(f"   (resolved) {k}")
     if new:
-        print(f"\n[FAIL] {len(new)} NEW gate(s) declare an intent they are "
-              f"not wired for:")
+        print(f"\n[FAIL] {len(new)} NEW gate(s) whose enforcement is either "
+              f"contradicted by the wiring or was never decided at all:")
         for k in new:
             print(f"   {k}")
     if new or paid:
