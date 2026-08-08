@@ -1,0 +1,404 @@
+{
+  "project": "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808",
+  "ic_class": "crypto_accelerator",
+  "ic_class_evidence": "no positive evidence — see ic_class_profile",
+  "steps": [
+    {
+      "name": "rig_topology_skeleton",
+      "status": "SKIP",
+      "duration_s": 1.9073486328125e-05,
+      "detail": "existing rig_topology kept: rig_topology.json",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "phase1_precheck",
+      "status": "PASS",
+      "duration_s": 0.0,
+      "detail": "28/13 L docs present",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "detect_ic_class",
+      "status": "PASS",
+      "duration_s": 0.0,
+      "detail": "crypto_accelerator",
+      "output_files": [],
+      "extras": {
+        "evidence": "no positive evidence — see ic_class_profile"
+      }
+    },
+    {
+      "name": "rtl_gen",
+      "status": "WAIVED",
+      "duration_s": 0.11841940879821777,
+      "detail": "IC class 'crypto_accelerator': staged vendor RTL found in input/vendor_rtl/ (275 file(s) (+ 270 more)) — REUSED-IP path: use skill `catalog-glue-author` to author the chip_top wrapper around the staged files. Emitted keystone phase2/stage1/rtl/SOURCE_MANIFEST.json (reused_ip:true) so #659/#711/#712 pin-gate relaxations are live.\nMANDATORY before authoring: open `/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/lessons.md` (207 chip-AGNOSTIC genre-convention lessons) and APPLY every section whose '**When to apply**' matches this design's genre — these are captured general topology/convention patterns, NOT per-problem answers.\nDUAL-TRACK (optional second opinion): `/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/ic_expert_db.md` holds 5 IC Expert DB design-class lesson(s) matched to THIS design (algorithm/interface/latency craft from proven-correct designs). For a hard design, author an INDEPENDENT second attempt guided by it and keep whichever attempt the gates PASS — measured to recover designs the primary digest misses (union lift).",
+      "output_files": [],
+      "extras": {
+        "fallback_skill": "catalog-glue-author",
+        "class_config": {
+          "name": "crypto_accelerator",
+          "class_tree_node": "crypto-engine",
+          "class_tree_node_status": "mapped",
+          "class_tree_node_basis": "'Algorithm data-path plus a SW-accessible register interface, no external protocol' against 'self-contained crypto block (no external protocol; register IO)' is an exact match.",
+          "sparse_control_timing": true,
+          "description": "ORGANIC #542 — Cryptographic accelerator IP: hardware implementation of AES, SHA, HMAC, ECC, ChaCha or similar. Typically pairs an algorithm data-path with a SW-accessible register interface for key loading, control, and status. Distinguishable by algorithm-domain vocabulary (encrypt/decrypt, key schedule, S-box, digest, IV/nonce) plus register-map features. Takes priority over bus_peripheral when crypto algorithm evidence is present.",
+          "synonyms": [
+            "aes_core",
+            "sha_core",
+            "hmac_core",
+            "crypto_core",
+            "cipher_engine",
+            "hash_engine"
+          ],
+          "rtl_gen": null,
+          "fallback_skill": "spec-to-rtl",
+          "verification_track": "generic_full_stack",
+          "command_protocol_applicable": false,
+          "analog_applicable": false,
+          "half_duplex_bus": false,
+          "owner_plugin": "vibe-ic",
+          "assertion_gen": null,
+          "assertion_fallback_skill": "assertion-gen",
+          "tb_gen": "oracle_tb_gen.py",
+          "tb_fallback_skill": "testbench-author"
+        },
+        "staged_vendor_rtl_count": 275,
+        "staged_vendor_rtl_sample": [
+          "input/vendor_rtl/aes/aes.sv",
+          "input/vendor_rtl/aes/aes_cipher_control.sv",
+          "input/vendor_rtl/aes/aes_cipher_control_fsm.sv",
+          "input/vendor_rtl/aes/aes_cipher_control_fsm_n.sv",
+          "input/vendor_rtl/aes/aes_cipher_control_fsm_p.sv"
+        ],
+        "lessons_digest": "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/lessons.md",
+        "lessons_count": 207,
+        "ic_expert_db_digest": "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/ic_expert_db.md",
+        "ic_expert_db_count": 5,
+        "source_manifest_emitted": "phase2/stage1/rtl/SOURCE_MANIFEST.json"
+      }
+    },
+    {
+      "name": "reused_ip_consume",
+      "status": "SKIP",
+      "duration_s": 0.001538991928100586,
+      "detail": "phase2/stage1/rtl/ already holds 126 RTL file(s) — a deterministic generator / author owns it; CONSUME skipped",
+      "output_files": [],
+      "extras": {
+        "reused_ip": false,
+        "staged": [],
+        "sv_files": [],
+        "vh_files": [],
+        "sv2v_available": false,
+        "sv_ingest_note": null,
+        "manifest_emitted": null,
+        "reason": "phase2/stage1/rtl/ already holds 126 RTL file(s) — a deterministic generator / author owns it; CONSUME skipped"
+      }
+    },
+    {
+      "name": "leaf_typo_aliases",
+      "status": "SKIP",
+      "duration_s": 0.039728641510009766,
+      "detail": "no leaf-name typo detected (no alias wrapper needed)",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "reset_clock_variant_aliases",
+      "status": "SKIP",
+      "duration_s": 0.9262561798095703,
+      "detail": "the design's own contract already declares the standard spelling(s) — refusing to rename the TB-facing contract (#689)",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "determinism_gates",
+      "status": "PASS",
+      "duration_s": 0.11849141120910645,
+      "detail": "determinism gates clean over 126 RTL file(s) (clock-divider phase-form + worked-example oracle + clock-divider waveform-ratio oracle; all self-skip when not applicable)",
+      "output_files": [],
+      "extras": null
+    },
+    {
+      "name": "complexity_advisory",
+      "status": "ADVISORY",
+      "duration_s": 0.14479756355285645,
+      "detail": "complexity score=82.27 tier=COMPLEX (prefer_catalog_glue=True synth_effort=high fpga_early=True sta_corners=multi+aging) — ADVISORY only",
+      "output_files": [
+        "reports/phase2/complexity_advisory.json"
+      ],
+      "extras": {
+        "score": 82.27,
+        "tier": "COMPLEX",
+        "recommendations": {
+          "prefer_catalog_glue": true,
+          "synth_effort": "high",
+          "run_fpga_early_prototype": true,
+          "sta_corners": "multi+aging",
+          "advice": "SoC-class: catalog-glue integration, hierarchical PnR, multi-corner+aging STA, FPGA early prototype mandatory."
+        },
+        "advisory_only": true
+      }
+    },
+    {
+      "name": "full_stack_tb_gen",
+      "status": "SKIP",
+      "duration_s": 0.17222809791564941,
+      "detail": "tb_chip_top_full.v emitted as CONNECTIVITY-ONLY skeleton (14 L9.top_ports → 14 DUT pins, 0 L3 opcodes driven). Functional correctness UNVERIFIED (8 vector(s) lack a concrete golden) — no concrete golden / no sim'd actual yet, so NO functional PASS is claimed. Functional gate falls to the bit-level oracle (with goldens) or gate-level synth + Phase 3. (RECONCILED to RTL surface — L9.top_ports diverged: missing-from-L9=['alert_rx_i', 'alert_tx_o', 'rst_edn_ni', 'rst_ni', 'rst_shadowed_ni', 'tl_i', 'tl_o'], not-in-RTL=['edn', 'tl']; the upstream Phase-1 extraction is the real defect, NOT an RTL structural fault)",
+      "output_files": [
+        "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/sim_full_stack/tb_chip_top_full.v",
+        "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/sim_full_stack/results.json"
+      ],
+      "extras": {}
+    },
+    {
+      "name": "l10_unit_tb_gen",
+      "status": "SKIP",
+      "duration_s": 0.01409769058227539,
+      "detail": "no TB produced — L10 carries 103 case(s) [verification_checklist 103]; the TB producer's scaffold scope is {cpu_functional, functional, functional_test, functional_vector, instruction_test} — 0 in scope, 103 out of scope; all 103 will be graded by l10_tb_conformance_check and any without a TB will FAIL Step 4",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "professional_tb_gen",
+      "status": "WAIVED",
+      "duration_s": 0.020756006240844727,
+      "detail": "generic professional TB generated; functional run deferred",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "reference_tb",
+      "status": "WAIVED",
+      "duration_s": 13.121479511260986,
+      "detail": "AID reference TB SKIPPED (class 'crypto_accelerator' verification_track='generic_full_stack' half_duplex_bus=False — the AID half-duplex single-wire reference TB (3-port clk/reset_n/id_bus) cannot bind this interface family); generic full-stack TB tb_chip_top_full.v compiled + ran to completion — CONNECTIVITY only, 0 golden compares (#439). AI invokes skill testbench-author: author a per-IC oracle TB from L3/L5/L10 at sim_full_stack/tb_chip_top_oracle.v, then re-run.",
+      "output_files": [
+        "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/sim_full_stack/tb_chip_top_full.v",
+        "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/sim_full_stack/generic_full_stack_run/full_stack.log"
+      ],
+      "extras": {
+        "verification_track": "generic_full_stack",
+        "aid_tb_skipped_reason": "class 'crypto_accelerator' verification_track='generic_full_stack' half_duplex_bus=False — the AID half-duplex single-wire reference TB (3-port clk/reset_n/id_bus) cannot bind this interface family",
+        "functional_verified": false,
+        "connectivity_pass_functional_deferred": true,
+        "capability_gap": "cap:cpu_functional_oracle",
+        "fallback_skill": "testbench-author",
+        "tb_frontend": "verilator_sva"
+      }
+    },
+    {
+      "name": "yosys_synth",
+      "status": "PASS",
+      "duration_s": 48.347326040267944,
+      "detail": "netlist=netlist_yosys.v cells=94966 synth_top=chip_top frontend=yosys_slang",
+      "output_files": [
+        "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage2/synth/netlist_yosys.v",
+        "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage2/synth/yosys.log"
+      ],
+      "extras": {
+        "synth_frontend": "yosys_slang",
+        "catalog_glue_prune_advisory": {
+          "issue": "#778",
+          "files_prunable": 32,
+          "files_reachable": 98,
+          "files_total": 130,
+          "synth_top": "chip_top",
+          "examples": [
+            "prim_secded_22_16_dec.sv",
+            "prim_secded_22_16_enc.sv",
+            "prim_secded_28_22_dec.sv",
+            "prim_secded_28_22_enc.sv",
+            "prim_secded_39_32_dec.sv",
+            "prim_secded_39_32_enc.sv",
+            "prim_secded_64_57_dec.sv",
+            "prim_secded_64_57_enc.sv"
+          ],
+          "recommendation": "prune the staged RTL set to the closure of synth_top"
+        }
+      }
+    },
+    {
+      "name": "qsf_gen",
+      "status": "SKIP",
+      "duration_s": 0.0011622905731201172,
+      "detail": "DE10 QSF generation SKIPPED: class 'crypto_accelerator' verification_track='generic_full_stack' half_duplex_bus=False — the AID half-duplex single-wire reference TB (3-port clk/reset_n/id_bus) cannot bind this interface family. A memory-bus/data core has no DE10 board-pin contract (its top ports are a data/instruction bus, not board switches/LEDs). Supply a *de10*.{v,sv} board-harness top to enable board verification; otherwise gate-level synth + Phase 3 is the verification path.",
+      "output_files": [],
+      "extras": {
+        "verification_track": "generic_full_stack",
+        "board_pin_skipped_reason": "class 'crypto_accelerator' verification_track='generic_full_stack' half_duplex_bus=False — the AID half-duplex single-wire reference TB (3-port clk/reset_n/id_bus) cannot bind this interface family"
+      }
+    },
+    {
+      "name": "sdc_gen",
+      "status": "PASS",
+      "duration_s": 0.05756235122680664,
+      "detail": "emitted chip_top.sdc (NOTE: clock port(s) taken from L8's DECLARED clock contract: clk_i@20ns on 'clk_i'\nPASS sdc_gen: /home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/fpga/chip_top.sdc (clock=cl)",
+      "output_files": [
+        "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/phase2/stage1/fpga/chip_top.sdc"
+      ],
+      "extras": {}
+    },
+    {
+      "name": "otp_image_check",
+      "status": "PASS",
+      "duration_s": 0.024247407913208008,
+      "detail": "[SKIP] otp_image_nonzero_check: no L11/L4 OTP layout declares payload-class regions (ID/MSN/ASN/SN/SMA/FCH/etc.)",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "fpga_compile",
+      "status": "SKIP",
+      "duration_s": 0.00023746490478515625,
+      "detail": "fpga/<name>.qsf missing — caller must produce it",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "fpga_burn",
+      "status": "SKIP",
+      "duration_s": 0.0001976490020751953,
+      "detail": "no .sof to burn",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "usb_hid_tester_verify",
+      "status": "SKIP",
+      "duration_s": 0.0008909702301025391,
+      "detail": "<half-duplex-tester> board verify SKIPPED: class 'crypto_accelerator' verification_track='generic_full_stack' half_duplex_bus=False — the AID half-duplex single-wire reference TB (3-port clk/reset_n/id_bus) cannot bind this interface family. A memory-bus/data core has no DE10 board-pin contract and speaks no single-wire half-duplex protocol on board pins, so the host connect_test cannot bind it. Supply a *de10*.{v,sv} board-harness top to enable hardware verification; otherwise gate-level synth + Phase 3 is the verification path.",
+      "output_files": [],
+      "extras": {
+        "verification_track": "generic_full_stack",
+        "board_pin_skipped_reason": "class 'crypto_accelerator' verification_track='generic_full_stack' half_duplex_bus=False — the AID half-duplex single-wire reference TB (3-port clk/reset_n/id_bus) cannot bind this interface family"
+      }
+    },
+    {
+      "name": "dft_scan_insertion",
+      "status": "SKIP",
+      "duration_s": 0.07120132446289062,
+      "detail": "scan insertion produced no publishable netlist (rc=2) → disclosed-skip; ATPG continues on the pre-scan netlist",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "dft_insertion",
+      "status": "SKIP",
+      "duration_s": 0.3441953659057617,
+      "detail": "DFT scan inserted; stuck-at ATPG NEVER RAN — no library-mapped netlist yet (phase2/stage2/synth/*_synth.v is written later) → precondition unmet, NOT a capability gap",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "post_dft_opt",
+      "status": "SKIP",
+      "duration_s": 8.20159912109375e-05,
+      "detail": "no scan netlist → post-DFT disclosed-skip",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "lec_equivalence",
+      "status": "SKIP",
+      "duration_s": 4498.278728961945,
+      "detail": "yosys equiv: verdict=INCONCLUSIVE (RTL vs netlist.v, rc=0)",
+      "output_files": [
+        "reports/lec.json",
+        "reports/lec.rpt"
+      ],
+      "extras": {}
+    },
+    {
+      "name": "arith_declaration_emit",
+      "status": "SKIP",
+      "duration_s": 0.10659980773925781,
+      "detail": "emitter fail-closed (rc=1); no file written — arith_declaration_emit: FAIL_CLOSED — required field(s) not derivable:   - rtl_source: cannot locate RTL file in phase2/stage1/rtl/   - bit_order: no LSB/MSB-first marker found in RTL header and no calibrated_bit_order in arith_oracle_manifest.json   - reset_polarity: cannot determine from RTL always-block   - size_param: `parameter size = N` not found in RTL   - multiplier_algorithm: no `algorith",
+      "output_files": [],
+      "extras": {}
+    },
+    {
+      "name": "phase2_manifests",
+      "status": "PASS",
+      "duration_s": 1.2657232284545898,
+      "detail": "11 manifest(s) written",
+      "output_files": [
+        "reports/phase2/lint/rtl_hygiene.json",
+        "reports/phase2/lint/rom_init_lint.json",
+        "reports/phase2/cdc/crossing.json",
+        "reports/phase2/cdc/async_input.json",
+        "reports/phase2/cdc/reset_dep.json",
+        "sim/results.xml",
+        "reports/phase2/coverage/coverage_actual.json",
+        "formal/formal_not_run.json",
+        "reports/phase2/fpga/quartus_map_audit.json",
+        "reports/phase2/fpga/on_board_pass.json",
+        "SOURCE_MANIFEST.md"
+      ],
+      "extras": {}
+    },
+    {
+      "name": "final_audit",
+      "status": "WAIVED",
+      "duration_s": 13.483436822891235,
+      "detail": "  GATE_RAN l8_clock_period_actionability_check          rc=1           FAIL\n  GATE_RAN l9_floorplan_contract_check                  rc=0           PASS\n  GATE_RAN l10_test_case_oracle_anchor_check            rc=0           PASS\n  GATE_RAN l11_otp_content_consumer_contract_check      rc=0           PASS\n  GATE_RAN l12_sequences_in_consumed_layer_check        rc=0           PASS\n  GATE_RAN l13_bringup_contract_check                   rc=0           PASS\n  GATE_RAN l14_protocol_versioning_contract_check       rc=0           PASS\n  GATE_RAN l15_encoding_tables_contract_check           rc=0           PASS\n  GATE_RAN l18_interconnect_topology_factuality_check   rc=0           PASS\n  GATE_RAN cross_layer_reference_check                  rc=2           VACUOUS_PASS\n  GATE_RAN phase1_planned_consumer_starved_check        rc=0           PASS\n  GATE_RAN l_doc_todo_stub_count_check                  rc=0           PASS\n  GATE_RAN l_doc_cross_consistency_check                rc=1           FAIL\n  GATE_RAN spec_review_lint                             rc=1           FAIL\n  GATE_RAN rtl_hygiene_lint                             rc=0           PASS\n  GATE_RAN rom_init_lint                                rc=0           PASS\n  GATE_RAN internal_vs_external_timing_check            rc=0           PASS\n  GATE_RAN threshold_range_contiguity_check             rc=0           PASS\n  GATE_RAN rsp_example_otp_consistency_check            rc=0           PASS\n  GATE_RAN spec_response_delay_check                    rc=0           PASS\n  GATE_RAN nba_addr_read_race_check                     rc=0           PASS\n  GATE_RAN periodic_timer_vs_rx_activity_check          rc=0           PASS\n  GATE_RAN memory_read_pipeline_check                   rc=0           PASS\n  GATE_RAN fpga_wrapper_input_polluter_check            rc=0           PASS\n  GATE_RAN arith_ss_corner_risk_check                   rc=0           PASS",
+      "output_files": [
+        "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/reports/audit/flow_compliance_check.log"
+      ],
+      "extras": {}
+    },
+    {
+      "name": "stamp_gate_reports",
+      "status": "PASS",
+      "duration_s": 0.0100250244140625,
+      "detail": "stamped #484 identity into 28 gate/lint json(s) under reports/phase2/gates, reports/phase2/lint",
+      "output_files": [
+        "reports/phase2/gates/arith_ss_corner_risk.json",
+        "reports/phase2/gates/assertion_property.json",
+        "reports/phase2/gates/bit_level_full_stack.json",
+        "reports/phase2/gates/cdc_async_input.json",
+        "reports/phase2/gates/cdc_crossing.json",
+        "reports/phase2/gates/cdc_reg_crossing.json",
+        "reports/phase2/gates/cdc_reset_dep.json",
+        "reports/phase2/gates/cpu_functional_oracle_waiver.json",
+        "reports/phase2/gates/formal_evidence.json",
+        "reports/phase2/gates/fpga_input_polluter.json",
+        "reports/phase2/gates/int_vs_ext_timing.json",
+        "reports/phase2/gates/l10_tb_conformance.json",
+        "reports/phase2/gates/l12_tb_coverage.json",
+        "reports/phase2/gates/memory_read_pipeline.json",
+        "reports/phase2/gates/nba_addr_race.json",
+        "reports/phase2/gates/periodic_timer.json",
+        "reports/phase2/gates/professional_tb.json",
+        "reports/phase2/gates/professional_tb_check.json",
+        "reports/phase2/gates/rsp_otp_consistency.json",
+        "reports/phase2/gates/spec_required_artifacts.json",
+        "reports/phase2/gates/spec_response_delay.json",
+        "reports/phase2/gates/threshold_contiguity.json",
+        "reports/phase2/gates/vacuous_testbench.json",
+        "reports/phase2/gates/yosys_hilomap.json",
+        "reports/phase2/gates/yosys_script_template.json",
+        "reports/phase2/gates/yosys_tiecell_recipe_order.json",
+        "reports/phase2/lint/rom_init_lint.json",
+        "reports/phase2/lint/rtl_hygiene.json"
+      ],
+      "extras": {
+        "stamped_count": 28
+      }
+    }
+  ],
+  "verdict": "PASS_WITH_WAIVERS",
+  "steps_view": {
+    "program": "steps_view",
+    "runner": "design_one_shot_runner",
+    "generated_at": "2026-08-08T23:07:43+0800",
+    "steps_root": "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/steps",
+    "status": "OK",
+    "tree_present": true,
+    "n_steps": 63,
+    "n_with_outputs": 11,
+    "nested_folders": 63,
+    "error": null,
+    "record_path": "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/reports/audit/steps_view.json"
+  }
+}

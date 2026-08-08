@@ -1,0 +1,1511 @@
+{
+  "schema_version": 2,
+  "doc_class": "regmap",
+  "ic_name": "opentitan_aes",
+  "registers": [
+    {
+      "address": "0x0",
+      "address_int": 0,
+      "name": "ALERT_TEST",
+      "access": "WO",
+      "default": "",
+      "description": "Alert Test Register (length=4)",
+      "reset_value": "0x0",
+      "fields": [
+        {
+          "bits": "1",
+          "field_name": "fatal_fault",
+          "access": "WO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 1,
+          "lsb": 1
+        },
+        {
+          "bits": "0",
+          "field_name": "recov_ctrl_update_err",
+          "access": "WO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 0,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x0",
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table",
+      "reset_value_kind": "numeric",
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 20,
+          "matched_token": "| aes.[`ALERT_TEST`](#alert_test)               | 0x0      |        4 | Alert Test Register                         |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x4",
+      "address_int": 4,
+      "name": "KEY_SHARE0",
+      "access": "WO",
+      "default": "",
+      "description": "Initial Key Registers Share 0. (length=4)",
+      "reset_value": "0x0",
+      "fields": [
+        {
+          "bits": "31:0",
+          "field_name": "key_share0",
+          "access": "WO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 31,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x4",
+      "base_offset": "0x4",
+      "base_addr": "0x4",
+      "element_offsets": [
+        {
+          "index": 0,
+          "offset": "0x4"
+        },
+        {
+          "index": 1,
+          "offset": "0x8"
+        },
+        {
+          "index": 2,
+          "offset": "0xc"
+        },
+        {
+          "index": 3,
+          "offset": "0x10"
+        },
+        {
+          "index": 4,
+          "offset": "0x14"
+        },
+        {
+          "index": 5,
+          "offset": "0x18"
+        },
+        {
+          "index": 6,
+          "offset": "0x1c"
+        },
+        {
+          "index": 7,
+          "offset": "0x20"
+        }
+      ],
+      "stride_bytes": 4,
+      "array_size": 8,
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table_multireg",
+      "reset_value_kind": "numeric",
+      "also_named": [
+        "KEY_SHARE0_0"
+      ],
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 21,
+          "matched_token": "| aes.[`KEY_SHARE0_0`](#key_share0)             | 0x4      |        4 | Initial Key Registers Share 0.              |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        },
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 91,
+          "matched_token": "| KEY_SHARE0_0 | 0x4      |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x24",
+      "address_int": 36,
+      "name": "KEY_SHARE1",
+      "access": "WO",
+      "default": "",
+      "description": "Initial Key Registers Share 1. (length=4)",
+      "reset_value": "0x0",
+      "fields": [
+        {
+          "bits": "31:0",
+          "field_name": "key_share1",
+          "access": "WO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 31,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x24",
+      "base_offset": "0x24",
+      "base_addr": "0x24",
+      "element_offsets": [
+        {
+          "index": 0,
+          "offset": "0x24"
+        },
+        {
+          "index": 1,
+          "offset": "0x28"
+        },
+        {
+          "index": 2,
+          "offset": "0x2c"
+        },
+        {
+          "index": 3,
+          "offset": "0x30"
+        },
+        {
+          "index": 4,
+          "offset": "0x34"
+        },
+        {
+          "index": 5,
+          "offset": "0x38"
+        },
+        {
+          "index": 6,
+          "offset": "0x3c"
+        },
+        {
+          "index": 7,
+          "offset": "0x40"
+        }
+      ],
+      "stride_bytes": 4,
+      "array_size": 8,
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table_multireg",
+      "reset_value_kind": "numeric",
+      "also_named": [
+        "KEY_SHARE1_0"
+      ],
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 29,
+          "matched_token": "| aes.[`KEY_SHARE1_0`](#key_share1)             | 0x24     |        4 | Initial Key Registers Share 1.              |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        },
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 128,
+          "matched_token": "| KEY_SHARE1_0 | 0x24     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x44",
+      "address_int": 68,
+      "name": "IV",
+      "access": "RW",
+      "default": "",
+      "description": "Initialization Vector Registers. (length=4)",
+      "reset_value": "0x0",
+      "fields": [
+        {
+          "bits": "31:0",
+          "field_name": "iv",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 31,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x44",
+      "base_offset": "0x44",
+      "base_addr": "0x44",
+      "element_offsets": [
+        {
+          "index": 0,
+          "offset": "0x44"
+        },
+        {
+          "index": 1,
+          "offset": "0x48"
+        },
+        {
+          "index": 2,
+          "offset": "0x4c"
+        },
+        {
+          "index": 3,
+          "offset": "0x50"
+        }
+      ],
+      "stride_bytes": 4,
+      "array_size": 4,
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table_multireg",
+      "reset_value_kind": "numeric",
+      "also_named": [
+        "IV_0"
+      ],
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 37,
+          "matched_token": "| aes.[`IV_0`](#iv)                             | 0x44     |        4 | Initialization Vector Registers.            |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        },
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 167,
+          "matched_token": "| IV_0   | 0x44     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x54",
+      "address_int": 84,
+      "name": "DATA_IN",
+      "access": "WO",
+      "default": "",
+      "description": "Input Data Registers. (length=4)",
+      "reset_value": "0x0",
+      "fields": [
+        {
+          "bits": "31:0",
+          "field_name": "data_in",
+          "access": "WO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 31,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x54",
+      "base_offset": "0x54",
+      "base_addr": "0x54",
+      "element_offsets": [
+        {
+          "index": 0,
+          "offset": "0x54"
+        },
+        {
+          "index": 1,
+          "offset": "0x58"
+        },
+        {
+          "index": 2,
+          "offset": "0x5c"
+        },
+        {
+          "index": 3,
+          "offset": "0x60"
+        }
+      ],
+      "stride_bytes": 4,
+      "array_size": 4,
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table_multireg",
+      "reset_value_kind": "numeric",
+      "also_named": [
+        "DATA_IN_0"
+      ],
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 41,
+          "matched_token": "| aes.[`DATA_IN_0`](#data_in)                   | 0x54     |        4 | Input Data Registers.                       |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        },
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 199,
+          "matched_token": "| DATA_IN_0 | 0x54     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x64",
+      "address_int": 100,
+      "name": "DATA_OUT",
+      "access": "RO",
+      "default": "",
+      "description": "Output Data Register. (length=4)",
+      "reset_value": "0x0",
+      "fields": [
+        {
+          "bits": "31:0",
+          "field_name": "data_out",
+          "access": "RO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 31,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x64",
+      "base_offset": "0x64",
+      "base_addr": "0x64",
+      "element_offsets": [
+        {
+          "index": 0,
+          "offset": "0x64"
+        },
+        {
+          "index": 1,
+          "offset": "0x68"
+        },
+        {
+          "index": 2,
+          "offset": "0x6c"
+        },
+        {
+          "index": 3,
+          "offset": "0x70"
+        }
+      ],
+      "stride_bytes": 4,
+      "array_size": 4,
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table_multireg",
+      "reset_value_kind": "numeric",
+      "also_named": [
+        "DATA_OUT_0"
+      ],
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 45,
+          "matched_token": "| aes.[`DATA_OUT_0`](#data_out)                 | 0x64     |        4 | Output Data Register.                       |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        },
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 230,
+          "matched_token": "| DATA_OUT_0 | 0x64     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x74",
+      "address_int": 116,
+      "name": "CTRL_SHADOWED",
+      "access": "",
+      "default": "",
+      "description": "Control Register. (length=4)",
+      "reset_value": "0x11fd",
+      "fields": [
+        {
+          "bits": "31:16",
+          "field_name": "Reserved",
+          "access": "",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "msb": 31,
+          "lsb": 16
+        },
+        {
+          "bits": "15",
+          "field_name": "MANUAL_OPERATION",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 15,
+          "lsb": 15
+        },
+        {
+          "bits": "14:12",
+          "field_name": "PRNG_RESEED_RATE",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x1",
+          "msb": 14,
+          "lsb": 12,
+          "encoding": [
+            {
+              "pattern": "001",
+              "mnem": "PER_1",
+              "meaning": "3'b001: Reseed the masking PRNG once per block. Invalid input values, i.e., values with multiple bits set and value 3'b000 are mapped to PER_1 (3'b001). This r",
+              "description": "3'b001: Reseed the masking PRNG once per block. Invalid input values, i.e., values with multiple bits set and value 3'b000 are mapped to PER_1 (3'b001). This r",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "010",
+              "mnem": "PER_64",
+              "meaning": "3'b010: Reseed the masking PRNG approximately once per every 64 blocks. This results in a max entropy consumption rate of ~5.4 Mbit/s.",
+              "description": "3'b010: Reseed the masking PRNG approximately once per every 64 blocks. This results in a max entropy consumption rate of ~5.4 Mbit/s.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "100",
+              "mnem": "PER_8K",
+              "meaning": "3'b100: Reseed the masking PRNG approximately once per every 8192 blocks. This results in a max entropy consumption rate of ~0.042 Mbit/s.",
+              "description": "3'b100: Reseed the masking PRNG approximately once per every 8192 blocks. This results in a max entropy consumption rate of ~0.042 Mbit/s.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "001",
+              "mnem": "AES_128",
+              "meaning": "3'b001: 128-bit key length.",
+              "description": "3'b001: 128-bit key length.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "010",
+              "mnem": "AES_192",
+              "meaning": "3'b010: 192-bit key length. In case support for 192-bit keys has been disabled at compile time, setting this value results in configuring AES_256 (3'b100).",
+              "description": "3'b010: 192-bit key length. In case support for 192-bit keys has been disabled at compile time, setting this value results in configuring AES_256 (3'b100).",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "100",
+              "mnem": "AES_256",
+              "meaning": "3'b100: 256-bit key length. Invalid input values, i.e., values with multiple bits set, value 3'b000, and value 3'b010 in case 192-bit keys are not supported (b",
+              "description": "3'b100: 256-bit key length. Invalid input values, i.e., values with multiple bits set, value 3'b000, and value 3'b010 in case 192-bit keys are not supported (b",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            }
+          ]
+        },
+        {
+          "bits": "11",
+          "field_name": "SIDELOAD",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 11,
+          "lsb": 11
+        },
+        {
+          "bits": "10:8",
+          "field_name": "KEY_LEN",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x1",
+          "msb": 10,
+          "lsb": 8,
+          "encoding": [
+            {
+              "pattern": "001",
+              "mnem": "PER_1",
+              "meaning": "3'b001: Reseed the masking PRNG once per block. Invalid input values, i.e., values with multiple bits set and value 3'b000 are mapped to PER_1 (3'b001). This r",
+              "description": "3'b001: Reseed the masking PRNG once per block. Invalid input values, i.e., values with multiple bits set and value 3'b000 are mapped to PER_1 (3'b001). This r",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "010",
+              "mnem": "PER_64",
+              "meaning": "3'b010: Reseed the masking PRNG approximately once per every 64 blocks. This results in a max entropy consumption rate of ~5.4 Mbit/s.",
+              "description": "3'b010: Reseed the masking PRNG approximately once per every 64 blocks. This results in a max entropy consumption rate of ~5.4 Mbit/s.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "100",
+              "mnem": "PER_8K",
+              "meaning": "3'b100: Reseed the masking PRNG approximately once per every 8192 blocks. This results in a max entropy consumption rate of ~0.042 Mbit/s.",
+              "description": "3'b100: Reseed the masking PRNG approximately once per every 8192 blocks. This results in a max entropy consumption rate of ~0.042 Mbit/s.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "001",
+              "mnem": "AES_128",
+              "meaning": "3'b001: 128-bit key length.",
+              "description": "3'b001: 128-bit key length.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "010",
+              "mnem": "AES_192",
+              "meaning": "3'b010: 192-bit key length. In case support for 192-bit keys has been disabled at compile time, setting this value results in configuring AES_256 (3'b100).",
+              "description": "3'b010: 192-bit key length. In case support for 192-bit keys has been disabled at compile time, setting this value results in configuring AES_256 (3'b100).",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "100",
+              "mnem": "AES_256",
+              "meaning": "3'b100: 256-bit key length. Invalid input values, i.e., values with multiple bits set, value 3'b000, and value 3'b010 in case 192-bit keys are not supported (b",
+              "description": "3'b100: 256-bit key length. Invalid input values, i.e., values with multiple bits set, value 3'b000, and value 3'b010 in case 192-bit keys are not supported (b",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            }
+          ]
+        },
+        {
+          "bits": "7:2",
+          "field_name": "MODE",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x3f",
+          "msb": 7,
+          "lsb": 2,
+          "encoding": [
+            {
+              "pattern": "000001",
+              "mnem": "AES_ECB",
+              "meaning": "6'b00_0001: Electronic Codebook (ECB) mode.",
+              "description": "6'b00_0001: Electronic Codebook (ECB) mode.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "000010",
+              "mnem": "AES_CBC",
+              "meaning": "6'b00_0010: Cipher Block Chaining (CBC) mode.",
+              "description": "6'b00_0010: Cipher Block Chaining (CBC) mode.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "000100",
+              "mnem": "AES_CFB",
+              "meaning": "6'b00_0100: Cipher Feedback (CFB) mode.",
+              "description": "6'b00_0100: Cipher Feedback (CFB) mode.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "001000",
+              "mnem": "AES_OFB",
+              "meaning": "6'b00_1000: Output Feedback (OFB) mode.",
+              "description": "6'b00_1000: Output Feedback (OFB) mode.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "010000",
+              "mnem": "AES_CTR",
+              "meaning": "6'b01_0000: Counter (CTR) mode.",
+              "description": "6'b01_0000: Counter (CTR) mode.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "100000",
+              "mnem": "AES_GCM",
+              "meaning": "6'b10_0000: Galois/Counter Mode (GCM). In case support for GCM has been disabled at compile time, setting this value results in configuring AES_NONE (6'b11_111",
+              "description": "6'b10_0000: Galois/Counter Mode (GCM). In case support for GCM has been disabled at compile time, setting this value results in configuring AES_NONE (6'b11_111",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "111111",
+              "mnem": "AES_NONE",
+              "meaning": "6'b11_1111: Invalid input values, i.e., value with multiple bits set, value 6'b00_0000, and value 6'b10_0000 in case GCM is not supported (because disabled at",
+              "description": "6'b11_1111: Invalid input values, i.e., value with multiple bits set, value 6'b00_0000, and value 6'b10_0000 in case GCM is not supported (because disabled at",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            }
+          ]
+        },
+        {
+          "bits": "1:0",
+          "field_name": "OPERATION",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x1",
+          "msb": 1,
+          "lsb": 0,
+          "encoding": [
+            {
+              "pattern": "11",
+              "mnem": "rw",
+              "meaning": "0x0",
+              "description": "0x0",
+              "extraction_strategy": "field_encoding_table_row_v1_6_512"
+            },
+            {
+              "pattern": "01",
+              "mnem": "AES_ENC",
+              "meaning": "2'b01: Encryption. Invalid input values, i.e., 2'b00 and 2'b11, are mapped to AES_ENC.",
+              "description": "2'b01: Encryption. Invalid input values, i.e., 2'b00 and 2'b11, are mapped to AES_ENC.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            },
+            {
+              "pattern": "10",
+              "mnem": "AES_DEC",
+              "meaning": "2'b10: Decryption.",
+              "description": "2'b10: Decryption.",
+              "extraction_strategy": "field_encoding_table_hexrow_v1_6_592"
+            }
+          ]
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x74",
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table",
+      "reset_value_kind": "numeric",
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 49,
+          "matched_token": "| aes.[`CTRL_SHADOWED`](#ctrl_shadowed)         | 0x74     |        4 | Control Register.                           |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x78",
+      "address_int": 120,
+      "name": "CTRL_AUX_SHADOWED",
+      "access": "",
+      "default": "",
+      "description": "Auxiliary Control Register. (length=4)",
+      "reset_value": "0x1",
+      "fields": [
+        {
+          "bits": "31:2",
+          "field_name": "Reserved",
+          "access": "",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "msb": 31,
+          "lsb": 2
+        },
+        {
+          "bits": "1",
+          "field_name": "FORCE_MASKS",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 1,
+          "lsb": 1
+        },
+        {
+          "bits": "0",
+          "field_name": "KEY_TOUCH_FORCES_RESEED",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x1",
+          "msb": 0,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x78",
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table",
+      "reset_value_kind": "numeric",
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 50,
+          "matched_token": "| aes.[`CTRL_AUX_SHADOWED`](#ctrl_aux_shadowed) | 0x78     |        4 | Auxiliary Control Register.                 |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x7c",
+      "address_int": 124,
+      "name": "CTRL_AUX_REGWEN",
+      "access": "RW0C",
+      "default": "",
+      "description": "Lock bit for Auxiliary Control Register. (length=4)",
+      "reset_value": "0x1",
+      "fields": [
+        {
+          "bits": "0",
+          "field_name": "CTRL_AUX_REGWEN",
+          "access": "RW0C",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x1",
+          "msb": 0,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x7c",
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table",
+      "reset_value_kind": "numeric",
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 51,
+          "matched_token": "| aes.[`CTRL_AUX_REGWEN`](#ctrl_aux_regwen)     | 0x7c     |        4 | Lock bit for Auxiliary Control Register.    |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x80",
+      "address_int": 128,
+      "name": "TRIGGER",
+      "access": "",
+      "default": "",
+      "description": "Trigger Register. (length=4)",
+      "reset_value": "0xe",
+      "fields": [
+        {
+          "bits": "31:4",
+          "field_name": "Reserved",
+          "access": "",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "msb": 31,
+          "lsb": 4
+        },
+        {
+          "bits": "3",
+          "field_name": "PRNG_RESEED",
+          "access": "WO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x1",
+          "msb": 3,
+          "lsb": 3
+        },
+        {
+          "bits": "2",
+          "field_name": "DATA_OUT_CLEAR",
+          "access": "WO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x1",
+          "msb": 2,
+          "lsb": 2
+        },
+        {
+          "bits": "1",
+          "field_name": "KEY_IV_DATA_IN_CLEAR",
+          "access": "WO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x1",
+          "msb": 1,
+          "lsb": 1
+        },
+        {
+          "bits": "0",
+          "field_name": "START",
+          "access": "WO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 0,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x80",
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table",
+      "reset_value_kind": "numeric",
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 52,
+          "matched_token": "| aes.[`TRIGGER`](#trigger)                     | 0x80     |        4 | Trigger Register.                           |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x84",
+      "address_int": 132,
+      "name": "STATUS",
+      "access": "",
+      "default": "",
+      "description": "Status Register (length=4)",
+      "reset_value": "0x0",
+      "fields": [
+        {
+          "bits": "31:7",
+          "field_name": "Reserved",
+          "access": "",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "msb": 31,
+          "lsb": 7
+        },
+        {
+          "bits": "6",
+          "field_name": "ALERT_FATAL_FAULT",
+          "access": "RO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 6,
+          "lsb": 6
+        },
+        {
+          "bits": "5",
+          "field_name": "ALERT_RECOV_CTRL_UPDATE_ERR",
+          "access": "RO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 5,
+          "lsb": 5
+        },
+        {
+          "bits": "4",
+          "field_name": "INPUT_READY",
+          "access": "RO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 4,
+          "lsb": 4
+        },
+        {
+          "bits": "3",
+          "field_name": "OUTPUT_VALID",
+          "access": "RO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 3,
+          "lsb": 3
+        },
+        {
+          "bits": "2",
+          "field_name": "OUTPUT_LOST",
+          "access": "RO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 2,
+          "lsb": 2
+        },
+        {
+          "bits": "1",
+          "field_name": "STALL",
+          "access": "RO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 1,
+          "lsb": 1
+        },
+        {
+          "bits": "0",
+          "field_name": "IDLE",
+          "access": "RO",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x0",
+          "msb": 0,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x84",
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table",
+      "reset_value_kind": "numeric",
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 53,
+          "matched_token": "| aes.[`STATUS`](#status)                       | 0x84     |        4 | Status Register                             |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "address": "0x88",
+      "address_int": 136,
+      "name": "CTRL_GCM_SHADOWED",
+      "access": "",
+      "default": "",
+      "description": "Galois/Counter Mode (GCM) Control Register. (length=4)",
+      "reset_value": "0x401",
+      "fields": [
+        {
+          "bits": "31:11",
+          "field_name": "Reserved",
+          "access": "",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "msb": 31,
+          "lsb": 11
+        },
+        {
+          "bits": "10:6",
+          "field_name": "NUM_VALID_BYTES",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x10",
+          "msb": 10,
+          "lsb": 6
+        },
+        {
+          "bits": "5:0",
+          "field_name": "PHASE",
+          "access": "RW",
+          "extraction_strategy": "l4_namecol_bitfield_v1_0_80",
+          "reset": "0x1",
+          "msb": 5,
+          "lsb": 0
+        }
+      ],
+      "extraction_strategy": "l4_namecol_register_v1_0_80",
+      "evidence": "input/docs/aes_registers.md",
+      "offset": "0x88",
+      "length": 4,
+      "offset_source": "gap_e2e6_register_offset_table",
+      "reset_value_kind": "numeric",
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 54,
+          "matched_token": "| aes.[`CTRL_GCM_SHADOWED`](#ctrl_gcm_shadowed) | 0x88     |        4 | Galois/Counter Mode (GCM) Control Register. |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x8",
+      "access": "",
+      "name": "KEY_SHARE0_1",
+      "description": "Initial Key Registers Share 0. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 22,
+        "matched_token": "| aes.[`KEY_SHARE0_1`](#key_share0)             | 0x8      |        4 | Initial Key Registers Share 0.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 92,
+          "matched_token": "| KEY_SHARE0_1 | 0x8      |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0xc",
+      "access": "",
+      "name": "KEY_SHARE0_2",
+      "description": "Initial Key Registers Share 0. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 23,
+        "matched_token": "| aes.[`KEY_SHARE0_2`](#key_share0)             | 0xc      |        4 | Initial Key Registers Share 0.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 93,
+          "matched_token": "| KEY_SHARE0_2 | 0xc      |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x10",
+      "access": "",
+      "name": "KEY_SHARE0_3",
+      "description": "Initial Key Registers Share 0. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 24,
+        "matched_token": "| aes.[`KEY_SHARE0_3`](#key_share0)             | 0x10     |        4 | Initial Key Registers Share 0.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 94,
+          "matched_token": "| KEY_SHARE0_3 | 0x10     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x14",
+      "access": "",
+      "name": "KEY_SHARE0_4",
+      "description": "Initial Key Registers Share 0. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 25,
+        "matched_token": "| aes.[`KEY_SHARE0_4`](#key_share0)             | 0x14     |        4 | Initial Key Registers Share 0.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 95,
+          "matched_token": "| KEY_SHARE0_4 | 0x14     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x18",
+      "access": "",
+      "name": "KEY_SHARE0_5",
+      "description": "Initial Key Registers Share 0. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 26,
+        "matched_token": "| aes.[`KEY_SHARE0_5`](#key_share0)             | 0x18     |        4 | Initial Key Registers Share 0.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 96,
+          "matched_token": "| KEY_SHARE0_5 | 0x18     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x1c",
+      "access": "",
+      "name": "KEY_SHARE0_6",
+      "description": "Initial Key Registers Share 0. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 27,
+        "matched_token": "| aes.[`KEY_SHARE0_6`](#key_share0)             | 0x1c     |        4 | Initial Key Registers Share 0.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 97,
+          "matched_token": "| KEY_SHARE0_6 | 0x1c     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x20",
+      "access": "",
+      "name": "KEY_SHARE0_7",
+      "description": "Initial Key Registers Share 0. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 28,
+        "matched_token": "| aes.[`KEY_SHARE0_7`](#key_share0)             | 0x20     |        4 | Initial Key Registers Share 0.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 98,
+          "matched_token": "| KEY_SHARE0_7 | 0x20     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x28",
+      "access": "",
+      "name": "KEY_SHARE1_1",
+      "description": "Initial Key Registers Share 1. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 30,
+        "matched_token": "| aes.[`KEY_SHARE1_1`](#key_share1)             | 0x28     |        4 | Initial Key Registers Share 1.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 129,
+          "matched_token": "| KEY_SHARE1_1 | 0x28     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x2c",
+      "access": "",
+      "name": "KEY_SHARE1_2",
+      "description": "Initial Key Registers Share 1. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 31,
+        "matched_token": "| aes.[`KEY_SHARE1_2`](#key_share1)             | 0x2c     |        4 | Initial Key Registers Share 1.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 130,
+          "matched_token": "| KEY_SHARE1_2 | 0x2c     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x30",
+      "access": "",
+      "name": "KEY_SHARE1_3",
+      "description": "Initial Key Registers Share 1. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 32,
+        "matched_token": "| aes.[`KEY_SHARE1_3`](#key_share1)             | 0x30     |        4 | Initial Key Registers Share 1.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 131,
+          "matched_token": "| KEY_SHARE1_3 | 0x30     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x34",
+      "access": "",
+      "name": "KEY_SHARE1_4",
+      "description": "Initial Key Registers Share 1. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 33,
+        "matched_token": "| aes.[`KEY_SHARE1_4`](#key_share1)             | 0x34     |        4 | Initial Key Registers Share 1.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 132,
+          "matched_token": "| KEY_SHARE1_4 | 0x34     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x38",
+      "access": "",
+      "name": "KEY_SHARE1_5",
+      "description": "Initial Key Registers Share 1. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 34,
+        "matched_token": "| aes.[`KEY_SHARE1_5`](#key_share1)             | 0x38     |        4 | Initial Key Registers Share 1.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 133,
+          "matched_token": "| KEY_SHARE1_5 | 0x38     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x3c",
+      "access": "",
+      "name": "KEY_SHARE1_6",
+      "description": "Initial Key Registers Share 1. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 35,
+        "matched_token": "| aes.[`KEY_SHARE1_6`](#key_share1)             | 0x3c     |        4 | Initial Key Registers Share 1.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 134,
+          "matched_token": "| KEY_SHARE1_6 | 0x3c     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x40",
+      "access": "",
+      "name": "KEY_SHARE1_7",
+      "description": "Initial Key Registers Share 1. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 36,
+        "matched_token": "| aes.[`KEY_SHARE1_7`](#key_share1)             | 0x40     |        4 | Initial Key Registers Share 1.              |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 135,
+          "matched_token": "| KEY_SHARE1_7 | 0x40     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x48",
+      "access": "",
+      "name": "IV_1",
+      "description": "Initialization Vector Registers. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 38,
+        "matched_token": "| aes.[`IV_1`](#iv)                             | 0x48     |        4 | Initialization Vector Registers.            |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 168,
+          "matched_token": "| IV_1   | 0x48     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x4c",
+      "access": "",
+      "name": "IV_2",
+      "description": "Initialization Vector Registers. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 39,
+        "matched_token": "| aes.[`IV_2`](#iv)                             | 0x4c     |        4 | Initialization Vector Registers.            |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 169,
+          "matched_token": "| IV_2   | 0x4c     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x50",
+      "access": "",
+      "name": "IV_3",
+      "description": "Initialization Vector Registers. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 40,
+        "matched_token": "| aes.[`IV_3`](#iv)                             | 0x50     |        4 | Initialization Vector Registers.            |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 170,
+          "matched_token": "| IV_3   | 0x50     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x58",
+      "access": "",
+      "name": "DATA_IN_1",
+      "description": "Input Data Registers. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 42,
+        "matched_token": "| aes.[`DATA_IN_1`](#data_in)                   | 0x58     |        4 | Input Data Registers.                       |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 200,
+          "matched_token": "| DATA_IN_1 | 0x58     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x5c",
+      "access": "",
+      "name": "DATA_IN_2",
+      "description": "Input Data Registers. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 43,
+        "matched_token": "| aes.[`DATA_IN_2`](#data_in)                   | 0x5c     |        4 | Input Data Registers.                       |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 201,
+          "matched_token": "| DATA_IN_2 | 0x5c     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x60",
+      "access": "",
+      "name": "DATA_IN_3",
+      "description": "Input Data Registers. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 44,
+        "matched_token": "| aes.[`DATA_IN_3`](#data_in)                   | 0x60     |        4 | Input Data Registers.                       |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 202,
+          "matched_token": "| DATA_IN_3 | 0x60     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x68",
+      "access": "",
+      "name": "DATA_OUT_1",
+      "description": "Output Data Register. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 46,
+        "matched_token": "| aes.[`DATA_OUT_1`](#data_out)                 | 0x68     |        4 | Output Data Register.                       |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 231,
+          "matched_token": "| DATA_OUT_1 | 0x68     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x6c",
+      "access": "",
+      "name": "DATA_OUT_2",
+      "description": "Output Data Register. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 47,
+        "matched_token": "| aes.[`DATA_OUT_2`](#data_out)                 | 0x6c     |        4 | Output Data Register.                       |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 232,
+          "matched_token": "| DATA_OUT_2 | 0x6c     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    },
+    {
+      "addr_hex": "0x70",
+      "access": "",
+      "name": "DATA_OUT_3",
+      "description": "Output Data Register. (length=4)",
+      "evidence": {
+        "source": "phase1/input_doc/aes_registers.txt",
+        "line": 48,
+        "matched_token": "| aes.[`DATA_OUT_3`](#data_out)                 | 0x70     |        4 | Output Data Register.                       |",
+        "extraction_strategy": "gfm_pipe_table_match"
+      },
+      "corroborating_evidence": [
+        {
+          "source": "phase1/input_doc/aes_registers.txt",
+          "line": 233,
+          "matched_token": "| DATA_OUT_3 | 0x70     |",
+          "extraction_strategy": "gfm_pipe_table_match"
+        }
+      ]
+    }
+  ],
+  "register_cap_v1_7_74": {
+    "cap": 128,
+    "collected": 12,
+    "carried": 12,
+    "dropped": 0,
+    "declared_never_dropped": true,
+    "dropped_names": [],
+    "reason": "every collected register is carried; the cap did not bite"
+  },
+  "no_registers_in_input": false,
+  "otp_layout": null,
+  "no_otp_layout_in_input": true,
+  "otp_ip_macro": {},
+  "internal_registers": [],
+  "input_declared_registers": {
+    "declared": 0,
+    "carried_at_emit": 0,
+    "absent_at_emit": [],
+    "already_carried_by_prose": 0,
+    "appended": 0,
+    "sources": [],
+    "measured_at": "gen_l4_regmap emit",
+    "authority": "descriptive only — l4_regmap_declared_register_coverage_check re-derives both sides independently"
+  },
+  "encoding_lifted_count_v1_6_512": 22,
+  "extraction_evidence": {
+    "input/docs/aes_registers.md": [
+      {
+        "literal": "ALERT_TEST field table (2 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "KEY_SHARE0 field table (1 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "KEY_SHARE1 field table (1 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "IV field table (1 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "DATA_IN field table (1 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "DATA_OUT field table (1 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "CTRL_SHADOWED field table (7 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "CTRL_AUX_SHADOWED field table (3 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "CTRL_AUX_REGWEN field table (1 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "TRIGGER field table (5 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "STATUS field table (8 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      },
+      {
+        "literal": "CTRL_GCM_SHADOWED field table (3 fields)",
+        "label": "L4 Name-column / wavejson bit-field (#736)"
+      }
+    ],
+    "internal/regmap/offset_table": [
+      {
+        "literal": "Register-summary offset-table inheritance (GAP-E2E-6, count=12)",
+        "label": "register_offset_table_gap_e2e6"
+      }
+    ]
+  },
+  "_generator": {
+    "plugin": "vibe-ic",
+    "plugin_version": "1.10.2",
+    "l_doc_taxonomy_digest": "e3eeeadc5528",
+    "l_doc_taxonomy_docs": 28,
+    "emitter": "spi_protocol_synth._write"
+  },
+  "class_path": "crypto_block_cipher",
+  "register_map_present": true,
+  "base_address": "Defined at SoC level; offsets given relative to module base.",
+  "notes": "Module memory map per spec. Reads from reserved bits return zeros and writes to reserved bits have no effect."
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "opentitan_aes",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {
+    "input/docs/aes_README.md": []
+  },
+  "_generator": {
+    "plugin": "vibe-ic",
+    "plugin_version": "1.10.2",
+    "l_doc_taxonomy_digest": "e3eeeadc5528",
+    "l_doc_taxonomy_docs": 28,
+    "emitter": "phase1_doc_one_shot_runner._v1_6_295_propagate_class_path_to_layer_docs"
+  },
+  "clock_domains": [
+    {
+      "name": "clk_i",
+      "source_pin": "clk_i",
+      "domain_kind": "primary",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk_i",
+      "type": "input",
+      "freq_mhz": null,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "domain_kind": "primary",
+      "source_pin": "clk_i"
+    }
+  ],
+  "class_path": "crypto_block_cipher"
+}

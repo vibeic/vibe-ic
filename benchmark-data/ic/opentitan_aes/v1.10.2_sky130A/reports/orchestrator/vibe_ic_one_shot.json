@@ -1,0 +1,57 @@
+{
+  "phase": "vibe-ic",
+  "project": "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808",
+  "duration_s": 85.34891533851624,
+  "halted_at": "phase2",
+  "phases": [
+    {
+      "name": "phase1",
+      "verdict": "PASS",
+      "rc": 0
+    },
+    {
+      "name": "phase2",
+      "verdict": "FAIL",
+      "rc": 1
+    },
+    {
+      "name": "analog",
+      "verdict": "SKIPPED",
+      "rc": 0
+    },
+    {
+      "name": "phase3",
+      "verdict": "SKIPPED",
+      "rc": 0
+    },
+    {
+      "name": "mixed_signal",
+      "verdict": "SKIPPED",
+      "rc": 0
+    }
+  ],
+  "advisories": [],
+  "container_image": {
+    "status": "ok",
+    "container": "vibeic-eda-otaes3",
+    "image_ref": "ghcr.io/vibeic/vibeic-eda:0.2.76",
+    "image_id": "sha256:579ab304336981cf4b3c6bb4d1c2c1bb40db0c4c61d8d52f293120726b80601e",
+    "running": true,
+    "created": "2026-08-08T13:43:36.483373607Z",
+    "verdict": "PASS",
+    "reason": "resolved vibeic-eda-otaes3 -> ghcr.io/vibeic/vibeic-eda:0.2.76 (sha256:579ab3043369)",
+    "require_image": "ghcr.io/vibeic/vibeic-eda:0.2.76",
+    "require_image_id": "sha256:579ab304336981cf4b3c6bb4d1c2c1bb40db0c4c61d8d52f293120726b80601e",
+    "image_match": true,
+    "propagated_to_child_docker_run": "sha256:579ab304336981cf4b3c6bb4d1c2c1bb40db0c4c61d8d52f293120726b80601e",
+    "propagated_via": "VIBEIC_EDA_IMAGE"
+  },
+  "verdict": "FAIL",
+  "deliverable_self_check": {
+    "state": "RUN_STILL_IN_PROGRESS",
+    "verdict": "IN_PROGRESS",
+    "deliverable": "/home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808/RESULT.md",
+    "reason": "deliverable not complete yet, but a runner is LIVE (pid 3826791 alive) — the agent has not reached its write step; not a failure (re-check after the run exits)",
+    "self_verify_cmd": "python3 /home/reyerchu/.claude/plugins/cache/vibe-ic-marketplace/vibe-ic/1.10.2/programs/run_output_completeness_check.py /home/reyerchu/_ot_aes_run/clean_run_v1.10.2_sky130A_20260808"
+  }
+}

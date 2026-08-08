@@ -1,0 +1,663 @@
+{
+  "doc_id": "L22",
+  "doc_name": "L22_VERIFICATION_PLAN",
+  "applicability": "APPLICABLE",
+  "ic_class": "crypto_accelerator",
+  "fields": {
+    "coverage_goals": [],
+    "formal_properties": [],
+    "regression_matrix": {},
+    "checklist_milestones": [
+      {
+        "id": "SPEC_COMPLETE",
+        "type": "Documentation",
+        "resolution": "Done",
+        "note": "[AES Design Spec](../README.md)",
+        "stage": "D1"
+      },
+      {
+        "id": "CSR_DEFINED",
+        "type": "Documentation",
+        "resolution": "Done",
+        "stage": "D1"
+      },
+      {
+        "id": "CLKRST_CONNECTED",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D1"
+      },
+      {
+        "id": "IP_TOP",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D1"
+      },
+      {
+        "id": "IP_INSTANTIABLE",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D1"
+      },
+      {
+        "id": "PHYSICAL_MACROS_DEFINED_80",
+        "type": "RTL",
+        "resolution": "N/A",
+        "stage": "D1"
+      },
+      {
+        "id": "FUNC_IMPLEMENTED",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D1"
+      },
+      {
+        "id": "ASSERT_KNOWN_ADDED",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D1"
+      },
+      {
+        "id": "LINT_SETUP",
+        "type": "Code Quality",
+        "resolution": "Done",
+        "stage": "D1"
+      },
+      {
+        "id": "NEW_FEATURES",
+        "type": "Documentation",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "BLOCK_DIAGRAM",
+        "type": "Documentation",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "DOC_INTERFACE",
+        "type": "Documentation",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "DOC_INTEGRATION_GUIDE",
+        "type": "Documentation",
+        "resolution": "Waived",
+        "note": "This checklist item has been added retrospectively.",
+        "stage": "D2"
+      },
+      {
+        "id": "MISSING_FUNC",
+        "type": "Documentation",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "FEATURE_FROZEN",
+        "type": "Documentation",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "FEATURE_COMPLETE",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "PORT_FROZEN",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "ARCHITECTURE_FROZEN",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "REVIEW_TODO",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "STYLE_X",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "CDC_SYNCMACRO",
+        "type": "RTL",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "LINT_PASS",
+        "type": "Code Quality",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "CDC_SETUP",
+        "type": "Code Quality",
+        "resolution": "Waived",
+        "note": "No block-level flow available - waived to top-level signoff.",
+        "stage": "D2"
+      },
+      {
+        "id": "RDC_SETUP",
+        "type": "Code Quality",
+        "resolution": "Waived",
+        "note": "No block-level flow available - waived to top-level signoff.",
+        "stage": "D2"
+      },
+      {
+        "id": "AREA_CHECK",
+        "type": "Code Quality",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "TIMING_CHECK",
+        "type": "Code Quality",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "SEC_CM_DOCUMENTED",
+        "type": "Security",
+        "resolution": "Done",
+        "stage": "D2"
+      },
+      {
+        "id": "SEC_CM_ASSETS_LISTED",
+        "type": "Security",
+        "resolution": "Done",
+        "stage": "D2S"
+      },
+      {
+        "id": "SEC_CM_IMPLEMENTED",
+        "type": "Security",
+        "resolution": "Done",
+        "note": "Datapath FI hardening in progress (not strictly required)",
+        "stage": "D2S"
+      },
+      {
+        "id": "SEC_CM_RND_CNST",
+        "type": "Security",
+        "resolution": "Done",
+        "stage": "D2S"
+      },
+      {
+        "id": "SEC_CM_NON_RESET_FLOPS",
+        "type": "Security",
+        "resolution": "Done",
+        "stage": "D2S"
+      },
+      {
+        "id": "SEC_CM_SHADOW_REGS",
+        "type": "Security",
+        "resolution": "Done",
+        "stage": "D2S"
+      },
+      {
+        "id": "SEC_CM_RTL_REVIEWED",
+        "type": "Security",
+        "resolution": "Done",
+        "stage": "D2S"
+      },
+      {
+        "id": "SEC_CM_COUNCIL_REVIEWED",
+        "type": "Security",
+        "resolution": "Done",
+        "stage": "D2S"
+      },
+      {
+        "id": "NEW_FEATURES_D3",
+        "type": "Documentation",
+        "resolution": "Not Started",
+        "stage": "D3"
+      },
+      {
+        "id": "TODO_COMPLETE",
+        "type": "RTL",
+        "resolution": "Not Started",
+        "stage": "D3"
+      },
+      {
+        "id": "LINT_COMPLETE",
+        "type": "Code Quality",
+        "resolution": "Not Started",
+        "stage": "D3"
+      },
+      {
+        "id": "CDC_COMPLETE",
+        "type": "Code Quality",
+        "resolution": "Not Started",
+        "stage": "D3"
+      },
+      {
+        "id": "RDC_COMPLETE",
+        "type": "Code Quality",
+        "resolution": "Not Started",
+        "stage": "D3"
+      },
+      {
+        "id": "REVIEW_RTL",
+        "type": "Review",
+        "resolution": "Not Started",
+        "stage": "D3"
+      },
+      {
+        "id": "REVIEW_DELETED_FF",
+        "type": "Review",
+        "resolution": "Not Started",
+        "stage": "D3"
+      },
+      {
+        "id": "REVIEW_SW_CHANGE",
+        "type": "Review",
+        "resolution": "Not Started",
+        "stage": "D3"
+      },
+      {
+        "id": "REVIEW_SW_ERRATA",
+        "type": "Review",
+        "resolution": "Not Started",
+        "stage": "D3"
+      },
+      {
+        "id": "DV_DOC_DRAFT_COMPLETED",
+        "type": "Documentation",
+        "resolution": "Done",
+        "note": "[AES DV document](../dv/README.md)",
+        "stage": "V1"
+      },
+      {
+        "id": "TESTPLAN_COMPLETED",
+        "type": "Documentation",
+        "resolution": "Done",
+        "note": "[AES Testplan](../dv/README.md#testplan)",
+        "stage": "V1"
+      },
+      {
+        "id": "TB_TOP_CREATED",
+        "type": "Testbench",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "PRELIMINARY_ASSERTION_CHECKS_ADDED",
+        "type": "Testbench",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "SIM_TB_ENV_CREATED",
+        "type": "Testbench",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "SIM_RAL_MODEL_GEN_AUTOMATED",
+        "type": "Testbench",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "CSR_CHECK_GEN_AUTOMATED",
+        "type": "Testbench",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "TB_GEN_AUTOMATED",
+        "type": "Testbench",
+        "resolution": "N/A",
+        "stage": "V1"
+      },
+      {
+        "id": "SIM_SMOKE_TEST_PASSING",
+        "type": "Tests",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "SIM_CSR_MEM_TEST_SUITE_PASSING",
+        "type": "Tests",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "FPV_MAIN_ASSERTIONS_PROVEN",
+        "type": "Tests",
+        "resolution": "N/A",
+        "stage": "V1"
+      },
+      {
+        "id": "SIM_ALT_TOOL_SETUP",
+        "type": "Tool Setup",
+        "resolution": "Done",
+        "note": "Xcelium (signoff), VCS (alt)",
+        "stage": "V1"
+      },
+      {
+        "id": "SIM_SMOKE_REGRESSION_SETUP",
+        "type": "Regression",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "SIM_NIGHTLY_REGRESSION_SETUP",
+        "type": "Regression",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "FPV_REGRESSION_SETUP",
+        "type": "Regression",
+        "resolution": "N/A",
+        "stage": "V1"
+      },
+      {
+        "id": "SIM_COVERAGE_MODEL_ADDED",
+        "type": "Coverage",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "TB_LINT_SETUP",
+        "type": "Code Quality",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "PRE_VERIFIED_SUB_MODULES_V1",
+        "type": "Integration",
+        "resolution": "N/A",
+        "stage": "V1"
+      },
+      {
+        "id": "DESIGN_SPEC_REVIEWED",
+        "type": "Review",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "TESTPLAN_REVIEWED",
+        "type": "Review",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "STD_TEST_CATEGORIES_PLANNED",
+        "type": "Review",
+        "resolution": "Done",
+        "note": "Exception (Power)",
+        "stage": "V1"
+      },
+      {
+        "id": "V2_CHECKLIST_SCOPED",
+        "type": "Review",
+        "resolution": "Done",
+        "stage": "V1"
+      },
+      {
+        "id": "DESIGN_DELTAS_CAPTURED_V2",
+        "type": "Documentation",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "DV_DOC_COMPLETED",
+        "type": "Documentation",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "FUNCTIONAL_COVERAGE_IMPLEMENTED",
+        "type": "Testbench",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "ALL_INTERFACES_EXERCISED",
+        "type": "Testbench",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "ALL_ASSERTION_CHECKS_ADDED",
+        "type": "Testbench",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "SIM_TB_ENV_COMPLETED",
+        "type": "Testbench",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "SIM_ALL_TESTS_PASSING",
+        "type": "Tests",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "FPV_ALL_ASSERTIONS_WRITTEN",
+        "type": "Tests",
+        "resolution": "N/A",
+        "stage": "V2"
+      },
+      {
+        "id": "FPV_ALL_ASSUMPTIONS_REVIEWED",
+        "type": "Tests",
+        "resolution": "N/A",
+        "stage": "V2"
+      },
+      {
+        "id": "SIM_FW_SIMULATED",
+        "type": "Tests",
+        "resolution": "N/A",
+        "stage": "V2"
+      },
+      {
+        "id": "SIM_NIGHTLY_REGRESSION_V2",
+        "type": "Regression",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "SIM_CODE_COVERAGE_V2",
+        "type": "Coverage",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "SIM_FUNCTIONAL_COVERAGE_V2",
+        "type": "Coverage",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "FPV_CODE_COVERAGE_V2",
+        "type": "Coverage",
+        "resolution": "N/A",
+        "stage": "V2"
+      },
+      {
+        "id": "FPV_COI_COVERAGE_V2",
+        "type": "Coverage",
+        "resolution": "N/A",
+        "stage": "V2"
+      },
+      {
+        "id": "PRE_VERIFIED_SUB_MODULES_V2",
+        "type": "Integration",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "NO_HIGH_PRIORITY_ISSUES_PENDING",
+        "type": "Issues",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "ALL_LOW_PRIORITY_ISSUES_ROOT_CAUSED",
+        "type": "Issues",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "DV_DOC_TESTPLAN_REVIEWED",
+        "type": "Review",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "V3_CHECKLIST_SCOPED",
+        "type": "Review",
+        "resolution": "Done",
+        "stage": "V2"
+      },
+      {
+        "id": "SEC_CM_TESTPLAN_COMPLETED",
+        "type": "Documentation",
+        "resolution": "Done",
+        "stage": "V2S"
+      },
+      {
+        "id": "FPV_SEC_CM_VERIFIED",
+        "type": "Tests",
+        "resolution": "Done",
+        "stage": "V2S"
+      },
+      {
+        "id": "SIM_SEC_CM_VERIFIED",
+        "type": "Tests",
+        "resolution": "Done",
+        "stage": "V2S"
+      },
+      {
+        "id": "SIM_COVERAGE_REVIEWED",
+        "type": "Tests",
+        "resolution": "Done",
+        "stage": "V2S"
+      },
+      {
+        "id": "SEC_CM_DV_REVIEWED",
+        "type": "Review",
+        "resolution": "Done",
+        "stage": "V2S"
+      },
+      {
+        "id": "DESIGN_DELTAS_CAPTURED_V3",
+        "type": "Documentation",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "X_PROP_ANALYSIS_COMPLETED",
+        "type": "Tests",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "FPV_ASSERTIONS_PROVEN_AT_V3",
+        "type": "Tests",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "SIM_NIGHTLY_REGRESSION_AT_V3",
+        "type": "Regression",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "SIM_CODE_COVERAGE_AT_100",
+        "type": "Coverage",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "SIM_FUNCTIONAL_COVERAGE_AT_100",
+        "type": "Coverage",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "FPV_CODE_COVERAGE_AT_100",
+        "type": "Coverage",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "FPV_COI_COVERAGE_AT_100",
+        "type": "Coverage",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "ALL_TODOS_RESOLVED",
+        "type": "Code Quality",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "NO_TOOL_WARNINGS_THROWN",
+        "type": "Code Quality",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "TB_LINT_COMPLETE",
+        "type": "Code Quality",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "PRE_VERIFIED_SUB_MODULES_V3",
+        "type": "Integration",
+        "resolution": "Not Started",
+        "stage": "V3"
+      },
+      {
+        "id": "NO_ISSUES_PENDING",
+        "type": "Issues",
+        "resolution": "Not Started",
+        "stage": "V3"
+      }
+    ],
+    "verification_plan_present": "implicit",
+    "notes": "Spec does not include a formal verification plan; categories above are derived from the spec's functional and waveform descriptions.",
+    "verification_categories_derived_from_spec": [
+      "Register access (read/write to all register fields; reserved-bit behavior)",
+      "Nominal transfer / transaction across the protocol's operating modes",
+      "Error and fault condition detection and handling",
+      "Reset behavior verification",
+      "Back-to-back / sustained operation"
+    ]
+  },
+  "extraction_hints": [
+    "Look for coverage targets, vplan, regression policy.",
+    "Capture per-feature coverage goals."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v1.10.2",
+  "extraction_evidence": {},
+  "_generator": {
+    "plugin": "vibe-ic",
+    "plugin_version": "1.10.2",
+    "l_doc_taxonomy_digest": "e3eeeadc5528",
+    "l_doc_taxonomy_docs": 28,
+    "emitter": "spi_protocol_synth._write"
+  }
+}

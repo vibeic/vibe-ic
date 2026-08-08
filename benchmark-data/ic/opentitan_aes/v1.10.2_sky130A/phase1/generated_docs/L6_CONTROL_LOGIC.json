@@ -1,0 +1,65 @@
+{
+  "schema_version": 2,
+  "doc_class": "control_logic",
+  "ic_name": "opentitan_aes",
+  "reject_rules": [],
+  "fsm_states": [],
+  "fsm_machines": [],
+  "fsm_machine_count": 0,
+  "pipeline_stages": [],
+  "no_pipeline_stages_in_input": true,
+  "no_fsm_states_in_input": true,
+  "no_fsm_in_input": true,
+  "fsm_tokens": [
+    {
+      "name": "Counter",
+      "type": "structure",
+      "source": "aes_README.md"
+    },
+    {
+      "name": "FSM",
+      "type": "structure",
+      "source": "aes_interfaces.md"
+    },
+    {
+      "name": "FIFO",
+      "type": "structure",
+      "source": "aes_registers.md"
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/aes_README.md": [
+      {
+        "literal": "Counter",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/aes_block_diagram.svg": [],
+    "input/docs/aes_block_diagram_cipher_core_masked.svg": [],
+    "input/docs/aes_checklist.md": [],
+    "input/docs/aes_interfaces.md": [
+      {
+        "literal": "FSM",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/aes_programmers_guide.md": [],
+    "input/docs/aes_registers.md": [
+      {
+        "literal": "FIFO",
+        "label": "FSM structure token"
+      }
+    ],
+    "input/docs/aes_theory_of_operation.md": [],
+    "input/docs/ghash_masked_algorithm.svg": [],
+    "input/docs/ghash_masked_block_diagram.svg": []
+  },
+  "_generator": {
+    "plugin": "vibe-ic",
+    "plugin_version": "1.10.2",
+    "l_doc_taxonomy_digest": "e3eeeadc5528",
+    "l_doc_taxonomy_docs": 28,
+    "emitter": "phase1_doc_one_shot_runner._v1_6_295_propagate_class_path_to_layer_docs"
+  },
+  "class_path": "crypto_block_cipher"
+}

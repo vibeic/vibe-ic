@@ -1,0 +1,690 @@
+{
+  "schema_version": 2,
+  "doc_class": "test_debug",
+  "ic_name": "opentitan_aes",
+  "test_scenarios": [
+    {
+      "name": "spec_complete",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item SPEC_COMPLETE — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "csr_defined",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item CSR_DEFINED — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "clkrst_connected",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item CLKRST_CONNECTED — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "ip_top",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item IP_TOP — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "ip_instantiable",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item IP_INSTANTIABLE — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "physical_macros_defined_80",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item PHYSICAL_MACROS_DEFINED_80 — N/A",
+      "expected": "DV checklist item satisfied (N/A)",
+      "status": "N/A",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "func_implemented",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item FUNC_IMPLEMENTED — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "assert_known_added",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item ASSERT_KNOWN_ADDED — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "lint_setup",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item LINT_SETUP — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "new_features",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item NEW_FEATURES — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "block_diagram",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item BLOCK_DIAGRAM — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "doc_interface",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item DOC_INTERFACE — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "doc_integration_guide",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item DOC_INTEGRATION_GUIDE — Waived",
+      "expected": "DV checklist item satisfied (Waived)",
+      "status": "Waived",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "missing_func",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item MISSING_FUNC — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "feature_frozen",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item FEATURE_FROZEN — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "feature_complete",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item FEATURE_COMPLETE — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "port_frozen",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item PORT_FROZEN — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "architecture_frozen",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item ARCHITECTURE_FROZEN — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "review_todo",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item REVIEW_TODO — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "style_x",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item STYLE_X — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "cdc_syncmacro",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item CDC_SYNCMACRO — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "lint_pass",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item LINT_PASS — Done",
+      "expected": "DV checklist item satisfied (Done)",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "cdc_setup",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item CDC_SETUP — Waived",
+      "expected": "DV checklist item satisfied (Waived)",
+      "status": "Waived",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "name": "rdc_setup",
+      "kind": "verification_checklist",
+      "stimulus": "DV checklist item RDC_SETUP — Waived",
+      "expected": "DV checklist item satisfied (Waived)",
+      "status": "Waived",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    }
+  ],
+  "test_modes": [],
+  "no_test_modes_in_input": true,
+  "debug_observability": [],
+  "no_debug_observability_in_input": true,
+  "debug_registers": [],
+  "debug_parameters": [],
+  "no_debug_parameters_in_input": true,
+  "formal_interfaces": [],
+  "no_formal_interfaces_in_input": true,
+  "verification_strategy": [
+    {
+      "phase": "spec_complete",
+      "method": "SPEC_COMPLETE",
+      "description": "DV checklist item SPEC_COMPLETE — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "csr_defined",
+      "method": "CSR_DEFINED",
+      "description": "DV checklist item CSR_DEFINED — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "clkrst_connected",
+      "method": "CLKRST_CONNECTED",
+      "description": "DV checklist item CLKRST_CONNECTED — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "ip_top",
+      "method": "IP_TOP",
+      "description": "DV checklist item IP_TOP — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "ip_instantiable",
+      "method": "IP_INSTANTIABLE",
+      "description": "DV checklist item IP_INSTANTIABLE — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "physical_macros_defined_80",
+      "method": "PHYSICAL_MACROS_DEFINED_80",
+      "description": "DV checklist item PHYSICAL_MACROS_DEFINED_80 — N/A",
+      "status": "N/A",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "func_implemented",
+      "method": "FUNC_IMPLEMENTED",
+      "description": "DV checklist item FUNC_IMPLEMENTED — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "assert_known_added",
+      "method": "ASSERT_KNOWN_ADDED",
+      "description": "DV checklist item ASSERT_KNOWN_ADDED — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "lint_setup",
+      "method": "LINT_SETUP",
+      "description": "DV checklist item LINT_SETUP — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "new_features",
+      "method": "NEW_FEATURES",
+      "description": "DV checklist item NEW_FEATURES — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "block_diagram",
+      "method": "BLOCK_DIAGRAM",
+      "description": "DV checklist item BLOCK_DIAGRAM — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "doc_interface",
+      "method": "DOC_INTERFACE",
+      "description": "DV checklist item DOC_INTERFACE — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "doc_integration_guide",
+      "method": "DOC_INTEGRATION_GUIDE",
+      "description": "DV checklist item DOC_INTEGRATION_GUIDE — Waived",
+      "status": "Waived",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "missing_func",
+      "method": "MISSING_FUNC",
+      "description": "DV checklist item MISSING_FUNC — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "feature_frozen",
+      "method": "FEATURE_FROZEN",
+      "description": "DV checklist item FEATURE_FROZEN — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "feature_complete",
+      "method": "FEATURE_COMPLETE",
+      "description": "DV checklist item FEATURE_COMPLETE — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "port_frozen",
+      "method": "PORT_FROZEN",
+      "description": "DV checklist item PORT_FROZEN — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "architecture_frozen",
+      "method": "ARCHITECTURE_FROZEN",
+      "description": "DV checklist item ARCHITECTURE_FROZEN — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "review_todo",
+      "method": "REVIEW_TODO",
+      "description": "DV checklist item REVIEW_TODO — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "style_x",
+      "method": "STYLE_X",
+      "description": "DV checklist item STYLE_X — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "cdc_syncmacro",
+      "method": "CDC_SYNCMACRO",
+      "description": "DV checklist item CDC_SYNCMACRO — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "lint_pass",
+      "method": "LINT_PASS",
+      "description": "DV checklist item LINT_PASS — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "cdc_setup",
+      "method": "CDC_SETUP",
+      "description": "DV checklist item CDC_SETUP — Waived",
+      "status": "Waived",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "rdc_setup",
+      "method": "RDC_SETUP",
+      "description": "DV checklist item RDC_SETUP — Waived",
+      "status": "Waived",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "area_check",
+      "method": "AREA_CHECK",
+      "description": "DV checklist item AREA_CHECK — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "timing_check",
+      "method": "TIMING_CHECK",
+      "description": "DV checklist item TIMING_CHECK — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "sec_cm_documented",
+      "method": "SEC_CM_DOCUMENTED",
+      "description": "DV checklist item SEC_CM_DOCUMENTED — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "sec_cm_assets_listed",
+      "method": "SEC_CM_ASSETS_LISTED",
+      "description": "DV checklist item SEC_CM_ASSETS_LISTED — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "sec_cm_implemented",
+      "method": "SEC_CM_IMPLEMENTED",
+      "description": "DV checklist item SEC_CM_IMPLEMENTED — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "sec_cm_rnd_cnst",
+      "method": "SEC_CM_RND_CNST",
+      "description": "DV checklist item SEC_CM_RND_CNST — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "sec_cm_non_reset_flops",
+      "method": "SEC_CM_NON_RESET_FLOPS",
+      "description": "DV checklist item SEC_CM_NON_RESET_FLOPS — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    },
+    {
+      "phase": "sec_cm_shadow_regs",
+      "method": "SEC_CM_SHADOW_REGS",
+      "description": "DV checklist item SEC_CM_SHADOW_REGS — Done",
+      "status": "Done",
+      "evidence": "input/docs/aes_checklist.md (DV verification checklist table)",
+      "extraction_strategy": "dv_checklist_table_v1_0_44"
+    }
+  ],
+  "no_verification_strategy_in_input": false,
+  "engineer_mode_unlock_sequence": null,
+  "no_engineer_mode_unlock_in_input": true,
+  "vsuite_per_kw_cap_skipped_v1_6_373": 0,
+  "supported_modes": [
+    {
+      "value": "ECB",
+      "evidence": {
+        "source": "input/docs/aes_README.md",
+        "line": 45,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "supported cipher mode"
+      }
+    },
+    {
+      "value": "CBC",
+      "evidence": {
+        "source": "input/docs/aes_README.md",
+        "line": 45,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "supported cipher mode"
+      }
+    },
+    {
+      "value": "CFB",
+      "evidence": {
+        "source": "input/docs/aes_README.md",
+        "line": 45,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "supported cipher mode"
+      }
+    },
+    {
+      "value": "OFB",
+      "evidence": {
+        "source": "input/docs/aes_README.md",
+        "line": 45,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "supported cipher mode"
+      }
+    },
+    {
+      "value": "CTR",
+      "evidence": {
+        "source": "input/docs/aes_README.md",
+        "line": 45,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "supported cipher mode"
+      }
+    },
+    {
+      "value": "GCM",
+      "evidence": {
+        "source": "input/docs/aes_README.md",
+        "line": 45,
+        "extraction_strategy": "readme_deep_parser",
+        "label": "supported cipher mode"
+      }
+    }
+  ],
+  "extraction_evidence": {
+    "input/docs/aes_checklist.md": [
+      {
+        "literal": "DV checklist item SPEC_COMPLETE — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item CSR_DEFINED — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item CLKRST_CONNECTED — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item IP_TOP — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item IP_INSTANTIABLE — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item PHYSICAL_MACROS_DEFINED_80 — N/A",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item FUNC_IMPLEMENTED — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item ASSERT_KNOWN_ADDED — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item LINT_SETUP — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item NEW_FEATURES — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item BLOCK_DIAGRAM — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item DOC_INTERFACE — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item DOC_INTEGRATION_GUIDE — Waived",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item MISSING_FUNC — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item FEATURE_FROZEN — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item FEATURE_COMPLETE — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item PORT_FROZEN — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item ARCHITECTURE_FROZEN — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item REVIEW_TODO — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item STYLE_X — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item CDC_SYNCMACRO — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item LINT_PASS — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item CDC_SETUP — Waived",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item RDC_SETUP — Waived",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item AREA_CHECK — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item TIMING_CHECK — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item SEC_CM_DOCUMENTED — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item SEC_CM_ASSETS_LISTED — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item SEC_CM_IMPLEMENTED — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item SEC_CM_RND_CNST — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item SEC_CM_NON_RESET_FLOPS — Done",
+        "label": "DV checklist row (#670)"
+      },
+      {
+        "literal": "DV checklist item SEC_CM_SHADOW_REGS — Done",
+        "label": "DV checklist row (#670)"
+      }
+    ]
+  },
+  "_generator": {
+    "plugin": "vibe-ic",
+    "plugin_version": "1.10.2",
+    "l_doc_taxonomy_digest": "e3eeeadc5528",
+    "l_doc_taxonomy_docs": 28,
+    "emitter": "phase1_doc_one_shot_runner._v1_6_295_propagate_class_path_to_layer_docs"
+  },
+  "class_path": "crypto_block_cipher"
+}
