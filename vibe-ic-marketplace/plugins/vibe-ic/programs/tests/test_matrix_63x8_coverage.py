@@ -98,7 +98,7 @@ import sys
 import tempfile
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import pytest
 
@@ -186,6 +186,34 @@ def pytest_collection_modifyitems(session, config, items):
     out = os.environ["MATRIX_CELL_COLLECT_OUT"]
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(rows, fh)
+'''
+
+#: The OUTCOME collector. Same discipline as the plugin above and for the same
+#: reason: it records pytest's RAW per-phase reports and reduces nothing. The
+#: reduction to a single outcome happens in :func:`_reduce_outcome`, in this
+#: file, where it is unit-testable — a plugin that decided what "red" meant
+#: would be a verdict-forming instrument living outside the file that is
+#: supposed to be auditable.
+_OUTCOME_PLUGIN = '''
+import json
+import os
+
+_ROWS = {}
+
+
+def pytest_runtest_logreport(report):
+    _ROWS.setdefault(report.nodeid, []).append({
+        "when": report.when,
+        "outcome": report.outcome,
+        "wasxfail": hasattr(report, "wasxfail"),
+        "longrepr": str(getattr(report, "longrepr", "") or "")[:240],
+    })
+
+
+def pytest_sessionfinish(session, exitstatus):
+    out = os.environ["MATRIX_CELL_OUTCOME_OUT"]
+    with open(out, "w", encoding="utf-8") as fh:
+        json.dump(_ROWS, fh)
 '''
 
 
@@ -498,6 +526,20 @@ def test_every_dimension_has_a_cell_complete_test_function():
 # ══════════════════════════════════════════════════════════════════════
 @lru_cache(maxsize=1)
 def state_census() -> Dict[Tuple[str, int], str]:
+    """``{(step, dim): state}`` — the CONFIGURATION axis, and only that.
+
+    NOT A COVERAGE CLAIM ON ITS OWN. This answers "how is the cell set up",
+    which is what the waiver-registry and NA-precondition cross-checks below
+    need. It does NOT answer "does the cell's predicate pass": every value
+    here is derived from ``matrix_cell_state`` plus a ``--collect-only`` run,
+    and neither ever executes a predicate.
+
+    Quoting ``ENFORCED: N`` from this dict is what ORGANIC-20260808 reported —
+    on 2026-08-08 it read 481 while 26 of those 481 cells were failing. Use
+    :func:`enforcement_census` for anything a reader will quote; it joins this
+    axis against the live outcome and is guarded by
+    :func:`test_no_cell_is_counted_enforced_while_its_predicate_is_red`.
+    """
     return {(sid, dim): _state(dim, sid)
             for (sid, dim) in collected_cells()}
 
@@ -837,3 +879,428 @@ def test_the_census_is_reported_for_humans(record_property):
     record_property("matrix_63x8_census", summary)
     record_property("matrix_63x8_per_dimension", " | ".join(lines))
     assert len(census) == expected_cells(), summary
+
+
+# ══════════════════════════════════════════════════════════════════════
+# THE SECOND AXIS — WHAT THE CELL'S PREDICATE ACTUALLY DID
+# ══════════════════════════════════════════════════════════════════════
+# ORGANIC-20260808 (P1), closed here.
+#
+# Everything above this line measures how a cell is CONFIGURED. Nothing above
+# it ever asked whether the cell's predicate PASSES. The two are independent,
+# and the gap between them was the one number in this system a reader is
+# invited to quote:
+#
+#     MEASURED 2026-08-09 on commit dee025059, before this section existed:
+#       state census        ENFORCED 481   WAIVED 11   NA 12   (504 cells)
+#       live suite          32 failed, 797 passed, 11 xfailed
+#       ENFORCED cells whose own pytest item was RED at that moment:  26
+#
+# `ENFORCED` is defined by this package's README as "a live predicate runs AND
+# PASSES". A red ENFORCED cell is therefore not a fourth category, it is a
+# CONTRADICTION between the state the owning module reports and what the tree
+# does when you run it — a cell counted as proof of enforcement at the exact
+# moment its enforcement is broken.
+#
+# The state axis could not have caught this and was never going to:
+# `collect_items()` runs pytest with `--collect-only`, so it can learn that a
+# cell EXISTS, is parametrized, is not skipped and carries (or does not carry)
+# an xfail marker — and nothing whatsoever about whether it passes. This
+# section runs the same eight modules FOR REAL, joins the two axes, and
+# `test_no_cell_is_counted_enforced_while_its_predicate_is_red` refuses the
+# contradiction.
+#
+# THE REMEDY FOR A RED CELL IS NOT TO SILENCE THIS TEST. The three-state rule
+# already has a home for "this enforcement is currently broken": WAIVED, with
+# a registry entry, an evidence-backed reason and a strict xfail — all three
+# cross-checked by `test_state_agrees_with_the_waiver_registry_and_the_
+# collected_marks` and `test_every_waived_cell_is_specific_evidence_backed_
+# and_strict`. Fix the cell or waive it on the record. Those are the two
+# doors, and neither of them is a green census over a red predicate.
+
+#: What each state PREDICTS the live run will do. This is what makes a state a
+#: CHECKABLE CLAIM rather than a label: the module says how the cell is set up,
+#: and this says what that setup obliges the cell to do when pytest runs it.
+#:
+#: ``WAIVED`` expects ``xfailed`` and not ``passed`` on purpose — a waiver is a
+#: strict xfail, so a WAIVED cell that PASSES is an XPASS, which is the
+#: anti-rot mechanism firing and must be reported, not absorbed.
+STATE_EXPECTS_OUTCOME: Dict[str, str] = {
+    "ENFORCED": "passed",
+    "WAIVED": "xfailed",
+    "NA": "passed",
+}
+
+
+class CellVerdict(NamedTuple):
+    """One cell on both axes at once."""
+
+    state: str                    # how the owning module has it configured
+    outcomes: Tuple[str, ...]     # what its pytest item(s) really did
+    agrees: bool                  # does the second axis bear out the first
+    label: str                    # what may be REPORTED for this cell
+
+
+def _reduce_outcome(reports: List[Dict]) -> str:
+    """Collapse one item's setup/call/teardown reports into ONE outcome.
+
+    Deliberately explicit about xfail rather than trusting a single field:
+    pytest signals an expected failure as ``skipped`` + ``wasxfail`` on the
+    call report, but a STRICT xfail that unexpectedly PASSES arrives as
+    ``failed`` and, depending on the pytest version, without ``wasxfail`` —
+    only its ``longrepr`` says ``[XPASS(strict)]``. Collapsing that to plain
+    "failed" would hide an XPASS, which is the exact rot the strict waivers
+    exist to surface.
+    """
+    call = next((r for r in reports if r["when"] == "call"), None)
+    if call is None:
+        setup = next((r for r in reports if r["when"] == "setup"), None)
+        if setup is None:
+            return "unrun"
+        if setup["outcome"] == "failed":
+            return "error"
+        if setup["outcome"] == "skipped":
+            return "xfailed" if setup["wasxfail"] else "skipped"
+        return "unrun"
+
+    if call["outcome"] == "passed":
+        label = "xpassed" if call["wasxfail"] else "passed"
+    elif call["outcome"] == "skipped":
+        label = "xfailed" if call["wasxfail"] else "skipped"
+    elif "XPASS" in call["longrepr"]:
+        label = "xpassed"
+    else:
+        label = "xfailed" if call["wasxfail"] else "failed"
+
+    # A green call with a red setup/teardown is not a green cell.
+    if label in ("passed", "xfailed") and any(
+            r["outcome"] == "failed" for r in reports if r["when"] != "call"):
+        return "error"
+    return label
+
+
+def _run_outcome_reports(
+        paths: Tuple[Path, ...],
+        cwd: Optional[Path] = None) -> Dict[str, List[Dict]]:
+    """``{nodeid: [raw phase reports]}`` from really RUNNING ``paths``.
+
+    Unlike :func:`collect_items` this does NOT assert ``returncode == 0``: a
+    non-zero exit is the normal, expected result of a suite that is reporting
+    findings, and demanding zero here would make this instrument unable to
+    observe the very thing it exists to observe. What IS asserted is that the
+    manifest was written and is non-empty — a run that produced no reports
+    would otherwise partition tidily into "no contradictions found".
+    """
+    assert paths, "no module paths given to the outcome run"
+    scratch = Path(tempfile.mkdtemp(prefix="matrix_cov_outcome_"))
+    try:
+        plugin = scratch / "matrix_cell_outcomes.py"
+        plugin.write_text(_OUTCOME_PLUGIN, encoding="utf-8")
+        out = scratch / "outcomes.json"
+        env = dict(os.environ)
+        env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        env["MATRIX_CELL_OUTCOME_OUT"] = str(out)
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(scratch)]
+            + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", *[str(p) for p in paths],
+             "-q", "--tb=no", "-p", "no:randomly",
+             "-p", "matrix_cell_outcomes"],
+            cwd=str(cwd or PLUGIN_ROOT), capture_output=True, text=True,
+            timeout=1800, env=env,
+        )
+        assert out.is_file(), (
+            f"the outcome run produced no manifest (rc={proc.returncode}); "
+            f"every cell would look outcome-less and this file's second axis "
+            f"would be measuring nothing.\n"
+            f"stdout tail:\n{proc.stdout[-3000:]}\n"
+            f"stderr tail:\n{proc.stderr[-2000:]}"
+        )
+        rows = json.loads(out.read_text(encoding="utf-8"))
+        assert rows, (
+            f"the outcome run recorded ZERO test reports "
+            f"(rc={proc.returncode}) — an empty second axis passes every join "
+            f"vacuously.\nstdout tail:\n{proc.stdout[-3000:]}"
+        )
+        return rows
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+@lru_cache(maxsize=1)
+def cell_outcomes() -> Dict[Tuple[str, int], Tuple[str, ...]]:
+    """``{(step, dim): (outcome, ...)}`` for every CELL item, live.
+
+    Keyed exactly like :func:`collected_cells` and by the same rule — a
+    parametrize id of exactly ``step<declared flow step id>`` — so the two
+    axes are joinable cell for cell and a mismatch in either direction is
+    visible rather than silently dropped.
+    """
+    by_file = _file_to_dim()
+    live_steps = {F.normalize_id(s) for s in F.step_ids()}
+    out: Dict[Tuple[str, int], List[str]] = {}
+    reports = _run_outcome_reports(dimension_module_paths())
+    for nodeid, phase_reports in reports.items():
+        head, sep, tail = nodeid.partition("::")
+        if not sep or "[" not in tail:
+            continue
+        dim = by_file.get(os.path.basename(head))
+        if dim is None:
+            continue
+        param = tail.rsplit("[", 1)[1].rstrip("]")
+        m = _CELL_ID_RE.match(param)
+        if not m or m.group(1) not in live_steps:
+            continue
+        out.setdefault((m.group(1), dim), []).append(
+            _reduce_outcome(phase_reports))
+    return {k: tuple(v) for k, v in out.items()}
+
+
+def _join_axes(
+        states: Dict[Tuple[str, int], str],
+        outcomes: Dict[Tuple[str, int], Tuple[str, ...]],
+) -> Dict[Tuple[str, int], CellVerdict]:
+    """Join the configuration axis against the live-outcome axis.
+
+    A cell with NO observed outcome does NOT agree. That is deliberate: an
+    unobserved cell is precisely the shape this whole file exists to refuse,
+    and defaulting it to "fine" would rebuild the defect one level up.
+    """
+    joined: Dict[Tuple[str, int], CellVerdict] = {}
+    for key, state in states.items():
+        assert state in STATE_EXPECTS_OUTCOME, (
+            f"{key}: state {state!r} has no expected outcome; a state whose "
+            f"claim about the live run is undefined cannot be checked")
+        observed = tuple(outcomes.get(key, ()))
+        want = STATE_EXPECTS_OUTCOME[state]
+        agrees = bool(observed) and all(o == want for o in observed)
+        joined[key] = CellVerdict(
+            state=state,
+            outcomes=observed,
+            agrees=agrees,
+            label=state if agrees else f"{state}-CONTRADICTED",
+        )
+    return joined
+
+
+def enforcement_counter(
+        joined: Dict[Tuple[str, int], CellVerdict]) -> Dict[str, int]:
+    """The REPORTABLE shape. ``ENFORCED`` here has earned the word."""
+    counts: Dict[str, int] = {}
+    for verdict in joined.values():
+        counts[verdict.label] = counts.get(verdict.label, 0) + 1
+    return counts
+
+
+@lru_cache(maxsize=1)
+def enforcement_census() -> Dict[Tuple[str, int], CellVerdict]:
+    """The two-axis census. THIS is the one to quote."""
+    return _join_axes(state_census(), cell_outcomes())
+
+
+def test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved():
+    """Anti-starvation guard for the second axis, mirroring the first's.
+
+    ``test_collection_is_real_and_not_starved`` protects the state axis. This
+    protects the outcome axis, and it matters more: a collection that returns
+    nothing makes the census obviously absurd (0 cells), whereas an outcome
+    run that returns nothing would leave the state census intact and every
+    contradiction check vacuously satisfied — a green "no red cells found"
+    produced by having looked at no cells. That is the exact failure shape the
+    campaign was opened to remove.
+    """
+    outcomes = cell_outcomes()
+    states = state_census()
+    assert len(outcomes) == expected_cells(), (
+        f"the outcome run observed {len(outcomes)} of {expected_cells()} "
+        f"cells; the second axis is starved and cannot contradict anything")
+    missing = sorted(set(states) - set(outcomes))
+    extra = sorted(set(outcomes) - set(states))
+    assert not missing and not extra, (
+        f"the two axes do not describe the same grid — "
+        f"{len(missing)} cell(s) have a state but no observed outcome "
+        f"{missing[:8]}; {len(extra)} have an outcome but no state {extra[:8]}")
+    for key, obs in sorted(outcomes.items()):
+        assert obs, f"{key}: observed outcome tuple is empty"
+        assert all(o != "unrun" for o in obs), (
+            f"{key}: pytest reported the item but it never ran ({obs})")
+
+
+def test_no_cell_is_counted_enforced_while_its_predicate_is_red():
+    """A red predicate may not be counted as proof of enforcement.
+
+    This is the whole of ORGANIC-20260808. Before it existed the census said
+    ENFORCED 481 while 26 of those cells were failing, and the number was
+    reproducible, published and quotable.
+
+    Two doors out of a failure here, both already built:
+      * fix the cell's predicate (or the defect it found), or
+      * WAIVE it — registry entry + evidence-backed reason + ``strict=True`` —
+        which the three cross-checks above then hold you to.
+    Editing this test is not a third door.
+    """
+    joined = enforcement_census()
+    counts = enforcement_counter(joined)
+    broken = sorted((k for k, v in joined.items() if not v.agrees),
+                    key=lambda k: (k[1], k[0]))
+    if broken:
+        lines = []
+        for sid, dim in broken:
+            verdict = joined[(sid, dim)]
+            lines.append(
+                f"  {sid}/d{dim} ({DIMENSION_NAMES[dim]}): reported "
+                f"{verdict.state} — which claims its predicate "
+                f"{STATE_EXPECTS_OUTCOME[verdict.state]} — but the live run "
+                f"says {', '.join(verdict.outcomes) or '<never observed>'}")
+        state_only = {s: sum(1 for v in joined.values() if v.state == s)
+                      for s in VALID_STATES}
+        pytest.fail(
+            f"{len(broken)} of {len(joined)} cells are reported in a state "
+            f"their own live predicate contradicts:\n"
+            + "\n".join(lines)
+            + f"\n\nSTATE-ONLY census (what used to be published): "
+              f"{state_only}"
+            + f"\nTWO-AXIS census (what is true): {counts}"
+            + "\n\nA cell in this list is counted as coverage and is not "
+              "covering anything. Fix the predicate or waive it on the "
+              "record; see matrix_63x8/README.md, 'The three-state rule'.")
+
+
+def test_the_enforcement_census_is_reported_for_humans(record_property):
+    """Emit the TWO-AXIS split, so the quotable number is the honest one."""
+    joined = enforcement_census()
+    counts = enforcement_counter(joined)
+    lines = []
+    for dim in DIMENSIONS:
+        per = [v.label for (s, d), v in joined.items() if d == dim]
+        lines.append(f"d{dim} {DIMENSION_NAMES[dim]}: "
+                     + " ".join(f"{lab}={per.count(lab)}"
+                                for lab in sorted(set(per))))
+    summary = (f"{len(joined)} cells = {len(F.step_ids())} steps x "
+               f"{len(DIMENSIONS)} dimensions; {counts}")
+    record_property("matrix_63x8_enforcement_census", summary)
+    record_property("matrix_63x8_enforcement_per_dimension", " | ".join(lines))
+    assert len(joined) == expected_cells(), summary
+    assert sum(counts.values()) == expected_cells(), counts
+
+
+# ── The control: prove the second axis can tell red from green ────────
+#: A throwaway dimension-shaped module. Three cells, three known outcomes.
+_SYNTHETIC_CELL_MODULE = '''
+import pytest
+
+DIM = 99
+
+
+@pytest.mark.parametrize("step_id", ["GREEN"], ids=["stepGREEN"])
+def test_synthetic_cell_green(step_id):
+    assert True
+
+
+@pytest.mark.parametrize("step_id", ["RED"], ids=["stepRED"])
+def test_synthetic_cell_red(step_id):
+    assert False, "synthetic red predicate"
+
+
+@pytest.mark.xfail(strict=True, reason="synthetic waiver")
+@pytest.mark.parametrize("step_id", ["WAIVED"], ids=["stepWAIVED"])
+def test_synthetic_cell_waived(step_id):
+    assert False, "synthetic waived predicate"
+'''
+
+
+def test_the_second_axis_downgrades_a_red_cell_that_the_state_axis_counts():
+    """The mutation control for this whole section.
+
+    Runs a synthetic module whose three cells have KNOWN outcomes, then joins
+    them against a state census that calls two of them ENFORCED — exactly the
+    situation the state axis cannot see. The state axis reports ENFORCED 2.
+    The joined census must report ENFORCED 1 and name the other.
+
+    Without this, `test_no_cell_is_counted_enforced_while_its_predicate_is_red`
+    would be a test whose green could mean "no contradictions" or "the
+    instrument cannot detect a contradiction", and those are not the same
+    fact.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="matrix_cov_axis_control_"))
+    try:
+        mod = scratch / "test_matrix_d99_synthetic_cells.py"
+        mod.write_text(_SYNTHETIC_CELL_MODULE, encoding="utf-8")
+        reports = _run_outcome_reports((mod,), cwd=scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    observed = {}
+    for nodeid, reps in reports.items():
+        if "[" not in nodeid:
+            continue
+        observed[nodeid.rsplit("[", 1)[1].rstrip("]")] = _reduce_outcome(reps)
+    assert observed == {
+        "stepGREEN": "passed",
+        "stepRED": "failed",
+        "stepWAIVED": "xfailed",
+    }, (f"the outcome instrument cannot tell a passing cell from a failing "
+        f"one on a module whose outcomes are known by construction: "
+        f"{observed}")
+
+    states = {("GREEN", 99): "ENFORCED",
+              ("RED", 99): "ENFORCED",
+              ("WAIVED", 99): "WAIVED"}
+    outcomes = {("GREEN", 99): ("passed",),
+                ("RED", 99): ("failed",),
+                ("WAIVED", 99): ("xfailed",)}
+
+    # This is the defect, reproduced in miniature: the state axis alone counts
+    # the red cell as enforcing.
+    assert sum(1 for v in states.values() if v == "ENFORCED") == 2
+
+    joined = _join_axes(states, outcomes)
+    assert joined[("GREEN", 99)].agrees
+    assert joined[("WAIVED", 99)].agrees
+    assert not joined[("RED", 99)].agrees, (
+        "a cell configured ENFORCED whose predicate FAILED was still reported "
+        "as enforcing — this is the defect ORGANIC-20260808 named")
+
+    counts = enforcement_counter(joined)
+    assert counts.get("ENFORCED") == 1, counts
+    assert counts.get("ENFORCED-CONTRADICTED") == 1, counts
+    assert counts.get("WAIVED") == 1, counts
+
+    # And an unobserved cell is a contradiction, not a pass: the second axis
+    # must not be satisfiable by having looked at nothing.
+    starved = _join_axes({("GONE", 99): "ENFORCED"}, {})
+    assert not starved[("GONE", 99)].agrees
+    assert starved[("GONE", 99)].label == "ENFORCED-CONTRADICTED"
+
+
+def test_the_outcome_reducer_names_a_strict_xpass_rather_than_a_failure():
+    """An XPASS must not be laundered into a plain failure.
+
+    A strict xfail that starts passing is the anti-rot mechanism firing — the
+    waiver's gap is fixed and the waiver must now be deleted. If
+    :func:`_reduce_outcome` folded it into "failed" it would still be red, but
+    the census would say "a WAIVED cell whose predicate failed", i.e. exactly
+    the healthy state, and the XPASS would vanish from the report.
+    """
+    assert _reduce_outcome([
+        {"when": "call", "outcome": "failed", "wasxfail": False,
+         "longrepr": "[XPASS(strict)] the gap this waiver names is fixed"},
+    ]) == "xpassed"
+    assert _reduce_outcome([
+        {"when": "call", "outcome": "skipped", "wasxfail": True,
+         "longrepr": "reason: still broken"},
+    ]) == "xfailed"
+    assert _reduce_outcome([
+        {"when": "setup", "outcome": "failed", "wasxfail": False,
+         "longrepr": "fixture blew up"},
+    ]) == "error"
+    assert _reduce_outcome([
+        {"when": "call", "outcome": "passed", "wasxfail": False,
+         "longrepr": ""},
+        {"when": "teardown", "outcome": "failed", "wasxfail": False,
+         "longrepr": "teardown blew up"},
+    ]) == "error"
+    # And a WAIVED cell that XPASSes is a contradiction, not a healthy waiver.
+    assert not _join_axes(
+        {("X", 9): "WAIVED"}, {("X", 9): ("xpassed",)})[("X", 9)].agrees
