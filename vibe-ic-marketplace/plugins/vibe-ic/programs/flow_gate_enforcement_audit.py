@@ -38,11 +38,28 @@ gates into blocking ones is a deliberate product decision with real blast
 radius (11 gates FAILing in one run means those runs start failing — correctly,
 but that is an owner's call, not a side effect of an audit tool).
 
+How the flow definition is read (ORGANIC #885, fixed 2026-08-09)
+---------------------------------------------------------------
+Until #885 this audit found gates by matching a REGEX over the flow YAML's raw
+text. `\\s*` in that pattern spans newlines, so against the NESTED clause form
+the flow uses for every conditional gate the match ran off the end of the line
+and captured the next YAML key: 31 clauses collapsed into one literal gate
+named `command`. The audit reported 120 gates where 150 are wired, so 31 real
+gate programs were audited by nothing — and `post_route_signoff_corner_check`,
+which IS invoked inline and CAN block, was credited with nothing.
+
+The flow definition is now PARSED with PyYAML — the same loader
+`flow_compliance_check` uses to execute these clauses — and walked
+structurally, so this audit reads the grammar the engine runs rather than an
+approximation of it. A flow it cannot parse is a hard error (rc 2), never a
+shorter gate list: an under-count here is indistinguishable from a flow with
+fewer gates, which is the exact class of lie this program exists to catch.
+
 Exit codes:
     0  audit completed
     1  a gate DECLARING `ENFORCEMENT: blocking` is only AUDIT_ONLY — a
        contradiction between stated intent and wiring
-    2  I/O error
+    2  I/O error, or the flow definition could not be parsed
 """
 from __future__ import annotations
 
@@ -53,13 +70,21 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+try:
+    import yaml
+except ImportError:  # pragma: no cover - environment guard
+    yaml = None  # type: ignore[assignment]
+
 _HERE = Path(__file__).resolve().parent
 _RUNNERS = ("phase3_one_shot_runner.py", "design_one_shot_runner.py",
             "vibe_ic_one_shot_runner.py", "phase23_one_shot_runner.py",
             "phase1_one_shot_runner.py", "analog_one_shot_runner.py")
-_GATE_RE = re.compile(
-    # #306 — `advisory_` is the non-blocking slot; a gate wired there IS wired.
-    r"(?:optional_|advisory_)?program_exit_zero:\s*[\"']?([\w./-]+)")
+# The three gate slots `flow_compliance_check._evaluate_gate` actually
+# dispatches on. This audit must read the SAME grammar the flow engine reads —
+# see `gates_in_flow` for the defect that motivated parsing instead of matching.
+# #306 — `advisory_` is the non-blocking slot; a gate wired there IS wired.
+_GATE_SLOTS = ("program_exit_zero", "optional_program_exit_zero",
+               "advisory_program_exit_zero")
 _DECL_RE = re.compile(r"ENFORCEMENT:\s*(blocking|advisory)", re.IGNORECASE)
 # The second channel: intent stated in the JSON the gate emits. Captures the
 # WHOLE right-hand side, not just a leading string literal — see
@@ -75,8 +100,83 @@ def _flow_def(explicit: Optional[str]) -> Path:
     return _HERE.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 
+class FlowGrammarError(RuntimeError):
+    """The flow definition could not be read with the flow engine's own
+    grammar. Never downgraded to a partial gate list: a shorter list reads as
+    `fewer gates exist`, which is the exact lie this audit was written to
+    catch."""
+
+
+def _first_token(cmd: str) -> Optional[str]:
+    """The gate PROGRAM name is the first whitespace-delimited token of the
+    command, exactly as `_check_program_exit_zero` shlex-splits it."""
+    parts = cmd.split()
+    return parts[0] if parts else None
+
+
+def _walk_clauses(node, out: List[dict]) -> None:
+    """Collect every gate clause in the document, at any nesting depth.
+
+    The flow definition nests gates under `gate:`, `all_of:`, `any_of:` and
+    per-step lists, so the walk is recursive and structural rather than
+    positional — a gate is wherever one of `_GATE_SLOTS` is a mapping key.
+    """
+    if isinstance(node, dict):
+        for key, val in node.items():
+            if key in _GATE_SLOTS:
+                # Both shapes the flow engine accepts (see
+                # `flow_compliance_check._evaluate_gate`): a bare command
+                # STRING, or a MAPPING carrying `command:` (plus optional
+                # `condition_files_exist:`).
+                cmd = val.get("command") if isinstance(val, dict) else val
+                name = _first_token(cmd) if isinstance(cmd, str) else None
+                out.append({"slot": key, "gate": name, "command": cmd})
+            _walk_clauses(val, out)
+    elif isinstance(node, list):
+        for item in node:
+            _walk_clauses(item, out)
+
+
+def clauses_in_flow(flow: Path) -> List[dict]:
+    """Every gate clause the flow engine would dispatch on, in document order.
+
+    THE DEFECT THIS REPLACED (ORGANIC #885, measured 2026-08-09). The previous
+    implementation matched
+    `(?:optional_|advisory_)?program_exit_zero:\\s*["']?([\\w./-]+)` over the
+    RAW TEXT. `\\s*` spans newlines, so against the nested clause form the flow
+    definition uses everywhere for conditional gates:
+
+        - optional_program_exit_zero:
+            command: "spare_cell_preservation_check . --json ..."
+            condition_files_exist: [...]
+
+    the match ran past the end of the line and captured the NEXT YAML key. All
+    31 such clauses collapsed into one literal gate named `command`, so the
+    audit reported 120 gates instead of 150 and 31 real gate programs — among
+    them `post_route_signoff_corner_check`, which IS wired inline and blocking
+    — were audited by nothing at all. An enforcement audit that cannot see a
+    gate cannot report that gate is unenforced, so the gap it exists to measure
+    was under-reported by 31.
+
+    Parsing with PyYAML — the same loader `flow_compliance_check` uses — means
+    the audit reads the grammar the engine executes, not an approximation of
+    it, so a future clause shape cannot silently drop out again.
+    """
+    if yaml is None:
+        raise FlowGrammarError(
+            "PyYAML required to read the flow definition (pip install pyyaml)")
+    try:
+        doc = yaml.safe_load(flow.read_text(errors="replace"))
+    except yaml.YAMLError as exc:
+        raise FlowGrammarError(f"cannot parse {flow}: {exc}") from exc
+    out: List[dict] = []
+    _walk_clauses(doc, out)
+    return out
+
+
 def gates_in_flow(flow: Path) -> List[str]:
-    return sorted(set(_GATE_RE.findall(flow.read_text(errors="replace"))))
+    """Unique gate program names wired into the flow definition."""
+    return sorted({c["gate"] for c in clauses_in_flow(flow) if c["gate"]})
 
 
 def runner_source(programs: Path) -> str:
@@ -136,7 +236,18 @@ def declared_intent(programs: Path, gate: str) -> Optional[str]:
 
 
 def audit(flow: Path, programs: Path) -> dict:
-    gates = gates_in_flow(flow)
+    clauses = clauses_in_flow(flow)
+    # A clause the walk reached but could not name is NOT dropped. Silently
+    # discarding it would reintroduce #885 in a new shape: an unnamed gate
+    # would once again be a gate the audit does not report on. It is surfaced
+    # so the flow author sees an unrunnable clause rather than a short tally.
+    malformed = [{"slot": c["slot"], "command": c["command"]}
+                 for c in clauses if not c["gate"]]
+    gates = sorted({c["gate"] for c in clauses if c["gate"]})
+    slots: Dict[str, set] = {}
+    for c in clauses:
+        if c["gate"]:
+            slots.setdefault(c["gate"], set()).add(c["slot"])
     src = runner_source(programs)
     rows = []
     for g in gates:
@@ -145,6 +256,7 @@ def audit(flow: Path, programs: Path) -> dict:
             "gate": g,
             "enforcement": "ENFORCED" if enforced else "AUDIT_ONLY",
             "declared": declared_intent(programs, g),
+            "slots": sorted(slots[g]),
         })
     # ORPHANED: a gate program that DECLARES an enforcement intent but is not
     # referenced by the flow definition at all. Worse than AUDIT_ONLY — not
@@ -166,12 +278,14 @@ def audit(flow: Path, programs: Path) -> dict:
                       and r["enforcement"] == "AUDIT_ONLY"]
     return {
         "total_gates": len(rows),
+        "total_clauses": len(clauses),
         "enforced": sum(1 for r in rows if r["enforcement"] == "ENFORCED"),
         "audit_only": sum(1 for r in rows if r["enforcement"] == "AUDIT_ONLY"),
         "declared": sum(1 for r in rows if r["declared"]),
         "undeclared": sum(1 for r in rows if not r["declared"]),
         "contradictions": contradictions,
         "orphaned": orphaned,
+        "malformed_clauses": malformed,
         "gates": rows,
     }
 
@@ -196,16 +310,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not flow.is_file():
         print(f"IO_ERROR: no flow definition at {flow}", file=sys.stderr)
         return 2
-    rep = audit(flow, programs)
+    try:
+        rep = audit(flow, programs)
+    except FlowGrammarError as exc:
+        # NEVER degrade to a partial read. A gate list that is short because
+        # the parser failed is indistinguishable from a flow with fewer gates,
+        # and this audit exists to stop exactly that confusion.
+        print(f"IO_ERROR: {exc}", file=sys.stderr)
+        return 2
     if a.json:
         Path(a.json).write_text(json.dumps(rep, indent=2, ensure_ascii=False))
     pct = 100 * rep["audit_only"] // max(1, rep["total_gates"])
     print("=== flow gate enforcement audit ===")
+    print(f"gate clauses in flow def : {rep['total_clauses']}")
     print(f"gates in flow definition : {rep['total_gates']}")
     print(f"  ENFORCED (can block)   : {rep['enforced']}")
     print(f"  AUDIT_ONLY (describes) : {rep['audit_only']}  ({pct}%)")
     print(f"declared intent          : {rep['declared']} "
           f"({rep['undeclared']} UNDECLARED)")
+    if rep.get("malformed_clauses"):
+        print("\nMALFORMED — a gate slot with no runnable `command`. It runs "
+              "nothing,\nso it certifies nothing:")
+        for m in rep["malformed_clauses"]:
+            print(f"  {m['slot']}: {m['command']!r}")
     if rep.get("orphaned"):
         print("\nORPHANED — declare an intent but are NOT in the flow definition,\n"
               "so not even the final audit reaches them:")
