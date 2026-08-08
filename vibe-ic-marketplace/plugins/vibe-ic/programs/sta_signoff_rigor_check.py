@@ -25,12 +25,27 @@ dump, against 51 of 106 for the other STA reports). A slack with no path is a
 verdict that reads the same whether or not the thing behind it was examined,
 which is precisely what this gate exists to stop.
 
+COVERAGE vs CONTENT (v1.10.3) added a FIFTH dimension: earlier versions only
+checked that the recovery/removal/min-pulse-width ANALYSIS ran (the marker
+line), never whether it actually PASSED. A real violation sitting in
+report_check_types' own output — e.g. a genuine min-pulse-width table row
+`<pin>  <required>  <actual>  <slack> (VIOLATED)`, or a recovery/removal path
+ending `slack (VIOLATED)` on an endpoint marked "(recovery check against ...)"
+/ "(removal check against ...)" — is real evidence the design FAILS this
+dimension, and a gate that only checks coverage would print PASS over it.
+That is exactly the "checks that lie" shape §4.05 forbids: measuring that the
+tool ran, not what it found.
+
 Verdict:
-  PASS  — the report shows OCV derating was applied AND carries recovery/removal
-          AND min-pulse-width evidence AND accounts for its own worst slack with
-          a path (a full-rigor sign-off basis).
-  FAIL  — the report exists but is MISSING one or more (the finding lists which):
-          an optimistic sign-off, not a foundry-grade one.
+  PASS  — the report shows OCV derating was applied, carries recovery/removal
+          AND min-pulse-width evidence (coverage), accounts for its own worst
+          slack with a path (ORGANIC #540), AND none of the recovery/removal/
+          min-pulse-width sections contains an actual (VIOLATED) row/path
+          (v1.10.3 content) — a full-rigor sign-off basis.
+  FAIL  — the report exists but either (a) is MISSING one or more of the
+          coverage/path dimensions, or (b) HAS a real (VIOLATED) recovery/
+          removal/min-pulse-width finding (the finding lists which either
+          way): an optimistic sign-off, not a foundry-grade one.
   rc=2  — the report path is absent/unreadable (missing-evidence IO error).
 
 AOCV/POCV vs flat-OCV (P1, implemented):
@@ -130,6 +145,69 @@ _WORST_PATHS_FAILED_RE = re.compile(
 _PATH_DUMP_RE = re.compile(
     r"^\s*(?:Startpoint|Endpoint)\s*:|data arrival time", re.IGNORECASE | re.M)
 
+# CONTENT (not just coverage) — a genuine violation inside report_check_types'
+# own output, distinct from an ordinary setup/hold PATH violation (which also
+# prints "slack (VIOLATED)" but is a different gate's concern entirely) AND
+# distinct from max_slew / max_capacitance / max_fanout table violations
+# (real findings too, but OUT OF SCOPE for this gate's declared dimensions —
+# they are DRV limits covered elsewhere; folding them in here would silently
+# widen this gate's contract and retroactively flip unrelated runs' verdicts,
+# exactly the kind of scope-creep a repo-gatekeeper should not slip in
+# unannounced). Scoped strictly to this gate's own 3 declared dimensions:
+# recovery, removal, min_pulse_width.
+#
+# min_pulse_width prints a flat pin-based TABLE, uniquely identified by its
+# two-Width header (LIVE-VALIDATED against real OpenSTA 3.1.0 output; distinct
+# from max_slew's "Limit Slew Slack" and max_capacitance's "Limit Cap Slack"
+# headers, which do NOT say "Width"):
+#     Required  Actual
+#Pin                                    Width   Width   Slack
+#------------------------------------------------------------
+#u_otp.u_otp/PRD (high)                200.00  100.01  -99.99 (VIOLATED)
+_MPW_TABLE_HEADER_RE = re.compile(r"Pin\s+Width\s+Width\s+Slack", re.IGNORECASE)
+
+# recovery / removal instead print a full PATH report (Startpoint/Endpoint/...
+# slack (MET|VIOLATED)), same shape as an ordinary setup/hold path, but the
+# Endpoint line names the check: "(recovery check against ...)" / "(removal
+# check against ...)". A violation is real when that marker is followed,
+# within the same path block, by "slack (VIOLATED)".
+_RECOVERY_REMOVAL_ENDPOINT_RE = re.compile(
+    r"\((?:recovery|removal) check against[^)\n]*\)", re.IGNORECASE)
+_SLACK_VIOLATED_RE = re.compile(r"slack\s*\(VIOLATED\)", re.IGNORECASE)
+
+
+def _check_types_violations(report_text: str) -> List[str]:
+    """Real (VIOLATED) findings inside report_check_types' own output,
+    scoped to this gate's 3 declared dimensions (recovery / removal /
+    min_pulse_width — NOT max_slew / max_capacitance / max_fanout).
+
+    Chip-AGNOSTIC: no design/pin names are assumed — the exact violating pin
+    or endpoint description is read straight out of the report and quoted
+    back verbatim (truncated) so the finding is self-evidencing.
+    """
+    found: List[str] = []
+    for hm in _MPW_TABLE_HEADER_RE.finditer(report_text):
+        after = report_text[hm.end():]
+        nl = after.find("\n")  # skip the "----" separator line under the header
+        block_start = after[nl + 1:] if nl != -1 else after
+        end = len(block_start)
+        for stopper in ("\n\n", "SIGNOFF_CHECK_TYPES_REPORTED"):
+            idx = block_start.find(stopper)
+            if idx != -1:
+                end = min(end, idx)
+        for line in block_start[:end].splitlines():
+            if "(VIOLATED)" in line.upper():
+                found.append(line.strip()[:160])
+    for m in _RECOVERY_REMOVAL_ENDPOINT_RE.finditer(report_text):
+        # bounded look-ahead: the path's own slack line follows shortly after
+        # its Endpoint line, well before the NEXT "Startpoint:" block begins.
+        window = report_text[m.end():m.end() + 2000]
+        next_start = window.find("Startpoint:")
+        scope = window if next_start == -1 else window[:next_start]
+        if _SLACK_VIOLATED_RE.search(scope):
+            found.append(m.group(0).strip()[:160])
+    return found
+
 
 def _find_report(target: Path) -> Optional[Path]:
     """Resolve the sign-off STA report. Accepts a file or a directory.
@@ -205,6 +283,9 @@ def evaluate(report_text: str) -> Dict[str, object]:
     if not mpw:
         missing.append("min-pulse-width check "
                        "(report_check_types -min_pulse_width)")
+    violations = _check_types_violations(report_text)
+    for v in violations:
+        missing.append(f"real (VIOLATED) finding in report_check_types: {v}")
     passed = not missing
     if aocv:
         ocv_mode = "aocv"
@@ -231,6 +312,7 @@ def evaluate(report_text: str) -> Dict[str, object]:
         "worst_path_evidence": worst_path_evidence,
         "worst_path_evidence_source": path_source,   # "marker"|"path-dump"|None
         "worst_path_query_failures": path_failures,
+        "check_types_violations": violations,
         "missing": missing,
         "ocv_scope": ocv_scope,
     }
