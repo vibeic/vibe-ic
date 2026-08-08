@@ -43,6 +43,50 @@ class AuditResult:
     passed: bool
     findings: List[Finding] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
+    # ORGANIC #887 — see `_verdict_for`. Defaulted so every existing
+    # construction site (and every caller that builds one) is unchanged.
+    verdict: str = "PASS"
+
+
+#: ORGANIC #887 — the disclosure this repo ALREADY uses for "I ran, but the
+#: input I audit was not there". Printed at line start; the flow's
+#: `flow_compliance_check._stdout_signals_vacuous` reads the gate's COMBINED
+#: stdout+stderr snippet on the rc==0 path and promotes the step to the
+#: VACUOUS-PASS verdict tier instead of counting it in the published
+#: "X/Y executed PASS" numerator.
+_VACUOUS_SENTINEL = "VACUOUS_PASS"
+
+
+def _verdict_for(result: AuditResult) -> str:
+    """PASS / FAIL / VACUOUS_PASS for a completed audit.
+
+    ORGANIC #887. A scan that read ZERO files has not cleared the design — it
+    never looked at it. `passed=True` printed beside `files_scanned=0`, with no
+    sentinel, is exactly the shape that let an EMPTY tree be certified in
+    silence: the step was scored a plain PASS and stayed in the published
+    executed-PASS numerator, while two of its siblings on the same `all_of`
+    answered the same tree with rc 1 and rc 2.
+
+    The exit code is deliberately NOT changed. A project that has not produced
+    RTL yet is not a defect; this gate is wired as an unconditional
+    `program_exit_zero` clause, so rc=1 would turn every such run red, and rc=2
+    would re-answer a question this gate is not the one to answer. The honest
+    signal is the one the repo already ships: exit 0 plus the `VACUOUS_PASS:`
+    disclosure, which the flow reads as its own verdict tier.
+
+    NOTE the predicate is `files_scanned`, NOT `files_scanned + files_skipped`.
+    A tree whose every RTL file was EXCLUDED by the scan-scope policy (#615
+    synth/PnR outputs, vendor staging, sim intermediates) also examined nothing
+    authoritative, and that is equally a vacuous result rather than a clean one.
+
+    Chip-AGNOSTIC: the predicate is "how many files did I read", nothing about
+    any design, PDK, vendor or cell.
+    """
+    if not result.passed:
+        return "FAIL"
+    if int(result.summary.get("files_scanned", 0) or 0) == 0:
+        return _VACUOUS_SENTINEL
+    return "PASS"
 
 
 def strip_comments(src: str) -> str:
@@ -315,6 +359,7 @@ def audit(project_dir: str) -> AuditResult:
             message=f"project_dir not found: {project_dir}"))
         result.passed = False
         result.summary = {'files_scanned': 0, 'violations': 1}
+        result.verdict = 'FAIL'
         return result
 
     skipped: List[Tuple[str, str]] = []
@@ -339,6 +384,7 @@ def audit(project_dir: str) -> AuditResult:
         'skipped': [{'file': fp, 'reason': rsn}
                     for fp, rsn in skipped[:50]],
     }
+    result.verdict = _verdict_for(result)
     return result
 
 
@@ -349,6 +395,17 @@ def main():
                    help="Emit JSON. With no value → stdout. With a path → write file.")
     args = p.parse_args()
     result = audit(args.project_dir)
+    # ORGANIC #887 — disclose a zero-file scan BEFORE the report is emitted,
+    # and on STDERR so a caller using `--json` (stdout mode) still receives
+    # parseable JSON on stdout. `flow_compliance_check.output_snippet`
+    # concatenates stdout and stderr, so the line-start sentinel is read on
+    # either stream.
+    if result.verdict == _VACUOUS_SENTINEL:
+        print(f"{_VACUOUS_SENTINEL}: reset_dependency_check examined 0 RTL "
+              f"file(s) under {Path(args.project_dir).resolve()} — no reset "
+              f"dependency, ordering or cycle was screened, so this is NOT a "
+              f"clean reset-dependency result",
+              file=sys.stderr)
     if args.json is not None:
         payload = json.dumps(asdict(result), indent=2)
         if args.json == "-":
