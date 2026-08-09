@@ -70,12 +70,20 @@ def test_consumer_reads_the_unbracketed_token_and_not_the_bracketed_one():
 
 
 def test_consumer_reads_only_two_channels(tmp_path):
-    """A JSON report saying VACUOUS_PASS is NOT a third channel.
+    """A JSON report saying VACUOUS_PASS is NOT a third channel AT THIS LEVEL.
 
-    `_check_program_exit_zero` never opens the report file, so a gate whose
-    only disclosure is `{"verdict": "VACUOUS_PASS"}` in its `--json` target is
-    credited a plain PASS. This is why the check does not accept the report as
-    routing.
+    `_check_program_exit_zero` never opens the report file, so at THIS function
+    a gate whose only disclosure is `{"verdict": "VACUOUS_PASS"}` in its
+    `--json` target still returns a plain pass. This is why the check does not
+    accept the report as routing FOR THIS FUNCTION.
+
+    vibe-ic#901 added the read ONE LEVEL UP, in `_evaluate_gate`, which knows
+    the `--json` path because it holds the command string. The assertion below
+    is unchanged and still true; what it pins is the boundary, not the claim
+    that nobody anywhere reads the report — see
+    `test_organic901_vacuity_is_counted_not_inferred
+    ::test_a_json_only_not_applicable_declaration_is_read` for the level that
+    does.
     """
     # `_resolve_program_cmd` resolves a bare name against PROGRAMS_DIR, so the
     # fixture has to live there for the real consumer to run it at all.

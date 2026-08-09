@@ -3217,6 +3217,104 @@ _WAIVER_EXIT_CODE = 3
 _WAIVER_STDOUT_SENTINEL = "PASS_WITH_WAIVERS"
 
 # ══════════════════════════════════════════════════════════════════════
+# vibe-ic#901 — THE CLAUSE LEDGER: vacuity is COUNTED, never inferred
+#                from silence
+# ══════════════════════════════════════════════════════════════════════
+# The VACUOUS_PASS tier means "every executed sub-gate was vacuously
+# satisfied" — that is what its own branch docstring has always claimed. It
+# was IMPLEMENTED as `vacuous_hints and not non_hint_reasons`, i.e. "at least
+# one clause said it was vacuous, and nobody said anything else". Those are
+# not the same proposition, because **a clause that passes substantively says
+# nothing at all** — it appends no reason. So "nobody objected" and "every
+# clause was vacuous" were indistinguishable, and ONE inapplicable clause
+# among several substantive ones re-tiered the whole step.
+#
+# That gap is not theoretical. v1.10.14 wired `_json_report_signals_vacuous`
+# into the same branch; more gates then emitted a vacuity hint, and step 23
+# (post-route STA, six clauses) flipped to VACUOUS_PASS because ONE clause
+# (`drv_promotion_corroboration_check` — "no route promotion this run") was
+# legitimately inapplicable while three siblings measured real design content
+# and, being satisfied, said nothing. Eight downstream steps then recorded
+# PASS_VOIDED_BY_DEPENDENCY and a genuinely converged cell reported an overall
+# FAIL with `failed_gate_count: 0`.
+#
+# The ledger closes it by making every LEAF clause register its own execution
+# instead of leaving the tier to read silence:
+#
+#   ran=True   the clause actually evaluated a predicate
+#   ran=False  the clause was not evaluated at all (an
+#              `optional_program_exit_zero` whose `condition_files_exist`
+#              matched nothing) — it is neither vacuous nor substantive, and
+#              must not sit in either side of the count
+#   vacuous    the clause DISCLOSED that it examined nothing (rc=2, a
+#              `VACUOUS_PASS:` stdout line, or — #901 — a `NOT_APPLICABLE`
+#              verdict in its own `--json` report)
+#   advisory   the clause cannot change the verdict (#306), so it is excluded
+#              from both sides of the count; letting it vote would let a
+#              non-blocking gate re-tier a step
+#   census     the clause is ELIGIBLE to be counted at all
+#
+# `census` is the part that is easy to get wrong, so it is stated as a rule
+# rather than a list: **a clause belongs in the denominator only if it could
+# ever have been in the numerator.** A `files_exist` presence probe and a
+# `json_field_true` field read have NO vacuity channel — no exit code, no
+# stdout sentinel, no report verdict of their own — so they can never be
+# counted vacuous. Putting them in the denominator would make "every clause
+# was vacuous" UNREACHABLE for any step that declares one, and the tier would
+# quietly stop existing for those steps rather than being decided.
+#
+# It is also what this program already believes about presence probes
+# everywhere else: "a file matching this pattern exists somewhere under the
+# project" is NOT "this step measured anything" — that sentence is in the
+# OUTPUT ATTRIBUTION disclosure a few hundred lines below, and #433's
+# zero-byte credit is the same point. Step 30 is the case that settles it: its
+# gate is `files_exist(*.sp) AND spice_correlation_check`, and on a project
+# with a SPICE deck but no SPEF and no STA the program has nothing to
+# correlate and says so. The deck being on disk is a PRECONDITION for the
+# measurement, not the measurement, and the step is vacuous.
+#
+# A step is VACUOUS_PASS only when `counted` is non-empty and EVERY counted
+# clause is vacuous. Silence therefore now means "substantive" — which is a
+# default, not an inference, and it is the default the vacuity CHANNELS exist
+# to override: a clause that examined nothing has three ways to say so, and
+# #901's contribution is that the third (its own JSON report) is finally read.
+_CLAUSE_KIND_ANY_OF = "any_of"
+
+
+def _clause(log: Optional[List[Dict[str, Any]]], kind: str, *,
+            ran: bool = True, vacuous: bool = False,
+            advisory: bool = False, census: bool = True,
+            detail: str = "") -> None:
+    """Append one LEAF-clause outcome to the ledger (no-op when unledgered).
+
+    `log is None` is the byte-identical legacy path: every existing caller of
+    `_evaluate_gate` that does not pass a ledger keeps its exact behaviour,
+    which matters because the tier decision falls back to the pre-#901 rule
+    when the ledger is empty.
+    """
+    if log is None:
+        return
+    log.append({"kind": kind, "ran": bool(ran), "vacuous": bool(vacuous),
+                "advisory": bool(advisory), "census": bool(census),
+                "detail": detail})
+
+
+def _clause_vacuity_census(log: Optional[List[Dict[str, Any]]]
+                           ) -> Tuple[int, int]:
+    """(vacuous_clauses, counted_clauses).
+
+    Excluded: clauses that never RAN, ADVISORY clauses (#306 — no verdict
+    authority), and clauses with no vacuity channel (`census=False`), which
+    could never appear in the numerator and so must not inflate the
+    denominator.
+    """
+    if not log:
+        return (0, 0)
+    counted = [c for c in log
+               if c.get("ran") and c.get("census") and not c.get("advisory")]
+    return (sum(1 for c in counted if c.get("vacuous")), len(counted))
+
+# ══════════════════════════════════════════════════════════════════════
 # CRASH — "the gate blew up" is not "the gate found a defect"
 # ══════════════════════════════════════════════════════════════════════
 # An unhandled Python exception exits non-zero, so on the exit code alone
@@ -3523,35 +3621,37 @@ _VACUOUS_JSON_VERDICTS = {"NOT_APPLICABLE", "SKIPPED", "SKIP", "VACUOUS",
 def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
     """True iff the gate's own JSON report declares it examined nothing.
 
-    ⚠️ NOT CURRENTLY WIRED INTO THE STEP TIER — see vibe-ic#901 follow-on.
+    WIRED INTO THE STEP TIER — but only behind the #901 clause ledger, and the
+    order matters more than the wiring.
 
-    Wiring this into the VACUOUS_PASS branch (v1.10.14) caused a MEASURED
-    regression: it turned a genuinely converged cell red. Controlled proof —
-    same run directory, byte-identical artefacts, only the audit binary
+    Wiring this into the VACUOUS_PASS branch on its own (v1.10.14) caused a
+    MEASURED regression: it turned a genuinely converged cell red. Controlled
+    proof — same run directory, byte-identical artefacts, only the audit binary
     changed:
 
         1.10.11  PASS=36 FAIL=0            -> PASS_WITH_WAIVERS
         1.10.16  PASS=25 FAIL=0 VOIDED=8   -> FAIL
 
-    Root cause: the tier branch is `passed and vacuous_hints and not
-    non_hint_reasons`, and its own docstring says the intent is "EVERY executed
-    sub-gate was vacuously satisfied". `not non_hint_reasons` only approximates
-    that, because a gate that passes SUBSTANTIVELY says nothing at all. Reading
-    gates' JSON made far more gates emit a vacuity hint, so a step with one
-    legitimately-inapplicable gate (`drv_promotion_corroboration_check`: "no
-    route promotion this run") and several siblings that measured real design
-    content flipped to VACUOUS_PASS — cascading into 8
-    PASS_VOIDED_BY_DEPENDENCY and an overall FAIL with `failed_gate_count: 0`.
+    Root cause was NOT this read. It was the tier branch `passed and
+    vacuous_hints and not non_hint_reasons`, whose own docstring says the
+    intent is "EVERY executed sub-gate was vacuously satisfied" while
+    `not non_hint_reasons` only approximates that — a gate that passes
+    SUBSTANTIVELY says nothing at all. Reading gates' JSON made far more gates
+    emit a vacuity hint, so a step with one legitimately-inapplicable gate
+    (`drv_promotion_corroboration_check`: "no route promotion this run") and
+    several siblings that measured real design content flipped to
+    VACUOUS_PASS — cascading into 8 PASS_VOIDED_BY_DEPENDENCY and an overall
+    FAIL with `failed_gate_count: 0`.
 
     A FAIL that enumerates nothing as failed is the same defect class this
-    campaign exists to remove, so the hook is withdrawn rather than left in
-    while a better fix is designed.
-
-    Closing #901 properly needs the tier decision to compare vacuous hints
-    against the NUMBER OF GATE CLAUSES THAT RAN, so "every sub-gate" is
-    counted rather than inferred from silence. Until then the original #901
-    hole (a gate declaring NOT_APPLICABLE in JSON the consumer never opened)
-    remains open and is the lesser evil.
+    campaign exists to remove, so the hook was withdrawn (v1.10.18) until the
+    counting existed. It now does: `_clause`/`_clause_vacuity_census` make
+    every executed clause register, and VACUOUS_PASS requires ALL of them to
+    have disclosed vacuity. One inapplicable clause among substantive siblings
+    is a PASS carrying a `partially vacuous (n of m)` disclosure. With that in
+    place this read closes the original hole instead of reopening the
+    regression: it can add a vacuity signal, it can no longer outvote the
+    clauses that measured design content.
 
     vibe-ic#901. Six gates exited 0 on an empty project without the consumer
     seeing a disclosure — and the two sharpest were SELF-AWARE, printing
@@ -7552,14 +7652,23 @@ def _declared_gate_summary(gate: Any) -> str:
 
 
 def _evaluate_gate(project: Path, gate: Dict[str, Any],
-                   skip_analog: bool = False) -> tuple[bool, List[str]]:
+                   skip_analog: bool = False,
+                   clause_log: Optional[List[Dict[str, Any]]] = None
+                   ) -> tuple[bool, List[str]]:
     """Evaluate a gate spec, return (passed, reasons).
 
     ``skip_analog`` (GAP-B, #789) is threaded down to the program-running
     branches so an analog-aware optional/required gate is invoked WITH
     ``--skip-analog`` (and a reviewable ``--analog-anchor``) when the run
     defers the analog track. Defaults to False → byte-identical to the
-    pre-fix behaviour."""
+    pre-fix behaviour.
+
+    ``clause_log`` (#901) is an OUT-parameter: every LEAF clause appends one
+    record describing whether it RAN and whether it disclosed vacuity, so the
+    step-level tier can COUNT "every sub-gate was vacuous" instead of
+    inferring it from the silence of the substantive ones. Default ``None``
+    keeps every existing caller byte-identical — the ledger is additive and
+    the return shape is unchanged."""
     reasons: List[str] = []
 
     # `files_exist` - top-level (any_of / all_of via flag)
@@ -7569,6 +7678,12 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         passed, found, missing = _check_files_exist(
             project, gate["files_exist"], any_of=any_of
         )
+        # #901 — RECORDED, and OUT of the census: a presence probe has no
+        # vacuity channel, so it can never be counted vacuous and must not sit
+        # in the denominator either (see the ledger doctrine above; step 30 is
+        # the case that decides it).
+        _clause(clause_log, "files_exist", ran=True, vacuous=False,
+                census=False, detail=str(gate["files_exist"])[:120])
         if not passed:
             # ORGANIC #675 — before declaring a hard FAIL, honor an honest
             # sibling self-skip artifact co-located with the absent canonical
@@ -7629,6 +7744,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         if _stdout_signals_structure_only(out):
             reasons.append(f"{_STRUCTURE_ONLY_HINT_PREFIX}"
                            f"{_structure_only_note(out) or _cmd}")
+        _vacuous_clause = False
         if not passed:
             reasons.append(f"program failed: {_cmd}")
             reasons.append(f"output: {out[:200]}")
@@ -7636,6 +7752,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # Wave 93 — bubble the rc=2 vacuous signal up so check_step
             # promotes the step's status to VACUOUS_PASS instead of PASS.
             reasons.append(out)
+            _vacuous_clause = True
         elif out.startswith(_WAIVER_HINT_PREFIX):
             # #651 — bubble the rc=3 PASS_WITH_WAIVERS signal up so check_step
             # promotes the step's status to WAIVED-DEFERRED instead of a bare
@@ -7651,15 +7768,38 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # as a bare PASS through a required one. A disclosure only counts if
             # the consumer reads it in both.
             reasons.append(f"{_VACUOUS_HINT_PREFIX}{_cmd}")
+            _vacuous_clause = True
+        elif _json_report_signals_vacuous(project, _cmd):
+            # vibe-ic#901 — THE THIRD CHANNEL, finally read. A gate that
+            # examined nothing may say so ONLY in its own `--json` report
+            # (`{"verdict": "NOT_APPLICABLE"}`) — a file the consumer never
+            # opened. Six gates did exactly that on an empty project and were
+            # scored substantive passes, `vacuous_testbench_check` among them:
+            # the gate against vacuous passes, consumed as one.
+            #
+            # Re-wired here ONLY because the clause ledger below now COUNTS
+            # vacuity. In v1.10.14 this same read was enough to re-tier a step
+            # whose siblings had measured real design content, because ONE
+            # hint decided the tier. The read is unchanged; what changed is
+            # that it can no longer outvote the clauses that did the work.
+            reasons.append(f"{_VACUOUS_HINT_PREFIX}{_cmd}")
+            _vacuous_clause = True
         if passed and _stdout_signals_token(out, _SUBSTANTIVE_STDOUT_TOKEN):
             reasons.append(f"{_SUBSTANTIVE_HINT_PREFIX}{_cmd}")
         if passed and _stdout_signals_token(out, _INCOMPLETE_STDOUT_TOKEN):
             reasons.append(f"{_INCOMPLETE_HINT_PREFIX}{_cmd}")
+        _clause(clause_log, "program_exit_zero", ran=True,
+                vacuous=_vacuous_clause, detail=_cmd)
         return passed, reasons
 
     # `json_field_true`
     if "json_field_true" in gate:
         passed, out = _check_json_field_true(project, gate["json_field_true"])
+        # #901 — same reasoning as `files_exist`: this slot can raise a SKIP
+        # hint (#608) but has no VACUITY channel, so it is recorded and left
+        # out of the census.
+        _clause(clause_log, "json_field_true", ran=True, vacuous=False,
+                census=False, detail=str(gate["json_field_true"])[:120])
         if not passed:
             reasons.append(f"json gate failed: {out}")
         elif out.startswith(_SKIP_HINT_PREFIX):
@@ -7695,6 +7835,14 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         for pat in cond_files:
             present.extend(project.glob(pat))
         if not present:
+            # #901 — the clause did NOT run. It is neither vacuous nor
+            # substantive, and it must sit on neither side of the count: a
+            # never-invoked clause in the denominator would make a genuinely
+            # all-vacuous step look partly substantive, and one in the
+            # numerator would make a step with a single skipped optional
+            # clause look wholly vacuous.
+            _clause(clause_log, "optional_program_exit_zero", ran=False,
+                    detail=f"condition_files_exist matched nothing: {cmd}")
             return True, reasons  # no inputs -> N/A -> pass
         # GAP-B (#789) — forward --skip-analog (+ reviewable --analog-anchor)
         # when the run defers the analog track AND this optional gate's program
@@ -7707,6 +7855,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         if _stdout_signals_structure_only(out):
             reasons.append(f"{_STRUCTURE_ONLY_HINT_PREFIX}"
                            f"{_structure_only_note(out) or cmd}")
+        _vacuous_clause = False
         if not passed:
             reasons.append(f"optional program failed: {cmd}")
             reasons.append(f"output: {out[:200]}")
@@ -7727,15 +7876,28 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # disclosure was silently downgraded to a bare pass. Forward the
             # marker instead — mirrors the `__WAIVER_HINT__` branch above.
             reasons.append(out)
+            _vacuous_clause = True
         elif _stdout_signals_vacuous(out):
             # Wave 93 — preserve the VACUOUS signal for upstream verdict
             # aggregation. The hint is filtered out before display so the
             # per-step listing only shows real reasons.
             reasons.append(f"{_VACUOUS_HINT_PREFIX}{cmd}")
+            _vacuous_clause = True
+        elif _json_report_signals_vacuous(project, cmd):
+            # vibe-ic#901 — same third channel as the required slot. An
+            # optional clause whose condition files DID match ran for real, so
+            # a `NOT_APPLICABLE` verdict in its own report is a disclosure the
+            # consumer must read here too; wiring it in one slot only is how
+            # the same program came to disclose its skip through one door and
+            # be read as a substantive pass through the other (#654's shape).
+            reasons.append(f"{_VACUOUS_HINT_PREFIX}{cmd}")
+            _vacuous_clause = True
         if passed and _stdout_signals_token(out, _SUBSTANTIVE_STDOUT_TOKEN):
             reasons.append(f"{_SUBSTANTIVE_HINT_PREFIX}{cmd}")
         if passed and _stdout_signals_token(out, _INCOMPLETE_STDOUT_TOKEN):
             reasons.append(f"{_INCOMPLETE_HINT_PREFIX}{cmd}")
+        _clause(clause_log, "optional_program_exit_zero", ran=True,
+                vacuous=_vacuous_clause, detail=cmd)
         return passed, reasons
 
     # `advisory_program_exit_zero` (#306) — RUNS the program, RECORDS the
@@ -7768,9 +7930,17 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             for pat in cond_files:
                 present.extend(project.glob(pat))
             if not present:
+                _clause(clause_log, "advisory_program_exit_zero", ran=False,
+                        advisory=True, census=False, detail=cmd)
                 return True, reasons  # no inputs -> not applicable -> silent
         cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
         ok, out = _check_program_exit_zero(project, cmd)
+        # #901 — recorded, and DELIBERATELY excluded from the vacuity census.
+        # An advisory clause cannot fail a step (#306); letting it vote on the
+        # tier would let a non-blocking gate re-tier one, which is the same
+        # authority-by-the-back-door the `any_of` guard above refuses.
+        _clause(clause_log, "advisory_program_exit_zero", ran=True,
+                advisory=True, census=False, detail=cmd)
         if ok and out.startswith(_VACUOUS_HINT_PREFIX):
             # rc=2 is the disclosed-skip tier, NOT a clean result. Recording
             # it as "ok" would make "this project has no such input" read as
@@ -7793,7 +7963,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         for _i, sub in enumerate(gate["all_of"]):
             if not isinstance(sub, dict):
                 continue
-            p, r = _evaluate_gate(project, sub, skip_analog=skip_analog)
+            p, r = _evaluate_gate(project, sub, skip_analog=skip_analog,
+                                  clause_log=clause_log)
             if not p:
                 reasons.extend(r)
                 # #306/#297 — the step has already failed, but the ADVISORY
@@ -7810,7 +7981,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     if (isinstance(later, dict)
                             and "advisory_program_exit_zero" in later):
                         _p2, r2 = _evaluate_gate(project, later,
-                                                 skip_analog=skip_analog)
+                                                 skip_analog=skip_analog,
+                                                 clause_log=clause_log)
                         reasons.extend(
                             h for h in r2
                             if h.startswith(_ADVISORY_HINT_PREFIX))
@@ -7864,8 +8036,28 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     "consulted. Put the advisory gate in an `all_of` "
                     "alongside them instead (#306).")
                 return False, reasons
-            p, _ = _evaluate_gate(project, sub, skip_analog=skip_analog)
+            # #901 — an `any_of` counts as ONE clause, and its members are
+            # evaluated into a SCRATCH ledger. This branch already discards
+            # every sub-gate reason (`p, _ =`), so no vacuity disclosure from
+            # inside a group has ever reached the step tier; letting the
+            # members into the REAL ledger would put clauses in the census
+            # whose hints the census can never see, and the two halves would
+            # disagree.
+            #
+            # The group's own census entry is DERIVED from the branch that
+            # satisfied it, by the same rule as everywhere else: a group whose
+            # winning branch contains no countable clause (a bare
+            # `files_exist` alternative, say) is not countable either, and a
+            # group whose countable clauses all disclosed vacuity is vacuous.
+            _scratch: List[Dict[str, Any]] = []
+            p, _ = _evaluate_gate(project, sub, skip_analog=skip_analog,
+                                  clause_log=_scratch)
             if p:
+                _v, _n = _clause_vacuity_census(_scratch)
+                _clause(clause_log, _CLAUSE_KIND_ANY_OF,
+                        ran=bool(_n), census=bool(_n),
+                        vacuous=bool(_n) and _v == _n,
+                        detail=f"{len(gate['any_of'])} alternative(s)")
                 return True, reasons
         reasons.append(f"no sub-gate passed in any_of")
         return False, reasons
@@ -9593,7 +9785,13 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # umbrella (#632) + final_audit (#609) already honour the flag; this
         # closes the per-step optional/required gate wiring gap. No-op when
         # skip_analog is False.
-        passed, reasons = _evaluate_gate(project, gate, skip_analog=skip_analog)
+        # #901 — the clause ledger. Every LEAF clause of this step's gate
+        # registers whether it RAN and whether it disclosed vacuity, so the
+        # tier below can COUNT "every executed sub-gate was vacuous" instead
+        # of reading it off the silence of the ones that did the work.
+        clause_log: List[Dict[str, Any]] = []
+        passed, reasons = _evaluate_gate(project, gate, skip_analog=skip_analog,
+                                         clause_log=clause_log)
         _audit_produced = [rel for rel in _absent_before_gate
                            if (project / rel).exists()]
         if strict_audit_evidence and _audit_produced:
@@ -9617,14 +9815,31 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                         f"the audit's own {_rel} ({_exc}); a later audit will "
                         f"read it as run evidence")
         # Wave 93 — VACUOUS_PASS verdict tier promotion. If the gate
-        # passed AND every reason carries the __VACUOUS_HINT__ marker
-        # (and at least one was emitted), the step ran but every
-        # executed sub-gate was vacuously satisfied (its audited input
-        # didn't apply to this project). Surface that as VACUOUS_PASS
-        # so the per-step listing labels it explicitly. Filter out the
-        # internal markers before display either way.
+        # passed AND every executed sub-gate was vacuously satisfied (its
+        # audited input didn't apply to this project), surface that as
+        # VACUOUS_PASS so the per-step listing labels it explicitly. Filter
+        # out the internal markers before display either way.
+        #
+        # #901 — "every executed sub-gate" is now COUNTED (`_every_clause_
+        # vacuous` below). Until then this comment said "every" and the code
+        # said "at least one hint and no contrary reason", which is a
+        # different proposition: a sub-gate that passes SUBSTANTIVELY appends
+        # no reason, so silence was being read as agreement.
         vacuous_hints = [r for r in reasons
                          if r.startswith(_VACUOUS_HINT_PREFIX)]
+        # #901 — THE COUNT the tier was missing. `_vac_n` out of `_ran_n`
+        # clauses disclosed that they examined nothing, where `_ran_n` counts
+        # the clauses that ACTUALLY RAN, are BLOCKING (not advisory) and HAVE
+        # a vacuity channel at all. VACUOUS_PASS requires ALL of them, which
+        # is what the branch below has always CLAIMED and never CHECKED.
+        #
+        # `_ran_n == 0` is the unledgered fallback: a gate shape that reaches
+        # a tier without registering a single countable clause must not be
+        # silently re-tiered by a census that saw nothing, so the pre-#901
+        # rule stands. `_every_clause_vacuous` is then True and the branch
+        # behaves exactly as it did before.
+        _vac_n, _ran_n = _clause_vacuity_census(clause_log)
+        _every_clause_vacuous = (_ran_n == 0) or (_vac_n == _ran_n)
         # ORGANIC #608 — a gate whose evidence artifact honestly self-reports a
         # skip verdict emits a __SKIP_HINT__ marker; promote the step to
         # SKIPPED-CONDITION (not PASS, not FAIL) the same way VACUOUS_PASS is
@@ -9730,7 +9945,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"substantive: the audited artefact was absent, and the "
                     f"gate verified the equivalent by another route: "
                     f"{h[len(_SUBSTANTIVE_HINT_PREFIX):]}")
-        elif passed and vacuous_hints and not non_hint_reasons and not skip_hints:
+        elif (passed and vacuous_hints and not non_hint_reasons
+                and not skip_hints and _every_clause_vacuous):
             result.status = "VACUOUS_PASS"
             for h in vacuous_hints:
                 # Strip the internal prefix; surface a human-friendly
@@ -9740,6 +9956,28 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"vacuous: gate program signalled VACUOUS_PASS "
                     f"(input not applicable): {cmd}"
                 )
+        elif passed and vacuous_hints and not non_hint_reasons and not skip_hints:
+            # #901 — PARTIALLY vacuous, which is a PASS. Some clause of this
+            # step examined nothing and said so; the OTHERS measured real
+            # design content and, being satisfied, said nothing at all. Under
+            # the pre-#901 rule the one disclosure decided the tier and the
+            # step was labelled "ran without measuring design-bound content" —
+            # false, and expensive: a VACUOUS_PASS voids the steps that depend
+            # on it, which is how one inapplicable clause produced eight
+            # PASS_VOIDED_BY_DEPENDENCY and an overall FAIL that enumerated
+            # nothing as failed (v1.10.14, withdrawn in v1.10.18).
+            #
+            # The disclosure is NOT dropped on the floor — that is the whole
+            # doctrine of this file. It is re-stated with its DENOMINATOR, so
+            # a reviewer sees both that a clause was inapplicable and that it
+            # was not the only clause that ran.
+            result.status = "PASS"
+            for h in vacuous_hints:
+                result.reasons.append(
+                    f"partially vacuous ({_vac_n} of {_ran_n} executed gate "
+                    f"clause(s) examined nothing; the rest measured design "
+                    f"content, so the step is NOT vacuous): "
+                    f"{h[len(_VACUOUS_HINT_PREFIX):]}")
         elif passed and structure_only_hints and not non_hint_reasons:
             # The step ran and produced its declared artefact — from a library
             # default. PASS would say the artefact is design-bound; it is not.
