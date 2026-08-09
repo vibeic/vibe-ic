@@ -337,18 +337,24 @@ def _path_segments(body: str, head_layer: str,
     a partial denominator published as a clean verdict is the same defect this
     gate exists to catch, one scale down. So the abandonment is returned —
     `{via, layer_at_stop, points_read, points_unread}` — and every caller up to
-    the exit code carries it."""
+    the exit code carries it.
+
+    An abandonment is recorded only when coordinate points REMAIN. A path whose
+    unresolvable via is its last token left nothing unexamined, so reporting it
+    as abandoned reports a gap that does not exist — and because any gap forces
+    rc=2, one via-only entry withheld a verdict on the whole design. See the
+    comment at the via branch."""
     segs: List[Tuple[str, int, int, int, int]] = []
     layer = head_layer
     px: Optional[int] = None
     py: Optional[int] = None
     read = 0
 
-    def _stop(via: str, why: str) -> Tuple[List[Any], Dict[str, Any]]:
-        total = len(_PATH_POINT_RE.findall(body))
+    def _stop(via: str, why: str, unread: int
+              ) -> Tuple[List[Any], Dict[str, Any]]:
         return segs, {"via": via, "reason": why, "layer_at_stop": layer,
                       "head_layer": head_layer, "points_read": read,
-                      "points_unread": max(0, total - read)}
+                      "points_unread": unread}
 
     for tm in _PATH_TOKEN_RE.finditer(body):
         a, b, name = tm.group(1), tm.group(2), tm.group(3)
@@ -361,9 +367,32 @@ def _path_segments(body: str, head_layer: str,
             # the token is not vocabulary.
             if px is None or name.upper() in _PATH_KEYWORDS:
                 continue
+            # AN UNRESOLVABLE VIA COSTS NOTHING WHEN THE PATH ENDS AT IT.
+            # A via-only entry — `NEW <layer> 0 ( x y ) <viaName>` — is how DEF
+            # spells a bare via drop in a special net, and it is ordinary: a
+            # PDN's layer-to-layer stack is written that way. The via is the
+            # LAST token of its path, so there is no metal after it whose layer
+            # could be unknown, and a via is a point, which cannot SPAN an
+            # obstruction under any reading. Treating it as an abandoned path
+            # made this gate return rc=2 CANNOT DETERMINE for every design that
+            # contains one, i.e. for essentially every real PDN — a refusal
+            # earned by nothing that was actually left unexamined.
+            #
+            # The condition is COUNTED, not assumed: the remaining coordinate
+            # points are re-scanned from the via's own position. Where metal
+            # really does follow an unresolvable via the gap is recorded
+            # exactly as before, because that metal's layer really is unknown
+            # and this gate does not guess a layer on a verdict that blocks.
+            # Counting from the position (rather than `total - read`) also
+            # avoids the pre-existing off-by-one from a leading `*` point,
+            # which `read` never counts but `total` does.
+            unread = len(_PATH_POINT_RE.findall(body[tm.end():]))
             pair = via_layers.get(name)
             if pair is None:
-                return _stop(name, "via not defined in this DEF's VIAS section")
+                if not unread:
+                    break
+                return _stop(name, "via not defined in this DEF's VIAS section",
+                             unread)
             lo, hi = pair
             # the via connects two routing layers; move to whichever is not the
             # one we are on. If neither matches, the path is not describable.
@@ -372,7 +401,10 @@ def _path_segments(body: str, head_layer: str,
             elif layer.lower() == hi.lower():
                 layer = lo
             else:
-                return _stop(name, f"via connects {lo}/{hi}, path is on {layer}")
+                if not unread:
+                    break
+                return _stop(name, f"via connects {lo}/{hi}, path is on {layer}",
+                             unread)
             continue
         x = px if a == "*" else int(a)
         y = py if b == "*" else int(b)
