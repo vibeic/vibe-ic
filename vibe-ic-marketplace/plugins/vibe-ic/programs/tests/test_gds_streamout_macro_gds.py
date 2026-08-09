@@ -9,24 +9,45 @@ here is a synthetic generic number (68/20 design, 200/0 macro) — no vendor / S
 / design literal appears.
 """
 import importlib
+import struct
 from pathlib import Path
 
 m = importlib.import_module("gds_streamout_layermap_check")
 
 
+def _rec(rtype: int, dtype: int, body: bytes = b"") -> bytes:
+    return struct.pack(">HBB", len(body) + 4, rtype, dtype) + body
+
+
+# A structurally complete but shape-less GDSII stream: HEADER .. ENDLIB. These
+# fixtures monkeypatch the layer scan, so the BYTES only have to be a readable
+# stream — but they do have to be one, because the check now refuses to issue a
+# layer verdict about a file it cannot read through.
+_EMPTY_STREAM = b"".join([
+    _rec(0x00, 0x02, struct.pack(">h", 600)),        # HEADER
+    _rec(0x01, 0x02, struct.pack(">h", 0) * 12),     # BGNLIB
+    _rec(0x02, 0x06, b"TEST.DB"),                    # LIBNAME
+    _rec(0x03, 0x05, b"\x00" * 16),                  # UNITS
+    _rec(0x04, 0x00),                                # ENDLIB
+])
+
+
 def _patch_layers(monkeypatch, mapping):
-    """Make scan_gds_layers return a controlled layer-set per file path
-    (avoids crafting real GDS binaries; the parser itself is tested elsewhere)."""
+    """Make the GDS walk return a controlled layer-set per file path
+    (avoids crafting real GDS binaries; the parser itself is tested
+    elsewhere). `error=None` says the stream was read end to end, which is
+    what these fixtures mean by "a GDS that exists"."""
     monkeypatch.setattr(
-        m, "scan_gds_layers",
-        lambda p, *a, **k: set(mapping.get(Path(p), set())))
+        m, "scan_gds",
+        lambda p, *a, **k: m.GdsScan(layers=set(mapping.get(Path(p), set())),
+                                     records=1, error=None))
 
 
 def _files(tmp_path, names):
     out = {}
     for n in names:
         f = tmp_path / n
-        f.write_bytes(b"\x00")   # just needs .is_file() True
+        f.write_bytes(_EMPTY_STREAM)   # readable stream; layers come from the patch
         out[n] = f
     return out
 
@@ -101,9 +122,11 @@ def test_unscannable_macro_gds_warns_not_swallows(monkeypatch, tmp_path):
         p = Path(p)
         if p == f["macro.gds"]:
             raise ValueError("corrupt macro record")   # non-(OSError/struct)
-        return {f["design.gds"]: {(68, 20), (200, 0)},
-                f["lib.gds"]: {(68, 20)}}.get(p, set())
-    monkeypatch.setattr(m, "scan_gds_layers", boom)
+        return m.GdsScan(
+            layers={f["design.gds"]: {(68, 20), (200, 0)},
+                    f["lib.gds"]: {(68, 20)}}.get(p, set()),
+            records=1, error=None)
+    monkeypatch.setattr(m, "scan_gds", boom)
     fnd, st = m.audit(f["design.gds"], None, f["lib.gds"], None,
                       require_layermap=False, macro_gds=[f["macro.gds"]])
     assert any(x.category == "MACRO_GDS_UNSCANNED" for x in fnd)      # WARN
