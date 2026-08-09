@@ -543,7 +543,7 @@ def main() -> int:
                         "route-plateauing low utilization on a fixed 1500x1500 die")
     p.add_argument("--util", type=float, default=0.4)
     p.add_argument("--pdk", default="auto")
-    # vibe-ic#<new> — THE REFUSAL NAMED A FLAG THIS ENTRY POINT COULD NOT
+    # vibe-ic 87ad3dfdf — THE REFUSAL NAMED A FLAG THIS ENTRY POINT COULD NOT
     # EXPRESS. `--allow-pdk-target-mismatch` existed only on
     # phase3_one_shot_runner. This runner is the canonical front door
     # (`/vibe-ic-all`) and forwarded ONLY --allow-oss-pdk-fallback, so a

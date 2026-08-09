@@ -50,7 +50,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # ── digital clock / reset input name patterns (aligned with the plugin's
 #    existing cvdp_complete_extract convention set) ─────────────────────────
-# vibe-ic#<new> — `ck<N>` AND `phi<N>` ARE CLOCKS. They are the standard
+# vibe-ic dfa75131a — `ck<N>` AND `phi<N>` ARE CLOCKS. They are the standard
 # switched-capacitor spellings, and omitting them made a pin's CLASS depend on
 # how its designer spelled it: measured on this file before the fix, only the
 # spelling changed between the two rows —

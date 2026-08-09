@@ -356,7 +356,7 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         "model_lib": model_lib,
         "typ_section": typ_section,
         "corner_sections": ctx_json.get("corner_sections") or [],
-        # vibe-ic#<new> — every (lib, section) the emitted deck must load. Empty
+        # vibe-ic#907 — every (lib, section) the emitted deck must load. Empty
         # for a single-lib / known family, where the single `model_lib` line is
         # still correct.
         "deck_loads": [tuple(dl) for dl in (ctx_json.get("deck_loads") or [])],
@@ -487,7 +487,7 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     if not metric:
         L.append(".option scale=1u")
     section = pdkctx.get("typ_section") or ""
-    # vibe-ic#<new> — LOAD EVERY LIB THIS DECK BINDS A DEVICE FROM.
+    # vibe-ic#907 — LOAD EVERY LIB THIS DECK BINDS A DEVICE FROM.
     #
     # One `.lib` line is right only while every bound device lives in that
     # lib's closure. A family that splits actives and passives across separate

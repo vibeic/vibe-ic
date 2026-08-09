@@ -211,7 +211,7 @@ class DeckContext:
     # must be emitted in explicit metres (see render_deck). chip-AGNOSTIC.
     device_geometry_units: Dict[str, str] = field(default_factory=dict)
     unresolved_roles: List[str] = field(default_factory=list)
-    # vibe-ic#<new> — EVERY (lib, section) THE DECK MUST LOAD, in order.
+    # vibe-ic#907 — EVERY (lib, section) THE DECK MUST LOAD, in order.
     #
     # The deck used to load exactly one: `.lib <model_lib> <typ_section>`. That
     # is correct only while every bound device lives in that lib's closure. A
@@ -643,7 +643,7 @@ def _default_reader(path: str) -> Optional[str]:
 def container_reader(container: str) -> Callable[[str], Optional[str]]:
     """Host read, falling back to `docker exec <container> cat <path>`.
 
-    vibe-ic#<new> — A CONTAINER-INSTALLED PDK CANNOT BE READ FROM THE HOST.
+    vibe-ic 535f2e3fb — A CONTAINER-INSTALLED PDK CANNOT BE READ FROM THE HOST.
 
     `resolve_deck_context` accepted a `reader` and its own docstring said the
     caller supplies "local read or container read" — but every call site left
@@ -837,7 +837,7 @@ def custom_family_context(res: Dict[str, Any],
         if u:
             device_geometry_units[role] = u
 
-    # vibe-ic#<new> — THE DECK MUST LOAD EVERY LIB WHOSE DEVICES IT BINDS.
+    # vibe-ic#907 — THE DECK MUST LOAD EVERY LIB WHOSE DEVICES IT BINDS.
     #
     # The re-derivation above keeps the cross-lib UNION map whenever the primary
     # cannot cover a required role. That is the honest choice for the MAP — the
@@ -986,7 +986,7 @@ def resolve_deck_context(pdk_selector: str,
       sky130 regression bit-identical.
 
     chip-AGNOSTIC; NDA-safe (paths only)."""
-    # vibe-ic#<new>: THE DISPATCHER OWNS THE READER CHOICE.
+    # vibe-ic 535f2e3fb: THE DISPATCHER OWNS THE READER CHOICE.
     # `reader` existed and every call site left it defaulted to a HOST read,
     # so a container-installed PDK parsed as empty and reported
     # NEEDS_NATIVE_TEMPLATE — "this PDK does not ship what we need" — when it

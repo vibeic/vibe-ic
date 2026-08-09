@@ -126,7 +126,7 @@ _ORCH_REPORT_PREFERENCE = (
 _ORCH_REPORT_GLOBS = (
     "reports/orchestrator/*_one_shot.json",
     "reports/*_one_shot.json",
-    # vibe-ic#<new> — per-phase orchestrator verdicts nest one level deeper:
+    # vibe-ic c5b333d87 — per-phase orchestrator verdicts nest one level deeper:
     # `report_path` routes `analog_one_shot.json` to reports/phase3/ (its
     # _REPORT_CATEGORY is "phase3", not "orchestrator"), so the analog run
     # verdict escaped the two globs above and an analog FAIL could not block a
