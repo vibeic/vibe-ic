@@ -250,19 +250,51 @@ def _registry_entry(selector: str) -> Tuple[Optional[str], Dict[str, Any]]:
 
 
 def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
-                        ctx_device_map: Dict[str, str]
-                        ) -> Tuple[Dict[str, str], List[str]]:
-    """{role: model name} for the resolved family, plus the roles that could
-    NOT be resolved. Prefers whatever the deck-context resolver already
-    elected, then falls back to the registry's declared device list. A role
-    that resolves to nothing is reported, never substituted."""
+                        ctx_device_map: Dict[str, str],
+                        ctx_election: Optional[Dict[str, Any]] = None,
+                        ) -> Tuple[Dict[str, str], List[str],
+                                   Dict[str, Dict[str, Any]]]:
+    """{role: model name} for the resolved family, the roles that could NOT be
+    resolved, and WHERE + WHY each bound model was chosen.
+
+    Prefers whatever the deck-context resolver already elected, then falls back
+    to the registry's declared device list. A role that resolves to nothing is
+    reported, never substituted.
+
+    vibe-ic#903 — THE TWO PATHS DISAGREED ABOUT WHOSE PREFERENCE APPLIES.
+    `_ROLE_PREFER` / `_ROLE_AVOID` below ("prefer a plain core-voltage device
+    over a high-voltage / low-Vt / isolated variant … auditable instead of
+    alphabetical", `_ROLE_AVOID` literally contains `hv_`) are only reached on
+    the REGISTRY fallback — the `continue` above them takes the deck-context
+    map VERBATIM. So the stated intent was live for the known open PDKs and
+    DEAD for exactly the parsed families that can ship an HV/LV split, where
+    the pick was `sorted(names, key=(len, name))[0]` and `hv` beat `lv` because
+    `h` < `l`. The fix is at the election SITE
+    (`analog_pdk_deck_context.map_device_roles`), which now applies the same
+    intent structurally and records its basis; this function reports which path
+    bound each role and what that path's basis was, so the answer is auditable
+    end to end instead of at neither end."""
     models = [m for m in (family_entry.get("device_models") or [])
               if isinstance(m, str)]
     out: Dict[str, str] = {}
     unresolved: List[str] = []
+    election: Dict[str, Dict[str, Any]] = {}
+    ctx_election = ctx_election or {}
     for role in roles:
         if ctx_device_map.get(role):
             out[role] = ctx_device_map[role]
+            rec: Dict[str, Any] = {"device": ctx_device_map[role],
+                                   "source": "deck_context"}
+            ctx_rec = ctx_election.get(role)
+            if isinstance(ctx_rec, dict):
+                rec["basis"] = ctx_rec.get("basis")
+                rec["rejected"] = ctx_rec.get("rejected") or []
+                if ctx_rec.get("voltage_domains_available"):
+                    rec["voltage_domains_available"] = \
+                        ctx_rec["voltage_domains_available"]
+                if ctx_rec.get("note"):
+                    rec["note"] = ctx_rec["note"]
+            election[role] = rec
             continue
         toks = _ROLE_TOKENS.get(role, ())
         cands = [m for m in models
@@ -279,8 +311,18 @@ def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
             avoid = sum(1 for a in _ROLE_AVOID if a in low)
             return (exact, avoid, len(low), low)
 
-        out[role] = sorted(cands, key=rank)[0]
-    return out, unresolved
+        ordered = sorted(cands, key=rank)
+        out[role] = ordered[0]
+        election[role] = {
+            "device": ordered[0],
+            "source": "registry",
+            "basis": ("sole-candidate" if len(ordered) == 1
+                      else ("declared-preference"
+                            if rank(ordered[0])[:2] != rank(ordered[1])[:2]
+                            else "name-order")),
+            "rejected": ordered[1:],
+        }
+    return out, unresolved, election
 
 
 def resolve_pdk_context(project: Path, pdk: str, container: str,
@@ -290,6 +332,7 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
     gets one foundry's device tokens against another's model lib."""
     ctx_json: Dict[str, Any] = {}
     device_map: Dict[str, str] = {}
+    device_election: Dict[str, Any] = {}
     model_lib: Optional[str] = None
     typ_section: Optional[str] = None
     device_terminals: Dict[str, int] = {}
@@ -340,6 +383,7 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         model_lib = ctx_json.get("model_lib")
         typ_section = ctx_json.get("typ_section")
         device_map = dict(ctx_json.get("device_map") or {})
+        device_election = dict(ctx_json.get("device_election") or {})
         device_terminals = dict(ctx_json.get("device_terminals") or {})
         geometry_units = dict(ctx_json.get("device_geometry_units") or {})
         work_items = list(ctx_json.get("work_items") or [])
@@ -348,7 +392,8 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         work_items = [f"deck-context resolver unavailable: {exc}"]
 
     fam_name, fam_entry = _registry_entry(family or pdk)
-    models, unresolved = resolve_role_models(fam_entry, roles, device_map)
+    models, unresolved, role_election = resolve_role_models(
+        fam_entry, roles, device_map, device_election)
     return {
         "status": status,
         "family": family,
@@ -361,6 +406,11 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         # still correct.
         "deck_loads": [tuple(dl) for dl in (ctx_json.get("deck_loads") or [])],
         "role_models": models,
+        # vibe-ic#903 — per role: which path bound the model (deck_context vs
+        # registry) and on what basis. An election that cannot be read back is
+        # indistinguishable from an alphabetical accident, which is what the
+        # deck-context path was.
+        "role_model_election": role_election,
         "unresolved_roles": unresolved,
         "device_terminals": device_terminals,
         "geometry_units": geometry_units,
