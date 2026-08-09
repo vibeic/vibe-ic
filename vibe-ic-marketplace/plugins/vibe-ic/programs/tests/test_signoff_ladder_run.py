@@ -179,6 +179,38 @@ class TestEMDensityTier:
         r = mod.check_tier_2_em(tmp_path)
         assert r.verdict == "FAIL"
 
+    # -- via/cut EM through the tier, on the shape the producer emits --------
+    # A via segment names only its two METAL endpoints; the cut layer carrying
+    # the current appears nowhere in the report. The tier used to drop every
+    # such segment and still report PASS.
+    _STACK_TLEF = (
+        "LAYER lyr1\n  TYPE ROUTING ;\n  WIDTH 0.14 ;\n  THICKNESS 0.35 ;\n"
+        "  DCCURRENTDENSITY AVERAGE 2.8 ;\nEND lyr1\n\n"
+        "LAYER cut12\n  TYPE CUT ;\n"
+        "  DCCURRENTDENSITY AVERAGE 0.29 ;\nEND cut12\n\n"
+        "LAYER lyr2\n  TYPE ROUTING ;\n  WIDTH 0.14 ;\n  THICKNESS 0.35 ;\n"
+        "  DCCURRENTDENSITY AVERAGE 2.8 ;\nEND lyr2\n")
+
+    def _via_project(self, tmp_path, current_a):
+        _write(tmp_path / "reports/phase3/em_segments.csv",
+               _EM_HEADER + f"lyr1,0,0,lyr2,1,0,{current_a}\n")
+        _write(tmp_path / "pdk/stack.tlef", self._STACK_TLEF)
+        return tmp_path
+
+    def test_via_over_cut_jmax_fails_the_tier(self, tmp_path):
+        # 9.0e-4 A vs cut12's 2.9e-4 A/cut → 3.1x over.
+        r = mod.check_tier_2_em(self._via_project(tmp_path, 9.0e-4))
+        assert r.verdict == "FAIL"
+        assert r.details["em_verdict"] == "FAIL"
+        assert r.details["summary"]["segments_unscreened"] == 0
+        assert "cut12" in r.details["summary"]["per_layer"]
+
+    def test_via_under_cut_jmax_passes_the_tier(self, tmp_path):
+        r = mod.check_tier_2_em(self._via_project(tmp_path, 1.0e-5))
+        assert r.verdict == "PASS"
+        assert r.details["em_verdict"] == "PASS"
+        assert r.details["summary"]["screened_by_basis"] == {"per_cut": 1}
+
 
 class TestLVSTapeoutTier:
     def test_genuine_match_pass(self, tmp_path):
