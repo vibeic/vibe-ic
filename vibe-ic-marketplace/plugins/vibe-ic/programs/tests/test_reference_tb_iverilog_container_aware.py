@@ -79,12 +79,24 @@ def test_container_absent_but_host_present_is_available(monkeypatch):
 # --------------------------------------------------------------------------
 # _iverilog_exec_container — WHERE compile+run execute
 # --------------------------------------------------------------------------
-def test_exec_on_host_when_host_has_iverilog(monkeypatch):
-    """Host has it -> run on host (no docker round-trip), even with a
-    container supplied."""
+def test_exec_in_container_even_when_host_also_has_iverilog(monkeypatch):
+    """#902 REVERSED THIS EXPECTATION, deliberately.
+
+    This test used to assert host-first ("host has it -> run on host, even
+    with a container supplied"). That is precisely the defect #902 reports:
+    the run VERIFIES which image `--container` executes and then simulates
+    somewhere else, so the same RTL was compiled by Icarus 11.0, 12.0 or 14.0
+    depending only on what the operating system had installed. The saved
+    docker round-trip is not worth an unattributable result.
+
+    The rule is now CONTAINER-FIRST: a supplied container that carries
+    iverilog is where the sim runs. Host execution remains reachable and is
+    covered by the tests below and in
+    test_issue902_pinned_image_used_for_simulation.py."""
     monkeypatch.setattr("shutil.which", lambda _t: "/usr/bin/iverilog")
     monkeypatch.setattr(dosr, "_tool_in_container", lambda c, t: True)
-    assert dosr._iverilog_exec_container("c") is False
+    monkeypatch.setattr(dosr, "_path_in_container", lambda p, c: True)
+    assert dosr._iverilog_exec_container("c") is True
 
 
 def test_exec_in_container_when_only_container_has_iverilog(monkeypatch):

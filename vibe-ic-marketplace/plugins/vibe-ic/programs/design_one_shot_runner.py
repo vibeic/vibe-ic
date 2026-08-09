@@ -577,11 +577,18 @@ def _tool_in_container(container: str, tool: str) -> bool:
 # iverilog would still never run.
 #
 # These helpers make availability AND execution container-aware: prefer the
-# container; fall back to the host only when the host actually has iverilog
-# (true host mode / mixed installs). Honesty preserved: when iverilog is
-# absent in BOTH the (supplied) container AND the host, availability is
-# False and the deterministic no-sim fallback still fires. chip-AGNOSTIC:
-# pure host/container tool-locality plumbing, no chip/PDK literal.
+# container; fall back to the host only when the container cannot do the job
+# (no iverilog in it, or it cannot see the project tree). Honesty preserved:
+# when iverilog is absent in BOTH the (supplied) container AND the host,
+# availability is False and the deterministic no-sim fallback still fires.
+#
+# #902 — the execution half used to be HOST-first while the availability half
+# was already CONTAINER-first, so on any host with an `iverilog` on $PATH the
+# run VERIFIED an image (`--require-image`) and then simulated somewhere else.
+# The two halves now agree, and `_record_sim_toolchain` writes which side
+# actually ran, identified by the image's content-addressed digest.
+# chip-AGNOSTIC: pure host/container tool-locality plumbing, no chip/PDK
+# literal.
 # -------------------------------------------------------------------------
 def _iverilog_available(container: str) -> bool:
     """Container-aware iverilog availability for the reference-TB sim gates.
@@ -596,16 +603,108 @@ def _iverilog_available(container: str) -> bool:
     return bool(_shutil.which("iverilog"))
 
 
-def _iverilog_exec_container(container: str) -> bool:
+#: Per-container image identity, resolved at most once per process. A sim
+#: makes several `_run_iverilog_stage` calls (compile, sv2v retry, vvp) and
+#: the identity cannot change under a running container, so one probe is
+#: enough. Keyed by container name; the value is the record shape returned by
+#: `container_image_provenance.inspect_container`.
+_SIM_IMAGE_IDENTITY_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _iverilog_exec_container(container: str,
+                             run_dir: Optional[Path] = None) -> bool:
     """True iff the iverilog/vvp compile+run must be DISPATCHED INTO
-    `container` (the host has no iverilog but the container does). When the
-    host has iverilog we keep the historical host execution (no docker
-    round-trip); the caller only reaches execution when `_iverilog_available`
-    already said yes, so 'not host' here implies 'container'."""
-    import shutil as _shutil
-    if _shutil.which("iverilog"):
+    `container` — i.e. into the image the run PINNED and VERIFIED.
+
+    #902. This used to answer HOST-FIRST: any host with an `iverilog` anywhere
+    on $PATH ran the sim on the host, so `--require-image` was verified at the
+    top of the run (`vibe_ic_one_shot_runner._capture_container_image`) and
+    then not used for the one thing it exists to pin. MEASURED across five
+    machines on 2026-08-10, same plugin, same pinned container:
+
+        no host-side iverilog      -> container Icarus 14.0 (devel)
+        /usr/local/bin/iverilog    -> HOST      Icarus 12.0 (stable)
+        /usr/bin/iverilog          -> HOST      Icarus 11.0 (stable)
+
+    Three different Icarus MAJORS compiling the same RTL, selected by what the
+    operating system happened to have installed — so a cross-host result
+    difference could not be attributed to the design.
+
+    The order is now CONTAINER-FIRST, which also makes it agree with
+    `_iverilog_available` (that one already preferred the container): when a
+    container is supplied and carries iverilog, that is where the sim runs,
+    whatever the host also has.
+
+    ONE documented exception, so the fix cannot break a working config:
+    `--container` may name a container with NO bind-mount covering `run_dir`,
+    where dispatching would only fail on missing files. In that case — and
+    only when the host can actually run the sim — execution stays on the host.
+    `run_dir=None` skips that check.
+
+    chip-AGNOSTIC: pure tool-locality plumbing, no chip/PDK/vendor literal."""
+    if not container:
         return False
-    return bool(container) and _tool_in_container(container, "iverilog")
+    if not _tool_in_container(container, "iverilog"):
+        return False
+    if run_dir is not None and not _path_in_container(str(run_dir), container):
+        import shutil as _shutil
+        if _shutil.which("iverilog"):
+            # The container cannot SEE the project tree; the host can run it.
+            return False
+    return True
+
+
+def _sim_image_identity(container: str) -> Dict[str, Any]:
+    """Resolve `container`'s image identity (cached). Never raises."""
+    if container in _SIM_IMAGE_IDENTITY_CACHE:
+        return _SIM_IMAGE_IDENTITY_CACHE[container]
+    try:
+        import container_image_provenance as _cip
+        ident = dict(_cip.inspect_container(container))
+    except Exception as exc:                                    # noqa: BLE001
+        ident = {"status": "identity_error",
+                 "error": f"{type(exc).__name__}: {exc}"}
+    _SIM_IMAGE_IDENTITY_CACHE[container] = ident
+    return ident
+
+
+def _record_sim_toolchain(run_dir: Path, container: str,
+                          where: str) -> Dict[str, Any]:
+    """#902 — record WHICH iverilog actually compiled/ran this stage, into
+    `run_dir/sim_toolchain.json`, so a cross-host result difference is
+    ATTRIBUTABLE instead of argued about.
+
+    When the stage runs in the container the record's identity field is the
+    image's CONTENT-ADDRESSED id (`image_id`, a sha256 digest). The tag is
+    recorded too but under `image_ref_mutable_tag`, because a tag is not an
+    identity: MEASURED on one fleet host, the container literally named
+    `vibeic-eda` was running tag 0.2.75 while other containers on the SAME host
+    ran 0.2.78, and the local `vibeic-eda:latest` tag resolved to a third,
+    different image id.
+
+    Returns the record (also written to disk). Never raises — a provenance
+    hiccup must not fail a sim. chip-AGNOSTIC."""
+    rec: Dict[str, Any] = {"exec": where, "container": container or None}
+    if where == "container":
+        ident = _sim_image_identity(container)
+        if ident.get("status") == "ok":
+            rec["image_id"] = ident.get("image_id")
+            rec["image_ref_mutable_tag"] = ident.get("image_ref")
+        else:
+            rec["image_identity_unresolved"] = ident.get("status") or "unknown"
+    else:
+        import shutil as _shutil
+        rec["iverilog_path"] = _shutil.which("iverilog")
+    try:
+        # Write only into a run_dir the caller already created (every real
+        # call site mkdir()s it before compiling). Provenance must not
+        # have filesystem side effects of its own.
+        if run_dir.is_dir():
+            (run_dir / "sim_toolchain.json").write_text(
+                json.dumps(rec, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+    return rec
 
 
 def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
@@ -621,10 +720,12 @@ def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
     cwd is the translated `run_dir` so `$readmem*` relative loads resolve, and
     `/foss/tools/bin` is put on PATH so the fork's iverilog/vvp are found.
     chip-AGNOSTIC."""
-    if not _iverilog_exec_container(container):
-        # host execution (unchanged); a plain argv passes through _run's
+    if not _iverilog_exec_container(container, run_dir):
+        # host execution; a plain argv passes through _run's
         # docker-exec-deadline rewriter untouched.
+        _record_sim_toolchain(run_dir, container, "host")
         return _run(argv, cwd=run_dir, timeout=timeout)
+    _record_sim_toolchain(run_dir, container, "container")
     import shlex as _shlex
     c_dir = _to_container_path(str(run_dir), container)
     c_argv = " ".join(_shlex.quote(_to_container_path(tok, container))
