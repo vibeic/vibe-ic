@@ -35,6 +35,12 @@ operator's mental model):
   * path not found at all                               → rc 2 (IO/arg)
   * EXPLICIT honest-skip marker + no droop value        → SKIPPED_CONDITION (rc 0)
 
+The `<report>` argument may name a DIRECTORY; it is then searched (recursively,
+`_DIR_REPORT_PATTERNS`) for a dynamic-IR report and the verdict comes from the
+report that search found — so a directory holding an over-budget report FAILs
+(rc 1). Only a search that actually ran and found nothing yields "directory
+with no dynamic-IR report" (rc 2). The static `ir_drop.json` never matches.
+
 Skip is recognised ONLY by an explicit marker (a `status` in _SKIP_STATUS_VALUES,
 or `dynamic_ir_report_emitted:false`) that the VCD-vectored emitter
 (dynamic_ir_vectored_emit.py) writes when there is genuinely no switching profile
@@ -146,23 +152,65 @@ def _extract_from_rpt(text: str) -> Optional[float]:
     return best
 
 
+# Patterns tried, in order, when the `report` argument names a DIRECTORY (the
+# CLI documents "<report> ... or a directory"). A STATIC `ir_drop.json` matches
+# none of them on purpose: a static report must never be resolved as a dynamic
+# sign-off (§4.05), which is why this is an allow-list of dynamic-ONLY names
+# rather than "any *.json in the directory".
+_DIR_REPORT_PATTERNS: Tuple[str, ...] = (
+    "*dynamic*ir*.json", "*transient*.json", "*dvd*.json",
+    "*dynamic*ir*.rpt", "*transient*.rpt",
+)
+
+
+def _resolve_report(report: Path) -> Tuple[Optional[Path], Optional[str]]:
+    """Resolve the `report` argument to a readable FILE.
+
+    Returns ``(file, None)`` on success, else ``(None, error)``.
+
+    A DIRECTORY is SEARCHED — that is the documented affordance. The search
+    used to be unreachable: the rglob sat under ``if not report.exists():``,
+    and a path that does not exist can never be a directory (both answers come
+    from the same stat), so for every real invocation the directory branch was
+    dead code and the gate answered "<dir> is a directory with no dynamic-IR
+    report" without ever having looked. A directory holding an over-budget
+    dynamic-IR report therefore returned IO_ERROR (rc 2) instead of FAIL
+    (rc 1) — the budget comparison was never reached. That message is now
+    EARNED: it is returned only after the search actually ran and came up
+    empty.
+
+    ``Path.exists()`` / ``is_dir()`` raise on EACCES (pathlib only swallows
+    ENOENT / ENOTDIR / EBADF / ELOOP), so the stat is guarded: an unreadable
+    path is an honest IO_ERROR, not an uncaught traceback out of the gate.
+    """
+    try:
+        if report.is_file():
+            return report, None
+        is_dir = report.is_dir()
+    except OSError as e:                      # EACCES, ENAMETOOLONG, ...
+        return None, f"cannot stat dynamic-IR report path {report}: {e}"
+    if not is_dir:
+        return None, f"dynamic-IR report not found at {report}"
+    for pat in _DIR_REPORT_PATTERNS:
+        try:
+            hits = [h for h in report.rglob(pat) if h.is_file()]
+        except OSError as e:
+            return None, f"cannot search {report} for a dynamic-IR report: {e}"
+        if hits:
+            # Shallowest first, then lexicographic, so a canonical
+            # reports/phase3/dynamic_ir.json wins over a deeper stray copy.
+            hits.sort(key=lambda p: (len(p.parts), str(p)))
+            return hits[0], None
+    return None, (f"{report} is a directory with no dynamic-IR report "
+                  f"(searched {', '.join(_DIR_REPORT_PATTERNS)})")
+
+
 def check(report: Path, vdd: Optional[float],
           budget_pct: Optional[float] = None) -> Dict[str, object]:
-    if not report.exists():
-        # search a dir for a dynamic-IR report
-        if report.is_dir():
-            for pat in ("*dynamic*ir*.json", "*transient*.json", "*dvd*.json",
-                        "*dynamic*ir*.rpt", "*transient*.rpt"):
-                hits = sorted(report.rglob(pat))
-                if hits:
-                    report = hits[0]
-                    break
-        if not report.is_file():
-            return {"verdict": "IO_ERROR",
-                    "error": f"dynamic-IR report not found at {report}"}
-    if report.is_dir():
-        return {"verdict": "IO_ERROR",
-                "error": f"{report} is a directory with no dynamic-IR report"}
+    resolved, resolve_error = _resolve_report(report)
+    if resolved is None:
+        return {"verdict": "IO_ERROR", "error": resolve_error}
+    report = resolved
     try:
         raw = report.read_text(errors="replace")
     except OSError as e:
