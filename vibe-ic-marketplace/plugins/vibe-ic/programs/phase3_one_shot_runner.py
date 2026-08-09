@@ -6932,6 +6932,32 @@ def macro_lef_layer_compat_guard(
     declared by the target PDK's tech LEF (or its cell LEF, for libraries that
     declare layers there). Otherwise this returns a loud refusal.
 
+    THE OBS-ONLY BRANCH WARNS RATHER THAN REFUSES, AND ITS ORIGINAL REASONING
+    WAS WRONG ABOUT THE COST. That branch was added to clear a real false
+    positive: a hard macro whose pins are all on declared metal and which
+    references a LEF-reserved layer type ONLY inside its OBS section was
+    halting phase3 for nothing. The pin half of that reasoning is correct and
+    is why the branch stays non-fatal. The obstruction half said the reader
+    "will drop the obstruction rectangle(s) on the undeclared layer" and that
+    "a CLASS BLOCK macro already blocks its own footprint, so the physical
+    result is unchanged". MEASURED against the reader, on exactly the shape
+    this file's own test pins — OBS opening on an undeclared layer, then a
+    full-footprint rect on a DECLARED layer, then another on a second declared
+    layer:
+
+        nObstructions = 0        (not 2)
+        nTerms        = 1        (the pin survives — that half was right)
+
+    The section is discarded IN FULL. The rectangles on declared layers are
+    lost with it, so the macro loads with NO obstruction geometry on ANY
+    layer, and the second clause's premise — that something else still blocks
+    the footprint — has nothing left to stand on. The disclosure below states
+    the measured behaviour instead. Whether this branch should now REFUSE
+    rather than warn is a live question and deliberately not decided here:
+    flipping it re-introduces the halt it was added to remove, and the
+    blocking verdict belongs in `macro_obs_load_parity_check`, which measures
+    the loss directly and is wired as a gate.
+
     NOT a substitution: this guard never renames, remaps or invents a layer.
     Remapping `metal3 -> Metal3` would silently re-cut another PDK's abstract
     onto this PDK's stack at a pitch it was never drawn for; the honest
@@ -6969,22 +6995,31 @@ def macro_lef_layer_compat_guard(
             # risk (the shape is dropped and that pin is unroutable).
             offenders.append((mlef, pin_unknown))
         elif obs_unknown:
-            # Undeclared layers appear ONLY in the OBS obstruction section →
-            # NOT fatal: no pin geometry is dropped, and a CLASS BLOCK macro
-            # already blocks its own footprint. Warn, do not refuse.
+            # Undeclared layers appear ONLY in the OBS obstruction section.
+            # Still not PIN-fatal — no pin geometry is dropped — but see the
+            # corrected disclosure below: the cost is NOT limited to the
+            # entries that named the undeclared layer.
             obs_only.append((mlef, obs_unknown))
     if obs_only and not offenders:
         for mlef, layers in obs_only:
             print(
                 "[WARN] phase3 hard-macro OBS-only undeclared layer(s) "
                 + ", ".join(layers)
-                + f" in {mlef} — NOT refused. These appear only in the "
-                "macro's OBS obstruction section, never in a PIN PORT, so no "
-                "pin geometry is dropped. OpenROAD will drop the obstruction "
-                "rectangle(s) on the undeclared layer; a CLASS BLOCK macro "
-                "already blocks its own footprint, so the physical result is "
-                "unchanged. (Supply an abstract cut for this stack, or add the "
-                "layer to the tech LEF, to silence this.)",
+                + f" in {mlef} — NOT refused, because no PIN PORT geometry is "
+                "dropped and the macro's pins stay routable. BUT THE "
+                "OBSTRUCTION COST IS TOTAL, NOT PARTIAL. MEASURED against the "
+                "reader: an OBS section containing ONE unresolvable layer is "
+                "discarded IN FULL — a macro declaring 64 OBS rectangles, of "
+                "which one named an undeclared layer, loaded with 0. The "
+                "rectangles on layers the tech LEF DOES declare go with it. "
+                "So this macro loads with the correct outline, intact pins, "
+                "and NO obstruction geometry on any layer, and every "
+                "downstream stage treats its footprint as free area: "
+                "follow-pins, straps and vias are emitted across it — metal "
+                "that is illegal AND does not connect. `macro_obs_load_parity_"
+                "check` measures this directly and BLOCKS on it. (Supply an "
+                "abstract cut for this stack, or add the layer to the tech "
+                "LEF, to silence this.)",
                 file=sys.stderr)
     if not offenders:
         return None
