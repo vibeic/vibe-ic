@@ -304,7 +304,9 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
 
-**504 cells: 481 ENFORCED, 11 WAIVED, 12 NA.**
+**504 cells: 455 ENFORCED, 26 ENFORCED-CONTRADICTED, 11 WAIVED, 12 NA.**
+
+The 26 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 455: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
 `ENFORCED` is published SPLIT, because it is not one thing. It means a live predicate ran and passed; it does not say WHAT it ran against, and that turns out to be three different answers:
 

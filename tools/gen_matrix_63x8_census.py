@@ -98,7 +98,21 @@ def _load():
 def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
     """``([per-dimension row], totals)`` recomputed from the live suite."""
     CV, SUB, DIMENSIONS, NAMES, QUESTIONS = _load()
-    states = CV.state_census()
+    # vibe-ic#898 — QUOTE THE TWO-AXIS CENSUS, NOT THE CONFIGURATION AXIS.
+    #
+    # This generator shipped calling state_census(), which is the exact thing
+    # that function's own docstring forbids: "Quoting `ENFORCED: N` from this
+    # dict is what ORGANIC-20260808 reported - on 2026-08-08 it read 481 while
+    # 26 of those 481 cells were failing. Use enforcement_census() for anything
+    # a reader will quote."
+    #
+    # So #889 (make the table generated) rebuilt the erasure #888 (a red
+    # predicate cannot count as ENFORCED) had just closed, and landed in the
+    # SAME batch. On one commit `--check` printed [PASS] ... 481 while
+    # test_no_cell_is_counted_enforced_while_its_predicate_is_red FAILED.
+    # A generated number is only better than a hand-written one if it is
+    # generated from the right source.
+    states = {k: v.label for k, v in CV.enforcement_census().items()}
     subs = CV.substitution_census()
     rows: List[Dict] = []
     for dim in DIMENSIONS:
@@ -112,12 +126,13 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
             "substituted": buckets.count(SUB.SUBSTITUTED),
             "undeclared": buckets.count(SUB.UNDECLARED_BUCKET),
             "enforced": per.count("ENFORCED"),
+            "contradicted": per.count("ENFORCED-CONTRADICTED"),
             "waived": per.count("WAIVED"),
             "na": per.count("NA"),
         })
     totals = {k: sum(r[k] for r in rows)
               for k in ("own", "substituted", "undeclared",
-                        "enforced", "waived", "na")}
+                        "enforced", "contradicted", "waived", "na")}
     totals["cells"] = len(states)
     return rows, totals
 
@@ -125,9 +140,25 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
 def render(rows: List[Dict], totals: Dict[str, int]) -> str:
     """The generated block, marker to marker. No timestamp: see WHAT IT REFUSES."""
     out: List[str] = [BEGIN, ""]
+    # #898: the headline must RECONCILE. Printing enforced/waived/na alone left
+    # the contradicted cells out of a line that reads like a partition, so the
+    # numbers silently failed to add to the total — the same erasure by omission
+    # the split below exists to prevent, one line higher.
+    _sum = (totals['enforced'] + totals['contradicted']
+            + totals['waived'] + totals['na'])
+    if _sum != totals['cells']:
+        raise SystemExit(
+            f"census does not partition: {_sum} != {totals['cells']}")
     out.append(
         f"**{totals['cells']} cells: {totals['enforced']} ENFORCED, "
+        f"{totals['contradicted']} ENFORCED-CONTRADICTED, "
         f"{totals['waived']} WAIVED, {totals['na']} NA.**")
+    out.append("")
+    out.append(
+        f"The {totals['contradicted']} CONTRADICTED cells are configured as "
+        f"enforcing while their own predicate is currently RED. They are NOT "
+        f"folded into the {totals['enforced']}: a cell whose predicate fails is "
+        f"not evidence of enforcement. See vibe-ic#888.")
     out.append("")
     out.append(
         f"`ENFORCED` is published SPLIT, because it is not one thing. It means "
