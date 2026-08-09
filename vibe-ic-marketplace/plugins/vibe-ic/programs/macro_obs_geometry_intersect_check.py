@@ -114,11 +114,25 @@ a staged macro LEF need not be named `macro*`, so discovery decided the verdict
 at least as much as the geometry did. A file's content answers "does this
 define a MACRO" directly; its path and name only guess at it.
 
-WHAT THIS FILE DOES NOT DO. It is not registered in
-`flow/phase1_phase2_phase3.yaml` and no runner invokes it; its only caller is
-`tools/ci/repo_hygiene_gates.sh`, under `run_tolerating_uncheckable`, over the
-tracked cells carrying `phase3/stage3/pnr/routed.def`. See #828 part 2 — not
-addressed here.
+WHERE IT RUNS (#828 part 2, closed). This file used to say: "It is not
+registered in `flow/phase1_phase2_phase3.yaml` and no runner invokes it; its
+only caller is `tools/ci/repo_hygiene_gates.sh`." A gate that declares itself
+BLOCKING and that no flow step runs enforces nothing on a real design — it
+reproduced this defect in seconds on a routed DEF and was never asked to.
+
+It is now a gate leg of STEP 21 (Routing), the step that PRODUCES routed.def,
+so the metal it examines exists by the time it is asked. It is conditioned on
+its own precondition — that the project stages a LEF to read — because that is
+the one input without which it can say nothing at all; every OTHER refusal it
+makes (an incomplete LEF set, discarded OBS evidence, a truncated read) still
+reaches the flow as rc=2 -> VACUOUS_PASS and is disclosed rather than passed.
+The CI caller in `tools/ci/repo_hygiene_gates.sh` is unchanged and still sweeps
+the tracked cells.
+
+SEE ALSO `macro_obs_load_parity_check`, which asks the prior question this gate
+cannot: whether the obstructions this file PARSES are the obstructions the tool
+LOADED. This gate reads the LEF with the plugin's own parser, so on a design
+whose OBS section the reader discarded it measures geometry the run never had.
 """
 from __future__ import annotations
 
