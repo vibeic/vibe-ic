@@ -58,35 +58,82 @@ L7_TEST_MODE_NOT_ENTERABLE  (WARN)
     signals and no entry sequence — a mode nobody can enter is prose,
     not a requirement.
 
-DOES IT BLOCK?
-==============
-**IT ADVISES. It never blocks by default (always exits 0).**
+DOES IT BLOCK? — AND THE DEFECT THAT ANSWER USED TO HIDE
+========================================================
+**IT ADVISES — because of the SLOT it is wired into, not because of its
+exit code.**
 
-The reason is the principle itself, applied without flinching: blocking
-a flow on a layer whose every reader is phase1 bookkeeping would stop
-production runs to protect nothing. The findings are real, but their
-consequence lives in L1/L9, and those layers have their own blocking
-gates (``l9_rtl_pin_consistency_check`` is the one that actually diffs
-the port set against the RTL top).
+It is wired at flow step D1 as::
 
-``--strict`` flips it to exit 1. That flag exists so that the DAY a
-consumer is wired to L7 — a DFT flow reading the TAP pin list, an
-``eda_dft`` invocation keyed off ``test_modes[]`` — this gate becomes a
-blocker with a one-flag change instead of a rewrite. Until then,
-claiming it blocks would be the dishonest option.
+    - advisory_program_exit_zero: "l7_debug_access_grounding_check ."
+
+``flow_compliance_check._evaluate_gate``'s advisory branch RUNS the
+program, RECORDS the verdict, and returns ``True`` unconditionally — it
+cannot fail a step. That slot, and nothing else, is what makes this gate
+non-blocking.
+
+THE DEFECT (fixed here). Every earlier version returned 0 unless
+``--strict`` was passed, and NO caller passes it: the flow wiring above
+is the program's only invocation and carries neither ``--strict`` nor
+``--json``. The advisory slot reads ONLY the exit code — rc 0 records
+``ADVISORY: ok:`` and DISCARDS the program's stdout entirely; rc 1
+records ``ADVISORY: FINDING: <cmd> :: <output>``; rc 2 records
+``ADVISORY: n/a (input not present)``. So of the three outcomes that slot
+can record, this gate could only ever produce the first. A project whose
+L7 named a dozen debug pins that exist in no pin table was recorded
+``GATE_RAN l7_debug_access_grounding_check rc=0 PASS``, identical to one
+that was examined and found correct, and the ``ADVISE — N finding(s)``
+line the program printed reached nothing. The ``FAIL`` verdict it
+printed under ``--strict``, and the ``blocks: true`` it wrote, were
+reachable only from its own unit test.
+
+WHY THE FIX IS THE DEFAULT AND NOT THE CALL SITE. Suppressing the exit
+code never prevented blocking — the slot does that — it prevented
+REPORTING. Adding ``--strict`` to the one flow line would have fixed one
+call site and left the program lying to every other caller and to anyone
+running it by hand. So the exit code is now always the verdict, which is
+also what every peer per-layer gate in the same advisory slot already
+did (``l16_``, ``l17_``, ``l21_macro_supply_rail_declared``,
+``l8_sta_clock_period_design_owned``, ``l9_floorplan_contract``,
+``l8_clock_period_actionability`` all return 1 on findings by default).
+This gate was the odd one out.
+
+The findings stay WARN and their consequence still lives in L1/L9, which
+have their own blocking gates (``l9_rtl_pin_consistency_check`` is the
+one that actually diffs the port set against the RTL top). Nothing here
+makes a run red: the advisory slot cannot fail a step.
+
+TWO FURTHER VERDICT CHANNELS THAT WERE ALSO DEAD
+================================================
+* The genuine skip branches (no L7 document, unparseable L7, waiver)
+  wrote ``skipped_reason``, printed ``skipped:`` and returned 0 — the
+  ``structured-skip-not-read-back`` shape ``_vacuous_exit`` exists for.
+  A project with NO L7 at all was credited the same green as one that
+  was examined. They now route through ``_vacuous_exit.exit_code`` to
+  rc 2, so the slot records ``n/a`` instead of ``ok``.
+* "L7 names access points but no pin-bearing layer declares anything"
+  used to set the SAME ``skipped_reason``, and ``main`` returned 0 on it
+  BEFORE printing any finding — so a project in that state could not
+  report an ungrounded debug register or a non-enterable test mode
+  either, even though both rules had already run and both had put their
+  findings in the report. That state is now recorded as a per-rule
+  ``rules_not_applicable`` note; it no longer speaks for the program.
 
 SWEEP / FALSE POSITIVES
 =======================
 Swept over every ``phase1/generated_docs`` tree reachable on the fleet.
-Zero false positives. The negative-control smoke test proves both
-directions on synthesized neutral fixtures (no real design's files are
-copied).
+Zero false positives. The negative-control smoke test proves every
+direction on synthesized neutral fixtures (no real design's files are
+copied), and drives the real flow-engine advisory clause so that
+"reachable" is asserted where the verdict is actually read.
 
 Usage:
     python3 l7_debug_access_grounding_check.py <project_dir> \
-        [--json report.json] [--strict]
+        [--json report.json]
 
-Exit codes: 0 PASS / advisory / skip | 1 FAIL (only with --strict)
+Exit codes: 0 PASS (examined the design, every claim grounded)
+            | 1 findings (recorded; the advisory slot does not block)
+            | 2 examined nothing (no/unparseable L7, or waived)
             | 2 project not found
 """
 from __future__ import annotations
@@ -102,6 +149,8 @@ from typing import Any, Optional
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
+
+import _vacuous_exit as _vx  # noqa: E402  (needs the sys.path insert above)
 
 WAIVER_ID = "l7_debug_access_grounding_override"
 WAIVER_MIN_CHARS = 40
@@ -298,6 +347,16 @@ def _waiver_rationale(project: Path, waiver_id: str) -> str:
     return ""
 
 
+def _mark_vacuous(summary: dict, token: str, sentence: str) -> None:
+    """Record that the gate examined NOTHING, in the shape `_vacuous_exit`
+    reads back. `token` is the machine-readable reason; `sentence` is the
+    human one. Only the three genuine early returns may call this — a rule
+    that could not judge is `rules_not_applicable`, not this."""
+    summary["skipped"] = True
+    summary["reason"] = token
+    summary["skipped_reason"] = sentence
+
+
 def inspect(project: Path) -> tuple[list[Finding], dict]:
     findings: list[Finding] = []
     summary: dict = {
@@ -307,7 +366,17 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
         "debug_registers": 0,
         "register_namespace_size": 0,
         "test_modes": 0,
+        # `skipped` / `reason` are the pair `_vacuous_exit` routes: they mean
+        # "this gate examined NOTHING", and only the three early returns below
+        # may set them. `skipped_reason` stays as the human sentence.
+        "skipped": False,
+        "reason": "",
         "skipped_reason": "",
+        # A rule that had no namespace to judge against. NOT a program-level
+        # skip: the other rules still ran and their findings still count. It
+        # used to share `skipped_reason`, which made `main` return before
+        # printing them — see the module docstring.
+        "rules_not_applicable": [],
         "waiver": "",
         "consumer_note": (
             "L7 has no downstream consumer; this gate cross-checks L7's "
@@ -319,18 +388,21 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
     if not l7_path.is_file():
         cands = sorted(gd.glob("L7_*.json"))
         if not cands:
-            summary["skipped_reason"] = "no L7 document in project"
+            _mark_vacuous(summary, "no-l7-document",
+                          "no L7 document in project")
             return findings, summary
         l7_path = cands[0]
     l7 = _read_json(l7_path)
     if not l7:
-        summary["skipped_reason"] = f"{l7_path.name} is empty or unparseable"
+        _mark_vacuous(summary, "l7-unreadable",
+                      f"{l7_path.name} is empty or unparseable")
         return findings, summary
 
     waiver = _waiver_rationale(project, WAIVER_ID)
     summary["waiver"] = waiver
     if waiver:
-        summary["skipped_reason"] = f"waiver {WAIVER_ID}: {waiver[:80]}"
+        _mark_vacuous(summary, "waived",
+                      f"waiver {WAIVER_ID}: {waiver[:80]}")
         return findings, summary
 
     points = _access_points(l7)
@@ -363,9 +435,17 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
                 where=", ".join(wheres),
             ))
     elif points and not pin_ns:
-        summary["skipped_reason"] = (
-            "L7 names access points but no pin-bearing layer declares any "
-            "identifier to ground them against — nothing to check")
+        # ONE RULE cannot judge. That is not the program examining nothing:
+        # the register rule and the test-mode rule below still run, and a
+        # finding from either is a real finding. Writing this into
+        # `skipped_reason` (as this branch used to) made `main` print
+        # `skipped:` and return 0 BEFORE those findings were ever printed.
+        summary["rules_not_applicable"].append({
+            "rule": "L7_DEBUG_SIGNAL_UNGROUNDED",
+            "reason": ("L7 names access points but no pin-bearing layer "
+                       "declares any identifier to ground them against — "
+                       "nothing to check"),
+        })
 
     # ── L7_DEBUG_REGISTER_UNGROUNDED ──
     dbg_regs = [e for e in (l7.get("debug_registers") or [])
@@ -376,6 +456,13 @@ def inspect(project: Path) -> tuple[list[Finding], dict]:
     summary["register_namespace_size"] = len(reg_ns)
     summary["register_namespace_provenance"] = {
         k: v for k, v in reg_prov.items() if v}
+    if dbg_regs and not reg_ns:
+        summary["rules_not_applicable"].append({
+            "rule": "L7_DEBUG_REGISTER_UNGROUNDED",
+            "reason": ("L7 declares debug registers but neither L4 nor L9 "
+                       "declares a register namespace to ground them "
+                       "against — nothing to check"),
+        })
     if dbg_regs and reg_ns:
         for i, e in enumerate(dbg_regs):
             nm = e["name"].strip()
@@ -433,35 +520,62 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="l7_debug_access_grounding_check")
     ap.add_argument("project_dir", type=Path)
     ap.add_argument("--json", default=None)
+    # DEPRECATED and deliberately a NO-OP, not deleted. It used to be the only
+    # way to reach exit 1, and no caller passed it, which is the defect this
+    # program was fixed for; the exit code is now always the verdict. It stays
+    # ACCEPTED because removing it would make any straggler invocation exit 2
+    # from argparse, and in the advisory slot rc 2 reads as
+    # "n/a (input not present)" — the removal would fail silently.
     ap.add_argument("--strict", action="store_true",
-                    help="exit 1 on findings (for the day a consumer is "
-                         "wired to L7; ADVISORY by default because today "
-                         "nothing downstream reads L7)")
+                    help="DEPRECATED, no effect: the exit code always "
+                         "reflects the verdict (0 clean / 1 findings / "
+                         "2 examined nothing). Enforcement is decided by the "
+                         "flow SLOT this gate is wired into, not here.")
     args = ap.parse_args(argv)
 
     project = args.project_dir.resolve()
     if not project.is_dir():
         print(f"[error] project not found: {project}", file=sys.stderr)
         return 2
+    if args.strict:
+        print("[note] --strict is deprecated and has no effect: this gate's "
+              "exit code already reports findings as rc 1.", file=sys.stderr)
 
     findings, summary = inspect(project)
     passed = not findings
+    skipped = _vx.summary_is_skipped(summary)
+    rc = _vx.exit_code(passed, skipped)
 
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps({
             "program": "l7_debug_access_grounding_check",
-            "blocks": bool(args.strict),
+            # The three-way conclusion, and the exit code it produced, from
+            # the SAME (passed, skipped) pair the printed verdict uses — so a
+            # reader of the report and a reader of the rc cannot disagree.
             "passed": passed,
+            "skipped": skipped,
+            "exit_code": rc,
+            "verdict": ("FINDINGS" if not passed
+                        else "VACUOUS" if skipped else "PASS"),
             "summary": summary,
             "findings": [f.as_dict() for f in findings],
         }, indent=2), encoding="utf-8")
 
     print(f"=== l7_debug_access_grounding_check ({project.name}) ===")
-    if summary.get("skipped_reason"):
-        print(f"skipped: {summary['skipped_reason']}")
-        return 0
+    # A rule that could not judge is DISCLOSED and does not silence the rest.
+    for na in summary.get("rules_not_applicable") or []:
+        print(f"[n/a] {na['rule']}: {na['reason']}")
+    if skipped:
+        # Nothing was examined. rc 2 puts it in the VACUOUS tier instead of
+        # letting it be credited as a pass over a design nobody read.
+        print(_vx.verdict_line("l7_debug_access_grounding_check",
+                               passed, skipped,
+                               _vx.skip_reason(summary)))
+        _vx.announce_vacuous("l7_debug_access_grounding_check",
+                             _vx.skip_reason(summary))
+        return rc
     print(f"access points: {summary['access_points']}  "
           f"pin namespace: {summary['pin_namespace_size']} "
           f"{summary['pin_namespace_provenance']}")
@@ -472,14 +586,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     if passed:
         print("PASS — every test/debug access point L7 claims is grounded in "
               "a layer that actually implements it")
-        return 0
-    if not args.strict:
-        print(f"ADVISE — {len(findings)} finding(s); exiting 0 (L7 has no "
-              f"downstream consumer, so this gate does not block; use "
-              f"--strict once one is wired)")
-        return 0
-    print(f"FAIL — {len(findings)} finding(s) (--strict)")
-    return 1
+        return rc
+    # WHICH RULES fired goes on its OWN line, and a fixed-width sentence
+    # follows it. The advisory slot records `output_snippet(...)[:200]`, and
+    # `output_snippet` keeps the LAST 300 characters — so what survives is the
+    # window 300..100 characters from the end. A verdict line written last
+    # falls OUTSIDE it and the record names no rule at all (measured). The
+    # trailing sentence below is the spacer that puts the tally inside the
+    # window. Same technique `flow_compliance_check` uses to keep its crash
+    # hint ahead of the same cut.
+    tally: dict[str, int] = {}
+    for f in findings:
+        tally[f.rule] = tally.get(f.rule, 0) + 1
+    rules = " ".join(f"{r} x{n}" for r, n in sorted(tally.items()))
+    print(f"FINDINGS — {rules} ({len(findings)} finding(s), exit {rc})")
+    print("recorded by the flow's ADVISORY slot: this verdict is RECORDED and "
+          "does NOT fail the step; the repair lives in L1/L9, which have "
+          "their own blocking gates.")
+    return rc
 
 
 if __name__ == "__main__":
