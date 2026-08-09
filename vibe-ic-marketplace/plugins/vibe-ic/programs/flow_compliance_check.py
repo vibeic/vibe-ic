@@ -6074,8 +6074,11 @@ _ZERO_DENOMINATOR_CLASSIFICATION: Dict[str, Dict[str, str]] = {
             "'no unguarded non-volatile write was found'."),
     },
     "response_payload_template_check": {
-        "verdict": "TRIGGER_ABSENT + ADVISORY_ONLY",
-        "gate_denominator": "total_assignments: 0 on 107/107",
+        "verdict": "TRIGGER_ABSENT (the ADVISORY_ONLY half is now repaired)",
+        "gate_denominator": (
+            "total_assignments: 0 on 107/107; re-measured with the gate's own "
+            "CLI over the 108 tracked rtl dirs after the severity split — "
+            "`denominator.examined` 0 on 108/108, 0 new FAIL"),
         "corpus_probe": (
             "Buffer names hit in 3/107, none in a command dispatcher. A "
             "looser probe — any file with an opcode `case` AND any "
@@ -6084,11 +6087,17 @@ _ZERO_DENOMINATOR_CLASSIFICATION: Dict[str, Dict[str, str]] = {
             "`ch_enable`, a per-channel enable vector, not a reply payload. "
             "No command/response packet handler exists here."),
         "disposition": (
-            "KEEP, unwired, and recorded as ADVISORY. Every finding it can "
-            "emit is severity WARN and `pass` is `not any(ERROR)`, so on any "
-            "readable directory it cannot return non-zero. Registering a "
-            "checker that is structurally incapable of failing is the "
-            "category error; the summary now says `advisory_only: true`."),
+            "KEEP, not yet wired — but the ADVISORY_ONLY half was FIXED "
+            "rather than re-recorded. It was the sharper defect: the gate "
+            "advertised `1 = findings` and every finding it could emit was "
+            "WARN, so its own failing verdict was unreachable and it would "
+            "have cleared #492's no-new-FAIL bar precisely BECAUSE it could "
+            "not fail. An ERROR tier (one opcode's entire reply is literals "
+            "AND the file never assigns a dynamic payload byte) makes rc 1 "
+            "reachable, and examining nothing now returns rc 2 VACUOUS "
+            "instead of rc 0. The argv adapter is still withheld: #492's "
+            "second condition, a non-zero denominator on every project, is "
+            "0/108 here and no fix to this gate can change that."),
     },
     "cmd_arg_range_validation_check": {
         "verdict": "TRIGGER_ABSENT (denominator was undisclosed, now stated)",
