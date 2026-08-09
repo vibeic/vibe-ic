@@ -242,11 +242,54 @@ def _read_def_density_comment(path: Path) -> Optional[float]:
     return None
 
 
+# The runner's PnR Tcl runs OpenROAD's own `check_placement` after each
+# legalization attempt and condenses the result to one marker per site:
+#     <SITE>_LEGALIZE_OK disp=<rung>     check_placement returned clean
+#     <SITE>_LEGALIZE_FAILED             every escalation rung exhausted
+# `check_placement` is the placer's OWN legality verdict — it is what detects
+# an overlap, a padding violation or an off-site instance. This gate is named
+# `placement_legality_check` and never read it.
+_LEGALIZE_FAILED_SUFFIX = "_LEGALIZE_FAILED"
+_LEGALIZE_OK_SUFFIX = "_LEGALIZE_OK"
+_LEGALIZE_MARKER_RE = re.compile(
+    r"\b([A-Z0-9_]+_LEGALIZE_(?:OK|FAILED))\b")
+
+
+def _legalizer_markers(project: Path) -> tuple[List[str], List[str]]:
+    """Return (failed_markers, ok_markers) found in the PnR logs.
+
+    Chip-AGNOSTIC: the markers are the runner's own structural output, not a
+    chip, PDK or library literal.
+    """
+    failed: List[str] = []
+    ok: List[str] = []
+    pnr_dir = project / "phase3" / "stage3" / "pnr"
+    if not pnr_dir.is_dir():
+        return failed, ok
+    for log in sorted(pnr_dir.rglob("*.log")):
+        try:
+            with log.open(errors="replace") as fh:
+                for line in fh:
+                    for m in _LEGALIZE_MARKER_RE.finditer(line):
+                        tok = m.group(1)
+                        if tok.endswith(_LEGALIZE_FAILED_SUFFIX):
+                            if tok not in failed:
+                                failed.append(tok)
+                        elif tok.endswith(_LEGALIZE_OK_SUFFIX):
+                            if tok not in ok:
+                                ok.append(tok)
+        except OSError:
+            continue
+    return failed, ok
+
+
 def inspect(project: Path):
     """Return (verdict, rc, findings, summary)."""
     findings: List[dict] = []
     summary = {
         "placed_def": _PLACED_DEF_REL,
+        "legalizer_failed_markers": [],
+        "legalizer_ok_markers": [],
         "declared_components": None,
         "parsed_components": None,
         "placed": None,
@@ -343,6 +386,54 @@ def inspect(project: Path):
                        f"status",
         })
         verdict, rc = "PASS", 0
+
+    # ---- The placer's OWN legality verdict ------------------------------
+    # Everything above is read from `placed.def`, the PRE-CTS snapshot, and
+    # its predicate is a DEF status TOKEN. Neither can see the failure this
+    # gate is named for:
+    #   * the window — CTS and hold repair insert instances AFTER placed.def
+    #     is written, so an instance that is illegal is not in the file this
+    #     gate reads; and
+    #   * the predicate — an overlapping or off-site instance still carries
+    #     `+ PLACED ( x y ) N`. The token is written regardless of legality,
+    #     so `unplaced == 0` is compatible with a design the placer could not
+    #     legalize at all.
+    # OpenROAD's `check_placement` is the verdict that does see it, the runner
+    # already runs it, and its result is in the log. Read it.
+    failed_markers, ok_markers = _legalizer_markers(project)
+    summary["legalizer_failed_markers"] = failed_markers
+    summary["legalizer_ok_markers"] = ok_markers
+    if failed_markers:
+        findings.append({
+            "severity": "FAIL", "rule": "LEGALIZER_REPORTED_FAILURE",
+            "message": (
+                f"the placer's own legality check FAILED in this run: "
+                f"{failed_markers} in the PnR log"
+                + (f" (succeeded at: {ok_markers})" if ok_markers else "")
+                + f". {_PLACED_DEF_REL} is the PRE-CTS snapshot and a DEF "
+                  f"status token cannot express an overlap, so the checks "
+                  f"above cannot see this: they report "
+                  f"{placed_n} placed / {unplaced_n} unplaced and are "
+                  f"correct about the file they read. An unlegalized design "
+                  f"loses pin access at detailed routing, and the resulting "
+                  f"unrouted layout is then measured by DRC, LVS and EM as "
+                  f"though it were the design."),
+        })
+        verdict, rc = "FAIL", 1
+    elif ok_markers:
+        findings.append({
+            "severity": "INFO", "rule": "LEGALIZER_REPORTED_OK",
+            "message": f"the placer's own legality check passed: {ok_markers}",
+        })
+    else:
+        findings.append({
+            "severity": "INFO", "rule": "LEGALIZER_VERDICT_ABSENT",
+            "message": (
+                "no `*_LEGALIZE_OK` / `*_LEGALIZE_FAILED` marker in the PnR "
+                "log — this run records no placer legality verdict, so the "
+                "status-token checks above stand alone. Not fabricated as a "
+                "pass."),
+        })
 
     # ---- Placement density (only if derivable; never fabricated) --------
     density_pct, dsrc = _read_density(project)
