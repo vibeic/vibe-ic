@@ -543,6 +543,28 @@ def main() -> int:
                         "route-plateauing low utilization on a fixed 1500x1500 die")
     p.add_argument("--util", type=float, default=0.4)
     p.add_argument("--pdk", default="auto")
+    # vibe-ic#<new> — THE REFUSAL NAMED A FLAG THIS ENTRY POINT COULD NOT
+    # EXPRESS. `--allow-pdk-target-mismatch` existed only on
+    # phase3_one_shot_runner. This runner is the canonical front door
+    # (`/vibe-ic-all`) and forwarded ONLY --allow-oss-pdk-fallback, so a
+    # DELIBERATE cross-PDK port was unreachable from it: the user hit
+    # "declared PDK != resolved PDK, REFUSED", read a message telling them to
+    # pass a flag, and had no way to pass it without abandoning the front door
+    # and driving phase 3 by hand.
+    #
+    # The refusal itself is CORRECT and stays: measured on sha256 x gf180mcuD,
+    # L19 derives pdk_target=sky130 from L1, and L7's 9-corner sign-off table
+    # plus L9's SDC are sky130_fd_sc_hd-specific — so gf180 numbers cannot
+    # claim that sign-off. (Control: spm's L1 names gf180mcuD as a SECOND
+    # target with its own library, period and utilisation, which is why
+    # spm x gf180mcuD converges legitimately.) What was missing was the
+    # documented way to SAY "I know, measure it anyway and disclose it".
+    p.add_argument("--allow-pdk-target-mismatch", action="store_true",
+                   help="Pass through to phase3: acknowledge IN WRITING that "
+                        "the PDK being measured is NOT the one the design's "
+                        "own L-docs declare. The run is then a DISCLOSED "
+                        "cross-PDK port — it may not claim the design's L7 "
+                        "sign-off, whose corners are declared per-PDK.")
     p.add_argument("--allow-oss-pdk-fallback", action="store_true",
                    help="Pass through to phase3: acknowledge an "
                         "open-source in-container PDK fallback even "
@@ -884,6 +906,8 @@ def main() -> int:
                    "--pdk", args.pdk]
         if getattr(args, "allow_oss_pdk_fallback", False):
             p3_args.append("--allow-oss-pdk-fallback")
+        if getattr(args, "allow_pdk_target_mismatch", False):
+            p3_args.append("--allow-pdk-target-mismatch")
         rc = _run_phase("PHASE 3 (synth → PnR → GDS → DRC → LVS)",
                          runner, p3_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "phase3_one_shot.json"))
