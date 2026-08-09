@@ -29,7 +29,10 @@ Usage:
 
 Exit codes:
     0 = PASS: a wake/sleep signal was found and its gating is correct
-    1 = FAIL (ungated dispatcher / incomplete clear paths)
+    1 = FAIL — ungated dispatcher (NO_AWAKE_GUARD), a flag driven awake and
+        never cleared (NO_CLEAR_PATH), or a flag with exactly one clear path
+        (SINGLE_CLEAR_PATH). NO_CLEAR_PATH was unreachable until the clear-path
+        audit stopped drawing its subject list from clear paths; see `audit`.
     2 = VACUOUS: nothing was examined — this RTL declares no wake or sleep
         signal at all, so there is no wake state to gate. #521: this used to
         be rc 0. It was one of three leads #515 could not reproduce, because
@@ -83,13 +86,42 @@ IF_CMD_RE = re.compile(
     re.IGNORECASE,
 )
 
+_AWAKE_FAMILY = r'(awake|is_awake|wakeup|wake_done)'
+_SLEEP_FAMILY = r'(sleep|is_sleep|sleeping|in_sleep|sleep_mode)'
+
+# One-bit literals, anchored so a WIDER literal that merely BEGINS with the
+# digit cannot satisfy them. The un-anchored `(?:1'b1|1|1'd1)` did: on
+# `sleep <= 1'b0` the bare `1` alternative matched the SIZE field, so a write
+# that WAKES the device was recorded as a clear path. Two such lines scored a
+# design "2 clear paths -> PASS" while it had none — and, since the sleep
+# family reached the clear-path store on every polarity, no sleep-polarity
+# design could ever present zero clear paths for NO_CLEAR_PATH to see.
+_ONE = r"(?:1'[bdh]1|1(?!\s*'|[0-9]))"
+_ZERO = r"(?:1'[bdh]0|0(?!\s*'|[0-9]))"
+
+# A write that returns the flag to the NON-awake state, under either polarity.
 AWAKE_CLEAR_RE = re.compile(
-    r'(awake|is_awake|wakeup|wake_done)\s*<=\s*(?:1\'b0|0|1\'d0)',
+    _AWAKE_FAMILY + r'\s*<=\s*' + _ZERO,
     re.IGNORECASE,
 )
 
 SLEEP_SET_RE = re.compile(
-    r'(sleep|is_sleep|sleeping|in_sleep|sleep_mode)\s*<=\s*(?:1\'b1|1|1\'d1)',
+    _SLEEP_FAMILY + r'\s*<=\s*' + _ONE,
+    re.IGNORECASE,
+)
+
+# The mirror image of the two above: a write that drives the flag INTO the
+# awake state. `awake <= 1` and `sleep <= 0` are the same event under the two
+# polarities, exactly as `awake <= 0` and `sleep <= 1` are the same event in
+# AWAKE_CLEAR_RE / SLEEP_SET_RE. These exist so the clear-path audit has a
+# subject universe that does NOT come from clear paths — see `audit`.
+AWAKE_SET_RE = re.compile(
+    _AWAKE_FAMILY + r'\s*<=\s*' + _ONE,
+    re.IGNORECASE,
+)
+
+SLEEP_CLEAR_RE = re.compile(
+    _SLEEP_FAMILY + r'\s*<=\s*' + _ZERO,
     re.IGNORECASE,
 )
 
@@ -133,6 +165,7 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
     dispatcher_files: List[str] = []
     dispatcher_has_awake_guard: Dict[str, bool] = {}
     awake_clear_paths: Dict[str, List[Tuple[str, int, str]]] = {}
+    awake_enter_paths: Dict[str, List[Tuple[str, int, str]]] = {}
 
     for p in _find_v_files(rtl_dir):
         try:
@@ -173,12 +206,22 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
                 awake_clear_paths.setdefault(m.group(1), []).append(
                     (fname, lineno, line.strip())
                 )
+            for m in AWAKE_SET_RE.finditer(line):
+                awake_enter_paths.setdefault(m.group(1), []).append(
+                    (fname, lineno, line.strip())
+                )
+            for m in SLEEP_CLEAR_RE.finditer(line):
+                awake_enter_paths.setdefault(m.group(1), []).append(
+                    (fname, lineno, line.strip())
+                )
 
     if not awake_files:
         return findings, {
             "awake_signals": {},
             "dispatchers": dispatcher_files,
             "clear_paths": {},
+            "enter_paths": {},
+            "denominator": {"examined": 0, "signals": []},
             "skipped": True,
             "reason": "no wake/sleep signals found — protocol may not have wake state",
         }
@@ -193,13 +236,46 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
                 file=dfile,
             ))
 
-    all_clear_signals = set()
-    for sig, paths in awake_clear_paths.items():
-        all_clear_signals.add(sig)
-    for sig in all_clear_signals:
+    # The subject universe used to be `awake_clear_paths.keys()` — derived from
+    # the evidence of the very property being audited. Every key there is born
+    # of `setdefault(sig, []).append(...)`, so a key exists only once the signal
+    # has at least one clear path, and `len(paths) < 2` could only ever observe
+    # len == 1. The zero-clear-path case — the flag that is driven awake and
+    # never returned, which is the WORST outcome this gate exists to catch —
+    # removed its own signal from the universe and was scored PASS. That made
+    # the gate non-monotonic: RTL that clears the flag once FAILED, RTL that
+    # never clears it at all PASSED.
+    #
+    # The universe now also carries every signal this RTL drives INTO the awake
+    # state. That is independent evidence, and it is deliberately narrower than
+    # "every signal AWAKE_SIGNAL_RE matched": those matches include input ports
+    # and wires a module merely READS (a block that receives `sleep_mode` has no
+    # business clearing it), so enumerating them would invent FAILs. A write of
+    # the awake polarity proves the signal is a wake-state element this RTL owns
+    # and is therefore answerable for returning.
+    subject_signals = sorted(set(awake_clear_paths) | set(awake_enter_paths))
+    for sig in subject_signals:
         paths = awake_clear_paths.get(sig, [])
+        enters = awake_enter_paths.get(sig, [])
         unique_files = set(p[0] for p in paths)
-        if len(paths) < 2:
+        # Membership in the union guarantees at least one of the two is
+        # non-empty, so this indexes something real — no `if paths else ""`.
+        anchor = paths[0] if paths else enters[0]
+        if not paths:
+            findings.append(Finding(
+                "ERROR", "NO_CLEAR_PATH",
+                f"Wake signal '{sig}' is driven INTO the awake state in "
+                f"{len(enters)} location(s) and is cleared in NONE. Once the "
+                f"device wakes it never returns to the non-awake state, so "
+                f"EVERY wake-clearing stimulus the spec defines (power-on "
+                f"reset, soft reset, timeout, brownout) is ignored — a "
+                f"strictly worse defect than the single-clear-path case "
+                f"below. Add a clear path for each spec-defined stimulus.",
+                file=anchor[0],
+                line=anchor[1],
+                details=anchor[2],
+            ))
+        elif len(paths) < 2:
             findings.append(Finding(
                 "ERROR", "SINGLE_CLEAR_PATH",
                 f"Wake signal '{sig}' is only cleared in {len(paths)} "
@@ -209,17 +285,31 @@ def audit(rtl_dir: Path) -> Tuple[List[Finding], Dict]:
                 f"timeout, brownout). A single clear path is a known-"
                 f"broken implementation — any test scenario that "
                 f"toggles a non-reset wake-clear stimulus will fail.",
-                file=paths[0][0] if paths else "",
-                line=paths[0][1] if paths else 0,
+                file=anchor[0],
+                line=anchor[1],
             ))
+
+    def _sites(store: Dict[str, List[Tuple[str, int, str]]]) -> Dict:
+        # Keyed on the whole subject universe, so a signal with an EMPTY clear
+        # list is visible in the report as an empty list rather than by being
+        # absent — the absence is what made the zero case invisible.
+        return {
+            sig: [
+                {"file": f, "line": ln, "code": c}
+                for f, ln, c in store.get(sig, [])
+            ]
+            for sig in subject_signals
+        }
 
     return findings, {
         "awake_signals": awake_files,
         "dispatchers": dispatcher_files,
         "dispatcher_awake_guard": dispatcher_has_awake_guard,
-        "clear_paths": {
-            sig: [{"file": f, "line": ln, "code": c} for f, ln, c in ps]
-            for sig, ps in awake_clear_paths.items()
+        "clear_paths": _sites(awake_clear_paths),
+        "enter_paths": _sites(awake_enter_paths),
+        "denominator": {
+            "examined": len(subject_signals),
+            "signals": subject_signals,
         },
     }
 

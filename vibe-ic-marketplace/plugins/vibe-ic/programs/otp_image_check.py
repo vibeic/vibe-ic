@@ -10,7 +10,9 @@ What it catches
   4. DUPLICATE_ADDRESS   — same address written twice
   5. BYTE_OUT_OF_RANGE   — a value is outside 0..255
   6. FIELD_COVERAGE      — an L4 field marked required=true has no bytes written
-  7. MALFORMED_LINE      — a non-comment, non-empty line fails the @addr byte pattern
+  7. MALFORMED_LINE      — a non-comment, non-empty line fails the @addr byte
+                           pattern, or carries an in-range value written wider
+                           than one byte (e.g. "0AA")
   8. OTP_SIZE_UNDETERMINED — neither L4 nor L11 declares OTP size (Wave 73 / v0.128 S2)
 
 Usage
@@ -34,7 +36,19 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-VER_LINE_RE = re.compile(r"^@([0-9a-fA-F]+)\s+([0-9a-fA-F]{1,2})\s*$")
+# The value group is deliberately UNBOUNDED in width.
+#
+# It used to be `[0-9a-fA-F]{1,2}`, which made the downstream
+# `val > 0xFF` predicate — i.e. the whole BYTE_OUT_OF_RANGE rule — dead
+# code: the lexer could not hand it a value above 0xFF, so every
+# over-wide value (a byte-image generator emitting 16-bit words, say)
+# was reported as MALFORMED_LINE "Unparseable line", collapsing a
+# *content* defect into a *syntax* defect. The width bound now lives in
+# the semantic check below, where it can actually be reported.
+VER_LINE_RE = re.compile(r"^@([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s*$")
+
+BYTE_MAX = 0xFF
+BYTE_HEX_DIGITS = 2
 
 
 @dataclass
@@ -120,12 +134,28 @@ def parse_ver(path: Path) -> (Dict[int, int], List[Finding]):
             ))
             continue
         addr = int(m.group(1), 16)
-        val = int(m.group(2), 16)
-        if val > 0xFF:
+        tok = m.group(2)
+        val = int(tok, 16)
+        if val > BYTE_MAX:
             findings.append(Finding(
                 rule="BYTE_OUT_OF_RANGE",
                 severity="error",
                 message=f"Byte value 0x{val:X} > 0xFF at addr 0x{addr:X}",
+                location=f"{path}:{lineno}",
+            ))
+            continue
+        if len(tok) > BYTE_HEX_DIGITS:
+            # In range once evaluated, but written wider than one byte
+            # (e.g. "0AA"). This was MALFORMED_LINE before the lexer was
+            # widened and stays MALFORMED_LINE: widening the lexer must
+            # not turn a line that fails today into a pass.
+            findings.append(Finding(
+                rule="MALFORMED_LINE",
+                severity="error",
+                message=(
+                    f"Byte token {tok!r} is {len(tok)} hex digits; a byte "
+                    f"image takes at most {BYTE_HEX_DIGITS}"
+                ),
                 location=f"{path}:{lineno}",
             ))
             continue

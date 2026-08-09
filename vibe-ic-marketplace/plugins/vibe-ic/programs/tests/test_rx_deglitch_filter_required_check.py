@@ -180,3 +180,205 @@ endmodule
     r = _run(tmp_path)
     assert r.returncode == 0
     assert "PASS_WITH_WAIVER" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# Multi-RX-path aggregation.
+#
+# The umbrella dispatches this gate ONCE per PROJECT over an rtl/ tree that
+# normally holds more than one pad. Until the aggregation fix the project
+# verdict was the verdict of whichever (file, seed) produced the LONGEST
+# chain, so the greenest pad in the design answered for every other pad and
+# the FAIL verdict (`RX_SYNC_CHAIN_TOO_SHORT`) was unreachable for the exact
+# shape this gate exists to catch. Both directions are asserted on returned
+# exit codes and on the emitted JSON — never on the text of the source.
+# ---------------------------------------------------------------------------
+
+def _run_json(tmp_path: Path):
+    """Run the gate and return (CompletedProcess, parsed json report)."""
+    out = tmp_path / "report.json"
+    r = subprocess.run(
+        [sys.executable, str(PROG), str(tmp_path), "--json", str(out)],
+        capture_output=True,
+        text=True,
+    )
+    return r, json.loads(out.read_text())
+
+
+# A compliant single-wire pad: 3-stage synchroniser + 2-of-2 AND vote.
+_COMPLIANT_PAD = """
+module aux_pad_block(
+  input  wire clk,
+  inout  wire aux_pad,
+  output wire aux_stable
+);
+  reg a1, a2, a3;
+  always @(posedge clk) begin
+    a1 <= aux_pad;
+    a2 <= a1;
+    a3 <= a2;
+  end
+  assign aux_stable = a3 & a2;
+  assign aux_pad = 1'bz;
+endmodule
+"""
+
+# A second compliant pad, so the PASS direction is also multi-path.
+_COMPLIANT_PAD_2 = """
+module alt_pad_block(
+  input  wire clk,
+  inout  wire alt_pad,
+  output wire alt_stable
+);
+  reg b1, b2, b3;
+  always @(posedge clk) begin
+    b1 <= alt_pad;
+    b2 <= b1;
+    b3 <= b2;
+  end
+  assign alt_stable = b3 | b2;
+  assign alt_pad = 1'bz;
+endmodule
+"""
+
+# The anti-pattern: a 2-FF synchroniser whose output goes straight to the
+# bit decoder. No third stage, no vote.
+_TWO_FF_PAD = """
+module bus_wrapper(
+  input  wire clk,
+  inout  wire serial_pad,
+  output wire rx_bit
+);
+  reg rx_ff1, rx_ff2;
+  always @(posedge clk) begin
+    rx_ff1 <= serial_pad;
+    rx_ff2 <= rx_ff1;
+  end
+  assign rx_bit = rx_ff2;
+  assign serial_pad = 1'bz;
+endmodule
+"""
+
+
+def test_noncompliant_pad_fails_even_beside_a_compliant_one(tmp_path):
+    """DIRECTION 1 — the FAIL verdict is reachable.
+
+    Fails against the unfixed program, which returns 0 and prints PASS
+    naming aux_pad_block.sv: the longest chain in the project (3) won the
+    single-verdict selection and the 2-FF pad next door was never scored.
+    """
+    _write_rtl(tmp_path, "aux_pad_block.sv", _COMPLIANT_PAD)
+    _write_rtl(tmp_path, "bus_wrapper.sv", _TWO_FF_PAD)
+
+    r, rep = _run_json(tmp_path)
+
+    assert r.returncode == 1, r.stdout
+    assert rep["passed"] is False
+    assert len(rep["failures"]) == 1, rep["failures"]
+    assert "RX_SYNC_CHAIN_TOO_SHORT" in rep["failures"][0]
+    assert "bus_wrapper.sv" in rep["failures"][0]
+
+    # The compliant pad is still scored and still credited — the gate got
+    # stricter about the worst path, it did not go blind to the good one.
+    verdicts = {p["wrapper_file"].split("/")[-1]: p["verdict"]
+                for p in rep["summary"]["rx_paths"]}
+    assert verdicts == {"aux_pad_block.sv": "PASS",
+                        "bus_wrapper.sv": "FAIL"}, verdicts
+
+
+def test_all_compliant_rx_paths_still_pass(tmp_path):
+    """DIRECTION 2 — the PASS verdict is still reachable.
+
+    Two pads, both with 3 stages and a vote. Worst-of aggregation must
+    still be able to say PASS, otherwise the gate would just be an
+    always-FAIL dressed up as a fix.
+    """
+    _write_rtl(tmp_path, "aux_pad_block.sv", _COMPLIANT_PAD)
+    _write_rtl(tmp_path, "alt_pad_block.sv", _COMPLIANT_PAD_2)
+
+    r, rep = _run_json(tmp_path)
+
+    assert r.returncode == 0, r.stdout
+    assert rep["passed"] is True
+    assert rep["failures"] == []
+    assert rep["warnings"] == []
+    assert "PASS" in r.stdout
+    paths = rep["summary"]["rx_paths"]
+    assert len(paths) == 2, paths
+    assert {p["verdict"] for p in paths} == {"PASS"}, paths
+
+
+def test_warn_path_beside_a_compliant_path_stays_warn_not_fail(tmp_path):
+    """The middle verdict survives worst-of: a 3-stage chain with no vote
+    is still non-blocking (rc 0) even though it is now the governing path.
+    """
+    _write_rtl(tmp_path, "aux_pad_block.sv", _COMPLIANT_PAD)
+    _write_rtl(
+        tmp_path,
+        "slow_pad_block.sv",
+        """
+module slow_pad_block(
+  input  wire clk,
+  inout  wire slow_pad,
+  output wire slow_bit
+);
+  reg c1, c2, c3;
+  always @(posedge clk) begin
+    c1 <= slow_pad;
+    c2 <= c1;
+    c3 <= c2;
+  end
+  assign slow_bit = c3;
+  assign slow_pad = 1'bz;
+endmodule
+""",
+    )
+
+    r, rep = _run_json(tmp_path)
+
+    assert r.returncode == 0, r.stdout
+    assert rep["failures"] == []
+    assert len(rep["warnings"]) == 1, rep["warnings"]
+    assert "RX_DEGLITCH_FILTER_MISSING" in rep["warnings"][0]
+    assert rep["summary"]["verdict"] == "WARN"
+
+
+def test_generic_input_port_does_not_mint_a_failure(tmp_path):
+    """Blast-radius guard. Worst-of scores the pads this gate names, not
+    every `*_in` port that happens to feed two flops: a config input with
+    a 2-deep register chain must not turn a compliant wrapper red.
+    """
+    _write_rtl(
+        tmp_path,
+        "wrapper_top.sv",
+        """
+module wrapper_top(
+  input  wire clk,
+  input  wire cfg_in,
+  inout  wire serial_pad,
+  output wire rx_stable
+);
+  reg s1, s2, s3;
+  always @(posedge clk) begin
+    s1 <= serial_pad;
+    s2 <= s1;
+    s3 <= s2;
+  end
+  assign rx_stable = s3 & s2;
+  reg cfg_r1, cfg_r2;
+  always @(posedge clk) begin
+    cfg_r1 <= cfg_in;
+    cfg_r2 <= cfg_r1;
+  end
+  assign serial_pad = 1'bz;
+endmodule
+""",
+    )
+
+    r, rep = _run_json(tmp_path)
+
+    assert r.returncode == 0, r.stdout
+    assert rep["failures"] == []
+    paths = rep["summary"]["rx_paths"]
+    assert [p["rx_seed"] for p in paths] == ["serial_pad"], paths
+    assert paths[0]["seed_route"] == "inout_pad"
