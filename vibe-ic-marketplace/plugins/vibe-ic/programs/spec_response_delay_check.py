@@ -39,14 +39,37 @@ completion and response launch. The gate:
 
   1. Scans L8*.json for response-delay fields; extracts MIN in µs
      or ticks.
-  2. Scans RTL FSMs in the target dir for obvious "launch response"
-     paths: `tx_start <= 1'b1;` / `tx_req <= 1'b1;` / `resp_go <= 1;`
-     preceded (in same always block) by a `<= S_TX` / `<= S_RESP`
-     state transition.
-  3. The immediately-preceding state must contain a counter-based
-     wait OR a flag like `srs_done`. If the transition to S_TX
-     happens directly from S_BUILD / S_VALIDATE / S_DECODE without
-     any wait state in between, WARN.
+  2. Scans RTL FSMs in the target dir for the RESPONSE LAUNCH — a
+     state assignment whose right-hand side is a response/transmit
+     state symbol (`S_TX*`, `S_RESP*`, `S_RSP*`, `S_TRANSMIT*`),
+     written with either `<=` (one-process FSM) or `=` (the
+     next-state block of a two-process FSM), whatever the state
+     register happens to be called.  Hops that ORIGINATE inside the
+     TX cluster (`S_TX_LOAD -> S_TX_ARM`) are pipeline steps, not
+     launches, and are ignored.
+  3. Each launch must be DELAY-GUARDED: it is launched from a state
+     whose name says "wait" (S_TSRS / S_WAIT* / S_TURNAROUND /
+     S_DELAY* / ...), or its case arm holds a counter / elapsed-flag
+     (`turnaround_cnt >= T_TSRS_MIN_TICKS`, `srs_done`), or the
+     module declares a delay state at all, or the module references
+     the spec's own delay parameter by name.  A launch with none of
+     that is the fail mode below and is reported as an ERROR.
+
+Reachability note (this is what this file was repaired for)
+-----------------------------------------------------------
+Step 2 used to be the single regex
+
+    r"st\\s*<=\\s*(S_TX\\w*|S_RESP\\w*|S_TRANSMIT\\w*|S_RSP\\w*)\\s*;"
+
+which only matches when the state register is literally spelled `st`
+(or ends in those two letters right before the `<=`).  Every FSM this
+flow produces writes `state <= S_TX_LOAD;`, and two-process FSMs write
+`next_state = S_TX;`; neither matches.  So on the target the flow
+actually passes — `phase2/stage1/rtl` — `has_tx_transition` was always
+False, the one ERROR-emitting branch was dead, and this gate could only
+ever print `verdict: PASS` / exit 0.  The predicate is now keyed on the
+right-hand side (a state symbol) instead of on the spelling of the
+left-hand register.
 
 Usage
 -----
@@ -115,6 +138,33 @@ def _parse_num(x: Any) -> float | None:
     return None
 
 
+#: Unit / bound suffixes stripped when turning a spec field name into the
+#: token the RTL would use for the same parameter (`tSRS_us` -> `SRS`).
+_UNIT_SUFFIX_RE = re.compile(
+    r"_(?:us|ns|ms|s|ticks?|cycles?|clks?|min|max|nom)$", re.IGNORECASE)
+
+
+def spec_delay_token(field: str) -> str:
+    """Core RTL-searchable token for the spec field `find_response_delay` hit.
+
+    ``timing_parameters.tSRS_us.min`` -> ``SRS``.  Returned empty when the
+    residue is too short to search for without matching noise.
+    """
+    parts = [p for p in str(field).split(".") if p]
+    if len(parts) < 2:
+        return ""
+    name = parts[-2]
+    prev = None
+    while prev != name:
+        prev = name
+        name = _UNIT_SUFFIX_RE.sub("", name)
+    if name[:2].lower() == "t_":
+        name = name[2:]
+    elif len(name) > 1 and name[0] == "t" and name[1].isupper():
+        name = name[1:]
+    return name if len(name) >= 3 else ""
+
+
 def find_response_delay(specs: list[Any]) -> tuple[str, float] | None:
     """Return (field_path, min_value_numeric) if any spec declares one.
 
@@ -153,58 +203,135 @@ def find_response_delay(specs: list[Any]) -> tuple[str, float] | None:
     return None
 
 
-# RTL analysis
-ALWAYS_HEAD_RE = re.compile(r"always\s*@\s*\(\s*posedge\b[^)]*\)\s*begin\b")
+# ── RTL analysis ────────────────────────────────────────────────────
+#
+# Everything below is keyed on the RIGHT-hand side of a state assignment.
+# The old predicate was keyed on the left-hand register being spelled
+# `st`, which no FSM the flow produces satisfies (see the reachability
+# note in the module docstring).
+
+IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+IDENT_ONLY_RE = re.compile(r"^[A-Za-z_]\w*$")
+
+#: A state symbol that belongs to the response / transmit cluster.
+#: Tolerates the `S_` / `ST_` / `STATE_` / bare naming conventions.
+TX_STATE_NAME = re.compile(
+    r"^(?:S|ST|STATE)?_?(?:TX|RESP|RSP|TRANSMIT)\w*$", re.IGNORECASE)
+
+#: A state symbol whose name declares it to be a deliberate wait.
+DELAY_STATE_NAME = re.compile(
+    r"(?:SRS|TURN|DELAY|DLY|WAIT|GUARD|HOLDOFF|GAP|IFS|PAUSE|SETTLE)",
+    re.IGNORECASE)
+
+#: Any identifier carrying wait / turnaround / counter semantics — the
+#: evidence that a launch is held off rather than fired immediately.
+DELAY_EVIDENCE_NAME = re.compile(
+    r"^\w*(?:srs|turn|delay|dly|wait|guard|holdoff|gap|ifs|pause|settle"
+    r"|cnt|count|counter|timer|tick|elapsed|expire)\w*$", re.IGNORECASE)
+
+#: `<state_reg> <= S_TX;` and `<next_state> = S_TX;` alike.
+STATE_ASSIGN_RE = re.compile(
+    r"\b([A-Za-z_]\w*)\s*(?:<=|=)\s*([A-Za-z_]\w*)\s*;")
+
+#: A case-arm label: an identifier or a sized/plain literal before `:`.
+CASE_LABEL_RE = re.compile(
+    r"(?:^|[\s;\)\}])"
+    r"((?:[A-Za-z_]\w*)"
+    r"|(?:\d+\s*'\s*[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+)"
+    r"|(?:\d+))"
+    r"\s*:(?!:|=)",
+    re.MULTILINE)
+
+ENUM_BLOCK_RE = re.compile(r"\benum\b[^{}]*\{([^{}]*)\}", re.DOTALL)
+PARAM_STMT_RE = re.compile(r"\b(?:localparam|parameter)\b[^;]*;", re.DOTALL)
 
 
-def _find_always_blocks(src: str):
-    for head in ALWAYS_HEAD_RE.finditer(src):
-        body_start = head.end()
-        depth = 1
-        for tok in re.finditer(r"\b(begin|end)\b", src[body_start:]):
-            if tok.group(1) == "begin":
-                depth += 1
-            else:
-                depth -= 1
-                if depth == 0:
-                    yield body_start, body_start + tok.start()
-                    break
+@dataclass
+class Launch:
+    """One transition INTO the response/transmit cluster."""
+    from_state: str      # "" when no enclosing case label was found
+    to_state: str
+    guard: str           # "" == unguarded == the fail mode
 
 
-# Heuristic: find transitions to a "TX" state.
-TX_TRANSITION_RE = re.compile(
-    r"st\s*<=\s*(S_TX\w*|S_RESP\w*|S_TRANSMIT\w*|S_RSP\w*)\s*;",
-    re.IGNORECASE,
-)
-
-# Heuristic: find intermediate wait states by name.
-WAIT_STATE_RE = re.compile(
-    r"(S_SRS|S_TSRS|S_WAIT\w*|S_DELAY\w*|S_TURN\w*|S_RSP_DELAY)",
-    re.IGNORECASE,
-)
-
-# Heuristic: find "immediately-preceding" state names like
-# `S_BUILD`/`S_VALIDATE`/`S_DECODE` transitioning to S_TX directly.
-FAST_PRECEDE_RE = re.compile(
-    r"(S_BUILD\w*|S_VALIDATE|S_DECODE|S_BUILD_CRC|S_READY)\s*:\s*begin",
-    re.IGNORECASE,
-)
-
-
-def check_rtl(path: Path) -> tuple[bool, bool, list[str]]:
-    """Return (has_tx_transition, has_wait_state, file_notes)."""
-    src = path.read_text(errors="replace")
+def _strip_comments(src: str) -> str:
     src = re.sub(r"//[^\n]*", "", src)
-    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
-    notes: list[str] = []
-    has_tx = False
-    has_wait = False
-    for m in TX_TRANSITION_RE.finditer(src):
-        has_tx = True
-    for m in WAIT_STATE_RE.finditer(src):
-        has_wait = True
-        notes.append(f"found wait-state token: {m.group(1)}")
-    return has_tx, has_wait, notes
+    return re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
+
+
+def _state_symbols(src: str, labels: list[tuple[int, str]]) -> set[str]:
+    """Identifiers this module uses as state constants."""
+    syms = {lab for _p, lab in labels if IDENT_ONLY_RE.match(lab)}
+    for blk in ENUM_BLOCK_RE.findall(src):
+        syms.update(IDENT_RE.findall(blk))
+    for stmt in PARAM_STMT_RE.findall(src):
+        syms.update(re.findall(r"([A-Za-z_]\w*)\s*=", stmt))
+    return syms
+
+
+def _is_state_symbol(name: str, syms: set[str]) -> bool:
+    return name in syms or bool(
+        re.match(r"^(?:S|ST|STATE)_", name, re.IGNORECASE))
+
+
+def analyse_rtl(src: str, spec_token: str = "") -> list[Launch]:
+    """Every response launch in *src*, each marked guarded or not."""
+    src = _strip_comments(src)
+    labels = [(m.end(), m.group(1)) for m in CASE_LABEL_RE.finditer(src)]
+    syms = _state_symbols(src, labels)
+
+    # File-level evidence: a delay state is declared at all, or the RTL
+    # names the spec's own delay parameter. Both are generous on purpose
+    # — this gate must not redden RTL that does implement the hold-off
+    # in a shape this parser cannot walk.
+    file_delay_states = sorted({
+        lab for _p, lab in labels
+        if IDENT_ONLY_RE.match(lab) and DELAY_STATE_NAME.search(lab)})
+    names_spec_param = bool(
+        spec_token and re.search(re.escape(spec_token), src, re.IGNORECASE))
+
+    launches: list[Launch] = []
+    for m in STATE_ASSIGN_RE.finditer(src):
+        to_state = m.group(2)
+        if not TX_STATE_NAME.match(to_state):
+            continue
+        if not _is_state_symbol(to_state, syms):
+            continue
+        arm_start, from_state = 0, ""
+        for pos, lab in labels:
+            if pos <= m.start():
+                arm_start, from_state = pos, lab
+            else:
+                break
+        if (from_state and IDENT_ONLY_RE.match(from_state)
+                and TX_STATE_NAME.match(from_state)):
+            continue        # intra-TX pipeline hop, not a response launch
+        arm = src[arm_start:m.start()]
+        if from_state and DELAY_STATE_NAME.search(from_state):
+            guard = f"launched from delay state {from_state}"
+        elif any(DELAY_EVIDENCE_NAME.match(i) for i in IDENT_RE.findall(arm)):
+            guard = "counter / elapsed-flag wait on the launch path"
+        elif file_delay_states:
+            guard = f"module declares delay state(s) {','.join(file_delay_states)}"
+        elif names_spec_param:
+            guard = f"module references spec delay parameter '{spec_token}'"
+        else:
+            guard = ""
+        launches.append(Launch(from_state, to_state, guard))
+    return launches
+
+
+def check_rtl(path: Path, spec_token: str = "") -> tuple[bool, bool, list[str]]:
+    """Return (has_response_launch, every_launch_delayed, file_notes)."""
+    launches = analyse_rtl(path.read_text(errors="replace"), spec_token)
+    notes = [
+        (f"UNGUARDED launch {ln.from_state or '<no case label>'} -> "
+         f"{ln.to_state}") if not ln.guard else
+        (f"guarded launch {ln.from_state or '<no case label>'} -> "
+         f"{ln.to_state} ({ln.guard})")
+        for ln in launches
+    ]
+    return bool(launches), all(ln.guard for ln in launches), notes
 
 
 def collect_files(path: Path) -> list[Path]:
@@ -245,6 +372,8 @@ def main() -> int:
 
     delay = find_response_delay(specs)
     findings: list[Finding] = []
+    launch_notes: list[str] = []
+    any_launch = False
 
     if delay is None:
         findings.append(Finding(
@@ -257,29 +386,32 @@ def main() -> int:
         ))
     else:
         field, min_val = delay
+        spec_token = spec_delay_token(field)
         target = Path(args.target)
         if not target.exists():
             print(f"error: not found: {target}", file=sys.stderr)
             return 2
         files = collect_files(target)
-        any_tx, any_wait = False, False
         for f in files:
-            ht, hw, _ = check_rtl(f)
-            if ht:
-                any_tx = True
-            if hw:
-                any_wait = True
-
-        if any_tx and not any_wait:
+            has_launch, all_delayed, notes = check_rtl(f, spec_token)
+            launch_notes.extend(f"{f}: {n}" for n in notes)
+            if not has_launch:
+                continue
+            any_launch = True
+            if all_delayed:
+                continue
+            unguarded = [n for n in notes if n.startswith("UNGUARDED")]
             findings.append(Finding(
                 "ERROR", "response_delay_not_implemented", field,
-                f"Spec declares response delay {min_val}, but RTL has "
-                f"state transitions to S_TX/S_RESP without any wait "
-                f"state (S_TSRS / S_WAIT / S_DELAY / S_TURN). This is "
-                f"the v068 <benchmark> hardware-fail mode: sim passes, host "
-                f"misses first response bits on hardware. Fix: add a "
-                f"counter-based wait state between request validation "
-                f"and TX launch.",
+                f"Spec declares response delay {min_val} at '{field}', but "
+                f"{f} launches the response with no hold-off on that path: "
+                f"{'; '.join(unguarded)}. The launch must be gated by a "
+                f"delay state or an explicit counter/elapsed flag "
+                f"(S_TSRS / S_WAIT* / S_TURNAROUND / '*_cnt >= T_*') so the "
+                f"first response bit arrives no earlier than the spec "
+                f"minimum. Firing immediately is the sim-passes / "
+                f"hardware-fails mode: the host bus is still turning around "
+                f"and drops the leading response bits.",
             ))
 
     errors = [f for f in findings if f.severity == "ERROR"]
@@ -288,6 +420,8 @@ def main() -> int:
             "target": args.target,
             "specs": args.spec,
             "declared_delay": delay,
+            "response_launch_seen": any_launch,
+            "response_launches": launch_notes,
             "errors": len(errors),
             "findings": [asdict(f) for f in findings],
             "verdict": "PASS" if not errors else "FAIL",
@@ -299,6 +433,8 @@ def main() -> int:
             _P(args.json).parent.mkdir(parents=True, exist_ok=True)
             _P(args.json).write_text(_txt + "\n")
     else:
+        for n in launch_notes:
+            print(f"[INFO] {n}")
         for f in findings:
             print(f"[{f.severity}] {f.rule} @ {f.field}")
             print(f"    {f.message}")
