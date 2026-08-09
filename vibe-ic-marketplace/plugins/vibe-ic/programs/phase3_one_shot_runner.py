@@ -3033,6 +3033,195 @@ def _build_tapcell_tcl(pdk: "PdkConfig") -> str:
         f"}}\n")
 
 
+def _build_unplaceable_master_cap_tcl() -> str:
+    """Forbid every master too WIDE to have a legal site on this floorplan.
+
+    Measured field failure: a flow shipped a `routed.def` carrying 563 signal
+    nets of which NOT ONE was routed, and DRC / LVS / EM were then all measured
+    on a design with no interconnect. Core utilization was 27 %.
+
+    The chain:
+
+        `tapcell -distance D` inserts WELLTAP cells FIXED in EVERY std-cell
+          row.  The longest contiguous run of FREE sites in any row is
+          therefore bounded by (tap pitch - tap width) -- measured on the
+          failing floorplan: a 2-site tap every 50 sites, over all 64 rows.
+        `repair_design` / `repair_timing` / `clock_tree_synthesis` choose a
+          repeater master from the library's whole buffer family.  The widest
+          members of that family were 50 and 62 sites -- i.e. AS WIDE AS or
+          WIDER than any free run on the die.
+        `detailed_placement` can never legalize such an instance.  It raised
+          DPL-0701, and because it ABORTS, the cells it had already moved were
+          left illegal too: `check_placement` on the same database afterwards
+          reported 37 overlap + 37 padding + 22 site-align violations, against
+          the legalizer's own claim of "Violations remain: 2".
+        `detailed_route` then aborted DRT-0073 "No access point" on 18
+          instances and wrote NO signal routing at all.
+
+    Utilization is irrelevant to this: the taps are FIXED, so a master wider
+    than the inter-tap run has no legal site at 27 % or at 90 %.  The only way
+    not to lose the design is to never let the optimizer choose such a master.
+
+    This block runs right after `tapcell`, MEASURES the longest free-site run
+    from the LIVE fixed-instance grid (not from a formula, so a pruned or
+    macro-blocked floorplan is measured as it really is), and `set_dont_use`s
+    every core master above it.  It is guarded three ways: it is a no-op when
+    the floorplan has no fixed obstruction, it never removes the last usable
+    buffer from the pool, and any error degrades to a NONFATAL note with the
+    prior behaviour.
+
+    It also REPORTS (without changing) any master already instantiated in the
+    linked netlist that exceeds the bound -- that is a synthesis-side residual
+    the resizer cannot fix, and the operator needs to see it named.
+
+    WHERE THE MEASUREMENT IS APPROXIMATE, AND IN WHICH DIRECTION.  Two
+    simplifications are deliberate and both err the SAME way -- toward a
+    LARGER bound, i.e. toward excluding LESS:
+
+      * a fixed instance is bucketed into the row of its `yMin` only, so a
+        multi-row hard macro obstructs one row here instead of all the rows
+        it really covers;
+      * the row extent is taken as the union of all rows, so a short row is
+        credited with the full span at its ends.
+
+    Both can therefore only FAIL to forbid a master that is in fact
+    unplaceable; neither can forbid one that is placeable.  That is the
+    correct direction to be wrong in: an over-large bound leaves the prior
+    behaviour, while an over-small bound would take away masters the design
+    can legitimately use.  The bound is also compared STRICTLY (`> bound` is
+    forbidden), so a master exactly as wide as the longest free run stays
+    legal.
+
+    Emits, on stdout, exactly one of:
+
+        PLACEABLE_WIDTH_BOUND: <dbu> dbu = <n> site(s); fixed obstructions=<m>
+        UNPLACEABLE_MASTERS_NONE: ...            nothing exceeded the bound
+        UNPLACEABLE_MASTERS_EXCLUDED: <k> ...    k masters set_dont_use'd
+        UNPLACEABLE_MASTERS_SKIPPED: ...         guard tripped, pool preserved
+        UNPLACEABLE_INSTANCES_PRESENT: <k> ...   report-only, already in netlist
+        UNPLACEABLE_MASTERS_NONFATAL: <err>      degraded to prior behaviour
+
+    chip-AGNOSTIC: standard OpenROAD/odb commands only; no design, PDK, cell or
+    dimension literal appears -- every number comes from the floorplan that was
+    just built.
+    """
+    return (
+        "# === unplaceable-master width cap (measured from the LIVE tap grid) ===\n"
+        "# FIXED taps bound the longest contiguous free-site run in every row.\n"
+        "# A master wider than that bound has NO legal site at ANY utilization;\n"
+        "# if the resizer/CTS inserts one, detailed_placement can never legalize\n"
+        "# it and detailed_route then aborts DRT-0073 and writes a DEF with zero\n"
+        "# signal routing. Measure the bound, then forbid the masters above it\n"
+        "# BEFORE the first buffer is inserted.\n"
+        "if {[catch {\n"
+        "  set _wc_blk [ord::get_db_block]\n"
+        "  set _wc_rows [$_wc_blk getRows]\n"
+        "  if {[llength $_wc_rows] > 0} {\n"
+        "    set _wc_sw [[[lindex $_wc_rows 0] getSite] getWidth]\n"
+        "    set _wc_x0 {} ; set _wc_x1 {}\n"
+        "    foreach _wc_r $_wc_rows {\n"
+        "      set _wc_b [$_wc_r getBBox]\n"
+        "      if {$_wc_x0 eq {} || [$_wc_b xMin] < $_wc_x0} { set _wc_x0 [$_wc_b xMin] }\n"
+        "      if {$_wc_x1 eq {} || [$_wc_b xMax] > $_wc_x1} { set _wc_x1 [$_wc_b xMax] }\n"
+        "    }\n"
+        "    array unset _wc_fx\n"
+        "    set _wc_nfixed 0\n"
+        "    foreach _wc_i [$_wc_blk getInsts] {\n"
+        "      set _wc_st [$_wc_i getPlacementStatus]\n"
+        "      if {$_wc_st ne \"FIRM\" && $_wc_st ne \"LOCKED\" && "
+        "$_wc_st ne \"FIXED\"} { continue }\n"
+        "      set _wc_bb [$_wc_i getBBox]\n"
+        "      lappend _wc_fx([$_wc_bb yMin]) [list [$_wc_bb xMin] [$_wc_bb xMax]]\n"
+        "      incr _wc_nfixed\n"
+        "    }\n"
+        "    set _wc_run 0\n"
+        "    if {$_wc_nfixed == 0} {\n"
+        "      set _wc_run [expr {$_wc_x1 - $_wc_x0}]\n"
+        "    } else {\n"
+        "      foreach _wc_y [array names _wc_fx] {\n"
+        "        set _wc_cur $_wc_x0\n"
+        "        foreach _wc_p [lsort -integer -index 0 $_wc_fx($_wc_y)] {\n"
+        "          set _wc_g [expr {[lindex $_wc_p 0] - $_wc_cur}]\n"
+        "          if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
+        "          if {[lindex $_wc_p 1] > $_wc_cur} { set _wc_cur [lindex $_wc_p 1] }\n"
+        "        }\n"
+        "        set _wc_g [expr {$_wc_x1 - $_wc_cur}]\n"
+        "        if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
+        "      }\n"
+        "    }\n"
+        "    puts \"PLACEABLE_WIDTH_BOUND: $_wc_run dbu = "
+        "[expr {$_wc_run / $_wc_sw}] site(s); fixed obstructions=$_wc_nfixed\"\n"
+        "    set _wc_kill {}\n"
+        "    foreach _wc_lib [[ord::get_db] getLibs] {\n"
+        "      foreach _wc_m [$_wc_lib getMasters] {\n"
+        "        if {![$_wc_m isCore]} { continue }\n"
+        "        if {[$_wc_m getWidth] > $_wc_run} { lappend _wc_kill [$_wc_m getName] }\n"
+        "      }\n"
+        "    }\n"
+        "    # GUARD: never take away the last usable buffer.\n"
+        "    set _wc_keepbuf 0\n"
+        "    foreach _wc_c [get_lib_cells -quiet *] {\n"
+        "      if {[catch {set _wc_ib [get_property $_wc_c is_buffer]}]} { continue }\n"
+        "      if {!$_wc_ib} { continue }\n"
+        "      if {[catch {set _wc_du [get_property $_wc_c dont_use]}]} { set _wc_du 0 }\n"
+        "      if {$_wc_du} { continue }\n"
+        "      if {[lsearch -exact $_wc_kill [get_name $_wc_c]] >= 0} { continue }\n"
+        "      incr _wc_keepbuf\n"
+        "    }\n"
+        "    if {[llength $_wc_kill] == 0} {\n"
+        "      puts \"UNPLACEABLE_MASTERS_NONE: every core master fits the "
+        "measured free-site run\"\n"
+        "    } elseif {$_wc_keepbuf < 1} {\n"
+        "      puts \"UNPLACEABLE_MASTERS_SKIPPED: excluding "
+        "[llength $_wc_kill] master(s) would empty the buffer pool "
+        "(survivors=$_wc_keepbuf) -- left enabled\"\n"
+        "    } else {\n"
+        "      set _wc_n 0\n"
+        "      foreach _wc_nm $_wc_kill {\n"
+        "        set _wc_lc [get_lib_cells -quiet $_wc_nm]\n"
+        "        if {[llength $_wc_lc] == 0} { continue }\n"
+        "        if {[catch {set_dont_use $_wc_lc}]} { continue }\n"
+        "        incr _wc_n\n"
+        "      }\n"
+        "      puts \"UNPLACEABLE_MASTERS_EXCLUDED: $_wc_n master(s) wider than "
+        "[expr {$_wc_run / $_wc_sw}] site(s); buffers still usable=$_wc_keepbuf "
+        "-- $_wc_kill\"\n"
+        "    }\n"
+        "    # REPORT-ONLY: masters the netlist already instantiates that the\n"
+        "    # floorplan cannot legalize. set_dont_use cannot undo those.\n"
+        "    set _wc_pre {}\n"
+        "    foreach _wc_i [$_wc_blk getInsts] {\n"
+        "      if {[[$_wc_i getMaster] getWidth] > $_wc_run} {\n"
+        "        lappend _wc_pre [$_wc_i getName]\n"
+        "      }\n"
+        "    }\n"
+        "    if {[llength $_wc_pre] > 0} {\n"
+        "      puts \"UNPLACEABLE_INSTANCES_PRESENT: [llength $_wc_pre] "
+        "instance(s) already in the netlist exceed the bound -- $_wc_pre\"\n"
+        "    }\n"
+        "  }\n"
+        "} _wc_err]} { puts \"UNPLACEABLE_MASTERS_NONFATAL: $_wc_err\" }\n")
+
+
+def _build_tapcell_and_placeability_tcl(pdk: "PdkConfig") -> str:
+    """`tapcell` insertion followed by the unplaceable-master width cap.
+
+    ORDER IS THE POINT and is why these two are composed in one place rather
+    than emitted independently: it is the FIXED tap grid that bounds the
+    longest contiguous free-site run, so the cap must be measured AFTER
+    `tapcell` has run -- measuring before it would measure an empty die and
+    exclude nothing.  Both must land BEFORE `buffer_ports` / `repair_design` /
+    `clock_tree_synthesis`, which are the commands that choose a repeater
+    master; a cap applied after the fact changes nothing.
+
+    Returning the composition as a VALUE (rather than concatenating at the
+    call site) is deliberate: the ordering contract is then testable by calling
+    this function, with no need to inspect the emitter's source.
+    """
+    return _build_tapcell_tcl(pdk) + _build_unplaceable_master_cap_tcl()
+
+
+
 def _build_tapcell_prune_tcl(pdk: "PdkConfig",
                              spare_pts_um: Optional[
                                  Sequence[Tuple[int, int]]] = None) -> str:
@@ -15048,6 +15237,34 @@ def _build_escalating_legalize_tcl(marker: str, var_tag: str = "",
         f"  }}\n"
         f"}}\n"
         f"{_clkswap}"
+        # Diamond-search rung. OpenROAD 26Q3 made the NegotiationLegalizer
+        # the DEFAULT (DPL-1102); measured on a failing post-CTS database it
+        # raised DPL-0701 "Violations remain: 2" and left 37 overlap + 37
+        # padding + 22 site-align violations behind, while the CLASSIC
+        # diamond legalizer (DPL-1101) on the SAME DEF legalized all but
+        # 2 cells (0 overlap, 0 padding, 2 site-align). It is a strictly
+        # last-resort rung -- gated on every rung above having failed --
+        # so a design that legalizes normally never enters it.
+        f"if {{$_dplok{v} == 0}} {{\n"
+        f"  if {{![catch {{detailed_placement -use_diamond_legalizer}}"
+        f" _dmd{v}]}} {{\n"
+        f"    if {{![catch {{check_placement}} _dmc{v}]}} {{ set "
+        f"_dplok{v} 1 ; puts \"{marker}_LEGALIZE_OK disp=diamond\" }}\n"
+        f"  }}\n"
+        f"  if {{$_dplok{v} == 0 && ![catch {{ord::get_die_area}} "
+        f"_dmda{v}]}} {{\n"
+        f"    set _dmw{v} [expr {{int(ceil([lindex $_dmda{v} 2] - "
+        f"[lindex $_dmda{v} 0]))}}]\n"
+        f"    set _dmh{v} [expr {{int(ceil([lindex $_dmda{v} 3] - "
+        f"[lindex $_dmda{v} 1]))}}]\n"
+        f"    if {{![catch {{detailed_placement -use_diamond_legalizer "
+        f"-max_displacement [list $_dmw{v} $_dmh{v}]}} _dmd{v}]}} {{\n"
+        f"      if {{![catch {{check_placement}} _dmc{v}]}} {{ set "
+        f"_dplok{v} 1 ; puts \"{marker}_LEGALIZE_OK "
+        f"disp=diamond-full-die\" }}\n"
+        f"    }}\n"
+        f"  }}\n"
+        f"}}\n"
         f"if {{$_dplok{v} == 0}} {{ puts \"{marker}_LEGALIZE_FAILED\" }}\n"
     )
 
@@ -18299,7 +18516,9 @@ if {{[catch {{estimate_parasitics -placement}} _pe_pl]}} {{
   puts "REPAIR_TIMING_SETUP_NONFATAL: $_rts_err"
 }}
 if {{[catch {{detailed_placement}} _rt_dp_err]}} {{
-  puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err"
+  if {{[catch {{detailed_placement -use_diamond_legalizer}} _rt_dp_errd]}} {{
+    puts "REPAIR_LEGALIZE_NONFATAL: $_rt_dp_err | diamond: $_rt_dp_errd"
+  }} else {{ puts "REPAIR_LEGALIZE_OK disp=diamond" }}
 }}
 puts "{_PNR_STAGE_MARKER} cts"
 if {{[catch {{clock_tree_synthesis -buf_list {{{clk_buf}}} -root_buf {clk_buf_root}{_cts_cluster}}} cts_err]}} {{
@@ -18365,7 +18584,9 @@ if {{[catch {{repair_timing -hold}} _rth2_err]}} {{
   puts "REPAIR_TIMING_HOLD_GR_NONFATAL: $_rth2_err"
 }}
 if {{[catch {{detailed_placement}} _gr_dp_err]}} {{
-  puts "GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err"
+  if {{[catch {{detailed_placement -use_diamond_legalizer}} _gr_dp_errd]}} {{
+    puts "GR_REPAIR_LEGALIZE_NONFATAL: $_gr_dp_err | diamond: $_gr_dp_errd"
+  }} else {{ puts "GR_REPAIR_LEGALIZE_OK disp=diamond" }}
 }}
 # Detailed route emits the actual `+ ROUTED ...` wire geometry that
 # def_stage_progression_check requires. Without it, routed.def carries
@@ -19246,7 +19467,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # v0.1.46/47/48 — silicon-critical PnR blocks (extracted to pure
     # helpers; see TestSiliconCriticalPnrBlocks in
     # programs/tests/test_phase3_backend_fixes.py).
-    tapcell_block = _build_tapcell_tcl(pdk)
+    tapcell_block = _build_tapcell_and_placeability_tcl(pdk)
     # #684 R6 (post-place) — sparse-die anti-flood tap prune, emitted after
     # placement (real geometry) and BEFORE placed.def (keeps DEF-stage
     # monotonicity). Pre-mark the spare grid positions (inserted after
