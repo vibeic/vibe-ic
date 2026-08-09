@@ -39,6 +39,15 @@
 //
 // If the agent's top module is not literally named `chip_top`, build
 // the TB with `+define+DUT_TOP_NAME=<actual_name>`.
+//
+// If the agent's open-drain bus PORT is not literally named `id_bus`,
+// build the TB with `+define+DUT_ID_BUS_PORT=<actual_port_name>`.
+// The bus itself is still the TB-side net `id_bus`; only the DUT-side
+// port identifier changes.  Without this the TB could bind exactly one
+// spelling of the bus port, so a functionally-correct DUT that declares
+// e.g. `inout id_io` could never reach the PASS verdict — iverilog
+// stopped at "port ``id_bus'' is not a port of u_dut", inside THIS file,
+// and the gate reported that as a compile defect in the agent's RTL.
 // ================================================================
 
 module aid_class_reference_tb;
@@ -80,14 +89,25 @@ module aid_class_reference_tb;
   pullup(id_bus);
   assign id_bus = host_drive_low ? 1'b0 : 1'bz;
 
-`ifdef DUT_TOP_NAME
+`ifndef DUT_TOP_NAME
+  `define DUT_TOP_NAME chip_top
+`endif
+
+// Two instantiation arms, NOT one macro-parameterised arm.  The
+// default arm below keeps the DUT-side bus port spelled out as the
+// literal `.id_bus(id_bus)` because callers that PARSE this file for
+// the TB's required port set (rather than compiling it) read the
+// instantiation text, and a macro token is not a port name to them.
+// The `DUT_ID_BUS_PORT arm is additive: it is only selected when a
+// caller states the DUT spells the port differently.
+`ifdef DUT_ID_BUS_PORT
   `DUT_TOP_NAME u_dut (
     .clk(clk),
     .reset_n(reset_n),
-    .id_bus(id_bus)
+    .`DUT_ID_BUS_PORT (id_bus)
   );
 `else
-  chip_top u_dut (
+  `DUT_TOP_NAME u_dut (
     .clk(clk),
     .reset_n(reset_n),
     .id_bus(id_bus)

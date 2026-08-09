@@ -47,8 +47,19 @@ Detection algorithm
      a) ``L8.rtl_constants.clock_period_ns`` / ``CLOCK_PERIOD_NS``;
      b) heuristic: scan rtl/ for ``CLOCK_PERIOD_NS = NN``;
      c) fall back to 20 (= 50 MHz).
+4b. Identify the DUT-side name of the open-drain bus port, from the top
+    module's own ``inout`` declaration, and bind the TB to it via
+    ``-DDUT_ID_BUS_PORT=<name>``.  The applicability predicate in step 9
+    accepts four spellings (``id_bus`` / ``id_io`` / ``idbus`` /
+    ``id_data``); the TB used to bind the literal ``id_bus`` only, so for
+    the other three the gate ADMITTED the design and then could only ever
+    emit FAIL — iverilog stopped at "port ``id_bus'' is not a port of
+    u_dut" (an error inside the plugin's own TB), which the gate reported
+    as ``TB_COMPILE_ERROR`` against the agent's RTL.  The PASS verdict was
+    unreachable for those designs no matter how correct they were.
 5. Run ``iverilog -g2012 -o <tmp>/tb -DDUT_TOP_NAME=<top> \\
-       -DCLOCK_PERIOD_NS=<period> <rtl> <plugin_tb>``.
+       -DDUT_ID_BUS_PORT=<bus_port> -DCLOCK_PERIOD_NS=<period> \\
+       <rtl> <plugin_tb>``.
 6. Run ``vvp <tmp>/tb`` (5 minute hard timeout).
 7. PASS when stdout contains ``PROTOCOL_REFERENCE_TB_PASS``.
 8. FAIL when stdout contains ``PROTOCOL_REFERENCE_TB_FAIL`` or
@@ -88,6 +99,11 @@ from typing import Optional
 
 
 PLUGIN_TB_REL = "tools/protocol_tb/aid_class_reference_tb.v"
+
+#: The DUT-side bus port name the reference TB binds when no
+#: ``DUT_ID_BUS_PORT`` override is supplied.  Kept as a named constant so
+#: the resolver below and the TB's own default cannot drift apart.
+TB_DEFAULT_ID_BUS_PORT = "id_bus"
 
 # Wave 29 — gate is non-waivable.  Sentinel kept to surface a clear
 # diagnostic if a project still carries the legacy waiver key.
@@ -236,6 +252,77 @@ def find_top_module(project: Path, rtl_files: list[Path]) -> Optional[str]:
     return None
 
 
+def _module_body(txt: str, name: str) -> Optional[str]:
+    """Return the source text of ``module <name> … endmodule``, or None."""
+    m = re.search(r"\bmodule\s+" + re.escape(name) + r"\s*[#(;]", txt)
+    if m is None:
+        return None
+    tail = txt[m.start():]
+    end = re.search(r"\bendmodule\b", tail)
+    return tail[:end.end()] if end else tail
+
+
+def find_id_bus_port(rtl_files: list[Path],
+                     top_name: Optional[str]) -> Optional[str]:
+    """Resolve the DUT-side name of the open-drain bus port.
+
+    Returns the declared identifier when it differs from the TB's default
+    ``id_bus``, and None when it IS ``id_bus`` (or cannot be resolved) so
+    the caller leaves the compile command untouched.
+
+    Why this exists.  ``_INOUT_ID_BUS`` — the same regex whose match is
+    the whole reason this gate runs on a project at all — already CAPTURES
+    the port name in group 1, and the program used to throw that capture
+    away and bind the literal ``id_bus``.  So the gate admitted four
+    spellings of the bus and could bind exactly one of them; for the other
+    three the reference TB failed to elaborate and the gate's PASS verdict
+    was unreachable by construction, whatever the RTL did.  The binding
+    now comes from the same scan as the admission.
+
+    Deliberately conservative in one direction: if the top module declares
+    ``id_bus`` at all, None is returned even when it ALSO declares another
+    accepted spelling.  A project that binds today must keep binding to
+    the same port, so this resolver can never move a passing project.
+    """
+    def _declared(txt: str) -> list[str]:
+        return [m.group(1) for m in _INOUT_ID_BUS.finditer(txt)]
+
+    def _pick(names: list[str]) -> Optional[str]:
+        for n in names:
+            if n.lower() == TB_DEFAULT_ID_BUS_PORT:
+                return None
+        return names[0]
+
+    # 1) The TOP module's own declaration is authoritative — a submodule
+    #    that happens to name its bus differently must not rebind the DUT.
+    if top_name:
+        for f in rtl_files:
+            try:
+                txt = f.read_text(errors="ignore")
+            except Exception:
+                continue
+            body = _module_body(txt, top_name)
+            if body is None:
+                continue
+            names = _declared(body)
+            if names:
+                return _pick(names)
+
+    # 2) Top not identified (the TB then defaults to `chip_top`), or the
+    #    top module carries no bus declaration of its own: fall back to
+    #    the first accepted declaration in RTL scan order — the same
+    #    evidence `is_protocol_design` used to admit the project.
+    for f in rtl_files:
+        try:
+            txt = f.read_text(errors="ignore")
+        except Exception:
+            continue
+        names = _declared(txt)
+        if names:
+            return _pick(names)
+    return None
+
+
 _CLOCK_PERIOD_RE = re.compile(
     r"\b(?:CLOCK_PERIOD_NS|CLK_PERIOD_NS|T_CLK_NS)\s*=\s*(\d+)",
 )
@@ -374,6 +461,7 @@ def run_iverilog(rtl_files: list[Path], plugin_tb: Path,
                  top_name: Optional[str], clk_period_ns: int,
                  work_dir: Path, timeout_compile: int = 90,
                  timeout_run: int = 300,
+                 id_bus_port: Optional[str] = None,
                  ) -> tuple[str, str, int, str, int]:
     """Returns (compile_stdout, compile_stderr, compile_rc,
                   run_stdout, run_rc)."""
@@ -398,6 +486,12 @@ def run_iverilog(rtl_files: list[Path], plugin_tb: Path,
     ]
     if top_name:
         cmd.append(f"-DDUT_TOP_NAME={top_name}")
+    # Only emitted when the DUT spells the bus port differently from the
+    # TB's own default, so the command for a conventional `id_bus` design
+    # is unchanged and the TB's default instantiation arm stays the one
+    # that elaborates.
+    if id_bus_port and id_bus_port != TB_DEFAULT_ID_BUS_PORT:
+        cmd.append(f"-DDUT_ID_BUS_PORT={id_bus_port}")
     for f in rtl_files:
         cmd.append(str(f))
     cmd.append(str(plugin_tb))
@@ -489,8 +583,10 @@ def check(project: Path, keep_tmp: bool = False) -> dict:
 
     top_name = find_top_module(project, rtl_files)
     clk_period_ns = find_clock_period_ns(project, rtl_files)
+    id_bus_port = find_id_bus_port(rtl_files, top_name)
     out["top_module"] = top_name or "chip_top"
     out["clock_period_ns"] = clk_period_ns
+    out["id_bus_port"] = id_bus_port or TB_DEFAULT_ID_BUS_PORT
 
     with tempfile.TemporaryDirectory(prefix="protocol_ref_tb_") as tmp:
         work_dir = Path(tmp)
@@ -536,7 +632,7 @@ def check(project: Path, keep_tmp: bool = False) -> dict:
             run_iverilog(
                 rtl_files, plugin_tb,
                 top_name=top_name, clk_period_ns=clk_period_ns,
-                work_dir=work_dir,
+                work_dir=work_dir, id_bus_port=id_bus_port,
             )
         )
 
@@ -652,6 +748,7 @@ def main() -> int:
             print(
                 f"PASS — PROTOCOL_REFERENCE_TB_PASS "
                 f"(top={result.get('top_module', '?')}, "
+                f"bus={result.get('id_bus_port', '?')}, "
                 f"clk_period={result.get('clock_period_ns', '?')} ns)")
         return 0
 

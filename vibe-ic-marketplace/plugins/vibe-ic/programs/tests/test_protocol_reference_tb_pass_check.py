@@ -422,6 +422,156 @@ def test_wave35_extended_scenarios_present():
         assert marker in txt, f"missing scenario verdict marker: {marker}"
 
 
+def _rename_bus(rtl: str, port: str) -> str:
+    """Same DUT, different spelling of the open-drain bus port.
+
+    `is_protocol_design` admits four spellings — `id_bus`, `id_io`,
+    `idbus`, `id_data` — as evidence that this AID-class TB applies, so a
+    stub renamed this way is a design the gate CHOOSES to run on.
+    """
+    return rtl.replace("id_bus", port)
+
+
+def _load_prog_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_prtb_under_test", PROG)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("port", ["id_io", "idbus", "id_data"])
+@pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not available")
+def test_alternate_bus_port_name_can_reach_pass(tmp_path, port):
+    """The PASS verdict must be reachable for every bus spelling the
+    gate's own applicability predicate admits.
+
+    Before the fix the TB bound the literal `id_bus`, so a DUT declaring
+    `inout id_io` (or `idbus` / `id_data`) was admitted by the gate and
+    then could ONLY ever emit FAIL: iverilog stopped at "port ``id_bus''
+    is not a port of u_dut" — an error inside the plugin's own reference
+    TB — which the gate reported as TB_COMPILE_ERROR against the agent's
+    RTL. The success branch was unreachable however correct the DUT was.
+    """
+    proj = _make_proj(tmp_path,
+                      rtl_files={"chip_top.v": _rename_bus(
+                          PASSING_STUB_RTL, port)},
+                      l3=L3_DEFAULT)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")], timeout=120)
+    out = json.loads((tmp_path / "out.json").read_text())
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert out["pass"] is True, out.get("findings")
+    assert out["findings"] == []
+    assert out["id_bus_port"] == port
+    assert "PROTOCOL_REFERENCE_TB_PASS" in out.get("run_stdout_tail", "")
+
+
+@pytest.mark.parametrize("port", ["id_io", "idbus", "id_data"])
+@pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not available")
+def test_alternate_bus_port_name_silent_dut_still_fails(tmp_path, port):
+    """The other direction: binding the real port must not hand out a
+    PASS. A silent DUT on a renamed bus still FAILs — and now FAILs for
+    the RUNTIME reason (it never answered), not because the TB could not
+    elaborate.
+    """
+    proj = _make_proj(tmp_path,
+                      rtl_files={"chip_top.v": _rename_bus(
+                          SILENT_STUB_RTL, port)},
+                      l3=L3_DEFAULT)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")], timeout=120)
+    out = json.loads((tmp_path / "out.json").read_text())
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert out["pass"] is False
+    rules = [f["rule"] for f in out["findings"]]
+    assert "TB_COMPILE_ERROR" not in rules, out["findings"]
+    assert "TB_RUNTIME_FAIL" in rules, out["findings"]
+    assert any("0 bytes" in f["message"] for f in out["findings"])
+
+
+@pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not available")
+def test_alternate_bus_port_name_wrong_opcode_still_fails(tmp_path):
+    """A renamed bus does not weaken the protocol assertions: a DUT that
+    answers with the wrong opcode still FAILs on the opcode, so the gate
+    is not merely 'anything that elaborates passes'."""
+    proj = _make_proj(tmp_path,
+                      rtl_files={"chip_top.v": _rename_bus(
+                          WRONG_OPCODE_STUB_RTL, "id_io")},
+                      l3=L3_DEFAULT)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")], timeout=120)
+    out = json.loads((tmp_path / "out.json").read_text())
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert out["id_bus_port"] == "id_io"
+    assert any("0x55" in f["message"] for f in out["findings"]), out["findings"]
+
+
+@pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not available")
+def test_default_bus_port_name_still_passes(tmp_path):
+    """The conventional spelling keeps binding exactly as before, and the
+    gate says which port it bound."""
+    proj = _make_proj(tmp_path,
+                      rtl_files={"chip_top.v": PASSING_STUB_RTL},
+                      l3=L3_DEFAULT)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")], timeout=120)
+    out = json.loads((tmp_path / "out.json").read_text())
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert out["pass"] is True
+    assert out["id_bus_port"] == "id_bus"
+
+
+@pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not available")
+def test_submodule_alias_does_not_rebind_a_top_that_declares_id_bus(tmp_path):
+    """A project that binds today must keep binding to the same port.
+
+    The top declares `inout id_bus`; a helper module in the same RTL dir
+    declares `inout id_io`. The resolver must stay on the top's own
+    declaration, so this project cannot be moved by the change.
+    """
+    helper = ("`timescale 1ns/100ps\n"
+              "module bus_alias_helper(input clk, inout id_io);\n"
+              "  assign id_io = 1'bz;\n"
+              "endmodule\n")
+    proj = _make_proj(tmp_path,
+                      rtl_files={"chip_top.v": PASSING_STUB_RTL,
+                                 "zz_helper.v": helper},
+                      l3=L3_DEFAULT)
+    r = _run([str(proj), "--json", str(tmp_path / "out.json")], timeout=120)
+    out = json.loads((tmp_path / "out.json").read_text())
+    assert out["id_bus_port"] == "id_bus", out
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert out["pass"] is True
+
+
+def test_find_id_bus_port_returns_the_declared_name(tmp_path):
+    """Unit-level: the resolver returns what the top DECLARES, and None
+    (= leave the TB on its default) whenever the top declares `id_bus`."""
+    mod = _load_prog_module()
+    d = tmp_path / "rtl"
+    d.mkdir()
+
+    alias = d / "a.v"
+    alias.write_text("module chip_top(input clk, inout id_data);\n"
+                     "endmodule\n")
+    assert mod.find_id_bus_port([alias], "chip_top") == "id_data"
+    # No top identified -> fall back to the same evidence that admitted
+    # the project.
+    assert mod.find_id_bus_port([alias], None) == "id_data"
+
+    conventional = d / "b.v"
+    conventional.write_text("module chip_top(input clk, inout id_bus);\n"
+                            "endmodule\n")
+    assert mod.find_id_bus_port([conventional], "chip_top") is None
+
+    both = d / "c.v"
+    both.write_text("module chip_top(input clk, inout id_io, inout id_bus);\n"
+                    "endmodule\n")
+    assert mod.find_id_bus_port([both], "chip_top") is None
+
+    none_at_all = d / "e.v"
+    none_at_all.write_text("module chip_top(input clk, output q);\n"
+                           "endmodule\n")
+    assert mod.find_id_bus_port([none_at_all], "chip_top") is None
+
+
 @pytest.mark.skipif(not IVERILOG, reason="iverilog/vvp not available")
 def test_wave35_scenarios_run_on_silent_stub(tmp_path):
     """Wave 35: even on a silent DUT, the extended scenarios produce
