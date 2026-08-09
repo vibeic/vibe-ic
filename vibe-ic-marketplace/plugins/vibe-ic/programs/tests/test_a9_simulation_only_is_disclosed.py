@@ -28,9 +28,27 @@ Three things were wrong, and each is pinned below:
     `_analog_a_check_common.vacuous_pass()` discloses that way while exiting 0, so
     the same program disclosed a skip through an optional slot and was read as a
     bare PASS through a required one. That is general, not A9-specific.
+
+#901 — WHAT THIS FILE PINS, AND WHAT IT DELIBERATELY DOES NOT
+-------------------------------------------------------------
+The first version of these tests pinned the TIER NAME `VACUOUS_PASS`, because
+under the pre-#901 rule one clause that disclosed inapplicability re-tiered the
+whole step. #901 replaced that with a CENSUS: A9 runs two census-bearing gate
+clauses and `mixed_signal_cosim_check` really does read the cosim results, so a
+tier asserting the whole step measured nothing was false about the half that
+did. A simulation-only close is now PASS carrying a `partially vacuous (1 of 2
+…)` disclosure that names `analog_a9_hw_verify_check`.
+
+Nothing this file protects moved. What it protects is that a simulation-only
+close cannot be told from a bench-verified one — a claim about TWO verdicts,
+now pinned as one (`test_the_disclosure_is_what_separates_it_from_a_bench_
+verified_close`) instead of being approximated by a label. The assertions read
+the emitted verdict and the dict the `--json` report is built from, so they hold
+under either vacuity doctrine and go red the moment the disclosure itself does.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -54,8 +72,14 @@ def _a9() -> dict:
     return next(s for s in doc["steps"] if str(s.get("id")) == "A9")
 
 
-def _project(tmp_path: Path, hw: dict | None) -> Path:
-    """A cosim-complete analog project; `hw` None == no bench measurement."""
+def _project(tmp_path: Path, hw: dict | None, corner: dict | None = None) -> Path:
+    """A cosim-complete analog project; `hw` None == no bench measurement.
+
+    `corner` writes the SPICE side that `analog_hw_spice_correlation_check`
+    correlates a bench number against. It is what makes a bench-carrying
+    project close CLEANLY rather than FAIL on "0 measurements compared", so a
+    genuinely bench-verified close is available as a control.
+    """
     (tmp_path / "phase1" / "analog").mkdir(parents=True)
     (tmp_path / "phase3" / "analog" / "blk1").mkdir(parents=True)
     (tmp_path / "phase3" / "mixed_signal" / "cosim").mkdir(parents=True)
@@ -71,26 +95,90 @@ def _project(tmp_path: Path, hw: dict | None) -> Path:
     if hw is not None:
         (tmp_path / "phase3" / "analog" / "blk1"
          / "hw_measurements.json").write_text(json.dumps(hw))
+    if corner is not None:
+        (tmp_path / "phase3" / "analog" / "blk1"
+         / "corner_results.json").write_text(json.dumps(corner))
     return tmp_path
+
+
+def _bench_verified(tmp_path: Path) -> Path:
+    """The control: a close that really did read a bench number."""
+    return _project(tmp_path, hw={"measurements": {"gain_db": 42.1}},
+                    corner={"pvt_results": {"tt": {"gain_db": 42.0}}})
+
+
+def _vacuity_disclosures(result) -> list:
+    """The disclosures in an EMITTED verdict, read off the verdict itself.
+
+    Deliberately keyed on the words a reviewer reads and on the clause NAME,
+    not on the tier label: #901 moved which pass-tier this lands in, and a test
+    that pins the label re-pins the defect that #901 removed instead of the
+    disclosure this file exists to protect.
+    """
+    return [x for x in result.reasons
+            if "vacuous" in x.lower() and "ADVISORY" not in x]
 
 
 # ── the defect ───────────────────────────────────────────────────────────────
 
 def test_simulation_only_close_is_not_a_bare_pass(tmp_path):
     """THE defect. Cosim green, no bench measurement anywhere -> the step must
-    disclose. Before the fix this was status PASS with reasons == []."""
+    disclose. Before the fix this was status PASS with reasons == [].
+
+    BARE is the word that carries the meaning, and it was never the tier: what
+    made the old verdict indefensible was that it said NOTHING, so the report
+    could not be told apart from a bench-verified close. This asserts on the
+    emitted verdict — a disclosure exists, and it NAMES the clause that
+    examined nothing — which is the property the fix owes, in whichever
+    pass-tier the flow's vacuity arithmetic puts it.
+
+    Under #901 that tier is PASS, not VACUOUS_PASS, and the reason is measured
+    rather than stipulated: A9's gate runs TWO census-bearing clauses, and
+    `mixed_signal_cosim_check` really does read the cosim results. A tier that
+    says the whole step measured nothing would be false about the half that
+    did; the tier says PASS and the disclosure says which half did not.
+    """
     p = _project(tmp_path, hw=None)
     assert not list(p.rglob("hw_measurements.json"))
     r = FCC.check_step(p, _a9(), {}, None)
-    assert r.status != "PASS", (r.status, r.reasons)
-    assert r.status == "VACUOUS_PASS", (r.status, r.reasons)
-    assert any("VACUOUS" in x or "vacuous" in x for x in r.reasons), r.reasons
+    assert r.reasons, (r.status, r.reasons)
+    disclosed = _vacuity_disclosures(r)
+    assert disclosed, (r.status, r.reasons)
+    assert any("analog_a9_hw_verify_check" in x for x in disclosed), disclosed
+
+    # …and it must survive into the machine-readable channel, which is what the
+    # `--json` report is built from (`asdict(step_result)`). A disclosure that
+    # only ever reached a terminal would be the same defect one layer down.
+    emitted = dataclasses.asdict(r)
+    assert any("analog_a9_hw_verify_check" in x and "vacuous" in x.lower()
+               for x in emitted["reasons"]), emitted["reasons"]
+
+
+def test_the_disclosure_is_what_separates_it_from_a_bench_verified_close(tmp_path):
+    """The defect stated as the COMPARISON it was always about.
+
+    The module header charges the old behaviour with being "byte-identical in
+    the report to a bench-verified close". That is a claim about two verdicts,
+    so pin it as one: run both closes through the same gate and require the
+    emitted verdicts to differ, with the difference living in the disclosure
+    and NOT in a mandate — the bench-verified close must not be the only one
+    that can pass.
+    """
+    sim = FCC.check_step(_project(tmp_path / "sim", hw=None), _a9(), {}, None)
+    bench = FCC.check_step(_bench_verified(tmp_path / "bench"), _a9(), {}, None)
+
+    assert bench.status not in ("FAIL", "MISSING"), (bench.status, bench.reasons)
+    assert sim.status not in ("FAIL", "MISSING"), (sim.status, sim.reasons)
+
+    assert (sim.status, list(sim.reasons)) != (bench.status, list(bench.reasons))
+    assert _vacuity_disclosures(sim), sim.reasons
+    assert not _vacuity_disclosures(bench), bench.reasons
 
 
 def test_simulation_only_close_is_still_legal(tmp_path):
     """DIRECTION 1, and the whole point of choosing disclosure over a mandate: a
-    headless/CI analog run must still be able to close. VACUOUS_PASS is a
-    pass-tier verdict — this must NOT become FAIL or MISSING."""
+    headless/CI analog run must still be able to close. The disclosure rides on
+    a PASS-FAMILY verdict — this must NOT become FAIL or MISSING."""
     r = FCC.check_step(_project(tmp_path, hw=None), _a9(), {}, None)
     assert r.status not in ("FAIL", "MISSING"), (r.status, r.reasons)
 
