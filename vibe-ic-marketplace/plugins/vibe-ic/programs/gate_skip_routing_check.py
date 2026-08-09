@@ -370,7 +370,12 @@ _UNROUTED_INVENTORY: Dict[str, int] = {
     "wake_gen_bus_active_reset_check": 2,
     "wake_gen_silence_gate": 4,
     "wake_pulse_emit_gated_by_first_rx_command_check": 2,
-    "wake_pulse_implementation_check": 1,
+    # wake_pulse_implementation_check: DRAINED. Its "nothing to examine" branch
+    # now routes through `_vacuous_exit` (rc 2), and the same change made the
+    # gate's FAIL verdict reachable at all — `main` returned `1 if args.strict
+    # else 0` and the P0 umbrella never supplies `--strict`, so every ERROR it
+    # printed exited 0 and was recorded as a PASS. DELETED rather than zeroed,
+    # per the rule stated at the head of this table.
     "wake_pulse_width_matches_measurement_check": 2,
 }
 

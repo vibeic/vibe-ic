@@ -365,19 +365,66 @@ endmodule
     assert abs(s["wake_pulse_us"] - 4.0) < 0.5, s
 
 
-def test_wave9_missing_both_fails_no_skip(tmp_path):
-    """Wave 9 — when neither wake-pulse nor BIT0 synonym resolves AND
-    no waiver, the gate must FAIL (it used to silently SKIP, which is
-    what let v0.119.40 slip through)."""
+def test_wave9_missing_both_is_vacuous_never_a_plain_pass(tmp_path):
+    """Wave 9's property, moved to the tier it belongs in.
+
+    ORIGINAL TEST (`test_wave9_missing_both_fails_no_skip`) asserted rc 1
+    on a project whose L docs say NOTHING about a wake pulse, on the
+    grounds that "it used to silently SKIP, which is what let v0.119.40
+    slip through". The concern is right; rc 1 was the wrong tier for it.
+    MEASURED over the tracked corpus, that branch fires on 99 of 117
+    project directories, none of them a wake-pulse design — so the day
+    the exit code started to bite, it would have reddened the corpus for
+    a reason no project has.
+
+    The property Wave 9 actually needed is "this must never be credited
+    as a plain PASS", and the plugin has a tier for exactly that: rc 2
+    VACUOUS, which `flow_compliance_check` records as a NAMED skip and
+    which carries the `VACUOUS_PASS:` disclosure saying in words that it
+    is not a pass over the design. That is STRICTLY STRONGER than what
+    this project got before the fix, which was rc 0 — a plain PASS,
+    because `--strict` is never supplied in production.
+    """
     docs = tmp_path / "phase1" / "generated_docs"
     docs.mkdir(parents=True, exist_ok=True)
     (docs / "L2.json").write_text(json.dumps({"unrelated": 1}))
     _write_rtl(tmp_path, "module core; endmodule")
-    r = _run(tmp_path, strict=True)
+    r = _run(tmp_path)          # NO --strict: production's argv
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS_PASS:" in (r.stdout + r.stderr), r.stdout + r.stderr
+    rep = json.loads((tmp_path / "rep.json").read_text())
+    assert rep["skipped"] is True, rep
+    assert rep["exit_code"] == 2, rep
+    # And it is NOT a finding-bearing failure: nothing about this project
+    # was examined, so nothing about it is claimed.
+    assert rep["findings"] == [], rep
+
+
+def test_declared_wake_class_with_no_numbers_still_fails(tmp_path):
+    """The half of Wave 9 that IS a design verdict, kept reachable.
+
+    A project that DOES declare a WAKE symbol class (structured, with
+    timing fields) but pins no width and no classifier window is a real
+    finding about a real design — the gate has a subject and cannot
+    check it. That must stay rc 1, without --strict.
+    """
+    docs = tmp_path / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L2.json").write_text(json.dumps({
+        "pulse_classes": [{"class_name": "WAKE", "min_ticks": None}],
+    }))
+    _write_rtl(tmp_path, """\
+module core(input clk, output wake_drv);
+  reg [10:0] twk_cnt;
+  always @(posedge clk) twk_cnt <= twk_cnt + 1;
+  assign wake_drv = 1'b0;
+endmodule
+""")
+    r = _run(tmp_path)          # NO --strict
     assert r.returncode == 1, r.stdout + r.stderr
     rep = json.loads((tmp_path / "rep.json").read_text())
     rules = [f["rule"] for f in rep["findings"]]
-    assert "WAKE_PULSE_VALUES_UNRESOLVED" in rules, rules
+    assert "WAKE_PULSE_VALUES_UNRESOLVED" in rules, rep
 
 
 def test_wave9_value_waiver_skips(tmp_path):
@@ -400,19 +447,27 @@ def test_wave9_value_waiver_skips(tmp_path):
 
 
 def test_wave9_value_waiver_too_short_rejected(tmp_path):
-    """Short rationale (<40 chars) must NOT silence the value branch."""
-    docs = tmp_path / "phase1" / "generated_docs"
-    docs.mkdir(parents=True, exist_ok=True)
-    (docs / "L2.json").write_text(json.dumps({"unrelated": 1}))
-    _write_rtl(tmp_path, "module core; endmodule")
+    """Short rationale (<40 chars) must NOT silence the value branch.
+
+    Driven on a project that HAS a subject (a declared BIT0 window and a
+    wake pulse too short for it), so what the assertion measures is the
+    waiver's rejection and nothing else. The previous fixture used a
+    project with no wake pulse anywhere, where the ERROR came from the
+    gate's own empty denominator — so the test would have gone on passing
+    with the waiver logic deleted.
+    """
+    _make_value_branch_docs(
+        tmp_path, wake_pulse_us=1.0, bit0_low_min_us=3.6)
     (tmp_path / "waivers.json").write_text(json.dumps({
         "waivers": [{
             "id": "wake_pulse_width_skipped_intentional",
             "rationale": "skip",
         }],
     }))
-    r = _run(tmp_path, strict=True)
+    r = _run(tmp_path)          # NO --strict: production's argv
     assert r.returncode == 1, r.stdout + r.stderr
+    rep = json.loads((tmp_path / "rep.json").read_text())
+    assert "WAKE_PULSE_BELOW_BIT0_MIN" in [f["rule"] for f in rep["findings"]], rep
 
 
 # ====================================================================
