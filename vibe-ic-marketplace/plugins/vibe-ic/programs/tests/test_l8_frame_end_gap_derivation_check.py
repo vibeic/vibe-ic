@@ -181,3 +181,162 @@ def test_ticks_with_no_resolvable_clock_still_skips(tmp_path):
     assert r.returncode == 0, r.stdout
     rep = json.loads((tmp_path / "rep.json").read_text())
     assert rep["summary"]["skipped_reason"]
+
+
+# ─────────────────────────────────────────────────────────────────────
+# THE FAIL VERDICT WAS UNREACHABLE FROM THE ONLY CALLER.
+#
+# Every test above passes `--strict`. The P0 structural umbrella does
+# not: `flow_compliance_check._structural_gate_argv` builds
+# `[python, <program>, <project>]` for a plain-argv gate. Under that argv
+# the old `main()` returned `1 if args.strict and not passed else 0` — so
+# rc was 0 for EVERY run the flow performs, while the JSON claimed
+# `"passed": true` next to an ERROR finding. rc 0 is PASS to the
+# umbrella, so the exact bug this gate documents scored green.
+#
+# These tests build the argv by CALLING THE UMBRELLA'S OWN BUILDER
+# rather than re-typing it, so they exercise the real construction path;
+# a re-typed argv agrees with the umbrella only by coincidence. Both
+# directions are asserted on returned values (exit code + emitted JSON),
+# never on program text. Fixtures are synthetic neutral data.
+# ─────────────────────────────────────────────────────────────────────
+
+def _umbrella_argv(project: Path) -> list[str]:
+    """The argv the P0 structural umbrella really runs this gate with."""
+    sys.path.insert(0, str(PROG.parent))
+    import flow_compliance_check as fcc
+
+    assert "l8_frame_end_gap_derivation_check" in fcc._STRUCTURAL_RTL_GATES
+    return fcc._structural_gate_argv(
+        "l8_frame_end_gap_derivation_check", project,
+        rtl_dir=project / "phase2" / "stage1" / "rtl")
+
+
+def _umbrella_argv_without_strict(project: Path) -> list[str]:
+    """The same argv with any `--strict` removed.
+
+    The property this fix owns is that the DEFAULT is correct, so the
+    no-strict shape is asserted explicitly rather than inferred from what
+    the caller happens to build today. Filtering instead of asserting
+    `--strict not in argv` keeps the test honest if a caller-side fix
+    later adds the flag: the default must still produce the verdict, and
+    the test must not start passing merely because the flag arrived.
+    """
+    return [a for a in _umbrella_argv(project) if a != "--strict"]
+
+
+def _run_as_umbrella(project: Path, report: Path):
+    """Drive the gate the way the flow does, minus any `--strict`."""
+    return subprocess.run(
+        _umbrella_argv_without_strict(project) + ["--json", str(report)],
+        capture_output=True, text=True)
+
+
+def test_error_is_reachable_from_the_umbrella_argv(tmp_path):
+    """DIRECTION 1 — fails against the unfixed program.
+
+    A gap above the derived upper bound, driven with the umbrella's own
+    argv (no `--strict`): the gate must return its FAIL verdict, and the
+    JSON must not publish `passed: true` beside an ERROR finding.
+    Unfixed: rc 0 and passed True.
+    """
+    _setup(tmp_path, frame_end_us=80.0)      # bound is 2 * 22 = 44us
+    rep_path = tmp_path / "umbrella.json"
+    r = _run_as_umbrella(tmp_path, rep_path)
+
+    assert r.returncode == 1, (
+        f"FAIL verdict unreachable from the real caller: rc={r.returncode}\n"
+        f"{r.stdout}")
+    rep = json.loads(rep_path.read_text())
+    assert rep["passed"] is False, rep
+    assert [f["rule"] for f in rep["findings"]] == [
+        "L8_FRAME_END_GAP_TOO_WIDE"]
+    assert rep["summary"]["upper_bound_us"] == 44.0
+
+    # And through the caller's argv EXACTLY as built, whatever it becomes.
+    raw = subprocess.run(_umbrella_argv(tmp_path),
+                         capture_output=True, text=True)
+    assert raw.returncode == 1, raw.stdout
+
+
+def test_too_tight_is_reachable_from_the_umbrella_argv(tmp_path):
+    """DIRECTION 1, other ERROR rule — also unreachable when unfixed."""
+    _setup(tmp_path, frame_end_us=21.0)      # bound is 22 + 3 = 25us
+    rep_path = tmp_path / "umbrella.json"
+    r = _run_as_umbrella(tmp_path, rep_path)
+
+    assert r.returncode == 1, r.stdout
+    rep = json.loads(rep_path.read_text())
+    assert rep["passed"] is False, rep
+    assert [f["rule"] for f in rep["findings"]] == [
+        "L8_FRAME_END_GAP_TOO_TIGHT"]
+
+
+def test_umbrella_argv_still_passes_an_in_range_value(tmp_path):
+    """DIRECTION 2 — proves the gate is not now always-fail.
+
+    Same argv, same fixture shape, only the derived value differs: a gap
+    inside [25, 44] must still return the PASS verdict with an empty
+    findings list and `passed: true`.
+    """
+    _setup(tmp_path, frame_end_us=27.0)
+    rep_path = tmp_path / "umbrella.json"
+    r = _run_as_umbrella(tmp_path, rep_path)
+
+    assert r.returncode == 0, r.stdout
+    rep = json.loads(rep_path.read_text())
+    assert rep["passed"] is True, rep
+    assert rep["findings"] == []
+    assert rep["summary"]["lower_bound_us"] == 25.0
+
+
+def test_umbrella_argv_still_exits_zero_on_the_skip_paths(tmp_path):
+    """DIRECTION 2, blast radius — every corpus project reaches the gate
+    through a skip path (no `frame_end_gap_*` field in L8). Those must
+    keep exiting 0, or the default change re-scores them all at once."""
+    _setup(tmp_path, frame_end_us=None)
+    rep_path = tmp_path / "umbrella.json"
+    r = _run_as_umbrella(tmp_path, rep_path)
+
+    assert r.returncode == 0, r.stdout
+    rep = json.loads(rep_path.read_text())
+    assert rep["passed"] is True
+    assert rep["findings"] == []
+    assert rep["summary"]["skipped_reason"]
+
+
+def test_waiver_still_suppresses_under_the_umbrella_argv(tmp_path):
+    """DIRECTION 2, escape hatch — a waived project must not be turned
+    red by the default change."""
+    _setup(tmp_path, frame_end_us=80.0)
+    (tmp_path / "waivers.json").write_text(json.dumps({
+        "waivers": [{
+            "id": "frame_end_gap_derivation_override",
+            "rationale": "synthetic fixture: master tolerates the wide gap",
+        }],
+    }))
+    rep_path = tmp_path / "umbrella.json"
+    r = _run_as_umbrella(tmp_path, rep_path)
+
+    assert r.returncode == 0, r.stdout
+    rep = json.loads(rep_path.read_text())
+    assert rep["passed"] is True
+    assert rep["findings"] == []
+
+
+def test_strict_flag_is_still_accepted_and_no_longer_gates_the_verdict(
+        tmp_path):
+    """`--strict` stays parseable (existing command lines keep working)
+    and now produces the SAME verdict as its absence."""
+    _setup(tmp_path, frame_end_us=80.0)
+    strict = subprocess.run(
+        _umbrella_argv(tmp_path) + ["--strict",
+                                    "--json", str(tmp_path / "s.json")],
+        capture_output=True, text=True)
+    plain = _run_as_umbrella(tmp_path, tmp_path / "p.json")
+
+    assert strict.returncode == 1, strict.stderr
+    assert strict.returncode == plain.returncode
+    assert (json.loads((tmp_path / "s.json").read_text())["passed"]
+            is json.loads((tmp_path / "p.json").read_text())["passed"]
+            is False)

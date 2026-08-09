@@ -37,22 +37,53 @@ Honest-FAIL guarantees:
   * absent / non-directory project -> exit 2
   * a subckt with a one-pin internal net -> exit 1 (FLOATING_NODE)
   * a subckt with a declared-but-unused port -> exit 1 (UNUSED_PORT)
-  * a .sp file with NO .subckt at all -> reported NO_SUBCKT INFO; it does
-    not vacuously pass (files_with_subckt is surfaced in the summary).
+  * .sp files were read but NOT ONE of them declares a `.subckt` -> exit 2
+    VACUOUS. No connectivity graph was built, so there is nothing for a PASS
+    to be a pass OVER.
+
+WHAT `skipped` IS DERIVED FROM, AND WHY IT CHANGED
+==================================================
+The vacuous tier (#521, `_vacuous_exit`) is routed entirely from this gate's
+own ``summary["skipped"]``. That flag used to answer "did I find a directory,
+and were there files in it to open?" — never "did I actually build the graph I
+audit". Two verdicts this module's own contract enumerates were therefore
+unreachable, both measured:
+
+  * ``reason="no_analog_dir"`` could not be produced by ANY input. The resolver
+    below ended in an unconditional ``if project.is_dir(): return project``,
+    and ``main()`` has already returned 2 for the only input that would make
+    that test fail — so the ``None`` return, the ``SKIP_NO_ANALOG_DIR``
+    finding and the reason token were dead code. Worse than dead: the fallback
+    silently promoted "this project has no analog directory" into "the analog
+    directory is the ENTIRE project tree", so an unrelated `.sp` anywhere under
+    the root became the denominator of an analog connectivity verdict.
+
+  * The vacuity this file's rc-2 line describes — "no connectivity graph was
+    built at all" — could not be reported once a single `.sp` existed, because
+    ``summary["skipped"]`` was hardcoded ``False`` the moment the file loop was
+    entered. A run that opened N decks and found zero `.subckt` printed
+    ``[PASS]`` and exited 0, in the PLAIN tier, indistinguishable to every
+    automated consumer from a clean graph. `files_with_subckt` sat in the JSON
+    saying otherwise and nothing read it. That is the credit #521 exists to
+    withhold, re-earned one layer down.
+
+Both are now derived from the graph itself: the resolver adopts the project
+root only on EVIDENCE that decks live there, and `skipped` is
+``files_with_subckt == 0``.
 
 Usage:
     python3 analog_netlist_connectivity_check.py <project_dir>
     python3 analog_netlist_connectivity_check.py <project_dir> --json out.json
 
 Exit codes:
-    0 = PASS: at least one .sp deck was parsed and its connectivity graph is
-        clean
+    0 = PASS: at least one .subckt connectivity graph was built and every one
+        of them is clean
     1 = FAIL (floating node / unused port)
-    2 = VACUOUS: nothing was examined — no analog directory, or no .sp file in
-        it, so no connectivity graph was built at all. #521: both used to be
-        rc 0, on 196 of the 200 tracked project roots. This is the branch the
-        "Honest-FAIL guarantees" note above was written to protect. Also rc 2
-        for an IO / parse error.
+    2 = VACUOUS: no connectivity graph was built at all — no analog directory
+        (`no_analog_dir`), no .sp file in it (`no_sp_files`), no readable .sp
+        (`no_readable_sp`), or .sp files that declare no `.subckt`
+        (`no_subckt_in_any_sp`). #521: these used to be rc 0, on 196 of the 200
+        tracked project roots. Also rc 2 for an IO / parse error.
 
 chip-AGNOSTIC.
 """
@@ -106,7 +137,28 @@ class AuditResult:
     summary: dict = field(default_factory=dict)
 
 
+def _has_sp(d: Path) -> bool:
+    """True iff at least one `*.sp` exists anywhere under `d`."""
+    try:
+        for _ in d.rglob("*.sp"):
+            return True
+    except OSError:
+        return False
+    return False
+
+
 def _analog_dir(project: Path) -> Optional[Path]:
+    """The directory whose SPICE decks this gate audits, or None when the
+    project has no analog root at all.
+
+    The last clause is a deliberate, EVIDENCE-BASED affordance and not a
+    catch-all: the gate may legitimately be pointed straight at a directory of
+    decks rather than at a project root, so that directory is accepted as the
+    analog root only when it actually holds a `.sp`. The unconditional
+    ``if project.is_dir(): return project`` it replaces made ``None`` — and
+    with it the entire ``no_analog_dir`` verdict — unreachable, because
+    ``main()`` rejects a non-directory before this is ever called.
+    """
     if _HAVE_PL:
         try:
             d = _pl.analog_dir(project)
@@ -119,7 +171,7 @@ def _analog_dir(project: Path) -> Optional[Path]:
                  project / "analog"):
         if cand.is_dir():
             return cand
-    if project.is_dir():
+    if project.is_dir() and _has_sp(project):
         return project
     return None
 
@@ -282,14 +334,26 @@ def run_audit(project: Path) -> AuditResult:
         else:
             result.passed = False
 
+    # The gate audits CONNECTIVITY GRAPHS, so its denominator is the number of
+    # `.subckt` blocks it built one for — not the number of files it opened.
+    # Zero graphs means it examined nothing, whatever the file count says.
+    built_no_graph = files_with_subckt == 0
     result.summary = {
-        "skipped": False,
+        "skipped": built_no_graph,
         "files_checked": checked,
         "files_with_subckt": files_with_subckt,
         "files_pass": files_pass,
         "files_fail": checked - files_pass,
         "pass": result.passed,
     }
+    if built_no_graph:
+        reason = "no_readable_sp" if checked == 0 else "no_subckt_in_any_sp"
+        result.summary["reason"] = reason
+        result.findings.append(Finding(
+            rule="NO_CONNECTIVITY_GRAPH", severity="INFO",
+            message=(f"{checked} .sp file(s) read, 0 declare a .subckt; no "
+                     f"connectivity graph was built, so this run is VACUOUS "
+                     f"and not a pass over the design")))
     return result
 
 

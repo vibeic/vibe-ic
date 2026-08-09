@@ -49,20 +49,53 @@ old decap-count proxy:
 SKIPPED is a distinct "cannot judge" verdict — it is never conflated with
 PASS, so an rc-based sign-off gate can never read absence as green.
 
+VIA / CUT SEGMENTS — why the cut layer has to be RESOLVED, not read
+-------------------------------------------------------------------
+The real producer names only the two METAL endpoints of a via segment. A row
+of `em_segments.csv` for a via reads
+
+    m1,x0,y0,m2,x1,y1,<current>          # both `Node0/1 Layer` are ROUTING
+
+— the CUT layer carrying that current is never written anywhere in the report.
+So a per-cut screen that only looks up `Node0 Layer` / `Node1 Layer` in the
+Jmax table can never find a cut entry, and EVERY via segment falls out as
+`unscreened` while the run still prints PASS. Via/cut EM is the dominant
+electromigration wear-out mechanism, so that is the exact class of segment a
+real sign-off must judge.
+
+This program therefore resolves the cut from the LAYER STACK:
+
+  * a cut layer NAMED by the report is used directly;
+  * else a cut entry whose `between` pair matches the two endpoints;
+  * else every cut layer lying strictly BETWEEN the two routing layers in
+    stack order (a tech LEF declares layers bottom-up, so declaration order
+    IS the stack). A stacked via must satisfy every cut it passes through, so
+    the MOST RESTRICTIVE of those limits is applied.
+
+The report may carry a per-segment cut count (`cuts` / `via_cuts` column or
+JSON key); the screened value is then `current / cuts`. Absent that count the
+screen assumes ONE cut — conservative by construction, since an array splits
+the current. Conservative can only over-report, never fabricate a PASS.
+
 jmax JSON schema (any of the jmax-unit keys per layer)::
 
     {
       "layers": {
-        "met1":  {"kind": "routing", "thickness_um": 0.35, "width_um": 0.14,
-                  "jmax_mA_per_um": 2.8},
-        "met5":  {"kind": "routing", "thickness_um": 1.26, "width_um": 1.6,
-                  "jmax_A_per_um2": 8.0e-3},
-        "via1":  {"kind": "cut", "jmax_mA_per_cut": 0.29}
+        "m1":   {"kind": "routing", "thickness_um": 0.35, "width_um": 0.14,
+                 "jmax_mA_per_um": 2.8},
+        "c12":  {"kind": "cut", "jmax_mA_per_cut": 0.29,
+                 "between": ["m1", "m2"]},
+        "m2":   {"kind": "routing", "thickness_um": 1.26, "width_um": 1.6,
+                 "jmax_A_per_um2": 8.0e-3}
       }
     }
 
   jmax may be given as  jmax_mA_per_um (per-width, LEF DC form),
   jmax_A_per_um2 (areal) or jmax_A_per_cm2 (areal, / 1e8).
+
+  Stack order comes from `between` (explicit, wins), else a per-layer
+  `stack_index`, else the order the layers appear in the `layers` object —
+  the same bottom-up convention a tech LEF uses.
 
 Usage::
 
@@ -88,7 +121,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # require J < Jmax * (1 - margin); 10% guardband is a common EM sign-off margin.
 _DEFAULT_MARGIN = 0.10
@@ -106,10 +139,12 @@ def _num(v: Any) -> Optional[float]:
 
 # ---------------------------------------------------------------------------
 # Jmax table (per-layer geometry + limit) — from tech LEF or supplied JSON.
-# Normalised internal entry:
+# Normalised internal entry (every entry also carries "stack_index": int|None,
+# the bottom-up position of the layer in the process stack — that is what lets
+# a via segment named only by its two METAL endpoints resolve its cut layer):
 #   routing: {"kind":"routing","thickness_um":t|None,"width_um":w|None,
 #             "jmax_areal_A_per_um2":a|None,"jmax_per_width_A_per_um":p|None}
-#   cut:     {"kind":"cut","jmax_per_cut_A":c}
+#   cut:     {"kind":"cut","jmax_per_cut_A":c,"between":[lo,hi]|None}
 # ---------------------------------------------------------------------------
 _LAYER_BLOCK_RE = re.compile(
     r"^\s*LAYER\s+(\S+)\s*;?\s*$(.*?)^\s*END\s+\1\b",
@@ -125,9 +160,15 @@ _DCDENS_RE = re.compile(
 
 
 def parse_lef_jmax(text: str) -> Dict[str, Dict[str, Any]]:
-    """Build a normalised Jmax table from a tech-LEF string."""
+    """Build a normalised Jmax table from a tech-LEF string.
+
+    LEF declares layers bottom-up in process order, so the index of each
+    `LAYER ... END` block IS the stack position. It is recorded on every entry
+    (`stack_index`) because the EM report names a via segment by its two METAL
+    endpoints only — the cut between them can be identified from the stack and
+    from nothing else in the report."""
     table: Dict[str, Dict[str, Any]] = {}
-    for m in _LAYER_BLOCK_RE.finditer(text):
+    for stack_index, m in enumerate(_LAYER_BLOCK_RE.finditer(text)):
         name = m.group(1)
         body = m.group(2)
         tm = _TYPE_RE.search(body)
@@ -147,6 +188,7 @@ def parse_lef_jmax(text: str) -> Dict[str, Dict[str, Any]]:
             areal = (per_width / thickness) if thickness else None
             table[name.lower()] = {
                 "orig_name": name, "kind": "routing",
+                "stack_index": stack_index,
                 "thickness_um": thickness, "width_um": width,
                 "jmax_per_width_A_per_um": per_width,
                 "jmax_areal_A_per_um2": areal,
@@ -154,6 +196,7 @@ def parse_lef_jmax(text: str) -> Dict[str, Dict[str, Any]]:
         elif ltype == "CUT":
             table[name.lower()] = {
                 "orig_name": name, "kind": "cut",
+                "stack_index": stack_index, "between": None,
                 "jmax_per_cut_A": dc * 1e-3,  # LEF cut DCCURRENTDENSITY is mA/cut
             }
     return table
@@ -165,10 +208,14 @@ def parse_json_jmax(data: Any) -> Dict[str, Dict[str, Any]]:
     layers = data.get("layers") if isinstance(data, dict) else None
     if not isinstance(layers, dict):
         return table
-    for name, spec in layers.items():
+    for pos, (name, spec) in enumerate(layers.items()):
         if not isinstance(spec, dict):
             continue
         kind = str(spec.get("kind", "routing")).lower()
+        # Stack position: explicit `stack_index` wins, else the order the
+        # layers appear in (the bottom-up convention a tech LEF uses).
+        si = _num(spec.get("stack_index"))
+        stack_index = int(si) if si is not None else pos
         if kind == "cut":
             per_cut = _num(spec.get("jmax_mA_per_cut"))
             if per_cut is not None:
@@ -177,8 +224,13 @@ def parse_json_jmax(data: Any) -> Dict[str, Dict[str, Any]]:
                 per_cut = _num(spec.get("jmax_A_per_cut"))
             if per_cut is None:
                 continue
+            btw = spec.get("between")
+            between = ([str(b).lower() for b in btw]
+                       if isinstance(btw, (list, tuple)) and len(btw) == 2
+                       else None)
             table[str(name).lower()] = {
-                "orig_name": name, "kind": "cut", "jmax_per_cut_A": per_cut}
+                "orig_name": name, "kind": "cut", "jmax_per_cut_A": per_cut,
+                "stack_index": stack_index, "between": between}
             continue
         thickness = _num(spec.get("thickness_um"))
         width = _num(spec.get("width_um")) or _num(spec.get("min_width_um"))
@@ -198,6 +250,7 @@ def parse_json_jmax(data: Any) -> Dict[str, Dict[str, Any]]:
             continue
         table[str(name).lower()] = {
             "orig_name": name, "kind": "routing",
+            "stack_index": stack_index,
             "thickness_um": thickness, "width_um": width,
             "jmax_per_width_A_per_um": per_width,
             "jmax_areal_A_per_um2": areal,
@@ -281,6 +334,7 @@ def _iter_csv_segments(em_path: Path, net_hint: Optional[str]
         i_cur = find("current")
         i_w = find("width")
         i_net = find("net")
+        i_cuts = find("cut")
         if i_l0 is None or i_cur is None:
             return  # not a per-segment EM CSV
         for row in reader:
@@ -292,10 +346,11 @@ def _iter_csv_segments(em_path: Path, net_hint: Optional[str]
             layer0 = row[i_l0].strip()
             layer1 = row[i_l1].strip() if (i_l1 is not None and len(row) > i_l1) else layer0
             width = _num(row[i_w]) if (i_w is not None and len(row) > i_w) else None
+            cuts = _num(row[i_cuts]) if (i_cuts is not None and len(row) > i_cuts) else None
             net = (row[i_net].strip() if (i_net is not None and len(row) > i_net)
                    else (net_hint or "unknown"))
             yield {"net": net, "layer0": layer0, "layer1": layer1,
-                   "current_A": abs(cur), "width_um": width}
+                   "current_A": abs(cur), "width_um": width, "cuts": cuts}
 
 
 def _iter_json_segments(data: Any, net_hint: Optional[str]
@@ -315,7 +370,8 @@ def _iter_json_segments(data: Any, net_hint: Optional[str]
         yield {"net": str(s.get("net", net_hint or "unknown")),
                "layer0": layer0, "layer1": layer1,
                "current_A": abs(cur),
-               "width_um": _num(s.get("width_um", s.get("width")))}
+               "width_um": _num(s.get("width_um", s.get("width"))),
+               "cuts": _num(s.get("cuts", s.get("via_cuts")))}
 
 
 def iter_segments(em_path: Path, net_hint: Optional[str]
@@ -348,6 +404,44 @@ def iter_segments(em_path: Path, net_hint: Optional[str]
 # ---------------------------------------------------------------------------
 # Screening.
 # ---------------------------------------------------------------------------
+def resolve_cut_entries(l0: str, l1: str, table: Dict[str, Dict[str, Any]]
+                        ) -> List[Dict[str, Any]]:
+    """Cut-layer entries a segment physically passes through.
+
+    The real EM report (OpenROAD PSM `-em_outfile`) writes a via segment as two
+    ROUTING endpoints and NEVER names the cut, so looking the endpoint names up
+    in the Jmax table can only ever miss — which is why the per-cut screen used
+    to be dead on every real report. Resolution order:
+
+      1. a cut layer the report DID name (some JSON reports do);
+      2. a cut entry whose explicit `between` pair matches the two endpoints;
+      3. every cut lying strictly between the two routing layers in stack order.
+
+    Returns [] when the reference cannot place a cut between the endpoints —
+    that stays an honest `unscreened`, never an assumed limit."""
+    e0 = table.get(l0)
+    e1 = table.get(l1)
+    named = [e for e in (e0, e1) if e is not None and e.get("kind") == "cut"]
+    if named:
+        return named
+    if l0 == l1 or e0 is None or e1 is None:
+        return []
+    pair = {l0, l1}
+    explicit = [e for e in table.values()
+                if e.get("kind") == "cut" and e.get("between")
+                and set(e["between"]) == pair]
+    if explicit:
+        return explicit
+    i0 = e0.get("stack_index")
+    i1 = e1.get("stack_index")
+    if i0 is None or i1 is None or i0 == i1:
+        return []
+    lo, hi = (i0, i1) if i0 < i1 else (i1, i0)
+    return [e for e in table.values()
+            if e.get("kind") == "cut" and e.get("stack_index") is not None
+            and lo < e["stack_index"] < hi]
+
+
 def _screen_segment(seg: Dict[str, Any], table: Dict[str, Dict[str, Any]],
                     margin: float, blacks_n: float) -> Dict[str, Any]:
     """Screen one segment → dict with status in
@@ -357,23 +451,32 @@ def _screen_segment(seg: Dict[str, Any], table: Dict[str, Dict[str, Any]],
     cur = seg["current_A"]
     net = seg["net"]
 
-    # via / cut segment: metal ends on different layers.
-    if l0 != l1:
-        cut = table.get(l0) if table.get(l0, {}).get("kind") == "cut" else None
-        cut = cut or (table.get(l1) if table.get(l1, {}).get("kind") == "cut" else None)
-        if cut is None:
-            return {"status": "unscreened", "net": net,
-                    "layer": f"{seg['layer0']}->{seg['layer1']}",
-                    "reason": "via_cut_layer_not_in_jmax_reference",
-                    "current_A": cur}
+    # via / cut segment — either the report named a cut layer, or the endpoints
+    # sit on two different routing layers and the cut is resolved from the
+    # stack. A stacked via must satisfy EVERY cut it crosses, so the most
+    # restrictive limit governs.
+    cuts_raw = _num(seg.get("cuts"))
+    n_cuts = cuts_raw if (cuts_raw is not None and cuts_raw >= 1) else 1.0
+    cut_entries = resolve_cut_entries(l0, l1, table)
+    if cut_entries:
+        cut = min(cut_entries, key=lambda e: e["jmax_per_cut_A"])
         limit = cut["jmax_per_cut_A"]
-        util = cur / limit if limit > 0 else math.inf
+        per_cut = cur / n_cuts
+        util = per_cut / limit if limit > 0 else math.inf
         offender = util >= (1.0 - margin)
         return {"status": "offender" if offender else "ok", "net": net,
                 "layer": cut["orig_name"], "basis": "per_cut",
-                "current_A": cur, "value_A_per_cut": cur,
+                "endpoints": f"{seg['layer0']}->{seg['layer1']}",
+                "cut_candidates": sorted(e["orig_name"] for e in cut_entries),
+                "cuts": n_cuts,
+                "current_A": cur, "value_A_per_cut": per_cut,
                 "limit_A_per_cut": limit, "utilization": util,
                 "lifetime_ratio": _lifetime_ratio(util, blacks_n)}
+    if l0 != l1:
+        return {"status": "unscreened", "net": net,
+                "layer": f"{seg['layer0']}->{seg['layer1']}",
+                "reason": "via_cut_layer_not_in_jmax_reference",
+                "current_A": cur}
 
     entry = table.get(l0)
     if entry is None:
@@ -481,6 +584,7 @@ def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
     min_life: Optional[float] = None
     per_layer: Dict[str, Dict[str, Any]] = {}
     unscreened_reasons: Dict[str, int] = {}
+    by_basis: Dict[str, int] = {}
 
     for seg in segs:
         n_total += 1
@@ -490,6 +594,7 @@ def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
             unscreened_reasons[r["reason"]] = unscreened_reasons.get(r["reason"], 0) + 1
             continue
         n_screened += 1
+        by_basis[r["basis"]] = by_basis.get(r["basis"], 0) + 1
         lyr = r["layer"]
         pl = per_layer.setdefault(lyr, {"segments": 0, "max_utilization": 0.0})
         pl["segments"] += 1
@@ -507,6 +612,7 @@ def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
         "segments_screened": n_screened,
         "segments_unscreened": n_unscreened,
         "unscreened_reasons": unscreened_reasons,
+        "screened_by_basis": dict(sorted(by_basis.items())),
         "worst_utilization": (round(worst_util, 6) if worst_util >= 0 else None),
         "worst_case_lifetime_ratio": (round(min_life, 4) if min_life is not None else None),
         "per_layer": {k: {"segments": v["segments"],
@@ -538,10 +644,12 @@ def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
         for o in offenders[:max(1, top_offenders)]:
             if o.get("basis") == "per_cut":
                 msg = (f"net={o['net']} via-layer={o['layer']} "
-                       f"current={o['current_A']:.3e} A >= "
+                       f"({o.get('endpoints', o['layer'])}, "
+                       f"cuts={o.get('cuts', 1)}) "
+                       f"current/cut={o['value_A_per_cut']:.3e} A >= "
                        f"{(1 - margin) * o['limit_A_per_cut']:.3e} A "
                        f"(Jmax/cut={o['limit_A_per_cut']:.3e} A, "
-                       f"margin={margin})")
+                       f"util={o['utilization']:.3f}, margin={margin})")
             else:
                 dens = o.get("density_A_per_um2")
                 dens_s = (f"{dens:.4e} A/um^2" if dens is not None
@@ -558,13 +666,19 @@ def evaluate(em_path: Optional[Path], jmax_path: Optional[Path],
 
     rep["verdict"] = "PASS"
     rep["pass"] = True
+    # A PASS states its own COVERAGE. Silently dropping the segments the
+    # reference could not place is how a via-EM offender used to ride out
+    # under a green verdict.
+    coverage = (f"{n_screened}/{n_total} segment(s) screened "
+                f"({dict(by_basis)}); {n_unscreened} unscreened "
+                f"{dict(unscreened_reasons)}")
+    tail = (f"; worst utilization {worst_util:.4f} (worst-case Black's "
+            f"lifetime headroom {min_life:.2f}x)" if min_life is not None
+            else "")
     rep["findings"].append({
         "severity": "INFO", "rule": "EM_CURRENT_DENSITY_UNDER_JMAX",
-        "message": (f"all {n_screened} screened segment(s) below Jmax with "
-                    f"margin {margin}; worst utilization {worst_util:.4f} "
-                    f"(worst-case Black's lifetime headroom "
-                    f"{min_life:.2f}x)" if min_life is not None else
-                    f"all {n_screened} screened segment(s) below Jmax")})
+        "message": (f"all screened segment(s) below Jmax with margin "
+                    f"{margin}: {coverage}{tail}")})
     return "PASS", rep
 
 
