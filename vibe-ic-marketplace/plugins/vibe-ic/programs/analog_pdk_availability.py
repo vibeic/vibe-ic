@@ -166,6 +166,261 @@ def _model_lib_candidates(lister: Callable[[str], List[str]],
     return sorted(dict.fromkeys(libs))
 
 
+# ── installed-PDK CORNER-LIBRARY capability probe ──────────────────────────
+# WHY THIS EXISTS. A design-input document can DECLARE that the target PDK
+# ships no ngspice corner library, and that declaration is load-bearing: it is
+# the documented justification for running the corner sweep on an ideal
+# analytic standin device model instead of the foundry's own corner sections
+# (`analog_corner_lib_realism_lint` downgrades an otherwise-FAILing LEVEL=1
+# deck to advisory the moment such a disclosure is present). Nothing ever
+# compared that declaration against the PDK actually installed. A declaration
+# that has gone STALE therefore keeps buying a weaker analysis than the
+# environment can support, silently and indefinitely.
+#
+# `resolve_pdk` already answers "is a native PDK there at all". This answers
+# the narrower factual question the declaration is ABOUT: does the resolved
+# PDK actually ship SECTIONED process-corner libraries?
+#
+# chip-AGNOSTIC. Pure SPICE `.lib <section> … .endl` structure (the section
+# iterator is the one `analog_pdk_deck_context` already ships, imported rather
+# than re-implemented) plus the universal process-corner nomenclature. No
+# vendor / family / SKU literal. NDA hygiene: counts, role names and PATHS
+# only — no PDK parameter VALUE is ever read out.
+#
+# Additive by construction: `resolve_pdk`'s returned dict is UNCHANGED. This is
+# an opt-in second call, so no existing consumer's behaviour moves.
+
+# Process-corner nomenclature, in the three families that appear in real
+# foundry libs: the two-letter skew pairs (tt/ss/ff/sf/fs), the spelled-out
+# forms (typ/typical/nominal/slow/fast), and the passive best/worst-case-sheet
+# forms (bcs/wcs) that resistor and capacitor corner libs use instead.
+#
+# Matching is WHOLE-TOKEN, never substring, so `buffer` is not a fast corner —
+# which means every spelling has to be listed. Measured: with `typ` alone, an
+# installed open PDK whose nominal section is spelled `typical` reported
+# corner_lib_present=False. That is the direction that VINDICATES a stale
+# document, so it is the worse of the two errors, not the safer one.
+_CORNER_ROLE_TOKENS = {
+    "typ":  ("tt", "typ", "typical", "nom", "nominal", "tm"),
+    "slow": ("ss", "slow", "wcs", "wc", "worst"),
+    "fast": ("ff", "fast", "bcs", "bc", "best"),
+    "skew": ("sf", "fs"),
+}
+# A CORNER library brackets the process grid: nominal AND both extremes. A lib
+# that only ships a nominal section is a model lib, not a corner lib, and
+# claiming otherwise would be the same overreach this probe exists to catch.
+_CORNER_SET_REQUIRED = ("typ", "slow", "fast")
+
+# Section-name tokens that mark a statistical / mismatch variant.
+_MISMATCH_SECTION_TOKENS = ("mismatch", "stat", "statistical", "mc", "mm")
+
+# Bound on how many model libs one probe will read out of a PDK install.
+_MAX_PROBE_LIBS = 96
+
+_BATCH_MARK = "@@@VIBEIC_PDK_LIB:"
+
+
+def _section_tokens(name: str) -> frozenset:
+    """The delimiter-separated word tokens of a `.lib` section name, lowercased
+    (`mos_tt_mismatch` → {mos, tt, mismatch}). Whole-token matching is what
+    keeps `ff` from matching inside an unrelated identifier."""
+    return frozenset(re.findall(r"[a-z]+[0-9]*", (name or "").lower()))
+
+
+def _section_corner_roles(name: str) -> frozenset:
+    """The process-corner ROLES a section name declares (subset of typ / slow /
+    fast / skew), or an empty set when the name carries no corner token."""
+    toks = _section_tokens(name)
+    return frozenset(role for role, wanted in _CORNER_ROLE_TOKENS.items()
+                     if toks & frozenset(wanted))
+
+
+def _section_is_mismatch(name: str) -> bool:
+    return bool(_section_tokens(name) & frozenset(_MISMATCH_SECTION_TOKENS))
+
+
+def _local_batch_reader(paths: List[str]) -> Dict[str, str]:
+    """Read staged/host model libs. Unreadable paths are simply absent from the
+    result — the caller reports what it could read, never what it assumed."""
+    out: Dict[str, str] = {}
+    for p in paths:
+        try:
+            out[p] = Path(p).read_text(errors="replace")
+        except OSError:
+            continue
+    return out
+
+
+def _batch_script(paths: List[str]) -> str:
+    """The shell the batch reader runs. `printf '\\n'` BEFORE each marker is
+    load-bearing: a model lib whose last byte is not a newline would otherwise
+    leave the next marker glued to the tail of the previous file's last line,
+    where a start-of-line match cannot see it. Measured on a real 32-lib
+    install: exactly one lib went missing that way, silently."""
+    return "; ".join(
+        f"printf '\\n'; echo {shlex.quote(_BATCH_MARK + p)}; "
+        f"cat {shlex.quote(p)} 2>/dev/null"
+        for p in paths)
+
+
+def _split_batch(stdout: str) -> Dict[str, str]:
+    """Split marker-framed batch output into {path: text}. Anything before the
+    first marker (the iic-osic-tools login banner) is dropped by construction.
+    Pure, so the framing can be pinned without a container."""
+    out: Dict[str, str] = {}
+    cur: Optional[str] = None
+    buf: List[str] = []
+    for line in (stdout or "").splitlines():
+        if line.startswith(_BATCH_MARK):
+            if cur is not None:
+                out[cur] = "\n".join(buf)
+            cur = line[len(_BATCH_MARK):].strip()
+            buf = []
+        elif cur is not None:
+            buf.append(line)
+    if cur is not None:
+        out[cur] = "\n".join(buf)
+    return out
+
+
+def _docker_batch_reader(container: str) -> Callable[[List[str]], Dict[str, str]]:
+    """Read CONTAINER-absolute model libs in ONE `docker exec`. A per-file exec
+    would make a full-PDK probe dozens of round trips; the marker framing keeps
+    it a single call.
+
+    `errors="replace"` is load-bearing, not defensive boilerplate. Foundry model
+    libs carry latin-1 bytes in their headers (a micro sign in a units comment
+    is enough), and a strict decode raises INSIDE `subprocess.communicate` —
+    which this function would have swallowed into an empty result, i.e. a real
+    installed corner library reported as "not readable". Measured: with
+    `text=True` alone, a 32-lib install decoded 2 libs and died on the third."""
+    def R(paths: List[str]) -> Dict[str, str]:
+        if not paths:
+            return {}
+        try:
+            r = subprocess.run(
+                ["docker", "exec", container, "bash", "-lc", _batch_script(paths)],
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=300)
+        except Exception:
+            return {}
+        if r.returncode != 0:
+            return {}
+        return _split_batch(r.stdout or "")
+    return R
+
+
+def probe_corner_capability(res: Dict[str, Any],
+                            reader: Optional[Callable[[List[str]], Dict[str, str]]] = None,
+                            container: Optional[str] = None,
+                            max_libs: int = _MAX_PROBE_LIBS) -> Dict[str, Any]:
+    """Does the PDK resolved by `resolve_pdk` actually SHIP sectioned corner
+    libraries?
+
+    `res` is a `resolve_pdk()` result. `reader` maps a list of lib paths to
+    their text (injectable — the tests drive it, and it is what lets a rung-2
+    CONTAINER path be read without assuming a host mount). Defaults to a
+    single-exec docker reader when `container` is given, else the host FS.
+
+    Returns, always with the same keys so a consumer never has to guess:
+        probed                    — was any model-lib text actually read
+        reason                    — why not, when probed is False
+        libs_scanned              — how many lib paths were offered
+        libs_read                 — how many were readable
+        libs_with_sections        — how many carry `.lib <section>` blocks
+        corner_lib_present        — at least one lib brackets the process grid
+        libs_with_full_corner_set — the PATHS of those libs
+        corner_roles_covered      — union of roles seen across all libs
+        example_corner_sections   — up to 10 corner section NAMES (never values)
+        mismatch_lib_present      — a statistical / mismatch variant exists
+        statistical_card_count    — MC card KEYWORD occurrences (never values)
+
+    `corner_lib_present` is deliberately conservative: False whenever the probe
+    could not read anything. An unprobeable environment must not be able to
+    manufacture a contradiction against a document."""
+    base: Dict[str, Any] = {
+        "probed": False, "reason": None,
+        "libs_scanned": 0, "libs_read": 0, "libs_with_sections": 0,
+        "corner_lib_present": False, "libs_with_full_corner_set": [],
+        "corner_roles_covered": [], "example_corner_sections": [],
+        "mismatch_lib_present": False, "statistical_card_count": 0,
+    }
+    res = res or {}
+    if not res.get("available"):
+        base["reason"] = "no native PDK resolved — nothing to probe"
+        return base
+    libs = [p for p in (res.get("spice_libs") or []) if p][:max_libs]
+    base["libs_scanned"] = len(libs)
+    if not libs:
+        base["reason"] = "resolved PDK exposes no ngspice model libs"
+        return base
+
+    if reader is None:
+        # Rung 1 paths are HOST paths (the project staged them); only a rung-2
+        # path lives inside the container. Reading a staged lib through
+        # `docker exec` would find nothing and report a false "not readable".
+        host_side = res.get("source") == "project_custom_pdk"
+        reader = (_docker_batch_reader(container) if (container and not host_side)
+                  else _local_batch_reader)
+    texts = reader(libs) or {}
+    if not texts:
+        base["reason"] = "no model lib was readable"
+        return base
+
+    # The section iterator is `analog_pdk_deck_context`'s — imported lazily so
+    # adding this probe does not pull an 884-line module into the import graph
+    # of every existing `analog_pdk_availability` consumer.
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    from analog_pdk_deck_context import _iter_section_bodies  # noqa: E402
+
+    roles_covered: set = set()
+    full: List[str] = []
+    examples: List[str] = []
+    with_sections = 0
+    mismatch = False
+    stat_cards = 0
+    for p in libs:
+        txt = texts.get(p)
+        if txt is None:
+            continue
+        names = [n for n, _ in _iter_section_bodies(txt)]
+        if not names:
+            continue
+        with_sections += 1
+        lib_roles: set = set()
+        for n in names:
+            r = _section_corner_roles(n)
+            if r:
+                lib_roles |= r
+                if n not in examples:
+                    examples.append(n)
+            if _section_is_mismatch(n):
+                mismatch = True
+        roles_covered |= lib_roles
+        if all(k in lib_roles for k in _CORNER_SET_REQUIRED):
+            full.append(p)
+        stat_cards += len(_STAT_CARD_RE.findall(txt))
+
+    base.update({
+        "probed": True,
+        "libs_read": len(texts),
+        "libs_with_sections": with_sections,
+        "corner_lib_present": bool(full),
+        "libs_with_full_corner_set": full,
+        "corner_roles_covered": sorted(roles_covered),
+        "example_corner_sections": sorted(examples)[:10],
+        "mismatch_lib_present": mismatch,
+        "statistical_card_count": stat_cards,
+    })
+    if not full:
+        base["reason"] = (
+            "model libs read, but none brackets the process grid "
+            f"(roles seen: {sorted(roles_covered) or 'none'})")
+    return base
+
+
 # ── family matching ──────────────────────────────────────────────────────
 
 def _norm(s: str) -> str:

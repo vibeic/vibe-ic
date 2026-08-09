@@ -1744,6 +1744,42 @@ steps:
         # (real ngspice required), matching the analog runner's own
         # per-step gate. chip-AGNOSTIC.
         - program_exit_zero: "analog_a4_corner_sweep_check . --json reports/phase2/gates/analog_corner_sweep.json"
+        # vibe-ic#904 — the OTHER half of the #693 lint below. That lint
+        # accepts a LEVEL=1 standin the moment the run DISCLOSES one ("no
+        # public ngspice" is literally in its disclosure-token list), and the
+        # disclosure it honours originates in a design-INPUT document. Nothing
+        # ever checked that document against the PDK actually installed, so a
+        # disclosure that has gone STALE keeps buying a weaker analysis than
+        # the environment supports, indefinitely and silently. This compares
+        # the document's claim about PDK capability against what the resolved
+        # PDK ships, and reports the contradiction.
+        #
+        # MEASURED on the installed container PDK this issue was filed
+        # against: the design input says "no public ngspice corner lib"; the
+        # install carries 6 sectioned corner libs — one per device class —
+        # every one of them bracketing the process grid (typ + slow + fast,
+        # plus both skew corners). The same probe run against the other three
+        # installed analog PDKs finds a full corner set in all three.
+        #
+        # ADVISORY BY DESIGN, not by deference. A stale sentence in a document
+        # is a documentation lag, not a design defect, and stopping a run over
+        # one would be the wrong trade. Same slot and same reason as
+        # `route_congestion_trade_disclosure` (§4.05): the content path always
+        # exits 0, so no verdict tier can move. It does NOT edit the document
+        # either — L9 is design INPUT, and rewriting it changes what the flow
+        # reads, which is a human's decision and not a check's side effect.
+        #
+        # PLACED BEFORE the #693 advisory, not after: that one must stay the
+        # LAST clause (its own wiring test pins that). Both sit after every
+        # blocking clause, which is the property that actually makes an
+        # advisory fire — `_evaluate_gate` re-runs the advisories AFTER the
+        # sub-gate that failed, and both of these are.
+        #
+        # BLAST RADIUS, measured over all 121 tracked project snapshots:
+        # 73 NO_CLAIM, 45 SKIP (no design-owned corpus), 3 CONTRADICTION, 0
+        # crashes. All 3 are snapshots of the one analog design that carries
+        # the stale sentence. Advisory, so 0 of the 121 change verdict tier.
+        - advisory_program_exit_zero: "pdk_capability_claim_disclosure . --json reports/analog/pdk_capability_claim.json"
         # vibe-ic#693 — corner-lib realism. A corner sweep is only as
         # trustworthy as the device models it ran on; this lint catches a
         # deck that silently stands in an analytic LEVEL=1 MOSFET for the
