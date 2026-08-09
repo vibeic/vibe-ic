@@ -461,18 +461,24 @@ def test_l12_reports_a_real_denominator_when_given_its_input(tmp_path):
     assert d["not_applicable_reason"] == ""
 
 
-def test_response_payload_declares_itself_advisory(tmp_path):
-    """Every finding it can emit is WARN and `pass` is `not any(ERROR)`, so on
-    any readable directory it cannot return non-zero. A checker structurally
-    incapable of failing should say so where a consumer can read it."""
+def test_response_payload_no_longer_declares_itself_advisory(tmp_path):
+    """#496 recorded this gate as ADVISORY_ONLY: every finding it could emit
+    was WARN while `pass` was `not any(ERROR)`, so on any readable directory it
+    could not return non-zero — its own advertised exit-1 verdict was
+    unreachable. The severity split ends that, and the field stays (as `false`)
+    rather than disappearing, so a consumer that learned to read it is told the
+    property changed."""
     rtl = _rtl(tmp_path, top__v="module top(input clk);\nendmodule\n")
-    assert _summary("response_payload_template_check", rtl)["advisory_only"]
+    assert _summary("response_payload_template_check", rtl)["advisory_only"] \
+        is False
 
 
-def test_response_payload_cannot_fail_even_on_its_own_worst_case(tmp_path):
+def test_response_payload_does_fail_on_its_own_worst_case(tmp_path):
     """Not a claim from reading the source — driven. A dispatcher whose reply
-    is entirely hardcoded is the maximum-severity input this program has, and
-    it still exits 0."""
+    is entirely hardcoded, in a file that never writes a dynamic payload byte,
+    is the maximum-severity input this program has. It used to exit 0 with its
+    findings printed under `"pass": true`; now the ERROR tier makes rc 1
+    reachable, which is what a gate registry entry has to mean."""
     rtl = _rtl(tmp_path, disp__v=(
         "module disp(input clk);\n  reg [7:0] rsp_buf [0:3];\n"
         "  always @(posedge clk) begin\n    case (cmd_op)\n"
@@ -481,8 +487,18 @@ def test_response_payload_cannot_fail_even_on_its_own_worst_case(tmp_path):
         "        rsp_buf[2] <= 8'h00;\n      end\n"
         "    endcase\n  end\nendmodule\n"))
     r = _run("response_payload_template_check", rtl)
-    assert r.returncode == 0
+    assert r.returncode == 1, r.stdout[:600]
     report = json.loads(r.stdout)
+    assert report["summary"]["pass"] is False
     assert report["summary"][GD.DENOMINATOR_KEY]["examined"] == 3
-    assert report["findings"], "the advisory should still have something to say"
-    assert {f["severity"] for f in report["findings"]} == {"WARN"}
+    assert {f["severity"] for f in report["findings"]} == {"ERROR"}
+
+
+def test_response_payload_examining_nothing_is_not_a_pass(tmp_path):
+    """The other half of #496's own thesis: a PASS over an empty denominator is
+    a false certificate. This gate answered rc 0 on all 108 tracked rtl
+    directories while examining 0 payload assignments in every one of them."""
+    rtl = _rtl(tmp_path, top__v="module top(input clk);\nendmodule\n")
+    r = _run("response_payload_template_check", rtl)
+    assert r.returncode == 2, r.stdout[:600]
+    assert json.loads(r.stdout)["summary"][GD.DENOMINATOR_KEY]["examined"] == 0
