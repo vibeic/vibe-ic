@@ -66,8 +66,13 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   fi
 
   # The checker splits RANGE on whitespace into git-log arguments.
+  # NDA_MSG_FAILED is tracked SEPARATELY from FAILED because the remediation
+  # printed at the end -- "reword the offending commit message(s)" -- is advice
+  # about THIS gate and no other. See the summary block for why that distinction
+  # only started to matter once the hook stopped dying at its first failure.
   if ! python3 "$CHECKER" --repo "$REPO_ROOT" --rev-range "$RANGE"; then
     FAILED=1
+    NDA_MSG_FAILED=1
   fi
 
   PUSH_RANGE="$RANGE"
@@ -126,7 +131,26 @@ run_gate() {                       # run_gate <label> <program> [args…]
   # touches no benchmark path at all. Both are FALSE — run by hand, with no
   # GIT_DIR, the same commands pass. Strip it so each gate resolves from its own
   # `--repo` / cwd exactly as it does when a human runs it.
-  out="$(env -u GIT_DIR -u GIT_WORK_TREE python3 "$PROGRAMS/$prog" "$@" 2>&1)"; rc=$?
+  # `|| rc=$?` IS LOAD-BEARING, NOT STYLE. This file runs under `set -e`, and a
+  # bare `out="$(cmd)"` assignment CARRIES the substituted command's exit
+  # status — so the first failing gate terminated the whole hook right here,
+  # before a single line below could run. Every diagnostic this function exists
+  # to print was unreachable on exactly the path that needs it.
+  #
+  # Measured: a push blocked by the version gate printed only the NDA gate's
+  # PASS and `error: failed to push some refs`. Nothing named the failing gate,
+  # its finding, or even that a gate had failed; the four gates had to be re-run
+  # by hand to learn which one it was. The gates were right and the block was
+  # right — the hook simply could not say why, which is the one thing a reader
+  # acts on, and which the comments below spend three paragraphs insisting on
+  # ("A GATE THAT COULD NOT RUN HAS NOT PASSED… only the sentence changes, and
+  # the sentence is what a reader acts on").
+  #
+  # `|| rc=$?` puts the substitution in a tested context, which suppresses
+  # `set -e` for it, and `rc` is pre-set so a PASSING gate still reads 0.
+  # The rc=1 / rc=2 distinction the next block depends on is preserved.
+  local rc=0
+  out="$(env -u GIT_DIR -u GIT_WORK_TREE python3 "$PROGRAMS/$prog" "$@" 2>&1)" || rc=$?
   # A GATE THAT COULD NOT RUN HAS NOT PASSED, AND HAS NOT FAILED ITS SUBJECT
   # (vibe-ic#640). The repo's checkers already distinguish these: rc 1 is a
   # finding, rc 2 is "the question could not be put". Collapsing both into
@@ -233,7 +257,20 @@ fi
 
 if [ "$FAILED" -ne 0 ]; then
   echo "pre-push: BLOCKED — see the gate(s) named above." >&2
-  cat >&2 <<'EOF'
+  # THE REMEDIATION MUST MATCH THE GATE THAT FIRED. This block used to print the
+  # NDA reword recipe unconditionally, and that was harmless only by accident:
+  # before the `|| rc=$?` fix one commit earlier, `set -e` killed the hook at the
+  # first failing run_gate, so the ONLY failure that could ever reach here was
+  # the NDA message check above -- which runs outside run_gate, in a tested `if`.
+  # The advice was therefore always correct, because nothing else could arrive.
+  #
+  # Making the hook survive its gates made this path reachable for every other
+  # gate too, and a version-gate failure was then answered with "reword the
+  # offending commit message(s)... use the generic wording (commercial PDK)" --
+  # confidently wrong instructions for a commit whose message was never in
+  # question. A fix that restores one sentence must not corrupt the next one.
+  if [ "${NDA_MSG_FAILED:-0}" = "1" ]; then
+    cat >&2 <<'EOF'
 Reword the offending commit message(s) before pushing:
     git rebase -i <base>      # mark the offending commit(s) `reword`
 Use the generic wording ("commercial PDK", "commercial foundry").
@@ -241,6 +278,15 @@ Re-scan with:
     python3 vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py \
         --rev-range origin/main..HEAD
 EOF
+  else
+    cat >&2 <<'EOF'
+Fix the finding printed under each FAILED gate, then push again. Each gate is a
+standalone program under vibe-ic-marketplace/plugins/vibe-ic/programs/ and can
+be re-run by hand with the same arguments the hook used.
+A "NOT CHECKED" gate has not passed -- it could not run, and needs the same
+attention as a failure.
+EOF
+  fi
   exit 1
 fi
 
