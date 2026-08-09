@@ -265,6 +265,11 @@ _PATH_HEAD_RE = re.compile(
 # coordinate may be `*`, which DEF defines as "repeat the one before it".
 _PATH_POINT_RE = re.compile(r"\(\s*(-?\d+|\*)\s+(-?\d+|\*)(?:\s+-?\d+)?\s*\)")
 
+# `+ SHAPE <token>` — a per-PATH declaration, which is the whole point of
+# reading it here rather than over the net entry. See
+# `parse_routed_segments_with_gaps`.
+_SHAPE_RE = re.compile(r"\+\s*SHAPE\s+(\w+)", re.I)
+
 
 # A via placed INSIDE a wiring path: a bare identifier sitting between two
 # coordinate groups. LEF/DEF 5.8: "If you specify a via, layerName for the next
@@ -431,7 +436,23 @@ def parse_routed_segments_with_gaps(
 
     `abandoned_paths` is the honest denominator. A path this parser could not
     follow to its end is metal it did not look at, and the caller must be able
-    to tell that from metal it looked at and cleared."""
+    to tell that from metal it looked at and cleared.
+
+    SHAPE IS A PROPERTY OF THE PATH, NOT OF THE NET. DEF states it per path
+    (`+ ROUTED <layer> <w> + SHAPE FOLLOWPIN`), and one supply net carries many
+    paths of different shapes — that is what a power grid IS: follow-pins on the
+    lowest layer and STRIPEs above them, all on the same net. Deriving the flag
+    from `"FOLLOWPIN" in entry`, i.e. from a substring of the WHOLE net entry,
+    labels every strap of a net that has any follow-pin anywhere as a follow-pin
+    itself. The label then names the wrong kind of metal on a gate whose finding
+    a person has to act on, and it cannot be off in the other direction, so it
+    reads as corroboration: every finding agreeing on the shape looks like a
+    coherent story about the cell rows.
+
+    The shape is read from the PATH's own text, and its absence means the path
+    declared none — not that a sibling path declared one. The head match is
+    searched too, because `_PATH_HEAD_RE` can consume a leading `+ SHAPE <tok>`
+    before the layer token."""
     segs: List[Dict[str, Any]] = []
     gaps: List[Dict[str, Any]] = []
     sec = re.search(r"^\s*SPECIALNETS\b(.*?)^\s*END\s+SPECIALNETS",
@@ -442,14 +463,17 @@ def parse_routed_segments_with_gaps(
     for entry in re.split(r"\n\s*-\s+", sec.group(1)):
         nm = re.match(r"\s*(\S+)", entry)
         net = nm.group(1) if nm else "?"
-        fp = "FOLLOWPIN" in entry
         heads = list(_PATH_HEAD_RE.finditer(entry))
         for i, hm in enumerate(heads):
             end = heads[i + 1].start() if i + 1 < len(heads) else len(entry)
-            path_segs, gap = _path_segments(
-                entry[hm.end():end], hm.group(1), via_layers)
+            body = entry[hm.end():end]
+            shm = _SHAPE_RE.search(hm.group(0) + " " + body)
+            shape = shm.group(1).upper() if shm else None
+            fp = (shape == "FOLLOWPIN")
+            path_segs, gap = _path_segments(body, hm.group(1), via_layers)
             for layer, x1, y1, x2, y2 in path_segs:
                 segs.append({"layer": layer, "net": net, "followpin": fp,
+                             "shape": shape,
                              "x1": min(x1, x2), "y1": min(y1, y2),
                              "x2": max(x1, x2), "y2": max(y1, y2)})
             if gap is not None:
@@ -628,6 +652,7 @@ def audit(def_text: str, macro_lef_texts: Sequence[str],
                         "inst": inst["inst"], "master": inst["master"],
                         "layer": layer, "net": s["net"],
                         "followpin": s["followpin"],
+                        "shape": s.get("shape"),
                         "seg": [s["x1"], s["y1"], s["x2"], s["y2"]],
                     })
     # #828 — the denominator this gate could not see. A master that is
@@ -849,8 +874,12 @@ def main(argv=None) -> int:
         print(f"[FAIL] {len(f)} supply segment(s) SPAN a placed macro's declared "
               f"obstruction ({fp} of them follow-pins):")
         for x in f[:12]:
+            # The path's OWN declared shape, not a flag derived from a
+            # substring of the whole net entry. `SHAPE (none)` is a real and
+            # different fact from `SHAPE STRIPE`, so it is printed rather than
+            # collapsed into the absence of a FOLLOWPIN token.
             print(f"   {x['inst']} ({x['master']}) {x['layer']}: net {x['net']}"
-                  f"{' FOLLOWPIN' if x['followpin'] else ''}  seg {x['seg']}")
+                  f"  SHAPE {x.get('shape') or '(none)'}  seg {x['seg']}")
         if len(f) > 12:
             print(f"   … {len(f) - 12} more")
         print("\n  A macro OBS is the vendor's statement of where the integrator "
