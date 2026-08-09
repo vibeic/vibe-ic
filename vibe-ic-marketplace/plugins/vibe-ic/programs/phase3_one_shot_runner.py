@@ -12735,20 +12735,102 @@ def _compute_downsized_die(die_w: int, die_h: int,
 #     design's violations can only be confirmed by a LIVE PnR run. The helpers
 #     below decide + resize honestly; they make no empirical convergence claim.
 # chip-AGNOSTIC: pure OpenROAD-log grammar + geometry math, no chip literal.
-_ROUTE_LOOSEN_UTIL_FLOOR = 0.12      # never target a util below this floor
+_ROUTE_LOOSEN_UTIL_FLOOR = 0.12      # the AUTHORED ladder's floor rung
 # Ladder head is the auto-die's own routing-headroom target; each rung is
 # strictly looser (lower util → larger die), ending at the floor rung.
 _ROUTE_LOOSEN_UTIL_LADDER: Tuple[float, ...] = (
     _AUTO_DIE_TARGET_UTIL, 0.18, _ROUTE_LOOSEN_UTIL_FLOOR)
+
+# ── vibe-ic#914 — TERMINATE ON A STALL, NOT ON A RUNG COUNT ─────────────────
+#
+# The ladder used to end when it ran out of AUTHORED rungs
+# (`loosen_idx + 1 >= len(ladder)`) and reported that as
+# `loosen_ladder_exhausted`. Two different situations reached that one word:
+#
+#   the design stopped responding to a looser die      — nothing left to try
+#   the design was still responding and we ran out     — the remedy was NOT
+#     of authored rungs                                  exhausted
+#
+# and an operator parked at `ROUTE_NOT_CONVERGED` could not tell which they
+# faced, while the gate's own remedy text told them to do by hand the exact
+# thing the ladder had been doing automatically and abandoned. Those two words
+# mean opposite things to whoever reads the log next.
+#
+# So the ladder now CONTINUES past its authored floor while the residual
+# violation count is still improving, and stops on a STALL. Four distinct
+# terminators, each named by the reason it reports:
+#
+#   loosen_ladder_stalled       the residual stopped improving for
+#                               `_ROUTE_LOOSEN_STALL_PATIENCE` consecutive
+#                               rungs — the ladder has nothing left to buy
+#   loosen_ladder_exhausted     the authored ladder ended and there is NO
+#                               improvement evidence to justify continuing
+#   loosen_rung_budget_reached  a HARD rung bound fired while the design was
+#                               still improving — the remedy is NOT exhausted
+#   die_cap_reached             the geometric bound fired (unchanged)
+#
+# WHY PATIENCE > 1 AND WHY IMPROVEMENT IS MEASURED AGAINST THE BEST-SO-FAR.
+# The residual count is a PROXY for routability, not routability itself, and it
+# is noisy across a die change: the run this was filed from went 5 → 2 → 3,
+# i.e. it got WORSE on the rung after its best, while a much larger floorplan
+# of the same netlist routed to 0. Terminating on the first non-improving rung
+# would read that noise as a verdict. Two consecutive rungs that beat nothing
+# is a stall; one is a wobble.
+#
+# THE UTIL FLOOR IS AN AUTHORED-LADDER FLOOR, NOT A SAFETY LIMIT. Continuation
+# rungs go below it deliberately — the thing that must not grow without bound
+# is the DIE, and that is bounded by `_DEFAULT_DIE_MAX_UM` (enforced in
+# `_compute_loosened_die`) and by `_ROUTE_LOOSEN_MAX_RUNGS`, both of which
+# report themselves when they fire.
+# chip-AGNOSTIC: violation-count arithmetic + geometry, no chip literal.
+_ROUTE_LOOSEN_STALL_PATIENCE = 2
+_ROUTE_LOOSEN_MAX_RUNGS = 6
+# Each continuation rung targets this fraction of the previous rung's util
+# (die side *= sqrt(1/ratio) ≈ 1.155 per rung).
+_ROUTE_LOOSEN_CONTINUATION_RATIO = 0.75
+
 # Preserve the historical over-util upsize budget (initial run + up to 3 grows)
 # EXACTLY, independent of the loop's total iteration count.
 _PNR_UPSIZE_RETRIES = 3
 # Total retry-loop iterations: initial run + up-to-3 upsizes + up-to-1 downsize
-# + up-to (ladder-1) loosen steps. Each mutation path is independently bounded
-# (upsize by the die cap + `_PNR_UPSIZE_RETRIES`; downsize by a one-shot flag;
-# loosen by the ladder length), so the loop always terminates well within this.
-_PNR_RETRY_ITERS = (1 + _PNR_UPSIZE_RETRIES + 1
-                    + (len(_ROUTE_LOOSEN_UTIL_LADDER) - 1))
+# + up-to `_ROUTE_LOOSEN_MAX_RUNGS` loosen steps. Each mutation path is
+# independently bounded (upsize by the die cap + `_PNR_UPSIZE_RETRIES`;
+# downsize by a one-shot flag; loosen by the rung bound, the die cap AND the
+# stall criterion), so the loop always terminates well within this.
+_PNR_RETRY_ITERS = (1 + _PNR_UPSIZE_RETRIES + 1 + _ROUTE_LOOSEN_MAX_RUNGS)
+
+
+def _loosen_ladder_util(idx: int,
+                        ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER,
+                        ratio: float = _ROUTE_LOOSEN_CONTINUATION_RATIO
+                        ) -> float:
+    """Target util at ladder rung `idx`. Inside the AUTHORED ladder this is the
+    authored value, byte-for-byte; past its end it is a geometric continuation
+    of the floor rung, so a design that is still improving keeps getting a
+    strictly looser rung to try. Pure arithmetic — chip-AGNOSTIC."""
+    i = max(0, int(idx))
+    if i < len(ladder):
+        return ladder[i]
+    return ladder[-1] * (ratio ** (i - len(ladder) + 1))
+
+
+def _loosen_stall_streak(residuals: Tuple[int, ...]) -> int:
+    """How many TRAILING rungs failed to improve on the BEST residual seen
+    before them. A rung improves iff its residual is strictly below every
+    residual before it; the first rung always counts as improving because it
+    has nothing to beat. Returns 0 when the last rung improved.
+
+    Best-so-far rather than previous-rung on purpose: the residual is a noisy
+    proxy, and `5 → 2 → 3` must read as "one wobble after a real gain", not as
+    "the ladder is finished". Pure — chip-AGNOSTIC."""
+    if len(residuals) < 2:
+        return 0
+    streak = 0
+    for i in range(len(residuals) - 1, 0, -1):
+        if residuals[i] < min(residuals[:i]):
+            break
+        streak += 1
+    return streak
 
 
 def _drt_violation_trajectory(log_text: str) -> List[int]:
@@ -12851,7 +12933,10 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
                               loosen_idx: int, auto_die_requested: bool,
                               route_completed: bool,
                               ladder: Tuple[float, ...] = _ROUTE_LOOSEN_UTIL_LADDER,
-                              die_max_um: int = _DEFAULT_DIE_MAX_UM
+                              die_max_um: int = _DEFAULT_DIE_MAX_UM,
+                              residual_history: Tuple[int, ...] = (),
+                              max_rungs: int = _ROUTE_LOOSEN_MAX_RUNGS,
+                              stall_patience: int = _ROUTE_LOOSEN_STALL_PATIENCE,
                               ) -> Tuple[Optional[Tuple[int, int, Dict[str, Any]]], str]:
     """ROUTING-FEEDBACK decision for ONE detailed-route outcome. Returns
     (new_w, new_h, record) to loosen-the-die-and-retry, or None to leave the
@@ -12860,11 +12945,20 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
 
       1. only an AUTO-owned die is ever loosened (`auto_die_requested`);
       2. only a COMPLETED route is judged (`route_completed` = rc==0 + DEF);
-      3. bounded — stop once the ladder floor rung is reached
-         (`loosen_idx + 1 >= len(ladder)`);
-      4. loosen ONLY on a genuine non-convergence signal
-         (`_drt_is_non_converging` over the parsed trajectory);
-      5. never grow past the die cap (delegated to `_compute_loosened_die`).
+      3. STALL-bounded (#914) — stop when the residual violation count has
+         failed to improve on its best for `stall_patience` consecutive rungs
+         (`loosen_ladder_stalled`);
+      4. HARD-bounded, and each bound REPORTS ITSELF: the authored ladder with
+         no improvement evidence (`loosen_ladder_exhausted`), the rung budget
+         while still improving (`loosen_rung_budget_reached`), the die cap
+         (`die_cap_reached`);
+      5. loosen ONLY on a genuine non-convergence signal
+         (`_drt_is_non_converging` over the parsed trajectory).
+
+    `residual_history` is the final DRT violation count of each PREVIOUS rung,
+    oldest first; this run's own count is appended from `log_text`. It is what
+    turns "how many rungs have I used" into "is this still buying anything",
+    which is the difference #914 is about.
 
     HONESTY: this is a deterministic congestion-relief mechanism. It does NOT
     assert that the looser die WILL converge a given design — only a live PnR
@@ -12884,13 +12978,30 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
         # DEF, so the loudest congestion signal reaches this path as
         # `route_completed=False` and buys exactly zero loosening.
         return None, "route_did_not_complete"
-    if loosen_idx + 1 >= len(ladder):
-        return None, "loosen_ladder_exhausted"
     trajectory = _drt_violation_trajectory(log_text)
+    # #914 — the residual series ACROSS rungs (not the within-run trajectory):
+    # every previous rung's final count plus this run's, when this run has one.
+    residuals = tuple(residual_history) + (
+        (trajectory[-1],) if trajectory else ())
+    streak = _loosen_stall_streak(residuals)
+    # (3) STALL: the ladder has stopped buying anything. Checked BEFORE the
+    # rung bounds so a ladder that is finished says so, whatever rung it is on.
+    if stall_patience > 0 and streak >= stall_patience:
+        return None, "loosen_ladder_stalled"
+    # (4) HARD BOUNDS, each naming itself. Continuing past the AUTHORED ladder
+    # requires MEASURED evidence — at least two rungs to compare. Given that,
+    # the terminator is the stall criterion above, not the ladder's length:
+    # reaching this line already means the ladder is not stalled. Requiring a
+    # brand-new best HERE would put the rung count back in charge whenever the
+    # last rung wobbled, which is the filed run exactly (5 -> 2 -> 3).
+    if loosen_idx + 1 >= len(ladder) and len(residuals) < 2:
+        return None, "loosen_ladder_exhausted"
+    if loosen_idx + 1 >= max_rungs:
+        return None, "loosen_rung_budget_reached"
     if not _drt_is_non_converging(trajectory):
         return None, "route_still_converging"
-    cur_util = ladder[loosen_idx]
-    next_util = ladder[loosen_idx + 1]
+    cur_util = _loosen_ladder_util(loosen_idx, ladder)
+    next_util = _loosen_ladder_util(loosen_idx + 1, ladder)
     dims = _compute_loosened_die(die_w, die_h, cur_util, next_util, die_max_um)
     if dims is None:
         return None, "die_cap_reached"
@@ -12905,8 +13016,19 @@ def _route_feedback_loosen_ex(die_w: int, die_h: int, log_text: str,
         "to_target_util": next_util,
         "final_violations": trajectory[-1],
         "violation_trajectory": list(trajectory),
+        # #914 — the ACROSS-RUNG series the termination decision is made on,
+        # beside the within-run trajectory it is easy to confuse it with.
+        "residual_series": list(residuals),
+        "stall_streak": streak,
+        "beyond_authored_ladder": loosen_idx + 1 >= len(ladder),
     }
     return (new_w, new_h, record), "loosened"
+
+
+#: #914 — a decline whose reason is one of these ended a ladder that was STILL
+#: IMPROVING: a bound fired, the remedy did not run out. The gate's message
+#: must not imply that no automatic remedy remains.
+_LOOSEN_BOUND_REASONS = ("loosen_rung_budget_reached", "die_cap_reached")
 
 
 def _route_feedback_loosen(*args, **kwargs
@@ -19621,6 +19743,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     target_util_pct = util * 100.0 if util <= 1.0 else util
     _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
     _loosen_idx = 0           # ROUTING-FEEDBACK — current loosen-ladder rung
+    # #914 — the residual DRT violation count of every rung judged so far,
+    # oldest first. This is what turns "how many rungs have I used" into "is
+    # this still buying anything", i.e. a rung count into a stall criterion.
+    _loosen_residuals: Tuple[int, ...] = ()
     _upsize_tries = 0         # over-util upsizes applied (bounded budget)
     # v1.3.47 — the PnR route runs under the PROGRESS-STALL WATCHDOG, not a
     # size ESTIMATE. A still-progressing OpenROAD (continuous CPU + periodic
@@ -19672,7 +19798,24 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             # (See _route_feedback_loosen for the full guard set + honesty note.)
             _lf, _lf_reason = _route_feedback_loosen_ex(
                 die_w, die_h, _pnr_log, _loosen_idx,
-                _auto_die_requested, _route_completed)
+                _auto_die_requested, _route_completed,
+                residual_history=_loosen_residuals)
+            # #914 — the across-rung series this decision was made on, kept in
+            # the caller too so a DECLINE (which returns no record) can still
+            # disclose the evidence it declined on.
+            _this_traj = _drt_violation_trajectory(_pnr_log)
+            _series = _loosen_residuals + (
+                (_this_traj[-1],) if _this_traj else ())
+            _streak = _loosen_stall_streak(_series)
+            # `still_improving` = the last rung set a NEW BEST.
+            # `not_stalled`     = the ladder had not run out of things to buy
+            #                     (fewer consecutive misses than the patience).
+            # A ladder can be not-stalled without having just improved — that
+            # is the wobble the stall criterion is patient about, and the two
+            # facts are reported separately rather than blurred into one.
+            _still_improving = len(_series) >= 2 and _streak == 0
+            _not_stalled = (len(_series) >= 2
+                            and _streak < _ROUTE_LOOSEN_STALL_PATIENCE)
             if _lf is None:
                 # #307 — the decline path used to have no `else` at all, so the
                 # flow could refuse its OWN rescue with nobody told. The UPSIZE
@@ -19687,19 +19830,39 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "reason": _lf_reason,
                     "die_w_um": die_w, "die_h_um": die_h,
                     "loosen_idx": _loosen_idx,
-                    "proposed_util": (_ROUTE_LOOSEN_UTIL_LADDER[_loosen_idx + 1]
-                                      if _loosen_idx + 1 < len(_ROUTE_LOOSEN_UTIL_LADDER)
-                                      else None),
+                    # #914 — the ladder continues past its authored floor while
+                    # the design is still improving, so the next rung has a
+                    # util even beyond `_ROUTE_LOOSEN_UTIL_LADDER`. It used to
+                    # read `None` there, which said "no proposal exists" when
+                    # what was true was "we chose not to make one".
+                    "proposed_util": (
+                        _loosen_ladder_util(_loosen_idx + 1)
+                        if _loosen_idx + 1 < _ROUTE_LOOSEN_MAX_RUNGS else None),
                     "die_max_um": _DEFAULT_DIE_MAX_UM,
+                    # #914 — WHICH bound fired, and whether the ladder was
+                    # still buying anything when it did. `stalled` and
+                    # `exhausted` mean opposite things to whoever reads this
+                    # next, and a reader must not have to infer which happened.
+                    "bound": _lf_reason,
+                    "still_improving": _still_improving,
+                    "not_stalled": _not_stalled,
+                    "residual_series": list(_series),
+                    "stall_streak": _streak,
+                    "max_rungs": _ROUTE_LOOSEN_MAX_RUNGS,
+                    "stall_patience": _ROUTE_LOOSEN_STALL_PATIENCE,
                 }
                 loosen_declines.append(_decline)
                 print(f"ROUTE_LOOSEN_DECLINED reason={_lf_reason} "
                       f"die={die_w}x{die_h}um rung={_loosen_idx} "
-                      f"proposed_util={_decline['proposed_util']}")
+                      f"proposed_util={_decline['proposed_util']} "
+                      f"still_improving={_still_improving} "
+                      f"not_stalled={_not_stalled} "
+                      f"residual_series={list(_series)}")
             if _lf is not None:
                 _lw, _lh, _lrec = _lf
                 _lrec["iteration"] = _retry_i
                 resize_history.append(_lrec)
+                _loosen_residuals = _series
                 die_w, die_h = _lw, _lh
                 core_w = die_w - 2 * core_pad
                 core_h = die_h - 2 * core_pad
@@ -20006,14 +20169,52 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             _drt_viol = _drt_final_violations(
                 _log_p.read_text(errors="ignore"))
     if _drt_viol is not None and _drt_viol > 0:
+        # #914 — SAY WHICH OF THE TWO THIS IS. The verdict is the same either
+        # way and it is correct either way; what the operator cannot otherwise
+        # tell is whether the automatic remedy RAN OUT or was CUT SHORT. The
+        # remedy text below tells them to enlarge the die by hand, which is
+        # exactly what the ladder had been doing — so when a bound stopped a
+        # ladder that was still improving, that has to be said, not implied
+        # away by a terminal-sounding verdict.
+        _last_decline = loosen_declines[-1] if loosen_declines else {}
+        _ladder_note = ""
+        if _last_decline:
+            _reason = _last_decline.get("reason") or ""
+            _series = _last_decline.get("residual_series") or []
+            _ser_txt = " -> ".join(str(v) for v in _series)
+            if _reason == "loosen_ladder_stalled":
+                _ladder_note = (
+                    f" The auto-loosen ladder STALLED (it was not cut short): "
+                    f"{_last_decline.get('stall_streak')} consecutive rung(s) "
+                    f"failed to improve on the best residual it had seen "
+                    f"({_ser_txt}), so a larger die is not what this design is "
+                    f"waiting for.")
+            elif _reason in _LOOSEN_BOUND_REASONS:
+                _ladder_note = (
+                    f" The auto-loosen ladder was CUT SHORT, not exhausted: a "
+                    f"bound fired (`{_reason}`) at rung "
+                    f"{_last_decline.get('loosen_idx')} while the residual was "
+                    f"still responding ({_ser_txt}). The manual remedy above "
+                    f"is the SAME remedy the ladder was applying, so raising "
+                    f"that bound is the first thing to try.")
+            elif _reason == "loosen_ladder_exhausted":
+                _evi = _ser_txt or "no residual series"
+                _ladder_note = (
+                    f" The auto-loosen ladder ran out at rung "
+                    f"{_last_decline.get('loosen_idx')} with no measured "
+                    f"rung-to-rung evidence to continue on ({_evi}).")
+            elif _reason:
+                _ladder_note = (
+                    f" The auto-loosen ladder declined at rung "
+                    f"{_last_decline.get('loosen_idx')}: `{_reason}`.")
         return StepResult(
             "pnr", "FAIL", time.time() - t0,
             (f"ROUTE_NOT_CONVERGED: detailed route completed with "
              f"{_drt_viol} violations remaining (final DRT-0199). The "
              f"design is congestion-limited at die {die_w}x{die_h}µm / "
              f"util {util:g}: increase --die-um, lower --util, or raise "
-             f"the router's end iteration. Emitted DEF/GDS are kept for "
-             f"debugging but are NOT sign-off artifacts."),
+             f"the router's end iteration.{_ladder_note} Emitted DEF/GDS are "
+             f"kept for debugging but are NOT sign-off artifacts."),
             [str(out_dir / "openroad.log"), str(def_file)],
             extras={"finding": "ROUTE_NOT_CONVERGED",
                     "drt_violations": _drt_viol,
@@ -20021,7 +20222,18 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                     "util": util,
                     "non_signoff_outputs": [str(def_file)],
                     "resize_history": resize_history,
-                    "loosen_declines": loosen_declines})
+                    "loosen_declines": loosen_declines,
+                    # #914 — the two facts a reader needs to tell a ladder that
+                    # ran out from one that was cut short, promoted out of the
+                    # decline list so a consumer does not have to know to look
+                    # for the last element of it.
+                    "loosen_terminator": (_last_decline.get("reason")
+                                          if _last_decline else None),
+                    "loosen_still_improving": bool(
+                        _last_decline.get("still_improving")),
+                    "loosen_was_cut_short": bool(
+                        (_last_decline.get("reason") or "")
+                        in _LOOSEN_BOUND_REASONS)})
     # ── PG NET-OWNERSHIP gate — a supply network that half the design is not
     # part of must never leave PnR silently. `global_connect` is a one-shot over
     # the instances alive when it runs; the PDN step runs it before placement, so

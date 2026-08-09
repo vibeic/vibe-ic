@@ -62,10 +62,18 @@ class TestLoosenLadderConstants:
         assert mod._PNR_UPSIZE_RETRIES == 3
 
     def test_retry_iters_covers_every_bounded_path(self):
-        # initial + upsize budget + one downsize + (ladder-1) loosen steps.
+        # vibe-ic#914 — the loosen path is bounded by `_ROUTE_LOOSEN_MAX_RUNGS`
+        # (a HARD rung bound) rather than by the AUTHORED ladder length,
+        # because the ladder now continues past its authored floor while the
+        # residual is still improving. The loop budget has to cover that bound:
+        # if the guard ran out first, a rung count would be deciding the
+        # outcome again, one level up, and the ladder's own stall criterion
+        # would never get to speak.
         expected = (1 + mod._PNR_UPSIZE_RETRIES + 1
-                    + (len(mod._ROUTE_LOOSEN_UTIL_LADDER) - 1))
+                    + mod._ROUTE_LOOSEN_MAX_RUNGS)
         assert mod._PNR_RETRY_ITERS == expected
+        assert (mod._ROUTE_LOOSEN_MAX_RUNGS
+                >= len(mod._ROUTE_LOOSEN_UTIL_LADDER) - 1)
 
 
 # ---------------------------------------------------------------------------
