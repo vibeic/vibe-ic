@@ -75,8 +75,26 @@ def _tree(root: Path, *, gates: dict, enforced=(), extra: dict = None):
     for name, body in (extra or {}).items():
         (programs / f"{name}.py").write_text(body)
     # `runner_source` reads only the names in `_RUNNERS`; one of them is enough.
+    #
+    # The invocation below CONSUMES the exit status on purpose. Until #884 a
+    # bare `STEP = "<gate>.py --run"` — the filename in a string literal — was
+    # enough to be scored ENFORCED, and this fixture used exactly that. #884
+    # made ENFORCED mean "the status reaches a control-flow decision", so the
+    # old fixture stopped producing an enforced gate and this file's paired
+    # CONTROL began failing: the gate it calls enforced was, correctly, no
+    # longer enforced. The test's intent was always "a genuinely wired gate is
+    # not reported"; only the way to build one changed. Keep it honest — a
+    # fixture that fakes enforcement would re-assert the very definition #884
+    # deleted.
     (programs / "phase3_one_shot_runner.py").write_text(
-        "".join(f'STEP = "{n}.py --run"\n' for n in enforced) or "# no gates\n")
+        "".join(
+            f"def step_{i}():\n"
+            f"    cp = subprocess.run([sys.executable, \"{n}.py\", \"p\"], check=False)\n"
+            f"    if cp.returncode != 0:\n"
+            f"        return \"FAIL\"\n"
+            f"    return \"PASS\"\n"
+            for i, n in enumerate(enforced)
+        ) or "# no gates\n")
     flow = root / "flow.yaml"
     flow.write_text("steps:\n" + "".join(
         f"  - gate:\n      program_exit_zero: {n}.py\n" for n in gates))
