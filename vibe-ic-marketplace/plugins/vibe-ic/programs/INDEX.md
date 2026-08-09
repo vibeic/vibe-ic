@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1067
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1067)
+- **Total programs (excluding helpers / shims):** 1071
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1071)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1058 |
+| `any` | 1062 |
 
 ## Alphabetical listing
 
@@ -274,6 +274,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dff_primitive_synth` | any | — | DETERMINISTIC emitter for the canonical single-bit D-FLIP-FLOP primitive (optionally with an active-high SYNCHRONOUS reset). |
 | `dfm_screen_check` | any | — | Step 35 DFM screen (v2.3). |
 | `dft_atpg_coverage_check` | any | — | REAL stuck-at coverage gate (Step 11 DFT/ATPG). |
+| `dft_post_optimization_scan_survival_check` | any | — | does post-DFT optimization (Step 12, "resynth / buffering") actually PRESERVE the scan chain Step 11 inserted, or did the netlist it emit... |
 | `dft_signoff_check` | any | — | aggregate DFT sign-off gate (foundry / ATE bar). |
 | `dft_signoff_common` | any | — | shared helper for the DFT sign-off gates. |
 | `dft_test_coverage` | any | — | raw FAULT coverage vs sign-off TEST coverage (#603). |
@@ -604,7 +605,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lvs_verdict_tokens` | any | — | single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477). |
 | `macro_non_seq_arc_contract_check` | any | — | a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS. |
 | `macro_obs_geometry_intersect_check` | any | — | Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686. |
-| `macro_obs_load_parity_check` | any | — | Obstructions the LEF declares vs obstructions a reader can load: an OBS section naming an undeclared layer is discarded IN FULL. |
+| `macro_obs_load_parity_check` | any | — | The obstructions the LEF DECLARES vs the obstructions the tool can LOAD. |
 | `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
@@ -987,6 +988,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `staged_rtl_reused_ip_manifest_emit` | any | — | ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path. |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `step_output_collector` | any | — | materialize a per-STEP output subfolder view. |
+| `step_preflight` | any | — | the ORCHESTRATOR side of `required_inputs`. |
+| `step_required_inputs_check` | any | — | refuse to run a step that has nothing to read. |
 | `step_write_ledger` | any | — | record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED. |
 | `structured_table_extractor` | any | — | ONE general extractor for the whole TABLE tier. |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
@@ -1140,7 +1143,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1058 programs)
+### `any` (1062 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1387,6 +1390,7 @@ _(no programs in this group)_
 - `dff_primitive_synth` — DETERMINISTIC emitter for the canonical single-bit D-FLIP-FLOP primitive (optionally with an active-high SYNCHRONOUS reset).
 - `dfm_screen_check` — Step 35 DFM screen (v2.3).
 - `dft_atpg_coverage_check` — REAL stuck-at coverage gate (Step 11 DFT/ATPG).
+- `dft_post_optimization_scan_survival_check` — does post-DFT optimization (Step 12, "resynth / buffering") actually PRESERVE the scan chain Step 11 inserted, or did the netlist it emit...
 - `dft_signoff_check` — aggregate DFT sign-off gate (foundry / ATE bar).
 - `dft_signoff_common` — shared helper for the DFT sign-off gates.
 - `dft_test_coverage` — raw FAULT coverage vs sign-off TEST coverage (#603).
@@ -1715,7 +1719,7 @@ _(no programs in this group)_
 - `lvs_verdict_tokens` — single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477).
 - `macro_non_seq_arc_contract_check` — a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS.
 - `macro_obs_geometry_intersect_check` — Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
-- `macro_obs_load_parity_check` — Obstructions the LEF declares vs obstructions a reader can load: an OBS section naming an undeclared layer is discarded IN FULL.
+- `macro_obs_load_parity_check` — The obstructions the LEF DECLARES vs the obstructions the tool can LOAD.
 - `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
@@ -2096,6 +2100,8 @@ _(no programs in this group)_
 - `staged_rtl_reused_ip_manifest_emit` — ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path.
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `step_output_collector` — materialize a per-STEP output subfolder view.
+- `step_preflight` — the ORCHESTRATOR side of `required_inputs`.
+- `step_required_inputs_check` — refuse to run a step that has nothing to read.
 - `step_write_ledger` — record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED.
 - `structured_table_extractor` — ONE general extractor for the whole TABLE tier.
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.

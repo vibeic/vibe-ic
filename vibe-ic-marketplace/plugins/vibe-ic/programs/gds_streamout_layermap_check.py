@@ -30,7 +30,15 @@ What it catches:
   2. ORPHAN_LAYER       — GDS layers no authority accounts for
   3. EMPTY_MAPPED_LAYER — a routed metal/via layer the map defines but that
                           received nothing (geometry went somewhere else)
-  4. UNREADABLE_GDS     — the GDS is missing or not parseable
+  4. UNREADABLE_GDS     — the GDS is missing, or present but not a readable
+                          GDSII stream (0 bytes, truncated, or not GDSII)
+
+An unreadable stream must reach (4) and not (1)-(3), because the evidence this
+check reasons over is "which layers carry shapes". A file the record walk
+cannot get through yields an empty layer set, and an empty layer set has no
+orphans — so a 0-byte, truncated or non-GDSII artefact would otherwise earn the
+strongest PASS this check can issue. Parseability is therefore a PRECONDITION
+of the verdict, checked before the layer accounting, not a finding alongside it.
 
 Usage:
     python3 gds_streamout_layermap_check.py --gds design.gds \\
@@ -39,8 +47,8 @@ Usage:
 
 Exit codes:
     0 = every populated layer is accounted for
-    1 = orphan / missing-map findings
-    2 = parse error / invalid arguments
+    1 = FAIL: orphan / missing-map / unreadable-or-unparseable GDS
+    2 = invalid arguments, or the check itself could not run
 
 Generality: no vendor, PDK or design literal. Layer numbers come from the
 inputs; the GDS is parsed with a minimal record scanner so the check needs no
@@ -57,6 +65,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 LayerKey = Tuple[int, int]
+
+# GDSII structural record types: a stream opens with HEADER and closes with
+# ENDLIB. Everything between them is the library.
+_REC_HEADER = 0x00
+_REC_ENDLIB = 0x04
 
 # GDSII record types carrying a layer or a purpose number.
 _REC_LAYER = 0x0D
@@ -80,6 +93,19 @@ class Finding:
 
 
 @dataclass
+class GdsScan:
+    """What one walk of a GDSII stream saw.
+
+    `error` is None only when the record chain was traversed from HEADER to
+    ENDLIB. When it is set, `layers` holds whatever was read BEFORE the fault
+    and is evidence, not an inventory — a caller must not read it as "these
+    are the layers this file has"."""
+    layers: Set[LayerKey] = field(default_factory=set)
+    records: int = 0
+    error: Optional[str] = None
+
+
+@dataclass
 class Stats:
     gds_layers: List[str] = field(default_factory=list)
     map_targets: List[str] = field(default_factory=list)
@@ -97,28 +123,63 @@ def _fmt(k: LayerKey) -> str:
 # ---------------------------------------------------------------------------
 # GDSII layer scan (minimal record walk — no layout tool needed)
 # ---------------------------------------------------------------------------
-def scan_gds_layers(path: Path,
-                    include_text: bool = False) -> Set[LayerKey]:
-    """Return every (layer, datatype) pair that carries at least one shape.
+def scan_gds(path: Path, include_text: bool = False) -> GdsScan:
+    """Walk a GDSII stream ONCE, returning both the populated layers and
+    whether the record chain could be traversed end to end.
 
-    Walks GDSII records and pairs each LAYER record with the purpose record
-    that follows it inside the same element, which is how the format orders
-    them. Unpaired LAYER records are ignored rather than guessed at. Text
-    labels are excluded unless asked for — they carry no geometry."""
+    The two answers have to come out of the SAME walk. Asked separately they
+    cannot be reconciled: a walk that stops two records in and a file that
+    genuinely holds no shapes both return an empty layer set, and this check's
+    verdict turns on exactly that difference — zero populated layers have zero
+    orphans, which is the strongest PASS it can issue. So the walk reports the
+    fault it hit instead of discarding it and returning what it had.
+
+    A stream opens with HEADER and closes with ENDLIB. Bytes after ENDLIB are
+    not inspected and the walk stops there: padding a stream out to a block
+    boundary with nulls is normal practice, not damage.
+
+    LAYER records are paired with the purpose record that follows them inside
+    the same element, which is how the format orders them. Unpaired LAYER
+    records are ignored rather than guessed at. Text labels are excluded
+    unless asked for — they carry no geometry.
+
+    Generality: GDSII format structure only. No vendor, PDK or design literal.
+    """
     found: Set[LayerKey] = set()
     pending: Optional[int] = None
     wanted = _PURPOSE_RECS if include_text else _GEOMETRY_RECS
+    records = 0
+
+    if path.stat().st_size == 0:
+        return GdsScan(found, 0,
+                       "empty file (0 bytes) — no stream was written")
+
     with path.open("rb") as fh:
         while True:
             head = fh.read(4)
             if len(head) < 4:
-                break
+                where = ("end of file" if not head
+                         else f"{len(head)} stray byte(s)")
+                return GdsScan(found, records, (
+                    f"truncated: {where} after {records} record(s); "
+                    f"ENDLIB was never reached"))
             length, rtype = struct.unpack(">HBB", head)[0], head[2]
+            if records == 0 and rtype != _REC_HEADER:
+                return GdsScan(found, 0, (
+                    f"not a GDSII stream: first record type is "
+                    f"0x{rtype:02x}, expected HEADER (0x00)"))
             if length < 4:
-                break
+                return GdsScan(found, records, (
+                    f"malformed record {records}: declared length {length} "
+                    f"is shorter than the 4-byte record header"))
             body = fh.read(length - 4)
             if len(body) < length - 4:
-                break
+                return GdsScan(found, records, (
+                    f"truncated: record {records} declares {length} bytes, "
+                    f"only {len(body) + 4} remain"))
+            records += 1
+            if rtype == _REC_ENDLIB:
+                return GdsScan(found, records, None)
             if rtype == _REC_LAYER and len(body) >= 2:
                 pending = struct.unpack(">h", body[:2])[0]
             elif rtype in _PURPOSE_RECS and len(body) >= 2:
@@ -126,7 +187,17 @@ def scan_gds_layers(path: Path,
                     if rtype in wanted:
                         found.add((pending, struct.unpack(">h", body[:2])[0]))
                     pending = None
-    return found
+
+
+def scan_gds_layers(path: Path,
+                    include_text: bool = False) -> Set[LayerKey]:
+    """Every (layer, datatype) pair that carries at least one shape.
+
+    Kept as the layer-only view of `scan_gds` for callers that have already
+    established the stream is readable. Anything deciding a VERDICT must use
+    `scan_gds` instead: an empty return here means "no shapes found", which is
+    not the same claim as "this file has no shapes"."""
+    return scan_gds(path, include_text=include_text).layers
 
 
 # ---------------------------------------------------------------------------
@@ -186,12 +257,33 @@ def audit(gds: Path, layermap: Optional[Path], lib_gds: Optional[Path],
         findings.append(Finding("ERROR", "UNREADABLE_GDS",
                                 f"GDS not found: {gds}"))
         return findings, stats
+
     try:
-        gds_layers = scan_gds_layers(gds)
+        scan = scan_gds(gds)
     except (OSError, struct.error) as exc:
         findings.append(Finding("ERROR", "UNREADABLE_GDS",
                                 f"cannot scan {gds.name}: {exc}"))
         return findings, stats
+
+    # Readability is a PRECONDITION of the layer accounting, not a finding
+    # beside it. Before this gate the category was emittable only for a
+    # MISSING file: a file that was present but empty, truncated or not GDSII
+    # at all came back as zero populated layers, zero populated layers have
+    # zero orphans, and zero orphans is this check's strongest PASS — so the
+    # weakest possible artefact scored a verdict byte-identical to a complete,
+    # correctly-mapped stream. Stop here rather than accounting for layers
+    # read out of a stream that was never read through.
+    if scan.error:
+        findings.append(Finding(
+            "ERROR", "UNREADABLE_GDS",
+            f"cannot read {gds.name} as a GDSII stream: {scan.error}",
+            "layer conformance is undecidable on a stream that cannot be "
+            "read end to end; scoring it as zero populated layers would "
+            "clear the weakest possible artefact with the strongest "
+            "possible verdict"))
+        return findings, stats
+
+    gds_layers = scan.layers
 
     map_targets: Set[LayerKey] = set()
     if layermap and layermap.is_file():
@@ -207,9 +299,22 @@ def audit(gds: Path, layermap: Optional[Path], lib_gds: Optional[Path],
     lib_layers: Set[LayerKey] = set()
     if lib_gds and lib_gds.is_file():
         try:
-            lib_layers = scan_gds_layers(lib_gds)
-        except (OSError, struct.error):
-            lib_layers = set()
+            _lib = scan_gds(lib_gds)
+        except (OSError, struct.error) as _lexc:
+            _lib = GdsScan(error=str(_lexc))
+        lib_layers = _lib.layers
+        if _lib.error:
+            # WARNING, not ERROR: a short read of an AUTHORITY input is a fact
+            # about this check's own evidence, not a defect in the design. It
+            # is said out loud because it NARROWS the allowed set, so an orphan
+            # reported below may be an artefact of the short read rather than
+            # of the flow — but it must not decide the verdict by itself.
+            findings.append(Finding(
+                "WARNING", "AUTHORITY_GDS_TRUNCATED",
+                f"library GDS {lib_gds.name} is not a complete GDSII "
+                f"stream: {_lib.error}",
+                "only the layers read before the fault were added to the "
+                "allowed set, so orphans below may be under-explained"))
 
     # Hard-macro / IP GDS layers are legitimate library geometry too:
     # the design's own vendor macro GDS is MERGED into the streamed
@@ -222,7 +327,7 @@ def audit(gds: Path, layermap: Optional[Path], lib_gds: Optional[Path],
         _mgp = Path(_mg)
         if _mgp.is_file():
             try:
-                macro_layers |= scan_gds_layers(_mgp)
+                _mac = scan_gds(_mgp)
             except Exception as _mexc:   # noqa: BLE001 — best-effort:
                 # a macro-scan failure must NEVER skip the whole
                 # conformance check; surface it (WARN, never swallow)
@@ -232,6 +337,18 @@ def audit(gds: Path, layermap: Optional[Path], lib_gds: Optional[Path],
                     "WARNING", "MACRO_GDS_UNSCANNED",
                     f"could not scan macro GDS {_mgp.name}: {_mexc}",
                     "its layers were NOT added to the allowed set"))
+                continue
+            macro_layers |= _mac.layers
+            if _mac.error:
+                # Same reasoning as the library GDS above: evidence about an
+                # authority input, WARNING only, never the verdict.
+                findings.append(Finding(
+                    "WARNING", "AUTHORITY_GDS_TRUNCATED",
+                    f"macro GDS {_mgp.name} is not a complete GDSII "
+                    f"stream: {_mac.error}",
+                    "only the layers read before the fault were added to "
+                    "the allowed set, so orphans below may be "
+                    "under-explained"))
 
     cfg_layers: Set[LayerKey] = set()
     if signoff_config and signoff_config.is_file():
