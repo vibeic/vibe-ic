@@ -45,9 +45,43 @@ For each `module M(...) ... endmodule` whose port list contains
     rd_en strobe — the handshake gives consumer an explicit cue
     about the lag).
 
-If none of these are present, WARN: the memory's read semantics are
-ambiguous, so a fresh-agent consumer reading `mem[addr]` as
-combinational will misuse it.
+If none of these are present the read contract is merely UNSTATED —
+`registered_read_undocumented`, severity WARN. An omission is a
+documentation debt: the consumer has to read the RTL, but the RTL is
+the truth and nothing in the module argues against it.
+
+Two shapes are NOT omissions, and they are the ones this gate exists
+to stop. In both, the module STATES something its own RTL contradicts,
+so a consumer who does the right thing — believe the module — is
+wrong. They are severity FAIL and they gate the flow:
+
+  - `contradictory_read_doc` — the module header affirmatively claims
+    a no-lag read ("combinational read", "asynchronous read",
+    "zero-cycle read", "no read latency", "read latency = 0") while
+    the body registers it (`<DATA> <= mem[addr];`). This is exactly
+    the real occurrence below: the words said "combinational
+    availability", the flops said otherwise, and the consumer lost a
+    byte per fetch cycle. Documenting nothing would have been safer
+    than documenting the opposite.
+  - `mixed_read_semantics` — the SAME port is both procedurally
+    assigned (`<DATA> <= mem[addr];`) and continuously assigned
+    (`assign <DATA> = mem[addr];`). Beyond the latency ambiguity this
+    is not legal Verilog: a variable may not carry both a procedural
+    and a continuous driver. It cannot elaborate, so it can never be
+    "the intended design" and there is nothing for an operator to
+    weigh.
+
+Severity note (v1.6.125 / #47 Fix 3 kept, and completed): "any finding
+=> FAIL" was correctly removed, because escalating a missing comment
+into a flow-blocking failure is not proportionate. What that change
+left behind was a gate with no FAIL-severity rule at all — every
+finding site was hard-coded WARN, so `verdict == "FAIL"` and exit 1
+were unreachable and BOTH callers (the step-2
+`optional_program_exit_zero` clause and the P0 umbrella's structural
+gate runner, which both grade this program purely on its exit status)
+recorded an unconditional PASS. The severity split above is what makes
+the FAIL side of that verdict expressible again, without making the
+omission case loud.
 
 Usage
 -----
@@ -55,8 +89,10 @@ Usage
 
 Exit codes
 ----------
-    0 = all memory modules declare their read semantics
-    1 = at least one memory module has undeclared read latency
+    0 = no memory module contradicts its own read contract (an
+        UNDOCUMENTED read latency is a WARN and does not gate)
+    1 = at least one memory module contradicts its own read contract
+        (`contradictory_read_doc` / `mixed_read_semantics`)
     2 = IO / argument error
 """
 from __future__ import annotations
@@ -124,6 +160,38 @@ VALID_PORT_RE = re.compile(
     r"output\s+(?:reg\s+|wire\s+)?([A-Za-z_][A-Za-z0-9_]*?)_valid\b"
 )
 
+# An AFFIRMATIVE claim that the read costs no cycle. This is deliberately NOT
+# the negation of LATENCY_DOC_RE: silence about latency is an omission (WARN),
+# while these phrases are the module asserting the OPPOSITE of a registered
+# read, which is what actually misleads a consumer.
+#
+# Kept narrow on purpose — a FAIL here fails step 2 of the flow. The noun forms
+# only admit a short, closed qualifier vocabulary between the adjective and
+# `read` (so prose like "combinational logic reads addr_q" is NOT a claim about
+# read latency), and the predicate forms allow at most 24 comma/period-free
+# characters of qualifier (so "read is registered, so the decode is
+# combinational" cannot reach across the sentence).
+_READ_QUAL = (r"(?:(?:mem|memory|array|ram|rom|register|regfile|reg|data"
+              r"|dual|single|port|word|byte)[-\s]+){0,2}")
+_NOT_A_VERB = r"(?!\s+(?:the|a|an|its|this|that|from|into|out|back)\b)"
+CONTRADICTORY_READ_DOC_RE = re.compile(
+    r"(?i)(?:"
+    # "combinational read" / "combinatorial memory read"
+    r"combinat(?:ional|orial)(?:ly)?[-\s]+" + _READ_QUAL + r"reads?\b" + _NOT_A_VERB
+    # "reads are single-cycle combinational" / "read is purely combinational"
+    + r"|reads?\s+(?:are|is)\b[^.,;\n]{0,24}?combinat(?:ional|orial)"
+    # "asynchronous read" / "async ram read"
+    + r"|async(?:hronous)?[-\s]+" + _READ_QUAL + r"reads?\b" + _NOT_A_VERB
+    + r"|reads?\s+(?:are|is)\b[^.,;\n]{0,24}?async(?:hronous)?\b"
+    # "zero-cycle read" / "0 cycle read" / "same-cycle read"
+    + r"|(?:zero|0|same)[-_\s]?cycle\s+reads?\b"
+    + r"|reads?\s+(?:are|is)\b[^.,;\n]{0,24}?(?:zero|0|same)[-_\s]?cycle"
+    # "no read latency" / "read latency = 0"
+    + r"|no\s+read[-_\s]?latency"
+    + r"|read[-_\s]?latency\s*[:=]\s*0\b"
+    r")"
+)
+
 
 def _line_of(src: str, offset: int) -> int:
     return src.count("\n", 0, offset) + 1
@@ -155,6 +223,7 @@ def check_file(path: Path) -> list[Finding]:
     scan_src = _blank_line_comments(src)
     findings: list[Finding] = []
 
+    prev_mod_end = 0
     for mod_m in MODULE_HEAD_RE.finditer(scan_src):
         mod_name = mod_m.group(1)
         header = mod_m.group(2)
@@ -185,12 +254,24 @@ def check_file(path: Path) -> list[Finding]:
         # `src` at the shared offsets (the blanked scan_src has no `//` doc to
         # read). The header span maps 1:1 because blanking preserves offsets.
         header_raw = src[mod_m.start(2):mod_m.end(2)]
+        # include a few lines ABOVE the module declaration (docstring)
+        above_raw = src[max(0, mod_start - 400):mod_start]
         has_latency_doc = bool(LATENCY_DOC_RE.search(header_raw)) or bool(
-            LATENCY_DOC_RE.search(
-                # include a few lines ABOVE the module declaration (docstring)
-                src[max(0, mod_start - 400):mod_start]
-            )
+            LATENCY_DOC_RE.search(above_raw)
         )
+        # Read the CONTRADICTION over the same header span, but over a
+        # DOCSTRING span clamped at the previous `endmodule`. The 400-char
+        # look-back is a heuristic: on a multi-module file it can reach into
+        # the module ABOVE, and attributing THAT module's (possibly true)
+        # "combinational read" note to THIS one would fail a step of the flow
+        # on a sentence about a different module. The clamp is applied only
+        # here, so the reassurance window (`has_latency_doc`) keeps its exact
+        # historical extent and no project changes WARN/PASS because of it.
+        above_own = src[max(0, mod_start - 400, prev_mod_end):mod_start]
+        prev_mod_end = mod_m.end()
+        _lie = (CONTRADICTORY_READ_DOC_RE.search(header_raw)
+                or CONTRADICTORY_READ_DOC_RE.search(above_own))
+        comb_claim = _lie.group(0).strip() if _lie else ""
 
         for out_name, arr_name, off in reg_reads:
             # Check combinational read alternative
@@ -203,13 +284,38 @@ def check_file(path: Path) -> list[Finding]:
             has_valid = out_name in valid_ports
 
             if is_also_comb:
-                # Both reg and comb — ambiguous; flag.
+                # Both reg and comb. Not merely ambiguous: a variable with a
+                # procedural AND a continuous driver is not legal Verilog, so
+                # this is never the intended design — FAIL.
                 findings.append(Finding(
-                    "WARN", "mixed_read_semantics",
+                    "FAIL", "mixed_read_semantics",
                     str(path), _line_of(src, off), mod_name,
                     f"Port `{out_name}` has both `<= mem[...]` (registered) "
                     f"and `assign {out_name} = mem[...]` (combinational). "
-                    f"Consumer cannot know the latency. Pick one.",
+                    f"Consumer cannot know the latency, and a variable "
+                    f"driven both procedurally and continuously does not "
+                    f"elaborate. Pick one.",
+                ))
+                continue
+
+            if comb_claim:
+                # The module STATES a no-lag read and REGISTERS it. Reported
+                # even when a `_valid` strobe or a latency note is also
+                # present: a consumer who believes the header is still wrong,
+                # and two mutually exclusive statements of the same contract
+                # are not a documented contract.
+                findings.append(Finding(
+                    "FAIL", "contradictory_read_doc",
+                    str(path), _line_of(src, off), mod_name,
+                    f"Module `{mod_name}` documents a no-lag read "
+                    f"({comb_claim!r}) but implements `{out_name} <= "
+                    f"{arr_name}[addr];`, which registers the data — "
+                    f"`{out_name}` lags `addr` by 1 cycle. A consumer that "
+                    f"believes the header reads stale data every fetch. Fix "
+                    f"options: (a) make the RTL match the claim with "
+                    f"`assign {out_name} = {arr_name}[addr];`; (b) correct "
+                    f"the header to '1-cycle read latency' / 'registered "
+                    f"read' and pipeline the consumer.",
                 ))
                 continue
 
@@ -282,6 +388,10 @@ def main() -> int:
             "scanned": len(files),
             "total_findings": len(all_findings),
             "warnings": len(warnings),
+            # Emitted alongside `warnings` so a reader of the artefact can see
+            # WHICH side of the verdict split it landed on without re-deriving
+            # it from `findings`.
+            "fails": len(fails),
             "findings": [asdict(f) for f in all_findings],
             "verdict": verdict,
         }, indent=2)

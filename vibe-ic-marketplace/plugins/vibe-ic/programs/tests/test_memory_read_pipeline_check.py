@@ -85,10 +85,16 @@ def test_combinational_read_passes(tmp_path):
 
 
 def test_mixed_semantics_flagged(tmp_path):
-    """Both registered and combinational for same output — ambiguous.
+    """Both registered and combinational for the same output — FAIL.
 
-    v1.6.125 (#47 Fix 3): mixed_read_semantics is WARN severity —
-    surfaced via verdict=WARN, exit 0 (non-blocking).
+    v1.6.125 (#47 Fix 3) downgraded EVERY finding to WARN, which left the
+    program with no FAIL-severity rule at all: `fails` was empty on every
+    input, so `verdict == "FAIL"` and exit 1 were unreachable and both
+    callers recorded an unconditional PASS. The omission case
+    (`registered_read_undocumented`) keeps that downgrade — a missing
+    comment must not gate the flow. This case does not: a variable with
+    both a procedural and a continuous driver is not legal Verilog, so it
+    cannot be the intended design and there is nothing to weigh.
     """
     src = """
     module mem(input clk, input [6:0] addr, output reg [7:0] data);
@@ -98,10 +104,10 @@ def test_mixed_semantics_flagged(tmp_path):
     endmodule
     """
     rc, out = _run(tmp_path, src)
-    assert rc == 0
-    assert out["verdict"] == "WARN"
+    assert rc == 1
+    assert out["verdict"] == "FAIL"
     rules = [f["rule"] for f in out["findings"]]
-    assert "mixed_read_semantics" in rules or "registered_read_undocumented" in rules
+    assert "mixed_read_semantics" in rules
 
 
 def test_v068_post_fix_shape(tmp_path):
