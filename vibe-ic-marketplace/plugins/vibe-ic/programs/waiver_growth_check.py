@@ -5,8 +5,14 @@ waiver_growth_check.py — v0.112 release-gate (BACKLOG-v10 P0 follow-up).
 Compares current `<project>/waivers.json` against a baseline (frozen at
 the previous release tag). Fails CI if:
   - waiver count grew without explicit `growth_rationale` in waivers.json, or
-  - a previously-closed waiver re-appeared, or
-  - a waiver's evidence pointer became stale (referenced file deleted).
+  - a previously-closed waiver re-appeared (`WAIVER_REOPENED`), or
+  - a waiver has aged past the error threshold.
+
+A stale EVIDENCE pointer is reported as a WARN, not a failure — it is a
+heuristic over free text and a pointer may legitimately name a foundry-side or
+not-yet-produced artefact. This header used to list it as a CI-failing
+condition, which no branch has ever implemented; the list now says what the
+program does.
 
 Why this exists: the v0.108 <benchmark> benchmark showed waivers grew from 6
 (Round 3 digital) → 9 (Round 4 + analog) without anyone tracking the
@@ -107,6 +113,48 @@ baseline of zero" produce the same number and very different meanings, the
 report now says which one happened, in both the text and the JSON
 (``baseline_present``).
 
+A REOPENED WAIVER IS INVISIBLE TO A NET-GROWTH NUMBER
+=====================================================
+The header above has always listed "a previously-closed waiver re-appeared" as
+a CI-failing condition. NO BRANCH EVER EMITTED IT. There was no
+``WAIVER_REOPENED`` category, no closure state was read from either document,
+and the verdict could not be produced by any input.
+
+It could not arrive by the growth route either, and that is the mechanism, not
+an oversight of one ``if``. Growth is ``|current \\ baseline| -
+|baseline \\ current|`` over waiver IDENTITIES. A reopened waiver is one whose
+identity is in BOTH documents — closed in the baseline, open again now — so it
+falls out of both differences and contributes exactly 0. Reopening deferred
+work that was signed off as done is the single most expensive thing this gate
+was built to notice, and it was the one shape guaranteed to read as flat. A
+project could close a waiver, ship the release that claims it closed, reopen it
+next release, and this gate would print ``net growth: 0`` and exit 0 — which is
+what it did, measured, before this section was written.
+
+So closure state is now read from BOTH documents, via
+``_waiver_entries.is_closed`` — the same predicate ``waiver_staleness_check``
+uses, so the two gates cannot come to disagree about whether one entry is
+closed. An identity that every baseline root marks CLOSED and any current root
+carries OPEN is a reopen, and is an ERROR.
+
+The COUNTING is deliberately left alone. Closed entries still count as roots on
+both sides exactly as before, so no project's ``net_growth``,
+``current_root_waivers`` or PASS/FAIL moves because of this change. Redefining
+the population to "open obligations only" would have been a silent re-score of
+every project carrying closure records, in both directions at once — a bigger
+claim than the defect justified. The hole that closure-blindness left in the
+growth number is closed by naming the reopen directly, not by moving the
+number.
+
+ESCAPE HATCH, RECORDED IN THE DATA. A reopen is sometimes correct — new
+silicon, a superseded assumption. The current entry may carry a substantive
+``reopen_rationale`` (same 30-character bar as ``growth_rationale``), which
+downgrades the finding to a WARN (``WAIVER_REOPENED_DISCLOSED``). It is
+operator-driven and it lives in the waiver document, like every other hatch
+here. Deleting the baseline's closure record would also silence it, and that is
+the reason the hatch exists: without one, the cheapest way to get green is to
+destroy the evidence that the waiver was ever closed.
+
 Usage:
   python3 waiver_growth_check.py <project_dir> \\
       [--baseline <path>] [--tolerance N] [--json [PATH]]
@@ -115,7 +163,7 @@ Default baseline: `<project>/.vibe-ic-state/waivers_baseline.json`
 Default tolerance: 0 (any net growth without rationale fails)
 Exit codes:
   0  PASS — waiver count flat or shrinking, OR growth has explicit rationale
-  1  FAIL — waiver grew unjustifiably
+  1  FAIL — waiver grew unjustifiably, or a closed waiver was reopened
   2  IO error
 """
 from __future__ import annotations
@@ -204,14 +252,20 @@ def _dialect_entries(waivers_doc: Any) -> List[Tuple[str, Any]]:
     return out
 
 
-def _root_identities(waivers_doc: Any) -> List[str]:
-    """Identities of root waivers — entries that are NOT cascades.
+def _root_pairs(waivers_doc: Any) -> List[Tuple[str, Any]]:
+    """``[(dialect, entry)]`` for root waivers — entries that are NOT cascades.
 
     A 'root' is any entry that is neither the target of another entry's
     ``cascades_to`` list nor self-declared derived via ``cascade_source``.
     Cascade targets are resolved WITHIN a dialect, never across one, and only
     in the dialect whose target vocabulary is defined — see
-    :func:`_cascade_target_name`."""
+    :func:`_cascade_target_name`.
+
+    The ENTRY is returned alongside its dialect, not just its identity, because
+    two questions are asked of the same root population — "how many are there"
+    and "which of them changed closure state" — and answering them from two
+    separate walks is how the two would come to disagree about which entries
+    are roots."""
     pairs = _dialect_entries(waivers_doc)
 
     cascade_targets: Dict[str, set] = {}
@@ -225,7 +279,7 @@ def _root_identities(waivers_doc: Any) -> List[str]:
             except TypeError:
                 continue  # unhashable target cannot name any entry
 
-    roots: List[str] = []
+    roots: List[Tuple[str, Any]] = []
     for dialect, entry in pairs:
         if isinstance(entry, dict):
             target_name = _cascade_target_name(dialect, entry)
@@ -240,8 +294,48 @@ def _root_identities(waivers_doc: Any) -> List[str]:
                 continue  # this entry is a cascaded child, not a root
             if entry.get("cascade_source") is not None:
                 continue  # explicitly marked as derived
-        roots.append(_identity(dialect, entry))
+        roots.append((dialect, entry))
     return roots
+
+
+def _root_identities(waivers_doc: Any) -> List[str]:
+    """Identities of root waivers, in :func:`_root_pairs` order. This is the
+    population the growth arithmetic counts, and it is UNCHANGED by closure
+    awareness: a closed entry is still a root and still counted, so no
+    project's growth number moves because reopens became detectable."""
+    return [_identity(dialect, entry) for dialect, entry in _root_pairs(waivers_doc)]
+
+
+def _closed_by_identity(waivers_doc: Any) -> Dict[str, bool]:
+    """``{identity: every root carrying it is CLOSED}``.
+
+    Identities are supposed to be unique within a document, but nothing
+    enforces it, so the collision case has to have a defined answer. It
+    resolves toward OPEN: an identity is closed only when EVERY root spelling
+    it is closed, and open as soon as one is not. That is the direction that
+    cannot invent a verdict — a reopen is only reported when the baseline is
+    unambiguous that the obligation was discharged and the current document
+    unambiguously carries live work under the same name."""
+    state: Dict[str, bool] = {}
+    for dialect, entry in _root_pairs(waivers_doc):
+        ident = _identity(dialect, entry)
+        state[ident] = state.get(ident, True) and _we.is_closed(entry)
+    return state
+
+
+def _open_roots_with_identity(waivers_doc: Any, ident: str) -> List[Dict[str, Any]]:
+    """The dict-shaped root entries carrying ``ident`` that are NOT closed."""
+    return [entry for dialect, entry in _root_pairs(waivers_doc)
+            if isinstance(entry, dict)
+            and _identity(dialect, entry) == ident
+            and not _we.is_closed(entry)]
+
+
+def _substantive(text: Any, minimum: int = 30) -> bool:
+    """One definition of "an operator actually wrote a justification here",
+    shared by ``growth_rationale`` and ``reopen_rationale`` so the two hatches
+    cannot drift into different bars for the same kind of prose."""
+    return isinstance(text, str) and len(text.strip()) >= minimum
 
 
 def _looks_like_path(tok: str) -> bool:
@@ -333,7 +427,61 @@ def main():
     removed_waivers = base_roots - cur_roots
     net_growth = len(new_waivers) - len(removed_waivers)
 
+    # A REOPEN lives entirely inside the INTERSECTION, which is precisely the
+    # part of the comparison the growth arithmetic discards: the identity is in
+    # both documents, so it is neither new nor removed and moves net_growth by
+    # 0. Closure state is the only thing that distinguishes "still deferred,
+    # unchanged" from "was signed off as done, and is back".
+    cur_closed = _closed_by_identity(cur_doc)
+    base_closed = _closed_by_identity(base_doc)
+    reopened_waivers = sorted(
+        ident for ident in (cur_roots & base_roots)
+        if base_closed.get(ident, False) and not cur_closed.get(ident, True)
+    )
+
     findings: List[Finding] = []
+    reopened_disclosed: List[str] = []
+
+    for ident in reopened_waivers:
+        live = _open_roots_with_identity(cur_doc, ident)
+        # Disclosure must cover EVERY live entry under the identity. One
+        # justified sibling does not justify an undisclosed one that happens to
+        # share its name.
+        disclosed = bool(live) and all(
+            _substantive(e.get("reopen_rationale")) for e in live)
+        if disclosed:
+            reopened_disclosed.append(ident)
+            findings.append(Finding(
+                severity="WARN",
+                category="WAIVER_REOPENED_DISCLOSED",
+                message=(
+                    f"waiver {ident} was CLOSED in the baseline and is open "
+                    f"again, with a `reopen_rationale` on the entry."
+                ),
+                details=(
+                    "Disclosed, not refused. Recorded so the release can be "
+                    "read against the one before it."
+                ),
+            ))
+            continue
+        findings.append(Finding(
+            severity="ERROR",
+            category="WAIVER_REOPENED",
+            message=(
+                f"waiver {ident} was CLOSED in the baseline "
+                f"({base_path}) and is OPEN again in {cur_path.name}. Net "
+                f"growth cannot see this: the same identity is in both "
+                f"documents, so it counts as neither new nor removed."
+            ),
+            details=(
+                "A closed waiver is a discharged obligation — the release "
+                "that closed it said the deferred work was done. Reopening it "
+                "is not flat waiver count, it is that claim being withdrawn. "
+                "Either close it again, or add a substantive "
+                "`reopen_rationale` to the entry saying why the earlier "
+                "closure no longer holds."
+            ),
+        ))
 
     # A document whose top level is not a JSON object carries no readable keys
     # at all. The shared reader fail-softs it to "no entries" — correct for a
@@ -460,10 +608,7 @@ def main():
 
     # Growth check.
     rationale = cur_doc.get("growth_rationale", "") if isinstance(cur_doc, dict) else ""
-    growth_justified = (
-        isinstance(rationale, str)
-        and len(rationale.strip()) >= 30  # minimum substantive justification
-    )
+    growth_justified = _substantive(rationale)  # minimum substantive justification
 
     if net_growth > args.tolerance and not growth_justified:
         findings.append(Finding(
@@ -509,6 +654,11 @@ def main():
             "baseline_present": base_present,
             "new_waivers": sorted(new_waivers),
             "removed_waivers": sorted(removed_waivers),
+            # Reported separately from new/removed BECAUSE it is in neither:
+            # a reopen contributes 0 to net_growth by construction, so a reader
+            # who only had the growth number could not tell it happened.
+            "reopened_waivers": list(reopened_waivers),
+            "reopened_waivers_disclosed": list(reopened_disclosed),
             "pass": pass_flag,
         },
         "findings": [asdict(f) for f in findings],
@@ -530,6 +680,10 @@ def main():
             print(f"  new this release: {sorted(new_waivers)}")
         if removed_waivers:
             print(f"  closed since baseline: {sorted(removed_waivers)}")
+        if reopened_waivers:
+            # Printed even though net growth is 0 for every one of them —
+            # that is the whole point of the line.
+            print(f"  reopened since baseline: {reopened_waivers}")
         for f in findings:
             print(f"  [{f.severity}] {f.category}: {f.message}")
     elif args.json == "-":
