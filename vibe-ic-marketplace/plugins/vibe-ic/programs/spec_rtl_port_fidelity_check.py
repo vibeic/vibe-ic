@@ -7,8 +7,19 @@ garbled spec led the generator to emit ports `Y1,Y3` when the design needed
 
   STANDALONE (default): structural "port sanity" on the RTL alone —
     - indexed-name GAP: a port family like `Y1, Y3` with a missing interior
-      index `Y2` (the Prob099 signature) → WARN.
+      index `Y2` (the Prob099 signature) → ERROR when the numeric suffix is a
+      real ENUMERATION (see `index_gap_severity`), WARN otherwise.
     - duplicate port names → WARN.
+
+  The ERROR tier in STANDALONE mode is load-bearing, not cosmetic. The only
+  programmatic caller (`eda_rtl_audit`) runs this program as
+  `python3 spec_rtl_port_fidelity_check.py <rtl_dir>` — no `--spec`, no
+  `--strict`. While every standalone rule was WARN-only, `errs` was empty by
+  CONSTRUCTION, `fail` was False for every possible RTL, and the verdict was
+  pinned to PASS: the dropped-port defect this program exists to catch could
+  not produce the FAIL it prints. The gap-severity split below restores a
+  reachable FAIL for the unambiguous shape while keeping the advisory shape
+  non-blocking.
 
   SPEC COMPARE (`--spec FILE`): exact match of the RTL port list against an
     integration-spec port list (name + direction + width). Any missing / extra
@@ -25,7 +36,8 @@ CLI (dual interface):
     python3 spec_rtl_port_fidelity_check.py --rtl-dir <dir> [--top NAME] [--spec FILE]
 
 Exit codes:
-    0 = PASS   1 = ERROR (spec mismatch) or, with --strict, any WARN
+    0 = PASS   1 = ERROR (dropped indexed port, or a `--spec` mismatch) or,
+               with --strict, any WARN
     2 = no RTL found / parse error
 """
 from __future__ import annotations
@@ -86,6 +98,33 @@ def load_spec(path: Path) -> List[Port]:
     return extract_spec_contract(txt, is_json=path.suffix == '.json').ports
 
 
+def index_gap_severity(observed: List[int], missing: List[int]) -> str:
+    """Severity for one indexed port family with an interior gap.
+
+    A trailing number on a port name is only an ENUMERATION INDEX when the
+    family reads like one; otherwise it encodes a VALUE (a bit-width, a rate, a
+    tap position) and an "interior gap" between two such names is meaningless.
+    Two purely arithmetic, chip-AGNOSTIC discriminators separate them:
+
+      * an enumeration is 0-based or 1-based — `d0,d1,…` / `Y1,Y2,…`. A family
+        whose lowest member is 8 or 16 (`out_8`, `out_16`) encodes a value.
+      * a DROPPED port leaves EXACTLY ONE hole (`Y1,Y3`: `Y2` is the omission).
+        A family riddled with several disjoint holes — measured in this corpus:
+        a one-hot state module exporting taps `0,1,2,3,7,11,12` — is a
+        deliberately SPARSE selection, not an omission, and must stay advisory:
+        it is a currently-green module and nothing about it is wrong.
+
+    Both hold → ERROR: one enumerated port was dropped from the interface,
+    which is a defect no spec can bless. Either fails → WARN: advisory, must
+    not turn a run red.
+    """
+    if observed[0] not in (0, 1):
+        return 'WARN'
+    if len(missing) != 1:
+        return 'WARN'
+    return 'ERROR'
+
+
 def check_index_gaps(ports: List[Port], path: str) -> List[Finding]:
     """Detect indexed port families with a missing interior index."""
     fam: Dict[str, List[int]] = {}
@@ -100,12 +139,26 @@ def check_index_gaps(ports: List[Port], path: str) -> List[Finding]:
             continue
         full = set(range(s[0], s[-1] + 1))
         missing = sorted(full - set(s))
-        if missing:
+        if not missing:
+            continue
+        sev = index_gap_severity(s, missing)
+        if sev == 'ERROR':
+            findings.append(Finding(
+                path, 'ERROR', 'port-index-gap', prefix,
+                f"enumerated port family '{prefix}*' has indices {s} with "
+                f"interior gap(s) {missing} — '{prefix}{missing[0]}' was "
+                f"DROPPED from the interface. A garbled/misread spec drops a "
+                f"port exactly this way (VerilogEval Prob099 signature); an "
+                f"enumeration with a hole in it is not a legal interface. "
+                f"Declare the missing port or renumber the family."))
+        else:
             findings.append(Finding(
                 path, 'WARN', 'port-index-gap', prefix,
                 f"port family '{prefix}*' has indices {s} with interior "
-                f"gap(s) {missing} — a garbled/misread spec often drops a port "
-                f"this way (VerilogEval Prob099 signature). Confirm "
+                f"gap(s) {missing}, but the numeric suffix does not read as an "
+                f"enumeration (it starts at {s[0]} and {len(missing)} index/es "
+                f"are absent against {len(s)} present) — most likely a "
+                f"value-encoding suffix, so this is advisory only. Confirm "
                 f"'{prefix}{missing[0]}' is genuinely absent."))
     return findings
 
