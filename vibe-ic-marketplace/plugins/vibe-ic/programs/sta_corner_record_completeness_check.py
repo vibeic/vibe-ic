@@ -1164,6 +1164,75 @@ def read_axis_evidence(project: Path,
 
 
 # ── evaluation ─────────────────────────────────────────────────────────────
+#: The slack field each declared sign-off ROLE is the sign-off evidence for.
+#: Same mapping R2 already uses to decide which datapoint a declared role owes.
+_R3_ROLE_FIELD = {"setup": "setup_wns_ns", "hold": "hold_wns_ns"}
+_R3_FIELD_LABEL = {"setup_wns_ns": "setup", "hold_wns_ns": "hold"}
+
+
+def _r3_judged_fields(row: Dict[str, object]) -> Tuple[List[str], List[str]]:
+    """(fields R3 decides the corner on, fields it excludes and discloses).
+
+    A sign-off corner is DECLARED for ONE check type — setup at the slow
+    corner, hold at the fast one — so the post-route sign-off report publishes
+    that corner's role field and no other. R1 already states this for the
+    nominal corner ("Demanding hold from it would be a FABRICATED violation");
+    R3 did not state it for the ROLED corners. `_resolve` back-fills the
+    unpublished field from the PRE_LAYOUT pool so the evidence table stays
+    complete, and records the origin of every number in `basis_used`. R3 then
+    took `min()` across both fields WITHOUT reading `basis_used`, so the hold
+    corner was decided by a setup number that
+
+      * its own producing report stamps `STA_BASIS: PRE_LAYOUT_ESTIMATE` and
+        describes as "NOT post-route sign-off ... a corner shown as MET here
+        may VIOLATE on the routed design", and
+      * the run's ACTUAL setup sign-off corner contradicts.
+
+    MEASURED (sha256 x sky130A, 2026-08-10): corner FF, declared role HOLD,
+    failed R3 on `setup -14.030 ns` taken from `per_corner/sta_FF.rpt`
+    (PRE_LAYOUT_ESTIMATE) while the same run's `sta_mcorner_ocv.rpt` reported
+    HOLD@FF `+0.260 MET` and SETUP@SS `+1.810 MET`, TNS 0.00 on both. The same
+    row's `pre_layout_superseded_ns` shows the mechanism: FF's TNS WAS
+    superseded by the post-route report (which publishes TNS for the corner)
+    and FF's setup WNS was NOT, because a hold corner has no post-route setup
+    number to supersede it with. The FAIL therefore named no defect in the
+    design, and the number it quoted was 5.6x the routed one.
+
+    A field is excluded ONLY when BOTH hold:
+
+      * `basis_used[field]` is PRE_LAYOUT — the number is an estimate, not
+        sign-off evidence, and
+      * the corner's declared role does not cover that field.
+
+    So both ways this rule must still fail are untouched:
+
+      * a run with NO post-route STA keeps failing, because its ROLE-covered
+        field is pre-layout too and is still judged — this preserves
+        `_resolve`'s promise that a pre-layout-only project "keeps exactly
+        today's numbers and today's verdict";
+      * a REAL post-route setup violation at the hold corner is SIGNOFF basis,
+        so it is judged and still fails.
+
+    A corner with no declared role keeps every field: this narrows the rule
+    using a fact the record states, and infers nothing where it states none.
+    """
+    basis = row.get("basis_used") or {}
+    role_fields = {_R3_ROLE_FIELD[r] for r in (row.get("roles") or [])   # type: ignore[union-attr]
+                   if r in _R3_ROLE_FIELD}
+    judged: List[str] = []
+    excluded: List[str] = []
+    for f in ("setup_wns_ns", "hold_wns_ns"):
+        if row.get(f) is None:
+            continue
+        if (role_fields
+                and f not in role_fields
+                and basis.get(f) == BASIS_PRE_LAYOUT):      # type: ignore[union-attr]
+            excluded.append(f)
+        else:
+            judged.append(f)
+    return judged, excluded
+
+
 def evaluate(project: Path,
              slack_tol: float = _DEFAULT_SLACK_TOL_NS) -> Dict[str, object]:
     """Pure evaluator over a run dir. ALWAYS returns the full per-corner
@@ -1338,8 +1407,24 @@ def evaluate(project: Path,
     for row in table:
         if not row.get("reported"):
             continue
-        vals = [float(row[f]) for f in ("setup_wns_ns", "hold_wns_ns")   # type: ignore[arg-type]
-                if row.get(f) is not None]
+        judged, off_role_prelayout = _r3_judged_fields(row)
+        vals = [float(row[f]) for f in judged]               # type: ignore[arg-type]
+        # A number the corner's ROLE does not cover, back-filled from a report
+        # that stamps itself PRE_LAYOUT_ESTIMATE, is DISCLOSED here and does
+        # not decide the corner. Stated as a finding, never as a rule: it is
+        # evidence about the record, not a violation of the design.
+        for _f in off_role_prelayout:
+            _v = row.get(_f)
+            if _v is not None and float(_v) < -slack_tol:    # type: ignore[arg-type]
+                findings.append(
+                    f"R3 sign-off corner '{row['corner']}' ({row['axis']} axis, "
+                    f"role {'/'.join(row.get('roles') or []) or 'signoff'}) "
+                    f"carries {_R3_FIELD_LABEL[_f]} {float(_v):+.3f} ns read "  # type: ignore[arg-type]
+                    f"from a {BASIS_PRE_LAYOUT} report — its declared role does "
+                    f"not cover that check, and no post-route sign-off number "
+                    f"for it exists to supersede the estimate, so it is "
+                    f"DISCLOSED and does not decide this corner "
+                    f"(source: {row.get('source')})")
         if not vals:
             continue
         worst = min(vals)
@@ -1350,11 +1435,15 @@ def evaluate(project: Path,
         if worst < -slack_tol:
             rules.append("R3_SIGNOFF_CORNER_VIOLATION")
             signoff_violated.append(str(row["corner"]))
+            # Only the fields R3 actually DECIDED on. A field excluded as
+            # off-role pre-layout is disclosed above under its own sentence;
+            # naming it inside the rule's violation text too would quote a
+            # number the rule did not use as if it had.
             detail = []
-            for f, tag in (("setup_wns_ns", "setup"), ("hold_wns_ns", "hold")):
+            for f in judged:
                 v = row.get(f)
                 if v is not None and float(v) < -slack_tol:
-                    detail.append(f"{tag} {float(v):+.3f} ns")
+                    detail.append(f"{_R3_FIELD_LABEL[f]} {float(v):+.3f} ns")
             tns_s = ("" if row.get("tns_ns") is None
                      else f", TNS {float(row['tns_ns']):.2f}")   # type: ignore[arg-type]
             findings.append(
