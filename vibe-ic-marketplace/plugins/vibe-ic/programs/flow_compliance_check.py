@@ -3523,6 +3523,36 @@ _VACUOUS_JSON_VERDICTS = {"NOT_APPLICABLE", "SKIPPED", "SKIP", "VACUOUS",
 def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
     """True iff the gate's own JSON report declares it examined nothing.
 
+    ⚠️ NOT CURRENTLY WIRED INTO THE STEP TIER — see vibe-ic#901 follow-on.
+
+    Wiring this into the VACUOUS_PASS branch (v1.10.14) caused a MEASURED
+    regression: it turned a genuinely converged cell red. Controlled proof —
+    same run directory, byte-identical artefacts, only the audit binary
+    changed:
+
+        1.10.11  PASS=36 FAIL=0            -> PASS_WITH_WAIVERS
+        1.10.16  PASS=25 FAIL=0 VOIDED=8   -> FAIL
+
+    Root cause: the tier branch is `passed and vacuous_hints and not
+    non_hint_reasons`, and its own docstring says the intent is "EVERY executed
+    sub-gate was vacuously satisfied". `not non_hint_reasons` only approximates
+    that, because a gate that passes SUBSTANTIVELY says nothing at all. Reading
+    gates' JSON made far more gates emit a vacuity hint, so a step with one
+    legitimately-inapplicable gate (`drv_promotion_corroboration_check`: "no
+    route promotion this run") and several siblings that measured real design
+    content flipped to VACUOUS_PASS — cascading into 8
+    PASS_VOIDED_BY_DEPENDENCY and an overall FAIL with `failed_gate_count: 0`.
+
+    A FAIL that enumerates nothing as failed is the same defect class this
+    campaign exists to remove, so the hook is withdrawn rather than left in
+    while a better fix is designed.
+
+    Closing #901 properly needs the tier decision to compare vacuous hints
+    against the NUMBER OF GATE CLAUSES THAT RAN, so "every sub-gate" is
+    counted rather than inferred from silence. Until then the original #901
+    hole (a gate declaring NOT_APPLICABLE in JSON the consumer never opened)
+    remains open and is the lesser evil.
+
     vibe-ic#901. Six gates exited 0 on an empty project without the consumer
     seeing a disclosure — and the two sharpest were SELF-AWARE, printing
     `{"verdict": "NOT_APPLICABLE", "reason": "... (step did not run)"}` into a
@@ -7611,8 +7641,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # promotes the step's status to WAIVED-DEFERRED instead of a bare
             # PASS, carrying the WITH_WAIVERS distinction to the Overall verdict.
             reasons.append(out)
-        elif _stdout_signals_vacuous(out) or _json_report_signals_vacuous(
-                project, _cmd):
+        elif _stdout_signals_vacuous(out):
             # A gate program may disclose the vacuous tier by PRINTING
             # `VACUOUS_PASS:` while still exiting 0 — which is exactly what the
             # shared analog helper `_analog_a_check_common.vacuous_pass()` does
