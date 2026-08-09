@@ -11689,6 +11689,57 @@ def _producer_cache_valid_for(out_dir: Path, kind: str) -> Tuple[bool, str]:
         f"ran")
 
 
+# ── FINAL-PLACEMENT-LEGALITY readers (chip-AGNOSTIC: OpenROAD grammar) ─────
+_RE_FINAL_PLACEMENT_LEGAL = re.compile(
+    r"^FINAL_PLACEMENT_LEGAL:\s*(yes|no)\b", re.M)
+_RE_DPL_OVERLAP_COUNT = re.compile(
+    r"DPL-0005\]\s*Overlap check failed\s*\((\d+)\)")
+# The measured occupancy of the die the run actually placed on, in the two
+# forms OpenROAD/the runner emit it. Used only to give the die-upsize retry a
+# number to grow FROM when the placement came back illegal.
+_RE_FILLER_CORE_UTIL = re.compile(r"core_util=([\d.]+)")
+_RE_DPL_UTILIZATION = re.compile(r"DPL-0009\]\s*Utilization:\s*([\d.]+)%")
+
+
+def _final_placement_illegal(
+        log_text: str) -> Tuple[bool, Optional[int]]:
+    """``(illegal, overlap_count)`` from a PnR log.
+
+    ``illegal`` is True only on POSITIVE evidence — the pnr.tcl probe printed
+    ``FINAL_PLACEMENT_LEGAL: no``. A log with no marker at all (older pnr.tcl,
+    stub OpenROAD, a run that never reached ``write_def``) is UNKNOWN, not bad:
+    returns ``(False, None)`` so behaviour is unchanged wherever the probe did
+    not run. chip-AGNOSTIC: OpenROAD log grammar only."""
+    if not isinstance(log_text, str) or not log_text:
+        return False, None
+    verdicts = _RE_FINAL_PLACEMENT_LEGAL.findall(log_text)
+    if not verdicts or verdicts[-1] != "no":
+        return False, None
+    counts = _RE_DPL_OVERLAP_COUNT.findall(log_text)
+    try:
+        return True, int(counts[-1]) if counts else None
+    except (TypeError, ValueError):
+        return True, None
+
+
+def _measured_core_util_pct(log_text: str) -> Optional[float]:
+    """Last measured CORE utilization (%) in a PnR log, or None.
+
+    Prefers the filler step's ``core_util=`` (it is measured on the final,
+    post-repair, post-fill occupancy) and falls back to the legalizer's
+    ``[INFO DPL-0009] Utilization: N%``. chip-AGNOSTIC."""
+    if not isinstance(log_text, str) or not log_text:
+        return None
+    for rx in (_RE_FILLER_CORE_UTIL, _RE_DPL_UTILIZATION):
+        m = rx.findall(log_text)
+        if m:
+            try:
+                return float(m[-1])
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def _extract_overutil_pct(log_text: str) -> Optional[float]:
     """Return the reported utilization% from an OpenROAD GPL-0301
     error, or None if the log doesn't carry that error."""
@@ -17677,8 +17728,49 @@ def _v1_8_100_signoff_drv_repair_tcl(out_dir_c: str) -> str:
         # route; it belongs after any buffer insertion, not only that one.
         "    if {[catch {repair_timing -setup} _sdr_rt]} "
         "{ puts \"SDR_REPAIR_TIMING_NONFATAL: $_sdr_rt\" }\n"
-        "    if {[catch {detailed_placement} _sdr_dp]} "
-        "{ puts \"SDR_DPL_NONFATAL: $_sdr_dp\" }\n"
+        # ── THE SWALLOWED LEGALIZATION (subservient x sky130A, measured) ──
+        # `repair_design` + `repair_timing -setup` above RESIZE and INSERT
+        # cells. On a die with no free sites `detailed_placement` then fails,
+        # and the shipped code printed `SDR_DPL_NONFATAL` and CARRIED ON:
+        # it cleared a CLEAN route and re-routed on an ILLEGAL placement.
+        #
+        # MEASURED, subservient x sky130A, plugin 1.10.14, image 0.2.78:
+        #   [INFO  DRT-0199] Number of violations = 0      <- base route clean
+        #   [ERROR DPL-0701] ... Violations remain: 4      -> SDR_DPL_NONFATAL
+        #   SDR_ROUTING_CLEARED: 719
+        #   Completing 100% with 5145 violations           <- reroute wrecked
+        # and the DEF that shipped carried overlapping cells:
+        #   check_placement -> [WARNING DPL-0005] Overlap check failed (647).
+        #                      [ERROR   DPL-0033] detailed placement checks failed
+        # Sign-off then reported 14278 KLayout DRC violations and an LVS abort
+        # (9677 Magic ext2spice extraction errors), NEITHER of which names the
+        # cause. Streaming the SAME design from the last LEGAL DEF
+        # (routed_preantenna.def, check_placement OK) through the SAME deck
+        # gives **0** DRC violations — so every one of those 14278 findings is
+        # this one defect.
+        #
+        # `_build_escalating_legalize_tcl` exists precisely to remove this
+        # anti-pattern (its own docstring: "swallows the error and carries on
+        # with an ILLEGAL placement, so routing and sign-off are then built on
+        # overlapping cells"). It was wired into INITIAL_DPL, the spare
+        # tie-off, POST_HOLD and the global-route legalize — but NOT into this
+        # one, the only legalize that runs after the last checkpoint DEF and
+        # therefore the only one whose failure reaches the shipped GDS.
+        #
+        # Two changes, both chip-AGNOSTIC:
+        #   1. legalize with the ESCALATING window ladder and CONFIRM with
+        #      `check_placement` (a `detailed_placement` that merely does not
+        #      throw is not evidence of legality);
+        #   2. when every rung fails, ABANDON this repair pass BEFORE the
+        #      routing clear below, so the last routed state survives instead
+        #      of being destroyed on the way to an illegal one.
+        + _build_escalating_legalize_tcl("SDR", var_tag="sdr")
+        + "    if {$_dploksdr == 0} {\n"
+          "      puts \"SDR_ABORT_ILLEGAL_PLACEMENT: every displacement rung "
+          "failed check_placement; abandoning this DRV-repair pass BEFORE the "
+          "routing clear so the last legally-placed route is what ships\"\n"
+          "      break\n"
+          "    }\n"
         # The routing clear. Without it `global_route` no-ops on already-routed
         # nets, the follow-on detailed_route aborts, and the design measures
         # clean because it is UNROUTED. PG and dont_touch nets are preserved.
@@ -18191,6 +18283,24 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     _rd_margin_placement = _repair_design_margin_tcl("repair_design_pl")
     _rd_margin_globalrt = _repair_design_margin_tcl("repair_design_gr")
     min_area_patch_block = _min_area_patch_tcl("MIN_AREA_PATCH")
+    # ── FINAL PLACEMENT LEGALITY, the LAST thing before write_def ──
+    # Every legalize site inside pnr.tcl is `catch`-guarded, so a
+    # legalization that fails anywhere after the last checkpoint DEF
+    # reaches `write_def` unannounced. Nothing between here and the
+    # sign-off DRC re-checks placement, so an illegal DEF is streamed,
+    # DRC/LVS report thousands of derived findings, and `pnr` reports
+    # PASS. Ask the tool, once, on the geometry that actually ships.
+    # `check_placement` prints its own `[WARNING DPL-0005] Overlap
+    # check failed (N).` so the COUNT lands in the log too.
+    # Measure-only here (the verdict is the runner's, below) and
+    # NONFATAL, so a stub OpenROAD degrades to the prior behaviour.
+    final_placement_gate_block = (
+        "# vibe-ic — final placement legality on the SHIPPED geometry\n"
+        "if {[catch {check_placement} _fpl_e]} {\n"
+        "  puts \"FINAL_PLACEMENT_LEGAL: no ($_fpl_e)\"\n"
+        "} else {\n"
+        "  puts \"FINAL_PLACEMENT_LEGAL: yes\"\n"
+        "}\n")
     return f"""
 {_thread_block}read_lef {tech_lef_c}
 read_lef {cell_lef_c}
@@ -18415,7 +18525,7 @@ puts "{_PNR_STAGE_MARKER} postroute_fill"
 # sees the final geometry (post antenna-repair, post filler) and every
 # downstream consumer (write_def / write_verilog / RCX / magic GDS / DRC /
 # LVS) reads the patched route.
-{min_area_patch_block}write_def {out_dir_c}/routed.def
+{min_area_patch_block}{final_placement_gate_block}write_def {out_dir_c}/routed.def
 write_def {out_dir_c}/{top}.def
 write_verilog {out_dir_c}/{top}_pnr.v
 report_checks > {out_dir_c}/sta.rpt
@@ -19622,6 +19732,10 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _downsized_once = False   # GAP-E2E-4 FOLLOW-UP — single conservative downsize
     _loosen_idx = 0           # ROUTING-FEEDBACK — current loosen-ladder rung
     _upsize_tries = 0         # over-util upsizes applied (bounded budget)
+    # Last iteration's final-placement-legality record (None = legal or
+    # unknown). Read after the loop: a run that could not grow its way
+    # to a legal placement must FAIL naming DPL-0033, not PASS.
+    _pnr_illegal_placement: Optional[Dict[str, Any]] = None
     # v1.3.47 — the PnR route runs under the PROGRESS-STALL WATCHDOG, not a
     # size ESTIMATE. A still-progressing OpenROAD (continuous CPU + periodic
     # DRT/antenna iteration logs) is NEVER killed → it runs to completion,
@@ -19655,6 +19769,37 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             _docker_timeout_isolate([out_dir / f"{top}.def"])
             break
         actual_util = _extract_overutil_pct(out + err)
+        # An ILLEGAL FINAL PLACEMENT is an over-utilization event that
+        # OpenROAD did NOT raise as one: the tools all returned 0, the DEF was
+        # written, and only `check_placement` knows the cells overlap. Feed it
+        # into the SAME bounded upsize path the GPL-0301 over-util error uses —
+        # a die with room is exactly what a legalizer that ran out of sites
+        # needs, and the budget/cap/explicit-die guards below are unchanged.
+        # MEASURED (subservient x sky130A): 647 overlapping instances at a
+        # measured core_util of 97.6 % on a 170x170 die whose L9-declared
+        # target was 35 %.
+        _fp_illegal, _fp_overlaps = _final_placement_illegal(
+            (out or "") + (err or ""))
+        if _fp_illegal:
+            _pnr_illegal_placement = {
+                "iteration": _retry_i,
+                "overlaps": _fp_overlaps,
+                "die_um": f"{die_w}x{die_h}",
+                "measured_core_util_pct": _measured_core_util_pct(
+                    (out or "") + (err or "")),
+            }
+            if actual_util is None:
+                _meas_u = _pnr_illegal_placement["measured_core_util_pct"]
+                actual_util = (_meas_u if _meas_u is not None
+                               else target_util_pct * 1.3)
+                print(f"PNR_PLACEMENT_ILLEGAL: check_placement reports "
+                      f"{_fp_overlaps if _fp_overlaps is not None else 'an unknown number of'} "
+                      f"overlapping instance(s) in the DEF this run would ship "
+                      f"(die={die_w}x{die_h}um, measured core_util="
+                      f"{actual_util:.1f}%, target {target_util_pct:.1f}%) — "
+                      f"treating as an over-utilization event")
+        else:
+            _pnr_illegal_placement = None
         if actual_util is None:
             # The route COMPLETED without an over-util placement error. Two
             # opt-in, AUTO-die-only geometry adjustments can still fire here —
@@ -20366,6 +20511,37 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # marker at all is UNKNOWN, not BAD — blocking on absent evidence would
     # manufacture a failure, which is the same error class as passing on
     # absent evidence.
+    # ── AN ILLEGAL PLACEMENT IS NEVER A PASS ──────────────────────────────
+    # Reached only when the bounded upsize budget / die cap could not buy a
+    # legal placement. Before this gate the step returned PASS and the defect
+    # resurfaced hours later as thousands of derived DRC violations and an LVS
+    # extraction abort, neither of which names it. FAIL here, naming the gate
+    # (`check_placement` -> DPL-0033) and the number (DPL-0005 overlap count),
+    # so the cause is stated where it is measured.
+    if _pnr_illegal_placement is not None:
+        _ip_n = _pnr_illegal_placement.get("overlaps")
+        _ip_u = _pnr_illegal_placement.get("measured_core_util_pct")
+        return StepResult(
+            "pnr", "FAIL", time.time() - t0,
+            ("PLACEMENT_NOT_LEGAL: OpenROAD `check_placement` on the DEF this "
+             "step would ship reports "
+             + (f"{_ip_n} overlapping instance(s) " if _ip_n is not None
+                else "overlapping instance(s) ")
+             + "([WARNING DPL-0005] / [ERROR DPL-0033]) at die "
+             + f"{_pnr_illegal_placement.get('die_um')}um"
+             + (f", measured core utilization {_ip_u:.1f}% (target "
+                f"{target_util_pct:.1f}%)" if _ip_u is not None else "")
+             + ". The die-upsize retry budget is exhausted, so no larger die "
+               "was tried. Streaming an illegal DEF is what turns ONE "
+               "placement failure into thousands of sign-off DRC violations "
+               "and an LVS extraction abort, so the route is NOT published. "
+               "Give the design more area (--die-um / a lower --util) or "
+               "reduce the post-route repair that grew it."),
+            [str(out_dir / "openroad.log")],
+            extras={"placement_legality": _pnr_illegal_placement,
+                    "resize_history": resize_history,
+                    "loosen_declines": loosen_declines,
+                    "die_um": f"{die_w}x{die_h}"})
     _pdn_verdict, _pdn_mk = _pnr_pdn_grid_verdict(project)
     if _pdn_verdict == "BAD":
         return StepResult(

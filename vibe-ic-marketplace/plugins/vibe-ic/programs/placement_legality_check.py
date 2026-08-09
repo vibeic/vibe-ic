@@ -255,6 +255,53 @@ _LEGALIZE_MARKER_RE = re.compile(
     r"\b([A-Z0-9_]+_LEGALIZE_(?:OK|FAILED))\b")
 
 
+# The runner's PnR Tcl also runs `check_placement` ONE more time, as the last
+# statement before `write_def`, and condenses it to:
+#     FINAL_PLACEMENT_LEGAL: yes
+#     FINAL_PLACEMENT_LEGAL: no (<DPL error>)
+# That probe is the only one measured on the geometry that actually SHIPS.
+# Every `*_LEGALIZE_*` marker above is measured at an intermediate site, and a
+# legalization that fails AFTER the last of them (post-route DRV repair resizes
+# and inserts cells) reaches `write_def` with none of them saying so. MEASURED
+# (subservient x sky130A): every intermediate site reported OK, `placed.def`
+# was legal, this gate returned PASS — and the DEF that shipped carried 647
+# overlapping instances, which sign-off then reported as 14278 DRC violations,
+# an LVS extraction abort and an unmeasurable IR/EM (PSM-0069). chip-AGNOSTIC.
+_FINAL_PLACEMENT_RE = re.compile(r"^FINAL_PLACEMENT_LEGAL:\s*(yes|no)\b", re.M)
+_DPL_OVERLAP_COUNT_RE = re.compile(
+    r"DPL-0005\]\s*Overlap check failed\s*\((\d+)\)")
+
+
+def _shipped_def_legality(project: Path):
+    """``(verdict, overlap_count)`` for the DEF the PnR step shipped.
+
+    ``verdict`` is ``"yes"``, ``"no"`` or ``None`` (no probe in the log —
+    an older pnr.tcl, a stub OpenROAD, or a run that never reached
+    ``write_def``). ``None`` is UNKNOWN and never fabricated into either
+    answer. chip-AGNOSTIC: runner/OpenROAD log grammar only.
+    """
+    pnr_dir = project / "phase3" / "stage3" / "pnr"
+    if not pnr_dir.is_dir():
+        return None, None
+    verdict = None
+    overlaps = None
+    for log in sorted(pnr_dir.rglob("*.log")):
+        try:
+            txt = log.read_text(errors="replace")
+        except OSError:
+            continue
+        hits = _FINAL_PLACEMENT_RE.findall(txt)
+        if hits:
+            verdict = hits[-1]
+        counts = _DPL_OVERLAP_COUNT_RE.findall(txt)
+        if counts:
+            try:
+                overlaps = int(counts[-1])
+            except (TypeError, ValueError):
+                pass
+    return verdict, overlaps
+
+
 def _legalizer_markers(project: Path) -> tuple[List[str], List[str]]:
     """Return (failed_markers, ok_markers) found in the PnR logs.
 
@@ -290,6 +337,8 @@ def inspect(project: Path):
         "placed_def": _PLACED_DEF_REL,
         "legalizer_failed_markers": [],
         "legalizer_ok_markers": [],
+        "shipped_def_placement_legal": None,
+        "shipped_def_overlap_instances": None,
         "declared_components": None,
         "parsed_components": None,
         "placed": None,
@@ -433,6 +482,42 @@ def inspect(project: Path):
                 "log — this run records no placer legality verdict, so the "
                 "status-token checks above stand alone. Not fabricated as a "
                 "pass."),
+        })
+
+    # ---- The SHIPPED DEF's own legality (never fabricated) --------------
+    _ship_verdict, _ship_overlaps = _shipped_def_legality(project)
+    summary["shipped_def_placement_legal"] = _ship_verdict
+    summary["shipped_def_overlap_instances"] = _ship_overlaps
+    if _ship_verdict == "no":
+        findings.append({
+            "severity": "FAIL", "rule": "SHIPPED_DEF_PLACEMENT_ILLEGAL",
+            "message": (
+                "OpenROAD `check_placement`, run as the last statement before "
+                "`write_def`, rejects the DEF this PnR step shipped"
+                + (f" ({_ship_overlaps} overlapping instance(s), "
+                   f"[WARNING DPL-0005])" if _ship_overlaps is not None
+                   else " ([ERROR DPL-0033])")
+                + ". `placed.def` above being legal says nothing about it: the "
+                  "post-route repair that resized and inserted cells runs "
+                  "AFTER it. An illegal shipped DEF is what turns one "
+                  "placement failure into thousands of derived sign-off DRC "
+                  "violations, an LVS extraction abort and an unmeasurable "
+                  "IR/EM."),
+        })
+        verdict, rc = "FAIL", 1
+    elif _ship_verdict == "yes":
+        findings.append({
+            "severity": "INFO", "rule": "SHIPPED_DEF_PLACEMENT_LEGAL",
+            "message": ("OpenROAD `check_placement` accepts the DEF this PnR "
+                        "step shipped (probed immediately before write_def)"),
+        })
+    else:
+        findings.append({
+            "severity": "INFO", "rule": "SHIPPED_DEF_LEGALITY_ABSENT",
+            "message": ("no `FINAL_PLACEMENT_LEGAL` probe in the PnR log — "
+                        "this run records no legality verdict for the DEF it "
+                        "shipped, so the `placed.def` checks above stand "
+                        "alone. Not fabricated as a pass."),
         })
 
     # ---- Placement density (only if derivable; never fabricated) --------
