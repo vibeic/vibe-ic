@@ -12,7 +12,9 @@ Even past the probe, the compile+run were executed on the HOST with a bare
 `iverilog`/`vvp` argv, so a container-only iverilog still never ran.
 
 The fix: availability AND execution are container-aware. Prefer the
-container; fall back to the host only when the host actually has iverilog.
+container; fall back to the host only in true host mode (no container, or a
+container without iverilog) — #902 later closed the execution half, which had
+still preferred the host whenever the host carried any iverilog.
 Honesty preserved: iverilog absent in BOTH -> availability False -> the
 deterministic no-sim WAIVE still fires.
 
@@ -79,11 +81,20 @@ def test_container_absent_but_host_present_is_available(monkeypatch):
 # --------------------------------------------------------------------------
 # _iverilog_exec_container — WHERE compile+run execute
 # --------------------------------------------------------------------------
-def test_exec_on_host_when_host_has_iverilog(monkeypatch):
-    """Host has it -> run on host (no docker round-trip), even with a
-    container supplied."""
+def test_exec_on_host_only_in_true_host_mode(monkeypatch):
+    """#902 REVISED. This case used to assert the opposite — "host has it ->
+    run on host (no docker round-trip), even with a container supplied" — which
+    is exactly the defect #902 reports: `--require-image` was verified and then
+    NOT used for the sim, so one cell got 11.0 / 12.0 / 14.0 depending on the
+    machine. A supplied container that carries iverilog now WINS; the host is
+    reached only in true host mode (no container / no iverilog in it). See
+    test_issue902_pinned_image_runs_the_sim.py for the full contract."""
     monkeypatch.setattr("shutil.which", lambda _t: "/usr/bin/iverilog")
     monkeypatch.setattr(dosr, "_tool_in_container", lambda c, t: True)
+    monkeypatch.setattr(dosr, "_path_in_container", lambda p, c: True)
+    assert dosr._iverilog_exec_container("c") is True
+    assert dosr._iverilog_exec_container("") is False
+    monkeypatch.setattr(dosr, "_tool_in_container", lambda c, t: False)
     assert dosr._iverilog_exec_container("c") is False
 
 

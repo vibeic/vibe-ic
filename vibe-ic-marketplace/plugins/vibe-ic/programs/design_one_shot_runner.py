@@ -577,11 +577,15 @@ def _tool_in_container(container: str, tool: str) -> bool:
 # iverilog would still never run.
 #
 # These helpers make availability AND execution container-aware: prefer the
-# container; fall back to the host only when the host actually has iverilog
-# (true host mode / mixed installs). Honesty preserved: when iverilog is
-# absent in BOTH the (supplied) container AND the host, availability is
-# False and the deterministic no-sim fallback still fires. chip-AGNOSTIC:
-# pure host/container tool-locality plumbing, no chip/PDK literal.
+# container; fall back to the host only in true host mode (no container, or a
+# container without iverilog) or when the container cannot see the run tree.
+# #902 — execution used to prefer the HOST whenever the host had any iverilog,
+# which meant `--require-image` pinned an image that then did not run the sim
+# (one cell, three frontends across the fleet, all under a PASSing pin).
+# Honesty preserved: when iverilog is absent in BOTH the (supplied) container
+# AND the host, availability is False and the deterministic no-sim fallback
+# still fires. chip-AGNOSTIC: pure host/container tool-locality plumbing, no
+# chip/PDK literal.
 # -------------------------------------------------------------------------
 def _iverilog_available(container: str) -> bool:
     """Container-aware iverilog availability for the reference-TB sim gates.
@@ -596,23 +600,53 @@ def _iverilog_available(container: str) -> bool:
     return bool(_shutil.which("iverilog"))
 
 
-def _iverilog_exec_container(container: str) -> bool:
+def _iverilog_exec_container(container: str,
+                             run_dir: Optional[Path] = None) -> bool:
     """True iff the iverilog/vvp compile+run must be DISPATCHED INTO
-    `container` (the host has no iverilog but the container does). When the
-    host has iverilog we keep the historical host execution (no docker
-    round-trip); the caller only reaches execution when `_iverilog_available`
-    already said yes, so 'not host' here implies 'container'."""
-    import shutil as _shutil
-    if _shutil.which("iverilog"):
+    `container`.
+
+    #902 — the pinned image must be the one that SIMULATES. This used to
+    short-circuit to the HOST whenever `shutil.which("iverilog")` found
+    anything, trading reproducibility for one saved docker round-trip:
+    `--require-image <ref>` was verified at launch and then NOT used for the
+    sim. Measured on the fleet with the SAME pin: hosts with iverilog 11.0 ran
+    11.0, a host with 12.0 ran 12.0, hosts with none ran the image's 14.0 — one
+    cell, three frontends, invisible because the pin check passed.
+
+    The predicate is now CONTAINER-FIRST, matching `_iverilog_available`:
+    dispatch into `container` whenever it carries iverilog. The host is the
+    fallback, taken only when
+
+      * no container is supplied / it has no iverilog (true host mode), or
+      * the container CANNOT SEE the run tree (`run_dir` is covered by no
+        bind-mount) while the host CAN run the sim itself. Dispatching into a
+        container that cannot read the project would turn a runnable sim into a
+        bogus "cannot open file" defect, so the host still wins that case.
+        When the host has no iverilog at all the dispatch happens regardless —
+        that is the pre-#902 container-only behaviour, unchanged.
+
+    `run_dir` is the ONLY locality input, deliberately: the compile and the
+    subsequent `vvp` run are handed the same `run_dir`, so both land on the
+    same side and a container-built `.vvp` is never handed to a host `vvp`
+    (or vice versa). The HOST tool is consulted ONLY inside the unreadable-tree
+    branch — on the normal path it has no vote, which is the whole point of the
+    pin. chip-AGNOSTIC."""
+    if not container or not _tool_in_container(container, "iverilog"):
         return False
-    return bool(container) and _tool_in_container(container, "iverilog")
+    if run_dir is None or _path_in_container(str(run_dir), container):
+        return True
+    # The container cannot read the project. Prefer the host when it can
+    # actually run the sim; otherwise the container is still the only option
+    # (pre-#902 behaviour for a host with no iverilog, unchanged).
+    import shutil as _shutil
+    return not _shutil.which("iverilog")
 
 
 def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
                         timeout: int = 120) -> Tuple[int, str, str]:
-    """Run one iverilog/vvp stage (a full argv) on the host, OR — when the
-    host lacks iverilog but `container` has it — dispatched INTO the container
-    against the bind-mounted (path-translated) project tree.
+    """Run one iverilog/vvp stage (a full argv) INSIDE `container` when that
+    container carries iverilog (#902 — the pinned image is what simulates),
+    else on the host.
 
     The project is bind-mounted, so every path token in `argv` (the .vvp
     output, the TB, the RTL sources) is translated host→container via
@@ -621,7 +655,7 @@ def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
     cwd is the translated `run_dir` so `$readmem*` relative loads resolve, and
     `/foss/tools/bin` is put on PATH so the fork's iverilog/vvp are found.
     chip-AGNOSTIC."""
-    if not _iverilog_exec_container(container):
+    if not _iverilog_exec_container(container, run_dir):
         # host execution (unchanged); a plain argv passes through _run's
         # docker-exec-deadline rewriter untouched.
         return _run(argv, cwd=run_dir, timeout=timeout)
