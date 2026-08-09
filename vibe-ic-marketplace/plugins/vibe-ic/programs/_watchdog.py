@@ -128,12 +128,35 @@ class ProgressMeter:
     Sources, all individually non-decreasing:
       • captured-output bytes  (a temp file the child appends to — only grows),
       • external tee'd-log advances  (size or mtime change → +1 event),
-      • CPU seconds  (carried forward; counted only on a strict increase).
+      • CPU seconds  (ACCUMULATED positive deltas — see below).
     A signal that is momentarily UNAVAILABLE (probe returned None) CARRIES
     FORWARD its last value — a signal *disappearing* is never mistaken for
     progress. This closes the None-flap where an intermittently-failing CPU
     probe (None ↔ frozen value) would otherwise reset the grace clock every
-    poll and let a genuinely hung job squat until the ceiling. pure + generic."""
+    poll and let a genuinely hung job squat until the ceiling. pure + generic.
+
+    THE CPU SIGNAL ACCUMULATES DELTAS; IT DOES NOT RATCHET TO A RUNNING MAX.
+    The distinction is load-bearing whenever the CPU probe reports the CPU of
+    a *currently live* process TREE (which `_docker_watchdog.container_cpu_
+    seconds` does) and the supervised tool spawns its heavy work as a SEQUENCE
+    of children. When such a child exits, its CPU-seconds legitimately LEAVE
+    the live-tree sum, so the reading DROPS. That drop is the signal's true
+    value falling — it is not the signal disappearing, and the None-flap rule
+    above does not apply to it.
+
+    Under the old running-max form the drop made the score unbeatable until the
+    NEXT child had re-accumulated the whole CPU of the previous one, so the
+    fused score sat frozen for that entire period while the tool ran flat out.
+    MEASURED: a 780k-cell synthesis under `yosys`, which invokes `yosys-abc`
+    once per ABC pass. The first ABC burned ~7400 CPU-s; when it exited the
+    live-tree sum fell by that much, and the second ABC — pegged at 100% CPU,
+    state R, zero voluntary context switches — was killed at exactly
+    `stall_grace_s` with "no forward progress (output+CPU idle)", which was
+    false. Because `yosys` writes nothing while ABC runs, CPU was the only live
+    signal, so blinding it blinded the whole meter. Accumulating positive
+    deltas keeps every invariant (monotonic; a hung tool shows delta 0; a None
+    probe contributes nothing) while letting the next child's very first
+    advance count as progress."""
 
     def __init__(self,
                  size_fn: Optional[Callable[[], float]] = None,
@@ -144,7 +167,13 @@ class ProgressMeter:
         self._cpu_fn = cpu_fn
         self._log_events = 0.0
         self._last_log = None
-        self._last_cpu = 0.0
+        # `_cpu_total` is the monotonic accumulation the score reads;
+        # `_prev_cpu` is the previous RAW reading and is allowed to FALL.
+        # `_prev_cpu` starts at 0.0, not None, so the FIRST reading is credited
+        # in full exactly as the previous running-max form credited it — the
+        # only intended behaviour change is what happens AFTER a fall.
+        self._cpu_total = 0.0
+        self._prev_cpu = 0.0
 
     def sample(self) -> float:
         score = 0.0
@@ -168,9 +197,14 @@ class ProgressMeter:
                 cpu = self._cpu_fn()
             except Exception:  # nosec
                 cpu = None
-            if cpu is not None and cpu > self._last_cpu:
-                self._last_cpu = cpu
-        score += self._last_cpu
+            if cpu is not None:
+                # Only a strict INCREASE is progress; a fall (a child of the
+                # measured tree exited) contributes nothing but is tracked, so
+                # the next child's first advance is seen immediately.
+                if cpu > self._prev_cpu:
+                    self._cpu_total += cpu - self._prev_cpu
+                self._prev_cpu = cpu
+        score += self._cpu_total
         return score
 
 

@@ -55,10 +55,31 @@ def test_meter_output_growth_is_progress():
 
 
 def test_meter_cpu_counts_only_strict_increase_and_carries_forward():
+    """CPU folds in as ACCUMULATED positive deltas, not as a running maximum.
+
+    The final expectation changed deliberately. This test used to read
+    `[0, 100, 100, 100, 150]`, i.e. after the reading fell 100 -> 90 a rise to
+    150 scored 150 — the running-max form, under which the 60 units of work
+    between 90 and 150 were not credited because the score was still pinned to
+    the earlier peak. That pinning is a real defect, not a nicety: the CPU
+    probe used in production (`_docker_watchdog.container_cpu_seconds`) reports
+    the LIVE process tree, so it falls every time a child of the supervised
+    tool exits, and the score then stayed frozen until the next child had
+    re-earned the departed child's entire CPU. A 780k-cell synthesis was killed
+    as `WATCHDOG_STALLED ... output+CPU idle` while pegged at 100% CPU because
+    of exactly this. See test_watchdog_cpu_survives_a_child_exit.py.
+
+    The properties this test always asserted are unchanged and still hold: the
+    score never falls, and a non-increase is never credited.
+    """
     seq = iter([0.0, 100.0, 100.0, 90.0, 150.0])
     m = W.ProgressMeter(size_fn=lambda: 0, cpu_fn=lambda: next(seq))
     s = [m.sample() for _ in range(5)]
-    assert s == [0.0, 100.0, 100.0, 100.0, 150.0], s
+    #                        ^0    ^+100  ^flat  ^fall: no credit  ^+60
+    assert s == [0.0, 100.0, 100.0, 100.0, 160.0], s
+    assert all(b >= a for a, b in zip(s, s[1:])), s      # never falls
+    assert s[2] == s[1], s                               # non-increase: no credit
+    assert s[3] == s[2], s                               # a fall: no credit
 
 
 def test_meter_none_flap_is_never_progress():
