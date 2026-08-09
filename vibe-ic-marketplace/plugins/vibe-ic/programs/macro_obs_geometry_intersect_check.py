@@ -655,6 +655,31 @@ def audit(def_text: str, macro_lef_texts: Sequence[str],
                         "shape": s.get("shape"),
                         "seg": [s["x1"], s["y1"], s["x2"], s["y2"]],
                     })
+    # THE COMPARISON, PER LAYER — and the layers it never had metal for.
+    #
+    # A crossing can only be found on a layer where BOTH an obstruction rect and
+    # a supply segment exist. The verdict publishes one number over all layers,
+    # so a layer that contributed an obstruction but for which the reader
+    # produced NO segment at all is indistinguishable from a layer that was
+    # compared and came back clean. It is not the same fact, and it is the one
+    # the reader most needs: an upper-layer strap is normally reached THROUGH a
+    # via, so a truncated path removes that layer's metal entirely and the layer
+    # then silently drops out of the comparison while the total still reads as
+    # if it covered everything.
+    #
+    # Stated rather than inferred. `_no_segment_layers` is what this gate was
+    # SILENT about; it is not a finding and does not move the verdict.
+    _obs_layers = sorted({layer.lower()
+                          for m in placed
+                          for (layer, *_r) in with_obs[m["master"]]["obs"]})
+    _seg_layers = {s["layer"].lower() for s in segs}
+    _no_segment_layers = [ly for ly in _obs_layers if ly not in _seg_layers]
+
+    findings_by_layer: Dict[str, int] = {}
+    for _f in findings:
+        k = _f["layer"].lower()
+        findings_by_layer[k] = findings_by_layer.get(k, 0) + 1
+
     # #828 — the denominator this gate could not see. A master that is
     # PLACED but that no supplied LEF declares at all is a master whose OBS,
     # if it has one, was never in the comparison. Disclosed here rather than
@@ -699,6 +724,55 @@ def audit(def_text: str, macro_lef_texts: Sequence[str],
                                  for lbl, e in d],
             })
 
+    # WHY THE COUNT MAY NOT BE QUOTED AS A TOTAL.
+    #
+    # `len(findings)` is the number of crossings this comparison FOUND. It is
+    # the number of crossings that EXIST only when the comparison saw all of its
+    # own inputs. Three conditions, each already measured above, break that:
+    #
+    #   * an abandoned path      — supply metal whose layer is unknown, so it
+    #                              was never intersected with anything;
+    #   * discarded OBS evidence — obstruction rects the LEF set carried and the
+    #                              merge did not consume;
+    #   * a placed master with no LEF — a footprint whose obstructions, if any,
+    #                              were never in the comparison at all.
+    #
+    # Under any of them the number is a FLOOR. `main` already said so in prose
+    # at the bottom of a FAIL report; the report a consumer actually parses said
+    # nothing, so `len(rep["findings"])` was quotable as a total with no way to
+    # learn it was not one. The flag travels WITH the count, in the same object,
+    # because a caveat in a different place from the number it qualifies is a
+    # caveat that will be separated from it.
+    _floor_reasons: List[str] = []
+    if gaps:
+        _floor_reasons.append(
+            f"{len(gaps)} wiring path(s) abandoned before their end "
+            f"({sum(g['points_unread'] for g in gaps)} coordinate point(s) "
+            f"unread) — that supply metal was never intersected")
+    if discarded:
+        _floor_reasons.append(
+            f"{len(discarded)} placed master(s) had OBS rect(s) in the LEF set "
+            f"that this comparison did not consume")
+    if without_lef:
+        _floor_reasons.append(
+            f"{len(without_lef)} placed master(s) have no LEF declaration in "
+            f"the set that was read, so their obstructions — if any — were "
+            f"never compared")
+    # NOT a floor reason on its own, and the distinction is the whole point. A
+    # macro may declare an obstruction on a layer the design simply carries no
+    # supply metal on; 0 findings there is then a TRUE clearance, and calling it
+    # a gap would be this gate crying wolf. It becomes a gap only in the
+    # presence of truncation — an upper-layer strap is normally reached THROUGH
+    # a via, so an abandoned path removes that layer's metal entirely and the
+    # layer drops out of the comparison while the total reads as if it covered
+    # everything. That conjunction is the condition, and it is stated as one.
+    if gaps and _no_segment_layers:
+        _floor_reasons.append(
+            "no supply segment was read on obstruction layer(s) "
+            + ", ".join(_no_segment_layers)
+            + " AND the read was truncated, so metal on those layer(s) may "
+              "exist unread — a count of 0 there is silence, not a clearance")
+
     return {
         "masters_with_obs": sorted(with_obs),
         "placed_instances": len(placed),
@@ -713,6 +787,16 @@ def audit(def_text: str, macro_lef_texts: Sequence[str],
         "truncated_paths": gaps,
         "unread_points": sum(g["points_unread"] for g in gaps),
         "findings": findings,
+        # The count, and whether it may be read as a total. See above.
+        "findings_count": len(findings),
+        "findings_by_layer": findings_by_layer,
+        "count_is_floor": bool(_floor_reasons),
+        "count_floor_reasons": _floor_reasons,
+        # Layers an obstruction was declared on and for which the reader
+        # produced no supply metal. The gate is SILENT about these; a 0 in
+        # `findings_by_layer` for such a layer is not a clean result.
+        "obs_layers_compared": _obs_layers,
+        "obs_layers_with_no_supply_segment_read": _no_segment_layers,
         "placed_masters": len(placed_masters),
         "masters_declared_by_lef": sorted(obs_by_master),
         "placed_masters_without_lef": without_lef,
@@ -869,10 +953,27 @@ def main(argv=None) -> int:
         if len(gaps) > 8:
             print(f"   … {len(gaps) - 8} more")
 
+    is_floor = rep["count_is_floor"]
+
+    def _name_the_floor() -> None:
+        """Say WHY the number is a floor, next to the number itself."""
+        print("\n  THIS COUNT IS A FLOOR, NOT A TOTAL — it is what this "
+              "comparison found, not\n  what the layout contains, because the "
+              "comparison did not see all of its\n  own inputs:")
+        for r in rep["count_floor_reasons"]:
+            print(f"   - {r}")
+
     if f:
         fp = sum(1 for x in f if x["followpin"])
-        print(f"[FAIL] {len(f)} supply segment(s) SPAN a placed macro's declared "
-              f"obstruction ({fp} of them follow-pins):")
+        # "at least N", not "N", whenever the read was incomplete. The gate
+        # already conceded this in prose at the BOTTOM of the report, three
+        # screens below the number a reader quotes — and a caveat that far from
+        # its number is a caveat that gets separated from it. The headline is
+        # the only place that cannot be read without the qualifier.
+        _n = f"at least {len(f)}" if is_floor else f"{len(f)}"
+        _fpn = f"at least {fp}" if is_floor else f"{fp}"
+        print(f"[FAIL] {_n} supply segment(s) SPAN a placed macro's declared "
+              f"obstruction ({_fpn} of them follow-pins):")
         for x in f[:12]:
             # The path's OWN declared shape, not a flag derived from a
             # substring of the whole net entry. `SHAPE (none)` is a real and
@@ -886,12 +987,27 @@ def main(argv=None) -> int:
               "may not put\n  metal. It is not in the PDK deck, so sign-off DRC "
               "cannot see this; and the\n  wire is attached to the right net, so "
               "a connectivity audit cannot either.")
+        # The per-layer split, published BY the gate rather than left to a
+        # consumer to derive from `findings` — because a layer missing from
+        # that derivation is invisible, and a layer with no supply metal read
+        # is exactly the case that goes missing.
+        print("\n  BY LAYER: " + ", ".join(
+            f"{ly}={n}" for ly, n in sorted(rep["findings_by_layer"].items()))
+            + f"   (obstruction layer(s) compared: "
+              f"{', '.join(rep['obs_layers_compared']) or 'none'})")
+        if gaps and rep["obs_layers_with_no_supply_segment_read"]:
+            print("  SILENT ON: "
+                  + ", ".join(rep["obs_layers_with_no_supply_segment_read"])
+                  + " — an obstruction was declared on these layer(s), NO "
+                    "supply\n  segment was read on any of them, and the read "
+                    "was truncated. Their metal may\n  exist unread, so the "
+                    "absence of a finding there is silence, not a clearance.")
         if gaps:
             _name_the_gaps()
         if discarded:
             _name_the_discarded()
-        if gaps or discarded:
-            print("\n  So this count is a FLOOR, not the total.")
+        if is_floor:
+            _name_the_floor()
         return 1
 
     # #828 — reached only when nothing was found to complain about. Whether
