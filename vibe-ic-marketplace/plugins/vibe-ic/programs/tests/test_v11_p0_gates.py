@@ -328,22 +328,67 @@ endmodule
     assert r.returncode == 0
 
 
-def test_p05_wrong_init_warns(tmp_path):
-    """RTL has init=0x00 but spec=0xFF → WARN (literal mismatch)."""
+def test_p05_hardcoded_wrong_constants_fail(tmp_path):
+    """The gate's OWN bug class must be able to reach FAIL.
+
+    A CRC module that hard-codes init=0x00 / poly=0x07 against a spec that
+    declares 0xFF / 0x8C is the v0.116 defect verbatim: every received frame
+    fails its CRC and is dropped. The module takes no poly/init/seed port and
+    declares no parameter, localparam or `define, so the constants in the file
+    ARE the implementation's constants — no further evidence can change the
+    answer, and the verdict is FAIL.
+
+    Predecessor of this test asserted `returncode == 0` on this exact input
+    ("WARN-only verdict (PASS exit)"), which is the defect being repaired: the
+    only ERROR-severity rule in the program was the test-vector oracle, so no
+    wrong constant in any RTL could reach exit 1.
+    """
     _l3_crc(tmp_path, init=0xFF, poly_refl=0x8C)
     _rtl(tmp_path, "crc8.sv", """\
 module crc8 (input logic clk, output logic [7:0] crc_out);
   logic [7:0] crc_q;
   always_ff @(posedge clk) begin
-    crc_q <= 8'h00;        // wrong init
-    crc_q <= (crc_q >> 1) ^ 8'h07;   // wrong poly
+    crc_q <= 8'h00;
+    crc_q <= (crc_q >> 1) ^ 8'h07;
   end
 endmodule
 """)
     r = _run("crc_oracle_vector_check", tmp_path)
-    assert r.returncode == 0  # WARN-only verdict (PASS exit)
+    assert r.returncode == 1
     rpt = _load(tmp_path, "crc_oracle_vector_check")
-    assert any(f["rule"] == "CRC_LITERAL_MISMATCH" for f in rpt["findings"])
+    errs = [f for f in rpt["findings"]
+            if f["rule"] == "CRC_LITERAL_MISMATCH" and f["severity"] == "ERROR"]
+    assert len(errs) == 2                      # init AND polynomial
+    assert rpt["passed"] is False
+    assert rpt["summary"]["skipped_reason"] == ""
+
+
+def test_p05_indirect_constants_warn_not_fail(tmp_path):
+    """The OTHER direction: the gate must NOT have become always-fail.
+
+    Same absent literals as the test above, but the module carries a
+    `localparam` seeded from outside the file. The polynomial can legitimately
+    arrive from a package, so absence here proves nothing — WARNING, exit 0.
+    The width-8 literal `8'h00` is present in both fixtures, so the ONLY thing
+    separating this verdict from the FAIL above is the indirection.
+    """
+    _l3_crc(tmp_path, init=0xFF, poly_refl=0x8C)
+    _rtl(tmp_path, "crc8.sv", """\
+module crc8 (input logic clk, input logic rst_n, output logic [7:0] crc_out);
+  localparam logic [7:0] CRC_POLY = crc_pkg::REFLECTED_POLY;
+  logic [7:0] crc_q;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) crc_q <= 8'h00;
+    else        crc_q <= (crc_q >> 1) ^ CRC_POLY;
+  end
+  assign crc_out = crc_q;
+endmodule
+""")
+    r = _run("crc_oracle_vector_check", tmp_path)
+    assert r.returncode == 0
+    rpt = _load(tmp_path, "crc_oracle_vector_check")
+    assert rpt["findings"], "an absent literal must still be reported"
+    assert all(f["severity"] == "WARNING" for f in rpt["findings"])
 
 
 def test_p05_oracle_vector_mismatch(tmp_path):
@@ -364,6 +409,160 @@ endmodule
     rpt = _load(tmp_path, "crc_oracle_vector_check")
     assert any(f["rule"] == "CRC_ORACLE_VECTOR_MISMATCH"
                for f in rpt["findings"])
+
+
+# --- the spelling the producers in this tree actually write -----------------
+#
+# `usb_pd_protocol_synth` / `ethercat_protocol_synth` / `aid_class_rtl_gen`
+# emit `crc_parameters.polynomial_hex` + `init_hex` + `reflect_input` /
+# `reflect_output` + `xorout_hex` + `width_bits` (and `crc.poly_hex`). The same
+# key skew was adjudicated for `phase1_quality_parity_check` in re #495; its
+# repair landed in `_spec_floor_keys.py` and this gate was never migrated. A
+# doc written this way made the gate report "no CRC parameters declared in
+# L3/L8" and exit 2 — no verdict of any kind, PASS or FAIL, was reachable
+# through the real caller.
+
+def _l3_crc_producer_spelling(project_dir, init=0xFF, poly=0x31,
+                              vectors=None):
+    docs = project_dir / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    block = {
+        "name": "CRC-8",
+        "width_bits": 8,
+        "polynomial_hex": f"0x{poly:02X}",
+        "init_hex": f"0x{init:02X}",
+        "reflect_input": True,
+        "reflect_output": True,
+        "xorout_hex": "0x00",
+        "no_crc_parameters_in_input": False,
+    }
+    if vectors:
+        block["test_vectors"] = vectors
+    (docs / "L3_CMD_PROTOCOL.json").write_text(json.dumps({
+        "doc_layer": "L3_CMD_PROTOCOL",
+        "crc_parameters": block,
+        "no_crc_parameters_in_input": False,
+    }))
+
+
+def test_p05_producer_spelled_spec_reaches_fail(tmp_path):
+    """A spec written the way the producers write it must reach a verdict."""
+    _l3_crc_producer_spelling(tmp_path, init=0xFF, poly=0x31)
+    _rtl(tmp_path, "crc8.sv", """\
+module crc8 (input logic clk, input logic rst_n, output logic [7:0] crc_out);
+  logic [7:0] crc_q;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) crc_q <= 8'h00;
+    else        crc_q <= (crc_q >> 1) ^ 8'h07;
+  end
+  assign crc_out = crc_q;
+endmodule
+""")
+    r = _run("crc_oracle_vector_check", tmp_path)
+    assert r.returncode == 1
+    rpt = _load(tmp_path, "crc_oracle_vector_check")
+    assert rpt["summary"]["skipped_reason"] == ""
+    assert rpt["summary"]["spec"]["init"] == 0xFF
+    assert rpt["summary"]["spec"]["poly"] == 0x31
+    assert any(f["rule"] == "CRC_LITERAL_MISMATCH" and f["severity"] == "ERROR"
+               for f in rpt["findings"])
+
+
+def test_p05_producer_spelled_spec_reaches_pass(tmp_path):
+    """…and the same reader must still be able to reach PASS.
+
+    Declared polynomial 0x31 with the RTL carrying its REFLECTED form 0x8C —
+    mathematically the same polynomial — plus the declared init. Zero
+    findings, exit 0.
+    """
+    _l3_crc_producer_spelling(tmp_path, init=0xFF, poly=0x31)
+    _rtl(tmp_path, "crc8.sv", """\
+module crc8 (input logic clk, input logic rst_n, output logic [7:0] crc_out);
+  logic [7:0] crc_q;
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) crc_q <= 8'hFF;
+    else        crc_q <= (crc_q >> 1) ^ 8'h8C;
+  end
+  assign crc_out = crc_q;
+endmodule
+""")
+    r = _run("crc_oracle_vector_check", tmp_path)
+    assert r.returncode == 0
+    rpt = _load(tmp_path, "crc_oracle_vector_check")
+    assert rpt["findings"] == []
+    assert rpt["summary"]["skipped_reason"] == ""
+
+
+def test_p05_zero_expected_vector_is_not_dropped(tmp_path):
+    """A vector whose expected CRC is 0x00 is a test, not a missing field.
+
+    `expected` was read through an `or` chain, so 0 fell through to the next
+    spelling and the vector was skipped — a vector that could never fail.
+    """
+    _l3_crc_producer_spelling(tmp_path, init=0xFF, poly=0x31, vectors=[
+        {"input": [0x74, 0x00, 0x01], "expected": "0x00"},   # real is 0xFD
+    ])
+    _rtl(tmp_path, "crc8.sv", """\
+module crc8;
+  reg [7:0] crc_q;
+  initial crc_q = 8'hFF;
+  wire [7:0] poly = 8'h8C;
+endmodule
+""")
+    r = _run("crc_oracle_vector_check", tmp_path)
+    assert r.returncode == 1
+    rpt = _load(tmp_path, "crc_oracle_vector_check")
+    assert rpt["summary"]["vectors_run"] == 1
+    assert any(f["rule"] == "CRC_ORACLE_VECTOR_MISMATCH"
+               for f in rpt["findings"])
+
+
+def test_p05_consistent_vector_passes_the_oracle(tmp_path):
+    """The oracle's own OTHER direction: a self-consistent spec must PASS."""
+    _l3_crc_producer_spelling(tmp_path, init=0xFF, poly=0x31, vectors=[
+        {"input": [0x74, 0x00, 0x01], "expected": "0xFD"},
+    ])
+    _rtl(tmp_path, "crc8.sv", """\
+module crc8;
+  reg [7:0] crc_q;
+  initial crc_q = 8'hFF;
+  wire [7:0] poly = 8'h8C;
+endmodule
+""")
+    r = _run("crc_oracle_vector_check", tmp_path)
+    assert r.returncode == 0
+    rpt = _load(tmp_path, "crc_oracle_vector_check")
+    assert rpt["summary"]["vectors_run"] == 1
+    assert rpt["summary"]["vectors_pass"] == 1
+    assert rpt["findings"] == []
+
+
+def test_p05_explicit_no_crc_declaration_still_skips(tmp_path):
+    """A doc that declares it has no CRC must stay silent (exit 2).
+
+    Every cell in the corpus is this shape (`crc_parameters: null` +
+    `no_crc_parameters_in_input: true`); the wider reader must not wake the
+    gate up on them.
+    """
+    docs = tmp_path / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L3_CMD_PROTOCOL.json").write_text(json.dumps({
+        "doc_layer": "L3_CMD_PROTOCOL",
+        "crc_parameters": None,
+        "no_crc_parameters_in_input": True,
+    }))
+    _rtl(tmp_path, "crc8.sv", """\
+module crc8 (input logic clk, output logic [7:0] crc_out);
+  logic [7:0] crc_q;
+  always_ff @(posedge clk) crc_q <= (crc_q >> 1) ^ 8'h07;
+  assign crc_out = crc_q;
+endmodule
+""")
+    r = _run("crc_oracle_vector_check", tmp_path)
+    assert r.returncode == 2
+    rpt = _load(tmp_path, "crc_oracle_vector_check")
+    assert rpt["findings"] == []
+    assert "no CRC parameters" in rpt["summary"]["skipped_reason"]
 
 
 # ===========================================================================

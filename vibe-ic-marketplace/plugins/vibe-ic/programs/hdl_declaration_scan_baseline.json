@@ -24,7 +24,6 @@
     "buffer_occupancy_flag_latency_check::_find_output_flags::_OUTPUT_1BIT_RE(chunk)",
     "catalog_glue_closure_resolver::build_index::_MODULE_DEF_RE(text)",
     "comb_gate_synth::_gate_bank::_RED_LINE(text)",
-    "crc_oracle_vector_check::inspect::_CRC_MODULE_RE(rtl)",
     "crc_synth::solve::_COMPOSITE_CRC_RE(prompt)",
     "cvdp_atomic_bridge::_skeleton_ports::_HEADER_RE(text)",
     "cvdp_context_interface_recover::_parse_one_span::_PORT_KW(header)",
