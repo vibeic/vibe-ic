@@ -66,8 +66,13 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   fi
 
   # The checker splits RANGE on whitespace into git-log arguments.
+  # NDA_MSG_FAILED is tracked SEPARATELY from FAILED because the remediation
+  # printed at the end -- "reword the offending commit message(s)" -- is advice
+  # about THIS gate and no other. See the summary block for why that distinction
+  # only started to matter once the hook stopped dying at its first failure.
   if ! python3 "$CHECKER" --repo "$REPO_ROOT" --rev-range "$RANGE"; then
     FAILED=1
+    NDA_MSG_FAILED=1
   fi
 
   PUSH_RANGE="$RANGE"
@@ -252,7 +257,20 @@ fi
 
 if [ "$FAILED" -ne 0 ]; then
   echo "pre-push: BLOCKED — see the gate(s) named above." >&2
-  cat >&2 <<'EOF'
+  # THE REMEDIATION MUST MATCH THE GATE THAT FIRED. This block used to print the
+  # NDA reword recipe unconditionally, and that was harmless only by accident:
+  # before the `|| rc=$?` fix one commit earlier, `set -e` killed the hook at the
+  # first failing run_gate, so the ONLY failure that could ever reach here was
+  # the NDA message check above -- which runs outside run_gate, in a tested `if`.
+  # The advice was therefore always correct, because nothing else could arrive.
+  #
+  # Making the hook survive its gates made this path reachable for every other
+  # gate too, and a version-gate failure was then answered with "reword the
+  # offending commit message(s)... use the generic wording (commercial PDK)" --
+  # confidently wrong instructions for a commit whose message was never in
+  # question. A fix that restores one sentence must not corrupt the next one.
+  if [ "${NDA_MSG_FAILED:-0}" = "1" ]; then
+    cat >&2 <<'EOF'
 Reword the offending commit message(s) before pushing:
     git rebase -i <base>      # mark the offending commit(s) `reword`
 Use the generic wording ("commercial PDK", "commercial foundry").
@@ -260,6 +278,15 @@ Re-scan with:
     python3 vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py \
         --rev-range origin/main..HEAD
 EOF
+  else
+    cat >&2 <<'EOF'
+Fix the finding printed under each FAILED gate, then push again. Each gate is a
+standalone program under vibe-ic-marketplace/plugins/vibe-ic/programs/ and can
+be re-run by hand with the same arguments the hook used.
+A "NOT CHECKED" gate has not passed -- it could not run, and needs the same
+attention as a failure.
+EOF
+  fi
   exit 1
 fi
 
