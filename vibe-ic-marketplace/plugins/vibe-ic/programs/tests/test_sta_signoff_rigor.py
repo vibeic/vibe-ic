@@ -212,7 +212,7 @@ SIGNOFF_CHECK_TYPES_REPORTED recovery removal max_slew min_pulse_width max_capac
 
 
 def test_real_min_pulse_width_violation_fails_the_gate():
-    # LIVE-CAUGHT on SN2025's OTP macro PRD pin: coverage was 100% (all 4
+    # LIVE-CAUGHT on an internal design's OTP macro PRD pin: coverage was 100%
     # dimensions present) but the actual table row VIOLATED — the old gate
     # (coverage-only) PASSed this; v1.10.3 must FAIL it.
     res = G.evaluate(_REAL_MPW_VIOLATION)

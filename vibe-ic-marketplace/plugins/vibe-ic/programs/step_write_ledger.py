@@ -115,10 +115,10 @@ run directories:
     /home/reyerchu/_sky130A_r3_run       455     211 ms         ~45 ms
     /home/reyerchu/_r6_sky130A/run       482     306 ms         ~50 ms
     published spm v1.5.66_gf180mcuD      216     179 ms         ~15 ms
-    /home/reyerchu/_n29_sn2025/run29   12007     434 ms        ~250 ms
+    /home/reyerchu/_nXX_internal/runXX     12007     434 ms        ~250 ms
 
 `emit()` (build + JSON write + per-step slices) on the 470 MB / 12k-file
-run29: 492-508 ms across three runs. That run's own
+that run: 492-508 ms across three runs. That run's own
 `reports/orchestrator/vibe_ic_one_shot.json` records duration_s = 344.1, and a
 full backend run is measured in hours — so the ledger costs well under 0.2% of
 the smallest run it was measured against, once, at the end.
@@ -300,7 +300,7 @@ def mtime_fidelity(entries: Dict[str, Dict[str, Any]],
 
         share on top mtime   distinct   n       directory
         0.981                3          216     published spm v1.5.66_gf180mcuD
-        0.964                78       12006     /home/reyerchu/_n29_sn2025/run29
+        0.964                78       12006     /home/reyerchu/_nXX_internal/runXX  
         0.884                85        4316     /home/reyerchu/_car15_evidence
         0.165               44          455     /home/reyerchu/_sky130A_r3_run
         0.122               54          482     /home/reyerchu/_r6_sky130A/run
