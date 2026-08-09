@@ -126,9 +126,21 @@ exactly those two:
       stdout/stderr snippet -> ``_stdout_signals_vacuous`` -> the same tier.
 
 A JSON report whose ``verdict`` field says ``VACUOUS_PASS`` is NOT a third
-channel: ``_check_program_exit_zero`` never opens the report. Measured by
-execution, not by reading — see
+channel AT THIS LEVEL: ``_check_program_exit_zero`` never opens the report.
+Measured by execution, not by reading — see
 ``test_gate_skip_routing_check.test_consumer_reads_only_two_channels``.
+
+UPDATED (vibe-ic#901): one level UP it now is. ``_evaluate_gate`` — the caller,
+not ``_check_program_exit_zero`` — reads the clause's own ``--json`` target via
+``_json_report_signals_vacuous`` and raises the same ``__VACUOUS_HINT__`` when
+the report declares ``NOT_APPLICABLE`` / ``SKIPPED`` / ``NOT_RUN``. So a gate
+whose ONLY disclosure is its report is no longer credited as a substantive
+pass. This module's verdict is DELIBERATELY unchanged by that: channel (C) is
+per-clause (it needs a ``--json`` argument in the gate's command line, which a
+gate cannot guarantee it will be given), while (A) and (B) travel with the gate
+itself. Routing through ``_vacuous_exit`` is still what this check demands, and
+a gate that satisfies only (C) is still listed here — as a REMAINING
+fragility, not as a false alarm.
 
 Channel (B) is real but FRAGILE, and the check says so on every run: the
 snippet is ``stdout[-300:] + stderr[-300:]``, so a sentinel printed before ~300
