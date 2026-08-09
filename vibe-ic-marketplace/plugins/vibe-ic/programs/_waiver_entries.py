@@ -125,6 +125,34 @@ def has_entries(data: Any) -> bool:
     return bool(entries(data))
 
 
+#: Values of an entry's ``status`` field that mean the deferred obligation is
+#: no longer open. Kept here with :func:`is_closed` so "this waiver is closed"
+#: has ONE spelling: a second gate that invented its own list would disagree
+#: with the first about the same entry, which is the drift this module exists
+#: to prevent.
+CLOSED_STATUS_VALUES: Tuple[str, ...] = ("closed", "resolved", "fixed")
+
+
+def is_closed(entry: Any) -> bool:
+    """True iff this entry records a waiver that has been CLOSED.
+
+    Two spellings are recognised, both already emitted in this tree: a
+    non-empty ``closure_proof`` (the evidence that the deferred work was
+    actually done), or a ``status`` in :data:`CLOSED_STATUS_VALUES`.
+
+    A non-dict entry is NOT closed. "I cannot read this entry" must never be
+    reported as "this obligation is discharged" — that is the same
+    unreadable-counted-as-clean failure the module docstring opens with."""
+    if not isinstance(entry, dict):
+        return False
+    proof = entry.get("closure_proof")
+    if isinstance(proof, str) and proof.strip():
+        return True
+    if isinstance(proof, (dict, list, tuple)) and proof:
+        return True
+    return entry.get("status") in CLOSED_STATUS_VALUES
+
+
 def read_document(project: Path,
                   filename: str = WAIVERS_FILENAME) -> Optional[Any]:
     """The parsed waivers document for ``project``, or None when the file does

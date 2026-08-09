@@ -118,14 +118,14 @@ def _load_waivers(project: Path) -> tuple[Path | None, list]:
 
 
 def _is_closed(entry: dict) -> bool:
-    cp = entry.get("closure_proof")
-    if isinstance(cp, str) and cp.strip():
-        return True
-    if isinstance(cp, dict) and cp:
-        return True
-    if entry.get("status") in ("closed", "resolved", "fixed"):
-        return True
-    return False
+    """Historical name; the predicate itself now lives in `_waiver_entries`.
+
+    `waiver_growth_check` needs the SAME question answered ("was this waiver
+    closed?") to tell a reopened waiver from a standing one. Two private copies
+    of a closure predicate would eventually disagree about one entry, and then
+    one gate would call it closed while the other aged it — the drift the
+    shared module was created to end. One definition, two readers."""
+    return _we.is_closed(entry)
 
 
 def inspect(project: Path, warn_days: int = 90,
