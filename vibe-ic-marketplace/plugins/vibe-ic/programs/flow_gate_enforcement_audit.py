@@ -1190,6 +1190,25 @@ class _RunnerModule:
         for (s, n, b) in taint:
             if n != name or s not in (scope, _MODULE_SCOPE):
                 continue
+            # vibe-ic#898 — A MODULE BINDING IS INVISIBLE INSIDE A FUNCTION
+            # THAT BINDS THE SAME NAME.
+            #
+            # Python scoping: a name assigned ANYWHERE in a function body is
+            # local for the WHOLE body, so the module-level binding is shadowed
+            # there — including on lines above the local assignment. The window
+            # test alone could not see this, because it closed a module entry
+            # with `_next_store(_MODULE_SCOPE, ...)`, which only knows about
+            # module-level stores.
+            #
+            # Measured: inserting ONE dead module-level line
+            # `cmd = "bsdl_emit.py"` — never read, never executed — moved
+            # bsdl_emit AUDIT_ONLY -> ENFORCED and the tree 16 -> 17. That is
+            # this file's own defect one scope up from where #884 fixed it, and
+            # CHEAPER to trigger than the refactor that refuted round 2: dead
+            # code sufficed.
+            if (s == _MODULE_SCOPE and scope != _MODULE_SCOPE
+                    and (scope, n) in self.stores):
+                continue
             if b <= line < self._next_store(s, n, b, ()):
                 return True
         return False

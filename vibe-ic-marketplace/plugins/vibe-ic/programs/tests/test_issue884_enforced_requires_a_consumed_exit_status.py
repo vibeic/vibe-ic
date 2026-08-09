@@ -528,6 +528,28 @@ def step(project):
     return "PASS"
 '''
 
+
+#: vibe-ic#898 — DEAD CODE AT MODULE SCOPE. Cheaper than R23-R25: no refactor,
+#: no second spawn, just one line that is never read and never executed. The
+#: module binding was treated as live inside a function that binds the same
+#: name, because the window closed with a MODULE-scope next-store which cannot
+#: see a function-local. Python scoping says the opposite: a name assigned
+#: anywhere in a function body is local for the WHOLE body.
+_R26_DEAD_MODULE_LEVEL_LINE = '''
+cmd = "refactored_check.py"
+
+import subprocess
+import sys
+
+
+def step(project):
+    cmd = [sys.executable, "other_program.py", project]
+    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if cp.returncode != 0:
+        return "FAIL"
+    return "PASS"
+'''
+
 _BEHAVIOUR_PRESERVING = {
     "R01_bare_statement": _R01_BARE,
     "R02_bound_unused": _R02_BOUND_UNUSED,
@@ -556,6 +578,7 @@ _BEHAVIOUR_PRESERVING = {
     "R24_name_rebound_to_later_blocking_spawn":
         _R24_NAME_REBOUND_TO_A_LATER_BLOCKING_SPAWN,
     "R25_named_but_never_spawned": _R25_NAMED_BUT_NEVER_SPAWNED,
+    "R26_dead_module_level_line": _R26_DEAD_MODULE_LEVEL_LINE,
 }
 
 
