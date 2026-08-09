@@ -180,6 +180,120 @@ def test_check_emits_otp_size_undetermined(tmp_path):
     assert any("could not be determined" in m for m in msgs), msgs
 
 
+# ---------------------------------------------------------------------------
+# 10. BYTE_OUT_OF_RANGE reachability (both directions).
+#
+# The docstring promises to distinguish rule 5 (BYTE_OUT_OF_RANGE — "a value
+# is outside 0..255") from rule 7 (MALFORMED_LINE — "a line fails the @addr
+# byte pattern"). Before the fix the .ver lexer bounded the value token to
+# {1,2} hex digits, so `val > 0xFF` could never be true and rule 5 was dead
+# code: every over-range byte was reported as "Unparseable line".
+#
+# These tests drive the CLI and assert on the emitted JSON + exit code only,
+# never on the source text.
+# ---------------------------------------------------------------------------
+def _run_cli(tmp_path, regmap_obj, ver_text):
+    """Invoke the program as the CLI does; return (returncode, findings)."""
+    import subprocess
+
+    l4 = tmp_path / "L4_REGMAP.json"
+    l4.write_text(json.dumps(regmap_obj))
+    ver = tmp_path / "img.ver"
+    ver.write_text(ver_text)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), str(ver), "--regmap", str(l4), "--json"],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode != 2, f"argument/IO error: {proc.stderr}"
+    return proc.returncode, json.loads(proc.stdout)
+
+
+def test_byte_out_of_range_is_reachable(tmp_path):
+    """FAILS against the unfixed program.
+
+    An over-range byte value must be reported as BYTE_OUT_OF_RANGE, not
+    swallowed by the syntax rule. Unfixed, the only rule emitted here is
+    MALFORMED_LINE and this assertion fails.
+    """
+    rc, findings = _run_cli(
+        tmp_path, {"otp_size_bytes": 128}, "@00000000 1FF\n")
+    rules = [f["rule"] for f in findings]
+    assert "BYTE_OUT_OF_RANGE" in rules, rules
+    assert rc == 1, rc
+    oor = [f for f in findings if f["rule"] == "BYTE_OUT_OF_RANGE"]
+    assert all(f["severity"] == "error" for f in oor), oor
+    assert any("0x1FF" in f["message"] for f in oor), oor
+
+
+def test_byte_out_of_range_reachable_across_widths(tmp_path):
+    """Reachable for any width above one byte, not just 3 hex digits."""
+    rc, findings = _run_cli(
+        tmp_path, {"otp_size_bytes": 128},
+        "@00000000 100\n@00000001 FFFF\n@00000002 DEADBEEF\n")
+    oor = [f for f in findings if f["rule"] == "BYTE_OUT_OF_RANGE"]
+    assert len(oor) == 3, findings
+    assert rc == 1, rc
+
+
+def test_valid_image_still_passes_after_widening(tmp_path):
+    """OPPOSITE direction: the gate is not always-fail.
+
+    A well-formed in-range byte image must still emit zero findings and
+    exit 0 — widening the lexer must not make every image red.
+    """
+    rc, findings = _run_cli(
+        tmp_path,
+        {"otp_size_bytes": 16,
+         "fields": [{"name": "ID", "offset": 0, "length": 2,
+                     "required": True}]},
+        "@00000000 AA\n@00000001 55\n// comment\n\n@0000000F FF\n")
+    assert findings == [], findings
+    assert rc == 0, rc
+
+
+def test_malformed_line_still_reachable_and_distinct(tmp_path):
+    """OPPOSITE direction for the sibling rule.
+
+    Genuine junk must still be MALFORMED_LINE, and must NOT be relabelled
+    as BYTE_OUT_OF_RANGE — the two verdicts stay distinguishable.
+    """
+    rc, findings = _run_cli(
+        tmp_path, {"otp_size_bytes": 128},
+        "@00000000 XX\nthis is junk\n@00000001 55\n")
+    rules = [f["rule"] for f in findings]
+    assert rules.count("MALFORMED_LINE") == 2, findings
+    assert "BYTE_OUT_OF_RANGE" not in rules, findings
+    assert rc == 1, rc
+
+
+def test_overwide_but_in_range_token_stays_malformed(tmp_path):
+    """Pins the deliberate no-red-to-green decision.
+
+    A zero-padded token like "0AA" evaluates in range but is wider than a
+    byte. It failed before the lexer was widened and must keep failing, as
+    MALFORMED_LINE rather than the (untrue) BYTE_OUT_OF_RANGE.
+    """
+    rc, findings = _run_cli(
+        tmp_path, {"otp_size_bytes": 128}, "@00000000 0AA\n")
+    rules = [f["rule"] for f in findings]
+    assert rules == ["MALFORMED_LINE"], findings
+    assert rc == 1, rc
+
+
+def test_out_of_range_byte_does_not_enter_the_image(tmp_path):
+    """A rejected byte must not be counted as coverage for a required
+    field — otherwise the new rule would mask FIELD_COVERAGE."""
+    rc, findings = _run_cli(
+        tmp_path,
+        {"otp_size_bytes": 16,
+         "fields": [{"name": "ID", "offset": 0, "length": 1,
+                     "required": True}]},
+        "@00000000 1FF\n")
+    rules = {f["rule"] for f in findings}
+    assert rules == {"BYTE_OUT_OF_RANGE", "FIELD_COVERAGE"}, findings
+    assert rc == 1, rc
+
+
 def test_check_uses_l11_otp_macro_size_when_l4_silent(tmp_path):
     """If L4 is silent on size but a sibling L11_CALIBRATION.json
     declares otp_macro_size, check() must pick it up — and *not* emit
