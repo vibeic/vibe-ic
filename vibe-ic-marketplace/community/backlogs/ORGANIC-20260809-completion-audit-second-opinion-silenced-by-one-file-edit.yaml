@@ -1,0 +1,62 @@
+type: bug
+severity: P1
+component: program:deliverable_verdict_consistency_check
+plugin_version: "1.10.11"
+
+title: >-
+  The completion-audit second opinion is silenced by any of five one-file edits, and the
+  gate still reports "agrees in polarity" having read only one record
+
+pattern: |
+  A cross-check between two independently produced records is only as strong as its
+  behaviour when one record is absent or unreadable. If the reader collapses every
+  failure mode - file missing, key renamed, value empty, zero bytes, malformed - into the
+  same None, and the comparison treats None as "nothing to disagree with", then the
+  check degrades silently to the single-record check it was built to replace, and it
+  still PRINTS the two-record sentence. That is worse than not having the cross-check:
+  the passing message asserts corroboration that did not happen, so a reader who sees it
+  stops looking. A gate that consumes a second opinion must distinguish "the second
+  opinion says PASS" from "there is no second opinion" from "the second opinion could not
+  be parsed", and must never claim agreement with a record it did not read.
+
+suggested_fix: |
+  Split `_load_verdict_json`'s single None into three outcomes - absent, unparseable, and
+  parsed - and carry them to the verdict line. When a candidate path EXISTS but does not
+  yield a verdict, that is a hard failure of the gate's own precondition, not a pass: an
+  audit file that is zero bytes or malformed or has lost its `verdict` key is evidence
+  that the producer broke, and the run cannot be certified against it. When no candidate
+  exists at all, the gate may still pass, but its message must say it compared ONE record
+  and name the one, rather than saying "agrees in polarity". Always populate
+  `audit_report` / `audit_verdict` (or an explicit `audit_absent` / `audit_unreadable`
+  marker) in the JSON report so a downstream reader can tell the cases apart. Consider
+  making the audit's PRESENCE required for any run that reached phase 2/3 at all, since
+  `benchmark_evidence_publish._audit_verdict` already treats the same file as
+  authoritative.
+
+id: "ORGANIC-20260809-completion-audit-second-opinion-silenced-by-one-file-edit"
+submitted_at: "2026-08-09T14:15:00+08:00"
+session_context: >-
+  2026-08-09 adversarial re-review, origin/main at c3d3b4a56 (plugin v1.10.11).
+  vibe-ic#883 landed at e170de81b to close exactly this class one level up - the module
+  had cited reports/audit/phase23_completion_audit.json in its evidence table since it was
+  written and never read it, so a FAIL audit sat invisibly behind a PASS aggregate for six
+  days in a public repo. The fix reads the file. It does not defend against the file being
+  unreadable. MEASURED on a synthetic run directory containing RESULT.md with the headline
+  "**Verdict:** PASS_WITH_WAIVERS", reports/orchestrator/vibe_ic_one_shot.json with
+  {"verdict":"PASS_WITH_WAIVERS"}, and reports/audit/phase23_completion_audit.json varied
+  one edit at a time, invoking `python3 programs/deliverable_verdict_consistency_check.py
+  <run_dir>` - (1) audit says {"verdict":"FAIL"} - rc=1, "VERDICT_CONTRADICTION",
+  the #883 fix working; (2) audit file DELETED - rc=0, "PASS ... headline
+  PASS_WITH_WAIVERS agrees in polarity with"; (3) key renamed verdict to result - rc=0,
+  same PASS sentence; (4) {"verdict":""} - rc=0, same PASS sentence; (5) audit file
+  truncated to ZERO BYTES - rc=0, same PASS sentence; (6) audit file malformed JSON
+  ('{"verdict":"FAIL"' unterminated) - rc=0, same PASS sentence. Cases 4, 5 and 6 are the
+  sharpest: the audit file EXISTS on disk, so a human inspecting the run sees that a
+  completion audit was produced, while the gate never parsed it and reported agreement.
+  Mechanism at programs/deliverable_verdict_consistency_check.py:419-427 -
+  `_load_verdict_json` wraps everything in `except Exception: return None` and ends
+  `return d if isinstance(d, dict) and d.get("verdict") else None`, so a missing key, an
+  empty string and a parse error are indistinguishable from an absent file; then
+  :429-448 `_read_completion_audit` returns None when `seen` is empty, and :452-458
+  `_not_laxer_than_audit` returns `chosen` unchanged when `audit is None`, without setting
+  `audit_report` or `audit_verdict`, so the JSON report carries no trace either.

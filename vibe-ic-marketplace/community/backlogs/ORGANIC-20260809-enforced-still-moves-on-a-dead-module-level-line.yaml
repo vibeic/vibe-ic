@@ -1,0 +1,68 @@
+type: bug
+severity: P1
+component: program:flow_gate_enforcement_audit
+plugin_version: "1.10.11"
+
+title: >-
+  ENFORCED still moves 16 to 17 when one DEAD module-level line is added, because the
+  name-side live range cannot see a function-local that shadows it
+
+pattern: |
+  A liveness window that admits a binding from an ENCLOSING scope, but computes that
+  binding's end-of-life using only the enclosing scope's own stores, cannot observe the
+  inner-scope store that shadows it. The name is then treated as still carrying the
+  outer value at every line of the inner scope, so any use of that name inside a function
+  is credited to whatever the module-level binding happened to hold. The failure is
+  invisible to single-scope fixtures: a window added to stop name coincidence WITHIN a
+  scope reads as complete while the identical coincidence ACROSS scopes is untouched, and
+  the coincidence is now cheaper to trigger than before, because it no longer needs a
+  real call site - a dead assignment nothing ever reads is enough. Any analysis that
+  reports "this artefact is reached by that mechanism" must close a binding's window
+  against stores in EVERY scope that can shadow it, or state that it does not.
+
+suggested_fix: |
+  In `_live_here`, a taint entry whose scope is `_MODULE_SCOPE` must have its window
+  closed by the FIRST store of that name in the QUERYING scope as well as by the next
+  module-level store: a module binding is not live at any line of a function that binds
+  the same name. Concretely, when `s == _MODULE_SCOPE and scope != _MODULE_SCOPE`, the
+  window end becomes `min(_next_store(_MODULE_SCOPE, n, b, ()), first_store(scope, n))`,
+  and when the querying scope stores the name at all before the queried line, the module
+  entry must not match. Add the cross-scope case to the `_BEHAVIOUR_PRESERVING` fixture
+  family, which today is entirely single-scope: none of the 22 existing fixtures, nor
+  R23/R24/R25 added by the #884 fix, can express "the module binds this name too". The
+  regression test that pins it should be the dead-line form, because that is the cheapest
+  trigger and the one no refactor-shaped fixture would find.
+
+id: "ORGANIC-20260809-enforced-still-moves-on-a-dead-module-level-line"
+submitted_at: "2026-08-09T14:05:00+08:00"
+session_context: >-
+  2026-08-09 adversarial re-review of the 63x8 FlowGate campaign, on origin/main at
+  c3d3b4a56 (plugin v1.10.11). vibe-ic#884 landed the same day, on its third attempt,
+  after two independent refutations; its commit message states the property under test as
+  "the answer does not depend on the spelling" and records four measured combinations all
+  holding ENFORCED at 16. MEASURED against that same tree and the same real flow
+  definition, copying the full programs directory and applying one edit to
+  design_one_shot_runner.py - inserting the single line `cmd = "bsdl_emit.py"` at module
+  scope, above the first import, where nothing ever reads it - `bsdl_emit` moves
+  INLINE_STATUS_IGNORED / AUDIT_ONLY to INLINE_BLOCKING / ENFORCED and the tree-wide
+  count moves ENFORCED=16 (150 gates) to ENFORCED=17 (150 gates). `cmd` is the name the
+  same runner already uses as a local at a blocking spawn site. Nothing the process does
+  changes; the inserted statement is never executed on any path that matters and its
+  value is never read. Reduced form, on synthetic fixtures through the same
+  `flow_gate_enforcement_audit.audit(flow, programs)` entry point the module's own tests
+  use, with the runner named design_one_shot_runner.py so it is scanned - a module-level
+  `cmd = "judged_gate.py"` plus a function-local `cmd = "other_gate.py"` that shadows it
+  and is the only value ever spawned - scores judged_gate INLINE_BLOCKING; renaming the
+  module-level variable to `judged_cmd`, changing nothing else, scores it INLINE_UNPROVEN.
+  Mechanism at programs/flow_gate_enforcement_audit.py:1181-1195 - `_live_here` accepts a
+  taint entry when `s in (scope, _MODULE_SCOPE)` and then tests
+  `b <= line < self._next_store(s, n, b, ())`, where `s` is `_MODULE_SCOPE`;
+  `_next_store` (:1087-1091) reads `self.stores[(scope, name)]`, and a function-local
+  store is recorded under `id(fn)`, so it never closes the module binding's window. This
+  is the exact sentence #884 closed one scope down, reproduced by the fix that closed it,
+  and now reachable without any refactor at all. Reproduce - copy the programs directory,
+  insert the dead line, run `flow_gate_enforcement_audit.audit(FLOW, programs)` and count
+  rows with `enforcement == "ENFORCED"`; script archived with this report. Two known holes
+  named in the #884 commit as still open (contextlib.suppress + check=True, and
+  _is_inert_branch narrowness) are DELIBERATELY NOT re-reported here; this is a third,
+  independent vector.

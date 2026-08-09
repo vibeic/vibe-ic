@@ -1,0 +1,63 @@
+type: bug
+severity: P2
+component: program:flow_gate_enforcement_audit
+plugin_version: "1.10.11"
+
+title: >-
+  The shrink-only registers ratchet on SIZE, not on membership, so 40 new entries enter
+  with no reason recorded whenever 40 are paid down in the same write
+
+pattern: |
+  A debt register that "may only shrink" is enforced by comparing the count of the new set
+  against the count of the old one. Count is not membership. Any write that removes as
+  many entries as it adds passes the guard, so the register admits unlimited NEW debt at
+  constant size, records nothing about it, and keeps a comment asserting it can only
+  shrink. The bypass is not exotic - it is the normal workflow: the READ path is what
+  fails and tells the developer to re-baseline, and the WRITE path they then run is the
+  one that does not check membership. The guard is therefore weakest at the exact moment
+  it is consulted. Any ratchet must diff the SETS and require a stated reason for each new
+  member, independently of whether other members were paid down; and the escape hatch's
+  "reason" must be checked for content, not length, or it degrades to a required
+  keystroke count.
+
+suggested_fix: |
+  Compute `widened` from set difference, not `len`: a write is a widening if
+  `set(now) - set(prev)` is non-empty, regardless of what left the register. Report the
+  new members by name in the refusal, the way the read path already does, so the reason
+  the author must supply is about specific entries rather than about a number. Consider
+  requiring the reason to name at least one of the new entries (substring match against
+  the added gate names), which is checkable and cannot be satisfied by padding; the
+  present `len(reason.strip()) >= 30` test accepts 34 repetitions of a single character.
+  Finally, `previous_size` / `scope_expanded` are written into the baseline but never read
+  back by any later run - either read them (e.g. refuse a write whose recorded
+  `previous_size` does not match the set actually loaded) or stop writing them, because a
+  field nobody consumes reads to a reviewer as a control that exists.
+
+id: "ORGANIC-20260809-shrink-only-register-churns-silently-at-constant-size"
+submitted_at: "2026-08-09T14:20:00+08:00"
+session_context: >-
+  2026-08-09 adversarial re-review, origin/main at c3d3b4a56 (plugin v1.10.11). The
+  baseline programs/flow_gate_enforcement_baseline.json carries two shrink-only registers,
+  `known` (0 entries) and `undeclared_known` (116 entries), the second added by vibe-ic#886
+  and widened by 3 on 2026-08-09 under vibe-ic#884. Its own `undeclared_comment` says the
+  register is "a SEPARATE shrink-only register" and `_comment` says "MAY ONLY SHRINK".
+  MEASURED, all against the real flow and real programs directory, with `--baseline`
+  pointed at a copy so the shipped file is untouched - (a) CONSTANT-SIZE CHURN: craft a
+  prev register holding 76 of the 116 real entries plus 40 names that do not exist in the
+  tree, so the recomputed set has 40 members the prev set lacks; `python3
+  programs/flow_gate_enforcement_audit.py --baseline <copy> --write-baseline` with NO
+  `--scope-expanded` exits 0, writes the file, and records `undeclared_scope_expanded:
+  null`. 40 new entries entered a shrink-only register with no reason recorded. The
+  1-entry form of the same swap also exits 0. (b) The READ path DOES catch it - the same
+  crafted baseline without `--write-baseline` exits 1 and prints both "1 NEW gate(s) are
+  AUDIT_ONLY and declare no intent at all" and "1 recorded undeclared gate(s) now state an
+  intent". So the two paths disagree, and the failing read path is precisely what sends a
+  developer to the write path. (c) GENUINE GROWTH IS caught: a prev register truncated to
+  100 entries against a recomputed 116 exits 1 without a reason - the guard works when the
+  count rises. (d) THE ESCAPE IS TOO CHEAP: the same growth with
+  `--scope-expanded 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'` (34 literal 'a' characters)
+  exits 0 and writes. Mechanism at programs/flow_gate_enforcement_audit.py:1667-1676 -
+  `widened[label] = ((p is None and bool(n)) or (p is not None and len(n) > len(p)))`, and
+  at :1661-1664 the reason check is `len(a.scope_expanded.strip()) < 30`. The audit's own
+  headline is unaffected and remains correct: 150 gates, 16 ENFORCED, 134 AUDIT_ONLY, 23
+  declared intent, 116 undeclared-and-audit-only.

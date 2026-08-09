@@ -1,0 +1,65 @@
+type: bug
+severity: P1
+component: program:gen_matrix_63x8_census
+plugin_version: "1.10.11"
+
+title: >-
+  The generated census publishes 481 ENFORCED from state_census(), the axis its own
+  docstring forbids quoting, and --check prints PASS while the guard test is RED
+
+pattern: |
+  Two fixes land the same day. The first splits a published figure into a strict axis and
+  a lax one and writes, in the lax axis's docstring, that it must never be quoted. The
+  second makes that figure GENERATED - the right structural move - and wires the
+  generator to the lax axis, because that is the function whose name matches the number
+  the artefact already carried. The artefact is now recomputed on every run, has a
+  freshness test, prints PASS, and publishes exactly the number the first fix existed to
+  retire. Making a number derived is not the same as making it true: a generator inherits
+  the correctness of the source it reads, and "which function do I call" is the load-
+  bearing decision, not "do I call one". Whenever a codebase declares one accessor
+  authoritative and another unquotable, every renderer of that value must be checked
+  against the declaration, and the freshness test must assert the SOURCE, not only that
+  the committed text matches whatever the generator produced.
+
+suggested_fix: |
+  Point `census_rows()` at `enforcement_census()` / `enforcement_counter()` instead of
+  `state_census()`, and render `ENFORCED-CONTRADICTED` as its own published column beside
+  ENFORCED / WAIVED / NA so the four add to the cell total. Keep the substitution split,
+  but compute it over cells whose predicate is actually green, otherwise a bucket is
+  published for cells that are red. Second, make the freshness test assert WHICH accessor
+  was read - a test that only diffs the rendered block against the committed one cannot
+  distinguish a correct source from a plausible one, which is how this passed review.
+  Third, `--check` must not print `[PASS]` while
+  `test_no_cell_is_counted_enforced_while_its_predicate_is_red` is failing: a generator
+  whose subject is a red suite should refuse, or state the contradiction count in its own
+  PASS line, the way `--check` already refuses NOTHING_SCANNED.
+
+id: "ORGANIC-20260809-generated-census-quotes-the-axis-its-own-docstring-forbids"
+submitted_at: "2026-08-09T14:10:00+08:00"
+session_context: >-
+  2026-08-09 adversarial re-review, origin/main at c3d3b4a56 (plugin v1.10.11).
+  vibe-ic#888 landed at 63e8e11bd; vibe-ic#889 landed at 162fab474, AFTER it, in the same
+  v1.10.7 batch. #888 added the two-axis census and wrote into
+  `state_census()`'s docstring, programs/tests/test_matrix_63x8_coverage.py:549-566 - "NOT
+  A COVERAGE CLAIM ON ITS OWN ... Quoting `ENFORCED: N` from this dict is what
+  ORGANIC-20260808 reported - on 2026-08-08 it read 481 while 26 of those 481 cells were
+  failing. Use enforcement_census() for anything a reader will quote". #889's generator,
+  tools/gen_matrix_63x8_census.py:99-120, calls `CV.state_census()` and
+  `CV.substitution_census()` and never calls `enforcement_census()`. MEASURED - `python3
+  tools/gen_matrix_63x8_census.py --check` exits 0 and prints "[PASS] 63x8 census fresh:
+  504 cells over 8 dimensions; ENFORCED own=16 substituted=45 undeclared=420; WAIVED=11
+  NA=12", and the committed block at
+  plugins/vibe-ic/programs/tests/matrix_63x8/README.md publishes "**504 cells: 481
+  ENFORCED, 11 WAIVED, 12 NA.**". MEASURED on the same tree, same commit -
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest
+  tests/test_matrix_63x8_coverage.py::test_no_cell_is_counted_enforced_while_its_predicate_is_red
+  -q` FAILS, and its own failure text reads "STATE-ONLY census (what used to be
+  published): {'ENFORCED': 481, 'WAIVED': 11, 'NA': 12}" then "TWO-AXIS census (what is
+  true): {'ENFORCED': 455, 'WAIVED': 11, 'NA': 12, 'ENFORCED-CONTRADICTED': 26}". So the
+  tree simultaneously ships a generator printing PASS on 481 and a guard printing FAIL
+  naming 481 as the retired figure. The 26 contradicted cells are 19 in d3, 6 in d7, 1 in
+  d4, every one of them reporting ENFORCED while its live predicate reports failed.
+  Independent confirmation by direct call - `enforcement_counter(enforcement_census())`
+  returns {'ENFORCED': 455, 'WAIVED': 11, 'NA': 12, 'ENFORCED-CONTRADICTED': 26}. The
+  published website page that quoted 481 has been rewritten against the two-axis census;
+  the README block has not.

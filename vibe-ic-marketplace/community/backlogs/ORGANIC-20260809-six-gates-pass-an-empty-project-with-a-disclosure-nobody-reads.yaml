@@ -1,0 +1,65 @@
+type: bug
+severity: P2
+component: program:flow_compliance_check
+plugin_version: "1.10.11"
+
+title: >-
+  Six gates exit 0 on an empty project, two of them declaring NOT_APPLICABLE in JSON that
+  the consumer never parses - including vacuous_testbench_check itself
+
+pattern: |
+  A gate discloses that it scanned nothing, and the disclosure is real - it is in the JSON
+  report, or in a prose line the author wrote for a human. The consumer recognises exactly
+  two forms: a specific exit code, and a specific token at the start of a line in a
+  fixed-width tail of stdout. Every other honest disclosure is therefore consumed as a
+  plain PASS. The producer's authors believe they disclosed; the consumer's authors
+  believe silence means substance; nobody is lying and the run still certifies an empty
+  tree. This is the same defect as an undisclosed vacuous pass, but far harder to find,
+  because grepping the producers for the word shows the disclosure present. The fix
+  belongs on the CONSUMER side: a machine-readable verdict field in the report the gate
+  already writes must be read, and any structured NOT_APPLICABLE must route to the vacuous
+  tier regardless of which channel carried it.
+
+suggested_fix: |
+  Teach `flow_compliance_check` to read the gate's own JSON report - the clause already
+  knows the `--json` path because it is in the flow's command string - and to treat a
+  top-level `verdict` of NOT_APPLICABLE / SKIPPED / VACUOUS as the vacuous tier, on the
+  rc-0 path, in both the REQUIRED and OPTIONAL branches. That is a channel a path length
+  cannot truncate, which is the property vibe-ic#887 established as the bar. Then convert
+  the four prose-only disclosers to `_vacuous_exit.announce_vacuous` so there is one
+  emitter, and add a meta-test that runs every `program_exit_zero` gate against an empty
+  project and asserts that rc==0 implies a disclosure the consumer actually recognises -
+  the sweep below is that test, and it is cheap enough to keep.
+
+id: "ORGANIC-20260809-six-gates-pass-an-empty-project-with-a-disclosure-nobody-reads"
+submitted_at: "2026-08-09T14:25:00+08:00"
+session_context: >-
+  2026-08-09 adversarial re-review, origin/main at c3d3b4a56 (plugin v1.10.11), after
+  vibe-ic#887 landed at a8441134f and fixed two step-3 gates whose sentinel a long project
+  path could truncate. MEASURED - extract every distinct `program_exit_zero` gate from
+  flow/phase1_phase2_phase3.yaml (87 of them), run each against a freshly created EMPTY
+  project directory with "." substituted for the project argument, and ask the REAL
+  consumer functions `flow_compliance_check._stdout_signals_vacuous(
+  flow_compliance_check.output_snippet(stdout, stderr))` whether the disclosure is
+  visible. Result - 15 gates exit 0 on an empty project; 9 of those disclose in a form the
+  consumer reads; 6 do not. The 6 are analog_a0_skip_forbidden_check,
+  drv_promotion_corroboration_check, professional_tb_check, quartus_map_audit,
+  sta_corner_record_completeness_check, vacuous_testbench_check. The two sharpest are
+  vacuous_testbench_check and professional_tb_check, and both are self-aware: run against
+  an empty tree, vacuous_testbench_check prints {"gate": "vacuous_testbench", "verdict":
+  "NOT_APPLICABLE", "reason": "no sim tree (step did not run)"} and exits 0, and
+  professional_tb_check prints {"gate": "professional_tb", "verdict": "NOT_APPLICABLE",
+  "reason": "no professional_tb.json (step did not run)"} and exits 0. The verdict is in
+  the snippet the consumer holds; the consumer does not look at it. Mechanism at
+  programs/flow_compliance_check.py:3515-3524 - `_stdout_signals_vacuous` returns True only
+  for a line starting with "VACUOUS_PASS", and at :7560-7580 the rc-0 branch of
+  `__check_program_exit_zero` reaches that helper as its only vacuity route besides the
+  rc-2 `_VACUOUS_HINT_PREFIX`. The other four disclose in prose the consumer also cannot
+  read - quartus_map_audit prints "[NO_BUILD] ... no Quartus build",
+  drv_promotion_corroboration_check prints "no route promotion this run - gate
+  inapplicable", sta_corner_record_completeness_check prints "no_corner_declaration: no
+  stance file, pvt_matrix or STA report declares or records an..." - so four more gates
+  believe they disclosed and are consumed as substantive passes. The prior round of this
+  campaign reported 27 gates exiting 0 with 24 disclosing; that figure came from a
+  different harness and is not directly comparable, so the numbers above are stated as
+  measured by the sweep described here rather than as a delta.
