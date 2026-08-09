@@ -29,6 +29,7 @@ from __future__ import annotations
 import posixpath
 import re
 from dataclasses import dataclass, field
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -623,6 +624,54 @@ def _default_reader(path: str) -> Optional[str]:
         return None
 
 
+def container_reader(container: str) -> Callable[[str], Optional[str]]:
+    """Host read, falling back to `docker exec <container> cat <path>`.
+
+    vibe-ic#<new> — A CONTAINER-INSTALLED PDK CANNOT BE READ FROM THE HOST.
+
+    `resolve_deck_context` accepted a `reader` and its own docstring said the
+    caller supplies "local read or container read" — but every call site left
+    it defaulted, so `_default_reader` did a HOST `Path(path).read_text()`
+    against paths that exist only inside the image. Measured: `/foss/pdks` is
+    absent on the host and present in the container, while the resolver
+    reported `source: container_installed` with 32 libs. Every lib therefore
+    read as unreadable and the deck context came back empty — which surfaced
+    as `NEEDS_NATIVE_TEMPLATE`, i.e. "this PDK does not ship what we need",
+    when the PDK ships it and we simply never looked.
+
+    Control, same PDK and same call, only the reader changed:
+
+        host reader       device_map {}                       NEEDS_NATIVE_TEMPLATE
+        container reader  {nmos: sg13_hv_nmos, pmos: ...}     OK, work_items=0
+
+    WHY THE DEFECT HID: `resolve_deck_context` routes sky130/gf180 to
+    `known_family_context`, which never parses a lib. Only an UNKNOWN
+    container-installed family reaches the parsing path — so the two PDKs
+    everything is tested against could not expose it.
+
+    The same fallback already exists for the digital flow
+    (`phase3_one_shot_runner._v1_6_604_read_text_or_container_cat`, added for
+    the via-analyzer tech-LEF read). This is that fix, for the analog deck
+    path.
+    """
+    def _read(path: str) -> Optional[str]:
+        txt = _default_reader(path)
+        if txt is not None:
+            return txt
+        if not container:
+            return None
+        try:
+            r = subprocess.run(["docker", "exec", container, "cat", path],
+                               capture_output=True, text=True, timeout=30,
+                               errors="replace")
+            if r.returncode == 0:
+                return r.stdout
+        except Exception:
+            pass
+        return None
+    return _read
+
+
 # vibe-ic#193 — the include-farm builder that served the retired entry-lib
 # strategy stood here (`_cross_file_include_targets`,
 # `_resolve_include_closure`, `LIB_FARM_DIRNAME`, `lib_farm_dir`,
@@ -860,6 +909,7 @@ def resolve_deck_context(pdk_selector: str,
                          res: Optional[Dict[str, Any]] = None,
                          required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                          reader: Optional[Callable[[str], Optional[str]]] = None,
+                         container: str = "",
                          ) -> DeckContext:
     """Dispatcher — the ONE entry point the deck emitter calls.
 
@@ -871,6 +921,17 @@ def resolve_deck_context(pdk_selector: str,
       sky130 regression bit-identical.
 
     chip-AGNOSTIC; NDA-safe (paths only)."""
+    # vibe-ic#<new>: THE DISPATCHER OWNS THE READER CHOICE.
+    # `reader` existed and every call site left it defaulted to a HOST read,
+    # so a container-installed PDK parsed as empty and reported
+    # NEEDS_NATIVE_TEMPLATE — "this PDK does not ship what we need" — when it
+    # ships it and we never looked. Defaulting here rather than per call site
+    # is deliberate: threading an argument through every caller is exactly how
+    # the seam went unused, and would leave the next caller free to
+    # reintroduce it.
+    if reader is None and container and res is not None:
+        if (res.get("source") or "") == "container_installed":
+            reader = container_reader(container)
     if res and res.get("available"):
         src = res.get("source")
         if src == "project_custom_pdk":

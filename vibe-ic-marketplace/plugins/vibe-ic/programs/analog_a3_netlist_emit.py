@@ -311,7 +311,8 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         ctx = _apdc.resolve_deck_context(pdk, res=res,
                                          required=tuple(r for r in roles
                                                         if r in ("nmos",
-                                                                 "pmos")))
+                                                                 "pmos")),
+                                         container=container or "")
         ctx_json = ctx.as_json()
         status = ctx_json.get("status") or "OK"
         family = ctx_json.get("family") or pdk
