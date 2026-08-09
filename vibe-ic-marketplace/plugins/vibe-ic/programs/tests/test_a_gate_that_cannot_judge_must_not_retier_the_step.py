@@ -31,9 +31,28 @@ refuses to record rc=2 as `ok` and writes `n/a (input not present)` instead, and
 `check_step` holds ADVISORY hints OUT of the tier decision (#306) — so the
 disclosure is recorded AND the step stays PASS, so the voided line survives.
 
-These tests drive the REAL entry point over a real fixture, and the second one
-is the positive control: it re-runs the identical fixture against a yaml whose
-only difference is the slot keyword, and asserts the defect comes back.
+These tests drive the REAL entry point over a real fixture, and the last one
+is the positive control: it re-runs the identical fixture against a yaml with
+one gate name changed, and asserts the defect comes back.
+
+SUPERSEDED IN PART BY vibe-ic#901 — recorded here, not silently absorbed
+=======================================================================
+The repair above is a PER-GATE one: move this gate out of the blocking slot.
+#901 fixed the CLASS in `check_step` — the tier now COUNTS the clauses that
+could have disclosed vacuity and requires ALL of them before calling a step
+vacuous, so one unjudgeable gate can no longer re-tier a step whose siblings
+reached verdicts. Measured on this file's own fixture: with the gate forced
+back into the blocking slot the step now stays PASS and the voided line
+survives, which is what the old positive control asserted would NOT happen.
+
+That control's own failure message named this exact condition — "if it no
+longer does, the tier interaction was fixed elsewhere and this wiring choice
+should be revisited". It is kept, inverted, and a NEW positive control (every
+countable clause vacuous) restores the falsification the file needs.
+
+The advisory slot stays right: #306 is what keeps a gate that can never judge
+out of the blocking denominator in the first place, and what puts its
+NOT-CHECKED verdict on the step line.
 """
 from __future__ import annotations
 
@@ -55,6 +74,16 @@ _ADVISORY_CLAUSE = (
 _BLOCKING_CLAUSE = (
     '- program_exit_zero: "hold_area_budget_check . '
     '--json reports/phase3/pnr/hold_area_budget.json"')
+
+#: #901 — step 20's ONE clause that can reach a verdict on this fixture, and
+#: the substitution that makes every countable clause of the step vacuous.
+#: That, not the slot keyword, is what decides the tier now.
+_VERDICT_CAPABLE_CLAUSE = (
+    '- program_exit_zero: "hold_closure_check . '
+    '--json reports/phase3/pnr/hold_closure.json"')
+_UNJUDGEABLE_SUBSTITUTE = (
+    '- program_exit_zero: "hold_area_budget_check . '
+    '--json reports/phase3/pnr/hold_closure.json"')
 
 _VOIDED_RE = re.compile(
     r"PASS voided: dependency \[19\] CTS.*= FAIL, so this step's PASS "
@@ -132,18 +161,68 @@ def test_the_advisory_slot_still_RECORDS_the_not_checked_disclosure(
     assert "hold_area_budget_check" in block, block
 
 
-def test_POSITIVE_CONTROL_the_blocking_slot_deletes_the_voided_line(
+def test_the_blocking_slot_NO_LONGER_deletes_the_voided_line(
         broken_chain, tmp_path):
-    """The same fixture against a yaml differing ONLY in the slot keyword.
-    If this passed too, the tests above would be measuring nothing."""
+    """SUPERSEDED CONTROL — kept, inverted, and MEASURED (vibe-ic#901).
+
+    This was the positive control: the same fixture against a yaml differing
+    ONLY in the slot keyword, asserting that the blocking slot brought the
+    defect back. Its own failure message named the condition under which it
+    would stop holding — "if it no longer does, the tier interaction was fixed
+    elsewhere and this wiring choice should be revisited". #901 is that fix.
+
+    The tier no longer turns on ONE clause's disclosure: `check_step` counts
+    the clauses that could have disclosed vacuity and requires ALL of them
+    before it will call a step vacuous. Step 20 declares `hold_closure_check`
+    alongside `hold_area_budget_check`, and on this fixture that gate reaches
+    a real verdict — so with the gate in EITHER slot the step stays a PASS and
+    the voided line survives. Asserting the old outcome here would be pinning
+    a defect.
+
+    The slot choice is still right and still load-bearing: `#306` is what
+    keeps a gate that can never judge out of the blocking denominator at all,
+    and the ADVISORY line is what makes its NOT-CHECKED verdict visible. What
+    changed is that it is no longer the ONLY thing standing between an
+    unjudgeable gate and a deleted disclosure.
+    """
     text = FLOW.read_text(encoding="utf-8")
     assert text.count(_ADVISORY_CLAUSE) == 1, "the shipped clause moved"
     variant = tmp_path / "blocking_flow.yaml"
     variant.write_text(text.replace(_ADVISORY_CLAUSE, _BLOCKING_CLAUSE))
 
     block = _step20(_audit(broken_chain, variant))
+    assert "[VACUOUS-PASS" not in block, block
+    assert _VOIDED_RE.search(block), (
+        "with #901's clause census in place the blocking slot must no longer "
+        "be able to delete the voided disclosure\n" + block)
+    assert "partially vacuous" in block, (
+        "the unjudgeable gate's disclosure must survive the PASS — trading "
+        "the wrong tier for a silent one is the same defect\n" + block)
+
+
+def test_POSITIVE_CONTROL_an_ALL_vacuous_step_still_deletes_the_voided_line(
+        broken_chain, tmp_path):
+    """THE CONTROL, re-authored around what now decides the tier.
+
+    The forward tests assert that Step 20 keeps its voided line. That claim is
+    only worth something if a yaml exists on which it FAILS. It does: leave
+    the unjudgeable gate exactly where it is and replace the ONE clause that
+    can reach a verdict (`hold_closure_check`) with the same gate that cannot,
+    so EVERY countable clause of the step discloses vacuity. The step is then
+    genuinely vacuous, and the voided line is genuinely deleted.
+
+    Same fixture, same entry point, one gate name different — and it separates
+    "the census works" from "the VACUOUS_PASS tier was deleted".
+    """
+    text = FLOW.read_text(encoding="utf-8")
+    assert text.count(_VERDICT_CAPABLE_CLAUSE) == 1, (
+        "step 20's verdict-capable clause moved")
+    variant = tmp_path / "all_vacuous_flow.yaml"
+    variant.write_text(text.replace(_VERDICT_CAPABLE_CLAUSE,
+                                    _UNJUDGEABLE_SUBSTITUTE))
+
+    block = _step20(_audit(broken_chain, variant))
     assert "[VACUOUS-PASS" in block, block
     assert not _VOIDED_RE.search(block), (
-        "the blocking slot was supposed to delete the voided disclosure; if "
-        "it no longer does, the tier interaction was fixed elsewhere and this "
-        "wiring choice should be revisited\n" + block)
+        "every countable clause disclosed that it examined nothing, so the "
+        "step IS vacuous and the voided line must go\n" + block)
