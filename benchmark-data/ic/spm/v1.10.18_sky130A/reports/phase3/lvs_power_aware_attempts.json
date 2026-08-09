@@ -1,0 +1,10 @@
+{
+  "attempts": [
+    {
+      "model": "well_tied",
+      "accepted": true,
+      "netlist": "phase3/stage3/extracted/spm_pwraware_welltied.v"
+    }
+  ],
+  "accepted": true
+}

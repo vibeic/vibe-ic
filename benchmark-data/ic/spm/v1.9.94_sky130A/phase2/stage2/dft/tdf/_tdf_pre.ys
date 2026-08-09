@@ -1,9 +1,0 @@
-read_liberty -ignore_miss_func /foss/pdks/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
-read_verilog /work/phase2/stage2/dft/cut_netlist.v
-hierarchy -top chip_top
-proc
-memory_collect
-memory_map
-flatten -separator _
-opt_clean
-write_verilog -noattr /work/phase2/stage2/dft/tdf/flat_core.v
