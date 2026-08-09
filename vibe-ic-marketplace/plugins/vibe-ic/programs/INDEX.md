@@ -604,6 +604,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `lvs_verdict_tokens` | any | — | single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477). |
 | `macro_non_seq_arc_contract_check` | any | — | a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS. |
 | `macro_obs_geometry_intersect_check` | any | — | Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686. |
+| `macro_obs_load_parity_check` | any | — | Obstructions the LEF declares vs obstructions a reader can load: an OBS section naming an undeclared layer is discarded IN FULL. |
 | `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
@@ -1714,6 +1715,7 @@ _(no programs in this group)_
 - `lvs_verdict_tokens` — single source of truth for netgen LVS terminal- verdict classification (ORGANIC #524, extends #507/#477).
 - `macro_non_seq_arc_contract_check` — a staged macro's NON-SEQUENTIAL timing requirement must reach the integration BEFORE post-CTS.
 - `macro_obs_geometry_intersect_check` — Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
+- `macro_obs_load_parity_check` — Obstructions the LEF declares vs obstructions a reader can load: an OBS section naming an undeclared layer is discarded IN FULL.
 - `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
