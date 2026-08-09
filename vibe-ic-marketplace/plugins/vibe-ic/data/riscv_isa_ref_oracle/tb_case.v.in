@@ -1,0 +1,142 @@
+// L10 case `@CASE@` — REAL oracle testbench for the subservient SoC.
+//
+// Oracle source: `spike`, the official RISC-V ISA reference simulator, run on
+// the SAME firmware this TB loads. Everything this TB compares against is read
+// at runtime from spike-derived golden files:
+//     golden_@CASE@_sram.txt   final 1 KiB SRAM image
+//     golden_@CASE@_gpio.txt   ordered GPIO write data (@NGPIO@ writes, count
+//                              taken from spike's commit log)
+// There is no hand-written expected value in this file. Any mismatch calls
+// $fatal, so vvp exits non-zero and the case cannot report a false PASS.
+//
+// The SRAM image check is a pure chip-boundary observation: that memory is
+// written only through the DUT's own o_sram_* port group.
+//
+// SPDX-License-Identifier: Apache-2.0
+`timescale 1ns/1ps
+`default_nettype none
+
+module @CASE@;
+
+   localparam MEMSIZE  = 1024;
+   localparam AW       = 8;
+   localparam WORDS    = MEMSIZE/4;
+   localparam TOHOST_W = 32'h3F0/4;
+   localparam NGPIO    = @NGPIO@;
+
+   reg              clk = 1'b0;
+   reg              rst = 1'b1;
+   wire [AW-1:0]    sram_adr;
+   wire [31:0]      sram_wdata;
+   wire [3:0]       sram_wsel;
+   wire             sram_we;
+   wire             sram_cyc;
+   reg  [31:0]      sram_rdata = 32'h0;
+   wire             gpio;
+
+   reg [31:0]       mem       [0:WORDS-1];
+   reg [31:0]       gold_mem  [0:WORDS-1];
+   reg [31:0]       gold_gpio [0:255];
+   reg [31:0]       wdat;
+
+   integer          i, errors = 0, gpio_n = 0, cyc = 0, done = 0;
+   reg [31:0]       gpio_val     [0:255];
+   reg [31:0]       gpio_pad_seq [0:255];
+   reg              ext_stb_d = 1'b0;
+
+   subservient #(.memsize(MEMSIZE), .gpio_width(1)) dut
+     (.i_clk(clk), .i_rst(rst),
+      .o_sram_adr(sram_adr), .o_sram_wdata(sram_wdata),
+      .o_sram_wsel(sram_wsel), .o_sram_we(sram_we), .o_sram_cyc(sram_cyc),
+      .i_sram_rdata(sram_rdata), .o_gpio(gpio));
+
+   always #5 clk = ~clk;
+
+   // external shared SRAM: 32-bit words, byte selects, registered read
+   always @(posedge clk) begin
+      if (sram_cyc) begin
+         if (sram_we) begin
+            wdat = mem[sram_adr];
+            if (sram_wsel[0]) wdat[7:0]   = sram_wdata[7:0];
+            if (sram_wsel[1]) wdat[15:8]  = sram_wdata[15:8];
+            if (sram_wsel[2]) wdat[23:16] = sram_wdata[23:16];
+            if (sram_wsel[3]) wdat[31:24] = sram_wdata[31:24];
+            mem[sram_adr] <= wdat;
+         end
+         sram_rdata <= mem[sram_adr];
+      end
+   end
+
+   // extension-bus monitor: PROTOCOL level (strobe rising edge), plus a pure
+   // pin-level sample of what o_gpio settled to after each transaction.
+   always @(posedge clk) ext_stb_d <= rst ? 1'b0 : dut.wb_ext_stb;
+   always @(posedge clk) begin
+      if (!rst && dut.wb_ext_stb && !ext_stb_d && dut.wb_ext_we) begin
+         gpio_val[gpio_n] = dut.wb_ext_dat;
+         gpio_n = gpio_n + 1;
+      end
+      if (!rst && !dut.wb_ext_stb && ext_stb_d && (gpio_n > 0))
+        gpio_pad_seq[gpio_n-1] = {31'b0, gpio};
+   end
+
+   always @(posedge clk) begin
+      cyc = cyc + 1;
+      if (!rst && sram_cyc && sram_we && (sram_adr == TOHOST_W[AW-1:0])
+          && (sram_wdata == 32'h1) && (sram_wsel == 4'hF))
+        done = 1;
+   end
+
+   initial begin
+      for (i = 0; i < WORDS; i = i + 1) mem[i] = 32'h0;
+      $readmemh("@CASE@.hex", mem);
+      $readmemh("golden_@CASE@_sram.txt", gold_mem);
+      $readmemh("golden_@CASE@_gpio.txt", gold_gpio);
+
+      repeat (20) @(posedge clk);
+      rst = 1'b0;
+
+      while (done == 0 && cyc < 4000000) @(posedge clk);
+      if (done == 0) begin
+         $display("[@CASE@] FAIL: firmware never reached the HTIF tohost store (%0d cycles)", cyc);
+         $fatal(1);
+      end
+      repeat (40) @(posedge clk);
+
+      // 1. full SRAM image vs the spike-derived golden (chip boundary only)
+      for (i = 0; i < WORDS; i = i + 1)
+        if (mem[i] !== gold_mem[i]) begin
+           errors = errors + 1;
+           if (errors < 6)
+             $display("[@CASE@] FAIL: sram word 0x%02x DUT=%08x GOLDEN=%08x", i, mem[i], gold_mem[i]);
+        end
+
+      // 2. GPIO transaction count and data vs the spike-derived golden
+      if (gpio_n !== NGPIO) begin
+         errors = errors + 1;
+         $display("[@CASE@] FAIL: %0d GPIO write(s), golden has %0d", gpio_n, NGPIO);
+      end
+      for (i = 0; i < NGPIO && i < gpio_n; i = i + 1) begin
+         if ((gpio_val[i] & 32'h1) !== (gold_gpio[i] & 32'h1)) begin
+            errors = errors + 1;
+            if (errors < 12)
+              $display("[@CASE@] FAIL: gpio write %0d DUT=%0d GOLDEN=%0d", i, gpio_val[i] & 1, gold_gpio[i] & 1);
+         end
+         // 3. and what the PIN itself settled to
+         if ((gpio_pad_seq[i] & 32'h1) !== (gold_gpio[i] & 32'h1)) begin
+            errors = errors + 1;
+            if (errors < 12)
+              $display("[@CASE@] FAIL: gpio PIN after write %0d = %0d, GOLDEN=%0d", i, gpio_pad_seq[i] & 1, gold_gpio[i] & 1);
+         end
+      end
+
+      if (errors != 0) begin
+         $display("[@CASE@] FAIL — %0d mismatch(es) vs the spike golden", errors);
+         $fatal(1);
+      end
+      $display("[@CASE@] PASS — %0d SRAM words and %0d GPIO write(s) match the spike golden (%0d cycles)",
+               WORDS, gpio_n, cyc);
+      $finish;
+   end
+
+endmodule
+`default_nettype wire

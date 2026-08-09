@@ -39,7 +39,10 @@ Verdicts / exit codes (chip-AGNOSTIC — structural artifacts only):
   1 = FAIL: the bridge claims a connectivity-PASS waiver but the evidence is
       not substantiated (missing/empty transcript, or functional_verified is
       asserted true while claiming the capability gap) — a forged waiver is
-      not honoured.
+      not honoured. ALSO 1 when `cpu_isa_ref_oracle_capability_probe` has
+      MEASURED the claimed capability as present: a waiver may not assert a
+      capability the environment has, so the gap is reported as a GENERATOR
+      gap that must be built, not waived.
 """
 from __future__ import annotations
 
@@ -57,6 +60,27 @@ import _sim_results_bridge as _srb  # noqa: E402
 # A chip-AGNOSTIC capability identifier, NOT a chip/vendor/SKU literal.
 CAP_CPU_FUNCTIONAL_ORACLE = "cap:cpu_functional_oracle"
 CONNECTIVITY_VERDICT = "CONNECTIVITY_PASS"
+
+#: Artefact written by `cpu_isa_ref_oracle_capability_probe.py`. Read-only
+#: here: this gate never shells out and never probes a container itself.
+_ISA_REF_PROBE_REL = "reports/phase2/gates/cpu_isa_ref_oracle_capability.json"
+
+
+def _read_isa_ref_oracle_probe(project: Path) -> dict:
+    """Return the capability-probe report, or {} when it was never produced.
+
+    An absent probe means the question was never asked, which must leave every
+    pre-existing verdict byte-identical — so {} is returned, never a guess.
+    """
+    p = project / _ISA_REF_PROBE_REL
+    if not p.is_file():
+        return {}
+    try:
+        d = json.loads(p.read_text(errors="replace"))
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+
 
 
 def _read_xml_field(xml: str, tag: str) -> str:
@@ -173,6 +197,34 @@ def _evaluate(project: Path) -> "tuple[int, str]":
             f"DEFERRED capability-gap waiver ({CAP_CPU_FUNCTIONAL_ORACLE}) is "
             "SUPERSEDED by this real functional PASS; Step 4 is a genuine "
             "functional simulation PASS, not WAIVED-DEFERRED.")
+
+    # 2026-08-10 — a waiver may not assert a capability the environment HAS.
+    # `cap:cpu_functional_oracle` claims "a per-IC functional oracle cannot be
+    # constructed here". For a processor class with a DECLARED ISA that has a
+    # reference simulator, that claim is decidable, and
+    # `cpu_isa_ref_oracle_capability_probe.py` decides it by MEASURING the
+    # run's own container. When the probe says CONSTRUCTIBLE the premise of
+    # this waiver is false: the oracle is unbuilt, not unbuildable, and
+    # granting WAIVED-DEFERRED would book an unbuilt generator as a missing
+    # capability — a green square over a gap nobody is tracking.
+    #
+    # Fail-open by design: if the probe artefact is absent or says anything
+    # other than CONSTRUCTIBLE, nothing changes. This can only turn a silent
+    # false waiver into a named FAIL; it can never invent one.
+    probe = _read_isa_ref_oracle_probe(project)
+    if probe.get("verdict") == "CONSTRUCTIBLE":
+        return 1, (
+            "FAIL: the connectivity-PASS waiver asserts "
+            f"{CAP_CPU_FUNCTIONAL_ORACLE}, but "
+            "cpu_isa_ref_oracle_capability_probe MEASURED that capability as "
+            f"PRESENT — declared ISA family {probe.get('declared_isa_family')!r} "
+            f"(from {probe.get('declared_isa_source')}), reference model "
+            f"{(probe.get('reference_model') or {}).get('path')}, cross "
+            f"toolchain {(probe.get('toolchain') or {}).get('path')}. "
+            f"{probe.get('oracle_shape', '')} This is a GENERATOR gap, not a "
+            "capability gap: build the reference-ISA differential oracle "
+            "instead of waiving it. Evidence: "
+            f"{_ISA_REF_PROBE_REL}.")
 
     return 3, (
         f"PASS_WITH_WAIVERS: {_waiver_track_class_label(xml)} — "
