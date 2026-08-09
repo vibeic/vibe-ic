@@ -1,8 +1,17 @@
 """Unit tests for gds_size_check.py.
 
 Tests verify correct detection of missing/empty/too-small GDS files.
+
+The size fixtures below used to be `b'\\x00' * N`, which is not a GDSII stream
+at all — harmless while a bad header was demoted to a WARNING, misleading once
+it became a hard ERROR (a "valid large GDS" case would then have been reddened
+by the FORMAT arm, not the size arm, and the test would have stopped testing
+size). They now carry a real GDSII HEADER record so each case isolates exactly
+the property it is named for. Format reachability is covered separately in
+test_gds_size_check_format_verdict.py.
 """
 import json
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +25,12 @@ sys.path.insert(0, str(SCRIPT.parent))
 import gds_size_check as gsc  # noqa: E402
 
 
+def _gds(size: int) -> bytes:
+    """`size` bytes whose first record is a real GDSII HEADER (00 06 00 02)."""
+    head = struct.pack(">HH", 6, 0x0002) + struct.pack(">h", 600)
+    return (head + b'\x00' * max(0, size - len(head)))[:size]
+
+
 # ===========================================================================
 # Test 1: Valid large GDS — PASS
 # ===========================================================================
@@ -23,7 +38,7 @@ class TestValidLargeGds:
     def test_200kb_pass(self, tmp_path):
         """GDS file of 200 KB with min=100 KB → PASS (no ERRORs)."""
         f = tmp_path / "design.gds"
-        f.write_bytes(b'\x00' * (200 * 1024))  # 200 KB
+        f.write_bytes(_gds(200 * 1024))  # 200 KB
         findings, stats = gsc.audit_gds(f, min_size_kb=100)
         errors = [x for x in findings if x.severity == "ERROR"]
         assert len(errors) == 0
@@ -33,7 +48,7 @@ class TestValidLargeGds:
     def test_cli_pass(self, tmp_path):
         """CLI returns exit 0 for valid GDS."""
         f = tmp_path / "design.gds"
-        f.write_bytes(b'\x00' * (200 * 1024))
+        f.write_bytes(_gds(200 * 1024))
         report = tmp_path / "report.json"
 
         res = subprocess.run(
@@ -54,7 +69,7 @@ class TestTooSmall:
     def test_10kb_fail(self, tmp_path):
         """GDS file of 10 KB with min=100 KB → TOO_SMALL."""
         f = tmp_path / "design.gds"
-        f.write_bytes(b'\x00' * (10 * 1024))  # 10 KB
+        f.write_bytes(_gds(10 * 1024))  # 10 KB
         findings, stats = gsc.audit_gds(f, min_size_kb=100)
         errors = [x for x in findings if x.severity == "ERROR"]
         assert len(errors) == 1
@@ -63,7 +78,7 @@ class TestTooSmall:
     def test_cli_fail_small(self, tmp_path):
         """CLI returns exit 1 for too-small GDS."""
         f = tmp_path / "design.gds"
-        f.write_bytes(b'\x00' * (10 * 1024))
+        f.write_bytes(_gds(10 * 1024))
 
         res = subprocess.run(
             [sys.executable, str(SCRIPT),
@@ -125,7 +140,7 @@ class TestBoundary:
     def test_exactly_at_threshold(self, tmp_path):
         """GDS file exactly at threshold → PASS (no ERRORs)."""
         f = tmp_path / "design.gds"
-        f.write_bytes(b'\x00' * (100 * 1024))  # exactly 100 KB
+        f.write_bytes(_gds(100 * 1024))  # exactly 100 KB
         findings, stats = gsc.audit_gds(f, min_size_kb=100)
         errors = [x for x in findings if x.severity == "ERROR"]
         assert len(errors) == 0
@@ -133,7 +148,7 @@ class TestBoundary:
     def test_one_byte_below_threshold(self, tmp_path):
         """GDS file 1 byte below threshold → TOO_SMALL."""
         f = tmp_path / "design.gds"
-        f.write_bytes(b'\x00' * (100 * 1024 - 1))
+        f.write_bytes(_gds(100 * 1024 - 1))
         findings, stats = gsc.audit_gds(f, min_size_kb=100)
         errors = [x for x in findings if x.severity == "ERROR"]
         assert len(errors) == 1
@@ -147,7 +162,7 @@ class TestCustomThreshold:
     def test_small_threshold(self, tmp_path):
         """1 KB file with min=0.5 KB → PASS."""
         f = tmp_path / "design.gds"
-        f.write_bytes(b'\x00' * 1024)
+        f.write_bytes(_gds(1024))
 
         res = subprocess.run(
             [sys.executable, str(SCRIPT),

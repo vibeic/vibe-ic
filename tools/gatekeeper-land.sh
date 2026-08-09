@@ -194,7 +194,20 @@ run_pytest() {
     echo "  FAIL  targeted test selection produced no files — not a clean result"
     FAILED=1; return
   fi
-  if out="$( cd "$PLUGIN" && xargs -a "$sel" pytest -q --maxfail=10 --timeout=180 --timeout-method=thread 2>&1 )"; then
+  # ISOLATE THE SUITE FROM AMBIENT pytest PLUGINS. pytest auto-loads every
+  # plugin installed anywhere in the environment, so an unrelated broken
+  # package makes THIS repo's suite unrunnable — and because the full tier can
+  # then never stamp, the pre-push hook refuses every push. Measured: a broken
+  # `web3` pytest_ethereum plugin in ~/.local raised ImportError during
+  # collection, and this function reported `FAIL targeted tests`. That reads as
+  # "your tests fail". They do not — pytest never started. Same shape as the
+  # A3 login-shell defect: an environment fault wearing a substantive verdict.
+  #
+  # PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 turns autoload off entirely, so no future
+  # broken package can do this again; `-p pytest_timeout` re-enables the ONE
+  # plugin these flags require. Disabling autoload without it silently drops
+  # --timeout and the run loses its per-test bound.
+  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 xargs -a "$sel" pytest -p pytest_timeout -q --maxfail=10 --timeout=180 --timeout-method=thread 2>&1 )"; then
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
   else
     printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"

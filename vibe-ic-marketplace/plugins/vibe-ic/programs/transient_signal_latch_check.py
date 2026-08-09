@@ -18,12 +18,24 @@ This gate scans:
      where signal_x has no separate sustained driver.
   2. Consumer side: find FSM where signal_x is referenced in a state that
      is NOT entered the same cycle ack_token fires (cycles offset > 1).
-  3. If a `cur_x <= signal_x` latching pattern exists in the consumer at
-     the strobe cycle, the race is mitigated — pass.
+  3. If a `cur_x <= signal_x` latching pattern exists anywhere in the
+     consumer file, the race is MITIGATED — reported as a WARN, not an
+     ERROR. The latch scan is file-wide (`scan_consumers` computes
+     `has_latch` with an `any(...)` over the whole file), so it shows that
+     the consumer latches the signal SOMEWHERE; it does not show that the
+     read site uses the latched copy. That is why a mitigated pair is an
+     advisory rather than silence.
+
+Severity tiers, and what each does to the exit code:
+  ERROR  cross-file, multi-cycle consumer read with no latch of the signal
+         anywhere in the consumer file      -> exit 1, always
+  WARN   the same pair, but the consumer does latch the signal somewhere
+         -> exit 0 by default, exit 1 under `--strict`
 
 Heuristic exit:
-  0 = PASS (no risky pattern, or latch present)
-  1 = FAIL (transient signal read by multi-cycle consumer without latch)
+  0 = PASS (no risky pattern; or every risky pair is latch-mitigated and
+      `--strict` was not given)
+  1 = FAIL (an unlatched pair, or — under `--strict` — a mitigated one)
   2 = Usage error
 
 Generality: any synchronous RTL design. No chip / tester / PDK names.
@@ -54,6 +66,54 @@ All three counts are now disclosed, on stdout as well as in the JSON, because
 the one-line verdict is what a human actually reads. ``files_scanned`` is
 deliberately NOT presented as the denominator: it is non-zero on 107/107 and
 would read as full coverage of a rule that ran on nothing.
+
+UNREACHABLE VERDICT — THE WARN TIER
+-----------------------------------
+``main`` used to compute the severity of a latch-mitigated pair and then throw
+the pair away before recording it::
+
+    severity = "WARN" if has_latch else "ERROR"
+    if has_latch:
+        continue                                        # mitigated
+    findings.append(RaceFinding(..., severity=severity))
+
+That ``continue`` sits between the only place ``"WARN"`` is ever assigned and
+the only ``findings.append`` in the file, so **no RaceFinding could carry
+severity="WARN"**. Three consequences, none of them visible from the output:
+
+* ``warns = [f for f in findings if f.severity == "WARN"]`` was provably ``[]``
+  for every possible input, so the verdict line printed ``0 warns`` whether the
+  gate had found no mitigated pair or a hundred of them. That is the #496
+  defect above — a zero you cannot read — one field to the left of where #496
+  fixed it, and it survived the #496 edit because #496 only looked at the
+  denominator.
+* ``--strict`` was INERT. Its entire effect is the ``not args.strict or not
+  warns`` conjunct of the status expression; with ``warns`` always empty that
+  conjunct is ``True`` for every input and both values of the flag, so no run
+  of this gate has ever been changed by passing it.
+* ``RaceFinding.has_latch`` was ``False`` in 100% of emitted records, in the
+  JSON as well as on stdout, so a report consumer could not tell a design that
+  latches its pulses from one that has no risky pair at all.
+
+The mitigated pair is now EMITTED, as a WARN. What that deliberately does NOT
+do is change the default verdict: a latched pair still exits 0, because the
+mitigation is real. ``--strict`` is what escalates it, and ``--strict`` now has
+an effect it never had.
+
+THE CALLER, decided rather than inherited. ``flow_compliance_check`` registers
+this gate in ``_STRUCTURAL_RTL_GATES`` but builds a POSITIONAL argv for it —
+``_structural_gate_argv`` has no ``--rtl-dir`` adapter row for this name — which
+this parser rejects with rc 2 before any check runs; the gate is one of the
+names pinned in ``p0_gate_invocability_drift_check.KNOWN_NOT_INVOCABLE``. So the
+umbrella supplies neither ``--rtl-dir`` nor ``--strict`` today, and adding a
+``--strict`` row to ``_STRUCTURAL_GATE_BARE_FLAGS`` would append a flag to an
+argv that never reaches argparse: an edit that reads in that table exactly like
+a wiring while doing nothing — the failure mode the table's own comment warns
+about. Making the gate invocable is the tracked #559 conversion, whose bar is a
+measurement over the tracked corpus, and it is deliberately not bundled here.
+The decision taken instead is the other one on offer: **make the default
+behaviour correct**. A mitigated pair is PASS *plus a visible WARN*, for every
+caller, with no flag required to see it.
 """
 from __future__ import annotations
 import argparse, json, re, sys
@@ -235,16 +295,29 @@ def main(argv: List[str] | None = None) -> int:
                 if not mc_ev:
                     continue  # no evidence of multi-cycle FSM
                 adjudicated += 1
-                severity = "WARN" if has_latch else "ERROR"
-                if has_latch:
-                    continue  # mitigated
+                # UNREACHABLE-VERDICT FIX (see the module docstring). What
+                # stood here was:
+                #     severity = "WARN" if has_latch else "ERROR"
+                #     if has_latch:
+                #         continue          # mitigated
+                # — the WARN severity was computed for the mitigated pair and
+                # then discarded before the gate's ONLY `findings.append`, so
+                # `warns` was empty by construction, the verdict line's
+                # `N warns` was a constant 0, and `--strict` was a tautology.
+                #
+                # A mitigated pair is now RECORDED at the WARN tier. It is not
+                # promoted to ERROR: `has_latch` is a file-wide `any(...)` in
+                # `scan_consumers`, so it proves the consumer latches this
+                # signal somewhere, not that the read site at `c_line` uses the
+                # latched copy. Strong enough to withhold an ERROR, too weak to
+                # justify saying nothing.
                 findings.append(RaceFinding(
                     signal=sig,
                     producer_file=str(prod_file), producer_line=prod_line,
                     consumer_file=str(cf), consumer_line=c_line,
                     multi_cycle_evidence=mc_ev,
                     has_latch=has_latch,
-                    severity=severity,
+                    severity="WARN" if has_latch else "ERROR",
                 ))
 
     errors = [f for f in findings if f.severity == "ERROR"]
@@ -266,7 +339,11 @@ def main(argv: List[str] | None = None) -> int:
     # line is identical for "cleared every pair" and "evaluated no pair".
     print(f"transient_signal_latch_check: {status} — {len(errors)} errors, "
           f"{len(warns)} warns; {denom.line()}")
-    for f in findings[:20]:
+    # ERRORs first. The listing is capped at 20; now that WARNs actually reach
+    # `findings`, a plain `findings[:20]` could push a failing pair out of the
+    # listing behind advisories — the cap deciding which verdict a human sees.
+    # With no WARNs this is byte-identical to the previous `findings[:20]`.
+    for f in errors[:20] + warns[:20]:
         print(f"  [{f.severity}] signal={f.signal}")
         print(f"    producer {f.producer_file}:{f.producer_line}")
         print(f"    consumer {f.consumer_file}:{f.consumer_line} ({f.multi_cycle_evidence})")
