@@ -22,9 +22,75 @@ False-alert escape hatches
   - waivers.json entry `frame_end_gap_derivation_override` skips the
     gate when present with non-empty rationale.
 
-Severity: ERROR (with `--strict` for fail-flow exit).
+Severity: ERROR.
 
-Exit codes: 0 PASS / 1 FAIL (strict) / 2 skip
+The FAIL verdict used to be gated behind `--strict`, and NOTHING SUPPLIED
+IT
+===========================================================================
+
+This gate's only registered caller is `flow_compliance_check`'s P0
+structural umbrella, which builds every plain-argv gate's command line in
+`_structural_gate_argv` as::
+
+    [sys.executable, <program>, <project>]
+
+— no `--strict`. So `main()`'s old ``return 1 if args.strict and not
+passed else 0`` could not return 1 for any run the flow performs, and the
+old ``passed = <no ERROR> or not args.strict`` wrote ``"passed": true``
+into the JSON report while `findings` carried the ERROR. The umbrella
+reads rc 0 as PASS. Measured on the exact docstring example below: the
+gate PRINTED ``[ERROR] L8_FRAME_END_GAP_TOO_WIDE ... 80.0us exceeds
+44.0us`` and exited 0 with ``passed=True`` — a detection with no verdict,
+credited as a pass.
+
+Why the DEFAULT was fixed rather than the caller
+------------------------------------------------
+The caller-side route is available in principle — the umbrella keeps an
+opt-in table, `_STRUCTURAL_GATE_BARE_FLAGS` — but taking it here was
+rejected for two reasons.
+
+First, the flag is not the load-bearing part. `--strict` decides only
+whether a finding the gate ALREADY MADE is allowed to reach a verdict;
+splitting "detected" from "reported" across an argv table is what
+produced this bug, and it leaves every DIRECT invocation of this program
+(skills, CI one-offs, a human at a prompt) false-green even after the
+umbrella is taught the flag. Severity is a property of the finding, so
+the finding decides.
+
+Second, the gate's own severity tier is the thing that keeps it honest,
+and that tier lives here, not in an argv table: an ERROR fails, anything
+advisory does not. A caller-side `--strict` promotes every severity at
+once and cannot express that distinction.
+
+So the default was made correct: an ERROR finding exits 1 with or without
+`--strict`, which is what "Severity: ERROR" already claimed. `--strict`
+is retained as an accepted no-op so existing command lines keep parsing,
+and the gate behaves identically whether or not a caller supplies it.
+
+Blast radius of the default change, MEASURED over the tracked corpus
+before landing — 137 project directories (every dir holding
+`phase1/generated_docs` or `input/docs`), driven read-only:
+
+    would now emit ERROR (turn red)      0 / 137
+    SKIP, no `frame_end_gap_*` in L8   137 / 137
+    can it FAIL at all?                a synthetic project whose L2
+                                       carries an ibt range and whose L8
+                                       declares a gap above the derived
+                                       upper bound exits 1, through the
+                                       umbrella's own argv builder
+
+No currently green cell turns red; the gate merely becomes capable of the
+verdict it exists to produce.
+
+Exit codes: 0 PASS or skip / 1 FAIL (an ERROR finding) / 2 usage error
+(project directory does not exist)
+
+Note on the skip paths: every `skipped_reason` return below exits 0, so
+the umbrella scores it PASS rather than SKIP. That is a SEPARATE defect,
+tracked by name in `gate_skip_routing_check._UNROUTED_INVENTORY`, with its
+own per-gate draining procedure. It is deliberately NOT changed here:
+flipping the skips to rc 2 would re-score all 130 of those corpus
+projects in one step.
 """
 from __future__ import annotations
 
@@ -300,7 +366,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(prog="l8_frame_end_gap_derivation_check")
     ap.add_argument("project_dir", type=Path)
     ap.add_argument("--json", default=None)
-    ap.add_argument("--strict", action="store_true")
+    ap.add_argument(
+        "--strict", action="store_true",
+        help=("Accepted for command-line compatibility and NO LONGER GATES "
+              "THE VERDICT: an ERROR finding exits 1 with or without it. "
+              "It used to be the only route to a non-zero exit, and the "
+              "one registered caller never supplies it — see the module "
+              "docstring."))
     args = ap.parse_args()
 
     project = args.project_dir.resolve()
@@ -309,7 +381,12 @@ def main() -> int:
         return 2
 
     findings, summary = inspect(project)
-    passed = not any(f.severity == "ERROR" for f in findings) or not args.strict
+    # The SEVERITY decides, not a flag. `passed` is what the JSON report
+    # publishes, so it has to mean "no ERROR was found" — it previously
+    # read `... or not args.strict`, which published True over an ERROR
+    # finding sitting in the same document.
+    errors = [f for f in findings if f.severity == "ERROR"]
+    passed = not errors
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
@@ -333,7 +410,10 @@ def main() -> int:
     if not findings:
         print("PASS — L8 frame_end_gap derived from L2 within legal range")
         return 0
-    return 1 if args.strict and not passed else 0
+    # Non-ERROR findings (advisory severities) stay rc 0; an ERROR is the
+    # gate's FAIL verdict and is reachable from the argv the umbrella
+    # actually builds.
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
