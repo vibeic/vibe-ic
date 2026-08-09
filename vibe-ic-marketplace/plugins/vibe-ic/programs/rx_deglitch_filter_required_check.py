@@ -16,11 +16,17 @@ Detection
 1. Locate top-level wrapper / RX-phy module heuristically:
      - file declares an `inout` port (top wrapper), OR
      - filename matches rx_phy / rx_pad / rx_sample / id_phy / bus_phy.
-2. Identify the candidate RX source signal — the first signal that
-   feeds an FF chain via NBA assignments. Either:
-     (a) the LHS of an `inout <bus>` (top wrapper case), or
-     (b) any input port matching rx_in / id_in / bus_in / kl_in /
-         <name>_rx / <name>_in fed into a chain.
+2. Identify EVERY candidate RX source signal in the project. Two
+   routes, and the route decides where the seed is admissible:
+     (a) the LHS of an `inout <bus>` — a bidirectional pad IS the
+         half-duplex single-wire bus this gate is about, so route (a)
+         seeds are admitted from ANY candidate file;
+     (b) an input port matching rx_in / id_in / bus_in / kl_in /
+         <name>_rx / <name>_in — admitted ONLY from a file whose NAME
+         says it is the RX phy (`_FILENAME_HINTS`). A generic `*_in`
+         port of an arbitrary module is not a noisy single-wire bus,
+         and demanding a 3-stage + vote deglitch on every such port
+         would fire on designs that have no such bus at all.
 3. Walk the synchronizer chain by following `<dst> <= <src>` NBA
    assignments where `src` is the previous stage. Count chain length.
 4. Inspect the consumer of the chain output:
@@ -28,14 +34,42 @@ Detection
        `assign <out> = <ff_a> | <ff_b>;` where both `ff_a` and `ff_b`
        are members of the sync chain — this is a 2-of-2 deglitch.
      - a procedural N-of-N AND/OR over ≥2 chain members also counts.
-5. Verdicts:
+5. Per-RX-path verdicts:
      PASS  — chain length ≥3 AND filter combines ≥2 chain stages
              via AND or OR.
      FAIL  — chain length <3 (silent-bug pattern: simple 2-FF sync).
      WARN  — chain length ≥3 but filter output is a single FF
              (deglitch missing — metastability OK, glitch not).
-     SKIP  — no top-level wrapper / no recognisable bus pad.
+   The PROJECT verdict is the WORST verdict over every RX path, not
+   the verdict of the best-looking one. See "Aggregation" below.
+     SKIP  — no top-level wrapper / no recognisable bus pad, or no
+             synchroniser chain reachable from any admissible seed.
 6. Honors waiver `rx_deglitch_intentionally_omitted` (≥40 chars).
+
+Aggregation — why WORST and not BEST
+====================================
+The umbrella (`flow_compliance_check._STRUCTURAL_RTL_GATES`) dispatches
+this gate ONCE per PROJECT, as `<gate>.py <project_dir>`, over an
+`rtl/` tree that normally holds many modules and more than one pad.
+
+Until this fix the project verdict was the verdict of whichever
+(file, seed) produced the LONGEST chain — `if len(chain) > len(best[3])`
+— i.e. the greenest RX path in the whole design decided the verdict for
+all of them. That made the FAIL verdict (`RX_SYNC_CHAIN_TOO_SHORT`)
+unreachable for the shape this gate exists to catch: a project whose
+top wrapper has the 2-FF anti-pattern and which ALSO contains one
+compliant peripheral pad did not merely lose the FAIL, it printed
+`PASS` and named the OTHER file as the RX path it had checked.
+
+A gate whose subject is "every half-duplex single-wire RX path" cannot
+be satisfied by its best path, so each admissible RX path is now scored
+on its own and the project takes the worst. `summary["rx_paths"]` lists
+every path that was scored, so the denominator is visible and a reader
+can see exactly which pad is non-compliant.
+
+This is the DEFAULT behaviour and there is deliberately no opt-in
+strictness flag: the umbrella passes no flags, so a flag-gated verdict
+would be exactly as unreachable as the one being fixed.
 
 Chip-AGNOSTIC: signal names auto-discovered from inout pad / sync FF
 naming. No protocol / chip / vendor identifiers hardcoded.
@@ -57,6 +91,10 @@ import _path_layout as _pl
 
 WAIVER_KEY = "rx_deglitch_intentionally_omitted"
 WAIVER_MIN_LEN = 40
+
+# Per-RX-path verdict severity. The PROJECT verdict is the worst over
+# every admissible RX path — see the module docstring, "Aggregation".
+_VERDICT_RANK = {"PASS": 0, "WARN": 1, "FAIL": 2}
 
 _INOUT_RE = re.compile(
     r"\binout\s+(?:logic\s+|wire\s+|reg\s+)?(\w+)\b",
@@ -125,30 +163,57 @@ def _find_rtl_files(project: Path) -> List[Path]:
     return sorted(out)
 
 
-def _candidate_rx_seeds(text: str) -> List[str]:
-    """Return list of plausible RX-source signal names in this file."""
-    seeds: List[str] = []
+def _candidate_rx_seeds(text: str) -> List[Tuple[str, str]]:
+    """Return [(signal, route)] for every plausible RX source in this file.
+
+    `route` is "inout_pad" for a bidirectional pad declaration and
+    "rx_port" for an RX-shaped input port. The caller decides which
+    routes are admissible in which file — see the module docstring,
+    Detection §2. Keeping the routes distinct is what lets a generic
+    `*_in` port stay out of the FAIL population without dropping it
+    from the file scan.
+    """
+    seeds: List[Tuple[str, str]] = []
     for m in _INOUT_RE.finditer(text):
-        seeds.append(m.group(1))
+        seeds.append((m.group(1), "inout_pad"))
     for m in _RX_PORT_RE.finditer(text):
-        seeds.append(m.group(1))
-    # Deduplicate, keep order.
+        seeds.append((m.group(1), "rx_port"))
+    # Deduplicate on the signal name, keep order (first route wins).
     seen: Set[str] = set()
-    uniq: List[str] = []
-    for s in seeds:
+    uniq: List[Tuple[str, str]] = []
+    for s, route in seeds:
         if s not in seen:
             seen.add(s)
-            uniq.append(s)
+            uniq.append((s, route))
     return uniq
 
 
-def _is_rx_phy_file(path: Path, text: str) -> bool:
+def _filename_says_rx_phy(path: Path) -> bool:
+    """True iff the FILE NAME declares this module to be the RX phy."""
     name = path.stem.lower()
-    if any(h in name for h in _FILENAME_HINTS):
+    return any(h in name for h in _FILENAME_HINTS)
+
+
+def _is_rx_phy_file(path: Path, text: str) -> bool:
+    if _filename_says_rx_phy(path):
         return True
     if _INOUT_RE.search(text):
         return True
     return False
+
+
+def _seed_is_admissible(route: str, name_says_rx_phy: bool) -> bool:
+    """Detection §2 — which seeds may carry a project verdict.
+
+    Route (a) `inout_pad`: a bidirectional pad IS the half-duplex
+    single-wire bus, in any file.
+    Route (b) `rx_port`: only where the FILE NAME says the module is
+    the RX phy. `input wire cfg_in` on an arbitrary block is not a
+    noisy single-wire bus and must not be able to mint a FAIL.
+    """
+    if route == "inout_pad":
+        return True
+    return name_says_rx_phy
 
 
 def _build_sync_chain(text: str, seed: str) -> List[str]:
@@ -307,7 +372,7 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
         )
         return failures, warnings, summary
 
-    candidates: List[Tuple[Path, str, List[str]]] = []
+    candidates: List[Tuple[Path, str, List[Tuple[str, str]]]] = []
     for f in rtl:
         try:
             raw = f.read_text(errors="ignore")
@@ -327,76 +392,128 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
         )
         return failures, warnings, summary
 
-    # Pick the candidate with the longest sync chain (most likely
-    # the real RX path); fall back to the first.
-    best: Optional[Tuple[Path, str, str, List[str]]] = None
+    # Score EVERY admissible RX path on its own. The project verdict is
+    # the worst of them (see module docstring, "Aggregation"): the old
+    # `max(len(chain))` selection let the greenest pad in the design
+    # answer for every other pad, which is what made the FAIL verdict
+    # unreachable for a project that has both a compliant peripheral pad
+    # and a non-compliant top-level bus.
+    paths: List[dict] = []
+    seen_chains: Set[Tuple[str, Tuple[str, ...]]] = set()
+    seeds_examined = 0
     for f, text, seeds in candidates:
-        for seed in seeds:
+        name_says_rx_phy = _filename_says_rx_phy(f)
+        try:
+            rel = f.relative_to(project)
+        except ValueError:
+            rel = f
+        for seed, route in seeds:
+            if not _seed_is_admissible(route, name_says_rx_phy):
+                continue
+            seeds_examined += 1
             chain = _build_sync_chain(text, seed)
-            if best is None or len(chain) > len(best[3]):
-                best = (f, text, seed, chain)
+            if not chain:
+                continue
+            key = (str(rel), tuple(chain))
+            if key in seen_chains:
+                # Two seeds (pad + its comb rename) resolving to the
+                # same flop chain are ONE RX path, not two.
+                continue
+            seen_chains.add(key)
+            found, evidence, n_terms = _filter_uses_chain(text, set(chain))
+            if len(chain) < 3:
+                verdict = "FAIL"
+            elif not found:
+                verdict = "WARN"
+            else:
+                verdict = "PASS"
+            # file:line of the last NBA in this chain.
+            last_ff = chain[-1]
+            line_no = 0
+            for idx, line in enumerate(text.splitlines(), start=1):
+                if re.search(rf"\b{re.escape(last_ff)}\s*<=", line):
+                    line_no = idx
+            paths.append({
+                "wrapper_file": str(rel),
+                "rx_seed": seed,
+                "seed_route": route,
+                "sync_chain": chain,
+                "chain_length": len(chain),
+                "filter_found": found,
+                "filter_evidence": evidence,
+                "filter_terms_in_chain": n_terms,
+                "verdict": verdict,
+                "loc": f"{rel}:{line_no}" if line_no else str(rel),
+            })
 
-    assert best is not None
-    f, text, seed, chain = best
-    try:
-        rel = f.relative_to(project)
-    except ValueError:
-        rel = f
+    summary["rx_paths"] = paths
+    summary["rx_paths_examined"] = len(paths)
+    summary["rx_seeds_admissible"] = seeds_examined
 
-    summary["wrapper_file"] = str(rel)
-    summary["rx_seed"] = seed
-    summary["sync_chain"] = chain
-    summary["chain_length"] = len(chain)
-
-    if not chain:
+    if not paths:
         summary["skip_reason"] = (
-            f"no synchronizer chain found from RX seed {seed!r}"
+            f"no synchronizer chain found from any of the "
+            f"{seeds_examined} admissible RX seed(s) in "
+            f"{len(candidates)} candidate file(s)"
         )
         return failures, warnings, summary
 
-    chain_set = set(chain)
-    found, evidence, n_terms = _filter_uses_chain(text, chain_set)
-    summary["filter_found"] = found
-    summary["filter_evidence"] = evidence
-    summary["filter_terms_in_chain"] = n_terms
+    # Governing path = worst verdict; ties broken by the shortest chain
+    # and then by file order, so the report names the most-degraded RX
+    # path rather than an arbitrary one.
+    worst = min(
+        paths,
+        key=lambda p: (-_VERDICT_RANK[p["verdict"]], p["chain_length"],
+                       p["wrapper_file"]),
+    )
+    # Back-compatible top-level keys: they now describe the GOVERNING
+    # path instead of the best-looking one.
+    for k in ("wrapper_file", "rx_seed", "sync_chain", "chain_length",
+              "filter_found", "filter_evidence", "filter_terms_in_chain"):
+        summary[k] = worst[k]
+    summary["verdict"] = worst["verdict"]
 
-    # Verdict matrix.
-    if len(chain) < 3:
-        # The dominant silent-bug pattern: simple 2-FF (or 1-FF)
-        # synchroniser with no deglitch.
-        # Locate file:line of the last NBA in the chain.
-        last_ff = chain[-1]
-        line_no = 0
-        for idx, line in enumerate(text.splitlines(), start=1):
-            if re.search(rf"\b{re.escape(last_ff)}\s*<=", line):
-                line_no = idx
-        loc = f"{rel}:{line_no}" if line_no else str(rel)
-        failures.append(
-            f"RX_SYNC_CHAIN_TOO_SHORT — {loc}: chain length "
-            f"{len(chain)} < 3 from RX seed {seed!r} (chain="
-            f"{chain!r}). A 2-FF synchroniser resolves metastability "
-            f"but does not filter 1-cycle glitches; cable EMI / "
-            f"open-drain edge ringing on real silicon will corrupt "
-            f"frame decoding (sim-PASS / hardware-FAIL pattern). "
-            f"See rig spec Layer 13 — RX deglitch filter required."
-        )
-        return failures, warnings, summary
+    for p in paths:
+        if p["verdict"] == "FAIL":
+            failures.append(
+                f"RX_SYNC_CHAIN_TOO_SHORT — {p['loc']}: chain length "
+                f"{p['chain_length']} < 3 from RX seed {p['rx_seed']!r} "
+                f"(chain={p['sync_chain']!r}). A 2-FF synchroniser "
+                f"resolves metastability but does not filter 1-cycle "
+                f"glitches; cable EMI / open-drain edge ringing on real "
+                f"silicon will corrupt frame decoding (sim-PASS / "
+                f"hardware-FAIL pattern). See rig spec Layer 13 — RX "
+                f"deglitch filter required."
+            )
+        elif p["verdict"] == "WARN":
+            chain = p["sync_chain"]
+            warnings.append(
+                f"RX_DEGLITCH_FILTER_MISSING — {p['wrapper_file']}: "
+                f"≥3-stage synchroniser present (chain={chain!r}) but "
+                f"no AND/OR-based 2-of-2 deglitch filter detected on "
+                f"the chain output. Add `assign rx_stable = "
+                f"{chain[-1]} & {chain[-2]};` (or OR variant). "
+                f"Without deglitch, single-cycle glitches still "
+                f"propagate — see rig spec Layer 13."
+            )
 
-    # Chain length ≥3.
-    if not found:
-        warnings.append(
-            f"RX_DEGLITCH_FILTER_MISSING — {rel}: ≥3-stage "
-            f"synchroniser present (chain={chain!r}) but no "
-            f"AND/OR-based 2-of-2 deglitch filter detected on "
-            f"the chain output. Add `assign rx_stable = "
-            f"{chain[-1]} & {chain[-2]};` (or OR variant). "
-            f"Without deglitch, single-cycle glitches still "
-            f"propagate — see rig spec Layer 13."
-        )
-        return failures, warnings, summary
-
-    # PASS.
     return failures, warnings, summary
+
+
+def _print_rx_path_table(summary: dict) -> None:
+    """Print the denominator: every RX path that was scored, and its own
+    verdict. Without this the reader cannot tell whether a project-level
+    PASS covered one pad or ten."""
+    paths = summary.get("rx_paths") or []
+    if not paths:
+        return
+    print(f"  RX paths scored: {len(paths)} (project verdict = worst)")
+    for p in paths:
+        print(
+            f"    [{p['verdict']:<4}] {p['wrapper_file']} "
+            f"seed={p['rx_seed']!r} route={p['seed_route']} "
+            f"chain={p['chain_length']} filter={p['filter_found']}"
+        )
 
 
 def main(argv: List[str]) -> int:
@@ -439,16 +556,20 @@ def main(argv: List[str]) -> int:
     if not failures and not warnings:
         chain = summary.get("sync_chain", [])
         ev = summary.get("filter_evidence", "")
+        n_paths = summary.get("rx_paths_examined", 0)
         print(
-            f"PASS — RX path uses {len(chain)}-stage synchroniser + "
+            f"PASS — {n_paths} RX path(s) examined, all compliant; "
+            f"weakest uses {len(chain)}-stage synchroniser + "
             f"deglitch filter ({ev[:80]})"
         )
+        _print_rx_path_table(summary)
         return 0
 
     if not failures and warnings:
         # WARN-only is non-blocking.
         for w in warnings:
             print(f"WARN — {w}")
+        _print_rx_path_table(summary)
         return 0
 
     if is_waived:
@@ -458,6 +579,7 @@ def main(argv: List[str]) -> int:
         )
         for fmsg in failures:
             print(f"  • {fmsg}")
+        _print_rx_path_table(summary)
         return 0
 
     print(f"FAIL — {len(failures)} RX deglitch filter issue(s):")
@@ -465,6 +587,7 @@ def main(argv: List[str]) -> int:
         print(f"  • {fmsg}")
     for w in warnings:
         print(f"  • (WARN) {w}")
+    _print_rx_path_table(summary)
     print()
     print("Why this matters:")
     print("  Half-duplex single-wire buses (id_bus / kline / lin /")
