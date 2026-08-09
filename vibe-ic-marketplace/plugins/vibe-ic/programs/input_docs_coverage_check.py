@@ -20,11 +20,19 @@ Usage:
         [--layers-dir <path>] (default: <project_dir>/generated_docs)
         [--coverage-md <path>] (default: <project_dir>/input_docs_coverage.md)
         [--json <out>]
-        [--strict]
+        [--strict]           escalate `weak_contribution_claim` WARN -> FAIL
+
+Severities:
+    FAIL — always for `input_doc_coverage` (an uncited doc). Additionally for
+           `weak_contribution_claim` when --strict is given.
+    WARN — `weak_contribution_claim` in the default (non-strict) mode. Advisory
+           only: it does not move `pass`.
 
 Exit codes:
-    0 — every input/docs file has coverage
-    1 — one or more files missing coverage
+    0 — every input/docs file has coverage (and, under --strict, no weak
+        contribution claim)
+    1 — one or more files missing coverage, or --strict and at least one weak
+        contribution claim
     2 — path / input error
 """
 from __future__ import annotations
@@ -125,11 +133,12 @@ def find_weak_contributions(coverage_text: str) -> list[tuple[str, str]]:
 
 
 def check(project_dir: Path, docs_dir: Path, layers_dir: Path,
-          coverage_md: Path) -> dict:
+          coverage_md: Path, strict: bool = False) -> dict:
     docs = list_input_docs(docs_dir)
     if not docs:
         return {
             "pass": False,
+            "strict": strict,
             "error": f"no files found in input docs dir {docs_dir}",
             "findings": [],
         }
@@ -165,10 +174,14 @@ def check(project_dir: Path, docs_dir: Path, layers_dir: Path,
 
     # v0.50.1 — flag weak "reviewed for context" dismissals that previously
     # hid load-bearing facts (see <benchmark> measured_timing.pptx post-mortem).
+    # `--strict` is what makes that escalation real: without it the caller can
+    # only ever be told WARN, so the FAIL verdict this rule documents was not
+    # reachable by any input at all (the flag was parsed and then discarded).
     weak = find_weak_contributions(coverage_text) if coverage_text else []
+    weak_severity = "FAIL" if strict else "WARN"
     for loc, snippet in weak:
         findings.append({
-            "severity": "WARN",
+            "severity": weak_severity,
             "rule": "weak_contribution_claim",
             "location": loc,
             "message": (
@@ -184,8 +197,13 @@ def check(project_dir: Path, docs_dir: Path, layers_dir: Path,
     return {
         "docs_total": len(docs),
         "docs_covered": len(covered),
-        "docs_missing": sum(1 for f in findings if f["severity"] == "FAIL"),
+        # count only uncited docs here — under --strict a weak contribution is
+        # also FAIL, but it is not a *missing* doc and must not inflate this.
+        "docs_missing": sum(1 for f in findings
+                            if f["severity"] == "FAIL"
+                            and f["rule"] == "input_doc_coverage"),
         "weak_contributions": len(weak),
+        "strict": strict,
         "coverage": covered,
         "findings": findings,
         "pass": not any(f["severity"] == "FAIL" for f in findings),
@@ -200,7 +218,10 @@ def main():
     ap.add_argument("--coverage-md", default=None)
     ap.add_argument("--json", default=None)
     ap.add_argument("--strict", action="store_true",
-                    help="Exit 1 on any missing coverage (default behaviour).")
+                    help="Escalate weak_contribution_claim from WARN to FAIL, "
+                         "so a 'reviewed for context' dismissal blocks (exit 1) "
+                         "instead of only warning. Missing coverage is FAIL in "
+                         "both modes.")
     args = ap.parse_args()
 
     proj = Path(args.project_dir)
@@ -212,7 +233,7 @@ def main():
     layers_dir = Path(args.layers_dir) if args.layers_dir else _pl.generated_docs_dir(proj)
     coverage_md = Path(args.coverage_md) if args.coverage_md else proj / "input_docs_coverage.md"
 
-    result = check(proj, docs_dir, layers_dir, coverage_md)
+    result = check(proj, docs_dir, layers_dir, coverage_md, strict=args.strict)
     if args.json:
         Path(args.json).write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
