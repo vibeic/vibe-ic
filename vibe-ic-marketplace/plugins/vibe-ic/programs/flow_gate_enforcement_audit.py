@@ -37,6 +37,30 @@ For every `program_exit_zero` gate in the flow definition:
   UNDECLARED  no declaration — the intent is unknown, which is how 66 of 72
               gates ended up de-facto advisory without anyone deciding that
 
+A note on what counts as a declaration (#886): the two lines above MENTION the
+token in prose. Until #886 this audit read them as a declaration about ITSELF,
+because the pattern was unanchored. A declaration must OPEN its line; a mention
+inside a sentence is not one. Several gates say in prose that they carry no
+declaration, and the old pattern read each of those as declaring one.
+
+Silence is not a decision (#886)
+--------------------------------
+UNDECLARED + AUDIT_ONLY was, until #886, the one state this audit could never
+fail on. The only failing shape was "DECLARES blocking, wired AUDIT_ONLY", so
+the audit could only fail a gate that had already gone to the trouble of
+stating an intent — and saying nothing was the reliable way to stay clean.
+Measured on this tree after #885: 113 of 150 gates are in that state while the
+audit prints PASS. The class is now RECORDED in its own shrink-only register
+and any NEW member fails.
+
+Its OWN register, deliberately. `known` is documented — in this file, in
+`flow_gate_enforcement_baseline.json` and in `test_316_the_recorded_debt_is_
+named_not_hidden` — as "gates that DECLARE an intent they are not wired for".
+A gate that declares NOTHING is not a member of that set, and merging the two
+grew a shrink-only register from 0 to 86 entries in one commit, which
+`test_306_register_never_grows` correctly refused. Different debt, different
+paydown (state an intent, or invoke it inline), so: two registers, one file.
+
 What ENFORCED used to mean (ORGANIC #884, fixed 2026-08-09)
 ----------------------------------------------------------
 It meant the gate's FILENAME appeared inside a string literal in a runner. A
@@ -1100,12 +1124,24 @@ class _RunnerModule:
         return None
 
     # -- "which process runs this gate?" -----------------------------------
-    def _taint(self, seed: Set[Tuple[int, str]]) -> Set[Tuple[int, str]]:
+    def _taint(self, seed: Set[Tuple[int, str, int]]) -> Set[Tuple[int, str, int]]:
         """(scope, name) pairs that can carry a value onward from `seed`.
 
         Covers the shapes the runners use: a local (`fixer = PROGRAMS_DIR /
         "g.py"`), a dict/tuple table iterated or `.get()`-ed, and an argv list
         built from either.
+
+        EVERY ENTRY CARRIES ITS BINDING LINE (#884, round 3). Until it did, a
+        tainted name was live for the whole scope, and `bsdl_emit` scored
+        ENFORCED because a DIFFERENT program's spawn eleven lines earlier
+        happened to use a local of the same name. Hoisting an argv into a local
+        called `cmd` — the name that function already uses — moved ENFORCED
+        16 -> 17; renaming that one local to `bsdl_cmd`, changing nothing else,
+        moved it back. A verdict that depends on how a local is SPELLED is the
+        exact defect this file is about, so the name side now gets the same
+        live-range window `_loads` already applies to the status side: a name
+        is live from its binding to its next store in that scope, and nowhere
+        else.
         """
         taint = set(seed)
         for _ in range(_MAX_NAME_HOPS):
@@ -1117,8 +1153,16 @@ class _RunnerModule:
                         continue
                     tsc = self._scope(node.target)
                     for nm in _stored_names(node.target):
-                        if (tsc, nm) not in taint:
-                            taint.add((tsc, nm))
+                        # `ast.comprehension` carries NO lineno of its own, so
+                        # falling back to 0 would open the window before the
+                        # target exists and close it at the target's own store
+                        # — which read a genuinely table-dispatched gate as
+                        # unwired. Take the line from the target itself.
+                        _ln = (getattr(node, "lineno", None)
+                               or getattr(node.target, "lineno", 0))
+                        e = (tsc, nm, _ln)
+                        if e not in taint:
+                            taint.add(e)
                             grew = True
                 elif isinstance(node, ast.Assign):
                     sc = self._scope(node)
@@ -1126,32 +1170,49 @@ class _RunnerModule:
                         continue
                     for t in node.targets:
                         for nm in _stored_names(t):
-                            if (sc, nm) not in taint:
-                                taint.add((sc, nm))
+                            e = (sc, nm, node.lineno)
+                            if e not in taint:
+                                taint.add(e)
                                 grew = True
             if not grew:
                 break
         return taint
 
-    def _taint_from_const(self, const: ast.Constant) -> Set[Tuple[int, str]]:
-        seed: Set[Tuple[int, str]] = set()
+    def _live_here(self, taint: Set[Tuple[int, str, int]], scope: int,
+                   name: str, line: int) -> bool:
+        """Is `name` carrying the gate AT THIS LINE (#884, round 3)?
+
+        A tainted binding reaches from its own line to the next store of that
+        name in that scope — the same window `_loads` uses. Outside it the name
+        holds someone else's value, and crediting a launch site there is the
+        name-coincidence this audit exists to refuse.
+        """
+        for (s, n, b) in taint:
+            if n != name or s not in (scope, _MODULE_SCOPE):
+                continue
+            if b <= line < self._next_store(s, n, b, ()):
+                return True
+        return False
+
+    def _taint_from_const(self, const: ast.Constant) -> Set[Tuple[int, str, int]]:
+        seed: Set[Tuple[int, str, int]] = set()
         a = self._enclosing_assign(const)
         if a is not None:
             sc = self._scope(a)
             for t in a.targets:
                 for nm in _stored_names(t):
-                    seed.add((sc, nm))
+                    seed.add((sc, nm, a.lineno))
         return self._taint(seed) if seed else set()
 
-    def _mentions(self, expr: ast.AST, taint: Set[Tuple[int, str]],
+    def _mentions(self, expr: ast.AST, taint: Set[Tuple[int, str, int]],
                   scope: int) -> bool:
         for n in ast.walk(expr):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
-                if (scope, n.id) in taint or (_MODULE_SCOPE, n.id) in taint:
+                if self._live_here(taint, scope, n.id, n.lineno):
                     return True
         return False
 
-    def _carries(self, expr: ast.AST, taint: Set[Tuple[int, str]], scope: int,
+    def _carries(self, expr: ast.AST, taint: Set[Tuple[int, str, int]], scope: int,
                  const: Optional[ast.Constant]) -> bool:
         """Does this expression carry the gate name — through a tainted NAME,
         or as the literal itself?
@@ -1177,13 +1238,15 @@ class _RunnerModule:
         return self._mentions(expr, taint, scope)
 
     def _site_runs(self, site: tuple, const: ast.Constant,
-                   taint: Set[Tuple[int, str]]) -> bool:
+                   taint: Set[Tuple[int, str, int]]) -> bool:
         call, _carrier, names, ids = site
         if id(const) in ids:
             return True
-        live = {n for (s, n) in taint
-                if s in (_MODULE_SCOPE, self._scope(call))}
-        return bool(names & live)
+        # #884 round 3: a name is only evidence WHERE IT IS LIVE. Without this
+        # line test, a spawn of a different program was credited to this gate
+        # because the two shared a local's name.
+        sc = self._scope(call)
+        return any(self._live_here(taint, sc, n, call.lineno) for n in names)
 
     # -- one dispatch hop, argument-precise --------------------------------
     def _param_names(self, fn: ast.AST) -> List[str]:
@@ -1192,7 +1255,7 @@ class _RunnerModule:
                 (list(getattr(a, "posonlyargs", [])) + list(a.args))]
 
     def _tainted_params(self, call: ast.Call, fn: ast.AST,
-                        taint: Set[Tuple[int, str]], scope: int,
+                        taint: Set[Tuple[int, str, int]], scope: int,
                         const: Optional[ast.Constant] = None) -> Set[str]:
         """WHICH parameters of `fn` receive the gate name at this call.
 
@@ -1226,7 +1289,7 @@ class _RunnerModule:
                 out.add(k.arg)
         return out
 
-    def _dispatch_fate(self, taint: Set[Tuple[int, str]],
+    def _dispatch_fate(self, taint: Set[Tuple[int, str, int]],
                        const: Optional[ast.Constant] = None) -> Optional[str]:
         """One hop: the gate name is an ARGUMENT to a helper that spawns it.
 
@@ -1251,14 +1314,14 @@ class _RunnerModule:
                                           const)
             if not params:
                 continue
-            inner = self._taint({(id(fn), p) for p in params})
+            inner = self._taint({(id(fn), p, fn.lineno) for p in params})
             lo, hi = fn.lineno, (fn.end_lineno or fn.lineno)
             for site in self.launches:
                 scall, carrier, names, _ids = site
                 if not (lo <= scall.lineno <= hi):
                     continue
-                live = {n for (s, n) in inner if s == id(fn)}
-                if not (names & live):
+                if not any(self._live_here(inner, id(fn), n, scall.lineno)
+                           for n in names):
                     continue
                 v = self._site_fate(scall, carrier, 0)
                 best = v if best is None else _strongest([best, v])

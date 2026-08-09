@@ -468,6 +468,66 @@ def step(project):
     run([sys.executable, "refactored_check.py", project], capture_output=True)
 '''
 
+
+#: ROUND-3 REFUTATION VECTOR. Every fixture above is a SINGLE-launch-site
+#: module, so none of them can express the shape that actually broke round 2:
+#: the gate's argv is hoisted into a local whose NAME a DIFFERENT program's
+#: spawn also uses. On the real runner that name is `cmd`, already in use
+#: eleven lines earlier for the ATPG run. The audit credited that other spawn
+#: to this gate and answered ENFORCED — so the verdict turned on how a local
+#: was spelled, which is the defect this whole file exists to refuse.
+_R23_NAME_REUSED_BY_AN_EARLIER_BLOCKING_SPAWN = '''
+import subprocess
+import sys
+
+
+def step(project):
+    cmd = [sys.executable, "other_program.py", project]
+    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if cp.returncode != 0:
+        return "FAIL"
+
+    cmd = [sys.executable, "refactored_check.py", project]
+    subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    return "PASS"
+'''
+
+#: The same coincidence in the other order: the gate is named first, and the
+#: name is later rebound to another program whose status IS tested.
+_R24_NAME_REBOUND_TO_A_LATER_BLOCKING_SPAWN = '''
+import subprocess
+import sys
+
+
+def step(project):
+    cmd = [sys.executable, "refactored_check.py", project]
+    subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+    cmd = [sys.executable, "other_program.py", project]
+    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if cp.returncode != 0:
+        return "FAIL"
+    return "PASS"
+'''
+
+#: The worst shape: the gate is NEVER SPAWNED AT ALL, only named — and the
+#: local holding its name is rebound to a program that IS judged. This is the
+#: original #884 defect verbatim ("the filename appeared in a string"),
+#: reproduced by the classifier that was supposed to have closed it.
+_R25_NAMED_BUT_NEVER_SPAWNED = '''
+import subprocess
+import sys
+
+
+def step(project):
+    cmd = [sys.executable, "refactored_check.py", project]
+    cmd = [sys.executable, "other_program.py", project]
+    cp = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if cp.returncode != 0:
+        return "FAIL"
+    return "PASS"
+'''
+
 _BEHAVIOUR_PRESERVING = {
     "R01_bare_statement": _R01_BARE,
     "R02_bound_unused": _R02_BOUND_UNUSED,
@@ -491,6 +551,11 @@ _BEHAVIOUR_PRESERVING = {
     "R20_suppress_instead_of_try": _R20_SUPPRESS_INSTEAD_OF_TRY,
     "R21_aliased_subprocess_module": _R21_ALIASED_SUBPROCESS_MODULE,
     "R22_from_import_run": _R22_FROM_IMPORT_RUN,
+    "R23_name_reused_by_earlier_blocking_spawn":
+        _R23_NAME_REUSED_BY_AN_EARLIER_BLOCKING_SPAWN,
+    "R24_name_rebound_to_later_blocking_spawn":
+        _R24_NAME_REBOUND_TO_A_LATER_BLOCKING_SPAWN,
+    "R25_named_but_never_spawned": _R25_NAMED_BUT_NEVER_SPAWNED,
 }
 
 
