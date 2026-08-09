@@ -386,5 +386,12 @@ def test_a_finding_still_blocks_when_the_read_was_also_incomplete(tmp_path):
     assert rc == 1, f"rc={rc}\n{out}"
     assert len(rep["findings"]) == 3, rep["findings"]
     assert len(rep["truncated_paths"]) == 1, rep["truncated_paths"]
-    assert "FLOOR, not the total" in out, out
+    # The disclosure moved from a closing sentence to the HEADLINE and to the
+    # JSON, and this assertion follows it there rather than being relaxed: the
+    # property under test ("the output has to say the count is a floor") is
+    # unchanged, and it is now asserted in all three places the number is read
+    # — the line a person quotes, the prose, and the field a machine parses.
+    assert "at least 3 supply segment(s) SPAN" in out, out
+    assert "THIS COUNT IS A FLOOR, NOT A TOTAL" in out, out
+    assert rep["count_is_floor"] is True, rep
     assert "other_tech_via" in out, out
