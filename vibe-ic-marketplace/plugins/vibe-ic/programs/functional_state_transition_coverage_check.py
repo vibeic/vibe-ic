@@ -40,9 +40,31 @@ USAGE
 
 EXIT CODES
 ----------
-    0 — every opcode's required state assertion appears in some TB.
-    1 — at least one opcode lacks the required assertion.
+    0 — at least one TB was READ, and every opcode's required state
+        assertion appears in it.
+    1 — at least one opcode lacks the required assertion, OR no TB source
+        was found at all (coverage is then zero, not complete).
     2 — IO / argument error.
+
+WHY "NO TB FOUND" IS A FAILING VERDICT, NOT A WARNING
+-----------------------------------------------------
+This gate used to answer "no TB under <dir>" with a WARN finding and an
+early return. WARN does not feed the verdict, so the report said
+``"errors": 0, "verdict": "PASS"`` — i.e. it certified "every opcode's
+required state assertion appears in some TB" having read no TB at all.
+FAIL was structurally unreachable for that entire class of input, which
+is precisely the class where measured coverage is zero.
+
+That was not a corner case. TB discovery matched only ``tb_*.v``,
+``tb_*.sv``, ``*_tb.v`` and ``*_tb.sv``, and the two most common
+testbench filenames written in this tree are the bare stems ``tb.v`` and
+``tb.sv`` — neither of which any of those four globs matches. A
+directory holding a real testbench named ``tb.v`` scored PASS.
+
+So both halves are repaired here: discovery now recognises a testbench by
+its stem (a strict superset of the four old globs, so it can only ever
+ADD text to the scanned blob), and a genuinely empty testbench corpus is
+an ERROR that reaches the FAIL verdict.
 """
 from __future__ import annotations
 
@@ -62,6 +84,9 @@ class Finding:
     file: str
     line: int
     message: str
+    # Which coverage entry this is about, so the report can count
+    # unverified opcodes without re-parsing its own prose.
+    opcode: str = ""
 
 
 def _strip_comments(text: str) -> str:
@@ -78,44 +103,117 @@ def _parse_inline(s: str) -> Optional[Dict[str, Any]]:
     return {"opcode": m.group(1), "must_assert_set": [m.group(2).strip()]}
 
 
-def audit(tb_target: Path, coverage: List[Dict[str, Any]]) -> List[Finding]:
-    findings: List[Finding] = []
+# A testbench is recognised by its STEM, not by four hand-written globs.
+# This matches every stem the old globs matched (``tb_x`` via ``^tb[_-]``,
+# ``x_tb`` via ``[_-]tb$``) and additionally the bare ``tb`` stem, the
+# infix ``x_tb_y`` form, and ``testbench*``. Strictly a superset: widening
+# discovery can only ADD source text to the scanned blob, and every
+# finding this gate emits is an ABSENCE, so no target that passes today
+# can be turned red by the widening alone.
+_TB_STEM_RE = re.compile(r"^tb$|^tb[_-]|[_-]tb$|[_-]tb[_-]|testbench", re.IGNORECASE)
+_TB_SUFFIXES = (".v", ".sv")
+
+
+def discover_tb_files(tb_target: Path) -> List[Path]:
+    """Every testbench source under ``tb_target`` (or the file itself)."""
     if tb_target.is_file():
-        files = [tb_target]
+        return [tb_target]
+    found: List[Path] = []
+    for suffix in _TB_SUFFIXES:
+        for p in tb_target.rglob("*" + suffix):
+            if p.is_file() and _TB_STEM_RE.search(p.stem):
+                found.append(p)
+    return sorted(set(found))
+
+
+def _opcode_hex_body(op: str) -> Optional[str]:
+    """Normalise an opcode to its bare hex digits, or None if not numeric.
+
+    ``0x74`` -> ``74``; ``0x0A`` -> ``a``; decimal ``116`` -> ``74``.
+    The old code used ``op.lower().lstrip("0x")``, which strips EVERY
+    leading ``0`` and ``x`` character: ``0x0a`` became ``a`` and the
+    resulting pattern could not match the ``8'h0a`` literal actually
+    written in the TB, so a driven opcode was reported as never driven.
+    """
+    s = op.strip().lower()
+    if s.startswith("0x"):
+        body = s[2:]
+    elif re.fullmatch(r"[0-9]+", s):
+        body = format(int(s, 10), "x")
     else:
-        files = sorted(
-            list(tb_target.rglob("tb_*.v")) +
-            list(tb_target.rglob("tb_*.sv")) +
-            list(tb_target.rglob("*_tb.v")) +
-            list(tb_target.rglob("*_tb.sv"))
-        )
+        body = s
+    if not re.fullmatch(r"[0-9a-f]+", body or ""):
+        return None
+    return body.lstrip("0") or "0"
+
+
+def audit(tb_target: Path, coverage: List[Dict[str, Any]],
+          files: Optional[List[Path]] = None) -> List[Finding]:
+    findings: List[Finding] = []
+    if files is None:
+        files = discover_tb_files(tb_target)
     if not files:
+        # NOT a WARN. WARN never reaches the verdict, so answering this
+        # input class with WARN made "PASS" the only verdict the gate
+        # could emit for a target it had read nothing from.
         findings.append(Finding(
-            "WARN", "no_tb_files", str(tb_target), 0,
-            f"no tb_*.v/.sv under {tb_target}",
+            "ERROR", "no_tb_files", str(tb_target), 0,
+            f"no testbench source found under {tb_target} — "
+            f"{len(coverage)} coverage entr"
+            f"{'y is' if len(coverage) == 1 else 'ies are'} therefore "
+            f"UNVERIFIED, and the state-transition coverage measured here "
+            f"is zero. This is a failing verdict, not a clean one: the "
+            f"gate cannot certify assertions it never read. Point the `tb` "
+            f"argument at the directory that holds the testbench sources.",
         ))
         return findings
 
     blob = "\n\n".join(_strip_comments(f.read_text(errors="replace"))
                         for f in files)
 
-    for entry in coverage:
+    for idx, entry in enumerate(coverage):
         op = str(entry.get("opcode", "")).strip()
         asserts = entry.get("must_assert_set") or []
         if not op:
             findings.append(Finding(
                 "ERROR", "coverage_malformed", "(none)", 0,
                 f"coverage entry missing opcode: {entry!r}",
+                opcode=f"<entry #{idx}>",
+            ))
+            continue
+
+        # An entry that demands nothing can only ever be reported PASS —
+        # the same unearned green as the no-TB path, one level up in the
+        # spec. Say so instead of scoring it.
+        if not [a for a in asserts if str(a).strip()]:
+            findings.append(Finding(
+                "ERROR", "coverage_entry_asserts_nothing", "(none)", 0,
+                f"opcode {op!r}: must_assert_set is empty, so this gate has "
+                f"no side-effect to look for and could only ever report PASS "
+                f"for this opcode. State the register/flag change the opcode "
+                f"is required to produce, or remove the entry.",
+                opcode=op,
+            ))
+            continue
+
+        body = _opcode_hex_body(op)
+        if body is None:
+            findings.append(Finding(
+                "ERROR", "coverage_malformed", "(none)", 0,
+                f"opcode {op!r} is not a numeric literal, so no TB literal "
+                f"can be derived from it and its coverage cannot be measured.",
+                opcode=op,
             ))
             continue
 
         # The opcode should appear in the TB (either as send_cmd(0x..) or
         # `cmd = 0x..` or written into a packet). If absent, the test
-        # never exercises the opcode at all.
-        op_norm = op.lower()
+        # never exercises the opcode at all. Leading zeros are tolerated on
+        # both sides, and the sized-literal form accepts any width, not
+        # just `8'h`.
+        core = r"0*" + re.escape(body)
         op_pattern = re.compile(
-            r"\b(?:0x" + re.escape(op_norm.lstrip("0x")) + r"|"
-            r"8'h" + re.escape(op_norm.lstrip("0x")) + r")\b",
+            r"\b(?:0x" + core + r"|\d*'h" + core + r")\b",
             re.IGNORECASE,
         )
         if not op_pattern.search(blob):
@@ -124,6 +222,7 @@ def audit(tb_target: Path, coverage: List[Dict[str, Any]]) -> List[Finding]:
                 f"opcode {op!r} is not driven by any TB (no send_cmd, "
                 f"no 8'h... literal). The state-transition coverage for "
                 f"this opcode is zero by definition.",
+                opcode=op,
             ))
             continue
 
@@ -158,6 +257,7 @@ def audit(tb_target: Path, coverage: List[Dict[str, Any]]) -> List[Finding]:
                     f"{lhs!r} in proximity to {rhs!r}). The TB drives "
                     f"the opcode but never checks the state change the "
                     f"spec requires.",
+                    opcode=op,
                 ))
     return findings
 
@@ -196,12 +296,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: target not found: {target}", file=sys.stderr)
         return 2
 
-    findings = audit(target, coverage)
+    files = discover_tb_files(target)
+    findings = audit(target, coverage, files)
     errors = [f for f in findings if f.severity == "ERROR"]
+    unverified = {f.opcode for f in errors if f.opcode}
 
     report = {
         "target": str(target),
+        # The verdict is only worth as much as the corpus it was measured
+        # on. A reader must be able to see that a PASS read something.
+        "tb_files_scanned": len(files),
+        "tb_files": [str(p) for p in files],
         "coverage_entries": len(coverage),
+        "opcodes_unverified": len(coverage) if not files else len(unverified),
         "errors": len(errors),
         "findings": [asdict(f) for f in findings],
         "verdict": "PASS" if not errors else "FAIL",
@@ -217,7 +324,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         for f in findings:
             print(f"[{f.severity}] {f.rule} @ {f.file}:{f.line}: {f.message}")
-        print(f"\n{len(errors)} error(s); verdict: {report['verdict']}")
+        print(f"\n{len(files)} TB file(s) scanned; {len(errors)} error(s); "
+              f"verdict: {report['verdict']}")
 
     return 0 if not errors else 1
 
