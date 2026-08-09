@@ -40,9 +40,9 @@
    "kind": "repo",
    "rel": "benchmark-data/ic/subservient"
   },
-  "benchmark-data/ic/u_hawaii_adc": {
+  "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run": {
    "kind": "repo",
-   "rel": "benchmark-data/ic/u_hawaii_adc"
+   "rel": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run"
   },
   "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A": {
    "kind": "published",
@@ -498,7 +498,7 @@
    "entries": {
     "phase3/analog/*/spec.json OR phase1/analog/*/spec.json": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/*/spec.json",
      "path": "phase3/analog/delta_sigma/spec.json",
      "size_bytes": 1231
@@ -510,7 +510,7 @@
    "entries": {
     "phase3/analog/*/topology.md OR phase2/analog/*/topology.md": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/*/topology.md",
      "path": "phase3/analog/delta_sigma/topology.md",
      "size_bytes": 3794
@@ -522,7 +522,7 @@
    "entries": {
     "phase3/analog/*/*.sp OR phase2/analog/*/*.sp": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/*/*.sp",
      "path": "phase3/analog/delta_sigma/delta_sigma.sp",
      "size_bytes": 2131
@@ -534,7 +534,7 @@
    "entries": {
     "phase3/analog/*/corner_results.json OR phase2/analog/*/corner_results.json": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/*/corner_results.json",
      "path": "phase3/analog/ldo/corner_results.json",
      "size_bytes": 4854
@@ -546,7 +546,7 @@
    "entries": {
     "phase3/analog/*/layout.mag OR phase3/analog/*/*.gds": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/*/layout.mag",
      "path": "phase3/analog/delta_sigma/layout.mag",
      "size_bytes": 681
@@ -558,7 +558,7 @@
    "entries": {
     "phase3/analog/*/pre_vs_post.json": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/*/pre_vs_post.json",
      "path": "phase3/analog/ldo/pre_vs_post.json",
      "size_bytes": 821
@@ -570,14 +570,14 @@
    "entries": {
     "phase3/analog/hardmacro/*/*.lef": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/hardmacro/*/*.lef",
      "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.lef",
      "size_bytes": 934
     },
     "phase3/analog/hardmacro/*/*.lib": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/hardmacro/*/*.lib",
      "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.lib",
      "size_bytes": 766
@@ -591,7 +591,7 @@
     },
     "phase3/analog/hardmacro/*/*.v": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/hardmacro/*/*.v",
      "path": "phase3/analog/hardmacro/delta_sigma/delta_sigma.v",
      "size_bytes": 822
@@ -604,7 +604,7 @@
    "entries": {
     "phase3/mixed_signal/cosim/*_cosim_results.json OR phase3/mixed_signal/cosim/mixed_signal_results.json OR phase3/analog/*/hw_measurements.json": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/*/hw_measurements.json",
      "path": "phase3/analog/delta_sigma/hw_measurements.json",
      "size_bytes": 724
@@ -1170,14 +1170,14 @@
    "entries": {
     "phase3/analog/*/drc_clean.flag OR phase3/analog/*/drc.report OR phase3/analog/*/*.lyrdb OR phase3/analog/*/drc.rpt": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/*/*.lyrdb",
      "path": "phase3/analog/ldo/klayout_drc.lyrdb",
      "size_bytes": 33542
     },
     "phase3/analog/*/lvs_match.flag OR phase3/analog/*/lvs.report OR phase3/analog/*/comp.json OR phase3/analog/*/lvs.rpt": {
      "status": "PRODUCED_BY_RUN",
-     "run": "benchmark-data/ic/u_hawaii_adc",
+     "run": "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run",
      "alternative": "phase3/analog/*/lvs_match.flag",
      "path": "phase3/analog/delta_sigma/lvs_match.flag",
      "size_bytes": 779

@@ -617,7 +617,11 @@ _LIVE_ENTRY_COUNT = 114
 #: part A8 tried to grow.
 SELF_CERTIFYING_AUDIT_PROBE: Dict[str, Tuple[str, ...]] = {
     # The analog reference run — A8's own base_run. MUST stay empty.
-    "benchmark-data/ic/u_hawaii_adc": (),
+    # 2026-08-10 (#905): the IC-level phase1/phase3/reports trees were RETIRED
+    # by MOVING them under `retired/ic_level_run/`, because the published
+    # layout contract admits only `input/` and `v<X.Y.Z>_<PDK>/` at the IC
+    # level. Same bytes, same probe, one directory deeper — path repair only.
+    "benchmark-data/ic/u_hawaii_adc/retired/ic_level_run": (),
     # 2026-08-07 — v1.5.66_gf180mcuD (the former non-empty control here) was
     # retired and replaced by v1.9.96_gf180mcuD. RE-MEASURED against the new
     # cell, not carried forward: it is published AFTER the em_signoff wiring
