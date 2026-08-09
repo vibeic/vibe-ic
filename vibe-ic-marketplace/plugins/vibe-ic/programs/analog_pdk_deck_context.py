@@ -211,6 +211,21 @@ class DeckContext:
     # must be emitted in explicit metres (see render_deck). chip-AGNOSTIC.
     device_geometry_units: Dict[str, str] = field(default_factory=dict)
     unresolved_roles: List[str] = field(default_factory=list)
+    # vibe-ic#<new> — EVERY (lib, section) THE DECK MUST LOAD, in order.
+    #
+    # The deck used to load exactly one: `.lib <model_lib> <typ_section>`. That
+    # is correct only while every bound device lives in that lib's closure. A
+    # family that splits its devices across several corner libs (actives in one,
+    # passives in another) resolves its device_map from the cross-lib UNION and
+    # then binds a device the single loaded section never defines — ngspice
+    # stops at `unknown subckt`. Each entry carries its OWN section name because
+    # the split libs do not share a corner vocabulary.
+    #
+    # A single-lib family yields exactly ONE entry (the primary), so the emitted
+    # deck is byte-identical to what it was. Empty = "the caller should keep
+    # emitting the single `model_lib` line" (the known-family fast path never
+    # populates this).
+    deck_loads: List[Tuple[str, str]] = field(default_factory=list)
     work_items: List[str] = field(default_factory=list)
     disclosure: str = ""
     # vibe-ic#193 — WHICH primary-selection strategy elected `model_lib`. There
@@ -237,6 +252,7 @@ class DeckContext:
             "device_terminals": self.device_terminals,
             "device_geometry_units": self.device_geometry_units,
             "unresolved_roles": self.unresolved_roles,
+            "deck_loads": [list(dl) for dl in self.deck_loads],
             "work_items": self.work_items, "disclosure": self.disclosure,
             "primary_policy": self.primary_policy,
         }
@@ -821,6 +837,53 @@ def custom_family_context(res: Dict[str, Any],
         if u:
             device_geometry_units[role] = u
 
+    # vibe-ic#<new> — THE DECK MUST LOAD EVERY LIB WHOSE DEVICES IT BINDS.
+    #
+    # The re-derivation above keeps the cross-lib UNION map whenever the primary
+    # cannot cover a required role. That is the honest choice for the MAP — the
+    # devices really do exist — but the deck emitted one `.lib <primary>
+    # <section>` line, so a device resolved from a DIFFERENT lib was bound and
+    # never defined. ngspice: `unknown subckt`. The comment directly above
+    # predicted this failure; the union fallback is what reaches it.
+    #
+    # So: for every bound device NOT in the primary's closure, add the lib that
+    # does define it. `.lib` needs a SECTION, and the split corner libs do not
+    # share a corner vocabulary (a family may name them `mos_tt` in one file and
+    # `res_typ` in another), so each extra lib is mapped through
+    # `map_corner_sections` OVER ITS OWN sections. An unsectioned device sub-lib
+    # is never loaded directly — the sectioned corner lib whose closure contains
+    # it is, which is how such a family is meant to be consumed.
+    #
+    # SINGLE-LIB FAMILIES ARE UNCHANGED: the primary's closure is the union, so
+    # nothing is ever added and the deck keeps its single `.lib` line. The
+    # known-family (sky130/gf180) fast path does not run this function at all.
+    def _deck_loads_for(dev_map: Dict[str, str]) -> List[Tuple[str, str]]:
+        if not primary:
+            return []
+        loads: List[Tuple[str, str]] = []
+        primary_closure = set(per_lib_subckts.get(primary, {}))
+        missing = sorted({d for d in dev_map.values()
+                          if d not in primary_closure})
+        for dname in missing:
+            # Prefer a SECTIONED lib that carries the device in its closure;
+            # among those prefer the one defining the FEWEST devices in its own
+            # text (the corner aggregator over a broad catch-all).
+            cands = [l for l in readable
+                     if l != primary
+                     and dname in per_lib_subckts.get(l, {})
+                     and per_lib_sections.get(l)]
+            if not cands:
+                continue
+            cands.sort(key=lambda l: (per_lib_own_devices.get(l, 0), l))
+            lib = cands[0]
+            if any(lib == have for have, _ in loads):
+                continue
+            pool = per_lib_composed.get(lib) or per_lib_sections.get(lib) or []
+            sec, _proc = map_corner_sections(pool)
+            if sec:
+                loads.append((lib, sec))
+        return loads
+
     sections = per_lib_sections.get(primary, []) if primary else []
     # union sections across libs is what's "available"; primary drives the deck.
     all_sections: List[str] = []
@@ -901,6 +964,8 @@ def custom_family_context(res: Dict[str, Any],
         device_map=device_map, device_terminals=device_terminals,
         device_geometry_units=device_geometry_units,
         unresolved_roles=unresolved,
+        deck_loads=(([(primary, typ)] + _deck_loads_for(device_map))
+                    if (primary and typ) else []),
         work_items=work_items, disclosure=disclosure,
         primary_policy=primary_policy)
 
