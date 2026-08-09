@@ -711,8 +711,25 @@ def verify_with_ngspice(container: str, block: str, sp_text: str,
             return {"simulation_verified": False,
                     "simulation_status": "NOT_VERIFIED_NO_SIMULATOR",
                     "detail": "no ngspice in the container"}
+        # The simulator must be started through a LOGIN shell. A PDK's
+        # ngspice init file -- the one that issues the `osdi` directives
+        # registering compiled Verilog-A model types -- is located only via
+        # `SPICE_USERINIT_DIR`, and that variable is exported by the EDA
+        # image's login profile; a non-login shell never sets it. Without it
+        # ngspice ignores every `.model <name> <va-type>` line ("Unknown
+        # model type ... - ignored"), then resolves no device at all
+        # ("Unable to find definition of model ..."), aborts before any
+        # analysis ("no simulations run!") and exits 1 -- which this function
+        # recorded as DID_NOT_CONVERGE, charging a renderable netlist for a
+        # missing environment and refusing to emit it.
+        #
+        # `bash -lc`, not `sh -lc`: the image profile is bash syntax and
+        # aborts under dash, which is why the login shell was dropped here.
+        # Dropping the login shell was the wrong half of that fix.
+        # `analog_real_corner_sweep` and `analog_a6_native_pv` already invoke
+        # the container through `bash -lc` for exactly this reason.
         cp = subprocess.run(
-            ["docker", "exec", container, "sh", "-c",
+            ["docker", "exec", container, "bash", "-lc",
              f"cd {stage} && {ng} -b tb_{block}.sp 2>&1"],
             capture_output=True, text=True, timeout=900)
         out = (cp.stdout or "") + (cp.stderr or "")
