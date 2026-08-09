@@ -3930,10 +3930,17 @@ steps:
         - files_exist: ["phase3/stage4/gds/*.gds"]
         - program_exit_zero: "gds_size_check --gds-file phase3/stage4/gds/*.gds --json reports/phase3/gds_size.json"
         # Substance, not just size. gds_size_check compares against a
-        # flow-wide 100 KB constant and demotes a bad GDSII header to a
-        # WARNING, so 150 KB of os.urandom() behind a 4-byte HEADER, and a
-        # zero-padded library with no structures at all, both signed off
-        # `pass: true, errors: 0, warnings: 0`. This gate walks the whole
+        # flow-wide 100 KB constant and USED TO demote a bad GDSII header to a
+        # WARNING — a verdict the clause above, which reads only the exit code,
+        # could never see. That demotion is fixed: a first record that is not a
+        # HEADER is now a hard ERROR there, so a renamed artefact no longer
+        # reaches this line at all.
+        #
+        # This gate is still required, and the reason is unchanged: a valid
+        # 4-byte HEADER says nothing about what follows it. 150 KB of random
+        # bytes behind a real HEADER, and a zero-padded library with no
+        # structures at all, still clear existence + header + size and signed
+        # off `pass: true, errors: 0, warnings: 0`. This gate walks the whole
         # record stream (HEADER..ENDLIB, no trailing padding) and requires
         # layout elements >= the design's OWN placed-instance count read
         # from phase3/stage3/pnr/routed.def — a derived floor, never a
