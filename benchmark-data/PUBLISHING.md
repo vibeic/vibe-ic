@@ -33,10 +33,42 @@ benchmark-data/ic/<IC>/
                                         #   phase1,phase2}
 ```
 
-**Folder name = plugin VERSION first, then PDK** — e.g. `v1.5.66_gf180mcuD`,
-`v1.5.65_sky130A`, `v1.5.58_ihp-sg13g2`. It is **not** prefixed with `pass_` /
+**Folder name = plugin VERSION first, then PDK** — e.g. `v1.9.96_gf180mcuD`,
+`v1.10.18_sky130A`. It is **not** prefixed with `pass_` /
 `clean_run_` (the verdict lives in `RESULT.md`, and `clean_run_*` is a
 `.gitignore`d prefix that would strip the committed phase folders).
+
+### `retired/` — the ONE other entry an `<IC>/` may hold
+
+```
+benchmark-data/ic/<IC>/
+    input/
+    v<plugin-version>_<PDK>/
+    retired/<plugin-version>_<PDK>/     # history; NOT a published result
+        RETIRED.md                      # required: why, "do not cite", who + when
+```
+
+A published folder is moved here — **never deleted** — when it turns out not to
+be a cell at all, i.e. the `(IC × PDK)` combination is not declared by the
+design's own `L19_CONSTRAINTS_PDK.json` / `L1` (see
+[`ic/CELL_MATRIX.md`](ic/CELL_MATRIX.md), *Combinations that are NOT cells*).
+Deleting it would make "we never ran this" and "we ran it and kept the record"
+the same state, which `ic/INDEX.md` forbids; leaving it at the `<IC>/` level
+would leave a non-cell inside the `v*_<PDK>` namespace every discovery glob in
+this repo walks. Moving satisfies both.
+
+`retired/<...>` is **outside** the published-cell namespace by construction:
+`benchmark_evidence_structure_check._discover_evidence_folders` scans only the
+direct children of `<IC>/`, so a retired folder is neither validated as a cell
+nor counted as one. `benchmark_evidence_index.py` still indexes it (it walks
+`rglob`), which is the point — the record stays visible and stays honest.
+
+Retiring is a **deliberate act with a paper trail**, not a cleanup: write
+`RETIRED.md`, re-point every citation, and record the move in
+`ic/retention.json` (whose keys are cell paths — a key that names no discovered
+cell FAILS the index gate). Retired 2026-08-09:
+`ic/spm/retired/v1.5.58_ihp-sg13g2/`,
+`ic/u_hawaii_adc/retired/v1.9.86_sky130A/`.
 
 ### Excluded by construction
 

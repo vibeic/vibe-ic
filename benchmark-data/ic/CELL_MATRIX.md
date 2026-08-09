@@ -42,8 +42,10 @@ L19 declares plainly. Deriving "no PDK declared" from a docs grep is how the
 | 11 | `u_hawaii_adc` | **ihp-sg13g2** | L19 `pdk_target: sg13g2`; L1 "Target PDK **IHP SG13G2**" |
 
 `u_hawaii_adc` runs the **analog A1–A9 track**, not the digital RTL→synth→PnR
-track. It has no RTL and needs none; its converged predecessor
-`v1.9.86_sky130A` has no `phase2/` at all. Routing it down the digital track
+track. It has no RTL and needs none; the run that used to sit at
+`u_hawaii_adc/v1.9.86_sky130A` — retired 2026-08-09 to
+`u_hawaii_adc/retired/v1.9.86_sky130A/`, see its `RETIRED.md` — has no
+`phase2/` at all. Routing it down the digital track
 produces `reference_tb: rtl/ missing`, which is a symptom of mis-routing and not
 a missing generator.
 
@@ -53,14 +55,31 @@ a missing generator.
 |---|---|
 | `sha256 × gf180mcuD` | sha256 declares SKY130 only; zero gf180 mentions anywhere. Dispatched 2026-08-09 in error and stopped mid-run. |
 | `edge_llm_accel × sky130A` | declares nangate45. Burned a full round once before (134 × ODB-0176 undefined-layer) and was dispatched again on 2026-08-09. **Still staged after this row was written** — see "A recorded non-cell that keeps getting dispatched" below. |
-| `u_hawaii_adc × sky130A` | declares IHP SG13G2, and is analog. |
-| `spm × ihp-sg13g2` | spm declares sky130 primary + gf180 secondary. **A published run `v1.5.58_ihp-sg13g2` exists**, which is precedent but not a declaration — recorded here precisely because an existing artefact is the easiest thing to mistake for grounding. |
+| `u_hawaii_adc × sky130A` | declares IHP SG13G2, and is analog. A published run `v1.9.86_sky130A` existed; **RETIRED 2026-08-09 to `u_hawaii_adc/retired/v1.9.86_sky130A/`** — moved, not deleted. Its own L19 recorded `pdk_target: sky130A` while the IC's L19 records `sg13g2`. |
+| `spm × ihp-sg13g2` | spm declares sky130 primary + gf180 secondary. **A published run `v1.5.58_ihp-sg13g2` existed**, which was precedent but not a declaration — recorded here precisely because an existing artefact is the easiest thing to mistake for grounding. **RETIRED 2026-08-09 to `spm/retired/v1.5.58_ihp-sg13g2/`** — moved, not deleted. Its own L19 says `pdk_target: sky130`; the PDK was in the folder name only. |
 
 A run against an undeclared PDK is not forbidden — the flow supports it through
 `--allow-pdk-target-mismatch`, which requires acknowledging in writing that the
 measured PDK is not the declared one. Such a run is a **disclosed cross-PDK
 port**: it may be published as that, and it may never claim the design's L7
 sign-off, whose corners are declared per-PDK.
+
+### What happens to a non-cell that was already published
+
+It is **RETIRED by moving**, to `benchmark-data/ic/<IC>/retired/<version>_<PDK>/`,
+and it is **never deleted**. Deleting would make *"we never ran this"* and *"we
+ran it, kept the record, and later established it was never a cell"* the same
+state — the exact collapse `INDEX.md` exists to prevent. Moving resolves that
+against the layout contract at the same time: the `<IC>/` level goes back to
+holding `input/` plus `v*_<PDK>/` cells, and the history sits one level down
+under `retired/`, out of the `v*_<PDK>` namespace that every discovery glob in
+this repo walks.
+
+Each retired folder carries a `RETIRED.md` stating (a) why it is not a cell,
+citing the L19/L1 declaration, (b) that it is history and **must not be cited
+as a result**, and (c) the date and that the repo gatekeeper decided it.
+Retired 2026-08-09: `spm/retired/v1.5.58_ihp-sg13g2/`,
+`u_hawaii_adc/retired/v1.9.86_sky130A/`.
 
 ## A recorded non-cell that keeps getting dispatched
 

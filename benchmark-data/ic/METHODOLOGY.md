@@ -65,7 +65,10 @@ by a deterministic, chip-AGNOSTIC program — never hand-assembled:
 
 The full convention (folder layout, exclusions, the publish/validate commands) is in
 [`benchmark-data/PUBLISHING.md`](../PUBLISHING.md). The `spm` cells
-(`v1.5.58_ihp-sg13g2`, `v1.5.65_sky130A`, `v1.5.66_gf180mcuD`) are the reference shape.
+(`v1.10.18_sky130A`, `v1.9.96_gf180mcuD`) are the reference shape. Which
+`(IC × PDK)` combinations ARE cells is derived, not asserted — see
+[`CELL_MATRIX.md`](CELL_MATRIX.md); a published folder for a combination the
+design never declared is retired to `<IC>/retired/`, not deleted.
 
 ## IC scope
 - **Primary = small, fully-specifiable, genuinely-generatable IPs** (arithmetic / protocol /

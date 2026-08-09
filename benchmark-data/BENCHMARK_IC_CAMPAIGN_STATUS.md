@@ -10,7 +10,7 @@ and is not part of this table._
 
 | IC × PDK | Status | Residual |
 |---|---|---|
-| spm × IHP-SG13G2 | **PASS_WITH_WAIVERS** | None (foundry/board-stage waivers only) — see `ic/spm/ihp-sg13g2/RESULT.md` |
+| ~~spm × IHP-SG13G2~~ | **RETIRED 2026-08-09 — NOT A CELL** (row kept as history; was: PASS_WITH_WAIVERS) | `spm` declares sky130A primary + gf180mcuD secondary and the run's own L19 says `pdk_target: sky130` — see `ic/CELL_MATRIX.md`. Evidence moved to `ic/spm/retired/v1.5.58_ihp-sg13g2/` (`RETIRED.md` there); **do not cite it as a result**. |
 | spm × sky130A | **PASS_WITH_WAIVERS** | None — see `ic/spm/sky130A_20260724/RESULT.md` |
 | spm × GF180MCU | **PASS_WITH_WAIVERS** | None — see `ic/spm/gf180mcuD_20260724/RESULT.md`. Metal-fill density DRC (v1.5.66) + SS slow-corner setup (v1.5.59) both closed; GDS present, 763/763 DRC rule categories clean, LVS match, STA MET (+1.73/+0.57 ns). |
 | sha256 × sky130A | FAIL | Post-route STA sign-off setup gap at the slow corner only (Step 23) — re-confirmed on a fresh v1.5.65 run |
@@ -21,7 +21,16 @@ and is not part of this table._
 | opentitan_aes × sky130A | FAIL | Re-run in progress on v1.5.65 (long-running: >5h at last check, actively progressing, not stalled) |
 | subservient × sky130A | FAIL | Re-run in progress on v1.5.65 |
 | subservient × GF180MCU | FAIL | Fresh v1.5.65 run: DFT ATPG (DT1), physical verification (Step 31), and tapeout-checklist residuals (Steps 36/38) |
-| u_hawaii_adc × sky130A | FAIL | Analog per-block physical verification (Step A6, DRC+LVS before merge) — required outputs not yet produced; real layout still pending |
+| ~~u_hawaii_adc × sky130A~~ | **RETIRED 2026-08-09 — NOT A CELL** (row kept as history; was: FAIL) | `u_hawaii_adc` declares **ihp-sg13g2** (L19 `pdk_target: sg13g2`; L1 "Target PDK **IHP SG13G2**"); `sky130` appears 0 times in its input docs — see `ic/CELL_MATRIX.md`. Evidence moved to `ic/u_hawaii_adc/retired/v1.9.86_sky130A/` (`RETIRED.md` there); **do not cite it as a result**. The declared cell `u_hawaii_adc × ihp-sg13g2` is unpublished. |
+
+> **The denominator in this file's header is not derived.** It says "12 cells";
+> `ic/CELL_MATRIX.md` (2026-08-09) derives **11** cells from the designs' own
+> `L19`/`L1` declarations, and two rows in the table above are among the
+> combinations it lists as **not cells at all**. Those two rows are struck
+> through and kept — the header line is left at its 2026-08-02 wording because
+> re-stamping a historical count against a matrix it was not derived from is the
+> fabrication `CELL_MATRIX.md` exists to prevent. **Take the cell population
+> from `ic/CELL_MATRIX.md`, not from this table.**
 
 ## What "PASS" requires here
 
