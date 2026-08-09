@@ -570,8 +570,10 @@ def extract_drv(text: str) -> Dict[str, object]:
     # title": `report_check_types` prints SEVERAL tables back to back, so an
     # open-ended table would keep counting rows belonging to the NEXT one (the
     # `Group Slack` / `Required Width` tables OpenSTA emits alongside). A table
-    # ends at the first line carrying no digit, which is where the next title
-    # begins.
+    # ends at the first NON-BLANK line carrying no digit, which is where the
+    # next title begins. Blank lines are interior to a table (OpenSTA separates
+    # `max capacitance` rows with them) and only suspend it — see the
+    # ROWS_BLANK branch below.
     kind: Optional[str] = None
     state = "IDLE"
 
@@ -624,9 +626,32 @@ def extract_drv(text: str) -> Dict[str, object]:
             continue
 
         # state == ROWS: the table ends at the first line with no digit in it.
-        if not line or not any(ch.isdigit() for ch in line):
+        #
+        # ...but a BLANK line is NOT that terminator, and treating it as one
+        # under-counted a whole check kind. MEASURED on caravel_user_project x
+        # sky130A (bit-identical routes on two hosts, plugin v1.10.18): OpenSTA
+        # prints the `max capacitance` table with a blank line BETWEEN EVERY
+        # ROW, while `max slew` and `max fanout` print theirs contiguously. The
+        # walk therefore closed the cap table after its FIRST row in each
+        # corner, and a sign-off report holding 48 VIOLATED capacitance rows
+        # (24 setup + 24 hold) was recorded as `max_capacitance x2`. A 24x
+        # under-count, in the LENIENT direction — the record understated the
+        # design's own sign-off DRV population.
+        #
+        # A blank therefore only SUSPENDS the table; the next line decides.
+        # Every real terminator (a DRV title, a non-DRV title, an
+        # `=== SECTION ===` banner, the check-types markers) is consumed
+        # earlier in this loop, so each still closes or re-opens a table
+        # exactly as it did before — this can only stop the walk from ending
+        # a table early, never keep one open across a title.
+        if not line:
+            state = "ROWS_BLANK"
+            continue
+        if not any(ch.isdigit() for ch in line):
             kind, state = None, "IDLE"
             continue
+        if state == "ROWS_BLANK":
+            state = "ROWS"
         if _VIOLATED_RE.search(line):
             counts[kind] = counts.get(kind, 0) + 1
             rows.setdefault(kind, []).append(_row_instance(line))

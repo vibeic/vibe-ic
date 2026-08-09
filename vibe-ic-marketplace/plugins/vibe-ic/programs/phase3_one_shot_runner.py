@@ -22450,6 +22450,69 @@ def _parse_ship_repair_log(log: str) -> dict:
     }
 
 
+def _ship_repair_refusals(parsed: dict) -> list:
+    """The promotion clauses that ACTUALLY refuse, in gate order, each named
+    with the numbers it refused on.
+
+    WHY THIS EXISTS. The non-promoted note used to close with a FIXED string,
+    `not promoted (needs setup>=0 and DRC-clean)`. That is a stated REASON, and
+    on a design whose repair is refused for any OTHER clause it is a WRONG one.
+
+    MEASURED, caravel_user_project x sky130A (routes bit-identical on two
+    independent hosts, md5 8dd2a0b7ab326390192d14c38ab8322a, so this is
+    reproducible rather than a one-off): the repair was refused while setup was
+    +8.81 ns (well over the `setup>=0` the note names) and the reroute reported
+    0 DRC violations (exactly the `DRC-clean` the note names). BOTH advertised
+    conditions were satisfied. The real refusal was the per-category DRV guard
+    -- `repair_design`'s own transcript rose slew 31->36 and cap 26->30. A
+    reader of that note is pointed at setup and DRC, which are fine, and away
+    from the clause that actually fired; the cell's failure was consequently
+    recorded for a long time as suspected PnR run-to-run randomness, which the
+    byte-identical routes disprove.
+
+    So the reason is DERIVED from the same `parsed` dict
+    `_ship_repair_should_promote` reads, clause for clause and in the same
+    order, and the published text can no longer disagree with the decision.
+    `test_signoff_repair_note_names_the_clause_that_refused` pins that
+    equivalence so the two cannot drift apart again.
+
+    This function is REPORTING ONLY -- it is not consulted by the gate and
+    changes no promotion decision. It cannot see `repaired_def_ok` /
+    `repaired_v_ok` (the gate's first clause, which is about artefacts rather
+    than about this dict), so an empty list means "nothing in the parsed log
+    refuses", not "the gate promoted"; the caller says so explicitly.
+    chip/PDK/vendor-AGNOSTIC: pure arithmetic on a parsed dict."""
+    out: list = []
+    if parsed.get("reroute_incomplete"):
+        out.append(f"the reroute did not complete "
+                   f"({parsed['reroute_incomplete']} abort(s))")
+    if parsed.get("repair_noop"):
+        out.append("the repair changed nothing")
+    _unr = parsed.get("unrouted_nets")
+    if _unr is not None and _unr > 0:
+        out.append(f"{_unr} net(s) were left unrouted")
+    wp, wb = parsed.get("wns_postroute"), parsed.get("wns_before")
+    if wp is not None and wb is not None and wp <= wb + 0.001:
+        out.append(f"setup did not measurably improve on the sign-off basis "
+                   f"({wb} -> {wp} ns)")
+    wa = parsed.get("wns_after_repair")
+    if wa is None or wa < -0.001:
+        out.append(f"the repair did not reach non-negative setup "
+                   f"(estimate {wa} ns)")
+    if parsed.get("route_violations") != 0:
+        out.append(f"the reroute was not DRC-clean "
+                   f"({parsed.get('route_violations')} violation(s))")
+    sb, sa = parsed.get("drv_slew_before"), parsed.get("drv_slew_after")
+    if sb is not None and sa is not None and sa > sb:
+        out.append(f"repair_design's own slew-violation transcript rose "
+                   f"{sb} -> {sa}")
+    cb, ca = parsed.get("drv_cap_before"), parsed.get("drv_cap_after")
+    if cb is not None and ca is not None and ca > cb:
+        out.append(f"repair_design's own capacitance-violation transcript "
+                   f"rose {cb} -> {ca}")
+    return out
+
+
 def _ship_repair_nonpromotion_note(parsed: dict) -> str:
     """The note the NON-PROMOTED sign-off repair publishes about its own slack.
 
@@ -22487,8 +22550,14 @@ def _ship_repair_nonpromotion_note(parsed: dict) -> str:
     reports the divergence it measured, never a reason for it.
     """
     viols = parsed.get("route_violations")
-    tail = (f" reroute violations={viols}; not promoted "
-            f"(needs setup>=0 and DRC-clean).")
+    # The refusing clause is DERIVED, never asserted (see
+    # `_ship_repair_refusals`): the old fixed "(needs setup>=0 and DRC-clean)"
+    # named two conditions that were both SATISFIED on the design that
+    # exposed this, and pointed every reader away from the clause that fired.
+    _why = _ship_repair_refusals(parsed)
+    tail = (f" reroute violations={viols}; not promoted — "
+            + ("; ".join(_why) if _why
+               else "no complete repaired route was written") + ".")
     est_b = parsed.get("wns_before")
     est_a = parsed.get("wns_after_repair")
     post = parsed.get("wns_postroute")
