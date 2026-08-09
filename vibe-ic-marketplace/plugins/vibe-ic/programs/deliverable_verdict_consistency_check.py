@@ -426,6 +426,22 @@ def _load_verdict_json(p: Path) -> Optional[dict]:
     return d if isinstance(d, dict) and d.get("verdict") else None
 
 
+def _audit_files_present(run_dir: Path) -> List[Path]:
+    """Every path the audit COULD have been read from, readable or not.
+
+    vibe-ic#897. `_load_verdict_json` collapses missing / empty / truncated /
+    malformed / wrong-key into one `None`, so "there was no audit" and "the
+    audit is corrupt" arrived identically — and the gate printed "agrees in
+    polarity" having consulted one record while believing it had consulted two.
+    Five separate one-file edits each silenced the second opinion at rc=0.
+    Presence is therefore established SEPARATELY from parseability.
+    """
+    out: List[Path] = []
+    for pat in _AUDIT_REPORT_RELS:
+        out.extend(sorted(run_dir.glob(pat)))
+    return out
+
+
 def _read_completion_audit(run_dir: Path) -> Optional[Tuple[Path, dict]]:
     """The STRICTEST phase-completion audit this run wrote, or ``None``.
 
@@ -465,7 +481,17 @@ def _not_laxer_than_audit(
     displaced the orchestrator, and ``displaced`` keeps the value that lost, so
     a reader can see a choice was made instead of inferring one.
     """
+    # The carrier key is PRIVATE and must never survive into the reported
+    # evidence dict — tests and consumers compare that dict field-by-field.
+    present = chosen.pop("_audit_candidates", None) or []
     if audit is None:
+        # #897: an audit file that EXISTS but did not parse is not the same as
+        # no audit at all. Say so in the evidence, so a reader can see the
+        # second opinion was attempted and lost rather than never sought.
+        if present:
+            chosen["audit_report"] = str(present[0])
+            chosen["audit_verdict"] = None
+            chosen["audit_unreadable"] = [str(p) for p in present]
         return chosen
     p, d = audit
     audit_pol = polarity(normalise_token(str(d["verdict"])))
@@ -530,6 +556,7 @@ def read_orchestrator_verdict(run_dir: Path) -> Dict[str, object]:
     # that early-return is precisely the mechanism that hid a FAIL audit behind
     # a PASS aggregate.
     audit = _read_completion_audit(run_dir)
+    _audit_present = _audit_files_present(run_dir)
 
     for rel in _ORCH_REPORT_PREFERENCE:
         d = _load_verdict_json(run_dir / rel)
@@ -538,7 +565,9 @@ def read_orchestrator_verdict(run_dir: Path) -> Dict[str, object]:
                    "polarity": polarity(normalise_token(str(d["verdict"]))),
                    "verdict_note": d.get("verdict_note"),
                    "halted_at": d.get("halted_at"), "source": "aggregate"}
+            out["_audit_candidates"] = _audit_present
             return _not_laxer_than_audit(out, audit)
+
     seen: Dict[str, Tuple[Path, dict]] = {}
     for pat in _ORCH_REPORT_GLOBS:
         for p in sorted(run_dir.glob(pat)):
@@ -704,6 +733,26 @@ def check(run_dir: Path, *, result: Optional[Path] = None) -> ConsistencyReport:
             f"deliverable UNDER-claims. Not a contradiction in the escape "
             f"direction: an agent may downgrade for a reason the orchestrator "
             f"cannot see. Recorded, not failed.", head, orch)
+
+    # vibe-ic#897 — DO NOT SAY "AGREES" WHEN A SECOND OPINION WAS LOST.
+    # An audit file that exists but did not parse (missing `verdict` key,
+    # empty, truncated, malformed) used to collapse into the same `None` as
+    # "there is no audit", and this line still claimed agreement — having read
+    # ONE record while the run shipped two. Five one-file edits each silenced
+    # it at rc=0. The verdict stays PASS (an unreadable record is not evidence
+    # of contradiction, and failing here would adjudicate a question this gate
+    # has just said it cannot put) but the claim is now HONEST about what it
+    # actually compared, and the unreadable path is named.
+    if orch.get("audit_unreadable"):
+        return ConsistencyReport(
+            str(run_dir), str(deliverable), "CONSISTENT", "DISCLOSED",
+            f"{deliverable.name}:{head['line_no']} headline {head['token']} "
+            f"agrees in polarity with "
+            f"{Path(str(orch['report'])).name} verdict {orch['verdict']!r} "
+            f"({hp}) — but the completion audit at "
+            f"{', '.join(orch['audit_unreadable'])} EXISTS AND DID NOT PARSE, "
+            f"so the second opinion this gate exists to consult was NOT read. "
+            f"Comparison made against one record, not two.", head, orch)
 
     return ConsistencyReport(
         str(run_dir), str(deliverable), "CONSISTENT", "PASS",
