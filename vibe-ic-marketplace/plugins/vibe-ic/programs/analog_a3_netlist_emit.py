@@ -308,10 +308,31 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
                                        container=container)
         except Exception:
             res = None
+        # vibe-ic#906 — ASK FOR EVERY ROLE THE IR ACTUALLY USES.
+        #
+        # This filtered the topology's roles down to the MOS pair before asking
+        # the resolver, so a role the IR genuinely instantiates (cap, res, ...)
+        # was never requested. `required` is not a cosmetic argument: the deck
+        # resolver re-derives `device_map` from the ELECTED PRIMARY lib and only
+        # falls back to the cross-lib union map when the primary cannot cover a
+        # REQUIRED role. Roles absent from `required` are therefore dropped from
+        # `device_map` whenever the primary happens to satisfy the MOS pair —
+        # and `resolve_role_models` then reports them unresolved, which A3
+        # surfaces as IR_NOT_RENDERABLE: "device role(s) cap, res do not
+        # resolve". Measured on a container-installed PDK: the resolver returns
+        # those very roles correctly WHEN ASKED, so the refusal described our
+        # own request, not the PDK.
+        #
+        # WHY IT HID: the fallback that rescues this for the two PDKs
+        # everything is tested against is the REGISTRY (`_registry_entry` ->
+        # `device_models`), which `resolve_role_models` consults after the
+        # context map. sky130/gf180 have a registry entry listing passives; an
+        # unknown / container-installed family resolves to `(None, {})`, so the
+        # context map is the ONLY source and the dropped roles become fatal.
+        # Same shape as the host-vs-container reader defect: only a family that
+        # is NOT one of the two tested open PDKs can reach it.
         ctx = _apdc.resolve_deck_context(pdk, res=res,
-                                         required=tuple(r for r in roles
-                                                        if r in ("nmos",
-                                                                 "pmos")),
+                                         required=tuple(roles),
                                          container=container or "")
         ctx_json = ctx.as_json()
         status = ctx_json.get("status") or "OK"
