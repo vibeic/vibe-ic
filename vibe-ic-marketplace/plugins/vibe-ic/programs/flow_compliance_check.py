@@ -3512,6 +3512,50 @@ def _stdout_signals_token(snippet: str, token: str) -> bool:
     return any(line.lstrip().startswith(token) for line in snippet.splitlines())
 
 
+#: vibe-ic#901 — verdicts a gate writes to its OWN --json report that mean
+#: "I examined nothing". Read from the FILE, not from stdout: #887 established
+#: that a disclosure a project-path length can delete is not a disclosure, and
+#: stdout is exactly that channel (the consumer sees only the last 300 chars).
+_VACUOUS_JSON_VERDICTS = {"NOT_APPLICABLE", "SKIPPED", "SKIP", "VACUOUS",
+                          "VACUOUS_PASS", "NO_BUILD", "NOT_RUN"}
+
+
+def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
+    """True iff the gate's own JSON report declares it examined nothing.
+
+    vibe-ic#901. Six gates exited 0 on an empty project without the consumer
+    seeing a disclosure — and the two sharpest were SELF-AWARE, printing
+    `{"verdict": "NOT_APPLICABLE", "reason": "... (step did not run)"}` into a
+    report the consumer never opened. `vacuous_testbench_check` was one of
+    them, which is the whole campaign in one line: the gate against vacuous
+    passes was itself consumed as a substantive pass.
+
+    The clause already knows the path — it is the `--json <path>` in the
+    command string it just ran — so this reads a channel that already exists
+    rather than asking gates to print something new. Doing it here also covers
+    gates written LATER, which patching six emitters would not.
+    """
+    m = re.search(r"--json[= ]+(\S+)", cmd or "")
+    if not m:
+        return False
+    p = Path(m.group(1).strip("'\""))
+    if not p.is_absolute():
+        p = project / p
+    try:
+        if not (p.is_file() and p.stat().st_size > 0):
+            return False
+        d = json.loads(p.read_text(errors="replace"))
+    except Exception:
+        return False
+    if not isinstance(d, dict):
+        return False
+    for key in ("verdict", "status"):
+        v = d.get(key)
+        if isinstance(v, str) and v.strip().upper() in _VACUOUS_JSON_VERDICTS:
+            return True
+    return False
+
+
 def _stdout_signals_vacuous(snippet: str) -> bool:
     """Return True iff the program's combined stdout/stderr snippet
     contains a `VACUOUS_PASS:` token at line-start. Allows leading
@@ -7567,7 +7611,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # promotes the step's status to WAIVED-DEFERRED instead of a bare
             # PASS, carrying the WITH_WAIVERS distinction to the Overall verdict.
             reasons.append(out)
-        elif _stdout_signals_vacuous(out):
+        elif _stdout_signals_vacuous(out) or _json_report_signals_vacuous(
+                project, _cmd):
             # A gate program may disclose the vacuous tier by PRINTING
             # `VACUOUS_PASS:` while still exiting 0 — which is exactly what the
             # shared analog helper `_analog_a_check_common.vacuous_pass()` does

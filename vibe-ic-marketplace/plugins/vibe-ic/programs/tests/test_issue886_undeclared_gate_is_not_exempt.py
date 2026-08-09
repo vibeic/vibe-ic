@@ -320,8 +320,12 @@ def test_a_write_puts_the_two_classes_in_separate_registers():
     assert m.main(["--flow", str(flow), "--programs", str(programs),
                    "--baseline", str(bl), "--write-baseline",
                    "--scope-expanded",
+                   # #900 requires the reason to NAME an entry it excuses, so a
+                   # padded string cannot buy a widening. This reason predates
+                   # that rule; naming the two gates keeps the test's intent
+                   # (the classes are recorded APART) and satisfies it honestly.
                    "a synthetic tree built by the #886 regression test to "
-                   "prove the two classes are recorded apart"]) == 0
+                   "prove faux_check and quiet_check are recorded apart"]) == 0
     doc = json.loads(bl.read_text())
     assert doc["known"] == ["contradiction::faux_check.py"], doc
     assert doc["undeclared_known"] == ["undeclared::quiet_check.py"], doc

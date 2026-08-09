@@ -1678,10 +1678,51 @@ def main(argv: Optional[List[str]] = None) -> int:
     prev = _recorded("known")
     prev_u = _recorded("undeclared_known")
     if a.write_baseline:
-        if a.scope_expanded is not None and len(a.scope_expanded.strip()) < 30:
-            print("\n[FAIL] --scope-expanded needs a real reason (>=30 chars) "
-                  "naming what the audit now looks at that it did not before.")
-            return 1
+        # vibe-ic#900 — RATCHET ON MEMBERSHIP, NOT ON COUNT.
+        #
+        # `len(n) > len(p)` is not a shrink-only guard. Any write that removes
+        # as many entries as it adds passes it, so the register admitted
+        # unlimited NEW debt at constant size while its own comment asserted it
+        # could only shrink. MEASURED: a prev register holding 76 real entries
+        # plus 40 names absent from the tree recomputes to 116 with 40 members
+        # prev lacked — `--write-baseline` with NO reason exited 0 and recorded
+        # `scope_expanded: null`.
+        #
+        # And the bypass sat on the normal workflow, which is what made it
+        # sharp: the READ path DOES catch the swap and exits 1, and the thing
+        # it tells you to run is the WRITE path that does not check membership.
+        # The guard was weakest at the exact moment it was consulted.
+        added = {"known": sorted(set(now) - set(prev or [])),
+                 "undeclared_known": sorted(set(now_u) - set(prev_u or []))}
+        if a.scope_expanded is not None:
+            reason = a.scope_expanded.strip()
+            if len(reason) < 30:
+                print("\n[FAIL] --scope-expanded needs a real reason (>=30 "
+                      "chars) naming what the audit now looks at that it did "
+                      "not before.")
+                return 1
+            # A LENGTH TEST IS A KEYSTROKE COUNT. `'a' * 34` satisfied the old
+            # one. Requiring the reason to NAME an entry it is excusing cannot
+            # be met by padding, and is checkable.
+            # Match the STEM as well as the filename: entries are recorded as
+            # `undeclared::foo_check.py`, but a human writing the reason says
+            # "foo_check". Demanding the extension would make an honest reason
+            # fail on a technicality — a naming rule that rejects the natural
+            # spelling teaches people to paste the raw entry instead of
+            # explaining, which is the padding problem again in another form.
+            new_names = set()
+            for v in added.values():
+                for e in v:
+                    nm = e.split("::", 1)[-1]
+                    new_names.add(nm)
+                    if nm.endswith(".py"):
+                        new_names.add(nm[:-3])
+            if new_names and not any(nm in reason for nm in new_names):
+                print("\n[FAIL] --scope-expanded must NAME at least one of the "
+                      "entries it excuses, so the reason is about specific "
+                      "debt rather than about a number. New entries:\n   "
+                      + "\n   ".join(sorted(new_names)))
+                return 1
         widened = {}
         for label, p, n in (("known", prev, now),
                             ("undeclared_known", prev_u, now_u)):
@@ -1692,10 +1733,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             # other — which is how a single flag would have silently licensed
             # future growth in a register it was never about.
             widened[label] = ((p is None and bool(n))
-                              or (p is not None and len(n) > len(p)))
+                              or (p is not None and bool(added[label])))
             if widened[label] and a.scope_expanded is None:
+                _new = added[label]
                 print(f"\n[FAIL] refusing to GROW the baseline `{label}` "
-                      f"({'unrecorded' if p is None else len(p)} -> {len(n)}): "
+                      f"({'unrecorded' if p is None else len(p)} -> {len(n)}"
+                      + (f", {len(_new)} NEW: {', '.join(_new[:8])}"
+                         + (" ..." if len(_new) > 8 else "") if _new else "")
+                      + f"): "
                       f"this register records debt that must be paid down, "
                       f"never permission to add more. If the audit now LOOKS "
                       f"at more than it did, say so with --scope-expanded "
