@@ -94,6 +94,24 @@ def _resolve_report(project: Path, override: Optional[str]) -> Optional[Path]:
     return None
 
 
+def _scope_phrase(corners_available: Optional[str]) -> str:
+    """Render the analyzed-corner scope for the VERDICT LINE, not just the JSON.
+
+    The scope is what makes a PASS interpretable. This gate reads the
+    multicorner SPEF report, whose corners are RC/parasitic corners
+    (`max,min,nom`); it says nothing about any other declared sign-off axis,
+    such as the process axis (SS/TT/FF). A reader must not have to already
+    know that in order to read the verdict: a qualifier the reader has to
+    supply themselves is not a disclosure.
+
+    An UNDECLARED scope is reported as such rather than omitted — a PASS whose
+    scope is unstated is indistinguishable from a PASS whose scope is complete.
+    """
+    if not corners_available:
+        return "UNDECLARED (report declares no `corners_available`)"
+    return corners_available
+
+
 def evaluate(report_text: str, slack_tol: float = _DEFAULT_SLACK_TOL_NS
              ) -> Dict[str, object]:
     """Pure evaluator over the multicorner sign-off report body. Records the
@@ -153,8 +171,9 @@ def evaluate(report_text: str, slack_tol: float = _DEFAULT_SLACK_TOL_NS
     return {
         "verdict": "PASS" if passed else "FAIL",
         "status": "PASS" if passed else "FAIL",
-        "reasons": (["all analyzed sign-off corners MET "
-                     f"(governing worst-slack {governing:+.3f} ns)"]
+        "reasons": ([f"all analyzed sign-off corners MET "
+                     f"(governing worst-slack {governing:+.3f} ns; "
+                     f"corners analyzed: {_scope_phrase(corners_available)})"]
                     if passed else violated),
         "corners_available": corners_available,
         "setup_worst_slack_ns": setup_ws,
