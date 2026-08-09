@@ -339,7 +339,12 @@ _UNROUTED_INVENTORY: Dict[str, int] = {
     "half_duplex_response_window_check": 1,
     "l3_opcode_pre_wake_allowed_typed_check": 5,
     "l6_reject_rules_from_rx_event_check": 6,
-    "l7_debug_access_grounding_check": 1,
+    # l7_debug_access_grounding_check: DRAINED. Its one unrouted branch was
+    # part of a wider defect — the gate's exit code was pinned to 0 for every
+    # verdict, because exit 1 was gated behind a `--strict` that its only
+    # caller (the flow's advisory slot) does not pass. Both the FINDING tier
+    # and this skip tier now route through `_vacuous_exit`. DELETED rather
+    # than zeroed, per the note above.
     "l8_clock_period_actionability_check": 1,
     "l8_frame_end_gap_derivation_check": 1,
     "l9_floorplan_contract_check": 1,
