@@ -5854,6 +5854,37 @@ _STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {
 #: neither needs a decoder.
 _STRUCTURAL_GATE_BARE_FLAGS: Dict[str, tuple[str, ...]] = {
     "fpga_wrapper_input_polluter_check": ("--strict",),
+    # LL-2. Same shape as the row above and found the same way: the gate
+    # DETECTS a half-duplex project with no frame-end-gap constant in L8,
+    # prints `[ERROR] L8_FRAME_END_GAP_MISSING`, and its own `main` returns
+    # `1 if args.strict and not passed else 0`. The umbrella built a positional
+    # argv with no `--strict`, so rc was 0 on every input that exists and the
+    # worker recorded the gate as PASS while the gate was saying ERROR. Its
+    # docstring already named this caller ("use --strict to fail
+    # flow_compliance"); nothing supplied it.
+    #
+    # MEASURED before wiring, over the 137 tracked project directories (every
+    # dir holding `phase1/generated_docs` or `input/docs`), driven through this
+    # same builder on a read-only pass:
+    #
+    #   new FAIL with --strict, gate as it stood   12 / 137
+    #   new FAIL with --strict, gate as fixed       0 / 137
+    #   can it FAIL at all?                        an injected half-duplex
+    #                                              project whose L2 carries a
+    #                                              tSRS + ibt range and whose
+    #                                              L8 has no frame-end key
+    #                                              exits 1
+    #
+    # All 12 were the SAME false alarm and none was a half-duplex
+    # command-response IC: every one was detected by the L1 free-text keyword
+    # arm alone (0 of the 137 declare a tSRS/ibt field at ANY depth in L2, and
+    # 0 declare a command table with response payloads), and 8 of the 12 shared
+    # one copied datasheet phrase. Wiring `--strict` without the severity tier
+    # the gate now applies would have reddened 12 projects for a constant the
+    # gate cannot derive and cannot name a value for. That tier is in the gate,
+    # not here, because it is a statement about evidence rather than about
+    # invocation.
+    "frame_end_gap_in_l8_check": ("--strict",),
 }
 
 
@@ -6523,12 +6554,18 @@ def _structural_gate_argv(gate_name: str,
         argv = [sys.executable, str(prog)]
         for flag in adapter:
             argv += [flag, target]
-        argv += list(_STRUCTURAL_GATE_BARE_FLAGS.get(gate_name, ()))
     else:
         # v0.118 fix: pass `project` (not `rtl_dir`) so gates can access
         # project-level artefacts (generated_docs/L*.json, waivers.json,
         # output_files/, *.qsf).
         argv = [sys.executable, str(prog), str(project)]
+    # The bare flags apply to BOTH argv shapes. They used to be appended only
+    # inside the adapter branch, which made the table silently inert for every
+    # positional gate — i.e. the one seam built to stop a gate from "clearing
+    # the bar by being incapable of failing" could not be applied to the ~200
+    # gates that take a positional project dir. Registering an entry for such a
+    # gate was a no-op that read, in the table, exactly like a wiring.
+    argv += list(_STRUCTURAL_GATE_BARE_FLAGS.get(gate_name, ()))
     # v1.6.32: forward --strict-timing to the provenance gate only.
     if strict_timing and gate_name == "provenance_output_hash_completeness_check":
         argv.append("--strict-timing")
