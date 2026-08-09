@@ -2172,6 +2172,27 @@ steps:
             condition_files_exist: ["input/pdk_local", "phase3/analog/hardmacro"]
         - files_exist: ["phase3/stage3/pnr/floorplan.def"]
         - program_exit_zero: "floorplan_pdn_check . --json reports/phase3/pnr/floorplan_pdn.json"
+        # vibe-ic — WHAT THE LEF DECLARES vs WHAT A READER CAN LOAD.
+        # A macro OBS section naming a layer the tech LEF does not declare is
+        # discarded IN FULL — MEASURED 64 declared OBS rects -> 0 loaded,
+        # including the rects on layers that ARE declared — while `read_lef`
+        # returns success. The macro then carries the right outline, intact
+        # pins and NO obstruction on any layer, so every later stage treats a
+        # sealed footprint as free area. Wired HERE because it is a LEF-LOAD
+        # property: this is the first step that reads the macro abstracts, and
+        # catching it at floorplan costs one gate instead of a whole route.
+        #
+        # UNCONDITIONAL, and that is deliberate. The obvious wiring is
+        # `optional_program_exit_zero` + `condition_files_exist: ["**/*.lef"]`,
+        # which keeps a LEF-less project's step at PASS instead of demoting it
+        # to VACUOUS-PASS. `flow_condition_reachability_check` classifies that
+        # exact form as SELF-DISABLING — the trigger is a file nothing in the
+        # flow guarantees, so a project could silently never run the gate. A
+        # gate that can be skipped by the absence of the thing it looks for is
+        # the orphan this whole change exists to end. rc=2 -> VACUOUS_PASS is
+        # the flow's honest encoding of "could not measure", and a step whose
+        # evidence is partly vacuous SHOULD read that way.
+        - program_exit_zero: "macro_obs_load_parity_check . --json reports/phase3/pnr/macro_obs_load_parity.json"
     blocks_on: [13, 14, A8]
 
   - id: 16
@@ -2576,6 +2597,24 @@ steps:
         # route and its verdict is printed and carried into the JSON report;
         # a finding does NOT fail the step.
         - advisory_program_exit_zero: "route_congestion_trade_disclosure ."
+        # vibe-ic#828 part 2 — THIS GATE WAS NEVER WIRED. Its own header said
+        # so: "It is not registered in flow/phase1_phase2_phase3.yaml and no
+        # runner invokes it; its only caller is tools/ci/repo_hygiene_gates.sh".
+        # A gate that declares itself BLOCKING and that no flow step runs
+        # enforces nothing on a real design — it reproduces the defect in
+        # seconds on a routed DEF and was never asked to. Wired on the step
+        # that PRODUCES routed.def, so the metal it examines exists.
+        #
+        # BLOCKING and UNCONDITIONAL. Not `advisory_*`: that slot is for gates
+        # that declare themselves advisory, and using it here would be #306's
+        # complaint in reverse — a gate that claims to block and does not. Not
+        # condition-gated either, for the reason spelled out at step 15: the
+        # reachability checker calls a `**/*.lef` trigger self-disabling, and a
+        # gate skippable by the absence of its own subject is an orphan with
+        # extra steps. Its refusals — an incomplete LEF set, discarded OBS
+        # evidence, a truncated read, no LEF at all — arrive as rc=2 ->
+        # VACUOUS_PASS and are disclosed, never a bare pass.
+        - program_exit_zero: "macro_obs_geometry_intersect_check . --json reports/phase3/pnr/macro_obs_geometry.json"
     blocks_on: [20]
 
   # ── Step 22: Parasitic Extraction ──────────────────────────
