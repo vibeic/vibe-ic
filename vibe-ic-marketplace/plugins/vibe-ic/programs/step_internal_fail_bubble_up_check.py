@@ -372,6 +372,16 @@ def _published_run_trees(corpus: Path) -> List[Path]:
 
     Outside a repository (a run tree handed over on its own) tracked-ness is
     not a question that applies, and the disk is the honest answer.
+
+    vibe-ic#905 — THE SWEEP IS DEPTH-INDEPENDENT, AND HAS TO BE.
+    This globbed `*/clean_run_*`, i.e. a run tree exactly TWO levels under the
+    ic root. MEASURED: retiring one IC's stray output by MOVING it one level
+    deeper (`<IC>/retired/clean_run_*/`, the never-delete rule this repo runs
+    on) took its run tree out of the population — 13 swept trees became 12 and
+    the recorded 6 findings became 5. A ratchet that a `git mv` can lower is
+    not measuring debt, it is measuring directory depth: the finding was
+    HIDDEN, not paid. `rglob` keeps the same population however the trees are
+    arranged, so retiring a folder can move a finding but can never delete one.
     """
     try:
         sys.path.insert(0, str(_HERE))
@@ -379,7 +389,13 @@ def _published_run_trees(corpus: Path) -> List[Path]:
         published = _published_tree.published_paths(corpus)
     except Exception:                               # noqa: BLE001
         published = None
-    on_disk = sorted(p for p in corpus.glob("*/clean_run_*") if p.is_dir())
+    on_disk = sorted({p for p in corpus.rglob("clean_run_*")
+                      if p.is_dir()
+                      # a run tree is never INSIDE another run tree; without
+                      # this a nested scratch folder would be swept twice.
+                      and not any(a.name.startswith("clean_run_")
+                                  for a in p.relative_to(corpus).parents
+                                  if a.name)})
     if published is None:
         return on_disk
     root = corpus.resolve()
