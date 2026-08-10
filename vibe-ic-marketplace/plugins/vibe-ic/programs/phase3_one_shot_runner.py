@@ -19788,7 +19788,13 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                 "measured_core_util_pct": _measured_core_util_pct(
                     (out or "") + (err or "")),
             }
-            if actual_util is None:
+            # An EXPLICIT `--die-um WxH` is never grown by this trigger: the
+            # operator pinned that geometry, and silently replacing it is the
+            # same §4.05 objection the ROUTE_LOOSEN path already honours
+            # (`reason=explicit_die_requested`). On an explicit die the record
+            # is kept and the step FAILs below, naming the overlap — which is
+            # the actionable answer for someone who chose the die.
+            if actual_util is None and _auto_die_requested:
                 _meas_u = _pnr_illegal_placement["measured_core_util_pct"]
                 actual_util = (_meas_u if _meas_u is not None
                                else target_util_pct * 1.3)
@@ -19798,6 +19804,13 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
                       f"(die={die_w}x{die_h}um, measured core_util="
                       f"{actual_util:.1f}%, target {target_util_pct:.1f}%) — "
                       f"treating as an over-utilization event")
+            elif actual_util is None:
+                print(f"PNR_PLACEMENT_ILLEGAL: check_placement reports "
+                      f"{_fp_overlaps if _fp_overlaps is not None else 'an unknown number of'} "
+                      f"overlapping instance(s) in the DEF this run would ship "
+                      f"(die={die_w}x{die_h}um) — the die is EXPLICIT "
+                      f"(--die-um), so it is NOT grown; this run FAILs naming "
+                      f"the overlap")
         else:
             _pnr_illegal_placement = None
         if actual_util is None:
