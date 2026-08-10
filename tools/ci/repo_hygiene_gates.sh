@@ -197,6 +197,15 @@ run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs
 # fail; anything NEW does.
 run "flow-gate enforcement audit"       "$ROOT" python3 "$PG/flow_gate_enforcement_audit.py"
 
+# vibe-ic#923 — the flow declared stage membership TWICE (a per-stage roster
+# `stages[].steps` and a per-step `stage:` field), nothing derived either from
+# the other, and they had drifted apart for 12 of the 63 steps: 4 outright
+# contradictions and 8 steps the roster had never been told about. The roster
+# was deleted because no shipped program read it for membership. This gate is
+# what makes a second declaration impossible rather than merely noisy, and it
+# also refuses the degenerate repair of deleting the surviving one.
+run "stage membership declared once"    "$ROOT" python3 "$PG/flow_stage_membership_single_declaration_check.py"
+
 # vibe-ic#312 family — a checker that reads a field NO document populates sees
 # an empty value, and an empty value is indistinguishable from a clean one.
 # Measured five times in one campaign; three were "the producer never existed".

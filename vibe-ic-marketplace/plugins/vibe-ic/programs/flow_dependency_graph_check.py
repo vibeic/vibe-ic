@@ -63,7 +63,10 @@ except ImportError:                                     # pragma: no cover
 # Steps that legitimately begin a chain. Like the sibling baselines in this
 # repo, it MAY ONLY SHRINK — a new root is a step that fell off the chain until
 # someone says otherwise, and saying otherwise means editing this line.
-DECLARED_ROOTS = {"D1", "A1", "P0"}
+# vibe-ic#923 — P0 left this set when it gained the ordering edge its own
+# `required_inputs: [{from: 1}]` had always implied. The set may only SHRINK,
+# and this is what shrinking looks like.
+DECLARED_ROOTS = {"D1", "A1"}
 
 
 def load_steps(path: Path) -> Optional[List[dict]]:
