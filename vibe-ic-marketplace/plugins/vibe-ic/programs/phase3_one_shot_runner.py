@@ -24715,9 +24715,10 @@ def _drc_wall_budget_s() -> float:
     runs to the ~24h hard ceiling. svrfdrc's single-thread derived-layer build
     (SHRINK/boolean/merge) is pathological on dense large designs (sha256: 100%
     CPU, 4.4h, zero output). This wall-clock cap bounds the DRC step so a perf
-    ceiling surfaces as an HONEST SKIPPED-CONDITION, never a multi-hour silent
-    hang. Default 2h; env VIBE_IC_DRC_BUDGET_S overrides (e.g. raise for a
-    genuinely-large sign-off, lower for CI). chip/tool-AGNOSTIC."""
+    ceiling surfaces as an HONEST, NON-GREEN verdict (see the kill path below),
+    never a multi-hour silent hang. Default 2h; env VIBE_IC_DRC_BUDGET_S
+    overrides (e.g. raise for a genuinely-large sign-off, lower for CI).
+    chip/tool-AGNOSTIC."""
     try:
         v = float(os.environ.get("VIBE_IC_DRC_BUDGET_S", "7200"))
         return v if v > 0 else 7200.0
@@ -24781,8 +24782,8 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
             cmd += f" --cell-aware-feol={cfg_c}"
     # v1.4.38 — bound the DRC step at a WALL-CLOCK budget (the stall watchdog never
     # kills a 100%-CPU tool; the default ceiling is ~24h). A non-completing DRC is
-    # NOT a proven violation → SKIPPED-CONDITION (disclosed perf ceiling), like the
-    # LEC timeout-guard, never a FAIL or a silent multi-hour hang.
+    # NOT a proven violation, and it is NOT a sign-off either — see the kill path
+    # below for the tier it takes and why, never a silent multi-hour hang.
     _drc_budget = _drc_wall_budget_s()
     rc, out, err = _docker_exec(container, cmd, marker=gds_c,
                                 hard_ceiling_s=_drc_budget)
@@ -24804,13 +24805,53 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
                                     hard_ceiling_s=_drc_budget)
     if rc in (_RC_STALLED, 124):
         _mins = int(_drc_budget // 60)
+        # vibe-ic#925 — THE TIER, not the prose. The message below was already
+        # honest: it refuses to call a timeout a violation and refuses to sign
+        # off from a partial report. The word beside it was not. This site
+        # returned `SKIPPED-CONDITION`, which is a word from
+        # `flow_compliance_check`'s vocabulary and not from this runner's
+        # (`_VERDICT_TIERS`) — and `_aggregate_verdict` enumerates ITS OWN
+        # vocabulary and lets anything else fall through to the catch-all
+        # `return "PASS"`. MEASURED on this tree before the change: a plan whose
+        # only non-PASS step was a timed-out sign-off DRC aggregated to a plain
+        # green `"PASS"` — not even PASS_WITH_WAIVERS. Downstream,
+        # `_flow_verdict_tiers.is_excused("SKIPPED-CONDITION")` is True, so
+        # wherever that word IS adjudicated the step is subtracted from
+        # `total_required` as well: a DRC that ran out of time stopped being
+        # owed at all.
+        #
+        # WHY NOT `SKIPPED-SETUP-REQUIRED`, the tier #925 proposed. That word
+        # appears ZERO times in this file — it belongs to
+        # `flow_compliance_check`, a different program with a different status
+        # vocabulary. Adopting it here would swap one foreign word for another
+        # and `_aggregate_verdict` would go on returning a green `"PASS"`
+        # (measured, both arms, in test_issue925_drc_timeout_is_not_excused).
+        #
+        # WHY `BLOCKED`. It is THIS runner's own word for the state that
+        # actually obtains — "the tool is present, the input is present, the
+        # check could not be completed, so NOTHING is known about the design"
+        # — it is named explicitly in `_aggregate_verdict`'s non-green bucket,
+        # and unlike `FAIL` it does not assert a violation the deck never
+        # found. (NOT relied on here, and stated so it is not assumed:
+        # `declared_signoff_rollup` does NOT cover this step — its declared
+        # population is STA/EM plus the DRV promotion gate, and `drc` is not
+        # in it. The denominator this fix moves is `_aggregate_verdict`'s.)
+        #
+        # ORGANIC #570 — a killed engine may have left a PARTIAL report at the
+        # canonical path, and the next reader cannot tell it from a finished
+        # one. Rename it away exactly as the PnR and LVS stall paths do, so no
+        # verdict can be read from an artefact this run never finished writing.
+        _docker_timeout_isolate([rpt])
         return StepResult(
-            "drc", "SKIPPED-CONDITION", time.time() - t0,
+            "drc", "BLOCKED", time.time() - t0,
             f"svrf-native commercial DRC did not complete within the "
             f"{_mins}-minute wall-clock budget (rc={rc}) — a svrfdrc performance "
             f"ceiling on large/dense geometry (single-thread derived-layer "
             f"build), NOT a proven violation. No sign-off from a partial report; "
-            f"disclosed. Re-run under a fixed/parallelised engine or raise "
+            f"the partial report (if any) was isolated to *.timeout.partial. "
+            f"NOTHING is known about the layout's DRC state, so this step is "
+            f"BLOCKED (never green) and still owes an answer — it is not an "
+            f"excused skip. Re-run under a fixed/parallelised engine or raise "
             f"VIBE_IC_DRC_BUDGET_S.",
             extras={"finding": "SVRFDRC_PERF_CEILING",
                     "drc_budget_s": _drc_budget})
