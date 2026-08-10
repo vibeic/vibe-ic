@@ -2600,15 +2600,26 @@ steps:
         # vibe-ic#828 part 2 — THIS GATE WAS NEVER WIRED. Its own header said
         # so: "It is not registered in flow/phase1_phase2_phase3.yaml and no
         # runner invokes it; its only caller is tools/ci/repo_hygiene_gates.sh".
-        # A gate that declares itself BLOCKING and that no flow step runs
+        # A gate whose verdict is blocking and that no flow step runs
         # enforces nothing on a real design — it reproduces the defect in
         # seconds on a routed DEF and was never asked to. Wired on the step
         # that PRODUCES routed.def, so the metal it examines exists.
         #
-        # BLOCKING and UNCONDITIONAL. Not `advisory_*`: that slot is for gates
-        # that declare themselves advisory, and using it here would be #306's
-        # complaint in reverse — a gate that claims to block and does not. Not
-        # condition-gated either, for the reason spelled out at step 15: the
+        # BLOCKING and UNCONDITIONAL. Not `advisory_*`: that slot RECORDS a
+        # finding and never fails the step (`_evaluate_gate`), and this gate's
+        # rc=1 is a real defect in the emitted metal, so its verdict has to
+        # decide step 21's. That is a DIFFERENT AXIS from the gate's own
+        # `ENFORCEMENT:` line, which answers whether a RUNNER spawns it inline
+        # and can stop the step as it happens: no runner does, the gate says so
+        # in its header with the measurement behind the decision, and
+        # `flow_gate_enforcement_audit` records that answer as advisory. The
+        # two are one word apart and reading them as one is how a gate gets
+        # moved into the advisory slot and silently defanged. MEASURED on this
+        # tree: FOUR other gates already sit in this blocking slot while their
+        # program declares advisory enforcement, so the slot has never followed
+        # the declaration.
+        #
+        # Not condition-gated either, for the reason spelled out at step 15: the
         # reachability checker calls a `**/*.lef` trigger self-disabling, and a
         # gate skippable by the absence of its own subject is an orphan with
         # extra steps. Its refusals — an incomplete LEF set, discarded OBS

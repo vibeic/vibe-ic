@@ -304,29 +304,31 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
 
-**504 cells: 455 ENFORCED, 26 ENFORCED-CONTRADICTED, 11 WAIVED, 12 NA.**
+**504 cells: 456 ENFORCED, 25 ENFORCED-CONTRADICTED, 11 WAIVED, 12 NA.**
 
-The 26 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 455: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+The 25 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 456: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+
+**What these 504 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
 
 `ENFORCED` is published SPLIT, because it is not one thing. It means a live predicate ran and passed; it does not say WHAT it ran against, and that turns out to be three different answers:
 
-* **17** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
-* **44** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
-* **420** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
+* **16** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
+* **45** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
+* **395** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
 
 The 11 WAIVED and 12 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
 
-| dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | WAIVED | NA |
-|-----|----------|--------------:|----------------------:|---------------------:|-------:|---:|
-| 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 63 | 0 | 0 |
-| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 60 | 2 | 1 |
-| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 53 | 3 | 7 |
-| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 63 | 0 | 0 |
-| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 61 | 1 | 1 |
-| 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 1 | 0 |
-| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 58 | 4 | 1 |
-| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 17 | 44 | 0 | 0 | 2 |
-| **total** | | **17** | **44** | **420** | **11** | **12** |
+| dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |
+|-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------:|---:|
+| 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 63 | 0 | 0 | 0 |
+| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 60 | 0 | 2 | 1 |
+| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 35 | 18 | 3 | 7 |
+| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 62 | 1 | 0 | 0 |
+| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 61 | 0 | 1 | 1 |
+| 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 1 | 0 |
+| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 52 | 6 | 4 | 1 |
+| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 16 | 45 | 0 | 0 | 0 | 2 |
+| **total** | | **16** | **45** | **395** | **25** | **11** | **12** |
 
 Regenerate (never edit this block by hand, and never quote it without re-running):
 

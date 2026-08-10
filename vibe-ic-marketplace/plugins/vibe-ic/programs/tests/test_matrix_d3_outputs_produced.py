@@ -284,7 +284,7 @@ first, and it is the wrong kind of evidence twice over.
    ``provenance.jsonl`` window attribution and the contradictions built on it —
    is derived from mtimes, and ``step_write_ledger.mtime_fidelity`` WITHHOLDS
    all of it on any tree a checkout produced. Re-emitted over
-   ``/home/reyerchu/_sky130A_r3_run`` (455 files, 44 distinct mtimes, top share
+   ``$HOME/_sky130A_r3_run`` (455 files, 44 distinct mtimes, top share
    0.165 — a live run) and then over the same tree with its mtimes flattened as
    a clone flattens them, the totals fall ``D5 40 -> 0``, ``D7 335 -> 0``,
    window attributions ``17 -> 12`` — and **the D3 residual is identical, step
@@ -322,8 +322,8 @@ that it can find a stale one, because a guard that can only measure zero has
 not been shown to work.
 
 On FIVE REAL RUN DIRECTORIES with a ledger emitted by the real emitter and
-committed — ``/home/reyerchu/_sky130A_r3_run``, ``/home/reyerchu/_r6_sky130A/
-run`` and copies of the in-repo ``spm/v1.5.66_gf180mcuD``,
+committed — ``$HOME/_sky130A_r3_run``, ``$HOME/_r6_sky130A/run``
+and copies of the in-repo ``spm/v1.5.66_gf180mcuD``,
 ``sha256/clean_run_v1427_20260715`` and ``u_hawaii_adc/v1.9.86_sky130A`` — all
 133 declared entries were resolved twice, ledger-bound and unbound:
 
@@ -584,7 +584,14 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 #: number is re-derived here rather than carried forward: 96 PRODUCED_BY_RUN +
 #: 6 PRODUCED_LIVE + 12 UNPROVEN-and-searched = 114 live, 19 fixture, 133
 #: declared.
-_LIVE_ENTRY_COUNT = 114
+# 2026-08-10: 114 -> 119. Two run roots this commit ALREADY TRACKS were
+# registered (caravel_user_project/v1.9.43_sky130A and phase1_parity/espi), so
+# five previously unsearchable entries now resolve against committed bytes.
+# The property this number guards -- "no evidence from outside the commit" --
+# is intact and was checked rather than assumed: both roots are kind="repo"
+# with repo-relative paths, 351 and 253 files tracked at HEAD respectively, and
+# nothing here resolves through $HOME.
+_LIVE_ENTRY_COUNT = 119
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -1248,6 +1255,55 @@ def produce_live(step_id, entry: str, rec: Dict) -> Tuple[bool, str]:
                 f"{writes} is tracked at HEAD in the run root {label!r}; this "
                 f"cell claims a LIVE production and cannot prove one against a "
                 f"tree that already carries the artefact"
+            )
+        # A LIVE production must also be proved against a tree the producer
+        # can actually READ.
+        #
+        # `--under <rel>` is the `eda_report_audit` family's declaration of
+        # WHICH artefacts the producer was told to summarise, and the program
+        # itself already states what happens when none of them is there:
+        # `SCOPE_NOT_FOUND` — "discovery was structurally impossible, so
+        # whatever this verdict says about reports is about the scope, not
+        # about the project" (`eda_report_audit._main`). Such a run still
+        # writes a non-empty JSON, and until this guard existed the only test
+        # applied to it was `size > 0`, so an auditor writing "I found nothing
+        # to summarise" into an empty tree counted as the step having PRODUCED
+        # its declared output.
+        #
+        # MEASURED on this commit, driving the real producer over all eight
+        # admissible run roots for step 10's
+        # `reports/phase3/sta/pre_pnr_summary.json`: four roots that carry no
+        # STA report at all each wrote a 969-BYTE record with
+        # `passed: false`, findings `[STA_REPORT_EXISTS, SCOPE_NOT_FOUND]`,
+        # `files_found: 0` and both declared scopes in
+        # `scoped_under_missing` — and 969 is exactly the size this entry's
+        # manifest record cited as its live production. The proof was of the
+        # auditor's ability to report an absence, not of the step's ability to
+        # produce a summary.
+        #
+        # The bar is AT LEAST ONE declared scope present, not all of them,
+        # and that limit is disclosed rather than hidden: no admissible run
+        # root carries `phase3/stage3/sta/per_corner`, so requiring all would
+        # be unsatisfiable by this corpus today and would redden a cell over
+        # evidence nobody can supply. One present scope is what separates "the
+        # producer read the step's own report" from "the producer read
+        # nothing", which is the distinction this guard exists to draw.
+        #
+        # A producer that declares no `--under` scope (step 9's
+        # `synth_area_stats_emit .`) is not covered by this rule at all. Said
+        # out loud because a rule that silently applies to one record out of
+        # six is not a rule a reader can rely on.
+        scopes = [argv[i + 1] for i, tok in enumerate(argv)
+                  if tok == "--under" and i + 1 < len(argv)]
+        if scopes and not any((dst / s).exists() for s in scopes):
+            return False, (
+                f"none of the producer's declared --under scope(s) {scopes} "
+                f"exists in a tracked-only copy of {label!r}, so "
+                f"`{program}` can discover nothing there: whatever it writes "
+                f"is a record OF THE SCOPE, not a summary of this step's "
+                f"outputs (the program's own SCOPE_NOT_FOUND finding says so "
+                f"in those words). A non-empty absence record is not a "
+                f"produced artefact"
             )
         proc = subprocess.run(
             [sys.executable, str(prog_file), *argv],
@@ -2614,7 +2670,21 @@ def test_d3_a_present_artefact_still_reads_as_produced(monkeypatch):
 #: (or registering) a run tree that carries the entry, NOT by a waiver: see
 #: ``test_d3_unevidenced_cells_are_named_cell_by_cell``.
 UNEVIDENCED_CELLS: Tuple[str, ...] = (
-    "11", "15", "17", "19", "20", "29", "30", "32", "M1", "M2", "M3", "M4",
+    # 2026-08-10: "11" and "29" LEFT this set. Neither was waived and no
+    # evidence was manufactured for them -- the artefacts they declare were
+    # already tracked by this commit, and the manifest simply did not list the
+    # trees carrying them as run roots, so `resolve_anywhere` never looked.
+    # Registering those two roots is the "manifest staleness" repair this
+    # module's own docstring distinguishes from the other ten:
+    #   11 <- benchmark-data/ic/caravel_user_project/v1.9.43_sky130A
+    #         (phase2/stage2/dft/*, 351 files tracked at HEAD)
+    #   29 <- benchmark-data/evaluation/phase1_parity/espi
+    #         (phase3/stage3/sim_postlayout/pass.flag, 253 files tracked)
+    # The remaining ten declare artefacts NO path in this commit matches. Only
+    # a published run tree closes those, and publishing one costs >1 GB of DEFs
+    # against a 2.0 GB .git -- which is why they stay RED here rather than
+    # becoming waivers. A red cell cannot rot; a waiver can, and did.
+    "15", "17", "19", "20", "30", "32", "M1", "M2", "M3", "M4",
 )
 
 

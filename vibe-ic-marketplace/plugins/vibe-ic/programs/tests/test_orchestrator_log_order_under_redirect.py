@@ -32,6 +32,20 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 # The others capture their children's output, so nothing interleaves.
 ORCHESTRATORS = ("vibe_ic_one_shot_runner.py", "design_one_shot_runner.py")
 
+#: Bound for BOTH launches below. NOT a round number picked by feel:
+#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
+#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed.
+#: The landed values were 120 (the redirect probe) and 180 (the import probe).
+#: MEASURED here: the redirect probe is a five-line parent around two
+#: `print()`-only children and runs 0.06 s; the import probe imports one
+#: orchestrator module and runs 0.16 s. 60 s is ~370x the slower of the two.
+_PROBE_TIMEOUT_S = 60
+
 
 def _redirected_order(tmp_path: Path, preamble: str) -> list[str]:
     """Run a parent that prints around an inherited-stdout child, redirected to
@@ -49,7 +63,7 @@ def _redirected_order(tmp_path: Path, preamble: str) -> list[str]:
     log = tmp_path / "run.log"
     with log.open("w") as fh:
         subprocess.run([sys.executable, str(parent)], stdout=fh,
-                       stderr=subprocess.STDOUT, timeout=120)
+                       stderr=subprocess.STDOUT, timeout=_PROBE_TIMEOUT_S)
     return log.read_text().splitlines()
 
 
@@ -88,7 +102,7 @@ def test_each_orchestrator_line_buffers_its_own_stream(tmp_path):
         log = tmp_path / f"out_{prog}.log"
         with log.open("w") as fh:
             subprocess.run([sys.executable, str(probe)], stdout=fh,
-                           stderr=subprocess.STDOUT, timeout=180)
+                           stderr=subprocess.STDOUT, timeout=_PROBE_TIMEOUT_S)
         out = log.read_text()
         assert "line_buffering=True" in out, f"{prog}: {out[-400:]}"
 

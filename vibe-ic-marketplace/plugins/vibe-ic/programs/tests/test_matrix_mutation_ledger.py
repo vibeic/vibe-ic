@@ -87,6 +87,28 @@ CANARY_STEP_ID = "ZZ_MUTATION_LEDGER_CANARY_STEP"
 #: twice, and the two PLUGIN_TREE replays copy and re-run the plugin.
 REPLAY_TIMEOUT = 900
 
+#: Bound for the two DIRECT pytest launches in this file (the growth control
+#: and the witness-address collection). NOT a round number picked by feel:
+#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
+#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed.
+#: The landed values were 600 (growth control) and 300 (collection). MEASURED
+#: here: the growth control runs ONE cell nodeid under a spliced flow and takes
+#: 22.18 s worst of its two calls; the collection is `--collect-only` over
+#: eight nodeids at 0.84 s. 22.18 s is the thinnest margin in this file — 2.7x
+#: — and it is stated rather than rounded away, because the growth control
+#: makes TWO of these calls in one test and 2 x 60 = 120 s is precisely the
+#: two-call shape the `// 3` divisor was measured to leave room for.
+#: `REPLAY_TIMEOUT` above is deliberately NOT folded in here: it bounds
+#: `replay_many`, a cross-module callee this gate cannot resolve, and it is
+#: reported as an advisory rather than a finding. Changing it would alter what
+#: the replays are allowed to do, which is not this change's subject.
+_PYTEST_TIMEOUT_S = 60
+
 
 # ══════════════════════════════════════════════════════════════════════
 # The state of a cell is answered by the module that OWNS it
@@ -341,7 +363,7 @@ def test_the_gate_itself_reddens_on_a_grown_flow(tmp_path):
             [sys.executable, "-m", "pytest", node,
              "-q", "-p", "no:randomly", "--no-header", "-rN"],
             cwd=str(L.PLUGIN_ROOT), capture_output=True, text=True,
-            timeout=600, env=env)
+            timeout=_PYTEST_TIMEOUT_S, env=env)
 
     grown_run = run(grown)
     assert grown_run.returncode != 0, (
@@ -698,8 +720,8 @@ def test_the_cell_test_addresses_are_real_pytest_nodes():
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *nodes, "--collect-only", "-q",
          "-p", "no:randomly", "--no-header"],
-        cwd=str(L.PLUGIN_ROOT), capture_output=True, text=True, timeout=300,
-        env=env)
+        cwd=str(L.PLUGIN_ROOT), capture_output=True, text=True,
+        timeout=_PYTEST_TIMEOUT_S, env=env)
     assert proc.returncode == 0, (
         f"pytest could not collect every witness cell address; a replay "
         f"against an address that does not exist proves nothing.\n"

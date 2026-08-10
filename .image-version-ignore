@@ -147,3 +147,36 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_spare_tieoff_one_driver_
 # tag would claim those exact numbers were read off an image that never ran
 # them, the same measurement-honesty violation as the entries above.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue789_streamout_layermap_any_signoff_deck.py
+
+# The image a MEASUREMENT was taken in, not a pointer this module uses. Both
+# ghcr tags in the file sit inside `MEASURED (...)` comment blocks that quote
+# the tool's own verbatim stdout beside the tag that produced it (a chain that
+# was BUILT then discarded by fault's yosys re-synthesis). Advancing them would
+# attribute those exact lines to an image that never emitted them — the
+# measurement-honesty rule every entry above restates.
+#
+# COSTS NO LIVE COVERAGE, and that is checkable rather than asserted: the module
+# never names an image itself, it runs whatever `fault_atpg_run.DOCKER_IMAGE`
+# resolves to (`import fault_atpg_run as _fatpg`; every docker call goes through
+# `_fatpg._run_docker`, and the value is echoed back in the emitted report's
+# `image`/`image_used` fields). `fault_atpg_run.py` IS a registered
+# INSTALL_DOC_CANDIDATE, so the live pointer that decides which image actually
+# runs still tracks the anchor — it is simply spelled one file over.
+#
+# What would invalidate this exemption: a fully-qualified ghcr tag written into
+# this file as a DEFAULT or fallback rather than inside a MEASURED block. The
+# regression test beside the module pins the indirection above so that change
+# cannot pass unnoticed.
+vibe-ic-marketplace/plugins/vibe-ic/programs/fault_scan_chain_insert.py
+
+# vibe-ic#408 — a test FIXTURE, not a live install pointer. The constant is the
+# image the stub `docker` in this file reports, and the whole point of the tests
+# is that the container the program finds may NOT be the pinned one: the ref is
+# spelled with a version that can never exist so no reader mistakes it for an
+# install instruction and no `docker pull` of it could ever succeed. Advancing
+# it to the anchor would make the fixture agree with the pin, which is exactly
+# the condition the MISMATCH tests need to NOT hold — the same rule the
+# test_container_image_provenance.py and test_issue621_prose_version_drift.py
+# entries above already state. The program under test resolves the real anchor
+# itself from tools/vibeic-eda/VERSION, so no live coverage is lost here.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_pdk_registry_asset_half_reads_the_pinned_image.py

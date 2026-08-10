@@ -136,8 +136,8 @@ dimension-7 failure message and every cell's ``record_property`` carries the
 :data:`RECORD_BOUND_ROOTS` pins the empty population.
 
 MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
-``/home/reyerchu/_sky130A_r3_run`` and
-``/home/reyerchu/campaign_v1544/spm/converge_1.5.44_gf180mcuD`` yield 335 and
+``$HOME/_sky130A_r3_run`` and
+``$HOME/campaign_v1544/spm/converge_1.5.44_gf180mcuD`` yield 335 and
 264 written-never-declared candidates. **That is not 335 findings, and the
 difference is the whole of the work.** Filtered through W2's existing rules —
 undeclared, artefact-shaped, gate-read, not a step-condition input — 12 and 9

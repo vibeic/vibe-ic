@@ -1178,10 +1178,43 @@ def audit(path: Path, layout: Optional[Path] = None,
                     file=str(fp)))
             else:
                 any_real_check = True
+                # SAY WHAT THIS GATE ESTABLISHED, AND NOTHING MORE.
+                #
+                # This gate answers exactly one question: is the 0 vacuous
+                # because the layout is empty? Here it is not — there IS
+                # geometry. That is the whole of the finding.
+                #
+                # The phrase it used to carry, "earned DRC-clean", claims a
+                # different and much larger thing: that a DRC adequate to the
+                # design ran and found nothing. This gate never looks at WHICH
+                # deck produced the 0 and cannot tell a foundry sign-off deck
+                # from the router's own in-loop pass.
+                #
+                # OBSERVED on a full run: the sign-off DRC was killed at its
+                # wall-clock cap and wrote no report; the surviving
+                # `drc_signoff.rpt` was the ROUTER's in-loop projection
+                # (antenna + via only, no spacing, no width, no min-area); and
+                # this line then stamped PASS / "earned DRC-clean" over a
+                # layout independently measured to carry ~1,968 unpatchable
+                # min-area shapes. `drc_signoff.json` correctly recorded
+                # `passed=false, is_signoff_deck=false` and even warned that
+                # the spacing and width categories were absent — so the truth
+                # was on disk, and this sentence contradicted it.
+                #
+                # The verdict is unchanged (still INFO, still not vacuous). The
+                # CLAIM is narrowed to what was measured, and the reader is
+                # pointed at the artefact that owns deck adequacy.
                 result.findings.append(Finding(
                     rule="DRC_CLEAN_EARNED", severity="INFO",
                     message=f"0-violation verdict on a layout proven to contain "
-                            f"geometry ({evidence}) — earned DRC-clean.{hint}",
+                            f"geometry ({evidence}) — the zero is NOT vacuous. "
+                            f"This gate does NOT establish that the deck behind "
+                            f"that zero is adequate for sign-off: it never reads "
+                            f"which deck produced it, so a router in-loop pass "
+                            f"and a foundry sign-off deck are indistinguishable "
+                            f"here. For deck adequacy read "
+                            f"`drc_signoff.json` (`is_signoff_deck`, `passed`) — "
+                            f"do not quote this line as a clean DRC.{hint}",
                     file=str(fp)))
         elif geometry_ok:
             # No verdict token parsed, but the run demonstrably examined
