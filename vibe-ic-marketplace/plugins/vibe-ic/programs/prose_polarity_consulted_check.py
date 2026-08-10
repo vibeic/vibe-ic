@@ -100,6 +100,17 @@ _NOT_PROSE: Dict[str, str] = {
         "#711 die_area_budget_um) both read English design documents, where "
         "denial is spellable and was spelled. Consulting `_prose_polarity` on "
         "a VIAS entry would be an unreachable branch.",
+    "policy_direction_pin_check::flip_source":
+        "Python's own string-literal grammar, matched at a RECORDED (line, "
+        "column). The matched text is `[rbuRBU]{0,2}` followed by an opening "
+        "quote -- a production of the Python lexical grammar, in which there "
+        "is no form that DENIES the literal it has just opened: source code "
+        "cannot say 'there is NOT a string here'. And the value written back "
+        "is `new_value`, the caller's replacement -- the function REPLACES the "
+        "matched text and hands the mutated source to pytest; it never "
+        "publishes the matched text as a declaration. Consulting "
+        "`_prose_polarity` on a quote character would be an unreachable "
+        "branch.",
 }
 
 
@@ -125,11 +136,56 @@ def _searches_prose(fn: ast.AST) -> bool:
     return False
 
 
+#: Modules whose `.compile` mints a PATTERN. Kept to the two spellings that
+#: exist in this corpus rather than `attr == "compile"` on anything, so an
+#: unrelated `x = obj.compile(...)` cannot borrow the exclusion.
+_PATTERN_FACTORY_MODULES = {"re", "regex"}
+
+
+def _is_compiled_pattern(value: ast.AST) -> bool:
+    """`re.compile(...)` -- the INSTRUMENT that reads prose, not a value read
+    out of prose.
+
+    A `re.Pattern` is never a declared value taken out of a sentence, whatever
+    was concatenated to build it, and no sentence can deny one. Both real
+    defects (#706 `pdk_target`, #711 `die_area_budget_um`) wrote the matched
+    TEXT into a declared field; memoising the searcher is keeping a tool.
+
+    Without this, a word-boundary helper that caches its own pattern --
+
+        left = r"(?<![A-Za-z0-9_])" if re.match(r"[A-Za-z0-9_]", token) else ""
+        pat  = re.compile(left + re.escape(token) + right)
+        _CACHE[token] = pat
+
+    -- reads as an extractor publishing a declared value, because the `re.match`
+    in the CONDITION marks `left` match-derived and `pat` inherits it. The text
+    that goes INTO a pattern is still tracked: an extractor that compiles a
+    pattern AND writes the matched text is unchanged, which is pinned by test.
+
+    MEASURED on this corpus before it was written: this removes exactly ONE
+    name from the 217 the predicate returns, `policy_direction_pin_check::_names`,
+    and no other. Two wider narrowings were built first and REJECTED on the same
+    measurement -- dropping the test of a conditional expression also dropped
+    `parametric_spec_extractor::extract_arithmetic`, whose
+    `"saturate" if re.search(r"saturat", text) else ...` is the #706 defect
+    exactly; and excluding slice bounds also dropped
+    `l22_checklist_milestone_emit::extract_milestones`, which publishes a
+    document's own resolution column. Both are findings, not noise.
+    """
+    return (isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "compile"
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id in _PATTERN_FACTORY_MODULES)
+
+
 def _match_derived_names(fn: ast.AST) -> Set[str]:
     """Locals bound to a regex match or to text taken out of one.
 
     `m = RE.search(t)`, `hits = RE.findall(t)`, `val = m.group(1)`, and one hop
-    onward (`val = raw.strip()`), which is how both real defects were written."""
+    onward (`val = raw.strip()`), which is how both real defects were written.
+    A local bound to `re.compile(...)` is NOT one of them -- see
+    `_is_compiled_pattern`."""
     out: Set[str] = set()
     for _ in range(3):                       # transitive, cheaply bounded
         grew = False
@@ -138,6 +194,8 @@ def _match_derived_names(fn: ast.AST) -> Set[str]:
                 continue
             t = n.targets[0]
             if not isinstance(t, ast.Name):
+                continue
+            if _is_compiled_pattern(n.value):
                 continue
             for sub in ast.walk(n.value):
                 hit = (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
