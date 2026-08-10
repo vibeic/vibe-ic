@@ -580,6 +580,62 @@ def _gate_citations(doc: Path) -> set:
         return set()
 
 
+def _git_tracked(dest: Path) -> Optional[set]:
+    """Paths git already TRACKS under `dest`, relative to it — or None when
+    git cannot answer, which is a different fact from "nothing is tracked".
+
+    At publish time `dest` is freshly staged and not yet added, so the honest
+    answer there is the empty set; run as a re-derivation over an already
+    published cell it is the cell's own file list."""
+    try:
+        cp = subprocess.run(["git", "ls-files", "-z", "--", "."],
+                            cwd=str(dest), capture_output=True, text=True,
+                            timeout=55)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if cp.returncode != 0:
+        return None
+    return {p for p in cp.stdout.split("\0") if p}
+
+
+def _clone_visible(dest: Path, rels: set) -> set:
+    """Of `rels` (paths relative to `dest`, all present on disk), the ones a
+    CLONE of this repository actually receives.
+
+    THE DEFECT THIS CLOSES. "It is in `dest`" and "the reader gets it" are two
+    different facts, and a repo-wide `.gitignore` rule is the gap between them.
+    MEASURED on the two published spm cells as committed: 45 CITATION_ROUTING
+    rows said RESOLVES because the cited log WAS sitting in the staged
+    directory when this program ran — and `*.log` at the repo root meant `git
+    add` never carried one of them. The record whose entire job is to tell a
+    reader whether a pointer can be followed asserted the good outcome for 45
+    pointers no reader could follow. Not a stale record: false when written.
+
+    `_prune_provenance` already draws this exact line, on the same publish,
+    for the same class of file — its docstring names `phase2/stage2/synth/
+    synth.log` by path. This function is that definition applied to the other
+    record, so the one publish stops holding two answers to one question.
+
+    CARRIAGE IS `tracked OR not ignored`, never `not ignored` alone: git stops
+    applying ignore rules to a path it already tracks, and this repo force-adds
+    evidence logs for exactly that reason. Asking only about ignore rules would
+    disclose a file the reader demonstrably receives.
+
+    FAIL-OPEN, deliberately. If git cannot answer, every disk-present path is
+    treated as carried — the behaviour that shipped before this. The wrong
+    direction to fail is toward a false disclosure: `evidence_citation_resolves
+    _check` HONOURS OUT_OF_PUBLISHED_SCOPE, so a disclosure invented by a git
+    hiccup would suppress a real finding. A false RESOLVES, by contrast, is
+    caught by `citation_routing_is_true_check`.
+    """
+    if not rels:
+        return set()
+    tracked = _git_tracked(dest)
+    if tracked is None:
+        return set(rels)
+    return (set(rels) - _git_ignored(dest, rels)) | (tracked & set(rels))
+
+
 def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     """Every evidence path the STAGED tree's own JSONs cite, and whether it
     resolves inside the published cell.
@@ -591,6 +647,8 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     if not dest.is_dir():
         return out
     seen = set()
+    pending: List[Dict[str, object]] = []
+    on_disk: set = set()
     # Walk the PUBLISHED tree, not this machine's disk. At publish time `dest`
     # is a freshly staged directory and the two agree; run as an AUDIT over an
     # already-published cell they do not, and a working checkout carries
@@ -633,15 +691,39 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
                 # to FOLLOW is a defect.
                 decision = "UNFOLLOWABLE_ABSOLUTE"
             elif (dest / cited).exists():
-                decision = "RESOLVES"
+                # ON DISK IS NOT THE SAME FACT AS "THE READER GETS IT", and
+                # deciding here is what made this record lie. Deferred to the
+                # second pass below, which asks git what a CLONE carries.
+                decision = None
+                on_disk.add(cited)
             elif any(cited.startswith(f"phase{n}/stage") for n in "123"):
                 decision = "OUT_OF_PUBLISHED_SCOPE"
             elif cited in asserted:
                 decision = "DANGLING_UNDER_PASS"
             else:
                 decision = "DANGLING"
-            out.append({"doc": rel_doc, "cited": cited,
-                        "decision": decision})
+            pending.append({"doc": rel_doc, "cited": cited,
+                            "decision": decision,
+                            "asserted": cited in asserted})
+
+    # SECOND PASS — the only thing it decides is the deferred RESOLVES, and it
+    # decides it against `git`, not against this machine's disk. Everything
+    # else was already final above.
+    carried = _clone_visible(dest, on_disk)
+    for row in pending:
+        decision = row["decision"]
+        if decision is None:
+            cited = str(row["cited"])
+            if cited in carried:
+                decision = "RESOLVES"
+            elif any(cited.startswith(f"phase{n}/stage") for n in "123"):
+                decision = "OUT_OF_PUBLISHED_SCOPE"
+            elif row["asserted"]:
+                decision = "DANGLING_UNDER_PASS"
+            else:
+                decision = "DANGLING"
+        out.append({"doc": str(row["doc"]), "cited": str(row["cited"]),
+                    "decision": str(decision)})
     return out
 
 
