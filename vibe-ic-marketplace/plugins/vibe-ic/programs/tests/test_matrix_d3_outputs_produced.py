@@ -422,9 +422,13 @@ The alternative was to move those cells to WAIVED, and it was rejected:
 
 So the seven cells stop CLAIMING ENFORCED-and-green: they stay ENFORCED and
 they FAIL, with a message naming the entry, the run root that is missing and
-the one action that closes it. Twelve cells are red for this reason (the
-eleven above plus M1, whose waiver covers a different entry) and they are
-pinned in :data:`UNEVIDENCED_CELLS` so the population cannot grow quietly.
+the one action that closes it. Nine cells are red for this reason. Ten are
+pinned in :data:`UNEVIDENCED_CELLS` so the population cannot grow quietly --
+the nine red ones plus M1, which is WAIVED and therefore xfails rather than
+failing. The two counts differ on purpose, and both are now held to the live
+register by ``test_matrix_unevidenced_prose_population``, so this sentence
+cannot drift away from it again the way it did when the register went from
+twelve entries to ten.
 Falsifiability is restored in BOTH directions and is asserted, not described:
 ``test_d3_an_entry_that_resolves_nowhere_is_not_reported_as_produced`` plants
 step 17's ``placed.def`` in an admissible run root and the cell goes green
@@ -2693,7 +2697,7 @@ def test_d3_unevidenced_cells_are_named_cell_by_cell():
 
     WHY THESE ARE FAILURES AND NOT NEW WAIVERS. A waiver is a public admission
     that a gap is ACCEPTED, and this module's own history is the argument
-    against granting twelve of them: its two FPGA waivers rested on a ``find
+    against granting ten of them: its two FPGA waivers rested on a ``find
     ~ -name '*.sof'`` count that was true on one day on one machine and false a
     fortnight later, and its A8 waiver existed in two copies telling two
     different stories. Every gap named here is closed by a commit — publish the
@@ -2703,17 +2707,21 @@ def test_d3_unevidenced_cells_are_named_cell_by_cell():
 
     The two kinds of gap are NOT the same and the difference is actionable:
 
-      * steps 11 and 29 declare artefacts THIS COMMIT ALREADY TRACKS, at
+      * UNTIL 2026-08-10 steps 11 and 29 sat here, declaring artefacts THIS
+        COMMIT ALREADY TRACKS, at
         ``benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage2/
         dft/*`` and ``benchmark-data/evaluation/phase1_parity/*/phase3/stage3/
         sim_postlayout/pass.flag``. Neither tree is a manifest run root, so
-        ``resolve_anywhere`` never looks there. That is manifest staleness and
-        registering the tree closes it. (Out of this cell's scope: touching the
-        manifest to move a cell is the one edit this campaign may not make.)
-      * the other ten declare artefacts no path in this commit matches at all.
-        Only a published run tree closes those.
+        ``resolve_anywhere`` never looked there. That is manifest staleness;
+        registering those two trees closed it and BOTH CELLS LEFT this
+        register -- see the dated note on :data:`UNEVIDENCED_CELLS`. Neither
+        was waived and no evidence was manufactured for either. (Out of this
+        cell's scope: touching the manifest to move a cell is the one edit
+        this campaign may not make.)
+      * all ten still pinned declare artefacts no path in this commit matches
+        at all. Only a published run tree closes those.
 
-    The pin is what keeps the population from growing quietly: a thirteenth
+    The pin is what keeps the population from growing quietly: an eleventh
     cell joining is a NEW loss of evidence and must be reported as its own
     finding, not absorbed into a set that is already red.
     """
