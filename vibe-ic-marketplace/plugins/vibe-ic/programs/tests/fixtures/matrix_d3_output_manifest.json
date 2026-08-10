@@ -377,8 +377,9 @@
       "reports/phase3/sta/pre_pnr_summary.json"
      ],
      "writes": "reports/phase3/sta/pre_pnr_summary.json",
-     "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-     "size_bytes": 969
+     "base_run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
+     "size_bytes": 1696,
+     "base_run_note": "RE-MEASURED 2026-08-10, not renamed. Commit 51517e71 retired benchmark-data/ic/spm/v1.5.66_gf180mcuD and bulk-renamed all 65 run/base_run citations onto the replacement cell. That is correct for a PRODUCED_BY_RUN `run`; it INVERTS a PRODUCED_LIVE `base_run`, because the replacement cell carries this artefact TRACKED AT HEAD (885 B, added by that same commit) while the retired one did not - verified with `git ls-tree -r 51517e71^ -- <retired cell>`, which lists post_route_signoff_corner.json, spef_vs_estimate_discrepancy.json and sta_corner_record_completeness.json under reports/phase3/sta/ and no pre_pnr_summary.json. A live production cannot be proved against a tree that already holds the artefact, so the record had become unprovable by construction and the cell was red. It is re-pointed at the run root step 10's OTHER declared output is already evidenced by, so both of this steps entries now come from ONE run: the run that produced phase3/stage3/sta/pre_pnr_timing.rpt is the run whose summary of that report is produced here. THE OLD RECORD WAS ALREADY HOLLOW, which is why this is not a like-for-like re-point: 969 B is exactly what this producer writes into a tree carrying NO STA report at all (passed:false, findings [STA_REPORT_EXISTS, SCOPE_NOT_FOUND], files_found:0, BOTH --under scopes in scoped_under_missing), byte-identical from four independent admissible roots measured on this commit. produce_live now refuses a base run in which no declared --under scope exists, so that absence record can never again be counted as a produced artefact."
     }
    }
   },

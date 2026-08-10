@@ -1249,6 +1249,55 @@ def produce_live(step_id, entry: str, rec: Dict) -> Tuple[bool, str]:
                 f"cell claims a LIVE production and cannot prove one against a "
                 f"tree that already carries the artefact"
             )
+        # A LIVE production must also be proved against a tree the producer
+        # can actually READ.
+        #
+        # `--under <rel>` is the `eda_report_audit` family's declaration of
+        # WHICH artefacts the producer was told to summarise, and the program
+        # itself already states what happens when none of them is there:
+        # `SCOPE_NOT_FOUND` — "discovery was structurally impossible, so
+        # whatever this verdict says about reports is about the scope, not
+        # about the project" (`eda_report_audit._main`). Such a run still
+        # writes a non-empty JSON, and until this guard existed the only test
+        # applied to it was `size > 0`, so an auditor writing "I found nothing
+        # to summarise" into an empty tree counted as the step having PRODUCED
+        # its declared output.
+        #
+        # MEASURED on this commit, driving the real producer over all eight
+        # admissible run roots for step 10's
+        # `reports/phase3/sta/pre_pnr_summary.json`: four roots that carry no
+        # STA report at all each wrote a 969-BYTE record with
+        # `passed: false`, findings `[STA_REPORT_EXISTS, SCOPE_NOT_FOUND]`,
+        # `files_found: 0` and both declared scopes in
+        # `scoped_under_missing` — and 969 is exactly the size this entry's
+        # manifest record cited as its live production. The proof was of the
+        # auditor's ability to report an absence, not of the step's ability to
+        # produce a summary.
+        #
+        # The bar is AT LEAST ONE declared scope present, not all of them,
+        # and that limit is disclosed rather than hidden: no admissible run
+        # root carries `phase3/stage3/sta/per_corner`, so requiring all would
+        # be unsatisfiable by this corpus today and would redden a cell over
+        # evidence nobody can supply. One present scope is what separates "the
+        # producer read the step's own report" from "the producer read
+        # nothing", which is the distinction this guard exists to draw.
+        #
+        # A producer that declares no `--under` scope (step 9's
+        # `synth_area_stats_emit .`) is not covered by this rule at all. Said
+        # out loud because a rule that silently applies to one record out of
+        # six is not a rule a reader can rely on.
+        scopes = [argv[i + 1] for i, tok in enumerate(argv)
+                  if tok == "--under" and i + 1 < len(argv)]
+        if scopes and not any((dst / s).exists() for s in scopes):
+            return False, (
+                f"none of the producer's declared --under scope(s) {scopes} "
+                f"exists in a tracked-only copy of {label!r}, so "
+                f"`{program}` can discover nothing there: whatever it writes "
+                f"is a record OF THE SCOPE, not a summary of this step's "
+                f"outputs (the program's own SCOPE_NOT_FOUND finding says so "
+                f"in those words). A non-empty absence record is not a "
+                f"produced artefact"
+            )
         proc = subprocess.run(
             [sys.executable, str(prog_file), *argv],
             cwd=dst, capture_output=True, text=True, timeout=60,
