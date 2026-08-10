@@ -911,7 +911,8 @@ def resolve(contract: Dict[str, Any],
             overrides: Dict[str, Any],
             rtl_declared: Dict[str, Tuple[Any, str]],
             existing: Optional[Dict[str, Any]] = None,
-            prior: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+            prior: Optional[Dict[str, Dict[str, Any]]] = None,
+            rtl_route_consulted: bool = True) -> Dict[str, Any]:
     """Resolve every contract field.  Returns a per-field status map.
 
     Priority, strongest first:
@@ -920,6 +921,10 @@ def resolve(contract: Dict[str, Any],
          before; re-running the emitter must not silently discard it)
       3. an opt-in `key = value` line from an RTL COMMENT block
       4. UNDETERMINED
+
+    ``rtl_route_consulted`` says whether tier 3 was actually READ. It only
+    affects the wording of an UNDETERMINED field's ``reason``, and it defaults
+    to True so every existing caller keeps the sentence it has today.
 
     There is no fifth tier.  A value this program cannot trace to something the
     designer wrote is not produced.
@@ -1042,11 +1047,27 @@ def resolve(contract: Dict[str, Any],
                          recovered_from_prose=True,
                          provenance_verified=True)
         else:
+            # Tier 3 is OPT-IN (`--from-rtl-declaration`). When the caller
+            # did not opt in, `rtl_declared` is empty because the route was
+            # NEVER READ -- which is indistinguishable, from inside this
+            # function, from "read it and found nothing". Saying "no line in an
+            # RTL comment block" in that case reports a search that did not
+            # happen, and it sends the author to write the very block the
+            # program has disabled. MEASURED (sha256 x sky130A, 2026-08-10): an
+            # author wrote a conforming `DECLARED CHOICES` block from this
+            # sentence; `_rtl_declared` reads all 7 fields out of it, and the
+            # CLI still reported all 7 undeclared with this same sentence.
             entry.update(
                 status="undetermined",
                 reason=("no author declaration supplied, none already recorded "
-                        "in the declaration file, and no `%s = <value>` line in "
-                        "an RTL comment block" % name),
+                        "in the declaration file, and " + (
+                            "no `%s = <value>` line in an RTL comment block"
+                            % name
+                            if rtl_route_consulted else
+                            "the RTL comment-block route was NOT consulted "
+                            "(it is opt-in: pass --from-rtl-declaration to "
+                            "read `%s = <value>` from an RTL comment block)"
+                            % name)),
                 recovered_from_prose=False)
 
         if entry["status"] == "determined":
@@ -1432,7 +1453,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     sidecar = out_path.with_name(out_path.stem + ".provenance.json")
     prior = _load_prior_provenance(sidecar)
 
-    status = resolve(contract, overrides, rtl_declared, existing, prior)
+    status = resolve(contract, overrides, rtl_declared, existing, prior,
+                     rtl_route_consulted=bool(args.from_rtl_declaration))
 
     undetermined_required = sorted(
         n for n, e in status.items()
