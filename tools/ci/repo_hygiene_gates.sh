@@ -79,6 +79,25 @@ run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_s
 # one makes a gate people route around. It runs ADVISORY (rc 0) so the count is
 # published every run and cannot drift unseen.
 run "container exec deadlines"  "$ROOT" python3 "$PG/container_exec_deadline_check.py" "$PLUGIN"
+# vibe-ic#693 — its NEIGHBOUR, and one of the gates nothing invoked. The
+# container login shell prints two `[INFO]` lines on STDOUT before the tool
+# does, so a caller that reads captured stdout as a value gets the banner
+# instead. The gate was written, tested, and reachable from nothing: its own
+# unit test was the only thing that had ever run it, which is the zero-coverage
+# shape `checker_execution_wiring_audit` reports and this lane exists to close.
+#
+# MEASURED at wiring time: population 1127 programs, 25 of them pass a login
+# shell to the container, verdict PASS — a live verdict over a real denominator,
+# not a gate that can only ever say "nothing to look at". Injecting one
+# `int(cp.stdout)` beside a `-lc` call site turns it rc 1 and names the line;
+# removing it returns rc 0. Both directions measured.
+#
+# BLOCKING on rc 1: unlike its neighbour above there is no pre-existing pile —
+# zero findings stand today, so nothing has to be blessed for this to be green.
+# `run_tolerating_uncheckable` for rc 2, which the gate returns when NO caller
+# passes a login shell at all: that means either the hazard is gone or the
+# detector stopped matching, and the gate refuses to call either one a PASS.
+run_tolerating_uncheckable "container stdout vs the login banner" "$ROOT" python3 "$PG/container_login_banner_parse_check.py"
 # vibe-ic#552 — a warning our EDA fork substitutes for an upstream abort must
 # still be visible to the gate that needs it. Every downgrade moves a
 # condition out of the error-matching sets BY CONSTRUCTION, so the
