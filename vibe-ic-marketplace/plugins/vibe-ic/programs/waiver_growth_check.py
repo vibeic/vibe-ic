@@ -4,7 +4,8 @@ waiver_growth_check.py — v0.112 release-gate (BACKLOG-v10 P0 follow-up).
 
 Compares current `<project>/waivers.json` against a baseline (frozen at
 the previous release tag). Fails CI if:
-  - waiver count grew without explicit `growth_rationale` in waivers.json, or
+  - waiver count grew without a `growth_rationale` in waivers.json NAMING
+    the new waivers, or
   - a previously-closed waiver re-appeared, or
   - a waiver's evidence pointer became stale (referenced file deleted).
 
@@ -99,13 +100,43 @@ comparison is against an EMPTY document, and entries then read as growth. That
 is not a new policy invented here — it is the behaviour this gate already
 applies, and already has a shipped test for, on the dialect it could see. The
 escape hatches are the ones that were always there and are all operator-driven
-and recorded in the data: a substantive top-level ``growth_rationale``, an
+and recorded in the data: a ``growth_rationale`` naming each new waiver, an
 explicit ``--baseline``, or ``--tolerance``.
 
 Because "compared against an absent baseline" and "compared against a recorded
 baseline of zero" produce the same number and very different meanings, the
 report now says which one happened, in both the text and the JSON
 (``baseline_present``).
+
+A RATIONALE COVERS ONLY THE WAIVERS IT NAMES
+============================================
+``growth_rationale`` used to be ONE top-level string, and 30 characters of
+anything set ``growth_justified`` for any growth of any size, permanently. It
+was therefore unbounded (the sentence that justified one waiver justified
+fifty), unscoped (it named nothing, so it covered a waiver added three releases
+later that nobody wrote it about) and non-expiring (it was never renewed).
+Measured on the unfixed gate: 50 waivers against an empty baseline with
+``growth_rationale`` set to ``"x" * 32`` printed ``[PASS]`` and exited 0 — the
+unchecked accumulation this gate's own ``details`` text says it prevents,
+reported as a pass.
+
+It is now an OBJECT keyed by the waiver identities it justifies — byte-for-byte
+the strings printed under ``new_waivers`` — each mapping to text saying why THAT
+waiver is acceptable for this release::
+
+    {"growth_rationale": {
+       "'36'": "<why this one is acceptable for this release>",
+       "waivers:step='lvs';phase='3';ticket='T-1'": "<and this one>"}}
+
+A new waiver therefore needs its own sentence and cannot inherit one written
+about something else. This is the doctrine ``signoff_audit`` already applies to
+``si_vacuity_accepted``, where naming the code is what makes an entry a
+disclosure rather than a blanket and a wildcard is refused; the same argument
+applies one level up, to the authorisation for the waiver existing at all.
+
+Keys are matched EXACTLY — never resolved, aliased or matched by substring. An
+unmatched key covers nothing, so the failure is CLOSED, and the report prints
+the exact JSON to paste. See :func:`_rationale_scope`.
 
 Usage:
   python3 waiver_growth_check.py <project_dir> \\
@@ -114,7 +145,8 @@ Usage:
 Default baseline: `<project>/.vibe-ic-state/waivers_baseline.json`
 Default tolerance: 0 (any net growth without rationale fails)
 Exit codes:
-  0  PASS — waiver count flat or shrinking, OR growth has explicit rationale
+  0  PASS — waiver count flat or shrinking, OR every new waiver is named in
+     `growth_rationale`
   1  FAIL — waiver grew unjustifiably
   2  IO error
 """
@@ -135,6 +167,12 @@ import _waiver_entries as _we  # noqa: E402  (after sys.path bootstrap)
 #: module docstring for why prose, version-bearing and severity fields are not
 #: among them.
 _WAIVERS_IDENTITY_FIELDS: Tuple[str, ...] = ("step", "phase", "ticket")
+
+#: Minimum characters of substantive text, PER NAMED WAIVER. Unchanged from the
+#: document-level bar it replaces: the #922 fix is about what a rationale must
+#: NAME, not about how long it must be. Raising the bar instead would have left
+#: a longer blanket authorising exactly as much.
+_MIN_RATIONALE_CHARS = 30
 
 
 @dataclass
@@ -177,6 +215,53 @@ def _identity(dialect: str, entry: Any) -> str:
         return repr(entry["id"])
     fields = ";".join(f"{f}={entry.get(f)!r}" for f in _WAIVERS_IDENTITY_FIELDS)
     return f"{dialect}:{fields}"
+
+
+def _rationale_scope(
+        waivers_doc: Any) -> Tuple[Dict[str, str], str, Dict[str, str]]:
+    """``(identity -> text, shape, identity -> why-rejected)`` for the
+    document's ``growth_rationale``.
+
+    ``shape`` is ``"scoped"`` (an object naming waivers), ``"blanket"`` (the
+    bare string this replaces), ``"absent"`` or ``"unreadable"``.
+
+    Keys are matched EXACTLY, never resolved, aliased or matched by substring.
+    A ``waived_steps`` identity is ``repr(id)``, which distinguishes the
+    integer ``3`` from the string ``"3"``; accepting a friendlier bare alias
+    would fuse them, and this module already refuses to guess a vocabulary in
+    the direction that loses waivers — see :func:`_cascade_target_name`. An
+    unmatched key covers nothing, which fails CLOSED: the safe direction.
+
+    A bare string is reported as ``"blanket"`` and covers NOTHING. It is not
+    silently upgraded to cover the current growth. A sentence that names no
+    waiver is not evidence about any particular waiver, and inferring which
+    ones its author meant would be precisely the guess this module refuses
+    everywhere else. The report says so, and prints the object to write.
+    """
+    if not isinstance(waivers_doc, dict):
+        return {}, "absent", {}
+    raw = waivers_doc.get("growth_rationale")
+    if raw is None:
+        return {}, "absent", {}
+    if isinstance(raw, str):
+        return {}, "blanket", {}
+    if not isinstance(raw, dict):
+        return {}, "unreadable", {}
+    scope: Dict[str, str] = {}
+    rejected: Dict[str, str] = {}
+    for ident, text in raw.items():
+        if not isinstance(ident, str):
+            rejected[repr(ident)] = "key is not a waiver identity string"
+        elif not isinstance(text, str):
+            rejected[ident] = (f"rationale is a {type(text).__name__}, "
+                               f"not text")
+        elif len(text.strip()) < _MIN_RATIONALE_CHARS:
+            rejected[ident] = (
+                f"rationale is {len(text.strip())} characters, below the "
+                f"{_MIN_RATIONALE_CHARS}-character bar")
+        else:
+            scope[ident] = text
+    return scope, "scoped", rejected
 
 
 def _cascade_target_name(dialect: str, entry: Dict[str, Any]) -> Any:
@@ -458,35 +543,85 @@ def main():
                 ),
             ))
 
-    # Growth check.
-    rationale = cur_doc.get("growth_rationale", "") if isinstance(cur_doc, dict) else ""
-    growth_justified = (
-        isinstance(rationale, str)
-        and len(rationale.strip()) >= 30  # minimum substantive justification
-    )
+    # Growth check. A rationale covers exactly the waiver identities it NAMES;
+    # see `_rationale_scope` for what one unnamed string used to authorise.
+    scope, rationale_shape, rejected = _rationale_scope(cur_doc)
+    uncovered = sorted(i for i in new_waivers if i not in scope)
+    growth_justified = rationale_shape == "scoped" and not uncovered
+
+    # Prose left behind for a waiver that no longer exists is the non-expiring
+    # half of the same defect, made visible. WARN rather than ERROR: under the
+    # scoped contract stale text authorises nothing, so it is litter, not a
+    # false green — and escalating it would fail projects for tidiness.
+    stale_scope = sorted(k for k in scope if k not in cur_roots)
+    if stale_scope:
+        findings.append(Finding(
+            severity="WARN",
+            category="GROWTH_RATIONALE_STALE_SCOPE",
+            message=(
+                f"`growth_rationale` names {len(stale_scope)} waiver "
+                f"identit{'y' if len(stale_scope) == 1 else 'ies'} that "
+                f"waivers.json no longer carries: {stale_scope}. The waiver "
+                f"closed; its authorisation should close with it."
+            ),
+        ))
 
     if net_growth > args.tolerance and not growth_justified:
+        if rationale_shape == "blanket":
+            why = (
+                "`growth_rationale` is a bare string, which names no waiver "
+                "and so authorises none: the same sentence would otherwise "
+                "cover every waiver added in every later release. ")
+        elif rationale_shape == "unreadable":
+            why = (
+                f"`growth_rationale` is a "
+                f"{type(cur_doc.get('growth_rationale')).__name__}, which "
+                f"carries no waiver identities. ")
+        elif rationale_shape == "scoped":
+            why = (
+                f"`growth_rationale` covers "
+                f"{len(new_waivers) - len(uncovered)} of the "
+                f"{len(new_waivers)} new waivers; not covered: {uncovered}. ")
+            if rejected:
+                why += ("Named but unusable as justification: "
+                        + "; ".join(f"{k} ({v})"
+                                    for k, v in sorted(rejected.items()))
+                        + ". ")
+        else:
+            why = "waivers.json carries no `growth_rationale`. "
+
+        paste = json.dumps(
+            {"growth_rationale": {
+                i: (f"<>={_MIN_RATIONALE_CHARS} characters saying why THIS "
+                    f"waiver is acceptable for this release>")
+                for i in (uncovered or sorted(new_waivers))}},
+            indent=2)
+
         findings.append(Finding(
             severity="ERROR",
             category="UNJUSTIFIED_WAIVER_GROWTH",
             message=(
                 f"Net waiver count grew by {net_growth} (> tolerance "
-                f"{args.tolerance}) without `growth_rationale` in waivers.json. "
+                f"{args.tolerance}) without a `growth_rationale` in "
+                f"waivers.json covering it. "
                 f"New waivers: {sorted(new_waivers)}. "
+                + why
                 + ("" if base_present else
                    "No baseline file exists at the path below, so the "
                    "comparison was made against an EMPTY document and every "
                    "current waiver counts as new. Freeze a baseline (or pass "
                    "--baseline) to measure growth against a real reference. ")
-                + f"Either close one of the new waivers, OR add a top-level "
-                f"`growth_rationale` field to waivers.json explaining why "
-                f"net growth is acceptable for this release."
+                + f"Either close the uncovered waivers, OR give each one its "
+                f"own entry in the top-level `growth_rationale` OBJECT, keyed "
+                f"by the identity printed above:\n{paste}"
             ),
             details=(
                 "Repeated growth without rationale leads to silent rot: every "
                 "release accumulates more deferred work until the project has "
                 "more open waivers than executed steps. This gate enforces "
-                "that growth is a deliberate, documented decision."
+                "that growth is a deliberate, documented decision — one "
+                "decision per waiver, so a new waiver needs its own sentence "
+                "and cannot inherit one written about something else."
             ),
         ))
 
@@ -506,6 +641,9 @@ def main():
             "net_growth": net_growth,
             "tolerance": args.tolerance,
             "growth_justified": growth_justified,
+            "growth_rationale_shape": rationale_shape,
+            "growth_rationale_scope": sorted(scope),
+            "uncovered_new_waivers": uncovered,
             "baseline_present": base_present,
             "new_waivers": sorted(new_waivers),
             "removed_waivers": sorted(removed_waivers),

@@ -631,7 +631,8 @@ _TAPEOUT_STEP_ID = 36
 # `<project>/waivers.json`, as a normal `waived_steps` entry naming this step and
 # carrying `si_vacuity_accepted`::
 #
-#     {"growth_rationale": "<why this release carries one more waiver>",
+#     {"growth_rationale": {
+#        "36": "<why THIS waiver is acceptable for this release>"},
 #      "waived_steps": [
 #       {"id": 36,
 #        "reason": "<>=20 chars saying why this vacuity is acceptable>",
@@ -641,6 +642,12 @@ _TAPEOUT_STEP_ID = 36
 #        "ticket": "<tracker id for closing this waiver>",
 #        "si_vacuity_accepted": ["SPEF_NO_COUPLING_PAIRS"]}
 #     ]}
+#
+# The `growth_rationale` key is the waiver IDENTITY `waiver_growth_check`
+# prints for this entry — `repr(id)`, so `"36"` for the integer id above and
+# `"'36'"` had the id been the string. That gate refuses a document-level
+# blanket for the same reason this block refuses a `si_vacuity_accepted`
+# wildcard: an authorisation that names nothing covers everything, forever.
 #
 # Only `id`, `reason`, `approver` and `si_vacuity_accepted` are read by THIS
 # condition. The other four are what the SIBLING waiver gates need, and they

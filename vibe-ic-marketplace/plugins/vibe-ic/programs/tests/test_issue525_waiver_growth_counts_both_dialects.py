@@ -304,11 +304,20 @@ def test_present_baseline_is_reported_as_present(tmp_path):
 def test_growth_rationale_is_the_operator_escape_hatch(tmp_path):
     """Growth in the newly-visible dialect is justified the same documented
     way as growth in the other — by a human writing it down in the data, not
-    by the gate lowering its own bar."""
+    by the gate lowering its own bar.
+
+    #922 made that writing SCOPED: the rationale is keyed by the waiver
+    identity it justifies. The escape hatch is unchanged in kind and this test
+    still asserts it opens; what moved is that the operator now has to say
+    WHICH waiver the sentence is about, so it cannot also cover waivers added
+    in later releases that nobody wrote it for."""
     proj = _project(tmp_path, {
         "waivers": [_attestation("lvs", "T-1")],
-        "growth_rationale": ("Device-level extraction is scheduled for the "
-                             "next release; deferral accepted by sign-off."),
+        "growth_rationale": {
+            "waivers:step='lvs';phase='3';ticket='T-1'":
+                ("Device-level extraction is scheduled for the "
+                 "next release; deferral accepted by sign-off."),
+        },
     })
     rc, result = _run_json(proj)
     assert result["summary"]["current_root_waivers"] == 1

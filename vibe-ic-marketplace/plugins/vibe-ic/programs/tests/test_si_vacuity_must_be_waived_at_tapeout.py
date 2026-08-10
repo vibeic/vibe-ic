@@ -927,8 +927,14 @@ def test_the_documented_waiver_example_satisfies_its_sibling_gates(tmp_path):
     _five_pillars(tmp_path)
     _si_vacuous(tmp_path)
     _write(tmp_path / "waivers.json", json.dumps({
-        "growth_rationale": ("One SI vacuity disclosed for this release; the "
-                             "extraction rerun is tracked."),
+        # #922: keyed by the identity `waiver_growth_check` reports for the
+        # entry below — `repr(id)` — because a rationale that names no waiver
+        # authorises every waiver, forever.
+        "growth_rationale": {
+            repr(sa._TAPEOUT_STEP_ID): (
+                "One SI vacuity disclosed for this release; the "
+                "extraction rerun is tracked."),
+        },
         "waived_steps": [{
             "id": sa._TAPEOUT_STEP_ID,
             "reason": _GOOD_REASON,
