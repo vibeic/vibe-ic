@@ -13198,12 +13198,63 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     # the mis-attribution it was added to prevent.
     _FAIL_STATUSES = ("FAIL", "FAIL_ECO_INERT", "STALE_BOARD_DETECTED",
                       "BLOCKED")
+    # THE CATCH-ALL IS NOW TOTAL. The comment above already names the hazard —
+    # "everything this function does not enumerate falls through to the
+    # catch-all `return "PASS"`" — and BLOCKED was added by hand once that bit.
+    # It bit again: SKIP is the MOST COMMON status this runner emits (53 call
+    # sites vs 34 FAIL and 22 PASS) and it was never enumerated, so it reached
+    # the same silent PASS.
+    #
+    # Enumerating every status the runner can emit means the next one invented
+    # cannot arrive as a silent pass. An unknown status is now reported rather
+    # than absorbed: it is NOT treated as a failure (that would turn a naming
+    # change into a red run), but it is never invisible.
+    _GREEN_STATUSES = ("PASS", "ADVISORY", "ECO_LOOP")
+    # ADVISORY is non-blocking BY CONTRACT (see _estimate_* — "status is always
+    # ADVISORY ... so this step cannot change _aggregate_verdict"). ECO_LOOP is
+    # a progress marker for an iteration, not a verdict; the iteration's outcome
+    # is carried by the steps around it.
+    # SKIPPED-CONDITION is a second skip spelling (rtl_gen and two verdict
+    # payloads). It was found by the totality test scraping the runner's own
+    # StepResult constructions rather than by anyone listing them here — which
+    # is the point of discovering the vocabulary instead of typing it.
+    _SKIP_STATUSES = ("SKIP", "SKIPPED-CONDITION")
+    _KNOWN = (set(_FAIL_STATUSES) | set(_GREEN_STATUSES)
+              | set(_SKIP_STATUSES) | {"WAIVED"})
+
     has_fail = any(s.status in _FAIL_STATUSES for s in plan)
     has_waived = any(s.status == "WAIVED" for s in plan)
+    unknown = sorted({s.status for s in plan if s.status not in _KNOWN})
+    if unknown:
+        # Loud, and on stderr so it survives a caller that reads only stdout.
+        print(f"design_one_shot_runner: UNCLASSIFIED step status(es) "
+              f"{unknown} reached the verdict aggregator. They are not counted "
+              f"as failures, and they are not silently green either — classify "
+              f"them in _aggregate_verdict before relying on this verdict.",
+              file=sys.stderr)
     if has_fail:
         return "FAIL"
     if has_waived:
         return "PASS_WITH_WAIVERS"
+
+    # DISCLOSED, NOT RECLASSIFIED. A bare PASS carrying SKIPs is the defect the
+    # 63x8 round-2 review recorded: phase 3 reads SKIP as PASS_WITH_WAIVERS
+    # (see phase3_one_shot_runner, "reads SKIP as PASS_WITH_WAIVERS"), phase 2
+    # reads the identical word as clean. Because the phase-2 verdict is PASS
+    # and not PASS_WITH_WAIVERS, no waivers.json entry is required or
+    # auto-generated, so a disclosed skip never reaches the must-close list.
+    #
+    # The verdict is NOT changed here on purpose: doing so would restate every
+    # published phase-2 result, which is a call for whoever owns the benchmark
+    # contract, not for this function. Tracked as a vibe-ic issue with the
+    # measurement. What changes is that the gap can no longer be silent.
+    skipped = [s.name for s in plan if s.status in _SKIP_STATUSES]
+    if skipped:
+        print(f"design_one_shot_runner: verdict PASS carries "
+              f"{len(skipped)} SKIPPED step(s) that are NOT tracked as "
+              f"waivers and therefore reach no must-close list: "
+              f"{', '.join(sorted(skipped))}. Phase 3 reads the same word as "
+              f"PASS_WITH_WAIVERS.", file=sys.stderr)
     return "PASS"
 
 
