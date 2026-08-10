@@ -519,7 +519,23 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
     still able to overwrite that step's output netlist. Chip-AGNOSTIC."""
     import _docker_watchdog as _dw
     _wrapped = _dw.wrap_with_container_timeout(cmd, timeout)
-    full = ["docker", "exec", container, "bash", "-lc", _wrapped]
+    full = ["docker", "exec",
+            # The vibeic-eda image is entered through a LOGIN shell, whose
+            # profile prints a two-line banner ("[INFO] Final PATH variable:
+            # ...") to STDOUT AHEAD of the command output.
+            # `IIC_OSIC_TOOLS_QUIET` is the image's OWN documented knob for
+            # it (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes
+            # on it), and `phase3_one_shot_runner` already passes it here.
+            #
+            # This path was cold for simulation until #902 moved iverilog/vvp
+            # dispatch INTO the container: MEASURED on a converged cell, the
+            # banner then landed at the TOP of the sim transcript
+            # (`sim_full_stack/oracle_run/oracle.log` grew from 4 lines to 6),
+            # which is the same stdout-contamination the repo already refuses
+            # at source elsewhere. Suppressing it HERE keeps every consumer
+            # clean instead of asking each one to remember to filter.
+            "-e", "IIC_OSIC_TOOLS_QUIET=1",
+            container, "bash", "-lc", _wrapped]
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
