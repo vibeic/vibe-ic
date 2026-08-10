@@ -100,6 +100,17 @@ _NOT_PROSE: Dict[str, str] = {
         "#711 die_area_budget_um) both read English design documents, where "
         "denial is spellable and was spelled. Consulting `_prose_polarity` on "
         "a VIAS entry would be an unreachable branch.",
+    "policy_direction_pin_check::flip_source":
+        "Python source, at a position the AST recorded. The matched text is "
+        "`[rbuRBU]{0,2}` then the opening quote of a string literal, located at "
+        "the (lineno, col_offset) ast gave for that literal, and the function "
+        "REWRITES it and returns the source — it declares nothing. The Python "
+        "grammar has no form that denies a literal: there is no way to write "
+        "'this argument is NOT \"richer\"', exactly as DEF gives no way to deny "
+        "a via's layer pair. The function also refuses (ValueError) unless the "
+        "text at that column is the literal it was told to expect, so it cannot "
+        "act on text it did not identify. `_prose_polarity` here would be an "
+        "unreachable branch.",
 }
 
 
@@ -125,11 +136,33 @@ def _searches_prose(fn: ast.AST) -> bool:
     return False
 
 
+def _is_compiled_pattern(node: ast.AST) -> bool:
+    """`x = re.compile(...)` — x is a MATCHER, not text taken out of prose.
+
+    The difference this draws is the one the gate is about. A compiled pattern
+    is the thing you search WITH; the defects are about the value you get back.
+    `pat = re.compile(a + re.escape(tok) + b)` holds no character of any document
+    — it cannot be a denied value published as a declaration, because it is not a
+    value from a document at all. Caching one (`_CACHE[tok] = pat`) was reported
+    as an extractor writing a declaration, which is a memo table, not a record.
+
+    Narrow on purpose: only the binding whose whole value is the `compile` call.
+    A pattern BUILT FROM matched text is still a pattern, so it is excluded too;
+    what is not excluded is anything the pattern later matches.
+    """
+    return (isinstance(node, ast.Call)
+            and ((isinstance(node.func, ast.Attribute) and node.func.attr == "compile")
+                 or (isinstance(node.func, ast.Name) and node.func.id == "compile")))
+
+
 def _match_derived_names(fn: ast.AST) -> Set[str]:
     """Locals bound to a regex match or to text taken out of one.
 
     `m = RE.search(t)`, `hits = RE.findall(t)`, `val = m.group(1)`, and one hop
-    onward (`val = raw.strip()`), which is how both real defects were written."""
+    onward (`val = raw.strip()`), which is how both real defects were written.
+
+    A binding to a COMPILED PATTERN is not one of those — see
+    `_is_compiled_pattern` for why a matcher cannot be a denied value."""
     out: Set[str] = set()
     for _ in range(3):                       # transitive, cheaply bounded
         grew = False
@@ -138,6 +171,8 @@ def _match_derived_names(fn: ast.AST) -> Set[str]:
                 continue
             t = n.targets[0]
             if not isinstance(t, ast.Name):
+                continue
+            if _is_compiled_pattern(n.value):
                 continue
             for sub in ast.walk(n.value):
                 hit = (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
