@@ -1,7 +1,39 @@
 #!/usr/bin/env python3
 """Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 
-THIS GATE BLOCKS (rc=1).
+THIS GATE BLOCKS (rc=1) — a statement about this program's VERDICT SEVERITY,
+not about where its verdict is consumed. Those are two different axes, and the
+second one is declared immediately below: a gate that says nothing about it is
+the defect `flow_gate_enforcement_audit` exists to catch, and silence there is
+not a decision.
+
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 21 while step 21 is running. What it DOES have, and this is why `advisory`
+here is not "ignorable": it is a gate leg of step 21 in the flow's BLOCKING
+slot (`program_exit_zero`, never `advisory_program_exit_zero`), so when
+`flow_compliance_check` evaluates that clause an rc=1 FAILs the step, and that
+verdict reaches the run's headline through
+`reports/audit/phase23_completion_audit.json`, which
+`phase3_one_shot_runner._derive_headline_verdict` reads. MEASURED on a copy of
+a published run-root: the evaluator's own step report lists this program under
+step 21's `measures`. What `flow_gate_enforcement_audit` scores is the narrower
+question "can this verdict stop the step it guards", and the answer there is
+no; `advisory` is that audit's token for that answer.
+
+WHY IT IS NOT PROMOTED TO INLINE-BLOCKING, MEASURED. The one inline pattern the
+phase-3 runner has — `_DECLARED_SIGNOFF_GATES` / `_run_declared_signoff_gate` —
+routes every rc other than 0 and 1 to BLOCKED (non-green), deliberately, because
+for a sign-off gate "could not check" is not a pass. This gate's rc=2 means
+something different: no DEF, no macro LEF, no placed macro, or no OBS in any of
+them, i.e. there was legitimately no obstruction to cross. Over the 15 published
+phase-3 run-roots under `benchmark-data/ic`, invoked exactly as a caller would:
+rc 2 on all 15, rc 0 and rc 1 on none. Wiring it into that table would therefore
+turn every one of those published runs non-green for owning no macro
+obstruction, which is the false alarm this gate's own rc-2 branch was written to
+avoid. The flow's rc=2 -> VACUOUS_PASS encoding is the correct consumer; that
+table is not. Promotion needs an inline consumer that PRESERVES
+rc=2 -> VACUOUS_PASS at the step that owns the subject — a flow-owner change
+with its own blast radius, not a side effect of recording this decision.
 
 WHY IT EXISTS
 -------------
@@ -116,18 +148,20 @@ define a MACRO" directly; its path and name only guess at it.
 
 WHERE IT RUNS (#828 part 2, closed). This file used to say: "It is not
 registered in `flow/phase1_phase2_phase3.yaml` and no runner invokes it; its
-only caller is `tools/ci/repo_hygiene_gates.sh`." A gate that declares itself
-BLOCKING and that no flow step runs enforces nothing on a real design — it
+only caller is `tools/ci/repo_hygiene_gates.sh`." A gate whose verdict is
+blocking and that no flow step runs enforces nothing on a real design — it
 reproduced this defect in seconds on a routed DEF and was never asked to.
 
 It is now a gate leg of STEP 21 (Routing), the step that PRODUCES routed.def,
-so the metal it examines exists by the time it is asked. It is conditioned on
-its own precondition — that the project stages a LEF to read — because that is
-the one input without which it can say nothing at all; every OTHER refusal it
-makes (an incomplete LEF set, discarded OBS evidence, a truncated read) still
-reaches the flow as rc=2 -> VACUOUS_PASS and is disclosed rather than passed.
-The CI caller in `tools/ci/repo_hygiene_gates.sh` is unchanged and still sweeps
-the tracked cells.
+so the metal it examines exists by the time it is asked. The clause is
+UNCONDITIONAL — the sentence here previously said it was conditioned on staging
+a LEF, and the flow definition says the opposite in the comment above the clause
+itself: a `**/*.lef` trigger is what `flow_condition_reachability_check` calls
+SELF-DISABLING, so the gate is asked on every run and answers for itself. Every
+refusal it makes (no LEF at all, an incomplete LEF set, discarded OBS evidence,
+a truncated read) reaches the flow as rc=2 -> VACUOUS_PASS and is disclosed
+rather than passed. The CI caller in `tools/ci/repo_hygiene_gates.sh` is
+unchanged and still sweeps the tracked cells.
 
 SEE ALSO `macro_obs_load_parity_check`, which asks the prior question this gate
 cannot: whether the obstructions this file PARSES are the obstructions the tool
