@@ -52,6 +52,36 @@ analog_steps: 9
 #   program_exit_zero: <program name + args; must exit 0>
 #   json_field_true: {file: <path>, field: <dotted.key>, expect: true}
 
+# STAGE MEMBERSHIP IS DECLARED ONCE, ON THE STEP (vibe-ic#923)
+# ------------------------------------------------------------
+# A `stages[]` entry declares a stage's IDENTITY (id, name) and its
+# CONDITION. It does NOT list its members. Membership is declared exactly
+# once, by the `stage:` field on each entry of `steps:` below.
+#
+# This block used to carry a second, hand-maintained membership roster
+# (`steps: [...]` per stage). Nothing derived either declaration from the
+# other and nothing reconciled them, so they drifted: as committed they
+# disagreed for 12 of the 63 steps — 4 outright contradictions (14, 32, 38
+# and 39, each of which the roster placed one stage LATER than the step
+# itself did) and 8 steps (42, 43, 44, DT1, DT2, DT3, FS1, P0) the roster
+# had never been updated to mention at all. The roster's own comments record
+# the drift: they still called Foundry Handoff "step 36" and manufacturing
+# "38-41" while the steps had long since become 38 and 40-44.
+#
+# The roster lost because it was never the live declaration. Every shipped
+# consumer that places a step in a stage reads the per-step `stage:` field —
+# `flow_compliance_check`, `final_report_generate`,
+# `flow_step_execution_coverage_check`, `flow_dashboard_data` — and the one
+# program that loads this block at all,
+# `phase1_planned_consumer_starved_check`, reads only `id` and `condition`
+# from it and resolves the stage of a step through the step field. So
+# deleting the roster moved no step for any program: it deleted a copy that
+# had been wrong about four of them without consequence, because no code was
+# listening.
+#
+# `flow_stage_membership_single_declaration_check.py` fails if a second
+# membership declaration reappears here, if a step names a stage that is not
+# declared below, or if a declared stage ends up with no members.
 stages:
   # v2 — Phase 1 doc-extraction stage. Unified entry that wraps the
   # 17 doc-gen skills (Path A: input_doc/) + 1 dialogue skill
@@ -61,32 +91,25 @@ stages:
   # external authoring path (e.g. the runner's dialogue mode).
   - id: stage_phase1
     name: "Phase 1 - Spec Extraction (input → L1-L27 structured JSON)"
-    steps: [D1]
 
   - id: stage1
     name: "RTL Generation + Verification"
-    steps: [1, 2, 3, 4, 5, 6]
 
   - id: stage2
     name: "Synthesis + DFT"
-    steps: [7, 8, 9, 10, 11, 12, 13]
 
   - id: stage_analog
     name: "Analog Design Pipeline (parallel with digital stages 1-2)"
     # Wave 90 / v1.6.14 — analog track integerised to A1..A9. A6 is
     # per-block Physical Verification; A7/A8/A9 are Resim / Hardmacro
     # / Cosim respectively.
-    steps: [A1, A2, A3, A4, A5, A6, A7, A8, A9]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
 
   - id: stage3
     name: "Physical Design + Sign-off"
-    # Wave 91 / v1.6.15 — Step 14 is the pre-PnR Yosys gate (promoted
-    # from synthetic Step 0); steps 15..31 are the PnR/sign-off track.
     # Design-for-ECO inserted Step 18 (Spare-cell + ECO-prep insertion)
     # between Placement (17) and CTS (19); all later ids were +1.
-    steps: [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
 
   # v1.6.13 Wave 88 — Mixed-Signal Integration (M1-M4) inserted
   # between digital stage3 and stage4. Required when analog blocks
@@ -96,15 +119,11 @@ stages:
   # SKIP if no analog_block_list.json (pure digital).
   - id: stage_mixed_signal
     name: "Mixed-Signal Integration (A+D top-level merge + sign-off)"
-    steps: [M1, M2, M3, M4]
     condition:
       files_exist: ["phase1/analog/analog_block_list.json"]
 
   - id: stage4
     name: "Output + Validation"
-    # Design-for-ECO +1 renumber (Step 18 insert): stage4 ids shifted +1.
-    # Foundry Handoff is now step 36 and FPGA final sign-off is step 37.
-    steps: [32, 33, 34, 35, 36, 37]
 
   # v1.6.13 Wave 88 — Manufacturing & Test (post-fab silicon stage).
   # Optional: only fires when project sets manufacturing.enabled = true
@@ -112,8 +131,6 @@ stages:
   # SKIP this stage entirely.
   - id: stage5_manufacturing
     name: "Manufacturing & Test (fab → wafer-sort → packaging → ATE final)"
-    # Design-for-ECO +1 renumber (Step 18 insert): manufacturing 38-41.
-    steps: [38, 39, 40, 41]
     condition:
       files_exist: ["phase3/stage5_manufacturing/silicon_received.json"]
 
@@ -2097,6 +2114,9 @@ steps:
   # specific (Yosys); commercial flows (Genus/DC) have no equivalent.
   - id: 14
     name: "🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)"
+    # Wave 91 / v1.6.15 — promoted from synthetic Step 0. It is the PRE-PnR
+    # gate, which is why it sits in Synthesis and not in Physical Design; the
+    # per-stage roster deleted in vibe-ic#923 had it the other way round.
     stage: stage2
     required_inputs:
       - from: 9
@@ -4452,6 +4472,14 @@ steps:
   - id: P0
     name: "Structural-RTL pre-flight (chip-AGNOSTIC structural gates)"
     stage: stage1
+    # vibe-ic#923 — the ORDERING edge, written down to match the DATA edge one
+    # line below. P0 reads step 1's RTL, so it cannot precede step 1, and step
+    # 1 blocks on D1; without this edge P0 was a stage1 step whose ancestry did
+    # not reach Phase 1, so a FAILED Phase 1 would not have redded it. This was
+    # invisible while `stages[].steps` was a second membership declaration:
+    # that roster never listed P0, so the guard that checks stage1 ancestry
+    # never looked at it. Deleting the roster made the guard see it.
+    blocks_on: [1]
     required_inputs:
       - from: 1
         path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
