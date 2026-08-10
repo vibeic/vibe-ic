@@ -33,6 +33,41 @@ must produce a roll-up whose `not_checked` list is empty. A change that turned
 every incomplete checkout into a hard failure would get worked around, and a
 worked-around gate is worse than the hole.
 
+#901 — WHAT MOVED HERE, AND WHY IT IS NOT A WEAKENING. Three assertions in
+this file pinned a gate's TIER (`["PASS"] * 5`, `not_checked == []`, `"5 of 5
+declared sign-off gate(s) PASSED"`) on a fixture where THREE of the five gates
+report, in their own `--json`, that they examined nothing:
+
+    drv_promotion_corroboration  {"verdict": "VACUOUS_PASS"}
+    sta_corner                   {"verdict": "NOT_APPLICABLE", "reasons":
+                                  ["no multicorner sign-off report
+                                    (sta_spef_multicorner.rpt) found —
+                                    nothing to gate"]}
+    sta_record                   {"verdict": "NOT_APPLICABLE", "reasons":
+                                  ["no_corner_declaration: ... there is no
+                                    timing record to judge"]}
+
+MEASURED by invoking each gate on this file's own `_project()` fixture. The
+`sta_corner` payload is, verbatim, the one vibe-ic#901 was filed against. So
+the "clean control" was asserting that a roll-up reading `5 of 5 PASSED` is
+correct over a fixture in which three of the five inspected no artefact — the
+#901 defect, pinned as an expectation, in the file that exists to stop a
+sign-off nobody performed from releasing.
+
+The expectations therefore move to the tier the gates' own reports imply, and
+the PROPERTY each test is NAMED for is re-asserted on the emitted verdict
+instead of on the label:
+
+  * "…still releases" is now asserted as `_aggregate_verdict(...) in
+    _RELEASING`, plus "no row is FAIL or BLOCKED" — the two things that would
+    withhold a release — and the disclosure is required to NAME each gate that
+    examined nothing. A run that quietly dropped the disclosure now fails here.
+  * "…withholds the release" keeps `not in _RELEASING` untouched, and gains the
+    discrimination the tier merge would have hidden: the ABSENT gate is
+    `BLOCKED` (no verdict at all, #544) while a gate that RAN and disclosed
+    inapplicability is `SKIP` (#901). Collapsing those two would lose exactly
+    the distinction this file was written to keep.
+
 INNER TIMEOUTS (#542). Every gate driven here is a pure report reader — none of
 the five contains a `subprocess`, `docker` or `shutil.which` call — and returns
 in well under a second. `_INNER_TIMEOUT_S` is far below CI's `--timeout=180`
@@ -237,9 +272,25 @@ def test_a_single_absent_declared_gate_withholds_the_release(
         _deployment(tmp_path, omit=("post_route_signoff_corner_check.py",)))
     results = {r.name: r for r in runner.step_declared_signoff_gates(proj)}
 
+    # The ABSENT gate: no verdict came back at all, which is #544's BLOCKED.
     assert results["sta_corner"].status == "BLOCKED", results["sta_corner"]
-    assert [results[n].status for n in ("sta_signoff", "sta_record",
-                                        "em_signoff")] == ["PASS"] * 3, results
+    assert [n for n, r in results.items() if r.status == "BLOCKED"] == \
+        ["sta_corner"], results
+
+    # The gates that MEASURED design content pass, and say nothing.
+    assert [results[n].status for n in ("sta_signoff", "em_signoff")] == \
+        ["PASS"] * 2, results
+
+    # #901 — `sta_record` was asserted here as a third "genuine PASS". It never
+    # was: it returns `{"verdict": "NOT_APPLICABLE", "reasons":
+    # ["no_corner_declaration: ... there is no timing record to judge"]}` on
+    # this fixture, and the runner simply could not see that. It is a gate that
+    # RAN and disclosed — SKIP, not BLOCKED — and the two must stay tellable
+    # apart, which is the whole reason this file distinguishes them.
+    assert results["sta_record"].status == "SKIP", results["sta_record"]
+    assert runner._SIGNOFF_NOT_CHECKED in results["sta_record"].detail, \
+        results["sta_record"].detail
+
     assert not any(r.status == "FAIL" for r in results.values()), (
         "no gate found a design defect, so the verdict below is about the "
         "absence and nothing else", results)
@@ -373,18 +424,53 @@ def test_an_rc2_argparse_rejection_says_it_was_never_validly_invoked(
 def test_a_complete_deployment_with_every_gate_passing_still_releases(
         tmp_path, runner):
     """The control that keeps this fix usable. Nothing patched, every declared
-    gate present, a project each of them passes: still PASS."""
+    gate present, no gate finds a defect and none is missing: the run still
+    RELEASES.
+
+    #901 — the release is the property; `["PASS"] * 5` was a label that
+    happened to travel with it, and on this fixture it was not true. Three of
+    these five gates report in their own `--json` that they examined nothing
+    (see the module docstring for the measured payloads), so the honest clean
+    control is: nothing FAILED, nothing was BLOCKED, the run releases, and
+    every gate that inspected no artefact is NAMED. The old assertion is the
+    stronger-looking one and the weaker one: it passed while the roll-up said
+    `5 of 5 PASSED` over three gates that had gated nothing.
+    """
     proj = _project(tmp_path)
     results = _all_signoff_steps(runner, proj)
-    assert [r.status for r in results] == ["PASS"] * 5, [
+    by_name = {r.name: r for r in results}
+
+    # THE PROPERTY THIS TEST IS NAMED FOR, read off the emitted verdict.
+    assert runner._aggregate_verdict(results) in _RELEASING, [
         (r.name, r.status, r.detail[:120]) for r in results]
-    assert runner._aggregate_verdict(results) == "PASS", results
+    # …and the two things that would withhold it are absent.
+    assert not [r.name for r in results if r.status == "FAIL"], results
+    assert not [r.name for r in results if r.status == "BLOCKED"], results
+
+    # The gates that MEASURED design content on this fixture.
+    assert by_name["sta_signoff"].status == "PASS", by_name["sta_signoff"]
+    assert by_name["em_signoff"].status == "PASS", by_name["em_signoff"]
+
+    # The gates that examined nothing, each DISCLOSED and each NAMED — the
+    # disclosure is what #901 is about, so it is asserted, not assumed.
+    examined_nothing = ["drv_promotion_corroboration", "sta_corner",
+                        "sta_record"]
+    for name in examined_nothing:
+        assert by_name[name].status == "SKIP", by_name[name]
+        assert runner._SIGNOFF_NOT_CHECKED in by_name[name].detail, \
+            (name, by_name[name].detail)
 
     rollup = runner.declared_signoff_rollup(results)
     assert rollup["declared"] == 5, rollup
-    assert rollup["not_checked"] == [], rollup
     assert rollup["failed"] == [], rollup
-    assert rollup["line"] == "5 of 5 declared sign-off gate(s) PASSED", rollup
+    assert rollup["not_checked"] == examined_nothing, rollup
+    assert rollup["line"] == (
+        "2 of 5 declared sign-off gate(s) PASSED; "
+        "3 NOT CHECKED (not a pass): drv_promotion_corroboration, "
+        "sta_corner, sta_record"), rollup["line"]
+    # The headline this file used to require is now the one it forbids.
+    assert "5 of 5 declared sign-off gate(s) PASSED" not in rollup["line"], \
+        rollup["line"]
 
 
 def test_a_clean_project_still_writes_every_declared_verdict_json(tmp_path,
@@ -424,13 +510,20 @@ def test_the_rollup_names_what_was_not_checked(tmp_path, runner, monkeypatch):
     monkeypatch.setattr(
         runner, "PROGRAMS_DIR",
         _deployment(tmp_path, omit=("post_route_signoff_corner_check.py",)))
-    rollup = runner.declared_signoff_rollup(
-        runner.step_declared_signoff_gates(proj))
-    assert rollup["not_checked"] == ["sta_corner"], rollup
+    plan = runner.step_declared_signoff_gates(proj)
+    rollup = runner.declared_signoff_rollup(plan)
+    by_name = {r.name: r for r in plan}
+    assert rollup["not_checked"] == ["sta_corner", "sta_record"], rollup
     assert rollup["declared"] == 4, rollup
     assert rollup["line"] == (
-        "3 of 4 declared sign-off gate(s) PASSED; "
-        "1 NOT CHECKED (not a pass): sta_corner"), rollup["line"]
+        "2 of 4 declared sign-off gate(s) PASSED; "
+        "2 NOT CHECKED (not a pass): sta_corner, sta_record"), rollup["line"]
+    # #901 — `not_checked` now has two populations and they must not merge:
+    # `sta_corner` produced NO verdict (its program is not in this deployment)
+    # and `sta_record` produced ONE that says it had nothing to judge. Same
+    # roll-up column, different step statuses, and triage reads the status.
+    assert by_name["sta_corner"].status == "BLOCKED", by_name["sta_corner"]
+    assert by_name["sta_record"].status == "SKIP", by_name["sta_record"]
 
 
 def test_the_rollup_names_a_failing_gate_apart_from_an_unchecked_one(

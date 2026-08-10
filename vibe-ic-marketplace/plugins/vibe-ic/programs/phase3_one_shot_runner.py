@@ -79,6 +79,7 @@ import metal_layer_density_check as _mld  # metal-layer NAME authority (producer
 import _signoff_drc_format as _sdf  # sign-off DRC producer classification (ONE answer)
 import synth_area_stats_emit as _sas  # #457 — synth area figure -> declared artefact
 import _gate_invocation  # #492/#544 — tell a gate's verdict from a bad invocation
+import _gate_report_verdict as _grv  # vibe-ic#901 gate/consumer contract
 import _sta_basis  # the ONE reader of the `STA_BASIS:` stamp (no second copy)
 import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch site
 
@@ -28697,6 +28698,53 @@ def _signoff_not_checked(name: str, t0: float, why: str,
                       f"{_SIGNOFF_NOT_CHECKED}: {why}", list(outputs))
 
 
+def _signoff_examined_nothing(name: str, t0: float, detail: str,
+                              outputs: Sequence[str] = ()) -> StepResult:
+    """A DECLARED sign-off gate that RAN, exited 0, and disclosed in its own
+    `--json` report that it had nothing to examine (vibe-ic#901).
+
+    `SKIP`, and the choice is the whole of #901's second half, so it is argued
+    rather than asserted:
+
+    * NOT `PASS`. That is the defect. `sta_corner` wrote
+      `{"verdict": "NOT_APPLICABLE", "reasons": ["no multicorner sign-off
+      report found - nothing to gate"]}` and exited 0; the rc-0 branch mapped
+      that to PASS, `declared_signoff_rollup` put it in `passed`, and the
+      headline read `4 of 5 declared sign-off gate(s) PASSED` on a run where
+      one of the five inspected no artefact at all — while `not_checked`, the
+      one field that exists to say so, stayed empty.
+
+    * NOT `BLOCKED`, which is what `_signoff_not_checked` returns and which
+      `_aggregate_verdict` folds into FAIL. BLOCKED is this module's word for
+      "the check could not be ATTEMPTED ... so NOTHING is known about the
+      design", and #544 reserves it for a gate that returned NO VERDICT — an
+      absent program, an rc-2, a subprocess that never started. A gate that ran
+      and answered "the artefact I gate does not exist in this run" DID return
+      a verdict. MEASURED, because the difference is not rhetorical: the five
+      declared sign-off gates run over all 14 published phase-3 run-roots under
+      `benchmark-data/ic` give 70 invocations — 48 rc 0, 22 rc 1, 0 rc >= 2 —
+      and 28 of the 48 rc-0 results carry a disclosed no-check verdict, 14 of
+      them `drv_promotion_corroboration` ("no route promotion this run"), the
+      gate the #901 reopen names as LEGITIMATELY inapplicable. Routing those to
+      BLOCKED would turn every one of those run-roots FAIL, which is the
+      v1.10.14 regression — a converged cell reported red by a fix for
+      false green — reproduced one layer up.
+
+    * `SKIP` is already this module's word for "the input this step needs is
+      not here" (`step_gds` returns it for a missing DEF), `_aggregate_verdict`
+      already folds it into PASS_WITH_WAIVERS, and `declared_signoff_rollup`
+      already counts anything that is neither PASS nor FAIL as `not_checked`.
+      No fourth spelling of "could not check" is added — the drift shape #527,
+      #530 and #534 each spent a version removing.
+
+    The disclosure is therefore NOT free: the run's verdict moves from PASS to
+    PASS_WITH_WAIVERS, and the roll-up line names the gate. What it does not do
+    is fail a design for a gate that had nothing to say.
+    """
+    return StepResult(name, "SKIP", time.time() - t0,
+                      f"{_SIGNOFF_NOT_CHECKED}: {detail}", list(outputs))
+
+
 def _run_declared_signoff_gate(project: Path, name: str, program: str,
                                out_rel: str,
                                extra_argv: tuple = (),
@@ -28741,6 +28789,15 @@ def _run_declared_signoff_gate(project: Path, name: str, program: str,
     detail = _gate_detail(out_json, cp.stdout or "", cp.stderr or "")
     outputs = [str(out_json)] if out_json.is_file() else []
     if cp.returncode == 0:
+        # vibe-ic#901 — rc 0 is not by itself a claim about the design. A gate
+        # may exit 0 having written `{"verdict": "NOT_APPLICABLE"}` into the
+        # very report this call named with `--json`, and reading that file is
+        # the contract `_gate_report_verdict` states once for every consumer of
+        # a gate verdict. `flow_compliance_check` is the other one; wiring it
+        # in a single consumer is what left this roll-up saying "4 of 5 PASSED"
+        # while the underlying JSON correctly said NOT_APPLICABLE.
+        if _grv.report_declares_no_check(out_json):
+            return _signoff_examined_nothing(name, t0, detail, outputs)
         return StepResult(name, "PASS", time.time() - t0, detail, outputs)
     if cp.returncode == 1:
         return StepResult(name, "FAIL", time.time() - t0, detail, outputs)

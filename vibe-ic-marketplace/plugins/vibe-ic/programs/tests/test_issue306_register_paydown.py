@@ -259,12 +259,28 @@ def test_306_gds_substance_gate_is_wired_at_both_streamout_engines(tmp_path):
 
 
 def test_306_drv_promotion_step_passes_when_nothing_was_promoted(tmp_path):
+    """The can-pass direction of the gate: a run that promoted no route must
+    not be BLOCKED or FAILED by the gate that corroborates promotions.
+
+    #901 — this asserted the label `PASS`. The gate writes
+    `{"verdict": "VACUOUS_PASS"}` in that situation, which is the gate saying
+    it examined nothing, and the runner now reads it: the step is `SKIP` with
+    the roll-up's NOT-CHECKED detail, `_aggregate_verdict` still releases, and
+    `declared_signoff_rollup` names it instead of counting it among the
+    PASSED. The property this test exists for — nothing was promoted, so
+    nothing may block — is asserted directly below; the label is not.
+    """
     import phase3_one_shot_runner as R
     (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
     r = R.step_drv_promotion_corroboration(tmp_path)
-    assert r.status == "PASS", r
+    assert r.status not in ("FAIL", "BLOCKED"), r
+    assert R._aggregate_verdict([r]) in ("PASS", "PASS_WITH_WAIVERS"), r
     assert (tmp_path / "reports" / "phase3" / "sta"
             / "drv_promotion_corroboration.json").is_file()
+    # …and the run is not told it corroborated anything.
+    rollup = R.declared_signoff_rollup([r])
+    assert "drv_promotion_corroboration" not in rollup["passed"], rollup
+    assert rollup["not_checked"] == ["drv_promotion_corroboration"], rollup
 
 
 def test_306_drv_promotion_step_blocks_an_uncorroborated_promotion(tmp_path):
