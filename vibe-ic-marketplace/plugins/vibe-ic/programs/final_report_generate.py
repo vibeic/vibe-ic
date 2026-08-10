@@ -119,9 +119,27 @@ VERDICT_SYM = {
 # Canonical roll-up print order. Any bucket the audit produces that is
 # NOT listed here is still printed (appended, sorted) — the roll-up must
 # never silently drop a bucket, or its rows stop summing to its own Total.
+# A bucket with no slot here is NOT RENDERED — see the print loop, which walks
+# ROLLUP_ORDER and never the roll-up's own keys. Four tiers were missing, so a
+# populated STRUCTURE-ONLY / INCOMPLETE / PASS-VOIDED-BY-DEPENDENCY / WAIVED
+# count had nowhere to appear.
+#
+# TWO HAND-TYPED LISTS HID EACH OTHER'S GAP.
+# test_rollup_order_covers_every_bucket_the_checker_can_emit was already written
+# to catch exactly this — but it derives `emitted` from
+# _TALLY_LABEL_TO_BUCKET.values(), and that map was missing the same tiers. The
+# guard could not fire while both copies were wrong in the same way, and it went
+# red the moment the map was derived from the shared vocabulary. Ordering is a
+# presentation choice and cannot be derived, so the list stays written out; the
+# existing test is what keeps it total.
+#
+# Order: full pass, then qualified done-claims, then excused, then non-green.
 ROLLUP_ORDER = (
-    "PASS", "VACUOUS-PASS", "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
-    "SKIPPED-CONDITION", "SKIPPED-SETUP-REQUIRED", "FAIL", "MISSING",
+    "PASS",
+    "VACUOUS-PASS", "STRUCTURE-ONLY", "INCOMPLETE",
+    "WAIVED", "WAIVED-DEFERRED", "DEFERRED-BY-UPSTREAM",
+    "SKIPPED-CONDITION", "SKIPPED-SETUP-REQUIRED",
+    "PASS-VOIDED-BY-DEPENDENCY", "FAIL", "MISSING",
     NO_VERDICT,
 )
 STAGE_TITLE = [
@@ -665,17 +683,50 @@ def _parse_verdicts(audit_text: str) -> Dict[str, str]:
 # MISSING may carry a "(N blocked-by-upstream of step X)" parenthetical.
 _TALLY_TOKEN_RE = re.compile(r"\b([A-Z][A-Z-]*[A-Z])=(\d+)")
 # The tally prints SKIPPED-CONDITION under the short label `SKIPPED`.
-_TALLY_LABEL_TO_BUCKET = {
-    "PASS": "PASS",
-    "FAIL": "FAIL",
-    "MISSING": "MISSING",
-    "WAIVED-DEFERRED": "WAIVED-DEFERRED",
-    "DEFERRED-BY-UPSTREAM": "DEFERRED-BY-UPSTREAM",
+#: Hand-written ALIASES only: report-side spellings that differ from the
+#: producer's own word. Everything else is derived below.
+_TALLY_LABEL_ALIASES = {
     "SKIPPED": "SKIPPED-CONDITION",
-    "SKIPPED-CONDITION": "SKIPPED-CONDITION",
-    "SKIPPED-SETUP-REQUIRED": "SKIPPED-SETUP-REQUIRED",
-    "VACUOUS-PASS": "VACUOUS-PASS",
+    "WAIVED-DEFERRED": "WAIVED-DEFERRED",
 }
+
+
+def _build_tally_label_map() -> dict:
+    """Every producer status gets a bucket, BY CONSTRUCTION.
+
+    THE DRIFT THIS CLOSES. This map used to be a hand-typed list of nine
+    labels, and the producer's vocabulary moved on without it. Three tiers had
+    no key -- STRUCTURE-ONLY, INCOMPLETE and PASS-VOIDED-BY-DEPENDENCY -- and
+    the blindness is two-sided:
+
+      * ``_parse_audit_tally`` keeps a label only when the map resolves it
+        (``if bucket is not None``), so those three were dropped on the way in;
+      * ``_reconcile_rollup``'s second loop admits a bucket only when it is
+        ``in _TALLY_LABEL_TO_BUCKET.values()``, so a bucket the roll-up
+        populated and the tally never named was filtered right back out.
+
+    So a disagreement in those tiers was reported as AGREEMENT and the
+    "Roll-up reconciliation FAILED" banner could not render -- in either
+    direction. PASS-VOIDED-BY-DEPENDENCY is the sharpest of the three: it is
+    the word #671 introduced precisely to say "this is NOT a pass".
+
+    ``_flow_verdict_tiers.PRODUCER_STATUSES`` is the authoritative vocabulary
+    and already carries an anti-drift test ("a word added there without a home
+    below is a test failure, not a silent escape"). That protection never
+    reached this copy because this copy was a copy. Deriving from it means the
+    next tier is covered without anyone remembering this file exists.
+    """
+    try:
+        from _flow_verdict_tiers import PRODUCER_STATUSES
+    except ImportError:  # pragma: no cover — shared module always ships
+        PRODUCER_STATUSES = set()
+    out = {s: s for s in PRODUCER_STATUSES}
+    # Aliases win: they encode a deliberate report-side renaming.
+    out.update(_TALLY_LABEL_ALIASES)
+    return out
+
+
+_TALLY_LABEL_TO_BUCKET = _build_tally_label_map()
 # The buckets `flow_compliance_check.py` prints UNCONDITIONALLY on its
 # tally line. A line missing any of them is not the tally.
 TALLY_MANDATORY_BUCKETS = frozenset(
