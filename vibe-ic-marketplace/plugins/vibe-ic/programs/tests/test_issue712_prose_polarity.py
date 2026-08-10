@@ -431,3 +431,111 @@ def test_the_shipped_exemption_is_live_and_argued():
     assert G.exemptions_in_scope(real) == sorted(G._NOT_PROSE)
     for reason in G._NOT_PROSE.values():
         assert len(reason.strip()) >= G._EXEMPT_REASON_MIN
+
+
+# ---------------------------------------------------------------------------
+# PRECISION: what the detector must NOT call a declaration, and — the half that
+# matters more — what it must still call one.
+#
+# The gate went red on two helpers of `policy_direction_pin_check`, and neither
+# was reading a document. The first repair attempt cleared them by refusing to
+# read an `IfExp` test and refusing to read slice bounds, which passed the gate
+# and DELETED NINE REAL FINDINGS, among them
+# `parametric_spec_extractor::extract_arithmetic` — the purest instance of #706
+# in the tree. Both directions are pinned below, because a narrowing that is
+# only checked against the thing it was written for is how a gate goes quiet.
+# ---------------------------------------------------------------------------
+
+_CACHED_PATTERN = '''
+import re
+_CACHE = {}
+def mentions(text, token):
+    """Is `token` in `text`, not glued to an identifier character."""
+    pat = _CACHE.get(token)
+    if pat is None:
+        left = r"(?<![A-Za-z0-9_])" if re.match(r"[A-Za-z0-9_]", token) else ""
+        pat = re.compile(left + re.escape(token))
+        _CACHE[token] = pat
+    return bool(pat.search(text))
+'''
+
+_DECIDES_A_LITERAL = '''
+import re
+def extract(text, rec):
+    sat = "saturate" if re.search(r"saturat", text, re.I) else "wrap"
+    rec["overflow"] = sat
+    return rec
+'''
+
+_SLICES_AT_THE_MATCH = '''
+import re
+RE = re.compile(r"module\\s+(\\w+)")
+def extract(text, rec):
+    m = RE.search(text)
+    body = text[m.end():m.end() + 120]
+    rec["body"] = body
+    return rec
+'''
+
+
+def test_a_compiled_pattern_cached_by_its_token_is_not_a_declaration(tmp_path):
+    """A MATCHER is not a matched value.
+
+    `_CACHE[token] = re.compile(...)` is a memo table: the cached object holds no
+    character of any document, so it cannot be a denied value published as a
+    declaration. Reported as one, it put a mention-predicate on a blocking gate's
+    finding list — and the only repair available for a false finding is either a
+    call that can never fire or a lie in the exemption set."""
+    assert G.scan(_tree(tmp_path, _CACHED_PATTERN)) == []
+
+
+def test_a_prose_probe_that_decides_a_literal_is_STILL_a_finding(tmp_path):
+    """THE REGRESSION GUARD. The value written is a literal the author typed, so
+    nothing is carried out of the document — but WHICH literal is decided by a
+    search over the document, and that is #706 exactly. `extract_arithmetic`
+    ships this shape today. A narrowing that reads the `IfExp` branches and not
+    its test drops it, and drops eight more with it."""
+    assert G.scan(_tree(tmp_path, _DECIDES_A_LITERAL)) == ["some_extract::extract"]
+
+
+def test_text_sliced_at_the_match_is_STILL_a_finding(tmp_path):
+    """The other half of the same guard. `text[m.end():...]` reaches into the
+    document with the match as an OFFSET, and what comes back is document text.
+    Four shipped extractors are written this way."""
+    assert G.scan(_tree(tmp_path, _SLICES_AT_THE_MATCH)) == ["some_extract::extract"]
+
+
+def _overflow_of(text):
+    """`extract_arithmetic`'s decision, reduced to the clause under test."""
+    return "saturate" if re.search(r"saturat", text, re.I) else "wrap"
+
+
+def test_a_denied_sentence_reaches_the_same_declaration_as_an_affirmed_one():
+    """WHY the shape above must stay on the list, stated as behaviour rather
+    than as structure. Two sentences of opposite polarity produce one declared
+    value, and the vocabulary the gate points at separates them — so the fix is
+    available and the extractor simply does not take it."""
+    affirmed = "The accumulator saturates at the upper bound."
+    denied = "The accumulator does not saturate at the upper bound."
+    assert _overflow_of(affirmed) == _overflow_of(denied) == "saturate"
+    assert PP.is_denied(affirmed) is None
+    assert PP.is_denied(denied) is not None
+
+
+def test_the_shipped_tree_carries_no_finding_its_register_does_not_record():
+    """The gate's contract, read off the JSON it emits and its exit code, on the
+    tree that actually ships. An exemption may not raise the register, so the
+    exempted names are subtracted BEFORE the comparison; a new blind extractor
+    lands here as a failure, which is the point."""
+    plugin = Path(__file__).resolve().parents[1].parent
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "polarity.json"
+        r = subprocess.run(
+            [sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py"),
+             "--root", str(plugin), "--json", str(out)],
+            capture_output=True, text=True, timeout=55)
+        emitted = json.loads(out.read_text())
+    effective = set(emitted["polarity_blind"]) - set(G.exemptions_in_scope(plugin))
+    unrecorded = sorted(effective - set(emitted["baseline"]))
+    assert unrecorded == [], f"not in the register: {unrecorded}"
+    assert r.returncode == 0, r.stdout + r.stderr
