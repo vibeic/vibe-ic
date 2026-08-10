@@ -85,6 +85,7 @@ import _waiver_entries as _we
 import _evidence_independence as _ev_ind  # #524
 import _sim_results_bridge as _srb
 import _gate_invocation
+import _gate_report_verdict as _grv  # vibe-ic#901 gate/consumer contract
 # vibe-ic#634 — the ONE classification of verdict words, shared with
 # `flow_step_execution_coverage_check` so a tier added here cannot be
 # unknown to the guard that adjudicates dependency ordering.
@@ -3614,8 +3615,11 @@ def _stdout_signals_token(snippet: str, token: str) -> bool:
 #: "I examined nothing". Read from the FILE, not from stdout: #887 established
 #: that a disclosure a project-path length can delete is not a disclosure, and
 #: stdout is exactly that channel (the consumer sees only the last 300 chars).
-_VACUOUS_JSON_VERDICTS = {"NOT_APPLICABLE", "SKIPPED", "SKIP", "VACUOUS",
-                          "VACUOUS_PASS", "NO_BUILD", "NOT_RUN"}
+#: vibe-ic#901 — ONE definition, in `_gate_report_verdict`, because the
+#: phase-3 declared-sign-off roll-up needs the same answer about the same
+#: report. A second copy of this set is how two consumers of one gate come
+#: to disagree about what that gate said.
+_VACUOUS_JSON_VERDICTS = _grv.NO_CHECK_VERDICTS
 
 
 def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
@@ -3665,25 +3669,7 @@ def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
     rather than asking gates to print something new. Doing it here also covers
     gates written LATER, which patching six emitters would not.
     """
-    m = re.search(r"--json[= ]+(\S+)", cmd or "")
-    if not m:
-        return False
-    p = Path(m.group(1).strip("'\""))
-    if not p.is_absolute():
-        p = project / p
-    try:
-        if not (p.is_file() and p.stat().st_size > 0):
-            return False
-        d = json.loads(p.read_text(errors="replace"))
-    except Exception:
-        return False
-    if not isinstance(d, dict):
-        return False
-    for key in ("verdict", "status"):
-        v = d.get(key)
-        if isinstance(v, str) and v.strip().upper() in _VACUOUS_JSON_VERDICTS:
-            return True
-    return False
+    return _grv.command_report_declares_no_check(project, cmd)
 
 
 def _stdout_signals_vacuous(snippet: str) -> bool:

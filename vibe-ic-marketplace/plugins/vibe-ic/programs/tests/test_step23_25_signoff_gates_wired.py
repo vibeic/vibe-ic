@@ -270,11 +270,35 @@ def test_enforcement_audit_sees_the_gates_as_enforced():
 
 
 def test_signoff_gates_pass_a_clean_project(tmp_path):
+    """No gate finds a defect on a clean project — nothing FAILs, nothing is
+    BLOCKED, the wiring does not invent a violation.
+
+    #901 — this asserted `["PASS"] * 4`, and on this fixture that was never
+    true of two of the four: `post_route_signoff_corner_check` returns
+    `{"verdict": "NOT_APPLICABLE", "reasons": ["no multicorner sign-off report
+    (sta_spef_multicorner.rpt) found - nothing to gate"]}` and
+    `sta_corner_record_completeness_check` returns NOT_APPLICABLE with
+    `no_corner_declaration`. Both exited 0, so the runner recorded them as
+    substantive passes and this test pinned that. The fixture is deliberately
+    minimal — its sibling `test_signoff_gates_block_a_violated_signoff_corner`
+    ADDS the multicorner report to make `sta_corner` speak — so the honest
+    statement is: the two gates with an artefact to read pass, and the two
+    without one say so.
+    """
     import phase3_one_shot_runner as R
     results = R.step_declared_signoff_gates(_project(tmp_path))
+    by_name = {r.name: r for r in results}
     assert len(results) == 4
-    assert [r.status for r in results] == ["PASS"] * 4, [
-        (r.name, r.status, r.detail) for r in results]
+    assert not [r.name for r in results if r.status in ("FAIL", "BLOCKED")], [
+        (r.name, r.status, r.detail[:160]) for r in results]
+    assert by_name["sta_signoff"].status == "PASS", by_name["sta_signoff"]
+    assert by_name["em_signoff"].status == "PASS", by_name["em_signoff"]
+    for name in ("sta_corner", "sta_record"):
+        assert by_name[name].status == "SKIP", by_name[name]
+        assert R._SIGNOFF_NOT_CHECKED in by_name[name].detail, \
+            (name, by_name[name].detail)
+    # …and the run is still releasable: a disclosure is not a defect.
+    assert R._aggregate_verdict(results) == "PASS_WITH_WAIVERS", results
 
 
 def test_signoff_gates_block_a_violated_signoff_corner(tmp_path):
