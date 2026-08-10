@@ -47,6 +47,15 @@ never re-implemented):
                                          was actually issued
   * blindness_audit.py                 — (optional, only when transcripts are
                                          supplied) prompt-only blindness audit
+  * control_substance_check.py         — (only when the control evidence is
+                                         supplied) how many of the change's
+                                         pre-fix control tests OBSERVED A
+                                         VALUE, as opposed to only noticing
+                                         that something was absent. A control
+                                         whose every failure is "the module the
+                                         fix introduces does not exist yet"
+                                         BLOCKS: "the tests fail pre-fix" is
+                                         true of every new file ever written
   * tools/ci/repo_hygiene_gates.sh     — (#538) the ENTIRE repo-hygiene set CI
                                          runs, INVOKED rather than re-listed,
                                          so a gate added to CI is covered here
@@ -94,6 +103,9 @@ CLI
                          [--pytest-cmd "<cmd>"]
                          [--commit-cmds-file <f>]   # PR commit command strings
                          [--transcripts <dir/file> --dataset <root>]  # blindness
+                         [--control-junit <f>] [--control-text <f>]  # the
+                                                    # pre-fix control's own
+                                                    # pytest report
                          [--repo <dir>] [--plugin-root <dir>]
                          [--changed-file <f>]       # override diff (one path/line)
                          [--json OUT]
@@ -726,6 +738,75 @@ def blindness_gate(transcripts: Optional[str],
 
 
 # --------------------------------------------------------------------------
+# control_substance_check — the PRE-FIX CONTROL, GRADED (vibe-ic#381).
+#
+# The standard control in this repo is "copy the change's new test file onto
+# clean main, run it, show it FAILS", and it is reported in a PR body as "the
+# tests fail pre-fix". Measured on two live PRs, that sentence covered a run
+# that collected NOTHING (551 lines of new test, one ModuleNotFoundError, zero
+# assertions executed — true of every new file ever written) and a run whose
+# 4-of-4 "behavioural" failures were 3-of-4 absence of a field the fix adds.
+# `control_substance_check` reads the control's own pytest report and counts
+# how many failures actually observed a VALUE.
+#
+# It shipped with nothing but its own unit test running it, which is the exact
+# shape it exists to name — a fixture proving the logic, never the artefacts —
+# and it is composed here because this program is the only place in the repo
+# that judges a base..head CHANGE rather than the tree.
+#
+# THE POLICY, stated rather than buried, and it follows `ci_ran_at_all_check`
+# twenty lines down:
+#   * evidence supplied + tautological  -> rc 1, BLOCKING. This is the gate.
+#   * evidence supplied + substantive   -> rc 0 with the count.
+#   * NO evidence + the diff changes test files -> rc -1, a LOUD non-blocking
+#     disclosure naming the count of test files whose control was not graded.
+#     Blocking here would refuse every landing from day one over evidence the
+#     workflow does not yet produce, and a gate that must be bypassed to work
+#     is a gate that gets bypassed for real reasons too.
+#   * NO evidence + no test file changed -> rc -1, not applicable.
+# The disclosure is never silent: the summary reaches the review record either
+# way, which is the difference between a decision and an oversight.
+# --------------------------------------------------------------------------
+def control_substance_gate(control_junit: Optional[str],
+                           control_text: Optional[str],
+                           files: List[str]) -> GateResult:
+    prog = _PROGRAMS_DIR / "control_substance_check.py"
+    if not prog.is_file():
+        return GateResult("control_substance_check", -1, "checker not present")
+    changed_tests = [f for f in files
+                     if f.endswith(".py") and ("/tests/" in f
+                                               or "/test_" in f)]
+    if not control_junit and not control_text:
+        if changed_tests:
+            return GateResult(
+                "control_substance_check", -1,
+                f"NO CONTROL EVIDENCE SUPPLIED and the diff changes "
+                f"{len(changed_tests)} test file(s) — nothing graded whether "
+                f"the pre-fix control observed a value or only noticed an "
+                f"absence. Re-run with --control-junit <the control run's "
+                f"pytest --junitxml>")
+        return GateResult("control_substance_check", -1,
+                          "not applicable — the diff changes 0 test file(s) "
+                          "and no control evidence was supplied")
+    argv: List[str] = []
+    if control_junit:
+        argv += ["--junit", control_junit]
+    if control_text:
+        argv += ["--text", control_text]
+    rc, out, err = _run_program(prog, argv)
+    blob = ((out or "") + (err or "")).strip()
+    first = (blob.splitlines() or [""])[0][:240]
+    if rc == 0:
+        return GateResult("control_substance_check", 0,
+                          first or "the control observed a value")
+    if rc == 1:
+        return GateResult("control_substance_check", 1,
+                          f"TAUTOLOGICAL CONTROL — {first}")
+    return GateResult("control_substance_check", 2,
+                      f"control evidence could not be read: {first}")
+
+
+# --------------------------------------------------------------------------
 # run_output_completeness — a benchmark/IC run under review whose RESULT.md is
 # EMPTY / MISSING / STUB must NOT land (v1.3.51). When the PR's change-set adds
 # or edits a run deliverable (a RESULT.md), self-check that run_dir's deliverable
@@ -1060,6 +1141,8 @@ def review(base: str, head: str, *,
            commit_cmds: Optional[List[str]] = None,
            transcripts: Optional[str] = None,
            dataset: Optional[str] = None,
+           control_junit: Optional[str] = None,
+           control_text: Optional[str] = None,
            version_by_gatekeeper: bool = False,
            override_files: Optional[List[str]] = None,
            override_cur: Optional[str] = None,
@@ -1143,6 +1226,7 @@ def review(base: str, head: str, *,
     gates.append(ci_ran_gate(repo, head, cadence))
     gates.append(run_deliverable_gate(repo, files))
     gates.append(blindness_gate(transcripts, dataset))
+    gates.append(control_substance_gate(control_junit, control_text, files))
     # #538 — LAST because it is by far the longest, so every cheap machine gate
     # has already printed by the time this starts. It is the whole CI hygiene
     # set, invoked (not re-listed) so that MERGE_OK means what it reads as.
@@ -1207,6 +1291,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="blindness-audit transcript dir/file (optional)")
     ap.add_argument("--dataset", default=None,
                     help="blindness-audit dataset root (required with --transcripts)")
+    ap.add_argument("--control-junit", default=None,
+                    help="the PRE-FIX control run's pytest --junitxml report; "
+                         "graded by control_substance_check, which BLOCKS on a "
+                         "control whose every failure is an absence")
+    ap.add_argument("--control-text", default=None,
+                    help="the same control as a pasted pytest console log "
+                         "(weaker than --junit; the checker measures the gap)")
     ap.add_argument("--repo", default=None,
                     help="repo root for git ops (default: cwd's repo)")
     ap.add_argument("--plugin-root", default=None,
@@ -1256,6 +1347,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    role=args.role, pytest_cmd=args.pytest_cmd,
                    commit_cmds=commit_cmds,
                    transcripts=args.transcripts, dataset=args.dataset,
+                   control_junit=args.control_junit,
+                   control_text=args.control_text,
                    version_by_gatekeeper=args.version_by_gatekeeper,
                    override_files=override_files,
                    batch=args.batch)

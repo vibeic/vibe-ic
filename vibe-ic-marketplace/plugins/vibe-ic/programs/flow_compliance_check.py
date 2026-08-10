@@ -93,6 +93,10 @@ import _flow_verdict_tiers as _T
 # this module reads `_flow_verdict_tiers` and nothing from here, so the verdict
 # path above cannot acquire a dependency on a classification.
 import _blocker_classification as _bc
+# The GUARD on the list `_bc` builds. Same downward direction: it reads
+# `_blocker_classification` and `_flow_verdict_tiers` and nothing from here, so
+# importing it cannot give the verdict path a dependency on a classification.
+import blocker_classification_check as _bcc
 import fpga_board_capability as _fpga_cap
 
 try:
@@ -11805,6 +11809,55 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocker_class_counts = _bc.class_counts(blockers)
     blocker_sub_class_counts = _bc.sub_blocker_class_counts(blockers)
 
+    # ── the contract guard on the list above, run BY THE PRODUCER ──────────
+    #
+    # `blocker_classification_check` is the guard on exactly the artefact this
+    # block just built: the list is complete over the non-PASS steps, invents
+    # none, names in `basis` the rule that decided each class, and the headline
+    # counts sum to the list. It shipped with NOTHING but its own unit test
+    # running it — zero coverage of real reports, a fixture the author wrote
+    # proving the logic and never the artefacts (vibe-ic#381). Compliance
+    # reports are produced HERE, so this is the one place the guard is handed a
+    # real one every time one exists.
+    #
+    # ADVISORY HERE, DELIBERATELY, and it is the same rule the block above
+    # states rather than a hedge: nothing in this section may move a verdict
+    # about a chip. `overall`, `counts`, every promotion tier and every
+    # exit-code decision are settled above and none of them reads this. A
+    # contract violation is a defect in the CLASSIFIER, not a fact about the
+    # design, and a classifier that could fail a chip would immediately be
+    # worth gaming. So it is disclosed by name — on stderr and in the report —
+    # and the verdict is left alone.
+    #
+    # The BLOCKING copy of the same guard is the sweep over committed reports
+    # in `tools/ci/repo_hygiene_gates.sh`, which is where a violation that
+    # reaches the corpus is refused.
+    #
+    # Wrapped for the same reason the classifier call is: a defect in the guard
+    # must not be able to break a flow run. A guard that could not run is
+    # itself recorded, never silently empty.
+    blocker_contract_violations: List[str] = []
+    try:
+        blocker_contract_violations, _bcc_facts = _bcc.check_report({
+            "overall": overall,
+            "steps": [asdict(r) for r in results],
+            "blockers": blockers,
+            "blocker_class_counts": blocker_class_counts,
+            "blocker_list_error": blocker_list_error,
+        })
+    except Exception as _bcc_exc:  # pragma: no cover - defence in depth
+        blocker_contract_violations = [
+            f"the blocker-list contract guard could not run: "
+            f"{type(_bcc_exc).__name__}: {_bcc_exc}"]
+    if blocker_contract_violations:
+        print(f"flow_compliance_check: WARN — the classified blocker list "
+              f"breaks its own contract in "
+              f"{len(blocker_contract_violations)} place(s). The list is "
+              f"published WITH this disclosure beside it; the verdict above is "
+              f"about the design and is untouched.", file=sys.stderr)
+        for _v in blocker_contract_violations:
+            print(f"  - {_v}", file=sys.stderr)
+
     if args.json:
         out = {
             "flow": args.flow,
@@ -11847,6 +11900,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             # is empty because the classifier failed, which is a completely
             # different fact from "nothing is blocked".
             "blocker_list_error": blocker_list_error,
+            # Empty list on the normal path. Non-empty means the list above
+            # breaks its own contract — a defect in the classifier, disclosed
+            # rather than folded into the design's verdict. A reader who trusts
+            # `blockers` must read this first.
+            "blocker_contract_violations": blocker_contract_violations,
             "steps": [asdict(r) for r in results],
         }
         Path(args.json).write_text(json.dumps(out, indent=2))
@@ -12086,6 +12144,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "blocker_class_counts": blocker_class_counts,
             "blocker_sub_class_counts": blocker_sub_class_counts,
             "blocker_list_error": blocker_list_error,
+            "blocker_contract_violations": blocker_contract_violations,
             "command_argv": list(sys.argv),
             # THE POPULATION, beside the tally. `design_input_digest` is what
             # the verdict was computed over; `measurement` is what computed

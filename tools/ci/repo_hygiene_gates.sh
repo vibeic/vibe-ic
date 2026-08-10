@@ -79,6 +79,25 @@ run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_s
 # one makes a gate people route around. It runs ADVISORY (rc 0) so the count is
 # published every run and cannot drift unseen.
 run "container exec deadlines"  "$ROOT" python3 "$PG/container_exec_deadline_check.py" "$PLUGIN"
+# Its SIBLING, and it had shipped with exactly the defect the comment above
+# describes. `container_login_banner_parse_check` finds the OTHER half of the
+# same hazard — a `docker exec ... bash -lc` whose captured stdout is then read
+# as a value, when a login shell prepends two `[INFO]` lines to it — and nothing
+# but its own unit test ever ran it, so `checker_execution_wiring_audit` counted
+# it as zero coverage of real inputs. Its population is this plugin's own
+# `programs/` tree, which is a repo-wide invariant needing no PR context: the
+# thing this script is for.
+#
+# BLOCKING, and it can afford to be. Measured on 221689eb: rc 0 in 4.6s over 25
+# login-shell callers and zero banner-fragile consumers, so unlike the gate
+# above there is no pre-existing pile to bless and no reason to run advisory.
+#
+# `run_tolerating_uncheckable` because the checker's own rc 2 does not mean
+# clean: it means NO caller passes a login shell any more, i.e. either the
+# hazard is gone or the detector stopped matching the call sites, and the
+# checker says in its own words that neither is a PASS. NOT_CHECKED carries that
+# to the roll-up instead of folding "I could not look" into "I looked".
+run_tolerating_uncheckable "container login-banner parses" "$ROOT" python3 "$PG/container_login_banner_parse_check.py"
 # vibe-ic#552 — a warning our EDA fork substitutes for an upstream abort must
 # still be visible to the gate that needs it. Every downgrade moves a
 # condition out of the error-matching sets BY CONSTRUCTION, so the
@@ -480,6 +499,27 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # Published, not on-disk, on purpose: 46 vs 17 is exactly the host-dependence
 # `_published_tree` exists to remove from a baseline.
 run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic"
+# Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
+# BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard
+# on that list's contract — complete over the non-PASS steps, inventing none,
+# and no class without a rule named in `basis`. It too shipped with nothing but
+# its own unit test running it.
+#
+# READ-ONLY over the corpus, so NOT `run_writing_the_corpus`: measured across a
+# full suite run, `wrote_corpus` is 0 with this gate declared — the dispatcher's
+# own `git status --porcelain --ignored=traditional -- benchmark-data` bracket
+# is unchanged by it.
+#
+# IT REPORTS NOT_CHECKED TODAY, ON PURPOSE. All 5 compliance reports the corpus
+# carries predate the `blockers` key, so every rule in the guard takes the
+# pre-contract early return and an rc 0 here would mean "no rule executed" while
+# reading exactly like "the reports are clean" — the vacuous sweep this repo
+# keeps removing one gate at a time, and the one PR #858's own review caught.
+# The checker now refuses to call that state a PASS (rc 2 with the count), so
+# this line cannot go green until a contract-carrying report is committed, and
+# it goes green by itself on the first one that is.
+run_tolerating_uncheckable "blocker list contract on committed reports" "$ROOT" \
+    python3 "$PG/blocker_classification_check.py" --dir "$ROOT/benchmark-data"
 
 # vibe-ic#410 — pdk_registry.json is not the only per-PDK table. Three others
 # are keyed independently, and registering a PDK in the registry registers it
