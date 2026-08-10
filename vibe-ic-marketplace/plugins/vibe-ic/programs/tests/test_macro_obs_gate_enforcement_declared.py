@@ -110,10 +110,16 @@ def test_the_audit_exits_zero_and_names_neither_gate_as_debt(tmp_path):
     audit that had stopped looking at these gates.
     """
     out = tmp_path / "audit.json"
+    # 60s is the per-call ceiling `ci_harness_timeout_ceiling_check` enforces
+    # (180s harness session bound // 3). A bound above it can outlive the
+    # session and take every other file in the subset down with it, so the
+    # number is not free to choose. Measured cost of this exact call on a
+    # loaded build host (load avg 13.9): 17.2-21.2s over 5 runs, so 60s is
+    # ~3x the observed worst case.
     cp = subprocess.run(
         [sys.executable, str(_PROGRAMS / "flow_gate_enforcement_audit.py"),
          "--json", str(out)],
-        capture_output=True, text=True, timeout=900)
+        capture_output=True, text=True, timeout=60)
     assert cp.returncode == 0, (
         f"rc={cp.returncode}\n{cp.stdout[-4000:]}\n{cp.stderr[-2000:]}")
     rep = json.loads(out.read_text())
