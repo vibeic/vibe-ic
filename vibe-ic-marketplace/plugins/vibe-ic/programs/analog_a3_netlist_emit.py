@@ -149,6 +149,18 @@ _ROLE_TOKENS = {
 # Within a role, prefer the most ordinary flavour: a plain core-voltage device
 # over a high-voltage / low-Vt / isolated variant. Deterministic and stated,
 # so the choice is auditable instead of alphabetical.
+#
+# WHERE THIS RANKING RUNS, AND WHERE IT DOES NOT (vibe-ic#903). It ranks the
+# REGISTRY's declared `device_models` — the fallback branch of
+# `resolve_role_models`. A role the deck-context resolver already elected does
+# NOT come through here, and a family whose libs are PARSED (the only kind that
+# can ship a high/low-voltage split) resolves every role that way. So until
+# #903 the sentence above described a rule that never ran for the families it
+# was written for: `"hv_"` sat in `_ROLE_AVOID` while a high-voltage device was
+# what got bound. The preference is now ALSO applied at the election site
+# (`analog_pdk_deck_context.device_flavour_rank`), structurally, so the two
+# paths agree; `test_issue903_device_flavour_election` holds them to that by
+# feeding THIS tuple to THAT ranker rather than restating either list.
 _ROLE_PREFER = {
     "nmos": ("01v8", "03v3", "lv_"),
     "pmos": ("01v8", "03v3", "lv_"),
@@ -249,20 +261,38 @@ def _registry_entry(selector: str) -> Tuple[Optional[str], Dict[str, Any]]:
     return None, {}
 
 
+# vibe-ic#903 — the two paths a role's model can be bound by. Named so the
+# artefact can say WHICH ONE bound each role instead of leaving it to be
+# inferred from which branch happened to fire.
+BOUND_BY_DECK_CONTEXT = "deck_context"
+BOUND_BY_REGISTRY = "registry"
+
+
 def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
                         ctx_device_map: Dict[str, str]
-                        ) -> Tuple[Dict[str, str], List[str]]:
-    """{role: model name} for the resolved family, plus the roles that could
-    NOT be resolved. Prefers whatever the deck-context resolver already
-    elected, then falls back to the registry's declared device list. A role
-    that resolves to nothing is reported, never substituted."""
+                        ) -> Tuple[Dict[str, str], List[str], Dict[str, str]]:
+    """{role: model name} for the resolved family, the roles that could NOT be
+    resolved, and {role: which path bound it} (BOUND_BY_*). Prefers whatever
+    the deck-context resolver already elected, then falls back to the
+    registry's declared device list. A role that resolves to nothing is
+    reported, never substituted.
+
+    vibe-ic#903 — WHY THE THIRD RETURN VALUE EXISTS. The `_ROLE_PREFER` /
+    `_ROLE_AVOID` ranking below runs ONLY on the registry branch. Taking the
+    deck context's election verbatim is correct — that resolver now applies the
+    same preference at its own election site, over the family's PARSED
+    candidates, which is the only place it can see them — but the split was
+    invisible in the artefact, so a comment claiming an auditable preference
+    and a binding chosen by name order were indistinguishable to a reader."""
     models = [m for m in (family_entry.get("device_models") or [])
               if isinstance(m, str)]
     out: Dict[str, str] = {}
     unresolved: List[str] = []
+    bound_by: Dict[str, str] = {}
     for role in roles:
         if ctx_device_map.get(role):
             out[role] = ctx_device_map[role]
+            bound_by[role] = BOUND_BY_DECK_CONTEXT
             continue
         toks = _ROLE_TOKENS.get(role, ())
         cands = [m for m in models
@@ -280,7 +310,8 @@ def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
             return (exact, avoid, len(low), low)
 
         out[role] = sorted(cands, key=rank)[0]
-    return out, unresolved
+        bound_by[role] = BOUND_BY_REGISTRY
+    return out, unresolved, bound_by
 
 
 def resolve_pdk_context(project: Path, pdk: str, container: str,
@@ -348,7 +379,8 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         work_items = [f"deck-context resolver unavailable: {exc}"]
 
     fam_name, fam_entry = _registry_entry(family or pdk)
-    models, unresolved = resolve_role_models(fam_entry, roles, device_map)
+    models, unresolved, bound_by = resolve_role_models(
+        fam_entry, roles, device_map)
     return {
         "status": status,
         "family": family,
@@ -361,6 +393,15 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         # still correct.
         "deck_loads": [tuple(dl) for dl in (ctx_json.get("deck_loads") or [])],
         "role_models": models,
+        # vibe-ic#903 — WHICH rule bound each role, and (for a parsed family)
+        # the deck resolver's own per-role election record: the basis, the
+        # rejected candidates, and whether the family spans more than one
+        # voltage domain — in which case ONE flavour is bound for every block,
+        # because this function takes no block argument.
+        "role_model_election": {
+            "bound_by": bound_by,
+            "deck_context": dict(ctx_json.get("device_election") or {}),
+        },
         "unresolved_roles": unresolved,
         "device_terminals": device_terminals,
         "geometry_units": geometry_units,

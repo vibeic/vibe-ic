@@ -211,6 +211,14 @@ class DeckContext:
     # must be emitted in explicit metres (see render_deck). chip-AGNOSTIC.
     device_geometry_units: Dict[str, str] = field(default_factory=dict)
     unresolved_roles: List[str] = field(default_factory=list)
+    # vibe-ic#903 — HOW each device role's flavour was elected, and WHAT was
+    # rejected. The device binding is an ELECTRICAL choice; before #903 it was
+    # decided by name ORDER and the artefact recorded nothing about it, so a
+    # reader had to re-derive the rule from the lib names to know why a deck
+    # binds the device it binds. See ELECTION_BASIS_* and `elect_device_roles`.
+    # It also carries the fact this fix does NOT resolve: when a family ships
+    # more than one voltage domain, ONE flavour is elected for the whole design.
+    device_election: Dict[str, Any] = field(default_factory=dict)
     # vibe-ic#907 — EVERY (lib, section) THE DECK MUST LOAD, in order.
     #
     # The deck used to load exactly one: `.lib <model_lib> <typ_section>`. That
@@ -252,6 +260,7 @@ class DeckContext:
             "device_terminals": self.device_terminals,
             "device_geometry_units": self.device_geometry_units,
             "unresolved_roles": self.unresolved_roles,
+            "device_election": self.device_election,
             "deck_loads": [list(dl) for dl in self.deck_loads],
             "work_items": self.work_items, "disclosure": self.disclosure,
             "primary_policy": self.primary_policy,
@@ -515,14 +524,134 @@ def transitive_geometry_units(lib_path: str, text: str,
     return units
 
 
-def map_device_roles(subckts: Dict[str, int],
-                     required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
-                     ) -> Tuple[Dict[str, str], List[str], List[str]]:
-    """Map parsed `.subckt` names → {role: device_name} via the generic role
-    heuristic. A MOS role (nmos/pmos) requires a ≥4-terminal subckt (matching
-    the templates' `X<inst> d g s b <subckt> w= l=` instantiation). Returns
-    (device_map, unresolved_required_roles, notes). Deterministic pick when a
-    role has several candidates: shortest name, then lexicographic."""
+# ── device FLAVOUR election (vibe-ic#903) ───────────────────────────────────
+# A foundry family commonly ships the SAME device ROLE in several FLAVOURS: a
+# plain core-voltage device, an elevated-voltage device, and special-Vt /
+# isolated / native / varactor variants. Which flavour a deck binds is an
+# ELECTRICAL decision. Until #903 it was decided by name ORDER alone — shortest
+# name, then lexicographic — so a family whose flavour names are the same
+# length elected whichever spelled first, and the electrical question was never
+# asked.
+#
+# MEASURED, on a container-installed family shipping two MOS flavours with
+# IDENTICAL corner-section vocabularies and EQUAL-LENGTH device names. One
+# `.op`, Vgs = Vds = core supply, W = 1 um, L = drawn minimum, typical section:
+#
+#     plain core-voltage flavour     |Id| = 4.005261e-04 A
+#     elevated-voltage flavour       |Id| = 1.703823e-15 A
+#
+# ~2.4e11 apart — and ngspice exits 0 with no error on BOTH. The wrong flavour
+# does not fail, it answers. That is why name order is not an acceptable
+# stand-in: nothing downstream can tell the two runs apart.
+#
+# The preference applied below is the one `analog_a3_netlist_emit._ROLE_PREFER`
+# already STATES — "prefer a plain core-voltage device over a high-voltage /
+# low-Vt / isolated variant … so the choice is auditable instead of
+# alphabetical" — moved to the ELECTION site, where it decides something. In a3
+# that ranking sits on the REGISTRY fallback branch, which a PARSED family never
+# reaches, so the families that can actually ship a flavour split were exactly
+# the ones the stated rule never ran for.
+#
+# WHAT THE RULE CANNOT DO — IT CANNOT PROMOTE. An ordinary-domain component and
+# NO domain component at all rank EQUAL, so the rule can only push an elevated
+# domain (or a special variant) DOWN. A candidate set carrying no flavour signal
+# therefore elects exactly what it always did: the historical
+# (shortest, lexicographic) pair is kept as the FINAL tiebreak for that reason,
+# and `test_903_guard_no_flavour_signal_still_elects_shortest_then_lexicographic`
+# is the paired guard that must pass on the UNFIXED program too.
+#
+# WHAT THIS DOES NOT FIX (#903's other half): the election is CHIP-GLOBAL.
+# `analog_a3_netlist_emit.resolve_pdk_context` takes no block argument, so a
+# design with an elevated-voltage pass path and a core-voltage core still gets
+# ONE flavour for EVERY block. A per-block binding needs a domain->block
+# contract that does not exist in the pipeline today, and inventing a parameter
+# no call site can populate is the dead seam RETIRED_PRIMARY_STRATEGIES exists
+# to warn about. So the multi-domain FACT is DISCLOSED in `device_election`
+# rather than silently resolved.
+#
+# chip-AGNOSTIC: generic device-class name COMPONENTS, the same category as
+# `_ROLE_TOKENS`' nfet / pmos / nch. No vendor, SKU or node literal.
+
+# Voltage-domain name COMPONENTS. Component-matched, NEVER substring: `hvt` is
+# a threshold flavour and must not read as a high-voltage domain.
+_DOMAIN_ELEVATED = ("mv", "hv", "ehv", "uhv", "xhv")
+_DOMAIN_ORDINARY = ("lv",)
+# Components that mark a device as something other than the plain one of its
+# role (special threshold, isolated, native, varactor, ESD).
+_SPECIAL_VARIANT = ("lvt", "hvt", "svt", "ulvt", "nvt", "zvt", "iso", "dss",
+                    "nat", "native", "var", "varicap", "varactor", "esd",
+                    "dnw", "nbl")
+# A name that SPELLS a voltage rating: `01v8` -> 1.8, `g5v0d10v5` -> 5.0/10.5.
+_RATING_RE = re.compile(r"(?<![0-9])(\d{1,3})v(\d{1,3})(?![0-9])")
+
+# The basis vocabulary an election record may report. Named constants rather
+# than inline strings so a consumer (and the tests) can DISCOVER the set from
+# the module instead of retyping it — a hand-copied vocabulary is how two
+# copies of one list each hide the other's gap.
+ELECTION_BASIS_KNOWN_TABLE = "known-family-table"
+ELECTION_BASIS_SOLE = "sole-candidate"
+ELECTION_BASIS_FLAVOUR = "flavour-preference"
+ELECTION_BASIS_NAME_ORDER = "name-order"
+
+# Which candidate SET the election ran over.
+ELECTION_SCOPE_KNOWN_TABLE = "known-family-table"
+ELECTION_SCOPE_UNION = "cross-lib-union"
+ELECTION_SCOPE_PRIMARY = "primary-lib-closure"
+
+
+def _name_components(name: str) -> List[str]:
+    """`_`/non-alphanumeric-delimited components of a device name, lowercased."""
+    return [c for c in re.split(r"[^a-z0-9]+", str(name).lower()) if c]
+
+
+def name_voltage_domain(name: str) -> Optional[str]:
+    """The voltage-domain COMPONENT a device name declares, or None when it
+    declares none. Component-matched, so a threshold-flavour component (`hvt`)
+    is not misread as a high-voltage domain. chip-AGNOSTIC."""
+    for c in _name_components(name):
+        if c in _DOMAIN_ELEVATED or c in _DOMAIN_ORDINARY:
+            return c
+    return None
+
+
+def name_voltage_rating(name: str) -> float:
+    """The HIGHEST voltage a device name SPELLS (`01v8` -> 1.8,
+    `g5v0d10v5` -> 10.5), or 0.0 when it spells none — a name that claims no
+    rating is treated as the plain device, never demoted by a number it does
+    not carry. chip-AGNOSTIC (a spelling convention, not a family)."""
+    best = 0.0
+    for whole, frac in _RATING_RE.findall(str(name).lower()):
+        try:
+            best = max(best, float("%d.%s" % (int(whole), frac)))
+        except ValueError:
+            continue
+    return best
+
+
+def device_flavour_rank(name: str) -> Tuple[int, float, int, str]:
+    """Sort key for ONE device-role candidate — LOWER is the more ordinary
+    device. `(demoting_components, spelled_rating, len(name), name)`.
+
+    The last two are the HISTORICAL rule verbatim, kept as the FINAL tiebreak
+    so a candidate set carrying no flavour signal elects exactly what it always
+    did."""
+    comps = set(_name_components(name))
+    demote = (len(comps & set(_DOMAIN_ELEVATED))
+              + len(comps & set(_SPECIAL_VARIANT)))
+    return (demote, name_voltage_rating(name), len(str(name)), str(name))
+
+
+def elect_device_roles(subckts: Dict[str, int],
+                       required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
+                       ) -> Tuple[Dict[str, str], List[str], List[str],
+                                  Dict[str, Any]]:
+    """`map_device_roles` plus the ELECTION RECORD (vibe-ic#903).
+
+    Returns (device_map, unresolved_required_roles, notes, election). The
+    election states, per role, WHAT was elected, WHICH RULE decided it
+    (ELECTION_BASIS_*), what was rejected, and which voltage domains the
+    candidate set spanned — so a deck's device binding is auditable from the
+    artefact instead of re-derived from the lib names."""
     candidates: Dict[str, List[str]] = {}
     notes: List[str] = []
     for name, nterm in subckts.items():
@@ -535,9 +664,62 @@ def map_device_roles(subckts: Dict[str, int],
             continue
         candidates.setdefault(role, []).append(name)
     device_map: Dict[str, str] = {}
+    roles_rec: Dict[str, Any] = {}
+    multi_domain: List[str] = []
     for role, names in candidates.items():
-        device_map[role] = sorted(names, key=lambda n: (len(n), n))[0]
+        ranked = sorted(names, key=device_flavour_rank)
+        elected = ranked[0]
+        device_map[role] = elected
+        if len(ranked) == 1:
+            basis = ELECTION_BASIS_SOLE
+        elif (device_flavour_rank(elected)[:2]
+              < device_flavour_rank(ranked[1])[:2]):
+            basis = ELECTION_BASIS_FLAVOUR
+        else:
+            # the flavour rule separated nothing — the historical pair decided.
+            basis = ELECTION_BASIS_NAME_ORDER
+        domains = sorted({d for d in (name_voltage_domain(n) for n in names)
+                          if d})
+        if len(domains) > 1:
+            multi_domain.append(role)
+        roles_rec[role] = {"elected": elected, "basis": basis,
+                           "rejected": ranked[1:], "voltage_domains": domains}
+    election: Dict[str, Any] = {
+        "scope": ELECTION_SCOPE_UNION,
+        "roles": roles_rec,
+        "multi_domain_roles": sorted(multi_domain),
+    }
+    if multi_domain:
+        # #903's UNFIXED half, stated in the artefact rather than left to be
+        # noticed. This is a FACT about the election, not a work item: refusing
+        # to emit for every multi-flavour family is a contract decision the
+        # owner has not taken, so the deck is still emitted and still says so.
+        election["chip_global_note"] = (
+            "the resolved family ships more than one VOLTAGE DOMAIN for "
+            f"role(s) {sorted(multi_domain)} and ONE flavour is elected for "
+            "the WHOLE design: the deck-context resolver takes no block "
+            "argument, so no block can differ (vibe-ic#903 — the per-block "
+            "half is NOT fixed)")
     unresolved = [r for r in required if r not in device_map]
+    return device_map, unresolved, notes, election
+
+
+def map_device_roles(subckts: Dict[str, int],
+                     required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
+                     ) -> Tuple[Dict[str, str], List[str], List[str]]:
+    """Map parsed `.subckt` names → {role: device_name} via the generic role
+    heuristic. A MOS role (nmos/pmos) requires a ≥4-terminal subckt (matching
+    the templates' `X<inst> d g s b <subckt> w= l=` instantiation). Returns
+    (device_map, unresolved_required_roles, notes).
+
+    Deterministic pick when a role has several candidates (vibe-ic#903): the
+    FLAVOUR preference first — `device_flavour_rank`, a plain core-voltage
+    device over an elevated-voltage / special-Vt / isolated variant — and the
+    historical shortest-name-then-lexicographic pair as the FINAL tiebreak, so
+    a candidate set with no flavour signal is unchanged. `elect_device_roles`
+    returns the same three values plus the per-role election record."""
+    device_map, unresolved, notes, _election = elect_device_roles(
+        subckts, required)
     return device_map, unresolved, notes
 
 
@@ -620,6 +802,21 @@ def known_family_context(selector: str) -> DeckContext:
         # substrate/well node injection (keeps the sky130 deck byte-identical).
         device_terminals={role: 4 for role in fam["device_map"]},
         template_family=_template_family,
+        # vibe-ic#903 — no DEVICE election happens on this path either: the
+        # device map is the plugin's authored table. Stated positively rather
+        # than left blank, so an artefact from this path is not silent about a
+        # question the other path now answers.
+        device_election={
+            "scope": ELECTION_SCOPE_KNOWN_TABLE,
+            "roles": {role: {"elected": dev,
+                             "basis": ELECTION_BASIS_KNOWN_TABLE,
+                             "rejected": [],
+                             "voltage_domains": (
+                                 [name_voltage_domain(dev)]
+                                 if name_voltage_domain(dev) else [])}
+                      for role, dev in fam["device_map"].items()},
+            "multi_domain_roles": [],
+        },
         # no election happens on this path — the lib comes from the table.
         primary_policy=PRIMARY_BY_KNOWN_TABLE,
         disclosure=(
@@ -697,6 +894,51 @@ def container_reader(container: str) -> Callable[[str], Optional[str]]:
 # RETIRED_PRIMARY_STRATEGIES for the epitaph and the restore instructions.
 
 
+def _record_closure_narrowing(union_election: Dict[str, Any],
+                              closure_election: Dict[str, Any],
+                              closure_map: Dict[str, str]) -> Dict[str, Any]:
+    """Fold the primary-lib closure re-derivation into the UNION election
+    record, keeping the union one as the election of record.
+
+    WHY THE UNION RECORD SURVIVES (vibe-ic#903). The primary lib is ranked by
+    the devices the UNION election resolved, so re-deriving the map from that
+    lib's closure is a CONSEQUENCE of that election, not a second one. Letting
+    the narrowed record replace it was measured to erase exactly the thing the
+    issue is about: the closure of a single-flavour corner lib holds ONE
+    candidate per role, so every role reported `sole-candidate`, `rejected` came
+    back empty, and the family's multi-voltage-domain census disappeared —
+    a record that says "there was nothing to choose between" about a family that
+    ships two flavours. What the narrowing CAN still do is bind a different
+    device than the union did; that is recorded per role and in `closure`."""
+    roles = {r: dict(rec) for r, rec in (union_election.get("roles") or
+                                         {}).items() if r in closure_map}
+    changed: Dict[str, Any] = {}
+    for role, name in closure_map.items():
+        rec = roles.get(role)
+        if rec is None:
+            rec = dict((closure_election.get("roles") or {}).get(role) or {})
+            roles[role] = rec
+        if rec.get("elected") != name:
+            changed[role] = {"union_election": rec.get("elected"),
+                             "primary_lib_closure": name}
+            rec["elected"] = name
+            rec["basis"] = ((closure_election.get("roles") or {}
+                             ).get(role) or {}).get(
+                                 "basis", ELECTION_BASIS_NAME_ORDER)
+    out = dict(union_election)
+    out["roles"] = roles
+    out["multi_domain_roles"] = [r for r in
+                                 (union_election.get("multi_domain_roles")
+                                  or []) if r in closure_map]
+    if not out["multi_domain_roles"]:
+        out.pop("chip_global_note", None)
+    out["closure"] = {
+        "scope": ELECTION_SCOPE_PRIMARY,
+        "rebound_roles": changed,
+    }
+    return out
+
+
 def custom_family_context(res: Dict[str, Any],
                           required: Tuple[str, ...] = _REQUIRED_ROLES_DEFAULT,
                           reader: Optional[Callable[[str], Optional[str]]] = None,
@@ -748,7 +990,8 @@ def custom_family_context(res: Dict[str, Any],
         # ships these; a device building-block sub-lib does not).
         per_lib_composed[lib] = parse_composed_corner_sections(lib, txt)
 
-    device_map, unresolved, notes = map_device_roles(union_subckts, required)
+    device_map, unresolved, notes, election = elect_device_roles(
+        union_subckts, required)
 
     # ORGANIC #149 — pick the primary lib (the file the `.lib <path> <section>`
     # deck line points at) by whether it DEFINES the RESOLVED device-role
@@ -811,10 +1054,11 @@ def custom_family_context(res: Dict[str, Any],
     # family (the synthetic fixtures + rung-1 staged libs) is unchanged: primary
     # IS that lib, so its closure == the union.
     if primary:
-        p_map, p_unres, p_notes = map_device_roles(
+        p_map, p_unres, p_notes, p_election = elect_device_roles(
             per_lib_subckts.get(primary, {}), required)
         if not p_unres:
             device_map, unresolved, notes = p_map, p_unres, p_notes
+            election = _record_closure_narrowing(election, p_election, p_map)
 
     # Terminal count per resolved role (from the primary's transitive subckts).
     # A foundry MOS subckt may carry a 5th (or more) substrate/well terminal the
@@ -948,6 +1192,18 @@ def custom_family_context(res: Dict[str, Any],
     # one strategy left this is a positive record rather than a disambiguator:
     # it is what would make a future second strategy visible immediately.
     policy_note = f" [primary elected by: {primary_policy}]"
+    # vibe-ic#903 — the DEVICE election's basis belongs in the prose too, so an
+    # artefact carrying only the disclosure still states why it bound what it
+    # bound, and states the multi-domain fact when there is one.
+    election_note = "".join(
+        f" [device role '{r}' elected by: {rec['basis']}"
+        + (f"; rejected={rec['rejected']}" if rec.get("rejected") else "")
+        + (f"; voltage domains present={rec['voltage_domains']}"
+           if len(rec.get("voltage_domains") or []) > 1 else "")
+        + "]"
+        for r, rec in sorted((election.get("roles") or {}).items()))
+    if election.get("chip_global_note"):
+        election_note += " [NOT per-block: " + election["chip_global_note"] + "]"
     disclosure = (
         f"custom PDK family '{family}' ({source}) — device map + corner "
         f"sections parsed from {len(readable)} resolved model lib(s); "
@@ -955,7 +1211,7 @@ def custom_family_context(res: Dict[str, Any],
         + (f" (note: {unread_note})" if unread_note else "")
         if status == "OK" else
         f"custom PDK family '{family}' ({source}) NOT natively emittable: "
-        + " | ".join(work_items)) + policy_note
+        + " | ".join(work_items)) + policy_note + election_note
     return DeckContext(
         status=status, source=source, family=str(family) if family else None,
         model_lib=primary, model_lib_includes=readable,
@@ -963,7 +1219,7 @@ def custom_family_context(res: Dict[str, Any],
         typ_section=typ, process_corners=process,
         device_map=device_map, device_terminals=device_terminals,
         device_geometry_units=device_geometry_units,
-        unresolved_roles=unresolved,
+        unresolved_roles=unresolved, device_election=election,
         deck_loads=(([(primary, typ)] + _deck_loads_for(device_map))
                     if (primary and typ) else []),
         work_items=work_items, disclosure=disclosure,
