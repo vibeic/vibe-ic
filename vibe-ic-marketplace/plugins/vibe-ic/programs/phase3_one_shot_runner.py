@@ -1223,9 +1223,16 @@ _ASIC_TOP_MODULE_BODY_RE = re.compile(
     r"\bmodule\s+([A-Za-z_]\w*)\b(.*?)\bendmodule\b", re.S)
 
 
-def _asic_top_strip_v_comments(text: str) -> str:
+def _strip_v_comments(text: str) -> str:
     """Remove // and /* */ comments so a module name mentioned only in a
-    comment is never mistaken for a declaration or an instantiation."""
+    comment is never mistaken for a declaration or an instantiation.
+
+    Shared: the ASIC-top resolver and `_sta_blackboxed_masters` both read
+    a name out of text that may carry comments, so neither carries its own
+    copy. Renamed from `_asic_top_strip_v_comments` when the second caller
+    arrived — the old name asserted a scope this helper no longer has.
+    Line-bounded for `//`, so stripping one line can never reach the next.
+    """
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
     text = re.sub(r"//[^\n]*", " ", text)
     return text
@@ -1252,7 +1259,7 @@ def _resolve_asic_top_structural(project: Path, top_name: str,
     for ext in (".v", ".sv"):
         for f in sorted(rtl_dir.rglob(f"*{ext}")):
             try:
-                raw = _asic_top_strip_v_comments(f.read_text(errors="replace"))
+                raw = _strip_v_comments(f.read_text(errors="replace"))
             except OSError:
                 continue
             for m in _ASIC_TOP_MODULE_HEADER_RE.finditer(raw):
@@ -32861,6 +32868,27 @@ def _sta_blackboxed_masters(log_path: Path) -> List[str]:
         # report-exists tests still apply. Fail OPEN here so this check can
         # only ever add a finding, never invent one.
         return []
+    # READ WHAT THE TOOL SAID, NEVER A COMMENT ABOUT WHAT IT SAID (vibe-ic#731).
+    # A per-corner log is not HDL, but nothing keeps HDL out of one: a flow that
+    # folds the netlist into its transcript, or a reader that echoes the
+    # offending source line, puts `//` and `/* */` text in here. A comment
+    # RESTATING the warning — the note somebody leaves beside the fix — would
+    # then be read as OpenSTA ASSERTING it, and the consequence is not a spare
+    # name in a list: the caller `rpt.unlink()`s this corner's report and
+    # records that the design did not link, so a MENTION would destroy a real
+    # post-route sign-off artefact.
+    #
+    # SAFE IN THE OTHER DIRECTION TOO, which matters more, because losing a
+    # genuine Warning 198 would restore the falsely-clean corner this helper
+    # exists to stop. The `//` strip is line-bounded, and the only text OpenSTA
+    # prints before the phrase on that line is `Warning <n>: <netlist path>
+    # line <n>, `; that path comes from `_to_container_path`, which appends a
+    # `/`-prefixed remainder to a mount destination and so cannot emit `//`.
+    # MEASURED over 64 real per-corner logs carrying 18 genuine Warning 198
+    # lines: `//` appeared on 50 lines, every one of them the OpenSTA GPL
+    # banner URL and none on a warning line, and the stripped scan returned the
+    # same 18 masters as the raw one.
+    txt = _strip_v_comments(txt)
     return sorted({m.group(1) for m in _STA_BLACKBOX_RE.finditer(txt)})
 
 
