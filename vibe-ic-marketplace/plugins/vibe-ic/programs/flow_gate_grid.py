@@ -195,7 +195,7 @@ def d8_catcher(steps: List[dict]) -> List[str]:
     return sorted(out)
 
 
-def _delegate(program: Path) -> Tuple[int, str]:
+def _delegate(program: Path, flow: Path) -> Tuple[int, str]:
     """Run a sibling check and return (rc, its last line).
 
     A MISSING delegate is rc=3, not rc=2. Both mean "no answer", but only one of
@@ -203,14 +203,34 @@ def _delegate(program: Path) -> Tuple[int, str]:
     the claimed cell count is printed a few lines below. Folding an absent
     delegate into the same bucket as an unreadable input would let the headline
     say 315 of 504 while two dimensions were never asked.
+
+    THE DOOR THAT WAS OPEN. The paragraph above describes rc=3 and stops there,
+    and so did the caller: rc=2 — the delegate RAN and answered "NOT CHECKED" —
+    was counted as a fully recomputed dimension. The headline then printed the
+    exact sentence this docstring says it exists to prevent, with exit 0 and no
+    warning. Both delegates return 2 when pyyaml is unavailable or the flow
+    yields no steps, so the condition is ordinary, not exotic. rc=2 and rc=3 are
+    now both no-answer and both excluded from the count; they stay
+    distinguishable in the message because the operator's next move differs.
+
+    `--flow` IS FORWARDED. It was accepted here, used for the three dimensions
+    computed in-process, and dropped for the two delegated ones — which both
+    accept it. Pointing the grid at a flow file therefore recomputed 3 of 5
+    dimensions against it while the headline claimed 5.
     """
     if not program.is_file():
         return 3, f"{program.name} is not present"
     try:
-        p = subprocess.run([sys.executable, str(program)],
+        p = subprocess.run([sys.executable, str(program), "--flow", str(flow)],
                            capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        # Named separately from the OSError arm below. TimeoutExpired is a
+        # SubprocessError subclass, so one `except` swallowed it into the same
+        # rc=2 that used to be counted as an answer — turning a delegate still
+        # working into a silent pass under the default invocation.
+        return 2, f"{program.name} exceeded the 300s delegate budget"
     except (OSError, subprocess.SubprocessError) as e:
-        return 2, str(e)
+        return 2, f"{program.name} could not be run: {e}"
     return p.returncode, (p.stdout or p.stderr).strip().splitlines()[-1] \
         if (p.stdout or p.stderr).strip() else ""
 
@@ -240,16 +260,23 @@ def main(argv=None) -> int:
     bad8 = [x for x in all8 if x not in D8_BASELINE]
     fixed6 = sorted(D6_BASELINE - set(all6))
     fixed8 = sorted(D8_BASELINE - set(all8))
-    rc2, line2 = _delegate(a.programs / "flow_step_can_fail_check.py")
-    rc5, line5 = _delegate(a.programs / "flow_dependency_graph_check.py")
+    rc2, line2 = _delegate(a.programs / "flow_step_can_fail_check.py", a.flow)
+    rc5, line5 = _delegate(a.programs / "flow_dependency_graph_check.py", a.flow)
 
-    _absent = [nm for nm, rc in (("D2", rc2), ("D5", rc5)) if rc == 3]
-    _dims = 5 - len(_absent)
+    # rc=2 AND rc=3 are both "no answer". Only 0 and 1 are answers: the delegate
+    # looked and said clean, or looked and said broken. Anything else must leave
+    # the denominator alone — `declared` is the denominator, and a consumer
+    # reports coverage against THAT, never against the number that happened to
+    # run.
+    _no_answer = [(nm, rc) for nm, rc in (("D2", rc2), ("D5", rc5))
+                  if rc not in (0, 1)]
+    _dims = 5 - len(_no_answer)
     rec = {
         "steps": n,
         "recomputed_dimensions": _dims,
         "recomputed_cells": _dims * n,
-        "delegates_absent": _absent,
+        "delegates_absent": [nm for nm, rc in _no_answer if rc == 3],
+        "delegates_no_answer": [{"dim": nm, "rc": rc} for nm, rc in _no_answer],
         "total_cells": 8 * n,
         "D1_wiring_broken": bad1,
         "D2_delegated": {"rc": rc2, "line": line2},
@@ -281,6 +308,17 @@ def main(argv=None) -> int:
                   f"count below excludes it; a headline that counted a "
                   f"dimension nobody asked about is the defect this grid exists "
                   f"to remove.")
+        elif rc != 0:
+            # The branch that did not exist. rc=2 fell through every arm above:
+            # no problem counted, nothing printed, the dimension counted as
+            # recomputed, exit 0. A delegate that answers "NOT CHECKED" is not a
+            # delegate that answers "clean", and one killed by the 300s budget
+            # while still working is neither.
+            problems += 1
+            print(f"flow_gate_grid: {name} — NO ANSWER (rc={rc}), {line}. The "
+                  f"delegate ran and did not reach a verdict, so this dimension "
+                  f"is excluded from the cell count below. Treating it as clean "
+                  f"would report coverage this grid never obtained.")
     if bad6:
         problems += 1
         print(f"flow_gate_grid: D6 skip — {len(bad6)} step(s) declare a "
