@@ -32,7 +32,7 @@ phase2/stage1/formal/formal_chip_top_report.md :: phase2/stage1/formal/formal_ch
 phase2/stage1/formal/results.json :: phase2/stage1/formal/formal_chip_top_formal.sby RESOLVES
 phase2/stage1/formal/results.json :: phase2/stage1/formal/formal_chip_top_formal.sby.log RESOLVES
 phase2/stage1/sim_full_stack/arith_oracle_manifest.json :: phase2/stage1/sim_full_stack/tb_chip_top_oracle.v RESOLVES
-phase2/stage1/sim_full_stack/results.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.log RESOLVES
+phase2/stage1/sim_full_stack/results.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.log DANGLING_UNDER_PASS
 phase2/stage2/dft/scan_insertion_not_run.json :: phase2/stage2/dft/scan_netlist.v RESOLVES
 phase2/stage2/dft/scan_insertion_not_run.json :: reports/phase2/dft/scan_chain.json RESOLVES
 phase2/stage2/dft/test_coverage.json :: phase2/stage2/dft/cut_netlist.v RESOLVES
@@ -202,7 +202,7 @@ reports/lec.json :: reports/lec_scan_gold_wrapper.v RESOLVES
 reports/lec_equivalence_check.json :: reports/lec.json RESOLVES
 reports/orchestrator/phase2_one_shot.json :: /home/reyerchu/spm3_run/gf180mcuD/reports/audit/steps_view.json UNFOLLOWABLE_ABSOLUTE
 reports/orchestrator/phase2_one_shot.json :: phase2/stage1/declaration_contract.json RESOLVES
-reports/orchestrator/phase2_one_shot.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.log RESOLVES
+reports/orchestrator/phase2_one_shot.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.log DANGLING_UNDER_PASS
 reports/orchestrator/phase2_one_shot.json :: phase2/stage1/sim_full_stack/results.json RESOLVES
 reports/orchestrator/phase2_one_shot.json :: phase2/stage1/sim_full_stack/tb_chip_top_full.v RESOLVES
 reports/orchestrator/phase2_one_shot.json :: phase2/stage1/sim_full_stack/tb_chip_top_oracle.v RESOLVES
@@ -336,7 +336,7 @@ reports/phase1/phase1_planned_consumer_starved_check.json :: reports/phase2/gate
 reports/phase1/phase1_planned_consumer_starved_check.json :: reports/sdc_validator.json RESOLVES
 reports/phase1_one_shot.json :: /home/reyerchu/spm3_run/gf180mcuD/reports/audit/steps_view.json UNFOLLOWABLE_ABSOLUTE
 reports/phase1_one_shot.json :: reports/audit/steps_view.json RESOLVES
-reports/phase2/coverage/coverage_actual.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.log RESOLVES
+reports/phase2/coverage/coverage_actual.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.log DANGLING_UNDER_PASS
 reports/phase2/dft/atpg_coverage_gate.json :: phase2/stage2/dft/atpg_coverage.rpt RESOLVES
 reports/phase2/dft/atpg_coverage_gate.json :: reports/phase2/dft/coverage.json RESOLVES
 reports/phase2/dft/bsdl_plan.json :: phase2/stage2/dft/scan_netlist.v RESOLVES
@@ -350,7 +350,7 @@ reports/phase2/dft/coverage.unmeasured.json :: phase2/stage2/synth/netlist.v RES
 reports/phase2/dft/dft_signoff.json :: reports/phase2/dft/bsdl_plan.json RESOLVES
 reports/phase2/dft/dft_signoff.json :: reports/phase2/dft/coverage.json RESOLVES
 reports/phase2/dft/path_delay_coverage.json :: phase2/stage2/dft/cut_netlist.v RESOLVES
-reports/phase2/dft/path_delay_coverage.json :: phase2/stage2/dft/pdf/sat_run.log RESOLVES
+reports/phase2/dft/path_delay_coverage.json :: phase2/stage2/dft/pdf/sat_run.log DANGLING_UNDER_PASS
 reports/phase2/dft/path_delay_coverage.json :: phase2/stage2/dft/pdf/sta_paths.rpt RESOLVES
 reports/phase2/dft/path_delay_coverage.json :: phase2/stage2/dft/tdf/flat_core.v RESOLVES
 reports/phase2/dft/path_delay_coverage.json :: phase3/stage3/extracted/chip_top.spef OUT_OF_PUBLISHED_SCOPE
@@ -362,7 +362,7 @@ reports/phase2/dft/scan_chain.json :: phase2/stage2/synth/netlist.v RESOLVES
 reports/phase2/dft/sdd_coverage_gate.json :: reports/phase2/dft/sdd_coverage.json RESOLVES
 reports/phase2/dft/transition_coverage.json :: /foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/gf180mcu_fd_sc_mcu7t5v0__tt_025C_5v00.lib UNFOLLOWABLE_ABSOLUTE
 reports/phase2/dft/transition_coverage.json :: phase2/stage2/dft/cut_netlist.v RESOLVES
-reports/phase2/dft/transition_coverage.json :: phase2/stage2/dft/tdf/sat_run.log RESOLVES
+reports/phase2/dft/transition_coverage.json :: phase2/stage2/dft/tdf/sat_run.log DANGLING_UNDER_PASS
 reports/phase2/dft/transition_coverage.json :: phase2/stage2/synth/chip_top_synth.v RESOLVES
 reports/phase2/dft/transition_coverage_gate.json :: reports/phase2/dft/transition_coverage.json RESOLVES
 reports/phase2/gates/assertion_property.json :: phase2/stage1/formal/formal_chip_top.sv RESOLVES
@@ -541,7 +541,7 @@ reports/write_ledger.json :: phase2/stage1/sim/tb/random_multiplication_function
 reports/write_ledger.json :: phase2/stage1/sim/tb/reset.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim/tb/toggle_branch_coverage.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim_full_stack/arith_oracle_manifest.json RESOLVES
-reports/write_ledger.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.log RESOLVES
+reports/write_ledger.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.log DANGLING_UNDER_PASS
 reports/write_ledger.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.v OUT_OF_PUBLISHED_SCOPE
 reports/write_ledger.json :: phase2/stage1/sim_full_stack/results.json RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim_full_stack/tb_chip_top_full.v RESOLVES
@@ -556,14 +556,14 @@ reports/write_ledger.json :: phase2/stage2/dft/atpg_coverage.unmeasured.rpt RESO
 reports/write_ledger.json :: phase2/stage2/dft/cut_netlist.v RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/dft_atpg_not_run.json OUT_OF_PUBLISHED_SCOPE
 reports/write_ledger.json :: phase2/stage2/dft/pdf/pdf_miters.v RESOLVES
-reports/write_ledger.json :: phase2/stage2/dft/pdf/sat_run.log RESOLVES
+reports/write_ledger.json :: phase2/stage2/dft/pdf/sat_run.log DANGLING_UNDER_PASS
 reports/write_ledger.json :: phase2/stage2/dft/pdf/sta_paths.rpt RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/scan_insertion_not_run.json RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/scan_netlist.v RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/tdf/cal_run.log RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/tdf/flat_core.v RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/tdf/loc_miter.v RESOLVES
-reports/write_ledger.json :: phase2/stage2/dft/tdf/sat_run.log RESOLVES
+reports/write_ledger.json :: phase2/stage2/dft/tdf/sat_run.log DANGLING_UNDER_PASS
 reports/write_ledger.json :: phase2/stage2/synth/area.rpt OUT_OF_PUBLISHED_SCOPE
 reports/write_ledger.json :: phase2/stage2/synth/chip_top_synth.v RESOLVES
 reports/write_ledger.json :: phase2/stage2/synth/netlist.v RESOLVES

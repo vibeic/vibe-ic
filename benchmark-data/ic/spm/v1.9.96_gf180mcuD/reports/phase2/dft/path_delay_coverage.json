@@ -644,5 +644,16 @@
   },
   "verdict": "PASS",
   "status": "PASS",
-  "reasons": []
+  "reasons": [],
+  "evidence_present": false,
+  "evidence_absent": {
+    "field": "sat_log",
+    "cited": "phase2/stage2/dft/pdf/sat_run.log",
+    "what_is_missing": "the yosys-SAT sensitisation transcript named by `sat_log`",
+    "why_it_is_absent": "The run staged this transcript into the published tree, but `*.log` is ignored repo-wide by the root .gitignore and the un-ignore rules cover only reports/**/*.log and formal sby logs, so `git add` silently dropped it at publish time. Every other file the same directory carries did land, which is how the absence went unnoticed.",
+    "recovery_attempted": "Searched on 2026-08-10 for the source run this deliverable's reports/write_ledger.json names as `project` (a /home/... run directory on the campaign host); it no longer exists on any host searched. NO substitute was used: another run's transcript is not this run's evidence, and manufacturing one would be the defect this disclosure exists to prevent.",
+    "read_this_report_as": "The verdict is left exactly as the run wrote it \u2014 it is not re-litigated here, and nothing in this deliverable contradicts it. What this disclosure changes is the reader's expectation: the numbers above CANNOT be re-derived from this deliverable, because the transcript they were read from was not published with it. Treat them as reported, not as reproduced.",
+    "corrected_on": "2026-08-10",
+    "corrected_by": "evidence_citation_resolves_check debt clearance; CITATION_ROUTING.txt rows for the same artefacts are corrected from RESOLVES to DANGLING_UNDER_PASS in the same change, so the two records agree."
+  }
 }
