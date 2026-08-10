@@ -1093,19 +1093,74 @@ def _reduce_outcome(reports: List[Dict]) -> str:
     return label
 
 
+#: Bound for ONE dimension module's outcome run. NOT a round number picked by
+#: feel: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest
+#: harness bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict.
+#:
+#: The landed value was 1800 — TEN TIMES the harness — on a single call that
+#: ran all eight dimension modules at once. It could never fire, and lowering
+#: it alone was not available: MEASURED on this tree, that one combined call
+#: takes 84.35 s inside pytest / 96.45 s wall, so any bound the harness lets
+#: fire would have killed a call that is doing real work. So the call is SPLIT
+#: instead — one process per module — and each module was measured whole:
+#:
+#:     d1  3.58s   d2  7.80s   d3 20.25s   d4 11.46s
+#:     d5  2.13s   d6  8.56s   d7 35.18s   d8  9.98s
+#:
+#: The slowest is d7 at 35.18 s, so 60 s is 1.7x the worst module and the bound
+#: can fire. The split is not free and the cost is stated rather than assumed:
+#: the eight separate runs total 98.94 s against the combined 96.45 s — +2.6 %,
+#: the price of seven extra interpreter starts. What it buys is that a
+#: dimension module that HANGS is killed at 60 s and NAMED, instead of
+#: outliving the harness and taking every other file's verdict with it.
+_OUTCOME_TIMEOUT_S = 60
+
+
 def _run_outcome_reports(
         paths: Tuple[Path, ...],
         cwd: Optional[Path] = None) -> Dict[str, List[Dict]]:
     """``{nodeid: [raw phase reports]}`` from really RUNNING ``paths``.
 
+    ONE SUBPROCESS PER PATH, and that is load-bearing rather than tidy. See
+    ``_OUTCOME_TIMEOUT_S``: a single run of all eight modules cannot be bounded
+    at anything the harness lets fire, so the bound that guarded it was a
+    decoration.
+
     Unlike :func:`collect_items` this does NOT assert ``returncode == 0``: a
     non-zero exit is the normal, expected result of a suite that is reporting
     findings, and demanding zero here would make this instrument unable to
     observe the very thing it exists to observe. What IS asserted is that the
-    manifest was written and is non-empty — a run that produced no reports
-    would otherwise partition tidily into "no contradictions found".
+    manifest was written and is non-empty — PER MODULE now, which is stricter
+    than before: one module contributing nothing used to be invisible behind
+    the seven that did.
+
+    A nodeid observed twice is refused rather than merged. Two modules cannot
+    own the same nodeid, so a collision means the merge is losing reports, and
+    a silently-lost report is a cell that reads outcome-less — the shape this
+    file exists to refuse.
     """
     assert paths, "no module paths given to the outcome run"
+    merged: Dict[str, List[Dict]] = {}
+    for path in paths:
+        for nodeid, reports in _run_one_module_outcome(path, cwd).items():
+            assert nodeid not in merged, (
+                f"nodeid {nodeid!r} was reported by more than one module run; "
+                f"merging would drop one of them and the cell it belongs to "
+                f"would read outcome-less")
+            merged[nodeid] = reports
+    assert merged, (
+        f"the outcome runs recorded ZERO test reports across {len(paths)} "
+        f"module(s) — an empty second axis passes every join vacuously.")
+    return merged
+
+
+def _run_one_module_outcome(path: Path,
+                            cwd: Optional[Path]) -> Dict[str, List[Dict]]:
+    """The single-module half of :func:`_run_outcome_reports`."""
     scratch = Path(tempfile.mkdtemp(prefix="matrix_cov_outcome_"))
     try:
         plugin = scratch / "matrix_cell_outcomes.py"
@@ -1117,23 +1172,32 @@ def _run_outcome_reports(
         env["PYTHONPATH"] = os.pathsep.join(
             [str(scratch)]
             + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", *[str(p) for p in paths],
-             "-q", "--tb=no", "-p", "no:randomly",
-             "-p", "matrix_cell_outcomes"],
-            cwd=str(cwd or PLUGIN_ROOT), capture_output=True, text=True,
-            timeout=1800, env=env,
-        )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", str(path),
+                 "-q", "--tb=no", "-p", "no:randomly",
+                 "-p", "matrix_cell_outcomes"],
+                cwd=str(cwd or PLUGIN_ROOT), capture_output=True, text=True,
+                timeout=_OUTCOME_TIMEOUT_S, env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(
+                f"the outcome run for {path.name} did not finish within "
+                f"{_OUTCOME_TIMEOUT_S}s. This bound exists so that THIS "
+                f"assertion is what a reader gets, instead of a pytest session "
+                f"kill that takes every other file's verdict with it."
+            ) from exc
         assert out.is_file(), (
-            f"the outcome run produced no manifest (rc={proc.returncode}); "
-            f"every cell would look outcome-less and this file's second axis "
-            f"would be measuring nothing.\n"
+            f"the outcome run for {path.name} produced no manifest "
+            f"(rc={proc.returncode}); every cell it owns would look "
+            f"outcome-less and this file's second axis would be measuring "
+            f"nothing.\n"
             f"stdout tail:\n{proc.stdout[-3000:]}\n"
             f"stderr tail:\n{proc.stderr[-2000:]}"
         )
         rows = json.loads(out.read_text(encoding="utf-8"))
         assert rows, (
-            f"the outcome run recorded ZERO test reports "
+            f"the outcome run for {path.name} recorded ZERO test reports "
             f"(rc={proc.returncode}) — an empty second axis passes every join "
             f"vacuously.\nstdout tail:\n{proc.stdout[-3000:]}"
         )
