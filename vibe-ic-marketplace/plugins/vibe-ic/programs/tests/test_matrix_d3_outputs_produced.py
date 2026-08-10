@@ -284,7 +284,7 @@ first, and it is the wrong kind of evidence twice over.
    ``provenance.jsonl`` window attribution and the contradictions built on it —
    is derived from mtimes, and ``step_write_ledger.mtime_fidelity`` WITHHOLDS
    all of it on any tree a checkout produced. Re-emitted over
-   ``/home/reyerchu/_sky130A_r3_run`` (455 files, 44 distinct mtimes, top share
+   ``$HOME/_sky130A_r3_run`` (455 files, 44 distinct mtimes, top share
    0.165 — a live run) and then over the same tree with its mtimes flattened as
    a clone flattens them, the totals fall ``D5 40 -> 0``, ``D7 335 -> 0``,
    window attributions ``17 -> 12`` — and **the D3 residual is identical, step
@@ -322,8 +322,8 @@ that it can find a stale one, because a guard that can only measure zero has
 not been shown to work.
 
 On FIVE REAL RUN DIRECTORIES with a ledger emitted by the real emitter and
-committed — ``/home/reyerchu/_sky130A_r3_run``, ``/home/reyerchu/_r6_sky130A/
-run`` and copies of the in-repo ``spm/v1.5.66_gf180mcuD``,
+committed — ``$HOME/_sky130A_r3_run``, ``$HOME/_r6_sky130A/run``
+and copies of the in-repo ``spm/v1.5.66_gf180mcuD``,
 ``sha256/clean_run_v1427_20260715`` and ``u_hawaii_adc/v1.9.86_sky130A`` — all
 133 declared entries were resolved twice, ledger-bound and unbound:
 

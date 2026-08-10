@@ -48,9 +48,8 @@ Two real, independent run directories, ledger built by the real emitter
 (2026-08-06):
 
     run                                                D7 residual   W2 promotions
-    /home/reyerchu/_sky130A_r3_run                            335              12
-    /home/reyerchu/campaign_v1544/spm/
-        converge_1.5.44_gf180mcuD                             264               9
+    $HOME/_sky130A_r3_run                                      335              12
+    $HOME/campaign_v1544/spm/converge_1.5.44_gf180mcuD         264               9
 
 "335 candidates" is NOT 335 findings, and the gap is the point. Of the 335,
 328 are captured by no ``required_outputs`` entry at all; of those, 327 can be
@@ -95,7 +94,7 @@ design" is stating something the run's own log contradicts.
 END TO END ON A REAL RUN, WITH THE RECORD ACTUALLY COMMITTED
 ============================================================
 The table above is the residual filtered on paper. Measured for real: a copy
-of ``/home/reyerchu/_sky130A_r3_run`` (455 files, mtimes preserved,
+of ``$HOME/_sky130A_r3_run`` (455 files, mtimes preserved,
 ``mtime_fidelity.top_mtime_share`` 0.165 so nothing is withheld) made into a
 git repository, its ledger emitted by ``step_write_ledger`` and COMMITTED, and
 this module pointed at it:
