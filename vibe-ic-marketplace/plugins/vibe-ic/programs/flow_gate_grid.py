@@ -258,8 +258,17 @@ def main(argv=None) -> int:
     all8 = d8_catcher(steps)
     bad6 = [x for x in all6 if x not in D6_BASELINE]
     bad8 = [x for x in all8 if x not in D8_BASELINE]
-    fixed6 = sorted(D6_BASELINE - set(all6))
-    fixed8 = sorted(D8_BASELINE - set(all8))
+    # A BASELINED STEP THAT VANISHED IS NOT A BASELINED STEP THAT WAS FIXED.
+    # `all6`/`all8` list steps that still carry the defect, so a step DELETED
+    # from the flow drops out of them and landed in `fixed*` — announced as
+    # "Good news" with an instruction to shrink the baseline, which would then
+    # erase the record that the step ever owed anything. Deleting the evidence
+    # and repairing the defect produced identical output.
+    _present = {str(s["id"]) for s in steps}
+    fixed6 = sorted((D6_BASELINE - set(all6)) & _present)
+    fixed8 = sorted((D8_BASELINE - set(all8)) & _present)
+    gone6 = sorted(D6_BASELINE - _present)
+    gone8 = sorted(D8_BASELINE - _present)
     rc2, line2 = _delegate(a.programs / "flow_step_can_fail_check.py", a.flow)
     rc5, line5 = _delegate(a.programs / "flow_dependency_graph_check.py", a.flow)
 
@@ -282,9 +291,9 @@ def main(argv=None) -> int:
         "D2_delegated": {"rc": rc2, "line": line2},
         "D5_delegated": {"rc": rc5, "line": line5},
         "D6_condition_without_kind": all6,
-        "D6_new": bad6, "D6_now_fixed": fixed6,
+        "D6_new": bad6, "D6_now_fixed": fixed6, "D6_step_gone": gone6,
         "D8_outputs_with_no_catcher": all8,
-        "D8_new": bad8, "D8_now_fixed": fixed8,
+        "D8_new": bad8, "D8_now_fixed": fixed8, "D8_step_gone": gone8,
         "not_derivable_from_source": NOT_DERIVABLE,
     }
     if a.json:
@@ -332,6 +341,15 @@ def main(argv=None) -> int:
         problems += 1
         print(f"flow_gate_grid: D8 catcher — {len(bad8)} step(s) declare outputs "
               f"nothing would miss: {', '.join(bad8)}")
+    for name, gone in (("D6", gone6), ("D8", gone8)):
+        if gone:
+            problems += 1
+            print(f"flow_gate_grid: {name} — {', '.join(gone)} is in the "
+                  f"baseline and NO LONGER EXISTS in the flow. This is not a "
+                  f"fix and must not be read as one: the step was removed, so "
+                  f"nothing can be said about whether its defect was ever "
+                  f"repaired. Drop it from the baseline only with the deletion "
+                  f"as the stated reason.")
     for name, fixed in (("D6", fixed6), ("D8", fixed8)):
         if fixed:
             problems += 1

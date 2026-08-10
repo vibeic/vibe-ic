@@ -236,3 +236,52 @@ def test_the_flow_argument_reaches_the_delegates(tmp_path):
     rc, out = _run(flow, tmp_path)
     assert "NOFLOW" not in out, out
     assert f"GOTFLOW {flow}" in out, out
+
+
+def test_a_deleted_baselined_step_is_not_reported_as_fixed(tmp_path):
+    """Deleting the evidence and repairing the defect must not look the same.
+
+    ``fixed6``/``fixed8`` were ``BASELINE - still_defective``. A step removed
+    from the flow drops out of ``still_defective`` for the same reason a
+    repaired one does, so a deletion printed "left the baseline. Good news"
+    together with an instruction to shrink the baseline — which would erase the
+    record that the step ever owed anything.
+    """
+    (tmp_path / "p.py").write_text("", encoding="utf-8")
+    _stub_delegates(tmp_path, 0, "clean")
+    # step "14" is in D8_BASELINE; a flow that does not contain it at all
+    flow = _flow(tmp_path, [{"id": "D1", "name": "x",
+                             "gate": {"program_exit_zero": "p"}}])
+    rc, out = _run(flow, tmp_path)
+    assert "NO LONGER EXISTS in the flow" in out, out
+    assert "14" in out, out
+    # and it must NOT be dressed up as good news
+    fixed_lines = [ln for ln in out.splitlines()
+                   if "left the baseline" in ln and "D8" in ln]
+    assert not fixed_lines, f"a deleted step was announced as fixed: {fixed_lines}"
+    assert rc == 1, out
+
+
+def test_a_genuinely_repaired_baselined_step_is_still_reported_as_fixed(tmp_path):
+    """Guard the guard: the deletion arm must not swallow real repairs.
+
+    Excluding absent steps from ``fixed`` would be worthless if it also
+    excluded steps that are present and clean — the baseline would then never
+    be allowed to shrink, and the test above would still pass.
+    """
+    (tmp_path / "p.py").write_text("", encoding="utf-8")
+    _stub_delegates(tmp_path, 0, "clean")
+    # step "14" PRESENT, with a criterion that would catch a missing output,
+    # so it is no longer a D8 finding: repaired, not deleted.
+    flow = _flow(tmp_path, [
+        {"id": "D1", "name": "x", "gate": {"program_exit_zero": "p"}},
+        {"id": "14", "name": "y", "required_outputs": ["out.txt"],
+         "gate": {"files_exist": ["out.txt"]}},
+    ])
+    rc, out = _run(flow, tmp_path)
+    # Scoped to D8. A tiny fixture necessarily omits D6's 22 baselined steps,
+    # so D6 correctly reports them as gone; asserting on the whole output would
+    # be asserting on the fixture's size rather than on the behaviour.
+    d8 = [ln for ln in out.splitlines() if "D8" in ln]
+    assert any("left the baseline" in ln for ln in d8), d8
+    assert not any("NO LONGER EXISTS" in ln for ln in d8), d8
