@@ -11062,12 +11062,55 @@ def main(argv: Optional[List[str]] = None) -> int:
               "INCOMPLETE": 0}
     for r in results:
         counts[r.status] = counts.get(r.status, 0) + 1
-    # v1.6.97 (issue #29 Bugs 1+2) — thin-input waivers count toward
-    # the WAIVED bucket so Overall verdict resolves to
-    # PASS_WITH_WAIVERS (not bare PASS) whenever the --allow-thin-input
-    # waiver actually fired. Each waiver is review_required=true and
-    # carries a ticket id so foundry tape-out review can close them.
-    counts["WAIVED"] += len(structural_waivers)
+    # vibe-ic#924 — `counts` IS A TALLY OF STEPS AND NOTHING ELSE.
+    #
+    # It is built one line above by `for r in results: counts[r.status] += 1`,
+    # so every unit in it is one canonical step. What used to stand here added
+    # `len(structural_waivers)` — a count of P0 SUB-GATE records, all of them
+    # inside the ONE step P0 — into that step tally, and the mixed number then
+    # reached four consumers at once:
+    #
+    #   * `total_required = len(steps) - <excused> + …`, where WAIVED is
+    #     EXCUSED (`_flow_verdict_tiers.EXCUSED`), so N waived SUB-GATES
+    #     removed N STEPS from a 63-step denominator. Numerator unchanged,
+    #     denominator smaller: the published ratio ROSE, and it rose with the
+    #     number of things waived.
+    #   * the headline `… N DEFERRED via waiver`, which says steps;
+    #   * the tally line `WAIVED-DEFERRED=N`, whose parts must sum to the step
+    #     total and no longer could;
+    #   * `⚠ N step(s) DEFERRED via waiver`, which says "step(s)" in words.
+    #
+    # MEASURED on the shipped CLI (0..4 sub-gate waivers, identical project,
+    # only the P0 records varying): Y went 8, 7, 6, 5, 4 and X/Y went 12.5%,
+    # 14.3%, 16.7%, 20.0%, 25.0% while ZERO steps carried a WAIVED status.
+    # It is also visible in published data: one committed audit log reads
+    # `Steps: 21 total (4/3 executed PASS, 3 DEFERRED via waiver)` — a
+    # numerator LARGER than its denominator, over a tally summing 22 of 21.
+    #
+    # WHY NOT "EXCUSE AT MOST ITS OWN STEP" (contribute `min(1, N)`). That
+    # reading assumes a waived sub-gate leaves P0 itself excused. It does not:
+    # `_p0_umbrella_status` returns only SKIPPED-CONDITION / FAIL / INCOMPLETE
+    # / PASS and CANNOT return WAIVED, and with a WAIVED record present the
+    # reachable set is {PASS, FAIL} — neither of which is EXCUSED. So `min(1,
+    # N)` would remove from the denominator a step that is simultaneously
+    # counted in the numerator. Same unit error, magnitude 1. The committed log
+    # above is that case in the wild: its P0 row reads `[PASS]` — the step was
+    # in the numerator — while its one sub-gate waiver took a step off the
+    # denominator, which is how `4/3` happened.
+    #
+    # WHAT THE ADDEND WAS FOR is preserved exactly. Its stated purpose (v1.6.97,
+    # issue #29) was to keep Overall at PASS_WITH_WAIVERS rather than a bare
+    # PASS whenever a --allow-thin-input waiver fired, and its only consumer for
+    # that is `elif counts["WAIVED"] > 0` — a BOOLEAN threshold that never
+    # needed a magnitude. It is carried below by this same-unit signal, so no
+    # run changes its verdict word or its exit code.
+    #
+    # Each waiver is still review_required=true with a ticket id; they remain
+    # published verbatim as `thin_input_waivers` in the --json report, are
+    # named per gate in P0's own reasons, and are disclosed on the headline and
+    # under the tally IN THEIR OWN UNIT below — so nothing goes silent, which
+    # is the failure mode the "ON THE LINE" note further down exists to forbid.
+    p0_subgate_waivers = len(structural_waivers)
 
     # THE VIOLATION MUST BE KNOWN BEFORE THE TABLE IS RENDERED.
     #
@@ -11132,7 +11175,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         counts = {k: 0 for k in counts}
         for _r in results:
             counts[_r.status] = counts.get(_r.status, 0) + 1
-        counts["WAIVED"] += len(structural_waivers)
+        # vibe-ic#924 — the re-application of the sub-gate addend went with it.
+        # This branch RESETS `counts` and re-tallies from `results`, so it
+        # reproduces the step tally exactly; re-adding a sub-gate population
+        # here would reinstate the unit mismatch on precisely the runs that
+        # already have an ordering violation. `p0_subgate_waivers` is unchanged
+        # by the reset — it is not a bucket of `counts`, which is the point.
         # NO `pass_count` HERE. The re-tally above is load-bearing (the tally
         # line, `total_required` and the sole numerator assignment all read
         # `counts`), but a `pass_count` store on this branch is dead: the
@@ -11369,8 +11417,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     vacuous_head += (
         f", {counts['STRUCTURE-ONLY']} STRUCTURE-ONLY excluded from executed"
         if counts.get("STRUCTURE-ONLY") else "")
+    # vibe-ic#924 — the sub-gate waivers keep their place on the line a
+    # reader actually reads, now NAMING THEIR UNIT so the number cannot be
+    # read as steps. Appended AFTER the two fields every existing parser keys
+    # on (`X/Y executed PASS,` then `W DEFERRED`) and with no `=`, per the
+    # note above, so `final_report_generate._parse_audit_tally` still cannot
+    # mistake this line for the per-verdict tally.
+    subgate_head = (f", {p0_subgate_waivers} P0 sub-gate waiver(s) "
+                    f"(not steps)" if p0_subgate_waivers else "")
     print(f"Steps: {len(steps)} total ({pass_count}/{total_required} executed PASS, "
-          f"{counts['WAIVED']} DEFERRED via waiver{vacuous_head})")
+          f"{counts['WAIVED']} DEFERRED via waiver{vacuous_head}{subgate_head})")
     skipped_str = f"  SKIPPED={counts.get('SKIPPED-CONDITION', 0)}" if counts.get("SKIPPED-CONDITION") else ""
     vacuous_str = (f"  VACUOUS-PASS={counts['VACUOUS_PASS']}"
                    if counts.get("VACUOUS_PASS") else "")
@@ -11427,6 +11483,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"{missing_str}  WAIVED-DEFERRED={counts['WAIVED']}"
         f"{dbu_str}{skipped_str}{vacuous_str}{voided_str}{so_str}{incomplete_str}\n"
     )
+    if p0_subgate_waivers:
+        # vibe-ic#924 — ITS OWN LINE, deliberately not a token on the tally
+        # line above. That line's contract is that its parts sum to the step
+        # total; a sub-gate count sitting among them is what broke the sum.
+        print(
+            f"  P0 sub-gate waivers: {p0_subgate_waivers} (deferred structural "
+            f"sub-gate(s) INSIDE step P0, review_required — NOT steps, and "
+            f"NOT subtracted from the {total_required} required steps above; "
+            f"see `thin_input_waivers` in the --json report and P0's own "
+            f"reasons for the per-gate detail)\n"
+        )
     if counts.get("STRUCTURE-ONLY") or so_failing:
         print(
             "  STRUCTURE-ONLY = the step ran and produced its declared "
@@ -11559,7 +11626,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not ok or forced_fail:
         overall = "FAIL"
-    elif counts["WAIVED"] > 0:
+    elif counts["WAIVED"] > 0 or p0_subgate_waivers > 0:
+        # vibe-ic#924 — the second disjunct is what the removed addend was
+        # actually for (v1.6.97 / issue #29: "so Overall verdict resolves to
+        # PASS_WITH_WAIVERS (not bare PASS) whenever the --allow-thin-input
+        # waiver actually fired"). It was expressed as an addend into a step
+        # counter, but the consumer is this `> 0` test, so a boolean carries
+        # it exactly and no run changes its verdict word.
         overall = "PASS_WITH_WAIVERS"
     else:
         overall = "PASS"
@@ -11685,7 +11758,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(f"\nOverall: {overall}  (strict={not args.lenient})")
     if overall == "PASS_WITH_WAIVERS":
-        print(f"  ⚠ {counts['WAIVED']} step(s) DEFERRED via waiver — production tapeout review must close them.")
+        # vibe-ic#924 — this sentence says "step(s)", so it gets the STEP
+        # count. The sub-gate waivers are a second sentence in their own unit
+        # rather than a silent addition to this one; a run waived only at
+        # sub-gate level used to print "N step(s) DEFERRED" with N steps
+        # deferred being zero.
+        if counts["WAIVED"]:
+            print(f"  ⚠ {counts['WAIVED']} step(s) DEFERRED via waiver — production tapeout review must close them.")
+        if p0_subgate_waivers:
+            print(f"  ⚠ {p0_subgate_waivers} P0 sub-gate(s) DEFERRED via "
+                  f"waiver (structural sub-gates inside step P0, not steps) — "
+                  f"production tapeout review must close them.")
     if overall == "PASS_WITH_OPEN_SOURCE_CONSTRAINTS":
         print(f"  ⚠ {len(os_constraints_deferrals)} step(s) DEFERRED — "
               f"required commercial tools unavailable in iic-osic-tools "
