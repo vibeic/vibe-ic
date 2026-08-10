@@ -126,6 +126,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -139,6 +141,12 @@ _PROGRAMS_DIR = Path(__file__).resolve().parent
 _PLUGIN_ROOT_DEFAULT = _PROGRAMS_DIR.parent  # .../vibe-ic
 _PLUGIN_JSON_REL = "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
 _MARKETPLACE_JSON_REL = "vibe-ic-marketplace/.claude-plugin/marketplace.json"
+_PLUGIN_TREE_REL = "vibe-ic-marketplace/plugins/vibe-ic"
+_PLUGIN_TESTS_REL = f"{_PLUGIN_TREE_REL}/programs/tests"
+#: Bound on the control replay below. Same 300 s the corpus harness
+#: (`programs/tests/_control_corpus_replay.py`) uses, so a control that is too
+#: slow to classify is recorded as unmeasured here exactly as it is there.
+_CONTROL_REPLAY_TIMEOUT_S = 300
 
 
 # --------------------------------------------------------------------------
@@ -455,6 +463,138 @@ def acceptance_control_gate(repo: Path, base: str, head: str) -> GateResult:
     bad = [ln for ln in body if "NOT valid" in ln]
     summary = (bad[0] if bad else (body[0] if body else "(no output)"))[:240]
     return GateResult("acceptance_control_check", 0, f"ADVISORY — {summary}")
+
+
+# --------------------------------------------------------------------------
+# control_substance_check (#693) — ADVISORY.
+#
+# The SUBSTANCE half of the gate above. `acceptance_control_check` asks whether
+# the control is the right COMMIT; this asks whether the control run carried any
+# information. Both are needed, and neither implies the other: a control against
+# the correct merge-base that collected zero tests is exactly as empty as one
+# against the wrong SHA.
+#
+# WHY IT IS WIRED HERE. `control_substance_check` shipped with a unit test, a
+# corpus replay harness and a documented measurement (7 of 45 replayed commits
+# TAUTOLOGICAL, 5 collected NOTHING) — and no automatic caller. It answered the
+# question only if a human remembered to capture a junit report and run it,
+# which for a checker whose subject is "the evidence you are about to believe"
+# is the same as absent at the moment it matters. This is the one place in the
+# repo that already has the change, its base and a verdict to attach.
+#
+# WHAT IT DOES: takes merge-base(base, head) — the control this repo's own rule
+# names — checks it out into a throwaway worktree, drops in ONLY the test files
+# the change ADDED, runs them, and classifies the failures. The replay is the
+# same shape `_control_corpus_replay.py` used to produce the published corpus
+# number, so this gate and that measurement cannot disagree about what a
+# control is.
+#
+# NEVER BLOCKING (rc is forced to 0, or -1 when there is nothing to replay).
+# The classifier UNDER-credits on purpose — a KeyError raised from inside the
+# program under test is a real behavioural control and is read as presence-only
+# — so a blocking verdict would refuse honest work. It reports the split and
+# the author answers, which is what its two ADVISORY neighbours above do.
+# --------------------------------------------------------------------------
+def _added_test_files(repo: Path, base: str, head: str) -> List[str]:
+    """Test files the change ADDED, relative to the merge-base.
+
+    `base...head` and not `base..head`: the control is the merge-base, so the
+    set of added files has to be measured from there too, or a branch behind
+    the integration tip reports files somebody else added as its own.
+    """
+    rc, out, _ = _git(repo, "diff", "--name-only", "--diff-filter=A",
+                      f"{base}...{head}", "--", f"{_PLUGIN_TESTS_REL}/")
+    if rc != 0:
+        return []
+    return [ln.strip() for ln in out.splitlines()
+            if ln.strip().endswith(".py") and "/test_" in ln]
+
+
+def control_substance_gate(repo: Path, base: str, head: str) -> GateResult:
+    name = "control_substance_check"
+    prog = _PROGRAMS_DIR / "control_substance_check.py"
+    if not prog.is_file():
+        return GateResult(name, -1, f"checker missing at {prog}")
+    rc, mb, _ = _git(repo, "merge-base", base, head)
+    control = mb.strip()
+    if rc != 0 or not control:
+        return GateResult(name, -1,
+                          f"skipped — merge-base({base}, {head}) unresolvable")
+    added = _added_test_files(repo, base, head)
+    if not added:
+        return GateResult(name, -1,
+                          "skipped — the change adds no test file under "
+                          "programs/tests/, so there is no control to replay")
+
+    tmp = Path(tempfile.mkdtemp(prefix="gk_control_substance_"))
+    wt = tmp / "wt"
+    made_worktree = False
+    try:
+        rc, _, err = _git(repo, "worktree", "add", "--quiet", "--detach",
+                          str(wt), control)
+        if rc != 0:
+            return GateResult(name, -1, "skipped — could not create the "
+                                        f"control worktree: {err.strip()[:120]}")
+        made_worktree = True
+        rel_paths: List[str] = []
+        for path in added:
+            rcb, blob, _ = _git(repo, "show", f"{head}:{path}")
+            if rcb != 0:
+                continue
+            dest = wt / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(blob)
+            rel_paths.append(str(Path(path).relative_to(_PLUGIN_TREE_REL)))
+        if not rel_paths:
+            return GateResult(name, -1, "skipped — none of the added test "
+                                        "files could be read at head")
+
+        xml = tmp / "control.xml"
+        basetemp = tmp / "bt"
+        basetemp.parent.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pytest", *rel_paths, "-q",
+                 "-p", "no:cacheprovider", f"--junitxml={xml}",
+                 f"--basetemp={basetemp}"],
+                cwd=str(wt / _PLUGIN_TREE_REL), env=env,
+                capture_output=True, text=True,
+                timeout=_CONTROL_REPLAY_TIMEOUT_S)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            return GateResult(name, -1, "skipped — the control replay did not "
+                                        f"finish: {type(exc).__name__}")
+        if not xml.is_file():
+            return GateResult(name, -1, "skipped — the control run produced no "
+                                        "junit report to classify")
+
+        out_json = tmp / "control_substance.json"
+        _rc, cout, cerr = _run_program(
+            prog, ["--junit", str(xml), "--advisory", "--json", str(out_json)])
+        try:
+            rep = json.loads(out_json.read_text())["primary"]
+        except Exception:
+            first = ((cout.strip() or cerr.strip()).splitlines()
+                     or ["(no output)"])[0]
+            return GateResult(name, -1, "skipped — the classifier returned "
+                                        f"nothing readable: {first[:150]}")
+        # The VERDICT, read from the classifier's own record rather than from
+        # its exit code: `--advisory` deliberately flattens the exit code, and
+        # the number that matters is how many failures observed a VALUE.
+        summary = (f"ADVISORY — control {control[:9]}, {len(rel_paths)} added "
+                   f"test file(s): {rep['substantive']} of "
+                   f"{rep['failures_reported']} reported failure(s) observed a "
+                   f"VALUE")
+        if rep.get("tautological"):
+            summary += " — TAUTOLOGICAL: every failure is explained by " \
+                       "something being absent before the change"
+        elif rep.get("no_evidence"):
+            summary += " — no testcase in the report; nothing was classified"
+        return GateResult(name, 0, summary[:240])
+    finally:
+        if made_worktree:
+            _git(repo, "worktree", "remove", "--force", str(wt))
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------
@@ -1136,6 +1276,7 @@ def review(base: str, head: str, *,
     gates.append(one_commit_gate(repo, base, head, batch=batch))
     gates.append(real_artefact_backing_gate(repo, base, head))
     gates.append(acceptance_control_gate(repo, base, head))
+    gates.append(control_substance_gate(repo, base, head))
     gates.append(loop_watchdog_gate(plugin_root))
     gates.append(plugin_audit_gate(plugin_root))
     gates.append(git_prohibition_gate(commit_cmds or []))

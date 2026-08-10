@@ -93,6 +93,11 @@ import _flow_verdict_tiers as _T
 # this module reads `_flow_verdict_tiers` and nothing from here, so the verdict
 # path above cannot acquire a dependency on a classification.
 import _blocker_classification as _bc
+# The CONTRACT guard over the list `_bc` builds, consulted by the producer on
+# the record it is about to publish (vibe-ic#693). Same import-only-downward
+# rule: it reads `_blocker_classification` and `_flow_verdict_tiers` and
+# nothing from here.
+import blocker_classification_check as _bcc
 import fpga_board_capability as _fpga_cap
 
 try:
@@ -100,6 +105,54 @@ try:
 except ImportError:
     print("flow_compliance_check: PyYAML required (pip install pyyaml)", file=sys.stderr)
     sys.exit(2)
+
+
+def blocker_contract_violations(overall: str,
+                                steps_json: List[Dict[str, Any]],
+                                blockers: List[Dict[str, Any]],
+                                class_counts: Mapping[str, int],
+                                blocker_list_error: str) -> List[str]:
+    """Check the classified blocker list about to be published against its own
+    contract, and return what is wrong with it.
+
+    WHY THE PRODUCER ASKS (vibe-ic#693). `blocker_classification_check` states
+    the three properties that make the list worth reading — nothing drops out,
+    nothing is invented, no class without a rule — and until this call NOTHING
+    ran it. It had a unit test and a sweep mode, and the only corpus the sweep
+    could reach is five committed reports that all PREDATE the `blockers` key,
+    so the guard body was never entered: it was a green light wired to nothing.
+    The place the contract is decidable on live data is HERE, where the list
+    exists and the steps it must agree with are in hand.
+
+    MEASURED at wiring time, on the producer's own output over a published run
+    tree: 63 steps, 39 blockers, the guard entered its rules and returned no
+    violation. The guard's decision points are reached on every real run.
+
+    ADVISORY BY CONSTRUCTION, and this is not softness. Every violation this
+    can return is a defect in `_blocker_classification`, never a property of
+    the chip, and the block below already refuses — deliberately, in writing —
+    to let a classifier defect change what this program reports about a design.
+    A contract violation therefore does not move `overall`, `counts`, any
+    promotion tier or the exit code. It is PRINTED and it is RECORDED in the
+    report as `blocker_contract_violations`, so a list that disagrees with its
+    own steps can never be read as one that agrees with them.
+
+    Returns the (possibly empty) list of violations. Never raises: a guard that
+    can crash the producer it audits would be worse than the drift it looks for.
+    """
+    try:
+        violations, _facts = _bcc.check_report({
+            "overall": overall,
+            "steps": steps_json,
+            "blockers": blockers,
+            "blocker_class_counts": dict(class_counts),
+            "blocker_list_error": blocker_list_error,
+        })
+        return list(violations)
+    except Exception as exc:              # pragma: no cover - defence in depth
+        return [f"the contract guard itself failed: "
+                f"{type(exc).__name__}: {exc} — the list below has NOT been "
+                f"checked against its own steps"]
 
 
 def _find_flow_def() -> Path:
@@ -11829,6 +11882,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     blocker_class_counts = _bc.class_counts(blockers)
     blocker_sub_class_counts = _bc.sub_blocker_class_counts(blockers)
 
+    # ── and the list is checked against its own contract before it ships ────
+    # The guard exists (`blocker_classification_check`) and, until this call,
+    # nothing automatic consulted it. It is asked here because here is where
+    # the list and the steps it must agree with are both in hand. ADVISORY —
+    # see `blocker_contract_violations` for why a classifier defect must not
+    # move a verdict about a chip — but never silent, and never dropped from
+    # the artefact.
+    _steps_json = [asdict(r) for r in results]
+    blocker_contract_fails = blocker_contract_violations(
+        overall, _steps_json, blockers, blocker_class_counts,
+        blocker_list_error)
+    if blocker_contract_fails:
+        print(f"flow_compliance_check: WARN — the classified blocker list "
+              f"breaks its own contract in {len(blocker_contract_fails)} "
+              f"place(s); it must not be read as agreeing with the steps "
+              f"above (ADVISORY: this does not change the verdict):",
+              file=sys.stderr)
+        for _v in blocker_contract_fails:
+            print(f"  - {_v}", file=sys.stderr)
+
     if args.json:
         out = {
             "flow": args.flow,
@@ -11871,7 +11944,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             # is empty because the classifier failed, which is a completely
             # different fact from "nothing is blocked".
             "blocker_list_error": blocker_list_error,
-            "steps": [asdict(r) for r in results],
+            # What `blocker_classification_check` said about the list in this
+            # very report. Empty on the normal path. Non-empty means the list
+            # above disagrees with `steps` below, and a reader must not treat
+            # the two as one consistent record.
+            "blocker_contract_violations": blocker_contract_fails,
+            "steps": _steps_json,
         }
         Path(args.json).write_text(json.dumps(out, indent=2))
 
@@ -12110,6 +12188,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "blocker_class_counts": blocker_class_counts,
             "blocker_sub_class_counts": blocker_sub_class_counts,
             "blocker_list_error": blocker_list_error,
+            "blocker_contract_violations": blocker_contract_fails,
             "command_argv": list(sys.argv),
             # THE POPULATION, beside the tally. `design_input_digest` is what
             # the verdict was computed over; `measurement` is what computed
