@@ -74,14 +74,20 @@ def _block() -> str:
 
 
 def _total_row(block: str):
-    """``(own, substituted, undeclared, waived, na)`` off the published total."""
+    """``(own, substituted, undeclared, contradicted, waived, na)``.
+
+    Six figures, not five. CONTRADICTED became a column of its own when the
+    three ENFORCED columns were moved onto the enforcement axis: they now span
+    the ENFORCED cells only, so without a column of its own a contradicted cell
+    would appear in no column at all and the row would silently drop 28 cells.
+    """
     m = re.search(
         r"\|\s*\*\*total\*\*\s*\|[^|]*\|"
         r"\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|"
-        r"\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|",
+        r"\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|",
         block)
     assert m, (
-        f"no ``**total**`` row with five bold figures found in the generated "
+        f"no ``**total**`` row with six bold figures found in the generated "
         f"census block. The published total is the number people quote; if it "
         f"cannot be parsed it cannot be checked.\n{block[:1200]}"
     )
@@ -115,13 +121,26 @@ def test_the_published_total_equals_the_live_census():
     generator would emit. That is one source checked against itself: a
     generator that computed the wrong thing would agree with a README carrying
     the wrong thing, and both would be green. This recomputes from
-    ``state_census()`` / ``substitution_census()`` directly.
+    ``enforcement_census()`` / ``substitution_census()`` directly.
+
+    INDEPENDENT IN SOURCE IS NOT INDEPENDENT IN AXIS. This test recomputed from
+    ``state_census()`` -- the CONFIGURATION axis -- and so agreed with a
+    generator that was wrong the same way. vibe-ic#898 moved the generator onto
+    ``enforcement_census()`` and left this check behind, which is why the fold
+    it was written to catch survived underneath it: the published ENFORCED
+    split summed to 481 while the headline two lines above said 453, and this
+    assertion passed, because 481 was exactly what the wrong axis predicted.
+    A second opinion taken from the same mistaken premise is not a second
+    opinion.
     """
-    own, substituted, undeclared, waived, na = _total_row(_block())
-    states = CV.state_census()
-    subs = CV.substitution_census()
+    own, substituted, undeclared, contradicted, waived, na = _total_row(_block())
+    states = {k: v.label for k, v in CV.enforcement_census().items()}
+    subs = {k: v for k, v in CV.substitution_census().items()
+            if states.get(k) == "ENFORCED"}
     live = {
         "ENFORCED": sum(1 for v in states.values() if v == "ENFORCED"),
+        "CONTRADICTED": sum(
+            1 for v in states.values() if v == "ENFORCED-CONTRADICTED"),
         "WAIVED": sum(1 for v in states.values() if v == "WAIVED"),
         "NA": sum(1 for v in states.values() if v == "NA"),
     }
@@ -137,10 +156,24 @@ def test_the_published_total_equals_the_live_census():
     assert (waived, na) == (live["WAIVED"], live["NA"]), (
         f"the published WAIVED/NA ({waived}/{na}) does not reproduce; the tree "
         f"says {live['WAIVED']}/{live['NA']}")
+    assert contradicted == live["CONTRADICTED"], (
+        f"the published CONTRADICTED ({contradicted}) does not reproduce; the "
+        f"tree says {live['CONTRADICTED']}")
     assert own + substituted + undeclared == live["ENFORCED"], (
         f"the three ENFORCED columns sum to "
         f"{own + substituted + undeclared}, but {live['ENFORCED']} cells are "
         f"ENFORCED — some cell is in no column or in two")
+    # THE ONE THAT WOULD HAVE CAUGHT THE FOLD. Every assertion above compares a
+    # published figure to a live figure, so all of them stayed green while the
+    # headline said 453 and the row said 481: no single one of them spans both
+    # the headline and the row. This does -- the six columns must account for
+    # every cell exactly once.
+    assert own + substituted + undeclared + contradicted + waived + na == len(states), (
+        f"the published columns account for "
+        f"{own + substituted + undeclared + contradicted + waived + na} cells "
+        f"but the matrix has {len(states)}. A published row that does not "
+        f"partition is how a contradicted cell hides inside an enforcement "
+        f"figure.")
 
 
 def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
@@ -175,7 +208,7 @@ def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
     )
 
     block = _block()
-    own, substituted_n, undeclared, _, _ = _total_row(block)
+    own, substituted_n, undeclared, _, _, _ = _total_row(block)
     assert substituted_n == len(substituted), (
         f"the block publishes {substituted_n} substituted cells; the tree "
         f"measures {len(substituted)}")
