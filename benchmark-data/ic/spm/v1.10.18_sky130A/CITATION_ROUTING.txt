@@ -19,6 +19,15 @@
 # It does not decide whether the claim is TRUE — the run may well have
 # closed timing — only whether this cell lets you check it.
 #
+# WHAT OUT_OF_PUBLISHED_SCOPE IS NOT. It is not a name for every path a
+# reader cannot reach. The cell is asked whether it carries ANYTHING at
+# that location: nothing there means the layout excludes it; a directory
+# that ships its neighbours and not this file is a HOLE, and is recorded
+# as DANGLING / DANGLING_UNDER_PASS. The distinction is load-bearing
+# downstream — evidence_citation_resolves_check honours
+# OUT_OF_PUBLISHED_SCOPE and deliberately does not honour DANGLING*, so
+# the wrong word here retires a finding instead of reporting one.
+#
 # Emitted even when every citation resolves: a record that only appears
 # on failure cannot be used to prove there were none.
 RESULT.md :: phase2/stage1/sim_full_stack/oracle_run/oracle.log RESOLVES
@@ -162,8 +171,8 @@ reports/audit/phase23_completion_audit.json :: reports/route_congestion_trades.j
 reports/audit/phase23_completion_audit.json :: reports/sdc_validator.json RESOLVES
 reports/audit/phase23_completion_audit.json :: reports/spare_cell_coverage.json RESOLVES
 reports/audit/phase23_completion_audit.json :: reports/spare_preservation.json RESOLVES
-reports/audit/step_preflight.json :: phase2/stage1/rtl/*.sv OUT_OF_PUBLISHED_SCOPE
-reports/audit/step_preflight.json :: phase2/stage1/rtl/*.v OUT_OF_PUBLISHED_SCOPE
+reports/audit/step_preflight.json :: phase2/stage1/rtl/*.sv DANGLING
+reports/audit/step_preflight.json :: phase2/stage1/rtl/*.v DANGLING
 reports/audit/step_preflight.json :: phase2/stage1/rtl/spm.v RESOLVES
 reports/audit/step_preflight.json :: phase2/stage2/dft/atpg_coverage.rpt RESOLVES
 reports/audit/step_preflight.json :: phase2/stage2/dft/scan_netlist.v RESOLVES
@@ -187,7 +196,7 @@ reports/audit/tapeout_checklist.json :: phase3/stage3/pnr/sta_spef_repaired.rpt 
 reports/audit/tapeout_checklist.json :: reports/phase3/lvs.rpt RESOLVES
 reports/audit/tapeout_checklist.json :: reports/phase3/si_mcf_sta_check.json RESOLVES
 reports/audit/tapeout_checklist.json :: steps/phase3/stage3/31_physical_verification_drc_lvs_erc_density/drc_signoff.rpt DANGLING
-reports/final_summary.md :: phase2/stage1/rtl/*.sv OUT_OF_PUBLISHED_SCOPE
+reports/final_summary.md :: phase2/stage1/rtl/*.sv DANGLING
 reports/final_summary.md :: phase2/stage1/sim_full_stack/results.json RESOLVES
 reports/final_summary.md :: phase2/stage2/synth/_dlatch_map.v RESOLVES
 reports/final_summary.md :: phase2/stage2/synth/netlist.v RESOLVES
@@ -218,7 +227,7 @@ reports/orchestrator/phase2_one_shot.json :: phase2/stage1/sim_full_stack/oracle
 reports/orchestrator/phase2_one_shot.json :: phase2/stage1/sim_full_stack/results.json RESOLVES
 reports/orchestrator/phase2_one_shot.json :: phase2/stage1/sim_full_stack/tb_spm_full.v RESOLVES
 reports/orchestrator/phase2_one_shot.json :: phase2/stage1/sim_full_stack/tb_spm_oracle.v RESOLVES
-reports/orchestrator/phase2_one_shot.json :: phase2/stage2/synth/*_synth.v OUT_OF_PUBLISHED_SCOPE
+reports/orchestrator/phase2_one_shot.json :: phase2/stage2/synth/*_synth.v DANGLING
 reports/orchestrator/phase2_one_shot.json :: phase2/stage2/synth/netlist_yosys.v RESOLVES
 reports/orchestrator/phase2_one_shot.json :: phase2/stage2/synth/yosys.log RESOLVES
 reports/orchestrator/phase2_one_shot.json :: reports/audit/flow_compliance_check.log RESOLVES
@@ -378,7 +387,7 @@ reports/phase2/dft/transition_coverage_gate.json :: reports/phase2/dft/transitio
 reports/phase2/gates/assertion_property.json :: phase2/stage1/formal/formal_spm.sv RESOLVES
 reports/phase2/gates/assertion_property.json :: phase2/stage1/formal/formal_spm_formal_bmc/src/formal_spm.sv RESOLVES
 reports/phase2/gates/assertion_property.json :: phase2/stage1/formal/formal_spm_formal_safety/src/formal_spm.sv RESOLVES
-reports/phase2/gates/assertion_property.json :: phase2/stage1/sim_professional/spm/spm_assertions.sv OUT_OF_PUBLISHED_SCOPE
+reports/phase2/gates/assertion_property.json :: phase2/stage1/sim_professional/spm/spm_assertions.sv DANGLING
 reports/phase2/gates/cdc_crossing.json :: reports/phase2/cdc/crossing.json RESOLVES
 reports/phase2/gates/cdc_reset_dep.json :: /home/reyerchu/_c14b_spm_sky130A/phase2/stage2/dft/cell_model_combined.v UNFOLLOWABLE_ABSOLUTE
 reports/phase2/gates/cdc_reset_dep.json :: /home/reyerchu/_c14b_spm_sky130A/phase2/stage2/dft/cut_netlist.v UNFOLLOWABLE_ABSOLUTE
@@ -435,7 +444,7 @@ reports/phase2/gates/yosys_tiecell_recipe_order.json :: phase2/stage2/synth/post
 reports/phase2/gates/yosys_tiecell_recipe_order.json :: phase2/stage2/synth/spm_synth.v RESOLVES
 reports/phase2/gates/yosys_tiecell_recipe_order.json :: phase2/stage2/synth/synth.log RESOLVES
 reports/phase2/gates/yosys_tiecell_recipe_order.json :: phase2/stage2/synth/yosys.log RESOLVES
-reports/phase2/synth_netlist.json :: phase2/stage2/synth/area.rpt OUT_OF_PUBLISHED_SCOPE
+reports/phase2/synth_netlist.json :: phase2/stage2/synth/area.rpt DANGLING
 reports/phase2/synth_netlist.json :: phase2/stage2/synth/netlist.v RESOLVES
 reports/phase2/synth_netlist.json :: phase2/stage2/synth/spm_synth.v RESOLVES
 reports/phase2/synth_netlist.json :: phase2/stage2/synth/stats.json RESOLVES
@@ -535,26 +544,26 @@ reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal.sby.log RESO
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/engine_0/logfile.txt RESOLVES
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/logfile.txt RESOLVES
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/model/design.json RESOLVES
-reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/model/design.log RESOLVES
-reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/model/design_aiger.log RESOLVES
-reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/model/design_prep.log RESOLVES
+reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/model/design.log DANGLING
+reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/model/design_aiger.log DANGLING
+reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/model/design_prep.log DANGLING
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/src/formal_spm.sv RESOLVES
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_bmc/src/spm.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/engine_0/logfile.txt RESOLVES
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/logfile.txt RESOLVES
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/model/design.json RESOLVES
-reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/model/design.log RESOLVES
-reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/model/design_aiger.log RESOLVES
-reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/model/design_prep.log RESOLVES
+reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/model/design.log DANGLING
+reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/model/design_aiger.log DANGLING
+reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/model/design_prep.log DANGLING
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/src/formal_spm.sv RESOLVES
 reports/write_ledger.json :: phase2/stage1/formal/formal_spm_formal_safety/src/spm.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/formal/results.json RESOLVES
 reports/write_ledger.json :: phase2/stage1/formal/spm.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/fpga/output_files/*.map.rpt OUT_OF_PUBLISHED_SCOPE
-reports/write_ledger.json :: phase2/stage1/rtl/*.sv OUT_OF_PUBLISHED_SCOPE
-reports/write_ledger.json :: phase2/stage1/rtl/*.v OUT_OF_PUBLISHED_SCOPE
+reports/write_ledger.json :: phase2/stage1/rtl/*.sv DANGLING
+reports/write_ledger.json :: phase2/stage1/rtl/*.v DANGLING
 reports/write_ledger.json :: phase2/stage1/rtl/spm.v RESOLVES
-reports/write_ledger.json :: phase2/stage1/sim/*.log OUT_OF_PUBLISHED_SCOPE
+reports/write_ledger.json :: phase2/stage1/sim/*.log DANGLING
 reports/write_ledger.json :: phase2/stage1/sim/tb/case_3.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim/tb/corner_operand.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim/tb/random_multiplication_functional_equivalence.v RESOLVES
@@ -562,12 +571,12 @@ reports/write_ledger.json :: phase2/stage1/sim/tb/reset.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim/tb/toggle_branch_coverage.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim_full_stack/arith_oracle_manifest.json RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.log RESOLVES
-reports/write_ledger.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.v OUT_OF_PUBLISHED_SCOPE
+reports/write_ledger.json :: phase2/stage1/sim_full_stack/oracle_run/oracle.v DANGLING
 reports/write_ledger.json :: phase2/stage1/sim_full_stack/results.json RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim_full_stack/tb_spm_full.v RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim_full_stack/tb_spm_oracle.v RESOLVES
-reports/write_ledger.json :: phase2/stage1/sim_professional/spm/sim_build/sim.v OUT_OF_PUBLISHED_SCOPE
-reports/write_ledger.json :: phase2/stage1/sim_professional/spm/spm_assertions.sv OUT_OF_PUBLISHED_SCOPE
+reports/write_ledger.json :: phase2/stage1/sim_professional/spm/sim_build/sim.v DANGLING
+reports/write_ledger.json :: phase2/stage1/sim_professional/spm/spm_assertions.sv DANGLING
 reports/write_ledger.json :: phase2/stage1/sim_professional/spm/spm_coverage_model.json RESOLVES
 reports/write_ledger.json :: phase2/stage1/sim_professional/spm/verification_plan.json RESOLVES
 reports/write_ledger.json :: phase2/stage2/constraints/pvt_matrix.json RESOLVES
@@ -579,7 +588,7 @@ reports/write_ledger.json :: phase2/stage2/dft/scan_chain_work/chained.v RESOLVE
 reports/write_ledger.json :: phase2/stage2/dft/scan_chain_work/chained.v.chain-intermediate.v RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/scan_insertion_not_run.json RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/scan_netlist.v RESOLVES
-reports/write_ledger.json :: phase2/stage2/dft/tdf/cal_run.log RESOLVES
+reports/write_ledger.json :: phase2/stage2/dft/tdf/cal_run.log DANGLING
 reports/write_ledger.json :: phase2/stage2/dft/tdf/flat_core.v RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/tdf/loc_miter.v RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/tdf/sat_run.log RESOLVES
@@ -587,7 +596,7 @@ reports/write_ledger.json :: phase2/stage2/dft/test_coverage.json RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/tv.json RESOLVES
 reports/write_ledger.json :: phase2/stage2/dft/tv.json.raw_tv.json RESOLVES
 reports/write_ledger.json :: phase2/stage2/synth/_dlatch_map.v RESOLVES
-reports/write_ledger.json :: phase2/stage2/synth/area.rpt OUT_OF_PUBLISHED_SCOPE
+reports/write_ledger.json :: phase2/stage2/synth/area.rpt DANGLING
 reports/write_ledger.json :: phase2/stage2/synth/netlist.v RESOLVES
 reports/write_ledger.json :: phase2/stage2/synth/netlist_yosys.v RESOLVES
 reports/write_ledger.json :: phase2/stage2/synth/post_dft_netlist.v RESOLVES
@@ -883,8 +892,8 @@ steps/mixed/stage_mixed_signal/M3_mixed_signal_verification_ams_co_sim_rnm_inter
 steps/mixed/stage_mixed_signal/M4_mixed_signal_sign_off_top_level_pv_final_verdict/written.json :: reports/analog/mixed_signal/signoff.json DANGLING
 steps/phase2/stage1/1_spec_to_rtl/STEP_RECORD.json :: phase2/stage1/rtl/spm.v RESOLVES
 steps/phase2/stage1/1_spec_to_rtl/STEP_RECORD.json :: reports/phase1/extraction_coverage_report.json RESOLVES
-steps/phase2/stage1/1_spec_to_rtl/written.json :: phase2/stage1/rtl/*.sv OUT_OF_PUBLISHED_SCOPE
-steps/phase2/stage1/1_spec_to_rtl/written.json :: phase2/stage1/rtl/*.v OUT_OF_PUBLISHED_SCOPE
+steps/phase2/stage1/1_spec_to_rtl/written.json :: phase2/stage1/rtl/*.sv DANGLING
+steps/phase2/stage1/1_spec_to_rtl/written.json :: phase2/stage1/rtl/*.v DANGLING
 steps/phase2/stage1/1_spec_to_rtl/written.json :: phase2/stage1/rtl/spm.v RESOLVES
 steps/phase2/stage1/1_spec_to_rtl/written.json :: reports/phase1/extraction_coverage_report.json RESOLVES
 steps/phase2/stage1/2_lint_rtl_quartus_unsafe_patterns_rtl_bug_claim_s/STEP_RECORD.json :: reports/phase2/lint/rom_init_lint.json RESOLVES
@@ -898,7 +907,7 @@ steps/phase2/stage1/3_cdc_rdc_check/written.json :: reports/phase2/cdc/async_inp
 steps/phase2/stage1/3_cdc_rdc_check/written.json :: reports/phase2/cdc/crossing.json RESOLVES
 steps/phase2/stage1/3_cdc_rdc_check/written.json :: reports/phase2/cdc/reset_dep.json RESOLVES
 steps/phase2/stage1/4_simulation_testbench_based_l10_l12_coverage_veri/STEP_RECORD.json :: reports/phase2/coverage/coverage_actual.json RESOLVES
-steps/phase2/stage1/4_simulation_testbench_based_l10_l12_coverage_veri/written.json :: phase2/stage1/sim/*.log OUT_OF_PUBLISHED_SCOPE
+steps/phase2/stage1/4_simulation_testbench_based_l10_l12_coverage_veri/written.json :: phase2/stage1/sim/*.log DANGLING
 steps/phase2/stage1/4_simulation_testbench_based_l10_l12_coverage_veri/written.json :: reports/phase2/coverage/coverage_actual.json RESOLVES
 steps/phase2/stage1/5_formal_verification_assertions_proved_bit_level_/STEP_RECORD.json :: phase2/stage1/formal/results.json RESOLVES
 steps/phase2/stage1/5_formal_verification_assertions_proved_bit_level_/STEP_RECORD.json :: phase2/stage1/sim_full_stack/results.json RESOLVES
@@ -933,7 +942,7 @@ steps/phase2/stage2/8_sdc_validation/STEP_RECORD.json :: reports/phase2/sdc_chec
 steps/phase2/stage2/8_sdc_validation/written.json :: reports/phase2/sdc_check.json RESOLVES
 steps/phase2/stage2/9_synthesis_yosys_mapped_netlist/STEP_RECORD.json :: phase2/stage2/synth/netlist.v RESOLVES
 steps/phase2/stage2/9_synthesis_yosys_mapped_netlist/STEP_RECORD.json :: phase2/stage2/synth/stats.json RESOLVES
-steps/phase2/stage2/9_synthesis_yosys_mapped_netlist/written.json :: phase2/stage2/synth/area.rpt OUT_OF_PUBLISHED_SCOPE
+steps/phase2/stage2/9_synthesis_yosys_mapped_netlist/written.json :: phase2/stage2/synth/area.rpt DANGLING
 steps/phase2/stage2/9_synthesis_yosys_mapped_netlist/written.json :: phase2/stage2/synth/netlist.v RESOLVES
 steps/phase2/stage2/9_synthesis_yosys_mapped_netlist/written.json :: phase2/stage2/synth/stats.json RESOLVES
 steps/phase2/stage2/DT1_transition_delay_fault_at_speed_loc_atpg/STEP_RECORD.json :: reports/phase2/dft/transition_coverage.json RESOLVES

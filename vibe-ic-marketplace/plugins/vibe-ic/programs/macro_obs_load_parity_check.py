@@ -1,7 +1,39 @@
 #!/usr/bin/env python3
 """The obstructions the LEF DECLARES vs the obstructions the tool can LOAD.
 
-THIS GATE BLOCKS (rc=1).
+THIS GATE BLOCKS (rc=1) — a statement about this program's VERDICT SEVERITY,
+not about where its verdict is consumed. Those are two different axes, and the
+second one is declared immediately below: a gate that says nothing about it is
+the defect `flow_gate_enforcement_audit` exists to catch, and silence there is
+not a decision.
+
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 15 while step 15 is running. What it DOES have, and this is why `advisory`
+here is not "ignorable": it is a gate leg of step 15 in the flow's BLOCKING
+slot (`program_exit_zero`, never `advisory_program_exit_zero`), so when
+`flow_compliance_check` evaluates that clause an rc=1 FAILs the step, and that
+verdict reaches the run's headline through
+`reports/audit/phase23_completion_audit.json`, which
+`phase3_one_shot_runner._derive_headline_verdict` reads. MEASURED on a copy of
+a published run-root: the evaluator's own step report lists this program under
+step 15's `measures`. What `flow_gate_enforcement_audit` scores is the narrower
+question "can this verdict stop the step it guards", and the answer there is
+no; `advisory` is that audit's token for that answer.
+
+WHY IT IS NOT PROMOTED TO INLINE-BLOCKING, MEASURED. The one inline pattern the
+phase-3 runner has — `_DECLARED_SIGNOFF_GATES` / `_run_declared_signoff_gate` —
+routes every rc other than 0 and 1 to BLOCKED (non-green), deliberately, because
+for a sign-off gate "could not check" is not a pass. This gate's rc=2 means
+something different: no LEF, or no macro declares an OBS, i.e. there was
+legitimately no obstruction to lose. Over the 15 published phase-3 run-roots
+under `benchmark-data/ic`, invoked exactly as a caller would: rc 2 on 12, rc 1
+on 3, rc 0 on none. Wiring it into that table would therefore turn 12 of 15
+published runs non-green for owning no macro obstruction, which is the false
+alarm this gate's own rc-2 branch was written to avoid. The flow's
+rc=2 -> VACUOUS_PASS encoding is the correct consumer; that table is not.
+Promotion needs an inline consumer that PRESERVES rc=2 -> VACUOUS_PASS at the
+step that owns the subject — a flow-owner change with its own blast radius, not
+a side effect of recording this decision.
 
 WHY IT EXISTS
 -------------

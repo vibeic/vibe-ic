@@ -431,3 +431,139 @@ def test_the_shipped_exemption_is_live_and_argued():
     assert G.exemptions_in_scope(real) == sorted(G._NOT_PROSE)
     for reason in G._NOT_PROSE.values():
         assert len(reason.strip()) >= G._EXEMPT_REASON_MIN
+
+
+# ── the PRECISION of "writes the matched value" (vibe-ic#712, second round) ──
+#
+# The gate went red on a file that landed after the baseline was written, with
+# two names out of one module. Neither is an extractor:
+#
+#   `_names`      a word-boundary predicate. It searches prose and returns a
+#                 bool; the only thing it writes into a dict is the compiled
+#                 pattern it memoises.
+#   `flip_source` a source mutator. It matches Python's own quote grammar at a
+#                 recorded (line, column) and splices the CALLER'S replacement
+#                 in, then hands the mutated source to pytest.
+#
+# One is fixed by narrowing the predicate, the other is exempted as formal
+# grammar. Which of the two applies is not interchangeable: `_names` reads real
+# English (docstrings and comments), so claiming NOT PROSE for it would be
+# false, and `flip_source` genuinely writes a value out of the text it matched,
+# so no narrowing reaches it honestly.
+#
+# The four tests below the first one are the CONTROL on the narrowing. Two
+# wider narrowings were built and measured before this one, and both dropped a
+# real finding off the register; those exact shapes are pinned here so the
+# rejection cannot be quietly re-litigated.
+
+_PATTERN_MEMO = '''
+import re
+_CACHE = {}
+def names(text, token):
+    """`token` in `text`, not glued to an identifier character."""
+    pat = _CACHE.get(token)
+    if pat is None:
+        left = r"(?<![A-Za-z0-9_])" if re.match(r"[A-Za-z0-9_]", token) else ""
+        right = r"(?![A-Za-z0-9_])" if re.search(r"[A-Za-z0-9_]$", token) else ""
+        pat = re.compile(left + re.escape(token) + right)
+        _CACHE[token] = pat
+    return bool(pat.search(text))
+'''
+
+
+def test_a_memoised_compiled_pattern_is_not_a_declared_value(tmp_path):
+    """A `re.Pattern` is the INSTRUMENT that reads prose, not a value read out
+    of prose, and no sentence can deny one. Caching the searcher under the
+    needle is keeping a tool; both real defects wrote the matched TEXT."""
+    assert G.scan(_tree(tmp_path, _PATTERN_MEMO)) == []
+
+
+_COMPILE_AND_PUBLISH = '''
+import re
+def extract(text, rec):
+    m = re.search(r"targets (\\w+)", text)
+    if m:
+        val = m.group(1)
+        pat = re.compile(val)
+        rec["probe"] = pat.pattern
+        rec["pdk_target"] = val
+    return rec
+'''
+
+
+def test_the_text_that_goes_into_a_pattern_is_still_tracked(tmp_path):
+    """The narrowing is about the OBJECT, not about laundering its input. An
+    extractor that compiles the matched text AND publishes it is #706 with an
+    extra line, and stays a finding."""
+    assert G.scan(_tree(tmp_path, _COMPILE_AND_PUBLISH)) == ["some_extract::extract"]
+
+
+_LITERAL_CHOSEN_BY_A_SEARCH = '''
+import re
+def extract(text):
+    m = re.search(r"\\b(adder|multiplier)\\b", text)
+    if not m:
+        return None
+    d = {"op": m.group(1)}
+    sat = "saturate" if re.search(r"saturat", text) else None
+    if sat:
+        d["overflow"] = sat
+    return d
+'''
+
+
+def test_a_literal_chosen_by_a_search_is_still_a_finding(tmp_path):
+    """REJECTED NARROWING #1, pinned. Dropping the TEST of a conditional
+    expression would have cleared the red name — and would also have cleared
+    this, which is #706 itself: the value published is a literal, but WHICH
+    literal is decided by a search over prose that was never asked whether it
+    denies. 'does NOT saturate' publishes `overflow: saturate`."""
+    assert G.scan(_tree(tmp_path, _LITERAL_CHOSEN_BY_A_SEARCH)) == [
+        "some_extract::extract"]
+
+
+_COLUMN_FOUND_BY_A_HEADER_MATCH = '''
+import re
+_HDR = re.compile(r"resolution", re.I)
+def extract(rows, rec):
+    hdr = rows[0].split("|")
+    res_c = next((k for k, h in enumerate(hdr) if _HDR.match(h)), None)
+    cells = rows[1].split("|")
+    rec["resolution"] = cells[res_c]
+    return rec
+'''
+
+
+def test_a_column_located_by_a_match_is_still_a_finding(tmp_path):
+    """REJECTED NARROWING #2, pinned. Excluding names used only as SLICE bounds
+    would have cleared the source mutator — and would also have cleared this,
+    which publishes a document's own resolution column verbatim."""
+    assert G.scan(_tree(tmp_path, _COLUMN_FOUND_BY_A_HEADER_MATCH)) == [
+        "some_extract::extract"]
+
+
+def test_the_source_mutator_is_exempted_as_formal_grammar_not_baselined():
+    """The other half. It is NOT removed from the scan — `exemption_audit`
+    fails the moment it stops being a finding — and it is NOT added to the
+    baseline, which is a debt register of extractors that SHOULD consult
+    polarity."""
+    name = "policy_direction_pin_check::flip_source"
+    assert name in G._NOT_PROSE
+    assert len(G._NOT_PROSE[name].strip()) >= G._EXEMPT_REASON_MIN
+    real = Path(__file__).resolve().parents[1].parent
+    assert name in G.scan(real), "exempted but no longer a finding"
+    baseline = json.loads(
+        (PROGRAMS / "prose_polarity_baseline.json").read_text())["known"]
+    assert name not in baseline
+    assert "policy_direction_pin_check::_names" not in baseline
+
+
+def test_the_gate_is_GREEN_on_the_tree_that_ships():
+    """The end of it. Read on the pristine base this exits 1 naming two
+    functions of `policy_direction_pin_check`; a verdict nobody can reproduce
+    green is the thing this repo is closing."""
+    r = subprocess.run(
+        [sys.executable, str(PROGRAMS / "prose_polarity_consulted_check.py")],
+        capture_output=True, text=True, timeout=55)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
