@@ -97,6 +97,51 @@ RULE DRIFT IS NEVER BASELINEABLE. ``RULES_UNREVIEWED`` is plugin-side debt,
 fixable in the same commit that caused it, by the same person. Letting it be
 recorded would defeat the one requirement the register exists beside.
 
+MAY ONLY SHRINK IS ENFORCED ON THE READ PATH TOO (vibe-ic#922)
+---------------------------------------------------------------
+Until #922 the ratchet lived entirely inside ``--write-baseline``: the writer
+refused to GROW the register without ``--scope-expanded``, and the reader took
+whatever ``known`` list it found on disk as the recorded debt. A register is a
+plain JSON file, so the writer was never the only way to add an entry to it —
+and adding one by hand is precisely how a NEW superseded record stops being
+NEW. The rule that FAILs the tree was one text editor away from being optional.
+
+That is not hypothetical. This repo shipped the default register in a state its
+own writer refuses to produce: ``previous_size: 2`` beside five ``known``
+entries and ``scope_expanded: null`` — the growth that landed with the
+``dfm_screen_check`` rule (v1.8.75), authorised in that commit's message and in
+the register's own ``_comment``, but written into neither field the program can
+read. Run ``--write-baseline`` over that same growth and it exits 1 with
+*refusing to GROW the register (2 -> 5)*. Two paths to the same edit, one of
+them ratcheted.
+
+So the reader now asks one question of the register before it trusts it: COULD
+``_write_baseline`` HAVE PRODUCED THIS DOCUMENT? The writer records the count it
+sanctioned (``size``) beside the count it grew from (``previous_size``) and the
+reason it was allowed to grow (``scope_expanded``), and :func:`_register_defects`
+re-checks the writer's own rules against those recorded numbers. An entry
+appended by hand leaves ``size`` behind and is caught; growing the recorded
+numbers as well requires forging two coupled counts and writing a reason, which
+is a deliberate false statement rather than an omission nothing measures.
+
+The reason is checked against the SAME minimum the writer applies
+(:data:`SCOPE_REASON_MIN_CHARS`), read from one constant, so the two sides
+cannot drift into disagreeing about what a written reason is.
+
+AND THE REASON IS SPENT BY THE WRITE THAT USED IT. A ``scope_expanded`` left
+standing on a register that grew nothing would be the finding this issue is
+named for, reproduced one file over: a permanent string that pre-authorises
+whatever growth comes next, reducing the forgery to a single number. So the
+writer records it only for the write it authorised, and a register carrying one
+without the growth it justifies is reported.
+
+A register written by an older version carries no ``size``. It is reported, not
+waved through: "no recorded size" is exactly the state a hand-edit produces once
+someone notices the field, so treating it as "nothing to check" would reopen the
+hole one key over. The repair is the writer — ``--write-baseline`` re-records
+the file — and the validator therefore runs on the READ path only, never in
+front of the writer that fixes it.
+
 A RECORDED ENTRY IS ONLY "PAID" IF SOMETHING RE-EXAMINED IT (vibe-ic#536)
 -------------------------------------------------------------------------
 The register's shrink-only rule needs a way to notice that an entry stopped
@@ -206,6 +251,12 @@ DEBT_RULE_NOT_APPLIED = "RULE_NOT_APPLIED"
 #: Field separator of a register entry. Kept in one place so ``debt_key`` and
 #: ``parse_debt_key`` cannot drift apart.
 KEY_SEP = "::"
+
+#: What counts as a WRITTEN reason for growing the register. The writer demands
+#: it of ``--scope-expanded`` and the reader re-checks it against the recorded
+#: ``scope_expanded``; one constant so a future edit cannot leave the reader
+#: accepting a reason the writer would have rejected (#922).
+SCOPE_REASON_MIN_CHARS = 30
 
 
 def debt_key(finding: Dict[str, Any]) -> str:
@@ -688,9 +739,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--write-baseline", action="store_true",
                     help="record today's superseded records as debt")
     ap.add_argument("--scope-expanded", default=None,
-                    help="reason (>=30 chars) a --write-baseline may GROW the "
-                         "register, naming what is now adjudicated that was "
-                         "not before")
+                    help=f"reason (>={SCOPE_REASON_MIN_CHARS} chars) a "
+                         f"--write-baseline may GROW the register, naming what "
+                         f"is now adjudicated that was not before; recorded "
+                         f"only for the write that actually grew it")
     ap.add_argument("--print-decision-digest", dest="digest_of", default=None,
                     help="print the current decision fingerprint for one gate "
                          "and exit; use it to refresh a declaration")
@@ -768,6 +820,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                                classify_recorded_debt(on_disk or [], now,
                                                       report))
 
+    # A register is a plain JSON file, so --write-baseline was never the only
+    # way to add an entry to it — and adding one by hand is how a NEW
+    # superseded record stops being NEW. Before the recorded debt is trusted,
+    # the file is asked whether the writer could have produced it (#922).
+    # `--ignore-baseline` does not suppress this: it asks for an answer
+    # computed as if nothing were recorded, which says nothing about whether
+    # the file on disk was ratcheted.
+    register_defects = _register_defects(bl_path)
+
     # Shrinking the register by hand on this program's say-so and shrinking it
     # with --write-baseline are the same irreversible edit, so both rest on the
     # same classification (#536).
@@ -785,8 +846,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         c["entry"] for c in recorded
         if c["status"] == DEBT_RECORD_UNPUBLISHED]
     s["recorded_debt_status"] = recorded
+    s["register_path"] = None if bl_path is None else str(bl_path)
+    s["register_defects"] = register_defects
 
-    if new or resolved or s["gates_unreviewed"] or strict_gates:
+    if (new or resolved or s["gates_unreviewed"] or strict_gates
+            or register_defects):
         verdict = "FAIL"
     elif s["vacuous"]:
         verdict = "VACUOUS_PASS"
@@ -807,6 +871,17 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 2
     if verdict == "FAIL":
+        if register_defects:
+            for d in register_defects:
+                print(f"  (register) {d}", file=sys.stderr)
+            print(f"[FAIL] {bl_path.name if bl_path else DEFAULT_BASELINE} is "
+                  f"not a state --write-baseline could have produced, so the "
+                  f"MAY-ONLY-SHRINK ratchet cannot be shown to have run over "
+                  f"it. Recorded debt read out of an unratcheted register is "
+                  f"standing permission wearing a register's name. Re-write it "
+                  f"with --write-baseline (and --scope-expanded '<why>' if the "
+                  f"growth is genuinely newly-adjudicated scope).",
+                  file=sys.stderr)
         if resolved:
             print(f"[FAIL] {len(resolved)} recorded entr(ies) were "
                   f"RE-ADJUDICATED by the rule that recorded them and are no "
@@ -859,6 +934,99 @@ def _read_register(bl_path: Optional[Path]) -> Optional[List[str]]:
         return None
 
 
+def _register_defects(bl_path: Optional[Path]) -> List[str]:
+    """Ways this register is NOT a document ``_write_baseline`` could produce.
+
+    Empty list = the file is consistent with the writer's own rules, which is
+    the only evidence available on the read path that the ratchet was actually
+    applied to it (#922). Each defect is prose a maintainer can act on.
+
+    An ABSENT register is not a defect: "nothing is recorded" is a legitimate
+    state and is already handled by the caller. An UNREADABLE one is not
+    reported here either — :func:`_read_register` turns it into "nothing
+    recorded", which makes every current finding NEW and FAILs the run loudly
+    on its own.
+    """
+    if bl_path is None or not bl_path.is_file():
+        return []
+    try:
+        doc = json.loads(bl_path.read_text())
+    except (OSError, ValueError):
+        return []                      # already fails via _read_register
+    if not isinstance(doc, dict):
+        return []                      # ditto
+    defects: List[str] = []
+
+    known = doc.get("known") or []
+    if not isinstance(known, list):
+        return []                      # ditto
+    n = len(known)
+
+    size = doc.get("size")
+    if size is None:
+        defects.append(
+            f"records no `size`, so there is no count the writer sanctioned "
+            f"to compare its {n} entr(ies) against. A register written by "
+            f"--write-baseline always carries one; re-write it with "
+            f"--write-baseline so the ratchet has something to hold.")
+    elif not isinstance(size, int) or isinstance(size, bool):
+        defects.append(f"has a non-integer `size` ({size!r}); the writer "
+                       f"records the entry count it sanctioned.")
+    elif size != n:
+        defects.append(
+            f"holds {n} entr(ies) but records `size` {size}: "
+            f"{'entries were added to' if n > size else 'entries were removed from'}"
+            f" it outside --write-baseline, so the MAY-ONLY-SHRINK ratchet "
+            f"never ran over "
+            f"{'them' if abs(n - size) != 1 else 'it'}.")
+
+    prev_size = doc.get("previous_size")
+    if prev_size is not None and (not isinstance(prev_size, int)
+                                  or isinstance(prev_size, bool)):
+        defects.append(f"has a non-integer `previous_size` ({prev_size!r}).")
+        prev_size = None
+
+    reason = doc.get("scope_expanded")
+    reason_ok = (isinstance(reason, str)
+                 and len(reason.strip()) >= SCOPE_REASON_MIN_CHARS)
+    if reason is not None and not reason_ok:
+        defects.append(
+            f"records a `scope_expanded` that is not a written reason "
+            f"(>= {SCOPE_REASON_MIN_CHARS} chars): {reason!r}. The writer "
+            f"refuses one this short.")
+
+    # The writer's own growth rule, re-checked against the recorded counts. It
+    # is asked of `size` — the count the writer sanctioned — and not of the
+    # length on disk, so a hand-appended entry is reported as the tamper it is
+    # (above) rather than as unjustified growth it never went through.
+    grown_to = size if isinstance(size, int) and not isinstance(size, bool) else n
+    grew = isinstance(prev_size, int) and grown_to > prev_size
+    if grew and not reason_ok:
+        defects.append(
+            f"grew {prev_size} -> {grown_to} with no written "
+            f"`scope_expanded`. The register records debt owed to the "
+            f"benchmark-agent, never permission to publish more superseded "
+            f"records; --write-baseline exits 1 on exactly this, so a "
+            f"register in this state did not come from it.")
+    # A REASON IS SPENT BY THE WRITE THAT USED IT. Left behind on a write that
+    # grew nothing, it becomes exactly what #922 was filed about one file over:
+    # a standing string that pre-authorises the NEXT growth, so the only edit
+    # left to forge is a number. The writer therefore records it only when it
+    # actually authorised growth, and a register carrying one anyway did not
+    # come from the writer either.
+    if reason is not None and not grew:
+        defects.append(
+            f"records a `scope_expanded` reason on a register that did not "
+            f"grow ({prev_size} -> {grown_to}). The writer records the reason "
+            f"only for the write it authorised; one kept past that write is a "
+            f"standing authorisation for a growth nobody has justified yet.")
+
+    if known != sorted(str(k) for k in known):
+        defects.append("has an unsorted `known` list; the writer always "
+                       "writes it sorted, so this was edited by hand.")
+    return defects
+
+
 def _write_baseline(bl_path: Path, now: List[str], prev: Optional[List[str]],
                     scope_expanded: Optional[str],
                     recorded: List[Dict[str, Any]]) -> int:
@@ -892,9 +1060,11 @@ def _write_baseline(bl_path: Path, now: List[str], prev: Optional[List[str]],
               f"not evidence the debt was paid when the rule never ran (#536). "
               f"Fix what made them undecidable, then write.", file=sys.stderr)
         return 1
-    if scope_expanded is not None and len(scope_expanded.strip()) < 30:
-        print("[FAIL] --scope-expanded needs a real reason (>=30 chars) "
-              "naming which gate's rules newly adjudicate these records.",
+    if (scope_expanded is not None
+            and len(scope_expanded.strip()) < SCOPE_REASON_MIN_CHARS):
+        print(f"[FAIL] --scope-expanded needs a real reason "
+              f"(>={SCOPE_REASON_MIN_CHARS} chars) "
+              f"naming which gate's rules newly adjudicate these records.",
               file=sys.stderr)
         return 1
     if prev is not None and len(now) > len(prev) and scope_expanded is None:
@@ -912,7 +1082,17 @@ def _write_baseline(bl_path: Path, now: List[str], prev: Optional[List[str]],
             "plugin fixes never share a commit — so they are recorded here, "
             "not silently fixed by the plugin that found them."),
          "previous_size": None if prev is None else len(prev),
-         "scope_expanded": scope_expanded,
+         # The count THIS write sanctioned. `previous_size` alone cannot carry
+         # the ratchet on the read path: it is the size grown FROM, so a hand
+         # appended entry sits above it just as a legitimately written one does
+         # (#922).
+         "size": len(now),
+         # Recorded ONLY for the write it authorised. Carried past that write
+         # it would be a standing permission for the NEXT growth, which is the
+         # defect this ratchet exists to refuse (#922).
+         "scope_expanded": (scope_expanded if (prev is not None
+                                               and len(now) > len(prev))
+                            else None),
          "known": now}, indent=2, ensure_ascii=False) + "\n")
     print(f"wrote {bl_path} ({len(now)} entr(ies))", file=sys.stderr)
     return 0
