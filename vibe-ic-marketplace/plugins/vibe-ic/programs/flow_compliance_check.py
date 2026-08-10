@@ -3015,6 +3015,15 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
         verdict, rc = "INVOCATION_ERROR", None
     else:
         verdict, rc = ("PASS", 0) if ok else ("FAIL", 1)
+        if verdict == "PASS" and _json_report_signals_vacuous(project, cmd_str):
+            # vibe-ic#901 — the ledger row is the GATE-granular verdict, and a
+            # gate that wrote `{"verdict": "NOT_APPLICABLE"}` into the report
+            # this very command named did not PASS anything. rc stays 0 (that
+            # is what the process returned, and the row states both) while the
+            # word matches what the gate said about itself. Derived from the
+            # SAME helper `_evaluate_gate` uses, so the ledger row and the step
+            # tier cannot disagree about one gate's own report.
+            verdict = "VACUOUS_PASS"
     _record_gate_execution(cmd_str, rc, verdict)
     return ok, out
 
