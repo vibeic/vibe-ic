@@ -5,7 +5,7 @@ THE DEFECT BEING CONTROLLED
 ---------------------------
 `step_output_collector.materialize()` derives every entry in `<project>/steps/`
 from `required_outputs`, filtering only on `exists`. MEASURED on a real run
-directory (a copy of /home/reyerchu/_sky130A_r3_run) with the step-37 GDS
+directory (a copy of $HOME/_sky130A_r3_run) with the step-37 GDS
 truncated to 0 bytes, the pre-change collector produced:
 
     steps/phase3/stage4/37_gdsii_output_.../spm.gds        -> symlink, present
