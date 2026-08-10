@@ -147,3 +147,24 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_spare_tieoff_one_driver_
 # tag would claim those exact numbers were read off an image that never ran
 # them, the same measurement-honesty violation as the entries above.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue789_streamout_layermap_any_signoff_deck.py
+
+# vibe-ic#927 — a MEASUREMENT record, not a pointer this module uses. Both ghcr
+# tags in the file sit inside `MEASURED (...)` comment blocks that quote the
+# tool's own verbatim stdout beside the tag that produced it. Advancing them
+# would attribute those exact lines to an image that never emitted them — the
+# measurement-honesty rule every entry above restates.
+#
+# COSTS NO LIVE COVERAGE, and that is checkable rather than asserted: the module
+# names no image itself. It does `import fault_atpg_run as _fatpg`, every docker
+# call goes through `_fatpg._run_docker`, and the image it reports back is
+# `_fatpg.DOCKER_IMAGE`. `fault_atpg_run.py` IS a registered
+# INSTALL_DOC_CANDIDATE, so the live pointer that decides which image actually
+# runs still tracks the anchor — it is simply spelled one file over.
+#
+# What would invalidate this exemption: a fully-qualified ghcr tag written into
+# this file as a DEFAULT or fallback rather than inside a MEASURED block. Once
+# the file is exempt the drift net would stay silent about that FOREVER, so the
+# coverage this entry removes is replaced by
+# tests/test_scan_chain_insert_image_follows_the_anchor.py, which walks the
+# module NAMESPACE at runtime and fails on any module-level ghcr string.
+vibe-ic-marketplace/plugins/vibe-ic/programs/fault_scan_chain_insert.py
