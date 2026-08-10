@@ -270,6 +270,20 @@ import step_write_ledger as _swl  # noqa: E402
 #: admissible here.
 RECORD_REL = "reports/write_ledger.json"
 
+#: Bound for the `git ls-tree` below. NOT a round number picked by feel:
+#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
+#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed. This module is not a `test_` file but it is scanned and
+#: it is spent by five test files, which is exactly why the ceiling applies.
+#: The landed value was 120. MEASURED here: `git ls-tree -r HEAD` over this
+#: checkout's 21945 tracked entries takes 0.01 s, so 60 s is a hang detector
+#: for a hung `git`, which is the only way this call can fail to return.
+_LS_TREE_TIMEOUT_S = 60
+
 #: The residual key this dimension reads. Quoted from the emitter's own output
 #: shape rather than guessed; :func:`_load` fails loudly if it disappears.
 _RESIDUAL_KEY = "written_never_declared"
@@ -350,7 +364,7 @@ def _git_tracked(root: Path) -> frozenset:
     try:
         proc = subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
-            cwd=str(root), capture_output=True, timeout=120,
+            cwd=str(root), capture_output=True, timeout=_LS_TREE_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError):
         return frozenset()
