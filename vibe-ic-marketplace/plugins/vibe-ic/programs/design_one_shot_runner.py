@@ -596,23 +596,380 @@ def _iverilog_available(container: str) -> bool:
     return bool(_shutil.which("iverilog"))
 
 
-def _iverilog_exec_container(container: str) -> bool:
+def _iverilog_sources_visible(argv: List[str], run_dir: Path,
+                              container: str) -> Tuple[bool, str]:
+    """(visible, reason) — can `container` SEE everything this stage needs?
+
+    #902 guard. `_to_container_path` returns the path UNTRANSLATED when no
+    bind-mount covers it, which inside the container is simply a missing file.
+    So the container is a usable execution site only when the run tree AND
+    every absolute path token in `argv` sit under one of its mounts. Answering
+    that BEFORE dispatching is what keeps the host fallback honest instead of
+    turning a working host sim into a container 'file not found'.
+
+    Absolute tokens are treated as paths (that is exactly the set
+    `_to_container_path` would rewrite); flags, `-D` defines and the bare tool
+    name are relative or dash-led and carry no mount. chip/tool-AGNOSTIC."""
+    if not _path_in_container(str(run_dir), container):
+        return False, ("run_dir is not bind-mounted into %r: %s"
+                       % (container, run_dir))
+    for tok in argv:
+        if not tok or not str(tok).startswith("/"):
+            continue
+        if not _path_in_container(str(tok), container):
+            return False, ("argv path is not bind-mounted into %r: %s"
+                           % (container, tok))
+    return True, "run_dir and every absolute argv path are bind-mounted"
+
+
+def _iverilog_exec_container(container: str,
+                             run_dir: Optional[Path] = None,
+                             argv: Optional[List[str]] = None) -> bool:
     """True iff the iverilog/vvp compile+run must be DISPATCHED INTO
-    `container` (the host has no iverilog but the container does). When the
-    host has iverilog we keep the historical host execution (no docker
-    round-trip); the caller only reaches execution when `_iverilog_available`
-    already said yes, so 'not host' here implies 'container'."""
-    import shutil as _shutil
-    if _shutil.which("iverilog"):
+    `container`.
+
+    #902 — this used to return False whenever the HOST had ANY iverilog:
+
+        if _shutil.which("iverilog"):
+            return False
+
+    so a run that pinned an image (`--require-image`) VERIFIED that image and
+    then simulated with whatever iverilog the host happened to carry. MEASURED
+    across the fleet: three different Icarus frontends for the SAME cell (two
+    host versions and the container's), selected by which host the job landed
+    on, with the pin reported satisfied throughout — host and container even
+    report different line numbers for the same error, so a diagnosis taken on
+    one host does not transfer to another. The pin check answers 'is the image
+    present and correct'; it never answered 'did the tools come from it'.
+
+    The container is now PREFERRED whenever it has iverilog — the same
+    container-first order `_iverilog_available` already uses, so availability
+    and execution can no longer disagree about where the simulator is. The
+    host stays the fallback for the two cases where the container cannot do
+    the job: it has no iverilog, or it cannot SEE the run tree / sources. Both
+    fallbacks are RECORDED by `_record_sim_toolchain`, so the divergence
+    between the toolchain a run pinned and the one it used is never silent
+    again. chip-AGNOSTIC."""
+    if not container:
         return False
-    return bool(container) and _tool_in_container(container, "iverilog")
+    if not _tool_in_container(container, "iverilog"):
+        return False
+    if run_dir is not None:
+        ok, _reason = _iverilog_sources_visible(list(argv or []), run_dir,
+                                                container)
+        if not ok:
+            return False
+    return True
+
+
+# -------------------------------------------------------------------------
+# #902 second half — SIM-TOOLCHAIN PROVENANCE
+#
+# `--require-image` is verified once at launch and answers 'is that image
+# present on this container'. Nothing compared it against the toolchain the
+# run actually USED, so the host/container split above was invisible: the pin
+# WAS checked and WAS reported satisfied while the simulator came from
+# somewhere else entirely. The predicate change above removes the common
+# cause; this record removes the SILENCE, which is the part that made it
+# undiagnosable — the residual host fallbacks (container without iverilog, run
+# tree not mounted) are still real, and now they are written down.
+#
+# Best-effort by construction: every probe and every write is guarded, and a
+# failure degrades to a recorded note. A run must never fail because its
+# attribution could not be taken.
+# -------------------------------------------------------------------------
+
+#: Filename of the per-run sim-toolchain record. A module constant so the
+#: writer, the aggregator and the tests read ONE string instead of hand-typed
+#: copies that can drift apart.
+SIM_TOOLCHAIN_RECORD = "sim_toolchain.json"
+
+#: (run_dir, container, tool, locality) already recorded in this process, so
+#: repeated stages do not re-probe docker for an answer they already have.
+_SIM_TOOLCHAIN_SEEN: Dict[str, Dict[str, Any]] = {}
+
+
+def _project_top_level_dir_names() -> Tuple[str, ...]:
+    """The top-level folder names a project can nest a run_dir under,
+    DISCOVERED from `_path_layout` instead of typed here.
+
+    Every `<name>_dir(project)` helper in the layout module is called against a
+    probe root and the FIRST component of the returned relative path is
+    collected. A phase or top-level folder added to the layout is therefore
+    attributable on arrival, instead of being silently unattributable until
+    someone remembers to extend a literal list."""
+    probe = Path("/__vibeic_layout_probe__")
+    names = set()
+    for attr in dir(_pl):
+        if attr.startswith("_") or not attr.endswith("_dir"):
+            continue
+        fn = getattr(_pl, attr, None)
+        if not callable(fn):
+            continue
+        try:
+            got = fn(probe)
+        except Exception:                                    # noqa: BLE001
+            continue                       # needs more than a project root
+        try:
+            rel = Path(str(got)).relative_to(probe)
+        except (ValueError, TypeError):
+            continue
+        if rel.parts:
+            names.add(rel.parts[0])
+    return tuple(sorted(names))
+
+
+def _project_root_of_run_dir(run_dir: Path) -> Optional[Path]:
+    """The project a sim `run_dir` sits in — the directory above the layout
+    folder it is nested in. None when undecidable, which is REPORTED as
+    undecidable rather than guessed."""
+    parts = Path(run_dir).parts
+    tops = _project_top_level_dir_names()
+    for i, part in enumerate(parts):
+        if i > 0 and part in tops:
+            return Path(*parts[:i])
+    return None
+
+
+#: Sentinels the tool-identity probe prints its two answers behind. The
+#: container is entered through `bash -lc`, whose LOGIN PROFILE prints its own
+#: banner lines ("[INFO] Final PATH variable: ..."); a probe that trusted line
+#: ORDER recorded that banner AS the simulator's version — a record that lies
+#: in exactly the way this record exists to stop. Marked lines are order- and
+#: noise-independent, and the SAME script runs on both sides so host and
+#: container answers cannot be parsed by two rules that drift apart.
+_TOOL_PROBE_PATH_MARK = "__VIBEIC_TOOL_PATH__"
+_TOOL_PROBE_VER_MARK = "__VIBEIC_TOOL_VERSION__"
+
+
+def _tool_probe_script(tool: str) -> str:
+    """The one probe script, used on the host AND inside the container."""
+    import shlex as _shlex
+    t = _shlex.quote(tool)
+    return (
+        'export PATH=%s/bin:$PATH; '
+        'p="$(command -v %s 2>/dev/null || true)"; echo "%s$p"; '
+        # MEASURED: `iverilog -V` writes its banner to STDOUT while `vvp -V`
+        # writes the SAME banner to STDERR. A probe reading only stdout
+        # recorded the runtime half of the very same toolchain as unknown.
+        # Read stdout first, fall back to stderr — never merge the two
+        # streams, whose interleaving is not ordered.
+        'vo="$("$p" -V 2>/dev/null | head -1 || true)"; '
+        've="$("$p" -V 2>&1 1>/dev/null | head -1 || true)"; '
+        'if [ -n "$vo" ]; then echo "%s$vo"; else echo "%s$ve"; fi'
+        % (TOOLS_IN_CONTAINER, t, _TOOL_PROBE_PATH_MARK,
+           _TOOL_PROBE_VER_MARK, _TOOL_PROBE_VER_MARK)
+    )
+
+
+def _parse_tool_probe(out: str) -> Tuple[Optional[str], Optional[str]]:
+    """Pull the two MARKED answers out of a probe transcript, ignoring any
+    login-profile noise around them."""
+    path = version = None
+    for ln in (out or "").splitlines():
+        ln = ln.strip()
+        if ln.startswith(_TOOL_PROBE_PATH_MARK) and path is None:
+            path = ln[len(_TOOL_PROBE_PATH_MARK):].strip() or None
+        elif ln.startswith(_TOOL_PROBE_VER_MARK) and version is None:
+            version = ln[len(_TOOL_PROBE_VER_MARK):].strip() or None
+    return path, version
+
+
+def _probe_tool_identity(tool: str, container: str, in_container: bool
+                         ) -> Tuple[Optional[str], Optional[str]]:
+    """(path, version_banner) for `tool` ON THE SIDE IT WILL ACTUALLY RUN.
+
+    MEASURED by asking that side — never inferred from the caller's intent,
+    which is the whole failure this record exists to close. Returns (None,
+    None) when the probe cannot answer, which is recorded as unknown rather
+    than filled in from the other side."""
+    script = _tool_probe_script(tool)
+    try:
+        if in_container:
+            _rc, out, _err = _docker_exec(container, script, timeout=30)
+        else:
+            _rc, out, _err = _run(["bash", "-lc", script], timeout=30)
+        return _parse_tool_probe(out)
+    except Exception:                                        # noqa: BLE001
+        return None, None
+
+
+def _declared_container_image(project: Optional[Path], container: str
+                              ) -> Dict[str, Any]:
+    """What the RUN declared/pinned, read from the artifact the launch-time
+    check already wrote (`reports/container_image.json`). Falls back to a live
+    inspect when that artifact is absent, and says which source it used —
+    an unreadable source is reported as unknown, never as a match."""
+    rec: Dict[str, Any] = {"declared_image_ref": None, "declared_image_id": None,
+                           "require_image": None, "declared_image_source": None}
+    if project is not None:
+        p = _pl.reports_dir(project) / "container_image.json"
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(doc, dict):
+                rec["declared_image_ref"] = doc.get("image_ref")
+                rec["declared_image_id"] = doc.get("image_id")
+                rec["require_image"] = doc.get("require_image")
+                rec["declared_image_source"] = str(p)
+                return rec
+        except Exception:                                    # noqa: BLE001
+            pass
+    if container:
+        try:
+            import container_image_provenance as _cip
+            live = _cip.inspect_container(container)
+            if live.get("status") == "ok":
+                rec["declared_image_ref"] = live.get("image_ref")
+                rec["declared_image_id"] = live.get("image_id")
+                rec["declared_image_source"] = "docker inspect %s" % container
+        except Exception:                                    # noqa: BLE001
+            pass
+    return rec
+
+
+def _record_sim_toolchain(run_dir: Path, container: str, tool: str,
+                          in_container: bool,
+                          fallback_reason: Optional[str] = None,
+                          ) -> Dict[str, Any]:
+    """#902 — record WHICH simulator toolchain this sim actually executed, and
+    whether it is the one the run pinned.
+
+    Writes `<run_dir>/sim_toolchain.json` (it belongs beside the transcript it
+    explains) and merges into `<project>/reports/sim_toolchain.json` when the
+    project root resolves. The verdict is deliberately three-valued:
+
+      MATCH        a container was declared and the sim ran IN it
+      DIVERGED     a container was declared and the sim ran on the HOST — the
+                   exact shape that made published sim verdicts host-dependent
+      UNPINNED     no container declared at all (true host mode); nothing to
+                   match, and saying so is not the same as saying MATCH
+      UNDECIDABLE  the probe could not resolve the image identity
+
+    Never raises and never changes a sim verdict. chip/tool-AGNOSTIC."""
+    locality = "container" if in_container else "host"
+    key = "%s|%s|%s|%s" % (run_dir, container, tool, locality)
+    if key in _SIM_TOOLCHAIN_SEEN:
+        return _SIM_TOOLCHAIN_SEEN[key]
+
+    rec: Dict[str, Any] = {
+        "tool": tool,
+        "run_dir": str(run_dir),
+        "container": container or "",
+        "execution_locality": locality,
+        "host_fallback_reason": fallback_reason,
+    }
+    try:
+        import platform as _platform
+        rec["host"] = _platform.node()
+    except Exception:                                        # noqa: BLE001
+        rec["host"] = None
+
+    path, version = _probe_tool_identity(tool, container, in_container)
+    rec["tool_path"] = path
+    rec["tool_version"] = version
+
+    project = _project_root_of_run_dir(Path(run_dir))
+    rec["project"] = str(project) if project else None
+    rec.update(_declared_container_image(project, container))
+
+    if not container:
+        rec["sim_toolchain_matches_declared_image"] = None
+        rec["verdict"] = "UNPINNED"
+        rec["reason"] = ("no container declared for this run — the sim ran on "
+                         "the host and there is no pinned toolchain to match")
+    elif not in_container:
+        rec["sim_toolchain_matches_declared_image"] = False
+        rec["verdict"] = "DIVERGED"
+        rec["reason"] = (
+            "container %r was declared (image %s) but %s ran on the HOST (%s) "
+            "— the run VERIFIED one toolchain and USED another: %s"
+            % (container, rec.get("declared_image_ref"), tool,
+               rec.get("tool_version") or rec.get("tool_path") or "unknown",
+               fallback_reason or "reason not captured"))
+    elif rec.get("declared_image_id") or rec.get("declared_image_ref"):
+        rec["sim_toolchain_matches_declared_image"] = True
+        rec["verdict"] = "MATCH"
+        rec["reason"] = (
+            "%s ran INSIDE container %r (image %s) — the sim toolchain is the "
+            "declared one" % (tool, container, rec.get("declared_image_ref")))
+    else:
+        rec["sim_toolchain_matches_declared_image"] = None
+        rec["verdict"] = "UNDECIDABLE"
+        rec["reason"] = (
+            "%s ran INSIDE container %r but its image identity could not be "
+            "resolved — attribution unavailable, not assumed"
+            % (tool, container))
+
+    _SIM_TOOLCHAIN_SEEN[key] = rec
+    _write_sim_toolchain_record(Path(run_dir), project, rec)
+    if rec["verdict"] == "DIVERGED":
+        try:
+            print("[#902 sim-toolchain DIVERGED] " + rec["reason"],
+                  file=sys.stderr)
+        except Exception:                                    # noqa: BLE001
+            pass
+    return rec
+
+
+def _merge_sim_toolchain_record(path: Path, rec: Dict[str, Any]) -> None:
+    """Merge one record into the aggregate at `path`, keyed by
+    (run_dir, tool, execution_locality).
+
+    ONE merge routine for BOTH destinations on purpose: an earlier revision
+    wrote the per-run_dir file with a bare `write_text(rec)` and merged only
+    the reports copy, so the compile record and the vvp record — different
+    tools, same run_dir — overwrote each other and the file claimed the run
+    used ONE tool. Best-effort: IO/parse errors degrade, never raise."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        records: List[Dict[str, Any]] = []
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(doc, dict) and isinstance(doc.get("records"), list):
+                records = [r for r in doc["records"] if isinstance(r, dict)]
+        except Exception:                                    # noqa: BLE001
+            records = []
+        ident = (rec["run_dir"], rec["tool"], rec["execution_locality"])
+        records = [r for r in records
+                   if (r.get("run_dir"), r.get("tool"),
+                       r.get("execution_locality")) != ident]
+        records.append(rec)
+        records.sort(key=lambda r: (str(r.get("run_dir")), str(r.get("tool")),
+                                    str(r.get("execution_locality"))))
+        verdicts: Dict[str, int] = {}
+        for r in records:
+            v = str(r.get("verdict"))
+            verdicts[v] = verdicts.get(v, 0) + 1
+        path.write_text(json.dumps(
+            {"records": records,
+             "verdicts": verdicts,
+             "diverged": verdicts.get("DIVERGED", 0),
+             "any_divergence": verdicts.get("DIVERGED", 0) > 0},
+            indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def _write_sim_toolchain_record(run_dir: Path, project: Optional[Path],
+                                rec: Dict[str, Any]) -> None:
+    """Persist the record beside the transcript it explains, and — when the
+    project root resolves — into the run-level aggregate under `reports/`.
+
+    The run_dir copy is written only when that directory ALREADY exists: the
+    record documents a sim that ran there, so conjuring the directory into
+    being would file evidence of a run in a place no run ever happened."""
+    rd = Path(run_dir)
+    if rd.is_dir():
+        _merge_sim_toolchain_record(rd / SIM_TOOLCHAIN_RECORD, rec)
+    if project is not None:
+        _merge_sim_toolchain_record(
+            _pl.reports_dir(project) / SIM_TOOLCHAIN_RECORD, rec)
 
 
 def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
                         timeout: int = 120) -> Tuple[int, str, str]:
-    """Run one iverilog/vvp stage (a full argv) on the host, OR — when the
-    host lacks iverilog but `container` has it — dispatched INTO the container
-    against the bind-mounted (path-translated) project tree.
+    """Run one iverilog/vvp stage (a full argv) INSIDE `container` when it has
+    iverilog and can see the run tree, else on the host.
 
     The project is bind-mounted, so every path token in `argv` (the .vvp
     output, the TB, the RTL sources) is translated host→container via
@@ -620,9 +977,28 @@ def _run_iverilog_stage(argv: List[str], run_dir: Path, container: str,
     `vvp`) carry no mount prefix and pass through untouched. The container
     cwd is the translated `run_dir` so `$readmem*` relative loads resolve, and
     `/foss/tools/bin` is put on PATH so the fork's iverilog/vvp are found.
-    chip-AGNOSTIC."""
-    if not _iverilog_exec_container(container):
-        # host execution (unchanged); a plain argv passes through _run's
+
+    #902 — the container is PREFERRED (it used to be the host whenever the
+    host had any iverilog, which made the simulator a property of the machine
+    the job landed on rather than of the pinned image), and either way the
+    locality is RECORDED by `_record_sim_toolchain` so a host fallback cannot
+    be silent. chip-AGNOSTIC."""
+    tool = os.path.basename(str(argv[0])) if argv else "iverilog"
+    in_container = _iverilog_exec_container(container, run_dir, argv)
+    fallback_reason: Optional[str] = None
+    if not in_container and container:
+        if not _tool_in_container(container, "iverilog"):
+            fallback_reason = ("container %r has no iverilog" % container)
+        else:
+            _ok, fallback_reason = _iverilog_sources_visible(
+                list(argv or []), run_dir, container)
+    try:
+        _record_sim_toolchain(run_dir, container, tool, in_container,
+                              fallback_reason)
+    except Exception:                                        # noqa: BLE001
+        pass                    # attribution must never fail the simulation
+    if not in_container:
+        # host execution; a plain argv passes through _run's
         # docker-exec-deadline rewriter untouched.
         return _run(argv, cwd=run_dir, timeout=timeout)
     import shlex as _shlex
