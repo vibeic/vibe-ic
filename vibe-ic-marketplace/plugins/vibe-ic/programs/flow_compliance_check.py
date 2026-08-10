@@ -10744,17 +10744,41 @@ def main(argv: Optional[List[str]] = None) -> int:
     # v1.6.15 Wave 91: phase-3 cap raised 39 → 40 (pre-PnR Yosys gate
     # promoted to Step 14, stage3-5 cascade +1).
     if args.phase != "all":
-        phase_range = (1, 6) if args.phase == "2" else (7, 40)
+        # THE UPPER BOUND IS DERIVED, NOT TYPED. It was hard-coded at 40 and the
+        # flow has since grown to 44, so steps 41-44 (the manufacturing steps)
+        # fell into NEITHER scope: `--phase 2` excluded them for being > 6 and
+        # `--phase 3` excluded them for being > 40. A step in neither scope can
+        # never be reported MISSING by a phase-scoped run -- it is invisible
+        # rather than out-of-scope, and nothing said so. Every past raise of
+        # this cap (39 -> 40) was a symptom of the constant existing at all.
+        _int_ids = [s["id"] for s in steps if isinstance(s.get("id"), int)]
+        _max_id = max(_int_ids) if _int_ids else 0
+        phase_range = (1, 6) if args.phase == "2" else (7, _max_id)
         kept = []
+        _agnostic = []
         for s in steps:
             sid = s.get("id")
             if isinstance(sid, int):
                 if phase_range[0] <= sid <= phase_range[1]:
                     kept.append(s)
             else:
-                # Non-integer id (stage* / A*) — phase-agnostic, keep.
+                # Non-integer id (A* / DT* / FS* / M* / P0) — phase-agnostic,
+                # kept in BOTH scopes. That is a deliberate choice and it means
+                # `--phase 2` and `--phase 3` are NOT a partition of the flow:
+                # these steps are counted once in each. Assigning each of them
+                # to a phase is a judgement about that step, made by whoever
+                # knows it; guessing them here would bury the ambiguity instead
+                # of showing it. So it is DISCLOSED rather than resolved, and a
+                # reader adding the two scopes together is told not to.
                 kept.append(s)
+                _agnostic.append(str(sid))
         steps = kept
+        if _agnostic:
+            print(f"flow_compliance_check: NOTE — {len(_agnostic)} "
+                  f"phase-agnostic step(s) are in scope for BOTH `--phase 2` "
+                  f"and `--phase 3`, so the two scopes are not a partition and "
+                  f"their step counts must not be added: "
+                  f"{', '.join(sorted(_agnostic))}")
         if not steps:
             print(f"flow_compliance_check: no steps for phase {args.phase}",
                   file=sys.stderr)
