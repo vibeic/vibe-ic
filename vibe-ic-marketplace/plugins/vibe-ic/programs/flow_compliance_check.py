@@ -1640,6 +1640,14 @@ class StepResult:
     # fails for another reason the FAIL stands and this flag is what puts the
     # disclosure on the tally line anyway.
     structure_only_disclosed: bool = False
+    # vibe-ic#901 — True when SOME (not all) of this step's gate clauses
+    # disclosed that they examined nothing. The step keeps whatever tier its
+    # remaining clauses earned, because the others DID examine the design; this
+    # field, the `reasons` line beside it and the tally-line counter are what
+    # stop that partial emptiness from vanishing into a bare PASS. `False` on a
+    # step whose EVERY clause was vacuous — that one is `VACUOUS_PASS`, which
+    # already says so.
+    partial_vacuity_disclosed: bool = False
     # #497 step 1 — the STRUCTURED per-gate payload, emitted ALONGSIDE
     # `reasons` and read by nothing yet.
     #
@@ -3015,6 +3023,15 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
         verdict, rc = "INVOCATION_ERROR", None
     else:
         verdict, rc = ("PASS", 0) if ok else ("FAIL", 1)
+        if verdict == "PASS" and _json_report_signals_vacuous(project, cmd_str):
+            # vibe-ic#901 — the ledger row is the GATE-granular verdict, and a
+            # gate that wrote `{"verdict": "NOT_APPLICABLE"}` into the report
+            # this very command named did not PASS anything. rc stays 0 (that
+            # is what the process returned, and the row states both) while the
+            # word matches what the gate said about itself. Derived from the
+            # SAME helper `_evaluate_gate` uses, so the ledger row and the step
+            # tier cannot disagree about one gate's own report.
+            verdict = "VACUOUS_PASS"
     _record_gate_execution(cmd_str, rc, verdict)
     return ok, out
 
@@ -3488,6 +3505,26 @@ def python_traceback_summary(stderr: str) -> str:
 # appears on the step line and in the JSON report whatever the tier.
 _ADVISORY_HINT_PREFIX = "__ADVISORY_HINT__: "
 
+# vibe-ic#901 — THE DENOMINATOR OF "EVERY SUB-GATE".
+#
+# The VACUOUS_PASS tier says "the step ran and every executed sub-gate was
+# vacuously satisfied". It was decided by `vacuous_hints and not
+# non_hint_reasons`, which is not that statement: a sub-gate that PASSES
+# SUBSTANTIVELY appends NOTHING, so silence and vacuity were indistinguishable
+# and one vacuous clause beside five substantive ones read as "every".
+#
+# That approximation is what withdrew the first #901 fix (v1.10.14 -> v1.10.18):
+# reading gates' own JSON verdicts made far MORE clauses disclose vacuity, a
+# step with one legitimately-inapplicable clause and several siblings that
+# measured real design content flipped to VACUOUS_PASS, and the dependents of
+# that step were voided into an overall FAIL that enumerated no failed gate.
+#
+# So every gate clause that RUNS now says so, and the tier compares the two
+# counts. This marker is the denominator; `_VACUOUS_HINT_PREFIX` is the
+# numerator. Held out of `non_hint_reasons` exactly like every other marker, so
+# it can never itself become a reason a step failed.
+_RAN_HINT_PREFIX = "__RAN_HINT__: "
+
 
 def _stdout_signals_waiver(snippet: str) -> bool:
     """Return True iff the program's combined stdout/stderr snippet contains
@@ -3523,12 +3560,15 @@ _VACUOUS_JSON_VERDICTS = {"NOT_APPLICABLE", "SKIPPED", "SKIP", "VACUOUS",
 def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
     """True iff the gate's own JSON report declares it examined nothing.
 
-    ⚠️ NOT CURRENTLY WIRED INTO THE STEP TIER — see vibe-ic#901 follow-on.
+    WIRED, on both the required and the optional `program_exit_zero` rc-0
+    paths — but only together with the clause COUNT (`_RAN_HINT_PREFIX`) that
+    the first attempt lacked. The history below is why the count had to come
+    first, and is kept so a later reader does not re-derive it the hard way.
 
-    Wiring this into the VACUOUS_PASS branch (v1.10.14) caused a MEASURED
-    regression: it turned a genuinely converged cell red. Controlled proof —
-    same run directory, byte-identical artefacts, only the audit binary
-    changed:
+    Wiring this into the VACUOUS_PASS branch WITHOUT the count (v1.10.14)
+    caused a MEASURED regression: it turned a genuinely converged cell red.
+    Controlled proof — same run directory, byte-identical artefacts, only the
+    audit binary changed:
 
         1.10.11  PASS=36 FAIL=0            -> PASS_WITH_WAIVERS
         1.10.16  PASS=25 FAIL=0 VOIDED=8   -> FAIL
@@ -3544,14 +3584,15 @@ def _json_report_signals_vacuous(project: Path, cmd: str) -> bool:
     PASS_VOIDED_BY_DEPENDENCY and an overall FAIL with `failed_gate_count: 0`.
 
     A FAIL that enumerates nothing as failed is the same defect class this
-    campaign exists to remove, so the hook is withdrawn rather than left in
-    while a better fix is designed.
+    campaign exists to remove, so the hook was withdrawn until a better fix
+    existed.
 
-    Closing #901 properly needs the tier decision to compare vacuous hints
-    against the NUMBER OF GATE CLAUSES THAT RAN, so "every sub-gate" is
-    counted rather than inferred from silence. Until then the original #901
-    hole (a gate declaring NOT_APPLICABLE in JSON the consumer never opened)
-    remains open and is the lesser evil.
+    THAT IS WHAT `_RAN_HINT_PREFIX` IS. The tier decision now compares vacuous
+    hints against the NUMBER OF GATE CLAUSES THAT RAN, so "every sub-gate" is
+    COUNTED rather than inferred from silence, and the step in the regression
+    above — one inapplicable clause, several siblings that measured real design
+    content — stays PASS while its one vacuous clause is named on the step line
+    as PARTIALLY-VACUOUS. The disclosure lands without the cascade.
 
     vibe-ic#901. Six gates exited 0 on an empty project without the consumer
     seeing a disclosure — and the two sharpest were SELF-AWARE, printing
@@ -7622,6 +7663,9 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         # accept the flag (byte-identical command otherwise).
         _cmd = _maybe_forward_skip_analog(project, _cmd, skip_analog)
         passed, out = _check_program_exit_zero(project, _cmd)
+        # vibe-ic#901 — this clause RAN. Recorded before anything is decided
+        # about it so the denominator cannot depend on the outcome.
+        reasons.append(f"{_RAN_HINT_PREFIX}{_cmd}")
         # Read BEFORE the pass/fail split and on the FULL snippet: the
         # 200-char truncation below would drop the sentinel, and the
         # disclosure is about what the gate certified, not about whether it
@@ -7650,6 +7694,13 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # program disclosed its skip through an optional slot and was read
             # as a bare PASS through a required one. A disclosure only counts if
             # the consumer reads it in both.
+            reasons.append(f"{_VACUOUS_HINT_PREFIX}{_cmd}")
+        elif _json_report_signals_vacuous(project, _cmd):
+            # vibe-ic#901 — the gate exited 0 and declared, in the `--json`
+            # report THIS clause named, that it examined nothing. That is a
+            # disclosure; it was reaching no consumer. Read from the FILE, not
+            # from stdout: #887 established that a channel a project-path
+            # length can truncate is not a disclosure channel.
             reasons.append(f"{_VACUOUS_HINT_PREFIX}{_cmd}")
         if passed and _stdout_signals_token(out, _SUBSTANTIVE_STDOUT_TOKEN):
             reasons.append(f"{_SUBSTANTIVE_HINT_PREFIX}{_cmd}")
@@ -7704,6 +7755,11 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         # hands over the flag the gate already knows how to honour.
         cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
         passed, out = _check_program_exit_zero(project, cmd)
+        # vibe-ic#901 — the condition files existed, so this clause RAN. An
+        # optional clause whose condition is UNMET returns above without
+        # reaching here and is deliberately not counted: it examined nothing
+        # AND declared nothing, which is a different (still-open) hole.
+        reasons.append(f"{_RAN_HINT_PREFIX}{cmd}")
         if _stdout_signals_structure_only(out):
             reasons.append(f"{_STRUCTURE_ONLY_HINT_PREFIX}"
                            f"{_structure_only_note(out) or cmd}")
@@ -7731,6 +7787,11 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             # Wave 93 — preserve the VACUOUS signal for upstream verdict
             # aggregation. The hint is filtered out before display so the
             # per-step listing only shows real reasons.
+            reasons.append(f"{_VACUOUS_HINT_PREFIX}{cmd}")
+        elif _json_report_signals_vacuous(project, cmd):
+            # vibe-ic#901 — same structured disclosure, read in the OPTIONAL
+            # slot too. A disclosure only counts if the consumer reads it in
+            # BOTH slots; the same program is wired through each.
             reasons.append(f"{_VACUOUS_HINT_PREFIX}{cmd}")
         if passed and _stdout_signals_token(out, _SUBSTANTIVE_STDOUT_TOKEN):
             reasons.append(f"{_SUBSTANTIVE_HINT_PREFIX}{cmd}")
@@ -7816,7 +7877,14 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                             if h.startswith(_ADVISORY_HINT_PREFIX))
                 return False, reasons
             for hint in r:
-                if hint.startswith(_VACUOUS_HINT_PREFIX):
+                if hint.startswith(_RAN_HINT_PREFIX):
+                    # vibe-ic#901 — the DENOMINATOR travels with the numerator.
+                    # This loop is a whitelist (see the note below): a
+                    # `__RAN_HINT__` dropped here would leave the step-level
+                    # tier counting vacuous clauses against a denominator of
+                    # zero, i.e. straight back to "silence means substance".
+                    reasons.append(hint)
+                elif hint.startswith(_VACUOUS_HINT_PREFIX):
                     reasons.append(hint)
                 elif hint.startswith(_WAIVER_HINT_PREFIX):
                     # #651 — a PASS_WITH_WAIVERS sub-gate makes the whole
@@ -9659,8 +9727,19 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                              if r.startswith(_SUBSTANTIVE_HINT_PREFIX)]
         incomplete_hints = [r for r in reasons
                             if r.startswith(_INCOMPLETE_HINT_PREFIX)]
+        # vibe-ic#901 — the denominator: gate clauses that actually dispatched
+        # a gate program. Predicate-only clauses (`files_exist`,
+        # `json_field_true`) are deliberately NOT counted: they cannot
+        # populate the numerator, so counting them would let a step leave the
+        # vacuous tier without any clause having said it examined anything —
+        # and the safe direction for a comparison that can only ever REMOVE
+        # the vacuous label is to keep the denominator to the clauses that can
+        # disclose.
+        ran_hints = [r for r in reasons
+                     if r.startswith(_RAN_HINT_PREFIX)]
         non_hint_reasons = [r for r in reasons
-                            if not r.startswith(_VACUOUS_HINT_PREFIX)
+                            if not r.startswith(_RAN_HINT_PREFIX)
+                            and not r.startswith(_VACUOUS_HINT_PREFIX)
                             and not r.startswith(_SKIP_HINT_PREFIX)
                             and not r.startswith(_WAIVER_HINT_PREFIX)
                             and not r.startswith(_STRUCTURE_ONLY_HINT_PREFIX)
@@ -9730,7 +9809,14 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"substantive: the audited artefact was absent, and the "
                     f"gate verified the equivalent by another route: "
                     f"{h[len(_SUBSTANTIVE_HINT_PREFIX):]}")
-        elif passed and vacuous_hints and not non_hint_reasons and not skip_hints:
+        elif (passed and vacuous_hints and not non_hint_reasons
+                and not skip_hints
+                and len(vacuous_hints) >= len(ran_hints)):
+            # vibe-ic#901 — "EVERY executed sub-gate was vacuously satisfied"
+            # is now COUNTED. `>=` not `==` so a vacuous clause reached by a
+            # path that emits no RAN marker can still promote the step: the
+            # comparison may only ever REMOVE this tier from a step some
+            # clause substantively examined, never add it to one none did.
             result.status = "VACUOUS_PASS"
             for h in vacuous_hints:
                 # Strip the internal prefix; surface a human-friendly
@@ -9747,6 +9833,21 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         else:
             result.status = "PASS" if passed else "FAIL"
             result.reasons.extend(non_hint_reasons)
+        # vibe-ic#901 — the tier is a per-STEP word and a partially vacuous
+        # step has no such word: some of its clauses examined the design and
+        # some examined nothing. Both facts are true and the step-level label
+        # can only carry one. Whichever tier resolved above, the clauses that
+        # disclosed emptiness are named HERE, so the disclosure survives on
+        # the step line, in `reasons`, in the typed field and in the tally —
+        # rather than being dropped for not having been unanimous.
+        if result.status != "VACUOUS_PASS" and vacuous_hints:
+            result.partial_vacuity_disclosed = True
+            for h in vacuous_hints:
+                result.reasons.append(
+                    f"PARTIALLY-VACUOUS ({len(vacuous_hints)} of "
+                    f"{max(len(ran_hints), len(vacuous_hints))} gate "
+                    f"clause(s) examined nothing): "
+                    f"{h[len(_VACUOUS_HINT_PREFIX):]}")
         # #306 — whatever tier was chosen, the advisory verdicts are printed
         # on the step line and carried into the JSON report. An advisory gate
         # that ran and said nothing would make the run LOOK audited while
@@ -11422,10 +11523,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                      f"artefact, see STRUCTURE-ONLY below)")
     so_str = (f"  STRUCTURE-ONLY={counts['STRUCTURE-ONLY']}"
               if counts.get("STRUCTURE-ONLY") else "")
+    # vibe-ic#901 — an ANNOTATION over the buckets, never a bucket: these steps
+    # are counted in whatever tier they resolved to (usually PASS), and adding
+    # them again would stop the parts summing to the total. What it says is the
+    # thing the tier word cannot: N steps here contain at least one gate clause
+    # that ran and examined nothing.
+    partial_vacuous = sum(1 for r in results
+                          if getattr(r, "partial_vacuity_disclosed", False))
+    pv_str = (f"  ({partial_vacuous} step(s) PARTIALLY-VACUOUS: a gate clause "
+              f"ran and examined nothing)" if partial_vacuous else "")
     print(
         f"  PASS={counts['PASS']}  {fail_str}  "
         f"{missing_str}  WAIVED-DEFERRED={counts['WAIVED']}"
-        f"{dbu_str}{skipped_str}{vacuous_str}{voided_str}{so_str}{incomplete_str}\n"
+        f"{dbu_str}{skipped_str}{vacuous_str}{voided_str}{so_str}"
+        f"{incomplete_str}{pv_str}\n"
     )
     if counts.get("STRUCTURE-ONLY") or so_failing:
         print(
