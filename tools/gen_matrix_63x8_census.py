@@ -113,7 +113,19 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
     # A generated number is only better than a hand-written one if it is
     # generated from the right source.
     states = {k: v.label for k, v in CV.enforcement_census().items()}
-    subs = CV.substitution_census()
+    # THE SAME DEFECT, ONE LINE LOWER. The comment above moved `states` off the
+    # configuration axis and onto the two-axis census; `subs` was left on the
+    # configuration axis, and the split is what the table actually PRINTS.
+    #
+    # substitution_census() buckets every cell CONFIGURED as enforcing --
+    # including the ones whose own predicate is currently RED. So own +
+    # substituted + undeclared spanned all 481 configured cells while the
+    # headline two lines above said "455 ENFORCED ... NOT folded into the 455".
+    # 455 + 26 = 481: they were folded, into the very columns the sentence
+    # denied. Filtering by the enforcement axis is what makes the three columns
+    # add up to the figure the reader is told they add up to.
+    subs = {k: v for k, v in CV.substitution_census().items()
+            if states.get(k) == "ENFORCED"}
     rows: List[Dict] = []
     for dim in DIMENSIONS:
         per = [v for (s, d), v in states.items() if d == dim]
@@ -149,6 +161,18 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
     if _sum != totals['cells']:
         raise SystemExit(
             f"census does not partition: {_sum} != {totals['cells']}")
+    # The guard the headline needed and did not have. The check above proves the
+    # four STATE figures partition the 504; it says nothing about whether the
+    # three columns underneath add up to the ENFORCED figure they are presented
+    # as splitting. They did not -- they summed to 481 under a headline of 455 --
+    # and no assertion in this file or its tests could see it, because every
+    # existing check compared the table to a census that was wrong the same way.
+    _split = totals['own'] + totals['substituted'] + totals['undeclared']
+    if _split != totals['enforced']:
+        raise SystemExit(
+            f"the ENFORCED split does not reconcile: own+substituted+"
+            f"undeclared = {_split}, but {totals['enforced']} cells are "
+            f"ENFORCED. A cell is in no column or in two.")
     out.append(
         f"**{totals['cells']} cells: {totals['enforced']} ENFORCED, "
         f"{totals['contradicted']} ENFORCED-CONTRADICTED, "
@@ -159,6 +183,23 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
         f"enforcing while their own predicate is currently RED. They are NOT "
         f"folded into the {totals['enforced']}: a cell whose predicate fails is "
         f"not evidence of enforcement. See vibe-ic#888.")
+    out.append("")
+    # WHAT THIS MATRIX MEASURES, printed with the number rather than filed in a
+    # doc nobody re-reads. Adversarial round 2 (2026-08-10) established that NO
+    # cell of the 63x8 reads artefact CONTENT: a sign-off artefact can violate
+    # its own criterion -- overlapping instances in a shipped DEF, a routed DEF
+    # with zero signal routing -- and not one of the 504 moves. Redirecting a
+    # gate's criterion at a DIFFERENT step's artefact likewise moves zero cells.
+    # The matrix is therefore a census of COVERAGE SHAPE, and 504/504 green is
+    # not a claim that any design is correct. Ruled 2026-08-10: this is an
+    # accepted boundary, not a defect -- so it must be STATED, not implied.
+    out.append(
+        f"**What these {totals['cells']} cells measure — and what they do "
+        f"not.** Every cell asks whether a step is declared, wired, and reached "
+        f"by a gate. NO cell reads the CONTENT of the artefact a step produces. "
+        f"A shipped sign-off artefact can violate the very criterion its step is "
+        f"named after and no cell here changes colour. Read this table as "
+        f"COVERAGE SHAPE, never as evidence that a design is correct.")
     out.append("")
     out.append(
         f"`ENFORCED` is published SPLIT, because it is not one thing. It means "
@@ -186,19 +227,24 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
         f"enforcing anything and enter none of those columns. There is "
         f"deliberately no single \"enforcing\" total to quote.")
     out.append("")
+    # CONTRADICTED gets a column. Filtering the three ENFORCED columns onto the
+    # enforcement axis (see census_rows) is only half the repair: without a
+    # column of its own, a contradicted cell would appear in NO column, and a
+    # row that silently drops cells is the erasure-by-omission this file warns
+    # about six lines from here. Every one of the 504 is now in exactly one.
     out.append("| dim | question | ENFORCED: own | ENFORCED: substituted "
-               "| ENFORCED: undeclared | WAIVED | NA |")
+               "| ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |")
     out.append("|-----|----------|--------------:|----------------------:"
-               "|---------------------:|-------:|---:|")
+               "|---------------------:|-------------:|-------:|---:|")
     for r in rows:
         out.append(
             f"| {r['dim']} | `{r['name']}` — {r['question']} "
             f"| {r['own']} | {r['substituted']} | {r['undeclared']} "
-            f"| {r['waived']} | {r['na']} |")
+            f"| {r['contradicted']} | {r['waived']} | {r['na']} |")
     out.append(
         f"| **total** | | **{totals['own']}** | **{totals['substituted']}** "
-        f"| **{totals['undeclared']}** | **{totals['waived']}** "
-        f"| **{totals['na']}** |")
+        f"| **{totals['undeclared']}** | **{totals['contradicted']}** "
+        f"| **{totals['waived']}** | **{totals['na']}** |")
     out.append("")
     out.append("Regenerate (never edit this block by hand, and never quote it "
                "without re-running):")
