@@ -46,6 +46,13 @@ WHAT THIS GATE ENFORCES (each is a named nonconformance on failure)
                     (>= 1 valid line). ALWAYS required, whether or not the GDS
                     itself ships: it is what keeps an artefact verifiable when
                     it is too large to store.
+  IC_LEVEL_LAYOUT   nothing sits directly under `ic/<IC>/` except `input/` and
+                    `v<major>.<minor>.<patch>_<PDK>/` cells (#905). Run output
+                    left at that level is attributable to no plugin version and
+                    no PDK. Reported, never repaired: where such a folder
+                    belongs — and whether it may be retired at all — is a
+                    maintainer's decision about published evidence, not a
+                    gate's.
   NO_RAW_GEOMETRY   no *.gds / *.def / *.spef / *.oas ABOVE THE 50 MB COMMIT
                     CEILING is committed under the folder (#419). It used to
                     reject them by extension, and that rule FAILED all three
@@ -493,6 +500,106 @@ def _discover_evidence_folders(root: Path) -> List[Path]:
     return found
 
 
+def _discover_ic_level_strays(root: Path,
+                              discovered: List[Path]) -> List[Path]:
+    """Every DIRECTORY directly under `ic/<IC>/` the contract does not admit
+    and that `_discover_evidence_folders` never looked at (vibe-ic#905).
+
+    `benchmark-data/ic/<IC>/` admits exactly two kinds of entry: the shared
+    `input/`, and one `v<major>.<minor>.<patch>_<PDK>/` per converged
+    (version x PDK) cell. Anything else at that level is run output
+    attributable to no plugin version and no PDK.
+
+    THE DISCOVERY ABOVE CANNOT SEE THOSE. It admits a child only when the name
+    LOOKS versiony (`v<ver>_<PDK>`, or one of the known-wrong prefixes) or the
+    child carries a `RESULT.md`. A bare `phase1/`, `reports/` or `sim/`
+    matches neither, so the gate that OWNS this contract has been grading the
+    cells while saying nothing about the strays sitting beside them — a gate
+    silent about the exact violation it is named for.
+
+    MEASURED on this repo's published corpus at the commit this rule landed
+    on: `_discover_evidence_folders` saw 19 folders across 9 IC directories;
+    48 stray directories across 8 of those 9 were invisible to it. #905 named
+    3 of the 48.
+
+    Entries already returned by `_discover_evidence_folders` are excluded, so
+    a misnamed cell is reported ONCE — by NAMING, with its specific message —
+    and never twice.
+
+    FILES at the IC level are deliberately OUT OF SCOPE. Several ICs carry a
+    top-level `RESULT.md` / `provenance.jsonl` / `SOURCE_MANIFEST.md`, and
+    whether those are part of the contract or violations of it has not been
+    measured here. A rule that reported them would be asserting something this
+    change did not check.
+
+    PUBLISHED MEANS TRACKED, so inside a git repo the candidate set comes from
+    the INDEX and not from this machine's disk — the same basis `_raw_scan_set`
+    already uses for NO_RAW_GEOMETRY, and the one `_published_tree.py` exists to
+    enforce. Written the disk way first, this rule reported a different number
+    on a working checkout than on a fresh worktree AT THE SAME COMMIT, because
+    a checkout also holds whatever the last local run left under
+    `benchmark-data/ic/<IC>/`. That is a gate whose verdict depends on who ran
+    it, which is the defect this repo keeps removing from gates one at a time —
+    and it would have been introduced by the very rule meant to close #905.
+
+    Outside a git repo the walk falls back to the filesystem, which is the
+    honest answer there: nothing has been published, so tracked-ness is not a
+    question that applies.
+    """
+    ic_root = root / "ic" if (root / "ic").is_dir() else root
+    seen = {p.resolve() for p in discovered}
+    strays: List[Path] = []
+    if not ic_root.is_dir():
+        return strays
+
+    repo = _git_toplevel(ic_root)
+    tracked: Optional[Set[Path]] = None
+    if repo is not None:
+        listed = _git_listed_files(repo, ic_root, include_staged=False)
+        # A directory is PUBLISHED when the index carries at least one file
+        # under it. `ls-files` lists files, never directories, so the parent
+        # chain is derived rather than asked for.
+        tracked = set()
+        for f in listed:
+            for parent in f.parents:
+                tracked.add(parent)
+
+    for ic_dir in sorted(p for p in ic_root.iterdir() if p.is_dir()):
+        for child in sorted(p for p in ic_dir.iterdir() if p.is_dir()):
+            if child.name == "input" or _NAME_RE.match(child.name):
+                continue
+            rc = child.resolve()
+            if rc in seen:
+                continue
+            if tracked is not None and rc not in tracked:
+                continue          # untracked local leftover — nothing published
+            strays.append(child)
+    return strays
+
+
+def check_ic_level_stray(stray: Path) -> FolderResult:
+    """One named nonconformance for a stray directory at the IC level.
+
+    REPORTS, does not repair. Deleting a published run makes "we never ran
+    this" and "we ran it, it failed, and we kept the record" the same state;
+    moving one re-attributes its output to a version that did not produce it.
+    Both are decisions about published evidence that belong to a maintainer.
+    The gate's job is that neither can be taken by accident, or missed.
+    """
+    res = FolderResult(path=str(stray.resolve()))
+    parent = stray.parent
+    if parent.parent.name == "ic":
+        res.ic = parent.name
+    res.fail("IC_LEVEL_LAYOUT",
+             f"'{stray.name}/' sits directly under ic/{res.ic or '<IC>'}/, where "
+             f"the contract admits only `input/` and "
+             f"`v<major>.<minor>.<patch>_<PDK>/`. Output here is attributable "
+             f"to no plugin version and no PDK. Move it into the versioned "
+             f"cell whose run produced it, or record why it is kept — this "
+             f"gate reports the divergence, it does not decide its fate.")
+    return res
+
+
 # --------------------------------------------------------------------------
 # CLI.
 # --------------------------------------------------------------------------
@@ -534,10 +641,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     targets: List[Path] = [Path(p) for p in args.paths]
+    # IC-level strays (#905) are carried SEPARATELY from `targets`: they are not
+    # candidate cells, so `check_folder`'s per-cell rules would grade them
+    # against a structure they were never meant to have.
+    strays: List[Path] = []
     if args.tree:
-        targets.extend(_discover_evidence_folders(Path(args.tree)))
+        discovered = _discover_evidence_folders(Path(args.tree))
+        targets.extend(discovered)
+        strays = _discover_ic_level_strays(Path(args.tree), discovered)
 
-    if not targets:
+    if not targets and not strays:
         if args.changed_since:
             print(f"benchmark_evidence_structure_check: no evidence folders "
                   f"discovered (nothing to diff against {args.changed_since}).")
@@ -547,7 +660,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     if args.changed_since:
-        kept, mode = _changed_evidence_roots(args.changed_since, targets)
+        # Strays are diff-scoped by the SAME rule as cells: a pre-existing one
+        # is grandfathered, so landing this rule cannot retroactively fail a PR
+        # that did not touch it. It fires exactly when a push adds or edits
+        # output at the IC level, which is the point at which it is cheap.
+        kept, mode = _changed_evidence_roots(args.changed_since, targets + strays)
         if kept is None:
             print(f"benchmark_evidence_structure_check: change set undeterminable "
                   f"({mode}); checking nothing (fail-open).")
@@ -556,7 +673,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"benchmark_evidence_structure_check: no evidence folders "
                   f"changed since {args.changed_since} — nothing to enforce.")
             return 0
-        targets = kept
+        kept_set = {p.resolve() for p in kept}
+        stray_set = {p.resolve() for p in strays}
+        targets = [t for t in kept if t.resolve() not in stray_set]
+        strays = [s for s in strays if s.resolve() in kept_set]
 
     results: List[FolderResult] = []
     for t in targets:
@@ -571,6 +691,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             results.append(r)
             continue
         results.append(check_folder(t, include_staged=args.include_staged))
+
+    for s in strays:
+        results.append(check_ic_level_stray(s))
 
     for r in results:
         _print_folder(r)
