@@ -12,8 +12,8 @@ This tree holds converged evidence AND runs that did not converge, and the folde
 | classification | cells |
 |---|---|
 | CONVERGED EVIDENCE | 3 |
-| RETAINED FAILURE | 2 |
-| UNAUDITED RECORD | 11 |
+| RETAINED FAILURE | 1 |
+| UNAUDITED RECORD | 12 |
 | **total** | **16** |
 
 ## CONVERGED EVIDENCE — 3
@@ -26,16 +26,15 @@ The cell's own audit artefact reads PASS or PASS_WITH_WAIVERS. This is what the 
 | `spm/v1.9.96_gf180mcuD` | PASS_WITH_WAIVERS | P34 F0 M0 W4 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged (plugin v1.9.96, re-published 2026-08-07 after the v1.9.96 ciel-content-addressed-hash DFT/ATPG fix and the earlier v1.9.94 metal-fill fixes); real-GDS witness superseding v1.5.66_gf180mcuD — see notes below for what that supersession does and does not carry forward |
 | `u_hawaii_adc/v1.9.86_sky130A` | PASS | P8 F0 M0 W0 | — | UNSTATED | yes | the converged analog cell, re-verified on plugin 1.9.86 (PASS=8 FAIL=0 MISSING=0, gate exit 0). No phase2/ because it runs the A-track, not the digital RTL->synth stage; the structure gate records that as a disclosed note rather than a silent pass. Its phase3/analog/ tree (hardmacro layouts, per-block specs) is published here rather than left in a pre-canonical run tree at the IC level — the publisher used to drop it, so the folder that IS the evidence did not contain it. |
 
-## RETAINED FAILURE — 2
+## RETAINED FAILURE — 1
 
 An audit ran and did NOT converge. These are retained on purpose: deleting them would make "we never ran this" and "we ran it, it failed, and we kept the record" the same state. Read the step counts — they separate one failed gate from a flow that never reached the steps at all.
 
 | cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
 |---|---|---|---|---|---|---|
-| `sha256` | FAIL | P5 F5 M25 W0 | vibe_ic=FAIL; phase2=FAIL | UNSTATED | yes | reproduction for #186 (OPEN) part 1 — the 9th top-level port reproduces on this cell |
 | `u_hawaii_adc/v1.9.86_sky130A/reports` | FAIL | P0 F0 M40 W0 | — | — | no | record only |
 
-## UNAUDITED RECORD — 11
+## UNAUDITED RECORD — 12
 
 No `reports/audit/phase23_completion_audit.json` exists for this cell, so there is NO machine verdict either way. A claim made in its RESULT.md is unbacked by an audit artefact; that is not the same as a failure, and it is not a pass.
 
@@ -46,6 +45,7 @@ No `reports/audit/phase23_completion_audit.json` exists for this cell, so there 
 | `ibex/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
 | `ibex/rerun_v1346` | — | — | — | UNSTATED | no | the only CRYPTOGRAPHIC MATCH in the #426 layout-artefact recovery audit |
 | `opentitan_aes/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
+| `sha256` | — | — | — | UNSTATED | yes | reproduction for #186 (OPEN) part 1 — the 9th top-level port reproduces on this cell |
 | `sha256/clean_run_v1335` | — | — | — | UNSTATED | no | record only |
 | `sha256/clean_run_v1431_commercial_pdk` | — | — | — | UNSTATED | no | record only |
 | `sha256/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |

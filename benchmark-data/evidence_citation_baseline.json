@@ -1,11 +1,10 @@
 {
-  "_comment": "Known-unresolved evidence citations (#361). MAY ONLY SHRINK. Entries are sha256-32 digests of '<doc>::<citation>' — the paths themselves are NOT stored (some embed a commercial foundry product name and a landed diff is permanent public content). Run the gate to see them.",
+  "_comment": "Known-unresolved evidence citations (#361). MAY ONLY SHRINK. Entries are sha256-32 digests of '<doc>::<citation>' \u2014 the paths themselves are NOT stored (some embed a commercial foundry product name and a landed diff is permanent public content). Run the gate to see them.",
   "unresolved": [
     "07be663bdab86b2595977dc98a264ee3",
     "1002b88f9169a950b0df16b2e948cad1",
     "210b3ac8bc645ab63c7417e7ff4f204d",
     "22eea7188516a6d40fd286d06ab88ded",
-    "2334f5fbfaf213d9d67e9c0c38285388",
     "2b977355ae48f7c95cfdfed586c8cb5f",
     "2f038f8aae63ec6a93c393220a11f06a",
     "368eefad0dd8572d650d365de3d345b6",
@@ -13,7 +12,6 @@
     "3b2985aeadcc20fe4663ffa869b6c5b5",
     "3cf2eaf778bb906d53b125ebef947dd9",
     "4860fa84ce41c2891214ea213582bc13",
-    "4a2efcc6c3a32325d43617b0bbb9fe71",
     "5ea5608c4d3561dac0f5332c20b0b98d",
     "635bea93a2f0d2ff394b02b1250f885e",
     "63957afdac6ce84dbf4e54f8af77046c",
@@ -42,7 +40,6 @@
     "ddc625cbe8e2411535197686bd7f5c6f",
     "e0c16b8ed14f08b72cd39261c8a06ca6",
     "e3feec40be445e01be0eac957cc1eb1c",
-    "e7a6017cd61ba344c68d4884cea16f57",
     "ecab992bbfe439f418f21e426b05131d",
     "f158367bc47fe8b792714272b800dfdc",
     "f73bd14ce43e0ec6f77b56cc47d8f54b",
