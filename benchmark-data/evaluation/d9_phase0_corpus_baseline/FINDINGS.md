@@ -31,7 +31,55 @@ corpus is byte-identical to `origin/main`.
 
 ---
 
-## 1. The corpus: 107 published run directories, not ~89
+## ⚠️ 2026-08-12 — the corpus this prose analyses is no longer the corpus
+
+`corpus_baseline.json` / `.md` beside this file have been **regenerated** and now
+read **90 published run dirs**, not 107. The analysis BELOW was written against
+the 107-run corpus on 2026-07-27 and its per-checker numbers are left exactly as
+measured then; they are not restated, because re-numbering a dated analysis
+without re-running its reasoning would be a fabrication. Read every count below
+as "of 107, on 2026-07-27".
+
+**Why the corpus moved.** Published run output that carries an unacknowledged
+failure was withdrawn under the owner ruling in vibe-ic#1015 (and #1010): 17 of
+the 107 run dirs came down. Nothing was repaired to achieve that and no verdict
+was flipped — the evidence was withdrawn from publication and remains in git
+history.
+
+**Two things changed at once, so both were measured separately** rather than
+attributed by assumption. Regenerating with today's code on the OLD 107-run
+corpus is the control:
+
+| | published record | control: today's code, 107 runs | now: today's code, 90 runs |
+|---|--:|--:|--:|
+| checkers measured | 78 | 71 | 71 |
+| cells | 8239 | 7490 | 6300 |
+| CLEAN | 2164 | 2066 | 1642 |
+| FINDING | 827 | 587 | 473 |
+| NO-INPUT | 4817 | 4513 | 3913 |
+| ERROR | 431 | 324 | 272 |
+| **RED** (FINDING+ERROR) | **1258** | **911** | **745** |
+| RED as a share of cells | 15.3% | 12.2% | 11.8% |
+
+The control and the new sweep run the **identical** 71-checker set, so the whole
+`911 → 745` movement is the withdrawal and nothing else. The earlier `78 → 71` is
+code drift since 2026-07-27, unrelated to this change: seven checkers left the
+candidate set, including `step_internal_fail_bubble_up_check` and
+`declared_pdk_is_the_pdk_used_check` — the two that FOUND the runs this
+withdrawal removed — because both have since been promoted to blocking criteria
+and a promoted checker is no longer a "would-redden-if-promoted" candidate.
+
+**THE HEADLINE MUST NOT BE READ AS AN IMPROVEMENT.** RED fell from 911 to 745
+because 17 published runs were deleted, not because anything got better. Not one
+checker changed its mind about any surviving run. The rate barely moves — 12.2%
+to 11.8% — and that near-flatness is the honest summary: the withdrawn runs were
+somewhat redder than average (166 RED in the 1190 cells removed, 13.9%) but this
+was never a corpus whose redness was concentrated in them. A smaller corpus
+demonstrates less; it does not demonstrate better.
+
+---
+
+## 1. The corpus: 107 published run directories, not ~89 _(as of 2026-07-27; 90 today — see the note above)_
 
 **Discovered, not typed.** PUBLISHED == git-tracked, because `.gitignore`
 excludes some working run trees, so "on disk" and "published" differ:
