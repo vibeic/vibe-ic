@@ -96,6 +96,7 @@ from pathlib import Path
 from typing import Optional
 import _path_layout as _pl
 import _vacuous_exit as _vx
+import _shape_refusal as _sr    # #991
 
 
 WAIVER_KEY = "bit_level_oracle_skipped"
@@ -481,16 +482,40 @@ def check(project: Path, results_path: Path) -> dict:
             **info,
         }
 
+    # #991 — THIS SITE FAILS CLOSED AND MISNAMES. Rule 1 below already
+    # REFUSES a non-list `per_vector` (rc 1, `pass: false`), so the
+    # `per_vector if isinstance(...) else []` at the `_crc_cross_check` call
+    # is unreachable with a bad shape and this gate does NOT fail open —
+    # measured, absent and malformed both exit 1. What it got wrong is the
+    # SENTENCE: both cases said "results.json lacks `per_vector` array",
+    # which sends the reader to the TB generator to find out why nothing was
+    # emitted, when 16 vectors were emitted in an object instead of an array.
+    per_vector_raw, per_vector_shape = _sr.read_list_from(data, "per_vector")
     per_vector = data.get("per_vector")
     info["per_vector_count"] = (
         len(per_vector) if isinstance(per_vector, list) else None
     )
+    info["per_vector_shape_refusal"] = per_vector_shape
     info["vectors_total"] = data.get("vectors_total")
     info["vectors_passed"] = data.get("vectors_passed")
     info["vectors_failed"] = data.get("vectors_failed")
 
     # Rule 1: per_vector present + size
-    if not isinstance(per_vector, list):
+    if per_vector_shape is not None:
+        # PRESENT, and not an array. Its own rule id because the remedy is
+        # different: nothing is missing from the run, and the fix is in the
+        # emitter's SHAPE, not in its coverage.
+        findings.append({
+            "rule": "PER_VECTOR_SHAPE_UNREADABLE",
+            "severity": "FAIL",
+            "message": (
+                _sr.sentence(per_vector_shape, "results.json") +
+                " Oracle mode requires per-vector expected/actual byte "
+                "comparison, and this gate compared none of them — this is a "
+                "REFUSAL, not a count of zero vectors."
+            ),
+        })
+    elif not isinstance(per_vector, list):
         findings.append({
             "rule": "PER_VECTOR_MISSING",
             "severity": "FAIL",
