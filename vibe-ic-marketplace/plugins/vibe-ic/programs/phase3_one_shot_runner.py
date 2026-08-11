@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -36583,8 +36584,142 @@ exit
 # than kept as a second authority that can drift again.
 _METAL_DENSITY_LAYER_RE = _mld._METAL_RE.pattern
 
+# ===========================================================================
+# WHICH DATATYPES DOES THE PDK ACTUALLY COUNT? (vibe-ic#990)
+#
+# The producer selected ONE (gds_layer, datatype) per metal layer — the first
+# routing/NET row of the LEF/DEF layermap — while the PDK's own KLayout density
+# deck counts routing PLUS a separate dummy-fill datatype. #988 measured both
+# paths on the published run's own GDS against that run's own deck and they
+# agreed to 0.00e+00 on all six layers, but recorded WHY:
+#
+#     measured 0 shapes on 36/28, 41/28, 34/28, 51/28 and 68..72/99
+#
+# That layout carries no fill. On a run that HAS fill the producer under-counts
+# by exactly the inserted fill area — the area inserted to SATISFY the rule —
+# and it under-counts in the direction that pushes a result toward the disputed
+# floor. A gate that cannot see fill cannot see the thing that fixes the
+# violation it reports.
+#
+# SO THE DATATYPE SET IS DISCOVERED, NEVER TYPED. Two sources, both the PDK's
+# own files, and the provenance of each is published in the report:
+#
+#   * the LAYERMAP — every purpose row the map carries for that LEF layer
+#     name, not only the first NET one. A real streamout map states FILL, PIN
+#     and TEXT as separate rows; the synthesized map this runner emits bundles
+#     them onto one spec, and both shapes are handled by the same rule.
+#   * the DECK — every layer binding in the PDK's own density deck that lands
+#     on that layer's GDS LAYER NUMBER. Keying on the NUMBER rather than on the
+#     deck's variable name is what makes this work across PDKs that name the
+#     same layer `met1`, `Metal1` and `m1`; #988 established that the PDKs in
+#     this registry already disagree about density SCOPE, so assuming they
+#     agree about naming is exactly the unwarranted assumption.
+#
+# A DATATYPE NUMBER IS NEVER WRITTEN DOWN HERE. What IS written down is a
+# PURPOSE VOCABULARY — the words that mean "this row carries no area a density
+# rule counts". That vocabulary is already this repo's: the synthesized
+# streamout map emits `LEFPIN,NET,SPNET,PIN,VIA,BLOCKAGE,FILL` and the
+# pre-#990 recipe matched on `"NET" in purpose`. #988's reading of the deck was
+# "all datatypes on the metal layer except text and via", which is the same
+# vocabulary and is why those two words are the exclusion.
+_DENSITY_PURPOSE_EXCLUDE = ("VIA", "CUT", "TEXT", "LABEL")
+
+
+def density_counted_specs(map_text, deck_texts, metal_re):
+    """(counted, routing, provenance) — every GDS spec a density rule counts.
+
+    `counted` maps a lower-cased metal layer name to a sorted list of
+    ``[gds_layer, gds_datatype]``; `routing` maps it to the single spec the
+    pre-#990 producer used, kept so the report can publish BOTH numbers and a
+    reader can see the delta rather than a figure that silently moved.
+
+    Pure text in, pure data out, no filesystem and no KLayout: this function is
+    injected VERBATIM into the KLayout recipe (see `_metal_density_recipe`) so
+    there is one authority, and it is directly testable off a fixture on a host
+    with no PDK and no klayout installed — which is every host this was written
+    on.
+    """
+    routing = {}
+    counted = {}
+    from_map = 0
+    for line in (map_text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        name, purpose = parts[0], parts[1]
+        try:
+            gl, gd = int(parts[2]), int(parts[3])
+        except ValueError:
+            continue
+        if not metal_re.match(name):
+            continue
+        key = name.lower()
+        up = purpose.upper()
+        if "NET" in up and key not in routing:
+            routing[key] = (gl, gd)
+        # A row is EXCLUDED only when EVERY purpose on it is an excluded one.
+        # The synthesized map bundles VIA onto the same row as NET and FILL, so
+        # a substring test would have dropped the whole layer — measured on
+        # this runner's own `_synthesize_streamout_layermap` output.
+        toks = [t for t in re.split(r"[^A-Za-z]+", up) if t]
+        if toks and all(t in _DENSITY_PURPOSE_EXCLUDE for t in toks):
+            continue
+        if (gl, gd) not in counted.setdefault(key, []):
+            counted[key].append((gl, gd))
+            from_map += 1
+
+    # The deck half. `NAME = input(L, D)` / `polygons(L, D)` / `layer(L, D)` are
+    # the KLayout DRC layer-binding forms; a missing datatype means 0.
+    bind_re = re.compile(
+        r"^[ \t]*([A-Za-z_]\w*)[ \t]*=[ \t]*(?:\w+\.)?"
+        r"(?:input|polygons|polygon_layer|layer)[ \t]*\([ \t]*"
+        r"(\d+)[ \t]*(?:,[ \t]*(\d+)[ \t]*)?\)", re.MULTILINE)
+    layer_numbers = {}
+    for key, specs in counted.items():
+        for gl, _gd in specs:
+            layer_numbers.setdefault(gl, []).append(key)
+    for key, spec in routing.items():
+        layer_numbers.setdefault(spec[0], [])
+        if key not in layer_numbers[spec[0]]:
+            layer_numbers[spec[0]].append(key)
+    from_deck = 0
+    decks_read = 0
+    for text in (deck_texts or []):
+        if not text:
+            continue
+        decks_read += 1
+        for m in bind_re.finditer(text):
+            var, gl = m.group(1), int(m.group(2))
+            gd = int(m.group(3)) if m.group(3) is not None else 0
+            if gl not in layer_numbers:
+                continue
+            up = var.upper()
+            if any(tok in up for tok in _DENSITY_PURPOSE_EXCLUDE):
+                continue
+            for key in layer_numbers[gl]:
+                if (gl, gd) not in counted.setdefault(key, []):
+                    counted[key].append((gl, gd))
+                    from_deck += 1
+
+    for key in list(counted):
+        counted[key] = sorted(counted[key])
+    prov = {
+        "specs_from_layermap": from_map,
+        "specs_from_deck": from_deck,
+        "deck_files_read": decks_read,
+        "purpose_exclusions": list(_DENSITY_PURPOSE_EXCLUDE),
+        "note": ("the datatype SET is discovered from the PDK's own layermap "
+                 "and its own density deck; no datatype number is written into "
+                 "this program (vibe-ic#990). `layers` counts that set; "
+                 "`layers_routing_only` is what the pre-#990 producer counted "
+                 "(the routing/NET row alone) and is published beside it so "
+                 "the delta is visible rather than a number that moved."),
+    }
+    return counted, routing, prov
+
+
 _METAL_DENSITY_KLAYOUT_RECIPE = r'''
-import json, re, sys
+import json, os, re, sys
 import pya
 gds_path = globals().get("gds", "")
 map_path = globals().get("map", "")
@@ -36594,44 +36729,97 @@ out_path = globals().get("out", "")
 # to be told from outside which process produced it can be rejudged against the
 # wrong one the moment it is read from a differently-configured shell.
 pdk_name = globals().get("pdk", "")
-# Parse the LEF/DEF layermap: "<lefname> <purpose> <gdslayer> <gdsdatatype>".
-# Keep the routing purpose (NET/SPNET) row per metal layer. The layer-name
-# pattern is injected from the CONSUMER gate's own regex so the two cannot drift.
-metal_layers = {}
+# The PDK's OWN density deck. Every deck in this registry `require`s its
+# density rules from a SIBLING file (`rule_decks/density.rb`,
+# `met_min_ca_density.lydrc`), so the named deck alone is not where the layer
+# bindings are — the deck's own directory and one level under it are swept.
+# Discovered from the path the runner already resolves, never a list of
+# PDK-specific filenames, and the sweep is BOUNDED and its size reported.
+# An absent or unreadable deck is not fatal: the layermap half still answers
+# and the report says the deck contributed nothing (vibe-ic#990).
+deck_path = globals().get("deck", "") or ""
+_DECK_SUFFIXES = (".drc", ".lydrc", ".rb", ".lydrf")
+_DECK_SWEEP_MAX = 40
+deck_paths = []
+if deck_path:
+    deck_paths.append(deck_path)
+    _base = os.path.dirname(deck_path)
+    for _root, _dirs, _files in os.walk(_base):
+        if _root != _base and os.path.dirname(_root) != _base:
+            continue                      # depth > 1 below the deck directory
+        for _f in sorted(_files):
+            _p = os.path.join(_root, _f)
+            if _p not in deck_paths and os.path.splitext(_f)[1] in _DECK_SUFFIXES:
+                deck_paths.append(_p)
+    deck_paths = deck_paths[:_DECK_SWEEP_MAX]
 metal_re = re.compile(r"__METAL_LAYER_NAME_RE__", re.IGNORECASE)
 try:
     with open(map_path) as fh:
-        for line in fh:
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            name, purpose = parts[0], parts[1]
-            try:
-                gl, gd = int(parts[2]), int(parts[3])
-            except ValueError:
-                continue
-            if metal_re.match(name) and "NET" in purpose.upper():
-                metal_layers.setdefault(name.lower(), (gl, gd))
+        map_text = fh.read()
 except OSError as e:
     open(out_path, "w").write(json.dumps({"error": "map_unreadable: %s" % e}))
     sys.exit(0)
+deck_texts = []
+decks_unreadable = []
+for p in deck_paths:
+    try:
+        with open(p) as fh:
+            deck_texts.append(fh.read())
+    except OSError as e:
+        decks_unreadable.append("%s: %s" % (p, e))
+
+__DENSITY_COUNTED_SPECS_SRC__
+
+counted, routing, spec_prov = density_counted_specs(
+    map_text, deck_texts, metal_re)
+spec_prov["deck_files_offered"] = len(deck_paths)
+spec_prov["deck_files_unreadable"] = decks_unreadable
+metal_layers = dict(routing)
 ly = pya.Layout()
 ly.read(gds_path)
 top = ly.top_cell()
 dbu = ly.dbu
 bb = top.bbox()
 die_um2 = (bb.width() * dbu) * (bb.height() * dbu)
-layers = {}
-absent = []
-for name, (gl, gd) in sorted(metal_layers.items()):
-    li = ly.find_layer(gl, gd)
-    if li is None:
-        absent.append(name)
-        continue
-    reg = pya.Region(top.begin_shapes_rec(li))
+
+
+def _density_of(specs):
+    """Merged area over the die bbox for a SET of (layer, datatype) specs.
+
+    The regions are joined and THEN merged, so a fill shape overlapping routing
+    is counted once. Summing per-datatype areas would inflate the number in the
+    one direction nobody questions.
+    """
+    reg = pya.Region()
+    seen = 0
+    for gl, gd in specs:
+        li = ly.find_layer(gl, gd)
+        if li is None:
+            continue
+        seen += 1
+        reg = reg + pya.Region(top.begin_shapes_rec(li))
+    if not seen:
+        return None
     reg.merge()
     area_um2 = reg.area() * dbu * dbu
-    layers[name] = round((area_um2 / die_um2) if die_um2 > 0 else 0.0, 6)
+    return round((area_um2 / die_um2) if die_um2 > 0 else 0.0, 6)
+
+
+layers = {}
+routing_only = {}
+fill_delta = {}
+absent = []
+for name in sorted(set(list(counted) + list(routing))):
+    full = _density_of(counted.get(name, []))
+    if full is None:
+        absent.append(name)
+        continue
+    layers[name] = full
+    r = routing.get(name)
+    bare = _density_of([r]) if r else None
+    if bare is not None:
+        routing_only[name] = bare
+        fill_delta[name] = round(full - bare, 6)
 open(out_path, "w").write(json.dumps({
     "tool": "klayout",
     "measurement": "per_layer_drawn_area_over_die_bbox_area",
@@ -36639,16 +36827,31 @@ open(out_path, "w").write(json.dumps({
     "gds": gds_path,
     "die_area_um2": round(die_um2, 3),
     "layers": layers,
+    # THE PRE-#990 NUMBER, PUBLISHED BESIDE THE NEW ONE. A gate whose figures
+    # move without saying so is a gate a reader cannot reconcile against an
+    # earlier run, and #988 left step 34 ORACLE-DISPUTED on a number measured
+    # under the old selector.
+    "layers_routing_only": routing_only,
+    "layers_datatype_delta": fill_delta,
     "layers_absent_in_gds": absent,
     "layer_gds_map": {k: list(v) for k, v in sorted(metal_layers.items())},
+    "layer_gds_specs": {k: [list(s) for s in v]
+                        for k, v in sorted(counted.items())},
+    "datatype_discovery": spec_prov,
     "disclosure": ("REAL KLayout measurement of the AS-BUILT (post-OpenROAD-"
                    "filler) GDS. Per-layer density = merged drawn metal area / "
-                   "die bbox area. Metal->GDS numbers from the PDK's own "
-                   "LEF/DEF layermap (routing/NET purpose). The signoff gate "
-                   "applies the foundry CMP window (or a DISCLOSED generic "
-                   "[0.30,0.70] default). Layers absent in the GDS are listed, "
-                   "not fabricated. A dedicated dummy-fill INSERTION pass is a "
-                   "documented follow-on; this measures the achieved density."),
+                   "die bbox area. The DATATYPE SET counted per metal layer is "
+                   "DISCOVERED from the PDK's own LEF/DEF layermap (every "
+                   "purpose row for that layer, not only routing/NET) and from "
+                   "the PDK's own density deck (every binding on that layer's "
+                   "GDS layer number); no datatype number is written into the "
+                   "producer. `layers_routing_only` is what the pre-#990 "
+                   "producer counted and `layers_datatype_delta` is the "
+                   "difference — on a layout with no dummy fill the delta is "
+                   "0.0 on every layer. The signoff gate applies the foundry "
+                   "CMP window (or a DISCLOSED generic [0.30,0.70] default) to "
+                   "`layers`. Layers absent in the GDS are listed, not "
+                   "fabricated."),
 }, indent=2))
 '''
 
@@ -36670,7 +36873,29 @@ def _metal_density_recipe() -> str:
         raise RuntimeError(
             "metal-density recipe: the metal-layer-name regex was not injected "
             "(template placeholder renamed?) — emitting it would measure nothing")
+    # THE DATATYPE DISCOVERY IS INJECTED BY SOURCE, not restated (vibe-ic#990).
+    # The recipe runs inside the container under KLayout's interpreter and
+    # cannot import this module, so the alternative to injection is a second
+    # copy — and a second copy of a selector is precisely how the producer and
+    # the consumer came to disagree in the first place (see the comment on
+    # `_METAL_DENSITY_LAYER_RE`). Injected, the function the tests exercise IS
+    # the function that runs.
+    src = "\n".join((
+        "_DENSITY_PURPOSE_EXCLUDE = %r" % (_DENSITY_PURPOSE_EXCLUDE,),
+        inspect.getsource(density_counted_specs),
+    ))
+    recipe = recipe.replace("__DENSITY_COUNTED_SPECS_SRC__", src)
+    # Same guard shape as above, and for the same reason: assert what SHOULD be
+    # there. `str.replace` makes an absent-placeholder check false by
+    # construction, so it can never fire.
+    if "def density_counted_specs(" not in recipe:
+        raise RuntimeError(
+            "metal-density recipe: the datatype-discovery source was not "
+            "injected (template placeholder renamed?) — emitting it would "
+            "measure the routing datatype alone and silently miss dummy fill")
     return recipe
+
+
 
 
 def _freshest_gds(alias_gds: Path, source_gds: Path) -> Optional[Path]:
@@ -36761,6 +36986,17 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     map_c = _to_container_path(str(layermap), container)
     out_c = _to_container_path(str(out_json), container)
     script_c = _to_container_path(str(script), container)
+    # THE PDK'S OWN DENSITY DECK (vibe-ic#990) — already resolved by this
+    # runner for sign-off DRC, and passed through here so the measurement
+    # counts the datatype set that deck counts. `pdk.drc_deck` is already a
+    # container-side path, and an empty one is not fatal: the recipe falls back
+    # to the layermap half and RECORDS that the deck contributed nothing.
+    deck_c = pdk.drc_deck or ""
+    if not deck_c:
+        notes.append(
+            f"metal density: PDK {pdk.name} resolves no DRC deck — the counted "
+            f"datatype set comes from the LEF/DEF layermap alone (#990). This "
+            f"is DISCLOSED in the report, not silent.")
     cmd = (
         # Our build first when the image has one; this used to pin the BASE
         # klayout directory ahead of everything, which defeated even a wrapper
@@ -36768,6 +37004,7 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
         f"{KLAYOUT_PREFER_FORK_SH}"
         f"export PATH={TOOLS_IN_CONTAINER}/bin:$PATH && "
         f"klayout -b -r {script_c} -rd gds={gds_c} -rd map={map_c} "
+        f"-rd deck={deck_c} "
         f"-rd pdk={pdk.name} -rd out={out_c} 2>&1 | tee "
         f"{_to_container_path(str(script.parent / 'metal_density.log'), container)}"
     )
