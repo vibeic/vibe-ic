@@ -101,6 +101,44 @@ GATE_DISPATCH_CORPUS_BLIND=0
 # `declare -a ... =()` so `set -u` is safe while the lists are still empty.
 declare -a GATE_LABELS=() GATE_STATES=() GATE_SECONDS=()
 
+# --- LOOP-DRIVEN GATES SAY HOW MANY ITEMS THEY EXPANDED OVER (vibe-ic#957) --
+# Three of this repo's gates are wired once and executed once per PUBLISHED
+# CELL. `gate_discloses_denominator_check` already demands of every gate
+# INDIVIDUALLY that a PASS say how much it looked at; the ROLL-UP was where
+# that requirement was missing. Three green rows and a line counting them among
+# ~74 gates read as "post-route geometry is checked across the published
+# corpus", while the loop selects ONE cell. The number was true and the
+# impression was false — the shape this repo removes from gates one at a time,
+# one level up from the gates.
+#
+# THE DENOMINATOR IS COMPUTED HERE AND NOWHERE ELSE. `gate_dispatch_over`
+# drives the iteration, so N is a fact the dispatcher measured rather than a
+# number a gate author typed next to a label — and a future loop gets the
+# disclosure by using the only expansion primitive there is.
+#
+# EMPTY OUTSIDE AN EXPANSION, AND THAT IS LOAD-BEARING: a gate that is not
+# loop-driven prints byte-for-byte what it printed before this change, so the
+# other ~70 rows cannot move.
+GATE_DISPATCH_ITEM_NOTE=""
+GATE_DISPATCH_CORPUS_CUR=""
+GATE_DISPATCH_CORPUS_IDX=0
+GATE_DISPATCH_CORPUS_TOTAL=0
+#: One entry per `gate_dispatch_over` call: what it was called, how many items
+#: it expanded over, how many gates that produced, and whether the producer
+#: itself succeeded. A corpus that expands to ZERO declares no gate at all, so
+#: nothing else in this record can carry it — which is exactly the case a
+#: reader most needs told.
+declare -a GATE_CORPUS_NAMES=() GATE_CORPUS_ITEMS=() GATE_CORPUS_GATES=()
+declare -a GATE_CORPUS_STATE=()
+#: Parallel to GATE_LABELS: which corpus (if any) each gate came from.
+declare -a GATE_ITEM_CORPUS=() GATE_ITEM_IDX=() GATE_ITEM_TOTAL=()
+#: `file:line` -> how many gates that source line has dispatched. A `run` line
+#: fires ONCE unless it is inside a loop, so a second hit with no expansion
+#: open is a loop written WITHOUT the dispatcher — the one way the disclosure
+#: above can be bypassed. Detected and NAMED rather than assumed absent.
+declare -A GATE_DISPATCH_SITES=()
+declare -a GATE_UNDISCLOSED_LOOPS=()
+
 gate_dispatch_init() {
   GATE_DISPATCH_T0="$SECONDS"
   while [ $# -gt 0 ]; do
@@ -161,12 +199,33 @@ _gate_dispatch_corpus_state() {
 _dispatch() {
   local tolerate="$1" may_write="$2" label="$3" wd="$4"; shift 4
   GATE_LABELS+=("$label")
+  GATE_ITEM_CORPUS+=("$GATE_DISPATCH_CORPUS_CUR")
+  GATE_ITEM_IDX+=("$GATE_DISPATCH_CORPUS_IDX")
+  GATE_ITEM_TOTAL+=("$GATE_DISPATCH_CORPUS_TOTAL")
+  # WHERE THE `run` LINE IS. `BASH_LINENO[1]` is the line that called the
+  # wrapper (`run`, `run_tolerating_uncheckable`, …) and `BASH_SOURCE[2]` the
+  # file it is in — i.e. the declaration a reader of the gate script sees, not
+  # this library.
+  local _site="${BASH_SOURCE[2]:-?}:${BASH_LINENO[1]:-0}"
+  local _hits=$(( ${GATE_DISPATCH_SITES[$_site]:-0} + 1 ))
+  GATE_DISPATCH_SITES["$_site"]=$_hits
+  if [ -z "$GATE_DISPATCH_CORPUS_CUR" ] && [ "$_hits" -eq 2 ]; then
+    # Said ONCE per site (at the second hit), for the same reason the
+    # corpus-blind note is said once: a per-iteration repeat would bury it.
+    GATE_UNDISCLOSED_LOOPS+=("$_site")
+  fi
+  #: The label is the gate's IDENTITY and is recorded UNCHANGED — two other
+  #: programs parse the gate script and reconcile every recorded label against
+  #: the `run` line that produced it, so a denominator glued into the label
+  #: would make every loop-driven record unattributable. The denominator is a
+  #: fact ABOUT this invocation, printed beside the label, not part of it.
+  local shown="$label${GATE_DISPATCH_ITEM_NOTE:+  $GATE_DISPATCH_ITEM_NOTE}"
   if [ "$GATE_DISPATCH_LIST_ONLY" -eq 1 ]; then
     GATE_STATES+=("LISTED"); GATE_SECONDS+=("0")
-    echo "$label"
+    echo "$shown"
     return 0
   fi
-  echo "── $label"
+  echo "── $shown"
   local t0="$SECONDS" rc=0 before="" after="" watched=1
   before="$(_gate_dispatch_corpus_state)" || watched=0
   # `|| rc=$?` and NOT a bare `( ... ); rc=$?` — the caller runs under `set -e`,
@@ -235,25 +294,155 @@ run_writing_the_corpus() {                # <label> <cwd> <cmd...>
   _dispatch 0 1 "$@"
 }
 
+# --- the only way to wire a gate PER ITEM (vibe-ic#957) ---------------------
+#     gate_dispatch_over <corpus-name> <body-fn> <producer-cmd...>
+#
+# `<producer-cmd>` prints one item per line; `<body-fn>` is called once per item
+# with that item as `$1` and wires whatever gates the item deserves.
+#
+# WHY THE DISPATCHER OWNS THE LOOP rather than exporting a counter for a `for`
+# body to quote: the count then cannot be stale, cannot be typed by hand, and
+# cannot be omitted — every gate the body declares is bracketed by an expansion
+# that knows both the index and the total, and a corpus that expands to ZERO
+# still leaves a record even though it declares no gate. A `for` written next to
+# this primitive instead of through it is caught by the site counter in
+# `_dispatch` and NAMED in the roll-up; it is not silently trusted.
+#
+# THE PRODUCER'S EXIT STATUS IS KEPT. `git ls-files` inside a non-repository
+# prints nothing and fails, and "the producer broke" must not reach a reader as
+# "the corpus is empty" — the same distinction `NOT_CHECKED` draws for a gate.
+# Its stderr is deliberately NOT swallowed: a producer that failed should say
+# why, in the log, on the line above the disclosure that it produced nothing.
+gate_dispatch_over() {
+  local corpus="$1" body="$2"; shift 2
+  local out="" rc=0 line i
+  local -a items=()
+  out="$("$@")" || rc=$?
+  # `[ -n "$line" ]` because a here-string over an EMPTY producer still yields
+  # one empty line, and an empty line is not an item.
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    items+=("$line")
+  done <<<"$out"
+  local n=${#items[@]} before=${#GATE_LABELS[@]}
+  if [ "$rc" -ne 0 ]; then
+    echo "   ^^ CORPUS PRODUCER FAILED (rc $rc) for \"$corpus\": the $n" \
+         "item(s) below are what it managed to print and NOT the corpus —" \
+         "read every verdict from this loop as covering an unknown fraction" \
+         "of it" >&2
+  fi
+  GATE_DISPATCH_CORPUS_CUR="$corpus"
+  GATE_DISPATCH_CORPUS_TOTAL="$n"
+  for (( i=0; i<n; i++ )); do
+    GATE_DISPATCH_CORPUS_IDX=$(( i + 1 ))
+    GATE_DISPATCH_ITEM_NOTE="[item $GATE_DISPATCH_CORPUS_IDX of $n over $corpus]"
+    "$body" "${items[$i]}"
+  done
+  GATE_DISPATCH_ITEM_NOTE=""
+  GATE_DISPATCH_CORPUS_CUR=""
+  GATE_DISPATCH_CORPUS_IDX=0
+  GATE_DISPATCH_CORPUS_TOTAL=0
+  GATE_CORPUS_NAMES+=("$corpus")
+  GATE_CORPUS_ITEMS+=("$n")
+  GATE_CORPUS_GATES+=("$(( ${#GATE_LABELS[@]} - before ))")
+  if [ "$rc" -eq 0 ]; then
+    GATE_CORPUS_STATE+=("EXPANDED")
+  else
+    GATE_CORPUS_STATE+=("PRODUCER_FAILED")
+  fi
+}
+
+# One line per corpus, printed with the roll-up. It states the DENOMINATOR the
+# loop expanded over, so a count of green gates cannot be read as a count of
+# items — including when the expansion produced exactly one, and especially
+# when it produced none, which is the only case that leaves no gate behind to
+# speak for itself.
+_gate_dispatch_corpora_rollup() {
+  local declared="$1" i n name items gates
+  n=${#GATE_CORPUS_NAMES[@]}
+  [ "$n" -gt 0 ] || return 0
+  for (( i=0; i<n; i++ )); do
+    name="${GATE_CORPUS_NAMES[$i]}"
+    items="${GATE_CORPUS_ITEMS[$i]}"
+    gates="${GATE_CORPUS_GATES[$i]}"
+    if [ "$items" -eq 0 ]; then
+      echo "repo_hygiene_gates: loop corpus \"$name\" expanded over 0 item(s)" \
+           "— it declared 0 gate(s) and NOTHING was checked over it; no gate" \
+           "in this run reports that, because none exists"
+    else
+      echo "repo_hygiene_gates: loop corpus \"$name\" expanded over $items" \
+           "item(s) -> $gates of $declared declared gate(s); those verdicts" \
+           "cover $items item(s), NOT the corpus at large"
+    fi
+    [ "${GATE_CORPUS_STATE[$i]}" = "EXPANDED" ] || \
+      echo "repo_hygiene_gates: loop corpus \"$name\" — its PRODUCER FAILED," \
+           "so even that item count is a floor and not the corpus"
+  done
+}
+
+# A loop that did not go through `gate_dispatch_over`: one `run` line, more
+# than one gate, no expansion open. Reported for the same reason the corpus
+# above is — the roll-up cannot say how many items such a loop covered, and a
+# reader who is not told assumes the label's scope is the whole subject.
+_gate_dispatch_undisclosed_loops() {
+  [ "${#GATE_UNDISCLOSED_LOOPS[@]}" -ne 0 ] || return 0
+  local site
+  for site in "${GATE_UNDISCLOSED_LOOPS[@]}"; do
+    echo "repo_hygiene_gates: LOOP WITHOUT A DECLARED DENOMINATOR at $site —" \
+         "${GATE_DISPATCH_SITES[$site]} gate(s) came from one \`run\` line" \
+         "without \`gate_dispatch_over\`, so this roll-up cannot say how many" \
+         "items they covered. Wire the loop through \`gate_dispatch_over\`." >&2
+  done
+}
+
 # --- the record ------------------------------------------------------------
 # python3 rather than hand-built JSON: every gate in the set is already a
 # `python3` invocation so it is not a new dependency, and argv carries the
 # labels EXACTLY — no quoting or delimiter can corrupt a record.
 _gate_dispatch_emit() {
-  local path="$1" i n total
+  local path="$1" i n total nc
   n=${#GATE_LABELS[@]}
+  nc=${#GATE_CORPUS_NAMES[@]}
   total=$(( SECONDS - GATE_DISPATCH_T0 ))
-  local -a triples=()
+  # Fixed-width groups, gates first then corpora, with both counts passed
+  # ahead of them: argv carries every label and corpus name EXACTLY, and no
+  # separator token can be mistaken for one of them.
+  local -a fields=()
   for (( i=0; i<n; i++ )); do
-    triples+=("${GATE_STATES[$i]}" "${GATE_SECONDS[$i]}" "${GATE_LABELS[$i]}")
+    fields+=("${GATE_STATES[$i]}" "${GATE_SECONDS[$i]}"
+             "${GATE_ITEM_CORPUS[$i]}" "${GATE_ITEM_IDX[$i]}"
+             "${GATE_ITEM_TOTAL[$i]}" "${GATE_LABELS[$i]}")
   done
-  python3 - "$path" "$total" "$GATE_DISPATCH_LIST_ONLY" \
-      ${triples[@]+"${triples[@]}"} <<'PY'
+  for (( i=0; i<nc; i++ )); do
+    fields+=("${GATE_CORPUS_ITEMS[$i]}" "${GATE_CORPUS_GATES[$i]}"
+             "${GATE_CORPUS_STATE[$i]}" "${GATE_CORPUS_NAMES[$i]}")
+  done
+  python3 - "$path" "$total" "$GATE_DISPATCH_LIST_ONLY" "$n" "$nc" \
+      ${fields[@]+"${fields[@]}"} \
+      ${GATE_UNDISCLOSED_LOOPS[@]+"${GATE_UNDISCLOSED_LOOPS[@]}"} <<'PY'
 import json, sys
 out, total, list_only = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "1"
-rest = sys.argv[4:]
-gates = [{"label": rest[i + 2], "state": rest[i], "seconds": int(rest[i + 1])}
-         for i in range(0, len(rest), 3)]
+ng, nc = int(sys.argv[4]), int(sys.argv[5])
+rest = sys.argv[6:]
+gf, rest = rest[:ng * 6], rest[ng * 6:]
+cf, undisclosed = rest[:nc * 4], rest[nc * 4:]
+gates = []
+for i in range(0, len(gf), 6):
+    # The three loop keys are written ONLY for a gate a loop produced, so a
+    # gate wired outside one records byte-for-byte what it recorded before
+    # vibe-ic#957 — the record of the other ~70 must not move either.
+    g = {"label": gf[i + 5], "state": gf[i], "seconds": int(gf[i + 1])}
+    if gf[i + 2]:
+        g["corpus"] = gf[i + 2]
+        g["corpus_item"] = int(gf[i + 3])
+        # The DENOMINATOR this gate's verdict covers, stated per gate as well
+        # as per corpus: a consumer that reads one gate must not have to
+        # reconstruct how many there were of it.
+        g["corpus_items"] = int(gf[i + 4])
+    gates.append(g)
+corpora = [{"name": cf[i + 3], "items": int(cf[i]), "gates": int(cf[i + 1]),
+            "expansion": cf[i + 2]}
+           for i in range(0, len(cf), 4)]
 n = lambda s: sum(1 for g in gates if g["state"] == s)
 doc = {
     "listed_only": list_only,
@@ -270,6 +459,15 @@ doc = {
     # consumer has to be able to tell those two apart.
     "wrote_corpus": n("WROTE_CORPUS"),
     "deferred": n("LISTED"),
+    # vibe-ic#957 — `declared` counts GATES. A loop-driven gate's subject is an
+    # ITEM, and three green gates over one item is not three items checked.
+    # One entry per expansion, present even when it produced no gate at all,
+    # because a corpus that expanded to zero is invisible in `gates` by
+    # construction and is the case a reader most needs told.
+    "corpora": corpora,
+    # Loops wired around the dispatcher instead of through it: their
+    # denominator is unknown, and unknown is recorded rather than assumed 1.
+    "undisclosed_loops": undisclosed,
     "seconds": total,
     "gates": gates,
 }
@@ -287,6 +485,13 @@ gate_dispatch_finish() {
     || _gate_dispatch_emit "$GATE_DISPATCH_SUMMARY_JSON"
 
   if [ "$GATE_DISPATCH_LIST_ONLY" -eq 1 ]; then
+    # TO STDERR IN LIST MODE, with the count line that is already there:
+    # `--list`'s STDOUT is the gate labels and a caller may read it as such, so
+    # a sentence about the run belongs on the same stream as the existing one.
+    # A loop that expanded over nothing has no label to appear among them,
+    # which is exactly why this must still print.
+    _gate_dispatch_corpora_rollup "$declared" >&2
+    _gate_dispatch_undisclosed_loops
     echo "gate_dispatch: $declared gate(s) declared; none run (--list)" >&2
     exit 0
   fi
@@ -298,6 +503,21 @@ gate_dispatch_finish() {
          "is NOT a pass" >&2
     exit 2
   fi
+
+  # vibe-ic#957 — BEFORE the verdict, and on the same stream as it: the
+  # sentence a reader takes away is "N gates passed", and N counts GATES. What
+  # each loop-driven gate covered is a different number, and it is the one the
+  # label's scope invites a reader to assume.
+  _gate_dispatch_corpora_rollup "$declared"
+  _gate_dispatch_undisclosed_loops
+  # Loop corpora that expanded over nothing, named so the closing sentence can
+  # refuse to stand unqualified over them.
+  local empty="" nempty=0
+  for (( i=0; i<${#GATE_CORPUS_NAMES[@]}; i++ )); do
+    [ "${GATE_CORPUS_ITEMS[$i]}" -eq 0 ] || continue
+    nempty=$(( nempty + 1 ))
+    empty="${empty:+$empty, }${GATE_CORPUS_NAMES[$i]}"
+  done
 
   for (( i=0; i<declared; i++ )); do
     case "${GATE_STATES[$i]}" in
@@ -347,6 +567,18 @@ gate_dispatch_finish() {
     echo "repo_hygiene_gates: $passed of $declared gate(s) passed;" \
          "$notchecked NOT CHECKED — this is NOT a pass over: $refused" \
          "(${total}s)"
+    exit 0
+  fi
+  # vibe-ic#957 — a loop that expanded over NOTHING declares no gate, so it
+  # cannot appear in `$declared` and cannot be NOT_CHECKED either: the set of
+  # gates silently shrinks and the sentence below stays literally true while
+  # the coverage it implies has gone to zero. That is the same aggregation
+  # dishonesty #539 removed, arriving through the denominator instead of
+  # through a state, so it is refused the same way — by NAME, in the sentence.
+  if [ "$nempty" -ne 0 ]; then
+    echo "repo_hygiene_gates: all $declared gate(s) passed, but $nempty loop" \
+         "corpus/corpora expanded over 0 item(s) — NOTHING was checked over:" \
+         "$empty (${total}s)"
     exit 0
   fi
   # Only now is the unqualified sentence true. It still states its own
