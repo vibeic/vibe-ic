@@ -180,23 +180,38 @@ run "practical notes specificity"   "$PLUGIN" python3 programs/practical_notes_s
 # run nowhere at all -- which is the exact condition it exists to detect.
 run "P0 disposition backing"        "$ROOT" python3 "$PG/p0_disposition_backing_check.py" --repo-root "$ROOT"
 
-# vibe-ic#354 — the image-version gate is BLOCKING. It failed loudly on main
-# for six versions (0.2.29 pinned in 13 places, never published) while nothing
-# enforced it. --require-remote: the pinned tag must actually RESOLVE on ghcr;
-# an unreachable registry is a FAIL here, not an UNVERIFIED shrug.
+# vibe-ic#215/#566 — the image-version gate is BLOCKING, and what it blocks on
+# is now exactly the half this repo owns: every live pointer equals the anchor,
+# and the anchor has not been rolled below what this repo already committed.
+# Both are read from the tree and from git, so the verdict has a fixed point.
 #
-# vibe-ic#539 — and that remote call is why this gate, alone in the set, is
-# declared out of the host-independence comparison below. That probe runs every
-# gate TWICE and requires the two verdicts to match; a verdict that depends on
-# a network round-trip can differ between the invocations for a reason that is
-# not in the commit. v1.7.92 went RED on this gate, whose code is perfectly
-# host-independent, and GREEN on the identical commit when re-run. The choice
-# is between excluding it deliberately and excluding it by luck. The directive
-# below is read by `gate_host_independence_check` — it must stay on the line
-# IMMEDIATELY above the gate, and if it drifts the gate is probed again (a
-# visible returning flake) rather than silently dropped.
-# host-independence: EXCLUDE — resolves a tag on a remote registry (--require-remote), so two invocations can differ for a reason that is not in the commit
-run_tolerating_uncheckable "image-version pins resolve" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --check --require-remote
+# vibe-ic#927 — it used to ALSO block on `--require-remote`, comparing the
+# anchor against `:latest` and against the newest tag on ghcr. Those are names
+# another org re-points on its own cadence: the gate went red when the fork
+# published (0.2.75 -> .81 -> .82 -> .83 in about twelve hours), green again
+# when they were quiet, and could not tell "we are behind" from "the registry
+# moved under us". Bumping the anchor each time closed the instance and left
+# the mechanism. The comparison still HAPPENS — it moved to the report on the
+# next line — it just no longer decides whether anyone can land.
+#
+# vibe-ic#539, now RESOLVED as a side effect: this gate was the one declared
+# out of the host-independence comparison, because that probe runs every gate
+# TWICE and requires the verdicts to match, and a network round-trip can differ
+# between invocations for a reason that is not in the commit (v1.7.92 went RED
+# then GREEN on an identical commit). --check makes no network call at all now,
+# so the EXCLUDE directive is GONE and the gate is probed like every other one.
+run "image-version pins are internally consistent" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --check
+
+# The other half of #927, deliberately NOT a verdict. "Has upstream published
+# something newer?" is real and worth knowing, so it is asked on every run and
+# the answer is RECORDED with the instant it was taken — a reading with no
+# timestamp cannot be told from a current one by a later reader. It exits 0 when
+# it got an answer (agreeing or not) and 2 when the registry did not respond, so
+# it can never be the reason a landing fails. Adopting a newer image is this
+# repo's call, made deliberately with `sync_image_version.py --set X.Y.Z`, which
+# is where the #354 "the tag must actually resolve" check now lives.
+# host-independence: EXCLUDE — resolves a tag on a remote registry, so two invocations can differ for a reason that is not in the commit
+run_tolerating_uncheckable "upstream image currency (report-only)" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --report-upstream --require-remote
 
 # On 2026-07-28 a retried `gh repo fork` created 25 forks of one upstream in six
 # minutes — the command is not idempotent and invents a numbered name instead of
