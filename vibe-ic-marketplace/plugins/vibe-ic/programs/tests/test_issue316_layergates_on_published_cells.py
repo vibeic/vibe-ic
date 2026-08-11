@@ -55,6 +55,9 @@ import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _IC = _PROGRAMS.parents[3] / "benchmark-data" / "ic"
+#: Premises this repo OWNS, so a rule keeps its regression test when the
+#: published tree that used to carry the premise is retired (#905).
+_FIXTURES = Path(__file__).resolve().parent / "fixtures"
 #: The PUBLISHED cell the u_hawaii_adc hardmacro LEFs are read from (#905).
 #: These two assertions used to read the IC-LEVEL `u_hawaii_adc/phase3/` tree,
 #: which is run output attributable to no plugin version and no PDK. The cell's
@@ -122,11 +125,23 @@ def test_the_landed_l8_gate_skips_the_cell_this_one_fails():
 
 
 # --------------------------------------------------------------------------- #
-# 3 — L21: a hollow power-intent layer under two published cells' hard macros
+# 3 — L21: a hollow power-intent layer under a published cell's hard macros
 # --------------------------------------------------------------------------- #
+# 2026-08-12, vibe-ic#905: this was parametrized over TWO cells. The second was
+# `u_hawaii_adc`, read at the IC LEVEL — one of the four stray entries #905
+# reports, and one this branch retires. `_cell()` skips when the tree is absent,
+# so leaving the case in place would have turned a PASSING assertion into a
+# SILENT SKIP: measured on both sides, this file goes `8 passed` before the
+# retirement to `8 passed, 1 skipped` after it, with no failure anywhere to say
+# a rule stopped being exercised. A retirement that buys itself a green run by
+# removing the subject is the shape this repo's gates exist to refuse.
+#
+# So the case is REMOVED HERE, in the diff, where a reviewer sees it — and the
+# coverage it carried is kept by `test_l21_fires_on_the_hollow_premise_fixture`
+# below, which owns the premise outright instead of borrowing it from published
+# run output. The remaining published-cell case is untouched and still runs.
 @pytest.mark.parametrize("cell_name,expect_pins", [
     ("edge_llm_accel", ("fakeram45_2048x39", "VDD", "VSS")),
-    ("u_hawaii_adc", ("ldo", "IOVDD", "VSS")),
 ])
 def test_l21_gate_fires_on_the_published_cells(cell_name, expect_pins):
     cell = _cell(cell_name)
@@ -139,6 +154,34 @@ def test_l21_gate_fires_on_the_published_cells(cell_name, expect_pins):
     assert rc == 1, f"expected FAIL on {cell_name}, got rc={rc}\n{out}"
     for token in expect_pins:
         assert token in out, f"{token!r} missing from the finding\n{out}"
+
+
+def test_l21_fires_on_the_hollow_premise_fixture():
+    """The L21-1 rule, exercised against a premise this repo OWNS (#905).
+
+    The rule needs exactly two things: an L21 whose `power_domains[]` is empty,
+    and a design-staged hard macro whose own LEF types a pin USE POWER / USE
+    GROUND. Both live in the fixture, so the assertion no longer depends on run
+    output that landed beside the published cells and cannot be silently
+    skipped when such a tree is retired.
+
+    This does NOT replace the published-cell case above — a fixture proves the
+    rule fires, a published cell proves it fires on real evidence. Both are
+    kept, which is why the count of assertions on this rule does not fall.
+    """
+    fixture = _FIXTURES / "l21_hollow_power_intent"
+    assert fixture.is_dir(), f"fixture missing: {fixture}"
+
+    l21 = json.loads((fixture / "phase1" / "generated_docs"
+                      / "L21_POWER_INTENT.json").read_text())
+    assert not (l21.get("fields", l21) or {}).get("power_domains"), (
+        "the fixture's premise moved: its L21 now declares power_domains")
+
+    rc, out = _run("l21_macro_supply_rail_declared_check.py", fixture)
+    assert rc == 1, f"expected FAIL on the fixture, got rc={rc}\n{out}"
+    for token in ("m_supply_probe", "VDDA", "VSSA"):
+        assert token in out, f"{token!r} missing from the finding\n{out}"
+    assert "L21-1" in out, out
 
 
 def test_l21_does_not_fire_on_a_published_cell_with_no_hard_macro():
