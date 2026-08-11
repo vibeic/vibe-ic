@@ -379,8 +379,21 @@ def test_a_malformed_waivers_file_does_not_kill_the_run(tmp_path):
 # --------------------------------------------------------------------------- #
 # BACKWARD COMPATIBILITY — the published cells must still validate
 # --------------------------------------------------------------------------- #
-_PUBLISHED = ("u_hawaii_adc", "spm/v1.5.65_sky130A", "spm/v1.9.96_gf180mcuD",
-              "spm/v1.5.58_ihp-sg13g2")
+# 2026-08-12, vibe-ic#905: the first entry was `u_hawaii_adc` — the IC ROOT, not
+# a published cell. Three of these four name a `v<ver>_<PDK>` cell; that one named
+# the directory the cells live in, and it validated only because a stray IC-level
+# `phase1/generated_docs/` made the root LOOK like a runnable project. That stray
+# tree is exactly what #905 reports and what this branch retires, so the entry
+# stopped satisfying `A1` the moment its accident was removed:
+#
+#   u_hawaii_adc                  A1 REFUSED — L1_DATASHEET.json, L5_ADI_SPEC.json absent
+#   u_hawaii_adc/v1.9.86_sky130A  A1 READY, no site refused, D1 READY
+#
+# Repointed at the published cell. This is not a baseline being moved to absorb a
+# failure: the cell is what the section header ("the published cells must still
+# validate") always meant, and it validates on BOTH sides of the retirement.
+_PUBLISHED = ("u_hawaii_adc/v1.9.86_sky130A", "spm/v1.5.65_sky130A",
+              "spm/v1.9.96_gf180mcuD", "spm/v1.5.58_ihp-sg13g2")
 
 
 @pytest.mark.parametrize("cell", _PUBLISHED)
