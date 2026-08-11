@@ -1527,7 +1527,25 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: The (steps, dimensions, ENFORCED cells) the ledger was built against. Like
 #: ``GRID_AS_MEASURED`` in the coverage meta-test, this is the review gate and
 #: never an input: every count below is recomputed live.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 481)
+#:
+#: MOVED 481 -> 482 on 2026-08-11, and the move is a FINDING rather than an
+#: accommodation, so it is landed in its own commit with the cause named. The
+#: grid did not grow a step (63 both before and after) and no cell was waived
+#: away; ONE cell changed state. ``332b9985`` ("flow: stage membership was
+#: declared twice and the copies disagreed") gave step P0 ``blocks_on: [1]``,
+#: which took P0's dimension-5 cell from NA to ENFORCED. Bisected over the 15
+#: commits that touched the flow or the dimension modules between ``0387e67a``
+#: (where 481 was authored and was CORRECT — 12/d2 WAIVED, 12/d5 ENFORCED,
+#: P0/d5 NA) and today: ``23d96bf5`` swapped step 12 between dimensions 2 and 5
+#: for a net change of zero, and ``332b9985`` is the only commit that moved the
+#: total. Neither re-ran the ledger's sweep, which is why the arithmetic sat
+#: one short for three days rather than failing on the day it drifted.
+#:
+#: The +1 is COVERED, not merely counted: ``D5-PHANTOM-EDGE`` was replayed
+#: against P0 on 2026-08-11 and REDDENED it. Raising this number without that
+#: replay would be exactly the "widen the baseline until it is green" move the
+#: gate exists to refuse.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 482)
 
 
 # ══════════════════════════════════════════════════════════════════════
