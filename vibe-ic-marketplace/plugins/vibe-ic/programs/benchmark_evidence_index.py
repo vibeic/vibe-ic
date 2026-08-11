@@ -353,10 +353,17 @@ def render(rows: List[Dict[str, str]], retention: Dict[str, str],
         "folders). This index is the answer that costs no JSON to read.")
     out.append("")
     out.append(
-        "**Nothing here is deleted for failing.** Removing a failed run would "
-        "make \"we never ran this\" and \"we ran it, it failed, and we kept "
-        "the record\" the same state. Cells marked `corpus: yes` are also the "
-        "population two BLOCKING gates walk "
+        "**A run that does not pass is WITHDRAWN from publication.** Owner "
+        "ruling, 2026-08-12 (vibe-ic#1015, #1010): benchmark-data that does not "
+        "pass does not go on GitHub. This reverses what this index said until "
+        "that date — that nothing here is deleted for failing, because removing "
+        "a failed run would make \"we never ran this\" and \"we ran it, it "
+        "failed, and we kept the record\" the same state. That concern is "
+        "answered by GIT rather than by publication: a withdrawal is a `git rm`, "
+        "so every removed run is still in history and the two states are still "
+        "distinguishable to anyone who looks there. What changed is that the "
+        "published tree is no longer where a failed run is kept. Cells marked "
+        "`corpus: yes` are also the population two BLOCKING gates walk "
         "(`cross_layer_reference_check --corpus`, "
         "`l4_systemrdl_export audit-corpus`).")
     out.append("")
