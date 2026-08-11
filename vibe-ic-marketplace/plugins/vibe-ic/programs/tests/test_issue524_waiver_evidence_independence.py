@@ -201,9 +201,35 @@ def test_assess_survives_a_malformed_evidence_field(tmp_path):
 
 @pytest.mark.skipif(not CORPUS.is_dir(), reason="tracked corpus not present")
 def test_corpus_attestation_entries_measure_as_reported():
-    """The 8 tracked attestation entries, classified. These are the numbers the
+    """The tracked attestation entries, classified. These are the numbers the
     disclosure-versus-refusal decision rests on; pinning them means a corpus
-    edit that changes the picture cannot pass unnoticed."""
+    edit that changes the picture cannot pass unnoticed.
+
+    vibe-ic#1028 — RE-MEASURED, NOT RE-TYPED. The withdrawal of published runs
+    that do not pass (#1015/#1010) removed `waivers.json` from five of the six
+    waiver-bearing cells. The pins below were not lowered to hug whatever the
+    smaller tree happens to hold: the withdrawn contribution was measured on
+    the pre-withdrawal tree ON ITS OWN, so the subtraction is measured on both
+    sides rather than inferred from the difference, and every component
+    reconciles exactly:
+
+        class          main   − withdrawn   = here
+        self_only         5         4           1
+        corroborated      2         2           0
+        free_text         1         0           1
+        total             8         6           2
+
+    THE CORROBORATED CLASS LOST BOTH OF ITS REAL-DATA INSTANCES. They were the
+    two `sgmii` entries, and no surviving cell cites an artefact independent of
+    its own run record. That is a real coverage loss, so it is named here
+    rather than absorbed into a smaller number: what still exercises
+    corroboration is this module's fixture half —
+    `test_an_existing_artefact_outside_the_run_record_is_independent`,
+    `test_corroboration_needs_one_independent_item_not_all_of_them` (the
+    classifier), and `test_corroborated_waiver_is_not_disclosed` (the consumer,
+    i.e. that the signal still means something). What is NOT retained is the
+    confirmation that the classifier separates the two on production data.
+    """
     rows = []
     for wf in sorted(CORPUS.glob("*/waivers.json")):
         doc = json.loads(wf.read_text())
@@ -211,14 +237,30 @@ def test_corpus_attestation_entries_measure_as_reported():
             rows.append((wf.parent.name, entry.get("step"),
                          _ei.assess(entry.get("evidence"), wf.parent)))
 
-    assert len(rows) == 8, [r[:2] for r in rows]
+    # REFUSE at zero rather than pass over it. Every assertion below is a
+    # statement about a population; at zero they all hold vacuously and this
+    # test would report a corpus that measures nothing exactly as it reports a
+    # corpus that measures correctly.
+    assert rows, (
+        "REFUSING on an empty population rather than passing over it: no "
+        f"tracked cell under {CORPUS} carries a waivers.json at all, so every "
+        "classification below would hold vacuously and this test would stop "
+        "being able to notice a corpus edit — which is the one thing it exists "
+        "to do.")
+
+    assert len(rows) == 2, [r[:2] for r in rows]
     corroborated = [r for r in rows if r[2].corroborated]
     self_only = [r for r in rows if r[2].self_referential_only]
     free_text = [r for r in rows
                  if not r[2].corroborated and not r[2].self_referential_only]
 
-    assert len(self_only) == 5, [r[:2] for r in self_only]
-    assert len(corroborated) == 2, [r[:2] for r in corroborated]
+    # The three classes must still partition the rows — the property that makes
+    # the counts mean anything, and the one that survives any corpus size.
+    assert len(self_only) + len(corroborated) + len(free_text) == len(rows), \
+        [(r[0], r[1]) for r in rows]
+
+    assert len(self_only) == 1, [r[:2] for r in self_only]
+    assert len(corroborated) == 0, [r[:2] for r in corroborated]
     assert len(free_text) == 1, [r[:2] for r in free_text]
 
     # every entry carries exactly one self-reference — the producer appends it
