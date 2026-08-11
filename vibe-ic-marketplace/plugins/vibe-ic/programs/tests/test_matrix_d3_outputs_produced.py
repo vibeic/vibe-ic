@@ -566,8 +566,20 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 #: section above), and committing those run trees is what closes them. The set
 #: is still pinned so a cell joining it is a loud, named event. See
 #: ``test_d3_fixture_attested_cells_are_named_cell_by_cell``.
+#:
+#: 2026-08-11 — step 29 LEAVES this set (7 -> 6), the shrinking direction
+#: (vibe-ic#983 ruling 2). Its sole entry until now was evidenced only by
+#: ``AI_IC_design/4th_benchmark/cv32e40p_e2e``, a tree outside this repository
+#: that no host consults, so the cell could not be decided from the commit at
+#: all. It now also declares ``reports/phase2/gates/post_layout_sim.json``,
+#: which resolves inside the repo against a registered root, so step 29 has
+#: in-repo evidence for the first time. The test's own report confirms the
+#: direction: "Newly external: []" — nothing joined. The entry that WAS
+#: external is still external and still unevidenced from the commit; this
+#: records that step 29 is no longer evidenced ONLY from outside, which is a
+#: strictly weaker and strictly true statement.
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
-    "17", "20", "29", "30", "M2", "M3", "M4",
+    "17", "20", "30", "M2", "M3", "M4",
 )
 
 #: How many of the declared entries are decided LIVE on every host. An
@@ -591,7 +603,23 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # is intact and was checked rather than assumed: both roots are kind="repo"
 # with repo-relative paths, 351 and 253 files tracked at HEAD respectively, and
 # nothing here resolves through $HOME.
-_LIVE_ENTRY_COUNT = 119
+# 2026-08-11: 119 -> 120, and 133 -> 134 declared (vibe-ic#983 ruling 2). Step
+# 29 now declares `reports/phase2/gates/post_layout_sim.json`, the BLOCKING
+# "Substance gate" report its own gate clause already wrote and no entry named.
+# The new entry is decided LIVE like the other 119 -- PRODUCED_BY_RUN resolved
+# against phase1_parity/espi, which is kind="repo", already a registered root,
+# and carries the file non-empty and tracked at HEAD (569 B).
+#
+# This baseline MOVED, so it is stated rather than absorbed: +1 declared, +1
+# live, +1 PRODUCED_BY_RUN (116), fixture-attested unchanged at 19. The guarded
+# property -- "no evidence from outside the commit" -- is intact: the entry
+# resolves inside the repo and nothing here reaches $HOME. What this number
+# must NOT be read as is an increase in independently-produced evidence: the
+# report's only producer is step 29's own gate (no runner invokes
+# post_layout_sim_check), which is recorded in the manifest entry's `note` and
+# is why the same declaration is NOT made for FS1, where it was measured to
+# stop the producer from running at all.
+_LIVE_ENTRY_COUNT = 120
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
