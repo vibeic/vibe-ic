@@ -171,3 +171,15 @@ benchmark-data/datasets/
 # 路由，四者的一致性由 programs/size_policy_drift_check.py 把關。
 !benchmark-data/ic/**/*.gds
 !benchmark-data/ic/**/*.def
+
+# The `*.gds` rule above says what it is for: "EDA tool outputs (large,
+# regeneratable)". A TEST FIXTURE is neither — it is source, it is 454 bytes,
+# and no tool produces it. `filled.gds` is the layout carrying dummy-fill
+# shapes that makes vibe-ic#990 falsifiable at all (see the fixture module's
+# own docstring); a checkout without it cannot run that test, and generating
+# it at test time instead would leave nothing a reviewer can open in KLayout.
+#
+# NARROW BY CONSTRUCTION: one exact path, in the same shape as the two
+# negations above, not a `tests/**` sweep. A stray tool output landing in a
+# test directory stays ignored.
+!vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/density_fill/filled.gds
