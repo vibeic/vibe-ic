@@ -7,6 +7,7 @@ Updated 2026-04-22: reports must now include a tool signature AND meet a
 minimum size (MIN_REPORT_BYTES per mode) to pass. Hand-typed stubs are
 rejected. See `TOOL_SIGNATURES` / `MIN_REPORT_BYTES` in eda_report_audit.py.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -228,7 +229,25 @@ def test_power_missing_dynamic_fail(tmp_path):
 # ---------------------------------------------------------------------------
 # EM mode
 # ---------------------------------------------------------------------------
+def _em_companion(root: Path, segments: int = 1667,
+                  peak: float = 1.963e-04) -> Path:
+    """The machine-readable half step 25 declares, at its canonical path."""
+    p = root / "reports" / "phase3" / "em.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"segments_analysed": segments,
+                             "max_segment_current_A": peak}))
+    return p
+
+
 def test_em_report_pass(tmp_path):
+    """Fixed fixture: it used to assert the blindness this test file exists to
+    stop. The report alone passed with NO machine-readable measurement beside
+    it — `machine_readable_found: 0` and `passed: True`, which is the zero
+    denominator `gate_zero_denominator_refuses_check` forbids. A passing
+    fixture now carries the companion, exactly as every published run that
+    passes this mode does (measured: 15 of 107 run dirs pass, all 15 carry
+    one).
+    """
     rpt = tmp_path / "em_check.rpt"
     rpt.write_text(
         "OpenROAD Electromigration analysis\n"
@@ -236,9 +255,82 @@ def test_em_report_pass(tmp_path):
         "Wire M3: Javg 2.5 mA, current density limit 5.0 mA/um\n"
         "Jpeak 8.1 mA/um, RMS current 3.2 mA/um\n" + _PAD
     )
+    _em_companion(tmp_path)
     result = era._check_em(tmp_path)
     assert result.passed is True
     assert result.summary["has_density"] is True
+    assert result.summary["machine_readable_found"] == 1
+
+
+def _em_report(root: Path) -> Path:
+    rpt = root / "em_check.rpt"
+    rpt.write_text(
+        "OpenROAD Electromigration analysis\n"
+        "EM lifetime: 10 years\n"
+        "Wire M3: Javg 2.5 mA, current density limit 5.0 mA/um\n"
+        "Jpeak 8.1 mA/um, RMS current 3.2 mA/um\n" + _PAD
+    )
+    return rpt
+
+
+def test_em_zero_machine_readable_denominator_refuses(tmp_path):
+    """ARM B of the two-arm deletion: delete step 25's declared measurement.
+
+    Hand-measured on the published corpus before this change, on isolated
+    copies of all three runs carrying step 25's full declared output set:
+    deleting `reports/phase3/em.{rpt,json}` + `em_signoff.json` moved
+    `files_found` 3 -> 2 and `machine_readable_found` 1 -> 0 while the verdict
+    stayed `"passed": true`, rc=0. The text half survived because the
+    discovery globs include `*ir*.rpt` — an IR-drop report — and because
+    `em_segments.csv` still carried the density keywords.
+    """
+    _em_report(tmp_path)
+    a = era._check_em(tmp_path)
+    assert a.passed is False, "arm B must refuse a zero denominator"
+    assert a.summary["machine_readable_found"] == 0
+    assert "EM_MEASUREMENT_ABSENT" in {f.rule for f in a.findings}
+    # ...and the SAME project with the measurement present passes, so the
+    # refusal is the deletion talking and not a blanket new rule.
+    _em_companion(tmp_path)
+    b = era._check_em(tmp_path)
+    assert b.passed is True
+    assert b.summary["machine_readable_found"] == 1
+
+
+@pytest.mark.parametrize("bad_peak", [0.0, -1.0, None])
+def test_em_peak_mutation_moves_the_verdict(tmp_path, bad_peak):
+    """Deletion is the cheapest probe, not the property: mutate the NUMBER.
+
+    A companion that says it examined 1667 segments and states no positive
+    peak current contradicts its own segment count. No tolerance is chosen
+    here and none is needed — the screen is zero-vs-positive, not equality,
+    so it is not fitted to the corpus.
+    """
+    _em_report(tmp_path)
+    _em_companion(tmp_path)
+    assert era._check_em(tmp_path).passed is True
+
+    p = tmp_path / "reports" / "phase3" / "em.json"
+    doc = json.loads(p.read_text())
+    doc["max_segment_current_A"] = bad_peak
+    p.write_text(json.dumps(doc))
+    r = era._check_em(tmp_path)
+    assert r.passed is False, f"peak {bad_peak!r} over 1667 segments must bite"
+    assert "EM_PEAK_CONTRADICTS_SEGMENT_COUNT" in {f.rule for f in r.findings}
+    # The denominator is still disclosed: the companion WAS read.
+    assert r.summary["machine_readable_found"] == 1
+
+
+def test_em_empty_segment_count_keeps_its_existing_treatment(tmp_path):
+    """The new rule keys on segments_analysed > 0 and must not swallow the
+    pre-existing `segments_analysed == 0` handling, which is a different
+    finding with a different message."""
+    _em_report(tmp_path)
+    _em_companion(tmp_path, segments=0, peak=0.0)
+    r = era._check_em(tmp_path)
+    rules = {f.rule for f in r.findings}
+    assert "EM_PEAK_CONTRADICTS_SEGMENT_COUNT" not in rules
+    assert rules & {"EM_PER_SEGMENT_HALF_EMPTY", "EM_MEASUREMENT_VACUOUS"}
 
 
 def test_em_stub_rejected(tmp_path):

@@ -116,6 +116,12 @@ class TestEmReportCheck:
             "Jpeak = 8.1 mA/um  peak current\n"
             "RMS current: 3.2 mA/um\n" + _PADDING
         )
+        # The machine-readable half step 25 declares. Without it the audit is
+        # screening 0 segments, and a zero denominator refuses.
+        comp = tmp_path / "reports" / "phase3" / "em.json"
+        comp.parent.mkdir(parents=True, exist_ok=True)
+        comp.write_text('{"segments_analysed": 1667, '
+                        '"max_segment_current_A": 1.963e-04}')
         assert _run_wrapper("em_report_check.py", str(tmp_path)) == 0
 
     def test_stub_rejected(self, tmp_path):

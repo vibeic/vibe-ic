@@ -1669,6 +1669,31 @@ def _check_em(project_dir: Path) -> AuditResult:
         empty_segments = (isinstance(segs, int) and not isinstance(segs, bool)
                           and segs <= 0)
         zero_peak = isinstance(peak, (int, float)) and float(peak) == 0.0
+        # A companion that says it analysed N>0 segments must state a POSITIVE
+        # peak for them. This is a self-contradiction screen, not an accuracy
+        # one: no tolerance is chosen and none is needed, because the two halves
+        # of the same report disagree about whether anything carries current at
+        # all. Measured over the corpus's 15 EM companions, every one states
+        # segments_analysed > 0 AND max_segment_current_A > 0, so this rule
+        # turns nothing published red; it is what makes MUTATING the number
+        # (0.0001963 -> 0.0) move the verdict, which deletion alone never did.
+        counted_segments = (isinstance(segs, int) and not isinstance(segs, bool)
+                            and segs > 0)
+        if counted_segments:
+            stated_peak = (isinstance(peak, (int, float))
+                           and not isinstance(peak, bool))
+            if not stated_peak or float(peak) <= 0.0:
+                machine_ok = False
+                result.findings.append(Finding(
+                    rule="EM_PEAK_CONTRADICTS_SEGMENT_COUNT", severity="ERROR",
+                    message=(
+                        f"EM companion reports segments_analysed={segs} but "
+                        f"max_segment_current_A={peak!r} — a per-segment screen "
+                        f"that examined {segs} segment(s) and found no positive "
+                        f"current on any of them contradicts its own segment "
+                        f"count; a formatted zero is not a measurement"),
+                    file=rel))
+            continue
         if not (empty_segments and zero_peak):
             continue
         if positive_current:
@@ -1694,6 +1719,36 @@ def _check_em(project_dir: Path) -> AuditResult:
                      "0.000e+00' line the keyword screen matched is a "
                      "formatted zero, not an electromigration result"),
             file=rel))
+
+    # ZERO DENOMINATOR. `machine_ok` starts True and is only ever cleared from
+    # INSIDE the loop above, so a project with NO machine-readable EM
+    # measurement at all never entered the body and reached `passed=True` on
+    # the keyword screen alone. MEASURED on the published corpus by hand:
+    # deleting step 25's three declared outputs from an isolated copy of
+    # `spm/v1.10.18_sky130A` moved `files_found` 3 -> 2 and
+    # `machine_readable_found` 1 -> 0, and the verdict stayed
+    # `"passed": true`, rc=0 — the run still matched `*ir*.rpt` (an IR-drop
+    # report is not an EM report) and the keyword screen was satisfied by
+    # `em_segments.csv`. That is the shape this repo already forbids in
+    # `gate_zero_denominator_refuses_check`: an absence indistinguishable from
+    # cleanliness. Nothing was screened, so the honest verdict is a refusal,
+    # not a pass.
+    #
+    # BLAST RADIUS, measured before landing: of 107 published run dirs, 15
+    # currently pass this mode and ALL 15 carry at least one companion
+    # (`machine_readable_found` 1, 2 or 3). This clause therefore turns ZERO
+    # published runs red; the runs it would catch (`u_hawaii_adc`,
+    # `edge_llm_accel`) are already red on `EM_DENSITY_VALUES`.
+    if not companions:
+        machine_ok = False
+        result.findings.append(Finding(
+            rule="EM_MEASUREMENT_ABSENT", severity="ERROR",
+            message=("no machine-readable EM measurement was found beside the "
+                     f"{len(files)} discovered report file(s), so 0 segment(s) "
+                     "were screened and the verdict would rest on keywords in "
+                     "a text file that the discovery globs also match in an "
+                     "IR-drop report; a zero denominator refuses, it does not "
+                     "pass")))
 
     result.passed = has_density and authentic and machine_ok
     result.summary = {"files_found": len(files), "has_density": has_density,

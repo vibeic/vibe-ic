@@ -128,6 +128,13 @@ def _project(tmp: Path) -> Path:
     rpt = tmp / "reports" / "phase3"
     rpt.mkdir(parents=True)
     (rpt / "em.rpt").write_text(_EM_RPT)
+    # Step 25 declares reports/phase3/em.json alongside em.rpt. A fixture that
+    # omitted it was passing on a ZERO denominator — `machine_readable_found:
+    # 0` with `passed: true` — which `_check_em` now refuses. A "clean project"
+    # fixture must carry what the step declares, or it is not clean, it is
+    # unmeasured.
+    (rpt / "em.json").write_text(json.dumps(
+        {"segments_analysed": 1667, "max_segment_current_A": 1.963e-04}))
     return tmp
 
 
