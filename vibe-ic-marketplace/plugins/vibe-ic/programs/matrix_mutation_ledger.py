@@ -121,11 +121,40 @@ the number of sites each must find, the flow step whose gate is re-run, the cell
 that step's own gate command through ``flow_compliance_check``'s own verdict
 mapping — so the entry cannot claim a red the flow would not honour.
 
-**HALF THE SEED SET PROVED A CELL CANNOT REDDEN, AND THAT WAS THE DELIVERABLE.**
-Four of the eight entries recorded :data:`CANNOT_REDDEN` on 2026-08-11.
-Multiplying every figure in a power report by 1000 does not move step 33's gate.
-Raising a power-grid segment current by a factor of 25000 does not move step
-25's. Those two are still open and still pinned.
+**PART OF THE SEED SET PROVES A CELL CANNOT REDDEN, AND THAT IS THE
+DELIVERABLE.** Four of the eight entries recorded :data:`CANNOT_REDDEN` when the
+channel was seeded on 2026-08-11. THREE were closed the same day, by two
+independent pieces of D9 Phase 1 work, and the fourth was answered in a way that
+is not a closure and should not be counted as one.
+
+CLOSED — the gate was believing the wrong author:
+  * ``ART-ROUTER-FINAL-ITERATION`` (step 21). Rewriting the router's FINAL
+    iteration from 0 violations to 12 did not move the gate, while rewriting the
+    runner's SUMMARY of that same file to 17 did. That pair said what step 21's
+    green was actually a statement about: the runner's arithmetic, not the
+    router's result.
+  * ``ART-NETLIST-PRIMITIVE-SWAP`` (step 9). Substituting 221 NAND primitives
+    for AND did not move the gate, and its own report enumerated the substituted
+    cell while passing.
+
+CLOSED — a number was read, reported, and never compared:
+  * ``ART-EM-CURRENT-DENSITY`` (step 25). Step 25's gate gained a clause that
+    screens the peak segment current against the total current the SAME report
+    says the net is supplied with. That authority is declared in the artefact,
+    so the comparison is available on every run, and the SAME byte edits that
+    recorded STAYED_GREEN now record REDDENED.
+
+NOT CLOSED, AND CORRECTLY SO:
+  * ``ART-POWER-FIGURES-X1000`` (step 33) was the same defect as step 25 — a
+    number read, reported, never compared — and the difference in outcome is not
+    effort, it is whether AN AUTHORITY EXISTS TO COMPARE AGAINST. Step 33's gate
+    also gained a comparison clause, total power against L19's
+    ``power_budget_uw``, but 0 of the 17 published runs carrying a power report
+    declare that budget, so the clause REFUSES (`INCOMPLETE`, naming what it
+    lacks) instead of passing. The mutation does not redden it because nothing
+    can: there is no authority. **A cell that refuses is not a cell that
+    passes**, and the flow's per-step listing now says INCOMPLETE where it used
+    to say PASS.
 
 TWO OF THE FOUR ARE NOW CLOSED, and they were ONE DEFECT IN TWO PLACES: the
 gate believed a summary written by the RUNNER instead of the output written by
@@ -1409,28 +1438,42 @@ ARTEFACT_MUTATIONS: Tuple[ArtefactMutation, ...] = (
                     "max segment current: 5.0 A", 1),
                Edit("Maximum current    : 1.96e-04 A",
                     "Maximum current    : 5.00e+00 A", 2)),
-        gate="em_report_check . --mode em --json reports/phase3/em_signoff.json",
+        gate=("em_peak_current_authority_check . "
+              "--json reports/phase3/em_current_authority.json"),
         what="raise the peak power-grid segment current from 1.963e-04 A to "
              "5.0 A — a factor of about 25000 — in every place the report "
              "states it",
         breaks="an electromigration screen against a current the metal cannot "
                "carry. 5 A through a power-grid segment sized for microamps is "
                "not a marginal call; it is a part that fails in the field.",
-        expected=CANNOT_REDDEN,
-        red_signal="",
-        observed="the gate's verdict does not move: baseline PASS, mutant PASS, "
-                 "zero findings, and its own report still reads MEASURED. "
-                 "em_report_check establishes that an EM analysis RAN and that "
-                 "the report carries a tool signature and a current figure; it "
-                 "never compares that figure against any limit, because no "
-                 "Jmax is resolved from the PDK at this step. There is "
-                 "therefore no magnitude of current this cell can refuse.",
+        expected=REDDENS,
+        red_signal="EM_PEAK_CURRENT_EXCEEDS_SUPPLY",
+        observed="CLOSED 2026-08-11. The edits below are BYTE-IDENTICAL to the "
+                 "ones that recorded CANNOT_REDDEN — only the gate this entry "
+                 "re-runs, and the flow that wires it, changed. Step 25's gate "
+                 "became an `all_of` and gained a clause that makes the number "
+                 "reach a comparison: `em_peak_current_authority_check` "
+                 "delegates the real per-layer J-vs-Jmax screen to "
+                 "`em_current_density_check` (614 lines, previously with zero "
+                 "references in the flow yaml) and, independently of any PDK, "
+                 "screens the peak against the total current the SAME report "
+                 "says the net is supplied with — Total power / Supply "
+                 "voltage. 5 A against a net supplied with 7.44e-04 A is a "
+                 "contradiction inside one artefact, and the limit is 1.0 "
+                 "because it is conservation of charge, not a guardband. The "
+                 "SIBLING clause `em_report_check` still cannot be moved by "
+                 "this edit and that record stands; it was never the clause "
+                 "that could.",
         measured=Measurement(
-            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
-            note="RECORDED AS A FINDING. Step 25's dimension-2 cell is ENFORCED "
-                 "and its gate is structurally falsifiable (D2-BLIND-GATE-"
-                 "PROGRAMS reddens it by renaming the program). It is not "
-                 "falsifiable from the CONTENT of the artefact it audits."),
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="baseline INCOMPLETE (rc 0 — the Jmax authority is absent in "
+                 "every published run, so the clause REFUSES rather than "
+                 "passing), mutant FAIL rc 1 naming the injected 5.0 A against "
+                 "the 7.4444e-04 A the report itself declares. Corpus blast "
+                 "radius measured over 109 discovered published run roots "
+                 "BEFORE the wiring: 0 PASS->FAIL at step 25. The peak/supply "
+                 "ratio was adjudicated BY HAND on all 13 runs carrying an EM "
+                 "report: 0.049-0.712, worst-case 29% headroom."),
     ),
     ArtefactMutation(
         name="ART-POWER-FIGURES-X1000",
@@ -1445,32 +1488,60 @@ ARTEFACT_MUTATIONS: Tuple[ArtefactMutation, ...] = (
                "deliberately left alone, so the table stays internally "
                "consistent and a reader checking that the rows sum to the "
                "total finds nothing wrong.",
-        gate=("power_report_check . --mode power "
-              "--json reports/phase2/gates/power_report.json"),
+        gate=("power_total_vs_budget_check . "
+              "--json reports/phase2/gates/power_budget.json"),
         expected=CANNOT_REDDEN,
         red_signal="",
-        observed="the gate's verdict does not move: baseline PASS, mutant PASS. "
-                 "power_report_check establishes that the report came from a "
-                 "real power tool and carries leakage plus dynamic categories; "
-                 "the NUMBERS are never read against a budget, a die area, or "
-                 "the design's own supply. A 1000x power figure is the same "
-                 "PASS as the true one.",
+        observed="STILL CANNOT REDDEN, AND THAT IS NOW THE CORRECT ANSWER "
+                 "RATHER THAN A HOLE. Re-pointed 2026-08-11 at the clause step "
+                 "33 gained for exactly this defect. The verdict no longer "
+                 "moves because it is no longer a PASS: baseline INCOMPLETE, "
+                 "mutant INCOMPLETE, both rc 0, and BOTH name the authority "
+                 "the run does not have. `power_total_vs_budget_check` "
+                 "compares total power against L19's `power_budget_uw` and "
+                 "REFUSES when it is unset — MEASURED over the corpus, 0 of "
+                 "the 17 published runs carrying a power report declare that "
+                 "budget (3 of 195 L19 copies do, and that design publishes no "
+                 "power report), so there is not one published run in which "
+                 "the comparison could have been made. `flow_compliance_check` "
+                 "now reports step 33 as INCOMPLETE rather than PASS on this "
+                 "run. A budget is a REQUIREMENT that must arrive in the "
+                 "design's own input documents; deriving one from die area, "
+                 "supply voltage or a sibling tool's number would be a "
+                 "threshold nobody declared, and a ruler fitted to this corpus "
+                 "is worse than an admitted absence. The mutation WOULD redden "
+                 "a run whose L19 states a budget — asserted directly in "
+                 "`programs/tests/test_power_total_vs_budget_check.py`, which "
+                 "is where that half of the predicate is proven, because the "
+                 "corpus cannot prove it.",
         measured=Measurement(
             date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
-            note="RECORDED AS A FINDING. 12 substitutions applied, exact-count "
-                 "checked; the 12 `0.00e+00` entries are correctly untouched "
-                 "because zero times 1000 is still zero."),
+            note="12 substitutions applied, exact-count checked; the 12 "
+                 "`0.00e+00` entries are correctly untouched because zero "
+                 "times 1000 is still zero. Corpus blast radius of the new "
+                 "clause, measured over 109 discovered published run roots: "
+                 "0 PASS->FAIL at step 33."),
     ),
 )
 
 #: How many artefact entries currently prove the cell they target CANNOT be
 #: reddened from artefact content. PINNED, exactly like the emptiness of
 #: :data:`NOT_FALSIFIABLE`, so the number can only move in a visible diff.
-#: Closing one of these is Phase 1 work and is deliberately NOT done here.
-#: 4 on 2026-08-11 when the channel was seeded; 2 after D9 Phase 1 closed
-#: ART-ROUTER-FINAL-ITERATION and ART-NETLIST-PRIMITIVE-SWAP. It moved in the
-#: same change that closed them, which is the whole point of pinning it.
-ARTEFACT_CANNOT_REDDEN_AS_MEASURED: int = 2
+#: Closing one of these is Phase 1 work.
+#:
+#: 4 -> 1 on 2026-08-11, in three independent changes that each closed what they
+#: measured: ART-ROUTER-FINAL-ITERATION and ART-NETLIST-PRIMITIVE-SWAP (the gate
+#: believed a summary the runner wrote instead of the output the tool wrote),
+#: then ART-EM-CURRENT-DENSITY (a peak current gained a declared authority to be
+#: compared against). Each moved this number in the same change that closed its
+#: entry, which is the whole point of pinning it.
+#:
+#: The one that remains is ART-POWER-FIGURES-X1000, and it is NOT open work in
+#: the same sense. Its entry says why staying here is now the correct answer:
+#: the cell REFUSES, naming the budget it lacks, and no published run declares
+#: the budget that would let it redden. A cell that refuses is not a cell that
+#: passes; this count is of cells that pass when they should not.
+ARTEFACT_CANNOT_REDDEN_AS_MEASURED: int = 1
 
 #: Cells no constructed mutation could redden. EMPTY as measured 2026-08-06.
 #: An entry here is a finding to publish, never a reason to weaken a predicate.
