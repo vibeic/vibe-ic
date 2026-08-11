@@ -188,6 +188,14 @@ class TestWiringIsStructuralNotTextual:
         assert name in driven, f"{name} is wired by a real gate clause"
         names = {c["name"] for c in
                  d9.discover_checkers(d9.PROGRAMS, d9.FLOW_YAML)}
+        # MEASURED, by this fix's own mutation control: an "always wired"
+        # mutant EMPTIES the population, and `name not in names` below is then
+        # satisfied VACUOUSLY -- right answer, wrong reason, which is the exact
+        # failure this class exists to rule out, one level up. So the exclusion
+        # only counts as evidence against a population that still has members.
+        assert len(names) > 1, (
+            "population collapsed -- the assertion below would pass vacuously, "
+            "which is not evidence that a gate clause was read")
         assert name not in names, f"{name} is driven, so it is not a candidate"
 
     def test_the_predicate_is_the_house_one_not_a_private_copy(self):
