@@ -34,8 +34,9 @@ THE FIVE THINGS THIS FILE REFUSES
    a gate the flow no longer wires, an absent gate program — each is
    NOT_REPLAYABLE with the reason, and NOT_REPLAYABLE never equals a recorded
    verdict, so it is always a failure. The control for this is shipped and runs
-   every time: :func:`test_control_a_missing_run_dir_reports_not_replayable`
-   points a real entry at a run that does not exist and requires the reason.
+   every time: :func:`test_control_an_unreplayable_entry_reports_not_replayable`
+   breaks one field of a REAL entry, four ways, and requires the refusal to name
+   which one broke.
 
 2. **A recorded verdict that no longer reproduces.** Every entry is replayed on
    every run — there is no witness subset, because an artefact entry claims one
@@ -85,6 +86,18 @@ import pytest
 
 import matrix_mutation_ledger as L
 from matrix_63x8 import flowref as F
+
+#: Bound for the two git launches in this file. NOT a round number picked by
+#: feel, and not the 120 s the first draft used — `ci_harness_timeout_ceiling_check`
+#: (BLOCKING) resolves the pytest harness bound from `tools/gatekeeper-land.sh`
+#: (`--timeout=180`, `--timeout-method=thread`) and permits any ONE blocking call
+#: at most `180 // 3` = 60 s. Above that the inner bound can never fire: pytest
+#: reaches 180 s first and takes the whole SESSION down, so `--maxfail` stops
+#: counting and every other file in the subset loses its verdict.
+#: MEASURED here: `git status --porcelain` over the named run is 0.01 s and
+#: `git ls-files --error-unmatch` is under 0.01 s, three runs each. 30 s is
+#: ~3000x the measured cost and half the permitted ceiling.
+_GIT_TIMEOUT_S = 30
 
 
 @lru_cache(maxsize=1)
@@ -370,7 +383,7 @@ def test_the_replay_never_mutates_the_published_run():
     paths = [str((L.benchmark_data_root() / r)) for r in runs]
     proc = subprocess.run(["git", "status", "--porcelain", "--", *paths],
                           cwd=str(L.REPO_ROOT), capture_output=True, text=True,
-                          timeout=120)
+                          timeout=_GIT_TIMEOUT_S)
     assert proc.returncode == 0, proc.stderr[-800:]
     assert not proc.stdout.strip(), (
         f"replaying the artefact ledger modified the PUBLISHED corpus:\n"
@@ -528,7 +541,7 @@ def test_the_canary_run_is_never_written_by_this_repository():
         rel = (L.benchmark_data_root() / run).relative_to(L.REPO_ROOT)
         proc = subprocess.run(["git", "ls-files", "--error-unmatch", str(rel)],
                               cwd=str(L.REPO_ROOT), capture_output=True,
-                              text=True, timeout=120)
+                              text=True, timeout=_GIT_TIMEOUT_S)
         assert proc.returncode == 0 and proc.stdout.strip(), (
             f"{run} is not tracked in git, so it is not a PUBLISHED run and "
             f"this channel would be measuring a local fixture")

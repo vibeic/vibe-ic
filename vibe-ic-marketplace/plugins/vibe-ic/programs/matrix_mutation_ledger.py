@@ -1183,12 +1183,21 @@ MUTATIONS: Tuple[Mutation, ...] = (
 _ARTEFACT_SWEEP = ("matrix_mutation_ledger.py --replay {name}   "
                    "(2026-08-11, one copy + two gate invocations per entry)")
 
-#: One klayout RDB violation item, in the exact shape the sign-off DRC reports
-#: in this corpus use. Three of these are spliced into an EMPTY `<items>` block.
+#: One klayout RDB violation item, in the STRUCTURAL shape the sign-off DRC
+#: reports in this corpus use. Three of these are spliced into an EMPTY
+#: `<items>` block.
+#:
+#: The category and cell names are deliberately SYNTHETIC rather than copied
+#: from a real rule deck. A fixture that named a real design-rule id would bake
+#: a process token into this module, and it would buy nothing: what the gate
+#: counts is `<item>` elements, which is asserted by the replay reporting the
+#: injected count of 3 back as `real_violation_total`. The names being obviously
+#: not-a-real-rule is also what stops one of these leaking into a report and
+#: being mistaken for a measurement.
 _RDB_ITEM = """  <item>
    <tags/>
-   <category>'li.1'</category>
-   <cell>spm</cell>
+   <category>'zzartefactcanary.1'</category>
+   <cell>zzartefactcanary_top</cell>
    <visited>false</visited>
    <multiplicity>1</multiplicity>
    <comment/>
