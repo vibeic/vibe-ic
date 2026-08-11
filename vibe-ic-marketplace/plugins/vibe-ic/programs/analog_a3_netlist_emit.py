@@ -242,10 +242,11 @@ def block_entries(project: Path) -> Tuple[List[Dict[str, Any]], Optional[str]]:
 # them. So the domain is DISCOVERED from the specs the design already wrote,
 # not declared a second time in a field someone has to remember to fill.
 #
-# WHAT IS READ: every spec row whose `units` is a volt unit; the block's domain
-# is the HIGHEST voltage any of them states, over every numeric field on the
-# row. Highest, because a device must survive the worst case its own block
-# puts across it — that is the question a flavour answers.
+# WHAT IS READ: every spec row whose UNIT is a volt unit — under either key
+# spelling this pipeline produces, see `_UNIT_KEYS`; the block's domain is the
+# HIGHEST voltage any of them states, over every numeric field on the row.
+# Highest, because a device must survive the worst case its own block puts
+# across it — that is the question a flavour answers.
 #
 # WHAT `elevated` MEANS: above the LOWEST domain the design declares across its
 # blocks. Relative, not absolute, because "elevated" is not a property of a
@@ -309,10 +310,18 @@ def spec_voltage(spec: Dict[str, Any]) -> Optional[float]:
     return best
 
 
+# The synthetic key `block_voltage_domains` reports the design's core domain
+# under. Named rather than inlined so it is greppable, and so the one way it
+# could go wrong — a block actually called this — is visible instead of latent.
+CORE_VOLTS_KEY = "_core_volts"
+
+
 def block_voltage_domains(project: Path, entries: List[Dict[str, Any]]
                           ) -> Dict[str, Any]:
     """{block name: VoltageDomain} for every declared block, plus the design's
-    core (lowest stated) domain under the key `_core_volts`.
+    core (lowest stated) domain under `CORE_VOLTS_KEY`. A block named that
+    would shadow it; nothing else in the tree would, and the shadowing costs a
+    reader the core value, not a block its domain.
 
     A block whose spec states no voltage — and every block of a design that
     states none anywhere — gets `VoltageDomain()`, which every ranker below
@@ -326,7 +335,7 @@ def block_voltage_domains(project: Path, entries: List[Dict[str, Any]]
         volts[name] = spec_voltage(spec) if isinstance(spec, dict) else None
     stated = [v for v in volts.values() if v is not None]
     core = min(stated) if stated else None
-    out: Dict[str, Any] = {"_core_volts": core}
+    out: Dict[str, Any] = {CORE_VOLTS_KEY: core}
     for name, v in volts.items():
         out[name] = _apdc.VoltageDomain(
             volts=v,
