@@ -2,6 +2,27 @@
 """power_total_vs_budget_check.py — the total power figure must reach a
 COMPARISON, or the step must REFUSE and name the budget it lacks.
 
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 33 while step 33 is running. That is the ONLY axis this token names, and
+it is the one `flow_gate_enforcement_audit` measures. The other two axes are
+unchanged, and are stated here so the declaration can never be read as
+permission to defang the gate:
+
+  * VERDICT SEVERITY — unchanged. rc 1 when a declared budget is exceeded,
+    rc 2 on INCOMPLETE. The rc-2 half is vibe-ic#1022's repair, landed in
+    #1026: on the whole published corpus this gate's honest answer is
+    INCOMPLETE (17 runs carry a power report, 0 carry an L19 power budget), and
+    while INCOMPLETE exited 0 the refusal was indistinguishable from a pass —
+    which is the exact defect the gate was written to remove, one floor down.
+  * FLOW SLOT — unchanged and BLOCKING. Step 33 wires this gate in
+    `program_exit_zero`, never `advisory_program_exit_zero`.
+
+WIRED AND DECLARED ARE DIFFERENT QUESTIONS (vibe-ic#1035). See the identically
+shaped block in `em_peak_current_authority_check`, this gate's sibling from the
+same two PRs: being wired into the flow's blocking slot has never been an
+answer to "does this program say where its verdict is consumed", and the audit
+reported both as `undeclared::` throughout, correctly.
+
 THE DEFECT, MEASURED
 ====================
 `matrix_mutation_ledger.ARTEFACT_MUTATIONS` carried ART-POWER-FIGURES-X1000
