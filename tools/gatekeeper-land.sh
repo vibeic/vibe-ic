@@ -207,6 +207,30 @@ fi
 
 echo "--- full tier (minutes; stamps the tree on success) ---"
 
+# vibe-ic#1029 — the full tier is the window in which the gates read the tree,
+# and it is the window in which they have three times been caught WRITING to
+# it. The fingerprint comparison at the end of this tier already refuses the
+# stamp when a TRACKED file moved; what it does not do is name what moved, or
+# see the untracked (`??`) half that `git add -A` would sweep just the same.
+#
+# This baseline pairs with the compare below to answer, by name, "did the full
+# tier write into the tree". It is deliberately taken around the WHOLE tier
+# rather than around pytest alone: the repo-hygiene gate script and the plugin
+# full audit run INSIDE this window but OUTSIDE the pytest command, so the
+# in-process pytest guard (programs/suite_write_guard.py, loaded by the
+# plugin's rootdir conftest) cannot see them. That gap is exactly the stage
+# whose family this repo already caught rewriting 77 tracked files.
+#
+# The two gate names above are spelled in prose rather than as their literal
+# flags/filenames on purpose: `test_v1916_the_tree_must_not_move_under_the_gates`
+# locates the real call sites by raw string position in this file, so a comment
+# quoting a flag verbatim would displace `index()` onto the comment and break a
+# test that is measuring the ORDER of the steps.
+WG_BASE="$(mktemp -t gk_writeguard.XXXXXX)"
+trap 'rm -f "$FP" "$WG_BASE"' EXIT
+run "write-guard baseline" \
+    python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --snapshot "$WG_BASE"
+
 # The TARGETED TEST RUN, carried over verbatim from the retired ci.yml:130-132.
 # Omitted from the first version of this script, which covered the governance
 # gates and quietly dropped the tests — the gap surfaced when
@@ -264,6 +288,15 @@ run_pytest
 
 run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh"
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+
+# #1029 — the standing assertion, executed: everything above ran against this
+# tree, so nothing above may have CHANGED it. Names every offending path rather
+# than only failing, because a count is what made three writers cost three
+# separate accidental discoveries. rc=2 (could not look) fails here too: `run`
+# treats any non-zero as FAIL, which is the point — "I could not measure" must
+# never reach the stamp as "I measured and it was clean".
+run "the full tier wrote nothing into the tree" \
+    python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --compare "$WG_BASE"
 
 # LAST, and after every suite has read the tree. Everything above answers
 # "do the gates pass"; this answers "did they all read the same tree", which is
