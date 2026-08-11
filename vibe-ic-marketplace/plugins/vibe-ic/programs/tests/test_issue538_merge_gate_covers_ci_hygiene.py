@@ -299,7 +299,29 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
         f"the dispatcher — they are wired through something that bypasses "
         f"the recording: {silent}")
     assert doc["declared"] == len(recorded)
-    assert len(recorded) >= len(decls), (recorded, decls)
+    # vibe-ic#1028. `assert len(recorded) >= len(decls)` USED TO STAND HERE and
+    # it was the size proxy the comment below already records as replaced — it
+    # simply outlived its own repair. It cannot be right at any corpus size: a
+    # templated `run` line contributes ONE declaration and as many invocations
+    # as its loop expands, so at zero expansion `recorded` is necessarily
+    # SMALLER than `decls`, by exactly the number of templated lines. Measured
+    # here: 74 declarations, 71 recorded, and the difference is precisely the
+    # three per-cell lines over `benchmark-data/ic/*/*/`, whose loop now
+    # expands over zero published cells (#1015/#1010).
+    #
+    # Its history is the argument for deleting rather than re-pinning it: it
+    # was `>` and went red when the corpus reached one cell, and was patched to
+    # `>=` — which bought a pass at exactly one cell and failed again at zero.
+    # A third re-pin would buy the same nothing.
+    #
+    # Nothing is lost. `assert_invocations_decompose` below asks the property
+    # DIRECTLY and strictly dominates this line: it requires a templated
+    # declaration to still exist (so the distinction cannot go untested), it
+    # requires the books to close as an EQUALITY over counts, and it requires
+    # every literal declaration to fire exactly once. A gate wired through a
+    # wrapper that skips the recording is caught by `silent` above and by the
+    # dedicated POSITIVE_CONTROL tests — not by comparing two list lengths.
+    #
     # The loop really is what makes the two numbers differ, asserted so that a
     # future script with no loop does not leave this test passing vacuously
     # over an equality it no longer checks.
