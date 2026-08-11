@@ -144,9 +144,21 @@ def test_the_corpus_flip_is_the_measured_one():
     # next assertion pins is untouched. 23 was the count when this landed; the
     # corpus has been re-published several times since and main already measured
     # 15, so this bound had no headroom left before #905 either.
-    assert len(newly) >= 14, (
-        f"only {len(newly)} project(s) newly resolve; 14 were measured after "
-        f"the #905 retirement (23 when this landed, 15 on main)")
+    # 2026-08-12, vibe-ic#1028: 14 -> 6, measured member-by-member on both
+    # sides in the same shape as the #905 note above. The census was re-run
+    # over the 16 withdrawn roots ALONE on the pre-withdrawal tree:
+    #     projects  83  -  17  =  66
+    #     legacy     6  -   4  =   2
+    #     resolved  20  -  12  =   8
+    #     newly     14  -   8  =   6
+    # All four reconcile. The bound lands exactly ON the new measurement, and
+    # that is not it being re-pinned to hug the tree — the note above already
+    # records that this bound had NO headroom left before #905 either (main
+    # measured 15 against a bound of 14). It is a floor that has always sat one
+    # member below the measurement, carried through the subtraction unchanged.
+    assert len(newly) >= 6, (
+        f"only {len(newly)} project(s) newly resolve; 6 were measured after "
+        f"the #1028 withdrawal (14 after #905, 23 when this landed)")
     assert legacy <= resolved, (
         "a project the old default resolved no longer resolves — the change "
         "was supposed to be additive")

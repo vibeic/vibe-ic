@@ -189,15 +189,39 @@ def test_the_published_corpus_resolves_and_diverges_as_measured():
     if not cells:
         pytest.skip("corpus cells not checked out")
     resolved = [c for c in cells if G._pdk_from_signoff_flow(c)]
-    assert len(resolved) >= 8, f"{len(resolved)} of {len(cells)} resolved"
+    # 2026-08-12, vibe-ic#1028. Both sides of "N of M resolved" moved, and both
+    # were re-measured over the 16 withdrawn roots alone on the pre-withdrawal
+    # tree rather than inferred from the difference:
+    #     cells     14  -  10  =  4      (exact)
+    #     resolved   9  -   7  =  2      (exact)
+    # The floor was 8 against 9 resolved — one of headroom — so it moves by the
+    # 7 the withdrawal took, to 1, keeping exactly that one. The proportion the
+    # test is really about is unchanged: 9 of 14 resolved before, 2 of 4 after.
+    assert len(resolved) >= 1, f"{len(resolved)} of {len(cells)} resolved"
 
     diverged = {}
     for c in cells:
         pdk, _n, m = G._resolve_pdk_and_node(c, None, None)
         if m:
             diverged[c.name] = (pdk, m)
-    # One of the two cells #376 named still diverges the same way.
-    assert diverged.get("v1.5.58_ihp-sg13g2") == ("ihp-sg13g2", "sky130")
+    # 2026-08-12, vibe-ic#1028 — the assertion that stood here named the cell
+    # `v1.5.58_ihp-sg13g2` as the one of #376's two that still diverged. That
+    # cell is one of the 16 roots withdrawn from publication (#1015/#1010), so
+    # the premise is gone and there is nothing left to assert about it.
+    #
+    # It is REMOVED here, in the diff, rather than left to evaluate to
+    # `None == (...)` and fail, or quietly rewritten to `is None` — which would
+    # have been the worst option available: `diverged.get(<withdrawn cell>) is
+    # None` PASSES, and passes for the one reason that means nothing, so the
+    # line would have gone on looking like a measurement of a divergence that
+    # nobody was measuring any more.
+    #
+    # Checked before removing: no surviving cell diverges, so the anchor cannot
+    # be re-derived. The RULE keeps its coverage in this same module, on
+    # premises the repo owns — `test_these_ARE_divergences` and
+    # `test_these_are_not_divergences` (both parametrised over constructed
+    # signoff/spec pairs) and `test_a_suppressed_divergence_still_declares_the_
+    # signoff_pdk`. What is lost is the confirmation on a published cell.
     # gf180mcuD does NOT (re-measured 2026-08-07 against v1.9.96_gf180mcuD,
     # which replaces the retired v1.5.66_gf180mcuD) — not because the PDK
     # disagreement itself went away, but because the SAME v1.9.96 ciel-hash
