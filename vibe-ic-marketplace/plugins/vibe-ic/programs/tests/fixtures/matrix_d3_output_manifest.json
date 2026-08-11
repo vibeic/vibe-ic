@@ -954,6 +954,14 @@
           "alternative": "phase3/stage3/sim_postlayout/pass.flag",
           "path": "phase3/stage3/sim_postlayout/pass.flag",
           "size_bytes": 194
+        },
+        "reports/phase2/gates/post_layout_sim.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
+          "alternative": "reports/phase2/gates/post_layout_sim.json",
+          "path": "reports/phase2/gates/post_layout_sim.json",
+          "size_bytes": 569,
+          "note": "vibe-ic#983 ruling 2. The SUBSTANCE arm of step 29, newly declared. Recorded PRODUCED_BY_RUN because espi carries it non-empty and tracked at HEAD, which is what that status asserts. Stated plainly so no reader over-reads it: this report's ONLY producer is step 29's own BLOCKING gate clause (no runner invokes post_layout_sim_check), so its presence in a published tree is the gate's output archived alongside the run, not an independent production event. Measured: declaring it moves 0 of the 6 published trees carrying a post-layout sim dir."
         }
       }
     },
