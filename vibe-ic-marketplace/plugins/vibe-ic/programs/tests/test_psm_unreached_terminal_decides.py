@@ -112,6 +112,19 @@ def test_a_reworded_tool_sentence_still_counts():
     assert ir_verdict(WORST_UV, BUDGET_UV, [], found) == "FAIL"
 
 
+def test_the_count_the_basis_quotes_is_not_a_display_cap():
+    """`connectivity` caps at 20 because it is a display sample. This list is a
+    decision input whose length is quoted back to the reader, and a length that
+    saturates at a cap reads "20" on a design with 60."""
+    many = CLEAN + "".join(
+        f"[WARNING PSM-0039] Unconnected instance u_top.u_b{i}/VPWR at "
+        f"location ({i}.000um, 0.000um).\n" for i in range(60))
+    cov = analysis_coverage(many, NETS)
+    assert len(cov["connectivity"]) == 20, "the display sample is still capped"
+    assert len(cov["unconnected_instances"]) == 60
+    assert "60 instance" in verdict_basis([], cov["unconnected_instances"])
+
+
 def test_the_basis_names_the_reason_the_verdict_is_not_a_pass():
     cov = analysis_coverage(UNREACHED, NETS)
     basis = verdict_basis(cov["analysis_failed"], cov["unconnected_instances"])

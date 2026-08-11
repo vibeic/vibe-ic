@@ -97,8 +97,14 @@ _PSM0039_TERM_RE = re.compile(
 _PSM0039_ANY_RE = re.compile(r"PSM-0039\]\s*(.*)")
 
 
-def unconnected_instances(log: str, cap: int = 20) -> List[str]:
+def unconnected_instances(log: str) -> List[str]:
     """Instance supply terminals the grid solver reported it could not reach.
+
+    UNCAPPED, unlike `connectivity`. That list is a display sample and says so;
+    this one is a decision input whose LENGTH is quoted back in
+    `verdict_basis`, and a length that silently saturates at a display cap is a
+    measurement that reads "20" on a design with 500. Callers that render it
+    cap at the point of rendering, where the truncation is visible.
 
     PSM-0039 ONLY. PSM-0038 — an unconnected SHAPE — is deliberately excluded:
     a floating island of supply metal is an imperfection, while an unreached
@@ -123,7 +129,7 @@ def unconnected_instances(log: str, cap: int = 20) -> List[str]:
         entry = term.group(1) if term else (m.group(1).strip() or line.strip())
         if entry not in seen:
             seen.append(entry)
-    return seen[:cap]
+    return seen
 
 
 def analysis_coverage(log: str, power_nets: Sequence[str],
@@ -139,7 +145,7 @@ def analysis_coverage(log: str, power_nets: Sequence[str],
         "analysis_failed": sorted(failed),
         "connectivity": [l.strip() for l in (log or "").splitlines()
                          if _CONN_RE.search(l)][:conn_cap],
-        "unconnected_instances": unconnected_instances(log, conn_cap),
+        "unconnected_instances": unconnected_instances(log),
     }
 
 
