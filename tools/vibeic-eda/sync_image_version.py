@@ -158,6 +158,13 @@ HISTORY_GLOBS = ["FIX_STATUS.md", "CHANGELOG*", "*CHANGELOG*", "*ROADMAP*.md",
 FLOATING_TAG = "latest"
 
 TAG_RE = re.compile(r"vibeic-eda:(\d+\.\d+\.\d+)")
+# The SAME image reference, read WITHOUT the semver assumption. `TAG_RE` is the
+# gate's numerator and it can only see pins; a file whose every tag is floating
+# is invisible to it, which is exactly how a registered install doc contributed
+# nothing to `--check`'s denominator and nobody could see it (vibe-ic#970). This
+# one reads whatever tag is written, and `is_mutable_tag` — the predicate that
+# already exists, not a second list of names — decides what it is.
+ANY_TAG_RE = re.compile(r"vibeic-eda:([A-Za-z0-9_][A-Za-z0-9._-]*)")
 GHCR_RE = re.compile(r"ghcr\.io/vibeic/vibeic-eda:(\d+\.\d+\.\d+)")
 CURRENT_RE = re.compile(r"(Current:\s*\*\*)(\d+\.\d+\.\d+)(\*\*)")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -535,6 +542,83 @@ def install_doc_refs(root: Path):
     return out
 
 
+def install_doc_coverage(root: Path, refs=None):
+    """RECONCILE the registered install docs against the ones that were COUNTED.
+
+    vibe-ic#970. `INSTALL_DOC_CANDIDATES` is a DECLARED POPULATION — the comment
+    on it says "EVERY vibeic-eda tag in these is a live pointer" — and
+    `install_doc_refs` returns only the ones that matched `TAG_RE`, i.e. only
+    the PINNED ones. Those two sets are not the same set, and the difference was
+    invisible: `mcp-eda/README.md` is registered, exists, is the install path a
+    user of the MCP server follows, and both of its pull commands are floating,
+    so it contributed ZERO refs while `--check` printed "25 across 10 file(s)"
+    and `[PASS]`. A stale PIN on those same two lines is caught loudly; a
+    FLOATING pointer on them is not counted at all.
+
+    Returns (counted, uncounted, absent):
+        counted    rel paths that contributed at least one ref
+        uncounted  rel paths that EXIST and contributed NONE, each with the
+                   floating tags found in it (discovered by reading the file
+                   and asking `is_mutable_tag`, never by naming `latest`)
+        absent     rel paths not present in this checkout — legitimate, the one
+                   script serves two repos, but still a shrunk denominator and
+                   therefore still stated
+
+    NOT A VERDICT. Whether those lines should be pinned to the anchor is a call
+    somebody makes; the defect this repairs is that nobody could see there was
+    a call to make. Same rule `gate_discloses_denominator_check` enforces on
+    every other gate here: a PASS must say how much it looked at, and
+    `declared` vs `probed` must both be printed when they differ.
+    """
+    refs = install_doc_refs(root) if refs is None else refs
+    contributed = {r[0] for r in refs}
+    counted, uncounted, absent = [], [], []
+    for rel in INSTALL_DOC_CANDIDATES:
+        p = root / rel
+        if not p.is_file():
+            absent.append(rel)
+            continue
+        if rel in contributed:
+            counted.append(rel)
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        # HOW MANY pointers, and WHICH NAMES. The count is occurrences (two
+        # `:latest` pull lines are two pointers a reader can follow), the names
+        # are the distinct set (repeating `latest` twice tells nobody anything).
+        hits = [t for t in ANY_TAG_RE.findall(text) if is_mutable_tag(t)]
+        uncounted.append((rel, len(hits), sorted(set(hits))))
+    return sorted(counted), uncounted, absent
+
+
+def print_install_doc_coverage(counted, uncounted, absent) -> None:
+    """Say what was NOT counted, every run, in the same breath as the count.
+
+    The per-file line is printed for the UNCOUNTED class only. `absent` is a
+    bare count with its reason: it is by construction (the script serves both
+    the plugin repo and the standalone vibeic-eda repo, and ten of the eleven
+    candidates are missing from the latter), so a name per file would be ten
+    lines of noise in the fixture repos and zero lines here — while the count
+    is what the reader needs to reconcile 10 + 1 + 0 = 11.
+    """
+    print(f"  registered but UNCOUNTED : {len(uncounted)} present-with-no-"
+          f"pinned-ref, {len(absent)} not-present-in-this-repo")
+    for rel, n_floating, names in uncounted:
+        what = (f"{n_floating} floating pointer(s) "
+                f"({', '.join(':' + t for t in names)}) and no X.Y.Z pin"
+                if n_floating else "no vibeic-eda tag of any shape")
+        print(f"     {rel} — {what}. Registered as an install doc where every "
+              f"tag is a live pointer, so it contributes NOTHING to the count "
+              f"above and --set cannot rewrite it; the anchor does not reach "
+              f"this file (vibe-ic#970).")
+    if absent:
+        print(f"     ({len(absent)} registered candidate(s) absent from this "
+              f"checkout — the same script serves both repos, so this is by "
+              f"design, and it is still a shrunk denominator.)")
+
+
 def ghcr_hits(root: Path, ignore):
     """(rel, lineno, version) for every ghcr.io/...:X.Y.Z in tracked files, minus history/ignore."""
     r = _sh(["git", "grep", "-nI", "-E", r"ghcr\.io/vibeic/vibeic-eda:[0-9]+\.[0-9]+\.[0-9]+"], root)
@@ -584,8 +668,15 @@ def do_check(root: Path, version: str, ignore,
     drift_net = [h for h in net if h[2] != version and h[0] not in install_set]
 
     ok_docs = sorted({r[0] for r in strict})
+    # vibe-ic#970 — the denominator must say what it did NOT count. `ok_docs` is
+    # the numerator's file set; `INSTALL_DOC_CANDIDATES` is the declared
+    # population, and the two differ silently whenever a registered doc's tags
+    # are all floating.
+    counted, uncounted, absent = install_doc_coverage(root, strict)
     print(f"vibeic_eda_version_sync: VERSION = {version}")
-    print(f"  install-doc refs checked : {len(strict)} across {len(ok_docs)} file(s)")
+    print(f"  install-doc refs checked : {len(strict)} across {len(ok_docs)} of "
+          f"{len(INSTALL_DOC_CANDIDATES)} registered file(s)")
+    print_install_doc_coverage(counted, uncounted, absent)
     print(f"  repo-wide ghcr pointers  : {len(net)}")
     # vibe-ic#566/#215 — the anchor must never move BELOW what this repo already
     # committed. Compares against git, which the other repo cannot move, so it
@@ -606,8 +697,15 @@ def do_check(root: Path, version: str, ignore,
     if regress_rc == 2:
         # "I could not read the baseline" is not "the baseline is fine".
         return 2
+    # The PASS sentence carries the shrinkage too, not only the block above it.
+    # A summary that reads COMPLETE while one member of the declared population
+    # was never measurable is the #901 shape, and it is what made #970 invisible
+    # for the whole life of the registration.
+    unreached = (f" {len(uncounted)} registered install doc(s) carry no pinned "
+                 f"pointer and were NOT counted — named above (vibe-ic#970)."
+                 if uncounted else "")
     print(f"[PASS] all live pointers == {version} and the anchor has not "
-          f"regressed. Upstream currency is NOT judged here — run "
+          f"regressed.{unreached} Upstream currency is NOT judged here — run "
           f"--report-upstream (vibe-ic#927).")
     return 0
 
@@ -623,6 +721,14 @@ def do_report_upstream(version: str, require_remote: bool = False,
     NEVER RETURNS 1. Two exit codes only:
         0  the registry answered and the reading below was taken
         2  the registry could not be reached — NOT CHECKED, and it says so
+
+    AND THAT IS ENFORCED, not asserted (vibe-ic#969). It used to be a property
+    of the code as written, and the code as written raised an uncaught
+    FileNotFoundError — rc 1 — when `--json` named a directory that does not
+    exist. The write is guarded below; the CLAMP that makes the sentence true
+    for inputs nobody has tried yet lives at the `--report-upstream` dispatch
+    in `main`, which turns any escape into rc 2 NOT CHECKED and can never turn
+    one into 0.
 
     A reading that disagrees exits 0 ON PURPOSE. "The fork published 0.2.84
     while this gate ran" is true, useful, and NOT a defect in this commit; it
@@ -666,9 +772,27 @@ def do_report_upstream(version: str, require_remote: bool = False,
             "running --set."),
     }
     if json_path:
-        Path(json_path).write_text(json.dumps(record, indent=2) + "\n",
-                                   encoding="utf-8")
-        print(f"  wrote                    : {json_path}")
+        # vibe-ic#969 — THE EXIT CODE IS A PROPERTY OF THE OBSERVATION, NOT OF
+        # THE FILESYSTEM. This write was unguarded, so `--json` pointed at a
+        # directory that does not exist raised FileNotFoundError and python
+        # exited 1 — the one code the docstring above promises this path can
+        # never produce, and the one `run_tolerating_uncheckable` does NOT
+        # tolerate (it tolerates rc 2 only; rc 1 is a FAIL). The reading was
+        # already taken and printed in full by then; failing to persist a copy
+        # of it cannot make the reading wrong, and must not be able to turn a
+        # landing red.
+        try:
+            p = Path(json_path)
+            if p.parent and not p.parent.exists():
+                p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+            print(f"  wrote                    : {json_path}")
+        except OSError as e:
+            print(f"  [warn] could not write {json_path}: "
+                  f"{e.__class__.__name__}: {e}")
+            print(f"         The reading above still stands and was printed in "
+                  f"full; only the persisted copy is missing. This path never "
+                  f"sets a verdict (vibe-ic#969).")
 
     if anchor_rc == 2 or latest_rc == 2:
         print("[NOT CHECKED] upstream currency: the registry did not answer. "
@@ -815,7 +939,37 @@ def main(argv=None) -> int:
         print(version)
         return 0
     if args.report_upstream:
-        return do_report_upstream(version, args.require_remote, args.json_path)
+        # THE INVARIANT IS ENFORCED HERE, NOT MERELY PROMISED IN A DOCSTRING
+        # (vibe-ic#969). "NEVER RETURNS 1" was a claim about the code as
+        # written, and the code as written could return 1 the moment `--json`
+        # named an unwritable path — a claim that holds only for the inputs
+        # somebody happened to try is not an invariant, it is a habit.
+        #
+        # Guarding the one write that was found (above) fixes the one instance.
+        # This clamp is what makes the SENTENCE true: whatever else this path
+        # ever grows — a second output file, a new registry accessor, a library
+        # that raises where today's does not — an unexpected failure degrades to
+        # rc 2 NOT CHECKED, which is this repo's word for "nothing was
+        # compared", and which `run_tolerating_uncheckable` accepts. It cannot
+        # silently become a PASS: 0 is returned only by the function itself.
+        #
+        # KeyboardInterrupt / SystemExit are BaseException and are deliberately
+        # NOT swallowed — a user's Ctrl-C is not an unreachable registry.
+        try:
+            rc = do_report_upstream(version, args.require_remote,
+                                    args.json_path)
+        except Exception as e:                                   # noqa: BLE001
+            print(f"[NOT CHECKED] upstream currency: the report itself failed "
+                  f"({e.__class__.__name__}: {e}). NOTHING was compared. This "
+                  f"is not a pass and not a landing verdict — the reporting "
+                  f"half never sets one (vibe-ic#969).")
+            return 2
+        if rc not in (0, 2):
+            print(f"[NOT CHECKED] upstream currency: the report returned an "
+                  f"out-of-contract code ({rc}); reported as NOT CHECKED "
+                  f"because this path may never fail a landing (vibe-ic#969).")
+            return 2
+        return rc
     if args.set:
         return do_set(root, vf, args.set, ignore, args.dry_run)
     if args.bump:
