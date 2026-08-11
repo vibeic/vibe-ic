@@ -1,8 +1,0 @@
-{
-  "fields": {
-    "power_domains": [
-      "3.3 V PCI I/O rail"
-    ],
-    "power_considerations": "Reuses the PCI clock and supply; optional CLKRUN# allows clock stopping for mobile power saving."
-  }
-}

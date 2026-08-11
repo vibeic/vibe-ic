@@ -1,9 +1,0 @@
-{
-  "fields": {
-    "attack_surface": [
-      "Flash Access channel exposes flash read/write — must be access-controlled.",
-      "OOB tunneling of SMBus/MCTP must validate message source."
-    ],
-    "security_notes": "eSPI itself defines no encryption; platform must gate Flash and OOB channels."
-  }
-}

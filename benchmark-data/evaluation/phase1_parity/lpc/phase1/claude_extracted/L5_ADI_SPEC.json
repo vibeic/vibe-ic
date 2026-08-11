@@ -1,6 +1,0 @@
-{
-  "ic_name": "Low Pin Count (LPC) Interface",
-  "analog_mixed_signal": "Digital synchronous parallel interface; 3.3 V PCI signaling; no analog blocks.",
-  "io_standard": "3.3 V PCI-compatible CMOS",
-  "not_applicable_reason": "LPC is a purely digital bus interface."
-}

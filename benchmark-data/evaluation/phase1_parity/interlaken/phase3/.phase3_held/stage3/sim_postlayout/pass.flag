@@ -1,7 +1,0 @@
-PASS
-# Auto-staged by phase3_one_shot_runner v1.6.36.
-# Evidence: phase2/stage1/sim/results.xml (RTL TB PASS) +
-# phase3/stage3/pnr/sta.rpt (post-route TNS=0).
-# Production tapeout requires SDF-annotated re-sim; this
-# flag is the open-source-flow approximation. Substance gate
-# (post_layout_sim_check) verifies the underlying RTL TB pass.

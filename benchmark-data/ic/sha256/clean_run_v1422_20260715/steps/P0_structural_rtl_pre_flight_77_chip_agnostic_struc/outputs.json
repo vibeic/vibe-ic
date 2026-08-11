@@ -1,8 +1,0 @@
-{
-  "id": "P0",
-  "name": "Structural-RTL pre-flight (77 chip-AGNOSTIC structural gates)",
-  "status": "pass",
-  "phase": "phase1",
-  "folder": "P0_structural_rtl_pre_flight_77_chip_agnostic_struc",
-  "outputs": []
-}

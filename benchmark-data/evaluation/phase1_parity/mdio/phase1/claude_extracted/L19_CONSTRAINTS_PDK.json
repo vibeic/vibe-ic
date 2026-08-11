@@ -1,7 +1,0 @@
-{
-  "fields": {
-    "pdk_target": "N/A (protocol spec, not a tapeout)",
-    "io_voltage": "1.2 V to 3.3 V (pull-up supply)",
-    "clock_max_mhz": 2.5
-  }
-}

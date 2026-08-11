@@ -1,8 +1,0 @@
-# running in formal_counter_formal_bmc/src/
-read_verilog -formal -DSPM_RESET_AT_T0 formal_counter.sv defines.v user_defines.v user_proj_example.v user_project_wrapper.v
-prep -top formal_counter
-
-hierarchy -smtcheck
-rename -witness
-write_jny -no-connections ../model/design.json
-write_rtlil ../model/design.il

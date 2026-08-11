@@ -1,8 +1,0 @@
-{
-  "program": "formal_proof_evidence_check",
-  "version": "1.0.0",
-  "findings": [
-    "SELF_REPORTED_SKIP (#675): results.json absent but the co-located sibling 'formal_not_run.json' honestly self-reports no proof ran (verdict=SKIPPED-CONDITION, #440 manifest shape) — vacuous for this gate, NOT a fabricated PASS"
-  ],
-  "verdict": "SKIPPED-CONDITION"
-}

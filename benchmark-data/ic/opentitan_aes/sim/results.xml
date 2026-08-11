@@ -1,9 +1,0 @@
-{
-  "verdict": "SKIP",
-  "reason": "no substantiating reference-TB evidence — refusing a verdict-only PASS (#433): reference_tb step verdict=FAIL; transcripts found=0",
-  "design_identity": {
-    "design": "opentitan_aes",
-    "ic_name": "opentitan_aes",
-    "top": "chip_top"
-  }
-}

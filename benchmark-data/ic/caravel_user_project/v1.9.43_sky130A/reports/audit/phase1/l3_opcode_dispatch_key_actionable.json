@@ -1,9 +1,0 @@
-{
-  "gate": "l3_opcode_dispatch_key_actionable_check",
-  "verdict": "VACUOUS_PASS",
-  "rc": 0,
-  "reason": "L3.opcodes empty/absent — no command protocol in input (structurally correct for non-protocol IPs).",
-  "total": 0,
-  "violations": [],
-  "unread_input_documents": []
-}
