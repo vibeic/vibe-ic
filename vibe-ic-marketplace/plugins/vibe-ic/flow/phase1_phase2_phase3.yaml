@@ -304,6 +304,40 @@ steps:
         # L8 STA period is design-owned, never sdc_gen's hardcoded default.
         # FAILs opentitan_aes, whose published SDC carries the default verbatim.
         - advisory_program_exit_zero: "l8_sta_clock_period_design_owned_check ."
+        # D9 Phase 1 — L6 states must carry the transitions their consumer needs.
+        # ADVISORY, and the reason is a MEASUREMENT, not a preference.
+        #
+        # BLAST RADIUS, re-measured on this branch's base (2ec8fc2f) with
+        # `tools/d9_corpus_baseline.py --only l6_fsm_scaffold_actionable_check`,
+        # unconditional per-cell isolation: 41 of 107 published roots red,
+        # 0 CLEAN, 66 NO-INPUT. Identical to the Phase-0 baseline at 93bfcf95f,
+        # so six intervening PRs moved nothing here.
+        #
+        # WHY NOT BLOCKING. Every one of the 41 is a TRUE finding — L6 declares
+        # states and zero transitions, and `emit_fsm_v()`'s body really is
+        # `// TODO — transition logic per L6.fsm_transitions`. But the defect is
+        # in the PRODUCER, not in 41 designs: across all 107 published
+        # L6_CONTROL_LOGIC.json, 36 carry `fsm_states` and exactly ONE (espi)
+        # carries a single transition. The prose-walker
+        # (`extraction_strategy: l6_fsm_prose_walker_v1_6_484`, 57 states) emits
+        # `transitions: []` every time it runs. Blocking would fail 41 published
+        # roots for one extractor, which is precisely why
+        # `l_doc_cross_consistency_check` above and `l17_…` before it are
+        # advisory: "BLOCKING would fail half the corpus for defects in the DOC
+        # PRODUCER, not in the designs."
+        #
+        # PROMOTION CONDITION, stated so it is a re-measurement and not a
+        # judgement call: repair the L6 transition extractor, then re-run the
+        # command above. When the red count is driven by designs rather than by
+        # the walker, this row becomes `program_exit_zero`.
+        #
+        # WIRED BARE (no `--json`) DELIBERATELY, like every sibling row in this
+        # block. Measured: `--json` makes it write a `verdict: FAIL` report into
+        # `reports/`, and `step_internal_fail_bubble_up_check` (Step 36, this
+        # PR) reads `reports/**/*.json` for exactly that field — so a `--json`
+        # here would manufacture the Step-36 red it then reports. See the
+        # cascade recorded at Step 36.
+        - advisory_program_exit_zero: "l6_fsm_scaffold_actionable_check ."
         # L7 debug/test access points are grounded in a layer that implements them
         - advisory_program_exit_zero: "l7_debug_access_grounding_check ."
         # every clock period an L8 consumer resolves is unique and actionable
@@ -599,6 +633,57 @@ steps:
         # not author), then a re-measure, then a per-step promotion with the
         # new number stated.
         - advisory_program_exit_zero: "arith_ss_corner_risk_check --strict phase2/stage1/rtl --json reports/phase2/gates/arith_ss_corner_risk.json"
+        # D9 Phase 1 — every submodule L9 DECLARES exists as a `module` in the
+        # RTL this flow generated, and is instantiated by something.
+        #
+        # WHY HERE AND NOT AT D1, where the other L-layer gates live: this one
+        # needs BOTH sides. `collect_rtl()` resolves `phase2/stage1/rtl` (then
+        # `rtl`, `asic_rtl`), which does not exist until Step 1 authors it. Wired
+        # at D1 it would return `VACUOUS_PASS: L9 missing or carries no
+        # submodules` on every project forever — measured, rc 0 — i.e. the
+        # permanent `__VACUOUS_HINT__` this file warns about for `spec_review_lint`.
+        # Step 2 is the first step whose gate block already reads
+        # `phase2/stage1/rtl`, so it is the earliest step where the question is
+        # answerable at all.
+        #
+        # BLAST RADIUS, re-measured on 2ec8fc2f with `tools/d9_corpus_baseline.py
+        # --only l9_submodule_conformance_check`: 8 of 107 red, 3 CLEAN,
+        # 96 NO-INPUT. Identical to the Phase-0 baseline.
+        #
+        # ADVISORY, and this one is a SPLIT VERDICT — all 8 reds were opened by
+        # hand, not sampled:
+        #   * 6 roots red because L9 declares a token that is NOT A MODULE and
+        #     never could be: `signed` (edge_llm_accel — a Verilog RESERVED
+        #     KEYWORD; `module signed` does not parse), `Checks` (an English
+        #     word), `min_distance` (x3 spm variants), `k28p5_special_char` +
+        #     `k27p7_special_char` (sgmii — 8b/10b comma characters, whose own
+        #     L9 `type` field reads "SATA state literal (Bug 9 L9 picker)" and
+        #     whose evidence is a PROSE LINE NUMBER). The finding is TRUE, but
+        #     its label — SUBMODULE_FILE_MISSING — points at the RTL for a
+        #     defect in the L9 EXTRACTOR. Blocking would tell an author to add
+        #     `module signed`.
+        #   * 1 REAL design-side gap: usb_pd. L9 declares `protocol_layer` and
+        #     `policy_engine`, each with a spec-section citation; the generated
+        #     RTL is a flat 694-line `chip_top` + `usb_pd_bmc_phy`. Filed.
+        #   * 1 WRONG RULER: edge_llm_matmul_accel. Its 8 declared submodules
+        #     carry NO evidence and NO confidence, and the RTL implements the
+        #     same function under a different, valid decomposition (`mac_pe`
+        #     instantiated, a generic `sram_sp` reused for the three memories).
+        #     Demanding a literal name match against an un-evidenced
+        #     decomposition is over-strict.
+        # 1 of 8 reds being a demonstrable wrong ruler is on its own enough to
+        # keep this out of the blocking slot.
+        #
+        # PROMOTION CONDITION: repair the L9 submodule extractor so a prose
+        # token cannot become a declared submodule, decide whether the
+        # decomposition is a CONTRACT or a SUGGESTION (layer-contract-doctrine),
+        # then re-run the command above.
+        #
+        # WIRED BARE (no `--json`) DELIBERATELY. Measured: with `--json` this
+        # program writes `{"verdict": "FAIL"}`, which Step 36's
+        # `step_internal_fail_bubble_up_check` reads as an unacknowledged
+        # step-internal FAIL. See the cascade recorded at Step 36.
+        - advisory_program_exit_zero: "l9_submodule_conformance_check ."
     blocks_on: [1]
 
   - id: 3
@@ -4070,6 +4155,56 @@ steps:
       all_of:
         - program_exit_zero: "tapeout_signoff_check . --mode tapeout --json reports/audit/tapeout_checklist.json"
         - advisory_program_exit_zero: "report_belongs_to_project_check . --json reports/audit/report_belongs_to_project.json"
+        # D9 Phase 1 — doctrine rule #4 at the step that signs off. A
+        # step-internal `verdict: FAIL` must be ACKNOWLEDGED (waivered, or the
+        # parent step's pass.flag dropped); silently keeping pass.flag while a
+        # `reports/**/*.json` declares FAIL is the fabrication shape.
+        #
+        # BLOCKING — the only one of this PR's three, and the reds are why.
+        # Re-measured on 2ec8fc2f with `tools/d9_corpus_baseline.py --only
+        # step_internal_fail_bubble_up_check`: 17 of 107 red, 90 CLEAN,
+        # 0 NO-INPUT, 0 ERROR. Identical to the Phase-0 baseline.
+        #
+        # ADJUDICATED BY HAND: 6 of the 17 roots opened (arm_aix, lpc, ibex,
+        # opentitan_aes, interlaken, espi) and the CONTENT of 4 cited reports
+        # read. All REAL, none a ruler artefact:
+        #   * interlaken `reports/phase3/antenna.json` — OpenROAD's own
+        #     `net_violations: 1, pin_violations: 1, clean: false`. espi and lpc
+        #     carry the same file at PASS, so the gate is not firing on presence.
+        #   * lpc `reports/spare_preservation.json` — 7 spare cells inserted,
+        #     `all_keep_attr_intact: false`. A Design-for-ECO defect.
+        #   * arm_aix `reports/phase1_one_shot.json` — the Phase-1 runner's own
+        #     `verdict: FAIL`, published.
+        # EVERY cited file was checked with `git ls-files --error-unmatch`
+        # before being believed, because the Phase-0 baseline had to RETRACT an
+        # adjudication built on a file its own sweep had created (§4.4). The 17
+        # span 21 DISTINCT report kinds across phase1/2/3 — spare cells, antenna,
+        # LEC, STA, DFT, FMEDA, foundry handoff — so this is a population of real
+        # defects, not one systemic shape.
+        #
+        # Blocking is affordable HERE specifically. Step 36 is the tapeout
+        # checklist; it `blocks_on: [31,32,33,34]`, so only a project that has
+        # reached physical sign-off is judged. A published Phase-1-only root is
+        # never asked the question.
+        #
+        # THE GATE'S OWN HYGIENE, verified rather than assumed:
+        #   * zero denominator REFUSES — an empty project returns rc 2
+        #     "[CANNOT DETERMINE] … no reports/ tree … NOT a pass".
+        #   * a PASS discloses its denominator — "PASS: 1 report(s) examined".
+        #   * it EXCLUDES ITS OWN report: run with `--json` into `reports/` and
+        #     re-run, and it does not cite the FAIL it just wrote. Measured on
+        #     arm_aix (still cites only phase1_one_shot.json) and afdx (stays
+        #     rc 0).
+        #
+        # THE CASCADE, stated because it constrains this PR's other two rows.
+        # This gate reads `reports/**/*.json` for `verdict`, so ANY gate wired
+        # with `--json` that writes a FAIL report manufactures a red here.
+        # MEASURED: `l20_dft_scan_topology_actionable_check` writes
+        # `reports/phase1/l20_….json` with `verdict: FAIL`, and running it flips
+        # afdx and jtag from rc 0 to rc 1 on THIS gate — two roots that are clean
+        # today. That is one of the two reasons l20 is NOT wired by this PR, and
+        # the reason l6/l9 above are wired BARE.
+        - program_exit_zero: "step_internal_fail_bubble_up_check ."
     blocks_on: [31, 32, 33, 34]
 
   - id: 37
