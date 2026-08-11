@@ -63,6 +63,41 @@ WHAT THIS GATE ENFORCES (each is a named nonconformance on failure)
                     the content should be retired. Deciding that is the owner's
                     call, and the entries can equally be MOVED into the cell they
                     belong to; both routes need the violation measured first.
+                      An `ic/<IC>/` that published NOTHING is not a unit that
+                    passed this rule; it is a unit the rule never got to judge.
+                    See ZERO DENOMINATOR below — that distinction is the whole
+                    subject of the rule, moved one level up.
+
+ZERO DENOMINATOR: A UNIT THAT EXAMINED NOTHING IS NOT A UNIT THAT PASSED (#967)
+==============================================================================
+Adding the IC-level rule (#952) made an EMPTY `ic/<IC>/` — no `input/`, no cell,
+no published entry of any kind — a CONFORMANT unit: `main()` relaxed the
+"nothing to check" refusal from `if not targets:` to `if not targets and not
+ic_dirs:`, so a tree of three empty IC directories printed **3/3 conformant**
+and exited 0 where the program had previously refused with rc 2. The rule was
+not wrong (an empty directory genuinely has no stray entries); the ROLL-UP was,
+because it credited a number that reads like coverage to a tree that published
+nothing. That is the same misreading #952 was written against.
+
+The repo already fixes the answer, in two rules that apply at two levels, and
+this program obeys both rather than inventing a third:
+
+  * `gate_discloses_denominator_check` — "a PASS must say how much it looked
+    at ... A gate may say PASS over zero items as long as a reader can SEE that
+    it was zero: a count, or an explicit 'no corpus' / 'nothing to check' /
+    SKIP." So a per-unit zero is DISCLOSED, never silently folded into a tally:
+    an IC directory with no published entry prints `[SKIP]` with its zero, and
+    is counted in neither the numerator nor the denominator. Every conforming
+    unit now also prints the count it judged.
+  * `gate_zero_denominator_refuses_check` — "the gate states it read NOTHING and
+    still exits 0 ... Either make it refuse (rc 2 is the disclosed-skip
+    convention)". So when NOTHING at all was examined — every discovered unit
+    skipped, no evidence folder anywhere — the whole run refuses with rc 2,
+    which is precisely the pre-#952 behaviour restored at the right place.
+
+`--changed-since` is untouched: grandfathering already answers "nothing changed
+to enforce" with rc 0 and a disclosure, and that is the CI shape
+`gatekeeper-land.sh` runs on every push that does not touch benchmark-data.
   NO_RAW_GEOMETRY   no *.gds / *.def / *.spef / *.oas ABOVE THE 50 MB COMMIT
                     CEILING is committed under the folder (#419). It used to
                     reject them by extension, and that rule FAILED all three
@@ -100,9 +135,11 @@ USAGE
 
 EXIT CODES
 ==========
-    0  every checked folder CONFORMS
+    0  every EXAMINED unit CONFORMS (>= 1 unit was examined)
     1  at least one folder is NONCONFORMANT
-    2  usage / I/O error (nothing meaningful was checked)
+    2  usage / I/O error, or NOTHING WAS EXAMINED — no evidence folder and no
+       IC directory that published anything. A zero denominator is a refusal,
+       not a pass (#967).
 """
 from __future__ import annotations
 
@@ -179,15 +216,39 @@ class FolderResult:
     pdk: Optional[str] = None
     version: Optional[str] = None
     verdict: Optional[str] = None
-    conforms: bool = True
+    # None = NO VERDICT WAS RENDERED (see `skip`). Deliberately not False: a
+    # unit that examined nothing did not fail, and deliberately not True: it did
+    # not pass either. A --json consumer summing `conforms is True` gets the
+    # honest numerator; one summing falsiness over-reports failures, which is
+    # the safe direction for a check whose whole subject is an undeserved PASS.
+    conforms: Optional[bool] = True
+    # How much this unit actually looked at, so a PASS says so on its own line
+    # (`gate_discloses_denominator_check`). None for a unit whose denominator is
+    # a fixed rule set rather than a discovered population (a cell).
+    examined: Optional[int] = None
+    # True iff the unit's denominator was ZERO. Excluded from BOTH the numerator
+    # and the denominator of the roll-up, and disclosed as `[SKIP]`.
+    skipped: bool = False
     failures: List[str] = field(default_factory=list)   # "RULE: message"
-    checks: Dict[str, bool] = field(default_factory=dict)
+    checks: Dict[str, Optional[bool]] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)     # "RULE: why it passed differently"
 
     def fail(self, rule: str, msg: str) -> None:
         self.conforms = False
         self.failures.append(f"{rule}: {msg}")
         self.checks[rule] = False
+
+    def skip(self, rule: str, why: str) -> None:
+        """Record that the rule had NOTHING to judge (#967).
+
+        Not `ok()`: a rule that found no violations because there was nothing
+        that COULD violate it has not been satisfied, it has been vacated, and
+        folding the two together is how "3/3 conformant" gets printed over a
+        tree that published nothing."""
+        self.skipped = True
+        self.conforms = None
+        self.checks[rule] = None
+        self.notes.append(f"{rule}: {why}")
 
     def ok(self, rule: str, note: str = "") -> None:
         """Record a pass. `note` is for a rule that passed on a DIFFERENT basis
@@ -527,6 +588,51 @@ def _changed_evidence_roots(base: str, targets: List[Path]) -> Tuple[Optional[Li
     return kept, f"changed-since {base}"
 
 
+def ic_level_entries(ic_dir: Path,
+                     include_staged: bool = False) -> Tuple[List[Path], List[Path]]:
+    """Return (published, strays) for the entries directly under `ic/<IC>/`.
+
+    `published` is the POPULATION the IC_LEVEL_LAYOUT rule judges — every entry
+    that counts as published content at that level: inside a git repo, a child
+    holding >= 1 tracked (optionally staged) file; outside one, every child.
+    `strays` is the subset that is neither the shared `input/` nor a
+    `v<major>.<minor>.<patch>_<PDK>` cell.
+
+    Split out for #967. `ic_level_strays` alone could not tell "this IC has
+    entries and all of them are allowed" from "this IC has no entries at all",
+    because both answer `[]` — and the roll-up read the second as a unit that
+    passed. The denominator has to be a value the caller can see, not a shape
+    the caller has to infer from an empty list.
+
+    The stray set is UNCHANGED by the split: the git-tracked filter now runs
+    before the allowed-entry filters instead of after, and every entry the
+    tracked filter drops was already dropped (an untracked `input/`, cell or
+    stray was a stray in neither ordering).
+    """
+    if not ic_dir.is_dir():
+        return [], []
+    repo = _git_toplevel(ic_dir)
+    tracked: Optional[Set[Path]] = None
+    if repo is not None:
+        tracked = _git_listed_files(repo, ic_dir, include_staged)
+
+    published: List[Path] = []
+    strays: List[Path] = []
+    for child in sorted(ic_dir.iterdir()):
+        if tracked is not None:
+            here = child.resolve()
+            if not any(p == here or str(p).startswith(str(here) + os.sep)
+                       for p in tracked):
+                continue        # a developer's local scratch: not PUBLISHED
+        published.append(child)
+        if child.name == "input" and child.is_dir():
+            continue
+        if child.is_dir() and _NAME_RE.match(child.name):
+            continue
+        strays.append(child)
+    return published, strays
+
+
 def ic_level_strays(ic_dir: Path, include_staged: bool = False) -> List[Path]:
     """Entries directly under `ic/<IC>/` that the layout contract does not allow.
 
@@ -545,34 +651,32 @@ def ic_level_strays(ic_dir: Path, include_staged: bool = False) -> List[Path]:
     counts only if it holds >= 1 tracked (optionally staged) file, so a local
     scratch directory a developer left beside the cells is not a finding about
     what was PUBLISHED. Outside a repo, every entry counts.
-    """
-    if not ic_dir.is_dir():
-        return []
-    repo = _git_toplevel(ic_dir)
-    tracked: Optional[Set[Path]] = None
-    if repo is not None:
-        tracked = _git_listed_files(repo, ic_dir, include_staged)
 
-    strays: List[Path] = []
-    for child in sorted(ic_dir.iterdir()):
-        if child.name == "input" and child.is_dir():
-            continue
-        if child.is_dir() and _NAME_RE.match(child.name):
-            continue
-        if tracked is not None:
-            here = child.resolve()
-            if not any(p == here or str(p).startswith(str(here) + os.sep)
-                       for p in tracked):
-                continue
-        strays.append(child)
-    return strays
+    Kept as the public name it has always been; the population half of the same
+    walk is `ic_level_entries`.
+    """
+    return ic_level_entries(ic_dir, include_staged=include_staged)[1]
 
 
 def check_ic_level_layout(ic_dir: Path,
                           include_staged: bool = False) -> FolderResult:
     """Validate the `ic/<IC>/` directory itself against the layout contract."""
     res = FolderResult(path=str(ic_dir), kind="ic-root", ic=ic_dir.name)
-    strays = ic_level_strays(ic_dir, include_staged=include_staged)
+    published, strays = ic_level_entries(ic_dir, include_staged=include_staged)
+    res.examined = len(published)
+    if not published:
+        # #967 — ZERO DENOMINATOR. Nothing was published at this level, so the
+        # layout contract judged nothing. `not strays` is true here for the same
+        # reason it is true of a perfectly laid-out IC, and reporting both as
+        # PASS is what let "3/3 conformant" be printed over three empty
+        # directories. rc-wise this is the disclosed-skip convention
+        # (`gate_zero_denominator_refuses_check`), not a verdict.
+        res.skip("IC_LEVEL_LAYOUT",
+                 "0 published entries under this IC directory — no input/, no "
+                 "v<ver>_<PDK> cell, nothing at all, so the layout contract had "
+                 "nothing to judge. Not counted as a conformant unit: a unit "
+                 "that examined nothing is not a unit that passed.")
+        return res
     if not strays:
         res.ok("IC_LEVEL_LAYOUT")
         return res
@@ -625,12 +729,28 @@ def _discover_evidence_folders(root: Path) -> List[Path]:
 # CLI.
 # --------------------------------------------------------------------------
 
+def _n_entries(n: int) -> str:
+    return f"{n} published entr{'y' if n == 1 else 'ies'}"
+
+
 def _print_folder(res: FolderResult) -> None:
-    tag = "PASS" if res.conforms else "FAIL"
+    # SKIP is checked FIRST: `res.conforms` is None for a skipped unit, and the
+    # `PASS if conforms else FAIL` ternary would have called it a FAIL — the
+    # opposite over-statement to the one #967 is about, and just as wrong.
+    tag = "SKIP" if res.skipped else ("PASS" if res.conforms else "FAIL")
     ident = res.path
     if res.kind == "ic-root":
-        print(f"[{tag}] {ident}"
-              + (f"  (IC={res.ic} IC-level layout)" if res.conforms else ""))
+        # A conforming IC-level unit now STATES ITS DENOMINATOR on its own line
+        # (`gate_discloses_denominator_check`): "N/N conformant" is only
+        # readable as coverage if each N says what it counted.
+        suffix = ""
+        if res.skipped:
+            suffix = (f"  (IC={res.ic} IC-level layout: examined nothing — "
+                      f"{_n_entries(res.examined or 0)}; NOT counted as a unit)")
+        elif res.conforms:
+            suffix = (f"  (IC={res.ic} IC-level layout: "
+                      f"{_n_entries(res.examined or 0)} examined, all allowed)")
+        print(f"[{tag}] {ident}{suffix}")
     else:
         print(f"[{tag}] {ident}"
               + (f"  (IC={res.ic} PDK={res.pdk} v{res.version} verdict={res.verdict})"
@@ -716,20 +836,57 @@ def main(argv: Optional[List[str]] = None) -> int:
     for r in results:
         _print_folder(r)
 
-    passed = sum(1 for r in results if r.conforms)
-    failed = len(results) - passed
+    # #967 — the printed count is the count ACTUALLY EXAMINED. A unit whose
+    # denominator was zero is in neither the numerator nor the denominator, and
+    # is disclosed on its own instead of being absorbed into "N/N conformant".
+    examined = [r for r in results if not r.skipped]
+    skipped = [r for r in results if r.skipped]
+    passed = sum(1 for r in examined if r.conforms)
+    failed = len(examined) - passed
+    tail = ""
+    if skipped:
+        tail = (f", {len(skipped)} skipped (examined nothing: "
+                + "; ".join(f"{r.ic or Path(r.path).name}={_n_entries(r.examined or 0)}"
+                            for r in skipped)
+                + ") — counted as neither conformant nor nonconformant")
     print(f"\nbenchmark_evidence_structure_check: "
-          f"{passed}/{len(results)} conformant, {failed} nonconformant")
+          f"{passed}/{len(examined)} conformant, {failed} nonconformant{tail}")
 
     if args.json:
         Path(args.json).write_text(
             json.dumps(
-                {"checked": len(results),
+                {"checked": len(examined),
                  "conformant": passed,
                  "nonconformant": failed,
+                 "skipped_examined_nothing": len(skipped),
+                 "discovered": len(results),
                  "folders": [asdict(r) for r in results]},
                 indent=2),
             encoding="utf-8")
+
+    if not examined:
+        # Every discovered unit examined nothing. `gate_zero_denominator_refuses
+        # _check`: "the gate states it read NOTHING and still exits 0 ... Either
+        # make it refuse (rc 2 is the disclosed-skip convention)". This restores
+        # the pre-#952 refusal at the level where the hole actually opened.
+        if args.changed_since:
+            # Grandfathering already answers rc 0 with a disclosure, and that is
+            # the shape every push runs. Not widened, not narrowed.
+            print(f"benchmark_evidence_structure_check: nothing changed since "
+                  f"{args.changed_since} that published anything — "
+                  f"nothing to enforce.")
+            return 0
+        print(f"ERROR: nothing was examined — {len(skipped)} IC director"
+              f"{'y' if len(skipped) == 1 else 'ies'} discovered and every one "
+              f"published nothing (no input/, no v<ver>_<PDK> cell, no entry of "
+              f"any kind), and no evidence folder was found. A unit that "
+              f"examined nothing is not a unit that passed, so this is a "
+              f"refusal rather than a tally of {len(skipped)} conformant "
+              f"unit(s). (The N/N form is deliberately not printed here: a "
+              f"reader — or a grep — must not be able to lift a coverage "
+              f"number out of a run that covered nothing.)",
+              file=sys.stderr)
+        return 2
 
     return 0 if failed == 0 else 1
 
