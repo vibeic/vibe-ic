@@ -91,12 +91,18 @@ mode — verification is the gate, not permission.
    ```
    cd vibeic-eda/fork-gatekeeper
    GK_PRODUCTION_WRITER=1 python3 discover_forks.py   # refresh the ledger
-   GK_PRODUCTION_WRITER=1 python3 build_page.py --out /home/reyerchu/vibeic.ai/eda-forks.html
+   GK_PRODUCTION_WRITER=1 python3 build_page.py \
+     --out "${GK_SITE_ROOT:?set GK_SITE_ROOT to the vibeic.ai document root on the serving host}/eda-forks.html"
    ```
-   `vibeic.ai` serves directly from disk (proxied to 192.168.1.112:3847), so
-   the page is live the moment `build_page.py` exits — verify with
-   `curl -s https://vibeic.ai/eda-forks.html | cmp - <the file>`, not by
-   trusting rc=0 alone. A 2026-08-05 incident: an owner asked "why hasn't
+   `GK_SITE_ROOT` is the directory the site is served FROM, on the machine
+   that serves it — it is a per-operator checkout path, so it is deliberately
+   not baked in here. Set it in that host's environment; the `:?` makes an
+   unset variable abort with that message instead of silently writing the page
+   to a path nobody serves, which is the failure this spelling exists to
+   prevent. `vibeic.ai` serves directly from disk (proxied to
+   192.168.1.112:3847), so the page is live the moment `build_page.py` exits
+   — verify with `curl -s https://vibeic.ai/eda-forks.html | cmp - <the file>`,
+   not by trusting rc=0 alone. A 2026-08-05 incident: an owner asked "why hasn't
    the page updated" after an entire evening spent on an image release,
    because the page update is a completely separate, much cheaper step that
    had simply never been run.

@@ -48,9 +48,8 @@ Two real, independent run directories, ledger built by the real emitter
 (2026-08-06):
 
     run                                                D7 residual   W2 promotions
-    /home/reyerchu/_sky130A_r3_run                            335              12
-    /home/reyerchu/campaign_v1544/spm/
-        converge_1.5.44_gf180mcuD                             264               9
+    $HOME/_sky130A_r3_run                                      335              12
+    $HOME/campaign_v1544/spm/converge_1.5.44_gf180mcuD         264               9
 
 "335 candidates" is NOT 335 findings, and the gap is the point. Of the 335,
 328 are captured by no ``required_outputs`` entry at all; of those, 327 can be
@@ -95,7 +94,7 @@ design" is stating something the run's own log contradicts.
 END TO END ON A REAL RUN, WITH THE RECORD ACTUALLY COMMITTED
 ============================================================
 The table above is the residual filtered on paper. Measured for real: a copy
-of ``/home/reyerchu/_sky130A_r3_run`` (455 files, mtimes preserved,
+of ``$HOME/_sky130A_r3_run`` (455 files, mtimes preserved,
 ``mtime_fidelity.top_mtime_share`` 0.165 so nothing is withheld) made into a
 git repository, its ledger emitted by ``step_write_ledger`` and COMMITTED, and
 this module pointed at it:
@@ -270,6 +269,20 @@ import step_write_ledger as _swl  # noqa: E402
 #: admissible here.
 RECORD_REL = "reports/write_ledger.json"
 
+#: Bound for the `git ls-tree` below. NOT a round number picked by feel:
+#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
+#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. Above that the inner bound can never fire: pytest reaches
+#: 180 s first and takes the whole SESSION down, so `--maxfail` stops counting
+#: and every other file in the subset loses its verdict, including files that
+#: had already passed. This module is not a `test_` file but it is scanned and
+#: it is spent by five test files, which is exactly why the ceiling applies.
+#: The landed value was 120. MEASURED here: `git ls-tree -r HEAD` over this
+#: checkout's 21945 tracked entries takes 0.01 s, so 60 s is a hang detector
+#: for a hung `git`, which is the only way this call can fail to return.
+_LS_TREE_TIMEOUT_S = 60
+
 #: The residual key this dimension reads. Quoted from the emitter's own output
 #: shape rather than guessed; :func:`_load` fails loudly if it disappears.
 _RESIDUAL_KEY = "written_never_declared"
@@ -350,7 +363,7 @@ def _git_tracked(root: Path) -> frozenset:
     try:
         proc = subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", "-z", "HEAD"],
-            cwd=str(root), capture_output=True, timeout=120,
+            cwd=str(root), capture_output=True, timeout=_LS_TREE_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError):
         return frozenset()

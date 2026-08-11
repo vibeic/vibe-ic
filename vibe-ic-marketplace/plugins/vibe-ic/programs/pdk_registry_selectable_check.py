@@ -47,6 +47,30 @@ container is reachable it reports SKIPPED for that half and says so. It is
 never folded into a PASS: "I could not look" and "I looked and it is clean"
 are different claims, and collapsing them is the defect #408 is about.
 
+WHICH IMAGE THE ASSET HALF LOOKS INSIDE
+---------------------------------------
+The asset half's authority is the image `tools/vibeic-eda/VERSION` PINS (or
+an explicit `VIBEIC_EDA_IMAGE`). `--container` is a SPEED shortcut for
+reading that same image, and it is used ONLY when the named container is
+actually running it.
+
+It did not used to be. Any live container with the right NAME was believed,
+and a long-lived container keeps the image it was CREATED from forever — a
+newer pull does not touch it — so the gate's verdict was a function of
+unpinned host state and the same commit answered differently on different
+hosts. MEASURED on one host, one pristine tree, `git status --porcelain`
+empty: against a container on the pinned image, rc=0 and 33/33 declared
+paths resolve; against a container on the upstream BASE image, rc=1 with ten
+"resolves to nothing" findings — every nangate45 and every asap7 asset —
+because that image ships neither PDK. The registry was identical in both
+runs. The false-FAIL direction wastes a reader; the false-PASS direction
+(container NEWER than the pin) is worse, because it lets a pin that cannot
+provide what the registry advertises ship as clean.
+
+A container that is not on the pinned image is therefore skipped, loudly,
+and the pinned image is read directly. A rejected container is NOT a finding
+— it is a fact about the host, not about `pdk_registry.json`.
+
 chip-AGNOSTIC: reads the registry's own data. `custom_auto_detect` carries no
 `container_path` (it is the auto-detect sentinel, not a directory), so the
 name rule applies only to entries that declare a path.
@@ -66,6 +90,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -95,8 +120,51 @@ def _image_tag() -> str:
     return f"{_GHCR_REPO}:latest"
 
 
-def _resolve_target(container: str):
-    """('exec', name) | ('run', image) | None — how to reach the PDK tree.
+def _image_of_container(container: str):
+    """The image a live container is RUNNING, as (ref, id), or None.
+
+    Delegates to `container_image_provenance`, the program that already owns
+    this question, so there is one implementation of "which image is that
+    container actually on" rather than a second one that can drift from it.
+    """
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import container_image_provenance as _cip
+    except ImportError:                                  # pragma: no cover
+        return None
+    rec = _cip.inspect_container(container)
+    if rec.get("status") != "ok" or not rec.get("running"):
+        return None
+    return (str(rec.get("image_ref") or ""), str(rec.get("image_id") or ""))
+
+
+def _image_id(ref: str):
+    """Content-addressed id of a local image ref, or None when absent.
+
+    Never raises: a host with no docker binary must report "I could not look",
+    which is what None means here, and never crash the name half — that half
+    needs no image at all.
+    """
+    try:
+        p = subprocess.run(["docker", "image", "inspect", "--format",
+                            "{{.Id}}", ref], capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (p.stdout or "").strip() or None if p.returncode == 0 else None
+
+
+# Resolution is decided ONCE. It used to be recomputed inside every
+# `_resolves` call — 33 `docker exec` probes for 33 declared assets — and it
+# now costs a `docker inspect` too, so memoise it. The memo is keyed by
+# container name and holds the WHY as well as the target, because the report
+# has to be able to say what it looked inside.
+_TARGET_MEMO: Dict[str, Any] = {}
+
+
+def _decide_target(container: str):
+    """(target, why) — target is ('exec', name) | ('run', image) | None.
 
     #408 finding 1 is that the asset half never actually ran. It required a
     LIVE container named `vibeic-eda`; this host runs `vpp_eda_030` and CI
@@ -105,16 +173,74 @@ def _resolve_target(container: str):
     half alone. An IMAGE is enough to answer the question — `docker run --rm`
     on the pinned tag reads the same /foss/pdks — so a missing container is no
     longer a reason not to look.
+
+    THE CONTAINER IS A SHORTCUT, NOT THE AUTHORITY (this fix). `--container`
+    names a CONTAINER, and a long-lived container keeps the image it was
+    CREATED from forever: pulling a newer tag does not touch it, and nothing
+    stops the name `vibeic-eda` sitting on an entirely different image. The
+    sentence above — "`docker run --rm` on the pinned tag reads the same
+    /foss/pdks" — is only true when the container IS the pinned image, and
+    that was never checked. So the gate's verdict was a function of unpinned
+    host state: the SAME commit answered differently on different hosts, and
+    both answers were reported as facts about the registry.
+
+    MEASURED, on one host, one pristine tree, `git status --porcelain` empty:
+      container on the pinned image  -> rc=0, 33/33 declared paths resolve
+      container on the upstream base -> rc=1, 10 findings (all five nangate45
+                                        assets + all five asap7 assets
+                                        "resolves to nothing")
+    The upstream base image genuinely ships neither PDK; the pinned image
+    ships both. Neither run says anything about `pdk_registry.json`, and the
+    second one is a false FAIL that reads exactly like a real registry defect.
+    The same mechanism produces a false PASS whenever the container is NEWER
+    than the pin, which is the direction that lets a broken pin ship.
+
+    This is the defect `container_image_provenance` was written for
+    ("Stale-container substitution (silent)"), measured elsewhere in this repo
+    as a run that "VERIFIED one image and silently used another" and voided 24
+    downstream steps. The gate that certifies the image must not itself be
+    guessing which image it is looking at.
+
+    So: use the container ONLY when its image identity matches the pin, else
+    fall back to the pinned image, else report nothing-to-look-at. A rejected
+    container is NOT a finding — it is a fact about the host, not about the
+    registry, and failing on it would make a gate people route around — but it
+    IS printed, because "what did you look inside" must never be a guess.
     """
-    if container and subprocess.run(
-            ["docker", "exec", container, "true"],
-            capture_output=True, text=True).returncode == 0:
-        return ("exec", container)
     img = _image_tag()
-    if subprocess.run(["docker", "image", "inspect", img],
-                      capture_output=True, text=True).returncode == 0:
-        return ("run", img)
-    return None
+    why: Dict[str, Any] = {"pinned_image": img, "container_rejected": None}
+    if container:
+        got = _image_of_container(container)
+        if got is not None:
+            ref, cid = got
+            want_id = _image_id(img)
+            if ref == img or cid == img or (want_id and want_id == cid):
+                why["source"] = f"container {container!r} (image {ref})"
+                return ("exec", container), why
+            why["container_rejected"] = {
+                "container": container, "image_ref": ref,
+                "image_id": cid[:19], "pinned_image": img,
+                "why": "the container is not running the pinned image, so "
+                       "anything found inside it is a fact about that image, "
+                       "not about the one this repo pins",
+            }
+    if _image_id(img) is not None:
+        why["source"] = f"pinned image {img}"
+        return ("run", img), why
+    why["source"] = None
+    return None, why
+
+
+def _resolve_target(container: str):
+    """('exec', name) | ('run', image) | None — how to reach the PDK tree."""
+    return _target_and_why(container)[0]
+
+
+def _target_and_why(container: str):
+    key = container or ""
+    if key not in _TARGET_MEMO:
+        _TARGET_MEMO[key] = _decide_target(container)
+    return _TARGET_MEMO[key]
 
 
 def _sh(target, script: str):
@@ -260,12 +386,26 @@ def audit(registry: Path, container: str) -> dict:
         for rp, base in sorted(shipped_trees(container).items()):
             if rp not in registered_resolved:
                 shipped_unregistered.append({"path": rp, "basename": base})
+    # WHAT WAS LOOKED INSIDE is part of the answer, not colour. A finding
+    # ("this asset resolves to nothing") is only a claim about the registry
+    # when the thing inspected is the image the repo pins; the same finding
+    # against a foreign container is a claim about that container. Record it
+    # so `--json` carries it and no reader has to assume.
+    try:
+        why = dict(_target_and_why(container)[1])
+    except (OSError, subprocess.SubprocessError):        # pragma: no cover
+        why = {"pinned_image": _image_tag(), "container_rejected": None}
+    if not have_image:
+        why["source"] = None
     return {"readable": True, "entries": len(entries),
             "unselectable": unselectable,
             "implicit_tapless": implicit_tapless,
             "asset_check": "ran" if have_image else "SKIPPED",
             "container": container, "assets_checked": assets_checked,
             "unresolved": unresolved,
+            "asset_source": why.get("source"),
+            "pinned_image": why.get("pinned_image"),
+            "container_rejected": why.get("container_rejected"),
             "shipped_unregistered": shipped_unregistered}
 
 
@@ -290,13 +430,19 @@ def main(argv=None) -> int:
         return 2
 
     print(f"pdk_registry_selectable_check: {rep['entries']} registry entr(ies)")
+    rej = rep.get("container_rejected")
+    if rej:
+        print(f"  container {rej['container']!r} NOT used: it runs "
+              f"{rej['image_ref']} ({rej['image_id']}), not the pinned "
+              f"{rej['pinned_image']} — {rej['why']}")
     if rep["asset_check"] == "ran":
         print(f"  asset resolution : {rep['assets_checked']} declared path(s) "
-              f"checked in container {rep['container']!r}")
+              f"checked in {rep.get('asset_source')}")
     else:
-        print(f"  asset resolution : SKIPPED — container "
-              f"{rep['container']!r} not reachable. This half was NOT "
-              f"checked; it is not a clean result.")
+        print(f"  asset resolution : SKIPPED — neither container "
+              f"{rep['container']!r} on the pinned image nor the pinned image "
+              f"{rep.get('pinned_image')} itself is reachable. This half was "
+              f"NOT checked; it is not a clean result.")
 
     # Shipped-but-unregistered is reported against a SHRINK-ONLY register:
     # `ihp-sg13cmos5l` predates this gate, and failing main on a pre-existing

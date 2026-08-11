@@ -39,9 +39,28 @@ Usage:
     python3 blocker_classification_check.py <...> --json out.json
 
 Exit codes:
-    0 = every report checked satisfies the contract (or predates it)
+    0 = at least one report CARRIED the contract and every checked report
+        satisfies it
     1 = at least one contract violation
-    2 = usage / I/O error
+    2 = usage / I/O error, or NOTHING EXERCISED THE GUARD
+
+THE LAST ONE IS THE POINT, AND IT USED TO BE A 0
+------------------------------------------------
+A sweep over reports that ALL predate the contract takes the `blockers is None`
+early return on every one of them: none of the five rules above ever runs. The
+first version of this program answered 0 there, and PR #858's review measured
+exactly that state — `--dir` over the 5 committed reports, exit 0, guard body
+never entered. `test_blocker_classification_sweep_reaches_its_guard` was written
+from it and says it plainly: *a sweep whose guard is never entered is a green
+light wired to nothing.* The test pins that the guard CAN be entered; it cannot
+stop a caller from reading a green that means "nothing was exercised" as one
+that means "the reports are clean".
+
+So the program refuses the verdict instead. `exercised = checked - pre_contract`
+is the denominator every run prints, and when it is zero the answer is
+NOT_CHECKED / rc 2 — this repo's vacuous-exit convention, which
+`_gate_dispatch.sh` records as NOT_CHECKED rather than folding into PASS. It
+goes green by itself the first time a contract-carrying report is swept.
 """
 from __future__ import annotations
 
@@ -250,22 +269,44 @@ def main(argv: Optional[List[str]] = None) -> int:
         for v in f["violations"]:
             print(f"      - {v}")
 
+    # The number that decides whether this run MEASURED anything: a report
+    # without the `blockers` key leaves `check_report` at its pre-contract
+    # early return, so none of the five rules ran on it. See the exit-code
+    # note in the module docstring — this used to be folded into PASS.
+    exercised = checked - pre_contract
+    if failures or unreadable:
+        verdict = "FAIL"
+    elif exercised > 0:
+        verdict = "PASS"
+    else:
+        verdict = "NOT_CHECKED"
+
     result = {
         "program": "blocker_classification_check",
         "reports_checked": checked,
         "pre_contract_reports": pre_contract,
+        "reports_exercising_the_contract": exercised,
         "non_report_json_skipped": skipped_not_a_report,
         "class_totals": totals,
         "unreadable": unreadable,
         "failures": failures,
-        "verdict": "FAIL" if (failures or unreadable) else "PASS",
+        "verdict": verdict,
     }
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(json.dumps(result, indent=2,
                                               ensure_ascii=False))
-    print(f"blocker_classification_check: {result['verdict']}")
-    return 1 if result["verdict"] == "FAIL" else 0
+    if verdict == "NOT_CHECKED":
+        print(f"blocker_classification_check: NOT_CHECKED — 0 of {checked} "
+              f"compliance report(s) carried a `blockers` key "
+              f"({pre_contract} predate the contract, "
+              f"{skipped_not_a_report} JSON file(s) were not compliance "
+              f"reports), so not one of this guard's rules executed. That is "
+              f"not a clean sweep, and reporting it as one is the defect this "
+              f"guard exists to stop downstream.")
+        return 2
+    print(f"blocker_classification_check: {verdict}")
+    return 1 if verdict == "FAIL" else 0
 
 
 if __name__ == "__main__":

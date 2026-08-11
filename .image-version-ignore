@@ -159,3 +159,15 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue789_streamout_layer
 # Registered rather than rewritten. If the measurement is ever REDONE on a newer
 # image, update the number and the tag together, in that order.
 vibe-ic-marketplace/plugins/vibe-ic/programs/fault_scan_chain_insert.py
+
+# test_pdk_registry_asset_half_reads_the_pinned_image.py:48 — ghcr=9.9.9 is a
+# FIXTURE, deliberately a version that can never exist, used to prove the asset
+# half reads the PINNED image rather than whatever container is lying around.
+# Advancing it with VERSION would destroy the property the test exists to check:
+# a fixture that tracks the anchor cannot detect a resolver that also tracks the
+# anchor for the wrong reason.
+#
+# Restored after a rebase: resolving the .image-version-ignore conflict by
+# taking the base side dropped this entry, and the sync gate caught it — which
+# is what it is for.
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_pdk_registry_asset_half_reads_the_pinned_image.py

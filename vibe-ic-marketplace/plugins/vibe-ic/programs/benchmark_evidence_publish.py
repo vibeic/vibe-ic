@@ -533,6 +533,15 @@ _CITATION_HEADER = (
     "# It does not decide whether the claim is TRUE — the run may well have\n"
     "# closed timing — only whether this cell lets you check it.\n"
     "#\n"
+    "# WHAT OUT_OF_PUBLISHED_SCOPE IS NOT. It is not a name for every path a\n"
+    "# reader cannot reach. The cell is asked whether it carries ANYTHING at\n"
+    "# that location: nothing there means the layout excludes it; a directory\n"
+    "# that ships its neighbours and not this file is a HOLE, and is recorded\n"
+    "# as DANGLING / DANGLING_UNDER_PASS. The distinction is load-bearing\n"
+    "# downstream — evidence_citation_resolves_check honours\n"
+    "# OUT_OF_PUBLISHED_SCOPE and deliberately does not honour DANGLING*, so\n"
+    "# the wrong word here retires a finding instead of reporting one.\n"
+    "#\n"
     "# Emitted even when every citation resolves: a record that only appears\n"
     "# on failure cannot be used to prove there were none.\n")
 
@@ -580,6 +589,122 @@ def _gate_citations(doc: Path) -> set:
         return set()
 
 
+def _git_tracked(dest: Path) -> Optional[set]:
+    """Paths git already TRACKS under `dest`, relative to it — or None when
+    git cannot answer, which is a different fact from "nothing is tracked".
+
+    At publish time `dest` is freshly staged and not yet added, so the honest
+    answer there is the empty set; run as a re-derivation over an already
+    published cell it is the cell's own file list."""
+    try:
+        cp = subprocess.run(["git", "ls-files", "-z", "--", "."],
+                            cwd=str(dest), capture_output=True, text=True,
+                            timeout=55)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if cp.returncode != 0:
+        return None
+    return {p for p in cp.stdout.split("\0") if p}
+
+
+def _clone_visible(dest: Path, rels: set) -> set:
+    """Of `rels` (paths relative to `dest`, all present on disk), the ones a
+    CLONE of this repository actually receives.
+
+    THE DEFECT THIS CLOSES. "It is in `dest`" and "the reader gets it" are two
+    different facts, and a repo-wide `.gitignore` rule is the gap between them.
+    MEASURED on the two published spm cells as committed: 45 CITATION_ROUTING
+    rows said RESOLVES because the cited log WAS sitting in the staged
+    directory when this program ran — and `*.log` at the repo root meant `git
+    add` never carried one of them. The record whose entire job is to tell a
+    reader whether a pointer can be followed asserted the good outcome for 45
+    pointers no reader could follow. Not a stale record: false when written.
+
+    `_prune_provenance` already draws this exact line, on the same publish,
+    for the same class of file — its docstring names `phase2/stage2/synth/
+    synth.log` by path. This function is that definition applied to the other
+    record, so the one publish stops holding two answers to one question.
+
+    CARRIAGE IS `tracked OR not ignored`, never `not ignored` alone: git stops
+    applying ignore rules to a path it already tracks, and this repo force-adds
+    evidence logs for exactly that reason. Asking only about ignore rules would
+    disclose a file the reader demonstrably receives.
+
+    FAIL-OPEN, deliberately. If git cannot answer, every disk-present path is
+    treated as carried — the behaviour that shipped before this. The wrong
+    direction to fail is toward a false disclosure: `evidence_citation_resolves
+    _check` HONOURS OUT_OF_PUBLISHED_SCOPE, so a disclosure invented by a git
+    hiccup would suppress a real finding. A false RESOLVES, by contrast, is
+    caught by `citation_routing_is_true_check`.
+    """
+    if not rels:
+        return set()
+    tracked = _git_tracked(dest)
+    if tracked is None:
+        return set(rels)
+    return (set(rels) - _git_ignored(dest, rels)) | (tracked & set(rels))
+
+
+def _carried_dirs(dest: Path) -> Optional[set]:
+    """The directories a CLONE of this cell RECEIVES, as posix relatives
+    ("" is the cell root). None when git could not be asked.
+
+    WHY THIS REPLACES A STRING PREFIX. `OUT_OF_PUBLISHED_SCOPE` makes one
+    specific promise and its consumer relies on exactly that promise:
+    `evidence_citation_resolves_check` honours it (with
+    `UNFOLLOWABLE_ABSOLUTE`) and NOTHING else, because it names a STRUCTURAL
+    reason — the publisher's layout does not carry this path. Honouring it
+    RETIRES the finding.
+
+    What decided it was the prefix `phase{1,2,3}/stage`. MEASURED on the two
+    published cells this landing repairs, that prefix is TRUE of
+    `phase3/stage3/pnr/` (0 files shipped) and FALSE of
+    `phase2/stage2/synth/` (10 shipped) and
+    `phase2/stage2/dft/tdf/` (5). So `synth.log`, `yosys.log` and
+    `tdf/sat_run.log` were recorded as "the layout excludes them" while the
+    layout demonstrably carries their neighbours; the same path
+    `phase2/stage1/sim_full_stack/oracle_run/oracle.log` RESOLVES in a cell
+    that force-added it. The prefix was standing in for a fact nobody checked.
+
+    THE SAME FACT IN BOTH MODES, which is why it is answered through
+    `_clone_visible` rather than by looking at the disk. At publish time
+    `dest` is staged and nothing is tracked yet, so the ignore rules decide;
+    on a re-derivation over an already published cell the tracked set decides.
+    One definition of carriage, two callers.
+
+    None when git cannot answer — never "nothing is carried", which would
+    declare every citation out of scope and silence the gate wholesale.
+    """
+    if _git_tracked(dest) is None:
+        return None
+    files = {q.relative_to(dest).as_posix()
+             for q in dest.rglob("*") if q.is_file()}
+    if not files:
+        return None
+    return {f.rpartition("/")[0] for f in _clone_visible(dest, files)}
+
+
+def _layout_excludes(cited: str, carried_dirs: Optional[set]) -> bool:
+    """Is `cited` unreachable because the published LAYOUT does not carry it,
+    as opposed to because it is a hole in a subtree the layout does carry?
+
+    The prefix test stays as the outer condition — nothing outside
+    `phase{N}/stage…` was ever judged this way and this is not the change to
+    widen it. What is new is that the prefix no longer DECIDES: the cell is
+    asked whether it carries anything at that location.
+
+    Falls back to the prefix alone when git could not be asked, i.e. to
+    exactly the rule that shipped before this. So the correction can only ever
+    turn OUT_OF_PUBLISHED_SCOPE into DANGLING*, never the reverse: an
+    unreachable git cannot manufacture a hole, and cannot silence one either.
+    """
+    if not any(cited.startswith(f"phase{n}/stage") for n in "123"):
+        return False
+    if carried_dirs is None:
+        return True
+    return cited.rpartition("/")[0] not in carried_dirs
+
+
 def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     """Every evidence path the STAGED tree's own JSONs cite, and whether it
     resolves inside the published cell.
@@ -591,6 +716,8 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
     if not dest.is_dir():
         return out
     seen = set()
+    pending: List[Dict[str, object]] = []
+    on_disk: set = set()
     # Walk the PUBLISHED tree, not this machine's disk. At publish time `dest`
     # is a freshly staged directory and the two agree; run as an AUDIT over an
     # already-published cell they do not, and a working checkout carries
@@ -632,16 +759,43 @@ def collect_citation_records(dest: Path) -> List[Dict[str, str]]:
                 # is legitimate provenance. Only a path something is expected
                 # to FOLLOW is a defect.
                 decision = "UNFOLLOWABLE_ABSOLUTE"
-            elif (dest / cited).exists():
+            else:
+                # DEFERRED, all of it. Two facts decide every remaining row and
+                # neither is on this machine's disk: does a CLONE carry this
+                # path, and — when it does not — does the clone carry anything
+                # at all at that location? "On disk" is not the same fact as
+                # "the reader gets it", and "absent" is not the same fact as
+                # "the publisher's layout excludes it".
+                decision = None
+                if (dest / cited).exists():
+                    on_disk.add(cited)
+            pending.append({"doc": rel_doc, "cited": cited,
+                            "decision": decision,
+                            "asserted": cited in asserted})
+
+    # SECOND PASS — decided against `git`, not against this machine's disk.
+    # Only the absolute paths were final above.
+    carried = _clone_visible(dest, on_disk)
+    carried_dirs = _carried_dirs(dest)
+    for row in pending:
+        decision = row["decision"]
+        if decision is None:
+            cited = str(row["cited"])
+            if cited in carried:
                 decision = "RESOLVES"
-            elif any(cited.startswith(f"phase{n}/stage") for n in "123"):
+            elif _layout_excludes(cited, carried_dirs):
                 decision = "OUT_OF_PUBLISHED_SCOPE"
-            elif cited in asserted:
+            elif row["asserted"]:
+                # A HOLE, NOT A DISCLOSURE: the reader receives this directory
+                # and not this file. Saying OUT_OF_PUBLISHED_SCOPE here would
+                # retire `evidence_citation_resolves_check`'s finding for a
+                # PASS whose proof still ships nowhere — one line in a routing
+                # file standing in for the missing artefact.
                 decision = "DANGLING_UNDER_PASS"
             else:
                 decision = "DANGLING"
-            out.append({"doc": rel_doc, "cited": cited,
-                        "decision": decision})
+        out.append({"doc": str(row["doc"]), "cited": str(row["cited"]),
+                    "decision": str(decision)})
     return out
 
 

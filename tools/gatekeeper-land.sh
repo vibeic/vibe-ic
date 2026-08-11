@@ -194,7 +194,7 @@ run_pytest() {
     echo "  FAIL  targeted test selection produced no files — not a clean result"
     FAILED=1; return
   fi
-  if out="$( cd "$PLUGIN" && xargs -a "$sel" pytest -q --maxfail=10 --timeout=180 --timeout-method=thread 2>&1 )"; then
+  if out="$( cd "$PLUGIN" && xargs -a "$sel" python3 -m pytest -q --maxfail=10 --timeout=180 --timeout-method=thread 2>&1 )"; then
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
   else
     printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"

@@ -77,6 +77,16 @@ _Per-opcode / per-mode coverage detail belongs in_ `reports/chip_specific_summar
 
 _Per_ `flow/phase1_phase2_phase3.yaml` _v2._
 
+> **How to read the `Output` column.** It names the REQUIRED output of the step
+> as `flow/phase1_phase2_phase3.yaml` declares it - a specification, not an
+> artefact this deliverable ships. Every step in the tables below is skipped, so
+> none of these files was produced. The column is rendered truncated, which hides
+> that for most rows; the two paths short enough to survive truncation are
+> therefore written WITHOUT backticks and marked _(not produced)_, so that no
+> reader and no citation checker can mistake a required output for a proof this
+> deliverable carries. `reports/reports/audit/phase23_completion_audit.json`
+> records the same fact for both: "no required_outputs found".
+
 ### P0 — Structural-RTL umbrella (chip-agnostic checkers)
 
 | ID | Coverage | V |
@@ -104,7 +114,7 @@ _Per_ `flow/phase1_phase2_phase3.yaml` _v2._
 | 10 | Pre-layout STA | 9 | `phase3/stage3/sta/pre…` | ⏭️ |
 | 11 | DFT insertion | 10 | `phase2/stage2/dft/sca…` | ⏭️ |
 | 12 | Post-DFT optimization | 11 | `phase2/stage2/synth/p…` | ⏭️ |
-| 13 | Equivalence check | 12 | `reports/lec.rpt` | ⏭️ |
+| 13 | Equivalence check | 12 | reports/lec.rpt _(not produced)_ | ⏭️ |
 | 14 | Synthesis handoff gate | 9, 13 | `phase2/stage2/synth/n…` | ⏭️ |
 | DT1 | Transition-delay-fault (… | 11 | `reports/phase2/dft/tr…` | ⏭️ |
 | DT2 | Path-delay-fault (at-spe… | DT1, 22 | `reports/phase2/dft/pa…` | ⏭️ |
@@ -125,7 +135,7 @@ _Per_ `flow/phase1_phase2_phase3.yaml` _v2._
 | 22 | Parasitic Extraction | 21 | `phase3/stage3/extract…` | ⏭️ |
 | 23 | Post-route STA | 22 | `phase3/stage3/sta/pos…` | ⏭️ |
 | 24 | IR Drop | 22 | `reports/phase3/ir_dro…` | ⏭️ |
-| 25 | EM check | 22 | `reports/phase3/em.rpt` | ⏭️ |
+| 25 | EM check | 22 | reports/phase3/em.rpt _(not produced)_ | ⏭️ |
 | 26 | Antenna check | 21 | `reports/phase3/antenn…` | ⏭️ |
 | 27 | Signal Integrity | 22 | `reports/phase3/si_cro…` | ⏭️ |
 | 28 | PERC / Reliability sign-… | 21–27 (5) | `reports/phase3/perc_e…` | ⏭️ |
