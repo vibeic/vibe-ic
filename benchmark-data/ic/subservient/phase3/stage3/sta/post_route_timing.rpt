@@ -1,0 +1,7 @@
+# post_route_timing.rpt — SPEF-BASED post-route STA (canonical, #527).
+# Basis: extracted parasitics (read_spef phase3/stage3/extracted/chip_top.spef).
+# The estimate-based report_checks is retained at phase3/stage3/pnr/sta.rpt for comparison.
+No paths found.
+tns max 0.00
+wns max 0.00
+worst slack max INF
