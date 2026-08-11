@@ -578,8 +578,23 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 #: external is still external and still unevidenced from the commit; this
 #: records that step 29 is no longer evidenced ONLY from outside, which is a
 #: strictly weaker and strictly true statement.
+#: 2026-08-12 — SIX cells JOIN this set (6 -> 12), the growing direction, and
+#: the cause is a withdrawal rather than a regression. Publication of run output
+#: that does not pass was withdrawn (vibe-ic#1015/#1010); six of the manifest's
+#: run roots went with it and are no longer registered, so every entry they
+#: evidenced is now attested by no root this repository carries. 10, 15, 16, 19,
+#: 29 and 32 thereby become evidenced ONLY from outside the registered set.
+#:
+#: Read the label precisely, because these six are NOT the same as the original
+#: six. The original six point at campaign-host trees that exist but that no
+#: host consults. These point at trees that are in this repository's HISTORY and
+#: in no working tree at all — strictly less recoverable, and correspondingly
+#: they are ALSO in :data:`UNEVIDENCED_CELLS`, which is the stronger statement
+#: and the one that governs. Step 29 in particular re-enters a set it left on
+#: 2026-08-11, because the registered root that gave it in-repo evidence then is
+#: one of the roots withdrawn now.
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
-    "17", "20", "30", "M2", "M3", "M4",
+    "10", "15", "16", "17", "19", "20", "29", "30", "32", "M2", "M3", "M4",
 )
 
 #: How many of the declared entries are decided LIVE on every host. An
@@ -619,7 +634,23 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-12: 120 -> 103, the SHRINKING direction, and the cause is a
+# withdrawal. Run output that does not pass was withdrawn from publication
+# (vibe-ic#1015/#1010), unregistering six of this manifest's run roots. 21
+# entries cited one; 8 re-derived live against a surviving admissible root and
+# are still decided LIVE, and 13 are not decided from the commit at all any
+# more. 120 - 17 = 103 (the 13 plus the four step-38 handoff entries counted in
+# the same sweep), against 134 declared, which is unchanged: no entry was
+# removed, the evidence for some of them was.
+#
+# THIS NUMBER GOING DOWN IS THE HONEST READING AND MUST NOT BE INVERTED. The
+# guarded property -- "no evidence from outside the commit" -- is still intact,
+# and 103 is not a regression in the flow: every withdrawn run is still in git
+# history and nothing about these steps changed. It is a reduction in what the
+# PUBLISHED corpus can demonstrate live, which is the price the withdrawal was
+# ruled to be worth. The pin is an EQUALITY so that the number cannot drift back
+# up by consulting a tree outside the commit.
+_LIVE_ENTRY_COUNT = 103
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -2708,11 +2739,42 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     #         (phase2/stage2/dft/*, 351 files tracked at HEAD)
     #   29 <- benchmark-data/evaluation/phase1_parity/espi
     #         (phase3/stage3/sim_postlayout/pass.flag, 253 files tracked)
-    # The remaining ten declare artefacts NO path in this commit matches. Only
-    # a published run tree closes those, and publishing one costs >1 GB of DEFs
-    # against a 2.0 GB .git -- which is why they stay RED here rather than
-    # becoming waivers. A red cell cannot rot; a waiver can, and did.
-    "15", "17", "19", "20", "30", "32", "M1", "M2", "M3", "M4",
+    #
+    # 2026-08-12: "11" and "29" ARE BACK, and this is the "NEW loss of evidence"
+    # the pin exists to report rather than absorb. The two run roots registered
+    # on 2026-08-10 are exactly two of the roots withdrawn from publication by
+    # vibe-ic#1015/#1010, so the staleness repair made then has been undone by
+    # the withdrawal -- not by any change to the flow or to these two steps.
+    # Measured on the surviving corpus, and the distinction matters:
+    #   11  the artefacts DO still exist, in benchmark-data/ic/spm/*, but that
+    #       run's own write ledger records this STEP as not having written them,
+    #       so the dimension refuses to count the glob match. Evidence that the
+    #       step produces them is what is gone, not the files.
+    #   29  phase3/stage3/sim_postlayout/ no longer exists anywhere in the
+    #       tracked tree; every root that carried it was withdrawn.
+    # Registering some other surviving root to move these two back to green is
+    # the one edit this campaign may not make -- it would be choosing evidence
+    # to clear a cell rather than measuring what the corpus can still show.
+    # They stay RED and are reported as a finding of the withdrawal.
+    #
+    # The same withdrawal put SIX more cells in this set, for the same reason:
+    # the only run root that evidenced an entry they declare is no longer
+    # published. 21 of the manifest's entries cited a withdrawn root; 8 of them
+    # re-derived live against a surviving admissible root and stayed green, and
+    # these are the rest.
+    #   10  phase3/stage3/sta/pre_pnr_timing.rpt
+    #   16  phase3/stage3/cts/clock_plan.json
+    #   21  phase3/stage3/pnr/routed.drc.rpt
+    #   23  phase3/stage3/sta/post_route_timing.rpt
+    #   34  phase3/stage3/pnr/filled.def OR .../metal_fill.done
+    #   38  four phase3/stage4/foundry_handoff/* artefacts
+    # This is a LOSS OF EVIDENCE, not a loss of function: nothing about these
+    # steps changed, and the runs that demonstrated them are still in git
+    # history. It is recorded here rather than absorbed because that is what
+    # this pin is for -- a withdrawal that quietly shrank what the corpus can
+    # demonstrate would otherwise read as no change at all.
+    "10", "11", "15", "16", "17", "19", "20", "21", "23", "29", "30", "32",
+    "34", "38", "M1", "M2", "M3", "M4",
 )
 
 
@@ -2895,8 +2957,25 @@ def test_d3_produce_live_is_not_decided_by_the_working_tree(monkeypatch):
         if erec.get("status") == "PRODUCED_LIVE"
         and erec.get("base_run") in run_roots()
     ]
+    # The probe needs the artefact to arrive UNTRACKED, so the base run must not
+    # already track the very path its producer writes. Selecting positionally
+    # made that a property of candidate ordering: when run roots were withdrawn
+    # (vibe-ic#1015/#1010) the first candidate became one whose tree does track
+    # it, and the probe silently stopped proving anything. State the requirement
+    # instead of relying on the order.
+    candidates = [c for c in candidates
+                  if not is_tracked(run_roots()[c[2]["base_run"]].path,
+                                    c[2]["writes"])]
     if not candidates:
-        pytest.skip("no live-produced entry has a run root on this tree")
+        pytest.skip(
+            "MUTATION CONTROL LOST, not merely inapplicable: no surviving run "
+            "root can host this probe. Both base runs that could (steps 9 and "
+            "10) were withdrawn from publication by vibe-ic#1015/#1010, and "
+            "every remaining PRODUCED_LIVE base run already tracks the path its "
+            "producer writes, so no UNTRACKED stale artefact can be staged. "
+            "This skip is a reportable consequence of the withdrawal — "
+            "publishing any passing run whose tree lacks one of its own "
+            "declared outputs restores it")
     sid, entry, erec = candidates[0]
     src = run_roots()[erec["base_run"]].path
 

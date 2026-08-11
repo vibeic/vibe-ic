@@ -25,7 +25,7 @@ being read as an encoding. Under-extraction is the safe direction: a table that
 states its code once is simply not lifted here.
 
 MEASURED ON THE REAL TRACKED DOCUMENT, not on a fixture transcribed from the
-issue: `benchmark-data/ic/opentitan_aes/phase1/input_doc/aes_registers.txt`
+issue: `benchmark-data/ic/opentitan_aes/input/docs/aes_registers.md`
 yields 21 lifted rows across three fields (a 3-bit reseed rate, a 3-bit key
 length, and the 6-bit MODE). The issue's excerpt names the last MODE mnemonic
 `AES_NONE`; the shipped document says `AES_GCM`, and what is asserted below is
@@ -145,8 +145,8 @@ def test_the_bare_binary_shape_is_left_to_tier_2():
 # ── the real document ───────────────────────────────────────────────────────
 def test_the_real_opentitan_doc_lifts_the_mode_field():
     """Not a transcription of the issue — the tracked input the runner reads."""
-    doc = (_REPO / "benchmark-data/ic/opentitan_aes/phase1/input_doc"
-           / "aes_registers.txt")
+    doc = (_REPO / "benchmark-data/ic/opentitan_aes/input/docs"
+           / "aes_registers.md")
     if not doc.is_file():
         pytest.skip("the tracked input doc is absent")
     # SCOPED TO THE FIELD, as the runner is — it lifts inside a per-field
@@ -169,8 +169,8 @@ def test_the_real_opentitan_doc_lifts_the_mode_field():
 def test_the_real_doc_also_lifts_the_narrower_fields():
     """Three fields in that document use this shape, at two different widths —
     evidence the tier is not tuned to one table."""
-    doc = (_REPO / "benchmark-data/ic/opentitan_aes/phase1/input_doc"
-           / "aes_registers.txt")
+    doc = (_REPO / "benchmark-data/ic/opentitan_aes/input/docs"
+           / "aes_registers.md")
     if not doc.is_file():
         pytest.skip("the tracked input doc is absent")
     text = doc.read_text(errors="replace")
