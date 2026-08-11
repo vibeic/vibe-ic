@@ -413,39 +413,101 @@ def test_903_a3_carries_the_domain_into_its_own_record(tmp_path):
             == {"volts": 1.2, "elevated": False})
 
 
-# ── PAIRED GUARDS: these must pass on BOTH arms ────────────────────────────
+# ── PAIRED GUARDS ──────────────────────────────────────────────────────────
+#
+# `test_903_paired_guard_*` call ONLY the API that predates this change and
+# pass on BOTH arms of the mutation control — they are the arm that stops the
+# per-block half being bought by breaking the behaviour that was already
+# right. `test_903_guard_*` below them guard the NEW behaviour and can only
+# run on the fixed arm; they are guards, not controls, and are named apart so
+# nobody reads a red one on the unfixed arm as a failed control.
 
-def test_903_guard_a_design_that_states_no_domain_still_gets_a_sane_default(
+def test_903_paired_guard_a_design_that_states_no_domain_gets_a_sane_default(
         tmp_path):
-    """THE guard for this change. A design that declares no voltage anywhere
-    has nothing to scope to: every block must still bind the ORDINARY flavour
-    (the pre-existing sane default), every block must get the SAME one, and the
-    record must still SAY the answer is chip-global rather than quietly
-    implying a per-block one it did not make."""
+    """THE control for this change, through the FOUR-argument call that
+    predates it. A design declaring no voltage anywhere has nothing to scope
+    to: every block must still bind the ORDINARY flavour (the pre-existing sane
+    default), every block must get the SAME one, and the record must still SAY
+    the answer is chip-global rather than implying a per-block one it did not
+    make. PASSES on both arms; a "fix" that invented a domain for a silent
+    design, or that stopped disclosing the chip-global scope, turns it red."""
     elev, ordn = _an_elevated_component(), _an_ordinary_component()
-    got = _per_block(tmp_path, _family(elev, ordn),
-                     {"block_a": None, "block_b": None})
+    blocks = {"block_a": None, "block_b": None}
+    project = _project(tmp_path, _family(elev, ordn), blocks)
+    got = {n: A3.resolve_pdk_context(project, "famx", "", list(_ROLES))
+           for n in blocks}
     a = got["block_a"]["role_models"]
     b = got["block_b"]["role_models"]
     assert a == b, (a, b)
     for role in _ROLES:
         assert a[role] == f"famx_{ordn}_{role}", a
     election = got["block_a"]["role_model_election"]["deck_context"]
-    assert election.get("domain_scope") != APDC.DOMAIN_SCOPE_STATED, election
     assert "chip_global_note" in election, election
 
 
-def test_903_guard_a_pdk_with_one_family_per_role_is_unaffected():
-    """A PDK shipping ONE flavour per role has nothing to elect. It must bind
-    the same device at every domain, and at none — otherwise the per-block half
-    was bought by disturbing families the issue never touched."""
+def test_903_paired_guard_a_pdk_with_one_family_per_role_is_unaffected():
+    """A PDK shipping ONE flavour per role has nothing to elect: it must bind
+    that device, and the election must call it a sole candidate rather than
+    claiming a preference decided something. PASSES on both arms — the issue
+    never touched such a family and neither may the fix."""
+    devices = [f"famx_{r}" for r in _ROLES]
+    ctx = _ctx(devices)
+    assert ctx.device_map == {r: f"famx_{r}" for r in _ROLES}, ctx.device_map
+    election = ctx.as_json()["device_election"]
+    for role, rec in election["roles"].items():
+        assert rec["basis"] == APDC.ELECTION_BASIS_SOLE, (role, rec)
+        assert rec["rejected"] == [], rec
+
+
+def test_903_paired_guard_a_threshold_component_is_not_a_voltage_domain():
+    """A threshold-flavour component must not read as a voltage DOMAIN — the
+    misreading the domain vocabulary was component-matched to prevent. Every
+    such component the program declares is checked, not one chosen by hand.
+    PASSES on both arms."""
+    thresholds = [t for t in APDC._SPECIAL_VARIANT
+                  if APDC.name_voltage_domain(f"famx_{t}_nmos") is None]
+    assert thresholds, "no special-variant component to check"
+    for tok in thresholds:
+        got = _elected(_family(tok, "zzz"))
+        for role in _ROLES:
+            assert got[role] == f"famx_zzz_{role}", (tok, got)
+
+
+def test_903_paired_guard_an_honest_refusal_stays_honest():
+    """A role with no template-compatible device must still be REFUSED, not
+    filled from somewhere. PASSES on both arms — the cheapest way to make a
+    flavour question go away is to loosen the refusal, and that must stay
+    expensive."""
+    ctx = _ctx([f"famx_{_an_ordinary_component()}_nmos"])
+    assert ctx.status == "NEEDS_NATIVE_TEMPLATE", ctx.status
+    assert ctx.unresolved_roles == ["pmos"], ctx.unresolved_roles
+    assert any("NEEDS_NATIVE_TEMPLATE" in w for w in ctx.work_items), \
+        ctx.work_items
+
+
+# ── guards on the NEW behaviour (fixed arm only) ───────────────────────────
+
+def test_903_guard_a_single_family_pdk_is_unmoved_by_any_domain():
+    """The sole-candidate family must bind the same device at EVERY domain and
+    at none — a domain may narrow a choice, never invent one."""
     devices = [f"famx_{r}" for r in _ROLES]
     baseline = _elected(devices)
-    assert baseline == {r: f"famx_{r}" for r in _ROLES}, baseline
     for dom in (None, APDC.VoltageDomain(),
                 APDC.VoltageDomain(volts=1.2, elevated=False),
                 APDC.VoltageDomain(volts=5.0, elevated=True)):
         assert _elected(devices, dom) == baseline, dom
+
+
+def test_903_guard_a_threshold_component_is_not_promoted_by_a_domain():
+    """The threshold-vs-domain distinction must hold at an ELEVATED domain too,
+    where a misread `*vt` component would newly win instead of newly lose."""
+    thresholds = [t for t in APDC._SPECIAL_VARIANT
+                  if APDC.name_voltage_domain(f"famx_{t}_nmos") is None]
+    for tok in thresholds:
+        got = _elected(_family(tok, "zzz"),
+                       APDC.VoltageDomain(volts=5.0, elevated=True))
+        for role in _ROLES:
+            assert got[role] == f"famx_zzz_{role}", (tok, got)
 
 
 def test_903_guard_a_design_on_one_voltage_has_no_elevated_block(tmp_path):
@@ -489,19 +551,3 @@ def test_903_guard_an_unstated_domain_ranks_identically_to_no_domain():
         n, APDC.VoltageDomain()))
     assert order_none == order_blank
     assert _elected(devices) == _elected(devices, APDC.VoltageDomain())
-
-
-def test_903_guard_a_threshold_component_is_still_not_a_voltage_domain():
-    """A threshold-flavour component must not read as an elevated DOMAIN — the
-    misreading the domain vocabulary was component-matched to prevent — at any
-    domain, including an elevated one. Every such component the program
-    declares is checked, not one chosen by hand."""
-    thresholds = [t for t in APDC._SPECIAL_VARIANT
-                  if APDC.name_voltage_domain(f"famx_{t}_nmos") is None]
-    assert thresholds, "no special-variant component to check"
-    for tok in thresholds:
-        devices = _family(tok, "zzz")
-        for dom in (None, APDC.VoltageDomain(volts=5.0, elevated=True)):
-            got = _elected(devices, dom)
-            for role in _ROLES:
-                assert got[role] == f"famx_zzz_{role}", (tok, dom, got)
