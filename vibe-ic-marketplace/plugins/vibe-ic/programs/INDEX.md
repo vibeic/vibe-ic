@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1076
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1076)
+- **Total programs (excluding helpers / shims):** 1077
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1077)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1067 |
+| `any` | 1068 |
 
 ## Alphabetical listing
 
@@ -997,6 +997,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_required_inputs_check` | any | — | refuse to run a step that has nothing to read. |
 | `step_write_ledger` | any | — | record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED. |
 | `structured_table_extractor` | any | — | ONE general extractor for the whole TABLE tier. |
+| `suite_write_guard` | any | — | a test run must not write into the tree it tests. |
 | `sustained_vs_edge_check` | any | — | Flag RTL using edge-detect when spec calls for sustained. |
 | `sv2v_mixed_driver_fixup` | any | — | deterministic post-pass to repair Verilog produced by sv2v when SystemVerilog hw2reg / packed-struct patterns produce MIXED-DRIVER nets (... |
 | `sv_compat_check` | any | — | Check if Verilog files require the -sv flag for Yosys synthesis. |
@@ -1148,7 +1149,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1067 programs)
+### `any` (1068 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2114,6 +2115,7 @@ _(no programs in this group)_
 - `step_required_inputs_check` — refuse to run a step that has nothing to read.
 - `step_write_ledger` — record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED.
 - `structured_table_extractor` — ONE general extractor for the whole TABLE tier.
+- `suite_write_guard` — a test run must not write into the tree it tests.
 - `sustained_vs_edge_check` — Flag RTL using edge-detect when spec calls for sustained.
 - `sv2v_mixed_driver_fixup` — deterministic post-pass to repair Verilog produced by sv2v when SystemVerilog hw2reg / packed-struct patterns produce MIXED-DRIVER nets (...
 - `sv_compat_check` — Check if Verilog files require the -sv flag for Yosys synthesis.
