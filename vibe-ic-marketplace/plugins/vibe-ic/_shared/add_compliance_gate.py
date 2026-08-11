@@ -2,7 +2,16 @@
 """
 Append the standard "Compliance gate" paragraph to every
 vibe-ic SKILL.md that doesn't already have one.
+
+`--skills-dir` retargets the walk at an arbitrary skills/ tree. It exists so a
+test can exercise this tool against a COPY instead of the shipped tree: before
+#1029 `test_add_gate_is_idempotent` ran the tool with no way to redirect it, so
+a passing test run left `skills/fork-gatekeeper-loop/SKILL.md` modified and
+`landing_worktree_is_clean_check.py` — which runs immediately after the tests in
+`gatekeeper-land.sh` — went red on dirt the harness itself created. Default is
+unchanged: the real skills/ tree.
 """
+import argparse
 from pathlib import Path
 import sys
 
@@ -29,12 +38,20 @@ across different agents.
 """
 
 
-def main():
+def default_skills_dir():
     d_plugin = Path(__file__).resolve().parent.parent
     marketplace = d_plugin.parent.parent
-    core_skills = marketplace / 'plugins' / 'vibe-ic' / 'skills'
+    return marketplace / 'plugins' / 'vibe-ic' / 'skills'
+
+
+def add_gate(core_skills):
+    """Append the gate to every SKILL.md under `core_skills` that lacks one.
+
+    Returns the number of files written.
+    """
+    base = core_skills.parent.parent.parent
     n = 0
-    for md in core_skills.glob('*/SKILL.md'):
+    for md in sorted(core_skills.glob('*/SKILL.md')):
         content = md.read_text(errors='replace')
         if 'Compliance gate' in content:
             continue
@@ -42,7 +59,24 @@ def main():
         new = content.rstrip() + '\n' + GATE.replace('{SKILL}', skill_name)
         md.write_text(new)
         n += 1
-        print(f"UPDATED: {md.relative_to(marketplace)}")
+        try:
+            shown = md.relative_to(base)
+        except ValueError:
+            shown = md
+        print(f"UPDATED: {shown}")
+    return n
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--skills-dir', default=None,
+                    help='skills/ tree to walk (default: the shipped one). '
+                         'Point this at a copy to exercise the tool without '
+                         'writing into the checkout.')
+    args = ap.parse_args(argv)
+    core_skills = (Path(args.skills_dir).resolve() if args.skills_dir
+                   else default_skills_dir())
+    n = add_gate(core_skills)
     print(f"\nAdded Compliance gate to {n} SKILL.md files.")
     return 0
 

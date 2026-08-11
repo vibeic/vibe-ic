@@ -10,8 +10,17 @@ Layout (vibe-ic marketplace):
 For every vibe-ic skill we emit a starter compliance.yaml in the
 plugin tree. Each file is a starting point - human review
 (or /rtl-review compliance-spec pass) is expected to refine patterns.
+
+`--skills-dir` retargets both the SKILL.md walk and the compliance.yaml write
+at an arbitrary skills/ tree, so a test can exercise this tool against a COPY.
+Same reason as add_compliance_gate.py (#1029): `test_bootstrap_is_idempotent`
+runs the tool for real, and it is a no-op today only because every shipped
+skill happens to already carry a compliance.yaml — the first skill that lands
+without one turns that test into a second writer into the shipped tree.
+Default is unchanged.
 """
 from __future__ import annotations
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -73,18 +82,11 @@ def gen_yaml(skill_name, detected):
     return '\n'.join(lines)
 
 
-def main():
-    # Wave 82: the former second plugin merged into vibe-ic. Try the
-    # merged-plugin layout first, fall back to legacy split for older
-    # checkouts.
-    d_plugin = Path(__file__).resolve().parent.parent
-    marketplace = d_plugin.parent.parent
-    legacy_core = marketplace / 'plugins' / 'vibe-ic' / 'skills'
-    if legacy_core.is_dir():
-        core_skills = legacy_core
-    else:
-        core_skills = d_plugin / 'skills'
-    d_skills = d_plugin / 'skills'
+def bootstrap(core_skills: Path, d_skills: Path) -> int:
+    """Emit a starter compliance.yaml for every skill that lacks one.
+
+    Returns the number of files created.
+    """
     made = 0
     for skill_md in core_skills.glob('*/SKILL.md'):
         name = skill_md.parent.name
@@ -98,6 +100,29 @@ def main():
         target.write_text(gen_yaml(name, detected))
         made += 1
         print(f"WROTE: skills/{name}/compliance.yaml")
+    return made
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--skills-dir', default=None,
+                    help='skills/ tree to read SKILL.md from and write '
+                         'compliance.yaml into (default: the shipped one). '
+                         'Point this at a copy to exercise the tool without '
+                         'writing into the checkout.')
+    args = ap.parse_args(argv)
+    if args.skills_dir:
+        core_skills = d_skills = Path(args.skills_dir).resolve()
+    else:
+        # Wave 82: the former second plugin merged into vibe-ic. Try the
+        # merged-plugin layout first, fall back to legacy split for older
+        # checkouts.
+        d_plugin = Path(__file__).resolve().parent.parent
+        marketplace = d_plugin.parent.parent
+        legacy_core = marketplace / 'plugins' / 'vibe-ic' / 'skills'
+        core_skills = legacy_core if legacy_core.is_dir() else d_plugin / 'skills'
+        d_skills = d_plugin / 'skills'
+    made = bootstrap(core_skills, d_skills)
     print(f"\nCreated {made} compliance.yaml files.")
     return 0
 

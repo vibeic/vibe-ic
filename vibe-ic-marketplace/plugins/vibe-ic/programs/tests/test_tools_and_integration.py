@@ -6,6 +6,8 @@ Covers:
 - add_compliance_gate.py (idempotency)
 - Integration: every one of the 55 skills passes the synthetic-audit pipeline
 """
+import hashlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +23,58 @@ ADD_GATE = PLUGIN / "_shared" / "add_compliance_gate.py"
 sys.path.insert(0, str(PLUGIN / "_shared"))
 import skill_compliance_check as scc  # noqa: E402
 import bootstrap_compliance as bc      # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# #1029 — these tools WRITE. Every test that runs one must run it against a
+# COPY of skills/, never the shipped tree.
+#
+# Before this, `test_add_gate_is_idempotent` ran add_compliance_gate.py with
+# cwd=PLUGIN and no way to redirect it. The tool appended a Compliance-gate
+# section to skills/fork-gatekeeper-loop/SKILL.md, the test asserted on the
+# SECOND application (correctly a no-op) and passed, and the modification was
+# left in the checkout. `gatekeeper-land.sh` runs the targeted tests at line
+# 205 and `landing_worktree_is_clean_check.py --expect-fingerprint` at line
+# 213 — so a green test run made the very next gate go red, the stamp was
+# never written, and pre-push refused. Nothing measured the FIRST application,
+# which is why it sat.
+# ---------------------------------------------------------------------------
+def _seed_skills_copy(tmp_path):
+    """Copy the real skills/ tree (SKILL.md + compliance.yaml) into tmp_path.
+
+    Seeded from the real tree, not from a fixture, so the tools are still
+    exercised against real content — the fix must not cost us that.
+    """
+    src = PLUGIN / "skills"
+    dst = tmp_path / "skills"
+    dst.mkdir()
+    for d in sorted(src.iterdir()):
+        if not d.is_dir() or not (d / "SKILL.md").exists():
+            continue
+        (dst / d.name).mkdir()
+        shutil.copy2(d / "SKILL.md", dst / d.name / "SKILL.md")
+        if (d / "compliance.yaml").exists():
+            shutil.copy2(d / "compliance.yaml",
+                         dst / d.name / "compliance.yaml")
+    assert list(dst.glob("*/SKILL.md")), "seed copied no SKILL.md"
+    return dst
+
+
+def _snapshot(root, pattern):
+    """{relative path: md5} — keyed by PATH, not by name.
+
+    The pre-#1029 snapshots were keyed by `md.name`, which is "SKILL.md" for
+    every skill, so both dicts collapsed to a single arbitrary entry and the
+    comparison covered one file out of ~90.
+    """
+    return {str(p.relative_to(root)):
+            hashlib.md5(p.read_bytes()).hexdigest()
+            for p in sorted(root.glob(pattern))}
+
+
+def _real_tree_snapshot():
+    return _snapshot(PLUGIN / "skills", "*/SKILL.md") | \
+           _snapshot(PLUGIN / "skills", "*/compliance.yaml")
 
 
 # ---------------------------------------------------------------------------
@@ -111,34 +165,114 @@ class TestEndToEndAllSkills:
 # ---------------------------------------------------------------------------
 # Idempotency of maintenance tools
 # ---------------------------------------------------------------------------
-class TestMaintenanceTools:
-    def test_bootstrap_is_idempotent(self):
-        """Running bootstrap twice must not duplicate or alter existing files."""
-        before = {}
-        for y in (PLUGIN / "skills").glob("*/compliance.yaml"):
-            before[y.name] = y.read_text()
-        res = subprocess.run(
-            [sys.executable, str(BOOTSTRAP)],
-            capture_output=True, text=True, cwd=str(PLUGIN))
-        after = {}
-        for y in (PLUGIN / "skills").glob("*/compliance.yaml"):
-            after[y.name] = y.read_text()
-        assert before == after, "bootstrap mutated existing files"
+GATE_HEADER = "## Compliance gate (mandatory)"
 
-    def test_add_gate_is_idempotent(self):
+
+class TestMaintenanceTools:
+    def _run(self, tool, skills_dir):
+        res = subprocess.run(
+            [sys.executable, str(tool), "--skills-dir", str(skills_dir)],
+            capture_output=True, text=True, cwd=str(PLUGIN), timeout=120)
+        assert res.returncode == 0, f"{tool.name} exit={res.returncode}\n{res.stderr}"
+        return res
+
+    # -- add_compliance_gate ------------------------------------------------
+    def test_add_gate_first_application_appends_the_section(self, tmp_path):
+        """THE ASSERTION #1029 WAS MISSING.
+
+        test_add_gate_is_idempotent measures the SECOND application, which is
+        correctly a no-op — so it is green whether the tool works or does
+        nothing at all. This measures the FIRST: on a SKILL.md with no gate,
+        one run must append the section, name that skill's own
+        compliance.yaml, preserve the existing body, and touch nothing else.
+        """
+        skills = _seed_skills_copy(tmp_path)
+        # Strip the gate section everywhere so the first application has real
+        # work to do, and remember the untouched bodies.
+        for md in sorted(skills.glob("*/SKILL.md")):
+            md.write_text(md.read_text().split(GATE_HEADER)[0].rstrip() + "\n")
+        # The tool's own predicate is the substring "Compliance gate"; a file
+        # that still mentions it elsewhere is one the tool deliberately skips.
+        bodies = {md.parent.name: md.read_text()
+                  for md in sorted(skills.glob("*/SKILL.md"))
+                  if "Compliance gate" not in md.read_text()}
+        skipped = _snapshot(skills, "*/SKILL.md")
+        assert len(bodies) > 1, "nothing left to append to — test is vacuous"
+
+        res = self._run(ADD_GATE, skills)
+
+        assert f"Added Compliance gate to {len(bodies)} SKILL.md files." \
+            in res.stdout, res.stdout
+        for name, body in bodies.items():
+            text = (skills / name / "SKILL.md").read_text()
+            assert GATE_HEADER in text, f"{name}: gate not appended"
+            assert f"skills/{name}/compliance.yaml" in text, (
+                f"{name}: gate does not name this skill's compliance.yaml")
+            assert text.startswith(body.rstrip()), (
+                f"{name}: original body not preserved")
+            assert text.count(GATE_HEADER) == 1, f"{name}: gate duplicated"
+        # Everything the tool declined to touch is byte-identical.
+        after = _snapshot(skills, "*/SKILL.md")
+        for rel, digest in skipped.items():
+            if Path(rel).parent.name in bodies:
+                continue
+            assert after[rel] == digest, f"{rel}: skipped file was rewritten"
+
+    def test_add_gate_is_idempotent(self, tmp_path):
         """Running add_compliance_gate twice must not duplicate the section."""
-        marketplace = PLUGIN.parent.parent.parent
-        core = marketplace / "plugins" / "vibe-ic" / "skills"
-        before = {}
-        for md in core.glob("*/SKILL.md"):
-            before[md.name] = md.read_text()
-        subprocess.run(
-            [sys.executable, str(ADD_GATE)],
-            capture_output=True, text=True, cwd=str(PLUGIN))
-        after = {}
-        for md in core.glob("*/SKILL.md"):
-            after[md.name] = md.read_text()
+        skills = _seed_skills_copy(tmp_path)
+        self._run(ADD_GATE, skills)          # bring every file to gated state
+        before = _snapshot(skills, "*/SKILL.md")
+        self._run(ADD_GATE, skills)          # the 2nd run is the subject
+        after = _snapshot(skills, "*/SKILL.md")
         assert before == after, "add_compliance_gate mutated files on 2nd run"
+        assert len(before) > 1, "snapshot collapsed — key by path, not name"
+
+    def test_add_gate_does_not_write_into_the_checkout(self, tmp_path):
+        """The regression guard for #1029 itself."""
+        before = _real_tree_snapshot()
+        self._run(ADD_GATE, _seed_skills_copy(tmp_path))
+        assert _real_tree_snapshot() == before, (
+            "add_compliance_gate wrote into the shipped skills/ tree")
+
+    # -- bootstrap_compliance ----------------------------------------------
+    def test_bootstrap_first_application_creates_the_yaml(self, tmp_path):
+        """First-application counterpart for bootstrap: a skill with no
+        compliance.yaml must get a loadable one naming that skill."""
+        skills = _seed_skills_copy(tmp_path)
+        names = sorted(d.name for d in skills.iterdir() if d.is_dir())
+        victim = names[0]
+        (skills / victim / "compliance.yaml").unlink()
+        survivor_before = (skills / names[1] / "compliance.yaml").read_text()
+
+        res = self._run(BOOTSTRAP, skills)
+
+        assert "Created 1 compliance.yaml files." in res.stdout, res.stdout
+        made = scc._load_yaml(skills / victim / "compliance.yaml")
+        assert made["skill"] == victim
+        assert len(made["requirements"]) > 0
+        assert (skills / names[1] / "compliance.yaml").read_text() == \
+            survivor_before, "bootstrap rewrote an existing compliance.yaml"
+
+    def test_bootstrap_is_idempotent(self, tmp_path):
+        """Running bootstrap twice must not duplicate or alter existing files."""
+        skills = _seed_skills_copy(tmp_path)
+        before = _snapshot(skills, "*/compliance.yaml")
+        self._run(BOOTSTRAP, skills)
+        after = _snapshot(skills, "*/compliance.yaml")
+        assert before == after, "bootstrap mutated existing files"
+        assert len(before) > 1, "snapshot collapsed — key by path, not name"
+
+    def test_bootstrap_does_not_write_into_the_checkout(self, tmp_path):
+        """The regression guard for #1029's latent second writer."""
+        skills = _seed_skills_copy(tmp_path)
+        # Make bootstrap have real work to do, so the guard is not vacuous.
+        (skills / sorted(d.name for d in skills.iterdir()
+                         if d.is_dir())[0] / "compliance.yaml").unlink()
+        before = _real_tree_snapshot()
+        self._run(BOOTSTRAP, skills)
+        assert _real_tree_snapshot() == before, (
+            "bootstrap_compliance wrote into the shipped skills/ tree")
 
 
 # ---------------------------------------------------------------------------
