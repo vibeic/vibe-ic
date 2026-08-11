@@ -3072,36 +3072,77 @@ def _build_unplaceable_master_cap_tcl() -> str:
     This block runs right after `tapcell`, MEASURES the longest free-site run
     from the LIVE fixed-instance grid (not from a formula, so a pruned or
     macro-blocked floorplan is measured as it really is), and `set_dont_use`s
-    every core master above it.  It is guarded three ways: it is a no-op when
-    the floorplan has no fixed obstruction, it never removes the last usable
-    buffer from the pool, and any error degrades to a NONFATAL note with the
-    prior behaviour.
+    every core master above it.
+
+    WHAT IS SCANNED, AND WHY IT IS THE ROWS (#966).  The first version of this
+    block iterated the `yMin` buckets of the FIXED INSTANCES.  A row holding no
+    fixed instance was therefore never visited at all -- and such a row is a
+    full-width free run, i.e. usually the LONGEST run on the die.  The bound
+    came out too small and `set_dont_use` then took away masters that did have
+    a legal site: measured on a two-row floorplan (both rows 0..1000 dbu, 10
+    dbu site) whose first row carried a 20 dbu obstruction every 200 dbu and
+    whose second row was empty, the true longest free run is 1000 dbu = 100
+    sites, and the block reported `PLACEABLE_WIDTH_BOUND: 200 dbu = 20 site(s)`
+    and excluded two masters that fit in the empty row with 600 dbu to spare.
+    That is the exact failure this docstring used to promise was impossible.
+    It was inert on the floorplan #951 was measured against only because
+    `tapcell -distance D` had put a tap in every one of its 64 rows.
+
+    The scan is now driven by `getRows`: EVERY row the design declares is
+    visited, each row is measured against its OWN extent and its OWN fixed
+    set, and a row with no fixed instance contributes its own full span.  The
+    global "nothing is fixed anywhere" special case is gone -- it is simply the
+    case where every row is free, and the row scan already answers it.
 
     It also REPORTS (without changing) any master already instantiated in the
     linked netlist that exceeds the bound -- that is a synthesis-side residual
     the resizer cannot fix, and the operator needs to see it named.
 
-    WHERE THE MEASUREMENT IS APPROXIMATE, AND IN WHICH DIRECTION.  Two
-    simplifications are deliberate and both err the SAME way -- toward a
+    WHERE THE MEASUREMENT IS STILL APPROXIMATE, AND IN WHICH DIRECTION.  These
+    simplifications are deliberate and they all err the SAME way -- toward a
     LARGER bound, i.e. toward excluding LESS:
 
       * a fixed instance is bucketed into the row of its `yMin` only, so a
-        multi-row hard macro obstructs one row here instead of all the rows
-        it really covers;
-      * the row extent is taken as the union of all rows, so a short row is
-        credited with the full span at its ends.
+        multi-row hard macro obstructs one row here instead of all the rows it
+        really covers.  Under a ROW scan that omission can only leave the other
+        covered rows looking freer than they are, i.e. raise the maximum;
+      * a fixed instance whose `yMin` coincides with no declared row (a macro
+        placed off the row grid) is counted in no row at all -- again, freer;
+      * area blockages / obstructions that are not instances are not counted;
+      * site alignment is not enforced: the comparison is dbu against dbu, so a
+        run that no site boundary can actually fit the master into is still
+        credited in full.
 
-    Both can therefore only FAIL to forbid a master that is in fact
-    unplaceable; neither can forbid one that is placeable.  That is the
-    correct direction to be wrong in: an over-large bound leaves the prior
-    behaviour, while an over-small bound would take away masters the design
-    can legitimately use.  The bound is also compared STRICTLY (`> bound` is
-    forbidden), so a master exactly as wide as the longest free run stays
-    legal.
+    Every one of those can therefore only FAIL to forbid a master that is in
+    fact unplaceable; none of them can forbid one that is placeable.  That is
+    the correct direction to be wrong in: an over-large bound leaves the prior
+    behaviour, while an over-small bound would take away masters the design can
+    legitimately use.  The bound is also compared STRICTLY (`> bound` is
+    forbidden), so a master exactly as wide as the longest free run stays legal.
+
+    THE THREE GUARDS, AND WHAT EACH ONE NOW GUARANTEES.  They are deliberately
+    at different layers and none of them stands in for another:
+
+      * MEASUREMENT (the row scan above) is the only thing that guarantees the
+        bound is not too small.  Nothing downstream can recover a bound that
+        was measured wrong -- which is the whole lesson of #966;
+      * DEGENERATE-MEASUREMENT FLOOR (`_wc_run <= 0`): if no row has a single
+        free dbu, exclude NOTHING and say so.  A floorplan with no free space
+        is a floorplan problem; forbidding the entire library cannot fix it and
+        would only destroy the run in a second way;
+      * BUFFER-POOL FLOOR (`_wc_keepbuf < 1`): never leave the resizer and CTS
+        with zero usable buffers.  This is a floor on the CONSEQUENCE, not a
+        check on the measurement -- it fires only when a bound is wrong enough
+        to wipe the whole buffer family, so a MODERATELY wrong bound passes it
+        by construction.  It must never be read as evidence that the bound is
+        right;
+      * ERROR FLOOR (`catch`): any error degrades to a NONFATAL note and the
+        prior behaviour, so the cap can never itself kill a PnR run.
 
     Emits, on stdout, exactly one of:
 
-        PLACEABLE_WIDTH_BOUND: <dbu> dbu = <n> site(s); fixed obstructions=<m>
+        PLACEABLE_WIDTH_BOUND: <dbu> dbu = <n> site(s); fixed obstructions=<m>;
+            rows=<r>
         UNPLACEABLE_MASTERS_NONE: ...            nothing exceeded the bound
         UNPLACEABLE_MASTERS_EXCLUDED: <k> ...    k masters set_dont_use'd
         UNPLACEABLE_MASTERS_SKIPPED: ...         guard tripped, pool preserved
@@ -3125,12 +3166,6 @@ def _build_unplaceable_master_cap_tcl() -> str:
         "  set _wc_rows [$_wc_blk getRows]\n"
         "  if {[llength $_wc_rows] > 0} {\n"
         "    set _wc_sw [[[lindex $_wc_rows 0] getSite] getWidth]\n"
-        "    set _wc_x0 {} ; set _wc_x1 {}\n"
-        "    foreach _wc_r $_wc_rows {\n"
-        "      set _wc_b [$_wc_r getBBox]\n"
-        "      if {$_wc_x0 eq {} || [$_wc_b xMin] < $_wc_x0} { set _wc_x0 [$_wc_b xMin] }\n"
-        "      if {$_wc_x1 eq {} || [$_wc_b xMax] > $_wc_x1} { set _wc_x1 [$_wc_b xMax] }\n"
-        "    }\n"
         "    array unset _wc_fx\n"
         "    set _wc_nfixed 0\n"
         "    foreach _wc_i [$_wc_blk getInsts] {\n"
@@ -3141,41 +3176,57 @@ def _build_unplaceable_master_cap_tcl() -> str:
         "      lappend _wc_fx([$_wc_bb yMin]) [list [$_wc_bb xMin] [$_wc_bb xMax]]\n"
         "      incr _wc_nfixed\n"
         "    }\n"
+        "    # #966: scan the ROWS, not the fixed-instance buckets. A row with\n"
+        "    # no fixed instance is a FULL-WIDTH free run -- usually the longest\n"
+        "    # on the die -- and bucket iteration never visited it, so the bound\n"
+        "    # came out too small and forbade masters that were placeable.\n"
+        "    # Each row is measured against its OWN extent and its OWN fixed set.\n"
         "    set _wc_run 0\n"
-        "    if {$_wc_nfixed == 0} {\n"
-        "      set _wc_run [expr {$_wc_x1 - $_wc_x0}]\n"
-        "    } else {\n"
-        "      foreach _wc_y [array names _wc_fx] {\n"
-        "        set _wc_cur $_wc_x0\n"
-        "        foreach _wc_p [lsort -integer -index 0 $_wc_fx($_wc_y)] {\n"
-        "          set _wc_g [expr {[lindex $_wc_p 0] - $_wc_cur}]\n"
-        "          if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
-        "          if {[lindex $_wc_p 1] > $_wc_cur} { set _wc_cur [lindex $_wc_p 1] }\n"
-        "        }\n"
-        "        set _wc_g [expr {$_wc_x1 - $_wc_cur}]\n"
+        "    foreach _wc_r $_wc_rows {\n"
+        "      set _wc_rb [$_wc_r getBBox]\n"
+        "      set _wc_x0 [$_wc_rb xMin]\n"
+        "      set _wc_x1 [$_wc_rb xMax]\n"
+        "      set _wc_y [$_wc_rb yMin]\n"
+        "      set _wc_own {}\n"
+        "      if {[info exists _wc_fx($_wc_y)]} { set _wc_own $_wc_fx($_wc_y) }\n"
+        "      set _wc_cur $_wc_x0\n"
+        "      foreach _wc_p [lsort -integer -index 0 $_wc_own] {\n"
+        "        set _wc_g [expr {[lindex $_wc_p 0] - $_wc_cur}]\n"
         "        if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
+        "        if {[lindex $_wc_p 1] > $_wc_cur} { set _wc_cur [lindex $_wc_p 1] }\n"
         "      }\n"
+        "      set _wc_g [expr {$_wc_x1 - $_wc_cur}]\n"
+        "      if {$_wc_g > $_wc_run} { set _wc_run $_wc_g }\n"
         "    }\n"
         "    puts \"PLACEABLE_WIDTH_BOUND: $_wc_run dbu = "
-        "[expr {$_wc_run / $_wc_sw}] site(s); fixed obstructions=$_wc_nfixed\"\n"
+        "[expr {$_wc_run / $_wc_sw}] site(s); fixed obstructions=$_wc_nfixed; "
+        "rows=[llength $_wc_rows]\"\n"
         "    set _wc_kill {}\n"
-        "    foreach _wc_lib [[ord::get_db] getLibs] {\n"
-        "      foreach _wc_m [$_wc_lib getMasters] {\n"
-        "        if {![$_wc_m isCore]} { continue }\n"
-        "        if {[$_wc_m getWidth] > $_wc_run} { lappend _wc_kill [$_wc_m getName] }\n"
+        "    set _wc_keepbuf 0\n"
+        "    if {$_wc_run > 0} {\n"
+        "      foreach _wc_lib [[ord::get_db] getLibs] {\n"
+        "        foreach _wc_m [$_wc_lib getMasters] {\n"
+        "          if {![$_wc_m isCore]} { continue }\n"
+        "          if {[$_wc_m getWidth] > $_wc_run} { lappend _wc_kill [$_wc_m getName] }\n"
+        "        }\n"
+        "      }\n"
+        "      # GUARD: never take away the last usable buffer.\n"
+        "      foreach _wc_c [get_lib_cells -quiet *] {\n"
+        "        if {[catch {set _wc_ib [get_property $_wc_c is_buffer]}]} { continue }\n"
+        "        if {!$_wc_ib} { continue }\n"
+        "        if {[catch {set _wc_du [get_property $_wc_c dont_use]}]} { set _wc_du 0 }\n"
+        "        if {$_wc_du} { continue }\n"
+        "        if {[lsearch -exact $_wc_kill [get_name $_wc_c]] >= 0} { continue }\n"
+        "        incr _wc_keepbuf\n"
         "      }\n"
         "    }\n"
-        "    # GUARD: never take away the last usable buffer.\n"
-        "    set _wc_keepbuf 0\n"
-        "    foreach _wc_c [get_lib_cells -quiet *] {\n"
-        "      if {[catch {set _wc_ib [get_property $_wc_c is_buffer]}]} { continue }\n"
-        "      if {!$_wc_ib} { continue }\n"
-        "      if {[catch {set _wc_du [get_property $_wc_c dont_use]}]} { set _wc_du 0 }\n"
-        "      if {$_wc_du} { continue }\n"
-        "      if {[lsearch -exact $_wc_kill [get_name $_wc_c]] >= 0} { continue }\n"
-        "      incr _wc_keepbuf\n"
-        "    }\n"
-        "    if {[llength $_wc_kill] == 0} {\n"
+        "    # GUARD: a non-positive bound is a broken floorplan, not a library\n"
+        "    # problem -- forbidding every master cannot give it free space.\n"
+        "    if {$_wc_run <= 0} {\n"
+        "      puts \"UNPLACEABLE_MASTERS_SKIPPED: measured free-site run is "
+        "$_wc_run dbu -- no row has free space; excluding masters cannot "
+        "create any -- left enabled\"\n"
+        "    } elseif {[llength $_wc_kill] == 0} {\n"
         "      puts \"UNPLACEABLE_MASTERS_NONE: every core master fits the "
         "measured free-site run\"\n"
         "    } elseif {$_wc_keepbuf < 1} {\n"
@@ -3197,9 +3248,11 @@ def _build_unplaceable_master_cap_tcl() -> str:
         "    # REPORT-ONLY: masters the netlist already instantiates that the\n"
         "    # floorplan cannot legalize. set_dont_use cannot undo those.\n"
         "    set _wc_pre {}\n"
-        "    foreach _wc_i [$_wc_blk getInsts] {\n"
-        "      if {[[$_wc_i getMaster] getWidth] > $_wc_run} {\n"
-        "        lappend _wc_pre [$_wc_i getName]\n"
+        "    if {$_wc_run > 0} {\n"
+        "      foreach _wc_i [$_wc_blk getInsts] {\n"
+        "        if {[[$_wc_i getMaster] getWidth] > $_wc_run} {\n"
+        "          lappend _wc_pre [$_wc_i getName]\n"
+        "        }\n"
         "      }\n"
         "    }\n"
         "    if {[llength $_wc_pre] > 0} {\n"

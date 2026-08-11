@@ -16,13 +16,22 @@ DRC, LVS and EM were then all measured on a design with no signal routing at
 all.  Utilization is irrelevant: the taps are FIXED, so a master wider than
 the inter-tap run has no legal site at 27 % or at 90 %.
 
-Two things are under test here, and BOTH directions of each:
+Three things are under test here, and BOTH directions of each:
 
   * the width cap must EXCLUDE a master that cannot be placed, and must NOT
     exclude one that can -- otherwise the cap could "pass" by forbidding
     everything, which would be a different way to lose the design;
+  * the bound must be measured over EVERY row the design declares, including a
+    row that holds no fixed instance (#966: such a row is a full-width free run
+    and the first version of the block never visited it, so it forbade masters
+    that were placeable) -- and a free row must lend the maximum only its OWN
+    extent, never a neighbour's;
   * the legalize ladder must REACH its diamond-legalizer rung when every
     earlier rung fails, and must NOT reach it when the default window works.
+
+Row counts are generated, not fixed: `_rows()` re-declares the block with
+whatever rows a test needs, so no test here is tied to a one-row floorplan --
+which is exactly how the #966 defect survived the first suite.
 
 Every assertion is against a value the program RETURNED or PRINTED.  No test
 in this file inspects the emitter's source text.  The Tcl is executed under a
@@ -159,6 +168,47 @@ mkmaster drv_wide 300
 mkmaster cell_wide 400
 """
 
+# The same library plus the obstruction master, for the generated floorplans.
+_LIB = "mkmaster OBST 20\n" + _UNOBSTRUCTED
+
+
+def _rows(*spans: tuple) -> str:
+    """Re-declare the stub block with one row per `(xMin, xMax, yMin)` span.
+
+    The shipped stub hard-codes a SINGLE row, which is how the #966 defect
+    (rows with no fixed instance are never measured) survived a green suite.
+    Row count and row extents are parameters here so that a test states the
+    floorplan it means and nothing is tied to "one row"."""
+    out, names = [], []
+    for i, (x0, x1, y) in enumerate(spans):
+        row, bb = f"ROW{i}", f"ROWBB{i}"
+        names.append(row)
+        out.append(f"_mkbb {bb} {x0} {x1} {y}\n"
+                   f"proc {row} {{args}} {{\n"
+                   "  switch -- [lindex $args 0] {\n"
+                   "    getSite { return SITE }\n"
+                   f"    getBBox {{ return {bb} }}\n"
+                   "  }\n"
+                   f'  error "{row} $args"\n'
+                   "}\n")
+    out.append("proc BLK {args} {\n"
+               "  switch -- [lindex $args 0] {\n"
+               f"    getRows {{ return [list {' '.join(names)}] }}\n"
+               "    getInsts { return $::INSTS }\n"
+               "  }\n"
+               '  error "BLK $args"\n'
+               "}\n")
+    return "".join(out)
+
+
+def _obstruct(y: int, pitch: int = 200, width: int = 20,
+              span: int = 1000) -> str:
+    """A FIXED obstruction `width` dbu wide every `pitch` dbu in the row at
+    `y`, i.e. the shape `tapcell -distance D` leaves behind."""
+    return (f"for {{set x {pitch}}} {{$x < {span}}} {{incr x {pitch}}} {{\n"
+            f"  mkinst obst{y}_$x FIXED $x [expr {{$x+{width}}}] {y} OBST\n"
+            "}\n")
+
 
 def _run_cap(setup: str, tmp_path) -> str:
     """Execute the emitted cap block and return everything it printed."""
@@ -243,6 +293,87 @@ def test_an_already_instantiated_unplaceable_master_is_named(tmp_path):
     out = _run_cap(setup, tmp_path)
     assert "UNPLACEABLE_INSTANCES_PRESENT: 1 instance(s)" in out, out
     assert "u_big" in out
+
+
+# ── #966: the bound is measured over the ROWS, not the fixed-instance buckets ─
+
+@_needs_tcl
+def test_a_row_with_no_fixed_instance_is_measured_too(tmp_path):
+    """THE #966 DEFECT.  Two rows of the same extent; the first carries an
+    obstruction every 200 dbu, the second carries nothing.  The longest free
+    run on this floorplan is the WHOLE second row, and both wide masters fit in
+    it with 600 dbu to spare.  Scanning the fixed instances' yMin buckets never
+    visits the empty row, reports 200 dbu, and `set_dont_use`s two masters that
+    are placeable -- the one outcome the docstring guarantees against."""
+    setup = _rows((0, 1000, 0), (0, 1000, 100)) + _LIB + _obstruct(0)
+    out = _run_cap(setup, tmp_path)
+    assert "PLACEABLE_WIDTH_BOUND: 1000 dbu = 100 site(s)" in out, out
+    assert "rows=2" in out, out
+    assert "UNPLACEABLE_MASTERS_NONE" in out, out
+    assert _excluded(out) == [], out
+
+
+@_needs_tcl
+def test_a_free_row_is_credited_only_with_its_own_extent(tmp_path):
+    """OPPOSITE VERDICT for the same two-row shape: the free row is SHORT
+    (0..150), so it cannot beat the obstructed row's 200 dbu run and the wide
+    masters stay forbidden.  Without this, "measure every row" could be bought
+    by crediting every row with the union extent of all rows -- which would
+    hand a short row a free run it does not have."""
+    setup = _rows((0, 1000, 0), (0, 150, 100)) + _LIB + _obstruct(0)
+    out = _run_cap(setup, tmp_path)
+    assert "PLACEABLE_WIDTH_BOUND: 200 dbu = 20 site(s)" in out, out
+    assert sorted(_excluded(out)) == ["cell_wide", "drv_wide"], out
+
+
+@_needs_tcl
+def test_the_converged_shape_with_a_tap_in_every_row_is_unchanged(tmp_path):
+    """PAIRED GUARD.  The floorplan the cap was first measured against had a
+    FIXED tap in EVERY row -- the case where bucket iteration and row iteration
+    agree by construction.  Four rows, same pitch: the answer must be the same
+    200 dbu = 20 sites, with the narrow master still usable.  The #966 fix may
+    not be bought by changing the verdict on the case that already worked.
+
+    Deliberately asserts nothing about the REPORT text (the bound line gained a
+    `rows=` field), only about the two things that must not move: the measured
+    bound and the set of masters excluded.  So this test passes unchanged
+    against the pre-#966 program as well as against the fixed one."""
+    spans = [(0, 1000, y) for y in (0, 100, 200, 300)]
+    setup = _rows(*spans) + _LIB + "".join(_obstruct(y) for _, _, y in spans)
+    out = _run_cap(setup, tmp_path)
+    assert "PLACEABLE_WIDTH_BOUND: 200 dbu = 20 site(s)" in out, out
+    assert sorted(_excluded(out)) == ["cell_wide", "drv_wide"], out
+
+
+@_needs_tcl
+def test_a_master_exactly_at_the_bound_stays_legal(tmp_path):
+    """The comparison is STRICT, and both sides of the boundary are pinned: a
+    master exactly as wide as the longest free run has a legal site and must
+    stay usable, one dbu wider does not and must go.  On the floorplan #951 was
+    measured against the surviving masters sat EXACTLY at the bound, so a
+    `>` -> `>=` slip would have forbidden every one of them."""
+    setup = (_OBSTRUCTED
+             + "mkmaster cell_at_bound 200\nmkmaster cell_over_bound 201\n")
+    out = _run_cap(setup, tmp_path)
+    assert "PLACEABLE_WIDTH_BOUND: 200 dbu" in out, out
+    excluded = _excluded(out)
+    assert "cell_at_bound" not in excluded, out
+    assert "cell_over_bound" in excluded, out
+
+
+@_needs_tcl
+def test_a_floorplan_with_no_free_space_excludes_nothing(tmp_path):
+    """DEGENERATE-MEASUREMENT FLOOR: one obstruction covering the only row
+    leaves a zero-dbu free run, so EVERY master is "too wide".  Forbidding the
+    whole library cannot give the floorplan free space; report the measurement
+    and change nothing.  (The buffer-pool floor happens to catch this shape too
+    -- it is a floor on the consequence, and it says nothing about whether the
+    bound was measured correctly.)"""
+    setup = _LIB + "mkinst obst_all FIXED 0 1000 0 OBST\n"
+    out = _run_cap(setup, tmp_path)
+    assert "PLACEABLE_WIDTH_BOUND: 0 dbu" in out, out
+    assert "no row has free space" in out, out
+    assert _excluded(out) == [], out
 
 
 @_needs_tcl
