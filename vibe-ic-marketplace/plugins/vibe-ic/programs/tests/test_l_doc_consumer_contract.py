@@ -296,3 +296,229 @@ def test_the_soft_vocabulary_never_widens_what_a_gate_discards():
     assert C.signoff_qualifier(row) is not None
     assert len(_hits(row)) == 1, (
         "the soft half of the vocabulary leaked into the discard filter")
+
+
+# ── vibe-ic#1011: a denial is not the requirement it denies ────────────────
+#
+# `signoff_qualifier` above answers "the document says this row is not
+# BINDING". `requirement_absent` answers the adjacent-but-different question,
+# "the document says the requirement is not THERE". Every fixture below is a
+# SYNTHETIC restatement of a shape measured on the published corpus; none is
+# copied from a design and none carries a design, foundry, vendor or process
+# token.
+
+_DENIALS = [
+    ("<standard> does NOT specify JTAG / scan-chain / on-chip BIST at the "
+     "protocol level.", "JTAG"),
+    ("There is no scan chain, no JTAG, and no boundary-scan path accessible "
+     "on the host interface.", "scan chain"),
+    ("Neither <bus A> nor <bus B> defines a JTAG / scan / BIST / MBIST / "
+     "debug architecture.", "JTAG"),
+    ("<protocol> is a published specification - no PDK, floor-plan, SDC, "
+     "UPF, or DFT artifact at the protocol level.", "DFT"),
+    ("No internal SDC / UPF / DFT artifacts in the spec.", "DFT"),
+    ("JTAG / scan / BIST are NOT specified at the protocol level.", "BIST"),
+    ("No standard DFT / JTAG path is exposed on the host interface.", "JTAG"),
+    ("The device implements only the 2-pin variant - no JTAG support.", "JTAG"),
+    ("<standard> does not list SDC / UPF / DFT constraints.", "DFT"),
+]
+
+#: THE OTHER DIRECTION, and the one that matters most. `_NON_NORMATIVE_RE`
+#: records the trap in as many words: "`must NOT exceed 5 ns` is a real
+#: requirement that contains a negation". A gate that learns only to say "no"
+#: is a ban, not a check.
+_REAL_REQUIREMENTS = [
+    ("- Test signals - support for scan, JTAG (IEEE 1149.1), and clock "
+     "control.", "JTAG"),
+    ("Scanctrl/Scanin/Scanout drive the scan chains for manufacturing DFT.",
+     "scan chains"),
+    ("Every device shall implement the 16-state TAP controller FSM.",
+     "TAP controller"),
+    ("The Boundary-Scan Register shall include one boundary-scan cell per "
+     "external I/O pin.", "boundary-scan"),
+]
+
+#: PROHIBITIONS. A deontic modal + negation DECLARES something, negatively;
+#: it does not say the requirement is absent. The auxiliary list in
+#: `_REQUIREMENT_ABSENT_RE` excludes every deontic modal BY CONSTRUCTION, and
+#: this is what pins that separation.
+_PROHIBITIONS = [
+    ("The scan chain must not exceed 5000 flops.", "scan chain"),
+    ("The design shall not expose the scan chain in mission mode.",
+     "scan chain"),
+    ("The TAP controller may not be clocked above 10 MHz.", "TAP controller"),
+    ("Scan enable should not be asserted during functional operation.",
+     "Scan enable"),
+    ("The boundary-scan path cannot be shared with functional logic.",
+     "boundary-scan"),
+]
+
+
+@pytest.mark.parametrize("line,term", _DENIALS)
+def test_requirement_absent_names_the_phrase_that_denies(line, term):
+    """It returns the PHRASE, not a bool — same contract as
+    `signoff_qualifier`, and for the same reason: a drop that names its
+    evidence is auditable, a bare True is not."""
+    got = C.requirement_absent(line, line.find(term))
+    assert got, f"a document DENYING the requirement was read as stating it: {line!r}"
+    assert isinstance(got, str) and got.strip()
+
+
+@pytest.mark.parametrize("line,term", _REAL_REQUIREMENTS + _PROHIBITIONS)
+def test_a_stated_requirement_is_never_read_as_absent(line, term):
+    assert C.requirement_absent(line, line.find(term)) is None, (
+        f"a REAL requirement was deleted as a denial: {line!r}")
+
+
+@pytest.mark.parametrize("line,term", _PROHIBITIONS)
+def test_prohibition_is_not_absence(line, term):
+    """The load-bearing separation, asserted against the pattern that draws
+    it rather than only through the public predicate, so widening the
+    auxiliary set cannot pass this by accident."""
+    assert C._PROHIBITION_RE.search(line), (
+        f"the deontic vocabulary does not recognise its own shape: {line!r}")
+    assert C.requirement_absent(line, line.find(term)) is None
+
+
+def _hits_denied(doc: str, vocab=r"scan chain|JTAG|BIST|DFT"):
+    import re as _re
+    from pathlib import Path as _P
+    return C.framed_hits([(_P("x.md"), doc)], _re.compile(vocab, _re.I),
+                         drop_denied=True)
+
+
+def _hits_plain(doc: str, vocab=r"scan chain|JTAG|BIST|DFT"):
+    import re as _re
+    from pathlib import Path as _P
+    return C.framed_hits([(_P("x.md"), doc)], _re.compile(vocab, _re.I))
+
+
+_DENIED_DOC = ("The specification does NOT specify JTAG / scan-chain / "
+               "on-chip BIST at the protocol level.\n")
+_STATED_DOC = ("Test signals are required: support for scan chain, JTAG "
+               "and clock control.\n")
+
+
+def test_the_default_still_counts_a_denial_as_a_hit():
+    """DIRECTION 1 — the flag is OPT-IN, so the default must not move. This
+    is what makes the shared predicate safe to change at all: three of the
+    four call sites do not pass it and must be byte-identical."""
+    assert len(_hits_plain(_DENIED_DOC)) >= 1
+
+
+def test_opting_in_drops_the_denial():
+    assert _hits_denied(_DENIED_DOC) == [], _hits_denied(_DENIED_DOC)
+
+
+def test_opting_in_keeps_a_positively_stated_requirement():
+    """THE PAIRED GUARD. A gate that only learns to say 'no' is a ban."""
+    assert len(_hits_denied(_STATED_DOC)) >= 1, (
+        "the opt-in deleted a requirement the document STATES")
+
+
+def test_the_default_record_shape_is_unchanged_by_the_new_opt_in():
+    plain = _hits_plain(_STATED_DOC)
+    assert set(plain[0]) == {"source", "line", "match", "context"}, plain[0]
+    assert "denied" not in plain[0]
+
+
+def test_the_opt_in_records_its_policy_on_its_own_records_only():
+    rec = _hits_denied(_STATED_DOC)[0]
+    assert "denied" in rec and rec["denied"] is None, rec
+
+
+def test_scope_is_the_LINE_not_the_SENTENCE():
+    """MEASURED counterexample, from 4 roots of the published corpus.
+
+    The second sentence describes OTHER vendors' silicon and requires
+    nothing of this design; it is a framed hit at all only because
+    REQUIREMENT_FRAMING_RE's +/-160-char window reaches BACK ACROSS the full
+    stop and borrows `specify` from the denial. A denial scoped narrower
+    than the framing window can always be out-flanked by the framing that
+    admitted the hit.
+    """
+    # Padded AROUND the pair, never BETWEEN it. Two things have to hold at
+    # once and they pull in opposite directions:
+    #   * the sentences must stay ADJACENT, so the second one's match is a hit
+    #     only by borrowing `specify` from the first — that borrowing IS the
+    #     defect being reproduced, and padding between them removes it;
+    #   * the two matches must not share one +/-160-char window, or the
+    #     context dedup collapses them and the fixture measures nothing (the
+    #     same trap `test_the_flag_is_scoped_to_the_row_not_the_neighbourhood`
+    #     documents).
+    # VERIFIED to discriminate: at sentence reach the second `BIST` survives
+    # and this test fails; at line reach nothing survives.
+    pad = "filler word " * 18
+    doc = (pad + "<standard> does NOT specify JTAG / scan-chain / on-chip "
+           "BIST at the protocol level. Vendors universally add scan + BIST "
+           "+ I/O voltage trim in vendor-specific register space. " + pad
+           + "\n")
+    assert len(_hits_plain(doc)) >= 2, "fixture no longer exercises both halves"
+    assert _hits_denied(doc) == [], (
+        "a sentence-scoped denial let the neighbouring sentence through")
+
+
+def test_scope_is_the_LINE_not_the_CLAUSE():
+    """The other rejected reach, on the shape that decided it: the cue is a
+    bare `no` heading a COMMA LIST, five clauses from the term it denies."""
+    doc = ("<protocol> is a published specification - no PDK, floor-plan, "
+           "SDC, UPF, or DFT artifact is required at the protocol level.\n")
+    assert len(_hits_plain(doc)) >= 1, "fixture no longer produces a hit"
+    assert _hits_denied(doc) == []
+
+
+def test_a_bare_no_must_stand_IN_FRONT_OF_the_term_it_denies():
+    """The loosest cue in the vocabulary is the only one required to govern
+    the match positionally. Letting a later `no` reach backwards is #790's
+    silent direction: the caller publishes less than it read and nothing
+    goes red."""
+    before = "The design has no JTAG requirement of any kind, as specified.\n"
+    after = ("A JTAG TAP controller is required; no waiver has been "
+             "granted.\n")
+    assert _hits_denied(before) == [], before
+    assert len(_hits_denied(after)) >= 1, (
+        "a `no` AFTER the term retracted a requirement in front of it")
+
+
+def test_a_bare_no_never_fires_on_a_comparative():
+    """`REQUIREMENT_FRAMING_RE` reads `no less than` as FRAMING. Treating the
+    same three words as a denial would let this predicate delete exactly the
+    rows that predicate admits."""
+    import re as _re
+    from pathlib import Path as _P
+    doc = "Stuck-at coverage shall be no less than 95% for the scan chain.\n"
+    kept = C.framed_hits([(_P("x.md"), doc)],
+                         _re.compile(r"scan chain", _re.I), drop_denied=True)
+    assert len(kept) == 1, ("a comparative was read as a denial and deleted a "
+                            "real coverage requirement: %r" % kept)
+
+
+def test_the_words_that_mean_no_are_NOT_forked_from_the_house_vocabulary():
+    """vibe-ic#712: "three private copies of it is how the divergence
+    happened". This predicate may add SHAPE, never a second dialect of the
+    words themselves — so every single-word cue it keys on must already be
+    recognised by `_prose_polarity`.
+
+    `neither`/`nor` are the ONE declared exception: they are a correlative
+    that module does not carry, and pushing them upstream would move the
+    counts of four unrelated modules for a shape only this predicate needs.
+    Listing them here is what stops the exception from growing silently.
+    """
+    import _prose_polarity as PP
+    for word in ("not", "no", "none", "without", "never"):
+        assert PP.NEGATION_RE.search(word), word
+    declared_exceptions = {"neither", "nor"}
+    src = C._REQUIREMENT_ABSENT_RE.pattern
+    for word in declared_exceptions:
+        assert word in src, word
+    assert C._blank_bracketed is PP.blank_bracketed
+
+
+def test_bracketed_qualifiers_do_not_carry_the_documents_polarity():
+    """#711's measurement, inherited rather than re-derived: a denial inside
+    brackets is a qualifier on a neighbouring value, not this line's
+    polarity."""
+    doc = ("A JTAG TAP controller is required (scan chains not included) for "
+           "this design.\n")
+    assert len(_hits_denied(doc)) >= 1, (
+        "a bracketed qualifier retracted the line's real requirement")
