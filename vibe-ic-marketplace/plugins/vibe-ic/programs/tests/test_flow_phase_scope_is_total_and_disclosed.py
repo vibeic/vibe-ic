@@ -93,7 +93,12 @@ def _program_scope(tmp_path, phase: str) -> set[str]:
     r = subprocess.run(
         [sys.executable, str(CHECK), str(tmp_path), "--phase", phase,
          "--flow", str(FLOW), "--json", str(out)],
-        capture_output=True, text=True, timeout=300)
+        # 60s = the ci_harness_timeout_ceiling ceiling (180s harness bound / 3).
+        # Measured 2026-08-11: this whole FILE runs in 2.26s, so the margin is
+        # ~25x on the file and far more on the single call. The old 300s could
+        # outlive the 180s harness, and what dies then is the SESSION, not the
+        # test -- which is the failure this bound exists to prevent.
+        capture_output=True, text=True, timeout=60)
     assert out.is_file(), (
         f"--phase {phase} produced no JSON report (rc={r.returncode})\n"
         f"{(r.stdout + r.stderr)[:1500]}")
@@ -166,7 +171,8 @@ def test_the_disclosure_names_the_overlapping_steps(tmp_path):
     r = subprocess.run(
         [sys.executable, str(CHECK), str(tmp_path), "--phase", "2",
          "--flow", str(FLOW)],
-        capture_output=True, text=True, timeout=300)
+        # 60s, same reasoning as the call above.
+        capture_output=True, text=True, timeout=60)
     out = r.stdout + r.stderr
     assert "not a partition" in out, (
         f"the both-scope overlap was not disclosed.\n{out[:2000]}")
