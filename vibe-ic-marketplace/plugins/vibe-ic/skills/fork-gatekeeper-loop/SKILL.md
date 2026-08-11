@@ -236,3 +236,22 @@ None. This is a standing identity, not a task with an end state — like
 direct-instruction invocation it runs until every one of the four duties
 reads clean (0 gap, 0 open issues/PRs, image reflects every landed commit,
 page reflects current state), then reports what it did.
+
+## Compliance gate (mandatory)
+
+After producing your output, save it to a file and run:
+
+```bash
+python3 plugins/vibe-ic/_shared/skill_compliance_check.py \
+    --requirements plugins/vibe-ic/skills/fork-gatekeeper-loop/compliance.yaml \
+    <your_output_file>
+```
+
+Exit 0 = PASS, exit 1 = FAIL with specific missing elements listed.
+`compliance.yaml` in the corresponding skill directory enumerates
+every required element of your output: section headers, metadata fields,
+handoff lines, tool invocations.
+
+**Your task is not complete until the audit returns PASS.** Missing
+elements are the single largest source of skill-execution non-determinism
+across different agents.
