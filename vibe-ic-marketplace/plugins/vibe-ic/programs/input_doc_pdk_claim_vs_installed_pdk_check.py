@@ -1,0 +1,901 @@
+#!/usr/bin/env python3
+"""input_doc_pdk_claim_vs_installed_pdk_check.py — decide a design-input
+document's factual claims about the INSTALLED PDK against the installed PDK.
+
+WHY THIS GATE EXISTS
+====================
+A design-input constraints document stated, as a fact, that its target PDK
+ships no ngspice corner library, and mandated that every corner result be
+labelled a hand-written LEVEL=1 standin in consequence. The PDK installed in
+the pinned EDA image ships sectioned corner libraries for every device class,
+and the deck resolver binds them successfully. The document was wrong, the
+mandated disclosure would have propagated into every downstream corner artefact
+as a statement contradicted by the very library the run bound against, and
+NOTHING IN THE FLOW NOTICED.
+
+The direction of that error is the reason it survived. It UNDERSTATES: it
+labels real foundry corner sections as approximations. Every honesty gate in
+this repo is pointed at the opposite direction — a result claiming more rigour
+than it has — so a disclosure claiming LESS rigour than it has passes every one
+of them. A false claim is a false claim whichever way it leans, and a mandated
+disclosure is not inert: it is copied verbatim into artefacts that are then
+read as the run's own account of itself.
+
+WHAT THIS GATE DECIDES
+======================
+Exactly one claim shape, chosen because it is the shape the corpus actually
+contains (measured, not assumed) and because it is decidable without judgement:
+
+    an ABSENCE or EXCLUSIVITY assertion, about a named installed PDK, about a
+    library artefact format that PDK actually ships
+
+    "<PDK> has no <format> corner lib"          -> ABSENCE
+    "<PDK> ships only the <name> corner lib"    -> EXCLUSIVITY
+
+For each such line the gate resolves the named PDK to a directory in the
+INSTALLED PDK ROOT, walks that directory, and answers from what is on disk.
+
+WHAT THIS GATE EXPLICITLY DOES NOT DECIDE
+=========================================
+  * Anything about UPSTREAM PUBLICATION. A claim worded "no PUBLIC corner lib"
+    is answered against the tree that is installed here, and the report says so
+    in `decides` / `does_not_decide`. If a maintainer means "the foundry has
+    not released one", the installed tree cannot settle that and the finding
+    should be read as "the artefact the document says does not exist is on disk
+    at these paths", which is the load-bearing part either way.
+  * Whether a claim is a REQUIREMENT rather than an assertion. "must sign off
+    at ss/tt/ff" names a corner vocabulary but asserts nothing about the PDK;
+    it carries no absence/exclusivity quantifier and is never a candidate.
+  * Any claim whose named PDK does not resolve to an installed directory. That
+    is UNDECIDED, never agreement. A project naming a PDK that is not installed
+    gets silence from this gate, and the silence is recorded as such.
+  * Whether the extra members of an artefact class are CORNER VARIANTS of one
+    library or unrelated files, in the general case. Where sibling structure is
+    detectable (a shared stem prefix differing by one trailing token) the gate
+    decides; where it is not, it reports UNDECIDED with the count and paths.
+
+NOTHING HERE IS A TABLE OF WHAT PDKs CONTAIN
+============================================
+Every fact the gate uses about a PDK is read from the installed tree at
+runtime: which PDKs exist (directory listing), which artefact formats they ship
+(file suffixes actually present), which directory qualifiers are meaningful
+(directory component names actually present), which library variants exist
+(file stems actually present), and which corner sections a library defines
+(`.lib <name>` section-definition lines parsed out of the file). Change the
+image and every answer changes. A hardcoded list of library names would have
+been a second copy of the same unverified claim, which is the defect.
+
+The claim-side vocabulary the gate does type out is natural-language
+QUANTIFIERS ("no", "only", the CJK equivalents) — the grammar of assertion, not
+the vocabulary of any PDK.
+
+EXIT CODES / VERDICT
+====================
+The report always carries a machine-readable top-level `verdict`, and the exit
+code is routed from the gate's own conclusion via `_vacuous_exit` (#515):
+
+    verdict FAIL            rc 1   >=1 claim CONTRADICTED by the installed tree
+    verdict PASS            rc 0   >=1 claim DECIDED, none contradicted
+    verdict NOT_APPLICABLE  rc 2   nothing decidable was examined, + the
+                                   `VACUOUS_PASS:` sentinel on stderr
+
+rc 0 from this gate means "at least one factual claim about the installed PDK
+was settled and none of them was false". It never means "the tree was quiet".
+A tree with no input documents, no resolvable claims, or no readable PDK root
+lands in the NOT_APPLICABLE tier, so an empty run cannot read as a substantive
+pass (vibe-ic#901).
+
+Usage:
+    python3 input_doc_pdk_claim_vs_installed_pdk_check.py <tree>
+        [--pdks-root /foss/pdks] [--container <name>] [--json out.json|-]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+import _vacuous_exit  # noqa: E402
+
+GATE = "input_doc_pdk_claim_vs_installed_pdk"
+
+DEFAULT_PDKS_ROOT = "/foss/pdks"
+
+# Document formats treated as design-input prose. A document-container format
+# list, not a PDK vocabulary; overridable on the command line.
+DEFAULT_DOC_SUFFIXES = (".md", ".txt")
+
+# The path component that marks a design INPUT tree in this repo's layout.
+INPUT_COMPONENT = "input"
+
+# ── the one typed vocabulary here: natural-language ASSERTION GRAMMAR ───────
+# These are quantifiers of English/CJK prose, not names of anything any PDK
+# ships. A document that phrases absence some other way is simply not a
+# candidate, and the report counts it nowhere — silence, not agreement.
+_ABSENCE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(no|not|none|never|lacks?|without|missing|"
+    r"unavailable|absent)(?![A-Za-z0-9_])"
+    r"|無|沒有|未提供|不隨附|欠缺|不提供")
+_EXCLUSIVITY_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(only|sole|solely|just)(?![A-Za-z0-9_])"
+    r"|僅|只有|唯一")
+
+# `.lib <bare-identifier>` on a line of its own — a SPICE section DEFINITION.
+# Shared with the deck-context resolver so the convention has one site; the
+# local fallback keeps this gate runnable in a stripped install.
+try:  # pragma: no cover - exercised implicitly by the full tree
+    from analog_pdk_deck_context import _LIB_SECTION_RE as _SECTION_DEF_RE
+except Exception:  # pragma: no cover
+    _SECTION_DEF_RE = re.compile(r"(?im)^\s*\.lib\s+([A-Za-z_]\w*)\s*$")
+
+# Infrastructure entries that sit alongside PDK directories under a pdks root
+# and are not themselves PDKs. Shared with the availability resolver.
+try:  # pragma: no cover
+    from analog_pdk_availability import _NON_PDK_ENTRIES
+except Exception:  # pragma: no cover
+    _NON_PDK_ENTRIES = frozenset({"versions.txt", "ciel", "volare", ".", ".."})
+
+# A subject shorter than this, after normalisation, is too weak to anchor a
+# claim to a PDK without false matches against ordinary prose.
+_MIN_SUBJECT_LEN = 4
+
+# A file suffix must be at least this long, and a claim word may extend it by
+# at most this many letters, before the word counts as naming that suffix.
+_MIN_SUFFIX_LEN = 3
+_SUFFIX_WORD_SLACK = 5
+
+# How close, in characters, the word saying WHICH artefact is denied must sit
+# to the format word it modifies. A whole clause away is a different sentence.
+_HEAD_GAP_CHARS = 3
+
+# How far either side of a quantifier its claim reaches, in characters before
+# snapping outwards to whole tokens. A design-document line is often a table
+# row holding several independent propositions; this is the neighbourhood one
+# quantifier is taken to govern.
+SCOPE_WIDTH_CHARS = 30
+
+# Reading a whole PDK tree to answer one sentence is not worth an unbounded
+# walk; these bound the work and every truncation is DISCLOSED in the report
+# (a silent cap would be the same defect one layer down).
+_MAX_PDK_FILES = 20000
+_MAX_SECTION_BYTES = 4_000_000
+
+
+# ── tokenisation ───────────────────────────────────────────────────────────
+
+_CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]+")
+
+
+def tokens(text: str) -> List[str]:
+    """Lowercase alphanumeric tokens of `text`, splitting camelCase humps.
+
+    Used identically on claim prose and on installed file paths, so a claim
+    word and a path word are comparable without either side owning a
+    dictionary. camelCase is split only at a lower/digit -> upper boundary,
+    which recovers the leading word of a compound file stem without
+    shredding an all-caps run into fragments.
+    """
+    split = _NON_ALNUM_RE.split(_CAMEL_SPLIT_RE.sub(" ", text))
+    return [t.lower() for t in split if t]
+
+
+def token_spans(text: str) -> List[Tuple[str, int, int]]:
+    """`tokens(text)` with each token's character span in the ORIGINAL text.
+
+    Spans are what make a proximity scope possible on prose that mixes Latin
+    words with CJK, where the quantifier itself ("僅", "無") is a character the
+    tokeniser drops. Character offsets survive that; token indices do not.
+    """
+    out: List[Tuple[str, int, int]] = []
+    for m in re.finditer(r"[A-Za-z0-9]+", text):
+        run, base = m.group(0), m.start()
+        pos = 0
+        for piece in _CAMEL_SPLIT_RE.sub(" ", run).split(" "):
+            if not piece:
+                continue
+            start = run.index(piece, pos)
+            out.append((piece.lower(), base + start, base + start + len(piece)))
+            pos = start + len(piece)
+    return out
+
+
+def scope_around(text: str, start: int, end: int,
+                 width: int) -> Tuple[str, List[str]]:
+    """The claim's SCOPE: `width` characters either side of the quantifier,
+    snapped outwards to whole tokens.
+
+    A line of a design document is not one proposition. "PDK has no LVS deck →
+    waive; structural CDL check optional" carries a denial and, a clause later,
+    an unrelated noun that happens to name a file format the PDK ships. Reading
+    the whole line as the denial's subject matter manufactured a contradiction
+    out of an adjacent clause — measured, on a real document, on the first run
+    of this gate. The quantifier governs its neighbourhood, so the
+    neighbourhood is what gets read.
+    """
+    lo, hi = max(0, start - width), min(len(text), end + width)
+    toks = []
+    for tok, s, e in token_spans(text):
+        if s < hi and e > lo:
+            toks.append(tok)
+            lo, hi = min(lo, s), max(hi, e)
+    return text[lo:hi], toks
+
+
+def normalise(text: str) -> str:
+    """Lowercase, alphanumerics only — the form subject matching compares in,
+    so `Alpha Node`, `alpha-node` and `alpha_node` are one string."""
+    return _NON_ALNUM_RE.sub("", text).lower()
+
+
+# ── installed-tree access (local FS or inside the EDA container) ───────────
+
+class InstalledTree:
+    """Read-only view of an INSTALLED PDK root, local or in a container.
+
+    Two operations only — list the files under a directory, and read one file.
+    Everything this gate knows about a PDK comes through here, so pointing it
+    at a different image is the whole of "the answer changes when the image
+    changes".
+    """
+
+    def __init__(self, root: str,
+                 lister: Optional[Callable[[str], List[str]]] = None,
+                 reader: Optional[Callable[[str], Optional[str]]] = None,
+                 walker: Optional[Callable[[str], List[str]]] = None):
+        self.root = root.rstrip("/") or "/"
+        self._lister = lister or _local_file_lister
+        self._reader = reader or _local_reader
+        self._walker = walker or _local_walker
+        self._cache: Dict[str, List[str]] = {}
+        self._walk_cache: Dict[str, List[str]] = {}
+
+    def entries(self, path: str) -> List[str]:
+        """Immediate entry names of `path` (files and directories)."""
+        if path not in self._cache:
+            self._cache[path] = self._lister(path)
+        return self._cache[path]
+
+    def files_under(self, path: str) -> List[str]:
+        """Absolute paths of every regular file under `path`, recursively.
+
+        ONE bulk call per subtree, not one per directory: a container-backed
+        walk that round-tripped per directory took minutes on a real PDK and a
+        gate nobody can afford to run is a gate nobody runs.
+        """
+        if path not in self._walk_cache:
+            self._walk_cache[path] = self._walker(path)[:_MAX_PDK_FILES]
+        return self._walk_cache[path]
+
+    def read(self, path: str) -> Optional[str]:
+        return self._reader(path)
+
+
+def _local_file_lister(path: str) -> List[str]:
+    """`find <path>` style listing: absolute paths of files, one per call
+    level. Returns entry names for a directory; [] when unreadable."""
+    p = Path(path)
+    if not p.is_dir():
+        return []
+    try:
+        return sorted(e.name + ("/" if e.is_dir() else "") for e in p.iterdir())
+    except OSError:
+        return []
+
+
+def _local_walker(path: str) -> List[str]:
+    """Every regular file under `path`, absolute, bounded by _MAX_PDK_FILES."""
+    root = Path(path)
+    if not root.is_dir():
+        return []
+    out: List[str] = []
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for fn in filenames:
+            out.append(f"{dirpath.rstrip('/')}/{fn}")
+            if len(out) >= _MAX_PDK_FILES:
+                return sorted(out)
+    return sorted(out)
+
+
+def _local_reader(path: str) -> Optional[str]:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(_MAX_SECTION_BYTES).decode("utf-8", "replace")
+    except OSError:
+        return None
+
+
+def _strip_banner(lines: Sequence[str]) -> List[str]:
+    """Drop the container login banner the EDA image prints before real output.
+
+    Same filtering the availability resolver applies; a banner line swallowed
+    into a listing would look like a PDK directory named `[INFO]`.
+    """
+    out = []
+    for raw in lines:
+        s = raw.strip()
+        if not s or s.startswith("[INFO]") or s.startswith("[ERROR]"):
+            continue
+        out.append(s)
+    return out
+
+
+def docker_backends(container: str
+                    ) -> Tuple[Callable[[str], List[str]],
+                               Callable[[str], Optional[str]],
+                               Callable[[str], List[str]]]:
+    """Lister + reader + bulk walker that see the tree INSIDE the container."""
+
+    def _run(cmd: str) -> Optional[str]:
+        try:
+            r = subprocess.run(
+                ["docker", "exec", container, "bash", "-lc", cmd],
+                capture_output=True, text=True, timeout=120)
+        except Exception:
+            return None
+        if r.returncode != 0:
+            return None
+        return r.stdout or ""
+
+    def lister(path: str) -> List[str]:
+        out = _run(f"ls -1p {shlex.quote(path)} 2>/dev/null")
+        if out is None:
+            return []
+        return sorted(_strip_banner(out.splitlines()))
+
+    def reader(path: str) -> Optional[str]:
+        out = _run(f"head -c {_MAX_SECTION_BYTES} {shlex.quote(path)} 2>/dev/null")
+        return out
+
+    def walker(path: str) -> List[str]:
+        out = _run(f"find {shlex.quote(path)} -type f 2>/dev/null | "
+                   f"head -n {_MAX_PDK_FILES}")
+        if out is None:
+            return []
+        return sorted(_strip_banner(out.splitlines()))
+
+    return lister, reader, walker
+
+
+# ── installed PDK discovery ────────────────────────────────────────────────
+
+def discover_installed_pdks(tree: InstalledTree) -> List[str]:
+    """Names of the PDK directories the installed root actually contains.
+
+    This is the gate's entire notion of "which PDKs exist". There is no list.
+    """
+    out = []
+    for name in tree.entries(tree.root):
+        if not name.endswith("/"):
+            continue
+        bare = name[:-1]
+        if bare in _NON_PDK_ENTRIES or bare.startswith("."):
+            continue
+        if len(normalise(bare)) < _MIN_SUBJECT_LEN:
+            continue
+        out.append(bare)
+    return sorted(out)
+
+
+def resolve_subject(line: str, installed: Sequence[str]) -> Tuple[Optional[str], str]:
+    """Which installed PDK, if any, this line is talking about.
+
+    Normalised containment — `Alpha Node` finds `alpha-node` — with the LONGEST
+    match winning, so a family name that is a prefix of another cannot capture
+    a claim about the longer one. A tie between two equally long names is
+    genuinely ambiguous and is refused rather than guessed.
+    """
+    hay = normalise(line)
+    matched = [p for p in installed if normalise(p) in hay]
+    if not matched:
+        return None, "no installed PDK name appears in the line"
+    longest = max(len(normalise(p)) for p in matched)
+    best = [p for p in matched if len(normalise(p)) == longest]
+    if len(best) > 1:
+        return None, f"ambiguous subject: {', '.join(sorted(best))}"
+    return best[0], ""
+
+
+# ── claim extraction ───────────────────────────────────────────────────────
+
+class Claim:
+    __slots__ = ("doc", "line_no", "text", "subject", "quantifier", "reason",
+                 "scope", "scope_tokens")
+
+    def __init__(self, doc: str, line_no: int, text: str,
+                 subject: Optional[str], quantifier: Optional[str],
+                 reason: str = "", scope: str = "",
+                 scope_tokens: Optional[Sequence[str]] = None):
+        self.doc = doc
+        self.line_no = line_no
+        self.text = text
+        self.subject = subject
+        self.quantifier = quantifier
+        self.reason = reason
+        self.scope = scope or text
+        self.scope_tokens = list(scope_tokens or [])
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"document": self.doc, "line": self.line_no,
+                "claim": self.text, "claim_scope": self.scope,
+                "subject_pdk": self.subject,
+                "quantifier": self.quantifier}
+
+
+def find_input_documents(tree_root: Path,
+                         suffixes: Sequence[str] = DEFAULT_DOC_SUFFIXES
+                         ) -> List[Path]:
+    """Design-input prose documents under `tree_root`.
+
+    A document is design INPUT when a component of its path is `input/` — the
+    repo-wide convention for "what the design was given", as distinct from what
+    a run produced. Nothing under a produced-artefact path is a claim this gate
+    adjudicates, because a produced artefact is the flow's own output and a
+    different gate's business.
+    """
+    if not tree_root.is_dir():
+        return []
+    sfx = tuple(s.lower() for s in suffixes)
+    out = []
+    for p in sorted(tree_root.rglob("*")):
+        if not p.is_file() or p.suffix.lower() not in sfx:
+            continue
+        if INPUT_COMPONENT not in p.parts:
+            continue
+        out.append(p)
+    return out
+
+
+def extract_claims(doc_path: Path, rel: str,
+                   installed: Sequence[str]) -> List[Claim]:
+    """Candidate claims in one document.
+
+    A candidate is a quantifier occurrence whose SCOPE — its token
+    neighbourhood, not its whole line — also names an installed PDK. Requiring
+    the subject inside the scope is what stops a PDK mentioned in one clause
+    from being made the subject of a denial in another.
+
+    A scope carrying both an absence and an exclusivity quantifier is kept but
+    marked ambiguous, because deciding which one governs is reading intent, and
+    this gate does not read intent.
+    """
+    try:
+        text = doc_path.read_text(errors="replace")
+    except OSError:
+        return []
+    claims = []
+    for i, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        seen_scopes = set()
+        for quant, rx in (("ABSENCE", _ABSENCE_RE),
+                          ("EXCLUSIVITY", _EXCLUSIVITY_RE)):
+            for m in rx.finditer(line):
+                scope, stoks = scope_around(line, m.start(), m.end(),
+                                            SCOPE_WIDTH_CHARS)
+                if scope in seen_scopes:
+                    continue
+                subject, _why = resolve_subject(scope, installed)
+                if subject is None:
+                    continue
+                seen_scopes.add(scope)
+                other = (_EXCLUSIVITY_RE if quant == "ABSENCE"
+                         else _ABSENCE_RE)
+                if other.search(scope):
+                    q, reason = None, ("claim scope carries both an absence "
+                                       "and an exclusivity quantifier")
+                else:
+                    q, reason = quant, ""
+                claims.append(Claim(rel, i, line[:400], subject, q, reason,
+                                    scope=scope, scope_tokens=stoks))
+    return claims
+
+
+# ── adjudication against the installed tree ────────────────────────────────
+
+def head_modifiers(scope: str, fmt: Sequence[str],
+                   subject_tokens: Sequence[str]) -> List[str]:
+    """The word(s) the claim uses to say WHICH artefact of a format it denies.
+
+    "no ngspice corner lib" denies the CORNER libs, not every `.lib` in the
+    tree. The distinguishing word is the one immediately in front of the format
+    word, and "immediately" is enforced in characters as well as tokens: on a
+    real bilingual document the nearest Latin token to `GDS` was six words and
+    a clause away, and treating it as the modifier would have made a true
+    statement about a staged macro look like a claim about the PDK.
+
+    A quantifier is never a modifier ("ships no lib" denies nothing in
+    particular), and neither is the subject's own name.
+    """
+    drop = {t.lower() for t in subject_tokens}
+    spans = token_spans(scope)
+    out: List[str] = []
+    for idx, (tok, start, _end) in enumerate(spans):
+        if not any(tok == s or tok.startswith(s) for s in fmt):
+            continue
+        if idx == 0:
+            continue
+        prev, _pstart, pend = spans[idx - 1]
+        if start - pend > _HEAD_GAP_CHARS:
+            continue
+        if prev in drop or any(prev == s or prev.startswith(s) for s in fmt):
+            continue
+        if _ABSENCE_RE.fullmatch(prev) or _EXCLUSIVITY_RE.fullmatch(prev):
+            continue
+        out.append(prev)
+    return out
+
+
+def _stem_tokens(path: str) -> List[str]:
+    return tokens(Path(path).stem)
+
+
+def _suffix(path: str) -> str:
+    return Path(path).suffix.lstrip(".").lower()
+
+
+def _sibling_family(paths: Sequence[str]) -> Optional[Tuple[str, Dict[str, str]]]:
+    """Detect a variant family: stems sharing every token but the last.
+
+    `<name>_typical` / `<name>_slow` / `<name>_fast` is a family whose members
+    are variants of one library. The shared prefix is the library, the trailing
+    token is the variant. Purely structural — the gate never has to know that
+    `slow` names a corner, only that it is the position in which these files
+    differ. Returns (prefix, {variant_token: path}) for the LARGEST family, or
+    None when no two stems share a prefix in that shape.
+    """
+    fams: Dict[str, Dict[str, str]] = {}
+    for p in paths:
+        tk = _stem_tokens(p)
+        if len(tk) < 2:
+            continue
+        prefix = " ".join(tk[:-1])
+        fams.setdefault(prefix, {})[tk[-1]] = p
+    best = None
+    for prefix, members in fams.items():
+        if len(members) < 2:
+            continue
+        if best is None or len(members) > len(best[1]):
+            best = (prefix, members)
+    return best
+
+
+def _sections_of(tree: InstalledTree, paths: Sequence[str],
+                 limit: int = 12) -> Dict[str, List[str]]:
+    """Corner-section vocabulary each library actually defines, scraped now.
+
+    The section names are READ, never assumed. A gate that shipped a list of
+    section names would be promising that no PDK will ever name one
+    differently, which is the promise this whole issue is about.
+    """
+    out: Dict[str, List[str]] = {}
+    for p in list(paths)[:limit]:
+        body = tree.read(p)
+        if not body:
+            continue
+        names = sorted(set(_SECTION_DEF_RE.findall(body)))
+        if names:
+            out[p] = names
+    return out
+
+
+def adjudicate(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
+    """Settle one claim against the installed tree, or refuse to.
+
+    Every narrowing step below is driven by the intersection of the CLAIM's own
+    words with what the installed tree actually contains — file suffixes,
+    directory component names, file stems. Nothing is matched against a
+    vocabulary this file carries.
+    """
+    rec = claim.as_dict()
+    rec["verdict"] = "UNDECIDED"
+    rec["evidence"] = []
+    rec["installed_pdk_path"] = f"{tree.root}/{claim.subject}"
+
+    if claim.quantifier is None:
+        rec["reason"] = claim.reason or "quantifier not determinable"
+        return rec
+
+    pdk_dir = f"{tree.root}/{claim.subject}"
+    files = tree.files_under(pdk_dir)
+    if not files:
+        rec["reason"] = "installed PDK directory is empty or unreadable"
+        return rec
+    if len(files) >= _MAX_PDK_FILES:
+        rec["truncated_at"] = _MAX_PDK_FILES
+
+    claim_tokens = set(claim.scope_tokens or tokens(claim.scope))
+    # The subject's OWN words are not evidence about the subject. Both the
+    # split form and the joined form are removed, so a directory named
+    # `<family>` cannot be mistaken for a qualifier the claim supplied.
+    subject_tokens = set(tokens(claim.subject)) | {normalise(claim.subject)}
+    claim_tokens = {t for t in claim_tokens
+                    if t not in subject_tokens
+                    and normalise(t) != normalise(claim.subject)}
+
+    # (1) artefact FORMAT: a claim token naming a file suffix actually present.
+    # Prose spells a suffix out — "corner library", "corner liberty" — where
+    # the tree writes `.lib`, so a claim token that EXTENDS a present suffix
+    # counts as naming it. The suffix comes from the tree, never from a synonym
+    # table here; the bounds (>=3 chars, <=_SUFFIX_WORD_SLACK extra letters)
+    # keep a one- or two-letter suffix from matching half the dictionary.
+    present_suffixes = {_suffix(f) for f in files if _suffix(f)}
+    fmt = {s for s in present_suffixes
+           if len(s) >= _MIN_SUFFIX_LEN
+           and any(t == s or (t.startswith(s)
+                              and len(t) - len(s) <= _SUFFIX_WORD_SLACK)
+                   for t in claim_tokens)}
+    if not fmt:
+        rec["reason"] = ("no artefact format named in the claim corresponds to "
+                         "a file suffix present in the installed PDK "
+                         f"({len(files)} files scanned)")
+        return rec
+    rec["artefact_format"] = sorted(fmt)
+    candidates = [f for f in files if _suffix(f) in fmt]
+
+    # (2) directory QUALIFIER: a claim token that is a real directory component
+    all_components = set()
+    for f in candidates:
+        all_components.update(
+            c.lower() for c in Path(f).parent.parts if c not in ("/", ""))
+    dir_quals = (claim_tokens & all_components) - subject_tokens - fmt
+    if dir_quals:
+        rec["directory_qualifiers"] = sorted(dir_quals)
+        narrowed = [f for f in candidates
+                    if {c.lower() for c in Path(f).parent.parts} & dir_quals]
+        if narrowed:
+            candidates = narrowed
+    if not candidates:
+        rec["reason"] = "no installed file matches the claim's artefact format"
+        return rec
+
+    # (3) stem QUALIFIER: a claim token occurring in at least one candidate stem
+    stem_vocab = set()
+    for f in candidates:
+        stem_vocab.update(_stem_tokens(f))
+    stem_quals = (claim_tokens & stem_vocab) - subject_tokens - fmt - dir_quals
+
+    if claim.quantifier == "ABSENCE":
+        # A denial needs a DISCRIMINATOR before the tree can answer it: the
+        # word the claim puts in front of the format, saying WHICH artefacts of
+        # that format it denies. Without one the claim denies "some file of
+        # format X" and no listing can settle that — the gate's first run
+        # answered such a claim by matching every file of the format and
+        # reported an unrelated file as the contradiction. Refusing is the only
+        # honest answer, recorded as UNDECIDED, never as agreement.
+        heads = head_modifiers(claim.scope, sorted(fmt), sorted(subject_tokens))
+        if not heads:
+            rec["reason"] = (
+                "the claim names an artefact format but no adjacent word "
+                "saying which artefacts of that format it denies; the "
+                "installed tree cannot settle a denial it cannot localise")
+            rec["evidence_count"] = len(candidates)
+            return rec
+        rec["denied_artefact"] = sorted(set(heads))
+        head_set = set(heads)
+        matched = [f for f in candidates if set(_stem_tokens(f)) & head_set]
+        if matched:
+            rec["verdict"] = "CONTRADICTED"
+            rec["reason"] = (
+                f"the installed PDK ships {len(matched)} artefact(s) the claim "
+                f"says it does not")
+            rec["evidence"] = matched[:40]
+            rec["evidence_count"] = len(matched)
+            secs = _sections_of(tree, matched)
+            if secs:
+                rec["sections_discovered"] = secs
+        else:
+            rec["verdict"] = "CORROBORATED"
+            rec["reason"] = (
+                f"no installed artefact of format {'/'.join(sorted(fmt))} is "
+                f"named {'/'.join(sorted(head_set))}; the claim holds over "
+                f"{len(candidates)} file(s) of that format")
+            rec["evidence_count"] = 0
+        return rec
+
+    # EXCLUSIVITY
+    if len(candidates) == 1:
+        only = candidates[0]
+        if set(_stem_tokens(only)) & claim_tokens:
+            rec["verdict"] = "CORROBORATED"
+            rec["reason"] = ("the installed PDK ships exactly one artefact of "
+                             "the claimed format, and the claim names it")
+            rec["evidence"] = [only]
+            rec["evidence_count"] = 1
+        else:
+            rec["reason"] = ("the installed PDK ships exactly one artefact of "
+                             "the claimed format but the claim does not name "
+                             "it; the claim may be about something else")
+            rec["evidence"] = [only]
+        return rec
+
+    fam = _sibling_family(candidates)
+    if fam is None:
+        rec["reason"] = (
+            f"the installed PDK ships {len(candidates)} artefacts of the "
+            "claimed format with no detectable variant-family structure; "
+            "deciding whether the extras are variants of one library needs a "
+            "corner-role vocabulary this gate deliberately does not carry")
+        rec["evidence"] = candidates[:40]
+        rec["evidence_count"] = len(candidates)
+        return rec
+
+    prefix, members = fam
+    unnamed = {v: p for v, p in members.items() if v not in claim_tokens}
+    if unnamed:
+        rec["verdict"] = "CONTRADICTED"
+        rec["reason"] = (
+            f"the installed PDK ships {len(members)} variants of "
+            f"'{prefix}' and the claim admits only the ones it names; "
+            f"unnamed: {', '.join(sorted(unnamed))}")
+        rec["evidence"] = [unnamed[v] for v in sorted(unnamed)][:40]
+        rec["evidence_count"] = len(unnamed)
+        secs = _sections_of(tree, list(members.values()))
+        if secs:
+            rec["sections_discovered"] = secs
+    else:
+        rec["verdict"] = "CORROBORATED"
+        rec["reason"] = (f"every installed variant of '{prefix}' is named in "
+                         "the claim")
+        rec["evidence"] = sorted(members.values())[:40]
+        rec["evidence_count"] = len(members)
+    return rec
+
+
+# ── report ─────────────────────────────────────────────────────────────────
+
+def run(tree_root: Path, pdks_root: str,
+        container: Optional[str] = None,
+        doc_suffixes: Sequence[str] = DEFAULT_DOC_SUFFIXES,
+        lister: Optional[Callable[[str], List[str]]] = None,
+        reader: Optional[Callable[[str], Optional[str]]] = None,
+        walker: Optional[Callable[[str], List[str]]] = None,
+        ) -> Dict[str, Any]:
+    """Adjudicate every decidable claim in `tree_root` against `pdks_root`."""
+    if container and lister is None and reader is None and walker is None:
+        lister, reader, walker = docker_backends(container)
+    tree = InstalledTree(pdks_root, lister=lister, reader=reader, walker=walker)
+
+    report: Dict[str, Any] = {
+        "gate": GATE,
+        "installed_pdk_root": pdks_root,
+        "installed_pdk_source": f"container:{container}" if container else "local",
+        "tree": str(tree_root),
+        "decides": (
+            "absence / exclusivity assertions, in design-input documents, "
+            "about library artefacts of a PDK that is installed here"),
+        "does_not_decide": [
+            "upstream publication status of any artefact (only what is "
+            "installed here)",
+            "claims about a PDK that is not installed in this root",
+            "requirements and targets, which assert nothing about the PDK",
+            "whether extra artefacts are corner variants when no sibling "
+            "family structure is detectable",
+        ],
+    }
+
+    installed = discover_installed_pdks(tree)
+    report["installed_pdks"] = installed
+    if not installed:
+        report["verdict"] = "NOT_APPLICABLE"
+        report["reason"] = "installed_pdk_root_unreadable"
+        report["documents_scanned"] = 0
+        report["claims"] = []
+        report["counts"] = {"contradicted": 0, "corroborated": 0,
+                            "undecided": 0}
+        return report
+
+    docs = find_input_documents(tree_root, doc_suffixes)
+    report["documents_scanned"] = len(docs)
+    if not docs:
+        report["verdict"] = "NOT_APPLICABLE"
+        report["reason"] = "no_input_documents"
+        report["claims"] = []
+        report["counts"] = {"contradicted": 0, "corroborated": 0,
+                            "undecided": 0}
+        return report
+
+    claims: List[Claim] = []
+    for d in docs:
+        try:
+            rel = str(d.relative_to(tree_root))
+        except ValueError:  # pragma: no cover - rglob keeps these relative
+            rel = str(d)
+        claims.extend(extract_claims(d, rel, installed))
+
+    results = [adjudicate(c, tree) for c in claims]
+    report["claims"] = results
+    counts = {
+        "contradicted": sum(1 for r in results if r["verdict"] == "CONTRADICTED"),
+        "corroborated": sum(1 for r in results if r["verdict"] == "CORROBORATED"),
+        "undecided": sum(1 for r in results if r["verdict"] == "UNDECIDED"),
+    }
+    report["counts"] = counts
+
+    if counts["contradicted"]:
+        report["verdict"] = "FAIL"
+        report["reason"] = (f"{counts['contradicted']} design-input claim(s) "
+                            "contradicted by the installed PDK")
+    elif counts["corroborated"]:
+        report["verdict"] = "PASS"
+        report["reason"] = (f"{counts['corroborated']} claim(s) decided, none "
+                            "contradicted")
+    elif claims:
+        report["verdict"] = "NOT_APPLICABLE"
+        report["reason"] = "all_claims_undecided"
+    else:
+        report["verdict"] = "NOT_APPLICABLE"
+        report["reason"] = "no_decidable_pdk_claim"
+    return report
+
+
+def _emit_human(report: Dict[str, Any]) -> None:
+    for r in report.get("claims", []):
+        if r["verdict"] == "CONTRADICTED":
+            print(f"[CONTRADICTED] {r['document']}:{r['line']}")
+            print(f"    claim    : {r['claim']}")
+            print(f"    installed: {r['reason']}")
+            for path in r.get("evidence", [])[:10]:
+                print(f"    artefact : {path}")
+            for path, secs in (r.get("sections_discovered") or {}).items():
+                print(f"    sections : {Path(path).name}: {', '.join(secs)}")
+        elif r["verdict"] == "UNDECIDED":
+            print(f"[UNDECIDED] {r['document']}:{r['line']} — {r['reason']}")
+    c = report.get("counts", {})
+    print(f"{GATE}: {report.get('documents_scanned', 0)} input document(s), "
+          f"{len(report.get('claims', []))} candidate claim(s) — "
+          f"contradicted={c.get('contradicted', 0)} "
+          f"corroborated={c.get('corroborated', 0)} "
+          f"undecided={c.get('undecided', 0)}")
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__.split("\n")[1],
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("tree", help="project or repository tree to scan")
+    ap.add_argument("--pdks-root", default=os.environ.get(
+        "VIBEIC_PDKS_ROOT", DEFAULT_PDKS_ROOT),
+        help="installed PDK root (default %(default)s)")
+    ap.add_argument("--container", default=None,
+                    help="read the installed PDK inside this container")
+    ap.add_argument("--doc-suffix", action="append", default=None,
+                    help="input-document suffix (repeatable)")
+    ap.add_argument("--json", default=None, help="JSON report path, or - for stdout")
+    args = ap.parse_args(argv)
+
+    report = run(Path(args.tree), args.pdks_root, container=args.container,
+                 doc_suffixes=tuple(args.doc_suffix or DEFAULT_DOC_SUFFIXES))
+
+    if args.json == "-":
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        if args.json:
+            Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.json).write_text(
+                json.dumps(report, indent=2, ensure_ascii=False))
+        _emit_human(report)
+
+    skipped = report["verdict"] == "NOT_APPLICABLE"
+    passed = report["verdict"] != "FAIL"
+    reason = report.get("reason", "unspecified")
+    print(_vacuous_exit.verdict_line(GATE, passed, skipped, reason),
+          file=sys.stderr)
+    if skipped:
+        _vacuous_exit.announce_vacuous(GATE, reason)
+    return _vacuous_exit.exit_code(passed, skipped)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

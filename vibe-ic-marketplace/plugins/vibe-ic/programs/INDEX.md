@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1071
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1071)
+- **Total programs (excluding helpers / shims):** 1073
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1073)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1062 |
+| `any` | 1064 |
 
 ## Alphabetical listing
 
@@ -355,6 +355,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow_gate_enforcement_audit` | any | — | which flow gates can actually STOP a run, and which only get to complain afterwards (#306). |
 | `flow_gate_grid` | any | — | recompute the flow-gate grid, and say which cells cannot be. |
 | `flow_stage_check` | any | — | Flow stage check — wrapper for signoff_audit --mode flow. |
+| `flow_stage_membership_single_declaration_check` | any | — | stage membership is declared once. |
 | `flow_step_can_fail_check` | any | — | a step whose gate cannot fail must say so. |
 | `flow_step_execution_coverage_check` | any | — | enforce "every applicable step ran, in order". |
 | `flow_step_executor_coverage_check` | any | — | "every step has an executor that runs it". |
@@ -474,6 +475,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ic_expert_db_query` | any | — | GENERAL-CORE retrieval over the IC Expert DB. |
 | `iface_conformance_v2` | any | — | prompt→interface conformance gate (ORGANIC #695). |
 | `infiniband_protocol_synth` | any | — | InfiniBand Architecture (IBTA) protocol synth helper. |
+| `input_doc_pdk_claim_vs_installed_pdk_check` | any | — | decide a design-input document's factual claims about the INSTALLED PDK against the installed PDK. |
 | `input_docs_coverage_check` | any | v0.50 | v0.50 plugin gate |
 | `integration_spec_audit` | any | — | Deterministic compliance check for integration-spec-gen. |
 | `interface_encoding_audit` | any | — | Detect gray-code vs binary encoding mismatches across module boundaries. |
@@ -1143,7 +1145,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1062 programs)
+### `any` (1064 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1470,6 +1472,7 @@ _(no programs in this group)_
 - `flow_gate_enforcement_audit` — which flow gates can actually STOP a run, and which only get to complain afterwards (#306).
 - `flow_gate_grid` — recompute the flow-gate grid, and say which cells cannot be.
 - `flow_stage_check` — Flow stage check — wrapper for signoff_audit --mode flow.
+- `flow_stage_membership_single_declaration_check` — stage membership is declared once.
 - `flow_step_can_fail_check` — a step whose gate cannot fail must say so.
 - `flow_step_execution_coverage_check` — enforce "every applicable step ran, in order".
 - `flow_step_executor_coverage_check` — "every step has an executor that runs it".
@@ -1589,6 +1592,7 @@ _(no programs in this group)_
 - `ic_expert_db_query` — GENERAL-CORE retrieval over the IC Expert DB.
 - `iface_conformance_v2` — prompt→interface conformance gate (ORGANIC #695).
 - `infiniband_protocol_synth` — InfiniBand Architecture (IBTA) protocol synth helper.
+- `input_doc_pdk_claim_vs_installed_pdk_check` — decide a design-input document's factual claims about the INSTALLED PDK against the installed PDK.
 - `input_docs_coverage_check` — v0.50 plugin gate  _[v0.50]_
 - `integration_spec_audit` — Deterministic compliance check for integration-spec-gen.
 - `interface_encoding_audit` — Detect gray-code vs binary encoding mismatches across module boundaries.
