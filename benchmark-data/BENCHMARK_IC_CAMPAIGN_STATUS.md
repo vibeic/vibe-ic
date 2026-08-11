@@ -8,6 +8,20 @@ run's own RESULT.md/AGENT_REPORT.md alone. This tracks the OPEN-PDK matrix
 sign-off track for spm/subservient/sha256/u_hawaii_adc is reported elsewhere
 and is not part of this table._
 
+> **⚠️ 2026-08-12 — rows below cite cells that are no longer published.** Under the
+> owner ruling in vibe-ic#1015 / #1010, published run output that does not pass was
+> withdrawn: 17 run roots came down, among them the cells this table's
+> `caravel_user_project`, `edge_llm_accel`, `ibex`, `opentitan_aes`, `subservient`
+> and `spm × IHP-SG13G2` rows point at. Their `RESULT.md` links no longer resolve.
+>
+> The STATUS COLUMN IS NOT RESTATED. This is a dated record — last updated
+> 2026-08-02, plugin v1.9.56 — and each verdict is what was independently
+> re-derived from raw run artifacts on that date. Rewriting those verdicts because
+> the evidence was withdrawn would turn a measurement into a claim about a tree
+> nobody can now inspect. Read the table as of its date; the withdrawn runs remain
+> in git history, and `benchmark-data/ic/INDEX.md` — which is generated from the
+> tracked artefacts and gated in CI — is the current answer.
+
 | IC × PDK | Status | Residual |
 |---|---|---|
 | spm × IHP-SG13G2 | **PASS_WITH_WAIVERS** | None (foundry/board-stage waivers only) — see `ic/spm/ihp-sg13g2/RESULT.md` |
