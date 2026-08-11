@@ -457,6 +457,103 @@ def test_903_a_candidate_carrying_no_signal_at_all_cannot_be_scoped():
     assert basis == APDC.ELECTION_BASIS_NAME_ORDER, basis
 
 
+# ── the REGISTRY branch, which has its own fixed-polarity preference ───────
+#
+# `_ROLE_PREFER` / `_ROLE_AVOID` prefer the core-voltage device and avoid the
+# elevated one unconditionally, which is the wrong answer for an elevated
+# block. The domain therefore has to reach this branch too — but only on the
+# components that are ABOUT the domain, or it would override a stated
+# preference between candidates the domain does not separate at all.
+
+def _registry_family_with_a_rating_split():
+    """A registry family that DECLARES more than one voltage rating for a MOS
+    role, discovered from the shipped registry rather than named here."""
+    data = json.loads((PROGRAMS / "pdk_registry.json").read_text())
+    for ent in data.get("pdks") or []:
+        if not isinstance(ent, dict):
+            continue
+        models = [m for m in ent.get("device_models") or []
+                  if isinstance(m, str)]
+        for role in ("nmos", "pmos"):
+            toks = A3._ROLE_TOKENS.get(role, ())
+            cands = [m for m in models
+                     if any(t in m.lower() for t in toks)]
+            ratings = sorted({APDC.name_voltage_rating(m) for m in cands}
+                             - {0.0})
+            if len(ratings) >= 2:
+                return ent, role, ratings
+    return None, None, None
+
+
+def test_903_the_registry_branch_binds_a_device_that_survives_the_domain():
+    """An elevated block must not be handed the core-voltage device just
+    because a fixed list prefers it. Asserted as a PROPERTY of the bound
+    model's own spelled rating, over a family discovered from the registry —
+    no device name is written down here."""
+    ent, role, ratings = _registry_family_with_a_rating_split()
+    if ent is None:
+        import pytest
+        pytest.skip("no registry family declares two ratings for a MOS role")
+    low, high = ratings[0], ratings[-1]
+    got, _unres, _by = A3.resolve_role_models(
+        ent, [role], {}, APDC.VoltageDomain(volts=high, elevated=True))
+    assert APDC.name_voltage_rating(got[role]) >= high, (high, got)
+    # and the core block still gets the ordinary device it always got
+    base, _u, _b = A3.resolve_role_models(ent, [role], {})
+    same, _u, _b = A3.resolve_role_models(
+        ent, [role], {}, APDC.VoltageDomain(volts=low, elevated=False))
+    assert same == base, (base, same)
+
+
+def test_903_a_stated_domain_does_not_override_the_registrys_preference():
+    """The domain key must contribute ONLY its flavour components. Measured
+    before this was true: a stated domain re-bound a passive role away from the
+    device `_ROLE_PREFER` names first to a shorter name the list does not
+    mention. For every role the registry preference covers, a non-elevated
+    stated domain must bind exactly what no domain binds."""
+    data = json.loads((PROGRAMS / "pdk_registry.json").read_text())
+    roles = sorted(A3._ROLE_PREFER)
+    checked = 0
+    for ent in data.get("pdks") or []:
+        if not isinstance(ent, dict) or not ent.get("device_models"):
+            continue
+        base, _u, _b = A3.resolve_role_models(ent, roles, {})
+        for volts in (1.2, 1.8):
+            got, _u, _b = A3.resolve_role_models(
+                ent, roles, {}, APDC.VoltageDomain(volts=volts,
+                                                   elevated=False))
+            assert got == base, (ent.get("name"), volts, base, got)
+        checked += 1
+    assert checked, "no registry family declares any device model"
+
+
+# ── both unit spellings the pipeline actually produces ─────────────────────
+
+def test_903_both_unit_key_spellings_the_pipeline_writes_are_read():
+    """`analog_a1_spec_emit` writes `unit`; the `analog-spec-extract` skill
+    writes `units`. Reading one would make the domain discoverable for half the
+    pipeline and invisible for the other half, which reads as "this design
+    states no domain" when it states one. The key list is scraped from the
+    program, so a third spelling added there is covered here."""
+    keys = A3._UNIT_KEYS
+    assert len(keys) >= 2, keys
+    for key in keys:
+        spec = {"specs": [{"name": "vsupply", "target": 1.8, key: "V"}]}
+        assert A3.spec_voltage(spec) == 1.8, (key, spec)
+
+
+def test_903_no_voltage_domain_line_is_emitted_when_none_is_stated(tmp_path):
+    """The netlist provenance gains a `voltage_domain=` line ONLY when the
+    design states one — a design that states none must emit the deck it always
+    emitted, or every existing artefact changes for a decision nobody made."""
+    devices = _family(_an_elevated_component(), _an_ordinary_component())
+    got = _per_block(tmp_path, devices, {"quiet": None})
+    dom = got["quiet"]["role_model_election"].get("domain")
+    assert dom in (None, {"volts": None, "elevated": False}), dom
+    assert not (dom or {}).get("volts")
+    assert not (dom or {}).get("elevated")
+
+
 # ── the record has to SAY which domain it answered ─────────────────────────
 
 def test_903_the_election_record_names_the_domain_it_was_scoped_to():
