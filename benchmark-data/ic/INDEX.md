@@ -13,8 +13,8 @@ This tree holds converged evidence AND runs that did not converge, and the folde
 |---|---|
 | CONVERGED EVIDENCE | 4 |
 | RETAINED FAILURE | 5 |
-| UNAUDITED RECORD | 5 |
-| **total** | **14** |
+| UNAUDITED RECORD | 4 |
+| **total** | **13** |
 
 ## CONVERGED EVIDENCE — 4
 
@@ -39,7 +39,7 @@ An audit ran and did NOT converge. These are retained on purpose: deleting them 
 | `sha256/clean_run_v1427_20260715` | FAIL | P33 F3 M0 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
 | `u_hawaii_adc/v1.9.86_sky130A/reports` | FAIL | P0 F0 M40 W0 | — | — | no | record only |
 
-## UNAUDITED RECORD — 5
+## UNAUDITED RECORD — 4
 
 No `reports/audit/phase23_completion_audit.json` exists for this cell, so there is NO machine verdict either way. A claim made in its RESULT.md is unbacked by an audit artefact; that is not the same as a failure, and it is not a pass.
 
@@ -49,7 +49,6 @@ No `reports/audit/phase23_completion_audit.json` exists for this cell, so there 
 | `opentitan_aes` | — | — | — | — | yes | reproduction for #405 — its input/docs/ drives the real walker that returned null for everything; also read directly by tests under programs/tests/ |
 | `sha256` | — | — | — | — | yes | reproduction for #186 (OPEN) part 1 — the 9th top-level port reproduces on this cell |
 | `sha256/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `u_hawaii_adc` | — | — | vibe_ic=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | — | yes | corpus member — walked by both blocking corpus gates |
 
 ## Reading the columns
 
