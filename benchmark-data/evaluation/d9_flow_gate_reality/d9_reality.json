@@ -1,20 +1,20 @@
 {
  "generated_by": "tools/d9_flow_gate_reality.py",
  "corpus": {
-  "runs": 107,
+  "runs": 90,
   "how": "git ls-files benchmark-data | dirs containing phase1/generated_docs/",
   "tech_lef_runs": 0
  },
  "steps": 63,
- "moves_today": 31,
- "dark": 32,
+ "moves_today": 27,
+ "dark": 36,
  "denominator_bands": {
-  "zero": 22,
-  "one_to_ten": 31,
-  "eleven_plus": 10,
+  "zero": 27,
+  "one_to_ten": 34,
+  "eleven_plus": 2,
   "all_runs": 1,
-  "median": 3,
-  "max": 107
+  "median": 2,
+  "max": 90
  },
  "skills": {
   "declared": 56,
@@ -55,13 +55,13 @@
  },
  "programs": {
   "on_disk": 1075,
-  "all_py_in_programs": 1133,
-  "referenced_by_flow": 216
+  "all_py_in_programs": 1134,
+  "referenced_by_flow": 221
  },
  "publishing_excluded_dark": {
-  "def": 1,
-  "gds": 12,
-  "spef": 8,
+  "def": 0,
+  "gds": 6,
+  "spef": 0,
   "oas": 0,
   "lef": 5,
   "tlef": 0,
@@ -72,7 +72,7 @@
    "*.spef",
    "*.oas"
   ],
-  "dark_cells_blocked": 7,
+  "dark_cells_blocked": 9,
   "blocked": [
    {
     "step": 15,
@@ -110,8 +110,22 @@
     ]
    },
    {
+    "step": 22,
+    "cause": "DENOMINATOR",
+    "needs": [
+     "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
+    ]
+   },
+   {
+    "step": 34,
+    "cause": "DENOMINATOR",
+    "needs": [
+     "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done"
+    ]
+   },
+   {
     "step": 38,
-    "cause": "ALREADY-RED",
+    "cause": "DENOMINATOR",
     "needs": [
      "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt"
     ]
@@ -124,13 +138,12 @@
     ]
    }
   ],
-  "ceiling_on_published_corpus": 56
+  "ceiling_on_published_corpus": 54
  },
  "causes": {
-  "ALREADY-RED": 2,
-  "DENOMINATOR": 22,
+  "DENOMINATOR": 27,
   "NO-BLOCKING-RULER": 2,
-  "RULER-BLIND": 5,
+  "RULER-BLIND": 6,
   "RULER-NEVER-RAN": 1
  },
  "evidenced_findings": {
@@ -140,11 +153,11 @@
    "source": "faults_covered = int(round(faults_total * coverage_ratio / 100.0))"
   },
   "floorplan_budget": {
-   "l19_docs": 195,
-   "null": 136,
-   "populated": 5,
-   "key_absent": 54,
-   "populated_but_prose": 3,
+   "l19_docs": 170,
+   "null": 120,
+   "populated": 1,
+   "key_absent": 49,
+   "populated_but_prose": 0,
    "field": "die_area_budget_um"
   },
   "pdk": {
@@ -158,9 +171,9 @@
    "name": "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)",
    "stage": "stage_phase1",
    "declared_outputs": 14,
-   "denominator": 107,
-   "runs_probed": 107,
-   "runs_moved": 8,
+   "denominator": 90,
+   "runs_probed": 90,
+   "runs_moved": 4,
    "blocking_programs": [
     "analog_a0_skip_forbidden_check",
     "l_doc_todo_stub_count_check",
@@ -203,14 +216,14 @@
     },
     {
      "program": "phase1_all_l_docs_present_check",
-     "runs": 7,
-     "example": "benchmark-data/ic/edge_llm_matmul_accel: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 3,
+     "example": "benchmark-data/ic/spm/v1.10.18_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
-    "green_survives": 213,
+    "green_survives": 179,
     "already_red": 0,
-    "never_read": 207
+    "never_read": 177
    },
    "pdk_bound_programs": [],
    "moves_today": true,
@@ -260,7 +273,7 @@
    "name": "Spec-to-RTL",
    "stage": "stage1",
    "declared_outputs": 3,
-   "denominator": 30,
+   "denominator": 15,
    "runs_probed": 0,
    "runs_moved": 0,
    "blocking_programs": [],
@@ -285,8 +298,8 @@
    "name": "🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)",
    "stage": "stage1",
    "declared_outputs": 2,
-   "denominator": 25,
-   "runs_probed": 25,
+   "denominator": 9,
+   "runs_probed": 9,
    "runs_moved": 0,
    "blocking_programs": [
     "fpga_wrapper_input_polluter_check",
@@ -320,9 +333,9 @@
    ],
    "movers": [],
    "arm_pattern": {
-    "green_survives": 77,
-    "already_red": 25,
-    "never_read": 173
+    "green_survives": 27,
+    "already_red": 9,
+    "never_read": 63
    },
    "pdk_bound_programs": [
     "rom_init_lint",
@@ -340,9 +353,9 @@
    "name": "🔁 CDC / RDC check",
    "stage": "stage1",
    "declared_outputs": 3,
-   "denominator": 25,
-   "runs_probed": 25,
-   "runs_moved": 25,
+   "denominator": 9,
+   "runs_probed": 9,
+   "runs_moved": 9,
    "blocking_programs": [
     "cdc_async_input_check",
     "cdc_crossing_check",
@@ -359,14 +372,14 @@
    "movers": [
     {
      "program": "cdc_crossing_check",
-     "runs": 25,
+     "runs": 9,
      "example": "benchmark-data/evaluation/cvdp/run_v0153_runner/fixed_priority_arbiter: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
-    "green_survives": 73,
+    "green_survives": 27,
     "already_red": 0,
-    "never_read": 2
+    "never_read": 0
    },
    "pdk_bound_programs": [
     "clock_domain_reg_crossing_check",
@@ -388,9 +401,9 @@
    "name": "🔁 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)",
    "stage": "stage1",
    "declared_outputs": 2,
-   "denominator": 19,
-   "runs_probed": 19,
-   "runs_moved": 18,
+   "denominator": 7,
+   "runs_probed": 7,
+   "runs_moved": 7,
    "blocking_programs": [
     "cpu_functional_oracle_waiver_check",
     "l10_tb_conformance_check",
@@ -413,14 +426,14 @@
    "movers": [
     {
      "program": "cpu_functional_oracle_waiver_check",
-     "runs": 18,
+     "runs": 7,
      "example": "benchmark-data/evaluation/cvdp/run_v0153_runner/fixed_priority_arbiter: CLEAN/rc=0 -> NO-INPUT/rc=2"
     }
    ],
    "arm_pattern": {
-    "green_survives": 27,
-    "already_red": 5,
-    "never_read": 64
+    "green_survives": 12,
+    "already_red": 0,
+    "never_read": 23
    },
    "pdk_bound_programs": [],
    "moves_today": true,
@@ -435,9 +448,9 @@
    "name": "🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)",
    "stage": "stage1",
    "declared_outputs": 3,
-   "denominator": 8,
-   "runs_probed": 8,
-   "runs_moved": 5,
+   "denominator": 4,
+   "runs_probed": 4,
+   "runs_moved": 3,
    "blocking_programs": [
     "assertion_property_check",
     "bit_level_full_stack_tb_check",
@@ -452,14 +465,14 @@
    "movers": [
     {
      "program": "formal_proof_evidence_check",
-     "runs": 5,
-     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 3,
+     "example": "benchmark-data/ic/sha256: FINDING/rc=1 -> NO-INPUT/rc=2"
     }
    ],
    "arm_pattern": {
-    "green_survives": 3,
-    "already_red": 6,
-    "never_read": 10
+    "green_survives": 2,
+    "already_red": 2,
+    "never_read": 5
    },
    "pdk_bound_programs": [],
    "moves_today": true,
@@ -512,9 +525,9 @@
    "name": "Constraint setup (SDC + PVT matrix)",
    "stage": "stage2",
    "declared_outputs": 2,
-   "denominator": 7,
-   "runs_probed": 7,
-   "runs_moved": 7,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "pvt_matrix_check",
     "sdc_syntax_check"
@@ -529,17 +542,12 @@
    "movers": [
     {
      "program": "pvt_matrix_check",
-     "runs": 7,
-     "example": "benchmark-data/evaluation/phase1_parity/mdio: FINDING/rc=1 -> NO-INPUT/rc=2"
-    },
-    {
-     "program": "sdc_syntax_check",
-     "runs": 1,
-     "example": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 2,
+     "example": "benchmark-data/ic/spm/v1.10.18_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=2"
     }
    ],
    "arm_pattern": {
-    "green_survives": 6,
+    "green_survives": 2,
     "already_red": 0,
     "never_read": 0
    },
@@ -558,8 +566,8 @@
    "name": "🔁 SDC validation",
    "stage": "stage2",
    "declared_outputs": 1,
-   "denominator": 12,
-   "runs_probed": 12,
+   "denominator": 2,
+   "runs_probed": 2,
    "runs_moved": 0,
    "blocking_programs": [
     "derived_clock_sdc_required_check",
@@ -576,9 +584,9 @@
    ],
    "movers": [],
    "arm_pattern": {
-    "green_survives": 39,
-    "already_red": 4,
-    "never_read": 5
+    "green_survives": 8,
+    "already_red": 0,
+    "never_read": 0
    },
    "pdk_bound_programs": [],
    "moves_today": false,
@@ -595,8 +603,8 @@
    "name": "Synthesis (Yosys → mapped netlist)",
    "stage": "stage2",
    "declared_outputs": 2,
-   "denominator": 3,
-   "runs_probed": 3,
+   "denominator": 2,
+   "runs_probed": 2,
    "runs_moved": 0,
    "blocking_programs": [
     "provenance_check",
@@ -611,7 +619,7 @@
    "arm_pattern": {
     "green_survives": 0,
     "already_red": 0,
-    "never_read": 6
+    "never_read": 4
    },
    "pdk_bound_programs": [],
    "moves_today": false,
@@ -655,9 +663,9 @@
    "name": "DFT insertion (scan chain + ATPG + at-speed + BSDL)",
    "stage": "stage2",
    "declared_outputs": 5,
-   "denominator": 3,
-   "runs_probed": 3,
-   "runs_moved": 3,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "bsdl_emit",
     "dft_atpg_coverage_check",
@@ -672,18 +680,13 @@
    "movers": [
     {
      "program": "bsdl_emit",
-     "runs": 3,
-     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=2"
+     "runs": 2,
+     "example": "benchmark-data/ic/spm/v1.9.96_gf180mcuD: CLEAN/rc=0 -> NO-INPUT/rc=2"
     },
     {
      "program": "dft_atpg_coverage_check",
-     "runs": 3,
-     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: FINDING/rc=1 -> NO-INPUT/rc=2"
-    },
-    {
-     "program": "dft_signoff_check",
-     "runs": 1,
-     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: FINDING/rc=1 -> NO-INPUT/rc=2"
+     "runs": 2,
+     "example": "benchmark-data/ic/spm/v1.9.96_gf180mcuD: CLEAN/rc=0 -> NO-INPUT/rc=2"
     }
    ],
    "arm_pattern": {
@@ -737,9 +740,9 @@
    "name": "Transition-delay-fault (at-speed LOC) ATPG",
    "stage": "stage2",
    "declared_outputs": 1,
-   "denominator": 5,
-   "runs_probed": 5,
-   "runs_moved": 4,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "transition_coverage_check"
    ],
@@ -750,13 +753,13 @@
    "movers": [
     {
      "program": "transition_coverage_check",
-     "runs": 4,
-     "example": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 2,
+     "example": "benchmark-data/ic/spm/v1.10.18_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
     "green_survives": 0,
-    "already_red": 1,
+    "already_red": 0,
     "never_read": 0
    },
    "pdk_bound_programs": [],
@@ -770,9 +773,9 @@
    "name": "Post-DFT optimization (resynth / buffering)",
    "stage": "stage2",
    "declared_outputs": 1,
-   "denominator": 3,
-   "runs_probed": 3,
-   "runs_moved": 3,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "dft_post_optimization_scan_survival_check"
    ],
@@ -783,8 +786,8 @@
    "movers": [
     {
      "program": "dft_post_optimization_scan_survival_check",
-     "runs": 3,
-     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 2,
+     "example": "benchmark-data/ic/spm/v1.10.18_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
@@ -805,9 +808,9 @@
    "name": "🔁 Equivalence check (RTL ≡ post-DFT netlist)",
    "stage": "stage2",
    "declared_outputs": 2,
-   "denominator": 5,
-   "runs_probed": 5,
-   "runs_moved": 4,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 1,
    "blocking_programs": [
     "lec_equivalence_check"
    ],
@@ -818,8 +821,8 @@
    "movers": [
     {
      "program": "lec_equivalence_check",
-     "runs": 4,
-     "example": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 1,
+     "example": "benchmark-data/ic/spm/v1.10.18_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
@@ -840,9 +843,9 @@
    "name": "Analog Spec Extraction",
    "stage": "stage_analog",
    "declared_outputs": 1,
-   "denominator": 3,
-   "runs_probed": 3,
-   "runs_moved": 3,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "analog_a1_spec_extract_check"
    ],
@@ -853,8 +856,8 @@
    "movers": [
     {
      "program": "analog_a1_spec_extract_check",
-     "runs": 3,
-     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
+     "runs": 2,
+     "example": "benchmark-data/ic/u_hawaii_adc: CLEAN/rc=0 -> NO-INPUT/rc=0"
     }
    ],
    "arm_pattern": {
@@ -875,9 +878,9 @@
    "name": "Analog Topology Selection",
    "stage": "stage_analog",
    "declared_outputs": 1,
-   "denominator": 3,
-   "runs_probed": 3,
-   "runs_moved": 3,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "analog_a2_topology_select_check"
    ],
@@ -888,7 +891,7 @@
    "movers": [
     {
      "program": "analog_a2_topology_select_check",
-     "runs": 3,
+     "runs": 2,
      "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
     }
    ],
@@ -910,9 +913,9 @@
    "name": "Analog Netlist Generation",
    "stage": "stage_analog",
    "declared_outputs": 1,
-   "denominator": 3,
-   "runs_probed": 3,
-   "runs_moved": 3,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "analog_a3_netlist_gen_check",
     "analog_netlist_pdk_check"
@@ -925,8 +928,8 @@
    "movers": [
     {
      "program": "analog_a3_netlist_gen_check",
-     "runs": 3,
-     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
+     "runs": 2,
+     "example": "benchmark-data/ic/u_hawaii_adc: FINDING/rc=1 -> NO-INPUT/rc=0"
     },
     {
      "program": "analog_netlist_pdk_check",
@@ -936,7 +939,7 @@
    ],
    "arm_pattern": {
     "green_survives": 1,
-    "already_red": 1,
+    "already_red": 0,
     "never_read": 0
    },
    "pdk_bound_programs": [],
@@ -952,9 +955,9 @@
    "name": "Analog Corner Sweep (PVT)",
    "stage": "stage_analog",
    "declared_outputs": 1,
-   "denominator": 3,
-   "runs_probed": 3,
-   "runs_moved": 3,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "analog_a4_corner_sweep_check"
    ],
@@ -967,7 +970,7 @@
    "movers": [
     {
      "program": "analog_a4_corner_sweep_check",
-     "runs": 3,
+     "runs": 2,
      "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
     }
    ],
@@ -1184,8 +1187,8 @@
    "name": "🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)",
    "stage": "stage2",
    "declared_outputs": 1,
-   "denominator": 15,
-   "runs_probed": 15,
+   "denominator": 5,
+   "runs_probed": 5,
    "runs_moved": 0,
    "blocking_programs": [
     "yosys_hilomap_required_check",
@@ -1200,9 +1203,9 @@
    ],
    "movers": [],
    "arm_pattern": {
-    "green_survives": 3,
+    "green_survives": 2,
     "already_red": 0,
-    "never_read": 27
+    "never_read": 8
    },
    "pdk_bound_programs": [],
    "moves_today": false,
@@ -1246,9 +1249,9 @@
    "name": "Clock planning",
    "stage": "stage3",
    "declared_outputs": 1,
-   "denominator": 5,
-   "runs_probed": 5,
-   "runs_moved": 2,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
    "blocking_programs": [
     "clock_plan_check"
    ],
@@ -1256,21 +1259,15 @@
    "blocking_reads_content": [
     "clock_plan_check"
    ],
-   "movers": [
-    {
-     "program": "clock_plan_check",
-     "runs": 2,
-     "example": "benchmark-data/ic/subservient: CLEAN/rc=0 -> FINDING/rc=1"
-    }
-   ],
+   "movers": [],
    "arm_pattern": {
     "green_survives": 0,
-    "already_red": 3,
+    "already_red": 0,
     "never_read": 0
    },
    "pdk_bound_programs": [],
-   "moves_today": true,
-   "cause": null,
+   "moves_today": false,
+   "cause": "DENOMINATOR",
    "declared_skills": [
     "cts-plan"
    ],
@@ -1316,9 +1313,9 @@
    "name": "Spare-cell + ECO-prep insertion (Design-for-ECO)",
    "stage": "stage3",
    "declared_outputs": 2,
-   "denominator": 6,
-   "runs_probed": 6,
-   "runs_moved": 6,
+   "denominator": 1,
+   "runs_probed": 1,
+   "runs_moved": 1,
    "blocking_programs": [
     "spare_cell_coverage_check"
    ],
@@ -1329,8 +1326,8 @@
    "movers": [
     {
      "program": "spare_cell_coverage_check",
-     "runs": 6,
-     "example": "benchmark-data/evaluation/phase1_parity/sgmii: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 1,
+     "example": "benchmark-data/ic/sha256: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
@@ -1444,9 +1441,9 @@
    "name": "Parasitic Extraction (RC → SPEF)",
    "stage": "stage3",
    "declared_outputs": 1,
-   "denominator": 4,
-   "runs_probed": 4,
-   "runs_moved": 4,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
    "blocking_programs": [
     "provenance_check",
     "spef_extraction_check"
@@ -1456,21 +1453,15 @@
     "provenance_check",
     "spef_extraction_check"
    ],
-   "movers": [
-    {
-     "program": "spef_extraction_check",
-     "runs": 4,
-     "example": "benchmark-data/evaluation/phase1_parity/espi: CLEAN/rc=0 -> FINDING/rc=1"
-    }
-   ],
+   "movers": [],
    "arm_pattern": {
     "green_survives": 0,
     "already_red": 0,
-    "never_read": 4
+    "never_read": 0
    },
    "pdk_bound_programs": [],
-   "moves_today": true,
-   "cause": null,
+   "moves_today": false,
+   "cause": "DENOMINATOR",
    "declared_skills": [],
    "missing_skills": []
   },
@@ -1479,9 +1470,9 @@
    "name": "Path-delay-fault (at-speed, timing-graded) ATPG",
    "stage": "stage2",
    "declared_outputs": 1,
-   "denominator": 6,
-   "runs_probed": 6,
-   "runs_moved": 5,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 1,
    "blocking_programs": [
     "path_delay_coverage_check"
    ],
@@ -1492,8 +1483,8 @@
    "movers": [
     {
      "program": "path_delay_coverage_check",
-     "runs": 5,
-     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 1,
+     "example": "benchmark-data/ic/spm/v1.9.96_gf180mcuD: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
@@ -1512,9 +1503,9 @@
    "name": "Small-delay-defect (SDD) at-speed grade",
    "stage": "stage2",
    "declared_outputs": 1,
-   "denominator": 5,
-   "runs_probed": 5,
-   "runs_moved": 4,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 1,
    "blocking_programs": [
     "sdd_coverage_check"
    ],
@@ -1525,8 +1516,8 @@
    "movers": [
     {
      "program": "sdd_coverage_check",
-     "runs": 4,
-     "example": "benchmark-data/ic/sha256/clean_run_v1427_20260715: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 1,
+     "example": "benchmark-data/ic/spm/v1.9.96_gf180mcuD: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
@@ -1583,9 +1574,9 @@
    "name": "🔁 IR Drop (static + dynamic)",
    "stage": "stage3",
    "declared_outputs": 3,
-   "denominator": 3,
-   "runs_probed": 3,
-   "runs_moved": 3,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "dynamic_ir_drop_check",
     "ir_drop_report_check"
@@ -1597,14 +1588,14 @@
    "movers": [
     {
      "program": "ir_drop_report_check",
-     "runs": 3,
-     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 2,
+     "example": "benchmark-data/ic/spm/v1.10.18_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
     "green_survives": 0,
     "already_red": 0,
-    "never_read": 3
+    "never_read": 2
    },
    "pdk_bound_programs": [
     "dynamic_ir_drop_check",
@@ -1622,8 +1613,8 @@
    "name": "🔁 EM check (electromigration lifetime)",
    "stage": "stage3",
    "declared_outputs": 3,
-   "denominator": 3,
-   "runs_probed": 3,
+   "denominator": 2,
+   "runs_probed": 2,
    "runs_moved": 0,
    "blocking_programs": [
     "em_peak_current_authority_check",
@@ -1635,9 +1626,9 @@
    ],
    "movers": [],
    "arm_pattern": {
-    "green_survives": 6,
+    "green_survives": 2,
     "already_red": 0,
-    "never_read": 0
+    "never_read": 2
    },
    "pdk_bound_programs": [
     "em_peak_current_authority_check",
@@ -1657,9 +1648,9 @@
    "name": "🔁 Antenna check (gate-oxide protection)",
    "stage": "stage3",
    "declared_outputs": 3,
-   "denominator": 3,
-   "runs_probed": 3,
-   "runs_moved": 3,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "antenna_report_check",
     "gds_antenna_deck_check"
@@ -1671,14 +1662,14 @@
    "movers": [
     {
      "program": "antenna_report_check",
-     "runs": 3,
-     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 2,
+     "example": "benchmark-data/ic/spm/v1.10.18_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
     "green_survives": 0,
     "already_red": 0,
-    "never_read": 3
+    "never_read": 2
    },
    "pdk_bound_programs": [
     "antenna_report_check"
@@ -1693,9 +1684,9 @@
    "name": "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)",
    "stage": "stage3",
    "declared_outputs": 1,
-   "denominator": 15,
-   "runs_probed": 15,
-   "runs_moved": 15,
+   "denominator": 3,
+   "runs_probed": 3,
+   "runs_moved": 3,
    "blocking_programs": [
     "si_crosstalk_check",
     "si_mcf_sta_check"
@@ -1708,13 +1699,13 @@
    "movers": [
     {
      "program": "si_crosstalk_check",
-     "runs": 15,
-     "example": "benchmark-data/evaluation/phase1_parity/espi: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 3,
+     "example": "benchmark-data/evaluation/phase1_parity/usb_pd: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
     "green_survives": 1,
-    "already_red": 14,
+    "already_red": 2,
     "never_read": 0
    },
    "pdk_bound_programs": [],
@@ -1730,9 +1721,9 @@
    "name": "🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain)",
    "stage": "stage3",
    "declared_outputs": 4,
-   "denominator": 9,
-   "runs_probed": 9,
-   "runs_moved": 9,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "perc_signoff_check"
    ],
@@ -1743,8 +1734,8 @@
    "movers": [
     {
      "program": "perc_signoff_check",
-     "runs": 9,
-     "example": "benchmark-data/ic/caravel_user_project: CLEAN/rc=0 -> NO-INPUT/rc=2"
+     "runs": 2,
+     "example": "benchmark-data/ic/spm/v1.10.18_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=2"
     }
    ],
    "arm_pattern": {
@@ -1763,8 +1754,8 @@
    "name": "Post-Layout Gate-Level Simulation (Post-Sim + SDF)",
    "stage": "stage3",
    "declared_outputs": 2,
-   "denominator": 3,
-   "runs_probed": 3,
+   "denominator": 0,
+   "runs_probed": 0,
    "runs_moved": 0,
    "blocking_programs": [
     "post_layout_sim_check"
@@ -1776,12 +1767,12 @@
    "movers": [],
    "arm_pattern": {
     "green_survives": 0,
-    "already_red": 3,
+    "already_red": 0,
     "never_read": 0
    },
    "pdk_bound_programs": [],
    "moves_today": false,
-   "cause": "ALREADY-RED",
+   "cause": "DENOMINATOR",
    "declared_skills": [],
    "missing_skills": []
   },
@@ -1819,9 +1810,9 @@
    "name": "🔁 Physical Verification (DRC + LVS + ERC + Density)",
    "stage": "stage3",
    "declared_outputs": 5,
-   "denominator": 7,
-   "runs_probed": 7,
-   "runs_moved": 3,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 0,
    "blocking_programs": [
     "drc_report_check",
     "drc_vacuous_pass_check",
@@ -1841,29 +1832,18 @@
     "pg_rail_geometry_check",
     "provenance_check"
    ],
-   "movers": [
-    {
-     "program": "drc_report_check",
-     "runs": 1,
-     "example": "benchmark-data/ic/sha256/clean_run_v1427_20260715: CLEAN/rc=0 -> FINDING/rc=1"
-    },
-    {
-     "program": "lvs_report_check",
-     "runs": 2,
-     "example": "benchmark-data/ic/caravel_user_project/v1.9.43_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
-    }
-   ],
+   "movers": [],
    "arm_pattern": {
-    "green_survives": 22,
-    "already_red": 5,
-    "never_read": 19
+    "green_survives": 8,
+    "already_red": 0,
+    "never_read": 6
    },
    "pdk_bound_programs": [
     "drc_report_check",
     "lvs_report_check"
    ],
-   "moves_today": true,
-   "cause": null,
+   "moves_today": false,
+   "cause": "RULER-BLIND",
    "declared_skills": [
     "drc-fix",
     "lvs-triage",
@@ -1907,9 +1887,9 @@
    "name": "Power analysis (pre/post-layout)",
    "stage": "stage4",
    "declared_outputs": 2,
-   "denominator": 14,
-   "runs_probed": 14,
-   "runs_moved": 11,
+   "denominator": 2,
+   "runs_probed": 2,
+   "runs_moved": 2,
    "blocking_programs": [
     "power_report_check",
     "power_total_vs_budget_check"
@@ -1921,14 +1901,14 @@
    "movers": [
     {
      "program": "power_report_check",
-     "runs": 11,
-     "example": "benchmark-data/evaluation/phase1_parity/interlaken: CLEAN/rc=0 -> FINDING/rc=1"
+     "runs": 2,
+     "example": "benchmark-data/ic/spm/v1.10.18_sky130A: CLEAN/rc=0 -> FINDING/rc=1"
     }
    ],
    "arm_pattern": {
-    "green_survives": 17,
+    "green_survives": 0,
     "already_red": 0,
-    "never_read": 0
+    "never_read": 2
    },
    "pdk_bound_programs": [],
    "moves_today": true,
@@ -1945,9 +1925,9 @@
    "name": "Metal Fill (ECO-aware density fill insertion)",
    "stage": "stage4",
    "declared_outputs": 3,
-   "denominator": 3,
-   "runs_probed": 3,
-   "runs_moved": 1,
+   "denominator": 0,
+   "runs_probed": 0,
+   "runs_moved": 0,
    "blocking_programs": [
     "metal_fill_density_check",
     "metal_fill_emit",
@@ -1959,21 +1939,15 @@
     "metal_fill_emit",
     "spare_cell_preservation_check"
    ],
-   "movers": [
-    {
-     "program": "metal_fill_density_check",
-     "runs": 1,
-     "example": "benchmark-data/ic/subservient: CLEAN/rc=0 -> FINDING/rc=1"
-    }
-   ],
+   "movers": [],
    "arm_pattern": {
-    "green_survives": 3,
-    "already_red": 2,
-    "never_read": 3
+    "green_survives": 0,
+    "already_red": 0,
+    "never_read": 0
    },
    "pdk_bound_programs": [],
-   "moves_today": true,
-   "cause": null,
+   "moves_today": false,
+   "cause": "DENOMINATOR",
    "declared_skills": [],
    "missing_skills": []
   },
@@ -1982,7 +1956,7 @@
    "name": "DFM screen (CMP density + redundant-via ratio + foundry-side OPC/RET disclosure)",
    "stage": "stage4",
    "declared_outputs": 1,
-   "denominator": 9,
+   "denominator": 2,
    "runs_probed": 0,
    "runs_moved": 0,
    "blocking_programs": [],
@@ -2007,10 +1981,11 @@
    "name": "Tapeout checklist (final sign-off confirmation)",
    "stage": "stage4",
    "declared_outputs": 1,
-   "denominator": 15,
-   "runs_probed": 15,
+   "denominator": 3,
+   "runs_probed": 3,
    "runs_moved": 0,
    "blocking_programs": [
+    "declared_pdk_is_the_pdk_used_check",
     "step_internal_fail_bubble_up_check",
     "tapeout_signoff_check"
    ],
@@ -2018,15 +1993,18 @@
     "report_belongs_to_project_check"
    ],
    "blocking_reads_content": [
+    "declared_pdk_is_the_pdk_used_check",
     "step_internal_fail_bubble_up_check"
    ],
    "movers": [],
    "arm_pattern": {
-    "green_survives": 6,
-    "already_red": 24,
-    "never_read": 0
+    "green_survives": 7,
+    "already_red": 1,
+    "never_read": 1
    },
-   "pdk_bound_programs": [],
+   "pdk_bound_programs": [
+    "declared_pdk_is_the_pdk_used_check"
+   ],
    "moves_today": false,
    "cause": "RULER-BLIND",
    "declared_skills": [
@@ -2039,9 +2017,9 @@
    "name": "GDSII output (only if Step 31 PV fully clean)",
    "stage": "stage4",
    "declared_outputs": 1,
-   "denominator": 10,
-   "runs_probed": 10,
-   "runs_moved": 10,
+   "denominator": 4,
+   "runs_probed": 4,
+   "runs_moved": 4,
    "blocking_programs": [
     "gds_port_label_check",
     "gds_size_check",
@@ -2057,20 +2035,15 @@
    ],
    "movers": [
     {
-     "program": "gds_port_label_check",
-     "runs": 1,
-     "example": "benchmark-data/ic/spm/v1.5.58_ihp-sg13g2: FINDING/rc=1 -> NO-INPUT/rc=2"
-    },
-    {
      "program": "gds_substance_check",
-     "runs": 10,
-     "example": "benchmark-data/evaluation/phase1_parity/espi: CLEAN/rc=0 -> NO-INPUT/rc=0"
+     "runs": 4,
+     "example": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A: CLEAN/rc=0 -> NO-INPUT/rc=0"
     }
    ],
    "arm_pattern": {
     "green_survives": 0,
     "already_red": 0,
-    "never_read": 29
+    "never_read": 12
    },
    "pdk_bound_programs": [],
    "moves_today": true,
@@ -2083,8 +2056,8 @@
    "name": "Foundry Handoff (mask spec + WAT plan + scribe layout + corner test kit)",
    "stage": "stage4",
    "declared_outputs": 5,
-   "denominator": 4,
-   "runs_probed": 4,
+   "denominator": 0,
+   "runs_probed": 0,
    "runs_moved": 0,
    "blocking_programs": [
     "foundry_handoff_package_check"
@@ -2096,12 +2069,12 @@
    "movers": [],
    "arm_pattern": {
     "green_survives": 0,
-    "already_red": 4,
+    "already_red": 0,
     "never_read": 0
    },
    "pdk_bound_programs": [],
    "moves_today": false,
-   "cause": "ALREADY-RED",
+   "cause": "DENOMINATOR",
    "declared_skills": [
     "tapeout-checklist"
    ],
@@ -2428,7 +2401,7 @@
    "missing_skills": []
   }
  ],
- "two_arm_cells_planned": 372,
+ "two_arm_cells_planned": 181,
  "run_cap_dropped": {},
  "corpus_clean_after_sweep": true
 }
