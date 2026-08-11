@@ -133,7 +133,7 @@ import subprocess
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import pytest
 
@@ -332,7 +332,7 @@ def _refusal_text(suffix: str, requirement_name: str, candidates: Sequence[Path]
         # refused FIXTURES — the whole point of this refusal — fall off the end
         # under "and 7 more". Every distinct reason gets a line, so the reader
         # always sees THAT a fixture was refused, not just that something was.
-        by_reason: dict = {}
+        by_reason: Dict[str, List[str]] = {}
         for rel, why in refused:
             by_reason.setdefault(why, []).append(rel)
         lines.append(f"  refused ({len(refused)}), because a real-data test may "
