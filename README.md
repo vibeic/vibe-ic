@@ -35,7 +35,7 @@ checkers (no fabrication, no hallucinated PASS).
 │       ├── ip-catalog/           open-source IP catalog (manifests)
 │       └── benchmark/            benchmark harness + registry
 ├── IP/                         open-core git submodules (serv · ibex · sha256 · opentitan)
-├── benchmark-data/             the benchmark corpus (~191 MB tracked) — see "The benchmark corpus" below
+├── benchmark-data/             the benchmark corpus (~185 MB tracked) — see "The benchmark corpus" below
 │   ├── ic/                      9 canonical benchmark ICs driven doc → RTL → GDS (3 publish run output today)
 │   └── evaluation/              7 open-benchmark / parity evaluation sets
 ├── benchmark_external/         external-benchmark harness notes (CVDP legal-input definition)
@@ -236,7 +236,7 @@ down), split two ways by **what the data is for**:
 
 | Sub-tree | Tracked size | What it holds |
 |---|---|---|
-| [`ic/`](benchmark-data/ic) | 122 MB | the 9 canonical benchmark ICs, driven end-to-end (documents → RTL → GDS) — 3 publish run output today; see the table below |
+| [`ic/`](benchmark-data/ic) | 116 MB | the 9 canonical benchmark ICs, driven end-to-end (documents → RTL → GDS) — 3 publish run output today; see the table below |
 | [`evaluation/`](benchmark-data/evaluation) | 69 MB | 7 evaluation sets — open-benchmark runs + the Phase-1 parity sweep |
 
 A local working tree grows far larger than this (re-run outputs, `clean_run_*/`
