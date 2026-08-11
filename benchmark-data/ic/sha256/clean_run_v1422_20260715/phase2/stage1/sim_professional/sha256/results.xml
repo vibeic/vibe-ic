@@ -1,8 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<testsuites name="cocotb tests"><testsuite name="tb_sha256" errors="0" failures="1" skipped="0" tests="1" time="0.166" timestamp="2026-07-15T10:40:42.654405+00:00" hostname="71ee24d7a8ed"><testcase classname="tb_sha256" name="professional_stream_test" time="0.166"><failure message="201/208 vectors mismatched the reference&#10;assert 201 == 0" type="AssertionError">Traceback (most recent call last):
-  File "/home/reyerchu/vibe-ic/benchmark-data/ic/sha256/clean_run_v1422_20260715/phase2/stage1/sim_professional/sha256/tb_sha256.py", line 139, in professional_stream_test
-    assert fails == 0, f"{fails}/{total} vectors mismatched the reference"
-AssertionError: 201/208 vectors mismatched the reference
-assert 201 == 0
-</failure><properties><property name="cocotb" value="True" /><property name="random_seed" value="1784112042" /><property name="file" value="/home/reyerchu/vibe-ic/benchmark-data/ic/sha256/clean_run_v1422_20260715/phase2/stage1/sim_professional/sha256/tb_sha256.py" /><property name="line" value="80" /><property name="sim_time_unit" value="ns" /><property name="sim_time_start" value="0.0" /><property name="sim_time_stop" value="131534.0" /><property name="sim_time_duration" value="131534.0" /><property name="sim_time_ratio" value="793552.5191104974" /></properties><system-err>Test failed with COCOTB_RANDOM_SEED=1784112042
-</system-err></testcase></testsuite></testsuites>

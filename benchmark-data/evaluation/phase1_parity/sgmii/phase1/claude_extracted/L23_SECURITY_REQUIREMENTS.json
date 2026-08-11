@@ -1,9 +1,0 @@
-{
-  "fields": {
-    "attack_surface": [
-      "Auto-Negotiation Config_Reg is unauthenticated — a rogue link partner can force a speed/duplex/link state.",
-      "SGMII defines no link encryption; payload confidentiality is the responsibility of higher layers (MACsec)."
-    ],
-    "security_notes": "SGMII itself defines no encryption or authentication; protect at the MAC/MACsec layer above."
-  }
-}

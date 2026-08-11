@@ -1,8 +1,0 @@
-{
-  "source_file": "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
-  "total_findings": 0,
-  "errors": 0,
-  "findings": [],
-  "verdict": "VACUOUS_PASS",
-  "rationale": "VACUOUS_PASS: L2 protocol_overview.half_duplex=false \u2014 RX/TX timing split rule does not apply."
-}
