@@ -795,6 +795,34 @@ def _f_hollow_reports(p: Path) -> None:
     _w(p, "reports/phase3/dynamic_ir.json", {})
 
 
+def _f_step_fail_unacknowledged(p: Path) -> None:
+    """A step-internal FAIL that nobody acknowledged, beside a step that says it
+    passed — the anti-fabrication shape doctrine rule #4 exists to catch.
+
+    Reddens the Step-36 clause ``step_internal_fail_bubble_up_check .``, which
+    was wired BLOCKING by D9 Phase 1 on 17 measured reds across the published
+    corpus. Neither absence nor presence alone reaches it, and that is the whole
+    reason this fixture is not ``EMPTY``. MEASURED, verbatim:
+
+        EMPTY   rc 2  [CANNOT DETERMINE] step_internal_fail_bubble_up: no
+                      reports/ tree (pre-output project), so no report was
+                      examined. NOT a pass
+
+    i.e. the gate REFUSES a zero denominator rather than passing it, so an empty
+    project can never redden it. The report has to exist, carry ``verdict:
+    FAIL``, and go unacknowledged.
+
+    The PASS report beside it is load-bearing twice over: it gives the gate a
+    real denominator to disclose, and it proves the fixture reddens on the FAIL
+    verdict specifically rather than on "a report exists at all".
+
+    Chip-AGNOSTIC and version-less by construction: an invented step name, no
+    process, no vendor, no tool.
+    """
+    _w(p, "reports/some_internal_step.json", {"verdict": "FAIL"})
+    _w(p, "reports/another_internal_step.json", {"verdict": "PASS"})
+
+
 # ── The three fixtures that replaced an empty-directory red with a real one ──
 #
 # Steps 6, 28 and 30 each had exactly one red before 2026-08-06, and each of
@@ -1145,6 +1173,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "POST_DFT_SCAN_LOST": _f_post_dft_scan_lost,
     "MACRO_OBS_LAYER_UNDECLARED": _f_macro_obs_layer_undeclared,
     "MACRO_OBS_SPANNED": _f_macro_obs_spanned,
+    "STEP_FAIL_UNACKNOWLEDGED": _f_step_fail_unacknowledged,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1157,6 +1186,11 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
     ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIPPED",
+    # D9 Phase 1 wired this into step 36 as the one BLOCKING promotion of that
+    # campaign. EMPTY cannot redden it: the gate REFUSES a zero denominator
+    # (rc 2, "no reports/ tree … NOT a pass"), so the unacknowledged FAIL has
+    # to be present for the gate to have anything to judge.
+    ("36", "step_internal_fail_bubble_up_check ."): "STEP_FAIL_UNACKNOWLEDGED",
     # vibe-ic#704 wired this into D1. EMPTY answers VACUOUS_PASS by design:
     # no generated_docs means phase1 has not run, which is not an incomplete
     # extraction. The docs must exist AND carry a placeholder.
