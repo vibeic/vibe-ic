@@ -1,4 +1,4 @@
-# Phase-0 findings: three settled UNDECIDEDs (U3, U5, U6)
+# Phase-0 findings: three settled UNDECIDEDs (U3, U5, U6) — second-reader record
 
 Three independent measurements, each of which was blocking a decision. Nothing in
 `flow/phase1_phase2_phase3.yaml` was changed by this document — every remedy below
@@ -12,20 +12,56 @@ first and the brief is not accommodated.
 
 ---
 
-## U3 — the Step-9 netlist split: **a real two-artefact reality with a
-## self-contradictory declaration**
+## Convergence note — this is the SECOND independent read
+
+A second agent measured the same three questions concurrently in the same worktree
+and landed `docs/D9_PHASE0_U3_U5_U6_FINDINGS.md` (commit `a5a9dcb3`) before this
+document. Both records are kept, because two independent reads converged on the
+same measurements is the strongest form this evidence takes — and because
+converging every disagreement in writing is this repo's own dual-track doctrine
+rather than an accident of two agents colliding.
+
+**Agreed, independently, to the digit:** `netlist.v` md5 and its 449/0 split; the
+mapped sibling's md5 and its 287/0 split; the two-writer alias mechanism; three
+`l_doc_expectations.json` on this host with `{14,10,4/5}` convergence records; the
+schema-mismatch answer coerced to a passing zero denominator; FS1 → fix the
+declaration; SSH to the other four hosts unavailable.
+
+**Three places the two reads differ, and how each resolves:**
+
+| # | disagreement | resolution |
+|---|---|---|
+| 1 | U3 headline: they say **(b) contract**; this document first said "neither reading as posed" | **They are right, and this document is corrected below.** They found the decisive citation I did not: `programs/fault_atpg_run.py:607-609` states the intent in the flow's own words. My contribution reduces to a refinement of (b), not a rival verdict. |
+| 2 | U6 marker count: they say **4** markers (steps 15/29/32/34); this document measures **7** | **This document's number is the complete one.** Their sweep missed step 4 (`sim/pass.flag`) and both of step A6's entries (`drc_clean.flag`, `lvs_match.flag`) — the analog track and step 4 are outside a 44-step-core sweep. A6 matters: like step 29, **both** of its declared artefacts are marker-`OR`s. |
+| 3 | P0: they say **(ii) NA**; this document said **(i) fix the declaration** | **Converged to (ii) now, (i) later** — see the P0 entry below. Their argument is the stronger one and I adopt it. |
+
+---
+
+## U3 — the Step-9 netlist split is **a CONTRACT (b)**, with a declaration that is
+## not merely incomplete but self-contradictory
 
 ### Verdict
 
-Neither reading as posed. Reading (b) is right about the **files**; reading (a) is
-right about the **declaration** — and the declaration is not merely *incomplete*,
-it is **internally inconsistent**: Step 9's own two `required_outputs` describe two
-different netlists.
+**(b) — an intentional two-artefact contract.** The flow states the intent in its
+own words, at `programs/fault_atpg_run.py:607-609`:
+
+> "The flow writes BOTH a generic `netlist.v` (kept for LEC/equivalence, where the
+> abstract gate view is wanted) AND a mapped `<top>_synth.v` (what PnR/streamout
+> consume)."
+
+That settles bug-vs-contract: it is a contract. Per the brief's "if it is already
+answered, say where and stop", **that citation is the answer** and the companion
+document reaches it independently.
+
+**The refinement this document adds** — and which the intent statement does not
+cover — is that the declaration is not merely *incomplete*. It is **internally
+inconsistent**: Step 9's own two `required_outputs` describe two different
+netlists, so the step contradicts itself about which arm it signs off on.
 
 **A cell that judged `netlist.v` is not judging a scratch artefact** — it is a
 real, gated, provenance-logged artefact that steps 10 and 11 declare as their
-input. But it is the **pre-map half**, and on a full run **no back-end consumer
-reads it**.
+input, and LEC deliberately wants exactly this abstract gate view. But it is the
+**pre-map arm**, and on a full run **no back-end consumer reads it**.
 
 ### Evidence
 
@@ -143,20 +179,55 @@ Contents, verbatim:
 **A content-correctness cell over six of the seven is a real check, not a tick** —
 each marker states a claim *and names the artefact the claim was derived from, so
 the claim is falsifiable against that artefact.* That is a third resolution the
-brief did not offer, and it is the right one:
+brief did not offer, and it is the right one for most of them. The exception is
+step 29, which is empty by *declaration* rather than by content and takes (i) —
+see the section after this table.
 
 | step | artefact | marker-only on | recommendation |
 |---|---|---|---|
 | 15 | `pdn.tcl OR pdn.done` | **6 / 6** resolving roots | **(iii) publish the cell** — judge `pdn.done`'s `source:` log for a real PDN insertion. Separately **(i)**: `pdn.tcl` resolved **0/125** — dead branch. |
-| 29 | `results.log OR pass.flag` | **4 / 4** | **(iii) publish the cell** — the flag names `post_layout_sim_check` as its substance gate; judge that the named evidence exists and agrees. Separately **(i)**: `results.log` **0/125**. |
+| 29 | `results.log OR pass.flag` | **4 / 4** | **(i) fix the declaration** — this is the one step that is empty *by declaration* (sole entry, marker-only). Declare `reports/phase2/gates/post_layout_sim.json`, the report of the blocking substance gate the flag itself names. `results.log` resolves **0/125**. |
 | 34 | `filled.def OR metal_fill.done` | **5 / 5** | **(iii) publish the cell** — `# fillers placed: N` is a number that can be checked against `metal_fill.log`. Note the measured value is `0` on the sampled run, which is itself a finding for whoever owns fill. Separately **(i)**: `filled.def` **0/125**. |
 | 32 | `eco_log.json OR no_eco_needed.flag` | **5 / 6** | **(iii) publish the cell** — `no_eco_needed.flag` names its source STA report and its reason (`TNS=0`); both are checkable. |
 | A6 | `lvs_match.flag OR …` | **1 / 2** | **(iii) publish the cell** — 763–779 B of scope disclosure is the *most* judgeable artefact in this table. |
 | A6 | `drc_clean.flag OR …` | **0 / 2** | **(iii) publish the cell**; content sibling present on the roots that resolve. |
 | 4 | `*.log OR results.xml OR pass.flag OR …` | **0 / 20** | **(iii) publish the cell** — `results.xml` resolved on all 20. The 5-byte `pass.flag` is a tick, but it is never the artefact the cell has to judge. Separately **(i)**: `phase2/stage1/sim/*.log` **0/125** — dead branch. |
 
-**No case warrants (ii) "publish as NA".** Zero of the seven produces only a
-contentless marker.
+**No case warrants (ii) "publish as NA" on grounds of emptiness.** Zero of the
+seven produces only a contentless marker.
+
+### The two steps that ARE empty *by declaration* — 29 and A6
+
+Emptiness-by-declaration is a different test from emptiness-of-content, and two
+steps fail it. A step is empty by declaration when **every** entry in its
+`required_outputs` is a marker-`OR`, so there is no declared artefact the step can
+be held to other than the marker:
+
+```
+29  ['results.log OR pass.flag']                                 # 1 entry, 1 marker-OR
+A6  ['drc_clean.flag OR drc.report OR *.lyrdb OR drc.rpt',       # 2 entries,
+     'lvs_match.flag OR lvs.report OR comp.json OR lvs.rpt']     #   both marker-ORs
+```
+
+* **Step 29** is the sharpest case in the flow: its sole declared artefact is an
+  `OR` whose content arm (`results.log`) resolves **0 / 125**, and the marker arm
+  resolved on **4 / 4** roots that got that far. The companion document reaches the
+  same conclusion and proposes the better remedy: **(i) declare
+  `reports/phase2/gates/post_layout_sim.json`** — the report of the blocking
+  `post_layout_sim_check` that `pass.flag` itself names as its substance gate, and
+  which exists on 5 published runs. Adopted here.
+* **Step A6** is the same shape and was missed by the 44-step-core sweep. Both
+  entries are marker-`OR`s, and 3 of its 8 alternatives (`drc.rpt`, `comp.json`,
+  `lvs.rpt`) resolve **0 / 125**. It is nonetheless the *least* worrying of the
+  two, because the analog markers are the richest artefacts in the table
+  (763–779 B of explicit scope disclosure ending in a machine-readable
+  `result=…` token). **(iii) publish the cell** and judge that disclosure.
+
+By contrast steps 15, 32, 34 and 4 each declare a content artefact **beside** the
+marker, so the "definitionally empty" premise is simply not met for them — even
+where that content artefact is itself never produced (step 15's `floorplan.def`
+and step 32's `eco_trigger_decision.json` both resolve 0 / 125, which makes them
+empty *in practice* but not *by declaration*, and is the separate finding below).
 
 ### FS1 and P0 — both are (i), both produce judgeable content today
 
@@ -184,9 +255,25 @@ It is the *least* empty step in the flow: measured on
 246 checkers, 210 verdicts, **and it already discloses its own denominator** — the
 house rule, satisfied. The verdict is emitted in-process by
 `flow_compliance_check._run_structural_rtl_gates` (`:6999`) as `_p0_gate_record`
-entries. → **(i) fix the declaration.** The only real work is that P0 has no
-step-owned artefact path today; its records land in a shared aggregate. Declaring
-one is the change, and it is small.
+entries.
+
+→ **(ii) publish as NA in writing, now — with (i) named as the follow-up.**
+
+This document first recommended (i). The companion record's argument is the
+stronger one and I adopt it: **P0 owns no artefact.** Its own `notes:` say the
+verdict "is emitted directly by `flow_compliance_check.py`'s
+`_run_structural_rtl_gates(...)` and surfaces in
+`reports/audit/phase23_completion_audit.json`" — a file P0 does not produce.
+Declaring that shared aggregate as P0's `required_output` would make P0's cell
+judge someone else's artefact, which is **exactly the U3 pathology this same
+document is arguing against**. Consistency requires (ii).
+
+But NA here must not be read as "P0 is empty". It is the least empty step in the
+flow, and the honest NA text has to say so: *no step-owned artefact exists to
+judge*, not *nothing was checked*. The real fix is a program change — have
+`_run_structural_rtl_gates` persist its `_p0_gate_record` list to a P0-owned path
+— after which (i) becomes available and correct. That is a program change, not a
+declaration change, and it is out of scope here.
 
 ### One more thing the sweep found, unasked
 
@@ -337,6 +424,10 @@ denominator.
   here would have been a test of the *measurement script*, not of the repo.
 * **Nothing was run, started, or modified on any other host.** Read-only was
   honoured — and in the event, unreachable.
+* **I did not delete, rewrite or quietly absorb the companion document.** Two
+  agents ran this brief concurrently in the same worktree; the collision is
+  disclosed at the top rather than resolved by making one record disappear. Where
+  we disagreed I said which read won and why, including the one where mine lost.
 * **`programs/tests/matrix_63x8/waivers.py` untouched. No baseline widened.
   Nothing under `benchmark-data/**/input/` edited. Nothing pushed to `main`.**
 
