@@ -29,6 +29,21 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 
+# vibe-ic#1029 — "a full suite run on a clean worktree leaves
+# `git status --porcelain` EMPTY" was a fact somebody had to REMEMBER to check.
+# Three writers into the shipped tree were each found by accident, never by
+# looking. Loading the guard HERE — the rootdir conftest, above both test trees
+# — is what makes the rule execute instead of being remembered: it rides every
+# pytest invocation rooted at the plugin, which includes the targeted subset
+# `tools/gatekeeper-land.sh` runs on EVERY landing.
+#
+# It is deliberately not a CI workflow step: Actions is disabled for this
+# account (`.github/workflows-disabled/README.md`), so a guard wired there
+# would never run — and a test that is always skipped is the exact defect
+# #1029 is about. Session mode costs two `git status` calls (0.20 s measured).
+pytest_plugins = ("suite_write_guard",)
+
+
 # ORGANIC #574 — robust waveform-artifact hygiene. Many tests run `vvp` on an
 # official benchmark testbench that carries `$dumpfile("wave.vcd")`; when such a
 # vvp runs with cwd inherited (the plugin tree under pytest) it leaves a stray
