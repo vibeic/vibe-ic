@@ -4196,14 +4196,31 @@ steps:
         #     arm_aix (still cites only phase1_one_shot.json) and afdx (stays
         #     rc 0).
         #
-        # THE CASCADE, stated because it constrains this PR's other two rows.
-        # This gate reads `reports/**/*.json` for `verdict`, so ANY gate wired
-        # with `--json` that writes a FAIL report manufactures a red here.
-        # MEASURED: `l20_dft_scan_topology_actionable_check` writes
-        # `reports/phase1/l20_….json` with `verdict: FAIL`, and running it flips
-        # afdx and jtag from rc 0 to rc 1 on THIS gate — two roots that are clean
-        # today. That is one of the two reasons l20 is NOT wired by this PR, and
-        # the reason l6/l9 above are wired BARE.
+        # THE CASCADE, stated because it constrains every row that writes a
+        # report. This gate reads `reports/**/*.json` for `verdict`, so a gate
+        # that writes a FAIL report manufactures a red here. That is CORRECT
+        # for a gate the flow wired BLOCKING and WRONG for one it wired
+        # ADVISORY — an advisory finding must not become blocking by
+        # travelling through a file. The rule, and it is this gate's own
+        # existing convention rather than a new one: EVERY GATE THAT WRITES A
+        # VERDICT-BEARING REPORT DECLARES IN IT THE MODE IT IS WIRED AT. This
+        # gate already honours `verdict_mode: ADVISES` (see its docstring), so
+        # an advisory row that declares it does not cascade and needs no change
+        # here.
+        #
+        # TWO MITIGATIONS, and which one a row needs depends on WHEN it writes:
+        #   * a gate that writes ONLY under `--json` is protected by being
+        #     wired BARE. That is l6 and l9 above, and the row below.
+        #   * a gate that writes UNCONDITIONALLY is not — bare wiring does not
+        #     help it, and it must declare its mode instead. MEASURED on
+        #     `l20_dft_scan_topology_actionable_check`, which calls
+        #     `write_report` with no `--json`: running it BARE flipped afdx and
+        #     jtag from rc 0 to rc 1 on THIS gate. vibe-ic#1003 gave it a
+        #     `--verdict-mode` and re-measured — jtag still FAILs and now
+        #     leaves this gate at rc 0. l20 is STILL NOT WIRED, for the
+        #     remaining reason recorded in its own issue: its F2 ruler counts a
+        #     sentence DENYING a DFT requirement as evidence that one was
+        #     stated, on at least 20 of its 25 remaining corpus reds.
         - program_exit_zero: "step_internal_fail_bubble_up_check ."
         # D9 Phase 2 — the process that RAN must be the process the design
         # DECLARED. Held back in #1006 (vibe-ic#1002) because 9 of its 10
