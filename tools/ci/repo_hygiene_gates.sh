@@ -763,6 +763,57 @@ run "flow-gate grid" "$PLUGIN" python3 programs/flow_gate_grid.py
 
 run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_check.py
 
+# The census the two gates above feed into, and the one thing in this family that
+# a HUMAN had to remember to run.
+#
+# WHY THIS LINE EXISTS. `matrix_63x8/README.md` publishes the campaign's headline
+# figure — "504 cells: N ENFORCED, N CONTRADICTED, N WAIVED, N NA" — and it has
+# gone stale TWICE, in two different ways, and neither time did anything notice.
+#
+#   * First it was hand-written. `origin/main` at dee025059 published 483/9/12
+#     while the live suite counted 481/11/12, four rows adrift, with the command
+#     that disproves the table printed two lines underneath it. #898 made the
+#     block GENERATED, which is the right repair and is not this one.
+#   * Then it was generated at the wrong VINTAGE. #929 gave step P0 a `blocks_on`
+#     key, self-invalidating d5's NA for that step — correctly, and loudly, with
+#     the owning module emitting "the NA has self-invalidated". #928's block had
+#     been generated BEFORE #929 existed and was merged two commits later without
+#     regeneration, so main published 28 CONTRADICTED / 12 NA while its own live
+#     join produced 29 / 11. Repaired in the tree; the ENFORCEMENT gap was left
+#     open deliberately, with the reason written down: "a generated artefact whose
+#     freshness check runs in no merge path will go stale again, and next time it
+#     may not be a number anyone re-derives."
+#
+# That gap is what this line closes. Measured at the time and re-measured today:
+# there is no `.github/workflows` directory in this repository, and before this
+# line THIS script contained zero references to `63x8`, `matrix` or `census` —
+# and #929 edited this very file, adding a gate one line away. The only automated
+# consumer was `test_matrix_63x8_census_freshness.py`, which runs when a human
+# selects it. So the guard shipped by #928 was real, was correct, and was enforced
+# by nothing that fires on a merge. Six PRs landed on 2026-08-11 alone.
+#
+# BLOCKING, and it is green on day one — which is the condition under which
+# blocking is honest. Measured at 6a61dbf2c: `[PASS] 63x8 census fresh: 504 cells
+# over 8 dimensions; ENFORCED own=16 substituted=45 undeclared=397; WAIVED=11
+# NA=11.`
+#
+# It can FAIL, proven rather than assumed: mutating one figure in the published
+# block (458 -> 457 ENFORCED) gives rc 1 and names the file and the command that
+# repairs it. A freshness gate that has never been shown to go red is the same
+# defect one level up.
+#
+# host-independence: it is re-run by `gate_host_independence_check` above, so
+# this was checked BEFORE wiring rather than discovered afterwards — two fresh
+# worktrees at the same commit, output byte-identical, rc 0 both.
+#
+# COST: 2m07s measured (`real 2m7.492s`, user 2m46.939s), and the host-independence
+# probe re-runs it, so ~6 min of added
+# CI in total. Disclosed rather than buried: that is real, it is the second most
+# expensive line in this file after the pytest-driven pin below, and it is the
+# price of a headline figure that cannot drift unseen. The cheaper option — trust
+# whoever lands the change to remember — is the option that already failed twice.
+run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.py" --check
+
 # A call site writes a literal into a parameter that picks between named
 # alternatives, prose argues WHICH WAY, and no test can see the difference.
 # MEASURED on review: flipping one such word — `on_conflict="richer"` to
