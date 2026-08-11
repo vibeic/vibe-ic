@@ -1,9 +1,0 @@
-{
-  "program": "cdc_async_input_check",
-  "passed": true,
-  "findings": [],
-  "summary": {
-    "files_scanned": 0,
-    "violations": 0
-  }
-}
