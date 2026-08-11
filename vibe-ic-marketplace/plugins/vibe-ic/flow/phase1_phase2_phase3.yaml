@@ -4288,15 +4288,83 @@ steps:
         #     arm_aix (still cites only phase1_one_shot.json) and afdx (stays
         #     rc 0).
         #
-        # THE CASCADE, stated because it constrains this PR's other two rows.
-        # This gate reads `reports/**/*.json` for `verdict`, so ANY gate wired
-        # with `--json` that writes a FAIL report manufactures a red here.
-        # MEASURED: `l20_dft_scan_topology_actionable_check` writes
-        # `reports/phase1/l20_….json` with `verdict: FAIL`, and running it flips
-        # afdx and jtag from rc 0 to rc 1 on THIS gate — two roots that are clean
-        # today. That is one of the two reasons l20 is NOT wired by this PR, and
-        # the reason l6/l9 above are wired BARE.
+        # THE CASCADE, stated because it constrains every row that writes a
+        # report. This gate reads `reports/**/*.json` for `verdict`, so a gate
+        # that writes a FAIL report manufactures a red here. That is CORRECT
+        # for a gate the flow wired BLOCKING and WRONG for one it wired
+        # ADVISORY — an advisory finding must not become blocking by
+        # travelling through a file. The rule, and it is this gate's own
+        # existing convention rather than a new one: EVERY GATE THAT WRITES A
+        # VERDICT-BEARING REPORT DECLARES IN IT THE MODE IT IS WIRED AT. This
+        # gate already honours `verdict_mode: ADVISES` (see its docstring), so
+        # an advisory row that declares it does not cascade and needs no change
+        # here.
+        #
+        # TWO MITIGATIONS, and which one a row needs depends on WHEN it writes:
+        #   * a gate that writes ONLY under `--json` is protected by being
+        #     wired BARE. That is l6 and l9 above, and the row below.
+        #   * a gate that writes UNCONDITIONALLY is not — bare wiring does not
+        #     help it, and it must declare its mode instead. MEASURED on
+        #     `l20_dft_scan_topology_actionable_check`, which calls
+        #     `write_report` with no `--json`: running it BARE flipped afdx and
+        #     jtag from rc 0 to rc 1 on THIS gate. vibe-ic#1003 gave it a
+        #     `--verdict-mode` and re-measured — jtag still FAILs and now
+        #     leaves this gate at rc 0. l20 is STILL NOT WIRED, for the
+        #     remaining reason recorded in its own issue: its F2 ruler counts a
+        #     sentence DENYING a DFT requirement as evidence that one was
+        #     stated, on at least 20 of its 25 remaining corpus reds.
         - program_exit_zero: "step_internal_fail_bubble_up_check ."
+        # D9 Phase 2 — the process that RAN must be the process the design
+        # DECLARED. Held back in #1006 (vibe-ic#1002) because 9 of its 10
+        # corpus reds were a zero-denominator FAIL; the ruler is repaired and
+        # this row is the promotion.
+        #
+        # BLOCKING, and the reds are the argument rather than a preference.
+        # Re-measured with `tools/d9_corpus_baseline.py --only
+        # declared_pdk_is_the_pdk_used_check`, unconditional per-cell
+        # isolation, over 107 published run dirs:
+        #
+        #     origin/main @3fd65e72   RED 10 · CLEAN 4 · NO-INPUT 93
+        #     with the repair         RED  1 · CLEAN 4 · NO-INPUT 102
+        #
+        # The 10 were reproduced EXACTLY from the issue's count, six PRs later,
+        # so nothing in between moved this population. All 10 were opened by
+        # hand before the change and the survivor was opened again after:
+        # ONE root's own L19 declares one process while its PnR log names
+        # another vendor's tech + stdcell LEF, and it carries no
+        # `pdk_target_alternates` that would permit the substitution. That is
+        # the exact defect this program was written for. It stays red, and it
+        # is FILED rather than absorbed — no waiver, no baseline widened.
+        #
+        # THE NINE THAT LEFT ARE NOT A SOFTENING. Each printed
+        # `0 librar(ies) across 0 log(s) — nothing to compare` and returned 1;
+        # seven carried no `*.log` at all. `gate_zero_denominator_refuses_check`
+        # is the house rule for that shape, and this repo REFUSED to promote
+        # `behavioral_evidence_per_spec_item_check` for it. They are now rc 2
+        # with the missing input NAMED, which is the other half of the rule.
+        #
+        # BLOCKING IS AFFORDABLE HERE SPECIFICALLY, by the same argument the
+        # row above makes: Step 36 `blocks_on: [31,32,33,34]`, so only a
+        # project that has reached physical sign-off is ever asked which
+        # process it built. A Phase-1-only root is not.
+        #
+        # THE GATE'S OWN HYGIENE, verified rather than assumed:
+        #   * zero denominator REFUSES — a declared target with no recorded
+        #     library load is rc 2 NOT CHECKED naming what it lacked.
+        #   * a PASS DISCLOSES its denominator — "N of M loaded librar(ies)
+        #     match" — and says what it did NOT verify (foundry / process
+        #     node are not derivable from a LEF filename).
+        #   * it cannot cascade into the gate above: it writes no report of
+        #     its own unless handed `--json`, and this row does not.
+        #
+        # LIMIT, STATED: the evidence channel is `*.log` only. Three of the
+        # nine refusals carry a MAPPED gate-level netlist whose cell names
+        # would answer the question, and all three CORROBORATE their own
+        # declaration — so nothing is hidden today, but a run that keeps no
+        # tool log is refused rather than judged. Closing that is a separate
+        # measured change; it moves what the gate PASSES, not only what it
+        # refuses.
+        - program_exit_zero: "declared_pdk_is_the_pdk_used_check ."
     blocks_on: [31, 32, 33, 34]
 
   - id: 37
