@@ -89,6 +89,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -108,16 +109,51 @@ def _asset_keys(entry: Dict[str, Any]) -> List[str]:
 _GHCR_REPO = "ghcr.io/vibeic/vibeic-eda"
 
 
-def _image_tag() -> str:
-    """The image the repo currently pins, or an env override."""
+def _is_mutable_tag(ref: str) -> bool:
+    """Is this ref's tag a NAME a third party can re-point, rather than an
+    immutable X.Y.Z release? Written against the tag's SHAPE, so `edge` /
+    `nightly` / a bare repo (which means `:latest`) are covered without anyone
+    remembering to add them. Mirrors `sync_image_version.is_mutable_tag`; it is
+    restated rather than imported because the packaged plugin ships no
+    repo-root `tools/`, so an import would be a hard dependency on the
+    development checkout.
+    """
+    tag = ref.rsplit("/", 1)[-1]
+    tag = tag.split(":", 1)[1] if ":" in tag else ""
+    return not re.match(r"^\d+\.\d+\.\d+$", tag)
+
+
+def _image_tag():
+    """The image the repo PINS, or an env override — or None. NEVER a floating tag.
+
+    vibe-ic#927. This gate BLOCKS (rc=1) on what it finds inside the image, so
+    the image it looks in decides a landing verdict. The fallback here used to
+    be `:latest` when no VERSION file was found (the packaged-plugin case), and
+    that made a blocking verdict a function of a MUTABLE THIRD-PARTY POINTER:
+    the fork publishes, `:latest` moves to a different manifest, and this gate's
+    answer changes on an unchanged tree — red for a reason nobody here caused,
+    green again when they ship nothing, and no way to tell those apart.
+
+    Returning None instead is the honest answer: with no anchor there is no
+    pinned image, so the asset half has nothing authoritative to look inside and
+    reports SKIPPED. "I could not look" and "I looked and it is clean" stay
+    different claims, which is the invariant this whole gate is built on.
+
+    An explicit `VIBEIC_EDA_IMAGE` override is still honoured verbatim, floating
+    or not — naming an image by hand IS the operator's deliberate call, and it
+    is announced below rather than silently accepted.
+    """
     ov = os.environ.get("VIBEIC_EDA_IMAGE")
     if ov:
+        if _is_mutable_tag(ov):
+            print(f"[warn] VIBEIC_EDA_IMAGE={ov} is a floating tag: what this "
+                  f"gate reports can change without any commit in this tree.")
         return ov
     for up in Path(__file__).resolve().parents:
         v = up / "tools" / "vibeic-eda" / "VERSION"
         if v.is_file():
             return f"{_GHCR_REPO}:{v.read_text().strip()}"
-    return f"{_GHCR_REPO}:latest"
+    return None
 
 
 def _image_of_container(container: str):
@@ -209,6 +245,16 @@ def _decide_target(container: str):
     """
     img = _image_tag()
     why: Dict[str, Any] = {"pinned_image": img, "container_rejected": None}
+    if img is None:
+        # No anchor in this checkout, so there is no pinned image to be the
+        # authority. vibe-ic#927: the alternative — falling back to the floating
+        # tag — would let a third party's push change this BLOCKING gate's
+        # verdict, so the asset half reports nothing-to-look-at instead.
+        why["source"] = None
+        why["no_pin"] = ("no tools/vibeic-eda/VERSION in this checkout and no "
+                         "VIBEIC_EDA_IMAGE override; refusing to fall back to a "
+                         "floating tag whose bytes a third party controls")
+        return None, why
     if container:
         got = _image_of_container(container)
         if got is not None:

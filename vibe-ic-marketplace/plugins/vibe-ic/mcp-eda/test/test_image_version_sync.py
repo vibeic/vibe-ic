@@ -135,29 +135,43 @@ def test_anchor_ok_when_equal_and_FAILS_when_ahead(monkeypatch):
 
 
 @_skip
-def test_check_end_to_end_flags_stale_anchor():
-    """--check must return non-zero when the (injected) published tag is newer than
-    VERSION, EVEN THOUGH every in-tree pointer matches VERSION — the exact
-    false-green issue #215 describes. 99.99.99 is used so the pin is unambiguously
-    newer than any real VERSION."""
+def test_report_end_to_end_flags_stale_anchor():
+    """The stale anchor #215 describes must still be FOUND and NAMED.
+
+    It moved from `--check` to `--report-upstream` (vibe-ic#927): the value it
+    compares against is one another org mutates, so it is an observation, not a
+    landing verdict. The finding itself is unchanged and this asserts it, plus
+    the exit code that makes it non-blocking — if that ever became non-zero
+    again the treadmill is back. 99.99.99 is used so the injected pin is
+    unambiguously newer than any real VERSION.
+    """
     env = dict(os.environ, VIBEIC_EDA_PUBLISHED_TAG="99.99.99")
-    r = subprocess.run([sys.executable, str(TOOL), "--check"],
+    r = subprocess.run([sys.executable, str(TOOL), "--report-upstream"],
                        capture_output=True, text=True, env=env)
-    assert r.returncode != 0, r.stdout
-    assert "STALE ANCHOR" in r.stdout and "99.99.99" in r.stdout
+    assert "STALE ANCHOR" in r.stdout and "99.99.99" in r.stdout, r.stdout
+    assert r.returncode == 0, r.stdout
 
 
 @_skip
-def test_check_end_to_end_passes_when_anchor_matches_published():
-    """GREEN: with the published tag pinned to the current VERSION, --check is
-    clean (pointers consistent AND anchor tracks reality). Not optional — a check
-    that cannot return clean is an alarm, not a check (issue #215)."""
+def test_check_end_to_end_is_clean_and_ignores_the_injected_published_tag():
+    """GREEN, and the invariance in one assertion.
+
+    A check that cannot return clean is an alarm, not a check (#215). And the
+    blocking half must return the SAME clean result whether the injected
+    registry claims our exact version or one far newer — that difference is
+    upstream's business, not this tree's (#927).
+    """
     v = (TOOL.parent / "VERSION").read_text().strip()
-    env = dict(os.environ, VIBEIC_EDA_PUBLISHED_TAG=v)
-    r = subprocess.run([sys.executable, str(TOOL), "--check"],
-                       capture_output=True, text=True, env=env)
-    assert r.returncode == 0, r.stdout
-    assert "anchor tracks reality" in r.stdout
+    outs = []
+    for claim in (v, "99.99.99"):
+        env = dict(os.environ, VIBEIC_EDA_PUBLISHED_TAG=claim)
+        r = subprocess.run([sys.executable, str(TOOL), "--check"],
+                           capture_output=True, text=True, env=env)
+        assert r.returncode == 0, (claim, r.stdout)
+        assert "all live pointers" in r.stdout
+        outs.append(r.stdout)
+    assert outs[0] == outs[1], (
+        "the blocking half's output depends on what the registry claims", outs)
 
 
 # ── vibe-ic#423 — `:latest` must resolve to the anchor ──────────────────────
@@ -189,8 +203,15 @@ def test_latest_on_the_anchor_manifest_passes(monkeypatch, capsys):
 
 
 def test_an_unreachable_registry_does_not_silently_pass(monkeypatch, capsys):
-    """With --require-remote it must FAIL, not shrug: "I could not look" is
-    not "it is correct"."""
+    """With --require-remote it must not shrug: "I could not look" is not "it
+    is correct".
+
+    rc 2 (NOT CHECKED), not rc 1. This assertion read `== 1` and had been
+    FAILING on main since the rc-2 vocabulary was introduced by
+    test_image_version_unreachable_is_not_a_failed_pin.py — the code moved and
+    this test stayed. A test asserting a superseded contract is worse than no
+    test, because it argues for the thing that was fixed.
+    """
     m = _load()
     monkeypatch.delenv(m.PUBLISHED_TAG_ENV, raising=False)
 
@@ -198,9 +219,10 @@ def test_an_unreachable_registry_does_not_silently_pass(monkeypatch, capsys):
         raise OSError("network down")
 
     monkeypatch.setattr(m, "_query_ghcr_digest", _boom)
-    assert m.check_latest_points_at_anchor("0.2.30", require_remote=True) == 1
+    assert m.check_latest_points_at_anchor("0.2.30", require_remote=True) == 2
     assert m.check_latest_points_at_anchor("0.2.30") == 0      # advisory mode
     out = capsys.readouterr().out
+    assert "NOT CHECKED" in out
     assert "UNVERIFIED" in out
 
 
