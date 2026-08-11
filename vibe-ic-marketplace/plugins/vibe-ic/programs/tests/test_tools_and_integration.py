@@ -3,9 +3,11 @@
 Covers:
 - bootstrap_compliance.py helpers (pattern detection, YAML emit)
 - gen_compliance_tests.py (pattern_to_satisfier etc.)
-- add_compliance_gate.py (idempotency)
+- add_compliance_gate.py (first application AND idempotency)
 - Integration: every one of the 55 skills passes the synthetic-audit pipeline
 """
+import hashlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +23,68 @@ ADD_GATE = PLUGIN / "_shared" / "add_compliance_gate.py"
 sys.path.insert(0, str(PLUGIN / "_shared"))
 import skill_compliance_check as scc  # noqa: E402
 import bootstrap_compliance as bc      # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Write into a COPY, never into the shipped tree (vibe-ic#1029)
+# ---------------------------------------------------------------------------
+# `add_compliance_gate.py` and `bootstrap_compliance.py` both resolve their
+# target from `Path(__file__).resolve().parent.parent` — the plugin directory
+# they are SHIPPED in. Invoke them as shipped and they write into the shipped
+# `skills/` tree. That is what #1029 measured: a clean `origin/main` checkout,
+# `pytest programs/tests/test_tools_and_integration.py` -> 15 passed, and
+#
+#     git status --porcelain
+#      M vibe-ic-marketplace/plugins/vibe-ic/skills/fork-gatekeeper-loop/SKILL.md
+#
+# `gatekeeper-land.sh` runs this suite at line 205 and then, at line 213, runs
+# `landing_worktree_is_clean_check.py --expect-fingerprint` — the gate that
+# exists precisely to catch a tree that moved while the gates ran. It went red
+# on dirt the gates themselves created, the run removed `.git/gatekeeper-stamp`,
+# and `pre-push` then refused the push. The local landing path could not
+# complete on a clean checkout.
+#
+# The fix is NOT to relax that gate or to carve `skills/` out of its scope — the
+# gate is right, the test was wrong to write there. Because both tools derive
+# every path from the script's own location, seeding
+# `<tmp>/plugins/vibe-ic/{_shared,skills}` and running the COPIED script
+# redirects them completely: `d_plugin = <tmp>/plugins/vibe-ic`, so
+# `core_skills = d_plugin/skills`, which is the copy.
+def _seed_plugin_copy(tmp_path, *scripts):
+    """Seed a throwaway plugin tree from the real one. Returns its plugin dir."""
+    plugin = tmp_path / "plugins" / "vibe-ic"
+    (plugin / "_shared").mkdir(parents=True)
+    for name in scripts:
+        shutil.copy2(PLUGIN / "_shared" / name, plugin / "_shared" / name)
+    shutil.copytree(PLUGIN / "skills", plugin / "skills")
+    return plugin
+
+
+def _snapshot(root, pattern):
+    """Map RELATIVE PATH -> content.
+
+    Keyed by relative path, not by `p.name`: every one of these files is named
+    `SKILL.md` (or `compliance.yaml`), so keying by name collapsed 63 files into
+    one dict entry and compared only whichever the glob yielded last.
+    """
+    return {str(p.relative_to(root)): p.read_text(errors="replace")
+            for p in sorted(root.glob(pattern))}
+
+
+def _digest_tree(root):
+    """md5 over (relative path, bytes) of every file under `root`."""
+    h = hashlib.md5()
+    for p in sorted(q for q in root.rglob("*") if q.is_file()):
+        h.update(str(p.relative_to(root)).encode())
+        h.update(b"\0")
+        h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+# Recorded at import, asserted at the END of this module. See
+# `test_shipped_skills_tree_is_untouched_by_this_module`.
+_SHIPPED_SKILLS_MD5_AT_IMPORT = _digest_tree(PLUGIN / "skills")
 
 
 # ---------------------------------------------------------------------------
@@ -112,33 +176,101 @@ class TestEndToEndAllSkills:
 # Idempotency of maintenance tools
 # ---------------------------------------------------------------------------
 class TestMaintenanceTools:
-    def test_bootstrap_is_idempotent(self):
+    def test_bootstrap_is_idempotent(self, tmp_path):
         """Running bootstrap twice must not duplicate or alter existing files."""
-        before = {}
-        for y in (PLUGIN / "skills").glob("*/compliance.yaml"):
-            before[y.name] = y.read_text()
+        plugin = _seed_plugin_copy(tmp_path, "bootstrap_compliance.py")
+        skills = plugin / "skills"
+        before = _snapshot(skills, "*/compliance.yaml")
+        assert before, "seeded copy carries no compliance.yaml — nothing measured"
         res = subprocess.run(
-            [sys.executable, str(BOOTSTRAP)],
-            capture_output=True, text=True, cwd=str(PLUGIN))
-        after = {}
-        for y in (PLUGIN / "skills").glob("*/compliance.yaml"):
-            after[y.name] = y.read_text()
+            [sys.executable, str(plugin / "_shared" / "bootstrap_compliance.py")],
+            capture_output=True, text=True, cwd=str(plugin))
+        assert res.returncode == 0, res.stderr
+        after = _snapshot(skills, "*/compliance.yaml")
         assert before == after, "bootstrap mutated existing files"
 
-    def test_add_gate_is_idempotent(self):
+    def test_bootstrap_writes_the_missing_compliance_yaml(self, tmp_path):
+        """The FIRST application. `test_bootstrap_is_idempotent` cannot see it:
+        every shipped skill already has a compliance.yaml, so both runs are
+        no-ops and the assertion holds against a tool that does nothing."""
+        plugin = _seed_plugin_copy(tmp_path, "bootstrap_compliance.py")
+        victim = sorted((plugin / "skills").glob("*/compliance.yaml"))[0]
+        name = victim.parent.name
+        victim.unlink()
+        res = subprocess.run(
+            [sys.executable, str(plugin / "_shared" / "bootstrap_compliance.py")],
+            capture_output=True, text=True, cwd=str(plugin))
+        assert res.returncode == 0, res.stderr
+        assert victim.exists(), (
+            f"bootstrap did NOT create skills/{name}/compliance.yaml on first "
+            f"application. stdout:\n{res.stdout}")
+        assert f"WROTE: skills/{name}/compliance.yaml" in res.stdout
+
+    def test_add_gate_first_application_appends_the_section(self, tmp_path):
+        """The FIRST application — the case whose absence let #1029 sit.
+
+        `test_add_gate_is_idempotent` measures the run AFTER the section is
+        already present, which is a no-op for a correct tool and equally a
+        no-op for a tool that does nothing at all. Nothing measured the run
+        that has work to do.
+        """
+        plugin = _seed_plugin_copy(tmp_path, "add_compliance_gate.py")
+        script = plugin / "_shared" / "add_compliance_gate.py"
+
+        # Strip the gate off one COPIED skill so the first application always
+        # has work, rather than depending on the shipped tree still carrying a
+        # gate-less skill (today exactly one does: fork-gatekeeper-loop).
+        victim = sorted((plugin / "skills").glob("*/SKILL.md"))[0]
+        name = victim.parent.name
+        base = victim.read_text(errors="replace").split(
+            "## Compliance gate (mandatory)")[0].rstrip() + "\n"
+        assert "Compliance gate" not in base, (
+            f"{name}/SKILL.md names the gate outside the appended section; "
+            "the first-application probe cannot be seeded from it")
+        victim.write_text(base)
+        untouched_before = _snapshot(plugin / "skills", "*/SKILL.md")
+
+        res = subprocess.run([sys.executable, str(script)],
+                             capture_output=True, text=True, cwd=str(plugin))
+        assert res.returncode == 0, res.stderr
+
+        got = victim.read_text(errors="replace")
+        assert "## Compliance gate (mandatory)" in got, (
+            "add_compliance_gate did NOT append the section on FIRST "
+            f"application to skills/{name}/SKILL.md. stdout:\n{res.stdout}")
+        assert got.startswith(base.rstrip()), "the prior body was not preserved"
+        assert f"plugins/vibe-ic/skills/{name}/compliance.yaml" in got, (
+            "the appended section did not interpolate the skill name")
+        assert f"UPDATED: plugins/vibe-ic/skills/{name}/SKILL.md" in res.stdout
+
+        # ...and it touched EXACTLY the files that needed it, no others.
+        need = {rel for rel, text in untouched_before.items()
+                if "Compliance gate" not in text}
+        assert str(victim.relative_to(plugin / "skills")) in need
+        after = _snapshot(plugin / "skills", "*/SKILL.md")
+        changed = {k for k in after if after[k] != untouched_before[k]}
+        assert changed == need, (
+            f"add_compliance_gate rewrote {changed - need} that already had "
+            f"the section, and skipped {need - changed} that did not")
+
+    def test_add_gate_is_idempotent(self, tmp_path):
         """Running add_compliance_gate twice must not duplicate the section."""
-        marketplace = PLUGIN.parent.parent.parent
-        core = marketplace / "plugins" / "vibe-ic" / "skills"
-        before = {}
-        for md in core.glob("*/SKILL.md"):
-            before[md.name] = md.read_text()
-        subprocess.run(
-            [sys.executable, str(ADD_GATE)],
-            capture_output=True, text=True, cwd=str(PLUGIN))
-        after = {}
-        for md in core.glob("*/SKILL.md"):
-            after[md.name] = md.read_text()
+        plugin = _seed_plugin_copy(tmp_path, "add_compliance_gate.py")
+        script = plugin / "_shared" / "add_compliance_gate.py"
+        skills = plugin / "skills"
+        # Bring the copy to the fully-gated state first, so the second run is
+        # the one under measurement.
+        first = subprocess.run([sys.executable, str(script)],
+                               capture_output=True, text=True, cwd=str(plugin))
+        assert first.returncode == 0, first.stderr
+        before = _snapshot(skills, "*/SKILL.md")
+        assert before, "seeded copy carries no SKILL.md — nothing measured"
+        second = subprocess.run([sys.executable, str(script)],
+                                capture_output=True, text=True, cwd=str(plugin))
+        assert second.returncode == 0, second.stderr
+        after = _snapshot(skills, "*/SKILL.md")
         assert before == after, "add_compliance_gate mutated files on 2nd run"
+        assert "Added Compliance gate to 0 SKILL.md files." in second.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +346,26 @@ class TestCoreSkillSchema:
         assert not orphan_d, (
             f"vibe-ic has compliance for skills not in vibe-ic: "
             f"{orphan_d}")
+
+
+# ---------------------------------------------------------------------------
+# The regression guard for vibe-ic#1029, kept LAST on purpose.
+# ---------------------------------------------------------------------------
+def test_shipped_skills_tree_is_untouched_by_this_module():
+    """No test in this file may leave a byte of `skills/` different.
+
+    pytest runs a module's tests in definition order, so this runs after every
+    test above. Against the pre-fix file it goes RED: the maintenance-tool
+    tests ran `add_compliance_gate.py` as shipped and it appended a section to
+    `skills/fork-gatekeeper-loop/SKILL.md`. That modification is what made
+    `gatekeeper-land.sh` line 213 fail and the landing stamp never get written.
+
+    This assertion is the test-side of the gate; it does not replace
+    `landing_worktree_is_clean_check.py`, which still owns the whole tree.
+    """
+    assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
+        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
+        "tool against a copy — see _seed_plugin_copy().")
 
 
 if __name__ == "__main__":
