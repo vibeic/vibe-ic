@@ -30,7 +30,10 @@
 #   3. compute the merge tree with `git merge-tree --write-tree` and REFUSE
 #      unless the rebase agrees with it AND the forge agrees with both. Replaying
 #      the branch's patches and 3-way-merging its text are different questions,
-#      and the phantom-revert shape is exactly where they diverge;
+#      and the phantom-revert shape is exactly where they diverge.
+#      `--write-tree` NEEDS GIT >= 2.38 and four of six hosts in this fleet run
+#      2.34.1, the landing host among them, so the capability is PROBED and the
+#      run declares a TIER — see "TWO TIERS" below;
 #   4. build the SQUASH commit — `commit-tree <merge tree> -p <base>` with the
 #      forge's own default squash message (the PR's commit messages concatenated,
 #      so the NDA and prohibition scans read the text that will actually land) —
@@ -46,6 +49,46 @@
 # The verified SHA is a local stand-in: the forge will pick its own committer and
 # date, so its commit hashes differently. The TREE is the identity that matters
 # and it is reported alongside.
+#
+# TWO TIERS, BECAUSE THE LANDING HOST CANNOT RUN THE STRONG ONE
+# ============================================================
+# `git merge-tree --write-tree` requires git >= 2.38. Measured across this fleet
+# on 2026-08-12: `.112` 2.43.0 and `.114` 2.54.0 have it; `.102` (the
+# orchestrator, where every `gh pr merge` is run), `.105`, `.120` and `.121` are
+# all 2.34.1 and do not. On those four the tree came back empty and the verdict
+# refused every landing with THE MERGE TREE COULD NOT BE COMPUTED — fail-closed
+# and correct, and a BAN rather than a check.
+#
+#   TIER `merge-tree`     git >= 2.38. Unchanged. The tree under test is the
+#                         3-way merge; the rebase replay cross-checks it and a
+#                         disagreement is a refusal.
+#   TIER `rebase-replay`  the fallback. The tree under test is the REBASE
+#                         REPLAY. THE SQUASH-VS-REBASE CROSS-CHECK IS NOT
+#                         PERFORMED — there is only one answer, so nothing can
+#                         disagree with it. The forge's `refs/pull/<n>/merge`
+#                         still cross-checks it whenever the forge merged this
+#                         same base.
+#
+# Everything else is identical in both tiers: the same squash commit is built
+# from the tree under test, the same `gatekeeper-land.sh` runs on it, the same
+# test and gate differentials decide. The fallback is a WEAKER CHECK, NEVER A
+# PASS — the paired negative control (an innocuous diff that leaves a test red)
+# is asserted UNDER THE FALLBACK, because a fallback that passes everything
+# would be worse than a gate that refuses everything.
+#
+# The loss is disclosed twice, and the machine-readable half is the load-bearing
+# one — a downstream reader must be able to tell the tiers apart without parsing
+# prose:
+#
+#   printed   `  DISCLOSE  SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED`
+#   JSON      "verification_tier": "rebase-replay", "tier_degraded": true,
+#             "squash_vs_rebase_cross_check": "NOT_PERFORMED",
+#             "disclosures": [...], "git_version", "git_version_required_for_merge_tree"
+#
+# `GATEKEEPER_FORCE_REBASE_REPLAY=1` forces the fallback on a host that has the
+# capability. It exists so the fallback branch is TESTED on every host rather
+# than only on the hosts that need it, and it can only ever select the weaker,
+# disclosed tier — no value of it turns a refusal into a pass.
 #
 # WHERE EACH HALF COMES FROM, AND WHY
 # ===================================
@@ -133,7 +176,7 @@ while [ $# -gt 0 ]; do
     --keep)     KEEP=1; shift ;;
     --base-gate-cache) BASE_GATE_CACHE="${2:?}"; shift 2 ;;
     --require-version-bump) REQUIRE_VERSION_BUMP=1; shift ;;
-    -h|--help)  sed -n '1,105p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)  sed -n '1,149p' "${BASH_SOURCE[0]}"; exit 0 ;;
     -*)         die "unknown option $1" ;;
     *)          [ -n "$PR" ] && die "more than one PR number given"
                 PR="$1"; shift ;;
@@ -249,16 +292,92 @@ elif [ -n "${FORGE_TREE:-}" ]; then
 fi
 echo "--- base=${BASE_SHA:0:12}  head=${HEAD_SHA:0:12}${GITHUB_TREE:+  forge-merge-tree=${GITHUB_TREE:0:12}}"
 
-# --------------------------------------- 2. the tree that WOULD be merged
+# ------------------------- 2. CAN THIS HOST COMPUTE THE MERGE TREE AT ALL?
+# `git merge-tree --write-tree` landed in git 2.38. Measured 2026-08-12 across
+# the fleet this repo is maintained on, FOUR OF SIX HOSTS RUN 2.34.1 — including
+# the orchestrator, which is where every `gh pr merge` is actually run.
+#
+# On those hosts the strong path does not fail, it never starts: `--write-tree`
+# is read as a REV, git answers `fatal: unknown rev --write-tree`, the tree comes
+# back empty and the verdict refuses with THE MERGE TREE COULD NOT BE COMPUTED.
+# That refusal is CORRECT — it fails closed and says so, and that property is
+# kept below — but as a gate it was useless: it refused every landing on the only
+# host that lands, which is the ban this whole program exists to avoid.
+#
+# So the capability is PROBED and the run picks a TIER:
+#
+#   merge-tree      the strong path, unchanged. The tree under test is the 3-way
+#                   merge, and the rebase replay is an INDEPENDENT second opinion
+#                   whose disagreement is a refusal.
+#   rebase-replay   the fallback. The tree under test is the REBASE REPLAY, and
+#                   THE SQUASH-VS-REBASE CROSS-CHECK IS NOT PERFORMED — there is
+#                   only one answer, so there is nothing to disagree with it.
+#
+# The fallback is a WEAKER CHECK, NOT A PASS. Every other refusal reason — the
+# test differential, the gate differential, silencing, truncation, the stamp, the
+# forge cross-check when the forge merged this same base — is computed
+# identically in both tiers, and the paired negative control is asserted UNDER
+# THE FALLBACK specifically (`test_end_to_end_the_fallback_still_refuses_an_
+# innocuous_diff_that_leaves_a_test_red`). A disclosed weaker check beats a
+# universal refusal; a fallback that passes everything would be worse than both.
+#
+# The loss is DISCLOSED in the printed verdict AND machine-readably in the JSON
+# (`verification_tier`, `tier_degraded`, `squash_vs_rebase_cross_check`, and the
+# `disclosures` code list), because a downstream reader has to be able to tell
+# the two tiers apart without parsing prose.
+#
+# THE PROBE IS FUNCTIONAL, NOT A VERSION COMPARISON. A version parse is what
+# breaks on `2.39.3 (Apple Git-145)` and on vendor forks, and it would answer
+# about the string rather than the capability. `git --version` is read only to
+# NAME the version found alongside the version needed, which is what a refusal
+# has to say to be actionable. Merging the base with ITSELF is the cheapest
+# question whose answer is known in advance — the base's own tree — so the probe
+# reports a property of the HOST and can never become an opinion about this PR.
+MERGE_TREE_MIN_VERSION="2.38"
+GIT_VERSION="$("${G[@]}" --version 2>/dev/null \
+    | sed -n 's/^git version \([0-9][0-9A-Za-z.]*\).*/\1/p')"
+[ -n "$GIT_VERSION" ] || GIT_VERSION="unknown"
+TIER="merge-tree"
+TIER_REASON=""
+if [ "${GATEKEEPER_FORCE_REBASE_REPLAY:-0}" = "1" ]; then
+  # THE TEST HOOK, and the only way the fallback branch can be exercised on a
+  # host that HAS the capability. Without it the fallback would be untested
+  # everywhere it is not needed and untestable everywhere it is — which is
+  # moving the untested path rather than removing it. It can only ever move a
+  # run to the WEAKER, DISCLOSED tier: there is no value of it that turns any
+  # refusal into a pass, and a forced fallback discloses exactly as a natural
+  # one does.
+  TIER="rebase-replay"
+  TIER_REASON="forced by GATEKEEPER_FORCE_REBASE_REPLAY (git $GIT_VERSION)"
+else
+  MT_PROBE="$("${G[@]}" merge-tree --write-tree "$BASE_SHA" "$BASE_SHA" 2>/dev/null)"
+  MT_PROBE_RC=$?
+  if [ "$MT_PROBE_RC" -ne 0 ] \
+     || ! printf '%s\n' "$MT_PROBE" | head -1 | grep -Eq '^[0-9a-f]{40,64}$'; then
+    TIER="rebase-replay"
+    TIER_REASON="git $GIT_VERSION does not support \`merge-tree --write-tree\` (needs >= $MERGE_TREE_MIN_VERSION)"
+  fi
+fi
+
+# --------------------------------------- 2b. the tree that WOULD be merged
 # `--write-tree` reports the merge of base and head from their merge base — the
 # same computation the forge does — and exits 1 when it conflicts.
-MT_OUT="$("${G[@]}" merge-tree --write-tree "$BASE_SHA" "$HEAD_SHA" 2>&1)"; MT_RC=$?
 EXPECTED_TREE=""
-if [ "$MT_RC" -eq 0 ]; then
-  EXPECTED_TREE="$(printf '%s\n' "$MT_OUT" | head -1)"
+if [ "$TIER" = "merge-tree" ]; then
+  MT_OUT="$("${G[@]}" merge-tree --write-tree "$BASE_SHA" "$HEAD_SHA" 2>&1)"; MT_RC=$?
+  if [ "$MT_RC" -eq 0 ]; then
+    EXPECTED_TREE="$(printf '%s\n' "$MT_OUT" | head -1)"
+  else
+    # THE CAPABILITY IS PRESENT AND THE MERGE STILL FAILED, so this is a fact
+    # about the PR and not about the host. Unchanged: it stays a refusal.
+    echo "--- the merge does not apply cleanly (merge-tree rc=$MT_RC):"
+    printf '%s\n' "$MT_OUT" | head -12 | sed 's/^/      /'
+  fi
 else
-  echo "--- the merge does not apply cleanly (merge-tree rc=$MT_RC):"
-  printf '%s\n' "$MT_OUT" | head -12 | sed 's/^/      /'
+  echo "--- merge-tree capability ABSENT — $TIER_REASON"
+  echo "    TIER=rebase-replay: the tree under test is the REBASE REPLAY, and the"
+  echo "    squash-vs-rebase cross-check is NOT performed. Disclosed in the verdict"
+  echo "    and in the JSON record; every other refusal reason is unchanged."
 fi
 
 # ------------------------------------------- 3. rebase in a throwaway worktree
@@ -278,12 +397,30 @@ if ! git -C "$WT_CAND" -c rebase.autoStash=false \
 fi
 REBASED_SHA="$(git -C "$WT_CAND" rev-parse HEAD)"
 REBASED_TREE="$(git -C "$WT_CAND" rev-parse 'HEAD^{tree}')"
-echo "--- rebase=$REBASE_STATUS  replayed=${REBASED_SHA:0:12}  tree=${REBASED_TREE:0:12}  merge-tree=${EXPECTED_TREE:0:12}"
+
+# THE FALLBACK'S TREE UNDER TEST — adopted ONLY when the replay actually
+# succeeded. A conflicted rebase leaves the HEAD's own tree checked out in the
+# worktree, which is not a merge result at all; adopting that would verify a tree
+# nobody will ever create, and it would do it silently, which is the one failure
+# mode worse than the refusal this replaces. Left EMPTY on conflict so the
+# verdict refuses as UNMEASURABLE, exactly as the strong tier does — the
+# fail-closed property is preserved, not traded away.
+if [ "$TIER" = "rebase-replay" ] && [ "$REBASE_STATUS" = "ok" ]; then
+  EXPECTED_TREE="$REBASED_TREE"
+fi
+echo "--- rebase=$REBASE_STATUS  replayed=${REBASED_SHA:0:12}  tree=${REBASED_TREE:0:12}  tier=$TIER  tree-under-test=${EXPECTED_TREE:0:12}"
 
 # A rebase conflict, a disagreement between the replay and the merge, or a forge
 # that disagrees with both means nothing downstream measures the right tree. Run
 # the verdict on what we have and stop — the suites would answer a question about
 # a tree nobody will create.
+#
+# UNDER THE FALLBACK the replay-vs-merge comparison is vacuous by construction
+# (they are the same object) — that IS the disclosed loss. The FORGE comparison
+# below is not vacuous and is not dropped: when the forge merged this same base,
+# `refs/pull/<n>/merge` is an independent second opinion computed by a git new
+# enough to have the capability this host lacks, so the fallback still gets a
+# real cross-check whenever the forge published one.
 SHORT_CIRCUIT=0
 [ "$REBASE_STATUS" != "ok" ] && SHORT_CIRCUIT=1
 [ -z "$EXPECTED_TREE" ] && SHORT_CIRCUIT=1
@@ -458,6 +595,9 @@ python3 "$VERDICT_PROG" \
   --land-log "$RUN/land.log" --selection "$RUN/selection.txt" \
   "${BASE_LAND_ARG[@]+"${BASE_LAND_ARG[@]}"}" \
   --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
+  --verification-tier "$TIER" --git-version "$GIT_VERSION" \
+  --merge-tree-min-version "$MERGE_TREE_MIN_VERSION" \
+  ${TIER_REASON:+--tier-reason "$TIER_REASON"} \
   ${JSON_OUT:+--json "$JSON_OUT"} \
   "${GATE_ARGS[@]+"${GATE_ARGS[@]}"}"
 RC=$?
@@ -465,6 +605,7 @@ RC=$?
 if [ "$RC" -eq 0 ]; then
   echo "=== LAND OK — verified the squash of ${HEAD_SHA:0:12} onto ${BASE_SHA:0:12}"
   echo "               commit ${VERIFIED_SHA:0:12} (local stand-in)  tree ${VERIFIED_TREE:0:12} (what lands)"
+  echo "               tier ${TIER}$( [ "$TIER" = "merge-tree" ] || echo "  (DEGRADED — squash-vs-rebase cross-check NOT performed)" )"
 else
   echo "=== REFUSED (rc=$RC) — do NOT run \`gh pr merge\`; the reasons are above"
 fi

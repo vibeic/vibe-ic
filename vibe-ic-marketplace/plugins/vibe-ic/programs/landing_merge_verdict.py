@@ -87,7 +87,51 @@ EVERY WAY THE DIFFERENTIAL CAN DEGRADE, DEGRADES TOWARD STRICTER
     hunts, not a clean sheet
 
 There is no argument this program accepts that makes it more permissive than
-"demand green". That is the property that makes the relaxation safe.
+"demand green". That is the property that makes the relaxation safe. THE
+VERIFICATION TIER BELOW IS NOT AN EXCEPTION TO IT: a degraded tier reports what
+it could not check and softens nothing it did.
+
+TWO TIERS, BECAUSE THE HOST THAT LANDS CODE CANNOT RUN THE STRONG ONE
+=====================================================================
+`git merge-tree --write-tree` requires git >= 2.38. Measured across this fleet
+on 2026-08-12, FOUR OF SIX HOSTS RUN 2.34.1 — including the orchestrator, where
+every `gh pr merge` is actually run:
+
+    .102  orchestrator, lands every PR   2.34.1   no
+    .105                                 2.34.1   no
+    .112  where this was authored        2.43.0   yes
+    .114                                 2.54.0   yes
+    .120                                 2.34.1   no
+    .121                                 2.34.1   no
+
+On the four, the strong path does not fail — it never starts. `--write-tree` is
+read as a REV (`fatal: unknown rev --write-tree`), the tree comes back empty and
+this program refuses with THE MERGE TREE COULD NOT BE COMPUTED. As a refusal
+that is exactly right and it is KEPT. As a gate it was a BAN: it refused every
+landing on the only host that lands, which is the failure mode this file exists
+to detect.
+
+    TIER `merge-tree`     git >= 2.38. The tree under test is the 3-way merge;
+                          the rebase replay is an independent second opinion and
+                          a disagreement is a refusal.
+    TIER `rebase-replay`  the fallback. The tree under test IS the rebase
+                          replay, so THE SQUASH-VS-REBASE CROSS-CHECK IS NOT
+                          PERFORMED — nothing is left to disagree with it. The
+                          forge's `refs/pull/<n>/merge` still cross-checks it
+                          whenever the forge merged this same base.
+
+Everything else is identical: same squash commit built from the tree under test,
+same `gatekeeper-land.sh`, same test and gate differentials, same fail-closed
+behaviour when the replay conflicts. **A fallback that passed everything would
+be worse than a gate that refused everything**, so the paired negative control —
+an innocuous diff that leaves a test red — is asserted UNDER THE FALLBACK.
+
+The loss is disclosed in the printed verdict AND machine-readably in the JSON
+(`verification_tier`, `tier_degraded`, `squash_vs_rebase_cross_check`,
+`disclosures`, `git_version`), because a disclosed weaker check is only better
+than a refusal if the weakness is legible to whatever reads the record next. An
+UNRECOGNISED tier refuses as unmeasurable rather than inheriting the strong
+tier's silence.
 
 Usage
 -----
@@ -97,6 +141,8 @@ Usage
         [--replayed-tree <oid>] [--github-tree <oid>]
         --land-log <path> [--base-land-log <path>] --selection <path>
         --base-junit <path> --candidate-junit <path>
+        [--verification-tier merge-tree|rebase-replay] [--git-version <v>]
+        [--merge-tree-min-version <v>] [--tier-reason <text>]
         [--gate-edited <path>...] [--maxfail N] [--json <out>]
 
 Exit codes
@@ -206,6 +252,20 @@ class Verdict:
     reasons: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     unmeasurable: bool = False
+    #: MACHINE-READABLE codes for what this verdict did and did not check, so a
+    #: downstream reader can tell a strong verification from a degraded one
+    #: without parsing prose. Prose lives in :attr:`notes`; these are the keys.
+    disclosures: List[str] = field(default_factory=list)
+
+
+# The verification TIERS. `merge-tree` is the strong path; `rebase-replay` is the
+# fallback for a host whose git predates `merge-tree --write-tree` (>= 2.38), on
+# which the strong path cannot start at all. Anything else is not a tier this
+# program knows how to reason about, and it FAILS CLOSED on one — see `decide`.
+TIER_MERGE_TREE = "merge-tree"
+TIER_REBASE_REPLAY = "rebase-replay"
+TIERS = (TIER_MERGE_TREE, TIER_REBASE_REPLAY)
+MERGE_TREE_MIN_VERSION = "2.38"
 
 
 # ---------------------------------------------------------------- junit reading
@@ -339,24 +399,77 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            github_tree: Optional[str], land: LandLog, delta: Delta,
            verified_sha: str, truncated: bool, dropped_files: Sequence[str],
            selection_size: int, replayed_tree: str = "",
-           base_land: Optional[LandLog] = None) -> Verdict:
+           base_land: Optional[LandLog] = None,
+           verification_tier: str = TIER_MERGE_TREE,
+           git_version: str = "", tier_reason: str = "") -> Verdict:
     reasons: List[str] = []
     notes: List[str] = []
+    disclosures: List[str] = []
+
+    # `reasons + [...]`, never a fresh list, and `disclosures` carried through.
+    # An early return that drops what was already found makes the operator hunt:
+    # a conflicting rebase and an uncomputable merge tree are the SAME event seen
+    # twice, and printing only the second names the symptom while hiding the
+    # cause. The same argument applies to the tier — a refusal that does not say
+    # WHICH tier could not answer sends the reader to the wrong host.
+    def _stop(reason: str) -> Verdict:
+        return Verdict(False, reasons + [reason], notes, unmeasurable=True,
+                       disclosures=disclosures)
+
+    # ---- WHICH TIER ANSWERED, AND WHAT IT THEREFORE DID NOT CHECK ----
+    # FAIL CLOSED ON AN UNKNOWN TIER, before anything else is read. A third tier
+    # arriving by typo must not inherit the strong tier's silence: if the gate
+    # cannot say what was verified, nothing was verified.
+    if verification_tier not in TIERS:
+        return Verdict(False, reasons + [
+            f"UNKNOWN VERIFICATION TIER {verification_tier!r} — this program "
+            f"knows {' and '.join(TIERS)} and cannot say what was checked, so "
+            f"nothing was."], notes, unmeasurable=True,
+            disclosures=["VERIFICATION_TIER_UNKNOWN"])
+
+    if verification_tier == TIER_REBASE_REPLAY:
+        disclosures += ["VERIFICATION_TIER_REBASE_REPLAY",
+                        "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED"]
+        notes.append(
+            "DEGRADED TIER: the tree under test is the REBASE REPLAY, not a "
+            "`merge-tree --write-tree` 3-way merge, so the squash-vs-rebase "
+            "cross-check WAS NOT PERFORMED — the phantom-revert shape, where "
+            "replay and merge disagree, would not have been caught here"
+            + (f" ({tier_reason})" if tier_reason else "")
+            + f". git found: {git_version or 'unknown'}; needed for the strong "
+              f"tier: >= {MERGE_TREE_MIN_VERSION}. Every OTHER refusal reason "
+              f"was computed exactly as the strong tier computes it.")
+    else:
+        disclosures.append("VERIFICATION_TIER_MERGE_TREE")
+        disclosures.append("SQUASH_VS_REBASE_CROSS_CHECK_PERFORMED")
+
+    # The forge's own merge is an independent second opinion computed by a git
+    # new enough to have the capability. Recorded either way, because under the
+    # fallback its PRESENCE is the only cross-check left and its ABSENCE is
+    # exactly how much was lost.
+    disclosures.append("FORGE_CROSS_CHECK_PERFORMED" if github_tree
+                       else "FORGE_CROSS_CHECK_ABSENT")
+    if verification_tier == TIER_REBASE_REPLAY and github_tree:
+        notes.append(
+            "the forge published a merge for this same base, so the replayed "
+            "tree still got one independent cross-check")
 
     if rebase_status != "ok":
         reasons.append(
             "REBASE CONFLICT — the PR does not apply to the current base, so "
             "no tree was verified. Rebase the branch and re-run.")
 
-    # `reasons + [...]`, never a fresh list. An early return that drops the
-    # reasons already found makes the operator hunt: a conflicting rebase and an
-    # uncomputable merge tree are the SAME event seen twice, and printing only
-    # the second one names the symptom while hiding the cause.
     if not expected_tree or not verified_tree:
-        return Verdict(False, reasons + [
-            "THE MERGE TREE COULD NOT BE COMPUTED — nothing was verified."],
-            notes, unmeasurable=True)
+        # UNDER THE FALLBACK this is still reachable and still refuses: the
+        # replay is adopted as the tree under test ONLY when it succeeded, so a
+        # conflicted rebase leaves it empty and lands here. The fallback trades
+        # away a cross-check, never the fail-closed property.
+        return _stop(
+            "THE MERGE TREE COULD NOT BE COMPUTED — nothing was verified.")
 
+    # Vacuous under the fallback — `expected_tree` IS `replayed_tree` there, and
+    # that identity is the disclosed loss. Kept unconditional so a shell that
+    # ever hands over an inconsistent pair is caught in either tier.
     if replayed_tree and replayed_tree != expected_tree:
         # REPLAY vs 3-WAY MERGE. Rebasing asks "does the branch's intent still
         # apply"; merging asks "does its text still combine". The phantom-revert
@@ -381,10 +494,9 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             f"measured here.")
 
     if not land.sentinel_seen or not (land.passed or land.failed):
-        return Verdict(False, reasons + [
+        return _stop(
             "THE LANDING GATES DID NOT RUN — gatekeeper-land.sh produced no "
-            "gate lines, so its silence is not a pass."], notes,
-            unmeasurable=True)
+            "gate lines, so its silence is not a pass.")
 
     # ---- the GATE differential, on exactly the rule the test tier uses ----
     # Not a nicety: measured 2026-08-12 at `e4880703b`, TWO of the repo-hygiene
@@ -463,9 +575,9 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             + ("…" if len(dropped_files) > 5 else ""))
 
     if delta.candidate_total == 0:
-        return Verdict(False, reasons + [
+        return _stop(
             "THE CANDIDATE RAN NO TESTS — a clean result over an empty run is "
-            "not a clean result."], notes, unmeasurable=True)
+            "not a clean result.")
 
     if delta.base_total == 0:
         notes.append(
@@ -508,7 +620,12 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
     # THE DECISION. Neutering this line — and only this line — is the mutant the
     # shipped tests are calibrated against. Everything above still measures and
     # still prints; only the answer changes.
-    return Verdict(not reasons, reasons, notes)
+    #
+    # THE TIER IS NOT AN INPUT TO IT. `disclosures` rides alongside the answer
+    # and never into it: the fallback reports what it could not check, it does
+    # not get to excuse anything it did check. A tier that could soften a reason
+    # would be the "fallback that passes everything" this design refuses.
+    return Verdict(not reasons, reasons, notes, disclosures=disclosures)
 
 
 # --------------------------------------------------------------------- the CLI
@@ -544,6 +661,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--gate-edited", action="append", default=[],
                     help="a path this branch changes that is part of the gate "
                          "judging it; disclosed, never blocking")
+    ap.add_argument("--verification-tier", default=TIER_MERGE_TREE,
+                    help="which tier computed the tree under test: "
+                         f"{TIER_MERGE_TREE} (git >= {MERGE_TREE_MIN_VERSION}, "
+                         f"the 3-way merge, cross-checked by the replay) or "
+                         f"{TIER_REBASE_REPLAY} (the fallback: the replay IS "
+                         f"the tree under test and the squash-vs-rebase "
+                         f"cross-check is not performed). Any other value "
+                         f"refuses as unmeasurable")
+    ap.add_argument("--git-version", default="",
+                    help="the git version measured on this host, named in the "
+                         "tier disclosure so the refusal is actionable")
+    ap.add_argument("--merge-tree-min-version", default=MERGE_TREE_MIN_VERSION,
+                    help="the git version the strong tier needs")
+    ap.add_argument("--tier-reason", default="",
+                    help="why this tier was selected, when it was not the "
+                         "strong one")
     ap.add_argument("--json", dest="json_out", default=None)
     a = ap.parse_args(argv)
 
@@ -599,7 +732,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                github_tree=a.github_tree or None, land=land, delta=delta,
                verified_sha=a.verified_sha, truncated=truncated,
                dropped_files=dropped, selection_size=len(selection),
-               replayed_tree=a.replayed_tree, base_land=base_land)
+               replayed_tree=a.replayed_tree, base_land=base_land,
+               verification_tier=a.verification_tier,
+               git_version=a.git_version, tier_reason=a.tier_reason)
 
     if a.gate_edited:
         v.notes.append("this branch edits the gate that judges it: "
@@ -609,9 +744,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             else "[FAIL] landing_merge_verdict: REFUSE")
     print(f"{head} — base {a.base_sha[:12]} + head {a.head_sha[:12]} "
           f"=> verified commit {a.verified_sha[:12]} tree "
-          f"{(a.verified_tree or '?')[:12]}")
+          f"{(a.verified_tree or '?')[:12]} [tier {a.verification_tier}]")
     for r in v.reasons:
         print(f"  REFUSE  {r}")
+    # PRINTED AND MACHINE-READABLE. The codes go to stdout as well as to the
+    # JSON so an operator reading a terminal and a program reading a record are
+    # told the same thing — a tier reported only in prose is a tier a downstream
+    # cannot act on.
+    for d in v.disclosures:
+        print(f"  DISCLOSE  {d}")
     for n in v.notes:
         print(f"  note    {n}")
     print(f"  stamp   {land.stamped_sha or 'NONE (gatekeeper-land.sh withheld it)'}")
@@ -641,6 +782,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "dropped_selected_files": dropped,
             "candidate_run_truncated": truncated,
             "gate_edited": a.gate_edited,
+            # ---- WHAT THIS VERDICT DID NOT CHECK, MACHINE-READABLY ----
+            # A disclosed weaker check beats a universal refusal ONLY if the
+            # weakness is legible to whatever reads the record next. These four
+            # keys are that contract: `verification_tier` names the tier,
+            # `tier_degraded` is the one-bit answer, `squash_vs_rebase_cross_
+            # check` names the specific check that was skipped, and
+            # `disclosures` is the stable code list to key on.
+            "verification_tier": a.verification_tier,
+            "tier_degraded": a.verification_tier != TIER_MERGE_TREE,
+            "squash_vs_rebase_cross_check": (
+                "PERFORMED" if a.verification_tier == TIER_MERGE_TREE
+                else "NOT_PERFORMED"),
+            "tier_reason": a.tier_reason,
+            "disclosures": v.disclosures,
+            "git_version": a.git_version,
+            "git_version_required_for_merge_tree": a.merge_tree_min_version,
         }, indent=2) + "\n")
 
     if v.unmeasurable:

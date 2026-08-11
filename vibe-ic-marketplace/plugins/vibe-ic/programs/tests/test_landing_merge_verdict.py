@@ -786,13 +786,14 @@ def sandbox(tmp_path_factory):
     return repo
 
 
-def _verify(repo, ref, tmp_path, *extra):
+def _verify(repo, ref, tmp_path, *extra, env_extra=None):
     out = tmp_path / f"v_{ref}.json"
     r = subprocess.run(
         ["bash", str(_VERIFY), "--ref", ref, "--base", "main",
          "--repo", str(repo), "--no-fetch", "--json", str(out), *extra],
         capture_output=True, text=True, timeout=_T,
-        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": ""})
+        env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
+             **(env_extra or {})})
     doc = json.loads(out.read_text()) if out.is_file() else None
     return r, doc
 
@@ -900,3 +901,260 @@ def test_reassert_refuses_a_record_that_was_not_a_pass(sandbox, tmp_path):
     bad = _reassert(sandbox, tmp_path / "v_innocuous_red.json")
     assert bad.returncode == 1, bad.stdout + bad.stderr
     assert "not LAND_OK" in bad.stderr
+
+
+# ================================================ THE TWO VERIFICATION TIERS
+#
+# `git merge-tree --write-tree` needs git >= 2.38. FOUR OF SIX HOSTS in this
+# fleet run 2.34.1, INCLUDING the orchestrator where every `gh pr merge` is run,
+# and on those the strong path never starts: `--write-tree` is read as a rev
+# (`fatal: unknown rev --write-tree`), so the tree came back empty and the gate
+# refused EVERY landing with THE MERGE TREE COULD NOT BE COMPUTED. Fail-closed
+# and correct; a ban rather than a check.
+#
+# The fallback verifies the REBASE REPLAY and DISCLOSES that the squash-vs-rebase
+# cross-check was not performed. What these tests refuse:
+#
+#   * a fallback that passes everything — worse than a gate that refuses
+#     everything, so the negative control is re-run UNDER THE FALLBACK;
+#   * a fallback that is disclosed only in prose — a downstream that cannot key
+#     on the tier cannot act on the weakness;
+#   * a fallback that is only exercised where it is needed. Forcing it with
+#     `GATEKEEPER_FORCE_REBASE_REPLAY=1` runs this branch on EVERY host, so the
+#     untested path is removed rather than moved;
+#   * a tier that can change an answer rather than only report what it checked.
+
+
+_FALLBACK = {"GATEKEEPER_FORCE_REBASE_REPLAY": "1"}
+
+
+def _host_has_write_tree(repo):
+    """Measured, not assumed: the same capability the script probes."""
+    r = _git(repo, "merge-tree", "--write-tree", "main", "main")
+    return r.returncode == 0 and len(r.stdout.strip()) >= 40
+
+
+# ------------------------------------------------- the decision, both tiers
+
+
+def test_an_unrecognised_tier_refuses_rather_than_inheriting_the_strong_silence():
+    """A third tier arriving by typo must not be read as the strong one. If the
+    gate cannot say WHAT was verified, nothing was."""
+    v = _decide(verification_tier="merge_tree")      # underscore, not hyphen
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("UNKNOWN VERIFICATION TIER" in r for r in v.reasons), v.reasons
+    assert "VERIFICATION_TIER_UNKNOWN" in v.disclosures
+
+
+def test_the_fallback_tier_discloses_the_cross_check_it_did_not_perform():
+    v = _decide(verification_tier=V.TIER_REBASE_REPLAY, git_version="2.34.1",
+                tier_reason="git 2.34.1 does not support `merge-tree --write-tree`")
+    assert v.ok is True, v.reasons          # PAIRED: a clean candidate still lands
+    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in v.disclosures
+    assert "VERIFICATION_TIER_REBASE_REPLAY" in v.disclosures
+    # NAMES THE VERSION FOUND AND THE VERSION NEEDED, so the refusal/disclosure
+    # is actionable rather than just true.
+    prose = " ".join(v.notes)
+    assert "2.34.1" in prose and V.MERGE_TREE_MIN_VERSION in prose, prose
+
+
+def test_the_strong_tier_records_that_the_cross_check_was_performed():
+    """The other side of the disclosure. Without this the fallback's code could
+    be emitted unconditionally and nothing would notice."""
+    v = _decide()
+    assert v.ok is True
+    assert "SQUASH_VS_REBASE_CROSS_CHECK_PERFORMED" in v.disclosures
+    assert "VERIFICATION_TIER_MERGE_TREE" in v.disclosures
+    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" not in v.disclosures
+
+
+def test_the_fallback_still_refuses_a_new_failure_this_branch_owns():
+    """The decision-level half of the paired guard. A FALLBACK THAT PASSES
+    EVERYTHING IS WORSE THAN A GATE THAT REFUSES EVERYTHING."""
+    v = _decide(verification_tier=V.TIER_REBASE_REPLAY,
+                delta=_delta(new_failures=["m::t"]))
+    assert v.ok is False
+    assert any("NEW FAILURE" in r for r in v.reasons), v.reasons
+
+
+def test_the_fallback_still_refuses_when_the_replay_itself_conflicted():
+    """The fallback adopts the replay as the tree under test ONLY when the replay
+    succeeded. A conflicted rebase leaves it empty and must still refuse as
+    UNMEASURABLE — the fallback trades away a cross-check, never fail-closed."""
+    v = _decide(verification_tier=V.TIER_REBASE_REPLAY,
+                rebase_status="conflict", expected_tree="")
+    assert v.ok is False and v.unmeasurable is True
+    assert any("REBASE CONFLICT" in r for r in v.reasons), v.reasons
+    assert any("COULD NOT BE COMPUTED" in r for r in v.reasons), v.reasons
+    # The refusal still says which tier could not answer.
+    assert "VERIFICATION_TIER_REBASE_REPLAY" in v.disclosures
+
+
+@pytest.mark.parametrize("over,expected_ok", [
+    ({}, True),
+    ({"delta": _delta(new_failures=["m::t"])}, False),
+    ({"delta": _delta(silenced=["m::t"])}, False),
+    ({"rebase_status": "conflict"}, False),
+    ({"verified_tree": OTHER_TREE}, False),
+    ({"truncated": True}, False),
+    ({"dropped_files": ("programs/tests/test_x.py",)}, False),
+    ({"land": V.parse_land_log(_GOOD_LOG.replace("PASS  repo hygiene gates",
+                                                 "FAIL  repo hygiene gates"))},
+     False),
+])
+def test_the_tier_reports_what_it_checked_and_never_changes_the_answer(
+        over, expected_ok):
+    """THE PROPERTY THAT MAKES THE FALLBACK SAFE, stated as an assertion.
+
+    For every fact the verdict turns on, BOTH tiers reach the SAME answer. The
+    degraded tier is allowed to say what it could not check; it is not allowed to
+    excuse anything it did check. If this ever fails, the fallback has become a
+    way to land something the strong tier refuses."""
+    strong = _decide(verification_tier=V.TIER_MERGE_TREE, **over)
+    weak = _decide(verification_tier=V.TIER_REBASE_REPLAY, **over)
+    assert strong.ok is expected_ok, strong.reasons
+    assert weak.ok is strong.ok, (weak.reasons, strong.reasons)
+    assert weak.reasons == strong.reasons, (weak.reasons, strong.reasons)
+
+
+# ------------------------------------------------------ the record, both tiers
+
+
+def test_the_cli_record_tells_the_two_tiers_apart_machine_readably(tmp_path):
+    """DISCLOSED IN PROSE IS NOT ENOUGH. A downstream reader keys on these."""
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+                  extra=("--verification-tier", V.TIER_REBASE_REPLAY,
+                         "--git-version", "2.34.1"))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verdict"] == "LAND_OK"
+    assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
+    assert doc["tier_degraded"] is True
+    assert doc["squash_vs_rebase_cross_check"] == "NOT_PERFORMED"
+    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in doc["disclosures"]
+    assert doc["git_version"] == "2.34.1"
+    assert doc["git_version_required_for_merge_tree"] == V.MERGE_TREE_MIN_VERSION
+    # ...and PRINTED, with the same codes, so a terminal and a program are told
+    # the same thing.
+    assert "DISCLOSE  SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in r.stdout
+    assert f"[tier {V.TIER_REBASE_REPLAY}]" in r.stdout
+
+
+def test_the_cli_record_marks_the_strong_tier_as_not_degraded(tmp_path):
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verification_tier"] == V.TIER_MERGE_TREE
+    assert doc["tier_degraded"] is False
+    assert doc["squash_vs_rebase_cross_check"] == "PERFORMED"
+
+
+def test_the_cli_refuses_an_unrecognised_tier_as_unmeasurable(tmp_path):
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+                  extra=("--verification-tier", "whatever"))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["verdict"] == "REFUSE"
+    assert doc["tier_degraded"] is True
+
+
+# ------------------------------------------- the detection, on THIS host
+
+
+def test_the_tier_the_script_picks_matches_this_hosts_real_capability(
+        sandbox, tmp_path):
+    """THE VERSION-DETECTION BRANCH ITSELF, measured rather than assumed.
+
+    The capability is probed independently here — the same question, asked
+    without the script — and the tier the script recorded must agree. On a git
+    >= 2.38 host this asserts the strong path was taken; on 2.34.1 it asserts the
+    fallback was, which is the whole reason this branch exists. Either way the
+    detection is exercised where the gate actually runs."""
+    r, doc = _verify(sandbox, "innocuous_green", tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    expected = (V.TIER_MERGE_TREE if _host_has_write_tree(sandbox)
+                else V.TIER_REBASE_REPLAY)
+    assert doc["verification_tier"] == expected, r.stdout
+    assert doc["tier_degraded"] is (expected != V.TIER_MERGE_TREE)
+    # The version is NAMED whichever tier ran, so a record can be read later
+    # without knowing which host produced it.
+    assert doc["git_version"], doc
+    assert doc["git_version_required_for_merge_tree"] == V.MERGE_TREE_MIN_VERSION
+
+
+def test_a_host_without_merge_tree_names_the_version_found_and_needed(
+        sandbox, tmp_path):
+    """What the reviewer asked a refusal to say, kept as a DISCLOSURE instead:
+    the version found and the version needed, both named."""
+    r, doc = _verify(sandbox, "innocuous_green", tmp_path, env_extra=_FALLBACK)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
+    assert V.MERGE_TREE_MIN_VERSION in " ".join(doc["notes"])
+    assert "merge-tree capability ABSENT" in r.stdout or \
+        "GATEKEEPER_FORCE_REBASE_REPLAY" in doc["tier_reason"], r.stdout
+
+
+# ------------------------------- THE PAIRED GUARD, end to end, UNDER THE FALLBACK
+
+
+def test_end_to_end_the_fallback_still_refuses_an_innocuous_diff_that_leaves_a_test_red(
+        sandbox, tmp_path):
+    """NON-NEGOTIABLE, and the reason the fallback is allowed to exist at all.
+
+    THE SAME negative control the strong tier is measured on — #1019's case that
+    got through five times, an ordinary source edit with no test file in its diff
+    that leaves the suite red — re-run with the strong path forced off. **A
+    fallback that passes everything is worse than a gate that refuses
+    everything.** This runs on every host, not only on the ones that need the
+    fallback."""
+    r, doc = _verify(sandbox, "innocuous_red", tmp_path, env_extra=_FALLBACK)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["verdict"] == "REFUSE"
+    assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
+    assert doc["delta"]["new_failures"], doc
+    # REFUSED, AND HONEST ABOUT WHY IT COULD REFUSE: the weakness is on the
+    # record even when the verdict is a refusal.
+    assert "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED" in doc["disclosures"]
+
+
+def test_end_to_end_the_fallback_allows_a_known_good_branch(sandbox, tmp_path):
+    """The other arm. If this failed the fallback would be the same ban with a
+    new name; if the arm above failed it would be a rubber stamp. Both are
+    required for either to mean anything."""
+    r, doc = _verify(sandbox, "innocuous_green", tmp_path, env_extra=_FALLBACK)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verdict"] == "LAND_OK"
+    assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
+    assert doc["tier_degraded"] is True
+    assert doc["delta"]["new_failures"] == []
+    assert doc["land"]["stamped_sha"], "the landing gates never stamped"
+    assert doc["base_land"] is not None, "arm A2 never ran under the fallback"
+    # The tree under test IS the replay — that identity is the disclosed loss.
+    assert doc["expected_tree"] == doc["replayed_tree"] == doc["verified_tree"]
+
+
+def test_end_to_end_the_fallback_still_refuses_a_conflicting_branch(
+        sandbox, tmp_path):
+    """FAIL-CLOSED IS NOT WHAT WAS TRADED AWAY. With no merge-tree to compute and
+    a replay that conflicted, there is no tree under test at all, and the
+    fallback must refuse as unmeasurable rather than adopt the head's own tree —
+    which is what is checked out in the worktree at that moment."""
+    r, doc = _verify(sandbox, "conflicting", tmp_path, env_extra=_FALLBACK)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["verdict"] == "REFUSE"
+    assert doc["unmeasurable"] is True
+    assert doc["rebase_status"] == "conflict"
+    assert doc["expected_tree"] == "", \
+        "a conflicted replay was adopted as the tree under test"
+    assert doc["land"]["pass"] == [], "the suites ran on a tree nobody will merge"
+
+
+def test_the_forced_fallback_is_the_only_thing_the_env_var_can_do(sandbox, tmp_path):
+    """The test hook must not be a bypass. Forcing the fallback selects the
+    WEAKER, DISCLOSED tier and nothing else — the same branch is refused with it
+    set as without it, so there is no value of it that turns a refusal into a
+    pass."""
+    natural, doc_n = _verify(sandbox, "innocuous_red", tmp_path)
+    forced, doc_f = _verify(sandbox, "innocuous_red", tmp_path,
+                            env_extra=_FALLBACK)
+    assert natural.returncode == forced.returncode == 1
+    assert doc_n["verdict"] == doc_f["verdict"] == "REFUSE"
+    assert doc_f["verification_tier"] == V.TIER_REBASE_REPLAY
