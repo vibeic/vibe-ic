@@ -256,6 +256,85 @@ def test_903_two_blocks_of_one_project_receive_different_flavours(tmp_path):
         assert core[role] == f"famx_{ordn}_{role}", core
 
 
+def _split_corner_family():
+    """A family shipping ONE CORNER ENTRY-POINT LIB PER FLAVOUR, the shape #903
+    was measured on: two pure aggregators with the SAME section vocabulary,
+    each `.include`ing its own device sub-lib."""
+    files = {}
+    for dom in (_an_elevated_component(), _an_ordinary_component()):
+        files[f"/pdk/corner_{dom}.lib"] = "\n".join(
+            [f"* corner entry-point lib ({dom})"]
+            + [line for sec in _SECTIONS
+               for line in (f".lib {sec}",
+                            f'.include "famx_{dom}_dev.lib"', ".endl")]) + "\n"
+        files[f"/pdk/famx_{dom}_dev.lib"] = "".join(
+            f".subckt famx_{dom}_{r} d g s b w=1 l=1\n.ends\n" for r in _ROLES)
+    res = {"available": True, "source": "container_installed",
+           "family": "famx", "target": "famx (synthetic)",
+           # elevated FIRST, the arrangement the alphabet also favours
+           "spice_libs": [f"/pdk/corner_{_an_elevated_component()}.lib",
+                          f"/pdk/corner_{_an_ordinary_component()}.lib"]}
+    return res, files
+
+
+def test_903_the_lib_the_deck_loads_follows_the_block_that_elected_it():
+    """THE LOAD-BEARING half of the cascade. Binding a device is only half a
+    deck: the emitted `.lib <path> <section>` line has to point at the lib that
+    DEFINES it, or ngspice aborts with `unknown subckt` — the issue's own
+    second failure mode. So a per-block flavour is only real if the primary lib
+    and `deck_loads` move with it, per block."""
+    res, files = _split_corner_family()
+    elev, ordn = _an_elevated_component(), _an_ordinary_component()
+    for dom, want in ((APDC.VoltageDomain(volts=1.8, elevated=True), elev),
+                      (APDC.VoltageDomain(volts=1.2, elevated=False), ordn)):
+        ctx = APDC.custom_family_context(res, _ROLES,
+                                         lambda p: files.get(p), dom)
+        assert ctx.status == "OK", ctx.work_items
+        assert ctx.device_map == {r: f"famx_{want}_{r}" for r in _ROLES}, \
+            ctx.device_map
+        assert ctx.model_lib == f"/pdk/corner_{want}.lib", ctx.model_lib
+        loaded = {lib for lib, _sec in ctx.deck_loads}
+        assert loaded == {f"/pdk/corner_{want}.lib"}, ctx.deck_loads
+        for lib, sec in ctx.deck_loads:
+            assert sec in _SECTIONS, (lib, sec)
+
+
+def test_903_the_primary_lib_tie_break_cannot_become_a_flavour_decision():
+    """#903's first claim also names the OTHER ordering: `custom_family_context`
+    picks `max(readable, key=_primary_rank)`, and `max` returns the first
+    maximal element, so a genuine tie is still broken by the order the libs
+    happen to arrive in. That is UNCHANGED and deliberately so — it is a choice
+    between two libs, not between two flavours.
+
+    Measured here rather than asserted about: two libs defining the SAME device
+    set tie on every rank component, the elected LIB does follow arrival order,
+    and the elected DEVICE does NOT — because the flavour election runs over
+    the cross-lib union first and the re-derivation over the tied lib's closure
+    reaches the same answer. If that ever stops being true this goes red, which
+    is the point of writing it down instead of trusting it."""
+    devices = _family(_an_elevated_component(), _an_ordinary_component())
+    files = {"/pdk/one.lib": _lib(devices), "/pdk/two.lib": _lib(devices)}
+    seen_libs, seen_devices = set(), set()
+    for order in (["/pdk/one.lib", "/pdk/two.lib"],
+                  ["/pdk/two.lib", "/pdk/one.lib"]):
+        res = {"available": True, "source": "container_installed",
+               "family": "famx", "target": "famx", "spice_libs": order}
+        for dom in (None, APDC.VoltageDomain(volts=1.8, elevated=True)):
+            ctx = APDC.custom_family_context(res, _ROLES,
+                                             lambda p: files.get(p), dom)
+            seen_libs.add(ctx.model_lib)
+            seen_devices.add((dom, tuple(sorted(ctx.device_map.items()))))
+    assert len(seen_libs) == 2, (
+        "the fixture no longer produces the tie it is about", seen_libs)
+    per_domain = {}
+    for dom, devmap in seen_devices:
+        per_domain.setdefault(dom, set()).add(devmap)
+    for dom, maps in per_domain.items():
+        assert len(maps) == 1, (
+            "the lib tie-break moved the elected FLAVOUR, which is the thing "
+            f"#903 is about: domain={dom} maps={maps}")
+
+
 def test_903_the_resolver_takes_the_domain_the_design_states(tmp_path):
     """The seam must be a parameter a call site can actually POPULATE — the
     complaint `RETIRED_PRIMARY_STRATEGIES` records about dead seams. So the
