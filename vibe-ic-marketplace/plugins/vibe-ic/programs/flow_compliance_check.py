@@ -10609,6 +10609,91 @@ def _published_tree_advisory(project: Path) -> Optional[str]:
     return None
 
 
+def completion_audit_verdict(
+    overall: str,
+    invoked_gate_count: Optional[int],
+    step_counts: Dict[str, int],
+    structural_fail_lines: List[str],
+    step_artifact_fail_lines: List[str],
+    registered_gate_count: Optional[int] = None,
+) -> Tuple[str, Optional[str]]:
+    """The `verdict` this run is ENTITLED to write into the completion audit.
+
+    vibe-ic#1001 — A VERDICT ABOUT A DESIGN THIS AUDIT NEVER READ.
+
+    `verdict` in `phase23_completion_audit.json` is the ONE field every
+    content-reading consumer keys on: `step_internal_fail_bubble_up_check`
+    walks `reports/**/*.json` for exactly this key and reads a `FAIL` in it as
+    "a step-internal gate found a defect in this design".
+
+    MEASURED — point `flow_compliance_check.py` at a directory holding no
+    design at all (`mkdir empty && flow_compliance_check.py . --phase all`) and
+    it writes:
+
+        verdict              FAIL
+        invoked_gate_count   0        (of 246 registered)
+        step_counts          PASS 0 / FAIL 0 / MISSING 40 / SKIPPED-COND 23
+        structural_fail_lines      []
+        step_artifact_fail_lines   []
+
+    while its own stdout says, in this file's words, ``GATE EXECUTION LEDGER:
+    no program gate was invoked in this run`` and tags the run
+    ``[whole run: no_steps_tree]``. Not one gate ran. Not one step was decided
+    in either direction. There is no finding — and the artefact asserts one
+    anyway, to every consumer that reads the key.
+
+    That is not hypothetical: one PUBLISHED run carries this artefact
+    byte-comparably (same `step_counts`, `invoked_gate_count: 0`), because the
+    audit was invoked from inside the run's own `reports/` directory, so its
+    project root resolved to a tree with no design in it. The SAME plugin
+    version re-audited the real root 3.5 seconds later and recorded PASS. The
+    stale wrong-root copy is one of the reds the Step-36 gate raises.
+
+    So: a run that measured NOTHING REFUSES. It says `INSUFFICIENT_DATA` —
+    this repo's existing token for "the tool did not run / the data is
+    missing", already in `step_internal_fail_bubble_up_check._NEUTRAL_VERDICTS`
+    — and DISCLOSES the denominator that made it refuse, per the house rule
+    that a verdict must say how much it looked at.
+
+    WHAT THIS DELIBERATELY DOES NOT DO — it does not touch `overall`. The exit
+    code, the stdout verdict line, the step table and every other consumer keep
+    the FAIL, so the run stays red and nothing can route around it. Refusing is
+    not passing; the only thing that changes is that a report stops CLAIMING a
+    step-internal finding it never made.
+
+    §4.05 NO-LEAK — this is a guard-RELAXING change, so the predicate is
+    conjunctive and every conjunct removes a way it could wave through a real
+    finding. ONE gate invoked, ONE step decided in EITHER direction, or ONE
+    structural / step-artifact failure line, and the FAIL stands unchanged. It
+    fires only when the numerator is empty on all four axes at once.
+
+    `invoked_gate_count is None` (a stage-3/4 invocation where the umbrella did
+    not run) is NOT zero-proof and deliberately keeps the FAIL: `None` means
+    "not asked", and only a measured 0 is evidence that nothing answered.
+
+    Returns (verdict, refusal_reason); refusal_reason is None whenever the
+    verdict is `overall` unchanged. chip-AGNOSTIC — reads counts, not designs.
+    """
+    if overall != "FAIL":
+        return overall, None
+    if invoked_gate_count != 0:
+        return overall, None
+    if (step_counts or {}).get("PASS", 0) or (step_counts or {}).get("FAIL", 0):
+        return overall, None
+    if structural_fail_lines or step_artifact_fail_lines:
+        return overall, None
+    denom = ("of an unresolved registered-gate population"
+             if registered_gate_count is None
+             else f"of {registered_gate_count} registered")
+    return "INSUFFICIENT_DATA", (
+        f"REFUSED, not FAILED: 0 gate(s) {denom} were invoked and 0 step(s) "
+        f"were decided (PASS 0 / FAIL 0), with no structural and no "
+        f"step-artifact failure line. Nothing about this design was measured, "
+        f"so this audit has no step-internal finding to report and does not "
+        f"claim one. The run's own status is UNCHANGED and still {overall} — "
+        f"refusing is not passing.")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("project_dir", nargs="?",
@@ -12359,6 +12444,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                                       "id": None,
                                       "unusable_reason": str(_exc)}
 
+        # vibe-ic#1001 — the verdict this audit is ENTITLED to write. Computed
+        # here rather than inline in the dict so the decision is one testable
+        # function; `overall` itself is untouched, so the exit code and every
+        # other consumer keep the FAIL. See `completion_audit_verdict`.
+        _audit_verdict, _audit_refusal = completion_audit_verdict(
+            overall,
+            structural_invoked_count,
+            counts,
+            structural_fail_lines,
+            step_artifact_fail_lines,
+            structural_registered_count,
+        )
+
         from datetime import datetime, timezone
         audit = {
             "schema_version": 1,
@@ -12375,7 +12473,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             "phase": args.phase,
             "strict_structural": bool(args.strict_structural),
             "strict_step_artifacts": bool(args.strict_step_artifacts),
-            "verdict": overall,
+            "verdict": _audit_verdict,
+            # Non-null ONLY when this audit refused (`INSUFFICIENT_DATA`): the
+            # denominator that made it refuse, so the refusal can be read
+            # without re-deriving it from the counts below.
+            "verdict_refusal_reason": _audit_refusal,
+            # The run's own status, ALWAYS — unchanged by the refusal above and
+            # identical to the exit code and the stdout verdict line. A refusal
+            # narrows what the audit CLAIMS, never what the run IS.
+            "run_status": overall,
             "gates": per_gate,
             "failed_gates": failed_gate_names,
             "failed_gate_count": len(failed_gate_names),
