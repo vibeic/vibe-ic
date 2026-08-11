@@ -114,13 +114,60 @@ def test_skip_when_not_applicable(tmp_path):
 # ── F1 VACUOUS_DFT_ASSERTION — negative control pair ─────────────────
 
 def test_NEGATIVE_CONTROL_fail_dft_asserted_but_no_chains(tmp_path):
-    """GUTTED: L20 claims DFT exists and carries zero chains."""
+    """GUTTED: an EXTRACTED L20 claims DFT exists and carries zero chains.
+
+    `extraction_status` is what makes the field values the DESIGN's claim
+    rather than the emitter's skeleton — see the twin below, which is the same
+    fixture WITHOUT it. Through vibe-ic#1003 this fixture omitted the status
+    and still reddened, which is why 48 of 106 published roots reddened on a
+    literal 50 protocol emitters write unconditionally.
+    """
     doc = json.loads(json.dumps(_SKELETON))
+    doc["extraction_status"] = "EXTRACTED"
     doc["fields"]["dft_present"] = True
     doc["fields"]["jtag_tap"] = {"tck": "tck", "tms": "tms"}
     r = _run(_mk(tmp_path, l20=doc))
     assert r.returncode == 1, r.stdout + r.stderr
     assert "VACUOUS_DFT_ASSERTION" in r.stdout
+
+
+def test_an_UNEXTRACTED_layer_asserts_nothing_with_the_same_fields(tmp_path):
+    """The twin of the test above, differing ONLY in extraction_status.
+
+    vibe-ic#1003. `dft_present` on a layer that has never been extracted is the
+    producer's field default, not a design's assertion — the identical rule
+    `dft_atpg_coverage_check` already applies to this same field in the
+    opposite direction ("its `dft_present: false` is the emitter's field
+    default, not a decision").
+
+    The pair is the whole argument: same fields, same empty `scan_chains[]`,
+    one bit of provenance apart, and only the one whose layer says its content
+    is real is held to the consumer contract.
+    """
+    doc = json.loads(json.dumps(_SKELETON))
+    doc["fields"]["dft_present"] = True
+    doc["fields"]["jtag_tap"] = {"tck": "tck", "tms": "tms"}
+    r = _run(_mk(tmp_path, l20=doc))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS_DFT_ASSERTION" not in r.stdout, r.stdout
+
+
+def test_a_producer_default_string_is_not_an_assertion_either(tmp_path):
+    """The exact corpus value: `dft_present: "partial"` on a skeleton.
+
+    54 of the 106 tracked L20 documents carry this string, written
+    unconditionally by 50 protocol emitters, every one of them beside an
+    enumerated NON-scan test surface. It is a true statement about a protocol
+    that has in-band test facilities and no scan chain; it is not a claim that
+    a scan topology exists.
+    """
+    doc = json.loads(json.dumps(_SKELETON))
+    doc["fields"]["dft_present"] = "partial"
+    doc["fields"]["in_band_test_facilities"] = [
+        {"name": "link error counter", "purpose": "run-time observability"}]
+    r = _run(_mk(tmp_path, l20=doc))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS_DFT_ASSERTION" not in r.stdout, r.stdout
 
 
 def test_POSITIVE_CONTROL_pass_dft_asserted_with_typed_chain(tmp_path):
@@ -146,10 +193,37 @@ def test_NEGATIVE_CONTROL_fail_chain_missing_reconcilable_fields(tmp_path):
         assert field in r.stdout
 
 
-def test_extraction_claimed_with_empty_chains_fails(tmp_path):
-    """A layer claiming EXTRACTED is held to the consumer contract."""
+def test_extraction_that_ran_and_found_nothing_is_not_a_vacuous_claim(tmp_path):
+    """RAN-AND-EMPTY is a design saying "I need no DFT", not a broken claim.
+
+    vibe-ic#1003, second half of the same disjunct. `is_extraction_claimed`
+    used to count as an assertion ON ITS OWN, so a layer that ran extraction
+    and honestly recorded nothing — the ONE state that is a real statement of
+    absence — was reported as making a claim it could not back.
+    `l_doc_consumer_contract.is_extraction_claimed.__doc__` names the three
+    producer states and says only RAN-AND-EMPTY means "I need no DFT".
+
+    The layer still has no immunity: the test above shows the same EXTRACTED
+    status DOES redden the moment the layer asserts a DFT field beside an empty
+    `scan_chains[]`.
+    """
     doc = json.loads(json.dumps(_SKELETON))
     doc["extraction_status"] = "EXTRACTED"
+    r = _run(_mk(tmp_path, l20=doc))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "VACUOUS_DFT_ASSERTION" not in r.stdout, r.stdout
+
+
+def test_a_chain_is_typed_even_on_an_unextracted_layer(tmp_path):
+    """CONTENT IS SELF-EVIDENCING — the extraction guard must not reach it.
+
+    The guard added for vibe-ic#1003 covers the assertion-WITHOUT-content arm
+    only. A `scan_chains[]` somebody actually wrote is a topology regardless of
+    provenance, and it is still held to the typing contract. If this ever goes
+    green, the guard has been widened past the defect it was measured for.
+    """
+    doc = json.loads(json.dumps(_SKELETON))
+    doc["fields"]["scan_chains"] = [{"name": "chain_0"}]
     r = _run(_mk(tmp_path, l20=doc))
     assert r.returncode == 1, r.stdout + r.stderr
     assert "VACUOUS_DFT_ASSERTION" in r.stdout
@@ -270,3 +344,84 @@ def test_writes_machine_readable_report(tmp_path):
     data = json.loads(rpt.read_text())
     assert data["verdict"] == "FAIL"
     assert data["blocking_findings"][0]["evidence"]
+
+
+# ── the cascade into the Step-36 bubble-up gate (vibe-ic#1003) ────────
+#
+# This gate WRITES `reports/phase1/<gate>.json` unconditionally, and
+# `step_internal_fail_bubble_up_check` (Step 36, BLOCKING) scans
+# `reports/**/*.json` for `verdict`. So an ADVISORY finding from this gate
+# arrives at the step that signs off as a BLOCKING one, which is a declaration
+# being overridden by a side effect. The tests below DRIVE both gates rather
+# than asserting the coupling in prose.
+
+_BUBBLE = (Path(__file__).resolve().parent.parent
+           / "step_internal_fail_bubble_up_check.py")
+
+
+def _bubble(project: Path) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(_BUBBLE), str(project)],
+                          capture_output=True, text=True)
+
+
+def _clean_project_with_a_real_report(tmp_path):
+    """A project the bubble-up gate examines and passes.
+
+    The PASS report is load-bearing: it gives that gate a real denominator, so
+    rc 0 means "examined and clean" rather than its rc 2 refusal — otherwise
+    the before/after below would compare two refusals.
+    """
+    proj = _mk(tmp_path, l20=_SKELETON, docs={"spec.txt": _DFT_REQUIREMENT_DOC})
+    rp = proj / "reports" / "phase2"
+    rp.mkdir(parents=True, exist_ok=True)
+    (rp / "some_step.json").write_text(json.dumps({"verdict": "PASS"}),
+                                       encoding="utf-8")
+    return proj
+
+
+def test_the_cascade_is_real_when_the_report_declares_nothing(tmp_path):
+    """CONTROL for the fix: the default still cascades, exactly as today.
+
+    `--verdict-mode` defaults to BLOCKS so no existing caller changes
+    behaviour. This test is what proves the fix below is measuring the flag and
+    not measuring some unrelated drift in either gate.
+    """
+    proj = _clean_project_with_a_real_report(tmp_path)
+    before = _bubble(proj)
+    assert before.returncode == 0, before.stdout + before.stderr
+
+    gate = _run(proj)
+    assert gate.returncode == 1, gate.stdout + gate.stderr
+
+    after = _bubble(proj)
+    assert after.returncode == 1, after.stdout + after.stderr
+    assert ("l20_dft_scan_topology_actionable_check"
+            in after.stdout + after.stderr)
+
+
+def test_declaring_ADVISES_removes_the_cascade(tmp_path):
+    """A finding the flow wired ADVISORY must not redden the blocking step.
+
+    `verdict_mode: ADVISES` is the repo's own convention, already honoured by
+    `step_internal_fail_bubble_up_check` and parsed by
+    `flow_gate_enforcement_audit`. Nothing new is invented here; this gate
+    joins the gates that already speak it.
+    """
+    proj = _clean_project_with_a_real_report(tmp_path)
+    before = _bubble(proj)
+    assert before.returncode == 0, before.stdout + before.stderr
+
+    gate = subprocess.run(
+        [sys.executable, str(PROG), str(proj), "--verdict-mode", "ADVISES"],
+        capture_output=True, text=True)
+    # the FINDING is unchanged — only its declared enforcement mode moved
+    assert gate.returncode == 1, gate.stdout + gate.stderr
+
+    rpt = (proj / "reports" / "phase1"
+           / "l20_dft_scan_topology_actionable_check.json")
+    data = json.loads(rpt.read_text())
+    assert data["verdict"] == "FAIL"
+    assert data["verdict_mode"] == "ADVISES"
+
+    after = _bubble(proj)
+    assert after.returncode == 0, after.stdout + after.stderr
