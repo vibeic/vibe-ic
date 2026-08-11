@@ -919,6 +919,57 @@ def audit_project_gates(programs_dir: Path, timeout: int = 120,
     return ("FAIL" if findings else "PASS"), findings, stats
 
 
+# ---------------------------------------------------------------------------
+# THE ROLL-UP MUST NOT RENAME WHAT IT COUNTS (vibe-ic#972)
+#
+# Both verdict lines below used to report `len(findings)` under ONE sentence
+# describing ONE kind. MEASURED on the CI population: a run whose only finding
+# was a `GATE_UNRUNNABLE` — a gate that could not be launched at all, so nothing
+# was ever known about its disclosure — printed
+#
+#     [FAIL] 1 gate(s) of 50 probed (74 declared) answer PASS over an empty tree
+#            without disclosing it.
+#
+# "could not be driven" and "answered PASS without disclosing" are different
+# facts with different remedies, and the second is a claim about an output that
+# in this case never existed. The line also NAMED NO GATE, so the one sentence a
+# reader sees carried neither the right kind nor the subject.
+#
+# The kinds are DISCOVERED from the findings, never listed here: a kind added to
+# `audit_ci` or `audit_project_gates` arrives in this roll-up already reported.
+# Every kind names its gates, so the headline is actionable on its own.
+_KIND_HEADLINE = {
+    "PASS_WITHOUT_DENOMINATOR":
+        "answered PASS over an empty tree without disclosing it",
+    "GATE_UNRUNNABLE":
+        "could not be driven at all — nothing is known about their disclosure",
+    "PASS_ON_A_PROJECT_THAT_IS_NOT_THERE":
+        "answered rc 0 for a path that does not exist, without disclosing it",
+    "STALE_INVENTORY_ENTRY":
+        "are on the known-silent inventory but no longer match it",
+    "STALE_UNDRIVEABLE_ENTRY":
+        "are on the undriveable list but can now be driven",
+}
+
+
+def summarise_findings(findings: List[Dict]) -> List[str]:
+    """One line PER KIND, each naming its gates. Kinds come from the data.
+
+    A kind with no entry in `_KIND_HEADLINE` is still reported — under its own
+    name rather than under somebody else's sentence, which is the whole point.
+    """
+    by_kind: Dict[str, List[str]] = {}
+    for f in findings:
+        by_kind.setdefault(str(f.get("kind", "UNCLASSIFIED")), []).append(
+            str(f.get("gate", "(unnamed)")))
+    lines: List[str] = []
+    for kind in sorted(by_kind):
+        gates = sorted(by_kind[kind])
+        what = _KIND_HEADLINE.get(kind, f"are reported as {kind}")
+        lines.append(f"  {len(gates)} {kind}: {what} — {', '.join(gates)}")
+    return lines
+
+
 def _print_inventory(stats: Dict) -> None:
     """The inventory IS this check's denominator, so it is printed on every
     run — passing or failing. A count nobody sees until something breaks is
@@ -996,8 +1047,11 @@ def _main_project_population(a) -> int:
     _print_inventory(stats)
 
     if findings:
-        print(f"[FAIL] {len(findings)} disclosure finding(s) over "
-              f"{stats['gates_probed']} gate(s).", file=sys.stderr)
+        for line in summarise_findings(findings):
+            print(line, file=sys.stderr)
+        print(f"[FAIL] {len(findings)} finding(s) over "
+              f"{stats['gates_probed']} gate(s), by kind above.",
+              file=sys.stderr)
         return 1
     print(f"[PASS] every rc-0 gate of {stats['gates_probed']} either discloses "
           f"what it examined or is on the dated inventory above.",
@@ -1061,9 +1115,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"  [NOT DRIVEN] {label} — {why}", file=sys.stderr)
 
     if findings:
-        print(f"[FAIL] {len(findings)} gate(s) of {res.probed} probed "
-              f"({res.declared} declared) answer PASS over an empty tree "
-              f"without disclosing it.", file=sys.stderr)
+        for line in summarise_findings(findings):
+            print(line, file=sys.stderr)
+        print(f"[FAIL] {len(findings)} finding(s) over {res.probed} probed CI "
+              f"gate(s) of {res.declared} declared, by kind above.",
+              file=sys.stderr)
         return 1
     print(f"[PASS] all {res.probed} probed CI gate(s) of {res.declared} "
           f"declared disclose what they examined (probed against an empty "
