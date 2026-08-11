@@ -210,8 +210,23 @@ class TestDriftIsDetected:
             capture_output=True, text=True)
         assert ok.returncode == 0, ok.stderr
 
-        page.write_text(page.read_text().replace(
-            '<div class="n">31</div>', '<div class="n">63</div>'))
+        # The edit must be DERIVED from the measurement, not typed. Hardcoding
+        # the then-current headline ("31") made this a no-op the moment the
+        # corpus moved: the string was simply absent, the page was unmodified,
+        # and --check passed for the one reason this test exists to reject.
+        # `moves_today` is the headline the flattering edit would target, and
+        # `steps` is the flattering value (every cell moving).
+        flattered = report["steps"]
+        assert report["moves_today"] != flattered, (
+            "moves_today already equals the total, so this mutation cannot "
+            "flatter the headline and would prove nothing")
+        before = page.read_text()
+        after = before.replace(f'<div class="n">{report["moves_today"]}</div>',
+                               f'<div class="n">{flattered}</div>')
+        assert after != before, (
+            "the rendered page does not carry the moves_today headline, so the "
+            "mutation this test relies on did not happen")
+        page.write_text(after)
         drifted = subprocess.run(
             [sys.executable, str(TOOLS / "gen_flow_gate_d9_section.py"),
              "--reality", str(reality), "--page", str(page), "--check"],
