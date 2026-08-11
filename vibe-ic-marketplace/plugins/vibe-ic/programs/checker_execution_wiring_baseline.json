@@ -31,7 +31,6 @@
     "rtl_signal_name_semantic_check.py",
     "rtl_unit_test_coverage_check.py",
     "skill_doc_section_present_check.py",
-    "spec_rtl_port_fidelity_check.py",
     "synth_wrapper_check.py",
     "verilator_timing_fallback_check.py",
     "waiver_growth_check.py"
@@ -64,7 +63,6 @@
     "rtl_signal_name_semantic_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only rtl, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "rtl_unit_test_coverage_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "skill_doc_section_present_check.py": "rc=2 SKIPs / refuses without its input — [--json JSON]",
-    "spec_rtl_port_fidelity_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "synth_wrapper_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only nothing, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
     "verilator_timing_fallback_check.py": "rc=2 SKIPs / refuses without its input — --tb-top TB_TOP --dut-name DUT_NAME",
     "waiver_growth_check.py": "unwired for lack of a CALLER, not for lack of an input — requires only project_dir, which a real run always has. The previous note said it 'skips without its input', which describes running it bare from a shell; that is not a state the flow is ever in (vibe-ic#659).",
