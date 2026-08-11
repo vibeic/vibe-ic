@@ -258,10 +258,15 @@ def test_903_the_two_flavour_vocabularies_are_held_to_each_other():
     avoid = A3._ROLE_AVOID
     assert avoid, "a3 declares no avoid vocabulary to check against"
     plain = "famx_nmos_zz"
-    base = APDC.device_flavour_rank(plain)[:2]
+    # the FLAVOUR half of the key, sliced the way the program itself slices it
+    # (`APDC.FLAVOUR_KEY_WIDTH`) rather than at a width retyped here — the key
+    # grew a component when the per-block half landed and a hard-coded slice
+    # would have gone quietly blind to the rating instead of red.
+    width = APDC.FLAVOUR_KEY_WIDTH
+    base = APDC.device_flavour_rank(plain)[:width]
     for token in avoid:
         marked = "famx_nmos_" + str(token).strip("_")
-        got = APDC.device_flavour_rank(marked)[:2]
+        got = APDC.device_flavour_rank(marked)[:width]
         assert got > base, (
             f"a3 declares `{token}` a flavour to avoid, but the deck-context "
             f"ranker treats `{marked}` as no worse than `{plain}`: "
@@ -352,14 +357,25 @@ def test_903_guard_a_mos_like_subckt_with_too_few_terminals_is_still_skipped():
 # ── the half that is NOT fixed ─────────────────────────────────────────────
 
 def test_903_the_per_block_half_is_declared_unfixed():
-    """The record CLAIMS the election cannot differ per block. This asserts the
-    claim is TRUE — `resolve_pdk_context` really does take no block argument —
-    so the disclosure cannot outlive the limitation it describes. When a
-    domain->block binding is added, this test must be changed deliberately,
-    together with the sentence it verifies."""
+    """CHANGED DELIBERATELY when the per-block half landed — the version of this
+    test that shipped with 792e428a6 asserted `resolve_pdk_context` takes NO
+    domain argument, and said in its own docstring that it must be rewritten
+    together with the sentence it verifies when a domain->block binding is
+    added. It has been. See
+    `test_issue903_per_block_voltage_domain.py` for the binding itself.
+
+    What remains true, and is what this now holds: a design that states NO
+    voltage domain has nothing to scope an election to, so it still gets ONE
+    flavour for every block — and the record still SAYS so, in those terms.
+    A "fix" that silently invented a domain for such a design turns this red."""
     params = set(inspect.signature(A3.resolve_pdk_context).parameters)
-    assert not (params & {"block", "block_name", "domain",
-                          "voltage_domain"}), params
-    note = (_split_family_ctx().as_json().get("device_election") or {}
-            ).get("chip_global_note") or ""
+    assert "domain" in params, (
+        "the per-block half is landed; `resolve_pdk_context` must take the "
+        f"domain the design states: {params}")
+    ctx = _split_family_ctx()                      # no domain passed
+    election = ctx.as_json().get("device_election") or {}
+    assert election.get("domain") is None, election.get("domain")
+    assert election.get("domain_scope") == APDC.DOMAIN_SCOPE_CHIP_GLOBAL, (
+        election.get("domain_scope"))
+    note = election.get("chip_global_note") or ""
     assert "no block can differ" in note, note
