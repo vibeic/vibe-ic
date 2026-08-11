@@ -338,13 +338,38 @@ def test_the_upstream_comparison_still_happens_and_is_dated(tmp_path):
 
 def test_the_report_never_returns_a_failing_code(tmp_path):
     """The invariant that makes it safe to wire anywhere: whatever the registry
-    says, this path cannot be the reason a landing fails."""
+    says, this path cannot be the reason a landing fails.
+
+    `rc in (0, 2)` ALONE IS NOT A GUARD (vibe-ic#969). argparse exits 2 on an
+    unrecognised argument, so this assertion passed unchanged against a tree
+    where `--report-upstream` does not exist at all — it could not tell "the
+    report degraded honestly to NOT CHECKED" from "the feature is absent", and
+    it was one of six tests passing in both arms of #927's own control. The
+    discriminator is whether the REPORT RAN, and its header line is printed
+    before any registry call, so it is present in every honest outcome.
+
+    `--json` is covered too: it is the flag #927 advertises for this half, the
+    old guard never passed it, and it is the one input that broke the
+    invariant. The exhaustive version — every un-writable destination, plus an
+    exception from a place nobody guarded — lives in
+    `test_issue969_970_report_half_is_as_safe_as_it_claims.py`.
+    """
     for env_extra in ({_ENV_KEY: "99.99.99"}, {_ENV_KEY: "0.0.1"}):
         env = dict(os.environ, **env_extra)
-        cp = subprocess.run(
-            [sys.executable, str(_PROG), "--report-upstream", "--require-remote"],
-            cwd=str(_REPO), capture_output=True, text=True, env=env)
-        assert cp.returncode in (0, 2), (env_extra, cp.returncode, cp.stdout)
+        for extra in ([],
+                      ["--json", str(tmp_path / "no" / "such" / "dir" / "r.json")]):
+            cp = subprocess.run(
+                [sys.executable, str(_PROG), "--report-upstream",
+                 "--require-remote", *extra],
+                cwd=str(_REPO), capture_output=True, text=True, env=env)
+            assert cp.returncode in (0, 2), (env_extra, extra, cp.returncode,
+                                             cp.stdout + cp.stderr)
+            assert "unrecognized arguments" not in cp.stderr, (
+                "this program has no --report-upstream, and rc 2 from argparse "
+                "is being read as a clean degrade", cp.stderr)
+            assert "vibeic_eda_upstream_report" in cp.stdout, (
+                "the report never ran", extra, cp.stdout, cp.stderr)
+            assert "Traceback" not in cp.stderr, (extra, cp.stderr)
 
 
 def test_an_unreachable_registry_reports_NOT_CHECKED_not_a_pass():
