@@ -304,9 +304,9 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
 
-**504 cells: 453 ENFORCED, 28 ENFORCED-CONTRADICTED, 11 WAIVED, 12 NA.**
+**504 cells: 453 ENFORCED, 29 ENFORCED-CONTRADICTED, 11 WAIVED, 11 NA.**
 
-The 28 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 453: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+The 29 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 453: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
 **What these 504 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
 
@@ -316,7 +316,7 @@ The 28 CONTRADICTED cells are configured as enforcing while their own predicate 
 * **45** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
 * **392** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
 
-The 11 WAIVED and 12 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
+The 11 WAIVED and 11 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
 
 | dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |
 |-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------:|---:|
@@ -324,11 +324,11 @@ The 11 WAIVED and 12 NA cells are not enforcing anything and enter none of those
 | 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 58 | 2 | 2 | 1 |
 | 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 34 | 19 | 3 | 7 |
 | 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 62 | 1 | 0 | 0 |
-| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 61 | 0 | 1 | 1 |
+| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 61 | 1 | 1 | 0 |
 | 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 1 | 0 |
 | 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 52 | 6 | 4 | 1 |
 | 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 16 | 45 | 0 | 0 | 0 | 2 |
-| **total** | | **16** | **45** | **392** | **28** | **11** | **12** |
+| **total** | | **16** | **45** | **392** | **29** | **11** | **11** |
 
 Regenerate (never edit this block by hand, and never quote it without re-running):
 
