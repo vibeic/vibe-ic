@@ -12,9 +12,9 @@ This tree holds converged evidence AND runs that did not converge, and the folde
 | classification | cells |
 |---|---|
 | CONVERGED EVIDENCE | 4 |
-| RETAINED FAILURE | 13 |
-| UNAUDITED RECORD | 11 |
-| **total** | **28** |
+| RETAINED FAILURE | 5 |
+| UNAUDITED RECORD | 5 |
+| **total** | **14** |
 
 ## CONVERGED EVIDENCE — 4
 
@@ -27,43 +27,29 @@ The cell's own audit artefact reads PASS or PASS_WITH_WAIVERS. This is what the 
 | `spm/v1.9.96_gf180mcuD` | PASS_WITH_WAIVERS | P34 F0 M0 W4 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged (plugin v1.9.96, re-published 2026-08-07 after the v1.9.96 ciel-content-addressed-hash DFT/ATPG fix and the earlier v1.9.94 metal-fill fixes); real-GDS witness superseding v1.5.66_gf180mcuD — see notes below for what that supersession does and does not carry forward |
 | `u_hawaii_adc/v1.9.86_sky130A` | PASS | P8 F0 M0 W0 | — | UNSTATED | yes | the converged analog cell, re-verified on plugin 1.9.86 (PASS=8 FAIL=0 MISSING=0, gate exit 0). No phase2/ because it runs the A-track, not the digital RTL->synth stage; the structure gate records that as a disclosed note rather than a silent pass. Its phase3/analog/ tree (hardmacro layouts, per-block specs) is published here rather than left in a pre-canonical run tree at the IC level — the publisher used to drop it, so the folder that IS the evidence did not contain it. |
 
-## RETAINED FAILURE — 13
+## RETAINED FAILURE — 5
 
 An audit ran and did NOT converge. These are retained on purpose: deleting them would make "we never ran this" and "we ran it, it failed, and we kept the record" the same state. Read the step counts — they separate one failed gate from a flow that never reached the steps at all.
 
 | cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
 |---|---|---|---|---|---|---|
-| `caravel_user_project` | FAIL | P28 F2 M0 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | provenance-defect row in #413; inventory member of the #419/#426 layout-artefact audits |
 | `caravel_user_project/v1.9.43_sky130A` | FAIL | P5 F10 M10 W2 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | PASS_WITH_WAIVERS | yes | corpus member — walked by both blocking corpus gates |
-| `edge_llm_accel` | FAIL | P22 F8 M4 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | COMPLETE | yes | read directly by tests under programs/tests/ (its input/docs/ and its published-cell layer gates); provenance-defect row in #413 |
-| `edge_llm_matmul_accel` | FAIL | P5 F3 M28 W2 | phase2=FAIL | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
-| `ibex` | FAIL | P2 F7 M27 W0 | vibe_ic=FAIL; phase2=FAIL | — | yes | the richest L4 in the repo (48 registers / 84 fields); the cell #377 (OPEN) tested its SystemRDL export hypothesis against, via phase1/systemrdl/ |
-| `opentitan_aes` | FAIL | P3 F6 M25 W1 | vibe_ic=FAIL; phase2=FAIL | — | yes | reproduction for #405 — its input/docs/ drives the real walker that returned null for everything; also read directly by tests under programs/tests/ |
-| `sha256` | FAIL | P5 F5 M25 W0 | vibe_ic=FAIL; phase2=FAIL | UNSTATED | yes | reproduction for #186 (OPEN) part 1 — the 9th top-level port reproduces on this cell |
+| `edge_llm_accel` | FAIL | P22 F8 M4 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | — | yes | read directly by tests under programs/tests/ (its input/docs/ and its published-cell layer gates); provenance-defect row in #413 |
 | `sha256/clean_run_v1422_20260715` | FAIL | P29 F3 M3 W1 | vibe_ic=FAIL; phase3=FAIL; phase2=FAIL | UNSTATED | yes | evidence artefact itemised by #140/#145/#146/#147 (closed) and #413; NOT named by #235 itself — see note below the tables |
 | `sha256/clean_run_v1427_20260715` | FAIL | P33 F3 M0 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
-| `subservient` | FAIL | P24 F9 M0 W1 | vibe_ic=FAIL; phase3=FAIL; phase2=FAIL | PRODUCTION-READY | yes | reproduction for #414 (5 near-fabricated HASH_MISMATCHes) and #417 (a shipped formal PASS citing a log that does not exist); also read directly by tests under programs/tests/ |
-| `u_hawaii_adc` | FAIL | P0 F0 M9 W1 | vibe_ic=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | — | yes | corpus member — walked by both blocking corpus gates |
-| `u_hawaii_adc/clean_run_v1422_20260715` | FAIL | P3 F2 M8 W8 | vibe_ic=FAIL; phase2=FAIL | UNSTATED | yes | reproduction for #141/#142/#143 — their repro commands name this path verbatim |
 | `u_hawaii_adc/v1.9.86_sky130A/reports` | FAIL | P0 F0 M40 W0 | — | — | no | record only |
 
-## UNAUDITED RECORD — 11
+## UNAUDITED RECORD — 5
 
 No `reports/audit/phase23_completion_audit.json` exists for this cell, so there is NO machine verdict either way. A claim made in its RESULT.md is unbacked by an audit artefact; that is not the same as a failure, and it is not a pass.
 
 | cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
 |---|---|---|---|---|---|---|
-| `caravel_user_project/clean_run_v1432_commercial` | — | — | — | UNSTATED | no | record only |
-| `caravel_user_project/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `ibex/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `ibex/rerun_v1346` | — | — | — | UNSTATED | no | the only CRYPTOGRAPHIC MATCH in the #426 layout-artefact recovery audit |
-| `opentitan_aes/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1335` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1431_commercial_pdk` | — | — | — | UNSTATED | no | record only |
+| `ibex` | — | — | — | — | yes | the richest L4 in the repo (48 registers / 84 fields); the cell #377 (OPEN) tested its SystemRDL export hypothesis against, via phase1/systemrdl/ |
+| `opentitan_aes` | — | — | — | — | yes | reproduction for #405 — its input/docs/ drives the real walker that returned null for everything; also read directly by tests under programs/tests/ |
+| `sha256` | — | — | — | — | yes | reproduction for #186 (OPEN) part 1 — the 9th top-level port reproduces on this cell |
 | `sha256/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1461_0223` | — | — | — | UNSTATED | no | reproduction for #210 (sign-off corner declared with no record) and the #316 UNTYPED_STEPS discovery |
-| `subservient/clean_run_v1335` | — | — | — | UNSTATED | no | record only |
-| `subservient/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
+| `u_hawaii_adc` | — | — | vibe_ic=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | — | yes | corpus member — walked by both blocking corpus gates |
 
 ## Reading the columns
 
