@@ -147,7 +147,7 @@ def test_an_empty_tree_is_refused_as_a_zero_denominator_and_refused_fast(
 
     t0 = time.monotonic()
     r = subprocess.run(argv, cwd=str(scratch), capture_output=True, text=True,
-                       timeout=180)
+                       timeout=60)
     elapsed = time.monotonic() - t0
     out = (r.stdout or "") + (r.stderr or "")
 
