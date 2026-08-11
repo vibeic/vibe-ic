@@ -17,8 +17,12 @@ Covers:
     capture commands and the documented JSON shape.
   * run_si_signoff_timing_aware public API + CLI exit codes (advisory => exit 0
     by default; --strict opt-in exits 1 only when the HIGH watch-list is set).
-  * REAL-SPEF validation against a routed sky130 SPEF in the repo (skipped if
-    not present in this checkout).
+  * REAL-SPEF validation against PUBLISHED extraction output — a routed SPEF
+    under `benchmark-data/`, selected by `_real_data` on a checked publication
+    rule rather than by a filesystem walk, and DISCLOSED by path in the run's
+    `real-data provenance` summary. If nothing published qualifies, these skip
+    with a reason naming which absence occurred; they never fall back to a
+    fixture (vibe-ic#1037).
 
 The synthetic SPEF fixtures use the exact OpenROAD SPEF dialect (C_UNIT PF,
 ':' delimiter, *NAME_MAP, *D_NET/*CONN/*CAP/*RES/*END) so the parser is
@@ -530,8 +534,11 @@ def test_cli_emit_tcl(tmp_path):
 
 
 # ===========================================================================
-# REAL-SPEF validation (skips cleanly if the routed SPEF is not in this
-# checkout — the worktree may not carry benchmark_phase1/*)
+# REAL-SPEF validation. The premise is PUBLISHED extraction output, and the
+# premise is CHECKED (vibe-ic#1037), not assumed from a walk. A skip here names
+# which absence occurred — "the real-data anchor was withdrawn" and "nothing of
+# this kind was ever published here" are different facts and do not share a
+# message.
 # ===========================================================================
 def test_real_spef_parses_and_attributes(record_property):
     sel = _real_spef()
