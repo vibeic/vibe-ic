@@ -246,15 +246,24 @@ def test_rewriting_the_reason_renews_it(tmp_path):
     assert rc == 0
 
 
-def test_naming_the_population_keeps_an_unchanged_reason_alive(tmp_path):
-    """THE PAIRED ARM, the other way out. Sometimes the old sentence IS still
-    the right one — the new waiver is more of exactly the same deferral. The
-    author keeps the words and states the scope, and the gate accepts it:
-    saying which waivers a reason covers is a stronger statement than
-    paraphrasing it, not a weaker one.
+def test_naming_the_population_does_not_make_an_old_sentence_new(tmp_path):
+    """INVERTED BY vibe-ic#968, deliberately and on the record.
 
-    Demanding a fresh paraphrase here and nothing else would teach operators to
-    reword rather than to re-scope, which is the failure this fix is for."""
+    This test shipped with #946 asserting the opposite — `growth_justified` is
+    True, rc 0 — under the reasoning that "keeping the words and re-declaring
+    which waivers they cover is a decision the author made in the data". It is
+    not a decision. The scope list is a PURE FUNCTION of waivers.json: the
+    twenty lines of `_derive_scope` in `test_issue968_948_growth_population.py`
+    produce it from the entries' own published names, never opening the
+    baseline and never reading `growth_rationale`. The identical argument that
+    retired the count as a binding of prose to a population (#945) retires the
+    list.
+
+    So the same fixture is kept, byte for byte, and the assertions are turned
+    over: an unrenewed sentence is refused through BOTH spellings. What the
+    list still buys is asserted in its own tests — it is the only thing that
+    says WHICH waivers a reason covers, and it is what a document should carry
+    where renewal is undecidable."""
     proj = _project(
         tmp_path,
         current=dict(_steps("alpha", "beta"),
@@ -265,10 +274,37 @@ def test_naming_the_population_keeps_an_unchanged_reason_alive(tmp_path):
     )
     rc, report = _run(proj)
 
+    # The scope itself is perfect — that is the point. It is not the defect.
     assert report["summary"]["growth_rationale_covers"] == ["alpha", "beta"]
     assert report["summary"]["growth_rationale_scope"] == {
         "unnamed": [], "unmatched": [], "ambiguous": []}
+    # And the sentence beside it still predates the waiver it authorises.
+    assert report["summary"]["growth_rationale_unrenewed"] is True
+    assert report["summary"]["growth_justified"] is False
+    assert "GROWTH_RATIONALE_UNRENEWED" in _categories(report)
+    assert "GROWTH_RATIONALE_SCOPE_MISMATCH" not in _categories(report)
+    assert rc == 1
+
+
+def test_rewriting_the_reason_renews_the_population_spelling_too(tmp_path):
+    """THE PAIRED ARM for the inversion above. The list spelling is not being
+    banned — it is being held to the same standard as the count. The author who
+    names the population AND writes the reason for it passes, and the finding
+    text that used to recommend the list as an escape now recommends this."""
+    proj = _project(
+        tmp_path,
+        current=dict(_steps("alpha", "beta"),
+                     growth_rationale=_RENEWED,
+                     growth_rationale_covers=["alpha", "beta"]),
+        baseline=dict(_steps("alpha"),
+                      growth_rationale=_REASON, growth_rationale_covers=1),
+    )
+    rc, report = _run(proj)
+
+    assert report["summary"]["growth_rationale_unrenewed"] is False
+    assert report["summary"]["growth_rationale_renewal"] == "renewed"
     assert report["summary"]["growth_justified"] is True
+    assert not _categories(report) & _GROWTH_FINDINGS
     assert rc == 0
 
 
