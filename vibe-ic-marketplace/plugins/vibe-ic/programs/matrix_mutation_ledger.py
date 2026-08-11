@@ -270,6 +270,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+try:  # the shared isolation harness (#996) — see its module docstring
+    import _run_isolation as _iso
+except ImportError:  # pragma: no cover - exercised by the packaged layout
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _run_isolation as _iso
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - yaml is a hard dep of the plugin
@@ -2086,12 +2092,18 @@ def _copy_published_run(src: Path, dst: Path) -> None:
 
     MEASURED, not reasoned: an earlier draft of this replay used ``cp -al`` and
     left eight JSON artefacts of the published run modified in the worktree
-    (`git status` named them; they were restored from HEAD). The rule in the
-    brief — never mutate a published run in place — is enforced here by copying
-    for real, and checked afterwards by :func:`_stat_manifest`.
+    (`git status` named them; they were restored from HEAD).
+
+    DELEGATED to :func:`_run_isolation.copy_run` (#996). That module is where
+    this hazard is now stated once, because three separate pieces of work hit
+    it on one day and each wrote its own careful treatment. The behaviour is
+    unchanged in the direction that matters — a real copy, refused if it shares
+    an inode with the source — and STRENGTHENED in one: the shared helper
+    compares the ``(dev, ino)`` sets of the whole tree, where the check below
+    looks at ``st_nlink`` of the single edited artefact. A published run whose
+    OTHER files were hardlinked would have passed here and does not there.
     """
-    subprocess.run(["cp", "-a", str(src), str(dst)],
-                   check=True, capture_output=True)
+    _iso.copy_run(src, dst)
 
 
 def _stat_manifest(root: Path) -> Dict[str, Tuple[int, int]]:
@@ -2101,16 +2113,15 @@ def _stat_manifest(root: Path) -> Dict[str, Tuple[int, int]]:
     no reads) and it catches the failure that actually happened: a gate program
     truncating a shared inode. A pure "did we copy correctly" assertion would
     not have — the copy was correct; the SHARING was the defect.
+
+    DELEGATED to :func:`_run_isolation.snapshot` (#996), narrowed back to the
+    ``(size, mtime_ns)`` pair this module compares so the equality below keeps
+    meaning exactly what it did. The shared snapshot also carries ``dev``/``ino``,
+    which are deliberately dropped here: an inode number changing under an
+    unchanged size and mtime is a re-copy, not a perturbation of the content
+    this replay is measuring.
     """
-    out: Dict[str, Tuple[int, int]] = {}
-    for p in root.rglob("*"):
-        if p.is_file():
-            try:
-                st = p.stat()
-            except OSError:  # pragma: no cover - races on a shared tree
-                continue
-            out[str(p.relative_to(root))] = (st.st_size, st.st_mtime_ns)
-    return out
+    return {k: (s.size, s.mtime_ns) for k, s in _iso.snapshot(root).items()}
 
 
 def replay_artefact(mut: ArtefactMutation, timeout: int = 900) -> ReplayResult:
