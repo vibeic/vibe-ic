@@ -34,7 +34,8 @@ WHAT CLOSES (2), AND WHY IT IS THE EXISTING SEAM AND NOT A NEW ONE
 The design already STATES its domains — a block's A1 `spec.json` carries its
 supply and terminal voltages WITH UNITS, because every other consumer needs
 them. `analog_a3_netlist_emit.block_voltage_domains` discovers the domain from
-those rows (by `units`, never by a list of blessed spec NAMES) and hands it
+those rows (by the row's UNIT, never by a list of blessed spec NAMES — both
+key spellings this pipeline produces are read) and hands it
 down as `analog_pdk_deck_context.VoltageDomain`; the ranking stays the deck
 resolver's own property, so no call site chooses a POLICY — only which DOMAIN
 it is asking about. `elevated` is RELATIVE to the design's lowest declared
@@ -56,11 +57,16 @@ WHAT IS STILL TRUE ABOUT #903 AFTER THIS — asserted, not hoped
     `test_903_a_candidate_carrying_no_signal_at_all_cannot_be_scoped` states
     that limit as an assertion rather than leaving it to be discovered.
 
-THE PAIRED GUARDS (`test_903_guard_*`) pass on BOTH arms on purpose. They are
-what stops the per-block half being bought by breaking the half that was
-already right: a design stating no domain must keep its sane default, a PDK
-with one family per role must be unaffected at every domain, and the authored
-known-family table must not move because someone passed a domain.
+THE PAIRED GUARDS (`test_903_paired_guard_*`) call ONLY API that predates this
+change and pass on BOTH arms on purpose. They are what stops the per-block half
+being bought by breaking the half that was already right: a design stating no
+domain must keep its sane default and keep DISCLOSING that the answer is
+chip-global, a PDK with one family per role must still elect `sole-candidate`
+with nothing rejected, a threshold component must still not read as a voltage
+domain, and an honest NEEDS_NATIVE_TEMPLATE refusal must stay honest.
+`test_903_guard_*` (no `paired_`) guard the NEW behaviour and can only run on
+the fixed arm — they are guards, not controls, and are named apart so nobody
+reads a red one on the unfixed arm as a failed control.
 
 chip-AGNOSTIC: every family and device name is synthetic (`famx`). The
 voltage-domain name COMPONENTS are generic device-class vocabulary — the same
@@ -347,7 +353,7 @@ def test_903_the_resolver_takes_the_domain_the_design_states(tmp_path):
     domains = A3.block_voltage_domains(project, _entries(blocks))
     assert domains["a"].volts == 1.8 and domains["a"].elevated is True
     assert domains["b"].volts == 1.2 and domains["b"].elevated is False
-    assert domains["_core_volts"] == 1.2
+    assert domains[A3.CORE_VOLTS_KEY] == 1.2
 
 
 def test_903_the_domain_is_read_from_units_not_from_a_blessed_spec_name():
