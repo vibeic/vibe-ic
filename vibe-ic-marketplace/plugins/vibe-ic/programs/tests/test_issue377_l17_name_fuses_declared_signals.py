@@ -87,9 +87,18 @@ def test_corpus_population_of_the_rail_is_pinned():
     untruncated evidence of the projects under that cap."""
     _need_corpus()
     rows = _fusion_rows()
-    assert len(rows) == 23, [p.name for p, _ in rows]
-    assert sum(len(e) for _, e in rows) == 62
-    assert sum(len(x["members_lost"]) for _, e in rows for x in e) == 131
+    # 2026-08-12, vibe-ic#1028 — 23/62/131 -> 21/60/127, ATTRIBUTED not typed.
+    # The three counts were re-run over the 16 withdrawn roots alone on the
+    # pre-withdrawal tree, so each subtraction is measured on both sides:
+    #     projects      23  -  2  =  21      withdrawn contributors: mdio, sgmii
+    #     entries       62  -  2  =  60
+    #     members_lost 131  -  4  = 127
+    # All three reconcile exactly and name the same two roots, which is what
+    # shows nothing moved for any reason other than the withdrawal — a rail
+    # that had genuinely changed shape could not keep all three identities.
+    assert len(rows) == 21, [p.name for p, _ in rows]
+    assert sum(len(e) for _, e in rows) == 60
+    assert sum(len(x["members_lost"]) for _, e in rows for x in e) == 127
 
 
 def test_the_reported_total_is_the_honest_count_not_the_n_minus_one_one():
@@ -105,8 +114,10 @@ def test_the_reported_total_is_the_honest_count_not_the_n_minus_one_one():
     total = sum(ev["declared_signals_without_a_port"] for _, ev in rows)
     recomputed = sum(len(x["members_lost"]) for _, ev in rows
                      for x in ev["entries"])
-    assert total == recomputed == 131, (total, recomputed)
-    assert sum(ev["entries_reported"] for _, ev in rows) == 62
+    # vibe-ic#1028: 131 -> 127 and 62 -> 60, same attributed subtraction as
+    # `test_corpus_population_of_the_rail_is_pinned` above.
+    assert total == recomputed == 127, (total, recomputed)
+    assert sum(ev["entries_reported"] for _, ev in rows) == 60
 
 
 def test_the_rail_fires_only_where_the_producer_writes_prose_names():
@@ -162,7 +173,8 @@ def test_the_fused_port_is_really_in_the_consumers_output():
             for lost in e["members_lost"]:
                 assert c._sanitize_id(lost) not in emitted, (proj, e, lost)
             checked += 1
-    assert checked == 62, checked
+    # vibe-ic#1028: 62 -> 60, the two entries lost with roots mdio and sgmii.
+    assert checked == 60, checked
 
 
 def test_e1_is_still_the_narrow_rail_the_remeasurement_left_it_as():
