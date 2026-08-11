@@ -379,7 +379,28 @@ def _published_run_trees(corpus: Path) -> List[Path]:
         published = _published_tree.published_paths(corpus)
     except Exception:                               # noqa: BLE001
         published = None
-    on_disk = sorted(p for p in corpus.glob("*/clean_run_*") if p.is_dir())
+    # DEPTH-INSENSITIVE (vibe-ic#1025). This was `corpus.glob("*/clean_run_*")`,
+    # which only ever matched run trees exactly ONE level below the corpus root.
+    # The docstring's own example passes `benchmark-data/ic`, where that works;
+    # passing `benchmark-data` — the obvious thing, and what the repo's other
+    # instruments take — matched `benchmark-data/ic/clean_run_*`, which does not
+    # exist, and the sweep reported reaching NOTHING. MEASURED at the commit this
+    # was fixed on:
+    #
+    #     --corpus benchmark-data      ->  0 tree(s),  VACUOUS_PASS, rc 2
+    #     --corpus benchmark-data/ic   -> 13 tree(s), 3 with reports/,
+    #                                     5 unacknowledged step-internal FAIL(s)
+    #
+    # Same repo, same commit, same question — the answer depended on how many
+    # path components the caller happened to type. A sweep whose population is a
+    # function of the caller's phrasing is not a sweep, and the VACUOUS_PASS it
+    # returned was honest about examining nothing while giving no hint that
+    # anything was reachable at all.
+    #
+    # `rglob` makes the two invocations agree by construction rather than by the
+    # caller remembering the right depth. The NAME pattern is unchanged: the
+    # population is still `clean_run_*` trees and this commit does not widen it.
+    on_disk = sorted(p for p in corpus.rglob("clean_run_*") if p.is_dir())
     if published is None:
         return on_disk
     root = corpus.resolve()

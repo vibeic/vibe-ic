@@ -219,3 +219,47 @@ def test_a_missing_project_dir_is_rc_2_not_rc_0(tmp_path):
     was clean" — the absence-renders-as-a-pass shape this repo keeps finding."""
     M = _cli()
     assert M.main([str(tmp_path / "no-such-project")]) == 2
+
+
+# ── the corpus sweep must not depend on how the caller spells the root (#1025) ──
+def _corpus_tree(root):
+    """Two ICs, each with a `clean_run_*` tree, at the depth the real corpus uses:
+    <corpus>/ic/<IC>/clean_run_*/ — i.e. TWO levels below the corpus root, not one."""
+    for ic, n in (("alpha", "clean_run_v1_20200101"), ("beta", "clean_run_v2_20200101")):
+        d = root / "ic" / ic / n / "reports"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "some_gate.json").write_text('{"verdict": "PASS"}', encoding="utf-8")
+    return root
+
+
+def test_the_sweep_reaches_the_same_trees_however_the_root_is_spelled(tmp_path):
+    """vibe-ic#1025. `_published_run_trees` globbed `*/clean_run_*` — run trees
+    exactly ONE level below the root. Real trees sit TWO levels down
+    (`ic/<IC>/clean_run_*`), so `--corpus benchmark-data` reached NOTHING while
+    `--corpus benchmark-data/ic` reached everything.
+
+    MEASURED on the real corpus at the commit this was fixed:
+
+        --corpus benchmark-data     ->  0 tree(s), VACUOUS_PASS, rc 2
+        --corpus benchmark-data/ic  -> 13 tree(s), 5 unacknowledged FAIL(s)
+
+    Same repo, same commit, same question; the answer depended on how many path
+    components the caller typed. This asserts the two agree.
+    """
+    import step_internal_fail_bubble_up_check as M
+    root = _corpus_tree(tmp_path / "bd")
+    outer = M._published_run_trees(root)
+    inner = M._published_run_trees(root / "ic")
+    assert len(outer) == 2, [str(p) for p in outer]
+    assert {p.name for p in outer} == {p.name for p in inner}
+
+
+def test_a_narrower_root_still_narrows_the_population(tmp_path):
+    """THE PAIRED GUARD. The fix must not turn the root argument into a no-op:
+    pointing at ONE IC must still sweep only that IC. A depth-insensitive search
+    that ignores where it was pointed would pass the test above and be useless."""
+    import step_internal_fail_bubble_up_check as M
+    root = _corpus_tree(tmp_path / "bd")
+    one = M._published_run_trees(root / "ic" / "alpha")
+    assert len(one) == 1, [str(p) for p in one]
+    assert one[0].name == "clean_run_v1_20200101"
