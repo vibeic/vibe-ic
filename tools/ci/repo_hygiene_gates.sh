@@ -388,8 +388,28 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # `_published_tree` reasoning as the corpus gate at line 408 ("46 vs 17 is
 # exactly the host-dependence `_published_tree` exists to remove from a
 # baseline"), applied to the loop that decides how many gates there ARE.
-while IFS= read -r _def; do
-  [ -n "$_def" ] || continue
+#
+# AND THE DENOMINATOR IS NOW PRINTED (vibe-ic#957). The corpus this loop
+# selects is ONE published cell — `git ls-files` over the glob below returns a
+# single routed DEF — so three gates run, once, over one item. Every one of the
+# three is honest about which cell it examined; the ROLL-UP that counted them
+# among ~74 green gates was not, and a reader took from it that post-route
+# geometry is checked across the published corpus. The count was true and the
+# impression was false.
+#
+# The iteration therefore goes through `gate_dispatch_over`, which measures the
+# expansion and states it — including at 1, and especially at 0, where the loop
+# declares no gate at all and there is nothing else left to notice its absence.
+# Nothing here types the number: a `for` that hand-quoted "1" would be the next
+# hand-maintained fact to drift, and drift is what this file exists to prevent.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO: it does not change the corpus and does
+# not change which gates run. Whether more published cells should carry a
+# `phase3/stage3/pnr/routed.def` is a PUBLISHING decision with a real
+# repository-size cost, and that decision is not a side effect of making the
+# roll-up honest.
+_per_published_cell_gates() {
+  local _def="$1" _cell
   _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
@@ -409,11 +429,16 @@ while IFS= read -r _def; do
   # each, so this is a live verdict over a real denominator.
   run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
     "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
-# `|| true` on the producer: `git ls-files` over a path that matches nothing is
-# not an error here, and under `pipefail` an empty result must not abort a
-# script whose remaining 60 gates have nothing to do with this corpus.
-done < <(git -C "$ROOT" ls-files -- \
-  'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def' 2>/dev/null || true)
+}
+# NO `|| true` ANY MORE, and that is a repair rather than an omission: it used
+# to turn "git could not look" into an empty corpus, which is the vacuous pass
+# this repo removes from gates one at a time. `gate_dispatch_over` keeps the
+# producer's exit status and says so; an empty result is still not an error and
+# still does not abort the ~70 gates that have nothing to do with this corpus.
+gate_dispatch_over "published cells carrying a routed DEF" \
+  _per_published_cell_gates \
+  git -C "$ROOT" ls-files -- \
+    'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def'
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the
