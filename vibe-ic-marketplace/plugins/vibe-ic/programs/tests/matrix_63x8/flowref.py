@@ -28,12 +28,13 @@ Key presence, measured:
     key                 present   non-empty
     gate                  62        62      (absent on P0 only)
     required_outputs      61        61      (absent on FS1 and P0)
-    blocks_on             62        60      (absent on P0; PRESENT-BUT-EMPTY
-                                             on D1 and A1, which are the two
-                                             genuine graph roots)
+    blocks_on             63        61      (present on every step;
+                                             PRESENT-BUT-EMPTY on D1 and A1,
+                                             which are the two genuine graph
+                                             roots)
 
-The 62/61/62 figures in circulation are *presence* counts. ``blocks_on`` is
-non-empty on only **60** steps. Any test that conflates the two will be wrong
+The 62/61/63 figures in circulation are *presence* counts. ``blocks_on`` is
+non-empty on only **61** steps. Any test that conflates the two will be wrong
 about D1 and A1.
 
 Top-level ``total_steps: 44`` counts the numeric steps ONLY. It is NOT
@@ -58,16 +59,16 @@ OR a sim ``*.log`` OR a ``pass.flag``; a ``drc_clean.flag`` OR a ``.lyrdb``).
 The consumer splits on the literal ``" OR "`` (spaces included) and strips each
 alternative — :func:`split_any_of` reproduces exactly that.
 
-Measured entry census (126 entries over 61 steps):
+Measured entry census (133 entries over 61 steps):
 
-    FILE          92   plain relative path, no wildcard, no " OR "
+    FILE          99   plain relative path, no wildcard, no " OR "
     GLOB          12   wildcard, no " OR "   (e.g. ``phase1/generated_docs/L13_*.json``)
     ANY_OF        22   contains " OR " (each alternative may itself be a glob;
                        one entry - step 4 - uses a recursive ``**`` alternative)
     PROGRAM_EXIT   0   *** see below ***
 
 **Contradiction with the brief, reported deliberately**: there is NO
-``program_exit_zero: "<cmd>"`` form anywhere in ``required_outputs``. All 126
+``program_exit_zero: "<cmd>"`` form anywhere in ``required_outputs``. All 133
 entries are plain strings; not one contains the token ``program_exit_zero``.
 That form exists only inside ``gate`` clauses (§3). :data:`PROGRAM_EXIT` is
 still returned by :func:`classify_output` for forward compatibility, but on the
@@ -396,9 +397,15 @@ def required_outputs(step_id: StepId) -> Tuple[str, ...]:
 def blocks_on(step_id: StepId) -> Tuple[StepId, ...]:
     """Raw ``blocks_on`` entries, mixed types, in declaration order.
 
-    Empty tuple both when the key is ABSENT (P0) and when it is declared EMPTY
+    Empty tuple both when the key is ABSENT and when it is declared EMPTY
     (D1, A1). Use :func:`declares_blocks_on` to tell those apart — they mean
     different things: "nobody wrote a dependency list" vs "this is a root".
+
+    The ABSENT case has NO example on the current yaml. P0 was the only step
+    without the key and #929 gave it one, so every step now declares
+    ``blocks_on`` and the two cases are told apart by D1/A1 alone. The
+    distinction is kept because it is a property of the accessor, not of
+    today's yaml — but a reader must not go looking for the absent step.
     """
     return tuple(step_by_id(step_id).get("blocks_on") or ())
 

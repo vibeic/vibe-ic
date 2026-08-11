@@ -183,6 +183,19 @@ RUN
 ``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` is mandatory in this tree (a stray
 ``pytest_ethereum`` plugin otherwise breaks collection).
 
+LIVE, not remembered: 160 blocking clauses over 62 gated steps. This is the
+denominator a reader wants; it moves with the yaml.
+
+The paragraph below is a PINNED RECORD of what was measured while this file
+was built, not a claim about the tree now. It is kept verbatim on purpose:
+re-deriving a dated measurement destroys the only evidence that the decision
+taken then was taken on real numbers (``programs/_derived_corpus_figure.py``,
+"THE THREE HONEST DISPOSITIONS OF A STATED FIGURE"). Read it as history, and
+read the live count above as the denominator. MEASURED while writing this
+note: the flow yaml at the last commit of 2026-07-28 carries 149 blocking
+clauses, not 150, so the pinned figure does not reproduce at that vintage
+either — reported, not silently overwritten.
+
 Measured on 2026-07-27: 150 blocking clauses over the 62 gated steps, 120 of
 them driven to a real FAIL, 30 registered in :data:`UNREDDENED`. Re-measured
 2026-07-28: 121 reddened, 29 registered — the
