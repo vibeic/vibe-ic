@@ -1,7 +1,0 @@
-# Metal-fill / density report — OpenROAD filler_placement
-# (ORGANIC-20260531 Step 33). Tool: openroad.
-# filler instances placed: 0
-# std-cell row utilization (post-fill): 14.0%
-# Note: per-metal-layer CMP density (20-80% rule) is screened by
-# the KLayout met_min_ca_density deck at sign-off DRC; this report
-# records the std-cell row fill achieved by filler_placement.

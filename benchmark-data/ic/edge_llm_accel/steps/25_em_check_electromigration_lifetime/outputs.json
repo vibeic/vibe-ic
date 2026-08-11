@@ -1,8 +1,0 @@
-{
-  "id": "25",
-  "name": "\ud83d\udd01 EM check (electromigration lifetime)",
-  "status": "skipped",
-  "phase": "phase3",
-  "folder": "25_em_check_electromigration_lifetime",
-  "outputs": []
-}

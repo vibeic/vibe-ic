@@ -1,5 +1,0 @@
-{
-  "error": "unsupported pdk: unmapped. Supported: ['gf180', 'sky130', 'ihp-sg13g2'] (or pass --cell-model-path for a custom library)",
-  "netlist_used": "phase2/stage2/synth/netlist.v",
-  "pdk_sniff": "no configured library's cells found in the resolved netlist"
-}

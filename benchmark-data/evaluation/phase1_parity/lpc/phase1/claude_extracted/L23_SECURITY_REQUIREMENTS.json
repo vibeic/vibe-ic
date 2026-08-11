@@ -1,9 +1,0 @@
-{
-  "fields": {
-    "attack_surface": [
-      "Firmware memory cycles expose the BIOS/firmware flash — must be write-protected against unauthorized reprogramming.",
-      "No CRC or authentication on the bus — relies on the trusted physical board interconnect."
-    ],
-    "security_notes": "LPC itself defines no encryption or integrity check; platform security relies on physical access control and firmware write-protect."
-  }
-}

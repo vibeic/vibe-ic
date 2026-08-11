@@ -1,4 +1,0 @@
-scribe_line_layout.gds is FOUNDRY-SUPPLIED (PCM structures + alignment marks) and is NOT generated here (#446). Obtain it from the shuttle/foundry kit and place it beside this note before tapeout.
-# design: clean_run_v1422_20260715
-# design_top: sha256
-# pdk: sky130

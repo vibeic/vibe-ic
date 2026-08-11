@@ -1,7 +1,0 @@
-{
-  "verdict": "SKIPPED-CONDITION",
-  "reason": "no scan_netlist.v (DFT was disclosed-skipped) \u2014 post-DFT optimization has no scan netlist to optimise",
-  "tool_attempted": true,
-  "capability_flag": "cap:post_dft_scan_optimization",
-  "skips_required_output": "phase2/stage2/synth/post_dft_netlist.v"
-}

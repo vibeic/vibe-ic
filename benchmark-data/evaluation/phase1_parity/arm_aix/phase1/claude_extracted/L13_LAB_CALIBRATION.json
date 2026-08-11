@@ -1,7 +1,0 @@
-{
-  "doc_id": "L13",
-  "extraction_source": "claude-opus-4.7-fresh-2026-05-29",
-  "fields": {},
-  "evidence": [],
-  "rationale": "AXI is a digital bus protocol with no analog content, no measurement-based calibration, no lab trim steps. Not applicable."
-}

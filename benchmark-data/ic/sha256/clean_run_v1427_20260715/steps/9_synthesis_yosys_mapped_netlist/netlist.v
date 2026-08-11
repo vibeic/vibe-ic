@@ -1,1 +1,0 @@
-../../phase2/stage2/synth/netlist.v
