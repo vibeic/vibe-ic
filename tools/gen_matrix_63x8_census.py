@@ -87,10 +87,46 @@ this program guards and how many stated population figures it does NOT, in the
 same files, graded by the SAME vocabulary the repo's figure checker uses. The
 unguarded remainder is a real number a reader can act on, not an absence.
 
+IT NOW ANSWERS FOR THE TREE IT IS POINTED AT (vibe-ic#972)
+----------------------------------------------------------
+Every path below used to be resolved from ``__file__`` and from ``__file__``
+alone, so this program answered for its OWN checkout whatever tree the caller
+was asking about. MEASURED on ``origin/main`` at ``6525cf05``, ``--check``
+launched with its cwd inside an EMPTY git repository — no plugin, no flow yaml,
+no matrix package::
+
+    [PASS] 63x8 census fresh: 504 cells over 8 dimensions; ENFORCED own=16 ...
+    real  1m50.203s
+
+504 cells over a directory containing one file. That is a check whose answer
+does not depend on its input, which is the exact class this campaign exists to
+remove, and the 110 seconds were the visible symptom of it:
+``gate_discloses_denominator_check`` drives every CI gate against a scratch tree
+under a 120s bound, so this line sat 8% under the timeout that would have
+reported it as unrunnable.
+
+The subject is now an ARGUMENT — the house wiring for every other gate in
+``tools/ci/repo_hygiene_gates.sh`` (``… _check.py "$ROOT"``) — and it decides
+three different answers, never one:
+
+    the subject IS this script's own checkout   census it (unchanged)
+    the subject carries no matrix suite         ZERO_DENOMINATOR, rc 2, at once
+    the subject is some OTHER checkout          CROSS_TREE refusal, rc 2
+
+The middle one is the house rule (``gate_zero_denominator_refuses_check``): a
+zero denominator REFUSES, it does not pass. The third exists because the census
+imports the dimension modules through ``sys.path`` off ``__file__``: this
+program physically cannot census a different checkout, and saying so is the only
+honest option left — answering with its own numbers is what it used to do.
+
+Omitting the argument keeps the previous default (this script's own repository),
+so a human, the freshness test and the host-independence probe are unaffected.
+
 Run::
 
     python3 tools/gen_matrix_63x8_census.py                 # rewrite the block
     python3 tools/gen_matrix_63x8_census.py --check         # exit 1 on drift
+    python3 tools/gen_matrix_63x8_census.py <root> --check  # …for THAT tree
     python3 tools/gen_matrix_63x8_census.py --check-figures # anchors only (cheap)
     python3 tools/gen_matrix_63x8_census.py --fix-figures   # rewrite the anchors
 """
@@ -115,6 +151,17 @@ README = PLUGIN_ROOT / "programs" / "tests" / "matrix_63x8" / "README.md"
 #: have missed two of the five stale figures above.
 FIGURES_ROOT = PLUGIN_ROOT / "programs" / "tests"
 
+#: Where each of the three roots above sits RELATIVE to a repository root.
+#: Derived from the constants rather than re-typed, so pointing this program at
+#: another tree cannot drift from where it looks in its own (vibe-ic#972).
+PLUGIN_REL = PLUGIN_ROOT.relative_to(REPO_ROOT)
+README_REL = README.relative_to(REPO_ROOT)
+FIGURES_REL = FIGURES_ROOT.relative_to(REPO_ROOT)
+
+#: The matrix package itself — the thing whose cells this program counts. Its
+#: absence is what makes a tree's census denominator ZERO.
+MATRIX_REL = (README.parent).relative_to(REPO_ROOT)
+
 #: Files in FIGURES_ROOT are in the corpus when they SPEAK ABOUT the substrate
 #: these figures come from. Discovered by content, never listed: a typed list
 #: is a promise that nobody will add a document.
@@ -138,6 +185,113 @@ from _derived_corpus_figure import (  # noqa: E402
     population_figures,
     render_anchored,
 )
+
+
+# ============================================================================
+# WHICH TREE IS THIS RUN ABOUT? (vibe-ic#972)
+# ============================================================================
+#: The three answers, as a state rather than a boolean. `OWN` is the only one
+#: that can produce a census; the other two are refusals with different reasons,
+#: and collapsing them would report "this tree has no suite" for a tree that has
+#: one this program simply cannot reach.
+SUBJECT_OWN = "OWN"
+SUBJECT_ZERO_DENOMINATOR = "ZERO_DENOMINATOR"
+SUBJECT_CROSS_TREE = "CROSS_TREE"
+
+
+#: What `_load()` and `census_rows()` ACTUALLY import, stated as the paths that
+#: have to be on disk for a census to be possible at all. Not a guess at the
+#: package's shape and not a naming convention: each entry below is one of the
+#: three import statements in `_load`, written as a path relative to a
+#: repository root. A tree missing any of them cannot produce a cell.
+CENSUS_INPUTS_REL: Tuple[Path, ...] = (
+    MATRIX_REL / "cells.py",            # DIMENSIONS / NAMES / QUESTIONS
+    MATRIX_REL / "substitution.py",     # the ENFORCED split buckets
+    FIGURES_REL / "test_matrix_63x8_coverage.py",   # enforcement_census()
+)
+
+
+def census_denominator(subject: Path) -> Dict[str, int]:
+    """How much matrix suite `subject` carries, DISCOVERED not assumed.
+
+    Every figure here is a count a reader can act on, because the refusal below
+    has to print one: "this tree has no census" and "this program did not look"
+    are the pair #447 is about, and a bare verdict cannot separate them.
+
+    The per-dimension modules are GLOBBED off the coverage meta-test's own
+    neighbour naming rather than listed, so a ninth dimension is counted here by
+    existing. That figure is REPORTED and is not what decides the refusal — the
+    three imports above are, because those are what actually has to load.
+    """
+    matrix = subject / MATRIX_REL
+    figures = subject / FIGURES_REL
+    try:
+        text = (subject / README_REL).read_text(encoding="utf-8",
+                                                errors="replace")
+    except OSError:
+        text = ""
+    return {
+        "census_inputs_present": sum(
+            1 for rel in CENSUS_INPUTS_REL if (subject / rel).is_file()),
+        "census_inputs_required": len(CENSUS_INPUTS_REL),
+        "matrix_package_files": (
+            len([p for p in matrix.rglob("*.py")
+                 if "__pycache__" not in p.parts]) if matrix.is_dir() else 0),
+        "dimension_modules": (
+            len([p for p in figures.glob("test_matrix_d*.py")
+                 if "__pycache__" not in p.parts]) if figures.is_dir() else 0),
+        "generated_census_markers": int(BEGIN in text) + int(END in text),
+        "flow_yaml": int(
+            (subject / PLUGIN_REL / "flow" / "phase1_phase2_phase3.yaml").is_file()),
+    }
+
+
+def classify_subject(subject: Path) -> Tuple[str, Dict[str, int]]:
+    """`(state, denominator)` for the tree this run was pointed at.
+
+    ORDER IS LOAD-BEARING. Emptiness is decided FIRST, so a scratch tree that
+    happens not to be this checkout is reported as carrying no suite — the fact
+    a caller can act on — rather than as an unreachable one.
+    """
+    counts = census_denominator(subject)
+    if (counts["census_inputs_present"] < counts["census_inputs_required"]
+            or counts["generated_census_markers"] < 2):
+        return SUBJECT_ZERO_DENOMINATOR, counts
+    if subject == REPO_ROOT:
+        return SUBJECT_OWN, counts
+    return SUBJECT_CROSS_TREE, counts
+
+
+def subject_refusal_lines(state: str, subject: Path,
+                          counts: Dict[str, int]) -> List[str]:
+    """The refusal, carrying its own denominator on every line."""
+    scope = (f"{counts['census_inputs_present']} of "
+             f"{counts['census_inputs_required']} required census input(s), "
+             f"{counts['dimension_modules']} dimension module(s), "
+             f"{counts['matrix_package_files']} file(s) in the matrix package, "
+             f"{counts['generated_census_markers']} of 2 generated-census "
+             f"marker(s), {counts['flow_yaml']} flow yaml")
+    if state == SUBJECT_ZERO_DENOMINATOR:
+        return [
+            f"ZERO_DENOMINATOR: {subject} carries {scope} — there is no 63x8 "
+            f"suite here to census, so NOTHING was examined and this is NOT a "
+            f"pass. A census rendered over zero cells matches an empty table "
+            f"trivially; the house rule (gate_zero_denominator_refuses_check) "
+            f"is that a zero denominator REFUSES.",
+            f"NOTHING_SCANNED: 0 of 0 cells. Point this program at a checkout "
+            f"that carries {MATRIX_REL}, or omit the argument to census "
+            f"{REPO_ROOT} (this script's own).",
+        ]
+    return [
+        f"CROSS_TREE: {subject} carries {scope}, but this program is "
+        f"{Path(__file__).resolve()} and its census imports the dimension "
+        f"modules through sys.path anchored on {REPO_ROOT}. It cannot census "
+        f"a DIFFERENT checkout, and answering with its own numbers is the "
+        f"defect this refusal exists to remove (vibe-ic#972) — the figures "
+        f"would describe {REPO_ROOT} under a heading naming {subject}.",
+        f"NOTHING_SCANNED: 0 of 0 cells here. Run that tree's own copy "
+        f"instead: python3 {subject / 'tools' / Path(__file__).name} --check",
+    ]
 
 
 def _load():
@@ -646,6 +800,15 @@ def run_figures(args) -> Tuple[int, Dict, List[str]]:
 
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # THE SUBJECT (vibe-ic#972). Optional, and its DEFAULT is the previous
+    # behaviour verbatim — this script's own repository — so nothing that
+    # already worked changes. What changes is that a caller CAN point it
+    # somewhere, and that when it is pointed somewhere it answers about there.
+    ap.add_argument("repo_root", nargs="?", default=None,
+                    help=f"the repository this run is about (default "
+                         f"{REPO_ROOT}, this script's own). A tree carrying no "
+                         f"63x8 suite is refused as a ZERO DENOMINATOR, not "
+                         f"censused as if it were this one")
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if the committed block or any anchored figure "
                          "would change (CI mode)")
@@ -655,17 +818,36 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--fix-figures", action="store_true",
                     help="rewrite every anchored figure in the corpus from the "
                          "live flow yaml, then exit")
-    ap.add_argument("--out", default=str(README),
-                    help=f"README to rewrite (default {README})")
-    ap.add_argument("--figures-root", default=str(FIGURES_ROOT),
+    # These three default to None, not to a path. A path baked in here could
+    # not be told apart from one the caller chose, so `repo_root` would have
+    # been unable to move them — which is how the subject came to be ignored in
+    # the first place. Explicit still wins; absent now follows the subject.
+    ap.add_argument("--out", default=None,
+                    help=f"README to rewrite (default <repo_root>/{README_REL})")
+    ap.add_argument("--figures-root", default=None,
                     help=f"tree swept for anchored figures "
-                         f"(default {FIGURES_ROOT})")
-    ap.add_argument("--root", default=str(PLUGIN_ROOT),
+                         f"(default <repo_root>/{FIGURES_REL})")
+    ap.add_argument("--root", default=None,
                     help=f"plugin root every figure binding is evaluated "
-                         f"against (default {PLUGIN_ROOT})")
+                         f"against (default <repo_root>/{PLUGIN_REL})")
     ap.add_argument("--figures-json",
                     help="write the full coverage report here")
     args = ap.parse_args(argv)
+
+    subject = (Path(args.repo_root).resolve() if args.repo_root else REPO_ROOT)
+    args.out = args.out or str(subject / README_REL)
+    args.figures_root = args.figures_root or str(subject / FIGURES_REL)
+    args.root = args.root or str(subject / PLUGIN_REL)
+
+    # DECIDED BEFORE ANY WORK, and that ordering is half the fix. The 110s this
+    # program spent over an empty tree were spent AFTER it had everything it
+    # needed to know there was nothing there: `run_figures` already refuses an
+    # empty corpus, and `main` ran the two-minute census anyway.
+    state, counts = classify_subject(subject)
+    if state != SUBJECT_OWN:
+        for line in subject_refusal_lines(state, subject, counts):
+            sys.stderr.write(line + "\n")
+        return 2
 
     if args.fix_figures:
         figures_root = Path(args.figures_root).resolve()

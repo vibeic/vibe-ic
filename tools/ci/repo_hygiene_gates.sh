@@ -892,7 +892,17 @@ run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_che
 # population figures in the same files it does not. That remainder is large and
 # is meant to be read, not celebrated — this gate is not, and does not claim to
 # be, a guarantee about every number on the page.
-run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.py" --check
+#
+# IT IS NOW HANDED "$ROOT", like every other gate on this page (vibe-ic#972).
+# This line used to pass NO subject, so the program resolved every path off its
+# own `__file__` and answered for its own checkout whatever tree it was asked
+# about. `gate_discloses_denominator_check` drives this exact declaration
+# against a scratch EMPTY repository, and MEASURED at 6525cf05 it printed
+# `[PASS] 63x8 census fresh: 504 cells over 8 dimensions` — over a directory
+# holding one file — in 1m50.203s, i.e. 8% under the 120s bound that would have
+# reported it as unrunnable. Handed the scratch root it now refuses it as a
+# ZERO DENOMINATOR in 0.03s, which is what that probe was asking for.
+run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.py" "$ROOT" --check
 
 # A call site writes a literal into a parameter that picks between named
 # alternatives, prose argues WHICH WAY, and no test can see the difference.
