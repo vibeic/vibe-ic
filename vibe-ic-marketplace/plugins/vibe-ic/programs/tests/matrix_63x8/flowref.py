@@ -5,36 +5,45 @@ Everything here is recomputed from
 memoised for the process. Nothing in this module reads ``.audit_63x8.json``:
 the audit is history, the yaml is the repo. If a step is added, removed or
 re-gated, every accessor below changes with it — which is precisely what makes
-the 504-cell ledger self-invalidating.
+the 504<!--figure:ledger_cells-->-cell ledger self-invalidating.
 
 ====================================================================
 THE GRAMMAR, AS MEASURED (not as remembered)
 ====================================================================
 Every claim below was checked against the yaml at
-``flow/phase1_phase2_phase3.yaml`` (63 steps) and, where the semantics live in
+``flow/phase1_phase2_phase3.yaml`` (63<!--figure:flow_steps--> steps) and,
+where the semantics live in
 a consumer rather than in the data, against that consumer's source.
 
 --------------------------------------------------------------------
 1. Steps
 --------------------------------------------------------------------
-``yaml.safe_load(...)["steps"]`` is a list of 63 dicts. **Step ids are mixed
-types**: 44 ``int`` (1..44) and 19 ``str`` (``D1``, ``P0``, ``FS1``, ``DT1``
+``yaml.safe_load(...)["steps"]`` is a list of 63<!--figure:flow_steps--> dicts.
+**Step ids are mixed types**: 44<!--figure:flow_steps_int--> ``int`` (1..44)
+and 19<!--figure:flow_steps_str--> ``str`` (``D1``, ``P0``, ``FS1``, ``DT1``
 ``DT2`` ``DT3``, ``A1``-``A9`` minus ``A0``, ``M1``-``M4``). Never assume int;
 never sort them naively. Use :func:`normalize_id` (``str()``) for dict keys and
 :func:`step_ids` for the raw, declaration-ordered tuple.
 
-Key presence, measured:
+Key presence, DERIVED — every digit below is written by
+``tools/gen_matrix_63x8_census.py`` from the yaml, and the ``<!--figure:...-->``
+anchor beside it names the binding that produced it. Do not hand-edit them:
+run ``--fix-figures``, and ``--check`` fails on drift (vibe-ic#961).
 
-    key                 present   non-empty
-    gate                  62        62      (absent on P0 only)
-    required_outputs      61        61      (absent on FS1 and P0)
-    blocks_on             62        60      (absent on P0; PRESENT-BUT-EMPTY
-                                             on D1 and A1, which are the two
-                                             genuine graph roots)
+    gate
+        present on 62<!--figure:gate_declared--> steps,
+        non-empty on 62<!--figure:gated_steps--> (absent on P0 only)
+    required_outputs
+        present on 61<!--figure:required_output_declared--> steps,
+        non-empty on 61<!--figure:required_output_steps--> (absent on FS1 and P0)
+    blocks_on
+        present on 63<!--figure:blocks_on_declared--> steps,
+        non-empty on 61<!--figure:blocks_on_nonempty--> (declared on every step;
+        PRESENT-BUT-EMPTY on D1 and A1, the two genuine graph roots)
 
-The 62/61/62 figures in circulation are *presence* counts. ``blocks_on`` is
-non-empty on only **60** steps. Any test that conflates the two will be wrong
-about D1 and A1.
+The ``present`` column is a PRESENCE count. ``blocks_on`` is non-empty on only
+61<!--figure:blocks_on_nonempty--> steps. Any test that conflates the two will
+be wrong about D1 and A1.
 
 Top-level ``total_steps: 44`` counts the numeric steps ONLY. It is NOT
 ``len(steps)``. Do not assert ``total_steps == 63``.
@@ -58,17 +67,23 @@ OR a sim ``*.log`` OR a ``pass.flag``; a ``drc_clean.flag`` OR a ``.lyrdb``).
 The consumer splits on the literal ``" OR "`` (spaces included) and strips each
 alternative — :func:`split_any_of` reproduces exactly that.
 
-Measured entry census (126 entries over 61 steps):
+Live entry census — 133<!--figure:required_output_entries--> entries over
+61<!--figure:required_output_steps--> steps, classified by
+:func:`classify_output` (digits derived; see the anchor note in §1):
 
-    FILE          92   plain relative path, no wildcard, no " OR "
-    GLOB          12   wildcard, no " OR "   (e.g. ``phase1/generated_docs/L13_*.json``)
-    ANY_OF        22   contains " OR " (each alternative may itself be a glob;
-                       one entry - step 4 - uses a recursive ``**`` alternative)
-    PROGRAM_EXIT   0   *** see below ***
+    FILE          99<!--figure:required_outputs_file-->
+        plain relative path, no wildcard, no " OR "
+    GLOB          12<!--figure:required_outputs_glob-->
+        wildcard, no " OR " (e.g. ``phase1/generated_docs/L13_*.json``)
+    ANY_OF        22<!--figure:required_outputs_any_of-->
+        contains " OR " (each alternative may itself be a glob; one entry —
+        step 4 — uses a recursive ``**`` alternative)
+    PROGRAM_EXIT   0<!--figure:required_outputs_program_exit-->
+        *** see below ***
 
 **Contradiction with the brief, reported deliberately**: there is NO
-``program_exit_zero: "<cmd>"`` form anywhere in ``required_outputs``. All 126
-entries are plain strings; not one contains the token ``program_exit_zero``.
+``program_exit_zero: "<cmd>"`` form anywhere in ``required_outputs``. All
+133<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
 That form exists only inside ``gate`` clauses (§3). :data:`PROGRAM_EXIT` is
 still returned by :func:`classify_output` for forward compatibility, but on the
 current yaml it never fires — a sibling that branches on it is writing dead
@@ -89,23 +104,29 @@ either call the real helper or document that it is using the strict form.
 --------------------------------------------------------------------
 3. ``gate`` grammar
 --------------------------------------------------------------------
-Top-level shapes, measured (62 gates):
+Top-level shapes over 62<!--figure:gated_steps--> gates — how many gates carry
+each key (a gate may carry more than one, so these do not partition):
 
-    {'all_of': [...]}                 44
-    {'program_exit_zero': <str|dict>} 16   (dict form once, on step 16:
-                                            {'command': '...'} )
-    {'files_exist': [...], 'any_of': True}  1   (step 1)
-    {'files_exist': [...]}                  1   (step 12)
+    {'all_of': [...]}                 46<!--figure:gate_shape_all_of-->
+    {'program_exit_zero': <str|dict>} 15<!--figure:gate_shape_program_exit_zero-->
+                                      (dict form once, on step 16:
+                                       {'command': '...'} )
+    {'files_exist': [...]}             1<!--figure:gate_shape_files_exist-->
+                                      (step 1, with 'any_of': True)
 
-Clause shapes inside ``all_of`` (152 clauses):
+Clause census, NORMALISED by :func:`gate_clauses` over every gated step. This
+replaces a hand-counted table of raw ``all_of`` members: the raw table counted
+a different population from the accessor this module tells you to use, so the
+two could not be reconciled by a reader and only one of them was derived.
 
-    {'program_exit_zero': '<cmd>'}                     72  MANDATORY
-    {'optional_program_exit_zero': {'command': '<cmd>',
-                                    'condition_files_exist': [...]}}  29
-    {'files_exist': [...]}                             22  all-of files
-    {'advisory_program_exit_zero': '<cmd>'}            20  NON-BLOCKING
-    {'files_exist': [...], 'any_of': True}              8  any-of files
-    {'json_field_true': {'file':..,'field':..,'expect':..}}  1  (step 39)
+    program_exit_zero          99<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
+    advisory_program_exit_zero 34<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
+    files_exist                32<!--figure:gate_clauses_files_exist-->
+    optional_program_exit_zero 28<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
+    json_field_true             1<!--figure:gate_clauses_json_field_true-->
+    ------------------------------
+    total                     194<!--figure:gate_clauses_total-->, of which
+                              160<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
   * ``program_exit_zero``          — blocking.
@@ -119,23 +140,27 @@ Use :func:`gate_clauses` (typed) rather than re-walking the dict.
 --------------------------------------------------------------------
 4. Program resolution
 --------------------------------------------------------------------
-A gate command's FIRST whitespace token is the program basename. All 127
-distinct tokens across the 137 gate commands resolve to
-``programs/<token>.py`` — there are zero unresolvable tokens and zero commands
+A gate command's FIRST whitespace token is the program basename. All
+152<!--figure:gate_program_tokens_distinct--> distinct tokens across the
+161<!--figure:gate_commands_total--> gate commands resolve to
+``programs/<token>.py`` — there are 0<!--figure:gate_programs_unresolved-->
+unresolvable tokens and zero commands
 that shell out via ``python3 <file>``. :func:`gate_programs` returns only
 tokens that resolve to a file that actually exists, so it is a live statement
 about the source tree, not about the yaml's spelling. Use
 :func:`gate_program_tokens` when you need the declared-but-possibly-missing
 form (that difference IS the dimension-1 wiring question).
 
-60 of the 62 gated steps name at least one program. Steps 1 and 12 have
-file-existence-only gates and legitimately name none.
+61<!--figure:steps_naming_a_program--> of the
+62<!--figure:gated_steps--> gated steps name at least one program. Step 1 has a
+file-existence-only gate and legitimately names none.
 
 --------------------------------------------------------------------
 5. ``blocks_on``
 --------------------------------------------------------------------
-91 edges, mixed types (75 int, 16 str), every target resolving to a declared
-step id — no dangling references at time of writing. Compare with
+94<!--figure:blocks_on_edges--> edges, mixed types
+(78<!--figure:blocks_on_edges_int--> int, 16<!--figure:blocks_on_edges_str--> str),
+every target resolving to a declared step id — no dangling references at time of writing. Compare with
 :func:`normalize_id` on both sides; the real consumers stringify
 (``{str(id): [str(e) for e in blocks_on]}``).
 """
@@ -396,9 +421,15 @@ def required_outputs(step_id: StepId) -> Tuple[str, ...]:
 def blocks_on(step_id: StepId) -> Tuple[StepId, ...]:
     """Raw ``blocks_on`` entries, mixed types, in declaration order.
 
-    Empty tuple both when the key is ABSENT (P0) and when it is declared EMPTY
+    Empty tuple both when the key is ABSENT and when it is declared EMPTY
     (D1, A1). Use :func:`declares_blocks_on` to tell those apart — they mean
     different things: "nobody wrote a dependency list" vs "this is a root".
+
+    The ABSENT case has NO example on the current yaml. P0 was the only step
+    without the key and #929 gave it one, so every step now declares
+    ``blocks_on`` and the two cases are told apart by D1/A1 alone. The
+    distinction is kept because it is a property of the accessor, not of
+    today's yaml — but a reader must not go looking for the absent step.
     """
     return tuple(step_by_id(step_id).get("blocks_on") or ())
 

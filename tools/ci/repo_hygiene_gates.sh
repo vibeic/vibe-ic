@@ -856,6 +856,17 @@ run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_che
 # expensive line in this file after the pytest-driven pin below, and it is the
 # price of a headline figure that cannot drift unseen. The cheaper option — trust
 # whoever lands the change to remember — is the option that already failed twice.
+#
+# WHAT THIS GATE COVERS, CORRECTED (vibe-ic#961). The paragraph above said "a
+# headline figure that cannot drift unseen". `--check` compared the MARKED BLOCK
+# only — 36 lines of a 501-line README — and five live-derived figures outside it
+# were stale on origin/main, one of them invalidated by #929, the very commit
+# cited nine lines above as the reason this gate exists. `--check` now also
+# re-derives every ANCHORED figure in the 63x8 corpus and PRINTS ITS OWN
+# COVERAGE on every verdict: how many figures it guards and how many stated
+# population figures in the same files it does not. That remainder is large and
+# is meant to be read, not celebrated — this gate is not, and does not claim to
+# be, a guarantee about every number on the page.
 run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.py" --check
 
 # A call site writes a literal into a parameter that picks between named
