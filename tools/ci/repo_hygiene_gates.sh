@@ -761,6 +761,17 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 # different installed PDK that happens to be TRUE — a real repository document
 # rather than a synthetic fixture, which is what keeps this from being a gate
 # that only ever says no.
+#
+# THAT MEASUREMENT WAS TAKEN OVER FOUR OF THE SIX INSTALLED PDKs (#964). The
+# container backend listed with `ls -1p`, which marks REAL directories only, so
+# the two PDKs the image installs as links into its package store were outside
+# the population entirely — no decision and no refusal on either. Re-measured on
+# the same image with the listing dereferencing, and with a lookup miss no
+# longer defaulting to agreement (#965): 134 design-input documents, 6 -> 7
+# candidate claims, 2 CONTRADICTED / 1 CORROBORATED / 3 -> 4 UNDECIDED, still 0
+# false positives, verdict unchanged at FAIL. The seventh claim is about one of
+# the two PDKs that could not be seen before, and it is UNDECIDED — which is the
+# point: it is now REFUSED out loud instead of dropped in silence.
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
   python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT"
 
