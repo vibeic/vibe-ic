@@ -3164,7 +3164,28 @@ steps:
       # evidence. The audit verdict therefore goes to a SEPARATE file; had the
       # dropped `--json` ever been honoured, the checker would have destroyed
       # the measurement it was auditing.
-      program_exit_zero: "em_report_check . --mode em --json reports/phase3/em_signoff.json"
+      all_of:
+        - program_exit_zero: "em_report_check . --mode em --json reports/phase3/em_signoff.json"
+        # THE FIGURE HAD TO REACH A COMPARISON. The clause above establishes
+        # that an EM analysis RAN and that its report is not vacuous; it never
+        # reads the current against a limit, so no magnitude of current could
+        # move it — `matrix_mutation_ledger.ART-EM-CURRENT-DENSITY` recorded a
+        # 25000x peak-current mutation returning rc 0 with zero findings.
+        #
+        # This clause is where the number is compared. It delegates the REAL
+        # per-layer J-vs-Jmax screen to `em_current_density_check` (which
+        # existed, complete, with zero references in this file), and when that
+        # authority is unresolvable it REFUSES — printing `INCOMPLETE:` and
+        # naming the PDK reference it lacks — rather than passing. It also
+        # screens the peak against the total current the report itself says the
+        # net is supplied with, which is conservation of charge and therefore
+        # a bound with nothing in it to tune.
+        #
+        # MEASURED before wiring, over every published run carrying an EM
+        # report: 0 PASS->FAIL. Wiring `em_current_density_check` DIRECTLY was
+        # measured and rejected — no published run carries a tech LEF, so its
+        # honest rc 3 SKIP would have failed the step on all of them.
+        - program_exit_zero: "em_peak_current_authority_check . --json reports/phase3/em_current_authority.json"
     blocks_on: [22]
 
   - id: 26
@@ -3853,7 +3874,24 @@ steps:
       # declared --json was dead, and no audit trail was written anywhere. The
       # wrapper now forwards its flags (same fix lvs_report_check got in #507),
       # so this path had to become a real, separate one at the same time.
-      program_exit_zero: "power_report_check . --mode power --json reports/phase2/gates/power_report.json"
+      all_of:
+        - program_exit_zero: "power_report_check . --mode power --json reports/phase2/gates/power_report.json"
+        # THE FIGURES WERE NEVER COMPARED TO ANYTHING. The clause above proves
+        # the report came from a real power tool and carries leakage plus
+        # dynamic categories; it never reads the numbers.
+        # `matrix_mutation_ledger.ART-POWER-FIGURES-X1000` recorded a 1000x
+        # rewrite of all 12 non-zero figures staying green.
+        #
+        # This clause carries the comparison — total power against L19's
+        # `power_budget_uw`. MEASURED over the corpus: 0 of the 17 published
+        # runs carrying a power report declare that budget (3 of 195 L19 copies
+        # do, and that design has no power report), so on today's corpus this
+        # clause REFUSES: it prints `INCOMPLETE:` naming the budget it lacks
+        # and exits 0. That is the honest verdict and it is not a green — a
+        # budget is a REQUIREMENT that has to arrive in the design's own input
+        # documents, and deriving one from die area or supply voltage would be
+        # a threshold nobody declared. Corpus blast radius: 0 PASS->FAIL.
+        - program_exit_zero: "power_total_vs_budget_check . --json reports/phase2/gates/power_budget.json"
     blocks_on: [23]
 
   # ── Step 34: Metal Fill (ECO-aware density fill insertion) ───
