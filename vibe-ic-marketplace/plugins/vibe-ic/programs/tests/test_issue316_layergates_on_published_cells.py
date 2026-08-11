@@ -72,11 +72,57 @@ _CELL_RE = re.compile(r"^v\d+\.\d+\.\d+_")
 sys.path.insert(0, str(_PROGRAMS))
 
 
+#: What each anchored rule is ALSO exercised by when its published cell is
+#: gone. Named, not gestured at: a skip that says "the rule is covered
+#: elsewhere" without saying WHERE is the same shrug as a skip that says
+#: nothing. Every entry was checked by running the named module.
+_RETAINED_COVERAGE = {
+    "opentitan_aes":
+        "test_l8_sta_clock_period_design_owned_check.py (10 tmp_path tests, "
+        "incl. test_gutted_l8_fails_and_wellformed_l8_passes — fires AND clears)",
+    "edge_llm_accel":
+        "test_l21_macro_supply_rail_declared_check.py (18 tmp_path tests, incl. "
+        "test_gutted_l21_fails_and_wellformed_l21_passes) and, in this module, "
+        "test_l21_fires_on_the_hollow_premise_fixture (a premise this repo owns)",
+}
+
+
 def _cell(name: str) -> Path:
+    """Resolve a published cell, and SPLIT the two reasons it can be absent.
+
+    vibe-ic#1028. "benchmark-data is not in this checkout" and "benchmark-data
+    IS here and this cell is not in it" are different facts, and until now they
+    shared one message — `published cell X not present` — which reads as the
+    first while meaning the second. The first is the normal state for an
+    outside contributor and costs nothing. The second means a cell was
+    WITHDRAWN from publication and a rule that was being anchored on real
+    evidence has stopped being anchored: a coverage loss, wearing the wording
+    of an irrelevance.
+
+    This is the same skip-reason split `_plugin_tree.repo_resource_or_skip`
+    already applies with `required_on_source=True` (flow #488), applied to the
+    corpus instead of to the source tree.
+
+    The withdrawn case still SKIPS rather than FAILs, deliberately: the rule's
+    logic is exercised elsewhere and named below, so a red here would report a
+    defect that does not exist. What it must not do is go quiet.
+    """
     p = _IC / name
-    if not (p / "phase1" / "generated_docs").is_dir():
-        pytest.skip(f"published cell {name} not present")
-    return p
+    if (p / "phase1" / "generated_docs").is_dir():
+        return p
+    if not _IC.is_dir():
+        pytest.skip(f"published cell {name}: benchmark-data/ic is not in this "
+                    f"checkout at all — the question does not apply here")
+    retained = _RETAINED_COVERAGE.get(
+        name, "NOTHING NAMED — this rule may now be unexercised; say so or "
+              "give it a fixture that owns its premise")
+    pytest.skip(
+        f"published cell {name} WITHDRAWN from publication (vibe-ic#1015/"
+        f"#1010): benchmark-data/ic IS present and carries "
+        f"{len(list(_IC.glob('*/phase1/generated_docs')))} cell(s), and this "
+        f"is not one of them. This is a REAL-DATA ANCHOR LOST, not a checkout "
+        f"that lacks the corpus — the rule's logic coverage is retained by: "
+        f"{retained}")
 
 
 def _run(gate: str, project: Path):

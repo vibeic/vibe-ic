@@ -205,3 +205,43 @@ def test_real_corpus_scans_clean(proj):
     assert rep["verdict"] == "CLEAN", (
         f"{proj.name} false-fired: {rep['findings']}")
     assert r.returncode == 0
+
+
+def test_the_real_corpus_population_is_not_silently_empty():
+    """A parametrisation that shrinks to nothing REPORTS nothing.
+
+    `test_real_corpus_scans_clean` derives its cases from the corpus, which is
+    the correct shape — a pinned list would rot. But the failure mode of a
+    derived population is the opposite of a pinned one: it cannot go red, it
+    can only get SMALLER, and a case that is never collected does not even
+    print a skip. Measured across the withdrawal of vibe-ic#1015/#1010,
+    `benchmark-data/ic/*/phase1/generated_docs` went 7 cells -> 1, six
+    parameter cases left collection entirely, and the suite's passed count fell
+    by six with no failure anywhere saying the false-fire guard had stopped
+    examining anything.
+
+    So the population is asserted HERE, where losing it is a FAILURE rather
+    than an absence.
+
+    The assertion is `> 0` and deliberately NOT a pinned count: re-pinning a
+    population to match a tree that just shrank is precisely the move the
+    ratchet doctrine forbids, and the house rule that motivates this
+    (`gate_zero_denominator_refuses_check`) keys on a zero beside a POPULATION
+    word, not on any particular number.
+
+    The flattened install cache legitimately carries no corpus at all. That is
+    a DIFFERENT fact from a corpus that is present and carries no cell, and the
+    two must not share an outcome — the skip-reason split this repo already
+    applies in `_plugin_tree.repo_resource_or_skip(required_on_source=True)`.
+    """
+    from _plugin_tree import NOT_SHIPPED_REASON, repo_path_or_missing
+    root = repo_path_or_missing("benchmark-data", "ic")
+    if not root.is_dir():
+        pytest.skip(f"benchmark-data/ic: {NOT_SHIPPED_REASON}")
+    projects = _corpus_projects()
+    assert projects, (
+        f"{root} IS present but no directory under it carries "
+        f"phase1/generated_docs, so test_real_corpus_scans_clean expands to "
+        f"ZERO cases and the false-fire guard examines nothing at all. That is "
+        f"a corpus loss being reported as a passing run — publish a cell, or "
+        f"say here why the guard no longer has a subject.")
