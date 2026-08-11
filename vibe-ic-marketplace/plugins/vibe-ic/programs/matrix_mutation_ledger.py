@@ -270,6 +270,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+try:  # the shared isolation harness (#996) — see its module docstring
+    import _run_isolation as _iso
+except ImportError:  # pragma: no cover - exercised by the packaged layout
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _run_isolation as _iso
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - yaml is a hard dep of the plugin
@@ -799,6 +805,20 @@ class NotFalsifiable:
 _SWEEP = ("matrix_mutation_ledger.py --replay {name} --step <each declared "
           "flow step>   (2026-08-06, 63 steps, one pytest run per step)")
 
+#: The 2026-08-06 sweep, PLUS a single-step replay on 2026-08-11 for an entry
+#: that gained exactly one step. Spelled out rather than folded into
+#: :data:`_SWEEP` because the two are different amounts of evidence: the bulk of
+#: ``applies_to`` rests on the 63-step sweep, and the added step rests on one
+#: replay run on a later tree. An entry using this must name the added step, so
+#: a reader can tell which claim rests on which run.
+_SWEEP_THEN_ONE = (
+    _SWEEP + "   THEN   matrix_mutation_ledger.py --replay {name} --step "
+             "{added}   (2026-08-11, the one step this entry gained)")
+
+#: A full re-sweep on 2026-08-11 — same shape as :data:`_SWEEP`, later tree.
+_RESWEEP = ("matrix_mutation_ledger.py --replay {name} --jobs 8   "
+            "(2026-08-11, every declared step, one pytest run per step)")
+
 MUTATIONS: Tuple[Mutation, ...] = (
     # ---------------- dimension 1 — wiring -----------------------------
     Mutation(
@@ -887,19 +907,30 @@ MUTATIONS: Tuple[Mutation, ...] = (
         witness="21",
         applies_to=(
             "D1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "FS1",
-            "DT1", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
-            "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
-            "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
-            "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41",
-            "42", "43", "44"),
+            "DT1", "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8",
+            "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
+            "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
+            "33", "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
+            "41", "42", "43", "44"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=59,
+            date="2026-08-11",
+            command=_SWEEP_THEN_ONE.replace("{added}", "12"), reddened=60,
             stayed_green=("35",),
-            note="59 red = every one of dimension 2's 59 ENFORCED cells, in one "
-                 "sweep. The 3 waived cells (1, 12, 35) and the NA cell (P0) "
-                 "are the only steps not reddened: 1/12/P0 have no executable "
+            note="60 red = every one of dimension 2's 60 ENFORCED cells, in one "
+                 "sweep. The 2 waived cells (1, 35) and the NA cell (P0) are "
+                 "the only steps not reddened: 1 and P0 have no executable "
                  "clause to blind, and 35's gate is files_exist + advisory, "
-                 "which is precisely why it is waived."),
+                 "which is precisely why it is waived. "
+                 "STEP 12 WAS ADDED 2026-08-11 and the old note's claim that it "
+                 "'has no executable clause to blind' was, by then, false. "
+                 "`23d96bf5` (v1.10.0, 'close the matrix_63x8 dimension-2 "
+                 "content gap on Step 12') gave step 12 a "
+                 "`program_exit_zero: dft_post_optimization_scan_survival_check` "
+                 "clause and lifted its dimension-2 waiver in the same change — "
+                 "so the very commit that made 12/d2 ENFORCED also created the "
+                 "edit site this mutation needs, and nothing re-ran the sweep. "
+                 "Replayed 2026-08-11: `--replay D2-BLIND-GATE-PROGRAMS "
+                 "--step 12` -> REDDENED in 1.5s."),
     ),
 
     # ---------------- dimension 3 — outputs produced -------------------
@@ -912,7 +943,15 @@ MUTATIONS: Tuple[Mutation, ...] = (
                "deleting the artefact, reached from the declaration end — which "
                "is the end a CI host without the campaign's run trees can move.",
         red_signal="step",
-        witness="21",
+        # WAS "21" until 2026-08-11. A witness must be GREEN at baseline — this
+        # class's own contract, three lines up in `Mutation` — and step 21's
+        # dimension-3 cell no longer is, so the entry was proving nothing and
+        # said so: `ALREADY_RED`. Re-picked by a rule rather than by taste:
+        # the FIRST step in flow-declaration order that is green at baseline.
+        # That is D1, measured at 4.1 s (the slowest of the 37 green
+        # candidates; the fastest are 38 and DT2 at 1.7 s). Speed is not the
+        # criterion and is recorded only so the cost of this choice is visible.
+        witness="D1",
         applies_to=(
             "D1", "1", "2", "3", "4", "5", "7", "8", "9", "10", "11", "DT1",
             "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
@@ -920,16 +959,42 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
             "34", "35", "36", "37", "38", "M2", "M3", "M4"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=53,
-            baseline_red=("11", "15", "17", "19", "20", "29", "30", "32",
-                          "M2", "M3", "M4"),
+            date="2026-08-11", command=_RESWEEP, reddened=53,
+            baseline_red=("12", "15", "17", "19", "20", "21", "22", "23", "24",
+                          "25", "26", "30", "32", "M2", "M3", "M4"),
             stayed_green=("6", "39", "M1"),
-            note="53 red = every one of dimension 3's 53 ENFORCED cells. 11 of "
-                 "them were ALREADY red at 1ea6689b (their declared artefacts "
-                 "genuinely do not exist), so 42 reds are attributable to this "
-                 "mutation; the 11 are falsifiable by definition and are named "
-                 "here rather than counted twice. The 3 greens are the waived "
-                 "cells, whose strict xfail correctly held."),
+            note="53 red = every one of dimension 3's 53 ENFORCED cells. 16 of "
+                 "them are ALREADY red before the mutation (their declared "
+                 "artefacts genuinely do not resolve), so 37 reds are "
+                 "attributable to this mutation; the 16 are falsifiable by "
+                 "definition and are named here rather than counted twice. The "
+                 "3 greens are the waived cells, whose strict xfail correctly "
+                 "held. "
+                 "BASELINE_RED MOVED 11 -> 16 ON 2026-08-11, and the move is a "
+                 "FINDING, not an accommodation. Newly red: 12, 21, 22, 23, 24, "
+                 "25, 26. No longer red: 11, 29. Re-measured by the full sweep "
+                 "(`--replay D3-UNDECLARED-ARTEFACT --jobs 8`, 53 pairs, 37 "
+                 "REDDENED + 16 ALREADY_RED, no other outcome). "
+                 "ONE cause for all nine moves: "
+                 "`benchmark-data/ic/spm/v1.9.96_gf180mcuD/reports/"
+                 "write_ledger.json` (captured 2026-08-06T19:17:51Z) is stale "
+                 "with respect to the commit that carries it, in BOTH "
+                 "directions — 21 artefacts it records as WRITTEN are absent "
+                 "from the commit (all under `phase3/stage3/**` and "
+                 "`phase3/stage4/foundry_handoff/**`; step 21's `routed.def` is "
+                 "recorded at 481667 B and was never added in any commit, and "
+                 "is not gitignored), and 4 specs it records as NOT WRITTEN are "
+                 "present in it (step 11's `scan_netlist.v`, `atpg_coverage.rpt` "
+                 "and `reports/phase2/dft/coverage.json`, step 12's "
+                 "`post_dft_netlist.v`). Because the ledger BINDS those steps to "
+                 "that run root, they no longer fall back to the root that does "
+                 "carry the artefact, and they redden. "
+                 "THE STALE LEDGER IS DELIBERATELY NOT REPAIRED HERE. Re-emitting "
+                 "a published run's record is a benchmark-data rewrite that "
+                 "would erase the historical fact that the run produced those "
+                 "artefacts, and it is not this change's subject. It is left "
+                 "RED and published; `test_d3_the_write_ledger_population_is_"
+                 "derived_from_the_commit` states the remedy in its own words."),
     ),
 
     # ---------------- dimension 4 — criteria match ---------------------
@@ -1018,12 +1083,23 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A8", "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22",
             "DT2", "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31",
             "32", "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3",
-            "M4", "40", "41", "42", "43", "44"),
+            "M4", "40", "41", "42", "43", "44", "P0"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=62,
-            note="62 red = every one of dimension 5's 62 ENFORCED cells, in one "
-                 "sweep, each reddening that cell alone. P0 is the single NA "
-                 "cell and declares no blocks_on key to append to."),
+            date="2026-08-11",
+            command=_SWEEP_THEN_ONE.replace("{added}", "P0"), reddened=63,
+            note="63 red = every one of dimension 5's 63 ENFORCED cells, in one "
+                 "sweep, each reddening that cell alone. There is no longer an "
+                 "NA cell in this dimension. "
+                 "P0 WAS ADDED 2026-08-11 and the old note's claim that it "
+                 "'declares no blocks_on key to append to' was, by then, false. "
+                 "`332b9985` ('flow: stage membership was declared twice and "
+                 "the copies disagreed') gave P0 `blocks_on: [1]`, which "
+                 "self-invalidated dimension 5's pinned NA exactly as that pin "
+                 "was written to do — step P0's own cell went red demanding "
+                 "re-evaluation. The re-evaluation was done, not waived: "
+                 "`d5_problems('P0')` is empty, so P0 runs the full predicate as "
+                 "an ENFORCED cell. Replayed 2026-08-11: `--replay "
+                 "D5-PHANTOM-EDGE --step P0` -> REDDENED in 1.6s."),
     ),
 
     # ---------------- dimension 6 — skip discipline --------------------
@@ -1557,7 +1633,25 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: The (steps, dimensions, ENFORCED cells) the ledger was built against. Like
 #: ``GRID_AS_MEASURED`` in the coverage meta-test, this is the review gate and
 #: never an input: every count below is recomputed live.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 481)
+#:
+#: MOVED 481 -> 482 on 2026-08-11, and the move is a FINDING rather than an
+#: accommodation, so it is landed in its own commit with the cause named. The
+#: grid did not grow a step (63 both before and after) and no cell was waived
+#: away; ONE cell changed state. ``332b9985`` ("flow: stage membership was
+#: declared twice and the copies disagreed") gave step P0 ``blocks_on: [1]``,
+#: which took P0's dimension-5 cell from NA to ENFORCED. Bisected over the 15
+#: commits that touched the flow or the dimension modules between ``0387e67a``
+#: (where 481 was authored and was CORRECT — 12/d2 WAIVED, 12/d5 ENFORCED,
+#: P0/d5 NA) and today: ``23d96bf5`` swapped step 12 between dimensions 2 and 5
+#: for a net change of zero, and ``332b9985`` is the only commit that moved the
+#: total. Neither re-ran the ledger's sweep, which is why the arithmetic sat
+#: one short for three days rather than failing on the day it drifted.
+#:
+#: The +1 is COVERED, not merely counted: ``D5-PHANTOM-EDGE`` was replayed
+#: against P0 on 2026-08-11 and REDDENED it. Raising this number without that
+#: replay would be exactly the "widen the baseline until it is green" move the
+#: gate exists to refuse.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 482)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1998,12 +2092,18 @@ def _copy_published_run(src: Path, dst: Path) -> None:
 
     MEASURED, not reasoned: an earlier draft of this replay used ``cp -al`` and
     left eight JSON artefacts of the published run modified in the worktree
-    (`git status` named them; they were restored from HEAD). The rule in the
-    brief — never mutate a published run in place — is enforced here by copying
-    for real, and checked afterwards by :func:`_stat_manifest`.
+    (`git status` named them; they were restored from HEAD).
+
+    DELEGATED to :func:`_run_isolation.copy_run` (#996). That module is where
+    this hazard is now stated once, because three separate pieces of work hit
+    it on one day and each wrote its own careful treatment. The behaviour is
+    unchanged in the direction that matters — a real copy, refused if it shares
+    an inode with the source — and STRENGTHENED in one: the shared helper
+    compares the ``(dev, ino)`` sets of the whole tree, where the check below
+    looks at ``st_nlink`` of the single edited artefact. A published run whose
+    OTHER files were hardlinked would have passed here and does not there.
     """
-    subprocess.run(["cp", "-a", str(src), str(dst)],
-                   check=True, capture_output=True)
+    _iso.copy_run(src, dst)
 
 
 def _stat_manifest(root: Path) -> Dict[str, Tuple[int, int]]:
@@ -2013,16 +2113,15 @@ def _stat_manifest(root: Path) -> Dict[str, Tuple[int, int]]:
     no reads) and it catches the failure that actually happened: a gate program
     truncating a shared inode. A pure "did we copy correctly" assertion would
     not have — the copy was correct; the SHARING was the defect.
+
+    DELEGATED to :func:`_run_isolation.snapshot` (#996), narrowed back to the
+    ``(size, mtime_ns)`` pair this module compares so the equality below keeps
+    meaning exactly what it did. The shared snapshot also carries ``dev``/``ino``,
+    which are deliberately dropped here: an inode number changing under an
+    unchanged size and mtime is a re-copy, not a perturbation of the content
+    this replay is measuring.
     """
-    out: Dict[str, Tuple[int, int]] = {}
-    for p in root.rglob("*"):
-        if p.is_file():
-            try:
-                st = p.stat()
-            except OSError:  # pragma: no cover - races on a shared tree
-                continue
-            out[str(p.relative_to(root))] = (st.st_size, st.st_mtime_ns)
-    return out
+    return {k: (s.size, s.mtime_ns) for k, s in _iso.snapshot(root).items()}
 
 
 def replay_artefact(mut: ArtefactMutation, timeout: int = 900) -> ReplayResult:

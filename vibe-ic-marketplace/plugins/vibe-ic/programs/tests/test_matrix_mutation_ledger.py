@@ -77,7 +77,7 @@ import sys
 import tempfile
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import pytest
 import yaml
@@ -557,6 +557,71 @@ def test_the_replay_lock_has_no_off_switch():
         == set(range(1, 9)), (
         "the witness plan does not reach all eight dimensions, so a dimension "
         "could carry entries that are never re-executed")
+
+
+def test_replay_witnesses_replays_the_witness_subset_not_everything(
+        monkeypatch, record_property):
+    """``--replay-witnesses`` selects the WITNESS subset. Pinned, not assumed.
+
+    The tests above pass the mode EXPLICITLY — ``replay_plan("witness")`` and
+    ``replay_plan("all")`` — so they measure the function and say nothing about
+    which mode the CLI asks it for. That literal is a DIRECTION, and the module
+    docstring argues it in as many words:
+
+        "WHY NOT 'just replay everything, always'. Because it costs minutes,
+        and a gate people disable is worse than a gate that states its own
+        reach."
+
+    Until this test existed the argument was prose. ``policy_direction_pin_check
+    --verify-pins`` flipped the literal to ``'all'`` and reported
+    ``changes nothing any test can see`` — the selector for the mechanism built
+    to close finding #20 was itself unasserted. Flipping it does not merely
+    make the gate slower: it silently turns a bounded, always-on lock into a
+    minutes-long one, which is the "gate people disable" the docstring names.
+
+    The plan is captured rather than executed — replaying it for real is the
+    minutes this direction exists to avoid, and paying them here would make the
+    test the very cost it is pinning.
+    """
+    seen: List[Sequence[Tuple[str, str]]] = []
+
+    def _capture(plan, **kw):
+        seen.append(tuple(plan))
+        return ()
+
+    monkeypatch.setattr(L, "replay_many", _capture)
+    rc = L.main(["--replay-witnesses"])
+    assert rc == 0, f"--replay-witnesses exited {rc} with the replay stubbed out"
+    assert len(seen) == 1, (
+        f"--replay-witnesses built {len(seen)} plans, expected exactly one")
+    got = seen[0]
+
+    witness_plan = L.replay_plan("witness")
+    all_plan = L.replay_plan("all")
+
+    # The denominator, disclosed rather than left for a reader to assume, and
+    # refused if it is ever zero (a lock that re-executes nothing is off).
+    record_property("replay_witnesses_pairs", len(got))
+    assert len(got) > 0, (
+        "--replay-witnesses built an EMPTY plan; a selector that selects "
+        "nothing must refuse, not pass")
+    assert len(witness_plan) < len(all_plan), (
+        f"the two modes are the same size ({len(witness_plan)}), so this test "
+        f"cannot tell them apart and pins nothing; the ledger must carry at "
+        f"least one entry whose applies_to is longer than one step")
+
+    assert got == witness_plan, (
+        f"--replay-witnesses re-executed {len(got)} (entry, step) pair(s); the "
+        f"witness subset is {len(witness_plan)} and the audit-grade 'all' mode "
+        f"is {len(all_plan)}. This CLI flag selects the witness subset by "
+        f"name — the bounded lock that runs on every invocation — and "
+        f"'{L.REPLAY_ENV}=all' is the opt-in for the other one.")
+    assert got != all_plan, (
+        f"--replay-witnesses built the 'all' plan ({len(all_plan)} pairs). The "
+        f"always-on lock would then cost minutes, and the module docstring's "
+        f"reason for the default — 'a gate people disable is worse than a gate "
+        f"that states its own reach' — would be describing a gate this "
+        f"repository no longer ships.")
 
 
 def test_control_removing_one_entry_uncovers_the_cells_it_carried(monkeypatch):
