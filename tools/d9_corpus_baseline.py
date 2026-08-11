@@ -77,6 +77,13 @@ CLEAN, FINDING, NO_INPUT, ERROR = "CLEAN", "FINDING", "NO-INPUT", "ERROR"
 # same rule.  Degrades LOUDLY: if the import ever breaks, every CLEAN cell is
 # marked `discloses=None` ("not measured") rather than silently `False`.
 sys.path.insert(0, str(PROGRAMS))
+
+# The shared isolation harness (#996). NOT wrapped in a soft try/except like
+# the disclosure import below: a degraded `discloses` costs a column, and a
+# degraded isolation harness costs the published corpus. If this import breaks
+# the sweep must not start.
+import _run_isolation                                        # noqa: E402
+
 try:
     from gate_discloses_denominator_check import discloses as _discloses
 except Exception as _exc:                                    # pragma: no cover
@@ -443,15 +450,15 @@ def _head(text: str, n: int = 200) -> str:
 # The writer set is DISCOVERED by probing, never typed, so a program that starts
 # writing tomorrow is caught tomorrow rather than silently corrupting a rerun.
 def _snapshot(root: Path) -> Dict[str, Tuple[int, int]]:
-    snap: Dict[str, Tuple[int, int]] = {}
-    for p in root.rglob("*"):
-        if p.is_file():
-            try:
-                st = p.stat()
-                snap[str(p.relative_to(root))] = (st.st_size, st.st_mtime_ns)
-            except OSError:
-                pass
-    return snap
+    """DELEGATED to :func:`_run_isolation.snapshot` (#996).
+
+    Narrowed to the ``(size, mtime_ns)`` pair the comparisons below use, so
+    they keep meaning exactly what they did. The shared helper also records
+    ``dev``/``ino`` — dropped here because this probe asks "did the program
+    write?", not "is this a hardlink of something else"; that second question
+    is asked by :func:`_run_isolation.copy_run` when the copy is made.
+    """
+    return {k: (s.size, s.mtime_ns) for k, s in _run_isolation.snapshot(root).items()}
 
 
 def probe_mutators(runs: List[str], checkers: List[Dict[str, object]],
@@ -734,6 +741,26 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"(denominator {len(results)} = {len(runs)} runs x "
           f"{len({c['checker'] for c in results})} measurable checkers)")
     print(f"elapsed {elapsed}s -> {args.out / 'corpus_baseline.json'}")
+
+    # THE TRIPWIRE (#996). This sweep drove every measurable checker over every
+    # published run; if isolation held, the corpus it read is byte-identical to
+    # the corpus it started from. The first version of this sweep left 2336
+    # tracked files modified, and nothing said so until somebody ran
+    # `git status` by hand. It is not left to somebody.
+    #
+    # A CONTAMINATED SWEEP IS NOT A SWEEP WITH A CAVEAT. The verdicts above
+    # depend on scheduling order once anything has been rewritten underneath
+    # them, so the numbers are withdrawn rather than published with a warning.
+    try:
+        st = _run_isolation.assert_corpus_pristine(
+            REPO, what="the corpus baseline sweep")
+    except _run_isolation.Perturbation as exc:
+        print(f"\n[FAIL] {exc}", file=sys.stderr)
+        print("The table above is WITHDRAWN: a checker that ran after a "
+              "rewrite read different content from one that ran before, so "
+              "these verdicts depend on scheduling order.", file=sys.stderr)
+        return RC_FAIL
+    print(f"tripwire: {st.describe()}")
     return RC_PASS
 
 
