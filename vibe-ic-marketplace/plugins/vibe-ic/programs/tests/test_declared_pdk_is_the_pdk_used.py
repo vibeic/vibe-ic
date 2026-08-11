@@ -119,36 +119,74 @@ def test_the_plugins_own_tree_is_not_mistaken_for_the_run(tmp_path):
     assert "othernode" not in out
 
 
-def test_no_library_load_is_fail_but_not_an_accusation(tmp_path):
-    """A target declared, a PDK staged, and NOTHING loaded.
+def test_no_library_load_refuses_it_does_not_fail(tmp_path):
+    """A target declared, a PDK staged, and NOTHING loaded — vibe-ic#1002.
 
-    Reproduces the state a Phase-1-only / retarget run is in. Before this was
-    split out, the gate printed "the staged PDK was not the one used" directly
-    above its own "loaded : 0 distinct librar(ies)" — a claim about a load that
-    never happened. It must still FAIL (nothing was demonstrated) and it must
-    not say a different PDK was used.
+    THIS TEST REVERSES A DECISION THIS FILE USED TO PIN. Through #710 the same
+    fixture asserted ``rc == 1``: the gate printed "0 librar(ies) across 0
+    log(s) — nothing to compare" and then returned FAIL. That is the shape
+    ``gate_zero_denominator_refuses_check`` exists to name — a zero beside a
+    POPULATION word is not a result — and the repo rejects it elsewhere. A FAIL
+    says "I looked and it was wrong"; this state looked at nothing.
+
+    The refusal must NAME what it lacked, which is the other half of the house
+    rule: rc 2 alone is a shrug.
     """
     r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
             staged=["zq42k3_sc.lib"], loaded=[])
     rc, out = _run(r)
-    assert rc == 1, out
+    assert rc == 2, out
+    assert "NOT CHECKED" in out, out
+    # it must not state a conclusion it has no evidence for, in either direction
     assert "was not the one used" not in out, out
     assert "whatever library was available" not in out, out
-    assert "no cell-library load at all" in out, out
+    assert "PASS" not in out, out
+    # and it must say what it lacked
+    assert "MISSING" in out, out
+    assert "cell-library load" in out, out
 
 
-def test_no_library_load_is_machine_readable(tmp_path):
-    """A caller must not have to parse prose to tell the two FAILs apart."""
+def test_the_refusal_is_machine_readable(tmp_path):
+    """A caller must be able to tell "not asked" from "asked and answered"."""
     rec = tmp_path / "rec.json"
     r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
             staged=["zq42k3_sc.lib"], loaded=[])
     p = subprocess.run([sys.executable, str(GATE), str(r), "--json", str(rec)],
                        capture_output=True, text=True, timeout=30)
-    assert p.returncode == 1, p.stdout + p.stderr
+    assert p.returncode == 2, p.stdout + p.stderr
     d = json.loads(rec.read_text())
-    assert d["verdict"] == "FAIL"
+    assert d["verdict"] == "NOT CHECKED"
     assert d["no_library_load_recorded"] is True
     assert d["libraries_loaded"] == []
+    assert "cell-library load" in d["missing_input"]
+    # the declaration it could not judge is still recorded, so the refusal is
+    # actionable rather than merely quiet
+    assert d["declared_target"] == "Example Foundry ZQ42-K3"
+
+
+def test_refusing_the_empty_case_does_not_disarm_the_motivating_defect(tmp_path):
+    """The docstring's own case: the PDK vanished and PnR ran on the image's.
+
+    This is the CONTROL for the change above. The motivating defect always
+    leaves library names in the log — it is a load that happened, of the wrong
+    library — so it can never reach the refusal branch. If this ever goes green
+    at rc 2, the refusal has been widened past its evidence.
+    """
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=[], loaded=["othernode_fd_sc_hd.lef",
+                               "othernode_fd_sc_hd__tt.lib"])
+    rc, out = _run(r)
+    assert rc == 1, out
+    assert "NO PDK is staged" in out, out
+
+
+def test_a_declaration_contradicted_by_a_real_load_still_fails(tmp_path):
+    """The one substantive corpus red's shape: staged, loaded, contradicted."""
+    r = _mk(tmp_path, target="Example Foundry ZQ42-K3",
+            staged=["zq42k3_sc.lib"], loaded=["othernode_fd_sc_hd.lef"])
+    rc, out = _run(r)
+    assert rc == 1, out
+    assert "was not the one used" in out, out
 
 
 def test_a_wrong_pdk_still_reports_a_wrong_pdk(tmp_path):
