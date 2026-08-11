@@ -12,9 +12,9 @@ This tree holds converged evidence AND runs that did not converge, and the folde
 | classification | cells |
 |---|---|
 | CONVERGED EVIDENCE | 4 |
-| RETAINED FAILURE | 11 |
-| UNAUDITED RECORD | 11 |
-| **total** | **26** |
+| RETAINED FAILURE | 5 |
+| UNAUDITED RECORD | 4 |
+| **total** | **13** |
 
 ## CONVERGED EVIDENCE — 4
 
@@ -27,41 +27,28 @@ The cell's own audit artefact reads PASS or PASS_WITH_WAIVERS. This is what the 
 | `spm/v1.9.96_gf180mcuD` | PASS_WITH_WAIVERS | P34 F0 M0 W4 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged (plugin v1.9.96, re-published 2026-08-07 after the v1.9.96 ciel-content-addressed-hash DFT/ATPG fix and the earlier v1.9.94 metal-fill fixes); real-GDS witness superseding v1.5.66_gf180mcuD — see notes below for what that supersession does and does not carry forward |
 | `u_hawaii_adc/v1.9.86_sky130A` | PASS | P8 F0 M0 W0 | — | UNSTATED | yes | the converged analog cell, re-verified on plugin 1.9.86 (PASS=8 FAIL=0 MISSING=0, gate exit 0). No phase2/ because it runs the A-track, not the digital RTL->synth stage; the structure gate records that as a disclosed note rather than a silent pass. Its phase3/analog/ tree (hardmacro layouts, per-block specs) is published here rather than left in a pre-canonical run tree at the IC level — the publisher used to drop it, so the folder that IS the evidence did not contain it. |
 
-## RETAINED FAILURE — 11
+## RETAINED FAILURE — 5
 
 An audit ran and did NOT converge. These are retained on purpose: deleting them would make "we never ran this" and "we ran it, it failed, and we kept the record" the same state. Read the step counts — they separate one failed gate from a flow that never reached the steps at all.
 
 | cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
 |---|---|---|---|---|---|---|
-| `caravel_user_project` | FAIL | P28 F2 M0 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | provenance-defect row in #413; inventory member of the #419/#426 layout-artefact audits |
 | `caravel_user_project/v1.9.43_sky130A` | FAIL | P5 F10 M10 W2 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | PASS_WITH_WAIVERS | yes | corpus member — walked by both blocking corpus gates |
-| `edge_llm_accel` | FAIL | P22 F8 M4 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | COMPLETE | yes | read directly by tests under programs/tests/ (its input/docs/ and its published-cell layer gates); provenance-defect row in #413 |
-| `edge_llm_matmul_accel` | FAIL | P5 F3 M28 W2 | phase2=FAIL | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
-| `ibex` | FAIL | P2 F7 M27 W0 | vibe_ic=FAIL; phase2=FAIL | — | yes | the richest L4 in the repo (48 registers / 84 fields); the cell #377 (OPEN) tested its SystemRDL export hypothesis against, via phase1/systemrdl/ |
-| `opentitan_aes` | FAIL | P3 F6 M25 W1 | vibe_ic=FAIL; phase2=FAIL | — | yes | reproduction for #405 — its input/docs/ drives the real walker that returned null for everything; also read directly by tests under programs/tests/ |
-| `sha256` | FAIL | P5 F5 M25 W0 | vibe_ic=FAIL; phase2=FAIL | UNSTATED | yes | reproduction for #186 (OPEN) part 1 — the 9th top-level port reproduces on this cell |
+| `edge_llm_accel` | FAIL | P22 F8 M4 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | — | yes | read directly by tests under programs/tests/ (its input/docs/ and its published-cell layer gates); provenance-defect row in #413 |
 | `sha256/clean_run_v1422_20260715` | FAIL | P29 F3 M3 W1 | vibe_ic=FAIL; phase3=FAIL; phase2=FAIL | UNSTATED | yes | evidence artefact itemised by #140/#145/#146/#147 (closed) and #413; NOT named by #235 itself — see note below the tables |
 | `sha256/clean_run_v1427_20260715` | FAIL | P33 F3 M0 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
-| `subservient` | FAIL | P24 F9 M0 W1 | vibe_ic=FAIL; phase3=FAIL; phase2=FAIL | PRODUCTION-READY | yes | reproduction for #414 (5 near-fabricated HASH_MISMATCHes) and #417 (a shipped formal PASS citing a log that does not exist); also read directly by tests under programs/tests/ |
 | `u_hawaii_adc/v1.9.86_sky130A/reports` | FAIL | P0 F0 M40 W0 | — | — | no | record only |
 
-## UNAUDITED RECORD — 11
+## UNAUDITED RECORD — 4
 
 No `reports/audit/phase23_completion_audit.json` exists for this cell, so there is NO machine verdict either way. A claim made in its RESULT.md is unbacked by an audit artefact; that is not the same as a failure, and it is not a pass.
 
 | cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
 |---|---|---|---|---|---|---|
-| `caravel_user_project/clean_run_v1432_commercial` | — | — | — | UNSTATED | no | record only |
-| `caravel_user_project/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `ibex/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `ibex/rerun_v1346` | — | — | — | UNSTATED | no | the only CRYPTOGRAPHIC MATCH in the #426 layout-artefact recovery audit |
-| `opentitan_aes/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1335` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1431_commercial_pdk` | — | — | — | UNSTATED | no | record only |
+| `ibex` | — | — | — | — | yes | the richest L4 in the repo (48 registers / 84 fields); the cell #377 (OPEN) tested its SystemRDL export hypothesis against, via phase1/systemrdl/ |
+| `opentitan_aes` | — | — | — | — | yes | reproduction for #405 — its input/docs/ drives the real walker that returned null for everything; also read directly by tests under programs/tests/ |
+| `sha256` | — | — | — | — | yes | reproduction for #186 (OPEN) part 1 — the 9th top-level port reproduces on this cell |
 | `sha256/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1461_0223` | — | — | — | UNSTATED | no | reproduction for #210 (sign-off corner declared with no record) and the #316 UNTYPED_STEPS discovery |
-| `subservient/clean_run_v1335` | — | — | — | UNSTATED | no | record only |
-| `subservient/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
 
 ## Reading the columns
 
@@ -80,4 +67,10 @@ No `reports/audit/phase23_completion_audit.json` exists for this cell, so there 
 - **`spm/v1.9.94_sky130A` was retired 2026-08-09**, replaced by `spm/v1.10.18_sky130A`. Two reasons, and the second is the load-bearing one. (1) A newer plugin: v1.10.18 withdrew the v1.10.14/#901 completion-audit vacuity hook, which had over-reached — it marked a whole step VACUOUS_PASS when a single one of its gates was legitimately inapplicable, cascading into PASS_VOIDED_BY_DEPENDENCY and an overall FAIL whose `failed_gate_count` was 0. (2) The retired cell's own `reports/orchestrator/*.json` and its RESULT.md were produced by DIFFERENT plugin versions, so the cell carried a derived verdict its own audit no longer agreed with. The replacement is a fresh clean-room run produced AND measured by v1.10.18 (`vibe_ic_one_shot_runner`, 226 s from the L1-L9 documents), so `vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS` is what the run itself recorded, not what a later re-audit asserted over it. What does NOT carry forward: the retired cell's role as the path cited by `spm/v1.9.96_gf180mcuD`'s RESULT.md and by `caravel_user_project/v1.9.43_sky130A`'s RESULT.md — both are HISTORICAL statements about a measurement made on 2026-08-07 and are deliberately left unedited (re-stamping a historical claim against a run it was not made on would be the fabrication this file exists to prevent); this note is the record of where that path went. The three tests that read the cell by path (`test_issue448_citation_routing`, `test_organic404_r4_shipped_netlist_refutes_a_resolution`, `test_provenance_matches_by_digest_after_publish_move`) were MIGRATED to the new cell in a separate commit, not left to fail.
 - **`spm/v1.5.66_gf180mcuD` was retired 2026-08-07**, replaced by `spm/v1.9.96_gf180mcuD` — landed after this session's plugin fixed a stale ciel content-addressed PDK version hash that had been misread as a DFT/ATPG capability gap (v1.9.96, commit 3d7c5a095), on top of the same v1.9.94 metal-fill container-reachability fix that also carried the sky130A cell above. The new run independently re-derives GDS/DRC(0 real violations)/LVS(match)/STA/DFT-ATPG(100.00% stuck-at) from its own artifacts — see the new cell's RESULT.md. What does NOT carry forward unverified: the retired cell's specific citations as the repro site for `#363` (EM coordinates outside the die) and the `#366`/`#381` formal false-PASS — those were properties of the OLD (pre-fix) run's artifacts, and this note does not re-assert them against the new run without re-checking; a maintainer who needs those specific repros should re-verify against the new cell or fall back to `spm/v1.5.58_ihp-sg13g2`, which is unaffected by this retirement.
 - **The IC-level stray output under `u_hawaii_adc/` was retired 2026-08-12 (#905)** — the `phase1/` entry in full, and the contents of `clean_run_v1422_20260715/` and `reports/` down to their live readers. 282 files. The `retained for` note on `u_hawaii_adc/clean_run_v1422_20260715` is removed with it: that entry no longer presents as a published cell, and a retention note that outlives its cell is exactly the stale citation this file exists to prevent. What the note recorded — that #141/#142/#143 name the path verbatim in their repro commands — is TRUE and is now broken; all three issues are CLOSED, so the cost is a closed-issue repro path rather than a live one, and it is stated here rather than discovered later. What is NOT retired: `phase3/` (31 files, still cited by live readers whose premise the published cell does not reproduce — its L21 declares `power_domains[]` where the IC-level one is hollow, so the two make the L21 gate fire different rules), `input/`, and the design-input documents under `clean_run_v1422_20260715/input/docs/` which are held by the standing owner constraint that design input is never deleted, not by any measured dependency — nothing in the tree reads them and all three are byte-identical to copies inside the published cell.
+- **Seventy-one IC-level stray entries across seven ICs were retired 2026-08-12** (the inherited half of the #905 branch, carried as its own change). Four `retained for` notes are removed with them, because the entries they name no longer present as published cells. Each recorded something TRUE, and each is now broken — written down here rather than left to be discovered:
+  - `caravel_user_project` — provenance-defect row in #413; inventory member of the #419/#426 layout-artefact audits.
+  - `ibex/rerun_v1346` — the ONLY cryptographic match in the #426 layout-artefact recovery audit. This is the sharpest single loss in the set.
+  - `sha256/clean_run_v1461_0223` — reproduction for #210 (sign-off corner declared with no record) and the #316 UNTYPED_STEPS discovery.
+  - `subservient` — reproduction for #414 and #417.
+Every issue cited above is CLOSED, so the cost is closed-issue reproduction paths rather than live ones; that is the whole of the mitigation and it is not claimed to be more. Two file sets are RETAINED inside otherwise-retired trees because live readers cut: `sha256/phase3/stage3/pnr/spare_cells.json` (1 of 11) and `subservient/phase3/stage3/sta/*` (7 of 50), both proved by mutation. Note that `subservient` and the `sha256/clean_run_*` roots are on the published-run-root deletion list now in flight (#1015/#1010): where a whole root comes down, DELETION SUPERSEDES RETENTION and those retentions are moot.
 
