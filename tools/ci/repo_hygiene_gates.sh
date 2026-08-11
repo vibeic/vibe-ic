@@ -731,6 +731,39 @@ run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary
 # or a gate whose rules changed without re-review — fails.
 run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
 
+# vibe-ic#904 — a design-input document made a CHECKABLE factual claim about the
+# installed PDK, the claim was false, and nothing in the flow noticed. The
+# disclosure it mandated ("label every corner result a LEVEL=1 standin") then
+# propagated into published output, so the false claim was not inert: it made the
+# results UNDERSTATE themselves, which is the direction nobody watches for.
+#
+# WHY IT WAS NOT WIRED WHEN IT LANDED, and why that changed. #949 shipped this
+# gate deliberately unwired, and the reason was sound at the time: wiring it
+# blocking would have turned main red on the very design-input document #904
+# forbade anyone to edit, i.e. it would have "closed" the issue by breaking the
+# flow. The owner then ruled option A and the documents were corrected in #958,
+# so the reason has expired. Leaving it unwired now costs two OTHER hygiene gates
+# — `checker_execution_wiring_audit` named it as a checker nothing but its own
+# test runs, and the unwired-gate census went 60 -> 61 — which is the same defect
+# this file exists to remove, one level up.
+#
+# `run_tolerating_uncheckable`, and the choice is load-bearing. The gate needs an
+# installed PDK tree to decide anything; on a host without one it exits 2 and
+# says `[VACUOUS] ... examined nothing (reason: installed_pdk_root_unreadable);
+# this is NOT a pass over the design`. NOT_CHECKED carries exactly that to the
+# roll-up, instead of folding "I could not look" into "I looked and it was
+# clean". Plain `run` would make every PDK-less host red for a reason that is
+# about the host; treating rc 2 as PASS would be the lie.
+#
+# MEASURED when wired, on the corrected tree: 134 design-input documents, 8
+# candidate claims, 4 CONTRADICTED / 1 CORROBORATED / 3 UNDECIDED before #958, 0
+# false positives. The CORROBORATED one is a claim of identical grammar about a
+# different installed PDK that happens to be TRUE — a real repository document
+# rather than a synthetic fixture, which is what keeps this from being a gate
+# that only ever says no.
+run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
+  python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT"
+
 # The flow-gate dashboard publishes a per-step dimension asking "can this step
 # actually fail", and NOTHING recomputes it — the page's own generator says so in
 # its docstring and carries the distribution forward. Recomputed from the flow

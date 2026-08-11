@@ -100,6 +100,25 @@ _NOT_PROSE: Dict[str, str] = {
         "#711 die_area_budget_um) both read English design documents, where "
         "denial is spellable and was spelled. Consulting `_prose_polarity` on "
         "a VIAS entry would be an unreachable branch.",
+    "input_doc_pdk_claim_vs_installed_pdk_check::_sections_of":
+        "SPICE `.lib` section directives inside a PDK corner library. The "
+        "matched text is `^\\s*\\.lib\\s+(NAME)\\s*$` -- a production of the "
+        "ngspice/SPICE library grammar, written by the foundry's model "
+        "packaging, in which there is no form that DENIES a section: SPICE "
+        "gives no way to write '.lib mos_tt is NOT defined here'. A section "
+        "either appears as a directive or it does not, and absence is already "
+        "how this function reports it (the name is simply not in the returned "
+        "list). The values written back are those section NAMES, quoted into "
+        "the gate's evidence so a reader can re-derive the vocabulary from the "
+        "same file -- they are never read as an assertion that could be "
+        "negated by surrounding text. Consulting `_prose_polarity` on a `.lib` "
+        "directive would add a branch that can never fire, and a call that can "
+        "never fire is a green light rather than a check. Contrast the two "
+        "defects this gate was built from (#706 pdk_target, #711 "
+        "die_area_budget_um): both read English design documents, where denial "
+        "is spellable and was spelled -- which is exactly what "
+        "vibe-ic#904 is about on the OTHER side of this same gate, where the "
+        "CLAIM text is prose and is parsed by the claim scanner, not here.",
     "policy_direction_pin_check::flip_source":
         "Python's own string-literal grammar, matched at a RECORDED (line, "
         "column). The matched text is `[rbuRBU]{0,2}` followed by an opening "
