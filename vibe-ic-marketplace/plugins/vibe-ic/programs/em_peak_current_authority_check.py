@@ -103,8 +103,25 @@ chip-AGNOSTIC: it reads currents, powers and voltages, and resolves the PDK
 reference through the existing discovery helper. No foundry, process or chip
 token appears anywhere in this file.
 
-Exit codes: 0 = PASS or INCOMPLETE (disclosed), 1 = a comparison FAILED,
-2 = the question could not be put (bad argument).
+Exit codes: 0 = PASS, 1 = a comparison FAILED, 2 = the question could not be
+put — INCOMPLETE (the disclosed-skip tier, `_vacuous_exit.RC_VACUOUS`) or a bad
+argument.
+
+INCOMPLETE EXITS 2, NOT 0 (vibe-ic#1017)
+----------------------------------------
+This gate is a BLOCKING `program_exit_zero` clause at step 25. Through #1000 it
+returned 0 for INCOMPLETE, so an EMPTY tree — no EM report, no authority of any
+kind — PASSED the blocking clause while this file's own last line said
+``electromigration was NOT screened``. A gate that states a refusal and returns
+a clean verdict is the shape `gate_zero_denominator_refuses_check` exists to
+forbid, and the shape repaired for `declared_pdk_is_the_pdk_used_check` in
+vibe-ic#1002. `test_matrix_d2_falsifiable` had been red on main for five merges
+saying exactly this.
+
+rc 2 is the repo-wide disclosed-skip tier: `flow_compliance_check` records it as
+VACUOUS_PASS — "the input-missing skip convention", explicitly NOT a clean
+result — so the refusal now survives into the flow record instead of being
+laundered into a PASS on the way out.
 """
 from __future__ import annotations
 
@@ -122,6 +139,10 @@ TOOL = "em_peak_current_authority_check"
 VERSION = "1.0.0"
 
 RC_OK, RC_FINDINGS, RC_ARG = 0, 1, 2
+#: INCOMPLETE — the disclosed-skip tier (`_vacuous_exit.RC_VACUOUS`).
+#: Named apart from RC_ARG because they mean different things to a
+#: reader even though the flow maps both to VACUOUS_PASS today.
+RC_NOT_SCREENED = 2
 
 #: The text report family. Same shape `eda_report_audit._check_em` discovers,
 #: kept narrow to the EM report proper — this gate reads NUMBERS, and an IR
@@ -437,7 +458,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"INCOMPLETE: electromigration was NOT screened — missing authority: "
           f"{rep['missing_authority']} ({rep.get('missing_authority_reason')}); "
           f"{screened} of {total} segment(s) screened against Jmax.")
-    return RC_OK
+    # A REFUSAL EXITS 2, NOT 0 (vibe-ic#1017). See the module docstring: this
+    # line says the screen did not happen, and until #1017 the next line handed
+    # a blocking clause a clean PASS anyway.
+    return RC_NOT_SCREENED
 
 
 if __name__ == "__main__":
