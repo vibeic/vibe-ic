@@ -32,7 +32,36 @@ DISCOVERY, NOT ENUMERATION
 * Run dirs are scraped from ``git ls-files`` (published == tracked), not typed.
 * Checkers are scraped by AST from ``programs/*.py``: a program qualifies when it
   has an ``ArgumentParser``, takes a directory-shaped positional, and reads file
-  CONTENT -- intersected with "appears nowhere in the canonical flow YAML".
+  CONTENT -- intersected with "the flow does not DRIVE it".
+
+WIRED MEANS DRIVEN, NOT MENTIONED
+---------------------------------
+"The flow drives it" is decided STRUCTURALLY, by walking the parsed gate spec
+and reading the program name out of each gate clause's command string.  It is
+NOT a substring test over the YAML text, and the difference is not academic:
+
+* vibe-ic#1012.  A step-36 comment naming ``l20_dft_scan_topology_actionable_check``
+  -- written to explain why that checker was NOT wired -- made the substring test
+  call it wired, so ``--only l20_…`` REFUSED with a zero denominator.  Documenting
+  a hold made the held checker invisible to the instrument that measures holds.
+* A gate clause's PATH ARGUMENT counted too: the string
+  ``reports/analog/mixed_signal/signoff_audit.json`` inside a
+  ``mixed_signal_signoff_check`` command made ``signoff_audit`` read as wired.
+* So did being a PREFIX of a wired name: ``si_mcf_sta`` matched because
+  ``si_mcf_sta_check`` is wired.
+
+A step-level ``programs:`` roster is deliberately NOT wiring either.  It is a
+declaration of what a step runs, not a gate that can fail -- and this
+instrument's whole output column is "would redden if PROMOTED TO BLOCKING",
+which is a question about gates.  Producers already populate the baseline
+(``lec_run``, ``qsf_gen``, ``analog_mc_yield_run``, ``l21_to_upf_emit``), so
+keeping the roster-only programs in the denominator is consistent with the
+existing population, not a new class of entrant.
+
+The wiring predicate is the HOUSE one -- ``flow_compliance_check
+._declared_gate_commands``, the same walk the flow runner itself uses to decide
+which gate programs a step declares -- imported rather than re-implemented, so
+the instrument and the flow can never drift into two dialects of "wired".
 * A small BESPOKE table covers the candidates whose CLI is not run-dir shaped
   (they take a report path, or require ``--spec``).  Each bespoke entry declares
   its own pre-flight locator, so "the artefact is not here" is decided by this
@@ -58,11 +87,14 @@ import re
 import shutil
 import subprocess
 import sys
+import shlex
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
+
+import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 PLUGIN = REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
@@ -83,6 +115,12 @@ sys.path.insert(0, str(PROGRAMS))
 # degraded isolation harness costs the published corpus. If this import breaks
 # the sweep must not start.
 import _run_isolation                                        # noqa: E402
+
+# The HOUSE wiring predicate (#1012). Also a hard import, and for the same
+# reason as `_run_isolation`: a degraded wiring test does not cost a column, it
+# silently re-decides the DENOMINATOR of every number this instrument prints.
+# There is deliberately no substring fallback -- the substring test IS the bug.
+from flow_compliance_check import _declared_gate_commands    # noqa: E402
 
 try:
     from gate_discloses_denominator_check import discloses as _discloses
@@ -184,9 +222,47 @@ def program_shape(path: Path) -> Optional[Dict[str, object]]:
                                    and _NONZERO_EXIT.search(src))}
 
 
+def flow_driven_programs(flow_yaml: Path) -> Set[str]:
+    """Program names the flow ACTUALLY DRIVES — read from the parsed gate spec.
+
+    Wiring lives in exactly two places in this YAML and nowhere else:
+
+      * a per-step gate clause -- ``program_exit_zero`` /
+        ``optional_program_exit_zero`` / ``advisory_program_exit_zero``,
+        each holding either a bare command string or a ``{command: ...}`` dict,
+        nested under ``all_of`` / ``any_of``;
+      * the ``final_gate``, whose shape is ``{program: …, args: …}``.
+
+    Only the FIRST token of a command string is a program name.  Everything
+    else in that string is an argument, and an argument that happens to contain
+    a program's name (``reports/analog/mixed_signal/signoff_audit.json``) is not
+    a wiring.  Comments never reach here at all -- PyYAML has already dropped
+    them by the time this walks the document, which is the structural reason
+    #1012 cannot recur rather than a promise that it will not.
+
+    Raises on an unparseable flow YAML.  Degrading to "nothing is wired" would
+    silently inflate the denominator by the whole program directory; degrading
+    to "everything is wired" would silently empty it.  Both are worse than a
+    stack trace.
+    """
+    doc = yaml.safe_load(flow_yaml.read_text(errors="replace")) or {}
+    names: Set[str] = set()
+    for step in doc.get("steps") or []:
+        if isinstance(step, dict):
+            names.update(_declared_gate_commands(step.get("gate")))
+    final_gate = doc.get("final_gate")
+    if isinstance(final_gate, dict):
+        # `final_gate` may carry gate clauses AND/OR the {program, args} shape.
+        names.update(_declared_gate_commands(final_gate))
+        prog = final_gate.get("program")
+        if isinstance(prog, str) and prog.strip():
+            names.add(shlex.split(prog)[0])
+    return names
+
+
 def discover_checkers(programs: Path, flow_yaml: Path) -> List[Dict[str, object]]:
-    """Verdict-shaped, content-reading, run-dir-drivable programs the flow
-    YAML never names.
+    """Verdict-shaped, content-reading, run-dir-drivable programs that no gate
+    clause in the canonical flow YAML drives.
 
     Programs carrying an extra REQUIRED option are KEPT.  The generic run-dir
     invocation cannot satisfy them, so they land in ERROR with argparse's own
@@ -194,13 +270,13 @@ def discover_checkers(programs: Path, flow_yaml: Path) -> List[Dict[str, object]
     denominator to flatter the result, the exact move
     ``extraction_coverage_denominator_audit`` exists to catch.
     """
-    yaml_text = flow_yaml.read_text(errors="replace")
+    driven = flow_driven_programs(flow_yaml)
     found: List[Dict[str, object]] = []
     for p in sorted(programs.glob("*.py")):
         if p.name.startswith("_"):
             continue                      # shared helper, not a CLI
-        if p.stem in yaml_text:
-            continue                      # already driven by the flow
+        if p.stem in driven:
+            continue                      # a gate clause really invokes it
         shape = program_shape(p)
         if not shape or not shape["verdict_shaped"]:
             continue
