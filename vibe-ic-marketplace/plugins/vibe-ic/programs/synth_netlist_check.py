@@ -763,6 +763,161 @@ def audit_area_stats(netlist_path: Path) -> Tuple[List[Finding], dict]:
     return findings, info
 
 
+# ---------------------------------------------------------------------------
+# THE CELL CENSUS MUST REACH THE VERDICT (63x8 artefact finding, step 9 / dim 2)
+#
+# THE DEFECT. This program counts every cell instance in the netlist and
+# ENUMERATES them by type in `stats.cell_type_counts`. It then forms no opinion
+# about any of it. MEASURED on the published run named by the ledger entry
+# ART-NETLIST-PRIMITIVE-SWAP, substituting `$_AND_` for `$_NAND_` at all 221
+# instantiation sites — 221 gates whose output is inverted with respect to what
+# synthesis produced, a netlist that no longer implements the RTL:
+#
+#     synth_netlist_check --netlist phase2/stage2/synth/netlist.v --json ...
+#         -> rc=0   total_cells 449 before and after,
+#            and `$_AND_: 221` PRINTED IN THE GATE'S OWN REPORT
+#
+# The gate listed the substituted primitive and passed. A report that states a
+# fact and passes anyway is not a weaker check than one that does not state it;
+# it is the same check with better documentation, and it reads to a reviewer as
+# though the fact was considered.
+#
+# WHAT DECIDES IT — THE TOOL'S OWN OUTPUT. `design_one_shot_runner.
+# step_yosys_synth` writes the synthesiser's output to `netlist_yosys.v` and
+# COPIES it to the canonical `netlist.v` that every downstream gate reads. So
+# the tool's own artefact is on disk beside the one under audit, and the census
+# of the audited file is a checkable claim about it rather than a number with
+# no second opinion anywhere. A cell census that disagrees with the census of
+# the file the tool actually wrote is one of two things, and both block: the
+# audited netlist was edited after synthesis, or it is a previous pass's ghost.
+#
+# WHY THE ALIAS AND NOT THE SYNTH LOG — MEASURED, NOT PREFERRED. The obvious
+# second authority is the yosys `stat` block, and it is NOT used here, because
+# one synthesis invocation writes SEVERAL netlists and logs a stat block for
+# each. Measured on that same run, the LAST stat block in the two logs beside
+# this netlist describes two different files:
+#
+#     yosys.log  -> 449 cells  {$_DFF_P_ 65, $_NAND_ 221, $_NOR_ 128, $_NOT_ 35}
+#     synth.log  -> 287 cells  (the technology-mapped census of `spm_synth.v`)
+#
+# Only the first describes `netlist.v`. A rule of the shape "compare against the
+# last stat block in the log beside the netlist" would raise a CONTRADICTION on
+# a run where nothing whatever is wrong — a ruler change reported as a defect,
+# which is the failure this campaign is least entitled to commit. Nothing here
+# reads a log; if a log-sourced authority is ever added it needs its own way to
+# say WHICH netlist a block describes, and that is not this change.
+#
+# ABSENCE IS DISCLOSED, NEVER FAILED. A netlist with no tool-emitted sibling is
+# reported as uncorroborated with the count of sources that were found (zero),
+# and the verdict is formed exactly as before. That follows the house rule
+# `gate_zero_denominator_refuses_check` states in its own words — refusing on a
+# zero denominator is a separate, individually measured change, and a blanket
+# one was tried in this repo and reverted after it flipped 182 of 182 run dirs.
+# ---------------------------------------------------------------------------
+#: The name `design_one_shot_runner` writes the SYNTHESISER'S OWN output under,
+#: before copying it to the canonical `netlist.v`. A literal, because it is a
+#: fixed part of the flow's own artefact contract and pinned by its own test —
+#: not a chip, PDK, or process token.
+TOOL_EMITTED_NETLIST_NAME = "netlist_yosys.v"
+
+
+def tool_emitted_netlist(netlist_path: Path) -> Optional[Path]:
+    """The synthesiser's own output file beside ``netlist_path``, or ``None``.
+
+    ``None`` when it is absent, unreadable, or IS the file under audit — a gate
+    pointed straight at the tool's output has no independent second copy to
+    corroborate against, and pretending otherwise would compare a file with
+    itself and call the agreement evidence.
+    """
+    candidate = netlist_path.parent / TOOL_EMITTED_NETLIST_NAME
+    if not candidate.is_file():
+        return None
+    try:
+        if candidate.resolve() == netlist_path.resolve():
+            return None
+    except OSError:                       # pragma: no cover - defensive
+        return None
+    return candidate
+
+
+def audit_cell_census(netlist_path: Path, cell_counts: Dict[str, int],
+                      total_cells: int) -> Tuple[List[Finding], dict]:
+    """``(findings, info)`` for the census cross-check against the tool's output.
+
+    The comparison is over the CELL CENSUS, not over bytes. Two files that
+    instantiate the same cells in the same numbers are the same design however
+    they are formatted, and a byte comparison would block on a re-write that
+    changed nothing — the same wrong quantity `audit_area_stats` documents
+    rejecting for mtime and filename.
+    """
+    findings: List[Finding] = []
+    info: dict = {
+        "corroborating_sources": 0,
+        "source": None,
+        "audited_total_cells": total_cells,
+        "tool_total_cells": None,
+        "status": "",
+    }
+
+    source = tool_emitted_netlist(netlist_path)
+    if source is None:
+        info["status"] = "NO_TOOL_EMITTED_NETLIST"
+        findings.append(Finding(
+            severity="INFO",
+            category="CELL_CENSUS_UNCORROBORATED",
+            message=(
+                f"the cell census was read from the netlist under audit and "
+                f"corroborated against 0 independent source(s): no "
+                f"{TOOL_EMITTED_NETLIST_NAME} beside it. The counts below are "
+                f"this file's own word about itself."),
+            details=f"searched: {netlist_path.parent / TOOL_EMITTED_NETLIST_NAME}",
+        ))
+        return findings, info
+
+    try:
+        tool_text = source.read_text(errors="replace")
+    except OSError as exc:
+        info["status"] = "TOOL_NETLIST_UNREADABLE"
+        findings.append(Finding(
+            severity="WARNING",
+            category="CELL_CENSUS_UNCORROBORATED",
+            message=(
+                f"{source.name} is present but could not be read "
+                f"({type(exc).__name__}), so the census is uncorroborated. NOT "
+                f"read is not agreement."),
+        ))
+        return findings, info
+
+    tool_total, tool_counts = count_cell_instances(tool_text)
+    info.update({"corroborating_sources": 1, "source": str(source),
+                 "tool_total_cells": tool_total})
+
+    audited = dict(cell_counts)
+    types = sorted(set(audited) | set(tool_counts))
+    differing = {t: {"audited": audited.get(t, 0), "tool": tool_counts.get(t, 0)}
+                 for t in types if audited.get(t, 0) != tool_counts.get(t, 0)}
+    info["cell_types_differing"] = differing
+
+    if not differing and tool_total == total_cells:
+        info["status"] = "AGREE"
+        return findings, info
+
+    info["status"] = "CONTRADICTS"
+    findings.append(Finding(
+        severity="ERROR",
+        category="CELL_CENSUS_CONTRADICTS_TOOL",
+        message=(
+            f"the audited netlist instantiates a different set of cells from "
+            f"the one the synthesiser itself wrote beside it "
+            f"({source.name}): {total_cells} cell(s) here against "
+            f"{tool_total} there. A netlist that disagrees with the tool's own "
+            f"output was either edited after synthesis or is a previous pass's "
+            f"ghost, and neither is the design this step certifies."),
+        details=f"per-type disagreement (audited vs tool): {differing}",
+    ))
+    return findings, info
+
+
 def build_report(findings: List[Finding], stats: dict,
                  netlist_path: str, min_cells: int) -> dict:
     n_err = sum(1 for f in findings if f.severity == "ERROR")
@@ -775,6 +930,15 @@ def build_report(findings: List[Finding], stats: dict,
             "file_exists": stats["file_exists"],
             "total_cells": stats["total_cells"],
             "unique_cell_types": stats["unique_cell_types"],
+            # A PASS states how much it looked at. `total_cells` is the
+            # netlist's own word about itself; this is how many INDEPENDENT
+            # sources that word was checked against, so a reader can tell an
+            # uncorroborated census from a corroborated one without opening
+            # `stats`.
+            "cell_census_corroborating_sources":
+                stats.get("cell_census", {}).get("corroborating_sources", 0),
+            "cell_census_status":
+                stats.get("cell_census", {}).get("status", ""),
             "findings_count": len(findings),
             "error_count": n_err,
             # since v1.1.0 (#427): WARNING/INFO findings no longer fail the gate —
@@ -813,6 +977,18 @@ def main(argv: list = None) -> int:
         area_findings, area_info = audit_area_stats(netlist_path)
         findings.extend(area_findings)
         stats["area_stats"] = area_info
+
+    # The census this program already enumerated, put to the tool that produced
+    # it. Gated on `has_module` rather than `file_exists`: the earlier returns
+    # for an empty / module-less netlist leave `cell_type_counts` empty, and
+    # comparing an empty census against a real one would relabel an existing
+    # EMPTY_NETLIST error as a contradiction.
+    if stats.get("has_module"):
+        census_findings, census_info = audit_cell_census(
+            netlist_path, stats.get("cell_type_counts", {}),
+            stats.get("total_cells", 0))
+        findings.extend(census_findings)
+        stats["cell_census"] = census_info
 
     report = build_report(findings, stats, str(netlist_path), args.min_cells)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)

@@ -121,23 +121,30 @@ the number of sites each must find, the flow step whose gate is re-run, the cell
 that step's own gate command through ``flow_compliance_check``'s own verdict
 mapping — so the entry cannot claim a red the flow would not honour.
 
-**HALF THE SEED SET PROVES A CELL CANNOT REDDEN, AND THAT IS THE DELIVERABLE.**
-Four of the eight entries record :data:`CANNOT_REDDEN`. Multiplying every figure
-in a power report by 1000 does not move step 33's gate. Raising a power-grid
-segment current by a factor of 25000 does not move step 25's. Substituting 221
-NAND primitives for AND does not move step 9's, and the gate's own report
-enumerates the substituted cell while passing. Rewriting the router's FINAL
-iteration from 0 violations to 12 does not move step 21's — while rewriting the
-runner's SUMMARY of that same file to 17 does, which is the pair that says what
-the green at step 21 is actually a statement about.
+**HALF THE SEED SET PROVED A CELL CANNOT REDDEN, AND THAT WAS THE DELIVERABLE.**
+Four of the eight entries recorded :data:`CANNOT_REDDEN` on 2026-08-11.
+Multiplying every figure in a power report by 1000 does not move step 33's gate.
+Raising a power-grid segment current by a factor of 25000 does not move step
+25's. Those two are still open and still pinned.
 
-These are published as ledger entries, not hidden as gaps: an entry that says
+TWO OF THE FOUR ARE NOW CLOSED, and they were ONE DEFECT IN TWO PLACES: the
+gate believed a summary written by the RUNNER instead of the output written by
+the TOOL. Substituting 221 NAND primitives for AND did not move step 9's gate
+while that gate's own report ENUMERATED the substituted cell; rewriting the
+router's FINAL iteration from 0 violations to 12 did not move step 21's, while
+rewriting the runner's SUMMARY of the same file to 17 did — the pair that said
+what the green at step 21 was actually a statement about. Both now redden,
+because each gate reads the tool's own artefact and treats a disagreement
+between two published statements of one quantity as a finding.
+
+These were published as ledger entries, not hidden as gaps: an entry that says
 "this mutation should redden cell X and does not" is precisely the record this
 campaign exists to produce. :data:`ARTEFACT_CANNOT_REDDEN_AS_MEASURED` pins the
 count so it cannot drift, and each such entry is a PIN, not a waiver — the day a
 gate learns to notice, its replay stops matching the record and the gate file
 fails by name, demanding the entry be updated in the same change that closes the
-gap. Closing them is Phase 1 and is deliberately NOT done here.
+gap. That is exactly how the two closures above were forced to declare
+themselves: the count moved from 4 to 2 in the same diff.
 
 WHAT THIS CHANNEL COSTS, AND HOW IT IS SCHEDULED. Every artefact entry is
 re-executed in BOTH replay modes — there is no "witness subset" to hide in,
@@ -1301,11 +1308,99 @@ ARTEFACT_MUTATIONS: Tuple[ArtefactMutation, ...] = (
                  "three spliced items are found as three real violations."),
     ),
 
+    # ---------------- CLOSED IN PHASE 1 ---------------------------------
+    # Both entries below were recorded CANNOT_REDDEN on 2026-08-11 and are
+    # REDDENS as of 2026-08-11 (D9 Phase 1). They are one defect in two places:
+    # THE GATE BELIEVED A SUMMARY WRITTEN BY THE RUNNER INSTEAD OF THE OUTPUT
+    # WRITTEN BY THE TOOL. Neither gate was made stricter about violations or
+    # about primitives; each was made to READ THE TOOL'S OWN ARTEFACT and to
+    # treat a disagreement between two published statements of one quantity as
+    # a finding rather than a tie broken silently in the summary's favour.
+    #
+    # MEASURED BLAST RADIUS over all 107 published run dirs, each gated on a
+    # `cp -a` copy: step 21 PASS -> FAIL 0, step 9 PASS -> FAIL 1
+    # (`evaluation/phase1_parity/sgmii`, adjudicated by hand — its netlist.v
+    # carries signals its own RTL never declares while the tool's own output
+    # beside it carries the RTL's, i.e. a stale ghost). No run went FAIL ->
+    # PASS. The corroboration is not inert: all 14 published router reports and
+    # all 15 gated netlists were corroborated against a tool source, so the
+    # zeros above are measured agreement, not absence.
+    ArtefactMutation(
+        name="ART-ROUTER-FINAL-ITERATION",
+        dim=2, step_id="21", run_dir=_RUN,
+        artefact="reports/phase3/drc_router.rpt",
+        edits=(Edit("    Completing 100% with 0 violations.\n"
+                    "[INFO DRT-0199]   Number of violations = 0.\n"
+                    "[INFO DRT-0267] cpu time = 00:00:06",
+                    "    Completing 100% with 12 violations.\n"
+                    "[INFO DRT-0199]   Number of violations = 12.\n"
+                    "[INFO DRT-0267] cpu time = 00:00:06", 1),),
+        gate=("drc_report_check . --mode drc --under phase3/stage3/pnr "
+              "--under reports/phase3/drc_router.rpt "
+              "--json reports/phase3/drc_router.json"),
+        what="rewrite the router's FINAL detailed-route iteration from "
+             "DRT-0199 = 0 violations to 12, leaving the runner's own summary "
+             "line at the top of the same file untouched",
+        breaks="the router finishing with 12 unresolved violations while the "
+               "summary above it still says 0. Same file, same step, same gate "
+               "as ART-DRC-ROUTER-SUMMARY, which ALSO reddens — the pair is "
+               "the point: before this was closed the gate believed the "
+               "runner's summary and never read the tool.",
+        expected=REDDENS,
+        red_signal='"real_violation_total": 12',
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="CLOSED. `_check_drc` now reads the router's own final "
+                 "iteration through the SHARED grammar "
+                 "`_signoff_drc_format.router_iter_last_count` — the one "
+                 "`phase3_one_shot_runner._drt_final_violations` already uses, "
+                 "so the cross-check cannot disagree with the runner by "
+                 "reading a different grammar — and raises "
+                 "DRC_SUMMARY_CONTRADICTS_TOOL when the summary disagrees. "
+                 "The corpus says the disagreement is real and not "
+                 "hypothetical: 7 of the 14 published router reports carry a "
+                 "summary that contradicts their own tool transcript, which is "
+                 "the residue of a runner bug the runner itself has since "
+                 "fixed (see the comment at phase3_one_shot_runner:32190) and "
+                 "that this gate could not see. Those 7 were already red and "
+                 "stay red; what is new is that the gate now says WHY."),
+    ),
+    ArtefactMutation(
+        name="ART-NETLIST-PRIMITIVE-SWAP",
+        dim=2, step_id="9", run_dir=_RUN,
+        artefact="phase2/stage2/synth/netlist.v",
+        edits=(Edit("\\$_NAND_", "\\$_AND_", 221),),
+        gate=("synth_netlist_check --netlist phase2/stage2/synth/netlist.v "
+              "--json reports/phase2/synth_netlist.json"),
+        what="substitute the generic primitive $_NAND_ for $_AND_ at all 221 "
+             "instantiation sites in the synthesised netlist",
+        breaks="221 gates whose output is inverted with respect to what "
+               "synthesis produced — a netlist that no longer implements the "
+               "RTL. This is the substitution a bad ECO script or a "
+               "mis-ordered techmap pass leaves behind.",
+        expected=REDDENS,
+        red_signal="CELL_CENSUS_CONTRADICTS_TOOL",
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="CLOSED. The cell census this gate ALREADY enumerated now "
+                 "decides something: it is compared against the census of "
+                 "`netlist_yosys.v`, the file the synthesiser itself wrote and "
+                 "which the runner copies to the audited `netlist.v`. The "
+                 "gate's finding names both sides per type ($_AND_ 221 vs 0, "
+                 "$_NAND_ 0 vs 221). NOT done, and measured rather than "
+                 "preferred: the yosys `stat` block is NOT used as a second "
+                 "authority, because one invocation logs a block per netlist "
+                 "it writes and on this very run the last block in synth.log "
+                 "describes a DIFFERENT file (287 technology-mapped cells vs "
+                 "this netlist's 449) — a rule keyed on it would raise a "
+                 "contradiction where nothing is wrong."),
+    ),
+
     # ---------------- PROVE THE CELL CANNOT REDDEN ----------------------
-    # These four are the deliverable, not the residue. Each is a cell that is
+    # These two are the deliverable, not the residue. Each is a cell that is
     # ENFORCED, green, and unmoved by a defect of a magnitude no reviewer would
-    # call marginal. They are Phase 1's work list, and they are pinned here so
-    # that closing one is a visible diff rather than a silent improvement.
+    # call marginal. They are the remaining work list, and they are pinned here
+    # so that closing one is a visible diff rather than a silent improvement.
     ArtefactMutation(
         name="ART-EM-CURRENT-DENSITY",
         dim=2, step_id="25", run_dir=_RUN,
@@ -1366,82 +1461,16 @@ ARTEFACT_MUTATIONS: Tuple[ArtefactMutation, ...] = (
                  "checked; the 12 `0.00e+00` entries are correctly untouched "
                  "because zero times 1000 is still zero."),
     ),
-    ArtefactMutation(
-        name="ART-NETLIST-PRIMITIVE-SWAP",
-        dim=2, step_id="9", run_dir=_RUN,
-        artefact="phase2/stage2/synth/netlist.v",
-        edits=(Edit("\\$_NAND_", "\\$_AND_", 221),),
-        gate=("synth_netlist_check --netlist phase2/stage2/synth/netlist.v "
-              "--json reports/phase2/synth_netlist.json"),
-        what="substitute the generic primitive $_NAND_ for $_AND_ at all 221 "
-             "instantiation sites in the synthesised netlist",
-        breaks="221 gates whose output is inverted with respect to what "
-               "synthesis produced — a netlist that no longer implements the "
-               "RTL. This is the substitution a bad ECO script or a "
-               "mis-ordered techmap pass leaves behind.",
-        expected=CANNOT_REDDEN,
-        red_signal="",
-        observed="the gate's verdict does not move: baseline PASS, mutant PASS, "
-                 "total_cells 449 before and after. The gate's own report "
-                 "ENUMERATES `$_AND_` in its cell_type_counts, so it is not "
-                 "that the substitution was invisible to it — the gate counts "
-                 "cells and checks the netlist parses and is non-empty, and "
-                 "forms no opinion about which primitive belongs where. "
-                 "Function is nobody's business at this step; the equivalence "
-                 "check that would notice is at a step this gate does not "
-                 "block on.",
-        measured=Measurement(
-            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
-            note="RECORDED AS A FINDING. Note also what the corpus shows: every "
-                 "netlist.v published under benchmark-data/ is generic-primitive "
-                 "form with zero technology-mapped cells, so the swap could only "
-                 "be primitive-for-primitive. That is a separate observation "
-                 "and it is NOT actioned here."),
-    ),
-    ArtefactMutation(
-        name="ART-ROUTER-FINAL-ITERATION",
-        dim=2, step_id="21", run_dir=_RUN,
-        artefact="reports/phase3/drc_router.rpt",
-        edits=(Edit("    Completing 100% with 0 violations.\n"
-                    "[INFO DRT-0199]   Number of violations = 0.\n"
-                    "[INFO DRT-0267] cpu time = 00:00:06",
-                    "    Completing 100% with 12 violations.\n"
-                    "[INFO DRT-0199]   Number of violations = 12.\n"
-                    "[INFO DRT-0267] cpu time = 00:00:06", 1),),
-        gate=("drc_report_check . --mode drc --under phase3/stage3/pnr "
-              "--under reports/phase3/drc_router.rpt "
-              "--json reports/phase3/drc_router.json"),
-        what="rewrite the router's FINAL detailed-route iteration from "
-             "DRT-0199 = 0 violations to 12, leaving the runner's own summary "
-             "line at the top of the same file untouched",
-        breaks="the router finishing with 12 unresolved violations while the "
-               "summary above it still says 0. Same file, same step, same gate "
-               "as ART-DRC-ROUTER-SUMMARY, which DOES redden — the pair is the "
-               "point: the gate believes the runner's summary, not the tool.",
-        expected=CANNOT_REDDEN,
-        red_signal="",
-        observed="the gate's verdict does not move: baseline PASS, mutant PASS, "
-                 "and its own stdout still reads `real_violation_total=0` with "
-                 "the router's last word reading 12 in the file it just parsed. "
-                 "The count is taken from the `violation report:` summary the "
-                 "RUNNER writes at the top of the artefact; the tool's own "
-                 "final iteration is quoted in the same file for provenance and "
-                 "is never read. A runner that mis-summarises its own tool is "
-                 "invisible here, and so is anyone who edits only the summary.",
-        measured=Measurement(
-            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
-            note="RECORDED AS A FINDING, and the sharpest one in the set: the "
-                 "SAME gate on the SAME file reddens for a summary edit and "
-                 "not for a tool-output edit, so the cell's green is a "
-                 "statement about the runner's arithmetic, not the router's."),
-    ),
 )
 
 #: How many artefact entries currently prove the cell they target CANNOT be
 #: reddened from artefact content. PINNED, exactly like the emptiness of
 #: :data:`NOT_FALSIFIABLE`, so the number can only move in a visible diff.
 #: Closing one of these is Phase 1 work and is deliberately NOT done here.
-ARTEFACT_CANNOT_REDDEN_AS_MEASURED: int = 4
+#: 4 on 2026-08-11 when the channel was seeded; 2 after D9 Phase 1 closed
+#: ART-ROUTER-FINAL-ITERATION and ART-NETLIST-PRIMITIVE-SWAP. It moved in the
+#: same change that closed them, which is the whole point of pinning it.
+ARTEFACT_CANNOT_REDDEN_AS_MEASURED: int = 2
 
 #: Cells no constructed mutation could redden. EMPTY as measured 2026-08-06.
 #: An entry here is a finding to publish, never a reason to weaken a predicate.
