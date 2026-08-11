@@ -1,0 +1,5 @@
+vibeic_eda_version_sync: VERSION = 0.2.84
+  install-doc refs checked : 25 across 10 file(s)
+  repo-wide ghcr pointers  : 16
+  anchor-no-regress        : OK (0.2.84 >= committed 0.2.84)
+[PASS] all live pointers == 0.2.84 and the anchor has not regressed. Upstream currency is NOT judged here — run --report-upstream (vibe-ic#927).

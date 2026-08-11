@@ -1,0 +1,19 @@
+vibeic_eda_upstream_report: anchor = 0.2.84
+  observed_at (UTC)        : 2026-08-11T03:51:07Z
+  floating tag under watch : :latest (mutable=True)
+[FAIL] STALE ANCHOR: VERSION=0.2.84 is OLDER than the newest published image tag 99.99.99 (source=override:VIBEIC_EDA_PUBLISHED_TAG).
+       Internal consistency is not correctness — every pointer equal to VERSION is *consistently wrong*.
+       Fix: python3 sync_image_version.py --set 99.99.99
+  latest-vs-anchor         : SKIPPED (VIBEIC_EDA_PUBLISHED_TAG override set — no registry to query)
+Traceback (most recent call last):
+  File "/home/reyerchu/_wfwt_g927/tools/vibeic-eda/sync_image_version.py", line 830, in <module>
+    raise SystemExit(main())
+  File "/home/reyerchu/_wfwt_g927/tools/vibeic-eda/sync_image_version.py", line 818, in main
+    return do_report_upstream(version, args.require_remote, args.json_path)
+  File "/home/reyerchu/_wfwt_g927/tools/vibeic-eda/sync_image_version.py", line 669, in do_report_upstream
+    Path(json_path).write_text(json.dumps(record, indent=2) + "\n",
+  File "/usr/lib/python3.10/pathlib.py", line 1154, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+  File "/usr/lib/python3.10/pathlib.py", line 1119, in open
+    return self._accessor.open(self, mode, buffering, encoding, errors,
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/does-not-exist-g927/x.json'
