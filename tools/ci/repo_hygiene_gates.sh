@@ -595,11 +595,22 @@ run "L4 -> SystemRDL disposition"       "$ROOT" python3 "$PG/l4_systemrdl_export
 # orchestrator report saying PASS_WITH_WAIVERS next to an audit saying FAIL.
 # Deleting the failures (#421) was refused on measurement — that would make
 # "we never ran this" and "we ran it, it failed, and we kept the record" the
-# same state. The repair is to LABEL, and the label has to be gated: the
+# same state.
+#
+# 2026-08-12: THE OWNER RULED THE OTHER WAY (vibe-ic#1015, #1010). Run output
+# that does not pass is WITHDRAWN from publication, and 17 published run roots
+# came down. The #421 concern above is answered by GIT, not by publication: a
+# withdrawal is a `git rm`, so "never ran" and "ran and failed" remain
+# distinguishable to anyone reading history — the published tree simply is no
+# longer where the second one is kept. The measured counts in the paragraph
+# above are from 2026-08-02 and are left as measured then; INDEX.md now reports
+# 17 cells, and it is regenerated rather than hand-edited.
+#
+# LABELLING IS STILL GATED, and that is why this line stays: the
 # hand-maintained BENCHMARK_IC_CAMPAIGN_STATUS.md is the version without a
-# gate, and all three of its citations for the converged cells point at
-# directories that no longer exist. INDEX.md is a pure function of the tracked
-# artefacts, so a verdict that changes while its row does not is a FAIL here.
+# gate, and its citations for the converged cells point at directories that no
+# longer exist. INDEX.md is a pure function of the tracked artefacts, so a
+# verdict that changes while its row does not is a FAIL here.
 run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_index.py" --check --root "$ROOT"
 
 # vibe-ic#459 follow-up — the PROGRAMS index, alongside the evidence index above.
