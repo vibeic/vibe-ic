@@ -35,8 +35,8 @@ checkers (no fabrication, no hallucinated PASS).
 │       ├── ip-catalog/           open-source IP catalog (manifests)
 │       └── benchmark/            benchmark harness + registry
 ├── IP/                         open-core git submodules (serv · ibex · sha256 · opentitan)
-├── benchmark-data/             the benchmark corpus (~385 MB tracked) — see "The benchmark corpus" below
-│   ├── ic/                      9 canonical benchmark ICs driven doc → RTL → GDS
+├── benchmark-data/             the benchmark corpus (~191 MB tracked) — see "The benchmark corpus" below
+│   ├── ic/                      9 canonical benchmark ICs driven doc → RTL → GDS (3 publish run output today)
 │   └── evaluation/              7 open-benchmark / parity evaluation sets
 ├── benchmark_external/         external-benchmark harness notes (CVDP legal-input definition)
 ├── tools/                      repo dev / CI utilities (second pytest tree)
@@ -236,8 +236,8 @@ down), split two ways by **what the data is for**:
 
 | Sub-tree | Tracked size | What it holds |
 |---|---|---|
-| [`ic/`](benchmark-data/ic) | 234 MB | the 9 canonical benchmark ICs, driven end-to-end (documents → RTL → GDS) |
-| [`evaluation/`](benchmark-data/evaluation) | 151 MB | 7 evaluation sets — open-benchmark runs + the Phase-1 parity sweep |
+| [`ic/`](benchmark-data/ic) | 122 MB | the 9 canonical benchmark ICs, driven end-to-end (documents → RTL → GDS) — 3 publish run output today; see the table below |
+| [`evaluation/`](benchmark-data/evaluation) | 69 MB | 7 evaluation sets — open-benchmark runs + the Phase-1 parity sweep |
 
 A local working tree grows far larger than this (re-run outputs, `clean_run_*/`
 and other generated directories are gitignored, not committed). The upstream
@@ -258,17 +258,25 @@ The ICs we push through the *whole* flow under the corrected protocol in
 the input is **curated design documents only** — no RTL, no reference netlist —
 so a run cannot quietly copy the answer it is being scored against.
 
-| IC | What it is |
-|---|---|
-| `spm` | configurable N-bit serial-parallel integer multiplier |
-| `sha256` | SHA-256 hash core |
-| `subservient` | bit-serial RISC-V core |
-| `ibex` | 32-bit RISC-V CPU core |
-| `opentitan_aes` | AES block from the OpenTitan family |
-| `caravel_user_project` | user-project harness for the Caravel SoC frame |
-| `u_hawaii_adc` | **the analog / mixed-signal one** — runs the Analog A1-A9 track (spec → topology → sizing → corner sweep → layout → post-layout resim → hardmacro) rather than the digital Phase-3 track |
-| `edge_llm_accel` | 64×64 weight-stationary INT4 systolic GEMM core, driven doc → GDS on the `nangate45` enablement |
-| `edge_llm_matmul_accel` | one INT4 matmul tile — the plain-language-dialogue → IC sample (front door, blind), on `sky130` |
+**Six of these nine currently publish no run output.** Under the 2026-08-12 owner
+ruling (vibe-ic#1015, #1010), published run output that carries an unacknowledged
+failure is withdrawn, and benchmark-data that does not pass is not published. What
+remains for those six is their **design input** — `input/`, the only legal input —
+which is deliberately kept, plus any older self-contained sub-run records. Their
+runs are not lost: `git rm` retains every removed file in history. The column below
+says which cells a reader can actually inspect today.
+
+| IC | Published run output today | What it is |
+|---|---|---|
+| `spm` | **yes** — 3 cells | configurable N-bit serial-parallel integer multiplier |
+| `sha256` | **yes** | SHA-256 hash core |
+| `u_hawaii_adc` | **yes** | **the analog / mixed-signal one** — runs the Analog A1-A9 track (spec → topology → sizing → corner sweep → layout → post-layout resim → hardmacro) rather than the digital Phase-3 track |
+| `subservient` | withdrawn — `input/` only | bit-serial RISC-V core |
+| `ibex` | withdrawn — `input/` only | 32-bit RISC-V CPU core |
+| `opentitan_aes` | withdrawn — `input/` only | AES block from the OpenTitan family |
+| `caravel_user_project` | withdrawn — `input/` only | user-project harness for the Caravel SoC frame |
+| `edge_llm_accel` | withdrawn — `input/` only | 64×64 weight-stationary INT4 systolic GEMM core, driven doc → GDS on the `nangate45` enablement |
+| `edge_llm_matmul_accel` | withdrawn — `input/` only | one INT4 matmul tile — the plain-language-dialogue → IC sample (front door, blind), on `sky130` |
 
 A typical IC directory:
 
@@ -294,8 +302,9 @@ Where the six-pillar
 gate (functional coverage · 56-step comparison vs the open-source reference ·
 code coverage · FPGA verification · analog closed-loop · design-for-ECO
 readiness) has been driven to completion, the IC also carries a
-`BENCHMARK_VERIFICATION_REPORT.md` — present today for `spm`, `sha256`,
-`subservient`, and `u_hawaii_adc`.
+`BENCHMARK_VERIFICATION_REPORT.md` — present today for `sha256` and `spm`.
+(`subservient` and `u_hawaii_adc` also carried one; both sat inside run output
+withdrawn under vibe-ic#1015 and came down with it.)
 
 ### `evaluation/` — the 7 evaluation sets
 
@@ -306,7 +315,7 @@ authoring model; the v1.4.81 VerilogEval runs do not).
 
 | Set | Tracked size | What it is |
 |---|---|---|
-| `phase1_parity` | 139 MB | the **87-protocol Phase-1 parity sweep** — does the deterministic Phase-1 engine extract the same protocol facts as the AI reference? One directory per protocol, each holding the engine's `phase1/generated_docs/L*.json` and the extraction-coverage / parity reports under `reports/` |
+| `phase1_parity` | 53 MB | the Phase-1 parity sweep, **81 protocol cells published today of the 87 swept** — does the deterministic Phase-1 engine extract the same protocol facts as the AI reference? One directory per protocol, each holding the engine's `phase1/generated_docs/L*.json` and the extraction-coverage / parity reports under `reports/` |
 | `cvdp` | 7.6 MB | NVIDIA CVDP campaign — the compliance-hardened re-runs behind the 243/302 figure |
 | `verilogeval_v2` | 2.5 MB | VerilogEval-v2 spec-to-RTL runs |
 | `verilogeval_human` | 1.3 MB | VerilogEval-Human code-completion runs |
