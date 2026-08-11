@@ -139,6 +139,24 @@ def test_the_other_published_cells_keep_their_verdicts():
     bad = {k: v for k, v in seen.items() if v not in
            ("PASS", "FAIL", "SKIPPED-CONDITION")}
     assert not bad, bad
-    # the three that are not SKIPPED-CONDITION are the ones this touches
-    assert seen.get(str(root / "spm" / "v1.5.58_ihp-sg13g2")) == "PASS"
-    assert seen.get(str(root / "subservient")) == "PASS"
+    # 2026-08-12, vibe-ic#1028 — these two lines named two cells, and BOTH are
+    # among the 16 roots withdrawn from publication by #1015/#1010. Written as
+    # `seen.get(<gone>) == "PASS"` they evaluate `None == "PASS"` and fail; the
+    # tempting repair is to drop them, which passes and measures nothing.
+    #
+    # They are RETIRED here, in the diff, rather than generalised. Generalising
+    # them to "every decided cell is PASS" was tried and is FALSE: a surviving
+    # cell decides FAIL, and FAIL is one of the verdicts the `bad` check three
+    # lines above deliberately admits. Asserting it would have replaced a lost
+    # measurement with a wrong one, which is worse than losing it.
+    #
+    # What survives is the part that does not depend on which cells exist: the
+    # `bad` assertion above still pins that every cell reaches one of the three
+    # legal verdicts, so a resolver change that produced a NEW verdict shape
+    # still fails here. What is lost is the two-cell PASS anchor, and there is
+    # no surviving substitute — the decided set is not all-PASS.
+    decided = {k: v for k, v in seen.items() if v != "SKIPPED-CONDITION"}
+    assert decided, (
+        "every cell carrying formal/ now reports SKIPPED-CONDITION, so this "
+        "guard examined nothing that could move. REFUSING rather than passing "
+        "over an empty decided-set (vibe-ic#1028).")

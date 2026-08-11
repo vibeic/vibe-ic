@@ -242,9 +242,28 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     # Pinned separately from `all_skipped`: these are the documents that
     # USED to reach PASS. If this reaches 0 the regression is invisible in
     # every other number here.
-    assert new_arm == 6, (
-        f"expected 6 tracked projects to reach the examined-set-empty arm, "
-        f"saw {new_arm}")
+    # 2026-08-12, vibe-ic#1028: 6 -> 1, and every one of the five lost is
+    # NAMED rather than inferred from the difference. Re-running this arm over
+    # the pre-withdrawal tree and marking which projects sit under one of the
+    # 16 withdrawn roots:
+    #     ibex                                    <- withdrawn
+    #     opentitan_aes                           <- withdrawn
+    #     sha256/clean_run_v1422_20260715         <- withdrawn
+    #     sha256/clean_run_v1427_20260715         <- withdrawn
+    #     subservient                             <- withdrawn
+    #     sha256                                     SURVIVES
+    #     6  -  5  =  1      (exact; the survivor is the one not marked)
+    # The equality is kept rather than relaxed to `> 0`, because this line's
+    # own reason for existing is that a SHRINKING denominator is the defect —
+    # a floor at 1 would let the last one go without a word. It is now one
+    # cell away from zero, which the assertion message says out loud.
+    assert new_arm == 1, (
+        f"expected 1 tracked project to reach the examined-set-empty arm, "
+        f"saw {new_arm}. This population was 6 before the withdrawal of "
+        f"vibe-ic#1015/#1010 took five of them; ONE published cell is now the "
+        f"entire denominator, so if it goes the arm is unexercised and the "
+        f"regression this file guards becomes invisible in every other number "
+        f"here. Do not relax this to a floor — publish a cell instead.")
     # Pinned so a silent vocabulary drift in the producer shows up as a diff
     # rather than as a quietly shrinking denominator.
     #
@@ -277,4 +296,16 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     #
     # `new_arm` is deliberately NOT moved: it holds at 6 across the retirement,
     # so the arm this landing added is still reached by every project it was.
-    assert (nonempty, declared, examined, all_skipped) == (35, 130, 64, 14)
+    # 2026-08-12, vibe-ic#1028: (35, 130, 64, 14) -> (21, 55, 29, 9). Measured
+    # the same way the #905 note above was — the census was re-run over the 16
+    # withdrawn roots ALONE on the pre-withdrawal tree, so each component's
+    # subtraction is measured on both sides rather than inferred:
+    #     nonempty      35  -  14  =  21
+    #     declared     130  -  75  =  55
+    #     examined      64  -  35  =  29
+    #     all_skipped   14  -   5  =   9
+    # All FOUR reconcile exactly. That is the part worth checking: a resolver
+    # or vocabulary drift riding along with the withdrawal would have to move
+    # one component without moving the withdrawn-root tally for the same
+    # component, and could not keep all four identities.
+    assert (nonempty, declared, examined, all_skipped) == (21, 55, 29, 9)

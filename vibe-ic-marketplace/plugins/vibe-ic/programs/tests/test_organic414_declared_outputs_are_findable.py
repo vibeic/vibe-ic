@@ -173,7 +173,19 @@ def test_the_published_corpus_is_followable_today():
     rep = C.audit(_REPO)
     assert rep["verdict"] == "PASS", rep["findings"][:8]
     decl = sum(c["declared"] for c in rep["cells"])
-    assert decl >= 156, decl
+    # 2026-08-12, vibe-ic#1028. The floor was 156 against 217 declared outputs
+    # across 22 cells. Re-running THIS audit over the 16 withdrawn roots alone
+    # on the pre-withdrawal tree measures their contribution directly:
+    #     cells      22  -  14  =   8      (exact)
+    #     declared  217  - 141  =  76      (exact)
+    # Carrying the old headroom through the subtraction would give a floor of
+    # 156 - 141 = 15, which 76 clears so easily that the ratchet would stop
+    # being able to notice anything. So the pin becomes the ATTRIBUTED
+    # EQUALITY instead: after a one-off withdrawal the exact expected
+    # population is knowable, an equality is strictly stronger than the floor
+    # it replaces, and it catches a corpus that GROWS by contamination as well
+    # as one that shrinks — which no floor can do.
+    assert decl == 76, decl
 
 
 def test_no_declaration_was_lost_in_the_repair():

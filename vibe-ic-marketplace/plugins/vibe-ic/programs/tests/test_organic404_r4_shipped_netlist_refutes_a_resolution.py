@@ -293,12 +293,27 @@ def test_the_three_spm_cells_carry_the_shipped_width_as_evidence():
     failing on since v1.6.90, and the number they ship is 32."""
     if not _CORPUS.is_dir():
         pytest.skip("published corpus not checked out")
+    # 2026-08-12, vibe-ic#1028 — the cell list was three names typed here, and
+    # one of them (`spm/v1.5.58_ihp-sg13g2`) was withdrawn from publication by
+    # #1015/#1010, so `seen == 3` failed on a corpus that is entirely healthy.
+    #
+    # DERIVED from the tree instead of re-typed as two. Re-pinning the literal
+    # list to whatever survives is what the ratchet doctrine forbids: it would
+    # have to be edited again on the next withdrawal, and each edit silently
+    # ratifies whatever the corpus happens to hold. The property under test is
+    # "every published cell of this family ships the width as evidence", which
+    # is a statement about the family, not about three names.
+    #
+    # The count is NOT pinned in either direction. What is pinned is that the
+    # population is NOT EMPTY (below) — a zero-denominator pass here would
+    # assert this rule over nothing, which `gate_zero_denominator_refuses_check`
+    # is the house rule against.
+    cells = sorted(p.parent.parent for p in
+                   (_CORPUS / "spm").glob("*/phase1/generated_docs")) \
+        if (_CORPUS / "spm").is_dir() else []
     seen = 0
-    for name in ("spm/v1.5.58_ihp-sg13g2", "spm/v1.10.18_sky130A",
-                 "spm/v1.9.96_gf180mcuD"):
-        d = _CORPUS / name
-        if not d.is_dir():
-            continue
+    for d in cells:
+        name = f"spm/{d.name}"
         seen += 1
         assert _GATE.shipped_netlist_port_widths(d).get("x") == 32, name
         findings, _ = _GATE.audit(d)
@@ -308,9 +323,13 @@ def test_the_three_spm_cells_carry_the_shipped_width_as_evidence():
         port = rows[0].evidence["ports"][0]
         assert port["port"] == "x"
         assert port["shipped_netlist_width"] == 32, (name, port)
-    if seen == 0:
+    if not (_CORPUS / "spm").is_dir():
         pytest.skip("spm cells not checked out")
-    assert seen == 3, f"only {seen} of 3 cells present"
+    assert seen > 0, (
+        "the corpus is present but carries no published cell of this family, "
+        "so this rule was asserted over nothing. REFUSING rather than passing: "
+        "an empty denominator and a clean result print the same way, and that "
+        "is the whole reason this file exists (vibe-ic#1028).")
 
 
 def test_ibex_is_refused_on_real_data():
