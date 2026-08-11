@@ -82,6 +82,51 @@ def test_a_hardlink_mirror_is_refused_before_anything_writes(tmp_path):
         "every file' was not enough and the inode comparison is")
 
 
+def test_copy_run_itself_refuses_when_the_copy_shares_inodes(tmp_path,
+                                                             monkeypatch):
+    """The REFUSAL, driven through `copy_run`, not just through its predicate.
+
+    THIS TEST EXISTS BECAUSE THE MUTANT ARM CAUGHT ITS ABSENCE. The first
+    version of this file asserted `shared_inodes()` on a hand-built mirror and
+    stopped there. Neutering `copy_run`'s `if shared:` to `if False:` left all
+    19 tests GREEN — the guard was unreachable from the suite, because
+    `shutil.copytree` never produces hardlinks, so nothing exercised the branch
+    that does the refusing.
+
+    The copy mechanism is swapped for a hardlinking one, which is not a
+    contrivance: it is precisely what the ledger's replay used to do.
+    """
+    src = _run(tmp_path)
+
+    def _hardlink_copytree(s, d, **kw):
+        subprocess.run(["cp", "-al", str(s), str(d)], check=True)
+
+    monkeypatch.setattr(I.shutil, "copytree", _hardlink_copytree)
+    with pytest.raises(I.SubjectPerturbed) as e:
+        I.copy_run(src, tmp_path / "dst")
+    assert "shares" in str(e.value) and "inode" in str(e.value), str(e.value)
+    assert "cp -al" in str(e.value), (
+        "the refusal should name the defect it is refusing, so a reader who "
+        "hits it knows what changed rather than only that something did")
+
+
+def test_isolated_run_refuses_a_sharing_copy_before_yielding(tmp_path,
+                                                             monkeypatch):
+    """And the refusal reaches the context manager: no body runs on a mirror."""
+    src = _run(tmp_path)
+    monkeypatch.setattr(
+        I.shutil, "copytree",
+        lambda s, d, **kw: subprocess.run(["cp", "-al", str(s), str(d)],
+                                          check=True))
+    entered = []
+    with pytest.raises(I.SubjectPerturbed):
+        with I.isolated_run(src):
+            entered.append(True)
+    assert not entered, (
+        "isolated_run yielded a copy that shares inodes with the published "
+        "run; the body would have written through to the original")
+
+
 def test_copy_run_produces_a_tree_that_shares_nothing(tmp_path):
     src = _run(tmp_path)
     dst = tmp_path / "copy"
