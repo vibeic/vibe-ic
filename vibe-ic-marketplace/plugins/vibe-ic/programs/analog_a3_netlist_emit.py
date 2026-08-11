@@ -261,17 +261,35 @@ _VOLT_UNITS = {"v": 1.0, "volt": 1.0, "volts": 1.0,
                "kv": 1e3, "kilovolt": 1e3, "kilovolts": 1e3}
 
 
+# BOTH SPELLINGS ARE REAL, measured on this tree: `analog_a1_spec_emit` writes
+# `unit` (singular) and the `analog-spec-extract` skill writes `units`. Reading
+# one of them would have made the domain discoverable for half the pipeline and
+# invisible for the other half — the shape of gap that reads as "this design
+# states no domain" when it states one.
+_UNIT_KEYS = ("units", "unit")
+
+
 def _unit_scale(units: Any) -> Optional[float]:
-    """The volts-per-unit of a spec row's `units`, or None when the row is not
-    a voltage at all."""
+    """The volts-per-unit of a spec row's unit, or None when the row is not a
+    voltage at all."""
     u = str(units or "").strip().lower().rstrip(".")
     return _VOLT_UNITS.get(u)
 
 
+def _row_unit_scale(row: Dict[str, Any]) -> Optional[float]:
+    """The volts-per-unit of a spec ROW, under either key spelling."""
+    for key in _UNIT_KEYS:
+        scale = _unit_scale(row.get(key))
+        if scale is not None:
+            return scale
+    return None
+
+
 def spec_voltage(spec: Dict[str, Any]) -> Optional[float]:
     """The HIGHEST voltage a block's spec STATES, in volts, or None when it
-    states none. Discovered from the rows' `units`, never from a list of
-    blessed spec NAMES — a design is free to call its supply anything."""
+    states none. Discovered from the rows' UNIT (either spelling — see
+    `_UNIT_KEYS`), never from a list of blessed spec NAMES: a design is free to
+    call its supply anything."""
     best: Optional[float] = None
     rows = spec.get("specs") if isinstance(spec, dict) else None
     if not isinstance(rows, list):
@@ -279,7 +297,7 @@ def spec_voltage(spec: Dict[str, Any]) -> Optional[float]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        scale = _unit_scale(row.get("units"))
+        scale = _row_unit_scale(row)
         if scale is None:
             continue
         for v in row.values():
@@ -383,7 +401,16 @@ def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
         try:
             import analog_pdk_deck_context as _apdc
             if _apdc.domain_is_stated(domain):
-                _rank_for_domain = _apdc.device_flavour_rank
+                _width = _apdc.FLAVOUR_KEY_WIDTH
+
+                def _rank_for_domain(m: str) -> tuple:
+                    # ONLY the FLAVOUR components. Letting the ranker's own
+                    # length/name tiebreak through would override the stated
+                    # `_ROLE_PREFER` order for candidates the domain does not
+                    # separate at all — measured: a stated domain re-bound the
+                    # passive role from the preferred device to a shorter name
+                    # that the preference list does not mention.
+                    return _apdc.device_flavour_rank(m, domain)[:_width]
         except Exception:                                  # pragma: no cover
             _rank_for_domain = None
     models = [m for m in (family_entry.get("device_models") or [])
@@ -412,7 +439,7 @@ def resolve_role_models(family_entry: Dict[str, Any], roles: List[str],
             fixed = (exact, avoid, len(low), low)
             if _rank_for_domain is None:
                 return fixed
-            return _rank_for_domain(m, domain) + fixed
+            return _rank_for_domain(m) + fixed
 
         out[role] = sorted(cands, key=rank)[0]
         bound_by[role] = BOUND_BY_REGISTRY
@@ -1113,7 +1140,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     # when the design states one: a design that states none binds chip-globally
     # and its deck is byte-identical to before, which is the paired guard.
     _dom = (pdkctx.get("role_model_election") or {}).get("domain")
-    if _dom:
+    if _dom and (_dom.get("volts") is not None or _dom.get("elevated")):
         prov_lines.append(
             f"_provenance: voltage_domain=volts={_dom.get('volts')} "
             f"elevated={_dom.get('elevated')} (stated by this block's spec; "

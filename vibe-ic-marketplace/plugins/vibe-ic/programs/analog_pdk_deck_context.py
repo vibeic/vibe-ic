@@ -710,8 +710,13 @@ def device_flavour_rank(name: str,
         request is the whole change.
     `fit`          — the TIGHTEST adequate rating wins, so a family spelling
         `01v8` / `03v3` binds `01v8` at 1.8 V and `03v3` at 3.3 V rather than
-        always the smaller. A name that spells NO rating keeps its historical
-        position ahead of any spelled one.
+        always the smaller. A name that spells NO rating is UNKNOWN, not
+        preferred: it ranks after every candidate whose name says it CAN take
+        the domain, and ahead of one whose name says it cannot (`overstressed`
+        already holds those). Measured before it worked that way: an unrated
+        MOS-capacitor name outranked the correctly rated device for its role
+        because "unrated sorts first" was carried over from the no-domain key,
+        where it is right and here is not.
 
     chip-AGNOSTIC: name COMPONENTS and volts, no vendor/SKU/node literal."""
     comps = set(_name_components(name))
@@ -730,7 +735,7 @@ def device_flavour_rank(name: str,
     if volts is None:
         fit = rating
     elif not rating:
-        fit = -1.0
+        fit = float("inf")
     elif rating >= volts:
         fit = rating - volts
     else:
