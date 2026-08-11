@@ -99,6 +99,24 @@ from matrix_63x8 import flowref as F
 #: ~3000x the measured cost and half the permitted ceiling.
 _GIT_TIMEOUT_S = 30
 
+#: Per-replay bound for the ARTEFACT channel. `L.replay_many` forwards it to the
+#: `subprocess.run` inside `L.replay_artefact`, so it IS a real process bound —
+#: `ci_harness_timeout_ceiling_check` cannot see that (the callee is in another
+#: module) and reports it as an ADVISORY rather than a finding, which is why the
+#: landed 900 survived here while the same number was caught elsewhere. It is the
+#: same hazard either way: 900 s under a 180 s `--timeout-method=thread` harness
+#: can never fire, so a hung replay takes the SESSION down instead of the test.
+#:
+#: 60 s is the ceiling (`180 // 3`) and this call is the only bounded call in any
+#: test that reaches it (`lru_cache`, so the eight replays are paid once).
+#: MEASURED here: all 8 ARTEFACT entries at `jobs=8`, worst SINGLE replay 1.55 s
+#: (ART-DRC-RDB-THREE-ITEMS), whole set 5.48 s wall. 60 s is ~39x the worst one.
+#:
+#: This is the ARTEFACT channel only. `test_matrix_mutation_ledger.py` bounds the
+#: WITNESS channel and could NOT be lowered to the ceiling — see the measurement
+#: recorded against its `REPLAY_TIMEOUT`.
+_ARTEFACT_REPLAY_TIMEOUT_S = 60
+
 
 @lru_cache(maxsize=1)
 def replay_results() -> Dict[str, L.ReplayResult]:
@@ -108,7 +126,9 @@ def replay_results() -> Dict[str, L.ReplayResult]:
     ``jobs=8``. Cheap enough that there is no subset to argue about.
     """
     plan = [(m.name, m.witness) for m in L.ARTEFACT_MUTATIONS]
-    return {r.mutation: r for r in L.replay_many(plan, jobs=8, timeout=900)}
+    return {r.mutation: r
+            for r in L.replay_many(plan, jobs=8,
+                                   timeout=_ARTEFACT_REPLAY_TIMEOUT_S)}
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -95,6 +95,37 @@ CANARY_STEP_ID = "ZZ_MUTATION_LEDGER_CANARY_STEP"
 
 #: How long one witness replay may take. The dimension-7 cell alone runs ~18s
 #: twice, and the two PLUGIN_TREE replays copy and re-run the plugin.
+#:
+#: THE ONE BOUND IN THIS CORPUS THAT DOES NOT FIT UNDER THE CEILING (vibe-ic#1022)
+#: -----------------------------------------------------------------------------
+#: `ci_harness_timeout_ceiling_check` permits any ONE blocking call at most
+#: `180 // 3` = 60 s, and it reports this line as an ADVISORY rather than a
+#: finding only because `L.replay_many` is a cross-module callee it cannot
+#: resolve. The hazard is identical to the ones it CAN resolve, and it is
+#: reachable: a one-line edit to `programs/matrix_mutation_ledger.py` selects
+#: this file into the 180 s targeted lane (verified with the real CLI,
+#: `ci_targeted_test_select.py --base HEAD` — 15 files at the smoke floor, 17
+#: with this file and `test_matrix_artefact_mutation_channel.py` added).
+#:
+#: It is NOT lowered to 60 anyway, because measurement says 60 would be a bound
+#: that fires on work that is passing. `replay_many` forwards this to each
+#: `_run_cell`, i.e. ONE `subprocess.run` running one pytest cell. MEASURED here
+#: over the full 24-pair witness plan, 32 cores, instrumented at `_run_cell`:
+#: 32 invocations, worst SINGLE bounded call 42.61 s at `jobs=8` and 26.8 s
+#: uncontended, both in the dimension-7 cell (the ~18s in the line above has
+#: grown). A 60 s bound is 1.41x the contended worst case — thinner than the
+#: 2.7x this file already calls its thinnest margin below, and under it on any
+#: host slower than this one. Trading a session-killer for an intermittent red
+#: is not a fix.
+#:
+#: The correct remedy is the checker's second one — move the two replay-driven
+#: tests (`test_lock2_…`, `test_the_replay_actually_ran_and_is_not_starved`) out
+#: of the 180 s lane. That is NOT done here: this tree has no second lane to move
+#: them to (`pytest.ini` names a `tests/` tree that does not exist, and there is
+#: no marker/deselect wiring in `tools/gatekeeper-land.sh`), so the move is new
+#: lane infrastructure rather than a re-bound. Until it exists this entry is
+#: recorded BY NAME with the measurement above in
+#: `test_ci_harness_timeout_ceiling_check._REVIEWED_ADVISORY_RESIDUAL`.
 REPLAY_TIMEOUT = 900
 
 #: Bound for the two DIRECT pytest launches in this file (the growth control
