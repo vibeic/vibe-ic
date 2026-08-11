@@ -458,23 +458,43 @@ def test_POSITIVE_CONTROL_a_literal_line_firing_twice_is_caught():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         _probe(root, "p_ok", "import sys\nprint('[PASS] fine')\nsys.exit(0)\n")
+        # THE TEMPLATED LINE IS LOAD-BEARING, and its absence is what made this
+        # control theatre. `assert_invocations_decompose` checks the LOOP clause
+        # FIRST. A fixture of two literal `run` lines has no templated
+        # declaration at all, so the loop clause raised and the decomposition
+        # clause — the one this test is named for — was never reached. With a
+        # bare `pytest.raises(AssertionError)` the two are indistinguishable,
+        # and the control passed while asserting nothing about clause 2.
+        # MEASURED: neutering BOTH decomposition clauses to `... or True` left
+        # the file at 30 passed. The loop below satisfies clause 1 so the
+        # decomposition clause is the one that must speak.
         script = _fixture_script(root, (
             f'run "twice over" "$ROOT" python3 "{root}/p_ok.py"\n'
-            f'run "twice over" "$ROOT" python3 "{root}/p_ok.py"\n'))
+            f'run "twice over" "$ROOT" python3 "{root}/p_ok.py"\n'
+            'while IFS= read -r _x; do\n'
+            '  [ -n "$_x" ] || continue\n'
+            f'  run "per cell ($(basename "$_x"))" "$ROOT" '
+            f'python3 "{root}/p_ok.py"\n'
+            'done < <(printf "alpha\\n")\n'))
         decls = GD.parse_declarations(script)
         doc = _list_record(script, root)
         recorded = [g["label"] for g in doc["gates"]]
 
+    # Clause 1 is SATISFIED here, so it cannot be what fires below.
+    assert [d for d in decls if d.runtime_expansion], \
+        "fixture is wrong: it was supposed to carry a templated declaration"
     # Two declarations sharing one label: every matcher claims every record, so
-    # the per-declaration counts sum to MORE than there are records.
-    assert firings(decls, recorded) == [2, 2], firings(decls, recorded)
+    # the per-declaration counts sum to MORE than there are records. The
+    # templated line fires once and is explained exactly once.
+    assert firings(decls, recorded) == [2, 2, 1], firings(decls, recorded)
     # THE REAL ASSERTION, driven over this script, required to DIE — and on the
     # DECOMPOSITION clause, not the loop clause, which is the half
-    # `len(recorded) > len(decls)` was structurally unable to reach.
-    with pytest.raises(AssertionError):
+    # `len(recorded) > len(decls)` was structurally unable to reach. `match=`
+    # is what makes that sentence checkable rather than merely asserted.
+    with pytest.raises(AssertionError, match="does not decompose"):
         assert_invocations_decompose(decls, recorded)
-    # The old proxy would have read this script as HEALTHY: 2 declarations,
-    # 2 records is not `recorded > decls`, and even a third duplicate would
+    # The old proxy would have read this script as HEALTHY: 3 declarations,
+    # 3 records is not `recorded > decls`, and even a third duplicate would
     # have looked like loop expansion. Pinned so the regression is named.
     assert not (len(recorded) > len(decls))
 
