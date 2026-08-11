@@ -198,6 +198,57 @@ def reconcile(declarations, recorded_labels):
     return unattributed, silent
 
 
+def firings(declarations, recorded_labels):
+    """How many invocations each declaration explains, in declaration order.
+
+    Deliberately a SECOND function rather than a third return value from
+    `reconcile`: one of that helper's callers asserts on the whole tuple
+    (``reconcile(...) == ([], [])``), so widening it would edit a test to
+    accommodate a change instead of measuring one.
+
+    This exists because the count is the thing the loop assertion below actually
+    needs. Asking "did the loop expand" through the SIZES of two lists is a
+    proxy, and the proxy is wrong at exactly one matched item -- see the comment
+    at its call site.
+    """
+    matchers = [(d, _label_matcher(d)) for d in declarations]
+    counts = {id(d): 0 for d in declarations}
+    for got in recorded_labels:
+        for d, m in matchers:
+            if m(got):
+                counts[id(d)] += 1
+    return [counts[id(d)] for d in declarations]
+
+
+def assert_invocations_decompose(declarations, recorded_labels):
+    """The invocation count decomposes into the declarations that explain it.
+
+    A FUNCTION rather than three inline asserts so that the positive controls
+    can drive THIS, under `pytest.raises`, instead of restating its condition
+    and asserting the restatement. A control that asserts a precondition tells
+    you the precondition holds; it does not tell you the assertion still fires.
+    """
+    templated = [d for d in declarations if d.runtime_expansion]
+    assert templated, (
+        "no templated `run` line remains in the hygiene script, so a "
+        "declaration and an invocation are now the same thing and this file's "
+        "central distinction is untested. Restore a loop or delete the "
+        "distinction -- do not leave this assertion passing over nothing.")
+    counts = firings(declarations, recorded_labels)
+    literal_total = sum(c for c, d in zip(counts, declarations)
+                        if not d.runtime_expansion)
+    templated_total = sum(c for c, d in zip(counts, declarations)
+                          if d.runtime_expansion)
+    assert literal_total + templated_total == len(recorded_labels), (
+        "the invocation count does not decompose into the declarations that "
+        f"explain it: {literal_total} literal + {templated_total} templated "
+        f"!= {len(recorded_labels)} recorded")
+    assert literal_total == len(declarations) - len(templated), (
+        "a literal `run` line fired a number of times other than once: "
+        f"{literal_total} invocations from "
+        f"{len(declarations) - len(templated)} literal declarations")
+
+
 def _list_record(script: Path, cwd: Path):
     import tempfile
     with tempfile.TemporaryDirectory() as td:
@@ -252,8 +303,32 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
     # The loop really is what makes the two numbers differ, asserted so that a
     # future script with no loop does not leave this test passing vacuously
     # over an equality it no longer checks.
-    assert any(d.runtime_expansion for d in decls) == \
-        (len(recorded) > len(decls)), (len(recorded), len(decls))
+    #
+    # IT USED TO ASK THAT THROUGH `len(recorded) > len(decls)`, and that is a
+    # PROXY for "the loop expanded" rather than the property. The two disagree
+    # at exactly ONE matched item: a templated `run` line that fires once
+    # contributes one declaration and one invocation, so the sizes are EQUAL
+    # while the loop is running perfectly. Measured on 2026-08-11 --
+    # `git ls-files -- 'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def'`
+    # returns exactly 1 path, so the three templated lines fire three times
+    # against three declarations, and this assertion reported a defect that was
+    # not there. It had been red on main since the corpus reached one cell.
+    #
+    # Asked directly instead. Two clauses, and BOTH are needed:
+    #   1. a templated declaration must still EXIST -- otherwise the
+    #      declaration-vs-invocation distinction this whole file is built on has
+    #      quietly stopped being exercised, which is the vacuity the original
+    #      comment was defending against;
+    #   2. the books must CLOSE -- every recorded invocation is explained by
+    #      some declaration, each literal one exactly once, each templated one
+    #      as many times as its loop expanded. An equality over counts, so it
+    #      cannot be satisfied by the corpus happening to have any size.
+    # Both clauses live in `assert_invocations_decompose` so the two
+    # POSITIVE_CONTROL tests below drive the REAL assertion under
+    # `pytest.raises` rather than restating its condition -- a control that
+    # asserts the precondition is a control that cannot tell you the assertion
+    # still fires.
+    assert_invocations_decompose(decls, recorded)
 
 
 def test_a_continued_run_line_is_read_as_the_one_command_bash_runs():
@@ -333,6 +408,75 @@ def test_one_looping_declaration_covers_every_iteration_it_produced():
     # …and a record the template does NOT explain is still caught.
     assert reconcile(decls, recorded + ["something else"])[0] == \
         ["something else"]
+
+
+def test_POSITIVE_CONTROL_the_loop_clause_fires_on_a_script_with_no_loop():
+    """The clause that replaced `len(recorded) > len(decls)` must be able to die.
+
+    The assertion it replaces was red on a correct script, which is one kind of
+    useless. Swapping it for one that is green on EVERY script would be the
+    other kind, and the more dangerous one, because it looks like a repair. So
+    this drives the replacement over a script whose `run` lines are all literal
+    and requires it to refuse.
+
+    Not a unit test of a helper: it builds a real hygiene script, sources the
+    real dispatch library, and asks the same two questions the live assertion
+    asks — because a helper test gets greener the more thorough it is and never
+    dies under the condition that matters.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _probe(root, "p_ok", "import sys\nprint('[PASS] fine')\nsys.exit(0)\n")
+        script = _fixture_script(root, (
+            f'run "flat one" "$ROOT" python3 "{root}/p_ok.py"\n'
+            f'run "flat two" "$ROOT" python3 "{root}/p_ok.py"\n'))
+        decls = GD.parse_declarations(script)
+        doc = _list_record(script, root)
+        recorded = [g["label"] for g in doc["gates"]]
+
+    assert not [d for d in decls if d.runtime_expansion], \
+        "fixture is wrong: it was supposed to have no loop"
+    # THE REAL ASSERTION, driven over this script, required to DIE.
+    with pytest.raises(AssertionError, match="no templated .run. line remains"):
+        assert_invocations_decompose(decls, recorded)
+    # …and the two clauses are independent: by every OTHER measure this script
+    # is fine — every record is explained and every literal line fired once —
+    # so the refusal above is the loop clause alone and not collateral.
+    assert reconcile(decls, recorded) == ([], [])
+    assert firings(decls, recorded) == [1, 1] and len(recorded) == 2
+
+
+def test_POSITIVE_CONTROL_a_literal_line_firing_twice_is_caught():
+    """The decomposition clause must die when a literal declaration over-fires.
+
+    `len(recorded) > len(decls)` could not see this at all: a literal gate
+    invoked twice makes recorded EXCEED decls, which the old assertion read as
+    healthy loop expansion. Counting per declaration tells them apart.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _probe(root, "p_ok", "import sys\nprint('[PASS] fine')\nsys.exit(0)\n")
+        script = _fixture_script(root, (
+            f'run "twice over" "$ROOT" python3 "{root}/p_ok.py"\n'
+            f'run "twice over" "$ROOT" python3 "{root}/p_ok.py"\n'))
+        decls = GD.parse_declarations(script)
+        doc = _list_record(script, root)
+        recorded = [g["label"] for g in doc["gates"]]
+
+    # Two declarations sharing one label: every matcher claims every record, so
+    # the per-declaration counts sum to MORE than there are records.
+    assert firings(decls, recorded) == [2, 2], firings(decls, recorded)
+    # THE REAL ASSERTION, driven over this script, required to DIE — and on the
+    # DECOMPOSITION clause, not the loop clause, which is the half
+    # `len(recorded) > len(decls)` was structurally unable to reach.
+    with pytest.raises(AssertionError):
+        assert_invocations_decompose(decls, recorded)
+    # The old proxy would have read this script as HEALTHY: 2 declarations,
+    # 2 records is not `recorded > decls`, and even a third duplicate would
+    # have looked like loop expansion. Pinned so the regression is named.
+    assert not (len(recorded) > len(decls))
 
 
 def test_a_gate_added_to_ci_is_covered_with_no_edit_to_the_merge_gate():
