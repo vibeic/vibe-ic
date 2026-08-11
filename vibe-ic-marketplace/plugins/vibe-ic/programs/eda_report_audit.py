@@ -1018,6 +1018,49 @@ def _drc_real_violation_count(text: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _drc_tool_final_violation_count(text: str) -> Optional[int]:
+    """The TOOL's own last word on its violation count, or ``None``.
+
+    THE DEFECT THIS CLOSES (63x8 artefact finding, step 21 / dimension 2).
+    ``reports/phase3/drc_router.rpt`` carries BOTH a runner-written summary at
+    the top AND the router's own transcript below it. `_drc_real_violation_
+    count` reads the summary and stops. MEASURED on the published run named by
+    the ledger entry ART-ROUTER-FINAL-ITERATION, rewriting the router's FINAL
+    detailed-route iteration from ``Number of violations = 0`` to ``= 12`` and
+    leaving the summary alone::
+
+        drc_report_check . --mode drc --under ... --json ...
+            -> rc=0   real_violation_total=0
+
+    A routed design finishing with 12 unresolved violations, certified clean,
+    with the contradicting number sitting in the file the gate had just parsed.
+    The same gate on the same file DOES redden when the SUMMARY is edited — so
+    the green was a statement about the runner's arithmetic, not the router's.
+
+    THE GRAMMAR IS IMPORTED, NOT RE-AUTHORED. `_sdf.router_iter_last_count` is
+    the one implementation `phase3_one_shot_runner._drt_final_violations` and
+    `signoff_audit`'s plain-text reader already share, and its module comment
+    says why: three private copies of it is how the readers of one report came
+    to return different numbers for it. A fourth copy here would be the same
+    mistake with this defect's name on it — and it would be the WORSE fourth
+    copy, because a cross-check that reads a different grammar from the runner
+    it is checking would raise contradictions that are its own.
+
+    That parser also owns the two facts a hand-rolled pattern gets wrong: the
+    count is per-ITERATION and falls as the router converges, so only the LAST
+    is a verdict; and an older build spells the same tally
+    ``Completing 100% with N violations``, which must be an EXCLUSIVE fallback
+    or one report is counted twice.
+
+    Returns ``None`` when the body carries no router-iteration grammar at all —
+    a KLayout RDB, an SVRF tally, a foundry deck transcript. That is NOT a zero
+    and must never be collapsed to one: it means this report has no tool-final
+    word to corroborate against, and `_check_drc` discloses that as an
+    uncorroborated file rather than crediting the silence as agreement.
+    """
+    return _sdf.router_iter_last_count(text)
+
+
 def _check_drc(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:drc", passed=False)
     files = _discover(project_dir, ["*drc*.rpt", "*drc*.log", "*drc*.txt",
@@ -1053,6 +1096,13 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # the sign-off policy can judge it. See `drc_report_check --signoff`.
     producers: List[dict] = []
     unreadable: List[str] = []
+    # THE TOOL'S OWN FINAL WORD, alongside the summary that claims to report it.
+    # Both are recorded per file and BOTH are disclosed, so a reader never has
+    # to take the gate's word for which one the number came from.
+    tool_total = 0
+    summary_total = 0
+    tool_corroborated = 0
+    contradictions: List[dict] = []
 
     for fp in files:
         try:
@@ -1084,6 +1134,42 @@ def _check_drc(project_dir: Path) -> AuditResult:
             determined_files += 1
             _user_n, _std_n = n
             stdcell_excluded += _std_n
+            summary_total += _user_n
+            # --- THE TOOL'S OWN OUTPUT IS THE AUTHORITY --------------------
+            # The count above came from a SUMMARY line. Where the same report
+            # also quotes the tool's own terminal count, the two are statements
+            # of one quantity and a disagreement between them is a FINDING in
+            # its own right — never a tie broken silently in the summary's
+            # favour. A runner that mis-summarises its own tool must not be
+            # invisible, in either direction.
+            _tool_n = _drc_tool_final_violation_count(text)
+            if _tool_n is not None:
+                tool_corroborated += 1
+                tool_total += _tool_n
+                if _tool_n != _user_n:
+                    contradictions.append({
+                        "file": _rel(fp, project_dir),
+                        "summary_says": _user_n, "tool_says": _tool_n})
+                    result.findings.append(Finding(
+                        rule="DRC_SUMMARY_CONTRADICTS_TOOL", severity="ERROR",
+                        message=(
+                            f"the summary line in this report says "
+                            f"{_user_n} violation(s) and the TOOL's own final "
+                            f"iteration in the same file says {_tool_n}. One "
+                            f"of the two is wrong and nothing here can say "
+                            f"which, so nothing is certified: a post-route DRC "
+                            f"verdict is only as good as the agreement between "
+                            f"the tool that measured it and the summary that "
+                            f"republishes it. The gating total below takes the "
+                            f"LARGER of the two."),
+                        file=str(fp)))
+                # Fail-safe direction, and the reason it is safe to take: a
+                # disagreement is ALREADY an ERROR above, so the maximum never
+                # decides a verdict the tool-authority reading would not also
+                # decide. It only decides the NUMBER reported, and reporting
+                # the smaller of two irreconcilable counts is the one choice
+                # that can grade a dirty design clean.
+                _user_n = max(_user_n, _tool_n)
             if _user_n > 0:
                 real_total += _user_n
                 if not worst_file:
@@ -1183,12 +1269,30 @@ def _check_drc(project_dir: Path) -> AuditResult:
                      f"in the {real_total} user-routing violation(s) the "
                      f"met2+/via2+ honesty gate reports. REVIEW REQUIRED."),
             file=best_file))
+    # `contradictions` gates EXPLICITLY rather than by relying on the maximum
+    # above having made `real_total` non-zero. It always will today — two counts
+    # that disagree cannot both be zero — but a verdict that depends on that
+    # coincidence would be silently undone by any later change to how the total
+    # is formed, and this is the whole decision being added.
     result.passed = (determined_files > 0 and real_total == 0 and authentic
-                     and not unreadable)
+                     and not unreadable and not contradictions)
     result.summary = {"files_found": len(files), "categories_found": cats_found,
                       "has_count": has_count, "tool_authentic": authentic,
                       "determined_files": determined_files,
                       "real_violation_total": real_total,
+                      # BOTH numbers, always, so a reader can see which one the
+                      # gating total came from instead of inferring it.
+                      "summary_violation_total": summary_total,
+                      "tool_violation_total": tool_total,
+                      # The corroboration DENOMINATOR: of the reports that
+                      # yielded a count, how many also quoted the tool's own
+                      # final word to check it against. A report with no tool
+                      # transcript is not corroborated and is not pretended to
+                      # be — see `tool_uncorroborated_files`.
+                      "tool_corroborated_files": tool_corroborated,
+                      "tool_uncorroborated_files": (determined_files
+                                                    - tool_corroborated),
+                      "tool_contradictions": contradictions,
                       "foundry_stdcell_excluded": stdcell_excluded,
                       "producers": producers,
                       "unreadable_files": len(unreadable),
