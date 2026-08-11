@@ -773,6 +773,10 @@ _SWEEP_THEN_ONE = (
     _SWEEP + "   THEN   matrix_mutation_ledger.py --replay {name} --step "
              "{added}   (2026-08-11, the one step this entry gained)")
 
+#: A full re-sweep on 2026-08-11 — same shape as :data:`_SWEEP`, later tree.
+_RESWEEP = ("matrix_mutation_ledger.py --replay {name} --jobs 8   "
+            "(2026-08-11, every declared step, one pytest run per step)")
+
 MUTATIONS: Tuple[Mutation, ...] = (
     # ---------------- dimension 1 — wiring -----------------------------
     Mutation(
@@ -897,7 +901,15 @@ MUTATIONS: Tuple[Mutation, ...] = (
                "deleting the artefact, reached from the declaration end — which "
                "is the end a CI host without the campaign's run trees can move.",
         red_signal="step",
-        witness="21",
+        # WAS "21" until 2026-08-11. A witness must be GREEN at baseline — this
+        # class's own contract, three lines up in `Mutation` — and step 21's
+        # dimension-3 cell no longer is, so the entry was proving nothing and
+        # said so: `ALREADY_RED`. Re-picked by a rule rather than by taste:
+        # the FIRST step in flow-declaration order that is green at baseline.
+        # That is D1, measured at 4.1 s (the slowest of the 37 green
+        # candidates; the fastest are 38 and DT2 at 1.7 s). Speed is not the
+        # criterion and is recorded only so the cost of this choice is visible.
+        witness="D1",
         applies_to=(
             "D1", "1", "2", "3", "4", "5", "7", "8", "9", "10", "11", "DT1",
             "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
@@ -905,16 +917,42 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
             "34", "35", "36", "37", "38", "M2", "M3", "M4"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=53,
-            baseline_red=("11", "15", "17", "19", "20", "29", "30", "32",
-                          "M2", "M3", "M4"),
+            date="2026-08-11", command=_RESWEEP, reddened=53,
+            baseline_red=("12", "15", "17", "19", "20", "21", "22", "23", "24",
+                          "25", "26", "30", "32", "M2", "M3", "M4"),
             stayed_green=("6", "39", "M1"),
-            note="53 red = every one of dimension 3's 53 ENFORCED cells. 11 of "
-                 "them were ALREADY red at 1ea6689b (their declared artefacts "
-                 "genuinely do not exist), so 42 reds are attributable to this "
-                 "mutation; the 11 are falsifiable by definition and are named "
-                 "here rather than counted twice. The 3 greens are the waived "
-                 "cells, whose strict xfail correctly held."),
+            note="53 red = every one of dimension 3's 53 ENFORCED cells. 16 of "
+                 "them are ALREADY red before the mutation (their declared "
+                 "artefacts genuinely do not resolve), so 37 reds are "
+                 "attributable to this mutation; the 16 are falsifiable by "
+                 "definition and are named here rather than counted twice. The "
+                 "3 greens are the waived cells, whose strict xfail correctly "
+                 "held. "
+                 "BASELINE_RED MOVED 11 -> 16 ON 2026-08-11, and the move is a "
+                 "FINDING, not an accommodation. Newly red: 12, 21, 22, 23, 24, "
+                 "25, 26. No longer red: 11, 29. Re-measured by the full sweep "
+                 "(`--replay D3-UNDECLARED-ARTEFACT --jobs 8`, 53 pairs, 37 "
+                 "REDDENED + 16 ALREADY_RED, no other outcome). "
+                 "ONE cause for all nine moves: "
+                 "`benchmark-data/ic/spm/v1.9.96_gf180mcuD/reports/"
+                 "write_ledger.json` (captured 2026-08-06T19:17:51Z) is stale "
+                 "with respect to the commit that carries it, in BOTH "
+                 "directions — 21 artefacts it records as WRITTEN are absent "
+                 "from the commit (all under `phase3/stage3/**` and "
+                 "`phase3/stage4/foundry_handoff/**`; step 21's `routed.def` is "
+                 "recorded at 481667 B and was never added in any commit, and "
+                 "is not gitignored), and 4 specs it records as NOT WRITTEN are "
+                 "present in it (step 11's `scan_netlist.v`, `atpg_coverage.rpt` "
+                 "and `reports/phase2/dft/coverage.json`, step 12's "
+                 "`post_dft_netlist.v`). Because the ledger BINDS those steps to "
+                 "that run root, they no longer fall back to the root that does "
+                 "carry the artefact, and they redden. "
+                 "THE STALE LEDGER IS DELIBERATELY NOT REPAIRED HERE. Re-emitting "
+                 "a published run's record is a benchmark-data rewrite that "
+                 "would erase the historical fact that the run produced those "
+                 "artefacts, and it is not this change's subject. It is left "
+                 "RED and published; `test_d3_the_write_ledger_population_is_"
+                 "derived_from_the_commit` states the remedy in its own words."),
     ),
 
     # ---------------- dimension 4 — criteria match ---------------------
