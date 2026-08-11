@@ -733,13 +733,28 @@ def _is_na(step_id) -> bool:
     return not F.declares_blocks_on(step_id) and not F.has_gate(step_id)
 
 
-#: The steps recorded as NA when this module landed (v1.7.68). Pinned so the
-#: classification is self-invalidating IN THE CELL, not only in the census: if
-#: P0 ever gains a ``blocks_on`` key or a gate, ``step P0``'s own test goes red
-#: and demands re-evaluation, and if any other step LOSES both it goes red too.
-#: An NA that silently re-classifies itself is the "silent absence wearing a
-#: hat" the campaign forbids.
-_NA_BASELINE = frozenset({"P0"})
+#: The steps recorded as NA for this dimension. Pinned so the classification is
+#: self-invalidating IN THE CELL, not only in the census: a step that gains a
+#: ``blocks_on`` key or a gate reddens its own test and demands re-evaluation,
+#: and a step that LOSES both goes red too. An NA that silently re-classifies
+#: itself is the "silent absence wearing a hat" the campaign forbids.
+#:
+#: EMPTY as re-measured here, and the emptiness is the pin FIRING, not the pin
+#: being removed. It held ``{"P0"}`` from v1.7.68. ``332b9985`` ("flow: stage
+#: membership was declared twice and the copies disagreed") gave P0
+#: ``blocks_on: [1]``, so ``_is_na("P0")`` became False and step P0's own cell
+#: went red with the sentence this comment promised it would print — "the NA has
+#: self-invalidated — dimension 5 must be enforced for it". The demanded
+#: re-evaluation was then DONE rather than waived: ``d5_problems("P0")`` is ``[]``
+#: on the live tree, so P0 now runs the full dimension-5 predicate as an ENFORCED
+#: cell like the other 62, and ``D5-PHANTOM-EDGE`` was replayed against it to
+#: prove the cell can still be reddened.
+#:
+#: An empty set here does NOT disarm the guard. The ENFORCED branch asserts
+#: ``not _is_na(...)`` for every cell, so the day any step drops both its
+#: ``blocks_on`` key and its gate it reddens rather than drifting into a silent
+#: NA — which is the direction this pin was always the weaker half of.
+_NA_BASELINE: frozenset = frozenset()
 
 
 def _params():
@@ -849,10 +864,31 @@ def test_d5_state_census_is_exhaustive():
         f"census does not partition: enforced={len(enforced)} "
         f"waived={len(waived)} na={len(na)} steps={len(F.step_ids())}"
     )
-    assert na == {"P0"}, (
-        f"NA set is {sorted(na)}; only P0 lacks both a blocks_on key and a "
-        f"gate on the current tree — a change here means dimension 5's NA "
-        f"rationale must be re-derived"
+    # The NA rationale, RE-DERIVED over the whole population rather than
+    # restated as a second literal. The line here used to be
+    # `assert na == {"P0"}` — a hardcoded copy of the pin asserted four lines
+    # above, so the two had to be edited together and neither checked the
+    # thing they were both about: that "NA" means, for every step, exactly
+    # "declares no blocks_on key and no gate". That is now measured on all 63.
+    misfiled = sorted(
+        F.normalize_id(s) for s in F.step_ids()
+        if (F.normalize_id(s) in na) != _is_na(s)
+        and F.normalize_id(s) not in waived
+    )
+    assert not misfiled, (
+        f"dimension 5's NA rationale does not hold for {misfiled}: a cell is "
+        f"NA if and only if it declares neither a blocks_on key nor a gate, "
+        f"and these disagree with that derivation"
+    )
+    assert len(F.step_ids()) == 63, (
+        f"the NA rationale was re-derived over {len(F.step_ids())} steps, not "
+        f"63; the population moved and this census states a figure for a grid "
+        f"it no longer describes"
+    )
+    assert enforced, (
+        f"dimension 5 enforces ZERO of its {len(F.step_ids())} cells "
+        f"(waived={len(waived)} na={len(na)}); a census over an empty enforced "
+        f"set proves nothing and must refuse rather than pass"
     )
     assert not (waived & na), f"cell in two states at once: {sorted(waived & na)}"
 
