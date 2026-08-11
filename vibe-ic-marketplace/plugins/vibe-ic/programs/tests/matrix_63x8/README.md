@@ -129,8 +129,8 @@ Things that will bite you if you skip the docstring:
 * **`required_outputs` is ALL-of across entries**, but `" OR "` *inside* one
   entry is any-of. It used to be any-of across entries and that was a real
   false-pass bug — see `programs/flow_compliance_check.py` ~line 6150.
-* **`blocks_on` is present on 62 steps but non-empty on only 60.** D1 and A1
-  declare it *empty* because they are the flow's genuine roots. "62 steps have
+* **`blocks_on` is present on 63 steps but non-empty on only 61.** D1 and A1
+  declare it *empty* because they are the flow's genuine roots. "63 steps have
   blocks_on" is a presence count, not a dependency count.
 * **`total_steps: 44`** in the yaml counts the numeric steps only. It is not
   `len(steps)`.
@@ -138,7 +138,7 @@ Things that will bite you if you skip the docstring:
   `advisory_program_exit_zero` does **not**, `optional_program_exit_zero`
   blocks only when its `condition_files_exist` are present. Treating an
   advisory clause as enforcement is measuring something adjacent.
-* **No `program_exit_zero` form exists in `required_outputs`** — all 126
+* **No `program_exit_zero` form exists in `required_outputs`** — all 133
   entries are plain path strings. That form lives only in `gate`.
 
 ### `cells.py` — the 504-cell ledger
@@ -229,7 +229,7 @@ from matrix_63x8 import cells as C, flowref as F, waivers as W
 
 The ledger's unit is a step, but dimensions 2 (falsifiability), 4
 (criteria-match) and 6 (skip discipline) each ask their question of a gate
-CLAUSE — 150 blocking clauses over 62 gated steps. A cell-level
+CLAUSE — 160 blocking clauses over 62 gated steps. A cell-level
 `xfail(strict=True)` cannot express "5 of this step's 6 clauses are proven and
 the 6th is not", so those modules carry an in-module per-clause register with
 the same both-directions anti-rot semantics (a stale entry reddens; an entry
