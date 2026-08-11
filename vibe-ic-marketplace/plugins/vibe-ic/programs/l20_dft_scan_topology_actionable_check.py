@@ -375,9 +375,23 @@ def inspect(project: Path) -> Dict[str, Any]:
                 })
 
     # ── F2 REQUIREMENT_OUTSIDE_CONSUMING_LAYER (BLOCKS) ──────────────
-    doc_hits = framed_hits(input_doc_texts(project), _DFT_VOCAB_RE)
+    # `drop_denied=True` — THIS GATE OPTS IN (vibe-ic#1011). Of the 25 F2
+    # findings this gate had over the 107 published run dirs, 16 were roots
+    # whose own L7 / L19 notes say the requirement is not there — "does NOT
+    # specify JTAG / scan-chain / on-chip BIST", "There is no scan chain, no
+    # JTAG", "no PDK, floor-plan, SDC, UPF, or DFT artifact at the protocol
+    # level". A denial is not a statement of the requirement it denies.
+    #
+    # DFT vocabulary is the case where this is safe, and that is why the flag
+    # is per-consumer rather than global: a real DFT requirement is written
+    # POSITIVELY ("support for scan, JTAG (IEEE 1149.1)"), so this gate loses
+    # nothing by declining denials. L23's security vocabulary is the opposite
+    # — its real requirements are prohibitions — and it deliberately does not
+    # opt in. Measured both ways before either was wired.
+    doc_hits = framed_hits(input_doc_texts(project), _DFT_VOCAB_RE,
+                           drop_denied=True)
     sib_hits = framed_hits(sibling_l_doc_texts(project, _SIBLING_CODES),
-                           _DFT_VOCAB_RE)
+                           _DFT_VOCAB_RE, drop_denied=True)
     result["evidence"]["dft_requirement_hits_input_docs"] = len(doc_hits)
     result["evidence"]["dft_requirement_hits_sibling_l_docs"] = len(sib_hits)
 

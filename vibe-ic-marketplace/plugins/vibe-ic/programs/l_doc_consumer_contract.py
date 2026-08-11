@@ -69,6 +69,7 @@ __all__ = [
     "project_relative_source",
     "OUTSIDE_PROJECT_PREFIX",
     "signoff_qualifier",
+    "requirement_absent",
     "waiver_rationale",
     "numeric_target",
     "nonempty_str",
@@ -488,25 +489,211 @@ def signoff_qualifier(line: str) -> Optional[str]:
     return None
 
 
-def _hit_line(text: str, offsets: List[int], m: "re.Match") -> str:
-    """The ORIGINAL line the match sits on.
+# ─────────────────────────────────────────────────────────────────────
+# "The document says the requirement DOES NOT EXIST"  (vibe-ic#1011)
+# ─────────────────────────────────────────────────────────────────────
+#
+# THE ADJACENT-BUT-DIFFERENT CASE. `signoff_qualifier` above answers "the
+# document says this row is not BINDING". This answers "the document says the
+# requirement is not THERE" — and a gate that cannot tell the two apart counts
+# a sentence DENYING a requirement as evidence that one was stated. MEASURED on
+# the 107 published run dirs: 25 of `l20_dft_scan_topology_actionable_check`'s
+# F2 findings, 16 of them this shape, in the roots' own words —
+#
+#   "IEEE 802.3-2005 does NOT specify JTAG / scan-chain / on-chip BIST ..."
+#   "There is no scan chain, no JTAG, and no boundary-scan path ..."
+#   "Neither <bus A> ... nor <bus B> ... defines a JTAG / scan / BIST ..."
+#   "no PDK, floor-plan, SDC, UPF, or DFT artifact at the protocol level"
+#
+# ABSENCE IS NOT PROHIBITION, AND THAT IS THE WHOLE RULER
+# ------------------------------------------------------
+# `_NON_NORMATIVE_RE` already records why a BLANKET negation guard is wrong:
+# "`must NOT exceed 5 ns` is a real requirement that contains a negation". So
+# this predicate keys on the SHAPE, not on the presence of a negation word:
+#
+#   ABSENCE (drop)      a negation bound to a DECLARATION verb, or an
+#                       existential "there is no" / a bare "no" standing in
+#                       front of the matched term
+#                       -> the document declared NOTHING
+#   PROHIBITION (keep)  a DEONTIC MODAL + not — shall not, must not, may not,
+#                       should not, will not, cannot
+#                       -> the document declared something, negatively
+#
+# The auxiliary set in (a) is exactly the INDICATIVE ones (do/does/did/is/are/
+# was/were/has/have/had/been). Every deontic modal is absent from it BY
+# CONSTRUCTION, so "must not exceed 5 ns" and "the design shall not expose the
+# scan chain" can never match. `_PROHIBITION_RE` is not a subtraction bolted on
+# afterwards; it exists so a test can PIN that separation and so a future
+# widening of the auxiliary set has something that goes red.
+#
+# WHY LINE AND NOT SENTENCE OR CLAUSE — decided on the corpus, not on taste.
+# The same predicate was run at all three reaches over all 107 published run
+# dirs; roots left with at least one surviving L20 hit:
+#
+#     no drop  34        LINE  12        SENTENCE  16        CLAUSE  18
+#
+# Every disagreement is one-directional and every one was hand-opened.
+#   * SENTENCE keeps 6 hits on 4 roots that line drops, and all 6 are the same
+#     shape: "<standard> does NOT specify JTAG / scan-chain / on-chip BIST ...
+#     PHY vendors universally add scan + BIST ... in vendor-specific register
+#     space." The surviving hit is in the SECOND sentence, which describes
+#     other vendors' silicon and requires nothing of this design — and it is a
+#     hit at all only because REQUIREMENT_FRAMING_RE's +/-160 window reaches
+#     BACK ACROSS the full stop to borrow "specify" from the denial. Framing is
+#     window-scoped; a denial scoped narrower than the window can always be
+#     out-flanked by the framing that admitted the hit.
+#   * CLAUSE additionally keeps 2 roots whose denial is a comma list — "no PDK,
+#     floor-plan, SDC, UPF, or DFT artifact at the protocol level" leaves the
+#     term in the clause " or DFT artifact at the protocol level", five clauses
+#     from the cue that denies it.
+# LINE is also the scope `signoff_qualifier` already declares by contract, so
+# the two halves of one decision are not scoped differently.
+#
+# ONE VOCABULARY, NOT A FOURTH COPY. The words that mean "no" are imported from
+# `_prose_polarity` (vibe-ic#712 — "three private copies of it is how the
+# divergence happened"), and `blank_bracketed` comes with them, so a qualifier
+# in brackets cannot carry a document's polarity. What is local here is the
+# SHAPE test, because absence-vs-prohibition is a distinction that module does
+# not draw and four other modules do not want drawn for them.
+# Only `blank_bracketed` is imported, and it is CALLED. `DENIAL_CORE_RE` was
+# imported here too, as a fast reject, and is deliberately gone: the branches
+# below already require its words, the predicate runs at most `limit` times per
+# call so there was no measured speed to buy, and an import whose only consumer
+# was the test asserting the import is the "a call that can never fire is a
+# green light rather than a check" shape this repo names in
+# `prose_polarity_consulted_check._NOT_PROSE`. The anti-fork guard that matters
+# is the test asserting every single-word cue below is already in
+# `_prose_polarity.NEGATION_RE`, and that does not need an alias to hold.
+from _prose_polarity import blank_bracketed as _blank_bracketed   # noqa: E402
+
+#: Verbs by which a document DECLARES a requirement. Negate one of these and
+#: the sentence says nothing was declared at all.
+_DECLARATION_VERB = (
+    r"(?:specif\w*|defin\w*|list\w*|mandat\w*|requir\w*|includ\w*|provid\w*|"
+    r"implement\w*|expos\w*|support\w*|describ\w*|document\w*|address\w*|"
+    r"cover\w*|contain\w*|declar\w*|impos\w*|prescrib\w*|enable\w*|"
+    r"carr(?:y|ies|ied)|ha(?:s|ve|d)|appl(?:y|ies|icable)|part\s+of|present)"
+)
+
+#: A deontic modal + negation is a REQUIREMENT, never an absence. Kept as its
+#: own pattern so the separation is testable rather than merely implied by the
+#: auxiliary list in `_REQUIREMENT_ABSENT_RE`.
+_PROHIBITION_RE = re.compile(
+    r"\b(?:shall|must|should|may|will|would|can|could|might)\s*n(?:o|')?t\b"
+    r"|\bcannot\b|\bshan't\b|\bmustn't\b",
+    re.IGNORECASE)
+
+_REQUIREMENT_ABSENT_RE = re.compile(
+    # (a) NEGATED DECLARATION — "does NOT specify", "are not defined",
+    #     "is not required to implement". INDICATIVE auxiliaries only.
+    r"\b(?:do(?:es)?|did|is|are|was|were|ha(?:s|ve|d)|been)\s+"
+    r"n(?:o|')t\b(?:\s+\w+){0,3}\s+" + _DECLARATION_VERB +
+    # (b) EXISTENTIAL — "there is no", "there are no such"
+    r"|\bthere\s+(?:is|are|was|were|exists?)\s+(?:\w+\s+){0,2}\bno\b"
+    # (c) CORRELATIVE — "Neither <A> nor <B> defines a JTAG / scan / BIST".
+    #     `neither`/`nor` are NOT in `_prose_polarity`'s vocabulary and are
+    #     deliberately NOT pushed there: that module is read by four other
+    #     modules whose counts would move for a shape only this predicate
+    #     needs. Recorded as the one local addition, not smuggled in.
+    r"|\bneither\b[^.]{0,200}?\bnor\b"
+    # (d) BARE PARTICIPLE — "not specified at the protocol level",
+    #     "not part of the standard", "not applicable".
+    r"|\bnot\s+(?:specified|defined|required|mandated|applicable|documented|"
+    r"described|covered|addressed|supported|exposed|present|"
+    r"part\s+of|in\s+scope|within\s+scope)\b",
+    re.IGNORECASE)
+
+#: A BARE `no` is the loosest cue in the whole vocabulary, so it is the ONLY
+#: one required to GOVERN the match POSITIONALLY: it counts only when it stands
+#: BEFORE the matched term. "no JTAG support" denies the term; "JTAG ... no"
+#: does not, and letting a later `no` reach backwards is #790's silent
+#: direction — the caller publishes less than it read and nothing goes red.
+_BARE_NO_RE = re.compile(r"\bno\b", re.IGNORECASE)
+
+#: ... and NEVER when it heads a comparative. `REQUIREMENT_FRAMING_RE` reads
+#: `no less than` as FRAMING, so treating the same three words as a denial
+#: would let this predicate delete the very rows that predicate admits.
+_NO_COMPARATIVE_RE = re.compile(
+    r"\bno\s+(?:less|fewer|more|greater|later|earlier|longer|shorter|worse|"
+    r"better|higher|lower)\b",
+    re.IGNORECASE)
+
+#: How far back a bare `no` may reach. A clause, not a sentence: the shapes it
+#: has to catch are "no PDK, floor-plan, SDC, UPF, or DFT artifact" (43 chars
+#: from cue to term) and "No standard DFT / JTAG path" (14). MEASURED — the
+#: widest bare-`no` span among the 107 published run dirs is 56 characters.
+_BARE_NO_REACH = 80
+
+
+def requirement_absent(line: str, term_offset: Optional[int] = None
+                       ) -> Optional[str]:
+    """The phrase by which this LINE says the requirement DOES NOT EXIST.
+
+    LINE-SCOPED BY CONTRACT, exactly like :func:`signoff_qualifier` — the
+    caller passes one line and never a neighbourhood. See `framed_hits` for
+    the corpus counterexample that decided line over sentence.
+
+    ``term_offset`` is where the matched vocabulary term sits INSIDE ``line``.
+    It is optional so the predicate stays callable on a bare line (and so the
+    positional half simply does not apply then), but a caller that has it gets
+    the bare-`no` shape, which is the one cue that must stand in front of the
+    term it denies.
+
+    Returns the matched PHRASE rather than a bool, so a consumer can record it
+    as evidence and a human can audit the call — the same reason
+    :func:`signoff_qualifier` does.
+    """
+    if not line:
+        return None
+    # Bracketed spans carry qualifiers, not the statement's polarity (#711).
+    # Length-preserving, so `term_offset` stays valid.
+    hay = _blank_bracketed(line)
+
+    m = _REQUIREMENT_ABSENT_RE.search(hay)
+    if m:
+        return m.group(0).strip()[:120]
+
+    if term_offset is None:
+        return None
+    lo = max(0, term_offset - _BARE_NO_REACH)
+    span = hay[lo:term_offset]
+    for cand in _BARE_NO_RE.finditer(span):
+        tail = span[cand.start():]
+        if _NO_COMPARATIVE_RE.match(tail):
+            continue
+        if _PROHIBITION_RE.search(span[max(0, cand.start() - 12):cand.end()]):
+            continue
+        return span[cand.start():].strip()[:120] or "no"
+    return None
+
+
+def _hit_line(text: str, offsets: List[int],
+              m: "re.Match") -> Tuple[str, int]:
+    """``(the ORIGINAL line the match sits on, where the match starts in it)``.
 
     Taken from the raw text rather than the normalised copy, because
     normalisation collapses newlines and a disclaimer must be scoped to the row
     that carries it.
+
+    The OFFSET is what lets `requirement_absent` ask whether a bare `no` stands
+    IN FRONT OF the term, which is the difference between "no JTAG support" and
+    a `no` that merely shares the row. Returned alongside the line rather than
+    re-derived by the caller, because `str.find` on the line would locate the
+    FIRST occurrence of the vocabulary and the match is not always the first.
     """
     start = offsets[m.start()] if m.start() < len(offsets) else 0
     end = offsets[m.end() - 1] if 0 < m.end() <= len(offsets) else start
     lo = text.rfind("\n", 0, start) + 1
     hi = text.find("\n", end)
-    return text[lo:] if hi == -1 else text[lo:hi]
+    return (text[lo:] if hi == -1 else text[lo:hi]), start - lo
 
 
 def framed_hits(texts: Iterable[Tuple[Path, str]],
                 vocab_re: re.Pattern,
                 window: int = 160,
                 limit: int = 12,
-                include_non_normative: bool = False) -> List[Dict[str, Any]]:
+                include_non_normative: bool = False,
+                drop_denied: bool = False) -> List[Dict[str, Any]]:
     """Vocabulary matches that carry requirement framing nearby.
 
     Mirrors ``l8_clock_domains_typed_check._is_real_clock_freq``: a raw
@@ -537,6 +724,48 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
 
     The predicate stays shared either way; only the policy differs. An
     emitter with a private predicate emits goals the gate does not accept.
+
+    ``drop_denied`` — OPT-IN, AND IT DEFAULTS OFF FOR A REASON (vibe-ic#1011).
+    A hit whose own line says the requirement DOES NOT EXIST is not evidence
+    that one was stated; see :func:`requirement_absent`. This is OFF by
+    default so that turning it on is a decision a consumer makes and a
+    measurement backs, never a silent global move of a SHARED predicate: the
+    four programs with a call site here (`l20_dft_scan_topology_actionable_
+    check`, `l22_verification_plan_measurable_check`,
+    `l23_security_requirements_typed_check`, `l22_coverage_goal_emit`) are
+    asking four different questions of four different vocabularies.
+
+    MEASURED, on all 107 published run dirs, which is what the default
+    encodes. For L20 it drops 74 of 153 framed hits and takes 34 roots with a
+    hit down to 12, keeping every root that states a requirement positively.
+
+    THE OTHER THREE ARE NOT SWITCHED ON, AND ONE OF THEM SAYS WHY. L22's two
+    consumers move by 0 hits, so the flag would buy them nothing. L23 moves by
+    2 — and both are WRONG DROPS, which is the finding that fixes the default
+    in place rather than a reason to shrug. Its layer texts are long
+    multi-paragraph prose blobs on one JSON line (836 and 831 chars), and in
+    them a `does not have` belonging to a different sentence reaches the
+    matched term:
+
+        "... a TBB is part of a Root of Trust that does not have Shielded
+         Locations."          -> retracts `Root of Trust`, 200 chars away
+        "... they do not have the same value as TPM_GENERATED_VALUE ..."
+                              -> retracts `attestation`, 400 chars away
+
+    Line scope is right for the layers whose text is one statement per line
+    and wrong for a layer that puts a whole spec section on one; a flag that
+    lets each consumer answer that for itself is the only honest shape,
+    because the same reach is correct for one and incorrect for the other.
+    L23's real requirements are also written as PROHIBITIONS ("the key shall
+    not be readable"), which `requirement_absent` separates from absence by
+    construction — but that separation is not what would hurt it here, and
+    saying so is the point of having measured.
+
+    ``drop_denied`` records on the opt-in path only, like the field above:
+
+        denied         str|None — the phrase by which the line denies it,
+                                  present so the drop is auditable from the
+                                  gate's own report rather than re-derived
     """
     out: List[Dict[str, Any]] = []
     seen_ctx: set = set()
@@ -558,10 +787,18 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
             # sign-off requirement vanished because of its neighbour. A
             # document disclaims the row it is written on; proximity is not
             # membership.
-            hit_line = _hit_line(text, offsets, m)
+            hit_line, term_offset = _hit_line(text, offsets, m)
             non_normative = bool(_NON_NORMATIVE_RE.search(hit_line))
             if non_normative and not include_non_normative:
                 continue          # the document itself says it is not a requirement
+            # SAME LINE SCOPE AS THE DISCLAIMER ABOVE. `sentence_scope` and a
+            # clause reach were both measured over the whole corpus and both
+            # rejected; the counterexamples are recorded beside
+            # `requirement_absent`, with the roots they came from.
+            denied = (requirement_absent(hit_line, term_offset)
+                      if drop_denied else None)
+            if denied:
+                continue          # the document itself says it does not exist
             key = ctx.strip()
             if key in seen_ctx:
                 continue
@@ -579,6 +816,12 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
                 # keeps exactly the shape it ships today.
                 rec["non_normative"] = non_normative
                 rec["line_text"] = hit_line.strip()[:220]
+            if drop_denied:
+                # Likewise opt-in only. Always None on a returned record —
+                # a denied hit never gets this far — but present so a report
+                # states which policy produced it, rather than leaving a
+                # reader to infer the ruler from the count.
+                rec["denied"] = denied
             out.append(rec)
             if len(out) >= limit:
                 return out

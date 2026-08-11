@@ -425,3 +425,113 @@ def test_declaring_ADVISES_removes_the_cascade(tmp_path):
 
     after = _bubble(proj)
     assert after.returncode == 0, after.stdout + after.stderr
+# ── vibe-ic#1011: F2 counted a DENIAL as evidence of a requirement ─────────
+#
+# DRIVEN through the CLI, not through `inspect()`, because the defect being
+# fixed was a VERDICT: the gate FAILed 25 published run dirs, 16 of them on
+# documents that say in so many words that the requirement does not exist.
+#
+# All fixtures are SYNTHETIC restatements of shapes measured on the corpus.
+# No design, foundry, vendor, process or part token appears in any of them.
+
+#: A sibling layer that DENIES having any DFT surface. Every phrase here is a
+#: shape that was live on the published corpus.
+_L7_DENIES_DFT = {
+    "test_debug_architecture_present": False,
+    "notes": ("<standard> does NOT specify JTAG / scan-chain / on-chip BIST "
+              "at the protocol level. Conformance is established by the "
+              "published compliance test specification."),
+    "rationale": ("Neither <bus A> nor <bus B> defines a JTAG / scan / BIST "
+                  "/ MBIST / debug architecture. There is no dedicated debug "
+                  "interface in either protocol."),
+    "ate_or_dft": ("No standard DFT / JTAG path is exposed on the host "
+                   "interface; it is not specified at the protocol level."),
+}
+
+#: The SAME layer shape, asserting a DFT surface positively. This is the pair
+#: that makes the test above mean something.
+_L7_STATES_DFT = {
+    "test_debug_architecture_present": True,
+    "test_modes": [
+        {"name": "Scan test",
+         "purpose": ("Scan control / scan in / scan out drive the scan "
+                     "chains that manufacturing DFT requires.")},
+        {"name": "Boundary scan",
+         "purpose": "A TAP controller is required for boundary scan access."},
+    ],
+}
+
+
+def test_a_sibling_layer_that_DENIES_dft_no_longer_reddens_f2(tmp_path):
+    """THE DEFECT. L20 is the honest empty skeleton and the design's own
+    documents say there is nothing to carry, so there is no gap to report."""
+    r = _run(_mk(tmp_path, l20=_SKELETON, siblings={"L7": _L7_DENIES_DFT}))
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+        "a document DENYING a DFT requirement was counted as stating one:\n"
+        + r.stdout + r.stderr)
+    assert r.returncode != 1, r.stdout + r.stderr
+
+
+def test_a_sibling_layer_that_STATES_dft_still_reddens_f2(tmp_path):
+    """THE PAIRED GUARD, and the reason the test above is not a ban.
+
+    This is the shape of the ONE finding among the 25 that is unambiguously
+    real: a sibling test-debug layer enumerating scan test and boundary scan
+    while L20 carries neither. It MUST stay red, and it is asserted here on a
+    synthetic twin so the corpus root is not needed to keep the guard alive.
+    """
+    r = _run(_mk(tmp_path, l20=_SKELETON, siblings={"L7": _L7_STATES_DFT}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        "the negation ruler deleted a REAL finding:\n" + r.stdout + r.stderr)
+
+
+def test_an_input_doc_that_DENIES_dft_no_longer_reddens_f2(tmp_path):
+    """The same question on the other evidence channel. Both `framed_hits`
+    call sites in this gate opt in, and a fix applied to one of them would
+    leave the other counting denials."""
+    denial = ("3.2 Test Provisions\n"
+              "The protocol does not specify a scan chain, and no JTAG TAP "
+              "controller is required at this layer.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": denial}))
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+        r.stdout + r.stderr)
+
+
+def test_an_input_doc_that_STATES_dft_still_reddens_f2(tmp_path):
+    """Paired guard for the input-doc channel — the fixture the file already
+    ships, asserted through the new code path."""
+    r = _run(_mk(tmp_path, l20=_SKELETON,
+                 docs={"spec.txt": _DFT_REQUIREMENT_DOC}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        r.stdout + r.stderr)
+
+
+def test_a_prohibition_about_dft_is_a_requirement_not_a_denial(tmp_path):
+    """`_NON_NORMATIVE_RE` records the trap this fixture pins: `must NOT
+    exceed 5 ns` is a real requirement that contains a negation. A gate that
+    cannot tell a PROHIBITION from an ABSENCE deletes half its own corpus."""
+    prohibition = ("3.2 Test Requirements\n"
+                   "A full scan chain is required. The scan chain shall not "
+                   "exceed 5000 flops and must not be observable in mission "
+                   "mode.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": prohibition}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        "a prohibition was read as an absence:\n" + r.stdout + r.stderr)
+
+
+def test_the_denial_ruler_cannot_turn_a_typed_topology_red_or_green(tmp_path):
+    """Content stays self-evidencing. A design that CARRIES an actionable
+    scan topology passes whatever its prose says, so the new ruler can only
+    ever move the evidence side of F2 — never the layer side."""
+    doc = dict(_SKELETON)
+    doc["fields"] = dict(_SKELETON["fields"], scan_chains=[_TYPED_CHAIN],
+                         dft_present=True)
+    for sibling in (_L7_DENIES_DFT, _L7_STATES_DFT):
+        r = _run(_mk(tmp_path / str(id(sibling)), l20=doc,
+                     siblings={"L7": sibling},
+                     docs={"spec.txt": _DFT_REQUIREMENT_DOC}))
+        assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+            r.stdout + r.stderr)
