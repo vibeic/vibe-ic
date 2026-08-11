@@ -321,6 +321,35 @@ def test_zero_eligible_refuses_and_names_the_lost_anchor(synthetic_repo):
     assert sel.eligible == 0 and sel.considered == 1
 
 
+def test_the_refused_fixture_survives_truncation(synthetic_repo):
+    """A refusal that lists "the first 8 by path" hides its own point.
+
+    Refused paths sort by name, so `benchmark-data/...` fills the list and the
+    refused FIXTURE — the thing the reader most needs to see — falls off under
+    "and N more". Grouping by REASON means every distinct reason gets a line,
+    so "a fixture was refused" is always visible however large the population.
+    """
+    root, add = synthetic_repo
+    for i in range(12):
+        add(f"benchmark-data/ic/x/v/phase3/.phase3_held/s/w{i:02d}.spef")
+    add("vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/"
+        "decoy/phase3/stage3/extracted/chip_top.spef")
+    sel = rd.select(".spef", lambda p: True, "any", label="truncation")
+    assert sel.path is None
+    assert "fixtures/decoy/phase3/stage3/extracted/chip_top.spef" in sel.reason, (
+        f"the refused fixture was truncated out of the refusal:\n{sel.reason}")
+
+
+def test_a_withdrawn_artefact_is_named_as_withdrawn(synthetic_repo):
+    """"Tracked but gone" is the withdrawal signature (#1015/#1010/#1028) and
+    must not be reported as the same absence as "never published here"."""
+    root, add = synthetic_repo
+    p = add("benchmark-data/ic/x/v/phase3/stage3/extracted/x.spef")
+    p.unlink()
+    why = rd.why_not_published(p)
+    assert why is not None and "ABSENT from the working tree" in why, why
+
+
 def test_an_empty_index_says_so_differently(synthetic_repo):
     """"Nothing was ever here" and "what was here is gone" are different
     absences and must not share one message."""
