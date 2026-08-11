@@ -87,6 +87,55 @@ mutually orderable, and the report sorts them. The renderings cannot collide:
 a ``waivers`` key is prefixed ``waivers:``, while a ``waived_steps`` key is
 ``repr()`` of its id — which for a string id always begins with a quote.
 
+THE RATIONALE REMEMBERS WHAT IT WAS WRITTEN AGAINST (vibe-ic#922)
+=================================================================
+``growth_rationale`` used to be one document-level string, and the whole test
+applied to it was ``len(strip()) >= 30``. Thirty characters of anything —
+measured, thirty literal ``x`` — made ``growth_justified`` true for ANY net
+growth of ANY size, and it stayed true forever. Three properties followed, none
+of them intended: the string that justified one waiver justified fifty
+(UNBOUNDED); it named nothing, so a sentence written about waiver X covered
+waiver Y added three releases later (UNSCOPED); and it was never renewed
+(NON-EXPIRING). This gate's own ``details`` text describes the harm it believes
+it prevents — "every release accumulates more deferred work until the project
+has more open waivers than executed steps" — which is precisely what a
+permanent blanket produces while the gate reports PASS.
+
+So the rationale now carries the population it was written against:
+``growth_rationale_covers``, the root-waiver count present when the author
+wrote it. The rationale justifies growth only while that number still equals
+the count in the file.
+
+EQUAL, not "at least". ``covers >= current`` would let a single edit reserve
+headroom — write 51 beside a file holding one waiver and the next fifty are
+pre-authorised, which is the same blanket with a number in front of it. Under
+equality a rationale can only ever describe the population beside it, so every
+subsequent waiver forces the author back to this field, in the same edit, with
+the reason in view. That is what "the ratchet has a memory" buys: growth is
+still an operator decision made in the data, but it is a decision made once per
+growth rather than once per project.
+
+Of the three options the issue put up, this is the one that removes the
+unboundedness at the least contract churn. Measured over the tracked corpus at
+the time of the fix: 9 ``waivers.json``, 15 entries, and ZERO carrying a
+``growth_rationale`` at all — so no existing document needed new prose under
+any option. What separates them is the cost of each FUTURE growth event.
+Scoping the rationale to the waiver identities it justifies (option 1) is more
+faithful to intent, but a waiver's identity here is a gate-internal key —
+``repr(id)``, or a ``step;phase;ticket`` triple — and requiring maintainers to
+transcribe it would couple the file format to this module's private
+representation and cost one written sentence per waiver. Expiry by age or
+release count (option 3) bounds how long a blanket lasts but not how wide it
+is, and this gate already carries a per-waiver ``approved_at`` clock; a second
+document-level clock would age a rationale that is still exactly right. The
+recorded count costs one integer, and it is an integer the gate already prints
+on its own report line ("current: N root waivers").
+
+What this does NOT do is scope the rationale's TEXT. A renewed count with the
+old sentence left standing is still prose about the wrong waivers — the gate
+can see that the population moved, not that the reason still fits it. That is
+option 1, and it remains open.
+
 THE BASELINE IS NEVER REWRITTEN BY THIS GATE
 ============================================
 Making the second dialect visible means projects carrying it now compare a
@@ -114,7 +163,8 @@ Usage:
 Default baseline: `<project>/.vibe-ic-state/waivers_baseline.json`
 Default tolerance: 0 (any net growth without rationale fails)
 Exit codes:
-  0  PASS — waiver count flat or shrinking, OR growth has explicit rationale
+  0  PASS — waiver count flat or shrinking, OR growth has an explicit rationale
+     that records the current waiver population (`growth_rationale_covers`)
   1  FAIL — waiver grew unjustifiably
   2  IO error
 """
@@ -135,6 +185,16 @@ import _waiver_entries as _we  # noqa: E402  (after sys.path bootstrap)
 #: module docstring for why prose, version-bearing and severity fields are not
 #: among them.
 _WAIVERS_IDENTITY_FIELDS: Tuple[str, ...] = ("step", "phase", "ticket")
+
+#: Minimum length of a substantive ``growth_rationale``. Unchanged from the
+#: value this gate has always applied; named so the docstring, the finding
+#: text and the predicate cannot drift apart about what "substantive" is.
+GROWTH_RATIONALE_MIN_CHARS = 30
+
+#: The root-waiver count a ``growth_rationale`` was written against. See
+#: "THE RATIONALE REMEMBERS WHAT IT WAS WRITTEN AGAINST" in the module
+#: docstring.
+_COVERS_FIELD = "growth_rationale_covers"
 
 
 @dataclass
@@ -177,6 +237,26 @@ def _identity(dialect: str, entry: Any) -> str:
         return repr(entry["id"])
     fields = ";".join(f"{f}={entry.get(f)!r}" for f in _WAIVERS_IDENTITY_FIELDS)
     return f"{dialect}:{fields}"
+
+
+def _covers_count(waivers_doc: Any) -> Optional[int]:
+    """The root-waiver count recorded beside ``growth_rationale``, or None when
+    the document records no usable one.
+
+    ``bool`` is excluded even though it is an ``int`` subclass: a
+    ``growth_rationale_covers: true`` would otherwise read as "this rationale
+    was written against exactly one waiver", which is a number the author
+    never wrote. A memory the gate invented is not a memory.
+
+    A malformed value returns None rather than raising, and None is reported —
+    the same shape as every other unreadable field in this gate: what cannot
+    be read is disclosed, never counted as satisfied."""
+    if not isinstance(waivers_doc, dict):
+        return None
+    raw = waivers_doc.get(_COVERS_FIELD)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return None
+    return raw
 
 
 def _cascade_target_name(dialect: str, entry: Dict[str, Any]) -> Any:
@@ -459,36 +539,101 @@ def main():
             ))
 
     # Growth check.
+    #
+    # The rationale is substantive prose AND it carries the waiver population
+    # it was written against. Both halves are required: prose alone is the
+    # permanent blanket this gate was fixed for (vibe-ic#922), and a count
+    # alone authorises nothing because nobody said why.
     rationale = cur_doc.get("growth_rationale", "") if isinstance(cur_doc, dict) else ""
-    growth_justified = (
+    rationale_substantive = (
         isinstance(rationale, str)
-        and len(rationale.strip()) >= 30  # minimum substantive justification
+        and len(rationale.strip()) >= GROWTH_RATIONALE_MIN_CHARS
     )
+    covers = _covers_count(cur_doc)
+    current_root_count = len(cur_roots)
+    # EQUAL, not >=. A rationale may describe the population it was written
+    # beside; it may not reserve headroom above it. `covers >= current` would
+    # let one edit pre-authorise every waiver up to the recorded ceiling, which
+    # is the unbounded blanket again with a number in front of it.
+    covers_current = covers is not None and covers == current_root_count
+    growth_justified = rationale_substantive and covers_current
 
     if net_growth > args.tolerance and not growth_justified:
-        findings.append(Finding(
-            severity="ERROR",
-            category="UNJUSTIFIED_WAIVER_GROWTH",
-            message=(
-                f"Net waiver count grew by {net_growth} (> tolerance "
-                f"{args.tolerance}) without `growth_rationale` in waivers.json. "
-                f"New waivers: {sorted(new_waivers)}. "
-                + ("" if base_present else
-                   "No baseline file exists at the path below, so the "
-                   "comparison was made against an EMPTY document and every "
-                   "current waiver counts as new. Freeze a baseline (or pass "
-                   "--baseline) to measure growth against a real reference. ")
-                + f"Either close one of the new waivers, OR add a top-level "
-                f"`growth_rationale` field to waivers.json explaining why "
-                f"net growth is acceptable for this release."
-            ),
-            details=(
-                "Repeated growth without rationale leads to silent rot: every "
-                "release accumulates more deferred work until the project has "
-                "more open waivers than executed steps. This gate enforces "
-                "that growth is a deliberate, documented decision."
-            ),
-        ))
+        no_baseline_note = ("" if base_present else
+                            "No baseline file exists at the path below, so the "
+                            "comparison was made against an EMPTY document and every "
+                            "current waiver counts as new. Freeze a baseline (or pass "
+                            "--baseline) to measure growth against a real reference. ")
+        if not rationale_substantive:
+            # Unchanged category and wording: a document with no usable
+            # rationale fails exactly as it always has, and every caller
+            # matching on this string keeps matching.
+            findings.append(Finding(
+                severity="ERROR",
+                category="UNJUSTIFIED_WAIVER_GROWTH",
+                message=(
+                    f"Net waiver count grew by {net_growth} (> tolerance "
+                    f"{args.tolerance}) without `growth_rationale` in waivers.json. "
+                    f"New waivers: {sorted(new_waivers)}. "
+                    + no_baseline_note
+                    + f"Either close one of the new waivers, OR add a top-level "
+                    f"`growth_rationale` field to waivers.json explaining why "
+                    f"net growth is acceptable for this release, together with "
+                    f"`{_COVERS_FIELD}: {current_root_count}` recording the "
+                    f"waiver count it was written against."
+                ),
+                details=(
+                    "Repeated growth without rationale leads to silent rot: every "
+                    "release accumulates more deferred work until the project has "
+                    "more open waivers than executed steps. This gate enforces "
+                    "that growth is a deliberate, documented decision."
+                ),
+            ))
+        elif covers is None:
+            findings.append(Finding(
+                severity="ERROR",
+                category="GROWTH_RATIONALE_WITHOUT_MEMORY",
+                message=(
+                    f"waivers.json carries a substantive `growth_rationale` but no "
+                    f"integer `{_COVERS_FIELD}`, so the rationale records no waiver "
+                    f"population and authorises net growth of {net_growth} (> "
+                    f"tolerance {args.tolerance}) without bound. "
+                    f"New waivers: {sorted(new_waivers)}. "
+                    + no_baseline_note
+                    + f"Add `{_COVERS_FIELD}: {current_root_count}` beside the "
+                    f"rationale to record the {current_root_count} root waiver(s) "
+                    f"it is being written against."
+                ),
+                details=(
+                    "A rationale with no recorded population is a permanent "
+                    "authorization: the sentence written to justify one waiver "
+                    "goes on justifying every waiver added after it, in any "
+                    "number, forever. Recording the count is what makes the "
+                    "next growth need its own decision."
+                ),
+            ))
+        else:
+            findings.append(Finding(
+                severity="ERROR",
+                category="GROWTH_RATIONALE_STALE",
+                message=(
+                    f"`growth_rationale` was written against {covers} root waiver(s) "
+                    f"(`{_COVERS_FIELD}`), but waivers.json now holds "
+                    f"{current_root_count}, and net growth is {net_growth} (> "
+                    f"tolerance {args.tolerance}). The waivers added since are not "
+                    f"covered by it. New waivers: {sorted(new_waivers)}. "
+                    + no_baseline_note
+                    + f"Either close the uncovered waiver(s), OR renew the "
+                    f"rationale for the current population and set "
+                    f"`{_COVERS_FIELD}: {current_root_count}`."
+                ),
+                details=(
+                    "The recorded count is the rationale's memory. Growth beyond "
+                    "it is growth nobody has justified yet — the renewal is the "
+                    "decision, and moving the number without rewriting the "
+                    "reason is a statement the author is making on the record."
+                ),
+            ))
 
     pass_flag = not any(f.severity == "ERROR" for f in findings)
 
@@ -506,6 +651,11 @@ def main():
             "net_growth": net_growth,
             "tolerance": args.tolerance,
             "growth_justified": growth_justified,
+            # Disclosed separately from the verdict: "the rationale covers the
+            # current population" and "no count was recorded at all" both make
+            # `growth_justified` false and mean different things to fix.
+            "growth_rationale_present": rationale_substantive,
+            _COVERS_FIELD: covers,
             "baseline_present": base_present,
             "new_waivers": sorted(new_waivers),
             "removed_waivers": sorted(removed_waivers),

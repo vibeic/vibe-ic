@@ -304,11 +304,20 @@ def test_present_baseline_is_reported_as_present(tmp_path):
 def test_growth_rationale_is_the_operator_escape_hatch(tmp_path):
     """Growth in the newly-visible dialect is justified the same documented
     way as growth in the other — by a human writing it down in the data, not
-    by the gate lowering its own bar."""
+    by the gate lowering its own bar.
+
+    vibe-ic#922 added the second half of what "writing it down" means: the
+    rationale also records the waiver population it was written against
+    (``growth_rationale_covers``), because a bare string authorised unlimited
+    growth forever. This test's SUBJECT is unchanged and so are its assertions
+    — the escape hatch still opens, on the same dialect, with the same
+    ``growth_justified is True`` and rc 0. Only the fixture moved to the
+    current contract."""
     proj = _project(tmp_path, {
         "waivers": [_attestation("lvs", "T-1")],
         "growth_rationale": ("Device-level extraction is scheduled for the "
                              "next release; deferral accepted by sign-off."),
+        "growth_rationale_covers": 1,
     })
     rc, result = _run_json(proj)
     assert result["summary"]["current_root_waivers"] == 1

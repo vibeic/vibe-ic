@@ -920,7 +920,13 @@ def test_the_documented_waiver_example_satisfies_its_sibling_gates(tmp_path):
     `growth_rationale`) and `waiver_staleness_check` rc 2 (no parseable
     `approved_at`, so the entry can never AGE). An example this gate accepts
     and its siblings reject sends a reviewer to write a waiver that cannot be
-    aged or closed — a permanent one."""
+    aged or closed — a permanent one.
+
+    vibe-ic#922 added `growth_rationale_covers` to that sibling contract: a
+    rationale must record the waiver population it was written against, or it
+    authorises unlimited growth forever. The documented block comment carries
+    the field, so this fixture does too — that is the whole point of this
+    test, and it fails here first if the comment and the gates drift."""
     import datetime
     import subprocess
 
@@ -929,6 +935,7 @@ def test_the_documented_waiver_example_satisfies_its_sibling_gates(tmp_path):
     _write(tmp_path / "waivers.json", json.dumps({
         "growth_rationale": ("One SI vacuity disclosed for this release; the "
                              "extraction rerun is tracked."),
+        "growth_rationale_covers": 1,
         "waived_steps": [{
             "id": sa._TAPEOUT_STEP_ID,
             "reason": _GOOD_REASON,

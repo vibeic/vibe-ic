@@ -632,6 +632,11 @@ _TAPEOUT_STEP_ID = 36
 # carrying `si_vacuity_accepted`::
 #
 #     {"growth_rationale": "<why this release carries one more waiver>",
+#      "growth_rationale_covers": <root-waiver count that rationale was written
+#                                  against; vibe-ic#922 — a rationale with no
+#                                  recorded population authorises unlimited
+#                                  growth forever, so `waiver_growth_check`
+#                                  now requires it to equal the current count>,
 #      "waived_steps": [
 #       {"id": 36,
 #        "reason": "<>=20 chars saying why this vacuity is acceptable>",
