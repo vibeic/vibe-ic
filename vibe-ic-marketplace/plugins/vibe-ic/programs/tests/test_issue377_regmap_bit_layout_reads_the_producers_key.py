@@ -261,7 +261,17 @@ def test_corpus_registers_are_reachable_through_the_resolved_key():
     assert old_schema == 0, (
         "a corpus register now writes `bit_fields`; the inertness measurement "
         "in the module docstring needs re-running")
-    assert reachable > 300, reachable
+    # 2026-08-12, vibe-ic#1028. The floor was 300 against a corpus of 345
+    # reachable registers. The withdrawal of #1015/#1010 removed 71 of them,
+    # measured by re-running THIS count over the withdrawn roots alone on the
+    # pre-withdrawal tree — it is not inferred from the difference:
+    #     main 345  −  withdrawn 71  =  branch 274      (exact, nothing else moved)
+    # So the floor moves by the 71 the withdrawal took, 300 − 71 = 229, and NOT
+    # to 273. Re-pinning a floor to just under whatever the shrunken tree
+    # happens to measure would make the ratchet unable to catch the next
+    # unexplained drop, which is the whole reason it is a floor and not an
+    # equality. 274 clears 229 with the same margin the old pair had.
+    assert reachable > 229, reachable
 
 
 def test_corpus_placeholder_population_has_not_moved():
@@ -278,7 +288,16 @@ def test_corpus_placeholder_population_has_not_moved():
     marked = sum(1 for _, r in corpus
                  for f in rblc.iter_register_fields(r)
                  if isinstance(f, dict) and rblc.field_is_marked_unknown(f))
-    assert marked == 202, marked
+    # 2026-08-12, vibe-ic#1028: 202 -> 140, and the move is ATTRIBUTED rather
+    # than typed. The count was re-run over the 16 withdrawn roots alone on the
+    # pre-withdrawal tree, so the subtraction is measured on both sides:
+    #     marked      main 202  −  withdrawn  62  =  branch 140   (exact)
+    #     registers   main 703  −  withdrawn 152  =  branch 551   (exact)
+    # Nothing moved for any reason other than the withdrawal — had anything
+    # else changed, the two lines would not both reconcile. The equality is
+    # KEPT (not relaxed to a floor): its purpose is to catch the marker being
+    # used to make fields disappear in either direction, and a floor cannot.
+    assert marked == 140, marked
 
 
 def test_corpus_pin_designations_are_refused_by_the_matcher():
