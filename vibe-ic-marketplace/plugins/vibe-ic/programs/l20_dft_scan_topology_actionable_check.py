@@ -138,11 +138,15 @@ _DFT_VOCAB_RE = re.compile(
 # roots' own inputs spend it on the name of a PROTOCOL MESSAGE rather than on a
 # built-in self-test. In their own words:
 #
-#   "The HBA shall transport the following FIS types: 0x27 Register
-#    Host-to-Device, ... 0x46 Data, 0x58 BIST Activate, 0x5F PIO Setup, ..."
+#   "The <controller> shall transport the following frame types: 0x27
+#    <name>, ... 0x46 Data, 0x58 BIST Activate, 0x5F <name>, ..."
 #   "BIST (B): When '1', indicates that the command that software built is for
-#    sending a BIST FIS."
+#    sending a BIST <frame>."
 #   "0x03  BIST                 Built-In Self Test"      (a message-type table)
+#
+# Quoted with the roots' own protocol nouns replaced by <placeholders>, the
+# same convention #1020 used in this file: the SHAPE is the evidence and the
+# standard's name is not part of it.
 #
 # A frame information structure and a message type are PAYLOADS A PROTOCOL
 # DEFINES ON THE WIRE. Neither says anything about whether this design has a
@@ -157,10 +161,14 @@ _DFT_VOCAB_RE = re.compile(
 #   (a) the token is preceded by a WIRE CODE POINT — `0x58 BIST`, `0b0011
 #       BIST`, `type 3 BIST`. A number that identifies the token on the wire is
 #       a message identifier; a scan chain does not have one.
-#   (b) the token is followed by a PROTOCOL-OBJECT NOUN — `BIST FIS`, `BIST
-#       message`, `BIST frame`, `BIST primitive`. The noun says what KIND of
-#       thing the token names, and every noun in the set is a thing that is
-#       transmitted.
+#   (b) the token is followed by a PROTOCOL-OBJECT NOUN — `BIST <frame>`,
+#       `BIST message`, `BIST frame`, `BIST primitive`. The noun says what KIND
+#       of thing the token names, and every noun in the set is a thing that is
+#       TRANSMITTED. The set includes two standards' own words for a frame
+#       alongside the generic ones — the same class of technology literal
+#       `_DFT_VOCAB_RE` above already spends on `jtag`, `bsdl` and `ieee 1149`,
+#       and for the same reason: the vocabulary of the technology is not a
+#       design, PDK, vendor or part identity.
 #
 # SCOPED TO THE SENTENCE, the same reach `framed_hits` now uses for framing and
 # for both of its drop predicates (#1021). That is what reaches "BIST (B): ...

@@ -427,15 +427,20 @@ def test_the_opt_in_records_its_policy_on_its_own_records_only():
     assert "denied" in rec and rec["denied"] is None, rec
 
 
-def test_scope_is_the_LINE_not_the_SENTENCE():
-    """MEASURED counterexample, from 4 roots of the published corpus.
+def test_the_counterexample_that_forced_LINE_scope_is_GONE():
+    """#1020's counterexample, re-run against the sentence-bounded framing.
 
-    The second sentence describes OTHER vendors' silicon and requires
-    nothing of this design; it is a framed hit at all only because
-    REQUIREMENT_FRAMING_RE's +/-160-char window reaches BACK ACROSS the full
-    stop and borrows `specify` from the denial. A denial scoped narrower
-    than the framing window can always be out-flanked by the framing that
-    admitted the hit.
+    It came from 4 roots of the published corpus: the SECOND sentence
+    describes other vendors' silicon and requires nothing of this design, and
+    it was a framed hit at all only because REQUIREMENT_FRAMING_RE's window
+    reached BACK ACROSS the full stop and borrowed `specify` from the denial
+    in the first. That borrow is what a sentence-scoped denial could not
+    out-flank, and it is the reason #1020 was forced to LINE.
+
+    #1021 bounded the framing to the sentence, so the second sentence is no
+    longer a hit AT ALL — with the denial ruler switched OFF as well as on.
+    That is the assertion below, and it is what made the sentence reach
+    available to `requirement_absent` and to `requirement_out_of_scope`.
     """
     # Padded AROUND the pair, never BETWEEN it. Two things have to hold at
     # once and they pull in opposite directions:
@@ -454,13 +459,21 @@ def test_scope_is_the_LINE_not_the_SENTENCE():
            "+ I/O voltage trim in vendor-specific register space. " + pad
            + "\n")
     assert len(_hits_plain(doc)) >= 2, "fixture no longer exercises both halves"
+    # The BORROWING half: with the denial ruler OFF, every surviving hit must
+    # sit in the sentence that carries `specify`. Not one may come from the
+    # second sentence, which carries no framing word of its own.
+    assert all("Vendors universally add" not in h["context"].split(". ")[-1]
+               or "specif" in h["context"]
+               for h in _hits_plain(doc)), _hits_plain(doc)
     assert _hits_denied(doc) == [], (
-        "a sentence-scoped denial let the neighbouring sentence through")
+        "the neighbouring sentence survived the denial")
 
 
-def test_scope_is_the_LINE_not_the_CLAUSE():
-    """The other rejected reach, on the shape that decided it: the cue is a
-    bare `no` heading a COMMA LIST, five clauses from the term it denies."""
+def test_the_CLAUSE_reach_stays_rejected():
+    """The reach that is still rejected, on the shape that decided it: the cue
+    is a bare `no` heading a COMMA LIST, five clauses from the term it denies.
+    A clause reach would leave the term in `" or DFT artifact at the protocol
+    level"` and read the denial as belonging to somebody else."""
     doc = ("<protocol> is a published specification - no PDK, floor-plan, "
            "SDC, UPF, or DFT artifact is required at the protocol level.\n")
     assert len(_hits_plain(doc)) >= 1, "fixture no longer produces a hit"
@@ -522,3 +535,194 @@ def test_bracketed_qualifiers_do_not_carry_the_documents_polarity():
            "this design.\n")
     assert len(_hits_denied(doc)) >= 1, (
         "a bracketed qualifier retracted the line's real requirement")
+
+
+# ── vibe-ic#1021: the framing window crossed full stops ────────────────────
+#
+# `framed_hits` admitted a match when a requirement word appeared anywhere in
+# a flat +/-160-char window, and a flat window does not stop at a full stop. A
+# published root's own input carried a parenthetical mention of a debug signal
+# in one sentence and an unrelated `requires` about security certification in
+# the next; the second promoted the first, and the gate reddened the project.
+#
+# Every fixture below is a SYNTHETIC restatement of a shape measured on the
+# published corpus. None is copied from a design and none carries a design,
+# foundry, vendor or process token.
+
+def _hits_re(doc: str, pattern: str, **kw):
+    import re as _re
+    from pathlib import Path as _P
+    return C.framed_hits([(_P("x.md"), doc)], _re.compile(pattern, _re.I), **kw)
+
+
+def test_NEGATIVE_CONTROL_framing_may_not_be_borrowed_across_a_full_stop():
+    """The defect, in the shape it was measured in.
+
+    FAILS on the pre-#1021 predicate: the flat window reaches back over the
+    full stop, finds `requires`, and reports 1 hit. This is the whole of
+    defect 1, and it is asserted before anything downstream of it.
+    """
+    doc = ("In this mode the digital circuits are disconnected and the bold "
+           "pins can be used to expose debug related signals (e.g. JTAG "
+           "interface). The certification body requires that privacy "
+           "precautions have been taken before the mode is entered.\n")
+    assert _hits_re(doc, r"jtag") == [], (
+        "a bare mention borrowed its framing from the NEXT sentence: %r"
+        % _hits_re(doc, r"jtag"))
+
+
+def test_POSITIVE_CONTROL_framing_in_the_terms_OWN_sentence_still_counts():
+    """The paired guard. A window that admits nothing is not a narrower
+    window, it is a broken one."""
+    doc = ("In this mode the digital circuits are disconnected. The design "
+           "requires a JTAG interface on the debug connector.\n")
+    assert len(_hits_re(doc, r"jtag")) == 1, _hits_re(doc, r"jtag")
+
+
+def test_a_HARD_WRAPPED_requirement_is_still_one_sentence():
+    """`_normalize_ws` exists because requirements are routinely hard-wrapped,
+    and the sentence bound must not undo it: a newline inside a sentence is a
+    soft wrap, not a full stop. The reach's own vocabulary agrees — a bare
+    "\\n" is deliberately NOT one of `SENTENCE_BREAKS`."""
+    doc = "The design shall verify the scan chain with 100%\ncoverage.\n"
+    assert len(_hits_re(doc, r"scan chain")) == 1, _hits_re(doc, r"scan chain")
+
+
+def test_the_reach_is_the_HOUSE_one_and_not_a_private_copy():
+    """vibe-ic#712's rule applied to the reach rather than the vocabulary:
+    "three private copies of it is how the divergence happened". This module
+    may choose WHERE to apply the reach; it may not own a second definition of
+    where a sentence ends."""
+    import _prose_polarity as PP
+    assert C._sentence_scope is PP.sentence_scope
+
+
+def test_the_window_argument_is_now_a_BUDGET_and_can_only_narrow():
+    """The new neighbourhood is the INTERSECTION of the old window and the
+    sentence, so no input can produce a hit that the flat window did not. A
+    smaller budget must therefore still be able to remove a hit."""
+    doc = ("The design requires the following, listed for completeness and "
+           "expanded on elsewhere in this document: a full scan chain.\n")
+    assert len(_hits_re(doc, r"scan chain")) == 1
+    assert _hits_re(doc, r"scan chain", window=20) == []
+
+
+# ── vibe-ic#1021: scope-deferral is not denial ─────────────────────────────
+#
+# The third idiom. Two published roots' L7 notes say chip-level JTAG/scan/BIST
+# "remain <somebody else>-silicon concerns" — no negation word anywhere, so no
+# denial ruler can reach them at any reach, and nothing about them is
+# non-normative. It is a DIFFERENT question and it gets a different predicate.
+
+_DEFERRALS = [
+    ("Chip-level JTAG/scan/BIST remain host-silicon concerns; conformance is "
+     "established by the published compliance test specification.", "JTAG"),
+    ("Chip-level JTAG/scan/BIST remain sink / controller silicon concerns.",
+     "BIST"),
+    ("Scan insertion is out of scope for this specification.", "Scan insertion"),
+    ("Boundary-scan provisions are beyond the scope of this layer.",
+     "Boundary-scan"),
+    ("The JTAG TAP is left to the integrator, who must specify it.", "JTAG"),
+    ("On-chip BIST is the responsibility of the memory vendor, per the "
+     "specification.", "BIST"),
+    ("ATPG pattern generation is deferred to the implementer's tool flow, as "
+     "required.", "ATPG"),
+]
+
+#: THE OTHER DIRECTION. A requirement that merely CONTAINS the word `scope`,
+#: or names a concern it then imposes, is still a requirement. This is the
+#: same trap `_NON_NORMATIVE_RE` records for negation, one idiom over: a gate
+#: that learns only to say "somebody else's" is a ban.
+_NOT_DEFERRALS = [
+    ("The scope of this specification includes a JTAG TAP controller.",
+     "JTAG"),
+    ("Scan insertion is required and is in scope for this design.",
+     "Scan insertion"),
+    ("The design shall provide a boundary-scan register per I/O pin.",
+     "boundary-scan"),
+    ("Test signals - support for scan, JTAG, and clock control is required.",
+     "JTAG"),
+]
+
+
+@pytest.mark.parametrize("line,term", _DEFERRALS)
+def test_requirement_out_of_scope_names_the_phrase_that_defers(line, term):
+    """It returns the PHRASE, not a bool — the same contract as its two
+    neighbours, and for the same reason: a drop that names its evidence is
+    auditable from the gate's own report."""
+    got = C.requirement_out_of_scope(line, line.find(term))
+    assert got, line
+
+
+@pytest.mark.parametrize("line,term", _DEFERRALS)
+def test_a_deferral_is_NOT_reachable_by_the_denial_predicate(line, term):
+    """The load-bearing claim of #1021's second defect, asserted rather than
+    argued: these lines carry NO negation word, so `requirement_absent`
+    correctly cannot see them. If a future widening makes it see them, the two
+    predicates have started answering one question and this goes red."""
+    assert C.requirement_absent(line, line.find(term)) is None, line
+
+
+@pytest.mark.parametrize("line,term", _NOT_DEFERRALS)
+def test_a_requirement_is_never_read_as_a_deferral(line, term):
+    assert C.requirement_out_of_scope(line, line.find(term)) is None, line
+
+
+def test_the_deferral_drop_is_OPT_IN_and_defaults_OFF():
+    """A SHARED predicate never moves four consumers by default. The other
+    three do not opt in, so the default path must be byte-identical."""
+    doc = ("Chip-level JTAG/scan/BIST remain host-silicon concerns; "
+           "conformance is established by the compliance specification.\n")
+    assert len(_hits_re(doc, r"jtag")) == 1, "the default path moved"
+    assert _hits_re(doc, r"jtag", drop_out_of_scope=True) == []
+
+
+def test_the_deferral_opt_in_records_its_policy_on_its_own_records_only():
+    doc = "A JTAG TAP controller is required on the debug connector.\n"
+    plain = _hits_re(doc, r"jtag")
+    assert set(plain[0]) == {"source", "line", "match", "context"}, plain[0]
+    rec = _hits_re(doc, r"jtag", drop_out_of_scope=True)[0]
+    assert "out_of_scope" in rec and rec["out_of_scope"] is None, rec
+
+
+def test_the_two_drop_predicates_stay_two_questions():
+    """`drop_denied` must not silently acquire the deferral vocabulary, and
+    `drop_out_of_scope` must not acquire the denial vocabulary. Folding them
+    would make the L23 measurement — which wants neither — unavailable as two
+    separate decisions."""
+    deferral = ("Chip-level JTAG/scan/BIST remain host-silicon concerns; "
+                "conformance is by the published specification.\n")
+    denial = ("<standard> does NOT specify JTAG / scan-chain / on-chip BIST "
+              "at the protocol level.\n")
+    assert len(_hits_re(deferral, r"jtag", drop_denied=True)) == 1
+    assert len(_hits_re(denial, r"jtag", drop_out_of_scope=True)) == 1
+
+
+# ── vibe-ic#1021: the vocabulary's owner decides what its tokens mean ──────
+
+def test_reject_runs_BEFORE_the_limit_so_a_real_hit_cannot_be_truncated_away():
+    """The silent direction, pinned. A post-filter on the returned records
+    would let `limit` truncate first: a text whose first `limit` matches are
+    all rejects would report ZERO hits while a real one went unread."""
+    noise = " ".join("The %d-th widget is required for scan chain use." % i
+                     for i in range(20))
+    doc = noise + " A real scan chain is required for manufacturing test.\n"
+    kept = _hits_re(doc, r"scan chain", limit=3,
+                    reject=lambda match, sentence: "widget" in sentence)
+    assert len(kept) == 1, kept
+    assert "manufacturing" in kept[0]["context"], kept
+
+
+def test_reject_is_handed_the_FULL_sentence_not_the_truncated_context():
+    """The reported `context` is truncated to 220 chars; the hook needs the
+    whole neighbourhood, because the phrase that identifies the token can sit
+    in the half that reporting throws away."""
+    seen = []
+    doc = ("lead in text " * 13 + "a scan chain is required "
+           + "trailing filler " * 5 + "identified at the far end\n")
+    _hits_re(doc, r"scan chain",
+             reject=lambda match, sentence: seen.append(sentence) or False)
+    assert seen, "the hook was never called"
+    assert "identified at the far end" in seen[0], seen
+    assert "identified at the far end" not in seen[0][:220], (
+        "the fixture no longer reaches past the reported truncation")
