@@ -347,7 +347,11 @@ def _cli(tree: Path, pdks: Path, tmp_path: Path):
         [sys.executable,
          str(_PROGRAMS / "input_doc_pdk_claim_vs_installed_pdk_check.py"),
          str(tree), "--pdks-root", str(pdks), "--json", str(out)],
-        capture_output=True, text=True, timeout=120)
+        # 60s = the ci_harness_timeout_ceiling ceiling (180s harness bound / 3).
+        # This file landed at 120s in #949 and put the gate over its ceiling on
+        # the very day it was wired. Measured 2026-08-11: the whole file runs in
+        # 0.68s.
+        capture_output=True, text=True, timeout=60)
     return proc, json.loads(out.read_text())
 
 
