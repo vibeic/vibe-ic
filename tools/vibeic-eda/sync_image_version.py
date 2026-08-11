@@ -9,24 +9,64 @@ WHY THIS EXISTS
     propagation mechanical and the drift a hard error:
 
         SOURCE OF TRUTH            the `VERSION` file (X.Y.Z, one line)
-        --check      (default)     FAIL if any LIVE pointer disagrees with VERSION,
-                                   OR if the VERSION anchor itself is STALE relative
-                                   to the newest published image tag (see below)
+        --check      (default)     BLOCKING. FAIL if any LIVE pointer disagrees
+                                   with VERSION, or if the anchor moved BELOW what
+                                   this repo already committed. Reads the repo and
+                                   git ONLY — never the registry.
+        --report-upstream          NON-BLOCKING. Resolve the registry and RECORD
+                                   what it said and when. Never returns 1.
         --set X.Y.Z                write VERSION + rewrite every live pointer
         --bump patch|minor|major   compute the next version, then --set it
         --print                    print the current VERSION
 
-    ANCHOR-vs-REALITY (issue #215)
+    TWO QUESTIONS, TWO SIDES OF ONE LINE (vibe-ic#927)
+        (a) IS THE PINNED ANCHOR THE ONE THIS REPO INTENDS?
+            Decidable from the repo alone — the pointers, and git's record of
+            what the anchor already was. Deterministic, has a fixed point, and
+            no third party can move it. SAFE TO BLOCK ON, and `--check` is
+            exactly this and nothing else.
+
+        (b) HAS UPSTREAM PUBLISHED SOMETHING NEWER?
+            Decidable only by asking a registry another org mutates on its own
+            cadence. REPORTED, never blocking — `--report-upstream`.
+
+        The line between them is not a style preference. A verdict that depends
+        on a MUTABLE THIRD-PARTY POINTER has three defects at once:
+          * it goes red for a reason nobody in this repo caused;
+          * it goes green again when the third party ships nothing;
+          * it cannot distinguish "we are behind" from "the registry moved under
+            us" — different facts, with different owners.
+        Measured: the anchor moved 0.2.75 -> .81 -> .82 -> .83 inside about
+        twelve hours, once per fork release, each time re-opening a gap no
+        commit in this tree caused. Bumping the number closes the instance and
+        leaves the mechanism; this split removes the mechanism.
+
+        WHAT COUNTS AS MUTABLE IS A PREDICATE, NOT A LIST (`is_mutable_tag`).
+        `latest` is not special — it is merely the non-semver tag we happen to
+        publish today. Any tag that is not an immutable X.Y.Z release is a NAME
+        the publisher can re-point at different bytes tomorrow, so the rule is
+        written against the shape, and `edge` / `nightly` / `main` are covered
+        the day someone publishes one without editing this file.
+
+        WHERE THE ADOPTION CALL LIVES. Whether to take a newer image is THIS
+        repo's call, made deliberately by running `--set`. That is the moment
+        the target is verified to resolve (vibe-ic#354's protection, kept), and
+        the moment a human is present to make the call. It is not a thing a
+        landing gate should decide on the repo's behalf at an arbitrary minute.
+
+    ANCHOR-vs-REALITY (issue #215) — now REPORTED, not blocking
         Internal consistency (every pointer == VERSION) is NECESSARY but NOT
         SUFFICIENT: if the VERSION file is ITSELF stale, the whole tree is
-        *consistently wrong* and the old check went green about it — it would have
-        demanded a correct pointer be rolled BACK to the stale anchor. So --check
-        also compares VERSION against the newest published `ghcr.io/vibeic/...`
-        semver tag (the actual reality). VERSION older than the newest published
-        tag FAILs loudly, naming both. Registry query is best-effort: pin/override
-        it with the `VIBEIC_EDA_PUBLISHED_TAG` env (tests / offline / CI); if the
-        registry can't be reached AND no override is set, the anchor line reports
-        UNVERIFIED (internal consistency only) rather than silently claiming clean.
+        *consistently wrong*. That comparison is still MADE and still printed in
+        full by `--report-upstream`; what changed is that it no longer sets a
+        landing verdict. Registry query is best-effort: pin/override it with the
+        `VIBEIC_EDA_PUBLISHED_TAG` env (tests / offline / CI); if the registry
+        can't be reached AND no override is set, the report says UNVERIFIED /
+        NOT CHECKED rather than silently claiming clean.
+
+        The #215 state it was written for is still BLOCKED, from the side that
+        has a fixed point: `check_anchor_no_regress` compares the anchor against
+        this repo's own committed history, which the other repo cannot move.
 
 TWO KINDS of `vibeic-eda:X.Y.Z`, treated DIFFERENTLY (verified empirically):
     * LIVE POINTER — "pull / run / build THIS image now". Lives in the install
@@ -111,6 +151,12 @@ INSTALL_DOC_CANDIDATES = [
 HISTORY_GLOBS = ["FIX_STATUS.md", "CHANGELOG*", "*CHANGELOG*", "*ROADMAP*.md",
                  "*_STATUS.md", "sync_image_version.py"]
 
+# The floating tag this repo publishes today. Named ONCE, here, and only so the
+# report has something to resolve — every RULE below is written against
+# `is_mutable_tag`, never against this constant, so a second floating tag needs
+# no rule change.
+FLOATING_TAG = "latest"
+
 TAG_RE = re.compile(r"vibeic-eda:(\d+\.\d+\.\d+)")
 GHCR_RE = re.compile(r"ghcr\.io/vibeic/vibeic-eda:(\d+\.\d+\.\d+)")
 CURRENT_RE = re.compile(r"(Current:\s*\*\*)(\d+\.\d+\.\d+)(\*\*)")
@@ -158,6 +204,26 @@ def next_version(cur: str, kind: str) -> str:
 
 def _semver_key(v: str):
     return tuple(int(n) for n in v.split("."))
+
+
+def is_mutable_tag(tag: str) -> bool:
+    """Is `tag` a name whose bytes a third party can change under us?
+
+    THE PREDICATE THE WHOLE (a)/(b) SPLIT TURNS ON, and deliberately written
+    against the SHAPE of the tag rather than against a list of names.
+
+    An immutable X.Y.Z release tag is a promise: `:0.2.83` means the same
+    manifest tomorrow as today, so a check that reads it has a fixed point and
+    can be blocked on. Everything else — `latest`, `edge`, `nightly`, `main`, a
+    branch name — is a POINTER the publisher re-aims on their own cadence, so a
+    verdict computed from it changes for reasons that are not in this commit.
+
+    Written as a predicate so the rule survives the next floating tag somebody
+    publishes: enumerating today's names would leave the rule silently
+    incomplete the first time that happened, which is the same shape of defect
+    as a per-file ignore list that is always one landing behind.
+    """
+    return not bool(SEMVER_RE.match(tag.strip()))
 
 
 def _query_ghcr_tags(repo: str, timeout: float = 6.0):
@@ -210,20 +276,28 @@ def _query_ghcr_digest(repo: str, tag: str, timeout: float = 6.0):
 
 def check_latest_points_at_anchor(version: str,
                                   require_remote: bool = False) -> int:
-    """`:latest` must resolve to the SAME manifest as the anchor version.
+    """Does the floating tag resolve to the SAME manifest as the anchor?
 
     #423: it did not, for four days, and nothing said so. A reader who pulls
     the tag that means "newest" got an older toolchain than the campaign runs
-    on, and their results were not comparable to the published ones. Skipped
-    (not failed) when the override env is set, because that mode exists for
-    offline / deterministic CI and there is no registry to ask.
+    on, and their results were not comparable to the published ones. That
+    OBSERVATION is worth making and this function still makes it, in full.
+
+    WHAT ITS RETURN VALUE MEANS CHANGED (vibe-ic#927). It is a FINDING
+    SEVERITY, not a verdict: 0 = agrees / nothing to compare, 1 = disagrees,
+    2 = could not look. `do_report_upstream` is the only caller, and it never
+    turns 1 into a non-zero exit, because the thing being compared is a
+    MUTABLE THIRD-PARTY POINTER (`is_mutable_tag`) — an answer that flips when
+    the fork publishes, with no commit here. `do_check` does not call this at
+    all. Skipped when the override env is set: that mode exists for offline /
+    deterministic CI and there is no registry to ask.
     """
     if os.environ.get(PUBLISHED_TAG_ENV):
         print("  latest-vs-anchor         : SKIPPED "
               f"({PUBLISHED_TAG_ENV} override set — no registry to query)")
         return 0
     try:
-        d_latest = _query_ghcr_digest(GHCR_REPO, "latest")
+        d_latest = _query_ghcr_digest(GHCR_REPO, FLOATING_TAG)
         d_anchor = _query_ghcr_digest(GHCR_REPO, version)
     except Exception as e:  # noqa: BLE001
         if require_remote:
@@ -479,6 +553,29 @@ def ghcr_hits(root: Path, ignore):
 
 def do_check(root: Path, version: str, ignore,
              require_remote: bool = False, vf: Path | None = None) -> int:
+    """THE BLOCKING HALF — question (a), and ONLY question (a).
+
+    "Is the pinned anchor the one this repo intends?" Two sub-questions, both
+    answered from things nobody outside this repository can move:
+
+        every live pointer == the anchor        the tree, read directly
+        the anchor >= what this repo committed   git, via check_anchor_no_regress
+
+    NO REGISTRY CALL HAPPENS HERE, and that is the property, not an
+    optimisation. `--require-remote` is accepted and ignored on this path (see
+    main) so the old CI invocation keeps working while meaning the right thing.
+
+    Consequences worth stating plainly, because they are the point:
+      * an offline run and an online run return the SAME verdict;
+      * a fork release published mid-gate cannot turn this red;
+      * this gate is host-independent again — it was excluded from the
+        two-invocations-must-agree probe precisely because it made a network
+        round-trip (vibe-ic#539), and it no longer does.
+
+    What was NOT bought by this: a genuinely wrong anchor still fails here. A
+    drifted pointer fails. A rolled-back anchor fails. The currency question
+    moved to `do_report_upstream`; it did not evaporate.
+    """
     strict = install_doc_refs(root)
     net = ghcr_hits(root, ignore)
     install_set = set(INSTALL_DOC_CANDIDATES)
@@ -490,48 +587,172 @@ def do_check(root: Path, version: str, ignore,
     print(f"vibeic_eda_version_sync: VERSION = {version}")
     print(f"  install-doc refs checked : {len(strict)} across {len(ok_docs)} file(s)")
     print(f"  repo-wide ghcr pointers  : {len(net)}")
-    # Anchor-vs-reality (issue #215): the VERSION anchor must not itself be stale
-    # relative to the newest published image tag, or the whole tree is consistently
-    # wrong. This is a SEPARATE failure axis from pointer drift; either fails --check.
-    anchor_rc = check_anchor_vs_reality(version, require_remote)
-    # vibe-ic#566 — the guard that keeps the relaxation above honest. Being
-    # BEHIND the newest published tag is a WARNING (another repo moves that
-    # value while this gate runs); moving BELOW what this repo already
-    # committed is a FAIL, because that is #215's "consistently wrong" state
-    # reached from the other direction. Compares against git, which the other
-    # repo cannot move, so it has a fixed point.
+    # vibe-ic#566/#215 — the anchor must never move BELOW what this repo already
+    # committed. Compares against git, which the other repo cannot move, so it
+    # has a fixed point and cannot flap. This is the whole of the anchor's
+    # blocking axis now.
     regress_rc = check_anchor_no_regress(root, vf, version)
+
+    if drift_strict or drift_net:
+        print(f"[FAIL] {len(drift_strict) + len(drift_net)} live pointer(s) != {version}:")
+        for rel, ln, ver, kind in drift_strict:
+            print(f"   {rel}:{ln}  {kind}={ver}  (want {version})")
+        for rel, ln, ver in drift_net:
+            print(f"   {rel}:{ln}  ghcr={ver}  (want {version}) — unregistered live pointer; "
+                  f"add to INSTALL_DOC_CANDIDATES or .image-version-ignore")
+        return 1
     if regress_rc == 1:
-        anchor_rc = 1
-    # vibe-ic#423 — a THIRD failure axis. The two above compare our pointers
-    # against the anchor and the anchor against the registry; both passed
-    # while `:latest` sat on 0.2.28 and 0.2.30 was current. Nobody was
-    # checking the tag an outside reader actually pulls.
-    latest_rc = check_latest_points_at_anchor(version, require_remote)
-    if not drift_strict and not drift_net:
-        if anchor_rc == 0 and latest_rc == 0:
-            print(f"[PASS] all live pointers == {version}, anchor tracks "
-                  f"reality, and :latest resolves to it")
-            return 0
-        # A real disagreement (1) dominates an unverifiable one (2): if the
-        # registry answered for one axis and disagreed, that is a defect even
-        # though the other axis could not be reached.
-        if anchor_rc == 1 or latest_rc == 1:
-            return 1
+        return 1
+    if regress_rc == 2:
+        # "I could not read the baseline" is not "the baseline is fine".
         return 2
-    print(f"[FAIL] {len(drift_strict) + len(drift_net)} live pointer(s) != {version}:")
-    for rel, ln, ver, kind in drift_strict:
-        print(f"   {rel}:{ln}  {kind}={ver}  (want {version})")
-    for rel, ln, ver in drift_net:
-        print(f"   {rel}:{ln}  ghcr={ver}  (want {version}) — unregistered live pointer; "
-              f"add to INSTALL_DOC_CANDIDATES or .image-version-ignore")
-    return 1
+    print(f"[PASS] all live pointers == {version} and the anchor has not "
+          f"regressed. Upstream currency is NOT judged here — run "
+          f"--report-upstream (vibe-ic#927).")
+    return 0
 
 
-def do_set(root: Path, vf: Path, new: str, ignore, dry: bool) -> int:
+def do_report_upstream(version: str, require_remote: bool = False,
+                       json_path: str | None = None) -> int:
+    """THE REPORTED HALF — question (b). An OBSERVATION, never a verdict.
+
+    "Has upstream published something newer, and does the floating tag still
+    resolve to what we pinned?" Both are facts about a registry another org
+    mutates, so the honest thing to produce is a dated reading, not a pass/fail.
+
+    NEVER RETURNS 1. Two exit codes only:
+        0  the registry answered and the reading below was taken
+        2  the registry could not be reached — NOT CHECKED, and it says so
+
+    A reading that disagrees exits 0 ON PURPOSE. "The fork published 0.2.84
+    while this gate ran" is true, useful, and NOT a defect in this commit; it
+    is an input to an adoption decision that belongs to a human running
+    `--set`. Exiting non-zero on it is how a landing gate ends up unobtainable
+    at arbitrary minutes through nobody's fault.
+
+    WHAT AND WHEN, both recorded. A reading with no timestamp cannot be told
+    apart from a current one by a later reader, so every line carries the UTC
+    instant it was taken and the digest/tag it actually resolved — not "there
+    is a newer image", but "at 2026-08-11T04:00:00Z, `latest` resolved to
+    sha256:... and the anchor 0.2.83 resolved to sha256:...".
+    """
+    from datetime import datetime, timezone
+    observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    print(f"vibeic_eda_upstream_report: anchor = {version}")
+    print(f"  observed_at (UTC)        : {observed_at}")
+    print(f"  floating tag under watch : :{FLOATING_TAG} "
+          f"(mutable={is_mutable_tag(FLOATING_TAG)})")
+
+    anchor_rc = check_anchor_vs_reality(version, require_remote)
+    latest_rc = check_latest_points_at_anchor(version, require_remote)
+
+    newest, src = newest_published_tag()
+    record = {
+        "observed_at": observed_at,
+        "anchor": version,
+        "floating_tag": FLOATING_TAG,
+        "newest_published_tag": newest,
+        "newest_published_source": src,
+        "anchor_vs_newest": ("unreachable" if anchor_rc == 2 else
+                             "disagrees" if anchor_rc == 1 else "agrees"),
+        "floating_vs_anchor": ("unreachable" if latest_rc == 2 else
+                               "disagrees" if latest_rc == 1 else "agrees"),
+        "blocking": False,
+        "why_not_blocking": (
+            "both comparisons are against a registry another org mutates; a "
+            "verdict computed from them changes with no commit in this tree "
+            "(vibe-ic#927). The adoption call is this plugin's, made by "
+            "running --set."),
+    }
+    if json_path:
+        Path(json_path).write_text(json.dumps(record, indent=2) + "\n",
+                                   encoding="utf-8")
+        print(f"  wrote                    : {json_path}")
+
+    if anchor_rc == 2 or latest_rc == 2:
+        print("[NOT CHECKED] upstream currency: the registry did not answer. "
+              "This is NOT a pass and NOT a failure — nothing was compared.")
+        return 2
+    if anchor_rc == 1 or latest_rc == 1:
+        print(f"[REPORT] upstream has moved relative to the anchor "
+              f"{version} (observed {observed_at}). This is INFORMATION, not a "
+              f"landing verdict: adopt it deliberately with "
+              f"`--set {newest or 'X.Y.Z'}` when this repo chooses to.")
+        return 0
+    print(f"[REPORT] anchor {version} agrees with upstream as of "
+          f"{observed_at}.")
+    return 0
+
+
+def check_adoption_target_resolves(new: str) -> int:
+    """THE ADOPTION MOMENT — where vibe-ic#354's protection now lives.
+
+    #354: `0.2.29`, a tag that never existed on ghcr, stayed pinned in 13
+    places for six versions while every clean-room install failed. That must
+    never pass again, and it does not.
+
+    It is checked HERE, at `--set`, rather than in the landing gate, because
+    this is the instant the repo makes the adoption call — a deliberate,
+    human-initiated action with a person present to read the answer. Asking
+    "does the tag we are about to adopt exist" at that moment validates an
+    ACTION THIS REPO IS TAKING. Asking it on every landing instead validates a
+    STATE A THIRD PARTY MOVED INTO, which is the whole defect of #927.
+
+    Blocking when the registry answers and the target is absent. NOT CHECKED —
+    and permitted — when the registry cannot be reached: refusing to pin
+    offline would make the anchor unmaintainable on a plane, and the pointer
+    drift the gate really guards is unaffected either way.
+    """
+    if is_mutable_tag(new):                      # belt-and-braces; do_set also checks
+        print(f"[FAIL] refusing to anchor on '{new}': not an immutable X.Y.Z "
+              f"release tag. A floating tag as the anchor would make every "
+              f"pointer in this tree mean different bytes on different days.")
+        return 1
+    tags, src = published_tags()
+    if tags is None:
+        print(f"[NOT CHECKED] adoption target {new}: registry unverifiable "
+              f"({src}). Proceeding — but nothing confirmed that {new} exists.")
+        return 0
+    if new not in tags:
+        newest = max(tags, key=_semver_key)
+        print(f"[FAIL] UNRESOLVABLE ADOPTION TARGET: {new} does not exist on "
+              f"the registry (newest published: {newest}; source={src}).")
+        print(f"       Pinning it would point every install at a tag "
+              f"`docker pull` cannot resolve (vibe-ic#354).")
+        return 1
+    print(f"  adoption-target-resolves : OK ({new} is published; source={src})")
+    return 0
+
+
+def do_set(root: Path, vf: Path, new: str, ignore, dry: bool,
+           verify_target: bool = True) -> int:
+    """Write the anchor and every live pointer.
+
+    `verify_target` distinguishes the two things this script is asked to do,
+    which look identical and are not:
+
+      ADOPTING an image that exists   `--set X.Y.Z`, run in THIS repo after the
+                                      fork published X.Y.Z. The tag must
+                                      resolve, or we recreate vibe-ic#354.
+      MINTING a version that does not `--bump`, run in the vibeic-eda repo to
+                                      choose the number about to be BUILT. The
+                                      tag cannot exist yet, by construction, so
+                                      demanding that it resolve would make
+                                      `--bump` permanently unusable.
+
+    Found by `--bump patch --dry-run` going red the moment the adoption check
+    was added: the script serves both repos, and a rule written for one of them
+    broke the other. Verification is also skipped for `--dry-run`, which writes
+    nothing and should not need a network to say what it would do.
+    """
     if not SEMVER_RE.match(new):
         print(f"[FAIL] target '{new}' is not X.Y.Z", file=sys.stderr)
         return 2
+    # Verified BEFORE anything is written: a refused adoption must leave the
+    # tree exactly as it found it, not half-rewritten to an unpullable tag.
+    if verify_target and not dry and check_adoption_target_resolves(new) != 0:
+        return 1
     changed = []
     for rel in INSTALL_DOC_CANDIDATES:
         p = root / rel
@@ -561,13 +782,23 @@ def do_set(root: Path, vf: Path, new: str, ignore, dry: bool) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="vibeic-eda image-version sync + drift gate")
     g = ap.add_mutually_exclusive_group()
-    g.add_argument("--check", action="store_true", help="verify all live pointers == VERSION (default)")
+    g.add_argument("--check", action="store_true",
+                   help="BLOCKING: every live pointer == VERSION and the anchor has not "
+                        "regressed. Repo + git only, never the registry (default)")
+    g.add_argument("--report-upstream", action="store_true", dest="report_upstream",
+                   help="NON-BLOCKING: resolve the registry and record what it said and "
+                        "when. Exits 0 (read taken) or 2 (unreachable), never 1")
     g.add_argument("--set", metavar="X.Y.Z", help="set VERSION and rewrite every live pointer")
     g.add_argument("--bump", choices=["patch", "minor", "major"], help="increment VERSION, then --set it")
     g.add_argument("--print", action="store_true", dest="print_", help="print the current VERSION")
     ap.add_argument("--dry-run", action="store_true", help="with --set/--bump: show changes, write nothing")
+    ap.add_argument("--json", metavar="PATH", dest="json_path",
+                    help="with --report-upstream: also write the dated reading as JSON")
     ap.add_argument("--require-remote", action="store_true",
-                    help="with --check: an unverifiable registry is a FAIL, not UNVERIFIED (CI mode, vibe-ic#354)")
+                    help="with --report-upstream: an unverifiable registry reports NOT "
+                         "CHECKED (rc 2) instead of UNVERIFIED (rc 0). ACCEPTED AND "
+                         "IGNORED with --check, which makes no registry call at all "
+                         "(vibe-ic#927) — kept so existing CI invocations keep working")
     args = ap.parse_args(argv)
 
     script_dir = Path(__file__).resolve().parent
@@ -583,10 +814,15 @@ def main(argv=None) -> int:
     if args.print_:
         print(version)
         return 0
+    if args.report_upstream:
+        return do_report_upstream(version, args.require_remote, args.json_path)
     if args.set:
         return do_set(root, vf, args.set, ignore, args.dry_run)
     if args.bump:
-        return do_set(root, vf, next_version(version, args.bump), ignore, args.dry_run)
+        # MINTING, not adopting — see do_set's docstring. The computed version
+        # does not exist on the registry yet and must not be required to.
+        return do_set(root, vf, next_version(version, args.bump), ignore,
+                      args.dry_run, verify_target=False)
     return do_check(root, version, ignore, args.require_remote, vf)
 
 
