@@ -242,8 +242,19 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     # Pinned separately from `all_skipped`: these are the documents that
     # USED to reach PASS. If this reaches 0 the regression is invisible in
     # every other number here.
-    assert new_arm == 6, (
-        f"expected 6 tracked projects to reach the examined-set-empty arm, "
+    # 2026-08-11, vibe-ic#905: 6 -> 5. This pin exists because "a shrinking
+    # denominator is the defect", so the shrink is named rather than absorbed.
+    # Measured member-by-member on both sides; exactly ONE member is lost and
+    # it is a tree this retirement deletes:
+    #     origin/main  ibex, opentitan_aes, sha256,
+    #                  sha256/clean_run_v1422_20260715,
+    #                  sha256/clean_run_v1427_20260715, subservient
+    #     after #905   the same five, minus `subservient` — its IC-level
+    #                  phase1/ (and so its L9 document) is retired
+    # The remaining five reach the arm identically. A future drop with the
+    # corpus UNCHANGED is the producer regression this assertion guards.
+    assert new_arm == 5, (
+        f"expected 5 tracked projects to reach the examined-set-empty arm, "
         f"saw {new_arm}")
     # Pinned so a silent vocabulary drift in the producer shows up as a diff
     # rather than as a quietly shrinking denominator.
@@ -255,4 +266,19 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     # assertion exists to protect: a shrinking denominator is the defect, a
     # growing one is the fix. Checked before updating — had any number fallen,
     # the census would have been the finding, not the expectation.
-    assert (nonempty, declared, examined, all_skipped) == (37, 132, 64, 16)
+    #
+    # 2026-08-11, vibe-ic#905: (37, 132, 64, 16) -> (31, 99, 38, 14). This is
+    # the first time EVERY number falls, and the comment above says a shrinking
+    # denominator is the defect — so it is named, not quietly re-typed. The
+    # cause is not the reader: it is that 6 of the 37 non-empty L9 documents
+    # were RETIRED with their trees (the IC-level phase1/ of
+    # caravel_user_project, edge_llm_matmul_accel and subservient, and the
+    # phase1/ of u_hawaii_adc/clean_run_v1422_20260715). The reader was not
+    # touched by this branch at all.
+    #
+    # The distinguishing check, and the reason this is not a waiver: the census
+    # is a pure function of the tracked L9 set. Re-run it against 3fd65e72 —
+    # the pre-retirement tree, where every one of those documents is still
+    # present — and it still returns (37, 132, 64, 16). A reader regression
+    # would fall on BOTH trees; this falls only on the tree the documents left.
+    assert (nonempty, declared, examined, all_skipped) == (31, 99, 38, 14)
