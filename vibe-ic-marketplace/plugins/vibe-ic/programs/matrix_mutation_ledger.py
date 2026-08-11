@@ -104,6 +104,67 @@ case passing in BOTH directions is the point: this gate must be silent about
 cells it does not speak for.
 
 ====================================================================
+THE THIRD CHANNEL — ARTEFACT_MUTATION (63x8 finding #20, at the mechanism)
+====================================================================
+For its first two channels this ledger could edit the FLOW YAML and it could
+edit the PLUGIN TREE. Both change the SOURCE. Neither can express "change a
+number inside a PUBLISHED REPORT and see whether anything notices", and that
+absence is finding #20 stated at the level where it is actionable: *no cell
+reads artefact CONTENT* was never a policy anyone wrote down — it was a
+consequence of the ledger having no way to say such a thing.
+
+:data:`ARTEFACT_MUTATIONS` says it. An entry names a published run under
+``benchmark-data/``, a file inside it, an exact list of byte substitutions with
+the number of sites each must find, the flow step whose gate is re-run, the cell
+``(step, dim)`` that bears on the answer, and the verdict that was MEASURED.
+:func:`replay_artefact` copies the run FOR REAL, applies the edit, and re-runs
+that step's own gate command through ``flow_compliance_check``'s own verdict
+mapping — so the entry cannot claim a red the flow would not honour.
+
+**HALF THE SEED SET PROVES A CELL CANNOT REDDEN, AND THAT IS THE DELIVERABLE.**
+Four of the eight entries record :data:`CANNOT_REDDEN`. Multiplying every figure
+in a power report by 1000 does not move step 33's gate. Raising a power-grid
+segment current by a factor of 25000 does not move step 25's. Substituting 221
+NAND primitives for AND does not move step 9's, and the gate's own report
+enumerates the substituted cell while passing. Rewriting the router's FINAL
+iteration from 0 violations to 12 does not move step 21's — while rewriting the
+runner's SUMMARY of that same file to 17 does, which is the pair that says what
+the green at step 21 is actually a statement about.
+
+These are published as ledger entries, not hidden as gaps: an entry that says
+"this mutation should redden cell X and does not" is precisely the record this
+campaign exists to produce. :data:`ARTEFACT_CANNOT_REDDEN_AS_MEASURED` pins the
+count so it cannot drift, and each such entry is a PIN, not a waiver — the day a
+gate learns to notice, its replay stops matching the record and the gate file
+fails by name, demanding the entry be updated in the same change that closes the
+gap. Closing them is Phase 1 and is deliberately NOT done here.
+
+WHAT THIS CHANNEL COSTS, AND HOW IT IS SCHEDULED. Every artefact entry is
+re-executed in BOTH replay modes — there is no "witness subset" to hide in,
+because an artefact entry claims exactly one cell. MEASURED 2026-08-11 on this
+tree, stated so nobody has to estimate it:
+
+  * the artefact plan ALONE, ``--replay-artefacts --jobs 1``: **3.06 s wall**
+    for all 8 entries (2.6 s of it inside the entries);
+  * the artefact plan alone at ``--jobs 8``: 2.72 s wall;
+  * the FULL witness plan — 16 yaml/tree entries plus these 8 — at
+    ``--jobs 8``: **78.18 s wall**, of which the 8 artefact entries account for
+    0.4-1.3 s each. The three dimension-7 witnesses alone cost 63-70 s.
+
+So this channel is roughly **4% of the replay budget it joins**, and it needs no
+new schedule: it rides the plan the gate file already runs on every CI
+invocation. Per entry it copies ~13 MB (one published run) into a temp dir and
+removes it, so peak transient disk is bounded by ``jobs`` x 13 MB, not by the
+entry count.
+
+If it ever DOES stop being affordable — a much larger corpus, or entries against
+multi-GB runs — the honest lever is to move the whole gate file to a scheduled
+audit job and say so. NOT to sample the artefact entries: an entry re-executed
+only in a mode nobody runs is exactly the asserted-but-never-run mutation the
+three locks exist to refuse, and cheapness bought that way is a lie about
+coverage rather than a saving.
+
+====================================================================
 NOT-FALSIFIABLE IS A VERDICT, NOT AN ERROR
 ====================================================================
 A cell for which no mutation could be constructed is recorded in
@@ -147,6 +208,7 @@ USAGE
     matrix_mutation_ledger.py --resolve              # LOCK 1 over every entry
     matrix_mutation_ledger.py --replay D5-PHANTOM-EDGE [--step 21]
     matrix_mutation_ledger.py --replay-witnesses [--jobs 8]
+    matrix_mutation_ledger.py --replay-artefacts [--jobs 8]
     matrix_mutation_ledger.py --emit-flow D5-PHANTOM-EDGE --step 21 --out f.yaml
     matrix_mutation_ledger.py --json out.json
 
@@ -206,9 +268,25 @@ CANARY_TOKENS: Tuple[str, ...] = (
     CANARY_PATH, CANARY_RTL, CANARY_PROGRAM, CANARY_FLAG, "zzmatrixcanary")
 
 
+#: Where the PUBLISHED runs live. ``benchmark-data/`` is committed to this
+#: repository, so an artefact entry resolves in any checkout; the override
+#: exists so a host that relocates the corpus can still replay rather than
+#: reporting NOT_REPLAYABLE for every entry.
+BENCHMARK_DATA_ENV = "VIBE_IC_BENCHMARK_DATA"
+BENCHMARK_DATA_REL = "benchmark-data"
+
+#: ``vibe-ic-marketplace/plugins/vibe-ic`` -> the repository root.
+REPO_ROOT: Path = PLUGIN_ROOT.parent.parent.parent
+
+
 def flow_yaml_path() -> Path:
     override = os.environ.get(FLOW_YAML_ENV)
     return Path(override) if override else PLUGIN_ROOT / FLOW_REL
+
+
+def benchmark_data_root() -> Path:
+    override = os.environ.get(BENCHMARK_DATA_ENV)
+    return Path(override) if override else REPO_ROOT / BENCHMARK_DATA_REL
 
 
 def load_flow(path: Optional[Path] = None) -> Dict[str, Any]:
@@ -260,12 +338,16 @@ def cell_nodeid(dim: int, sid: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# The two mutation channels
+# The three mutation channels
 # ══════════════════════════════════════════════════════════════════════
 FLOW_YAML = "FLOW_YAML"      # edit the flow document; replay via FLOW_YAML_ENV
 PLUGIN_TREE = "PLUGIN_TREE"  # edit a file; replay in a hardlink mirror
+#: edit a NUMBER INSIDE A PUBLISHED REPORT; replay against a real copy of the
+#: run. See "THE THIRD CHANNEL" in the module docstring for why the first two
+#: could not express this and why this one cannot use a hardlink mirror.
+ARTEFACT_MUTATION = "ARTEFACT_MUTATION"
 
-CHANNELS = (FLOW_YAML, PLUGIN_TREE)
+CHANNELS = (FLOW_YAML, PLUGIN_TREE, ARTEFACT_MUTATION)
 
 _EXEC_KEYS = ("program_exit_zero", "advisory_program_exit_zero",
               "optional_program_exit_zero", "program_exit_zero_any_of")
@@ -463,7 +545,39 @@ YAML_KINDS: Dict[str, Callable[[Dict, Dict], bool]] = {
 #: patching the wrong place.
 TREE_KINDS: Tuple[str, ...] = ("insert_before_anchor",)
 
-KINDS: Tuple[str, ...] = tuple(sorted(YAML_KINDS)) + TREE_KINDS
+#: An ARTEFACT_MUTATION entry performs a list of exact byte substitutions in one
+#: file of one published run. Each substitution declares how many times its
+#: ``frm`` must occur, and the count is checked before anything is written — see
+#: :func:`resolve_artefact`.
+ARTEFACT_KINDS: Tuple[str, ...] = ("byte_substitution",)
+
+KINDS: Tuple[str, ...] = tuple(sorted(YAML_KINDS)) + TREE_KINDS + ARTEFACT_KINDS
+
+
+def step_gate_commands(sid: str,
+                       doc: Optional[Dict[str, Any]] = None) -> Tuple[str, ...]:
+    """Every executable command the LIVE flow wires into ``sid``'s gate.
+
+    DERIVED, never typed. An ARTEFACT_MUTATION entry names one of these strings
+    verbatim, so a flow edit that renames a flag, adds an argument or drops the
+    clause makes the entry unresolvable instead of leaving a stale proof that
+    quietly re-runs a command the flow no longer issues.
+    """
+    doc = doc if doc is not None else load_flow()
+    step = step_by_id(doc, sid)
+    if step is None:
+        return ()
+    clauses: List[Tuple[Dict, str, Any]] = []
+    _exec_clauses(step.get("gate"), clauses)
+    out: List[str] = []
+    for _, _, value in clauses:
+        if isinstance(value, list):
+            out.extend(v for v in value if isinstance(v, str))
+        else:
+            cmd = _command_of(value)
+            if cmd:
+                out.append(cmd)
+    return tuple(out)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -521,6 +635,104 @@ class Mutation:
 
     def covers(self, sid: str) -> bool:
         return str(sid) in self.applies_to
+
+
+#: The two verdicts an ARTEFACT_MUTATION entry may RECORD. ``STAYED_GREEN`` is
+#: not a failure of the ledger — it is the finding the ledger exists to publish.
+REDDENS = "REDDENED"
+CANNOT_REDDEN = "STAYED_GREEN"
+ARTEFACT_EXPECTATIONS = (REDDENS, CANNOT_REDDEN)
+
+
+@dataclass(frozen=True)
+class Edit:
+    """One exact byte substitution, with the number of sites it must find.
+
+    ``count`` is the resolution check and the blast-radius check at once: the
+    replay refuses to write unless ``frm`` occurs EXACTLY ``count`` times, so a
+    regenerated artefact that gained or lost an occurrence reports
+    NOT_REPLAYABLE rather than silently editing a different number of places
+    than the one that was measured.
+    """
+
+    frm: str
+    to: str
+    count: int
+
+
+@dataclass(frozen=True)
+class ArtefactMutation:
+    """A NUMBER INSIDE A PUBLISHED REPORT, changed, and what the gate did.
+
+    This is the record 63x8 finding #20 asks for. An entry names a published run
+    directory, a file in it, the exact bytes changed, the flow step whose gate is
+    re-run, and the cell ``(step_id, dim)`` that bears on the result — and then
+    :func:`replay_artefact` performs the edit on a REAL COPY and re-runs that
+    step's own gate command through the flow's own verdict mapping.
+
+    ``expected`` is the measured answer, and BOTH values are first-class:
+
+      * :data:`REDDENS` — the gate's verdict moved PASS -> FAIL, and
+        ``red_signal`` names the string in its output that proves it failed
+        FOR THIS DEFECT rather than for some unrelated reason.
+      * :data:`CANNOT_REDDEN` — the gate's verdict did NOT move. The entry is
+        then a published finding: this cell cannot be reddened from artefact
+        content by this edit. ``observed`` records what the gate said instead.
+
+    A CANNOT_REDDEN entry is NOT a licence to leave the gap open, and it is not
+    a waiver: it is a pin. The moment the gate learns to notice, the replay's
+    verdict stops matching ``expected`` and the gate file fails, demanding the
+    record be updated in the same change that closes the gap.
+    """
+
+    name: str
+    dim: int
+    #: The flow step whose gate is re-run. With ``dim`` this is the cell.
+    step_id: str
+    #: Published run root, relative to ``benchmark-data/``.
+    run_dir: str
+    #: The file inside the run whose bytes are changed.
+    artefact: str
+    edits: Tuple[Edit, ...]
+    #: One of :func:`step_gate_commands` for ``step_id``, VERBATIM.
+    gate: str
+    #: One line: the edit, in terms someone can perform by hand.
+    what: str
+    #: The real defect this edit simulates. Why reddening is the RIGHT answer.
+    breaks: str
+    expected: str
+    measured: Measurement
+    #: Asserted PRESENT in the mutant output and ABSENT in the baseline output
+    #: when ``expected`` is :data:`REDDENS`. Descriptive only otherwise — see
+    #: ``observed``, which is where a CANNOT_REDDEN entry carries its evidence.
+    red_signal: str = ""
+    #: What the gate did INSTEAD of reddening. Required for CANNOT_REDDEN.
+    observed: str = ""
+    channel: str = ARTEFACT_MUTATION
+    kind: str = "byte_substitution"
+
+    @property
+    def label(self) -> str:
+        return f"d{self.dim}:{self.name}"
+
+    @property
+    def cell(self) -> Tuple[str, int]:
+        return (str(self.step_id), int(self.dim))
+
+    @property
+    def witness(self) -> str:
+        """The step replayed on every run. An artefact entry claims one cell,
+        so its witness is that cell's step and there is no wider sweep to
+        under-sample."""
+        return str(self.step_id)
+
+    @property
+    def applies_to(self) -> Tuple[str, ...]:
+        return (str(self.step_id),)
+
+    @property
+    def proves_cell_cannot_redden(self) -> bool:
+        return self.expected == CANNOT_REDDEN
 
 
 @dataclass(frozen=True)
@@ -958,8 +1170,288 @@ MUTATIONS: Tuple[Mutation, ...] = (
     ),
 )
 
+# ══════════════════════════════════════════════════════════════════════
+# THE ARTEFACT LEDGER — a number inside a published report, changed
+# ══════════════════════════════════════════════════════════════════════
+# Every entry below was executed on 2026-08-11 against the tree at 38c8e687.
+# Each replay copies the named run with `cp -a` (NOT `cp -al` — see
+# `_copy_published_run`), applies the byte edits, and re-runs the step's own
+# gate command through `flow_compliance_check._check_program_exit_zero`, which
+# is the FLOW's own verdict mapping (rc 2 = VACUOUS_PASS and rc 3 + sentinel =
+# PASS_WITH_WAIVERS both count as PASS). An entry therefore cannot claim a red
+# the flow itself would not honour.
+_ARTEFACT_SWEEP = ("matrix_mutation_ledger.py --replay {name}   "
+                   "(2026-08-11, one copy + two gate invocations per entry)")
+
+#: One klayout RDB violation item, in the STRUCTURAL shape the sign-off DRC
+#: reports in this corpus use. Three of these are spliced into an EMPTY
+#: `<items>` block.
+#:
+#: The category and cell names are deliberately SYNTHETIC rather than copied
+#: from a real rule deck. A fixture that named a real design-rule id would bake
+#: a process token into this module, and it would buy nothing: what the gate
+#: counts is `<item>` elements, which is asserted by the replay reporting the
+#: injected count of 3 back as `real_violation_total`. The names being obviously
+#: not-a-real-rule is also what stops one of these leaking into a report and
+#: being mistaken for a measurement.
+_RDB_ITEM = """  <item>
+   <tags/>
+   <category>'zzartefactcanary.1'</category>
+   <cell>zzartefactcanary_top</cell>
+   <visited>false</visited>
+   <multiplicity>1</multiplicity>
+   <comment/>
+   <image/>
+   <values>
+    <value>edge-pair: (1.0,1.0;1.0,1.1)|(1.2,1.0;1.2,1.1)</value>
+   </values>
+  </item>
+"""
+
+#: The one published run every seed entry uses. Chosen by MEASUREMENT, not by
+#: preference: it is the only run in the corpus whose seven physical-signoff
+#: gates are ALL green at baseline, and a mutation against an already-red gate
+#: proves nothing. The survey that picked it is in the PR body.
+_RUN = "ic/spm/v1.10.18_sky130A"
+
+ARTEFACT_MUTATIONS: Tuple[ArtefactMutation, ...] = (
+    # ---------------- reddens -----------------------------------------
+    ArtefactMutation(
+        name="ART-DRC-ROUTER-SUMMARY",
+        dim=2, step_id="21", run_dir=_RUN,
+        artefact="reports/phase3/drc_router.rpt",
+        edits=(Edit("violation report: 0\n"
+                    "violation count summary: 0 violation(s) found",
+                    "violation report: 17\n"
+                    "violation count summary: 17 violation(s) found", 1),),
+        gate=("drc_report_check . --mode drc --under phase3/stage3/pnr "
+              "--under reports/phase3/drc_router.rpt "
+              "--json reports/phase3/drc_router.json"),
+        what="rewrite the router DRC summary from 0 violations to 17",
+        breaks="a post-route DRC count that is not what the router found. If "
+               "this cannot move the gate, a routed design with real spacing "
+               "violations ships with a clean-looking report.",
+        expected=REDDENS,
+        red_signal='"real_violation_total": 17',
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="the gate parses the summary line it is handed and reports the "
+                 "injected count back; baseline PASS, mutant FAIL."),
+    ),
+    ArtefactMutation(
+        name="ART-IR-DROP-OVER-BUDGET",
+        dim=2, step_id="24", run_dir=_RUN,
+        artefact="reports/phase3/ir_drop.json",
+        edits=(Edit('"worst_ir_uv": 375.0', '"worst_ir_uv": 300000.0', 1),),
+        gate=("ir_drop_report_check . --mode ir_drop "
+              "--json reports/phase3/ir_drop_signoff.json"),
+        what="raise the recorded worst static IR drop from 375 uV to 300000 uV, "
+             "which is 1.67x the run's own recorded 180000 uV budget",
+        breaks="a power grid that does not deliver its supply. The published "
+               "budget is in the same file, so this is the one artefact edit in "
+               "the seed set the gate can settle without any outside reference.",
+        expected=REDDENS,
+        red_signal="exceeds the 1.8e+05",
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="the gate compares the figure against budget_uv carried in the "
+                 "same artefact and names both values in its finding."),
+    ),
+    ArtefactMutation(
+        name="ART-ANTENNA-NET-VIOLATIONS",
+        dim=2, step_id="26", run_dir=_RUN,
+        artefact="reports/phase3/antenna.rpt",
+        edits=(Edit("antenna check: 0 net violations, 0 pin violations\n"
+                    "antenna clean: YES",
+                    "antenna check: 7 net violations, 0 pin violations\n"
+                    "antenna clean: NO", 1),),
+        gate=("antenna_report_check . --mode antenna "
+              "--json reports/phase3/antenna_signoff.json"),
+        what="rewrite the antenna result from 0 net violations / clean YES to "
+             "7 net violations / clean NO",
+        breaks="unrepaired antenna nets reaching tapeout — gate-oxide damage "
+               "that no electrical test after packaging can undo.",
+        expected=REDDENS,
+        red_signal="Antenna violations present: 7",
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="the gate reads the count and the clean flag from the report "
+                 "text; baseline PASS, mutant FAIL naming the injected 7."),
+    ),
+    ArtefactMutation(
+        name="ART-DRC-RDB-THREE-ITEMS",
+        dim=2, step_id="31", run_dir=_RUN,
+        artefact="reports/phase3/drc_signoff.rpt",
+        edits=(Edit(" <items>\n </items>",
+                    " <items>\n" + _RDB_ITEM * 3 + " </items>", 1),),
+        gate=("drc_report_check . --mode drc --signoff "
+              "--under reports/phase3/drc_signoff.rpt "
+              "--json reports/phase3/drc_signoff.json"),
+        what="splice three klayout RDB violation items into the sign-off DRC "
+             "report's EMPTY <items> block",
+        breaks="sign-off DRC violations that the published report does carry and "
+               "the flow does not act on. This is the artefact-content twin of "
+               "the empty-input defect that convened the campaign: the gate is "
+               "handed a report with real items in it.",
+        expected=REDDENS,
+        red_signal='"real_violation_total": 3',
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=1,
+            note="the RDB is XML and the gate counts <item> elements, so the "
+                 "three spliced items are found as three real violations."),
+    ),
+
+    # ---------------- PROVE THE CELL CANNOT REDDEN ----------------------
+    # These four are the deliverable, not the residue. Each is a cell that is
+    # ENFORCED, green, and unmoved by a defect of a magnitude no reviewer would
+    # call marginal. They are Phase 1's work list, and they are pinned here so
+    # that closing one is a visible diff rather than a silent improvement.
+    ArtefactMutation(
+        name="ART-EM-CURRENT-DENSITY",
+        dim=2, step_id="25", run_dir=_RUN,
+        artefact="reports/phase3/em.rpt",
+        edits=(Edit("max segment current: 1.963e-04 A",
+                    "max segment current: 5.0 A", 1),
+               Edit("Maximum current    : 1.96e-04 A",
+                    "Maximum current    : 5.00e+00 A", 2)),
+        gate="em_report_check . --mode em --json reports/phase3/em_signoff.json",
+        what="raise the peak power-grid segment current from 1.963e-04 A to "
+             "5.0 A — a factor of about 25000 — in every place the report "
+             "states it",
+        breaks="an electromigration screen against a current the metal cannot "
+               "carry. 5 A through a power-grid segment sized for microamps is "
+               "not a marginal call; it is a part that fails in the field.",
+        expected=CANNOT_REDDEN,
+        red_signal="",
+        observed="the gate's verdict does not move: baseline PASS, mutant PASS, "
+                 "zero findings, and its own report still reads MEASURED. "
+                 "em_report_check establishes that an EM analysis RAN and that "
+                 "the report carries a tool signature and a current figure; it "
+                 "never compares that figure against any limit, because no "
+                 "Jmax is resolved from the PDK at this step. There is "
+                 "therefore no magnitude of current this cell can refuse.",
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
+            note="RECORDED AS A FINDING. Step 25's dimension-2 cell is ENFORCED "
+                 "and its gate is structurally falsifiable (D2-BLIND-GATE-"
+                 "PROGRAMS reddens it by renaming the program). It is not "
+                 "falsifiable from the CONTENT of the artefact it audits."),
+    ),
+    ArtefactMutation(
+        name="ART-POWER-FIGURES-X1000",
+        dim=2, step_id="33", run_dir=_RUN,
+        artefact="reports/phase3/power.rpt",
+        edits=(Edit("e-04", "e-01", 4), Edit("e-05", "e-02", 4),
+               Edit("e-06", "e-03", 1), Edit("e-10", "e-07", 3)),
+        what="multiply every non-zero figure in the OpenSTA power table by 1000 "
+             "by shifting its exponent three decades — internal, switching, "
+             "leakage and total, per group and in the Total row",
+        breaks="a power report off by three orders of magnitude. The zeros are "
+               "deliberately left alone, so the table stays internally "
+               "consistent and a reader checking that the rows sum to the "
+               "total finds nothing wrong.",
+        gate=("power_report_check . --mode power "
+              "--json reports/phase2/gates/power_report.json"),
+        expected=CANNOT_REDDEN,
+        red_signal="",
+        observed="the gate's verdict does not move: baseline PASS, mutant PASS. "
+                 "power_report_check establishes that the report came from a "
+                 "real power tool and carries leakage plus dynamic categories; "
+                 "the NUMBERS are never read against a budget, a die area, or "
+                 "the design's own supply. A 1000x power figure is the same "
+                 "PASS as the true one.",
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
+            note="RECORDED AS A FINDING. 12 substitutions applied, exact-count "
+                 "checked; the 12 `0.00e+00` entries are correctly untouched "
+                 "because zero times 1000 is still zero."),
+    ),
+    ArtefactMutation(
+        name="ART-NETLIST-PRIMITIVE-SWAP",
+        dim=2, step_id="9", run_dir=_RUN,
+        artefact="phase2/stage2/synth/netlist.v",
+        edits=(Edit("\\$_NAND_", "\\$_AND_", 221),),
+        gate=("synth_netlist_check --netlist phase2/stage2/synth/netlist.v "
+              "--json reports/phase2/synth_netlist.json"),
+        what="substitute the generic primitive $_NAND_ for $_AND_ at all 221 "
+             "instantiation sites in the synthesised netlist",
+        breaks="221 gates whose output is inverted with respect to what "
+               "synthesis produced — a netlist that no longer implements the "
+               "RTL. This is the substitution a bad ECO script or a "
+               "mis-ordered techmap pass leaves behind.",
+        expected=CANNOT_REDDEN,
+        red_signal="",
+        observed="the gate's verdict does not move: baseline PASS, mutant PASS, "
+                 "total_cells 449 before and after. The gate's own report "
+                 "ENUMERATES `$_AND_` in its cell_type_counts, so it is not "
+                 "that the substitution was invisible to it — the gate counts "
+                 "cells and checks the netlist parses and is non-empty, and "
+                 "forms no opinion about which primitive belongs where. "
+                 "Function is nobody's business at this step; the equivalence "
+                 "check that would notice is at a step this gate does not "
+                 "block on.",
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
+            note="RECORDED AS A FINDING. Note also what the corpus shows: every "
+                 "netlist.v published under benchmark-data/ is generic-primitive "
+                 "form with zero technology-mapped cells, so the swap could only "
+                 "be primitive-for-primitive. That is a separate observation "
+                 "and it is NOT actioned here."),
+    ),
+    ArtefactMutation(
+        name="ART-ROUTER-FINAL-ITERATION",
+        dim=2, step_id="21", run_dir=_RUN,
+        artefact="reports/phase3/drc_router.rpt",
+        edits=(Edit("    Completing 100% with 0 violations.\n"
+                    "[INFO DRT-0199]   Number of violations = 0.\n"
+                    "[INFO DRT-0267] cpu time = 00:00:06",
+                    "    Completing 100% with 12 violations.\n"
+                    "[INFO DRT-0199]   Number of violations = 12.\n"
+                    "[INFO DRT-0267] cpu time = 00:00:06", 1),),
+        gate=("drc_report_check . --mode drc --under phase3/stage3/pnr "
+              "--under reports/phase3/drc_router.rpt "
+              "--json reports/phase3/drc_router.json"),
+        what="rewrite the router's FINAL detailed-route iteration from "
+             "DRT-0199 = 0 violations to 12, leaving the runner's own summary "
+             "line at the top of the same file untouched",
+        breaks="the router finishing with 12 unresolved violations while the "
+               "summary above it still says 0. Same file, same step, same gate "
+               "as ART-DRC-ROUTER-SUMMARY, which DOES redden — the pair is the "
+               "point: the gate believes the runner's summary, not the tool.",
+        expected=CANNOT_REDDEN,
+        red_signal="",
+        observed="the gate's verdict does not move: baseline PASS, mutant PASS, "
+                 "and its own stdout still reads `real_violation_total=0` with "
+                 "the router's last word reading 12 in the file it just parsed. "
+                 "The count is taken from the `violation report:` summary the "
+                 "RUNNER writes at the top of the artefact; the tool's own "
+                 "final iteration is quoted in the same file for provenance and "
+                 "is never read. A runner that mis-summarises its own tool is "
+                 "invisible here, and so is anyone who edits only the summary.",
+        measured=Measurement(
+            date="2026-08-11", command=_ARTEFACT_SWEEP, reddened=0,
+            note="RECORDED AS A FINDING, and the sharpest one in the set: the "
+                 "SAME gate on the SAME file reddens for a summary edit and "
+                 "not for a tool-output edit, so the cell's green is a "
+                 "statement about the runner's arithmetic, not the router's."),
+    ),
+)
+
+#: How many artefact entries currently prove the cell they target CANNOT be
+#: reddened from artefact content. PINNED, exactly like the emptiness of
+#: :data:`NOT_FALSIFIABLE`, so the number can only move in a visible diff.
+#: Closing one of these is Phase 1 work and is deliberately NOT done here.
+ARTEFACT_CANNOT_REDDEN_AS_MEASURED: int = 4
+
 #: Cells no constructed mutation could redden. EMPTY as measured 2026-08-06.
 #: An entry here is a finding to publish, never a reason to weaken a predicate.
+#:
+#: NOT the same statement as an ARTEFACT_MUTATION recorded CANNOT_REDDEN: this
+#: list is about the dimension modules' own pytest cells, which every entry in
+#: :data:`MUTATIONS` still reddens. The four artefact findings say something
+#: narrower and newer — the cell cannot be reddened from the CONTENT of the
+#: artefact its step publishes — and they are counted separately for exactly
+#: that reason.
 NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 
 #: The (steps, dimensions, ENFORCED cells) the ledger was built against. Like
@@ -972,16 +1464,46 @@ LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 481)
 # Lookups
 # ══════════════════════════════════════════════════════════════════════
 @lru_cache(maxsize=1)
-def by_name() -> Dict[str, Mutation]:
-    return {m.name: m for m in MUTATIONS}
+def by_name() -> Dict[str, Any]:
+    """Every entry of every channel, by name. Names are globally unique so that
+    ``--replay <NAME>`` means one thing; the uniqueness is asserted by the gate
+    rather than assumed here."""
+    out: Dict[str, Any] = {m.name: m for m in MUTATIONS}
+    out.update({m.name: m for m in ARTEFACT_MUTATIONS})
+    return out
 
 
-def mutation(name: str) -> Mutation:
+def mutation(name: str) -> Any:
     try:
         return by_name()[name]
     except KeyError:
         raise KeyError(f"no mutation named {name!r}; known: "
                        f"{sorted(by_name())}") from None
+
+
+def artefact_mutations_for(sid: str, dim: int) -> Tuple[ArtefactMutation, ...]:
+    """Every ARTEFACT_MUTATION entry that targets ``(step, dim)``.
+
+    Deliberately NOT folded into :func:`mutations_covering`. That function
+    answers "which entry reddens this cell's pytest item", and an artefact entry
+    answers a different question about a different instrument — half of them
+    answer *no*. Letting them count as coverage would make the census read
+    healthier for having recorded a gap.
+    """
+    key = (str(sid), int(dim))
+    return tuple(m for m in ARTEFACT_MUTATIONS if m.cell == key)
+
+
+def artefact_findings() -> Tuple[ArtefactMutation, ...]:
+    """The entries that prove the cell they target CANNOT redden. THE FINDING."""
+    return tuple(m for m in ARTEFACT_MUTATIONS if m.proves_cell_cannot_redden)
+
+
+def artefact_headline() -> str:
+    """The one line this channel is for, fit for the README."""
+    return (f"{len(ARTEFACT_MUTATIONS)} artefact mutations registered; "
+            f"{len(artefact_findings())} currently prove the cell they target "
+            f"cannot redden.")
 
 
 def mutations_for(dim: int) -> Tuple[Mutation, ...]:
@@ -1081,8 +1603,85 @@ def resolve(mut: Mutation, sid: str,
     return None
 
 
+def artefact_run_root(mut: ArtefactMutation) -> Path:
+    return benchmark_data_root() / mut.run_dir
+
+
+def resolve_artefact(mut: ArtefactMutation,
+                     doc: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """``None`` when the entry could be replayed RIGHT NOW; else why it cannot.
+
+    This is LOCK 1 for the third channel, and it is four independent checks
+    because an artefact entry can rot in four unrelated ways:
+
+      1. the published run was moved or deleted;
+      2. the file inside it was renamed;
+      3. the artefact was REGENERATED and the bytes the edit names are gone, or
+         now occur a different number of times — the exact-count requirement is
+         what turns "the number moved" into a refusal rather than a silent edit
+         of a different set of sites than the one that was measured;
+      4. the FLOW no longer wires the gate the entry re-runs, or wires it with
+         different arguments. Matched verbatim against
+         :func:`step_gate_commands`, so a renamed flag is a resolution failure
+         and not a replay that quietly measures a command nobody issues.
+
+    Whatever it returns is a REASON, and the caller reports NOT_REPLAYABLE with
+    it. Nothing here is ever a skip.
+    """
+    root = artefact_run_root(mut)
+    if not root.is_dir():
+        return (f"published run {mut.run_dir!r} is not a directory under "
+                f"{benchmark_data_root()} — the entry names a run this "
+                f"checkout does not have")
+    target = root / mut.artefact
+    if not target.is_file():
+        return (f"{mut.artefact!r} does not exist in {mut.run_dir!r}; the "
+                f"artefact the edit names was renamed or removed")
+    doc = doc if doc is not None else load_flow()
+    if step_by_id(doc, mut.step_id) is None:
+        return (f"step {mut.step_id} is not declared in {flow_yaml_path()}")
+    wired = step_gate_commands(mut.step_id, doc)
+    if mut.gate not in wired:
+        return (f"step {mut.step_id}'s gate no longer wires this command "
+                f"verbatim: {mut.gate!r}. The flow declares "
+                f"{list(wired)!r}, so the recorded verdict is about a gate "
+                f"invocation the flow no longer issues")
+    if _gate_program_path(mut.gate) is None:
+        return (f"the gate program {mut.gate.split()[0]!r} does not exist "
+                f"under {PLUGIN_ROOT / 'programs'} — the tool the entry "
+                f"measures is absent, so its verdict cannot be reproduced")
+    try:
+        text = target.read_text(encoding="utf-8", errors="surrogateescape")
+    except OSError as exc:  # pragma: no cover - defensive
+        return f"cannot read {mut.artefact}: {exc}"
+    for i, edit in enumerate(mut.edits):
+        hits = text.count(edit.frm)
+        if hits != edit.count:
+            return (f"edit #{i} expects {edit.count} occurrence(s) of "
+                    f"{edit.frm[:60]!r} in {mut.artefact} and the published "
+                    f"file has {hits}; the artefact changed under the entry "
+                    f"and the recorded edit no longer lands where it was "
+                    f"measured")
+    return None
+
+
+def _gate_program_path(cmd: str) -> Optional[Path]:
+    """The program file a gate command names, resolved the way the flow does."""
+    parts = cmd.split()
+    if not parts:
+        return None
+    name = parts[0]
+    path = (PLUGIN_ROOT / "programs" /
+            (name if name.endswith(".py") else f"{name}.py"))
+    return path if path.is_file() else None
+
+
 def unresolved() -> Tuple[Tuple[str, str, str], ...]:
-    """``((mutation name, step, problem), ...)`` over the WHOLE ledger."""
+    """``((mutation name, step, problem), ...)`` over the WHOLE ledger.
+
+    Covers all three channels: the yaml/tree entries per (entry, step) pair and
+    the artefact entries per entry, since an artefact entry claims one cell.
+    """
     doc = load_flow()
     out: List[Tuple[str, str, str]] = []
     for m in MUTATIONS:
@@ -1090,6 +1689,10 @@ def unresolved() -> Tuple[Tuple[str, str, str], ...]:
             problem = resolve(m, sid, doc)
             if problem:
                 out.append((m.name, sid, problem))
+    for a in ARTEFACT_MUTATIONS:
+        problem = resolve_artefact(a, doc)
+        if problem:
+            out.append((a.name, a.step_id, problem))
     return tuple(out)
 
 
@@ -1107,15 +1710,27 @@ class ReplayResult:
     signal_seen: bool
     detail: str
     seconds: float = 0.0
+    #: What the ledger RECORDED for this pair. ``REDDENED`` for every FLOW_YAML
+    #: and PLUGIN_TREE entry — those channels have no other expressible answer —
+    #: and either value for an ARTEFACT_MUTATION entry.
+    expected: str = "REDDENED"
+    #: Set when the replay could not be performed at all. Carries the reason, and
+    #: makes :attr:`as_recorded` False, so a replay that could not run is never
+    #: a quiet pass.
+    not_replayable: str = ""
+    channel: str = FLOW_YAML
 
     @property
     def proved(self) -> bool:
         """The cell went PASS -> FAIL, and failed for the declared reason."""
-        return (self.applied and self.baseline_rc == 0
+        return (self.applied and not self.not_replayable
+                and self.baseline_rc == 0
                 and self.mutant_rc not in (None, 0) and self.signal_seen)
 
     @property
     def verdict(self) -> str:
+        if self.not_replayable:
+            return "NOT_REPLAYABLE"
         if self.proved:
             return "REDDENED"
         if not self.applied:
@@ -1125,6 +1740,18 @@ class ReplayResult:
         if self.mutant_rc in (None, 0):
             return "STAYED_GREEN"
         return "RED_FOR_ANOTHER_REASON"
+
+    @property
+    def as_recorded(self) -> bool:
+        """The replay reproduced what the ledger RECORDED.
+
+        For every FLOW_YAML and PLUGIN_TREE entry ``expected`` is ``REDDENED``
+        and this is identical to :attr:`proved` — those channels are unchanged
+        by the third one arriving. For an ARTEFACT_MUTATION entry recorded
+        ``STAYED_GREEN`` this is the pin: the day the gate learns to notice, the
+        verdict stops matching and the gate file says so by name.
+        """
+        return self.verdict == self.expected
 
 
 def _run_cell(dim: int, sid: str, cwd: Path,
@@ -1150,8 +1777,14 @@ def replay(mut: Mutation, sid: Optional[str] = None,
     yaml into a scratch dir and feed it through :data:`FLOW_YAML_ENV`;
     PLUGIN_TREE entries build a ``cp -al`` hardlink mirror of the plugin and
     unlink-then-write inside it. Both are removed afterwards.
+
+    ARTEFACT_MUTATION entries are dispatched to :func:`replay_artefact`, which
+    copies a published run FOR REAL — see its docstring for why a hardlink
+    mirror is unsafe there and safe here.
     """
     import time
+    if isinstance(mut, ArtefactMutation):
+        return replay_artefact(mut, timeout=timeout)
     sid = str(sid or mut.witness)
     started = time.time()
     scratch = Path(tempfile.mkdtemp(prefix=f"matmut_{mut.name}_"))
@@ -1202,9 +1835,184 @@ def replay(mut: Mutation, sid: Optional[str] = None,
             f"patched {patched}; baseline rc={base_rc}, mutant rc={mut_rc}, "
             f"red_signal {mut.red_signal!r} "
             f"{'present' if seen else 'ABSENT'}\n--- mutant tail ---\n{tail}",
-            time.time() - started)
+            time.time() - started, "REDDENED", "", mut.channel)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------
+# ARTEFACT_MUTATION replay
+# ---------------------------------------------------------------------
+def _flow_module():
+    """``flow_compliance_check``, imported lazily.
+
+    The replay uses the FLOW'S OWN verdict mapping rather than a raw exit code,
+    because the flow does not treat every non-zero rc as a failure: rc 2 is
+    VACUOUS_PASS and rc 3 with the waiver sentinel is PASS_WITH_WAIVERS, and
+    both count as PASS at the step. An artefact entry that scored a raw rc could
+    therefore claim a red the flow would never honour. Import is ~0.07 s.
+    """
+    programs = str(PLUGIN_ROOT / "programs")
+    if programs not in sys.path:
+        sys.path.insert(0, programs)
+    import flow_compliance_check  # noqa: PLC0415 - deliberately lazy
+    return flow_compliance_check
+
+
+def _run_gate(cmd: str, project: Path) -> Tuple[int, str]:
+    """Run one gate command against ``project``. ``(0|1, FULL output)``.
+
+    ``0`` means the FLOW would call this clause satisfied. The argv and the
+    rc-to-verdict mapping both come from ``flow_compliance_check`` rather than
+    being re-invented here — this must run the gate exactly as the flow runs it,
+    or a recorded red is a red in a harness nobody ships.
+
+    The one thing NOT delegated is the output: the flow truncates its snippet
+    for its report, and a truncated snippet made ``red_signal`` matching a
+    function of where the interesting line happened to fall. The full stdout and
+    stderr are returned so the signal check means what it says.
+    """
+    fcc = _flow_module()
+    argv = fcc._resolve_program_cmd(cmd, cwd=project)
+    if not argv:
+        return 1, f"program not found: {cmd.split()[0]}"
+    proc = subprocess.run(argv, cwd=str(project), capture_output=True,
+                          text=True, timeout=fcc._pl.gate_timeout_s())
+    out = (proc.stdout or "") + (proc.stderr or "")
+    rc = proc.returncode
+    if rc == 0 or rc == 2:                       # 2 = VACUOUS_PASS
+        return 0, out
+    if rc == fcc._WAIVER_EXIT_CODE and fcc._stdout_signals_waiver(proc.stdout):
+        return 0, out                            # 3 + sentinel = WITH_WAIVERS
+    return 1, out
+
+
+def _copy_published_run(src: Path, dst: Path) -> None:
+    """A REAL copy of a published run. Never a hardlink mirror.
+
+    The PLUGIN_TREE channel gets away with ``cp -al`` because the LEDGER is the
+    only writer into that mirror and it unlinks before writing. This channel
+    cannot: its replay RUNS GATE PROGRAMS inside the copy, and those programs
+    write their own JSON reports into ``reports/`` with an ordinary open-for-
+    write. Through a hardlink that truncates the PUBLISHED file.
+
+    MEASURED, not reasoned: an earlier draft of this replay used ``cp -al`` and
+    left eight JSON artefacts of the published run modified in the worktree
+    (`git status` named them; they were restored from HEAD). The rule in the
+    brief — never mutate a published run in place — is enforced here by copying
+    for real, and checked afterwards by :func:`_stat_manifest`.
+    """
+    subprocess.run(["cp", "-a", str(src), str(dst)],
+                   check=True, capture_output=True)
+
+
+def _stat_manifest(root: Path) -> Dict[str, Tuple[int, int]]:
+    """``{relative path: (size, mtime_ns)}`` for every file under ``root``.
+
+    Taken before and after a replay and compared. Cheap (one ``stat`` per file,
+    no reads) and it catches the failure that actually happened: a gate program
+    truncating a shared inode. A pure "did we copy correctly" assertion would
+    not have — the copy was correct; the SHARING was the defect.
+    """
+    out: Dict[str, Tuple[int, int]] = {}
+    for p in root.rglob("*"):
+        if p.is_file():
+            try:
+                st = p.stat()
+            except OSError:  # pragma: no cover - races on a shared tree
+                continue
+            out[str(p.relative_to(root))] = (st.st_size, st.st_mtime_ns)
+    return out
+
+
+def replay_artefact(mut: ArtefactMutation, timeout: int = 900) -> ReplayResult:
+    """Change the number in the published report, and ask the gate.
+
+    Copy the run, run the step's gate (must PASS — a mutation against an
+    already-red gate proves nothing and is reported ALREADY_RED, never skipped),
+    apply the byte edits, run the same gate again, and record whether the
+    verdict moved. The published run is stat-manifested before and after and the
+    two must be identical.
+
+    ``timeout`` is accepted for symmetry with :func:`replay`; the per-gate
+    budget is the flow's own (``VIBE_IC_GATE_TIMEOUT_S``, default 900 s),
+    because the point is to run the gate exactly as the flow runs it.
+    """
+    import time
+    started = time.time()
+
+    def fail(reason: str) -> ReplayResult:
+        return ReplayResult(mut.name, mut.dim, str(mut.step_id), False, None,
+                            None, False, reason, time.time() - started,
+                            mut.expected, reason, ARTEFACT_MUTATION)
+
+    problem = resolve_artefact(mut)
+    if problem:
+        return fail(problem)
+
+    src = artefact_run_root(mut)
+    before = _stat_manifest(src)
+    scratch = Path(tempfile.mkdtemp(prefix=f"artmut_{mut.name}_"))
+    try:
+        run = scratch / "run"
+        _copy_published_run(src, run)
+        target = run / mut.artefact
+        if target.stat().st_nlink != 1:
+            return fail(
+                f"the copy of {mut.artefact} shares its inode with the "
+                f"published run (st_nlink={target.stat().st_nlink}); writing "
+                f"it would modify benchmark-data in place")
+
+        base_rc, base_out = _run_gate(mut.gate, run)
+        if base_rc != 0:
+            return ReplayResult(
+                mut.name, mut.dim, str(mut.step_id), True, base_rc, None, False,
+                f"the gate is ALREADY failing on the unmutated run: "
+                f"{mut.gate}\n{base_out[-1200:]}",
+                time.time() - started, mut.expected, "", ARTEFACT_MUTATION)
+
+        text = target.read_text(encoding="utf-8", errors="surrogateescape")
+        for i, edit in enumerate(mut.edits):
+            hits = text.count(edit.frm)
+            if hits != edit.count:
+                return fail(f"edit #{i} found {hits} site(s), recorded "
+                            f"{edit.count} (checked again on the copy)")
+            text = text.replace(edit.frm, edit.to)
+        target.unlink()
+        target.write_text(text, encoding="utf-8", errors="surrogateescape")
+
+        mut_rc, mut_out = _run_gate(mut.gate, run)
+        seen = bool(mut.red_signal) and mut.red_signal in mut_out
+        # A signal that is present in the BASELINE output too proves nothing
+        # about the mutation. Free two-arm control, inside every replay.
+        seen_at_baseline = bool(mut.red_signal) and mut.red_signal in base_out
+        if mut.expected == REDDENS and seen_at_baseline:
+            return fail(f"red_signal {mut.red_signal!r} is present in the "
+                        f"UNMUTATED run's gate output too, so it cannot "
+                        f"evidence the mutation")
+        tail = "\n".join(l for l in mut_out.strip().splitlines()
+                         if l.strip())[-1200:]
+        detail = (f"run {mut.run_dir} -> copy; edited {mut.artefact} "
+                  f"({sum(e.count for e in mut.edits)} site(s)); gate "
+                  f"{mut.gate.split()[0]}: baseline PASS, mutant "
+                  f"{'FAIL' if mut_rc else 'PASS'}; red_signal "
+                  f"{mut.red_signal!r} "
+                  f"{'present' if seen else 'absent'}\n"
+                  f"--- mutant gate output tail ---\n{tail}")
+        return ReplayResult(
+            mut.name, mut.dim, str(mut.step_id), True, base_rc, mut_rc,
+            seen if mut.expected == REDDENS else True, detail,
+            time.time() - started, mut.expected, "", ARTEFACT_MUTATION)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+        after = _stat_manifest(src)
+        if after != before:
+            changed = sorted(set(before) ^ set(after)) or sorted(
+                k for k in before if before[k] != after.get(k))
+            raise RuntimeError(
+                f"{mut.name}: the PUBLISHED run {mut.run_dir} changed during "
+                f"its own replay — {changed[:12]}. A replay that edits the "
+                f"corpus it measures has destroyed the thing it was proving.")
 
 
 def replay_mode() -> str:
@@ -1212,16 +2020,25 @@ def replay_mode() -> str:
 
 
 def replay_plan(mode: Optional[str] = None) -> Tuple[Tuple[str, str], ...]:
-    """``((mutation name, step), ...)`` the current mode will re-execute."""
+    """``((mutation name, step), ...)`` the current mode will re-execute.
+
+    EVERY artefact entry is in BOTH modes. That is not an oversight and it is
+    not free — see the cost note in the module docstring. An artefact entry
+    claims exactly one cell, so ``witness`` and ``all`` cannot differ for it,
+    and an entry that is only re-executed in an audit mode nobody runs is the
+    asserted-but-never-run mutation this ledger was built to refuse.
+    """
     mode = (mode or replay_mode())
     if mode not in REPLAY_MODES:
         raise ValueError(
             f"{REPLAY_ENV}={mode!r} is not one of {REPLAY_MODES}. The replay "
             f"lock has no off switch: an entry nobody re-executes is exactly "
             f"the asserted-but-never-run mutation this ledger refuses.")
+    artefacts = tuple((m.name, m.witness) for m in ARTEFACT_MUTATIONS)
     if mode == "all":
-        return tuple((m.name, s) for m in MUTATIONS for s in m.applies_to)
-    return tuple((m.name, m.witness) for m in MUTATIONS)
+        return tuple((m.name, s)
+                     for m in MUTATIONS for s in m.applies_to) + artefacts
+    return tuple((m.name, m.witness) for m in MUTATIONS) + artefacts
 
 
 def replay_many(plan: Sequence[Tuple[str, str]], jobs: int = 8,
@@ -1263,6 +2080,16 @@ def census(states: Optional[Dict[Tuple[str, int], str]] = None) -> Dict[str, Any
         "not_falsifiable": [f"{nf.step_id}/d{nf.dim}" for nf in NOT_FALSIFIABLE],
         "replay_mode": replay_mode(),
         "replay_pairs": len(replay_plan()),
+        "artefact": {
+            "registered": len(ARTEFACT_MUTATIONS),
+            "reddens": len(ARTEFACT_MUTATIONS) - len(artefact_findings()),
+            "cannot_redden": len(artefact_findings()),
+            "cannot_redden_cells": [f"{m.step_id}/d{m.dim}:{m.name}"
+                                    for m in artefact_findings()],
+            "runs": sorted({m.run_dir for m in ARTEFACT_MUTATIONS}),
+            "benchmark_data": str(benchmark_data_root()),
+            "headline": artefact_headline(),
+        },
         "per_dimension": {
             f"d{d}": {
                 "considered": sum(1 for s, dd in target if dd == d),
@@ -1282,6 +2109,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="LOCK 1 over every (entry, step) pair")
     ap.add_argument("--replay", metavar="NAME")
     ap.add_argument("--replay-witnesses", action="store_true")
+    ap.add_argument("--replay-artefacts", action="store_true",
+                    help="replay every ARTEFACT_MUTATION entry")
     ap.add_argument("--step", metavar="ID")
     ap.add_argument("--emit-flow", metavar="NAME",
                     help="write the mutated flow yaml and exit (no pytest)")
@@ -1309,7 +2138,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{cell_nodeid(mut.dim, sid)}")
         return 0
 
-    if a.census or not (a.resolve or a.replay or a.replay_witnesses):
+    if a.census or not (a.resolve or a.replay or a.replay_witnesses
+                        or a.replay_artefacts):
         rep = census()
         report["census"] = rep
         print(f"=== matrix_mutation_ledger ({rep['flow_yaml']}) ===")
@@ -1318,6 +2148,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         for d, per in rep["per_dimension"].items():
             print(f"  {d}: {per['covered']}/{per['considered']} cells carry a "
                   f"named mutation  [{', '.join(per['entries'])}]")
+        art = rep["artefact"]
+        print(f"  ARTEFACT_MUTATION: {art['headline']}")
+        for line in art["cannot_redden_cells"]:
+            print(f"    CANNOT REDDEN FROM ARTEFACT CONTENT: {line}")
         print(f"  replay mode: {rep['replay_mode']} "
               f"({rep['replay_pairs']} pair(s) re-executed per run)")
         if rep["not_falsifiable"]:
@@ -1327,7 +2161,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         bad = unresolved()
         report["unresolved"] = [
             {"mutation": n, "step": s, "problem": p} for n, s, p in bad]
-        pairs = sum(len(m.applies_to) for m in MUTATIONS)
+        pairs = (sum(len(m.applies_to) for m in MUTATIONS)
+                 + len(ARTEFACT_MUTATIONS))
         print(f"\nLOCK 1 — {pairs} (entry, step) pair(s) checked against "
               f"{flow_yaml_path()}")
         if bad:
@@ -1344,6 +2179,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else [(mut.name, s) for s in mut.applies_to])
     elif a.replay_witnesses:
         plan = list(replay_plan("witness"))
+    elif a.replay_artefacts:
+        plan = [(m.name, m.witness) for m in ARTEFACT_MUTATIONS]
 
     if plan:
         print(f"\nLOCK 2 — replaying {len(plan)} (entry, step) pair(s), "
@@ -1351,11 +2188,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         results = replay_many(plan, jobs=a.jobs, timeout=a.timeout)
         report["replay"] = [r.__dict__ | {"verdict": r.verdict} for r in results]
         for r in results:
-            mark = "ok  " if r.proved else "FAIL"
+            # `as_recorded`, not `proved`: an ARTEFACT_MUTATION entry that
+            # RECORDS `STAYED_GREEN` is reproducing a published finding when it
+            # stays green, and reporting it as a failure would push an author
+            # toward deleting the record instead of closing the gap.
+            mark = "ok  " if r.as_recorded else "FAIL"
+            note = ("" if r.expected == "REDDENED"
+                    else "  [recorded finding: the cell CANNOT redden]")
             print(f"  [{mark}] {r.mutation} @ step {r.step_id}: {r.verdict} "
-                  f"({r.seconds:.1f}s)")
-            if not r.proved:
+                  f"({r.seconds:.1f}s){note}")
+            if not r.as_recorded:
                 rc = 1
+                print(f"        expected {r.expected}, got {r.verdict}")
                 print("        " + r.detail.replace("\n", "\n        "))
 
     if a.json_out:

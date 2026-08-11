@@ -30,11 +30,19 @@ THE FOUR THINGS THIS FILE REFUSES
 3. **A mutation that was written down but never run.**
    Three locks, described in full in the ledger's own module docstring:
    LOCK 1 re-resolves every (entry, step) pair's edit site against the live tree
-   (697 pairs, one yaml parse); LOCK 2 REPLAYS each entry's witness for real on
+   (705 pairs, one yaml parse); LOCK 2 REPLAYS each entry's witness for real on
    an isolated copy and requires the cell to go PASS -> FAIL with the declared
    ``red_signal`` present; LOCK 3 checks the recorded arithmetic against itself.
    The replay lock has no off switch — an unrecognised
    ``VIBE_IC_MATRIX_MUTATION_REPLAY`` is a failure, not a skip.
+
+   The counts here cover all THREE channels. The third, ``ARTEFACT_MUTATION``,
+   edits a number inside a PUBLISHED REPORT rather than the source, and is
+   gated in its own file — ``test_matrix_artefact_mutation_channel.py`` — for
+   one reason worth stating here: half its entries RECORD that the cell they
+   target cannot be reddened from artefact content, and an entry like that must
+   never be able to satisfy point 1 above. The tuples are kept separate and the
+   separation is asserted there.
 
 4. **A NOT-FALSIFIABLE cell buried instead of published.**
    A cell no mutation could move is a FINDING, and
@@ -49,9 +57,11 @@ WHAT THIS FILE DOES *NOT* CLAIM
   * A mutation proves the cell is CONNECTED to something a change can move. It
     does not prove the predicate is strong, and no count here may be quoted as
     "481 defects would be caught".
-  * By default LOCK 2 re-executes ONE witness per entry (16 pytest runs), not
-    all 697 pairs. That number is asserted rather than left for a reader to
-    assume, and ``VIBE_IC_MATRIX_MUTATION_REPLAY=all`` is the audit-grade mode.
+  * By default LOCK 2 re-executes ONE witness per yaml/tree entry (16 pytest
+    runs) plus EVERY artefact entry (8 gate replays, which have no witness
+    subset), not all 705 pairs. That number is asserted rather than left for a
+    reader to assume, and ``VIBE_IC_MATRIX_MUTATION_REPLAY=all`` is the
+    audit-grade mode.
   * 13 cells are already red at 1ea6689b. An already-red cell is falsifiable by
     definition; it is recorded in the entry's ``baseline_red`` and excluded from
     the attributable count, and no witness may be one of them.
@@ -534,11 +544,15 @@ def test_the_replay_lock_has_no_off_switch():
     for bad in ("off", "0", "no", "none", "skip"):
         with pytest.raises(ValueError):
             L.replay_plan(bad)
-    assert len(L.replay_plan("witness")) == len(L.MUTATIONS) > 0, (
+    # Both ledgers. The ARTEFACT_MUTATION channel has no witness subset — an
+    # artefact entry claims exactly one cell — so it contributes its full length
+    # to BOTH modes, and an off switch cannot be spelled for it either.
+    assert len(L.replay_plan("witness")) == (
+        len(L.MUTATIONS) + len(L.ARTEFACT_MUTATIONS)) > 0, (
         "the witness plan is empty; a lock that re-executes nothing is off in "
         "everything but name")
     assert len(L.replay_plan("all")) == sum(
-        len(m.applies_to) for m in L.MUTATIONS) > 0
+        len(m.applies_to) for m in L.MUTATIONS) + len(L.ARTEFACT_MUTATIONS) > 0
     assert {d for d in (L.mutation(n).dim for n, _ in L.replay_plan("witness"))} \
         == set(range(1, 9)), (
         "the witness plan does not reach all eight dimensions, so a dimension "
@@ -615,7 +629,8 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
     results = replay_results()
     plan = L.replay_plan()
     expected = (len(L.MUTATIONS) if L.replay_mode() == "witness"
-                else sum(len(m.applies_to) for m in L.MUTATIONS))
+                else sum(len(m.applies_to) for m in L.MUTATIONS)
+                ) + len(L.ARTEFACT_MUTATIONS)
     assert len(results) == len(plan) == expected > 0, (
         f"replayed {len(results)} pair(s) for a plan of {len(plan)}; mode "
         f"{L.replay_mode()!r} should re-execute {expected}")
@@ -627,7 +642,16 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
                     f"mode={L.replay_mode()} pairs={len(results)} "
                     f"proved={proved} "
                     f"seconds={sum(r.seconds for r in results):.1f}")
-    assert proved == len(results)
+    # `as_recorded`, not `proved`. For every FLOW_YAML and PLUGIN_TREE entry the
+    # two are IDENTICAL — those channels record `REDDENED` and nothing else, and
+    # `verdict == "REDDENED"` is definitionally `proved`. The distinction exists
+    # only for ARTEFACT_MUTATION entries that RECORD `STAYED_GREEN`, where the
+    # published finding is that the gate does not move; scoring those as
+    # unproved would make the honest thing to do with a measured gap be to
+    # delete the record of it.
+    assert all(r.as_recorded for r in results), [
+        f"{r.mutation}@{r.step_id}: expected {r.expected}, got {r.verdict}"
+        for r in results if not r.as_recorded]
     # Every dimension must be represented, or a whole dimension's entries could
     # be un-replayed while the count still looked healthy.
     dims = {r.dim for r in results}
