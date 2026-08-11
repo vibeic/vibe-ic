@@ -69,6 +69,18 @@ absence claim is corroborated only when all three of these are POSITIVE facts:
     those files were the ones read, and none of their names carries the denied
     word under any reading of that name.
 
+"EVERY DIRECTORY" is a UNIVERSAL and is now enforced as one. It was written as
+an intersection with the union of the named directories, so one productive
+qualifier kept the gate answering while another named directory held nothing of
+the format at all — and the answer was CORROBORATED, over a population that
+included a directory the gate never read (vibe-ic#981). The reason string was
+built from the same union, so it printed the barren directory's name inside its
+own account of what it had examined.
+
+CONTRADICTION is deliberately NOT universal, and the asymmetry is the logic
+rather than a concession: a denial is FALSIFIED by one artefact in any one
+named directory, and CONFIRMED only by having read all of them.
+
 When any of them is missing the gate returns UNDECIDED with the reason, and
 UNDECIDED is counted nowhere. This was the defect in the first version: a
 denied-word lookup that MISSED fell straight through to CORROBORATED, so a
@@ -698,8 +710,61 @@ def _sections_of(tree: InstalledTree, paths: Sequence[str],
     return out
 
 
+def _refuse_corroboration_over_a_barren_directory(
+        rec: Dict[str, Any]) -> Dict[str, Any]:
+    """Withhold agreement that was quantified over a directory nobody read.
+
+    The docstring at the top of this file promises a UNIVERSAL — "every
+    DIRECTORY the claim named holds files of that format" — and the narrowing
+    that feeds the verdict is an INTERSECTION with the union of those
+    directories. One productive qualifier therefore kept the gate answering
+    while another named directory held nothing at all, and the answer it gave
+    was CORROBORATED, which is the only route to rc 0 (vibe-ic#981).
+
+    This is the ONE place that decision is made, and it is made LAST, on the
+    finished record, for two reasons. Applying the universal earlier would
+    refuse before the tree had been asked, which would throw away a
+    CONTRADICTION standing on a productive sibling directory — measured on the
+    real corpus, not hypothesised. And placing it after the verdict means every
+    route to CORROBORATED passes through it, including ones added later, rather
+    than each route having to remember.
+
+    UNDECIDED is counted nowhere, so a run whose only claim lands here is
+    `all_claims_undecided` — rc 2 with the `VACUOUS_PASS:` sentinel, never a
+    pass. The withheld reason is KEPT, under its own key: a reader has to be
+    able to see what the gate would have said and why it did not say it.
+    """
+    barren = rec.get("directory_qualifiers_without_that_format") or []
+    if rec.get("verdict") != "CORROBORATED" or not barren:
+        return rec
+    named = rec.get("directory_qualifiers") or []
+    fmt = "/".join(rec.get("artefact_format") or [])
+    rec["verdict"] = "UNDECIDED"
+    rec["corroboration_withheld"] = rec.get("reason", "")
+    rec["reason"] = (
+        f"the claim names {len(named)} director(y/ies) — {', '.join(named)} — "
+        f"and agreement with it would be a statement about all of them; "
+        f"{', '.join(barren)} exist(s) in the installed PDK but holds no "
+        f"artefact of format {fmt}, so the claim was never checked there. "
+        "Agreement quantified over a directory that was never read is not "
+        "agreement")
+    return rec
+
+
 def adjudicate(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
     """Settle one claim against the installed tree, or refuse to.
+
+    Two steps, deliberately separate. `_decide_against_the_tree` reads the tree
+    and answers; `_refuse_corroboration_over_a_barren_directory` then withholds
+    an agreement whose population the read did not cover. Splitting them is
+    what lets a CONTRADICTION survive a narrowing that a CORROBORATION may not.
+    """
+    return _refuse_corroboration_over_a_barren_directory(
+        _decide_against_the_tree(claim, tree))
+
+
+def _decide_against_the_tree(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
+    """Answer one claim from what is on disk, or record why it cannot be.
 
     Every narrowing step below is driven by the intersection of the CLAIM's own
     words with what the installed tree actually contains — file suffixes,
@@ -772,8 +837,36 @@ def adjudicate(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
     for f in files:
         pdk_components |= _rel_components(f)
     dir_quals = (claim_tokens & pdk_components) - subject_tokens - fmt
+
+    # The population the claim is answered over is the UNION of the directories
+    # it named; the population a CORROBORATION quantifies over is EVERY one of
+    # them. Those are different sets and they need separate bookkeeping,
+    # because the union alone cannot tell you which member contributed nothing
+    # (vibe-ic#981).
+    #
+    # The asymmetry is not a compromise, it is the logic. A denial is falsified
+    # by ONE artefact in ANY named directory — "no corner lib under a/ or b/"
+    # is false the moment a corner lib turns up under b/, and what a/ holds
+    # cannot rescue it. But a denial is CONFIRMED only by having looked in all
+    # of them, so a directory that contributed zero files of the format leaves
+    # the universal unverified. Measured on the real corpus: the false claim at
+    # a project's L5 analog spec names two directories, one of which holds no
+    # file of the claimed format at all — applying the universal before the
+    # verdict would have thrown that true CONTRADICTION away.
+    per_dir: Dict[str, List[str]] = {}
+    barren: List[str] = []
     if dir_quals:
         rec["directory_qualifiers"] = sorted(dir_quals)
+        for qual in sorted(dir_quals):
+            per_dir[qual] = [f for f in candidates if qual in _rel_components(f)]
+            if not per_dir[qual]:
+                barren.append(qual)
+        rec["examined_by_directory"] = {q: len(v) for q, v in per_dir.items()}
+        if barren:
+            # Read by `_refuse_corroboration_over_a_barren_directory` after the
+            # verdict is known, so a CONTRADICTION found in a productive
+            # sibling directory still stands.
+            rec["directory_qualifiers_without_that_format"] = sorted(barren)
         narrowed = [f for f in candidates if _rel_components(f) & dir_quals]
         if not narrowed:
             # The claim is about a place; that place is real and empty of this
@@ -843,8 +936,16 @@ def adjudicate(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
             # denied word is in none of their names under any reading of them.
             # Each of those three is a positive fact; when any of them is
             # missing the branches above have already returned UNDECIDED.
-            where = (f" under {'/'.join(sorted(dir_quals))}" if dir_quals
-                     else " anywhere in the installed PDK")
+            # The reason states the population it actually read, PER DIRECTORY.
+            # Naming the directories and then printing one total let a
+            # corroboration say "the claim holds over the 1 file(s) of that
+            # format under a/b" when b contributed the file and a contributed
+            # nothing — a sentence whose subject is a set the gate never
+            # examined (vibe-ic#981). A per-directory count cannot say that:
+            # the zero is written down where the reader is.
+            where = (" under " + ", ".join(f"{q} ({len(per_dir[q])})"
+                                           for q in sorted(dir_quals))
+                     if dir_quals else " anywhere in the installed PDK")
             rec["verdict"] = "CORROBORATED"
             rec["reason"] = (
                 f"no installed artefact of format {'/'.join(sorted(fmt))} is "
@@ -935,14 +1036,32 @@ def run(tree_root: Path, pdks_root: str,
             "a denial about a directory that exists but holds no artefact of "
             "the claimed format; the format's files elsewhere in the tree "
             "answer a different question",
+            "a claim naming SEVERAL directories where any one of them holds "
+            "no artefact of the claimed format; agreement would be a "
+            "statement about a directory that was never read, so it is "
+            "withheld — a contradiction found in the others still stands",
         ],
     }
 
     installed = discover_installed_pdks(tree)
     report["installed_pdks"] = installed
     if not installed:
+        # NAME THE BACKEND THAT CAME BACK EMPTY (vibe-ic#981). The wired call
+        # site passes no `--container`, so on a host with no local PDK tree
+        # this is the branch that always fires and the container backend —
+        # `docker_backends`, and with it the `-L` dereference that #964 exists
+        # for — is not merely undecided, it is NOT EXECUTED AT ALL. "I could
+        # not look" and "I could not look, and here is the half of me that
+        # never ran" are different disclosures, and only the second one tells a
+        # reader that a whole code path is being certified by nothing.
         report["verdict"] = "NOT_APPLICABLE"
-        report["reason"] = "installed_pdk_root_unreadable"
+        report["reason"] = (
+            "installed_pdk_root_unreadable "
+            f"(backend: {report['installed_pdk_source']}"
+            + ("; the container backend was NOT exercised by this run — "
+               "pass --container <name> to read the PDK inside the EDA image)"
+               if not container else ")"))
+        report["backend_not_exercised"] = [] if container else ["container"]
         report["documents_scanned"] = 0
         report["claims"] = []
         report["counts"] = {"contradicted": 0, "corroborated": 0,

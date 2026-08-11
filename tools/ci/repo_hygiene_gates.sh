@@ -797,6 +797,44 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 # false positives, verdict unchanged at FAIL. The seventh claim is about one of
 # the two PDKs that could not be seen before, and it is UNDECIDED — which is the
 # point: it is now REFUSED out loud instead of dropped in silence.
+#
+# THE WIRED PATH BELOW HAS NEVER EXERCISED ANY OF THAT (vibe-ic#981). It passes
+# no `--container`, and no host that runs this script has a local `/foss/pdks`,
+# so the run bails at `installed_pdk_root_unreadable` with 0 documents scanned:
+# not one claim adjudicated, the walker never called, and `docker_backends` —
+# the `-L` dereference #964 exists for — not executed at all. Every measurement
+# quoted above was taken BY HAND with `--container`; none of them was taken by
+# this line. The gate's own report now NAMES the backend that never ran, so the
+# rc-2 says "I could not look, and here is the half of me that never ran"
+# instead of leaving that for a reviewer to notice.
+#
+# WHY THE DISCLOSURE AND NOT ONE OF THE OTHER TWO REPAIRS, measured 2026-08-11:
+#
+#   a container in CI — REJECTED, and not because it is slow. It is not: the
+#     gate answers in 2.2s against a live EDA container over all six installed
+#     PDKs. It is rejected because it comes back rc 1: 134 documents, 7
+#     candidate claims, 2 CONTRADICTED / 1 CORROBORATED / 4 UNDECIDED. Those
+#     two contradictions are TRUE — the documents really do deny a corner
+#     library the image really does ship — and both live under
+#     benchmark-data/**/input/, which #904 forbade editing and which this
+#     campaign forbids editing. Wiring it blocking would turn main red on files
+#     nobody is permitted to correct, which is the exact bind #949 shipped this
+#     gate unwired to avoid. It is reported as a FINDING in the PR instead of
+#     being made green by widening anything.
+#
+#   a fixture PDK tree — REJECTED as theatre. This file's own line above says
+#     it: "a checker only its own unit test ever runs has zero coverage of real
+#     inputs: the fixture proves the logic, never the artefacts." pytest
+#     already drives this gate over 41 synthetic PDK fixtures, including the
+#     container backend's REAL command strings with `docker exec` swapped for a
+#     local shell. A fixture run wired here would be that same suite wearing a
+#     CI hat, and it would make the roll-up read PASS for a gate that still has
+#     not seen one installed artefact.
+#
+# So the honest state is: the LOGIC is covered by pytest, the ARTEFACTS are
+# covered by nothing automatic, and the gate now says so in the same document
+# that carries its verdict. NOT_CHECKED in the roll-up is the correct state and
+# is deliberately left in place.
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
   python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT"
 
