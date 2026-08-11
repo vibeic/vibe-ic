@@ -189,7 +189,20 @@ def test_the_published_corpus_resolves_and_diverges_as_measured():
     if not cells:
         pytest.skip("corpus cells not checked out")
     resolved = [c for c in cells if G._pdk_from_signoff_flow(c)]
-    assert len(resolved) >= 8, f"{len(resolved)} of {len(cells)} resolved"
+    # 2026-08-12, vibe-ic#905: 8 -> 7. The floor MOVED BECAUSE ITS SUBJECT WAS
+    # RETIRED, not to absorb a resolver failure. Measured member-by-member
+    # across all three trees, so every step of the drop is attributable:
+    #     main                16 cells, 10 resolved
+    #     after the #905 fix  14 cells,  9 resolved   (still above the old 8)
+    #     after this PR       11 cells,  7 resolved
+    #     lost here: caravel_user_project, subservient — their IC-level phase3/
+    #                is retired, so there is no sign-off flow left to read a
+    #                PDK from
+    #     gained:    none, on any tree
+    # No resolver behaviour changed: every cell that survives resolves exactly
+    # as it did before. If this ever fails with the cell set UNCHANGED, that is
+    # a resolver regression and not a corpus edit.
+    assert len(resolved) >= 7, f"{len(resolved)} of {len(cells)} resolved"
 
     diverged = {}
     for c in cells:
