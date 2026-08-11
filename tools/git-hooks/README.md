@@ -17,7 +17,33 @@ improves a hook takes effect with no re-install.
 | Hook | When it runs | What it blocks |
 |------|--------------|----------------|
 | `commit-msg` | as a commit is created | an NDA foundry / SKU / process token in the commit **message** |
-| `pre-push` | before a push reaches the remote | the same token in **any** commit message in the range being pushed |
+| `pre-push` | before a push reaches the remote | the same token in **any** commit message in the range being pushed, plus the cheap governance gates and — pushing to `main` — a commit with no matching `gatekeeper-land.sh` stamp |
+
+## A HOOK CANNOT SEE A MERGE. Use `tools/gatekeeper-verify-merge.sh`.
+
+`pre-push` is the only enforced gate on what reaches `main`, and it is enforced
+**on `git push`**. **`gh pr merge --squash` creates the commit SERVER-SIDE:
+nothing is pushed from a local clone, so no hook fires and
+`tools/gatekeeper-land.sh` never runs.** Merging is not pushing.
+
+There is no server-side fallback and none can be created — measured 2026-08-12
+(vibe-ic#1019): Actions is disabled at the **account** level
+(`actions/permissions` → `{"enabled": false}`, appeal rejected; a self-hosted
+runner does not help because *scheduling* is the blocked layer), and `main`
+returns `404 Branch not protected`, so there is no required status check to
+satisfy. That is not a gap in this file — it is the reason the merge path needs
+its own tool:
+
+```bash
+tools/gatekeeper-verify-merge.sh <pr-number> --json /tmp/v.json   # MUST exit 0
+gh pr merge <pr-number> --squash
+tools/gatekeeper-verify-merge.sh --reassert /tmp/v.json           # if time passed
+```
+
+It rebases the PR onto the current base in a throwaway worktree, proves that
+tree is the tree the merge would produce, and runs the same
+`gatekeeper-land.sh` the push path runs. What went unnoticed without it:
+`test_matrix_d2_falsifiable.py` stayed RED on `main` across five merges.
 
 Both delegate to
 `vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py`.

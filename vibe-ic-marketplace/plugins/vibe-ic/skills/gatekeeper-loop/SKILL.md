@@ -273,6 +273,50 @@ that version-assignment commit into the single landing commit that carries
 the one bump. Never merge-commit or rebase-merge a multi-commit PR (that
 would land several commits).
 
+### Step 3.7 — RUN THE MERGE-PATH GATE. `gh pr merge` runs no gate at all.
+
+```bash
+tools/gatekeeper-verify-merge.sh <num> --json /tmp/verify-<num>.json   # MUST exit 0
+gh pr merge <num> --squash --delete-branch
+tools/gatekeeper-verify-merge.sh --reassert /tmp/verify-<num>.json     # if time passed
+```
+
+**This is not a reminder, it is the only gate on this path.** Measured
+2026-08-12 (vibe-ic#1019):
+
+| what was assumed | what is true |
+|---|---|
+| required status checks gate the merge | Actions is disabled at the **account** level — `actions/permissions` → `{"enabled": false}`; the appeal was rejected. `gh workflow run` → `HTTP 422`. A self-hosted runner does not help: *scheduling* is the blocked layer. |
+| branch protection backs it up | `gh api repos/vibeic/vibe-ic/branches/main/protection` → **`404 Branch not protected`**. No required check exists. |
+| `gatekeeper-land.sh` runs at the merge | It runs on **`git push`**, via the stamp `tools/git-hooks/pre-push` demands. **`gh pr merge --squash` creates the commit SERVER-SIDE — nothing is pushed from a local clone, so `pre-push` never fires and `gatekeeper-land.sh` never runs.** |
+
+Consequence, measured rather than feared: `test_matrix_d2_falsifiable.py` was
+RED on `main` across five merges (#1006 #1007 #1008 #1009 #1013) and the
+targeted selector had picked that exact file for **all seven** merges examined.
+The suite was right, the selection was right, and the thing that runs them was
+never invoked. In the same window the **version assignment of Step 3.5 also
+stopped happening** — the last twelve first-parent landings all carry the same
+plugin version, because Step 3.5 commits it on the *rebased local branch* and a
+server-side squash of the PR's *remote head* never sees it.
+
+`gatekeeper-verify-merge.sh` fetches the PR head, rebases it onto the current
+base **in a throwaway worktree**, proves that tree is the tree the merge would
+produce (`git merge-tree --write-tree`, cross-checked against the forge's own
+`refs/pull/<n>/merge`), and runs `gatekeeper-land.sh` on it. It refuses — loudly,
+non-zero — on a rebase conflict, on any non-test gate failure, on a stamp naming
+another commit, and on a tree that is not the one that would land. **Land only
+on rc 0.**
+
+It judges the suite DIFFERENTIALLY (the base's failed set vs the candidate's)
+rather than demanding green, because `main` carries pre-existing red and a gate
+that refuses every landing is a ban that teaches the operator to bypass it. A
+test going **failed → skipped/absent is a refusal, never an improvement**.
+
+Two things it does NOT do, on purpose: it does not push, and it does not merge.
+The version assignment of Step 3.5 still has to reach the PR branch before
+`gh pr merge` can carry it — the verdict says so in its notes rather than
+letting the deferral pass for a bump.
+
 ```bash
 gh pr merge <num> --squash --delete-branch
 ```
@@ -280,7 +324,8 @@ gh pr merge <num> --squash --delete-branch
 The merge uses `--squash` and NEVER `--admin` / `--force` (see §Hard
 rules). After release, the loop moves to the next PR; the next PR rebases
 onto the **now-advanced** `origin/main`, so each landing is serialized and
-re-validated against the latest tree.
+re-validated against the latest tree — and `--reassert` refuses a verdict whose
+base moved while it waited, because other agents land while a verify runs.
 
 > **why re-run on the rebased tree is not optional:** the PR's own CI ran
 > against the base it was opened on. Between then and now, the queue has
