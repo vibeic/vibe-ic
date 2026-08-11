@@ -89,6 +89,12 @@ def discover_sdc_files(base: Path) -> List[Path]:
     return sorted(base.rglob("*.sdc"))
 
 
+#: The path step 8 names as its own required_input in the flow declaration.
+#: An ERROR on a file HERE is the one this gate's verdict turns on; an ERROR
+#: anywhere else in the rglob population is reported and does not decide.
+DECLARED_SDC_SCOPE = "phase2/stage2/constraints/"
+
+
 # ---------------------------------------------------------------------------
 # Bracket checking
 # ---------------------------------------------------------------------------
@@ -281,7 +287,37 @@ def audit(project_dir: str) -> AuditResult:
         if file_errors == 0:
             valid_files += 1
 
-    passed = valid_files > 0
+    # ---- THE DECLARED SCOPE ------------------------------------------------
+    # `passed = valid_files > 0` alone meant ANY ONE valid .sdc anywhere under
+    # the project rescued every other one. MEASURED by hand on isolated copies
+    # of published runs: deleting every `create_clock` line from
+    # `phase2/stage2/constraints/*.sdc` — the file step 8 DECLARES as its input
+    # — left the gate at rc=0 / PASS on caravel_user_project/v1.9.43_sky130A
+    # (valid_files 2 -> 1, errors 0 -> 1) and on phase1_parity/mdio
+    # (valid_files 2 -> 1, errors 2 -> 3). An unconstrained clock reached PnR
+    # with a green sign-off gate. The error was computed and then discarded.
+    #
+    # WHY THE SCOPE AND NOT A BARE `errors == 0`. Discovery is a project-wide
+    # rglob and reaches artefacts step 8 does not own. Measured over 107
+    # published run dirs, 22 pass this gate and 10 of those 22 carry at least
+    # one ERROR — and EVERY one of those errors is outside the declared scope:
+    #   phase2/stage1/fpga/*.sdc          6 runs — an FPGA/Quartus constraint
+    #                                     file, a different tool's artefact
+    #   input/**                          2 runs — the design INPUT and a
+    #                                     reference flow, neither this flow's
+    #                                     product nor ours to judge
+    #   steps/7_*/                        2 runs — a step's own staging copy
+    # So `errors == 0` would turn 10 of 22 published runs red on rulers that do
+    # not belong to this step. Scoping the VERDICT to what step 8 declares
+    # turns 0 of 22 red and still bites the mutation above. The findings for
+    # the wider population are unchanged and still reported.
+    declared_errors = [f for f in findings
+                       if f.severity == "ERROR"
+                       and str(f.file or "").startswith(DECLARED_SDC_SCOPE)]
+    declared_files = sorted({str(f.relative_to(base)) for f in sdc_files
+                             if str(f.relative_to(base)).startswith(
+                                 DECLARED_SDC_SCOPE)})
+    passed = valid_files > 0 and not declared_errors
     return AuditResult(
         program="sdc_syntax_check",
         passed=passed,
@@ -291,6 +327,11 @@ def audit(project_dir: str) -> AuditResult:
             "valid_files": valid_files,
             "errors": sum(1 for f in findings if f.severity == "ERROR"),
             "clocks_found": sum(1 for f in findings if f.rule == "CLOCK_PERIOD_OK"),
+            # The denominator the VERDICT rests on, stated separately from the
+            # population that was merely reported on.
+            "declared_scope": DECLARED_SDC_SCOPE,
+            "declared_scope_files": declared_files,
+            "declared_scope_errors": len(declared_errors),
         },
     )
 
