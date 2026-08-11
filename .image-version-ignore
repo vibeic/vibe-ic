@@ -147,3 +147,15 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_spare_tieoff_one_driver_
 # tag would claim those exact numbers were read off an image that never ran
 # them, the same measurement-honesty violation as the entries above.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_issue789_streamout_layermap_any_signoff_deck.py
+
+# fault_scan_chain_insert.py:468 — the 0.2.65 there is a MEASUREMENT RECORD, not
+# a live pointer. The comment states what a specific tool printed on a specific
+# image ("Internal scan chain successfully constructed. Length: 271"), and the
+# image is named so a reader can reproduce it. Advancing that tag with VERSION
+# would assert those exact lines came off an image that never produced them —
+# falsifying provenance to satisfy a sync check, which is the same
+# measurement-honesty violation the entries above exist to prevent.
+#
+# Registered rather than rewritten. If the measurement is ever REDONE on a newer
+# image, update the number and the tag together, in that order.
+vibe-ic-marketplace/plugins/vibe-ic/programs/fault_scan_chain_insert.py
