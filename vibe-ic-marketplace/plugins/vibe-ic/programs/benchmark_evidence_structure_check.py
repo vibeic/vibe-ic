@@ -46,6 +46,23 @@ WHAT THIS GATE ENFORCES (each is a named nonconformance on failure)
                     (>= 1 valid line). ALWAYS required, whether or not the GDS
                     itself ships: it is what keeps an artefact verifiable when
                     it is too large to store.
+  IC_LEVEL_LAYOUT   checked on the `ic/<IC>/` directory ITSELF, not on a cell.
+                    Only two kinds of entry belong at that level: the shared
+                    `input/`, and one `v<major>.<minor>.<patch>_<PDK>` directory
+                    per converged cell. Anything else is run output that landed
+                    beside the cells instead of inside one, so it is attributable
+                    to no plugin version and no PDK.
+                      Until this rule existed the per-cell walk simply did not
+                    ENUMERATE such an entry: `_discover_evidence_folders` keeps
+                    a child only when it looks version-y, carries a rejected
+                    prefix, or holds a RESULT.md, so a bare `phase1/` `phase3/`
+                    `reports/` at the IC level was skipped in silence and the
+                    tree still reported "N/N conformant". A misnamed publish was
+                    named; an UNNAMED one was invisible.
+                      This rule RECORDS the divergence — it never decides that
+                    the content should be retired. Deciding that is the owner's
+                    call, and the entries can equally be MOVED into the cell they
+                    belong to; both routes need the violation measured first.
   NO_RAW_GEOMETRY   no *.gds / *.def / *.spef / *.oas ABOVE THE 50 MB COMMIT
                     CEILING is committed under the folder (#419). It used to
                     reject them by extension, and that rule FAILED all three
@@ -152,6 +169,12 @@ _CONVERGED = ("PASS", "PASS_WITH_WAIVERS")
 @dataclass
 class FolderResult:
     path: str
+    # "cell" = a v<ver>_<PDK> evidence folder; "ic-root" = the ic/<IC>/ directory
+    # itself, whose only rule is IC_LEVEL_LAYOUT. Kept explicit so a reader (and
+    # the --json consumer) can tell the two apart: an ic-root has no PDK, no
+    # version and no verdict, and printing it as a cell with three None fields
+    # reads like a cell that lost its identity.
+    kind: str = "cell"
     ic: Optional[str] = None
     pdk: Optional[str] = None
     version: Optional[str] = None
@@ -436,6 +459,57 @@ def check_folder(folder: Path, include_staged: bool = False) -> FolderResult:
 # Tree discovery.
 # --------------------------------------------------------------------------
 
+def _changed_file_set(base: str, anchor: Path) -> Tuple[Optional[Set[Path]], str]:
+    """Absolute paths added/modified since `base`, or (None, why) if undeterminable."""
+    repo = _git_toplevel(anchor if anchor.exists() else Path.cwd())
+    if repo is None:
+        return None, "not a git repo"
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "diff", "--name-only", "--diff-filter=d",
+             f"{base}...HEAD"],
+            capture_output=True, text=True, check=False, timeout=60)
+        if out.returncode != 0:
+            # fall back to a two-dot diff (base not an ancestor / shallow clone)
+            out = subprocess.run(
+                ["git", "-C", str(repo), "diff", "--name-only", "--diff-filter=d",
+                 base, "HEAD"],
+                capture_output=True, text=True, check=False, timeout=60)
+        if out.returncode != 0:
+            return None, f"git diff against {base} failed"
+    except Exception as exc:
+        return None, f"git diff error: {exc}"
+    return ({(repo / ln.strip()).resolve()
+             for ln in out.stdout.splitlines() if ln.strip()},
+            f"changed-since {base}")
+
+
+def _changed_ic_dirs(base: str, ic_dirs: List[Path],
+                     include_staged: bool) -> Tuple[Optional[List[Path]], str]:
+    """Filter IC dirs to those whose OWN STRAY ENTRIES have a file changed since
+    `base`.
+
+    Deliberately NOT "any file under the IC dir changed". Publishing a new,
+    perfectly conforming cell into an IC that already carries legacy strays
+    touches the IC dir, and grandfathering exists precisely so that push is not
+    failed by evidence it did not create. Scoping the diff to the stray entries
+    themselves keeps the CI shape honest in both directions: a push that ADDS
+    run output at the IC level is caught, and one that merely publishes beside
+    pre-existing strays is not. Full `--tree` (no --changed-since) still reports
+    every legacy violation.
+    """
+    changed, mode = _changed_file_set(base, ic_dirs[0] if ic_dirs else Path.cwd())
+    if changed is None:
+        return None, mode
+    kept: List[Path] = []
+    for ic in ic_dirs:
+        roots = [s.resolve() for s in ic_level_strays(ic, include_staged)]
+        if any(c == r or str(c).startswith(str(r) + os.sep)
+               for r in roots for c in changed):
+            kept.append(ic)
+    return kept, mode
+
+
 def _changed_evidence_roots(base: str, targets: List[Path]) -> Tuple[Optional[List[Path]], str]:
     """Filter `targets` to the evidence folders that have >= 1 file changed since
     `base` (added/modified; deletions ignored). Returns (kept, mode).
@@ -444,30 +518,84 @@ def _changed_evidence_roots(base: str, targets: List[Path]) -> Tuple[Optional[Li
     fail-OPENS (checks nothing, exits 0) so CI plumbing never becomes a flaky
     blocker; the real guards are the per-folder rules + the publish self-check.
     """
-    anchor = targets[0] if targets else Path.cwd()
-    repo = _git_toplevel(anchor if anchor.exists() else Path.cwd())
-    if repo is None:
-        return None, "not a git repo"
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(repo), "diff", "--name-only", "--diff-filter=d",
-             f"{base}...HEAD"],
-            capture_output=True, text=True, check=False)
-        if out.returncode != 0:
-            # fall back to a two-dot diff (base not an ancestor / shallow clone)
-            out = subprocess.run(
-                ["git", "-C", str(repo), "diff", "--name-only", "--diff-filter=d",
-                 base, "HEAD"],
-                capture_output=True, text=True, check=False)
-        if out.returncode != 0:
-            return None, f"git diff against {base} failed"
-    except Exception as exc:
-        return None, f"git diff error: {exc}"
-    changed = {(repo / ln.strip()).resolve() for ln in out.stdout.splitlines() if ln.strip()}
+    changed, mode = _changed_file_set(base, targets[0] if targets else Path.cwd())
+    if changed is None:
+        return None, mode
     kept = [t for t in targets
             if any(str(c).startswith(str(t.resolve()) + os.sep) or c == t.resolve()
                    for c in changed)]
     return kept, f"changed-since {base}"
+
+
+def ic_level_strays(ic_dir: Path, include_staged: bool = False) -> List[Path]:
+    """Entries directly under `ic/<IC>/` that the layout contract does not allow.
+
+    Allowed: the shared `input/`, and one `v<major>.<minor>.<patch>_<PDK>`
+    directory per converged cell. EVERYTHING else is returned — a stray run
+    directory (`phase1/`, `phase3/`, `reports/`, `steps/`), a loose file
+    (`RESULT.md`, `provenance.jsonl`) that belongs inside a cell, and a
+    rejected-prefix folder (`clean_run_*`, `pass_*`) which is at the wrong
+    LEVEL as well as under the wrong NAME.
+
+    A rejected-prefix folder is deliberately reported by BOTH rules: NAMING says
+    its contents would be stripped on the way in, IC_LEVEL_LAYOUT says it is not
+    a cell. Those are different consequences and collapsing them would lose one.
+
+    Git-aware, for the same reason NO_RAW_GEOMETRY is: inside a repo an entry
+    counts only if it holds >= 1 tracked (optionally staged) file, so a local
+    scratch directory a developer left beside the cells is not a finding about
+    what was PUBLISHED. Outside a repo, every entry counts.
+    """
+    if not ic_dir.is_dir():
+        return []
+    repo = _git_toplevel(ic_dir)
+    tracked: Optional[Set[Path]] = None
+    if repo is not None:
+        tracked = _git_listed_files(repo, ic_dir, include_staged)
+
+    strays: List[Path] = []
+    for child in sorted(ic_dir.iterdir()):
+        if child.name == "input" and child.is_dir():
+            continue
+        if child.is_dir() and _NAME_RE.match(child.name):
+            continue
+        if tracked is not None:
+            here = child.resolve()
+            if not any(p == here or str(p).startswith(str(here) + os.sep)
+                       for p in tracked):
+                continue
+        strays.append(child)
+    return strays
+
+
+def check_ic_level_layout(ic_dir: Path,
+                          include_staged: bool = False) -> FolderResult:
+    """Validate the `ic/<IC>/` directory itself against the layout contract."""
+    res = FolderResult(path=str(ic_dir), kind="ic-root", ic=ic_dir.name)
+    strays = ic_level_strays(ic_dir, include_staged=include_staged)
+    if not strays:
+        res.ok("IC_LEVEL_LAYOUT")
+        return res
+    named = ", ".join(s.name + ("/" if s.is_dir() else "") for s in strays)
+    res.fail(
+        "IC_LEVEL_LAYOUT",
+        f"{len(strays)} entr{'y' if len(strays) == 1 else 'ies'} at the IC level "
+        f"{'is' if len(strays) == 1 else 'are'} neither input/ nor a "
+        f"v<ver>_<PDK> cell: {named}. Run output "
+        f"here is attributable to no plugin version and no PDK. Move it into the "
+        f"cell it belongs to, or retire it deliberately — this rule records the "
+        f"divergence, it does not decide which.")
+    return res
+
+
+def _discover_ic_dirs(root: Path) -> List[Path]:
+    """Every `ic/<IC>/` directory under a benchmark-data-ish root."""
+    ic_root = root / "ic" if (root / "ic").is_dir() else root
+    if not ic_root.is_dir():
+        return []
+    # An IC directory is one that carries the shared input/ or >= 1 subdirectory;
+    # a loose file beside the IC folders is not an IC.
+    return sorted(p for p in ic_root.iterdir() if p.is_dir())
 
 
 def _discover_evidence_folders(root: Path) -> List[Path]:
@@ -500,9 +628,13 @@ def _discover_evidence_folders(root: Path) -> List[Path]:
 def _print_folder(res: FolderResult) -> None:
     tag = "PASS" if res.conforms else "FAIL"
     ident = res.path
-    print(f"[{tag}] {ident}"
-          + (f"  (IC={res.ic} PDK={res.pdk} v{res.version} verdict={res.verdict})"
-             if res.conforms else ""))
+    if res.kind == "ic-root":
+        print(f"[{tag}] {ident}"
+              + (f"  (IC={res.ic} IC-level layout)" if res.conforms else ""))
+    else:
+        print(f"[{tag}] {ident}"
+              + (f"  (IC={res.ic} PDK={res.pdk} v{res.version} verdict={res.verdict})"
+                 if res.conforms else ""))
     # Notes print on PASS too — a rule that passed on a different basis is
     # exactly the thing a reader must be able to see, and only-on-failure
     # printing would hide it in the case that matters.
@@ -534,10 +666,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     targets: List[Path] = [Path(p) for p in args.paths]
+    ic_dirs: List[Path] = []
     if args.tree:
         targets.extend(_discover_evidence_folders(Path(args.tree)))
+        # The IC directories themselves. Only --tree walks these: a caller who
+        # names one cell is asking about that cell, not about its siblings.
+        ic_dirs = _discover_ic_dirs(Path(args.tree))
 
-    if not targets:
+    if not targets and not ic_dirs:
         if args.changed_since:
             print(f"benchmark_evidence_structure_check: no evidence folders "
                   f"discovered (nothing to diff against {args.changed_since}).")
@@ -552,13 +688,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"benchmark_evidence_structure_check: change set undeterminable "
                   f"({mode}); checking nothing (fail-open).")
             return 0
-        if not kept:
+        kept_ic, _ = _changed_ic_dirs(args.changed_since, ic_dirs,
+                                      args.include_staged)
+        ic_dirs = kept_ic or []
+        if not kept and not ic_dirs:
             print(f"benchmark_evidence_structure_check: no evidence folders "
                   f"changed since {args.changed_since} — nothing to enforce.")
             return 0
         targets = kept
 
     results: List[FolderResult] = []
+    for ic in ic_dirs:
+        results.append(check_ic_level_layout(ic, include_staged=args.include_staged))
     for t in targets:
         if not t.exists():
             r = FolderResult(path=str(t))
