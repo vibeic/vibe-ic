@@ -47,6 +47,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +55,16 @@ import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _IC = _PROGRAMS.parents[3] / "benchmark-data" / "ic"
+#: The PUBLISHED cell the u_hawaii_adc hardmacro LEFs are read from (#905).
+#: These two assertions used to read the IC-LEVEL `u_hawaii_adc/phase3/` tree,
+#: which is run output attributable to no plugin version and no PDK. The cell's
+#: own LEFs are a DIFFERENT run's bytes (md5 differs) but parse identically —
+#: verified before the move: `ldo` -> [(IOVDD, POWER), (VSS, GROUND)] and
+#: `delta_sigma` -> unconnected [(VDD, POWER), (VSS, GROUND)] on both trees. So
+#: the measurement is unchanged and it now cites a published cell.
+_CELL = "v1.9.86_sky130A"
+#: The published-cell name contract: v<major>.<minor>.<patch>_<PDK>.
+_CELL_RE = re.compile(r"^v\d+\.\d+\.\d+_")
 
 sys.path.insert(0, str(_PROGRAMS))
 
@@ -211,8 +222,8 @@ def test_backend_parser_reads_a_pin_written_entirely_on_one_line():
         "END m_blk2\n")
     assert _parse_macro_supply_pins(block) == {"m_blk2": [("VPWR", "POWER")]}
 
-    lef = (_IC / "u_hawaii_adc" / "phase3" / "analog" / "hardmacro" / "ldo"
-           / "ldo.lef")
+    lef = (_IC / "u_hawaii_adc" / _CELL / "phase3" / "analog" / "hardmacro"
+           / "ldo" / "ldo.lef")
     if not lef.is_file():
         pytest.skip("published hardmacro LEF not present")
     real = _parse_macro_supply_pins(lef.read_text())
@@ -227,7 +238,7 @@ def test_the_backend_plan_now_reports_those_pins_instead_of_missing_them():
     finding — the pins were not unconnected, they were invisible."""
     from phase3_one_shot_runner import _macro_supply_gc_plan
 
-    lef = (_IC / "u_hawaii_adc" / "phase3" / "analog" / "hardmacro"
+    lef = (_IC / "u_hawaii_adc" / _CELL / "phase3" / "analog" / "hardmacro"
            / "delta_sigma" / "delta_sigma.lef")
     if not lef.is_file():
         pytest.skip("published hardmacro LEF not present")
@@ -240,3 +251,34 @@ def test_the_backend_plan_now_reports_those_pins_instead_of_missing_them():
 
     conn2, unconn2 = _macro_supply_gc_plan([text], ["VDD"], ["VSS"])
     assert not unconn2 and len(conn2) == 2, (conn2, unconn2)
+
+
+# --------------------------------------------------------------------------- #
+# 6 — #905: the hardmacro LEFs are read from a PUBLISHED CELL, not the IC level
+# --------------------------------------------------------------------------- #
+def test_the_hardmacro_lefs_are_read_from_a_published_cell():
+    """The two `_parse_macro_supply_pins` assertions above used to read
+    `benchmark-data/ic/u_hawaii_adc/phase3/`, an IC-LEVEL tree: run output
+    attributable to no plugin version and no PDK, which `IC_LEVEL_LAYOUT`
+    forbids and vibe-ic#905 retires.
+
+    Pin the DESTINATION, not just the current answer. Without this, a future
+    edit walks the paths back up to the IC level and nothing says so — and the
+    walk-back is invisible, because `lef.is_file()` guards both assertions with
+    `pytest.skip`, so a wrong path goes GREEN-but-silent rather than red."""
+    assert _CELL_RE.match(_CELL), (
+        f"{_CELL!r} is not a v<major>.<minor>.<patch>_<PDK> cell name")
+
+    for block in ("ldo", "delta_sigma"):
+        lef = (_IC / "u_hawaii_adc" / _CELL / "phase3" / "analog"
+               / "hardmacro" / block / f"{block}.lef")
+        rel = lef.relative_to(_IC).parts
+        assert rel[1] == _CELL, (
+            f"{block}.lef is read from {rel[1]!r}, not the published cell")
+        assert _CELL_RE.match(rel[1]), (
+            f"{block}.lef is read from a non-cell IC-level entry {rel[1]!r}")
+        if lef.is_file():
+            # The IC-level copy this moved off must not be what is read.
+            stray = _IC / "u_hawaii_adc" / "phase3" / "analog" / "hardmacro" \
+                / block / f"{block}.lef"
+            assert lef.resolve() != stray.resolve()
