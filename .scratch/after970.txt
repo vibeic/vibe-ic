@@ -1,0 +1,7 @@
+vibeic_eda_version_sync: VERSION = 0.2.84
+  install-doc refs checked : 25 across 10 of 11 registered file(s)
+  registered but UNCOUNTED : 1 present-with-no-pinned-ref, 0 not-present-in-this-repo
+     vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/README.md — 1 floating pointer(s) (:latest) and no X.Y.Z pin. Registered as an install doc where every tag is a live pointer, so it contributes NOTHING to the count above and --set cannot rewrite it; the anchor does not reach this file (vibe-ic#970).
+  repo-wide ghcr pointers  : 16
+  anchor-no-regress        : OK (0.2.84 >= committed 0.2.84)
+[PASS] all live pointers == 0.2.84 and the anchor has not regressed. 1 registered install doc(s) carry no pinned pointer and were NOT counted — named above (vibe-ic#970). Upstream currency is NOT judged here — run --report-upstream (vibe-ic#927).

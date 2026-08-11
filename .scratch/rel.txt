@@ -1,0 +1,24 @@
+........................................F.........................       [100%]
+=================================== FAILURES ===================================
+_________________ test_the_real_ci_gate_set_is_currently_clean _________________
+
+    def test_the_real_ci_gate_set_is_currently_clean():
+        """The measured state at land time: every CI gate discloses what it
+        examined. A zero baseline is the right shape for a regression guard — it
+        can only fire on a NEW instance."""
+        import pytest
+        script = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
+        if not script.is_file():
+            pytest.skip("CI script not present")
+        verdict, findings = G.audit(_REPO)
+>       assert verdict == "PASS", findings
+E       AssertionError: [{'detail': "could not be driven against a scratch tree: Command '['python3', '/home/reyerchu/_wfwt_g927/tools/gen_mat...63x8_census.py', '--check']' timed out after 120 seconds", 'gate': '63x8 census freshness', 'kind': 'GATE_UNRUNNABLE'}]
+E       assert 'FAIL' == 'PASS'
+E         
+E         - PASS
+E         + FAIL
+
+vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_gate_discloses_denominator.py:134: AssertionError
+=========================== short test summary info ============================
+FAILED vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_gate_discloses_denominator.py::test_the_real_ci_gate_set_is_currently_clean
+1 failed, 65 passed in 312.01s (0:05:12)
