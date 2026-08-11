@@ -509,3 +509,41 @@ that matter most:
 * dimension 6's legs L1 and L2 are structurally inert for most steps; L1b and
   L3/L3b carry the dimension, and
   `test_d6_every_cell_has_at_least_one_capable_leg` is what keeps that honest.
+
+### Can a cell be reddened by changing a number in a PUBLISHED REPORT?
+
+**8 artefact mutations registered; 4 currently prove the cell they target cannot
+redden.**
+
+That is the `ARTEFACT_MUTATION` channel of `programs/matrix_mutation_ledger.py`,
+added because the ledger's first two channels both edit the SOURCE — the flow
+yaml and the plugin tree — and neither could express the question. "No cell reads
+artefact CONTENT" (finding #20) was never a policy: it was a consequence of there
+being no way to say such a thing.
+
+Each entry names a published run under `benchmark-data/`, a file in it, an exact
+byte edit, the cell `(step, dim)` it bears on, and the verdict that was MEASURED;
+the replay copies the run for real, applies the edit, and re-runs that step's own
+gate through the flow's own verdict mapping. Run it with
+`matrix_mutation_ledger.py --replay-artefacts` (3.1 s for all 8) and read the
+count with `--census`.
+
+The four that prove a cell CANNOT redden are the point of the channel, not its
+residue:
+
+| cell | edit | what the gate did |
+|---|---|---|
+| 25/d2 | peak power-grid segment current 1.96e-04 A → 5.0 A (~25000x) | PASS, zero findings — no Jmax is resolved, so no current is refusable |
+| 33/d2 | every non-zero power figure x1000 | PASS — tool signature and categories are checked; the numbers are read against nothing |
+| 9/d2 | 221 `$_NAND_` → `$_AND_` | PASS — the gate's own report *enumerates* `$_AND_` and counts cells, and forms no view on which primitive belongs |
+| 21/d2 | router's FINAL iteration `DRT-0199` 0 → 12 | PASS, still printing `real_violation_total=0` — the count comes from the RUNNER's summary line, not the router's last word |
+
+The last one is the sharpest: the SAME gate on the SAME file *does* redden when
+the runner's summary is edited 0 → 17. So step 21's green is a statement about
+the runner's arithmetic, not the router's result.
+
+These are pinned by `ARTEFACT_CANNOT_REDDEN_AS_MEASURED`, and pinned is not
+waived — the day a gate learns to read its artefact, its replay stops matching
+the record and the gate file fails by name, demanding the entry be updated in the
+same change that closes the gap. Closing them is separate work and is
+deliberately not done by the channel that measures them.
