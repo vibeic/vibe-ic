@@ -535,3 +535,157 @@ def test_the_denial_ruler_cannot_turn_a_typed_topology_red_or_green(tmp_path):
                      docs={"spec.txt": _DFT_REQUIREMENT_DOC}))
         assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
             r.stdout + r.stderr)
+
+
+# ── vibe-ic#1021: three ruler defects, all measured on published roots ─────
+#
+# Every fixture is a SYNTHETIC restatement of a shape read off the published
+# corpus by hand. None is copied from a design and none carries a design,
+# foundry, vendor, protocol-standard or process token.
+
+def test_NEGATIVE_CONTROL_framing_may_not_be_borrowed_across_a_full_stop(
+        tmp_path):
+    """DEFECT 1. A parenthetical MENTION in one sentence, an unrelated
+    `requires` about certification in the next. Before #1021 the +/-160-char
+    window reached back across the full stop and reddened the project.
+
+    Paired with the guard below: this must go quiet and that must stay red.
+    """
+    doc = ("4.1 Debug Connector\n"
+           "In this mode all digital circuits are disconnected from the "
+           "connector and the bold pins can be used to expose debug related "
+           "signals (e.g. JTAG interface). The certification body requires "
+           "that privacy precautions have been taken before the mode is "
+           "entered.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": doc}))
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+        "framing was borrowed from the NEXT sentence:\n" + r.stdout + r.stderr)
+
+
+def test_POSITIVE_CONTROL_framing_in_the_terms_own_sentence_still_reddens(
+        tmp_path):
+    """The paired guard for defect 1. A window that admits nothing is not a
+    narrower window, it is a broken one."""
+    doc = ("4.1 Debug Connector\n"
+           "In this mode all digital circuits are disconnected from the "
+           "connector. The design requires a JTAG TAP controller on the "
+           "debug connector.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": doc}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        r.stdout + r.stderr)
+
+
+#: DEFECT 2, in the two roots' own idiom: no negation word anywhere, so no
+#: denial ruler reaches it at any reach.
+_L7_DEFERS_DFT = {
+    "test_debug_architecture_present": False,
+    "notes": ("The protocol-level test/debug surface is the sideband channel "
+              "plus the link training patterns and symbol error counters. "
+              "Chip-level JTAG/scan/BIST remain source / sink silicon "
+              "concerns; conformance is established by the published "
+              "compliance test specification."),
+}
+
+
+def test_a_sibling_layer_that_DEFERS_dft_to_another_party_does_not_redden(
+        tmp_path):
+    """DEFECT 2. "this requirement belongs to somebody else" is neither "it
+    does not exist" nor "there is one here"."""
+    r = _run(_mk(tmp_path, l20=_SKELETON, siblings={"L7": _L7_DEFERS_DFT}))
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+        "a scope-deferral was counted as a stated requirement:\n"
+        + r.stdout + r.stderr)
+    assert r.returncode != 1, r.stdout + r.stderr
+
+
+def test_a_layer_that_names_a_concern_AND_IMPOSES_IT_still_reddens(tmp_path):
+    """The paired guard for defect 2, and the reason it is not a ban. The
+    ownership vocabulary is narrow by construction: a layer may use the word
+    `concern` and still state a requirement of its own."""
+    sibling = {
+        "test_debug_architecture_present": True,
+        "notes": ("Manufacturing test is a first-order concern for this "
+                  "design. A full scan chain is required and the TAP "
+                  "controller shall be reachable from the debug connector."),
+    }
+    r = _run(_mk(tmp_path, l20=_SKELETON, siblings={"L7": sibling}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        "the deferral ruler deleted a REAL finding:\n" + r.stdout + r.stderr)
+
+
+#: DEFECT 3. Two published roots spend the BIST token on a PROTOCOL MESSAGE
+#: NAME, inside a genuine `shall` sentence, so framing is really there and
+#: cannot discriminate. Restated synthetically in both shapes.
+_BIST_MESSAGE_DOCS = {
+    "message_table.txt": (
+        "5.2 Data Message Types\n"
+        "Data Messages (number of data objects >= 1): 0x01 Capabilities, "
+        "0x02 Request, 0x03 BIST Built-In Self Test, 0x04 Sink_Capabilities. "
+        "The device shall implement every message type listed.\n"),
+    "frame_types.txt": (
+        "6.1 Frame Types\n"
+        "The controller shall transport the following frame types: 0x27 "
+        "Register Host-to-Device, 0x39 Activate, 0x46 Data, 0x58 BIST "
+        "Activate, 0x5F Setup.\n"),
+    "bit_definition.txt": (
+        "6.2 Command Header\n"
+        "BIST (B): when set, indicates that the command the driver built is "
+        "for sending a BIST frame, and the controller shall send it.\n"),
+}
+
+
+def test_a_protocol_MESSAGE_NAME_carrying_the_bist_token_does_not_redden(
+        tmp_path):
+    """DEFECT 3. A frame type and a message type are payloads a protocol
+    defines on the wire. Neither says anything about whether the design has a
+    built-in self-test, which is the only question this layer asks."""
+    for name, text in _BIST_MESSAGE_DOCS.items():
+        r = _run(_mk(tmp_path / name, l20=_SKELETON, docs={name: text}))
+        assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+            f"a protocol message name was read as a DFT requirement "
+            f"({name}):\n" + r.stdout + r.stderr)
+
+
+def test_a_REAL_bist_requirement_still_reddens(tmp_path):
+    """The paired guard for defect 3, and the one that keeps the narrowing
+    honest: the token is only rejected when the document says, structurally,
+    that it is naming an encoding."""
+    doc = ("6.3 Test Provisions\n"
+           "The design shall provide memory BIST for every on-chip SRAM and "
+           "the MBIST controller is required to report a pass/fail status.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": doc}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        "the message-name ruler deleted a REAL MBIST requirement:\n"
+        + r.stdout + r.stderr)
+
+
+def test_the_message_name_ruler_touches_ONLY_the_bist_alternative(tmp_path):
+    """It narrows ONE of sixteen alternatives in the vocabulary. A scan-chain
+    requirement sitting in the SAME sentence as a message-type table must be
+    unaffected — otherwise the reject is a sentence-level ban rather than a
+    token-level one."""
+    doc = ("6.1 Frame Types\n"
+           "The controller shall transport 0x58 BIST Activate, and the "
+           "design shall additionally provide a full scan chain for "
+           "manufacturing test.\n")
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"spec.txt": doc}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout, (
+        r.stdout + r.stderr)
+
+
+def test_all_three_rulers_leave_a_typed_topology_alone(tmp_path):
+    """Content stays self-evidencing, exactly as #1011's ruler had to. All
+    three of this issue's rulers move only the EVIDENCE side of F2; a design
+    that CARRIES an actionable scan topology passes whatever its prose says."""
+    doc = dict(_SKELETON)
+    doc["fields"] = dict(_SKELETON["fields"], scan_chains=[_TYPED_CHAIN],
+                         dft_present=True)
+    for i, sibling in enumerate((_L7_DEFERS_DFT, _L7_STATES_DFT)):
+        r = _run(_mk(tmp_path / f"case{i}", l20=doc, siblings={"L7": sibling},
+                     docs=dict(_BIST_MESSAGE_DOCS)))
+        assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout, (
+            r.stdout + r.stderr)
