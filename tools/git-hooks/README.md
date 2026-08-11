@@ -45,6 +45,13 @@ tree is the tree the merge would produce, and runs the same
 `gatekeeper-land.sh` the push path runs. What went unnoticed without it:
 `test_matrix_d2_falsifiable.py` stayed RED on `main` across five merges.
 
+Proving the replay IS the merge tree needs `git merge-tree --write-tree`, i.e.
+**git >= 2.38** — which four of six hosts here, the orchestrator included, do
+not have. On those the script falls back to verifying the rebase replay and
+says so, in the printed verdict and in the JSON
+(`"verification_tier": "rebase-replay"`, `"tier_degraded": true`). Every other
+refusal reason is unchanged; only that one cross-check is dropped.
+
 Both delegate to
 `vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py`.
 
