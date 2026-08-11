@@ -14,14 +14,22 @@ extractor **never fabricates** a fact the spec does not state.
 
 ## ⚠️ What the 87 inputs actually are — source-tier qualification
 
-The parity number above is uniform. **The inputs behind it are not.** Only 23 of the 87 protocols
-were measured against the real specification from its issuing body. The rest were measured against
-an encyclopedia article, a vendor document, or an authored text reconstruction.
+The parity number above is uniform. **The inputs behind it are not.** Only 22 of the 86 protocols
+still published were measured against the real specification from its issuing body. The rest were
+measured against an encyclopedia article, a vendor document, or an authored text reconstruction.
+
+> **The sweep numbers above are the sweep's own and have not been restated.** They were measured
+> over 87 protocols and that is what they say. The tier table below describes what is PUBLISHED
+> NOW, which is 86: six protocols had their run output withdrawn under the 2026-08-12 owner
+> ruling (vibe-ic#1015) because it did not pass, and one of those six — the only `specification`
+> tier among them — tracked no input document of its own, so no cell remains for it to count.
+> The other five keep their input documents and are still counted here. Nothing was re-measured;
+> a published cell left, and only the denominator of the tier table moved.
 
 <!-- source-tier-counts -->
 | Source tier | Count | What the input document is |
 |---|---|---|
-| **`specification`** — 23 | 23 | The protocol spec as published by its issuing body (ARM AMBA, Bosch CAN, JEDEC JESD79-3C, IEEE 802.3-2005, NXP UM10204, MIPI I3C/DSI, PCI-SIG PCIe 1.0, USB 2.0, Bluetooth 5.2, TCG TPM 2.0, Wishbone B4, …). |
+| **`specification`** — 22 | 22 | The protocol spec as published by its issuing body (Bosch CAN, JEDEC JESD79-3C, IEEE 802.3-2005, NXP UM10204, MIPI I3C/DSI, PCI-SIG PCIe 1.0, USB 2.0, Bluetooth 5.2, TCG TPM 2.0, Wishbone B4, …). |
 | **`encyclopedia`** — 12 | 12 | A **Wikipedia** article print/export, not a spec: `arinc429, cxl, ethernet_800g, hbm3, hdlc, lpddr5, milstd1553, nvlink, pcie_gen5, spdif, ufs, usb4`. (`ufs` concatenates 3 articles.) |
 | **`vendor_document`** — 13 | 13 | A vendor app note / datasheet / IP manual / brochure / slide deck — **not the protocol spec**: `canfd, dali, ethercat, hdmi, jtag, mipi, nfc, onewire, rs485, soundwire, spi, uart, ucie`. |
 | **`reconstructed_text`** — 39 | 39 | An authored plain-text technical reference written **for this benchmark**, summarising a named standard — the 40 "reconstructed `*_spec.txt`" of the headline, minus `ufs` (which is encyclopedic). |
