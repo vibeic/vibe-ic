@@ -132,6 +132,70 @@ _DFT_VOCAB_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A TEST STRUCTURE IS NOT A MESSAGE NAME (vibe-ic#1021)
+# =====================================================
+# `m?bist` above matches the token BIST wherever it appears, and two published
+# roots' own inputs spend it on the name of a PROTOCOL MESSAGE rather than on a
+# built-in self-test. In their own words:
+#
+#   "The HBA shall transport the following FIS types: 0x27 Register
+#    Host-to-Device, ... 0x46 Data, 0x58 BIST Activate, 0x5F PIO Setup, ..."
+#   "BIST (B): When '1', indicates that the command that software built is for
+#    sending a BIST FIS."
+#   "0x03  BIST                 Built-In Self Test"      (a message-type table)
+#
+# A frame information structure and a message type are PAYLOADS A PROTOCOL
+# DEFINES ON THE WIRE. Neither says anything about whether this design has a
+# built-in self-test, which is the only question L20 asks — and both sit inside
+# a `shall` sentence, so requirement framing is genuinely present and cannot
+# discriminate. This is a VOCABULARY defect, so it is fixed in the vocabulary's
+# owner and nowhere else: `framed_hits` is shared by four programs asking four
+# different questions, and none of the other three has a DFT vocabulary to
+# collide.
+#
+# TWO STRUCTURAL SIGNALS, BOTH OF WHICH NAME AN ENCODING RATHER THAN A DESIGN:
+#   (a) the token is preceded by a WIRE CODE POINT — `0x58 BIST`, `0b0011
+#       BIST`, `type 3 BIST`. A number that identifies the token on the wire is
+#       a message identifier; a scan chain does not have one.
+#   (b) the token is followed by a PROTOCOL-OBJECT NOUN — `BIST FIS`, `BIST
+#       message`, `BIST frame`, `BIST primitive`. The noun says what KIND of
+#       thing the token names, and every noun in the set is a thing that is
+#       transmitted.
+#
+# SCOPED TO THE SENTENCE, the same reach `framed_hits` now uses for framing and
+# for both of its drop predicates (#1021). That is what reaches "BIST (B): ...
+# for sending a BIST FIS", where the FIRST occurrence carries neither signal
+# and the sentence that defines it carries both. Within one sentence a token is
+# one thing; across a document it is not, which is why this is not run over the
+# whole line.
+_BIST_TOKEN_RE = re.compile(r"\bm?bist\b", re.IGNORECASE)
+_BIST_IS_A_MESSAGE_NAME_RE = re.compile(
+    #   (a) a wire code point standing immediately in front of the token
+    r"(?:0x[0-9a-f]+|0b[01]+|\btype\s+\d+|\bcode\s+\d+)\s*[-:.]?\s*m?bist\b"
+    #   (b) a protocol-object noun standing immediately behind it
+    r"|\bm?bist\b[\s-]+(?:fis|message|msg|frame|packet|pdu|primitive|"
+    r"ordered\s+set|payload|dword|opcode|command\s+type|message\s+type)\b",
+    re.IGNORECASE)
+
+
+def _bist_is_a_message_name(matched: str, sentence: str) -> bool:
+    """True when THIS match spends the BIST token on a protocol message name.
+
+    The ``reject`` hook `framed_hits` calls, so the decision is made INSIDE the
+    hit loop — before dedup and before the limit. A post-filter on the returned
+    records would be wrong twice: the limit would truncate before it ran, and
+    the ``context`` field those records carry is truncated for reporting, so
+    the "BIST (B) ... for sending a BIST FIS" sentence loses its own second
+    half.
+
+    A match that is not a BIST token is never touched: this narrows ONE
+    alternative of the vocabulary and leaves the other fifteen as they were.
+    """
+    if not _BIST_TOKEN_RE.fullmatch((matched or "").strip()):
+        return False
+    return bool(_BIST_IS_A_MESSAGE_NAME_RE.search(sentence or ""))
+
+
 # Sibling layers that legitimately carry a DFT requirement upstream of
 # L20. If the requirement lives here and not in L20, that IS the defect.
 _SIBLING_CODES = ("L7", "L24", "L19", "L2")
@@ -209,6 +273,17 @@ def _chain_missing_fields(entry: Any) -> List[str]:
     if not (nonempty_str(clk) or numeric_target(clk) is not None):
         missing.append("clock")
     return missing
+
+
+def _dft_hits(texts) -> List[Dict[str, Any]]:
+    """Framed DFT-requirement hits from ``texts``, this gate's three policies
+    applied: a denial is not a statement, a scope-deferral is not a statement,
+    and a protocol message name is not this vocabulary. One helper so the two
+    call sites below cannot drift into two policies (#1021)."""
+    return framed_hits(texts, _DFT_VOCAB_RE,
+                       drop_denied=True,
+                       drop_out_of_scope=True,
+                       reject=_bist_is_a_message_name)
 
 
 def _backend_dft_artifacts(project: Path) -> List[str]:
@@ -388,10 +463,15 @@ def inspect(project: Path) -> Dict[str, Any]:
     # nothing by declining denials. L23's security vocabulary is the opposite
     # — its real requirements are prohibitions — and it deliberately does not
     # opt in. Measured both ways before either was wired.
-    doc_hits = framed_hits(input_doc_texts(project), _DFT_VOCAB_RE,
-                           drop_denied=True)
-    sib_hits = framed_hits(sibling_l_doc_texts(project, _SIBLING_CODES),
-                           _DFT_VOCAB_RE, drop_denied=True)
+    #
+    # `drop_out_of_scope=True` — THIS GATE OPTS IN TOO (vibe-ic#1021). Two
+    # roots' L7 notes hand chip-level JTAG/scan/BIST to a different party's
+    # silicon, in a sentence carrying no negation word at all, so no denial
+    # ruler can reach them. Same per-consumer reasoning as above and the same
+    # measurement: L22's two consumers and L23 move by 0 hits, so neither is
+    # switched on.
+    doc_hits = _dft_hits(input_doc_texts(project))
+    sib_hits = _dft_hits(sibling_l_doc_texts(project, _SIBLING_CODES))
     result["evidence"]["dft_requirement_hits_input_docs"] = len(doc_hits)
     result["evidence"]["dft_requirement_hits_sibling_l_docs"] = len(sib_hits)
 

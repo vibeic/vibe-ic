@@ -33,13 +33,20 @@ class of literal ``l8_clock_domains_typed_check`` already uses for
 
 REQUIREMENT FRAMING
 ===================
-A bare vocabulary hit is not a requirement. ``_has_requirement_framing``
-applies the same context-window discipline as
+A bare vocabulary hit is not a requirement. ``framed_hits`` applies the
+same context-window discipline as
 ``l8_clock_domains_typed_check._is_real_clock_freq``: a match only
-counts when a requirement/goal word appears within N characters. This
-is what keeps "the upstream project already hit 90% coverage" (a status
-report about somebody else's work) from being read as "this design
-requires 90% coverage".
+counts when a requirement/goal word appears nearby. This is what keeps
+"the upstream project already hit 90% coverage" (a status report about
+somebody else's work) from being read as "this design requires 90%
+coverage".
+
+NEARBY MEANS "IN THE SAME SENTENCE", and the character count is only a
+budget on how much text is examined (vibe-ic#1021). It used to be the
+rule, and a flat count crosses full stops: a bare mention in one
+sentence borrowed a ``requires`` from the next and became a
+requirement. The reach is ``_prose_polarity.sentence_scope`` — the
+house rule, imported, not a fourth private copy.
 
 SINGLE DETERMINISTIC TRACK
 ==========================
@@ -55,7 +62,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 __all__ = [
     "generated_docs_dir",
@@ -70,6 +77,7 @@ __all__ = [
     "OUTSIDE_PROJECT_PREFIX",
     "signoff_qualifier",
     "requirement_absent",
+    "requirement_out_of_scope",
     "waiver_rationale",
     "numeric_target",
     "nonempty_str",
@@ -371,6 +379,40 @@ def sibling_l_doc_texts(project: Path, codes: Iterable[str]
 # ─────────────────────────────────────────────────────────────────────
 # Requirement framing
 # ─────────────────────────────────────────────────────────────────────
+#
+# THE FRAMING NEIGHBOURHOOD IS THE SENTENCE, NOT A CHARACTER COUNT (#1021).
+# ------------------------------------------------------------------------
+# `framed_hits` used to look for framing anywhere within +/-`window`
+# characters of the matched term, and that window CROSSED FULL STOPS: a hit in
+# one sentence borrowed its framing from the next. MEASURED on the published
+# corpus, in a root's own input:
+#
+#   "... the 14 bold pins can be used to expose debug related signals
+#    (e.g. JTAG interface). USB IF requires for certification that security
+#    and privacy consideration and precaution has been taken ..."
+#
+# The `requires` belongs to a sentence about SECURITY CERTIFICATION. It reached
+# back across the full stop and promoted a parenthetical mention of a debug
+# signal into a stated DFT requirement, reddening a published project.
+#
+# THE REACH IS THE HOUSE ONE, IMPORTED AND NOT RE-IMPLEMENTED.
+# `_prose_polarity.sentence_scope` is the repo's single rule for "the sentence
+# a match sits in", symmetric in both directions since #790, and its
+# `before`/`after` are a BUDGET rather than the rule — so passing `window` for
+# both makes the new neighbourhood exactly the INTERSECTION of the old window
+# and the sentence. The change can therefore only ever narrow what is admitted;
+# it can never admit something the flat window did not.
+#
+# LIMIT, STATED RATHER THAN HIDDEN. The scope is computed on the
+# WHITESPACE-NORMALISED copy, because that is the text the match was found in
+# and because normalisation is what makes ".\n" readable as the break ". " at
+# all. Normalisation has by then already collapsed "\n\n" and "\n- ", two of
+# `SENTENCE_BREAKS`'s five members, so those two cannot fire on this substrate.
+# MEASURED before it was left out: recovering them from the offset map moves
+# l20 from 47 surviving hits to 43, l23 from 8 to 9 (a dedup split, not a new
+# hit) and l22 from 1 to 1 — and moves ZERO roots on all four consumers. A
+# recovery with no measured effect is machinery that can only drift, so it is
+# recorded here instead of shipped.
 
 # Words that turn a vocabulary mention into a stated requirement for
 # THIS design. Technology-neutral; contains no design/PDK/vendor token.
@@ -526,28 +568,52 @@ def signoff_qualifier(line: str) -> Optional[str]:
 # afterwards; it exists so a test can PIN that separation and so a future
 # widening of the auxiliary set has something that goes red.
 #
-# WHY LINE AND NOT SENTENCE OR CLAUSE — decided on the corpus, not on taste.
-# The same predicate was run at all three reaches over all 107 published run
-# dirs; roots left with at least one surviving L20 hit:
+# THE REACH WAS LINE, AND IS NOW THE SENTENCE — BECAUSE THE FRAMING MOVED
+# ----------------------------------------------------------------------
+# #1020 measured all three reaches over the published corpus and chose LINE,
+# and its stated reason was NOT that a sentence is the wrong unit. It was that
+# a sentence-scoped denial could be OUT-FLANKED: `REQUIREMENT_FRAMING_RE`'s
+# window crossed full stops, so 6 hits on 4 roots survived a sentence-scoped
+# denial only because the framing that admitted them had been borrowed back
+# ACROSS the full stop from the very sentence that denied them. Its own words:
+# "a denial scoped narrower than the window can always be out-flanked by the
+# framing that admitted the hit."
 #
-#     no drop  34        LINE  12        SENTENCE  16        CLAUSE  18
+# #1021 bounded the framing window to the sentence, which is the other end of
+# that same defect. RE-MEASURED afterwards, over every published run dir, at
+# both reaches, driving the real `framed_hits` loop and swapping only the reach:
 #
-# Every disagreement is one-directional and every one was hand-opened.
-#   * SENTENCE keeps 6 hits on 4 roots that line drops, and all 6 are the same
-#     shape: "<standard> does NOT specify JTAG / scan-chain / on-chip BIST ...
-#     PHY vendors universally add scan + BIST ... in vendor-specific register
-#     space." The surviving hit is in the SECOND sentence, which describes
-#     other vendors' silicon and requires nothing of this design — and it is a
-#     hit at all only because REQUIREMENT_FRAMING_RE's +/-160 window reaches
-#     BACK ACROSS the full stop to borrow "specify" from the denial. Framing is
-#     window-scoped; a denial scoped narrower than the window can always be
-#     out-flanked by the framing that admitted the hit.
-#   * CLAUSE additionally keeps 2 roots whose denial is a comma list — "no PDK,
-#     floor-plan, SDC, UPF, or DFT artifact at the protocol level" leaves the
-#     term in the clause " or DFT artifact at the protocol level", five clauses
-#     from the cue that denies it.
-# LINE is also the scope `signoff_qualifier` already declares by contract, so
-# the two halves of one decision are not scoped differently.
+#     framing FLAT      denial LINE  12 roots      denial SENTENCE  16 roots
+#     framing SENTENCE  denial LINE  10 roots      denial SENTENCE  10 roots
+#
+# The counterexample is GONE — the 4 roots on which the two reaches disagreed
+# no longer disagree, because the second sentence can no longer borrow the
+# first's `specify`. The reaches now differ by 3 hits on ONE root, all in the
+# same direction: SENTENCE keeps 3 that LINE drops, and hand-opening them shows
+# LINE was WRONG on all three. They sit on a JSON `"content"` megaline where a
+# denial belonging to a DIFFERENT sentence retracted them — the exact shape
+# #1020 recorded as L23's two wrong drops and named as the limit it could not
+# fix from where it stood.
+#
+# So SENTENCE is taken, and it is the SAFE direction as well as the correct
+# one: on this corpus it is a strict SUPERSET of what LINE keeps. Zero hits are
+# dropped by the sentence reach that the line reach kept, so no root can go
+# quietly clean because of it. It also restores the property #1020 wanted and
+# could not have — the framing that ADMITS a hit and the predicates that DROP
+# it are now scoped by ONE rule, applied to ONE span. Neither can out-flank the
+# other, in either direction.
+#
+# CLAUSE stays rejected, on #1020's measurement and unchanged by any of this:
+# "no PDK, floor-plan, SDC, UPF, or DFT artifact at the protocol level" leaves
+# the term in the clause " or DFT artifact at the protocol level", five clauses
+# from the cue that denies it.
+#
+# `_NON_NORMATIVE_RE` DELIBERATELY DID NOT MOVE, and the asymmetry is measured
+# rather than an oversight. Its counterexample is a MARKDOWN TABLE — "a
+# disclaimer on one table row silences a real requirement on the NEXT one" —
+# and table rows are separated by a NEWLINE, not by a full stop. A sentence
+# reach does not separate them; the line reach is the only one that does. It
+# keeps the scope its own measurement bought.
 #
 # ONE VOCABULARY, NOT A FOURTH COPY. The words that mean "no" are imported from
 # `_prose_polarity` (vibe-ic#712 — "three private copies of it is how the
@@ -564,7 +630,15 @@ def signoff_qualifier(line: str) -> Optional[str]:
 # `prose_polarity_consulted_check._NOT_PROSE`. The anti-fork guard that matters
 # is the test asserting every single-word cue below is already in
 # `_prose_polarity.NEGATION_RE`, and that does not need an alias to hold.
-from _prose_polarity import blank_bracketed as _blank_bracketed   # noqa: E402
+# `sentence_scope` joins it for #1021: it is the house REACH, the counterpart
+# of the house VOCABULARY, and the same argument applies — a second copy of
+# "where does a sentence end" is how the first divergence happened. It is
+# CALLED, on the framing neighbourhood and on both drop predicates' spans, so
+# it is not an import whose only consumer is the test asserting the import.
+from _prose_polarity import (                                    # noqa: E402
+    blank_bracketed as _blank_bracketed,
+    sentence_scope as _sentence_scope,
+)
 
 #: Verbs by which a document DECLARES a requirement. Negate one of these and
 #: the sentence says nothing was declared at all.
@@ -627,11 +701,15 @@ _BARE_NO_REACH = 80
 
 def requirement_absent(line: str, term_offset: Optional[int] = None
                        ) -> Optional[str]:
-    """The phrase by which this LINE says the requirement DOES NOT EXIST.
+    """The phrase by which this SPAN says the requirement DOES NOT EXIST.
 
-    LINE-SCOPED BY CONTRACT, exactly like :func:`signoff_qualifier` — the
-    caller passes one line and never a neighbourhood. See `framed_hits` for
-    the corpus counterexample that decided line over sentence.
+    SPAN-SCOPED BY CONTRACT — the caller passes ONE span and never a
+    neighbourhood, and since #1021 that span is the SENTENCE the term sits in,
+    which is the same span the framing was looked for in. See the block above
+    for the re-measurement that retired the line reach, and note that
+    :func:`signoff_qualifier` deliberately did NOT move with it: its
+    counterexample is a table row, and rows end at a newline rather than a
+    full stop.
 
     ``term_offset`` is where the matched vocabulary term sits INSIDE ``line``.
     It is optional so the predicate stays callable on a bare line (and so the
@@ -667,6 +745,96 @@ def requirement_absent(line: str, term_offset: Optional[int] = None
     return None
 
 
+# ─────────────────────────────────────────────────────────────────────
+# "The document says the requirement IS SOMEBODY ELSE'S"  (vibe-ic#1021)
+# ─────────────────────────────────────────────────────────────────────
+#
+# THE THIRD IDIOM, AND IT IS NOT REACHABLE BY EITHER OF THE FIRST TWO.
+# `signoff_qualifier` answers "the document says this row is not BINDING".
+# `requirement_absent` answers "the document says the requirement is not
+# THERE". Neither asks the question two published roots' own L7 notes answer,
+# VERBATIM and identically:
+#
+#     "Chip-level JTAG/scan/BIST remain Source/Sink-silicon concerns"
+#     "Chip-level JTAG/scan/BIST remain Source / panel-TCON silicon concerns"
+#
+# That is "this requirement belongs to somebody ELSE'S silicon". It is not a
+# denial — it does not say the requirement does not exist, and it CONTAINS NO
+# NEGATION WORD AT ALL, so `requirement_absent` cannot reach it at ANY reach,
+# correctly, because that is not the question that predicate asks. It is not a
+# non-normative disclaimer either: nothing about it says "informational".
+#
+# A GATE ASKS ABOUT ITS OWN LAYER. `l20_dft_scan_topology_actionable_check`'s
+# question is "did THIS design's inputs state a DFT requirement THIS design's
+# L20 is missing?" A sentence that assigns the requirement to a different
+# party's silicon is an answer of NO to that question, in the design's own
+# words — and a gate that reads it as YES blocks a published project for
+# stating its scope correctly.
+#
+# DELIBERATELY NARROW, AND IN THE SAME SHAPE AS ITS TWO NEIGHBOURS: it keys on
+# a closed vocabulary of OWNERSHIP TRANSFER, not on the general idea of scope.
+# "the scope of this specification includes a JTAG TAP" is a REQUIREMENT that
+# contains the word scope, exactly as "must NOT exceed 5 ns" is a requirement
+# that contains a negation — the trap `_NON_NORMATIVE_RE` already records. So
+# the bare word `scope` is never a cue; only an EXCLUSION from a scope is
+# ("out of scope", "outside the scope", "beyond the scope"), and only a
+# transfer of ownership is (a linking verb bound to `concern` / `matter` /
+# `responsibility`, or an explicit hand-off verb).
+#
+# WHAT IS DELIBERATELY NOT IN IT, having been measured and rejected:
+#   * `up to` — "the link runs at up to 5 Gb/s" is a rate, not a deferral, and
+#     it occurs in that sense far more often than in this one.
+#   * `vendor-specific` / `implementation-defined` — these DO mark a deferral
+#     ("PHY vendors add scan + BIST in vendor-specific register space"), but
+#     they equally often qualify a register map INSIDE a stated requirement.
+#     Adding them drops hits on roots the corpus gives no way to adjudicate as
+#     wrong, so they stay out until a root forces the question.
+#   * the bare word `scope` in any position — see above.
+_OUT_OF_SCOPE_RE = re.compile(
+    # (a) EXCLUSION FROM A SCOPE. Note that every one of these is spellable
+    #     with NO negation word, which is the whole gap this predicate fills.
+    r"\b(?:out\s+of|outside(?:\s+of)?|beyond)\s+(?:the\s+)?scope\b"
+    # (b) OWNERSHIP TRANSFER by a linking verb bound to an ownership noun —
+    #     "remain <somebody>'s concerns", "is a matter for the integrator".
+    #     Bounded, and it may not cross a full stop: the sentence that hands
+    #     the requirement away is the sentence that must contain the term.
+    r"|\b(?:remains?|stays?|is|are|was|were|be)\b[^.]{0,80}?"
+    r"\b(?:concerns?|matters?|responsibilit(?:y|ies)|prerogatives?)\b"
+    # (c) EXPLICIT HAND-OFF. "left to the SoC integrator", "deferred to the
+    #     implementer". The verb alone carries it; no owner noun needed.
+    r"|\b(?:left|deferred|delegated|relegated|devolved|handed\s+off)\s+to\b"
+    r"|\bresponsibility\s+of\b|\ba\s+matter\s+for\b",
+    re.IGNORECASE)
+
+
+def requirement_out_of_scope(line: str, term_offset: Optional[int] = None
+                             ) -> Optional[str]:
+    """The phrase by which this SPAN defers the requirement to SOMEBODY ELSE.
+
+    SPAN-SCOPED BY CONTRACT, on the same span as :func:`requirement_absent` —
+    the sentence the matched term sits in, which is also the sentence the
+    framing was looked for in. That equality is load-bearing: a predicate that
+    DROPS a hit at a narrower reach than the framing that ADMITTED it can be
+    out-flanked, which is the defect #1020 hit from the other end and #1021
+    fixed.
+
+    ``term_offset`` is accepted for signature parity with its two neighbours so
+    a caller can hold all three the same way; it is unused, because unlike a
+    bare `no` every cue here is a multi-word phrase that cannot be produced by
+    an unrelated word happening to share the span.
+
+    Returns the matched PHRASE rather than a bool, for the same reason
+    :func:`signoff_qualifier` and :func:`requirement_absent` do: a drop a human
+    can audit from the gate's own report.
+    """
+    if not line:
+        return None
+    # Bracketed spans carry qualifiers, not the statement's polarity (#711),
+    # and the same is true of its ownership. Length-preserving.
+    m = _OUT_OF_SCOPE_RE.search(_blank_bracketed(line))
+    return m.group(0).strip()[:120] if m else None
+
+
 def _hit_line(text: str, offsets: List[int],
               m: "re.Match") -> Tuple[str, int]:
     """``(the ORIGINAL line the match sits on, where the match starts in it)``.
@@ -693,12 +861,19 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
                 window: int = 160,
                 limit: int = 12,
                 include_non_normative: bool = False,
-                drop_denied: bool = False) -> List[Dict[str, Any]]:
-    """Vocabulary matches that carry requirement framing nearby.
+                drop_denied: bool = False,
+                drop_out_of_scope: bool = False,
+                reject: Optional[Callable[[str, str], bool]] = None
+                ) -> List[Dict[str, Any]]:
+    """Vocabulary matches that carry requirement framing IN THEIR OWN SENTENCE.
 
     Mirrors ``l8_clock_domains_typed_check._is_real_clock_freq``: a raw
-    vocabulary hit is noise; a hit inside a ±``window``-char neighbourhood
-    of a requirement word is a stated requirement.
+    vocabulary hit is noise; a hit whose neighbourhood carries a requirement
+    word is a stated requirement. ``window`` is the BUDGET for that
+    neighbourhood; the neighbourhood itself is the intersection of that budget
+    with the SENTENCE the term sits in (vibe-ic#1021 — before that it was the
+    flat budget, and a hit in one sentence could borrow its framing from the
+    next). See the block above ``REQUIREMENT_FRAMING_RE`` for the measurement.
 
     Matching runs on the whitespace-normalised text so hard-wrapped
     requirements are found, and results are deduplicated by context so
@@ -766,17 +941,64 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
         denied         str|None — the phrase by which the line denies it,
                                   present so the drop is auditable from the
                                   gate's own report rather than re-derived
+
+    ``drop_out_of_scope`` — THE THIRD IDIOM, AND IT IS ALSO OPT-IN
+    (vibe-ic#1021). A hit whose own sentence hands the requirement to a
+    DIFFERENT party's silicon is not evidence that THIS design was required to
+    carry it; see :func:`requirement_out_of_scope`. Separate from
+    ``drop_denied`` rather than folded into it, because they are two different
+    questions — "the requirement does not exist" and "the requirement is not
+    mine" — and a consumer that wants one may not want the other. MEASURED
+    across all four consumers before it was wired: only `l20` moves, by the two
+    roots whose L7 notes carry the idiom verbatim; `l22`'s two consumers and
+    `l23` move by 0 hits, so switching them on would buy them nothing and is
+    not done. Records ``out_of_scope`` on the opt-in path, for the same
+    auditability reason as ``denied``.
+
+    ``reject`` — THE VOCABULARY'S OWNER DECIDES WHAT ITS OWN TOKENS MEAN
+    (vibe-ic#1021). Called as ``reject(matched_text, sentence)`` and, when it
+    returns True, the match is not a member of the vocabulary at all and is
+    dropped before dedup, before the limit and before either drop predicate.
+    This exists because polarity is NOT the only way a framed hit can be
+    spurious: `l20`'s ``m?bist`` matches the SATA ``BIST Activate`` FIS and the
+    USB-PD ``BIST`` message type, which are payloads a protocol defines on the
+    wire, sitting inside genuine ``shall`` sentences. No framing, denial or
+    scope ruler can discriminate those, because nothing about them is
+    mis-framed, denied or deferred — the TOKEN simply means something else in
+    that document.
+
+    IT IS A HOOK AND NOT A SHARED RULE BECAUSE THE COLLISION IS NOT SHARED.
+    Four programs pass four different vocabularies here; a protocol message
+    name collides with exactly one of them. Encoding l20's collision list in
+    this module would put DFT vocabulary in the shared contract and move the
+    other three consumers for a shape none of them has.
+
+    WHY IT RUNS HERE AND NOT ON THE RETURNED RECORDS. A caller could filter
+    afterwards, and that would be wrong in the silent direction: ``limit``
+    truncates first, so a root whose first ``limit`` hits are all rejects would
+    be reported as having ZERO hits while real ones went unread. Rejecting
+    inside the loop means the limit counts what survived.
+
+    The ``sentence`` handed over is the FULL framing neighbourhood, not the
+    truncated ``context`` field the record carries for reporting — the reason
+    this is a hook rather than a post-filter a second time.
     """
     out: List[Dict[str, Any]] = []
     seen_ctx: set = set()
     for path, text in texts:
         norm, offsets = _normalize_ws(text)
         for m in vocab_re.finditer(norm):
-            lo = max(0, m.start() - window)
-            hi = min(len(norm), m.end() + window)
+            # THE SENTENCE, BUDGETED AT ±`window` — not the flat ±`window`
+            # (vibe-ic#1021). `sentence_scope`'s before/after ARE a budget by
+            # its own contract, so this is exactly the intersection of the two
+            # and can only ever narrow what the flat window admitted.
+            lo, hi = _sentence_scope(norm, m.start(), m.end(),
+                                     before=window, after=window)
             ctx = norm[lo:hi]
             if not REQUIREMENT_FRAMING_RE.search(ctx):
                 continue
+            if reject is not None and reject(m.group(0), ctx):
+                continue          # not a member of this vocabulary at all
             # Scope the disclaimer to the hit's OWN LINE, not to the ±window.
             # Gatekeeper finding: with a 160-char neighbourhood, a disclaimer
             # on one table row silences a real requirement on the NEXT one.
@@ -791,14 +1013,20 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
             non_normative = bool(_NON_NORMATIVE_RE.search(hit_line))
             if non_normative and not include_non_normative:
                 continue          # the document itself says it is not a requirement
-            # SAME LINE SCOPE AS THE DISCLAIMER ABOVE. `sentence_scope` and a
-            # clause reach were both measured over the whole corpus and both
-            # rejected; the counterexamples are recorded beside
-            # `requirement_absent`, with the roots they came from.
-            denied = (requirement_absent(hit_line, term_offset)
+            # THE DROP PREDICATES READ THE SAME SPAN THE FRAMING WAS FOUND IN
+            # (vibe-ic#1021). Handing them `ctx` rather than re-deriving a
+            # reach is what makes "neither half can out-flank the other"
+            # structural rather than a claim: it is one span, computed once.
+            # `_NON_NORMATIVE_RE` above is the ONE deliberate exception — its
+            # counterexample is a table row, and rows end at a newline.
+            denied = (requirement_absent(ctx, m.start() - lo)
                       if drop_denied else None)
             if denied:
                 continue          # the document itself says it does not exist
+            out_of_scope = (requirement_out_of_scope(ctx, m.start() - lo)
+                            if drop_out_of_scope else None)
+            if out_of_scope:
+                continue          # the document itself says it is somebody else's
             key = ctx.strip()
             if key in seen_ctx:
                 continue
@@ -822,6 +1050,8 @@ def framed_hits(texts: Iterable[Tuple[Path, str]],
                 # states which policy produced it, rather than leaving a
                 # reader to infer the ruler from the count.
                 rec["denied"] = denied
+            if drop_out_of_scope:
+                rec["out_of_scope"] = out_of_scope
             out.append(rec)
             if len(out) >= limit:
                 return out
