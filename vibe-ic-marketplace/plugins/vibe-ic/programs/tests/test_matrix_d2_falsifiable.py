@@ -823,6 +823,40 @@ def _f_step_fail_unacknowledged(p: Path) -> None:
     _w(p, "reports/another_internal_step.json", {"verdict": "PASS"})
 
 
+def _f_pdk_declared_not_used(p: Path) -> None:
+    """The design declares one process and the tools loaded another.
+
+    Reddens the Step-36 clause ``declared_pdk_is_the_pdk_used_check .``, wired
+    BLOCKING by D9 Phase 2 on ONE measured red across the published corpus —
+    a root whose own L19 names one process while its PnR log names another
+    vendor's tech + stdcell LEF.
+
+    EMPTY cannot reach it, and after vibe-ic#1002 that is a VIRTUE rather than
+    a gap. MEASURED, verbatim:
+
+        EMPTY   rc 2  declared_pdk_is_the_pdk_used: rc=2 NOT CHECKED — the
+                      design declares no PDK target and no cell library was
+                      loaded — no physical implementation to judge
+
+    The gate refuses a zero denominator, so BOTH halves of its question have to
+    be present before it has anything to judge: a declaration, and a recorded
+    library load to compare it against. A fixture carrying only the declaration
+    is ALSO rc 2 now (that is exactly the change #1002 made), so this fixture
+    is the minimum that reddens — which is what makes it a real negative
+    control rather than a way of tripping an unguarded branch.
+
+    Chip-, PDK- and vendor-AGNOSTIC by construction: both names are invented,
+    and the rule under test is agreement between two records, not the identity
+    of either.
+    """
+    _w(p, "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+       {"doc_id": "L19", "doc_name": "L19_CONSTRAINTS_PDK",
+        "fields": {"pdk_target": "Example Foundry ZQ42-K3"}})
+    _w(p, "phase3/stage3/pnr/pnr.log",
+       "[INFO ODB-0227] LEF file: /pdks/othernode/othernode_fd_sc_hd.lef\n"
+       "[INFO STA-0001] Liberty: /pdks/othernode/othernode_fd_sc_hd__tt.lib\n")
+
+
 # ── The three fixtures that replaced an empty-directory red with a real one ──
 #
 # Steps 6, 28 and 30 each had exactly one red before 2026-08-06, and each of
@@ -1174,6 +1208,7 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "MACRO_OBS_LAYER_UNDECLARED": _f_macro_obs_layer_undeclared,
     "MACRO_OBS_SPANNED": _f_macro_obs_spanned,
     "STEP_FAIL_UNACKNOWLEDGED": _f_step_fail_unacknowledged,
+    "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1191,6 +1226,11 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # (rc 2, "no reports/ tree … NOT a pass"), so the unacknowledged FAIL has
     # to be present for the gate to have anything to judge.
     ("36", "step_internal_fail_bubble_up_check ."): "STEP_FAIL_UNACKNOWLEDGED",
+    # D9 Phase 2 wired this into step 36 (vibe-ic#1002). EMPTY cannot redden
+    # it: the gate REFUSES a zero denominator, so both halves of its question
+    # -- a declared target AND a recorded library load -- have to be present
+    # before it has anything to compare.
+    ("36", "declared_pdk_is_the_pdk_used_check ."): "PDK_DECLARED_NOT_USED",
     # vibe-ic#704 wired this into D1. EMPTY answers VACUOUS_PASS by design:
     # no generated_docs means phase1 has not run, which is not an incomplete
     # extraction. The docs must exist AND carry a placeholder.
