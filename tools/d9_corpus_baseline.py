@@ -85,6 +85,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import shlex
@@ -586,19 +587,90 @@ def probe_mutators(runs: List[str], checkers: List[Dict[str, object]],
 
 
 # ---------------------------------------------------------------------- driving
+def _kill_process_group(proc: "subprocess.Popen") -> None:
+    """SIGTERM then SIGKILL the timed-out cell's whole process group.
+
+    Best-effort by construction: the group may already be gone (ESRCH), and a
+    platform without ``killpg`` falls back to killing the direct child, which
+    is exactly the pre-existing behaviour rather than a new failure mode.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (OSError, AttributeError):
+        proc.kill()
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except (OSError, AttributeError):
+            break
+        try:
+            proc.wait(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _rmtree_stubborn(path: Path, tries: int = 4) -> Optional[str]:
+    """Remove a throwaway copy.  Returns None, or the REASON it survived.
+
+    A leaked scratch directory is a FINDING, not a crash and not a silence: it
+    costs disk under ``--scratch`` and says an orphan outlived its cell, but it
+    cannot touch the corpus (that is what `assert_corpus_pristine` proves), so
+    withdrawing 9202 measured cells over it would be the wrong trade.
+    """
+    last: Optional[BaseException] = None
+    for attempt in range(tries):
+        try:
+            shutil.rmtree(path)
+            return None
+        except OSError as exc:
+            last = exc
+            time.sleep(0.25 * (attempt + 1))
+    return f"{type(last).__name__}: {last}"
+
+
 def run_cell(program: Path, argv: List[str], timeout: int) -> Dict[str, object]:
+    """Drive ONE cell, and on timeout kill the whole PROCESS GROUP.
+
+    `subprocess.run(timeout=…)` kills the direct child and nothing below it.
+    That was survivable while the population was checkers; it is not once the
+    population is honest, because the corrected wiring test (#1012) admitted
+    the runner-class programs — every one of which had been excluded by a
+    substring hit — and a runner spawns children.
+
+    MEASURED: a timed-out runner left grandchildren writing into the throwaway
+    copy, and the copy's cleanup then raised
+    ``OSError: [Errno 39] Directory not empty: 'reports'`` — which propagated
+    out of the worker and killed the sweep at cell 8500 of 9202. So the cell
+    is started in its OWN session and the group is signalled, which ends the
+    orphans rather than leaving them racing the cleanup.
+    """
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     cmd = [sys.executable, str(program)] + argv
     t0 = time.time()
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, env=env, cwd=str(PROGRAMS))
-        rc, out, err = p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired:
-        rc, out, err = "TIMEOUT", "", ""
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, env=env, cwd=str(PROGRAMS),
+                             start_new_session=True)
     except OSError as exc:
         rc, out, err = "SPAWN", "", str(exc)
+    else:
+        try:
+            out, err = p.communicate(timeout=timeout)
+            rc = p.returncode
+        except subprocess.TimeoutExpired:
+            _kill_process_group(p)
+            # Drain, so the pipes close and no writer is left mid-write. The
+            # group is already signalled, so this cannot block on the timeout
+            # again -- but it is bounded anyway rather than trusted.
+            try:
+                out, err = p.communicate(timeout=15)
+            except subprocess.TimeoutExpired:      # pragma: no cover
+                p.kill()
+                out, err = "", ""
+            rc = "TIMEOUT"
     bucket, why = classify(rc, out, err)
     cell = {"rc": rc, "bucket": bucket, "why": why,
             "secs": round(time.time() - t0, 2)}
@@ -753,6 +825,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             todo.append(cell)
 
+    #: Throwaway copies an orphaned grandchild kept alive past its cell.
+    #: Reported, never swallowed -- see `_rmtree_stubborn`.
+    leaked: List[Dict[str, str]] = []
+
     def drive(cell: Dict[str, object]) -> Dict[str, object]:
         """Run ONE cell against a pristine throwaway copy of the run.
 
@@ -772,21 +848,39 @@ def main(argv: Optional[List[str]] = None) -> int:
         """
         name = cell["checker"]
         cell["isolated"] = True
-        with tempfile.TemporaryDirectory(dir=str(scratch)) as td:
-            dst = Path(td) / "run"
+        # mkdtemp + explicit teardown, NOT `with TemporaryDirectory(...)`: its
+        # cleanup raises out of the worker, and one raised cleanup killed a
+        # 9202-cell sweep at cell 8500 (see `_rmtree_stubborn`).
+        td = Path(tempfile.mkdtemp(dir=str(scratch)))
+        try:
+            dst = td / "run"
             shutil.copytree(REPO / cell["run"], dst, symlinks=True)
             argv, _reason = _bespoke(dst).get(name, ([str(dst)], ""))
             if argv is None:
                 return {"rc": None, "bucket": NO_INPUT, "secs": 0.0,
                         "why": "pre-flight (isolated): required artefact absent"}
             return run_cell(PROGRAMS / f"{name}.py", argv, args.timeout)
+        finally:
+            why = _rmtree_stubborn(td)
+            if why:
+                leaked.append({"checker": name, "run": cell["run"],
+                               "scratch": str(td), "why": why})
 
     done = 0
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futs = {pool.submit(drive, c): c for c in todo}
         for fut in as_completed(futs):
             cell = futs[fut]
-            cell.update(fut.result())
+            try:
+                cell.update(fut.result())
+            except Exception as exc:            # noqa: BLE001 -- see below
+                # ONE cell that the HARNESS could not drive is one ERROR cell,
+                # not a dead sweep. It stays in the denominator carrying the
+                # harness's own reason, which is the same rule this instrument
+                # already applies to a checker that cannot run.
+                cell.update({"rc": None, "bucket": ERROR, "secs": 0.0,
+                             "why": f"could not measure: harness raised "
+                                    f"{type(exc).__name__}: {exc}"})
             results.append(cell)
             done += 1
             if done % 500 == 0:
@@ -800,6 +894,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "checkers": sorted(discovered, key=lambda c: c["name"]),
         "unmeasurable": UNMEASURABLE,
         "writers_isolated": mutators,
+        "scratch_copies_leaked": leaked,
         "cells": len(results),
         "elapsed_secs": elapsed,
         "table": sorted(results, key=lambda c: (c["checker"], c["run"])),
@@ -812,6 +907,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     tally: Dict[str, int] = {CLEAN: 0, FINDING: 0, NO_INPUT: 0, ERROR: 0}
     for c in results:
         tally[c["bucket"]] += 1
+    if leaked:
+        print(f"\n[FINDING] {len(leaked)} throwaway copy(ies) survived their "
+              f"cell -- an orphan was still writing. The CORPUS is unaffected "
+              f"(the tripwire below proves it); the scratch dirs are left in "
+              f"place under --scratch so the orphan is inspectable:",
+              file=sys.stderr)
+        for lk in leaked[:10]:
+            print(f"    {lk['checker']} on {lk['run']}: {lk['why']}",
+                  file=sys.stderr)
+        if len(leaked) > 10:
+            print(f"    ... and {len(leaked) - 10} more (see "
+                  f"corpus_baseline.json:scratch_copies_leaked)", file=sys.stderr)
+
     print(f"\nCLEAN={tally[CLEAN]} FINDING={tally[FINDING]} "
           f"NO-INPUT={tally[NO_INPUT]} ERROR={tally[ERROR]}  "
           f"(denominator {len(results)} = {len(runs)} runs x "

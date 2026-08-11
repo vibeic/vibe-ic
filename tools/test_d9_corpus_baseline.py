@@ -13,6 +13,7 @@ docstring against a published run.
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -203,6 +204,73 @@ class TestWiringIsStructuralNotTextual:
         flow runner cannot drift into two dialects of "wired"."""
         from flow_compliance_check import _declared_gate_commands as house
         assert d9._declared_gate_commands is house
+
+
+class TestATimedOutCellLeavesNoOrphanWriting:
+    """A timed-out cell must take its GRANDCHILDREN with it.
+
+    Not hypothetical, and not found by review: it is what happened the first
+    time the corrected population (#1012) was swept. `subprocess.run(timeout=)`
+    kills the direct child only, and the corrected wiring test admitted the
+    runner-class programs — every one of which the substring hit had excluded,
+    and every one of which spawns children. A timed-out runner left
+    grandchildren writing into the throwaway copy; the copy's cleanup then
+    raised `OSError: [Errno 39] Directory not empty: 'reports'`, which
+    propagated out of the worker and killed the sweep at cell 8500 of 9202.
+    """
+
+    #: A program that spawns a child which keeps writing, then blocks forever.
+    #: The child is deliberately NOT waited on — that is the shape under test.
+    SPAWNS_AN_ORPHAN = """
+import subprocess, sys, time
+out = sys.argv[1]
+subprocess.Popen([sys.executable, "-u", "-c",
+                  "import sys,time,pathlib\\n"
+                  "d=pathlib.Path(sys.argv[1])\\n"
+                  "i=0\\n"
+                  "while True:\\n"
+                  "    (d/('f%d.txt' % i)).write_text('x')\\n"
+                  "    i += 1\\n"
+                  "    time.sleep(0.2)\\n", out])
+time.sleep(600)
+"""
+
+    def test_timeout_kills_the_whole_process_group(self, tmp_path):
+        prog = tmp_path / "spawner.py"
+        prog.write_text(self.SPAWNS_AN_ORPHAN)
+        work = tmp_path / "work"
+        work.mkdir()
+
+        cell = d9.run_cell(prog, [str(work)], timeout=2)
+        assert cell["rc"] == "TIMEOUT"
+        assert cell["bucket"] == d9.ERROR, "a timeout is a could-not-measure"
+
+        # The orphan wrote while the parent ran; if the group died with the
+        # parent, the count is FROZEN from here on. Two samples 1.5s apart is
+        # ~7 write ticks of headroom over the child's 0.2s period.
+        first = len(list(work.iterdir()))
+        time.sleep(1.5)
+        second = len(list(work.iterdir()))
+        assert first > 0, ("the orphan never wrote at all -- this test would "
+                           "pass vacuously against a broken spawner")
+        assert first == second, (
+            f"orphan STILL WRITING after its cell timed out "
+            f"({first} -> {second} files); the process group survived")
+
+    def test_a_copy_an_orphan_holds_open_is_reported_not_raised(self, tmp_path):
+        """`_rmtree_stubborn` returns a REASON; it never raises.
+
+        A leaked scratch dir costs disk and says an orphan outlived its cell.
+        It cannot touch the corpus — `assert_corpus_pristine` proves that
+        separately — so withdrawing thousands of measured cells over it would
+        be the wrong trade, and crashing the sweep over it is worse.
+        """
+        assert d9._rmtree_stubborn(tmp_path / "never-existed", tries=1) is not None
+        real = tmp_path / "real"
+        (real / "reports").mkdir(parents=True)
+        (real / "reports" / "r.json").write_text("{}")
+        assert d9._rmtree_stubborn(real) is None
+        assert not real.exists()
 
 
 class TestGeneratedRtlIsNeverTheInputRtl:
