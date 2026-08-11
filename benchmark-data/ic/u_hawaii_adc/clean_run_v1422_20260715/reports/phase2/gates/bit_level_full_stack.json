@@ -1,6 +1,0 @@
-{
-  "pass": true,
-  "vacuous_pass": true,
-  "rule": "N/A",
-  "rationale": "VACUOUS_PASS: IC has no command protocol / opcodes (L3_CMD_PROTOCOL.no_opcodes_in_input) \u2014 opcode-driven bit-level full-stack TB is N/A for this non-protocol IC (mirrors runner full_stack_tb_gen/reference_tb SKIP)."
-}

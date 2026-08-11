@@ -1,8 +1,0 @@
-{
-  "id": "37",
-  "name": "GDSII output (only if Step 31 PV fully clean)",
-  "status": "pending",
-  "phase": "phase3",
-  "folder": "37_gdsii_output_only_if_step_31_pv_fully_clean",
-  "outputs": []
-}
