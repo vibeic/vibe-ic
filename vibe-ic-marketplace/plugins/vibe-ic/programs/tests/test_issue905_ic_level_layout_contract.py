@@ -186,30 +186,52 @@ def test_guard_the_shared_input_dir_is_never_a_stray(clean_tree):
 
 def test_guard_the_cell_itself_is_still_validated_by_the_cell_rules(clean_tree):
     """The IC-level rule is ADDITIVE. The per-cell checks still run and still
-    pass on a complete cell — the new rule must not have displaced them."""
+    pass on a complete cell — the new rule must not have displaced them.
+
+    Deliberately asserts on NOTHING the fix introduced, so it holds in BOTH
+    arms: it is the guard, and a guard that only exists after the fix cannot
+    witness the fix breaking something."""
     cell = clean_tree / "ic" / "ic_alpha" / "v1.2.3_pdka"
     res = besc.check_folder(cell)
     assert res.conforms, res.failures
-    assert res.kind == "cell"
     for rule in ("NAMING", "RESULT_PRESENT", "CONVERGED", "PHASE1_DOCS",
                  "PHASE2", "PHASE3_REPORTS", "GDS_MANIFEST"):
         assert res.checks.get(rule) is True, (rule, res.checks)
 
 
 def test_guard_a_rejected_prefix_folder_is_still_failed_by_naming(tmp_path):
-    """`clean_run_*` keeps its OWN diagnosis.
+    """`clean_run_*` keeps its OWN diagnosis — NAMING, unchanged.
 
-    It is now reported twice — NAMING (its contents would be stripped on the way
-    in) and IC_LEVEL_LAYOUT (it is not a cell). Those are different
-    consequences; the new rule must not have swallowed the older, sharper one."""
+    Both-arms guard: the new rule must not have swallowed the older, sharper
+    message about the contents being stripped on the way in."""
     root = tmp_path / "benchmark-data"
     ic = _tree(root)
-    bad = ic / "clean_run_v1234_20260101"
-    _make_cell(bad)
+    _make_cell(ic / "clean_run_v1234_20260101")
     rc, out = _run("--tree", str(root))
     assert rc == 1
     assert "NAMING" in out and "gitignored" in out, out
+
+
+def test_bug_a_rejected_prefix_folder_is_also_at_the_wrong_level(tmp_path):
+    """...and it now ALSO gets the IC-level finding.
+
+    Reported by both rules on purpose: NAMING says its contents would be
+    stripped, IC_LEVEL_LAYOUT says it is not a cell. Different consequences,
+    and collapsing them would lose one."""
+    root = tmp_path / "benchmark-data"
+    ic = _tree(root)
+    _make_cell(ic / "clean_run_v1234_20260101")
+    rc, out = _run("--tree", str(root))
+    assert rc == 1
     assert "IC_LEVEL_LAYOUT" in out, out
+    assert "clean_run_v1234_20260101/" in out, out
+
+
+def test_bug_a_cell_result_is_tagged_as_a_cell(clean_tree):
+    """The kind discriminator exists on the cell side too, so a --json consumer
+    can separate the two result shapes rather than inferring it from null fields."""
+    res = besc.check_folder(clean_tree / "ic" / "ic_alpha" / "v1.2.3_pdka")
+    assert res.kind == "cell"
 
 
 def test_guard_no_ic_level_finding_when_a_single_cell_is_named(clean_tree, tmp_path):
