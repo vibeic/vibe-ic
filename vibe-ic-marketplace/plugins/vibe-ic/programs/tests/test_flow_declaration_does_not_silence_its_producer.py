@@ -88,6 +88,7 @@ sys.path.insert(0, str(_PLUGIN / "programs"))
 from matrix_63x8 import flowref as F  # noqa: E402
 
 import flow_compliance_check as FCC  # noqa: E402
+import _run_isolation as _iso  # noqa: E402
 
 #: Minimal synthesizable source, so a gate that insists on reading real RTL
 #: (FS1's does — "inapplicability is EARNED from RTL that was actually read")
@@ -305,6 +306,13 @@ def test_declaring_them_would_suppress_the_producer(step_id, tmp_path, record_pr
     NEVER run against a published tree: ``check_step`` executes real gates,
     which WRITE into the project directory. Doing this in-place would mutate
     committed run evidence.
+
+    That sentence used to be the whole guarantee. It is now CHECKED (#996):
+    the tripwire at the end of this test asserts
+    ``git status --porcelain benchmark-data/`` is empty after the real gates
+    have run, so a future fixture that accidentally resolves to a published
+    path fails here instead of being noticed in somebody's `git status` three
+    commits later. A promise in a docstring is not a guard.
     """
     gate_json = _json_outputs(step_id)
     step = dict(F.step_by_id(step_id))
@@ -355,3 +363,11 @@ def test_declaring_them_would_suppress_the_producer(step_id, tmp_path, record_pr
         f"the 2026-07-28 one. Do not silence this by deleting the assert: "
         f"change the flow and the pin together."
     )
+
+    # THE TRIPWIRE (#996). Both arms above executed REAL gates through
+    # `check_step`, and real gates write. They were pointed at `tmp_path`
+    # fixtures, which is why this passes — but "which is why this passes" was
+    # previously a claim in the docstring rather than a measurement.
+    record_property("corpus_after",
+                    _iso.assert_corpus_pristine(
+                        what=f"L3 for step {step_id}").describe())
