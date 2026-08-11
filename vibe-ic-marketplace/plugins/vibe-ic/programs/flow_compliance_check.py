@@ -7938,6 +7938,19 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     # which is precisely the shape of defect the tier exists
                     # to make visible.
                     reasons.append(hint)
+                elif hint.startswith(_SUBSTANTIVE_HINT_PREFIX):
+                    reasons.append(hint)
+                elif hint.startswith(_INCOMPLETE_HINT_PREFIX):
+                    # The whitelist's own warning, come true. #599 added these
+                    # two tiers to `program_exit_zero` and did NOT add them
+                    # here, so a sub-gate that printed `INCOMPLETE:` inside an
+                    # `all_of` had its refusal dropped at this line and the
+                    # step was reported as a bare PASS — the exact failure the
+                    # comment above describes. MEASURED: step 25's and step
+                    # 33's new authority clauses print the token, exit 0, and
+                    # before this branch existed `check_step` returned PASS
+                    # with the hint absent from `reasons` entirely.
+                    reasons.append(hint)
         return True, reasons
 
     # `any_of` - list of sub-gates, any one passes
