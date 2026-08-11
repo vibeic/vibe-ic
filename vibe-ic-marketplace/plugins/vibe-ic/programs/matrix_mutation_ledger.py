@@ -799,6 +799,16 @@ class NotFalsifiable:
 _SWEEP = ("matrix_mutation_ledger.py --replay {name} --step <each declared "
           "flow step>   (2026-08-06, 63 steps, one pytest run per step)")
 
+#: The 2026-08-06 sweep, PLUS a single-step replay on 2026-08-11 for an entry
+#: that gained exactly one step. Spelled out rather than folded into
+#: :data:`_SWEEP` because the two are different amounts of evidence: the bulk of
+#: ``applies_to`` rests on the 63-step sweep, and the added step rests on one
+#: replay run on a later tree. An entry using this must name the added step, so
+#: a reader can tell which claim rests on which run.
+_SWEEP_THEN_ONE = (
+    _SWEEP + "   THEN   matrix_mutation_ledger.py --replay {name} --step "
+             "{added}   (2026-08-11, the one step this entry gained)")
+
 MUTATIONS: Tuple[Mutation, ...] = (
     # ---------------- dimension 1 — wiring -----------------------------
     Mutation(
@@ -887,19 +897,30 @@ MUTATIONS: Tuple[Mutation, ...] = (
         witness="21",
         applies_to=(
             "D1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "FS1",
-            "DT1", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9",
-            "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2", "DT3",
-            "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33",
-            "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40", "41",
-            "42", "43", "44"),
+            "DT1", "12", "13", "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8",
+            "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22", "DT2",
+            "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32",
+            "33", "34", "36", "37", "38", "39", "M1", "M2", "M3", "M4", "40",
+            "41", "42", "43", "44"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=59,
+            date="2026-08-11",
+            command=_SWEEP_THEN_ONE.replace("{added}", "12"), reddened=60,
             stayed_green=("35",),
-            note="59 red = every one of dimension 2's 59 ENFORCED cells, in one "
-                 "sweep. The 3 waived cells (1, 12, 35) and the NA cell (P0) "
-                 "are the only steps not reddened: 1/12/P0 have no executable "
+            note="60 red = every one of dimension 2's 60 ENFORCED cells, in one "
+                 "sweep. The 2 waived cells (1, 35) and the NA cell (P0) are "
+                 "the only steps not reddened: 1 and P0 have no executable "
                  "clause to blind, and 35's gate is files_exist + advisory, "
-                 "which is precisely why it is waived."),
+                 "which is precisely why it is waived. "
+                 "STEP 12 WAS ADDED 2026-08-11 and the old note's claim that it "
+                 "'has no executable clause to blind' was, by then, false. "
+                 "`23d96bf5` (v1.10.0, 'close the matrix_63x8 dimension-2 "
+                 "content gap on Step 12') gave step 12 a "
+                 "`program_exit_zero: dft_post_optimization_scan_survival_check` "
+                 "clause and lifted its dimension-2 waiver in the same change — "
+                 "so the very commit that made 12/d2 ENFORCED also created the "
+                 "edit site this mutation needs, and nothing re-ran the sweep. "
+                 "Replayed 2026-08-11: `--replay D2-BLIND-GATE-PROGRAMS "
+                 "--step 12` -> REDDENED in 1.5s."),
     ),
 
     # ---------------- dimension 3 — outputs produced -------------------
@@ -1018,12 +1039,23 @@ MUTATIONS: Tuple[Mutation, ...] = (
             "A8", "A9", "14", "15", "16", "17", "18", "19", "20", "21", "22",
             "DT2", "DT3", "23", "24", "25", "26", "27", "28", "29", "30", "31",
             "32", "33", "34", "35", "36", "37", "38", "39", "M1", "M2", "M3",
-            "M4", "40", "41", "42", "43", "44"),
+            "M4", "40", "41", "42", "43", "44", "P0"),
         measured=Measurement(
-            date="2026-08-06", command=_SWEEP, reddened=62,
-            note="62 red = every one of dimension 5's 62 ENFORCED cells, in one "
-                 "sweep, each reddening that cell alone. P0 is the single NA "
-                 "cell and declares no blocks_on key to append to."),
+            date="2026-08-11",
+            command=_SWEEP_THEN_ONE.replace("{added}", "P0"), reddened=63,
+            note="63 red = every one of dimension 5's 63 ENFORCED cells, in one "
+                 "sweep, each reddening that cell alone. There is no longer an "
+                 "NA cell in this dimension. "
+                 "P0 WAS ADDED 2026-08-11 and the old note's claim that it "
+                 "'declares no blocks_on key to append to' was, by then, false. "
+                 "`332b9985` ('flow: stage membership was declared twice and "
+                 "the copies disagreed') gave P0 `blocks_on: [1]`, which "
+                 "self-invalidated dimension 5's pinned NA exactly as that pin "
+                 "was written to do — step P0's own cell went red demanding "
+                 "re-evaluation. The re-evaluation was done, not waived: "
+                 "`d5_problems('P0')` is empty, so P0 runs the full predicate as "
+                 "an ENFORCED cell. Replayed 2026-08-11: `--replay "
+                 "D5-PHANTOM-EDGE --step P0` -> REDDENED in 1.6s."),
     ),
 
     # ---------------- dimension 6 — skip discipline --------------------
