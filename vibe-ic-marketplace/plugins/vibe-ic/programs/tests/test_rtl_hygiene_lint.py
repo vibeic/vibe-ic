@@ -418,3 +418,75 @@ def test_rule_is_scoped_per_module():
     endmodule
     """
     assert _undriven(src) == ['y']  # only module b's
+
+
+# ---------------------------------------------------------------------------
+# The denominator (D9 blind-ruler campaign, step 2)
+# ---------------------------------------------------------------------------
+_CLEAN_SV = """\
+module d9_clean (input wire clk, input wire a, output wire y);
+  assign y = a & clk;
+endmodule
+"""
+
+
+def _drive(*args):
+    return subprocess.run([sys.executable, str(SCRIPT), *args],
+                          capture_output=True, text=True)
+
+
+def test_zero_files_read_refuses_instead_of_printing_a_clean_zero(tmp_path):
+    """MEASURED before the fix, by hand, on isolated copies of 6 published
+    runs: deleting every `phase2/stage1/rtl/*.sv` and `*.v` and re-driving this
+    gate on the same argument list gave rc=0 and
+
+        rtl_hygiene_lint: 0 errors, 0 warnings, 0 info
+
+    — character-for-character what a clean design prints. An unread design and
+    a clean one were indistinguishable in both the output and the exit code
+    the flow aggregates.
+    """
+    missing = str(tmp_path / "does_not_exist.sv")
+    r = _drive(missing, "--severity", "ERROR")
+    assert r.returncode != 0, "a gate that read nothing must not exit 0"
+    assert "linted 0 file(s)" in (r.stdout + r.stderr)
+
+
+def test_a_pass_states_how_many_files_it_read(tmp_path):
+    """The house rule (`gate_discloses_denominator_check`): a PASS must say how
+    much it looked at. The old report stated only the finding counts."""
+    f = tmp_path / "clean.sv"
+    f.write_text(_CLEAN_SV)
+    r = _drive(str(f), "--severity", "ERROR")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "linted 1 file(s)" in r.stdout
+
+
+def test_the_count_is_files_READ_not_files_NAMED(tmp_path):
+    """A named argument that does not exist is skipped, so the number asked
+    about and the number read are different facts. Reporting the first would
+    reinstate the same blindness one level up."""
+    f = tmp_path / "clean.sv"
+    f.write_text(_CLEAN_SV)
+    r = _drive(str(f), str(tmp_path / "ghost.sv"), "--severity", "ERROR")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "linted 1 file(s)" in r.stdout, "2 named, 1 read"
+
+
+def test_a_real_defect_in_the_rtl_still_moves_the_verdict(tmp_path):
+    """The control that says the refusal above is not the only thing biting.
+
+    MEASURED on isolated copies of 5 published runs (sha256 x3, cvdp x2):
+    injecting one declared-but-undriven wire into the RTL the flow's own
+    expanded argument list names moved the gate rc 0 -> 1 on every one. Step 2
+    is NOT blind to its input; it was blind to the ABSENCE of one.
+    """
+    f = tmp_path / "probe.sv"
+    f.write_text(_CLEAN_SV)
+    assert _drive(str(f), "--severity", "ERROR").returncode == 0
+    f.write_text(_CLEAN_SV.replace(
+        "  assign y = a & clk;",
+        "  wire d9_undriven_probe;\n  assign y = a & clk;"))
+    r = _drive(str(f), "--severity", "ERROR")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "linted 1 file(s)" in r.stdout

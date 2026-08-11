@@ -6348,6 +6348,11 @@ def main():
     min_sev = sev_order[args.severity]
 
     all_findings: List[Finding] = []
+    # THE DENOMINATOR. Counted, not inferred from `len(args.files)`: a named
+    # argument that does not exist is skipped below, so the number of files
+    # ASKED ABOUT and the number actually READ are different facts and the
+    # report has to state the second one.
+    linted = 0
     for f in args.files:
         p = Path(f)
         if not p.exists():
@@ -6355,17 +6360,44 @@ def main():
             continue
         try:
             all_findings += lint_file(p)
+            linted += 1
         except Exception as e:
             print(f"ERROR parsing {f}: {e}", file=sys.stderr)
             return 2
 
+    # A ZERO DENOMINATOR REFUSES. Every argument the caller named resolved to
+    # nothing, so this gate read no RTL at all — and the line it used to print
+    # in that case was character-for-character the line it prints for a clean
+    # design: `rtl_hygiene_lint: 0 errors, 0 warnings, 0 info`, rc=0.
+    #
+    # MEASURED by hand on isolated copies of published runs: deleting every
+    # `phase2/stage1/rtl/*.sv` and `*.v` and re-driving this gate on the same
+    # argument list produced rc=0 and that same clean line on 6 of 6 runs.
+    #
+    # HOW REACHABLE THIS IS, stated honestly rather than overclaimed: NOT from
+    # the flow. `flow_compliance_check._expand_globs` applies bash nullglob, so
+    # on a project with no RTL both patterns are DROPPED, argparse's
+    # `nargs='+'` rejects the empty list, and the step already reaches rc=2 /
+    # VACUOUS_PASS. The hole is on the direct-invocation path — a caller that
+    # passes explicit paths, or an unexpanded pattern, as every hand run and
+    # every wrapper that does its own globbing does. Corpus blast radius is
+    # therefore 0 by construction; this closes a hole rather than turning
+    # anything red.
+    if not linted:
+        print("rtl_hygiene_lint: linted 0 file(s) — every named argument "
+              "resolved to nothing, so NO RTL was read. A clean design and an "
+              "unread one print the same zero; this refuses rather than "
+              "reporting the second as the first.", file=sys.stderr)
+        return 1
+
     filtered = [f for f in all_findings if sev_order[f.severity] >= min_sev]
 
-    # Text report
+    # Text report. A PASS must say how much it looked at.
     err = sum(1 for f in filtered if f.severity == 'ERROR')
     warn = sum(1 for f in filtered if f.severity == 'WARN')
     info = sum(1 for f in filtered if f.severity == 'INFO')
-    print(f"rtl_hygiene_lint: {err} errors, {warn} warnings, {info} info")
+    print(f"rtl_hygiene_lint: linted {linted} file(s); "
+          f"{err} errors, {warn} warnings, {info} info")
     print("-" * 70)
     for fd in sorted(filtered, key=lambda x: (x.file, x.line, x.severity)):
         # ORGANIC #770 round-2 — an ADVISORY (non-block-eligible) finding is
