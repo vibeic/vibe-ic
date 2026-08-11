@@ -1,8 +1,0 @@
-{
-  "id": "11",
-  "name": "DFT insertion (scan chain + ATPG + at-speed + BSDL)",
-  "status": "pending",
-  "phase": "phase2",
-  "folder": "11_dft_insertion_scan_chain_atpg_at_speed_bsdl",
-  "outputs": []
-}
