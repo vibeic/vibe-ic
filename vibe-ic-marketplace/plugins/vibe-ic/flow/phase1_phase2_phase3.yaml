@@ -4182,6 +4182,98 @@ steps:
         # LEC, STA, DFT, FMEDA, foundry handoff — so this is a population of real
         # defects, not one systemic shape.
         #
+        # #1001 — ALL 17 ROOTS NOW ADJUDICATED, not 6. Re-measured on
+        # 3fd65e72e: 107 published run roots, 17 RED / 90 CLEAN / 0 NO-INPUT /
+        # 0 ERROR, 38 findings over 21 report kinds. Identical to the count
+        # above, so nothing in the intervening PRs moved this population. Every
+        # cited file was confirmed git-tracked first (38/38 tracked).
+        #
+        # THE SPLIT IS 16 / 0 / 1. Sixteen roots carry at least one REAL
+        # unacknowledged defect and stay red; ONE is a producer writing FAIL for
+        # a non-failure. Per finding: 36 real / 1 repaired-but-stale / 1
+        # not-a-failure. The honest headline is that these are real.
+        #
+        #   a  arm_aix        phase1_one_shot.json — the Phase-1 runner's own
+        #                     published verdict, delegated_rc 1; no waivers.json
+        #                     and no reports/orchestrator/ anywhere in the root
+        #   a  espi           spare preservation x3 — 12 inserted, 12 survived,
+        #                     12 UNTAGGED, keep_check_applied true
+        #   a  interlaken     phase3/antenna.json — the router's own
+        #                     net_violations 1 / pin_violations 1 / clean false
+        #   a  lpc            phase-1 completeness 52/53 (one token missing in
+        #                     every layer) + spare preservation x3, 7/7 untagged
+        #   a  mdio           spare preservation x3, 8/8 untagged
+        #   a  sgmii          spare preservation x3, 13/13 untagged
+        #   a  caravel_user_project
+        #                     foundry handoff ERROR — required files present,
+        #                     the chip GDS deliverable absent
+        #   a  caravel_user_project/<second run>
+        #                     a connectivity-PASS waiver whose <evidence>
+        #                     pointer does not dereference; foundry handoff with
+        #                     all 7 required files missing
+        #   a  edge_llm_accel 5 real (macro handoff missing a .gds; PERC
+        #                     ZERO_TAPS — 1.49M placed cells, 0 well/substrate
+        #                     taps; spare coverage tie_off_ok false x2; a 0-byte
+        #                     GDS member) + 1 (b), below
+        #   a  edge_llm_matmul_accel
+        #                     lec.json — 0 of 43814 points proven. Today's
+        #                     producer still emits this branch verbatim, so it
+        #                     is NOT stale. LIMIT: reports/lec.rpt is not
+        #                     published, so whether today's expanded budget
+        #                     guards would re-class it cannot be decided here.
+        #   a  ibex           phase-1 completeness 149/182, 33 tokens missing
+        #   a  opentitan_aes  phase-1 completeness 288/328, 40 tokens missing
+        #   a  sha256/<first run>
+        #                     the TDF coverage measurement was never produced;
+        #                     FMEDA baseline invalid so DC is unmeasurable
+        #   a  sha256/<second run>
+        #                     post-route sign-off corner setup worst-slack
+        #                     -8.830 ns VIOLATED; TDF coverage 0.0% vs floor 90%
+        #   a  subservient    PERC antenna FAIL; antenna net_violations 1; a CTS
+        #                     report carrying no skew/latency/depth metric at
+        #                     all; PVT matrix corner_count 0
+        #   a  u_hawaii_adc/<first run>
+        #                     analog roll-up — 2 of 18 steps FAIL, both
+        #                     A6_PV_DRC_NO_EVIDENCE
+        #   c  u_hawaii_adc/<second run>
+        #                     reports/reports/audit/phase23_completion_audit.json
+        #                     — invoked 0 of 246 registered gates, decided 0
+        #                     steps (PASS 0 / FAIL 0), no structural and no
+        #                     step-artifact failure line, and still wrote
+        #                     verdict FAIL. The SAME plugin version re-audited
+        #                     the real root 3.5 s later and recorded PASS; this
+        #                     copy is a wrong-root invocation whose audit landed
+        #                     one directory deeper than the reports/audit/
+        #                     exclusion reaches. FIXED IN THE PRODUCER (#1001):
+        #                     an audit that measured nothing now writes
+        #                     INSUFFICIENT_DATA and discloses its denominator,
+        #                     while the run verdict, the exit code and the new
+        #                     `run_status` field all keep the FAIL.
+        #
+        # THE ONE (b), and it is a finding not a root: edge_llm_accel's
+        # reports/lec.json carries verdict FAIL beside its own sentence "Not
+        # classifiable as PASS or FAIL." Today's lec_run.py contains that phrase
+        # on exactly one line and that branch assigns INCONCLUSIVE — the
+        # producer was repaired and the record was never re-emitted. The root
+        # still stays RED on its five other, real findings.
+        #
+        # NOT DONE, deliberately: no published artefact re-emitted (that is a
+        # benchmark-data change with its own review), so the corpus sweep before
+        # and after this PR is byte-identical at 17 RED / 90 CLEAN. Fixing the
+        # producer does not retro-clean the record it already wrote.
+        #
+        # THE EASY (c) STORY THAT THE MEASUREMENT REFUSED. Nine of the 38
+        # findings are an absence stated plainly and then FAILed (no TDF
+        # measurement, unmeasurable DC, 0 PVT corners, no parseable DRC, a
+        # vacuous CTS report). That is NOT this repo's non-failure: #785/#774
+        # exist precisely to stop gates going quiet on absence,
+        # `gate_zero_denominator_refuses_check` says in its own words that it
+        # "does not make any gate refuse" and that forcing four to do so was
+        # tried and REVERTED, and `_vacuous_exit` reserves the vacuous tier for
+        # "does not apply to this project" while ruling FAIL BEATS VACUOUS.
+        # Reclassifying them would have run against the house rule, so they are
+        # booked as (a) and stay red.
+        #
         # Blocking is affordable HERE specifically. Step 36 is the tapeout
         # checklist; it `blocks_on: [31,32,33,34]`, so only a project that has
         # reached physical sign-off is judged. A published Phase-1-only root is
