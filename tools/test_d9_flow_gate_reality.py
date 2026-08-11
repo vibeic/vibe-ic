@@ -150,6 +150,45 @@ class TestThePageMayNotSoftenTheSentence:
         assert "PLANNED" in block
 
 
+class TestNoMeasuredNumberInTheBlockIsHandTyped:
+    """A literal typed into the prose beside a derived cell is this page's own
+    defect, committed inside the section that exists to name it.
+
+    It cannot fail on the day it is written -- the two copies agree -- and it
+    fails silently on every day after.  MEASURED here: the generator printed
+    the derived ``all_py_in_programs`` in the comparison table and a hand-typed
+    copy of the same number in the sentence beside it.  Rebasing this branch
+    onto main moved the tree from 1133 tracked ``.py`` files to 1134; the
+    derived cell followed and the sentence did not.
+
+    ``--check`` cannot catch this: it compares the page against the block the
+    generator renders, and both sides carry the same stale literal.
+    """
+
+    def _report(self):
+        return json.loads(
+            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
+             / "d9_reality.json").read_text())
+
+    @pytest.mark.parametrize(
+        "field", ["on_disk", "all_py_in_programs", "referenced_by_flow"])
+    def test_moving_the_measurement_moves_every_copy_in_the_block(self, field):
+        report = self._report()
+        stale = str(report["programs"][field])
+        assert stale in gen.render(report), (
+            f"{field} is not printed at all; this test would pass vacuously")
+
+        moved = json.loads(json.dumps(report))
+        moved["programs"][field] += 1
+        after = gen.render(moved)
+
+        assert str(moved["programs"][field]) in after
+        assert stale not in after, (
+            f"programs.{field}: the block still prints {stale} after the "
+            f"measurement moved to {moved['programs'][field]} -- that copy is "
+            "hand-typed, not derived, and will drift with the next commit")
+
+
 class TestDriftIsDetected:
     """``--check`` is the only thing standing between this block and the
     hand-typed total the page's masthead warns about.

@@ -424,7 +424,8 @@ def render(rep: Dict) -> str:
          f'<b>{pg["on_disk"]}</b> 支（非底線開頭）／'
          f'<b>{pg["all_py_in_programs"]}</b> 支全部 .py，'
          f'flow 點到 <b>{pg["referenced_by_flow"]}</b> 支',
-         '「1128」比較接近全部 .py 的 1133；本頁把兩種定義都印出來。'),
+         f'「1128」比較接近全部 .py 的 '
+         f'{pg["all_py_in_programs"]}；本頁把兩種定義都印出來。'),
         ("PDK 天花板", "53",
          f'<b>{excl["ceiling_on_published_corpus"]}</b>',
          f'由 <code>PUBLISHING.md</code> 排除清單推導：'
