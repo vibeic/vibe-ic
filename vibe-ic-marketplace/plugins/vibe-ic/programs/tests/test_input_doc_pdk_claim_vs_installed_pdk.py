@@ -421,6 +421,247 @@ def test_installed_pdk_list_comes_from_the_directory_listing(tmp_path):
     assert rep["installed_pdks"] == ["alphanode", "deltanode"], rep
 
 
+# ── #964: a PDK installed as a SYMLINK is part of the population ───────────
+#
+# The container backend listed with `ls -1p`, and `-p` appends the trailing
+# slash to REAL directories only; `discover_installed_pdks` keeps an entry only
+# if it carries that slash. An image that installs a PDK as a link into a
+# versioned package store therefore had that PDK outside the population — and a
+# claim about it was dropped at extraction, so it got neither a decision nor the
+# UNDECIDED the report's own `does_not_decide` promises.
+#
+# These exercise the container backend's REAL command strings against a REAL
+# symlink by running them in a local shell instead of `docker exec`. No
+# container is needed and no command string is asserted on: what is tested is
+# whether the commands can SEE a link.
+
+
+def _shell_backends(monkeypatch):
+    """The gate's own container backend, with `docker exec` swapped for a
+    local shell. Same commands, same parsing, a tree the test can build."""
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kw):
+        assert cmd[:2] == ["docker", "exec"], cmd
+        return real_run(["bash", "-lc", cmd[-1]], **kw)
+
+    monkeypatch.setattr(gate.subprocess, "run", fake_run)
+    return gate.docker_backends("container-name-is-never-used")
+
+
+def _linked_pdk(tmp_path: Path, family: str = "gammanode") -> Path:
+    """A pdks root whose PDK is a LINK into a store outside that root."""
+    store = tmp_path / "store"
+    sectioned_pdk(store, family=f"{family}-1.0")
+    pdks = tmp_path / "pdks"
+    pdks.mkdir(parents=True, exist_ok=True)
+    sectioned_pdk(pdks, family="alphanode")
+    (pdks / family).symlink_to(store / f"{family}-1.0")
+    return pdks
+
+
+def test_a_pdk_installed_as_a_symlink_is_in_the_population(tmp_path, monkeypatch):
+    """#964: the listing must dereference, or the PDK is silently not there."""
+    pdks = _linked_pdk(tmp_path)
+    lister, reader, walker = _shell_backends(monkeypatch)
+
+    rep = gate.run(project_with(tmp_path / "proj", ABSENCE_DOC), str(pdks),
+                   lister=lister, reader=reader, walker=walker)
+
+    assert rep["installed_pdks"] == ["alphanode", "gammanode"], rep
+
+
+def test_a_true_claim_about_a_symlinked_pdk_is_still_corroborated(
+        tmp_path, monkeypatch):
+    """PAIRED GUARD for #964: bringing the link into the population must let
+    the gate DECIDE it, not merely count it. A population that grows but
+    answers nothing is a ban dressed as a fix."""
+    pdks = tmp_path / "pdks"
+    pdks.mkdir(parents=True)
+    bare_pdk(tmp_path / "store", family="gammanode-1.0")
+    (pdks / "gammanode").symlink_to(tmp_path / "store" / "gammanode-1.0")
+    tree = project_with(
+        tmp_path / "proj",
+        "- GammaNode has no public ngspice corner lib -> standin models.\n")
+    lister, reader, walker = _shell_backends(monkeypatch)
+
+    rep = gate.run(tree, str(pdks), lister=lister, reader=reader, walker=walker)
+
+    assert rep["installed_pdks"] == ["gammanode"], rep
+    assert rep["verdict"] == "PASS", rep
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CORROBORATED"]
+    assert claim["subject_pdk"] == "gammanode"
+
+
+def test_a_false_claim_about_a_symlinked_pdk_is_contradicted(tmp_path,
+                                                             monkeypatch):
+    """The population fix is only worth having if the walk follows too: the
+    bulk walker has to open a start path that is itself a link."""
+    pdks = _linked_pdk(tmp_path)
+    tree = project_with(
+        tmp_path / "proj",
+        "- GammaNode has no public ngspice corner lib -> standin models.\n")
+    lister, reader, walker = _shell_backends(monkeypatch)
+
+    rep = gate.run(tree, str(pdks), lister=lister, reader=reader, walker=walker)
+
+    assert rep["verdict"] == "FAIL", rep
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CONTRADICTED"]
+    assert claim["subject_pdk"] == "gammanode"
+    assert any(p.endswith("cornerBlk.lib") for p in claim["evidence"]), claim
+
+
+def test_a_symlinked_subdirectory_inside_a_pdk_is_walked(tmp_path):
+    """Same defect one level down, on the LOCAL backend: an image that links
+    only part of a PDK into a store left the walk stopping at the link, so a
+    fully installed PDK read as empty — which this gate reports as unreadable,
+    i.e. silence, not a decision."""
+    pdks = tmp_path / "pdks"
+    _write(pdks / "alphanode" / "libs.tech" / "placeholder.txt", "x\n")
+    store = tmp_path / "store" / "models"
+    _write(store / "cornerBlk.lib", ".lib grade_nom\n.endl\n")
+    (pdks / "alphanode" / "libs.tech" / "ngspice").symlink_to(store)
+    tree = project_with(tmp_path / "proj", ABSENCE_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    assert rep["verdict"] == "FAIL", rep
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CONTRADICTED"]
+    assert any(p.endswith("cornerBlk.lib") for p in claim["evidence"]), claim
+
+
+def test_the_walk_terminates_when_a_link_points_back_up_the_tree(tmp_path):
+    """Following links can cycle; the walk must still return."""
+    pdks = tmp_path / "pdks"
+    models = pdks / "alphanode" / "libs.tech" / "ngspice" / "models"
+    _write(models / "cornerBlk.lib", ".lib grade_nom\n.endl\n")
+    (models / "loop").symlink_to(pdks / "alphanode")
+
+    found = gate._local_walker(str(pdks / "alphanode"))
+
+    assert any(p.endswith("cornerBlk.lib") for p in found), found
+
+
+# ── #965: a lookup that cannot settle a claim must not settle it ───────────
+
+
+def test_a_denied_word_hidden_in_an_uppercase_run_is_found(tmp_path):
+    """#965: the denied word sat inside an uppercase run of a file stem.
+
+    `tokens()` splits camelCase at a lower/digit -> upper boundary only, so a
+    stem like `<word><RUN><tail>` yielded `<word>` + `<run><tail>` and the run
+    on its own was never a token. The lookup missed, and the miss fell straight
+    through to CORROBORATED — the gate AGREED with a false claim about the very
+    files it cites as evidence under a differently-worded one.
+
+    The fix is a rule about letter case, not a case for this tree: wherever an
+    uppercase run abuts a lowercase run, both readings of the boundary count.
+    """
+    pdks = tmp_path / "pdks"
+    models = pdks / "alphanode" / "libs.tech" / "ngspice" / "models"
+    _write(models / "cornerBLKhv.lib", ".lib grade_nom\n.endl\n")
+    _write(models / "cornerBLKlv.lib", ".lib grade_low\n.endl\n")
+    tree = project_with(
+        tmp_path / "proj",
+        "- AlphaNode has no public ngspice blk lib -> standin models.\n")
+
+    rep = run_gate(tree, pdks)
+
+    assert rep["verdict"] == "FAIL", rep
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CONTRADICTED"]
+    assert claim["denied_artefact"] == ["blk"], claim
+    assert sorted(Path(p).name for p in claim["evidence"]) == [
+        "cornerBLKhv.lib", "cornerBLKlv.lib"], claim
+
+
+def test_both_readings_of_an_uppercase_run_boundary_are_emitted(tmp_path):
+    """The boundary is genuinely ambiguous without a lexicon — `ABChv` is
+    `abc`+`hv`, `ABCDef` is `abc`+`def` — so the lookup keeps both readings
+    instead of guessing. `tokens()` keeps its single ordered reading, because
+    sibling-family detection reads token POSITIONS."""
+    assert {"abc", "hv"} <= gate.lookup_tokens("wordABChv")
+    assert {"abc", "def"} <= gate.lookup_tokens("ABCDef")
+    assert gate.tokens("wordABChv") == ["word", "abchv"]
+
+
+def test_a_qualifier_naming_a_directory_without_that_format_is_undecided(
+        tmp_path):
+    """#965, second instance: the claim names a directory, that directory is
+    real and holds nothing of the claimed format, and the gate answered from
+    the files of that format sitting somewhere else entirely — in the
+    affirmative. Answering a different question is a refusal, not agreement."""
+    pdks = tmp_path / "pdks"
+    _write(pdks / "betanode" / "libs.ref" / "cells" / "lib"
+           / "BetaCells_typical.lib", "library (t) { }\n")
+    _write(pdks / "betanode" / "libs.tech" / "ngspice" / "models"
+           / "devices_blk.spice", "* models\n")
+    tree = project_with(
+        tmp_path / "proj",
+        "- BetaNode has no public ngspice corner lib -> standin models.\n")
+
+    rep = run_gate(tree, pdks)
+
+    assert rep["counts"]["corroborated"] == 0, rep["claims"]
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "UNDECIDED"]
+    assert "ngspice" in claim["directory_qualifiers"], claim
+    assert "holds no artefact of format" in claim["reason"], claim
+    assert rep["verdict"] == "NOT_APPLICABLE", rep
+
+
+def test_that_refusal_is_not_printed_as_a_pass(tmp_path):
+    """The exit-code half of #965. CORROBORATED is the only route to a
+    substantive rc 0, so tightening it has to be checked at the exit code or
+    the tightening is decorative. A run whose only claim is now refused must
+    exit 2 with the sentinel, never 0."""
+    pdks = tmp_path / "pdks"
+    _write(pdks / "betanode" / "libs.ref" / "cells" / "lib"
+           / "BetaCells_typical.lib", "library (t) { }\n")
+    _write(pdks / "betanode" / "libs.tech" / "ngspice" / "models"
+           / "devices_blk.spice", "* models\n")
+    tree = project_with(
+        tmp_path / "proj",
+        "- BetaNode has no public ngspice corner lib -> standin models.\n")
+
+    proc, rep = _cli(tree, pdks, tmp_path)
+
+    assert rep["verdict"] == "NOT_APPLICABLE", rep
+    assert rep["reason"] == "all_claims_undecided", rep
+    assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+    combined = proc.stdout + proc.stderr
+    assert any(ln.startswith("VACUOUS_PASS") for ln in combined.splitlines())
+
+
+def test_a_true_denial_about_a_directory_that_holds_the_format_still_passes(
+        tmp_path):
+    """PAIRED GUARD for #965, and the one that decides whether this is a fix
+    or a ban. The claim is TRUE, the directory it names is real AND holds files
+    of the claimed format, and none of them carries the denied word under any
+    reading. That is positive evidence, so it must still be CORROBORATED and
+    still rc 0. A gate that only ever says no is not a check."""
+    pdks = bare_pdk(tmp_path / "pdks")
+    tree = project_with(tmp_path / "proj", ABSENCE_DOC)
+
+    proc, rep = _cli(tree, pdks, tmp_path)
+
+    assert rep["verdict"] == "PASS", rep
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CORROBORATED"]
+    assert "ngspice" in claim["directory_qualifiers"], claim
+    assert "under" in claim["reason"] and "ngspice" in claim["reason"], claim
+    assert claim["examined_count"] >= 1, claim
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+
+
+def test_the_report_says_it_refuses_a_denial_about_an_empty_directory(tmp_path):
+    """The new refusal is part of the gate's declared boundary, in the same
+    document that carries its verdict."""
+    pdks = sectioned_pdk(tmp_path / "pdks")
+
+    rep = run_gate(project_with(tmp_path / "proj", ABSENCE_DOC), pdks)
+
+    assert any("holds no artefact of the claimed format" in s
+               for s in rep["does_not_decide"]), rep["does_not_decide"]
+
+
 def test_no_pdk_library_name_is_hardcoded_in_the_gate():
     """The gate's source may carry assertion grammar; it may not carry a PDK's
     vocabulary. A library name typed here would be the very claim the gate

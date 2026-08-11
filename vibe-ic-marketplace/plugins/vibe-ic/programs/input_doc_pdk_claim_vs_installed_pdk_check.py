@@ -53,6 +53,27 @@ WHAT THIS GATE EXPLICITLY DOES NOT DECIDE
     library or unrelated files, in the general case. Where sibling structure is
     detectable (a shared stem prefix differing by one trailing token) the gate
     decides; where it is not, it reports UNDECIDED with the count and paths.
+  * A denial about a DIRECTORY that holds no artefact of the claimed format.
+    "no <dir> <format> lib" is a claim about a place; if that place is real and
+    empty of that format, the files of that format sitting somewhere else in
+    the tree answer a different question, and answering a different question in
+    the affirmative is exactly this gate's own failure mode (vibe-ic#965).
+
+AGREEMENT IS NOT THE DEFAULT
+===========================
+CORROBORATED is a decision, and every decision here has to be paid for. An
+absence claim is corroborated only when all three of these are POSITIVE facts:
+
+    the claimed FORMAT is present in this PDK at all, and
+    every DIRECTORY the claim named holds files of that format, and
+    those files were the ones read, and none of their names carries the denied
+    word under any reading of that name.
+
+When any of them is missing the gate returns UNDECIDED with the reason, and
+UNDECIDED is counted nowhere. This was the defect in the first version: a
+denied-word lookup that MISSED fell straight through to CORROBORATED, so a
+false claim about an artefact whose name hid the word inside an uppercase run
+was reported as agreement — and agreement is the only route to rc 0.
 
 NOTHING HERE IS A TABLE OF WHAT PDKs CONTAIN
 ============================================
@@ -80,10 +101,17 @@ code is routed from the gate's own conclusion via `_vacuous_exit` (#515):
                                    `VACUOUS_PASS:` sentinel on stderr
 
 rc 0 from this gate means "at least one factual claim about the installed PDK
-was settled and none of them was false". It never means "the tree was quiet".
-A tree with no input documents, no resolvable claims, or no readable PDK root
-lands in the NOT_APPLICABLE tier, so an empty run cannot read as a substantive
-pass (vibe-ic#901).
+was settled BY EXAMINING THE ARTEFACTS IT IS ABOUT, and none of them was
+false". It never means "the tree was quiet", and since #965 it no longer means
+"one lookup came back empty for a reason nobody checked". A tree with no input
+documents, no resolvable claims, no readable PDK root, or nothing but claims
+the gate refused lands in the NOT_APPLICABLE tier, so neither an empty run nor
+a run of pure ignorance can read as a substantive pass (vibe-ic#901).
+
+Tightening corroboration moves runs DOWN the tiers, never up: a claim that used
+to buy rc 0 by defaulting to agreement now either contradicts (rc 1) or is
+refused, and a run whose every claim is refused is `all_claims_undecided`,
+which is rc 2 with the `VACUOUS_PASS:` sentinel — not a pass.
 
 Usage:
     python3 input_doc_pdk_claim_vs_installed_pdk_check.py <tree>
@@ -176,6 +204,21 @@ _MAX_SECTION_BYTES = 4_000_000
 _CAMEL_SPLIT_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]+")
 
+# Where an UPPERCASE RUN abuts a lowercase run the word boundary is genuinely
+# ambiguous without a lexicon: `ABChv` is `abc`+`hv` or `ab`+`chv`, and `ABCDef`
+# is `abc`+`def`. Exactly one of the two readings is right in each case and no
+# rule expressible here can tell which, so `lookup_tokens` returns BOTH rather
+# than guessing. Guessing is what the shipped tokeniser did — it took the whole
+# run plus its lowercase tail as one word, so the word hidden at the front of a
+# compound stem could never be found, and a denial of that word came back
+# CORROBORATED (vibe-ic#965).
+_ACRONYM_WORD_RE = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")   # ABCDef -> ABC|Def
+_ACRONYM_TAIL_RE = re.compile(r"(?<=[A-Z][A-Z])(?=[a-z])")   # ABChv  -> ABC|hv
+
+# A fragment shorter than this is not a word anyone denies; keeping them would
+# let a single stray letter of an acronym match a claim.
+_MIN_LOOKUP_FRAGMENT = 2
+
 
 def tokens(text: str) -> List[str]:
     """Lowercase alphanumeric tokens of `text`, splitting camelCase humps.
@@ -185,9 +228,41 @@ def tokens(text: str) -> List[str]:
     dictionary. camelCase is split only at a lower/digit -> upper boundary,
     which recovers the leading word of a compound file stem without
     shredding an all-caps run into fragments.
+
+    This is the ORDERED, one-reading segmentation, and it stays that way:
+    sibling-family detection reads token POSITIONS ("stems sharing every token
+    but the last"), so it needs a single sequence, not a bag of alternatives.
+    For "does this word occur in that name" use `lookup_tokens`.
     """
     split = _NON_ALNUM_RE.split(_CAMEL_SPLIT_RE.sub(" ", text))
     return [t.lower() for t in split if t]
+
+
+def lookup_tokens(text: str) -> set:
+    """Every word `text` can be READ as containing — the union of the readings.
+
+    `tokens()` commits to one segmentation. This does not: wherever an
+    uppercase run abuts a lowercase run, both boundaries are emitted, so a
+    compound name yields the acronym AND the tail AND the one-word form. It is
+    an unordered set used for one question only — is this claim word the name
+    of that artefact — where a missed reading is a MISS, and a miss in this
+    gate used to fall through to agreement.
+
+    Purely structural: no name of anything any PDK ships appears here, and the
+    rule is about letter case, so a differently-named tree gets the same
+    treatment.
+    """
+    out = set()
+    for run in re.finditer(r"[A-Za-z0-9]+", text):
+        for piece in _CAMEL_SPLIT_RE.sub(" ", run.group(0)).split(" "):
+            if not piece:
+                continue
+            out.add(piece.lower())
+            for rx in (_ACRONYM_WORD_RE, _ACRONYM_TAIL_RE):
+                for frag in rx.sub(" ", piece).split(" "):
+                    if len(frag) >= _MIN_LOOKUP_FRAGMENT:
+                        out.add(frag.lower())
+    return out
 
 
 def token_spans(text: str) -> List[Tuple[str, int, int]]:
@@ -283,7 +358,12 @@ class InstalledTree:
 
 def _local_file_lister(path: str) -> List[str]:
     """`find <path>` style listing: absolute paths of files, one per call
-    level. Returns entry names for a directory; [] when unreadable."""
+    level. Returns entry names for a directory; [] when unreadable.
+
+    `Path.is_dir()` DEREFERENCES, so a PDK installed as a link into a package
+    store gets its trailing slash here and enters the population. The container
+    backend had to be told to do the same (vibe-ic#964).
+    """
     p = Path(path)
     if not p.is_dir():
         return []
@@ -294,12 +374,31 @@ def _local_file_lister(path: str) -> List[str]:
 
 
 def _local_walker(path: str) -> List[str]:
-    """Every regular file under `path`, absolute, bounded by _MAX_PDK_FILES."""
+    """Every regular file under `path`, absolute, bounded by _MAX_PDK_FILES.
+
+    Symlinked subdirectories are FOLLOWED. An image that installs a PDK, or a
+    part of one, as a link into a versioned package store is the ordinary case
+    rather than an edge case, and a walk that stops at the link reports the PDK
+    as empty — which this gate reads as "unreadable", i.e. silence, on a tree
+    that is fully present (vibe-ic#964).
+
+    Following links can cycle, so real paths are remembered and a directory
+    already walked under another name is not walked again. That bound is
+    structural; the _MAX_PDK_FILES bound only fires on files.
+    """
     root = Path(path)
     if not root.is_dir():
         return []
     out: List[str] = []
-    for dirpath, _dirnames, filenames in os.walk(path):
+    seen: set = set()
+    for dirpath, dirnames, filenames in os.walk(path, followlinks=True):
+        real = os.path.realpath(dirpath)
+        if real in seen:
+            dirnames[:] = []
+            continue
+        seen.add(real)
+        dirnames[:] = [d for d in dirnames
+                       if os.path.realpath(os.path.join(dirpath, d)) not in seen]
         for fn in filenames:
             out.append(f"{dirpath.rstrip('/')}/{fn}")
             if len(out) >= _MAX_PDK_FILES:
@@ -348,7 +447,13 @@ def docker_backends(container: str
         return r.stdout or ""
 
     def lister(path: str) -> List[str]:
-        out = _run(f"ls -1p {shlex.quote(path)} 2>/dev/null")
+        # -L DEREFERENCES, and it is load-bearing: -p appends the trailing
+        # slash to REAL directories only, `discover_installed_pdks` keeps an
+        # entry only if it carries that slash, and an image that installs a PDK
+        # as a link into a package store therefore had that PDK silently
+        # outside the population — no decision and no refusal, on a PDK that is
+        # installed (vibe-ic#964). The local lister already dereferenced.
+        out = _run(f"ls -1pL {shlex.quote(path)} 2>/dev/null")
         if out is None:
             return []
         return sorted(_strip_banner(out.splitlines()))
@@ -358,7 +463,10 @@ def docker_backends(container: str
         return out
 
     def walker(path: str) -> List[str]:
-        out = _run(f"find {shlex.quote(path)} -type f 2>/dev/null | "
+        # -L for the same reason one level down: without it `find` will not
+        # descend through a linked directory, and will not even open a start
+        # path that is itself a link, so the PDK reads as empty.
+        out = _run(f"find -L {shlex.quote(path)} -type f 2>/dev/null | "
                    f"head -n {_MAX_PDK_FILES}")
         if out is None:
             return []
@@ -645,17 +753,44 @@ def adjudicate(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
     candidates = [f for f in files if _suffix(f) in fmt]
 
     # (2) directory QUALIFIER: a claim token that is a real directory component
-    all_components = set()
-    for f in candidates:
-        all_components.update(
-            c.lower() for c in Path(f).parent.parts if c not in ("/", ""))
-    dir_quals = (claim_tokens & all_components) - subject_tokens - fmt
+    # of the PDK — of the WHOLE PDK, not merely of the files that already carry
+    # the claimed format. Reading the qualifier off the already-narrowed set
+    # makes it impossible to notice the one case that matters: the claim names
+    # a directory that exists and holds NOTHING of that format, so the files
+    # answering the claim came from somewhere else entirely (vibe-ic#965).
+    #
+    # Components are taken RELATIVE to the PDK directory, so the mount path's
+    # own words cannot be mistaken for a qualifier the claim supplied.
+    prefix = pdk_dir.rstrip("/") + "/"
+
+    def _rel_components(path: str) -> set:
+        rel = path[len(prefix):] if path.startswith(prefix) else path
+        return {c.lower() for c in Path(rel).parent.parts
+                if c not in ("/", ".", "")}
+
+    pdk_components: set = set()
+    for f in files:
+        pdk_components |= _rel_components(f)
+    dir_quals = (claim_tokens & pdk_components) - subject_tokens - fmt
     if dir_quals:
         rec["directory_qualifiers"] = sorted(dir_quals)
-        narrowed = [f for f in candidates
-                    if {c.lower() for c in Path(f).parent.parts} & dir_quals]
-        if narrowed:
-            candidates = narrowed
+        narrowed = [f for f in candidates if _rel_components(f) & dir_quals]
+        if not narrowed:
+            # The claim is about a place; that place is real and empty of this
+            # format. Answering it from the files of that format found in some
+            # OTHER directory is answering a different question, and answering
+            # a different question in the affirmative is the failure this gate
+            # exists to catch, one level up.
+            rec["reason"] = (
+                "the claim narrows to directory "
+                f"'{'/'.join(sorted(dir_quals))}', which exists in the "
+                f"installed PDK but holds no artefact of format "
+                f"{'/'.join(sorted(fmt))}; the {len(candidates)} file(s) of "
+                "that format found elsewhere in the tree cannot settle a claim "
+                "about that directory")
+            rec["evidence_count"] = len(candidates)
+            return rec
+        candidates = narrowed
     if not candidates:
         rec["reason"] = "no installed file matches the claim's artefact format"
         return rec
@@ -684,7 +819,13 @@ def adjudicate(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
             return rec
         rec["denied_artefact"] = sorted(set(heads))
         head_set = set(heads)
-        matched = [f for f in candidates if set(_stem_tokens(f)) & head_set]
+        # `lookup_tokens`, not `tokens`: a name that hides the denied word
+        # inside an uppercase run used to read as a name that does not contain
+        # it, the lookup missed, and the miss fell through to agreement. The
+        # tree side is the side that is enriched — the claim's own word is
+        # taken as written, so widening cannot invent a denial the document
+        # never made.
+        matched = [f for f in candidates if lookup_tokens(Path(f).stem) & head_set]
         if matched:
             rec["verdict"] = "CONTRADICTED"
             rec["reason"] = (
@@ -696,12 +837,21 @@ def adjudicate(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
             if secs:
                 rec["sections_discovered"] = secs
         else:
+            # Corroboration here is EARNED, not defaulted: the format is
+            # present in this PDK, every directory the claim named holds files
+            # of that format, those are the files that were read, and the
+            # denied word is in none of their names under any reading of them.
+            # Each of those three is a positive fact; when any of them is
+            # missing the branches above have already returned UNDECIDED.
+            where = (f" under {'/'.join(sorted(dir_quals))}" if dir_quals
+                     else " anywhere in the installed PDK")
             rec["verdict"] = "CORROBORATED"
             rec["reason"] = (
                 f"no installed artefact of format {'/'.join(sorted(fmt))} is "
-                f"named {'/'.join(sorted(head_set))}; the claim holds over "
-                f"{len(candidates)} file(s) of that format")
+                f"named {'/'.join(sorted(head_set))}; the claim holds over the "
+                f"{len(candidates)} file(s) of that format{where}")
             rec["evidence_count"] = 0
+            rec["examined_count"] = len(candidates)
         return rec
 
     # EXCLUSIVITY
@@ -782,6 +932,9 @@ def run(tree_root: Path, pdks_root: str,
             "requirements and targets, which assert nothing about the PDK",
             "whether extra artefacts are corner variants when no sibling "
             "family structure is detectable",
+            "a denial about a directory that exists but holds no artefact of "
+            "the claimed format; the format's files elsewhere in the tree "
+            "answer a different question",
         ],
     }
 
