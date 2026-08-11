@@ -1,5 +1,21 @@
 # D9 Phase 0 / Deliverable 0.2 — what the corpus baseline says
 
+> **SUPERSEDED DENOMINATOR — vibe-ic#1012.** The population below (78 checkers)
+> was selected with a wiring test that scanned the flow-YAML **text**, so any
+> program named in a comment, in a `notes:` block, in a path argument, or as a
+> prefix of a wired name was dropped from the measured population. Re-measured
+> against gate clauses only, the population is **87** and the would-redden rate
+> is **21.43 %**, not the 13-14 % this directory's denominator implies. See
+> `../d9_1012_wiring_denominator/FINDINGS.md` for the before/after, the
+> per-entrant cells, and the restated headline.
+>
+> This directory is NOT rewritten. It is the record of what was measured on
+> 107 published runs at the time, and the two tables agree cell-for-cell on
+> every checker they share — including `l20_dft_scan_topology_actionable_check`
+> (55 FINDING / 3 CLEAN / 49 NO-INPUT) and `lec_run` (107 ERROR), which a later
+> comment removed from the population entirely. What changed is which checkers
+> were in the population, not what any of them did.
+
 The table is `corpus_baseline.md` (+ `corpus_baseline.json`, one row per
 `(run, checker)` cell). It is emitted by `tools/d9_corpus_baseline.py`, so it is
 regenerable rather than pasted:
