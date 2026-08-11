@@ -581,3 +581,215 @@ def test_GUARD_promoting_a_step_must_not_delete_its_voided_dependency_line(
         "the downstream step stopped disclosing that it rests on a broken "
         "chain; a new disclosure was paid for with an old one\n"
         + joined + "\n" + out)
+
+
+# ═════════════ the same question, asked of the SHIPPED step ═══════════════
+#
+# Everything above reaches the tier through synthetic gate programs, which is
+# the right instrument for "does the consumer read this channel" — it can pin a
+# verdict exactly. It is the wrong instrument for "is the withdrawn v1.10.14
+# regression a defect in the WORLD or in the RULE", because a synthetic gate
+# cannot be wrong about the flow the product actually ships.
+#
+# So the two tests below carry no synthetic anything. The step is Step 4 read
+# VERBATIM out of the shipped flow YAML, the clauses are the four shipped gate
+# programs that step declares, and the only thing that differs between the two
+# projects is WHETHER THE SIMULATION RAN.
+#
+# MEASURED, this file's own fixtures, the real binary, origin/main vs this
+# commit (`git checkout origin/main -- flow_compliance_check.py`, md5 both):
+#
+#   e4328c5dac7354c4f2e211977c37c099  origin/main
+#     sim ran      -> Step 4 PASS          (no disclosure: the hole)
+#     nothing ran  -> Step 4 PASS          (no disclosure: the hole)
+#   a51ec449befe874b1ad2150e1f257c52  this commit
+#     sim ran      -> Step 4 PASS + "PARTIALLY-VACUOUS (1 of 4 …)"
+#     nothing ran  -> Step 4 VACUOUS_PASS
+#
+# and the arm that is NOT shipped — the structured channel wired with the tier
+# rule left as it was, which is what v1.10.14 did and what #934 proposes again:
+#
+#   76099945e61ca1715929227ffb526adc  structured channel, uncounted
+#     sim ran      -> Step 4 VACUOUS_PASS  <- FALSE. 3 of its 4 clauses read the
+#                                             sim tree, the coverage artefact
+#                                             and the testbenches.
+#
+# The same arm on a published 63-step run root turns Step 2 (Lint) VACUOUS_PASS
+# on 1 vacuous clause out of 10 that ran.
+
+_TB_THAT_DRIVES_THE_DESIGN = """// portless testbench: the sim tree's real driver
+module tb_top;
+  reg clk = 0; reg rst = 1; wire [7:0] q;
+  always #5 clk = ~clk;
+  dut u_dut (.clk(clk), .rst(rst), .q(q));
+  initial begin
+    #20 rst = 0;
+    #200 $display("TB done"); $finish;
+  end
+endmodule
+"""
+
+_UNIT_UNDER_TEST = """module dut (input clk, input rst, output reg [7:0] q);
+  always @(posedge clk) if (rst) q <= 8'd0; else q <= q + 8'd1;
+endmodule
+"""
+
+
+def _shipped_step4_flow(tmp_path: Path) -> Path:
+    """The shipped Step 4, verbatim, as a one-step flow.
+
+    Read out of the flow YAML rather than retyped: a copy typed here would go
+    on passing after the shipped step changed, which is the failure mode this
+    whole issue is about.
+    """
+    doc = yaml.safe_load(FLOW_YAML.read_text())
+    step4 = [s for s in doc.get("steps", []) if str(s.get("id")) == "4"]
+    assert step4, "the shipped flow no longer declares a Step 4"
+    step4 = json.loads(json.dumps(step4[0]))
+    step4.pop("blocks_on", None)          # single-step flow: no upstream
+    path = tmp_path / "shipped_step4.yaml"
+    path.write_text(yaml.safe_dump(
+        {"version": doc["version"], "flow_name": "i901_shipped_step4",
+         "total_steps": 1, "analog_steps": 0,
+         "stages": [s for s in doc["stages"] if s["id"] == "stage1"],
+         "steps": [step4]}, sort_keys=False))
+    return path
+
+
+def _project_where_the_sim_ran(tmp_path: Path, ran: bool) -> Path:
+    """Step 4's own declared inputs, and nothing else.
+
+    `ran=True`  — results.xml + pass.flag on disk, a testbench that really
+                  instantiates the unit, a coverage artefact with real counts.
+                  `professional_tb_check` is then the ONE clause with nothing
+                  to look at, and it says NOT_APPLICABLE in its own report.
+    `ran=False` — none of it. Every clause has nothing to look at.
+    """
+    p = tmp_path / ("sim_ran" if ran else "nothing_ran")
+    (p / "reports/phase2/gates").mkdir(parents=True)
+    (p / "reports/phase2/coverage").mkdir(parents=True)
+    if ran:
+        sim = p / "phase2/stage1/sim"
+        sim.mkdir(parents=True)
+        (sim / "tb_top.v").write_text(_TB_THAT_DRIVES_THE_DESIGN)
+        (sim / "dut.v").write_text(_UNIT_UNDER_TEST)
+        (sim / "results.xml").write_text(
+            '<?xml version="1.0"?><testsuites><testsuite name="tb_top" '
+            'tests="1" failures="0"><testcase name="count"/></testsuite>'
+            '</testsuites>\n')
+        (sim / "pass.flag").write_text("PASS\n")
+        (p / "reports/phase2/coverage/coverage_actual.json").write_text(
+            json.dumps({
+                "totals": {
+                    "line":   {"covered": 74, "total": 76, "pct": 97.37},
+                    "toggle": {"covered": 27, "total": 29, "pct": 93.10},
+                    "branch": {"covered": 19, "total": 20, "pct": 95.00}},
+                "per_file": {"phase2/stage1/sim/dut.v": {
+                    "line": {"covered": 74, "total": 76, "pct": 97.37}}},
+                "format_detected": "verilator_dat"}, indent=1) + "\n")
+    return p
+
+
+def _shipped_step4(tmp_path: Path, ran: bool):
+    os.environ[F._pl.GATE_TIMEOUT_ENV] = "50"
+    project = _project_where_the_sim_ran(tmp_path, ran)
+    rc, out, doc = _audit(project, _shipped_step4_flow(tmp_path))
+    step = None
+    for s in doc.get("steps", []):
+        if str(s.get("id")) == "4":
+            step = s
+    assert step is not None, doc
+    return rc, out, step
+
+
+def test_GUARD_the_shipped_step_is_not_vacuous_when_its_sim_actually_ran(
+        tmp_path):
+    """THE REGRESSION THE COUNT EXISTS FOR, on the shipped step.
+
+    Step 4 dispatched four clauses over a tree where the simulation ran. Three
+    of them read real content — the sim results, the testbenches (`{"verdict":
+    "PASS", "reason": "every testbench drives the design"}`), the coverage
+    artefact (`line=97.37% toggle=93.1% branch=95.0%`). One, the professional-TB
+    gate, had no producer report and said NOT_APPLICABLE.
+
+    VACUOUS_PASS asserts "every executed sub-gate was vacuously satisfied". On
+    this step that sentence is false, and a run cannot be made more honest by
+    printing a false sentence. The clause that examined nothing is still named.
+
+    This test must give the SAME answer before and after the change — it is the
+    guard, not the fix. It FAILS against the structured channel wired without a
+    denominator, which is exactly the arm being refused.
+    """
+    _rc, out, step = _shipped_step4(tmp_path, ran=True)
+    assert step["status"] != "VACUOUS_PASS", (
+        "the shipped simulation step was labelled 'every executed sub-gate was "
+        "vacuously satisfied' over a tree whose sim ran, whose testbenches "
+        "drive the unit and whose coverage was measured\n"
+        + "\n".join(str(r) for r in step.get("reasons", [])))
+    assert step["status"] == "PASS", step
+
+
+def test_the_shipped_step_names_the_one_clause_that_examined_nothing(tmp_path):
+    """Same fixture, the other half: the guard above must not be bought by
+    dropping the disclosure.
+
+    Refusing the tier is only half an answer. The professional-TB clause DID
+    run and DID examine nothing, and if the step is not going to say so in its
+    word it has to say so in its line — otherwise "not unanimous" becomes a new
+    way to be silent, which is the shape #901 is filed against.
+
+    Unlike the guard, this one is expected to move: it FAILS against
+    origin/main, where the clause's own report is never opened.
+    """
+    _rc, _out, step = _shipped_step4(tmp_path, ran=True)
+    assert step.get("partial_vacuity_disclosed") is True, (
+        "the one clause that examined nothing was dropped for failing to be "
+        "unanimous — one silent pass traded for another\n" + str(step))
+    assert any("PARTIALLY-VACUOUS" in str(r) and "professional_tb_check" in str(r)
+               for r in step["reasons"]), step["reasons"]
+    assert any("1 of 4 gate clause(s)" in str(r) for r in step["reasons"]), (
+        "the disclosure does not state the count it rests on; without the "
+        "denominator this is the v1.10.14 rule with a friendlier sentence\n"
+        + str(step["reasons"]))
+
+
+def test_the_other_self_aware_shipped_gate_also_reaches_the_tier(tmp_path):
+    """THE FIX, through the SECOND of the two gates #901 calls the sharpest.
+
+    `professional_tb_check` over a tree with no producer report writes
+    `{"verdict": "NOT_APPLICABLE", "reason": "no professional_tb.json (step did
+    not run)"}` and exits 0 — the same shape as `vacuous_testbench_check` and
+    through the same channel, so a fix that reached only the gate the issue
+    quoted first would look complete and be half done.
+
+    The step declares an output it really produced, so the audit reaches the
+    gate instead of short-circuiting on MISSING: the question under test is
+    what the TIER does with the gate's answer, not whether the step ran.
+    """
+    os.environ[F._pl.GATE_TIMEOUT_ENV] = "50"
+    project = tmp_path / "no_producer_report"
+    (project / "reports/probe").mkdir(parents=True)
+    (project / "reports/probe/step_ran.json").write_text('{"step_ran": true}\n')
+    flow = _flow(
+        tmp_path,
+        '        - program_exit_zero: "professional_tb_check . --json '
+        'reports/gates/professional_tb_check.json"\n')
+    # the step DID run and DID produce its declared output
+    flow.write_text(flow.read_text().replace(
+        "    stage: stage1\n",
+        "    stage: stage1\n"
+        '    required_outputs: ["reports/probe/step_ran.json"]\n'))
+    _rc, out, doc = _audit(project, flow)
+
+    declared = json.loads(
+        (project / "reports/gates/professional_tb_check.json").read_text())
+    assert declared["verdict"].upper() in F._VACUOUS_JSON_VERDICTS, declared
+
+    step = _step_under_audit(doc)
+    assert step["status"] == "VACUOUS_PASS", (
+        f"a gate that declared {declared['verdict']} in its own report was "
+        f"consumed as {step['status']}\n{out}")
+    assert any("1 of 1 gate clause(s) that ran" in str(r)
+               for r in step["reasons"]), (
+        "the tier was granted without stating the count it was granted on; "
+        "an uncounted grant is the v1.10.14 rule again\n" + str(step["reasons"]))
