@@ -274,7 +274,26 @@ def test_on_the_real_repo_no_published_path_is_a_hollow_link():
         if resolved not in tracked and resolved not in dirs:
             hollow.append(p)
 
-    assert links, f"no tracked symlink under {root} — nothing was examined"
+    assert links, (
+        f"REFUSING on an empty population rather than passing over it: "
+        f"{root} tracks NO symlink at all ({len(tracked)} tracked paths), so "
+        f"the real-data half of the hollow-link rule has no subject.\n"
+        f"Measured across the withdrawal of vibe-ic#1015/#1010: 126 tracked "
+        f"symlinks -> 0, of which 31 -> 0 were hollow. All 126 lived under a "
+        f"withdrawn run root; none lived anywhere else.\n"
+        f"The RULE is still exercised — this module's fixture half owns its "
+        f"premise outright: test_a_tracked_link_to_an_untracked_target_is_not_"
+        f"published, test_an_absolute_link_is_not_published, "
+        f"test_a_chain_is_followed_to_where_it_actually_lands, "
+        f"test_a_link_cycle_terminates_and_is_not_published, "
+        f"test_the_link_target_is_read_from_the_index_not_from_the_disk, "
+        f"test_a_tree_of_nothing_but_hollow_links_publishes_an_EMPTY_SET, "
+        f"test_require_is_not_satisfied_by_a_hollow_link.\n"
+        f"What is LOST is the real-data confirmation this test exists to add, "
+        f"and by this function's own docstring a fixture 'cannot show the "
+        f"defect still exists in the shipped corpus'. That is why this refuses "
+        f"instead of being deleted: publishing any run that carries a symlink "
+        f"restores it, and until then the loss should be visible.")
     assert hollow, (f"{len(links)} tracked symlink(s) and none hollow: this "
                     f"guard examined nothing discriminating and must not pass "
                     f"quietly")
