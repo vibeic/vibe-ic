@@ -218,7 +218,26 @@ def _git_toplevel(folder: Path) -> Optional[Path]:
 
 
 def _git_listed_files(repo: Path, folder: Path, include_staged: bool) -> Set[Path]:
-    """Absolute paths of git-tracked (and optionally staged) files under folder."""
+    """Absolute paths of git-tracked (and optionally staged) files under folder.
+
+    The pathspec is RESOLVED first, and that is load-bearing rather than tidy.
+    `git -C <repo>` interprets a relative pathspec against the REPO ROOT, not
+    against the caller's cwd, so a folder named relatively -- which is exactly
+    how the shipped invocation reaches this, `--tree ../../../benchmark-data`
+    from the plugin directory -- escapes the repo and matches nothing. git then
+    exits 0 with empty output, the caller reads "no tracked files here", and
+    every entry is filtered away as untracked scratch.
+
+    Measured 2026-08-11 on origin/main, same tree, same commit, one argument
+    style apart:
+
+        --tree ../../../benchmark-data   ->  9 IC dirs, 0 failing, "13/28 conformant"
+        --tree /abs/path/benchmark-data  ->  9 IC dirs, 8 failing, 93 entries
+
+    The relative form is a PASS earned by looking at nothing.
+    """
+    repo = Path(repo).resolve()
+    folder = Path(folder).resolve()
     files: Set[Path] = set()
     cmds = [["git", "-C", str(repo), "ls-files", "--", str(folder)]]
     if include_staged:
