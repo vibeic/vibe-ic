@@ -131,10 +131,68 @@ document-level clock would age a rationale that is still exactly right. The
 recorded count costs one integer, and it is an integer the gate already prints
 on its own report line ("current: N root waivers").
 
-What this does NOT do is scope the rationale's TEXT. A renewed count with the
-old sentence left standing is still prose about the wrong waivers — the gate
-can see that the population moved, not that the reason still fits it. That is
-option 1, and it remains open.
+AND THE RATIONALE SAYS WHAT IT IS A RATIONALE FOR (vibe-ic#922, second half)
+===========================================================================
+The recorded count made the population change LOUD. It did nothing about the
+sentence beside it being about something else by then, because a COUNT cannot
+bind prose to a population — it says how many, never which. Two states the
+count-memory alone reports as PASS:
+
+  * SWAP. Baseline holds ``alpha``; the file holds ``alpha, beta, gamma`` with
+    ``growth_rationale_covers: 3``. A later edit closes ``gamma`` and opens
+    ``delta``. The count is still 3, so it still equals the current count, net
+    growth is still +2, and the rationale block is not touched at all: a
+    sentence written about ``gamma`` now authorises ``delta``, and no field in
+    the document moved.
+  * DRIFT. Growth beyond the recorded count forces the author back to the
+    integer — and to nothing else. Bumping 3 to 4 with the old sentence left
+    standing renews the memory without renewing the reason.
+
+So the memory now has a SECOND SPELLING, and the gate can also see when the
+first one has gone stale.
+
+``growth_rationale_covers`` may be written as a COUNT (an integer — exactly the
+#945 contract, unchanged) or as a POPULATION: a LIST naming the root waivers
+the rationale was written about. As a count it must EQUAL the current root
+count. As a population it must BE the current root population — every root
+waiver named, every name naming exactly one root. A name that matches no
+current entry is refused for the same reason ``covers >= current`` is: a
+rationale may describe the waivers beside it, never reserve room for waivers
+that do not exist yet.
+
+THE NAMES COME FROM THE DOCUMENT, NOT FROM THIS MODULE. A name is any value the
+entry itself publishes under ``ticket``, ``id`` or ``step`` — fields the waiver
+schema defines and the author writes. This gate's own growth key (``repr(id)``,
+or a ``step;phase;ticket`` triple) is deliberately NOT the vocabulary: making
+maintainers transcribe a composite key would bind waivers.json to this module's
+private representation, which is the objection that kept option 1 shut. Names
+are compared AS WRITTEN and never resolved through
+``_waiver_entries.STEP_NAME_TO_ID``, for the reason stated above — that map is
+many-to-one. For the same reason an AMBIGUOUS name — one published by more than
+one current root, which is what ``step: "lvs"`` becomes the moment a project
+defers that role twice — covers NOTHING and is reported. A name that could mean
+either of two obligations has not identified either.
+
+AND THE OLD SENTENCE CANNOT SIT STILL. The baseline is a frozen copy of a
+previous waivers.json, so it may carry the ``growth_rationale`` that was on
+record then. When it does, and the current document repeats that rationale
+WORD FOR WORD (whitespace and case normalised, so re-wrapping or re-casing a
+paragraph is not a renewal), and waivers have been added since — that sentence
+demonstrably predates them. It is not a rationale for them; it is a rationale
+that outlived its subject. ``GROWTH_RATIONALE_UNRENEWED``.
+
+Two ways out, and both are the author saying something on the record: rewrite
+the reason for the population that is actually there, or keep the reason and
+state its scope with the list spelling. A gate that accepted neither would be a
+ban, and a legitimate shrink is never asked to renew anything — the rationale
+is consulted only when the count grows past tolerance.
+
+WHAT THIS STILL DOES NOT DO. Where the baseline carries no rationale, the gate
+has no earlier sentence to compare against and cannot tell a fresh reason from
+a copied one; there, #945's count-memory is the whole of what it can say. The
+list spelling is available in that state and is what a document should use, but
+it is not compelled, because compelling it would re-price every growth event
+this repo has already sanctioned under the count contract.
 
 THE BASELINE IS NEVER REWRITTEN BY THIS GATE
 ============================================
@@ -164,7 +222,9 @@ Default baseline: `<project>/.vibe-ic-state/waivers_baseline.json`
 Default tolerance: 0 (any net growth without rationale fails)
 Exit codes:
   0  PASS — waiver count flat or shrinking, OR growth has an explicit rationale
-     that records the current waiver population (`growth_rationale_covers`)
+     that records the current waiver population (`growth_rationale_covers`, as
+     a count or as a list naming it) and is not the sentence frozen in the
+     baseline
   1  FAIL — waiver grew unjustifiably
   2  IO error
 """
@@ -191,10 +251,18 @@ _WAIVERS_IDENTITY_FIELDS: Tuple[str, ...] = ("step", "phase", "ticket")
 #: text and the predicate cannot drift apart about what "substantive" is.
 GROWTH_RATIONALE_MIN_CHARS = 30
 
-#: The root-waiver count a ``growth_rationale`` was written against. See
-#: "THE RATIONALE REMEMBERS WHAT IT WAS WRITTEN AGAINST" in the module
-#: docstring.
+#: The population a ``growth_rationale`` was written against — spelled as the
+#: root-waiver COUNT (an integer) or as the population itself (a list of names
+#: the entries publish). See "THE RATIONALE REMEMBERS WHAT IT WAS WRITTEN
+#: AGAINST" and "AND THE RATIONALE SAYS WHAT IT IS A RATIONALE FOR" in the
+#: module docstring.
 _COVERS_FIELD = "growth_rationale_covers"
+
+#: The fields an entry publishes a NAME under, in preference order. Every one
+#: is written by the document's author and defined by the waiver schema — this
+#: gate's own composite growth key is deliberately not among them, so naming a
+#: waiver never requires knowing how this module keys one.
+_PUBLISHED_NAME_FIELDS: Tuple[str, ...] = ("ticket", "id", "step")
 
 
 @dataclass
@@ -259,6 +327,111 @@ def _covers_count(waivers_doc: Any) -> Optional[int]:
     return raw
 
 
+def _covers_names(waivers_doc: Any) -> Optional[List[Any]]:
+    """The POPULATION spelling of the memory — the list of names recorded
+    beside ``growth_rationale`` — or None when the document does not use it.
+
+    Elements are returned RAW. Whether each one names a waiver is decided by
+    :func:`_scope_report` against the entries actually present, because a name
+    is only meaningful relative to the population it is claimed over."""
+    if not isinstance(waivers_doc, dict):
+        return None
+    raw = waivers_doc.get(_COVERS_FIELD)
+    return raw if isinstance(raw, list) else None
+
+
+def _render_name(value: Any) -> Optional[str]:
+    """One JSON scalar as the name it spells, or None when it spells none.
+
+    BOTH SIDES of the comparison are rendered here — the value an entry
+    publishes and the value the rationale's scope list records — so a waiver
+    whose ``id`` the document writes as the integer ``39`` is named by ``39``
+    or by ``"39"``, whichever the author reaches for. One renderer is the
+    point: two would let the scope list and the entry disagree about what a
+    name is, which is how a scope that looks satisfied covers nothing.
+
+    Booleans are excluded for the same reason they are excluded from the
+    count — ``True`` is not a name anybody wrote — and a container is not a
+    name at all."""
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (str, int, float)):
+        return None
+    rendered = str(value).strip()
+    return rendered or None
+
+
+def _published_names(entry: Any) -> List[str]:
+    """The names an entry publishes for itself, from its own fields.
+
+    Compared AS WRITTEN, and never resolved through the many-to-one step-name
+    map — see the module docstring."""
+    if not isinstance(entry, dict):
+        return []
+    names: List[str] = []
+    for field in _PUBLISHED_NAME_FIELDS:
+        rendered = _render_name(entry.get(field))
+        if rendered and rendered not in names:
+            names.append(rendered)
+    return names
+
+
+def _normalized_rationale(text: Any) -> str:
+    """A rationale reduced to what it SAYS, for comparing one against another.
+
+    Whitespace is collapsed and case folded, so re-wrapping a paragraph or
+    re-casing a word is not mistaken for renewing the reason. Anything that is
+    not a string normalises to the empty string, which compares equal to
+    nothing substantive."""
+    if not isinstance(text, str):
+        return ""
+    return " ".join(text.split()).casefold()
+
+
+def _scope_report(cover_names: List[Any],
+                  root_pairs: List[Tuple[str, Any]]) -> Dict[str, List[str]]:
+    """How a recorded population lines up with the waivers actually present.
+
+    Returns the three ways it can fail to be that population, each reported
+    rather than collapsed into a bare False — an author told only "the scope is
+    wrong" has to guess which waiver the gate meant.
+
+      * ``unnamed`` — root waivers no recorded name identifies. These are the
+        waivers the rationale does not cover.
+      * ``unmatched`` — recorded names that identify no current entry. Either
+        the waiver was closed and the rationale still talks about it, or the
+        name is for a waiver that does not exist yet, which is the headroom
+        the count spelling is already forbidden from reserving.
+      * ``ambiguous`` — names published by more than one root. A role name is
+        not unique; a name that could mean either of two obligations has
+        identified neither, so it covers neither.
+    """
+    by_name: Dict[str, List[str]] = {}
+    for dialect, entry in root_pairs:
+        identity = _identity(dialect, entry)
+        for name in _published_names(entry):
+            by_name.setdefault(name, []).append(identity)
+
+    covered: set = set()
+    unmatched: List[str] = []
+    ambiguous: List[str] = []
+    for raw in cover_names:
+        name = _render_name(raw)
+        owners = by_name.get(name, []) if name else []
+        if not owners:
+            unmatched.append(repr(raw))
+        elif len(owners) > 1:
+            ambiguous.append(repr(raw))
+        else:
+            covered.add(owners[0])
+
+    unnamed = [_identity(d, e) for d, e in root_pairs
+               if _identity(d, e) not in covered]
+    return {"unnamed": sorted(unnamed),
+            "unmatched": sorted(unmatched),
+            "ambiguous": sorted(ambiguous)}
+
+
 def _cascade_target_name(dialect: str, entry: Dict[str, Any]) -> Any:
     """The value another entry's ``cascades_to`` list would name this entry by,
     or None when this dialect has no defined target vocabulary.
@@ -284,14 +457,20 @@ def _dialect_entries(waivers_doc: Any) -> List[Tuple[str, Any]]:
     return out
 
 
-def _root_identities(waivers_doc: Any) -> List[str]:
-    """Identities of root waivers — entries that are NOT cascades.
+def _root_entries(waivers_doc: Any) -> List[Tuple[str, Any]]:
+    """``[(dialect, entry)]`` for the root waivers — entries that are NOT
+    cascades.
 
     A 'root' is any entry that is neither the target of another entry's
     ``cascades_to`` list nor self-declared derived via ``cascade_source``.
     Cascade targets are resolved WITHIN a dialect, never across one, and only
     in the dialect whose target vocabulary is defined — see
-    :func:`_cascade_target_name`."""
+    :func:`_cascade_target_name`.
+
+    The ENTRIES are returned, not only their identities, because scoping a
+    rationale asks each root what names it publishes. Counting and naming must
+    walk the same set: a root that growth counts but scope cannot see would be
+    a waiver nobody has to name."""
     pairs = _dialect_entries(waivers_doc)
 
     cascade_targets: Dict[str, set] = {}
@@ -305,7 +484,7 @@ def _root_identities(waivers_doc: Any) -> List[str]:
             except TypeError:
                 continue  # unhashable target cannot name any entry
 
-    roots: List[str] = []
+    roots: List[Tuple[str, Any]] = []
     for dialect, entry in pairs:
         if isinstance(entry, dict):
             target_name = _cascade_target_name(dialect, entry)
@@ -320,8 +499,14 @@ def _root_identities(waivers_doc: Any) -> List[str]:
                 continue  # this entry is a cascaded child, not a root
             if entry.get("cascade_source") is not None:
                 continue  # explicitly marked as derived
-        roots.append(_identity(dialect, entry))
+        roots.append((dialect, entry))
     return roots
+
+
+def _root_identities(waivers_doc: Any) -> List[str]:
+    """Identities of the root waivers — :func:`_root_entries`, keyed."""
+    return [_identity(dialect, entry)
+            for dialect, entry in _root_entries(waivers_doc)]
 
 
 def _looks_like_path(tok: str) -> bool:
@@ -550,13 +735,47 @@ def main():
         and len(rationale.strip()) >= GROWTH_RATIONALE_MIN_CHARS
     )
     covers = _covers_count(cur_doc)
+    cover_names = _covers_names(cur_doc)
     current_root_count = len(cur_roots)
     # EQUAL, not >=. A rationale may describe the population it was written
     # beside; it may not reserve headroom above it. `covers >= current` would
     # let one edit pre-authorise every waiver up to the recorded ceiling, which
     # is the unbounded blanket again with a number in front of it.
     covers_current = covers is not None and covers == current_root_count
-    growth_justified = rationale_substantive and covers_current
+
+    # The POPULATION spelling: the same memory written as identities instead of
+    # a cardinality. It is satisfied only when the recorded names ARE the
+    # current root population — nothing unnamed, nothing named that is not
+    # here, nothing named ambiguously.
+    scope = _scope_report(cover_names, _root_entries(cur_doc)) \
+        if cover_names is not None else None
+    scope_ok = scope is not None and not any(scope.values())
+
+    # An unchanged sentence cannot be a rationale for waivers added after it
+    # was written. The baseline is a frozen waivers.json, so when it carries a
+    # substantive rationale the gate has the earlier sentence on record and can
+    # say so; when it does not, it has nothing to compare and says nothing.
+    base_rationale = (base_doc.get("growth_rationale", "")
+                      if isinstance(base_doc, dict) else "")
+    baseline_rationale_substantive = (
+        isinstance(base_rationale, str)
+        and len(base_rationale.strip()) >= GROWTH_RATIONALE_MIN_CHARS
+    )
+    rationale_unrenewed = (
+        baseline_rationale_substantive
+        and bool(new_waivers)
+        and _normalized_rationale(rationale) == _normalized_rationale(base_rationale)
+    )
+
+    # The count spelling authorises growth only while the reason beside it is
+    # not the one already frozen in the baseline. The population spelling
+    # survives an unchanged sentence, because it states the scope explicitly:
+    # keeping the words and re-declaring which waivers they cover is a decision
+    # the author made in the data, which is the same standard the count is held
+    # to. Naming the population is therefore always the stronger escape.
+    growth_justified = rationale_substantive and (
+        scope_ok or (covers_current and not rationale_unrenewed)
+    )
 
     if net_growth > args.tolerance and not growth_justified:
         no_baseline_note = ("" if base_present else
@@ -589,6 +808,46 @@ def main():
                     "that growth is a deliberate, documented decision."
                 ),
             ))
+        elif cover_names is not None:
+            # The author chose the population spelling, so the complaint is
+            # about WHICH waivers it names — never "add a count instead".
+            parts = []
+            if scope["unnamed"]:
+                parts.append(
+                    f"it names no waiver for {scope['unnamed']}, so those "
+                    f"waiver(s) are not covered by it")
+            if scope["unmatched"]:
+                parts.append(
+                    f"it names {scope['unmatched']}, which no current waiver "
+                    f"publishes — a rationale may describe the waivers beside "
+                    f"it, not ones that were closed or do not exist yet")
+            if scope["ambiguous"]:
+                parts.append(
+                    f"it names {scope['ambiguous']}, which more than one "
+                    f"current waiver publishes, so the name identifies none "
+                    f"of them")
+            findings.append(Finding(
+                severity="ERROR",
+                category="GROWTH_RATIONALE_SCOPE_MISMATCH",
+                message=(
+                    f"`{_COVERS_FIELD}` records the population the "
+                    f"`growth_rationale` was written about, but it is not the "
+                    f"population in waivers.json: " + "; ".join(parts) + ". "
+                    f"Net growth is {net_growth} (> tolerance "
+                    f"{args.tolerance}). New waivers: {sorted(new_waivers)}. "
+                    + no_baseline_note
+                    + f"Name each of the {current_root_count} root waiver(s) "
+                    f"exactly once, using a value the entry itself publishes "
+                    f"under {', '.join(_PUBLISHED_NAME_FIELDS)}."
+                ),
+                details=(
+                    "A rationale has to say what it is a rationale FOR. A "
+                    "scope that omits a waiver is silent about it, and a "
+                    "scope that names one which is not there is prose about "
+                    "the wrong waiver — the state a document-level sentence "
+                    "drifts into on its own."
+                ),
+            ))
         elif covers is None:
             findings.append(Finding(
                 severity="ERROR",
@@ -610,6 +869,35 @@ def main():
                     "goes on justifying every waiver added after it, in any "
                     "number, forever. Recording the count is what makes the "
                     "next growth need its own decision."
+                ),
+            ))
+        elif covers_current:
+            findings.append(Finding(
+                severity="ERROR",
+                category="GROWTH_RATIONALE_UNRENEWED",
+                message=(
+                    f"`growth_rationale` records the current population "
+                    f"({covers} root waiver(s)), but the sentence itself is "
+                    f"word for word the one already frozen in the baseline at "
+                    f"{base_path}, and {len(new_waivers)} waiver(s) have been "
+                    f"added since it was written: {sorted(new_waivers)}. It is "
+                    f"not a rationale for them. "
+                    + no_baseline_note
+                    + f"Either rewrite the reason for the waivers that are "
+                    f"actually there, OR keep it and state its scope: replace "
+                    f"`{_COVERS_FIELD}: {covers}` with the list of the "
+                    f"{current_root_count} root waiver(s) it covers, naming "
+                    f"each by a value that entry publishes under "
+                    f"{', '.join(_PUBLISHED_NAME_FIELDS)}."
+                ),
+                details=(
+                    "The recorded count is a memory of HOW MANY, never of "
+                    "WHICH. Renewing the number while the reason sits "
+                    "untouched leaves an old sentence authorising waivers it "
+                    "was never written about — and a swap that keeps the "
+                    "count would move no field in the document at all. "
+                    "Naming the population is what ties the reason to its "
+                    "subject; rewriting it is what says the author re-read it."
                 ),
             ))
         else:
@@ -655,7 +943,15 @@ def main():
             # current population" and "no count was recorded at all" both make
             # `growth_justified` false and mean different things to fix.
             "growth_rationale_present": rationale_substantive,
-            _COVERS_FIELD: covers,
+            # The count spelling keeps reporting the integer it always did;
+            # the population spelling reports the names. `None` still means
+            # "no usable memory was recorded", in either spelling.
+            _COVERS_FIELD: covers if covers is not None else cover_names,
+            # Disclosed separately again: a document can be rejected for the
+            # scope its rationale claims, for the reason having outlived the
+            # waivers, or for neither, and those are different repairs.
+            "growth_rationale_scope": scope,
+            "growth_rationale_unrenewed": rationale_unrenewed,
             "baseline_present": base_present,
             "new_waivers": sorted(new_waivers),
             "removed_waivers": sorted(removed_waivers),
