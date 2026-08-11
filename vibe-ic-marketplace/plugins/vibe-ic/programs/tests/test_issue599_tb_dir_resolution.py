@@ -132,9 +132,21 @@ def test_the_corpus_flip_is_the_measured_one():
               if PL._holds_testbench(p / "phase2/stage1/sim/tb")}
     resolved = {p for p in projects if PL.resolve_tb_dir(p) is not None}
     newly = resolved - legacy
-    assert len(newly) >= 15, (
-        f"only {len(newly)} project(s) newly resolve; 23 were measured when "
-        f"this landed")
+    # 2026-08-12, vibe-ic#905: 15 -> 14. The bound MOVED BECAUSE ITS SUBJECT WAS
+    # RETIRED, not to absorb a resolver failure. Measured member-by-member on
+    # both sides; exactly ONE member is lost and it is a tree this branch
+    # retires:
+    #     parent commit   84 projects, 6 legacy, 21 resolved, 15 newly
+    #     this commit     83 projects, 6 legacy, 20 resolved, 14 newly
+    #     lost:   benchmark-data/ic/u_hawaii_adc/clean_run_v1422_20260715
+    #     gained: none
+    # `legacy` is unchanged at 6 on both sides, so the additive guarantee the
+    # next assertion pins is untouched. 23 was the count when this landed; the
+    # corpus has been re-published several times since and main already measured
+    # 15, so this bound had no headroom left before #905 either.
+    assert len(newly) >= 14, (
+        f"only {len(newly)} project(s) newly resolve; 14 were measured after "
+        f"the #905 retirement (23 when this landed, 15 on main)")
     assert legacy <= resolved, (
         "a project the old default resolved no longer resolves — the change "
         "was supposed to be additive")
