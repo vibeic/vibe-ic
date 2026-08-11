@@ -117,8 +117,11 @@ def test_the_same_citation_is_not_recorded_twice(tmp_path):
 def test_the_three_converged_cells_are_measured_not_assumed():
     """Real data, and the numbers that justify separating the two states."""
     import pytest
-    cells = ["spm/v1.5.58_ihp-sg13g2", "spm/v1.10.18_sky130A",
-             "spm/v1.9.96_gf180mcuD"]
+    # Was three. `spm/v1.5.58_ihp-sg13g2` was withdrawn from publication on
+    # 2026-08-12 (vibe-ic#1010: its declared process target and the process its
+    # own PnR log names disagree), so two converged cells remain. The property
+    # under test is per-cell and unchanged; only the population shrank.
+    cells = ["spm/v1.10.18_sky130A", "spm/v1.9.96_gf180mcuD"]
     seen = 0
     for c in cells:
         d = _CORPUS / c
@@ -133,7 +136,7 @@ def test_the_three_converged_cells_are_measured_not_assumed():
         assert mc[0]["decision"] == "OUT_OF_PUBLISHED_SCOPE", (c, mc)
     if seen == 0:
         pytest.skip("published corpus not checked out")
-    assert seen == 3, f"only {seen} of 3 converged cells present"
+    assert seen == 2, f"only {seen} of 2 converged cells present"
 
 
 # ── the PLAN-versus-CLAIM split ────────────────────────────────────────────

@@ -15,26 +15,28 @@ than the skip it replaces — the umbrella would be certifying a check that
 examined nothing. Both halves were measured; only three gates clear both.
 
 MEASUREMENT PROVENANCE, stated so it reproduces rather than described. The
-denominator is 108:
+denominator is 89:
 
     git ls-files benchmark-data | grep -E '/rtl/[^/]+\\.(v|sv)$' \\
-        | sed -E 's#/rtl/[^/]+$##' | sort -u | wc -l      -> 108
+        | sed -E 's#/rtl/[^/]+$##' | sort -u | wc -l      -> 89
 
-It was 107 when this was first measured at v1.7.69 and became 108 in cdc54d32f
-(2026-08-02), which added
-`benchmark-data/ic/caravel_user_project/v1.9.43_sky130A/phase2/stage1/rtl`. The
-whole sweep was RE-RUN over the 108 rather than the pin raised to match: three
-rows claim "0 FAIL over ALL of them", and raising the number alone would assert
-that about a directory no gate had been pointed at. What moved, and why nine of
-the fifteen rows had rotted while this pin stayed green, is recorded in the
+It was 107 when this was first measured at v1.7.69, became 108 in cdc54d32f
+(2026-08-02), and fell to 89 when published run output that does not pass was
+withdrawn (vibe-ic#1015, #1010) and took 19 of the directories with it. Each
+time the whole sweep was RE-RUN rather than the pin raised to match: three rows
+claim "0 FAIL over ALL of them", and moving the number alone would assert that
+about a population no gate had been pointed at. The 19 withdrawn directories
+were measured separately so that every row that moved is ATTRIBUTED — all
+fifteen reconcile as old(108) - withdrawn(19) = new(89). What moved, and the one
+gate whose FAIL column reached zero purely by subtraction, is recorded in the
 comment block above `P0_RTL_DIR_GROUP_MEASUREMENT` in `flow_compliance_check`.
 
-Do not read this 108 as the v1.7.69 sweep's 108, which was a DIFFERENT set: that
+Do not read this as the v1.7.69 sweep's 108, which was a DIFFERENT set: that
 one applied `flow_compliance_check`'s OWN rtl_dir alternation ("phase2/stage1/
 rtl", "rtl", "src", "hdl") to a 107-dir corpus, and its extra member was
 `benchmark-data/ic/subservient/phase2/stage1/formal/subservient/src` — a
 vendored formal copy, not a project root the flow is pointed at. The numbers
-below are quoted on the 108 directories NAMED `rtl`, which is the set the test
+below are quoted on the directories NAMED `rtl`, which is the set the test
 at the bottom of this file reconstructs.
 
 Every gate CLI was run against a scratch MIRROR of those directories, never
@@ -128,14 +130,14 @@ def test_converted_gates_are_no_longer_reported_as_skipped(tmp_path):
 
 
 # Gates wanting ONLY `--rtl-dir` — a value the umbrella already derives — plus the
-# one wanting `--rtl --strict`. All 15 were re-measured over the 108 tracked RTL
+# one wanting `--rtl --strict`. All 15 were re-measured over the 89 tracked RTL
 # directories under benchmark-data, on a scratch MIRROR of the corpus (no gate CLI
 # was pointed at the tracked tree).
 # Two bars must BOTH be cleared: converting must not turn the gate red, and the
 # gate must actually EXAMINE something, because a PASS over an empty denominator
 # is a false PASS and is worse than the skip it replaces.
 #
-#   gate                              new FAIL/108   projects w/ denominator>0
+#   gate                              new FAIL/89    projects w/ denominator>0
 
 
 def _dangling_symlink_rtl_dir(tmp_path):
@@ -296,6 +298,24 @@ def test_only_gates_that_cleared_both_bars_were_converted():
     gate adds no FAIL over the corpus AND discloses a non-zero denominator on
     every project. Anything else stays disclosed as NOT INVOKED."""
     licensed = {g for g, (fails, denom) in _RTL_DIR_GROUP_MEASUREMENT.items()
-                if fails == 0 and denom == _CORPUS_DENOMINATOR}
+                if fails == 0 and denom == _CORPUS_DENOMINATOR
+                and g not in F.P0_CLEARANCE_UNPROVEN_BY_WITHDRAWAL}
     assert licensed == set(F._STRUCTURAL_GATE_ARGV_ADAPTERS), (
         "the converted set no longer matches what the measurement licenses")
+
+
+def test_a_gate_cleared_only_by_withdrawal_is_not_licensed():
+    """The arithmetic half of the rule can be satisfied by DELETION: withdraw the
+    directories a gate failed on and its FAIL column reaches 0 without anything
+    having been measured as safe. #1015/#1010 did exactly that to
+    `rtl_precheck_gate` (3 FAILs, all 3 in withdrawn runs). Every disqualified
+    gate must therefore look licensed on the numbers and still not be converted —
+    if it stops looking licensed, this test is passing for the wrong reason."""
+    assert F.P0_CLEARANCE_UNPROVEN_BY_WITHDRAWAL, "the disqualification list is empty"
+    for gate in F.P0_CLEARANCE_UNPROVEN_BY_WITHDRAWAL:
+        fails, denom = _RTL_DIR_GROUP_MEASUREMENT[gate]
+        assert fails == 0 and denom == _CORPUS_DENOMINATOR, (
+            f"{gate} no longer clears the bar on the numbers, so listing it as "
+            f"'cleared only by withdrawal' no longer says anything")
+        assert gate not in F._STRUCTURAL_GATE_ARGV_ADAPTERS, (
+            f"{gate} was converted on a clearance that only a deletion produced")

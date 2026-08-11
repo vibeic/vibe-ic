@@ -276,5 +276,11 @@ REAL = repo_path_opt("benchmark-data/evaluation/phase1_parity")
 def test_real_phase1_parity_corpus_is_fully_tiered_and_published():
     rep = mod.check(REAL, REAL / "source_tier.json")
     assert rep["violations"] == []
-    assert rep["protocols_total"] == 87
+    # 87 -> 86 on 2026-08-12. Six protocols had their run output withdrawn from
+    # publication under the owner ruling in vibe-ic#1015; five of them keep the
+    # input document they were measured against, so they remain published cells
+    # and stay tiered. The sixth tracked no input document of its own, so no
+    # directory remains and `source_tier.json` records it under
+    # `withdrawn_from_publication` instead of `protocols`.
+    assert rep["protocols_total"] == 86
     assert "RESULT_sweep_v1_2_34.md" in rep["result_md_checked"]

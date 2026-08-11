@@ -5863,28 +5863,65 @@ def _digital_backend_is_na(project: Path) -> Tuple[bool, str]:
 # job, and a derived value could not have demanded anything — but a tripwire over the
 # measured GATES is the missing half, and it is not in this change.
 #
-#   gate                              new FAIL/108   projects w/ denominator>0
-P0_CORPUS_DENOMINATOR = 108
+# 2026-08-12 — RE-MEASURED OVER 89, BECAUSE THE CORPUS SHRANK RATHER THAN GREW.
+#
+# Published run output that does not pass was withdrawn (vibe-ic#1015, #1010), which
+# took 19 of the 108 tracked `rtl` directories with it. The sweep was re-run the same
+# way as the 2026-08-04 measurement — 15 gates x 89 directories, argv in the
+# umbrella's own `_structural_gate_argv` shape, on a scratch MIRROR, no gate CLI
+# pointed at the tracked tree — and the 19 withdrawn directories were measured
+# SEPARATELY so every moved row is attributed rather than assumed.
+#
+# EVERY ROW RECONCILES: old(108) - withdrawn(19) = new(89), for all fifteen. No gate's
+# BEHAVIOUR moved in this change; only the population did. Four rows moved:
+#
+#   testbench_exists_check        103 -> 84 FAIL   (all 19 withdrawn dirs failed it)
+#   rtl_precheck_gate               3 -> 0  FAIL   (all 3 of its failures were withdrawn)
+#   packet_length_check_present     3 -> 0  FAIL, denominator 4 -> 0
+#   pre_awake_silence_check         1 -> 0  FAIL, denominator 1 -> 0
+#
+# THE TRAP THIS TABLE MUST NOT SPRING. `rtl_precheck_gate` now reads (0, 89) and so
+# satisfies the conversion rule's arithmetic — but it satisfies it ONLY because the
+# three directories that failed it are gone. That is clearance by absence of evidence,
+# not by evidence: nothing measured it as safe, the counter-examples simply left. A
+# number that improves because the evidence was removed is not an improvement, and
+# converting on it would wire a gate into the flow on the strength of a deletion.
+# It is therefore recorded at its MEASURED value and disqualified by name below.
+#
+#   gate                              new FAIL/89    projects w/ denominator>0
+P0_CORPUS_DENOMINATOR = 89
 #: Each row's comment names the count column 2 was read from, so a reader
 #: reconstructs it instead of trusting it. `denominator.examined` is the structured
 #: block v1.7.70 gave eight of these gates; the rest disclose one scalar.
 P0_RTL_DIR_GROUP_MEASUREMENT = {
-    "sustained_vs_edge_check":          (0, 108),   # CONVERTED — `N files scanned`
-    "timer_freeze_after_state_check":   (0, 108),   # CONVERTED — `files_scanned`
-    "fpga_wrapper_input_polluter_check": (0, 108),  # CONVERTED v1.8.82 — `Files scanned`
+    "sustained_vs_edge_check":          (0, 89),    # CONVERTED — `N files scanned`
+    "timer_freeze_after_state_check":   (0, 89),    # CONVERTED — `files_scanned`
+    "fpga_wrapper_input_polluter_check": (0, 89),   # CONVERTED v1.8.82 — `Files scanned`
     "cmd_arg_range_validation_check":   (0, 0),     # `denominator.examined` — was 4/107
-    "bit_count_modulo_check":           (1, 2),     # `denominator.examined`; now REDDENS 1
+    "bit_count_modulo_check":           (1, 2),     # `denominator.examined`; still REDDENS 1
     "l12_sequence_implementation_check": (0, 0),    # `denominator.examined` (L12 sequences)
     "otp_write_lock_gate_check":        (0, 0),     # `denominator.examined` (write-enable sites)
     "pulse_decoder_edge_check":         (0, 1),     # `denominator.examined` (decoder files)
     "response_payload_template_check":  (0, 0),     # `denominator.examined` (payload assignments)
     "tristate_self_rx_mask_check":      (0, 0),     # `denominator.examined` (driven tristate buses)
     "transient_signal_latch_check":     (0, 0),     # `examined N ... pairs` — was None
-    "testbench_exists_check":           (103, 108),  # the l9-shaped trap; subject = the dir itself
-    "rtl_precheck_gate":                (3, 108),   # `auditors_total: 7` on every project
-    "packet_length_check_present":      (3, 4),     # `files_checked` — 107 was never measured
-    "pre_awake_silence_check":          (1, 1),     # non-vacuous on 1 — 107 was never measured
+    "testbench_exists_check":           (84, 89),   # the l9-shaped trap; subject = the dir itself
+    "rtl_precheck_gate":                (0, 89),    # `auditors_total: 7`; 3 FAILs WITHDRAWN, see below
+    "packet_length_check_present":      (0, 0),     # `files_checked`; its 4-dir denominator was withdrawn
+    "pre_awake_silence_check":          (0, 0),     # non-vacuous on 0; its 1 dir was withdrawn
 }
+
+#: Gates whose zero-FAIL column is an ARTEFACT of runs leaving the corpus, not a
+#: measurement that they are safe to convert. The conversion rule reads "no new FAIL
+#: over the corpus AND a non-zero denominator"; a gate that failed on directories
+#: which have since been WITHDRAWN satisfies the first half by subtraction, and its
+#: counter-examples are still in git history rather than refuted. Such a gate stays
+#: disclosed as NOT INVOKED until it is re-measured against a corpus that could
+#: actually redden it. Removing a name from here is a FLOW change and needs the
+#: flow-change-acceptance bar; it is not licensed by this table alone.
+P0_CLEARANCE_UNPROVEN_BY_WITHDRAWAL = frozenset({
+    "rtl_precheck_gate",   # 3/3 of its FAILs were in runs withdrawn by #1015/#1010
+})
 
 
 _STRUCTURAL_GATE_ARGV_ADAPTERS: Dict[str, tuple[str, ...]] = {
