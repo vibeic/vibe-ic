@@ -49,8 +49,41 @@ WHAT IT ENFORCES
     Everything is derived from L14's own declarations. No design name,
     PDK name, vendor part number or signal literal appears in this file.
 
-RULES  (all FAIL severity; blocking only under --strict)
+A ROW CONTAINER THIS GATE CANNOT READ IS REFUSED, NEVER A PASS (vibe-ic#991)
+    `_rows()` was `v if isinstance(v, list) else []`, so `versions` carrying a
+    real version history keyed BY VERSION instead of as a list of rows became
+    the empty list, `total` became 0, every row rule iterated nothing, and the
+    gate printed `[PASS]` and exited 0. MEASURED: a document declaring two
+    version rows in that shape produced output BYTE-IDENTICAL — stdout, exit
+    code and JSON report alike — to a document with no `versions` key at all.
+    Since 122 of the 197 L14 docs published in this tree legitimately declare
+    `EXTRACTION_FOUND_NOTHING` with empty rows, the coerced zero was
+    indistinguishable from the commonest honest state in the corpus.
+
+    Now a row container that is PRESENT and is not a JSON array is a REFUSAL
+    that NAMES WHAT ARRIVED — its JSON type, its keys, and how many entries
+    went unexamined — and the verdict is REFUSED with a non-zero exit.
+
+    WHAT IS DELIBERATELY NOT CHANGED: a zero denominator still PASSES when the
+    layer was READ and is honestly empty. `gate_zero_denominator_refuses_check`
+    keys on "a zero beside a POPULATION word", and its own governing line is
+    "an empty artefact is not a missing one" — the 122 docs above were read and
+    are empty, which is a real result. Only an UNREAD container refuses.
+
+RULES  (FAIL severity; blocking only under --strict, EXCEPT the shape refusal)
     l14_parseable                       valid JSON object.
+    l14_row_container_shape             every row container that is PRESENT is
+                                        a JSON array. REFUSED (exit 1) whether
+                                        or not --strict: `--strict` governs
+                                        whether DESIGN findings block, and this
+                                        one is not a design finding — it is the
+                                        gate reporting that it could not read
+                                        its own input. Advisory-by-default is
+                                        justified below by "L14 has no
+                                        consumer", which is a statement about
+                                        the CONTENT nobody reads, not a licence
+                                        for the gate to report a pass over a
+                                        layer it never examined.
     l14_status_matches_content          status flag agrees with row counts,
                                         in both directions.
     l14_version_row_actionable          each version row carries a version
@@ -68,7 +101,11 @@ USAGE
 
 EXIT CODES
     0 = PASS, or findings present while advisory (the default)
-    1 = FAIL and --strict
+    1 = FAIL and --strict, OR a row container was REFUSED for its shape
+        (#991 — a gate that could not read its input must not exit 0; the only
+        wiring is the flow's `advisory_program_exit_zero` slot, which RECORDS
+        every non-zero rc as an advisory FINDING and never blocks a step, so
+        this cannot fail a run — measured, not assumed)
     2 = L14 not found (skip)
 """
 from __future__ import annotations
@@ -77,9 +114,11 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import _shape_refusal as _sr     # #991 — the ONE definition of a wrong shape
 
 try:
     import _path_layout as _pl
@@ -122,9 +161,14 @@ def _fields(l14: Dict[str, Any]) -> Dict[str, Any]:
     return f if isinstance(f, dict) else l14
 
 
-def _rows(l14: Dict[str, Any], key: str) -> List[Any]:
-    v = _fields(l14).get(key)
-    return v if isinstance(v, list) else []
+def _rows(l14: Dict[str, Any],
+          key: str) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+    """`(rows, mismatch)`. `mismatch` is None when the container is ABSENT or
+    is a JSON array — both real, legitimate zeros — and otherwise NAMES what
+    arrived instead. #991: this used to swallow the second value, and the
+    caller could not tell a layer that declares nothing from a layer whose
+    declarations it failed to read."""
+    return _sr.read_list_from(_fields(l14), key)
 
 
 def _has_any(row: Dict[str, Any], keys) -> bool:
@@ -172,12 +216,22 @@ def check(l14: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if l14.get("applicability") == "N/A":
         return {"findings": findings, "skipped": "applicability=N/A"}
 
-    versions = _rows(l14, "versions")
-    deprecated = _rows(l14, "deprecated_features")
-    traps = _rows(l14, "backward_compat_traps")
+    versions, m_versions = _rows(l14, "versions")
+    deprecated, m_deprecated = _rows(l14, "deprecated_features")
+    traps, m_traps = _rows(l14, "backward_compat_traps")
     total = len(versions) + len(deprecated) + len(traps)
     status = l14.get("extraction_status")
     anchors = _doc_evidence_anchors(l14)
+
+    # 0. #991 — A CONTAINER THIS GATE CANNOT READ IS REFUSED BEFORE ANY OTHER
+    # RULE RUNS. It has to come first: every rule below iterates these three
+    # lists, so a coerced empty makes all of them vacuously true, and rule 1
+    # would then read `total == 0` and report either nothing at all or
+    # "carries zero rows" — a sentence about content, for a document whose
+    # content this gate never saw.
+    refusals = [m for m in (m_versions, m_deprecated, m_traps) if m]
+    for m in refusals:
+        fail("l14_row_container_shape", _sr.sentence(m, "L14"))
 
     # 1. status flag vs content — both directions.
     if status == _FOUND_NOTHING and total > 0:
@@ -188,8 +242,13 @@ def check(l14: Optional[Dict[str, Any]]) -> Dict[str, Any]:
              f"traps={len(traps)}). Any reader that trusts the flag to "
              f"decide whether this layer was populated gets the wrong "
              f"answer; the flag and the content must agree.")
+    # `and not refusals`: with a container refused, `total == 0` is this
+    # gate's own coercion, not the document's content. Saying "the document
+    # carries zero rows" there would be a false statement about the input and
+    # would point the remedy at the producer's completeness instead of at the
+    # shape — the misnaming half of #991, one rule down.
     if isinstance(status, str) and status.upper().startswith("EXTRACTED") \
-            and total == 0:
+            and total == 0 and not refusals:
         fail("l14_status_matches_content",
              "extraction_status claims EXTRACTED but the document carries "
              "zero version / deprecation / compat rows — a green flag with "
@@ -275,6 +334,13 @@ def check(l14: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "row_counts": {"versions": len(versions),
                        "deprecated_features": len(deprecated),
                        "backward_compat_traps": len(traps)},
+        # THE DENOMINATOR, stated (gate_discloses_denominator_check). `total`
+        # is what was EXAMINED; `refused_containers` is what could not be, and
+        # the two are separate numbers precisely so no reader can add them or
+        # mistake one for the other.
+        "examined_rows": total,
+        "refused_containers": refusals,
+        "entries_not_examined": _sr.not_examined(refusals),
         "evidence_anchors": anchors,
     }
 
@@ -327,6 +393,10 @@ def main(argv=None) -> int:
     result["blocks"] = bool(args.strict)
     fails = [f for f in result["findings"] if f["severity"] == "FAIL"]
     result["pass"] = not fails
+    refused = result.get("refused_containers") or []
+    result["verdict"] = ("REFUSED" if refused
+                         else "PASS" if not fails
+                         else "FAIL" if args.strict else "ADVISE")
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
@@ -334,16 +404,43 @@ def main(argv=None) -> int:
     for f in result["findings"]:
         print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
 
+    # EVERY verdict line states its denominator — how many rows this run
+    # actually examined — so no outcome here can be read without it
+    # (gate_discloses_denominator_check).
+    n = result.get("examined_rows", 0)
+    counts = result.get("row_counts") or {}
+    denom = (f"examined {n} row(s) "
+             f"(versions={counts.get('versions', 0)}, "
+             f"deprecated={counts.get('deprecated_features', 0)}, "
+             f"traps={counts.get('backward_compat_traps', 0)})")
+
+    # REFUSED OUTRANKS EVERY OTHER OUTCOME, including a completely clean run
+    # of the remaining rules — because those rules iterated a list this gate
+    # built by discarding the input, so their cleanliness is an artefact of
+    # the discard. A fix that only added the finding and left the exit code
+    # at 0 would have left the published shape exactly as it was: advisory
+    # rc 0, which the flow records as `ok`.
+    if refused:
+        lost = result.get("entries_not_examined")
+        print(f"[REFUSED] l14_protocol_versioning_contract_check: "
+              f"{len(refused)} row container(s) are PRESENT in a shape this "
+              f"gate cannot read "
+              f"({', '.join(sorted(m['field'] for m in refused))}) — "
+              f"{denom}, and "
+              f"{lost if isinstance(lost, int) else 'an unknown number of'} "
+              f"entr{'y' if lost == 1 else 'ies'} went unexamined. This is "
+              f"NOT a pass and NOT a reading of zero.")
+        return 1
     if not fails:
-        print("[PASS] l14_protocol_versioning_contract_check")
+        print(f"[PASS] l14_protocol_versioning_contract_check: {denom}")
         return 0
     if args.strict:
         print(f"[FAIL] l14_protocol_versioning_contract_check: "
-              f"{len(fails)} finding(s) — BLOCKS (--strict)")
+              f"{len(fails)} finding(s), {denom} — BLOCKS (--strict)")
         return 1
     print(f"[ADVISE] l14_protocol_versioning_contract_check: "
-          f"{len(fails)} finding(s) — advisory only (L14 has no consumer; "
-          f"re-run with --strict to block)")
+          f"{len(fails)} finding(s), {denom} — advisory only (L14 has no "
+          f"consumer; re-run with --strict to block)")
     return 0
 
 

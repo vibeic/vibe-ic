@@ -249,6 +249,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _published_tree  # noqa: E402
+import _shape_refusal as _sr  # noqa: E402  (#991)
 
 # ---------------------------------------------------------------------------
 # Consumer import — the gate asserts against the CONSUMER'S OWN derivation.
@@ -352,7 +353,35 @@ def _unwrap(d: Optional[dict]) -> dict:
 
 
 def _as_list(v: Any) -> list:
+    """Coerce for the INTERNAL walks below (a row's own `signals`, an L9 port
+    block) where an unexpected shape is one row's problem and the row is
+    already reported by name.
+
+    NOT for the two TOP-LEVEL catalog containers — `channels` and
+    `global_signals`. Those feed `channels_declared` / `global_signals_declared`
+    and the E1 rail, and there a coerced empty is indistinguishable from a
+    catalog that declares nothing: see `_catalog_container` and #991.
+    """
     return v if isinstance(v, list) else []
+
+
+def _catalog_container(l17: dict, key: str
+                       ) -> Tuple[list, Optional[Dict[str, Any]]]:
+    """`(rows, mismatch)` for a TOP-LEVEL catalog container.
+
+    #991, MEASURED on this gate: an L17 declaring two channels with two member
+    signals, keyed BY CHANNEL NAME instead of as a list of rows, produced a
+    report BYTE-IDENTICAL to an L17 with no `channels` key at all —
+    `channels_declared: 0`, `pass: true`, rc 0. Every rail below iterates
+    `channels`, so the coercion made all of them vacuously clean, and the one
+    rail that fires on an empty catalog (E1) is guarded on
+    `not channels and not globals_` — which the coercion satisfies.
+
+    Absent stays absent: a key that is not there, and a declared `[]`, both
+    return no mismatch. Those are real zeros and this gate has always passed
+    them.
+    """
+    return _sr.read_list_from(l17, key)
 
 
 def _as_dict(v: Any) -> dict:
@@ -586,13 +615,30 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
                  or l17.get("extraction_status")
                  or raw17.get("status") or "").strip().upper()
 
-    channels = _as_list(l17.get("channels"))
-    globals_ = _as_list(l17.get("global_signals"))
+    channels, m_channels = _catalog_container(l17, "channels")
+    globals_, m_globals = _catalog_container(l17, "global_signals")
+    # #991 — REPORTED BEFORE ANY OTHER RAIL. Everything below iterates these
+    # two lists, so with a container coerced away every rail is vacuously
+    # clean and the report reads as a catalog that declares nothing.
+    shape_refusals = [m for m in (m_channels, m_globals) if m]
+    for _m in shape_refusals:
+        findings.append(Finding(
+            "ERROR", "CATALOG_CONTAINER_SHAPE_UNREADABLE",
+            _sr.sentence(_m, l17_path.name) +
+            " This gate examined ZERO entries from it. Every rail below reads "
+            "this container, so their silence is this refusal's consequence "
+            "and not a statement about the catalog.",
+            {"refused": _m}))
     info.update({
         "l17_file": l17_path.name,
         "extraction_status": status or None,
         "channels_declared": len(channels),
         "global_signals_declared": len(globals_),
+        # THE DENOMINATOR, and the part of it that could not be read, as two
+        # separate numbers (gate_discloses_denominator_check).
+        "catalog_entries_examined": len(channels) + len(globals_),
+        "catalog_containers_refused": [m["field"] for m in shape_refusals],
+        "catalog_entries_not_examined": _sr.not_examined(shape_refusals),
         "consumer_import": ("phase2_scaffold_gen"
                             if _consumer is not None
                             else f"UNAVAILABLE ({_CONSUMER_IMPORT_ERROR})"),
@@ -619,8 +665,13 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             narrative_populated[key] = v
     info["narrative_fields_populated"] = sorted(narrative_populated)
 
+    # `and not shape_refusals`: E1's whole sentence is "the catalog declares 0
+    # channels / 0 global signals". With a container refused, that zero is
+    # THIS GATE'S coercion and the sentence would be a false statement about
+    # the document — the misnaming half of #991. The refusal above is the
+    # accurate finding for that input.
     if (status in _STATUS_FOUND_NOTHING and not channels and not globals_
-            and narrative_populated):
+            and narrative_populated and not shape_refusals):
         # Evidence: which named tokens does the narrative assert, and do any
         # of them resolve in the design's own entity universe?
         toks = _identifier_tokens(narrative_populated)

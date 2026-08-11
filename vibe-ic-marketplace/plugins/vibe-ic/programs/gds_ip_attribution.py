@@ -33,15 +33,60 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _shape_refusal as _sr  # noqa: E402  (#991)
+
 
 VIBE_IC_USER_LAYER = (200, 42)
 VIBE_IC_USER_TEXT_LAYER = (200, 43)
 
 
-def build_attribution_blob(declaration: Dict[str, Any]) -> str:
-    lines = ["VIBE-IC-CATALOG-AUDIT v1"]
+#: The token this record uses where a count or a hash would go but the field it
+#: would have been computed from could not be read. It is deliberately NOT a
+#: number and NOT a hex string: the whole point is that a foundry IP-audit
+#: reviewer scanning this blob must not be able to read the field as a measured
+#: zero. `REFUSED` sorts, greps and reads as what it is.
+REFUSED = "REFUSED"
 
-    for ip in declaration.get("ip_catalog_used", []):
+
+def build_attribution_blob(declaration: Dict[str, Any]) -> str:
+    """The VIBE-IC-CATALOG-AUDIT record embedded in the foundry handoff GDS.
+
+    #991 — WHY THERE ARE `REFUSED` LINES IN AN EMITTER. This function has no
+    verdict, so the defect here is not a gate passing: it is that the record
+    it writes INTO A TAPE-OUT DELIVERABLE stated things that were not true.
+    MEASURED on `files_copied` carrying two entries keyed by filename:
+
+        before   IP <n> <v> <l> files=0 sha256_agg:e3b0c44298fc1c14 …
+        after    IP <n> <v> <l> files=REFUSED sha256_agg:REFUSED …
+                 REFUSED `files_copied` … an object carrying 2 key(s) …
+
+    `files=0` is the fail-open half — two copied files reported as none. The
+    `sha256_agg` is worse and was not in the issue: `e3b0c44298fc1c14` is the
+    head of SHA-256 of the EMPTY STRING, so the record published a plausible
+    16-hex-digit aggregate attestation over a file set it had not read. A
+    reviewer cannot tell that from a real digest, and an IP-provenance record
+    whose hash means "I hashed nothing" is worse than one that has no hash: the
+    absent case correctly printed `n/a`.
+
+    The record's format for WELL-FORMED input is byte-identical to before.
+    """
+    lines = ["VIBE-IC-CATALOG-AUDIT v1"]
+    refusals: List[Dict[str, Any]] = []
+
+    def refuse(mismatch: Dict[str, Any], where: str = "") -> None:
+        refusals.append(mismatch)
+        lines.append(f"{REFUSED} {_sr.sentence(mismatch, where)}")
+
+    ips, m_ips = _sr.read_list_from(declaration, "ip_catalog_used")
+    if m_ips is not None:
+        # The outer container. Unread, this emitted a blob with NO `IP` lines
+        # at all — indistinguishable from a design that reused no catalog IP,
+        # which is precisely the claim a licence auditor reads this record to
+        # check.
+        refuse(m_ips, "declaration.json")
+
+    for ip in ips:
         if not isinstance(ip, dict):
             continue
         name = ip.get("ip_name", "?")
@@ -49,10 +94,17 @@ def build_attribution_blob(declaration: Dict[str, Any]) -> str:
         lic = ip.get("license", "?")
         commit = ip.get("canonical_commit", "?")
         url = ip.get("canonical_url", "?")
-        files = ip.get("files_copied", []) or []
-        n_files = len(files) if isinstance(files, list) else 0
+        files, m_files = _sr.read_list_from(ip, "files_copied")
+        if m_files is not None:
+            lines.append(
+                f"IP {name} {ver} {lic} files={REFUSED} "
+                f"sha256_agg:{REFUSED} url:{url} commit:{commit}"
+            )
+            refuse(m_files, f"ip_catalog_used[{name}]")
+            continue
+        n_files = len(files)
         h = hashlib.sha256()
-        for f in (files if isinstance(files, list) else []):
+        for f in files:
             if isinstance(f, dict) and f.get("sha256"):
                 h.update(f["sha256"].encode())
         aggregate_sha = h.hexdigest()[:16] if files else "n/a"
@@ -61,7 +113,10 @@ def build_attribution_blob(declaration: Dict[str, Any]) -> str:
             f"sha256_agg:{aggregate_sha} url:{url} commit:{commit}"
         )
 
-    for f in declaration.get("ai_authored_files", []):
+    authored, m_authored = _sr.read_list_from(declaration, "ai_authored_files")
+    if m_authored is not None:
+        refuse(m_authored, "declaration.json")
+    for f in authored:
         if isinstance(f, str):
             lines.append(f"AI-AUTHORED {f}")
         elif isinstance(f, dict):
@@ -166,8 +221,13 @@ def main(argv: List[str]) -> int:
             print(f"ERROR: {decl_path} not found", file=sys.stderr)
             return 2
         decl = json.loads(decl_path.read_text())
-        print(build_attribution_blob(decl))
-        return 0
+        blob = build_attribution_blob(decl)
+        print(blob)
+        # #991 — the record was still emitted (a partial provenance record is
+        # more use to an auditor than none), but a run that produced one
+        # carrying a REFUSED line must not report success: this is the only
+        # signal a CALLER gets, and rc 0 would say the attribution is complete.
+        return 0 if f"\n{REFUSED} " not in "\n" + blob else 3
 
     if args.cmd == "extract":
         text = read_attribution_from_gds(Path(args.gds), args.top)
@@ -189,6 +249,13 @@ def main(argv: List[str]) -> int:
         if ok:
             print(f"injected {len(blob.encode())} bytes attribution into {args.gds_out}")
             print(f"  layer: {VIBE_IC_USER_TEXT_LAYER}, top cell: {top!r}")
+            # #991 — same rule as build-text, and it matters more here: this
+            # blob is now INSIDE the foundry handoff GDS.
+            if f"\n{REFUSED} " in "\n" + blob:
+                print(f"  {REFUSED}: the attribution record carries a stated "
+                      f"hole — a declared list could not be read; see the "
+                      f"{REFUSED} line(s) above", file=sys.stderr)
+                return 3
             return 0
         return 1
 
