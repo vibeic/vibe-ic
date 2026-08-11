@@ -35578,8 +35578,11 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         _psm_failed = _cov["analysis_failed"]
         _psm_conn = _cov["connectivity"]
         _bump_m = re.search(r"PSM-0073.*?bump", log)
-        # PSM's own connectivity verdict, kept beside the number it explains.
-        _psm_unconn = re.findall(r"PSM-0039\]\s*(.+)", log)
+        # PSM's own connectivity verdict, kept beside the number it explains —
+        # and now DECIDING it. This list used to be re-derived here by a second
+        # inline regex, which is the drift the module's own header warns about;
+        # there is ONE implementation of the rule and this reads it.
+        _psm_unconn = _cov["unconnected_instances"]
         (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
             "tool": "openroad-psm",
             "mode": "static_ir_drop",
@@ -35627,14 +35630,18 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "nets_analysed": _psm_analysed,
             "nets_analysis_failed": _psm_failed,
             "connectivity_findings": _psm_conn,
-            "verdict_basis": verdict_basis(_psm_failed),
-            # BOTH conditions, composed. #662 says an unmeasured supply has no
-            # derivable verdict; #669 says a net whose analysis FAILED must not
-            # make the number better. They are independent reasons the verdict
-            # is not a PASS, and taking either side of the conflict alone would
-            # have dropped the other silently.
+            "verdict_basis": verdict_basis(_psm_failed, _psm_unconn),
+            # ALL THREE conditions, composed. #662 says an unmeasured supply
+            # has no derivable verdict; #669 says a net whose analysis FAILED
+            # must not make the number better; and an instance terminal the
+            # solver could not REACH must not either — the supply question this
+            # flow otherwise gates is net OWNERSHIP, which such a terminal
+            # passes (its net pointer is valid) while no conductor arrives.
+            # They are independent reasons the verdict is not a PASS, and
+            # taking any one alone would drop the others silently.
             "verdict": ("UNMEASURED" if not _supply_measured
-                        else ir_verdict(_worst_ir_uv, _ir_budget_uv, _psm_failed)),
+                        else ir_verdict(_worst_ir_uv, _ir_budget_uv,
+                                        _psm_failed, _psm_unconn)),
             "evidence": "analyze_power_grid stdout",
         }, indent=2) + "\n")
         if not _supply_measured:
