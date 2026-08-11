@@ -50,15 +50,63 @@ _REPO_SPEF_CANDIDATES = [
 
 
 def _real_spef() -> Path | None:
+    """A REAL routed SPEF — extraction output from a published run, never a
+    file this suite wrote for itself.
+
+    vibe-ic#1028. All three named candidates above live under run roots that
+    were withdrawn from publication (#1015/#1010), so the `rglob` fallback
+    became the only branch that can return anything — and the nearest `*.spef`
+    on disk is `programs/tests/fixtures/si_mcf_zero_coupling/`, a fixture whose
+    entire purpose is to carry NO coupling. `test_real_spef_*` was therefore
+    about to describe a file authored by this test suite as real extracted
+    parasitics.
+
+    It was caught only by luck: that particular fixture contradicts the
+    assertion, so the tests went red. A fixture that happened to carry coupling
+    would have made them PASS while examining nothing real, and nothing would
+    have said so. That is the failure mode worth closing, not the red.
+
+    Two changes, both about stating the requirement rather than taking what
+    the walk yields first:
+      * the fallback SKIPS this suite's own fixture tree outright;
+      * selection requires the property the callers actually need — coupling
+        pairs — instead of returning the first non-empty file and letting the
+        caller's assertion discover the mismatch.
+    """
+    def _usable(p: Path) -> bool:
+        if not (p.is_file() and p.stat().st_size > 0):
+            return False
+        try:
+            return bool(m.parse_spef(p.read_text(errors="replace"))["pair_cc"])
+        except Exception:
+            return False
+
     for p in _REPO_SPEF_CANDIDATES:
-        if p.is_file() and p.stat().st_size > 0:
+        if _usable(p):
             return p
-    # also search relative to the plugin tree (in case the checkout has them)
     root = PROG.parents[2]  # .../vibe-ic-marketplace
-    for hit in root.rglob("*.spef"):
-        if hit.stat().st_size > 0:
+    for hit in sorted(root.rglob("*.spef")):
+        # A fixture is not real data. Reading one here would let a test named
+        # `real_spef` make a real-data claim about a file in `tests/`.
+        if "tests" in hit.parts or "fixtures" in hit.parts:
+            continue
+        if _usable(hit):
             return hit
     return None
+
+
+#: One message for both real-SPEF tests, so the reason cannot drift apart.
+_NO_REAL_SPEF = (
+    "REAL-DATA ANCHOR LOST, not a checkout without the corpus: all three "
+    "named routed-SPEF candidates lived under run roots withdrawn from "
+    "publication (vibe-ic#1015/#1010), and no surviving tracked SPEF carries "
+    "coupling pairs. This suite's own fixtures are deliberately NOT eligible — "
+    "reading one would let a test named `real_spef` claim real extracted "
+    "parasitics about a file it wrote itself. The parser and scorer remain "
+    "exercised by the synthetic fixtures in this module; what is lost is the "
+    "confirmation that they work on production extraction output. Publishing "
+    "any run that carries an extracted SPEF restores it."
+)
 
 
 # ===========================================================================
@@ -512,7 +560,7 @@ def test_cli_emit_tcl(tmp_path):
 def test_real_spef_parses_and_attributes():
     sp_path = _real_spef()
     if sp_path is None:
-        pytest.skip("no real routed SPEF present in this checkout")
+        pytest.skip(_NO_REAL_SPEF)
     sp = m.parse_spef(sp_path.read_text(errors="replace"))
     # a real OpenRCX SPEF must carry coupling pairs + named nets + drivers
     assert len(sp["pair_cc"]) > 0
@@ -533,7 +581,7 @@ def test_real_spef_scores_with_synthetic_windows():
     (i.e. it does NOT crash and the verdict is well-formed)."""
     sp_path = _real_spef()
     if sp_path is None:
-        pytest.skip("no real routed SPEF present in this checkout")
+        pytest.skip(_NO_REAL_SPEF)
     sp = m.parse_spef(sp_path.read_text(errors="replace"))
     # build a timing JSON: every driver pin switches in [0,1] ns (all overlap)
     pins = {}
