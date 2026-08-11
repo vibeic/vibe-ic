@@ -141,10 +141,31 @@ def test_the_advisory_layer_gates_are_wired_bare(program: str) -> None:
     )
 
 
+#: Bound for every program launch in this file. NOT a round number picked by
+#: feel: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest
+#: harness bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. The landed value was 120, which is ABOVE that: it could
+#: never fire, because pytest reaches 180 s first and `--timeout-method=thread`
+#: takes the whole SESSION down rather than the test, so every other file in the
+#: subset loses its verdict including the ones that had already passed.
+#:
+#: 30 and not the full 60, because `_run` is a HELPER and the cascade test below
+#: calls it FOUR times in one test function. 4 x 60 = 240 s outlives the harness
+#: even though no single call does; 4 x 30 = 120 s leaves the 60 s of reserve
+#: the `// 3` divisor was measured to keep.
+#:
+#: MEASURED here, three runs each on the scratch project this file builds:
+#: `l9_submodule_conformance_check` 0.02/0.03/0.03 s and
+#: `step_internal_fail_bubble_up_check` 0.02/0.03/0.02 s. 30 s is ~1000x the
+#: worst of those, so the lower bound constrains nothing that passes today.
+_PROGRAM_TIMEOUT_S = 30
+
+
 def _run(program: str, project: Path, *extra: str):
     proc = subprocess.run(
         [sys.executable, str(PROGRAMS / f"{program}.py"), str(project), *extra],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=_PROGRAM_TIMEOUT_S,
     )
     return proc.returncode, proc.stdout + proc.stderr
 

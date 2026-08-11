@@ -49,6 +49,30 @@ import flow_compliance_check as F  # noqa: E402
 
 CHECKER = PROGRAMS / "flow_compliance_check.py"
 
+#: Bounds for the process launches below. NOT round numbers picked by feel:
+#: `ci_harness_timeout_ceiling_check` (BLOCKING) resolves the pytest harness
+#: bound from `tools/gatekeeper-land.sh` — `--timeout=180`,
+#: `--timeout-method=thread` — and permits any ONE blocking call at most
+#: `180 // 3` = 60 s. The landed values were 1800 and 300, both ABOVE that, so
+#: neither could ever fire: pytest reaches 180 s first and the thread method
+#: takes the whole SESSION down instead of the test, which produces no verdict
+#: at all rather than a red one.
+#:
+#: 1800 s was never this file's cost. It is the bound a `flow_compliance_check`
+#: run against a REAL design needs; both fixtures here are a design-LESS tree
+#: (an empty directory, and a directory holding one 20-byte report), which is
+#: the whole point of the file. MEASURED, three runs each: the empty-project
+#: run is 0.33/0.31/0.32 s, the wrong-root run is 0.32/0.32/0.32 s, and
+#: `step_internal_fail_bubble_up_check` is 0.02/0.03/0.02 s.
+#:
+#: TWO values, because the divisor counts CALLS PER TEST, not calls per file:
+_ONE_CALL_S = 60      #: a test whose only bounded call is this one — the ceiling.
+_THREE_CALL_S = 30    #: `…is_no_longer_read_as_a_step_internal_fail` makes THREE
+#: bounded calls in one test function. 3 x 60 = 180 s is exactly the harness
+#: bound, which leaves it nothing to report with — the two-call shape is the most
+#: the `// 3` divisor was measured to cover. 3 x 30 = 90 s keeps half the budget
+#: in reserve, and is still ~90x the 0.32 s worst case measured above.
+
 #: The measured-nothing shape, as recorded by a run against a design-less tree.
 NOTHING = dict(
     overall="FAIL",
@@ -135,7 +159,7 @@ def test_empty_project_refuses_in_the_artefact_and_still_exits_1(tmp_path):
     proj.mkdir()
     r = subprocess.run(
         [sys.executable, str(CHECKER), ".", "--phase", "all"],
-        cwd=proj, capture_output=True, text=True, timeout=1800)
+        cwd=proj, capture_output=True, text=True, timeout=_ONE_CALL_S)
     assert r.returncode == 1, (
         "refusing is not passing — the run must stay red "
         f"(rc={r.returncode})\n{r.stdout[-2000:]}")
@@ -174,7 +198,7 @@ def test_the_refused_artefact_is_no_longer_read_as_a_step_internal_fail(
     # The wrong-root invocation, verbatim: cwd is the run's own reports/ dir.
     subprocess.run([sys.executable, str(CHECKER), ".", "--phase", "all"],
                    cwd=proj / "reports", capture_output=True, text=True,
-                   timeout=1800)
+                   timeout=_THREE_CALL_S)
     nested = (proj / "reports" / "reports" / "audit"
               / "phase23_completion_audit.json")
     assert nested.is_file(), "fixture did not reproduce the wrong-root shape"
@@ -182,7 +206,7 @@ def test_the_refused_artefact_is_no_longer_read_as_a_step_internal_fail(
 
     gate = PROGRAMS / "step_internal_fail_bubble_up_check.py"
     r = subprocess.run([sys.executable, str(gate), str(proj)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=_THREE_CALL_S)
     assert r.returncode == 0, (
         "a refused audit must not read as an unacknowledged step-internal "
         f"FAIL\n{r.stdout}\n{r.stderr}")
@@ -193,7 +217,7 @@ def test_the_refused_artefact_is_no_longer_read_as_a_step_internal_fail(
     (proj / "reports" / "phase2" / "broken_gate.json").write_text(
         json.dumps({"verdict": "FAIL"}) + "\n", encoding="utf-8")
     r2 = subprocess.run([sys.executable, str(gate), str(proj)],
-                        capture_output=True, text=True, timeout=300)
+                        capture_output=True, text=True, timeout=_THREE_CALL_S)
     assert r2.returncode == 1, (
         "the refusal must not silence a real step-internal FAIL in the same "
         f"tree\n{r2.stdout}\n{r2.stderr}")

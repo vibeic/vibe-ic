@@ -507,7 +507,42 @@ def test_the_json_record_carries_what_the_text_says(tmp_path):
 #: At zero the assertion below is also the strongest it can be. A NEW
 #: unresolvable bound above the ceiling turns it red with the file, line and
 #: callee named — which is the report the count could never produce.
-_REVIEWED_ADVISORY_RESIDUAL = 0
+#:
+#: ── AND THEN ONE ENTRY WOULD NOT LOWER (vibe-ic#1022) ────────────────────────
+#: The count above went red at 2, and re-reading both showed they are not the
+#: same kind of entry. One was the eleven's kind and was LOWERED
+#: (`test_matrix_artefact_mutation_channel.py`, worst single replay MEASURED at
+#: 1.55 s under a 900 s bound — 60 s constrains nothing). The other is the first
+#: entry in this corpus where the bound is REAL and the ceiling is genuinely too
+#: low for it: `test_matrix_mutation_ledger.py::REPLAY_TIMEOUT` reaches one
+#: `subprocess.run` per pytest cell whose worst case MEASURED over the full
+#: 24-pair witness plan is 42.61 s at `jobs=8` / 26.8 s uncontended, so 60 s is
+#: 1.41x the contended worst case and would fire on work that passes today.
+#:
+#: THE FIX FOR THE COUNT IS NOT A BIGGER COUNT — it is to stop being a count.
+#: Everything the note above says against `10 -> 11` is true of `0 -> 1`: it is
+#: available at every step, it never fails loudly, and it cannot say WHICH entry
+#: is new. A NAMED set says all three. It keeps the property that made zero
+#: strong (anything unrecorded fails, by name), and it adds the one zero could
+#: not have: the recorded entry carries its measurement and its reason, so the
+#: next reader inherits the evidence instead of an integer.
+#:
+#: The entry below is recorded, NOT waived. It is reachable in the 180 s lane
+#: (verified: `ci_targeted_test_select.py --base HEAD` emits 15 files at the
+#: smoke floor and 17 once `programs/matrix_mutation_ledger.py` is touched, the
+#: two extra being this entry's file and the artefact channel's). Its correct
+#: remedy is the checker's SECOND one — move the two replay-driven tests out of
+#: the 180 s lane — which needs a lane that does not exist in this tree yet.
+#: When it does, delete this entry and the set is empty again.
+_REVIEWED_ADVISORY_RESIDUAL = {
+    ("programs/tests/test_matrix_mutation_ledger.py", "L.replay_many"): (
+        "REPLAY_TIMEOUT=900 bounds one `_run_cell` pytest-cell subprocess. "
+        "MEASURED 24-pair witness plan, 32 cores, instrumented at `_run_cell`: "
+        "32 invocations, worst single call 42.61 s at jobs=8 / 26.8 s "
+        "uncontended (dimension-7 cell). 60 s is 1.41x that and would fire on "
+        "passing work. Needs relocation out of the 180 s lane, not a re-bound."
+    ),
+}
 
 
 def test_the_advisory_residual_does_not_grow_unreviewed(tmp_path):
@@ -523,14 +558,42 @@ def test_the_advisory_residual_does_not_grow_unreviewed(tmp_path):
     subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
                    capture_output=True, text=True, timeout=_T)
     doc = json.loads(out.read_text())
-    n = len(doc["unresolved_above_ceiling"])
-    assert n <= _REVIEWED_ADVISORY_RESIDUAL, (
-        f"{n} unresolvable bounds above the ceiling, "
-        f"{_REVIEWED_ADVISORY_RESIDUAL} were reviewed — read the new ones and "
-        "either lower them or record why they are not bounds:\n  "
+    unresolved = doc["unresolved_above_ceiling"]
+    unrecorded = [u for u in unresolved
+                  if (u["path"], u["callee"]) not in _REVIEWED_ADVISORY_RESIDUAL]
+    assert not unrecorded, (
+        f"{len(unrecorded)} unresolvable bound(s) above the ceiling that nobody "
+        "has read — lower them, or record each one BY NAME in "
+        "_REVIEWED_ADVISORY_RESIDUAL with the measurement that says it cannot "
+        "be lowered:\n  "
         + "\n  ".join(f"{u['path']}:{u['line']} {u['callee']}"
                       f"({u['keyword']}={u['seconds']})"
-                      for u in doc["unresolved_above_ceiling"]))
+                      for u in unrecorded))
+
+
+def test_a_recorded_advisory_that_stopped_existing_is_deleted(tmp_path):
+    """The other direction, which is how a named set avoids the count's fate.
+
+    A count only ever grows: nothing forces `11` back down to `10` when an entry
+    is lowered, so the baseline outlives the thing it described and quietly
+    permits a NEW entry in the retired one's slot. A named set cannot do that —
+    a recording whose call site is gone is itself the failure, and the fix is to
+    delete the line rather than to notice it.
+    """
+    root = C.find_repo_root()
+    if root is None:
+        pytest.skip("no repo root in reach")
+    out = tmp_path / "r.json"
+    subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
+                   capture_output=True, text=True, timeout=_T)
+    live = {(u["path"], u["callee"])
+            for u in json.loads(out.read_text())["unresolved_above_ceiling"]}
+    stale = sorted(k for k in _REVIEWED_ADVISORY_RESIDUAL if k not in live)
+    assert not stale, (
+        "recorded advisory entries the checker no longer reports — the bound "
+        "was lowered or the call site moved, so delete the recording instead of "
+        "leaving a slot a future entry can land in unread:\n  "
+        + "\n  ".join(f"{p} {c}" for p, c in stale))
 
 
 # ── the gate is dispatched, not merely present ───────────────────────────────
