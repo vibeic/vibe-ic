@@ -41,8 +41,16 @@ r1_r2_r3_compliance:
 - ✅ LDO regulates Vout=1.2 V across line/load; modulator meets ENOB/OSR target in transient
 
 ## Tool / data disclosures (honesty)
-- IHP SG13G2 has **no public ngspice corner lib** → corner sims use documented LEVEL=1 standin
-  models (modeled, not silicon sign-off). Must be stated in every corner result.
+- IHP SG13G2 ships **sectioned ngspice corner libraries** for every device class, and corner sims
+  bind them directly: `cornerMOShv.lib` / `cornerMOSlv.lib` (`mos_tt` / `mos_ss` / `mos_ff` /
+  `mos_sf` / `mos_fs`, plus `_mismatch` and `_stat` variants), `cornerRES.lib`
+  (`res_typ` / `res_bcs` / `res_wcs`) and `cornerCAP.lib` (`cap_typ` / `cap_bcs` / `cap_wcs`),
+  with real subcircuit device definitions. A corner result is still SIMULATED and is not silicon
+  sign-off, and must say so — but it must NOT be labelled a LEVEL=1 standin, because it is not one.
+  CORRECTED 2026-08-11 (vibe-ic#904): this document previously stated the PDK ships no public
+  ngspice corner lib and instructed every corner result to be labelled a LEVEL=1 standin. That was
+  false against the PDK installed in the pinned image, and it understated results produced from the
+  foundry's own corner sections.
 - The fabricated EE628 chip publishes only a flat top-cell GDS + chip-level extracted netlist
   (no per-block sub-netlist). It is the **golden oracle for the verify stage only**.
 - A8 hardware-in-the-loop is WAIVED (no physical EE628 die on the bench) — substitute with a

@@ -139,9 +139,9 @@ The full convention (folder layout, exclusions, the publish/validate commands) i
   target) via a **REAL iverilog/vvp** mixed-signal cosim (A8 HIL WAIVED → real
   cosim substitute, disclosed). Per-block PV: **Magic DRC=0 + KLayout SG13G2
   sign-off deck = 0 items** (non-vacuous) on streamed real GDS. **HONEST
-  DISCLOSURE** (in every result): SG13G2 has NO public ngspice corner lib → all
-  SPICE uses documented **LEVEL=1 standin** models = MODELED, not silicon
-  sign-off; per-block device-LVS OUT OF SCOPE (upstream has no per-block
+  DISCLOSURE** (in every result): SPICE binds the PDK's own sectioned ngspice
+  corner libraries (cornerMOShv/lv, cornerRES, cornerCAP; tt/ss/ff/sf/fs) =
+  MODELED, not silicon sign-off; per-block device-LVS OUT OF SCOPE (upstream has no per-block
   sub-netlist) → LVS at schematic+spec level. Pillar 1 functional coverage
   **100% (19/19)**; Pillar 2 **14/14 applicable PASS** (D1 + A1-A9 + M1-M4,
   cross-checked vs the fabricated UHEE628 golden at **spec + chip-GDS level**:
