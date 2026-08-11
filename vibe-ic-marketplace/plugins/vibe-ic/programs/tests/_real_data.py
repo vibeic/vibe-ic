@@ -240,6 +240,12 @@ def why_not_published(path: Path) -> Optional[str]:
         return ("not git-tracked at that path — publication in this repo IS the "
                 "commit, so an untracked file (a runtime write, a local scratch) "
                 "is never published output")
+    if not path.exists():
+        # The withdrawal signature (#1015/#1010/#1028), and worth its own
+        # sentence: "the index still lists it" and "it is not there" is a
+        # different situation from a path that was never published.
+        return ("git-tracked but ABSENT from the working tree — withdrawn from "
+                "publication, or a sparse/partial checkout")
     if not path.is_file():
         return "not a regular file"
     if path.stat().st_size == 0:
@@ -321,12 +327,22 @@ def _refusal_text(suffix: str, requirement_name: str, candidates: Sequence[Path]
                 f"index carries none at all, eligible or otherwise.")
     lines = [head]
     if refused:
+        # GROUPED BY REASON, not truncated by sort order. A flat "first 8 of 15"
+        # list is sorted by path, so `benchmark-data/...` fills it and the
+        # refused FIXTURES — the whole point of this refusal — fall off the end
+        # under "and 7 more". Every distinct reason gets a line, so the reader
+        # always sees THAT a fixture was refused, not just that something was.
+        by_reason: dict = {}
+        for rel, why in refused:
+            by_reason.setdefault(why, []).append(rel)
         lines.append(f"  refused ({len(refused)}), because a real-data test may "
                      f"not read a file this repo did not publish:")
-        for rel, why in list(refused)[:8]:
-            lines.append(f"    - {rel}: {why}")
-        if len(refused) > 8:
-            lines.append(f"    - ... and {len(refused) - 8} more")
+        for why, rels in sorted(by_reason.items(), key=lambda kv: -len(kv[1])):
+            lines.append(f"    * {len(rels)}x {why}")
+            for rel in rels[:2]:
+                lines.append(f"        - {rel}")
+            if len(rels) > 2:
+                lines.append(f"        - ... and {len(rels) - 2} more")
     if unmet:
         lines.append(f"  eligible but requirement-unmet ({len(unmet)}):")
         for rel in list(unmet)[:8]:
