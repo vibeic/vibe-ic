@@ -222,10 +222,20 @@ def _entries(blocks):
 
 def _per_block(tmp_path, devices, blocks):
     """What A3 binds for each block, through the REAL per-block path: discover
-    the design's domains, then call the resolver the way `emit_for_block`
-    does."""
+    the design's domains, then call the resolver the way `emit_for_block` does.
+
+    ON THE UNFIXED ARM there is no discovery to do — the per-block caller has
+    no way to say WHICH block it is asking about, so the only call available is
+    the four-argument one. That is not a shortcut around the control, it IS the
+    defect: taking it makes the unfixed arm fail on the two blocks binding the
+    same device, which is the measurement, rather than on a missing attribute,
+    which would be a red that proves nothing."""
     project = _project(tmp_path, devices, blocks)
-    domains = A3.block_voltage_domains(project, _entries(blocks))
+    discover = getattr(A3, "block_voltage_domains", None)
+    if discover is None:
+        return {n: A3.resolve_pdk_context(project, "famx", "", list(_ROLES))
+                for n in blocks}
+    domains = discover(project, _entries(blocks))
     return {n: A3.resolve_pdk_context(project, "famx", "", list(_ROLES),
                                       domains[n])
             for n in blocks}
@@ -407,9 +417,9 @@ def test_903_a3_carries_the_domain_into_its_own_record(tmp_path):
     devices = _family(_an_elevated_component(), _an_ordinary_component())
     got = _per_block(tmp_path, devices,
                      {"pass_block": 1.8, "core_block": 1.2})
-    assert (got["pass_block"]["role_model_election"]["domain"]
+    assert (got["pass_block"]["role_model_election"].get("domain")
             == {"volts": 1.8, "elevated": True})
-    assert (got["core_block"]["role_model_election"]["domain"]
+    assert (got["core_block"]["role_model_election"].get("domain")
             == {"volts": 1.2, "elevated": False})
 
 
