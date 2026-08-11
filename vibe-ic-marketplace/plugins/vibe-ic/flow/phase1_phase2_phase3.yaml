@@ -1197,8 +1197,55 @@ steps:
       # does not preserve the design.
       - synth_wrapper_gen
     required_outputs:
+      # THE PRE-MAP ARM, and it is named as such deliberately (vibe-ic#984).
+      # This step emits TWO netlists and this entry is the technology-GENERIC
+      # one, kept for LEC/equivalence where the abstract gate view is wanted.
+      # It is generic BY CONSTRUCTION: the phase-2 recipe is
+      # `techmap; opt; dffunmap; abc -g cmos2` with NO Liberty loaded, and that
+      # recipe cannot emit a standard cell.
+      #
+      # RE-MEASURED across every published run tree carrying this file
+      # (16 discovered, 2026-08-11): all 16 netlist.v hold 100% generic Yosys
+      # primitives and ZERO standard cells; the 9 trees that also carry the
+      # mapped arm hold ZERO generic primitives and 100% standard cells there.
+      # The split is total, not incidental.
+      #
+      # A dimension reading THIS entry is therefore making a statement about
+      # the pre-map netlist ONLY. It is NOT a statement about the netlist that
+      # PnR, area/stats and scan/ATPG consume — those bind the mapped arm named
+      # below, which is why `synth_netlist_check` emits
+      # AREA_ARTEFACT_DESCRIBES_ANOTHER_NETLIST rather than deciding for itself
+      # which netlist step 9 should account for.
       - "phase2/stage2/synth/netlist.v"
       - "phase2/stage2/synth/area.rpt OR phase2/stage2/synth/stats.json"
+      # THE MAPPED ARM — `<top>_synth.v` — is DELIBERATELY NOT DECLARED HERE,
+      # and that is a measured decision, not an oversight (vibe-ic#984).
+      #
+      # It is a real, deliberate artefact: PnR and streamout consume it first,
+      # `stats.json` records it as `"netlist"`, and `resolve_mapped_netlist`
+      # switches scan/ATPG onto it because iverilog cannot elaborate `$_NAND_`
+      # and the generic file yields zero fault sites.
+      #
+      # But it is written by PHASE 3's `step_synth`, not by this stage-2 step:
+      # of the 16 published trees carrying netlist.v, the 9 carrying the mapped
+      # arm ALL ran phase 3 and the 7 without it did not, with no exceptions.
+      # `required_outputs` is ALL-of-N and its only any-of spelling is ` OR `
+      # between paths, so an unconditional entry here cannot be satisfied by a
+      # phase-2-only run. MEASURED on a published tree that PASSes step 9
+      # today: deleting its mapped netlist to stand in for a converged
+      # `--skip-phase3` run turns check_step from PASS into MISSING with the
+      # entry declared, while the shipped declaration still returns PASS.
+      # (Across the published corpus as it stands the change is inert — 0 of 16
+      # trees move — because no phase-2-only tree PASSes step 9 today anyway.
+      # The cost lands on future phase-2-only runs, not on the census.)
+      #
+      # WHAT WOULD CLOSE THIS: a conditional spelling for `required_outputs`
+      # (per-entry `condition:`, which the grammar does not have today), or
+      # splitting step 9's mapped half onto the phase-3 step that produces it.
+      # Until one of those exists, the arms are LABELLED here rather than both
+      # declared, so a dimension can state which netlist it measured — which is
+      # what vibe-ic#984 asked for — without making a stage-2 step
+      # unsatisfiable without phase 3.
     # Provenance required (2026-04-22): the netlist MUST appear as a
     # logged `yosys` output in provenance.jsonl with matching hash.
     # To satisfy, wrap Yosys like:
@@ -1500,6 +1547,27 @@ steps:
     # already are: every one holds the vacuous-skip verdict
     # `{"program": "fmeda_fault_injection_coverage", "verdict": "NOT_APPLICABLE"}`
     # — audit output committed as run evidence, not a fault-injection result.
+    #
+    # RE-MEASURED 2026-08-11 (vibe-ic#983 ruling 1 asked for exactly the
+    # declaration withdrawn above). Every load-bearing fact still holds, so the
+    # declaration is still NOT made:
+    #   * PRODUCER: still exactly one. `fmeda_fault_injection_coverage` is
+    #     reached only by this gate line; everything else that names it imports
+    #     it as a library (`fmeda_coverage_check`,
+    #     `result_md_audit_provenance_check`) or names it in prose/INDEX.
+    #   * THE BREAKAGE, reproduced on this tree: two check_step runs on a fresh
+    #     fixture holding only phase2/stage1/rtl. As shipped -> VACUOUS_PASS and
+    #     the gate WRITES both JSON files. With both paths declared -> MISSING,
+    #     "no required_outputs found", and the tree holds NO file under reports/
+    #     afterwards. Declaring stops the gate, and the gate is the producer.
+    #   * THE EVIDENCE, re-counted: 15 files across 8 published run trees, so
+    #     #983's count is right. But 7 of the 8 `fmeda_coverage.json` still hold
+    #     the vacuous NOT_APPLICABLE document; exactly ONE carries a real
+    #     fault-injection roll-up (injected/detected counts, DC vs the ASIL
+    #     floor) and its verdict is FAIL. A count of files is not a count of
+    #     measurements.
+    # #983's count held; its inference that "the step produces judgeable output"
+    # did not — the AUDITOR produces it. Unchanged until the wiring above lands.
     gate:
       all_of:
         - program_exit_zero: "fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl --asil D --json reports/phase2/safety/fmeda_coverage.json"
@@ -3365,6 +3433,25 @@ steps:
       - post_layout_sim_check
     required_outputs:
       - "phase3/stage3/sim_postlayout/results.log OR phase3/stage3/sim_postlayout/pass.flag"
+      # The SUBSTANCE arm. Until now this step's only declared entry could be
+      # satisfied by `pass.flag` alone, and that flag says of itself that it is
+      # "the open-source-flow approximation" whose substance is checked
+      # elsewhere: "Substance gate (post_layout_sim_check) verifies the
+      # underlying RTL TB pass". The gate below already runs that check as a
+      # BLOCKING `program_exit_zero` clause; the report it writes was simply
+      # never declared, so no dimension could state that it had read it.
+      #
+      # MEASURED before declaring (vibe-ic#983):
+      #   * the report is carried by 5 published run trees;
+      #   * check_step over every published tree carrying a post-layout sim dir
+      #     (6 discovered) returns the SAME status with and without this entry —
+      #     0 of 6 moved, so declaring it re-grades no published run;
+      #   * step 29 already declares a runner-produced entry, so the
+      #     "every declared entry absent -> MISSING before the gate runs" early
+      #     return cannot be newly triggered by adding this one. That early
+      #     return is exactly why the same change is NOT made to FS1 — see the
+      #     FS1 comment above, where it was measured to stop the producer.
+      - "reports/phase2/gates/post_layout_sim.json"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/sim_postlayout/results.log", "phase3/stage3/sim_postlayout/pass.flag"]
@@ -4494,6 +4581,29 @@ steps:
     required_inputs:
       - from: 1
         path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+    # NO required_outputs — DELIBERATE, and NOT the same case as a step whose
+    # declaration is merely missing (vibe-ic#983 ruling 3). P0 owns no artefact
+    # at all: it is a SYNTHETIC preflight whose verdict is emitted directly by
+    # `flow_compliance_check._run_structural_rtl_gates(...)` into the audit's
+    # own `reports/audit/phase23_completion_audit.json`, under the `gates:`
+    # array (see `notes:` below).
+    #
+    # That file belongs to the AUDIT, not to P0. Declaring it here would make
+    # P0's dimension-3 cell judge a file P0 does not produce — the step would
+    # be certified by an artefact whose producer is the very program doing the
+    # certifying. That is the same pathology vibe-ic#984 names for the Step 9
+    # netlist split, and the one the withdrawn FS1 closure demonstrated (see
+    # the FS1 comment above, where declaring an auditor-produced path was
+    # MEASURED to stop the producer from ever running).
+    #
+    # So the 63x8 matrix must publish P0 as NA for the artefact dimensions
+    # rather than as a gap awaiting a declaration. It already does: d3, d7 and
+    # d8 all read NA today, and d3's NA branch asserts the precondition LIVE
+    # (`assert not F.declares_required_outputs(sid)`), so if anyone ever adds
+    # required_outputs here the NA self-invalidates and the suite goes red
+    # instead of silently re-grading the cell. This comment is that ruling
+    # written down at the point of decision, which is the only place a future
+    # reader looks.
     notes: |
       Synthetic preflight stage; the verdict is emitted directly by
       flow_compliance_check.py's `_run_structural_rtl_gates(...)` and

@@ -421,8 +421,24 @@ def test_output_entries_classify_into_the_four_kinds():
     # artefacts were part of this count for one day and are NOT here: no
     # producer outside FS1's own gate writes them, so declaring them could only
     # be satisfied by the auditor's own output.
-    assert sum(seen.values()) == 133, seen
-    assert seen[F.FILE] == 99
+    #
+    # 2026-08-11: 133 -> 134, FILE 99 -> 100 (vibe-ic#983 ruling 2). The ONE new
+    # entry is step 29's `reports/phase2/gates/post_layout_sim.json`, the
+    # BLOCKING "Substance gate" report its own gate clause already wrote while
+    # no entry named it. GLOB and ANY_OF are untouched.
+    #
+    # And FS1's two FMEDA artefacts are STILL not here. #983 asked for them
+    # again in the same breath as step 29's; the difference is measured, not
+    # stylistic. Step 29 already declares a run-produced entry, so its gate
+    # keeps running and the declaration re-grades nothing (0 of 6 published
+    # trees move). FS1 declares nothing else, so declaring its gate paths trips
+    # the "every declared entry absent -> MISSING before the gate runs" early
+    # return and the producer never runs at all: MEASURED on this tree,
+    # VACUOUS_PASS with both reports written becomes MISSING with none.
+    # test_flow_declaration_does_not_silence_its_producer.py holds that
+    # distinction live for both steps.
+    assert sum(seen.values()) == 134, seen
+    assert seen[F.FILE] == 100
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
