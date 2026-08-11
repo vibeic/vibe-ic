@@ -108,11 +108,21 @@ def test_peak_over_supply_current_fails(tmp_path):
 
 
 def test_peak_under_supply_current_does_not_fail(tmp_path):
-    """The published corpus's own ratio. Nothing may go red here — this is the
-    half of the control that keeps the gate from being a blanket refusal."""
+    """The published corpus's own ratio. Nothing may go RED here.
+
+    rc 2, not 0, since vibe-ic#1017: this project has no Jmax authority, so the
+    gate reaches INCOMPLETE and INCOMPLETE is now the disclosed-skip tier. What
+    this test guards is unchanged and is the thing that matters — the supply
+    screen does not fire — and it is asserted directly rather than through the
+    exit code.
+
+    The half of the control that keeps this gate from being a BLANKET refusal
+    is `test_jmax_present_screens_and_names_the_threshold`, which still earns a
+    real rc 0.
+    """
     proj = _project(tmp_path, peak="1.963e-04")
     r = _run(proj)
-    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.returncode == 2, r.stdout + r.stderr
     assert "EM_PEAK_CURRENT_EXCEEDS_SUPPLY" not in r.stdout
 
 
@@ -121,8 +131,13 @@ def test_the_bound_is_one_not_a_guardband(tmp_path):
     later introduces a margin here, this dies — which is the point: the limit
     is conservation of charge and there is nothing in it to tune."""
     # supplied current = 1.0e-03 / 1.0 = 1.0e-03 A
+    #
+    # Just UNDER is rc 2, not 0 (vibe-ic#1017): neither project carries a Jmax
+    # authority, so passing the supply screen still leaves the gate INCOMPLETE.
+    # The two sides remain opposite — 2 is "I did not finish", 1 is "I looked
+    # and it was wrong" — and only one of them is a verdict.
     assert _run(_project(tmp_path / "a", peak="9.99e-04", power="1.0e-03",
-                         volt="1.0")).returncode == 0
+                         volt="1.0")).returncode == 2
     assert _run(_project(tmp_path / "b", peak="1.01e-03", power="1.0e-03",
                          volt="1.0")).returncode == 1
 
@@ -130,10 +145,11 @@ def test_the_bound_is_one_not_a_guardband(tmp_path):
 # ── the REFUSAL ────────────────────────────────────────────────────────────
 def test_no_jmax_refuses_and_names_it(tmp_path):
     """A current that is physically possible is not an EM pass. With no Jmax
-    authority the gate must REFUSE and name what it lacks — never print PASS."""
+    authority the gate must REFUSE and name what it lacks — never print PASS,
+    and (vibe-ic#1017) never EXIT like one either."""
     proj = _project(tmp_path, peak="1.963e-04")
     r = _run(proj)
-    assert r.returncode == 0
+    assert r.returncode == 2
     assert "[PASS]" not in r.stdout
     assert any(l.lstrip().startswith("INCOMPLETE")
                for l in r.stdout.splitlines())
@@ -143,12 +159,20 @@ def test_no_jmax_refuses_and_names_it(tmp_path):
 
 
 def test_empty_project_refuses_and_discloses(tmp_path):
-    """Zero denominator. The house rule is that a gate which read nothing must
-    not answer with a bare pass; it may exit 0 only if it SAYS so."""
+    """Zero denominator: the gate must REFUSE, and refusing means rc 2.
+
+    This docstring used to read "it may exit 0 only if it SAYS so" — and that
+    is NOT the house rule, which is why `test_matrix_d2_falsifiable` was red on
+    main for five merges (vibe-ic#1017). `gate_zero_denominator_refuses_check`
+    says REFUSE. Saying so in stdout while exiting 0 does not reach the
+    consumer: this gate is a BLOCKING `program_exit_zero` clause at step 25,
+    and `program_exit_zero` reads the EXIT CODE, not the prose. An empty tree
+    used to pass it.
+    """
     proj = tmp_path / "empty"
     (proj / "reports").mkdir(parents=True)
     r = _run(proj)
-    assert r.returncode == 0
+    assert r.returncode == 2
     assert "[PASS]" not in r.stdout
     assert any(l.lstrip().startswith("INCOMPLETE")
                for l in r.stdout.splitlines())
@@ -203,7 +227,7 @@ def test_json_report_is_written_and_carries_both_tiers(tmp_path):
     proj = _project(tmp_path, peak="1.963e-04")
     out = tmp_path / "out.json"
     r = _run(proj, "--json", str(out))
-    assert r.returncode == 0
+    assert r.returncode == 2          # INCOMPLETE tier, vibe-ic#1017
     doc = json.loads(out.read_text())
     assert doc["verdict"] == "INCOMPLETE"
     assert doc["supply_current_screen"]["screened"] is True
@@ -217,3 +241,34 @@ def test_not_a_directory_is_an_argument_error(tmp_path):
         [sys.executable, str(PROG), str(tmp_path / "nope")],
         capture_output=True, text=True)
     assert r.returncode == 2
+
+
+# ── the TIER AS THE CONSUMER SEES IT (vibe-ic#1017) ────────────────────────
+def test_the_refusal_reaches_the_flow_as_not_a_pass(tmp_path):
+    """The exit code only matters because of what `flow_compliance_check` does
+    with it, so assert it THERE and not just here.
+
+    This is the whole of vibe-ic#1017. Both of this campaign's step-25/step-33
+    gates printed a refusal and returned 0, and `program_exit_zero` — a
+    BLOCKING clause — reads the exit code, not the prose. An empty tree passed.
+    `test_matrix_d2_falsifiable::test_d2_gate_has_a_reachable_fail` said so on
+    main for five merges and was merged past each time.
+
+    Driven through the consumer's own wrapper rather than a re-implementation
+    of its rules, so it cannot drift from them: rc 2 must land in the
+    VACUOUS_PASS tier — the "input-missing skip convention", explicitly NOT a
+    clean result — and a real comparison must still land in PASS.
+    """
+    import flow_compliance_check as fcc
+
+    empty = tmp_path / "empty"
+    (empty / "reports").mkdir(parents=True)
+    ok, out = fcc._check_program_exit_zero(
+        empty, "em_peak_current_authority_check .")
+    assert ok, out            # rc 2 is not a FAIL ...
+    assert out.startswith(fcc._VACUOUS_HINT_PREFIX), out   # ... and not a PASS
+
+    real = _project(tmp_path / "real", peak="1.0e-06", with_csv=True, with_jmax=True)
+    ok2, out2 = fcc._check_program_exit_zero(real, "em_peak_current_authority_check .")
+    assert ok2, out2
+    assert not out2.startswith(fcc._VACUOUS_HINT_PREFIX), out2

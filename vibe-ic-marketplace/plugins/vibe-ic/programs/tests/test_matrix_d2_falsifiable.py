@@ -857,6 +857,84 @@ def _f_pdk_declared_not_used(p: Path) -> None:
        "[INFO STA-0001] Liberty: /pdks/othernode/othernode_fd_sc_hd__tt.lib\n")
 
 
+def _f_em_peak_exceeds_supply(p: Path) -> None:
+    """The EM report contradicts itself: a branch carries more current than the
+    net is supplied with.
+
+    Reddens the Step-25 clause
+    ``em_peak_current_authority_check . --json reports/phase3/em_current_authority.json``.
+
+    EMPTY cannot reach it, and after vibe-ic#1017 that is a VIRTUE rather than a
+    gap. MEASURED on an empty tree, verbatim:
+
+        EMPTY   rc 2  INCOMPLETE: electromigration was NOT screened — missing
+                      authority: per-layer Jmax (PDK tech LEF DCCURRENTDENSITY,
+                      or a --jmax JSON); and the net supply current ...
+
+    Through #1000 that same tree exited **0** and PASSED this BLOCKING clause
+    while printing ``NOT screened`` — which is why `test_d2_gate_has_a_reachable_fail`
+    was red on main for five merges. The refusal now leaves through the exit
+    code as well as the text, so the fixture below has to carry a real
+    contradiction to redden the cell.
+
+    The finding is `EM_PEAK_CURRENT_EXCEEDS_SUPPLY`, and it is ORACLE-FREE: no
+    Jmax, no PDK, no golden value is consulted. The report states its own
+    supply authority (``Total power / Supply voltage``) and its own peak segment
+    current, and the peak is 9x the supply. **No branch of a grid can carry more
+    current than the supply injects**, so the artefact refutes itself on
+    conservation of charge — the limit is 1.0 because it is physics, not a
+    guardband.
+
+    Chip-, PDK- and vendor-AGNOSTIC by construction: the numbers are invented
+    and the rule is internal consistency of one report, not agreement with any
+    process.
+    """
+    _w(p, "reports/phase3/em.rpt",
+       "Electromigration summary\n"
+       "Net: VDD\n"
+       "  Supply voltage: 1.8 V\n"
+       "  Total power: 1.0e-03 W\n"
+       "  Maximum current: 5.0e-03 A\n")
+
+
+def _f_power_over_budget(p: Path) -> None:
+    """Total power exceeds the budget the design's own L19 declares.
+
+    Reddens the Step-33 clause
+    ``power_total_vs_budget_check . --json reports/phase2/gates/power_budget.json``.
+
+    EMPTY cannot reach it, and after vibe-ic#1017 that is a VIRTUE. MEASURED on
+    an empty tree, verbatim:
+
+        EMPTY   rc 2  INCOMPLETE: total power was NOT compared against
+                      anything — missing authority: L19_CONSTRAINTS_PDK.json
+                      fields.power_budget_uw ...
+
+    Through #1000 that tree exited **0** into a BLOCKING clause.
+
+    BOTH halves are load-bearing, which is what makes this a real negative
+    control rather than a way of tripping an unguarded branch: a fixture with
+    only the report and no budget is rc 2 (nothing to compare against), and a
+    fixture with only the budget and no report is rc 2 as well (nothing to
+    compare). The gate refuses to derive a budget from die area or supply
+    voltage — a threshold nobody declared would turn an unanswered question
+    into an answered one — so the declaration has to be present and the
+    measurement has to be present before there is a verdict to earn.
+
+    330 uW against a declared 100 uW: 3.3x over. Chip- and PDK-AGNOSTIC — a
+    watt figure, a micro-watt budget, and the design's own number as the only
+    authority.
+    """
+    _w(p, "reports/phase2/power.rpt",
+       "Group                  Internal  Switching    Leakage      Total\n"
+       "                          Power      Power      Power      Power (Watts)\n"
+       "-----------------------------------------------------------------\n"
+       "Total                  1.00e-04   2.00e-04   3.00e-05   3.30e-04 100.0%\n")
+    _w(p, "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+       {"doc_id": "L19", "doc_name": "L19_CONSTRAINTS_PDK",
+        "fields": {"power_budget_uw": 100}})
+
+
 # ── The three fixtures that replaced an empty-directory red with a real one ──
 #
 # Steps 6, 28 and 30 each had exactly one red before 2026-08-06, and each of
@@ -1209,6 +1287,8 @@ FIXTURES: Dict[str, Callable[[Path], None]] = {
     "MACRO_OBS_SPANNED": _f_macro_obs_spanned,
     "STEP_FAIL_UNACKNOWLEDGED": _f_step_fail_unacknowledged,
     "PDK_DECLARED_NOT_USED": _f_pdk_declared_not_used,
+    "EM_PEAK_EXCEEDS_SUPPLY": _f_em_peak_exceeds_supply,
+    "POWER_OVER_BUDGET": _f_power_over_budget,
 }
 
 #: Which fixture reddens which clause. Keyed by ``(normalized step id, exact
@@ -1231,6 +1311,17 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # -- a declared target AND a recorded library load -- have to be present
     # before it has anything to compare.
     ("36", "declared_pdk_is_the_pdk_used_check ."): "PDK_DECLARED_NOT_USED",
+    # vibe-ic#1017. #1000 wired both of these BLOCKING and left INCOMPLETE on
+    # rc 0, so EMPTY answered PASS to a blocking clause while the programs' own
+    # last lines said "NOT screened" / "NOT compared against anything". #1017
+    # moved INCOMPLETE to the disclosed-skip tier (rc 2), so EMPTY can no longer
+    # carry either cell and each needs an artefact that is WRONG on its own
+    # terms -- self-contradiction for EM, an exceeded self-declared budget for
+    # power. Neither fixture consults an oracle.
+    ("25", "em_peak_current_authority_check . --json "
+           "reports/phase3/em_current_authority.json"): "EM_PEAK_EXCEEDS_SUPPLY",
+    ("33", "power_total_vs_budget_check . --json "
+           "reports/phase2/gates/power_budget.json"): "POWER_OVER_BUDGET",
     # vibe-ic#704 wired this into D1. EMPTY answers VACUOUS_PASS by design:
     # no generated_docs means phase1 has not run, which is not an incomplete
     # extraction. The docs must exist AND carry a placeholder.

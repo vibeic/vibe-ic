@@ -83,8 +83,26 @@ WHAT THIS GATE DOES NOT DO — stated so a reviewer does not have to find it
 chip-AGNOSTIC: it reads a watt figure and a micro-watt budget. No foundry,
 process or chip token appears anywhere in this file.
 
-Exit codes: 0 = PASS or INCOMPLETE (disclosed), 1 = the total exceeds the
-declared budget, 2 = the question could not be put (bad argument).
+Exit codes: 0 = PASS, 1 = the total exceeds the declared budget, 2 = the
+question could not be put — INCOMPLETE (the disclosed-skip tier,
+`_vacuous_exit.RC_VACUOUS`) or a bad argument.
+
+INCOMPLETE EXITS 2, NOT 0 (vibe-ic#1017)
+----------------------------------------
+This gate is a BLOCKING `program_exit_zero` clause at step 33. Through #1000 it
+returned 0 for INCOMPLETE, so an EMPTY tree — no power report, no L19, nothing —
+PASSED the blocking clause while this file's own last line said ``total power
+was NOT compared against anything``. That is the shape
+`gate_zero_denominator_refuses_check` forbids and the one repaired for
+`declared_pdk_is_the_pdk_used_check` in vibe-ic#1002.
+`test_matrix_d2_falsifiable` had been red on main for five merges saying so.
+
+The refusal itself is unchanged and still correct: this gate will not derive a
+budget from die area or supply voltage, because a threshold nobody declared
+would turn an unanswered question into an answered one. What changes is only
+that the refusal now leaves through the exit code as well as the text —
+`flow_compliance_check` records rc 2 as VACUOUS_PASS, explicitly NOT a clean
+result.
 """
 from __future__ import annotations
 
@@ -99,6 +117,10 @@ TOOL = "power_total_vs_budget_check"
 VERSION = "1.0.0"
 
 RC_OK, RC_FINDINGS, RC_ARG = 0, 1, 2
+#: INCOMPLETE — the disclosed-skip tier (`_vacuous_exit.RC_VACUOUS`).
+#: Named apart from RC_ARG because they mean different things to a
+#: reader even though the flow maps both to VACUOUS_PASS today.
+RC_NOT_COMPARED = 2
 
 #: Where a power report may sit. DISCOVERED from the tree, never enumerated.
 _RPT_GLOBS = ("reports/**/power*.rpt", "steps/**/power*.rpt")
@@ -304,7 +326,8 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"an answered one.")
     print(f"INCOMPLETE: total power was NOT compared against anything — "
           f"missing authority: {rep['missing_authority']}.")
-    return RC_OK
+    # A REFUSAL EXITS 2, NOT 0 (vibe-ic#1017). See the module docstring.
+    return RC_NOT_COMPARED
 
 
 if __name__ == "__main__":

@@ -123,7 +123,7 @@ def test_the_ledger_mutation_reddens_a_run_that_declares_a_budget(tmp_path):
 def test_absent_budget_refuses_and_names_the_authority(tmp_path):
     proj = _project(tmp_path, budget=None)
     r = _run(proj)
-    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.returncode == 2, r.stdout + r.stderr   # REFUSAL tier, vibe-ic#1017
     assert "[PASS]" not in r.stdout
     assert any(l.lstrip().startswith("INCOMPLETE")
                for l in r.stdout.splitlines())
@@ -138,7 +138,7 @@ def test_disagreeing_copies_are_not_an_authority(tmp_path):
     reported."""
     proj = _project(tmp_path, budget=1000.0, extra_budgets=(2000.0,))
     r = _run(proj)
-    assert r.returncode == 0
+    assert r.returncode == 2          # REFUSAL tier, vibe-ic#1017
     assert any(l.lstrip().startswith("INCOMPLETE")
                for l in r.stdout.splitlines())
     assert "copies disagree" in r.stdout
@@ -152,10 +152,17 @@ def test_agreeing_copies_are_one_authority(tmp_path):
 
 
 def test_empty_project_refuses_and_discloses(tmp_path):
+    """Zero denominator: REFUSE, and refusing means rc 2 (vibe-ic#1017).
+
+    This gate is a BLOCKING `program_exit_zero` clause at step 33, and
+    `program_exit_zero` reads the EXIT CODE. Until #1017 an empty tree — no
+    power report, no L19 — exited 0 and PASSED that clause while this very
+    stdout said the total was NOT compared against anything.
+    """
     proj = tmp_path / "empty"
     (proj / "reports").mkdir(parents=True)
     r = _run(proj)
-    assert r.returncode == 0
+    assert r.returncode == 2
     assert "[PASS]" not in r.stdout
     assert any(l.lstrip().startswith("INCOMPLETE")
                for l in r.stdout.splitlines())
@@ -196,3 +203,34 @@ def test_bad_argument_is_an_argument_error(tmp_path):
     assert subprocess.run(
         [sys.executable, str(PROG), str(tmp_path / "nope")],
         capture_output=True, text=True).returncode == 2
+
+
+# ── the TIER AS THE CONSUMER SEES IT (vibe-ic#1017) ────────────────────────
+def test_the_refusal_reaches_the_flow_as_not_a_pass(tmp_path):
+    """The exit code only matters because of what `flow_compliance_check` does
+    with it, so assert it THERE and not just here.
+
+    This is the whole of vibe-ic#1017. Both of this campaign's step-25/step-33
+    gates printed a refusal and returned 0, and `program_exit_zero` — a
+    BLOCKING clause — reads the exit code, not the prose. An empty tree passed.
+    `test_matrix_d2_falsifiable::test_d2_gate_has_a_reachable_fail` said so on
+    main for five merges and was merged past each time.
+
+    Driven through the consumer's own wrapper rather than a re-implementation
+    of its rules, so it cannot drift from them: rc 2 must land in the
+    VACUOUS_PASS tier — the "input-missing skip convention", explicitly NOT a
+    clean result — and a real comparison must still land in PASS.
+    """
+    import flow_compliance_check as fcc
+
+    empty = tmp_path / "empty"
+    (empty / "reports").mkdir(parents=True)
+    ok, out = fcc._check_program_exit_zero(
+        empty, "power_total_vs_budget_check .")
+    assert ok, out            # rc 2 is not a FAIL ...
+    assert out.startswith(fcc._VACUOUS_HINT_PREFIX), out   # ... and not a PASS
+
+    real = _project(tmp_path / "real", budget=1000.0)
+    ok2, out2 = fcc._check_program_exit_zero(real, "power_total_vs_budget_check .")
+    assert ok2, out2
+    assert not out2.startswith(fcc._VACUOUS_HINT_PREFIX), out2
