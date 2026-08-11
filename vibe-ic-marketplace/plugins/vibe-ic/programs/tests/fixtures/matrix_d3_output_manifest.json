@@ -16,14 +16,6 @@
       "kind": "home",
       "rel": "AI_IC_design/4th_benchmark/ibex_e2e"
     },
-    "benchmark-data/ic/caravel_user_project": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/caravel_user_project"
-    },
-    "benchmark-data/ic/sha256": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/sha256"
-    },
     "benchmark-data/ic/sha256/clean_run_v1427_20260715": {
       "kind": "repo",
       "rel": "benchmark-data/ic/sha256/clean_run_v1427_20260715"
@@ -35,10 +27,6 @@
     "benchmark-data/ic/spm/v1.9.96_gf180mcuD": {
       "kind": "repo",
       "rel": "benchmark-data/ic/spm/v1.9.96_gf180mcuD"
-    },
-    "benchmark-data/ic/subservient": {
-      "kind": "repo",
-      "rel": "benchmark-data/ic/subservient"
     },
     "benchmark-data/ic/u_hawaii_adc": {
       "kind": "repo",
@@ -164,10 +152,10 @@
         },
         "phase1/generated_docs/L8_RTL_CONSTANTS.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
           "alternative": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
           "path": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
-          "size_bytes": 3207
+          "size_bytes": 5495
         }
       }
     },
@@ -247,10 +235,10 @@
       "entries": {
         "phase2/stage1/sim/*.log OR phase2/stage1/sim/results.xml OR phase2/stage1/sim/pass.flag OR phase2/stage1/sim_professional/**/results.xml": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
           "alternative": "phase2/stage1/sim/results.xml",
           "path": "phase2/stage1/sim/results.xml",
-          "size_bytes": 101
+          "size_bytes": 843
         },
         "reports/phase2/coverage/coverage_actual.json": {
           "status": "PRODUCED_BY_RUN",
@@ -280,7 +268,7 @@
         },
         "phase2/stage1/sim_full_stack/results.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
           "alternative": "phase2/stage1/sim_full_stack/results.json",
           "path": "phase2/stage1/sim_full_stack/results.json",
           "size_bytes": 3119
@@ -646,7 +634,7 @@
         },
         "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
           "alternative": "phase3/stage3/pnr/pdn.done",
           "path": "phase3/stage3/pnr/pdn.done",
           "size_bytes": 144
@@ -658,10 +646,10 @@
       "entries": {
         "phase3/stage3/cts/clock_plan.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
           "alternative": "phase3/stage3/cts/clock_plan.json",
           "path": "phase3/stage3/cts/clock_plan.json",
-          "size_bytes": 388
+          "size_bytes": 196
         }
       }
     },
@@ -682,10 +670,10 @@
       "entries": {
         "phase3/stage3/pnr/spare_cells.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/sha256",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
           "alternative": "phase3/stage3/pnr/spare_cells.json",
           "path": "phase3/stage3/pnr/spare_cells.json",
-          "size_bytes": 34545
+          "size_bytes": 3765
         },
         "reports/spare_cell_coverage.json": {
           "status": "PRODUCED_BY_RUN",
@@ -708,10 +696,10 @@
         },
         "phase3/stage3/cts/clock_tree.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
           "alternative": "phase3/stage3/cts/clock_tree.rpt",
           "path": "phase3/stage3/cts/clock_tree.rpt",
-          "size_bytes": 606
+          "size_bytes": 1924
         }
       }
     },
@@ -739,17 +727,17 @@
         },
         "phase3/stage3/pnr/routed.drc.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
           "alternative": "phase3/stage3/pnr/routed.drc.rpt",
           "path": "phase3/stage3/pnr/routed.drc.rpt",
-          "size_bytes": 19045
+          "size_bytes": 18989
         },
         "reports/phase3/drc_router.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
           "alternative": "reports/phase3/drc_router.rpt",
           "path": "reports/phase3/drc_router.rpt",
-          "size_bytes": 19208
+          "size_bytes": 19539
         }
       }
     },
@@ -938,10 +926,10 @@
         "reports/phase2/gates/perc_signoff.json": {
           "status": "PRODUCED_BY_RUN",
           "provenance_note": "the recorded copy is `perc_signoff_check`'s own verdict document ({\"program\": \"perc_signoff_check\", ...}) and no producer outside step 28's gate writes this path, so the run root carries compliance-gate output committed alongside the run. Admissible for dimension 3 (the root carries a runner marker and the file pre-exists any audit of it) but it is NOT independent of the checker: see flow_compliance_check --strict-audit-evidence.",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
           "alternative": "reports/phase2/gates/perc_signoff.json",
           "path": "reports/phase2/gates/perc_signoff.json",
-          "size_bytes": 523
+          "size_bytes": 474
         }
       }
     },
@@ -1011,18 +999,18 @@
         "reports/phase3/lvs.json": {
           "status": "PRODUCED_BY_RUN",
           "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) — same class as perc_signoff.json above.",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
           "alternative": "reports/phase3/lvs.json",
           "path": "reports/phase3/lvs.json",
-          "size_bytes": 225
+          "size_bytes": 238
         },
         "reports/phase2/gates/erc_density.json": {
           "status": "PRODUCED_BY_RUN",
           "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) — same class as perc_signoff.json above.",
-          "run": "benchmark-data/ic/caravel_user_project",
+          "run": "benchmark-data/ic/sha256/clean_run_v1427_20260715",
           "alternative": "reports/phase2/gates/erc_density.json",
           "path": "reports/phase2/gates/erc_density.json",
-          "size_bytes": 1188
+          "size_bytes": 842
         }
       }
     },
@@ -1031,10 +1019,10 @@
       "entries": {
         "phase3/stage3/eco/eco_log.json OR phase3/stage3/eco/no_eco_needed.flag": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
-          "alternative": "phase3/stage3/eco/eco_log.json",
-          "path": "phase3/stage3/eco/eco_log.json",
-          "size_bytes": 370
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
+          "alternative": "phase3/stage3/eco/no_eco_needed.flag",
+          "path": "phase3/stage3/eco/no_eco_needed.flag",
+          "size_bytes": 158
         },
         "phase3/stage3/eco/eco_trigger_decision.json": {
           "status": "PRODUCED_BY_RUN",
@@ -1069,7 +1057,7 @@
       "entries": {
         "phase3/stage3/pnr/filled.def OR phase3/stage3/pnr/metal_fill.done": {
           "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/subservient",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
           "alternative": "phase3/stage3/pnr/metal_fill.done",
           "path": "phase3/stage3/pnr/metal_fill.done",
           "size_bytes": 373
