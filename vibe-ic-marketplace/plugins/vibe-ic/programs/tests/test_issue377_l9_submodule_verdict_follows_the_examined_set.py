@@ -255,4 +255,26 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     # assertion exists to protect: a shrinking denominator is the defect, a
     # growing one is the fix. Checked before updating — had any number fallen,
     # the census would have been the finding, not the expectation.
-    assert (nonempty, declared, examined, all_skipped) == (37, 132, 64, 16)
+    #
+    # 2026-08-12, vibe-ic#905: (37, 132, 64, 16) -> (35, 130, 64, 14). Numbers
+    # FALL here, and the paragraph above says a falling denominator is the
+    # defect — so this is named member-by-member rather than re-typed.
+    #
+    # The cause is not the reader. It is that exactly TWO of the 37 non-empty L9
+    # documents were RETIRED with their trees, both on the one IC #905 names:
+    #     benchmark-data/ic/u_hawaii_adc/phase1/generated_docs/L9_INTEGRATION_SPEC.json
+    #     benchmark-data/ic/u_hawaii_adc/clean_run_v1422_20260715/
+    #         phase1/generated_docs/L9_INTEGRATION_SPEC.json
+    # No member was gained. Both sat in the `all_skipped` set, which is why
+    # `examined` is UNCHANGED at 64 while the other three fall by exactly the
+    # two documents (nonempty -2, declared -2, all_skipped -2).
+    #
+    # The distinguishing check, and the reason this is not a waiver: the census
+    # is a pure function of the tracked L9 set. Re-run it against the parent
+    # commit — where both documents are still present — and it still returns
+    # (37, 132, 64, 16); measured, not assumed. A reader regression would fall
+    # on BOTH trees. This falls only on the tree the documents left.
+    #
+    # `new_arm` is deliberately NOT moved: it holds at 6 across the retirement,
+    # so the arm this landing added is still reached by every project it was.
+    assert (nonempty, declared, examined, all_skipped) == (35, 130, 64, 14)
