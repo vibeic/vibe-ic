@@ -440,7 +440,55 @@ def _build_corpus_figures() -> CorpusFigures:
         table[f"required_outputs_{kind.lower()}"] = _out_kind(kind)
     for kind in F.GATE_CLAUSE_KINDS:
         table[f"gate_clauses_{kind}"] = _clause_kind(kind)
-    return CorpusFigures({name: _binding(fn) for name, fn in table.items()})
+
+    bound = {name: _binding(fn) for name, fn in table.items()}
+    bound.update(_artefact_channel_figures())
+    return CorpusFigures(bound)
+
+
+def _artefact_channel_figures() -> Dict[str, Callable[[Path], int]]:
+    """The two digits the ARTEFACT_MUTATION channel publishes about ITSELF.
+
+    Not a property of the flow yaml, which is why these are bound separately
+    from the table above and take the root through the ledger rather than
+    through `_flow_scope`.
+
+    THEY ARE HERE BECAUSE THEY ROTTED. `matrix_mutation_ledger` already
+    computes this pair live — `artefact_headline()`'s docstring says the line
+    is "fit for the README" — and the README carried a HAND-TYPED copy of it
+    instead. The ledger's own count then moved 4 -> 2 -> 1 across `46dbf43d`
+    and `fc664a57`, each time in the change that closed the gap, exactly as
+    `ARTEFACT_CANNOT_REDDEN_AS_MEASURED`'s comment requires; the README went on
+    publishing 4 and a four-row table naming three gates as unable to fail that
+    had learned to fail. Nothing compared the two, because the replay guards the
+    LEDGER and nothing guarded its PUBLICATION.
+
+    A stale "this gate cannot fail" is the worse direction of that error: it
+    reads as a disclosed known gap, so it buys the credit for honesty while
+    describing a gate that is now doing its job.
+    """
+    def _ledger(root: Path):
+        """The ledger belonging to `root`, falling back to this plugin.
+
+        Imported under its own module name — `spec_from_file_location` with a
+        synthetic name breaks the module's `@dataclass` declarations, because
+        dataclasses resolves annotations through `sys.modules[cls.__module__]`.
+        """
+        for p in (Path(root) / "programs", PLUGIN_ROOT / "programs"):
+            if (p / "matrix_mutation_ledger.py").is_file():
+                sp = str(p)
+                if sp not in sys.path:
+                    sys.path.insert(0, sp)
+                break
+        import matrix_mutation_ledger as L  # noqa: E402
+        return L
+
+    return {
+        "artefact_mutations_registered":
+            lambda root: len(_ledger(root).ARTEFACT_MUTATIONS),
+        "artefact_cannot_redden":
+            lambda root: len(_ledger(root).artefact_findings()),
+    }
 
 
 #: The seam's adoption contract: one module-global naming every figure this
