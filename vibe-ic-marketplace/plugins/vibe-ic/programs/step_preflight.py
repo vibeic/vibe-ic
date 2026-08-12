@@ -743,6 +743,53 @@ def _confirm_identity(project: Path, dec: Decision,
 # --------------------------------------------------------------------------- #
 # The gate itself
 # --------------------------------------------------------------------------- #
+#: Set to "0" to suppress the refusal-time repro bundle (vibe-ic#1097 S7).
+#: Opt-OUT rather than opt-in: the bundle is only ever produced on a refusal,
+#: which is already an abnormal outcome someone is about to investigate, and a
+#: diagnostic nobody remembers to enable is a diagnostic that is not there when
+#: it is needed — which is the `step_required_inputs_check` shape this module
+#: was written to end.
+REPRO_BUNDLE_ENV = "VIBE_IC_REPRO_BUNDLE"
+
+
+def _emit_repro_bundle(project: Path, dec: "Decision") -> Optional[str]:
+    """Bundle the refused span's declared inputs. Returns a path, or None.
+
+    NEVER RAISES AND NEVER CHANGES A VERDICT. This runs on the refusal path, so
+    every failure mode here — no flow, unwritable reports dir, a step with no
+    `required_inputs` — must leave the refusal exactly as it was. A diagnostic
+    that can convert a clean refusal into a crash is worse than no diagnostic:
+    the caller would lose the finding it came to report.
+
+    An INCOMPLETE bundle is still returned. On this path the inputs are absent
+    BY CONSTRUCTION — that is what was refused — so "some of it is missing" is
+    the evidence, not a reason to withhold it. The manifest inside the archive
+    names every unresolved input, so the bundle states its own completeness.
+    """
+    if os.environ.get(REPRO_BUNDLE_ENV, "1") == "0":
+        return None
+    steps = [str(s) for s in (dec.flow_steps or []) if str(s)]
+    if not steps:
+        return None
+    try:
+        from step_repro_bundle import write_bundle, DEFAULT_REL  # type: ignore
+        out = (Path(project) / DEFAULT_REL /
+               f"refused-{dec.site}-{'-'.join(steps)}.tar.gz")
+        rep = write_bundle(Path(project), steps, out)
+        if rep.get("verdict") == "REFUSED":
+            return None
+        print(f"[preflight] {dec.site}: repro bundle -> {out} "
+              f"({len(rep.get('files', []))} input(s) present, "
+              f"{len(rep.get('missing', []))} absent)",
+              file=sys.stderr, flush=True)
+        return str(out)
+    except Exception as exc:                            # noqa: BLE001
+        # Named, never silent — and never fatal.
+        print(f"[preflight] {dec.site}: repro bundle NOT produced: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return None
+
+
 def gate(project: Path, runner: str, site: str,
          refusal_factory: Callable[[str, Dict[str, Any]], Any],
          fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -803,14 +850,27 @@ def gate(project: Path, runner: str, site: str,
     if not dec.allow:
         print(f"[preflight] {site}: {dec.detail}", file=sys.stderr, flush=True)
         record(Path(project), dec)
-        return refusal_factory(dec.detail, {
+        extras = {
             "finding": REFUSAL_FINDING,
             "preflight_verdict": dec.verdict,
             "flow_steps": dec.flow_steps,
             "absent_inputs": [i for i in dec.inputs
                               if i.get("state") == "absent"],
             "preflight_ledger": LEDGER_REL,
-        })
+        }
+        # vibe-ic#1097 (S7) — THE ONE MOMENT A REPRO BUNDLE IS WORTH MOST.
+        # This is the single place the flow says "this step cannot read what
+        # it was promised", and it is exactly the state a field agent then
+        # spends a round trip reconstructing by hand. ORFS emits its issue
+        # tarball on the same event (`flow/util/makeIssue.sh`).
+        #
+        # Wired HERE and not at the ~11 dispatch sites for the reason this
+        # module exists: `gate()` is the ONE shared decision point, and it
+        # appends nothing, so `plan[-1]` keeps meaning what it meant.
+        bundle = _emit_repro_bundle(Path(project), dec)
+        if bundle:
+            extras["repro_bundle"] = bundle
+        return refusal_factory(dec.detail, extras)
 
     if dec.verdict != "READY":
         # Never silent: UNDECLARED / NOT-YET-DUE / UNAVAILABLE are all "this
