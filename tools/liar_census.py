@@ -1955,7 +1955,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  CLEAN    {clean:>4}")
     print(f"  N/A      {len(unmeasured):>4}   (every probe returned N/A — NOT measured, "
           f"and deliberately NOT counted clean)")
-    print(f"  CLEAN    {len(reports) - len(liars) - len(suspects) - len(guarded):>4}")
     print()
     print(_coverage_block(pop, len(reports), bool(args.only)))
     for r in liars + suspects:
