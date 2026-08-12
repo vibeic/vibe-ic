@@ -18,10 +18,23 @@ Every test drives the REAL `suite_write_guard` module, loaded as a real pytest
 plugin into a real nested pytest session against a real throwaway git repo, for
 the reason `test_corpus_write_guard.py` gives about `_gate_dispatch.sh`: a
 fixture copy of the logic would drift from the code that actually runs.
+
+THE CHILD'S ENVIRONMENT IS PART OF THE FIXTURE (vibe-ic#1047)
+=============================================================
+Driving a real nested session means the child's environment decides what the
+child loads, and an environment nobody chose is one the HOST chose. These tests
+passed 16/16 on one machine and failed 8/16 on the machine that runs every
+`gh pr merge` — same commit, same command — because the child autoloaded a
+broken `pytest11` entry point that has nothing to do with this guard.
+
+So `_child_env` below decides the whole environment, and two tests fabricate a
+broken plugin on the child's path to prove the decision holds — on any host,
+including one where the offending package is not installed.
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -65,16 +78,57 @@ def _write_test_file(repo: Path, body: str) -> Path:
     return f
 
 
-def _nested_pytest(repo: Path, test_file: Path, *extra: str):
+def _child_env(*extra_pythonpath: str) -> dict:
+    """The child's WHOLE environment, decided here rather than by the host.
+
+    vibe-ic#1047: these tests assert `returncode == 0` on a spawned pytest.
+    That assertion is only about the guard if nothing ELSE on the host can
+    make a bare pytest exit non-zero — so every input that decides what the
+    child loads is pinned here, and nothing is inherited by accident.
+
+    `PYTEST_DISABLE_PLUGIN_AUTOLOAD` is the load-bearing one. Without it the
+    child loads every `pytest11` entry point installed on the machine, and one
+    broken third-party package reddens a test that has nothing to do with it.
+    On the landing host that package is `web3` (`web3.tools.pytest_ethereum`,
+    `ImportError: cannot import name 'ContractName' from 'eth_typing'`), and it
+    took 8 of these 16 tests down while saying nothing about the guard.
+
+    Setting it in the OPERATOR's shell does not help and measuring that it did
+    not help is what makes this fix worth writing down: `subprocess.run(env=…)`
+    REPLACES the child environment, so a variable exported outside this
+    process is dropped by the very whitelist meant to make the child
+    predictable. The mitigation has to be applied to the child, here, or it
+    reaches nothing.
+
+    `PYTEST_ADDOPTS` and `PYTEST_PLUGINS` are pinned EMPTY for the same
+    reason: both are read by the child and both can inject a plugin or a flag
+    the assertions below never asked for.
+
+    Disabling autoload does NOT weaken what the child runs. The guard is
+    loaded explicitly by `-p suite_write_guard`, and the planted-writer tests
+    above are the proof: they still go red and still name the path. A fix that
+    bought a green by removing the guard from the child would have traded a
+    false red for a false green, which is worse than the defect.
+    """
+    pythonpath = os.pathsep.join([str(_PROGRAMS), *extra_pythonpath])
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "PYTHONPATH": pythonpath,
+        # decide what the child loads; do not let the host decide it
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "PYTEST_ADDOPTS": "",
+        "PYTEST_PLUGINS": "",
+    }
+
+
+def _nested_pytest(repo: Path, test_file: Path, *extra: str, env: dict | None = None):
     """Run a REAL pytest session with the REAL guard plugin loaded."""
     argv = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
             "-p", "suite_write_guard",
             "--write-guard-repo", str(repo), str(test_file), *extra]
-    env = {"PATH": __import__("os").environ.get("PATH", ""),
-           "PYTHONPATH": str(_PROGRAMS),
-           "HOME": __import__("os").environ.get("HOME", "")}
     return subprocess.run(argv, capture_output=True, text=True, timeout=_T,
-                          cwd=str(repo.parent), env=env)
+                          cwd=str(repo.parent), env=env or _child_env())
 
 
 # --------------------------------------------------------------------------
@@ -297,6 +351,96 @@ def test_per_test_mode_attributes_the_write_to_its_nodeid(tmp_path):
     assert "test_guilty" in out, out
     assert "written by" in out, out
     assert "test_innocent" not in out.split("written by")[-1], out
+
+
+# --------------------------------------------------------------------------
+# The HARNESS must not be an assertion about the host (vibe-ic#1047).
+#
+# These two tests are what turns "it fails on .102" into something any host can
+# run. The condition is not waited for: a broken `pytest11` entry point is
+# FABRICATED on the child's path, which is exactly the shape `web3` has on the
+# landing host, so the defect reproduces on a machine where `web3` is not
+# installed at all and cannot silently un-reproduce when someone repairs it.
+# --------------------------------------------------------------------------
+
+#: The real message from the landing host, reused verbatim so a reader
+#: grepping the issue lands here (`web3.tools.pytest_ethereum.deployer`).
+_BROKEN_PLUGIN_ERROR = "cannot import name 'ContractName' from 'eth_typing'"
+
+
+def _broken_pytest11_dist(tmp_path: Path) -> Path:
+    """A directory that looks, to `importlib.metadata`, like an INSTALLED
+    pytest plugin whose module raises `ImportError` when pytest imports it."""
+    site = tmp_path / "hostsite"
+    site.mkdir()
+    (site / "wg1047_broken_plugin.py").write_text(
+        f"raise ImportError({_BROKEN_PLUGIN_ERROR!r})\n")
+    dist = site / "wg1047_broken_plugin-1.0.dist-info"
+    dist.mkdir()
+    (dist / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: wg1047-broken-plugin\nVersion: 1.0\n")
+    (dist / "entry_points.txt").write_text(
+        "[pytest11]\nwg1047_broken = wg1047_broken_plugin\n")
+    (dist / "RECORD").write_text("")
+    return site
+
+
+def test_a_broken_host_plugin_cannot_redden_the_child_but_WOULD_have(tmp_path):
+    """Both directions, in one test, because either alone proves nothing.
+
+    The negative control comes first: with autoload left to the host, the
+    fabricated plugin really does kill the child before the guard can speak.
+    An immunity assertion whose hostile fixture is inert would pass against
+    the pre-fix code too (flow-change-acceptance §1).
+    """
+    repo = _repo(tmp_path)
+    target = repo / "pkg" / "shipped.txt"
+    tf = _write_test_file(repo, (
+        "from pathlib import Path\n"
+        f"def test_appends_to_a_shipped_file():\n"
+        f"    p = Path({str(target)!r})\n"
+        "    p.write_text(p.read_text() + 'appended by a passing test\\n')\n"))
+    site = _broken_pytest11_dist(tmp_path)
+
+    # NEGATIVE CONTROL — this is the .102 failure, reproduced here.
+    hostile = _child_env(str(site))
+    hostile.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD")
+    p = _nested_pytest(repo, tf, env=hostile)
+    out = p.stdout + p.stderr
+    assert p.returncode != 0, f"the hostile fixture is inert:\n{out}"
+    assert _BROKEN_PLUGIN_ERROR in out, f"the plugin never loaded:\n{out}"
+    # and note WHY that red says nothing about the guard: the session died
+    # during config parse, so the guard never got to report at all
+    assert "WROTE INTO THE TREE" not in out, out
+    assert not target.read_text().endswith("appended by a passing test\n")
+
+    # THE FIX — same broken plugin, same path, environment decided by us.
+    p = _nested_pytest(repo, tf, env=_child_env(str(site)))
+    out = p.stdout + p.stderr
+    assert _BROKEN_PLUGIN_ERROR not in out, f"host plugin reached the child:\n{out}"
+    # the guard is still LOADED and still bites — the green was not bought by
+    # taking the guard out of the child
+    assert "1 passed" in out, out
+    assert p.returncode != 0, f"guard did not redden the session:\n{out}"
+    assert "WROTE INTO THE TREE" in out, out
+    assert "pkg/shipped.txt" in out, out
+
+
+def test_a_broken_host_plugin_cannot_redden_a_NON_writing_child(tmp_path):
+    """The false RED #1047 actually produced: a clean session called dirty.
+
+    `test_a_non_writing_session_stays_green` is the one whose `returncode == 0`
+    was an assertion about the host's `site-packages`. Under a hostile path it
+    must still be an assertion about the guard.
+    """
+    repo = _repo(tmp_path)
+    site = _broken_pytest11_dist(tmp_path)
+    tf = _write_test_file(repo, "def test_reads_nothing():\n    assert True\n")
+
+    p = _nested_pytest(repo, tf, env=_child_env(str(site)))
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, f"a host plugin reddened a clean session:\n{out}"
+    assert "wrote nothing" in out, out
 
 
 # --------------------------------------------------------------------------
