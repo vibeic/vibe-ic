@@ -131,10 +131,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -563,6 +565,146 @@ def failing_files(output: str) -> List[str]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# The mutation is written into the SHIPPED SOURCE, so it must survive the
+# process dying (vibe-ic#1025 follow-up, #1029 family)
+# ---------------------------------------------------------------------------
+# `verify_pin` flips a literal in the real file and restores it in a `finally`.
+# A `finally` does not run on SIGTERM, and SIGTERM is not hypothetical here:
+# `gatekeeper_review._run_hygiene` invokes the hygiene script through
+# `subprocess.run(..., timeout=...)`, and on `TimeoutExpired` the child is
+# killed. This gate needs ~10 minutes on this corpus, so it is the gate most
+# likely to be inside its own mutation window when that happens.
+#
+# MEASURED on a clean detached origin/main worktree: a mutation is on disk 23 s
+# after start, and one SIGTERM there (child rc 143) leaves
+#
+#     M programs/atpg_untestable_fault_classify.py
+#     -        on_conflict="richer",
+#     +        on_conflict="sparser",
+#
+# in the shipped tree. Separately, a run killed at 550 s left
+# `phase3_one_shot_runner.py` with its PDK default rewritten
+# `sky130A` -> `nangate45`.
+#
+# THE REASON THIS IS WORSE THAN AN ORDINARY DIRTY FILE: the damage is
+# SELF-CONCEALING. The next run RE-DERIVES the site from whatever the source
+# now says, so it reads `nangate45` as the argued value, flips it, and reports
+# a perfectly self-consistent verdict over a corrupted tree. Two consecutive
+# runs agreed byte-for-byte on exactly that. Nothing in the output is wrong;
+# the subject is.
+#
+# Two mechanisms, because they cover different deaths:
+#   * SIGTERM/SIGINT -> handlers restore and re-raise, so the ordinary kill
+#     (and `timeout`, and Ctrl-C) leaves the tree clean;
+#   * SIGKILL / power loss -> a JOURNAL written OUTSIDE the tree BEFORE the
+#     mutation, so the NEXT run finds it, repairs the file, and SAYS SO. A
+#     journal cannot prevent the damage; what it removes is the concealment.
+_INFLIGHT: Dict[str, Any] = {}
+
+
+def journal_for(root: Path) -> Path:
+    """Journal path for `root`, outside the tree and keyed to it.
+
+    Outside, because a gate that journals INTO the tree it audits is the very
+    thing the corpus-write guard exists to catch. Keyed, so two worktrees of
+    this repo cannot repair each other's files.
+    """
+    key = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"policy_pin_inflight-{key}.json"
+
+
+def _arm(journal: Path, target: Path, original: str, mutated: str) -> None:
+    """Record the pending mutation BEFORE it reaches disk."""
+    journal.write_text(json.dumps({
+        "file": str(target), "original": original, "mutated": mutated}),
+        encoding="utf-8")
+    _INFLIGHT.update({"file": target, "original": original,
+                      "journal": journal})
+
+
+def _disarm(journal: Path) -> None:
+    _INFLIGHT.clear()
+    try:
+        journal.unlink()
+    except OSError:
+        pass
+
+
+def _restore_inflight() -> None:
+    """Put the file back. Safe to call twice; never raises."""
+    tgt, orig = _INFLIGHT.get("file"), _INFLIGHT.get("original")
+    if tgt is not None and orig is not None:
+        try:
+            Path(tgt).write_text(orig, encoding="utf-8")
+        except OSError:
+            pass
+    jrn = _INFLIGHT.get("journal")
+    if jrn is not None:
+        try:
+            Path(jrn).unlink()
+        except OSError:
+            pass
+    _INFLIGHT.clear()
+
+
+def install_signal_restore() -> None:
+    """Restore on the deaths a `finally` does not see, then die as asked."""
+    def _handler(signum, _frame):
+        _restore_inflight()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError, AttributeError):
+            # Not the main thread, or the platform lacks it. The journal below
+            # is the backstop; it is not conditional on this working.
+            pass
+
+
+def recover_journal(journal: Path) -> Tuple[int, List[str]]:
+    """Repair a file a previous run died on. Returns (rc, lines to print).
+
+    rc 0  nothing to repair, or repaired
+    rc 2  a journal exists and the file matches NEITHER what we wrote NOR what
+          we would restore — someone has edited it since. Refused rather than
+          clobbered: this function's job is to undo THIS gate's write, and it
+          cannot prove that is all it would be undoing.
+    """
+    if not journal.is_file():
+        return RC_OK, []
+    try:
+        rec = json.loads(journal.read_text(encoding="utf-8"))
+        target = Path(rec["file"])
+        original, mutated = rec["original"], rec["mutated"]
+    except (OSError, ValueError, KeyError) as exc:
+        return RC_UNDETERMINED, [
+            f"[UNDETERMINED] policy_direction_pin_check: unreadable in-flight "
+            f"journal {journal}: {exc}. A previous run died mid-mutation and "
+            f"this one cannot tell what it left behind."]
+    if not target.is_file():
+        journal.unlink()
+        return RC_OK, []
+    now = target.read_text(encoding="utf-8")
+    if now == original:
+        journal.unlink()
+        return RC_OK, []
+    if now != mutated:
+        return RC_UNDETERMINED, [
+            f"[UNDETERMINED] policy_direction_pin_check: {target} was left "
+            f"MUTATED by a previous run of this gate, and has been edited "
+            f"since. Refusing to overwrite it — restore it by hand, then "
+            f"delete {journal}."]
+    target.write_text(original, encoding="utf-8")
+    journal.unlink()
+    return RC_OK, [
+        f"[REPAIRED] policy_direction_pin_check: a previous run died inside "
+        f"its mutation window and left {target} rewritten. Restored. Left "
+        f"alone, the next sweep would have re-derived the argued value FROM "
+        f"THE MUTATION and reported a consistent verdict over a corrupt tree."]
+
+
 def run_pytest(paths: Sequence[Path], cwd: Path, basetemp: Path,
                extra: Sequence[str] = ()) -> Tuple[int, str]:
     env = dict(os.environ)
@@ -597,6 +739,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
 
     target = root / site["file"]
     original = target.read_text(encoding="utf-8")
+    journal = journal_for(root)
     killed_by: List[Dict[str, Any]] = []
     survivors: List[str] = []
     try:
@@ -607,6 +750,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
                 result["state"] = "ABSTAIN"
                 result["why"] = f"could not rewrite the literal: {exc}"
                 return result
+            _arm(journal, target, original, mutated)
             target.write_text(mutated, encoding="utf-8")
             rc, out = run_pytest(candidates, root.parent, basetemp, extra)
             if rc != 0:
@@ -617,6 +761,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
                 survivors.append(other)
     finally:
         target.write_text(original, encoding="utf-8")
+        _disarm(journal)
 
     if killed_by:
         # A RED test kills every mutant, including one nobody wrote a pin for.
@@ -728,6 +873,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return RC_UNDETERMINED
 
     selected = [s for s in argued if (args.only or "") in s["file"]]
+
+    # BEFORE anything is measured. A leftover mutation from a previous run is
+    # not a dirty file this run can measure around: the sweep would re-derive
+    # the argued value FROM it and report a self-consistent verdict over a
+    # corrupt tree. Repair first, or refuse.
+    rc_rec, lines = recover_journal(journal_for(root))
+    for ln in lines:
+        print(ln, file=sys.stderr if rc_rec else sys.stdout)
+    if rc_rec:
+        return rc_rec
+    install_signal_restore()
+
     basetemp = Path(args.basetemp) if args.basetemp else Path(tempfile.mkdtemp(prefix="pdpc-"))
     basetemp.mkdir(parents=True, exist_ok=True)
 
