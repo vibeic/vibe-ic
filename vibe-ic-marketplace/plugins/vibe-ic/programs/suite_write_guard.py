@@ -104,6 +104,10 @@ RC_NOT_CHECKED = 2
 TRACKED = "tracked"
 UNTRACKED = "untracked"
 IGNORED = "ignored"
+#: A tracked file the run wrote to and then RESTORED. Invisible to every
+#: porcelain-derived channel above, because at both snapshots git says clean.
+#: See THE REVERTED CLASS below.
+REVERTED = "reverted"
 
 #: The two classes `git add -A` would sweep into a commit.
 BLOCKING_CLASSES = (TRACKED, UNTRACKED)
@@ -182,12 +186,18 @@ def _classify(status: str) -> str:
     return TRACKED
 
 
-def snapshot(repo: Path) -> Dict[str, list]:
+def snapshot(repo: Path, *, deep: bool = False) -> Dict[str, list]:
     """Signature of every path git currently reports as not-pristine.
 
     Includes the ignored class so the advisory half has something to compare;
     measured at 0.10 s with or without `--ignored` on this repo, so carrying it
     costs nothing.
+
+    `deep=True` additionally stats EVERY TRACKED FILE, which is the only way to
+    see the reverted class — see `_deep_tracked`. The return shape is then the
+    wrapper dict `{"_deep": 1, "porcelain": …, "tracked": …}`; `compare` accepts
+    either shape, so a shallow baseline and a deep one still compare (as
+    shallow). Measured on this repo: 0.28 s for 21 779 tracked files.
     """
     repo = Path(repo)
     if not repo.is_dir():
@@ -204,7 +214,67 @@ def snapshot(repo: Path) -> Dict[str, list]:
             # collide with one.
             size, mtime = -1, -1
         sig[rel] = [status, size, mtime]
-    return sig
+    if not deep:
+        return sig
+    return {"_deep": 1, "porcelain": sig, "tracked": _deep_tracked(repo)}
+
+
+def _deep_tracked(repo: Path) -> Dict[str, list]:
+    """`(size, mtime_ns)` for every tracked file, pristine ones included.
+
+    THE REVERTED CLASS (vibe-ic#1029 one level up)
+    ----------------------------------------------
+    Everything else in this module is derived from `git status`, and a file a
+    run writes to and then RESTORES is clean at both ends: git reports nothing,
+    at either snapshot, and the module docstring above says so in as many words
+    — "a write made AND reverted inside a single test is invisible to a
+    snapshot taken after it … but it is not outside 'the instrument perturbs
+    its subject'."
+
+    That bound is fine for this module's ORIGINAL subject, which is what
+    `git add -A` would ship. It is not fine for the subject the per-gate
+    bracket in `tools/ci/_gate_dispatch.sh` asks about: whether the gate that
+    runs NEXT is handed the tree this gate was handed. A gate that flips a
+    literal in the shipped source, runs pytest against it and puts it back is a
+    mutator for the whole width of that window, and `policy_direction_pin_check
+    --verify-pins` holds one open for ~23 s at a time (measured in #1090).
+
+    `mtime_ns` is the channel that survives the restore. Size alone does not: a
+    flip between two same-length literals — `"richer"` -> `"sparser"` is not
+    one, but `sky130A` -> `nangate45` is — restores byte-for-byte. Nothing here
+    hashes content: 21 779 files is 0.28 s to stat and would be ~9 s to hash,
+    and the question is "was this file written during the window", which the
+    stat answers and the hash does not (a restored file hashes identically).
+    """
+    out = _git(repo, "ls-files", "-z")
+    tracked: Dict[str, list] = {}
+    for rel in out.split("\0"):
+        if not rel:
+            continue
+        try:
+            st = (repo / rel).lstat()
+            tracked[rel] = [st.st_size, st.st_mtime_ns]
+        except OSError:
+            tracked[rel] = [-1, -1]
+    return tracked
+
+
+def _split(sig) -> Tuple[Dict[str, list], Dict[str, list]]:
+    """`(porcelain, tracked)` out of either snapshot shape.
+
+    A snapshot taken before this flag existed, or by a caller that did not ask
+    for it, has no tracked half — and an ABSENT deep half must never read as an
+    empty one, or "I did not look" would arrive as "nothing was touched". The
+    caller distinguishes them by the emptiness of the second element together
+    with `_is_deep`.
+    """
+    if isinstance(sig, dict) and sig.get("_deep"):
+        return sig.get("porcelain", {}), sig.get("tracked", {})
+    return sig, {}
+
+
+def _is_deep(sig) -> bool:
+    return isinstance(sig, dict) and bool(sig.get("_deep"))
 
 
 def compare(before: Dict[str, list], after: Dict[str, list]) -> dict:
@@ -214,6 +284,8 @@ def compare(before: Dict[str, list], after: Dict[str, list]) -> dict:
     something it did not create is not the defect this gate is about, and
     `git add -A` cannot ship an absence it did not cause.
     """
+    before, deep_before = _split(before)
+    after, deep_after = _split(after)
     findings: List[dict] = []
     for path, sig in sorted(after.items()):
         prev = before.get(path)
@@ -238,12 +310,31 @@ def compare(before: Dict[str, list], after: Dict[str, list]) -> dict:
                 "what": "disappeared", "was": sig, "now": None,
             })
 
+    # The reverted class, and ONLY when both ends were measured deeply. A
+    # deep-vs-shallow pair degrades to the shallow answer rather than reporting
+    # every tracked file as untouched, which is what an empty `deep_before`
+    # would otherwise mean.
+    if deep_before and deep_after:
+        porcelain_seen = {f["path"] for f in findings}
+        for path, sig in sorted(deep_after.items()):
+            prev = deep_before.get(path)
+            if prev is None or prev == sig or path in porcelain_seen:
+                continue
+            findings.append({
+                "path": path, "status": "  ", "class": REVERTED,
+                "what": "written-and-restored" if prev[0] == sig[0]
+                        else "rewritten-and-restored-to-a-different-size",
+                "was": prev, "now": sig,
+            })
+
     def _blocks(f: dict) -> bool:
         return f["class"] in BLOCKING_CLASSES and f["what"] != "disappeared"
 
     blocking = [f for f in findings if _blocks(f)]
     advisory = [f for f in findings if not _blocks(f)]
-    return {"findings": findings, "blocking": blocking, "advisory": advisory}
+    return {"findings": findings, "blocking": blocking, "advisory": advisory,
+            "reverted": [f for f in findings if f["class"] == REVERTED],
+            "deep": bool(deep_before and deep_after)}
 
 
 def format_report(result: dict, *, where: str = "this run") -> str:
@@ -262,6 +353,8 @@ def format_report(result: dict, *, where: str = "this run") -> str:
             "  Nothing that READS this tree may write to it — not a test, and "
             "not a gate. Direct the write into a tmp dir, or copy the subject "
             "before mutating it.")
+    reverted = [f for f in advisory if f["class"] == REVERTED]
+    advisory = [f for f in advisory if f["class"] != REVERTED]
     named = [f for f in advisory if not _is_cache_noise(f["path"])]
     noise = len(advisory) - len(named)
     if named:
@@ -281,6 +374,26 @@ def format_report(result: dict, *, where: str = "this run") -> str:
         lines.append(
             f"[INFO] suite_write_guard: +{noise} regenerable cache artefact(s) "
             f"(__pycache__/.pytest_cache/*.pyc) not listed.")
+    if reverted:
+        # Its own header, because it answers a DIFFERENT question from the two
+        # above and a reader who takes it for "not blocking, therefore fine"
+        # has missed the one it answers. Nothing here would be shipped by
+        # `git add -A` — the file is byte-identical again — and that is exactly
+        # why it must be named: the damage is not to the commit, it is to every
+        # gate that read this tree while the window was open.
+        lines.append(
+            f"[INFO] suite_write_guard: {len(reverted)} tracked file(s) were "
+            f"WRITTEN AND RESTORED during {where} (ADVISORY — `git status` is "
+            f"clean at both ends, so no other channel here can see them):")
+        for f in reverted[:40]:
+            lines.append(f"    ~~  {f['path']}   ({f['what']})")
+        if len(reverted) > 40:
+            lines.append(f"    … and {len(reverted) - 40} more.")
+        lines.append(
+            "  A gate that does this is a MUTATOR for the width of its window. "
+            "Anything reading the tree in that window — a later gate, a "
+            "parallel one, a killed run's leftovers — read something this run "
+            "made up.")
     if not blocking:
         # Always emitted when nothing blocks, so a reader can tell "the guard
         # ran and found nothing" from "the guard did not run" without inferring
@@ -299,16 +412,28 @@ def _main(argv=None) -> int:
     ap.add_argument("--compare", metavar="BASE",
                     help="compare the tree against a baseline snapshot")
     ap.add_argument("--json", metavar="OUT", help="write the report as JSON")
+    ap.add_argument("--deep", action="store_true",
+                    help="also stat every tracked file, so a write that was "
+                         "REVERTED before the snapshot is still seen "
+                         "(+0.28s/snapshot on this repo). Both ends must use "
+                         "it; a deep/shallow pair degrades to shallow.")
     a = ap.parse_args(argv)
 
     repo = Path(a.repo).resolve()
     try:
-        if bool(a.snapshot) == bool(a.compare):
-            raise NotChecked("exactly one of --snapshot / --compare is required")
-        if a.snapshot:
+        if not a.snapshot and not a.compare:
+            raise NotChecked("one of --snapshot / --compare is required")
+        # BOTH together is the ROTATING BRACKET, and it is what makes a
+        # per-stage sweep affordable: `--compare prev --snapshot next` measures
+        # one stage and leaves the baseline for the next in ONE snapshot rather
+        # than two. Over the ~70 gates of `repo_hygiene_gates.sh` that is the
+        # difference between ~0.4 s and ~0.8 s per gate — 28 s against 56 s on
+        # a run that takes ~57 min. See `tools/ci/_gate_dispatch.sh`.
+        if a.snapshot and not a.compare:
             Path(a.snapshot).write_text(
-                json.dumps(snapshot(repo), indent=1) + "\n")
-            print(f"[PASS] suite_write_guard: baseline written to {a.snapshot}")
+                json.dumps(snapshot(repo, deep=a.deep), indent=1) + "\n")
+            print(f"[PASS] suite_write_guard: baseline written to {a.snapshot}"
+                  + (" (deep)" if a.deep else ""))
             return RC_CLEAN
         base_p = Path(a.compare)
         if not base_p.is_file():
@@ -317,7 +442,17 @@ def _main(argv=None) -> int:
             before = json.loads(base_p.read_text())
         except (OSError, ValueError) as exc:
             raise NotChecked(f"baseline unreadable: {exc}")
-        result = compare(before, snapshot(repo))
+        # `--deep` on the compare side alone measures nothing extra: the
+        # reverted channel needs BOTH ends. Asked for it against a shallow
+        # baseline, say so rather than answer as if it had been carried.
+        if a.deep and not _is_deep(before):
+            raise NotChecked(
+                f"--deep asked for, but the baseline {base_p} is shallow — "
+                f"the reverted class needs both ends measured deeply")
+        now = snapshot(repo, deep=_is_deep(before))
+        result = compare(before, now)
+        if a.snapshot:
+            Path(a.snapshot).write_text(json.dumps(now, indent=1) + "\n")
     except NotChecked as exc:
         # The one thing this gate must never do is answer 0 without looking.
         print(f"WRITE_GUARD_NOT_CHECKED: {exc}", file=sys.stderr)
