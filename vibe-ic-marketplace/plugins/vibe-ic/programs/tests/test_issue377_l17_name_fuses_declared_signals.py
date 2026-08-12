@@ -79,34 +79,147 @@ def _need_corpus():
         pytest.skip("published corpus not present in this checkout")
 
 
-def test_corpus_population_of_the_rail_is_pinned():
-    """23 projects / 62 entries / 69 declared signals that never reach a port.
+E3G_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "l17_e3g_rail"
 
-    `entries` is truncated to 20 in the report, so the project count and the
-    per-project shape are what is asserted; the totals are recomputed from the
-    untruncated evidence of the projects under that cap."""
-    _need_corpus()
-    rows = _fusion_rows()
-    assert len(rows) == 23, [p.name for p, _ in rows]
-    assert sum(len(e) for _, e in rows) == 62
-    assert sum(len(x["members_lost"]) for _, e in rows for x in e) == 131
+#: The report cap in the producer: `"entries": fused[:20]`. Read here so the
+#: cap-awareness below states the same number the producer does.
+_ENTRY_REPORT_CAP = 20
 
 
-def test_the_reported_total_is_the_honest_count_not_the_n_minus_one_one():
+def _e3g_fixture_row(tmp_path):
+    """The owned fixture, laid out as a project, audited, evidence returned."""
+    import importlib
+    import shutil
+    g = importlib.import_module("l17_channel_catalog_consumer_contract_check")
+    gd = tmp_path / "e3g" / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    shutil.copy(E3G_FIXTURE / "fusion_rail.L17_CHANNEL_CATALOG.json",
+                gd / "L17_CHANNEL_CATALOG.json")
+    shutil.copy(E3G_FIXTURE / "fusion_rail.L9_INTEGRATION_SPEC.json",
+                gd / "L9_INTEGRATION_SPEC.json")
+    findings, _ = g.audit(tmp_path / "e3g")
+    fired = [f for f in findings
+             if f.category == "CHANNEL_NAME_FUSES_DECLARED_SIGNALS"]
+    assert len(fired) == 1, [f.category for f in findings]
+    return fired[0].evidence
+
+
+def test_the_rail_reports_exactly_the_entries_that_lose_something(tmp_path):
+    """The rail's own truth table, over a population this test owns.
+
+    THIS REPLACES THREE CENSUS PINS. `len(rows) == 23`, `sum(len(e)) == 62` and
+    `sum(len(members_lost)) == 131` counted the published corpus, not the rail:
+    each moves when anyone publishes or withdraws a cell, and PR #1028 takes all
+    three to zero at once. The property those integers were standing in for is
+    "the rail reports an entry exactly when the fusion LOSES a declared signal,
+    and reports every member it lost" — which is stated here against
+    `fixtures/l17_e3g_rail/`, where the answer is fixed by documents this test
+    ships.
+
+    The four branches, and which is which, are in the fixture's README.
+    """
+    ev = _e3g_fixture_row(tmp_path)
+    entries = ev["entries"]
+    by_name = {e["declared_name"]: e for e in entries}
+
+    # FIRES — and on exactly these. The two silent cases below are the reason
+    # this is an equality and not a `>=`.
+    assert set(by_name) == {"sig_alpha / sig_beta",
+                            "sig_gamma, sig_delta, sig_epsilon",
+                            "sig_zeta / sig_eta"}, sorted(by_name)
+    # SILENT — a group name beside BOTH its members loses nothing…
+    assert "sig_theta / sig_iota" not in by_name
+    # …and a string with an unreadable part is refused, not guessed at.
+    assert "sig_kappa / q" not in by_name
+
+    assert [len(by_name[n]["members_lost"]) for n in
+            ("sig_alpha / sig_beta", "sig_gamma, sig_delta, sig_epsilon",
+             "sig_zeta / sig_eta")] == [2, 3, 1]
+    # The PARTIAL case: one member does reach a port of its own, the other
+    # does not, and only the second is charged.
+    partial = by_name["sig_zeta / sig_eta"]
+    assert partial["members_also_emitted_separately"] == ["sig_zeta"]
+    assert partial["members_lost"] == ["sig_eta"]
+
+    assert ev["entries_reported"] == 3
+    assert ev["declared_signals_without_a_port"] == 6
+
+
+def test_the_reported_total_is_the_honest_count_not_the_n_minus_one_one(
+        tmp_path):
     """The number a reader acts on, pinned.
 
     The fused port is not any member's port — a terminal named "AA_BB" is
     neither AA nor BB — so no member may be charged to it. An N-1 arithmetic
     (which is what E3b does, and what this rail was first written to do)
-    under-reports by one per entry and would report ZERO for the corpus'
-    partial cases, where exactly one member is missing."""
+    under-reports by one per entry and would report ZERO for the partial cases,
+    where exactly one member is missing.
+
+    `== 131` USED TO STAND WHERE THE DISCRIMINATION IS NOW. That integer made
+    the test look strong and was doing none of the work: it is the corpus'
+    size, and it would have been satisfied by any arithmetic that happened to
+    total 131. What decides the claim is that the honest total DIFFERS from
+    what N-1 would say — asserted here as the inequality it is, so a producer
+    that switched to N-1 fails even if some other corpus made the two agree.
+    """
+    ev = _e3g_fixture_row(tmp_path)
+    entries = ev["entries"]
+
+    honest = sum(len(e["members_lost"]) for e in entries)
+    n_minus_one = sum(len(e["members_named"]) - 1 for e in entries)
+
+    assert ev["declared_signals_without_a_port"] == honest, (
+        "the reported total must be the members actually lost")
+    assert honest != n_minus_one, (
+        "the fixture no longer distinguishes the two arithmetics, so the "
+        f"assertion above proves nothing: honest={honest} n-1={n_minus_one}")
+    assert ev["declared_signals_without_a_port"] != n_minus_one
+
+    # `entries` is capped at 20 in the report; `entries_reported` is not. They
+    # agree here BECAUSE the fixture is under the cap — stated, so that a
+    # fixture grown past it fails loudly instead of quietly comparing a
+    # truncated list against an untruncated count.
+    assert len(entries) < _ENTRY_REPORT_CAP, len(entries)
+    assert ev["entries_reported"] == len(entries)
+
+
+def test_the_corpus_rail_reports_every_member_it_lost_and_no_other():
+    """The same property, over whatever corpus this checkout carries.
+
+    A RELATION, NOT A CENSUS. Every clause below is true of one project on its
+    own, so it says the same thing about 23 published cells, about 104, and
+    about the 1 a future checkout might carry — and it says nothing at all when
+    there are none, which `_need_corpus` turns into a skip rather than a lie.
+
+    Cap-aware on purpose: `entries` is truncated at 20 and
+    `declared_signals_without_a_port` is not, so the totals are compared only
+    for the rows the cap did not bite. Which rows those are is asserted, not
+    assumed.
+    """
     _need_corpus()
     rows = _fusion_rows(with_evidence=True)
-    total = sum(ev["declared_signals_without_a_port"] for _, ev in rows)
-    recomputed = sum(len(x["members_lost"]) for _, ev in rows
-                     for x in ev["entries"])
-    assert total == recomputed == 131, (total, recomputed)
-    assert sum(ev["entries_reported"] for _, ev in rows) == 62
+    assert rows, (
+        "the rail fires on no published cell, so every clause below is "
+        "vacuous — re-derive the population before trusting this test")
+    uncapped = 0
+    for proj, ev in rows:
+        assert ev["entries_reported"] >= len(ev["entries"]), (proj, ev)
+        if len(ev["entries"]) < _ENTRY_REPORT_CAP:
+            uncapped += 1
+            assert ev["entries_reported"] == len(ev["entries"]), (proj, ev)
+            assert ev["declared_signals_without_a_port"] == sum(
+                len(e["members_lost"]) for e in ev["entries"]), (proj, ev)
+        for e in ev["entries"]:
+            assert len(e["members_named"]) >= 2, (proj, e)
+            assert e["members_lost"], (proj, e)
+            assert set(e["members_lost"]).isdisjoint(
+                e["members_also_emitted_separately"]), (proj, e)
+            assert (len(e["members_lost"])
+                    + len(e["members_also_emitted_separately"])
+                    == len(e["members_named"])), (proj, e)
+    assert uncapped, (
+        "every reported project hit the 20-entry cap, so the total-vs-entries "
+        "clause above examined nothing")
 
 
 def test_the_rail_fires_only_where_the_producer_writes_prose_names():
@@ -144,25 +257,58 @@ def test_every_reported_entry_actually_lost_a_declared_signal():
         "longer exercised and this guard has gone quiet")
 
 
-def test_the_fused_port_is_really_in_the_consumers_output():
-    """ARTIFACT-FIRST. Not "the rule would fire" — the consumer's own
-    derivation is re-run and the single fused port is looked up in it."""
-    _need_corpus()
+def _assert_consumer_agrees(proj, entries):
+    """The consumer's own derivation is re-run; return how many entries it
+    adjudicated, so the caller can prove the loop was not empty."""
     import importlib
     g = importlib.import_module("l17_channel_catalog_consumer_contract_check")
     c = importlib.import_module("phase2_scaffold_gen")
-    checked = 0
-    for proj, entries in _fusion_rows():
-        gd = proj / "phase1" / "generated_docs"
-        l17 = g._unwrap(g._read_json(sorted(gd.glob("L17_*.json"))[0]))
-        l9 = g._unwrap(g._read_json(gd / "L9_INTEGRATION_SPEC.json"))
-        emitted = {s["name"] for s in c.derive_signals(l17, l9)}
-        for e in entries:
-            assert e["emitted_port"] in emitted, (proj, e)
-            for lost in e["members_lost"]:
-                assert c._sanitize_id(lost) not in emitted, (proj, e, lost)
-            checked += 1
-    assert checked == 62, checked
+    gd = proj / "phase1" / "generated_docs"
+    l17 = g._unwrap(g._read_json(sorted(gd.glob("L17_*.json"))[0]))
+    l9 = g._unwrap(g._read_json(gd / "L9_INTEGRATION_SPEC.json"))
+    emitted = {s["name"] for s in c.derive_signals(l17, l9)}
+    for e in entries:
+        assert e["emitted_port"] in emitted, (proj, e)
+        for lost in e["members_lost"]:
+            assert c._sanitize_id(lost) not in emitted, (proj, e, lost)
+        for kept in e["members_also_emitted_separately"]:
+            # The other half of the claim, and it was never asserted: a member
+            # the rail declined to charge must really BE in the output. Without
+            # it a rail that called every member "also emitted separately"
+            # would report nothing and pass.
+            assert c._sanitize_id(kept) in emitted, (proj, e, kept)
+    return len(entries)
+
+
+def test_the_fused_port_is_really_in_the_consumers_output(tmp_path):
+    """ARTIFACT-FIRST. Not "the rule would fire" — the consumer's own
+    derivation is re-run and the single fused port is looked up in it.
+
+    `checked == 62` USED TO CLOSE THIS TEST. It was a non-vacuity counter
+    wearing a census's clothes: the loop increments once per entry, so the
+    integer restated the corpus' entry count and could only ever say "the
+    corpus has not been republished". What it MEANT is "the loop was not
+    empty", which is asserted here against a count derived from the same
+    evidence rather than typed in — over the owned fixture, so it holds with no
+    corpus at all.
+    """
+    ev = _e3g_fixture_row(tmp_path)
+    checked = _assert_consumer_agrees(tmp_path / "e3g", ev["entries"])
+    assert checked == ev["entries_reported"] > 0, (checked, ev)
+
+
+def test_the_fused_port_is_in_the_consumers_output_on_the_corpus_too():
+    """The same artefact-first check, over whatever corpus is present.
+
+    Every published cell that fires the rail is adjudicated; the count is
+    derived from the evidence, never typed in, so republishing changes it and
+    nothing else.
+    """
+    _need_corpus()
+    rows = _fusion_rows()
+    assert rows, "the rail fires on no published cell — nothing was checked"
+    checked = sum(_assert_consumer_agrees(p, e) for p, e in rows)
+    assert checked == sum(len(e) for _, e in rows) > 0, checked
 
 
 E1_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "l17_e1_rail"
