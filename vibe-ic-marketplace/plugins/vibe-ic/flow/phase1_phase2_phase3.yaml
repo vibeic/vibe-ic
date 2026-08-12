@@ -228,9 +228,45 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # MOVED HERE FROM STEP 1 (see the note there). The extraction-coverage
+      # REPORT is a Phase-1 deliverable: `phase1_coverage_report_gen` emits it
+      # at end-of-Phase 1 and it lands under `reports/phase1/`. It is declared
+      # where it is produced, and — the half that makes the declaration mean
+      # something — READ by a clause of this step's own gate, immediately
+      # below. A declared output no gate reads is what dimension 4 reports.
+      - "reports/phase1/extraction_coverage_report.md"
+      - "reports/phase1/extraction_coverage_report.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
+        # A SECOND, INDEPENDENT DEFECT — and it is NOT what makes d4 green.
+        # MEASURED both ways: with this clause absent, `matrix_d4_probe.
+        # grounding_report("D1")` still grounds both entries, through
+        # `l_doc_cross_consistency_check.py`, which is already a D1 gate
+        # program and also reads those paths. So the move above stands on its
+        # own and this clause is not load-bearing for dimension 4. Recorded
+        # here because the first draft of this change claimed the opposite and
+        # a paired-guard mutant refuted it.
+        #
+        # It is wired anyway, on its own merits. `phase1_coverage_report_
+        # present_check` resolves exactly `reports/phase1/extraction_coverage_
+        # report.{md,json}` (via `_path_layout.report_path`, verified) and
+        # checks the recorded overall coverage. Its own docstring says Wave 5
+        # "closes that gap" — a fresh agent skipping report-gen and still
+        # claiming Phase 1 complete — but it was WIRED INTO NO GATE AT ALL, so
+        # the gap it describes has been open the whole time. `l_doc_cross_
+        # consistency_check` grounding the PATH is not the same as anything
+        # checking the REPORT; that is what this clause adds.
+        #
+        # ADVISORY, and the reason is measured rather than assumed: over 14
+        # published cells carrying `phase1/generated_docs`, 12 exit 0 and 2
+        # exit 1. Those two are a real finding about the corpus, not about this
+        # declaration, and promoting the clause to blocking in the same change
+        # that moves the entry would red two published cells for a defect this
+        # change did not introduce and does not adjudicate. Advisory RUNS the
+        # reader and surfaces both, which is what the entry needs to stop being
+        # unread; promoting it belongs to whoever fixes those two cells.
+        - advisory_program_exit_zero: "phase1_coverage_report_present_check ."
         # #312 — the SECOND track. Findings are advisory (a divergence between
         # the two tracks needs converging, not an automatic stop); running is
         # not. A missing/unparseable report exits 1 here, because a second
@@ -483,12 +519,15 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-      # Phase 1 extraction-coverage REPORT
-      # (companion to LL-38 gate). Mandatory deliverable; per-doc
-      # diagnostic of which verbatim literals from
-      # extraction_patterns.json reached generated_docs/L*.json.
-      - "reports/phase1/extraction_coverage_report.md"
-      - "reports/phase1/extraction_coverage_report.json"
+      # vibe-ic d4 — `reports/phase1/extraction_coverage_report.{md,json}` USED
+      # TO BE DECLARED HERE and is now declared on D1, where it is produced.
+      # Step 1 is Spec-to-RTL: its skill is `spec-to-rtl` and its gate reads
+      # `phase2/stage1/rtl/*`. It never wrote the coverage report — the
+      # producer is `phase1_coverage_report_gen`, whose own docstring says it
+      # "always runs at end-of-Phase 1", and the artefact lands under
+      # `reports/phase1/`. So this step CLAIMED a deliverable belonging to
+      # another step, and because `required_outputs` is ALL-of-N a Phase-2 tree
+      # with correct RTL audited MISSING on a Phase-1 report it never owed.
     gate:
       files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
       any_of: true
