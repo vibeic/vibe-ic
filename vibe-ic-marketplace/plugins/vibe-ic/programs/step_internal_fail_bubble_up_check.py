@@ -2,6 +2,23 @@
 """
 step_internal_fail_bubble_up_check.py — anti-fabrication gate (v1.6.44).
 
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 36 while step 36 is running. That single axis is all this token names, and
+it is the one `flow_gate_enforcement_audit` measures. The `ENFORCEMENT` section
+further down this docstring answers a DIFFERENT question — the verdict severity
+of PROJECT mode versus CORPUS mode — and it is unchanged: an unacknowledged
+FAIL is still rc 1. Two axes; this line is the one the audit was reading and
+finding nothing on.
+
+THE FLOW SLOT IS ALSO UNCHANGED AND BLOCKING. Step 36 wires this gate BARE in
+`program_exit_zero`, never `advisory_program_exit_zero`, so an rc 1 FAILs the
+step when `flow_compliance_check` evaluates the clause. The flow's own comment
+at that row records the measurement behind the choice — 17 of 107 published
+roots red, all 17 adjudicated by hand, 16 carrying at least one real
+unacknowledged defect — and `advisory` here must never be cited as a reason to
+move the clause. `test_issue1035_five_gates_declare_where_they_are_enforced`
+pins the slot for exactly that reason.
+
 Doctrine rule #4: a step-internal sub-gate `verdict: FAIL` (or MISSING)
 MUST bubble up to the project's overall verdict — either by being
 explicitly waived in `waivers.json`, or by causing the parent step's

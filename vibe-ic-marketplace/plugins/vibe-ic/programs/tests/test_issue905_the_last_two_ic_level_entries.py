@@ -117,9 +117,21 @@ def _ic() -> Path:
 
 
 def _run_gate(gate: str, project: Path):
+    # 60s, not 120s. `ci_harness_timeout_ceiling_check` enforces a per-call
+    # ceiling of 180 // 3 = 60s, derived from the harness bound this repo's own
+    # `gatekeeper-land.sh:197` sets with `--timeout=180`. An INNER bound above
+    # the harness does not fail the test — it outlives the harness, which kills
+    # the SESSION and takes every other file in the subset down with it. The
+    # 120s here was the one bound over the ceiling on a clean checkout of
+    # origin/main at ad8fbfeb, so the gate exited 1 and no landing could be
+    # stamped (vibe-ic#1035).
+    #
+    # MEASURED before lowering, not assumed safe: the whole file runs in 0.71s
+    # (`pytest --durations`, slowest call 0.15s), so 60s is ~85x the observed
+    # worst case for this file and ~400x this call's share of it.
     proc = subprocess.run(
         [sys.executable, str(_PROGRAMS / gate), str(project)],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     return proc.returncode, proc.stdout + proc.stderr
 
 

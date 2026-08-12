@@ -2,6 +2,31 @@
 """em_peak_current_authority_check.py — the EM peak current must reach a
 COMPARISON, or the step must name the authority it lacks.
 
+ENFORCEMENT: advisory — no runner spawns this gate inline, so it cannot stop
+step 25 while step 25 is running. That is the ONLY axis this token names, and
+it is the one `flow_gate_enforcement_audit` measures ("can this verdict stop
+the step it guards"). It is not a statement that the finding is ignorable, and
+the other two axes are unchanged and stated here so the declaration can never
+be quoted as a demotion:
+
+  * VERDICT SEVERITY — unchanged and BLOCKING in the ordinary sense. rc 1 on a
+    supply-current contradiction or a Jmax offender, and rc 2 on INCOMPLETE.
+    The rc-2-on-INCOMPLETE half is vibe-ic#1022's repair, landed in #1026: this
+    gate previously exited 0 while reporting that it had compared nothing, so
+    the honest refusal was indistinguishable from a pass.
+  * FLOW SLOT — unchanged and BLOCKING. Step 25 wires this gate in
+    `program_exit_zero`, never `advisory_program_exit_zero`, so when
+    `flow_compliance_check` evaluates that clause a non-zero rc FAILs the step.
+
+WIRED AND DECLARED ARE DIFFERENT QUESTIONS (vibe-ic#1035). This gate was wired
+BLOCKING at step 25 by #1000 and repaired by #1026, and it was STILL reported
+by `flow_gate_enforcement_audit` as `undeclared::em_peak_current_authority_
+check` at every commit from 080bf6d05 through ad8fbfeb. Neither PR was wrong
+and the audit was not stale: "which flow slot is this clause in" and "does this
+program state where its verdict is consumed" are two questions, and answering
+the first has never answered the second. Silence on the second is what the
+audit refuses, and this block is the answer rather than a loosening of it.
+
 THE DEFECT, MEASURED
 ====================
 `matrix_mutation_ledger.ARTEFACT_MUTATIONS` carried an entry, ART-EM-CURRENT-
