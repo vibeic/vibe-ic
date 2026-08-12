@@ -193,3 +193,151 @@ def test_the_real_corpus_pair_is_clean_in_the_other_direction():
             pytest.skip(f"published run absent from this checkout: {p}")
     rc, out = run_gate(cur, "--baseline-run", prev, "--today", "2026-08-12")
     assert rc == RC_CLEAN, out
+
+
+# ===========================================================================
+# §N — SCANNER COVERAGE PORTED FROM vibe-ic#1092
+#
+# #1092 built the same gate on an inferred predecessor, which is why it is being
+# closed in favour of this one. But its SCANNER saw three shapes this one did
+# not, and each is paired here: the red case with the coverage, and the green
+# twin proving the coverage is not "match everything".
+# ===========================================================================
+def _rpt(run, rel, text):
+    p = run / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def test_family_B_standalone_OpenSTA_numbered_form_is_compared(tmp_path):
+    """`Warning 168:` is `STA-0168`. Unbracketed, and previously invisible.
+
+    Two of the ids the corpus actually carries in `aging_sta.rpt`/`power.rpt`
+    are this shape. Before the port they were absent from every comparison while
+    the gate still reported a clean one.
+    """
+    prev = _run_dir(tmp_path, "prev", ["AAA-0001"])
+    cur = _run_dir(tmp_path, "cur", ["AAA-0001"])
+    _rpt(cur, "reports/phase3/aging_sta.rpt",
+         "Warning 168: constraint.sdc line 3, something was not allowed.\n")
+    rc, out = run_gate(cur, "--baseline-run", prev, "--today", "2026-08-12")
+    assert rc == RC_BLOCKING, out
+    assert "STA-0168" in out, out
+
+
+def test_PAIRED_family_B_present_in_BOTH_runs_is_clean(tmp_path):
+    """The twin. Coverage that cannot say "unchanged" is not coverage."""
+    prev = _run_dir(tmp_path, "prev", ["AAA-0001"])
+    cur = _run_dir(tmp_path, "cur", ["AAA-0001"])
+    for r in (prev, cur):
+        _rpt(r, "reports/phase3/aging_sta.rpt", "Warning 168: same in both.\n")
+    rc, out = run_gate(cur, "--baseline-run", prev, "--today", "2026-08-12")
+    assert rc == RC_CLEAN, out
+
+
+def test_PAIRED_family_B_needs_line_start_not_prose(tmp_path):
+    """`... see Warning 168: below` inside prose is NOT a diagnostic.
+
+    The anchor is the whole reason this regex is safe to widen. Without this
+    twin, "compare family B" would be satisfied by matching the substring
+    anywhere and the gate would invent ids out of sentences.
+    """
+    prev = _run_dir(tmp_path, "prev", ["AAA-0001"])
+    cur = _run_dir(tmp_path, "cur", ["AAA-0001"])
+    _rpt(cur, "reports/notes.rpt",
+         "The tool may emit Warning 168: in some configurations.\n")
+    rc, out = run_gate(cur, "--baseline-run", prev, "--today", "2026-08-12")
+    assert rc == RC_CLEAN, out
+    assert "STA-0168" not in out, out
+
+
+def test_ids_inside_json_tool_output_are_compared(tmp_path):
+    """The runner stores console output in JSON fields; 3 corpus files do this.
+
+    `dynamic_ir.json` carries `[WARNING ODB-0220]` verbatim. That is tool
+    output, not a report about tool output, and `.json` was not scanned.
+    """
+    prev = _run_dir(tmp_path, "prev", ["AAA-0001"])
+    cur = _run_dir(tmp_path, "cur", ["AAA-0001"])
+    _rpt(cur, "reports/phase3/dynamic_ir.json",
+         json.dumps({"tool_stdout": "[WARNING BBB-0002] rail check\n"}) + "\n")
+    rc, out = run_gate(cur, "--baseline-run", prev, "--today", "2026-08-12")
+    assert rc == RC_BLOCKING, out
+    assert "BBB-0002" in out, out
+
+
+def test_the_emitted_baseline_stores_ids_BARE_so_the_regex_cannot_harvest_them(
+        tmp_path):
+    """WHAT ACTUALLY CLOSES THE LOOP FOR THE BASELINE — measured, not assumed.
+
+    An earlier version of this test asserted the schema skip was what stopped
+    `--emit-baseline`'s output being read back, and it SURVIVED a mutant that
+    deleted the skip. The reason is worth pinning instead of hiding: the baseline
+    stores ids BARE (`"ids": ["ZZZ-0009"]`), and `_DIAG` requires the bracketed
+    `[WARNING ZZZ-0009]` form, so the regex cannot harvest them whatever the skip
+    does. The serialization format is the real defence.
+
+    That is exactly why the format must not drift. If anyone ever stores the
+    console LINE beside the id — the obvious next feature — the loop opens, and
+    the schema skip below is what will hold. This test pins the format; the next
+    one proves the skip works when the format is not enough.
+    """
+    cur = _run_dir(tmp_path, "cur", ["AAA-0001"])
+    _rpt(cur, "reports/phase3/x.rpt", "[WARNING ZZZ-0009] one real new id\n")
+    rc, _ = run_gate(cur, "--emit-baseline")
+    assert rc == RC_CLEAN, "emitting a baseline should not itself block"
+    text = (cur / "tool_warning_ids.json").read_text()
+    assert "ZZZ-0009" in text, text
+    assert "[WARNING ZZZ-0009]" not in text, (
+        "the emitted baseline now carries a BRACKETED diagnostic line. The loop "
+        "this gate must not have is open unless the schema skip catches it — see "
+        "the next test, and do not relax it.")
+
+
+def test_an_own_artefact_carrying_a_bracketed_line_is_still_not_harvested(
+        tmp_path):
+    """THE SKIP, proved on the case the format does not cover.
+
+    A run artefact that carries this gate's SCHEMA and a bracketed diagnostic
+    line — what the baseline becomes the day it stores console text — must not be
+    scanned. Deleting the skip makes this red, which is what makes it a check.
+    """
+    prev = _run_dir(tmp_path, "prev", ["AAA-0001"])
+    cur = _run_dir(tmp_path, "cur", ["AAA-0001"])
+    _rpt(cur, "reports/phase3/prior_answer.json", json.dumps({
+        "schema": "vibe-ic/tool-warning-ids/v1",
+        "ids": ["WWW-0004"],
+        "lines": ["[WARNING WWW-0004] quoted from the previous run's log"],
+    }) + "\n")
+    rc, out = run_gate(cur, "--baseline-run", prev, "--today", "2026-08-12")
+    assert rc == RC_CLEAN, (
+        f"an id was harvested out of this gate's OWN previous answer: {out}")
+    assert "WWW-0004" not in out, out
+
+
+def test_PAIRED_an_acceptance_file_cannot_manufacture_the_id_it_excuses(tmp_path):
+    """The acceptance file carries no schema and sits in the same run root.
+
+    Its `why` is free text where a reviewer would paste the log line being
+    excused. Reading that back would let an acceptance CREATE the id it exists
+    to excuse — an exemption that is also its own evidence.
+    """
+    prev = _run_dir(tmp_path, "prev", ["AAA-0001"])
+    cur = _run_dir(tmp_path, "cur", ["AAA-0001"])
+    _accept(cur, [{"id": "QQQ-0007", "until": "2099-01-01",
+                   "why": "seen as [WARNING QQQ-0007] in the log"}])
+    rc, out = run_gate(cur, "--baseline-run", prev, "--today", "2026-08-12")
+    assert rc == RC_CLEAN, out
+    assert "QQQ-0007" not in out, (
+        f"an id was harvested out of the acceptance file's own text: {out}")
+
+
+def test_a_five_digit_message_number_is_not_invisible(tmp_path):
+    """The widened id regex. `[A-Z]{2,5}-\\d{3,4}` could not see this at all."""
+    prev = _run_dir(tmp_path, "prev", ["AAA-0001"])
+    cur = _run_dir(tmp_path, "cur", ["AAA-0001"])
+    _rpt(cur, "reports/phase3/y.rpt", "[WARNING ABC-12345] numbered past 9999\n")
+    rc, out = run_gate(cur, "--baseline-run", prev, "--today", "2026-08-12")
+    assert rc == RC_BLOCKING, out
+    assert "ABC-12345" in out, out

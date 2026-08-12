@@ -105,15 +105,62 @@ RC_CLEAN, RC_BLOCKING, RC_NOT_CHECKED = 0, 1, 2
 #: `[WARNING DRT-0120]` / `[ERROR STA-0441]`. INFO is deliberately excluded:
 #: informational chatter changes with verbosity and would drown the signal.
 #: The tool prefix is captured, never enumerated — no tool is named here.
-_DIAG = re.compile(r"\[(?:WARNING|ERROR)\s+([A-Z]{2,5}-\d{3,4})\]")
+#:
+#: WIDENED from `[A-Z]{2,5}-\d{3,4}` (vibe-ic#1092 review). The narrower form
+#: could not match a five-digit message number, nor a prefix carrying a digit,
+#: so a tool numbering past 9999 would have been silently invisible while the
+#: gate still reported a clean comparison. Nothing in the corpus needs the extra
+#: width TODAY — that is the point: a scanner must not go blind the first time a
+#: tool numbers higher than the day the regex was typed.
+_DIAG = re.compile(r"\[(?:WARNING|ERROR)\s+([A-Z][A-Z0-9]{1,7}-\d{3,5})\]")
+
+#: Family B — STANDALONE OpenSTA, which numbers its messages and does NOT
+#: bracket them: `Warning 441: constraint.sdc line 3, ...`. Anchored at line
+#: start so the digits are the message number and not a coincidence in prose.
+#:
+#: PORTED from vibe-ic#1092, which measured the shape this scanner could not
+#: see. It is a SMALL family here — 41 lines across 20 `.rpt` files at
+#: `4b22e36ea` (`aging_sta.rpt`, `power.rpt`), carrying five distinct numbers:
+#: 441, 305, 503, 168, 198 — and it is ported anyway for a specific reason, not
+#: a volumetric one: `STA-0168` and `STA-0198` ARE `Warning 168:` and
+#: `Warning 198:`. Without this, those two ids are absent from every comparison
+#: and the gate reports a clean one having never looked at them.
+_DIAG_STA_NUMBERED = re.compile(r"^(?:Warning|Error)\s+(\d{2,5}):", re.MULTILINE)
 
 #: Text artefacts a published run carries its diagnostics in.
-_TEXT_SUFFIXES = (".log", ".rpt", ".txt", ".out")
+#:
+#: `.json` ADDED (vibe-ic#1092 review). The runner stores tool console output
+#: inside JSON fields, and three files in this commit's corpus carry gated ids
+#: that way — `spm/v1.9.96_gf180mcuD/reports/phase3/dynamic_ir.json`,
+#: `caravel_user_project/phase3/stage3/cts/clock_tree.json`,
+#: `subservient/phase3/stage3/cts/clock_tree.json`. That is real tool output, not
+#: a report about tool output, and omitting the suffix hid it.
+_TEXT_SUFFIXES = (".log", ".rpt", ".txt", ".out", ".json")
 
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 BASELINE_NAME = "tool_warning_ids.json"
 ACCEPTANCE_NAME = "tool_warning_id_acceptance.json"
+
+#: THE FEEDBACK LOOP `.json` WOULD HAVE OPENED, AND WHY THIS IS KEYED ON SCHEMA.
+#:
+#: `--emit-baseline` writes BASELINE_NAME **into the run root it just scanned**.
+#: While `.json` was not scanned that was harmless by accident; the moment the
+#: suffix is added, the gate's own emitted baseline becomes tool output on the
+#: next run and the gate starts reporting ids whose only source is its own
+#: previous answer. A check whose output is its input cannot be trusted about
+#: either.
+#:
+#: Keyed on a SCHEMA STRING rather than on a filename, ported from vibe-ic#1092:
+#: renaming the artefact must not silently reopen the loop, and a caller may
+#: legitimately write the baseline somewhere other than BASELINE_NAME.
+SCHEMA = "vibe-ic/tool-warning-ids/v1"
+
+
+
+def _is_own_artifact(text: str) -> bool:
+    """True when `text` is a record THIS gate wrote (see SCHEMA)."""
+    return f'"schema": "{SCHEMA}"' in text or f'"schema":"{SCHEMA}"' in text
 
 
 def collect_ids(root: Path, exclude: list[Path] | None = None) -> dict[str, list[str]]:
@@ -139,11 +186,31 @@ def collect_ids(root: Path, exclude: list[Path] | None = None) -> dict[str, list
             text = f.read_text(errors="replace")
         except OSError:
             continue
+        # This gate's OWN artefacts are not tool output. See SCHEMA above:
+        # without this, `--emit-baseline` + a scanned `.json` makes the gate read
+        # its own previous answer back as a finding.
+        #
+        # TWO tests, not one, and both are needed. The schema stamp covers the
+        # baseline wherever a caller writes it. The NAME check covers the
+        # ACCEPTANCE file, which carries no schema and lives in the same run root
+        # — and whose `why` field is free text where a reviewer would naturally
+        # paste the very log line they are excusing. Reading that back would let
+        # an acceptance MANUFACTURE the id it exists to excuse.
+        if f.name in (BASELINE_NAME, ACCEPTANCE_NAME) or _is_own_artifact(text):
+            continue
+        rel = f.relative_to(root).as_posix()
         for m in _DIAG.finditer(text):
             found.setdefault(m.group(1), [])
-            rel = f.relative_to(root).as_posix()
             if rel not in found[m.group(1)]:
                 found[m.group(1)].append(rel)
+        # Family B lands in the SAME namespace as family A, zero-padded to four,
+        # so `STA-0168` reads and sorts like every other id and an acceptance
+        # entry can name it in one spelling.
+        for m in _DIAG_STA_NUMBERED.finditer(text):
+            key = f"STA-{int(m.group(1)):04d}"
+            found.setdefault(key, [])
+            if rel not in found[key]:
+                found[key].append(rel)
     return found
 
 
@@ -270,7 +337,8 @@ def main(argv=None) -> int:
 
     if a.emit_baseline:
         ids = sorted(collect_ids(run))
-        (run / BASELINE_NAME).write_text(json.dumps({"ids": ids}, indent=2) + "\n")
+        (run / BASELINE_NAME).write_text(
+            json.dumps({"schema": SCHEMA, "ids": ids}, indent=2) + "\n")
         print(f"wrote {run / BASELINE_NAME} with {len(ids)} ID(s)")
         return RC_CLEAN
 
