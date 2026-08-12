@@ -31039,15 +31039,46 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "ss/ff)."),
         }, indent=2) + "\n")
         written.append(str(mc_ocv_stance))
-        # When the sign-off STA SURFACED a real SETUP violation, ALSO emit the
-        # honest achievable-Fmax datapoint so a Category-H spec-vs-technology
-        # residual (a full CPU/crypto block at a slow OSS PDK — e.g. ibex@sky130,
-        # sha256 single-cycle round) SELF-REPORTS the frequency it actually MEETs
-        # instead of a bare FAIL. §4.05 HONESTY: this is a MEASUREMENT, never a
-        # clock relaxation — `timing_closed_multi_corner` above stays as-is and the
-        # sign-off verdict is unchanged; achievable_fmax.json travels ALONGSIDE the
-        # FAIL, `relaxation_applied` is always False.
-        if mc_ocv_ok and setup_wns is not None and setup_wns < 0:
+        # Emit the honest achievable-Fmax datapoint whenever the sign-off STA
+        # produced a setup number — on a PASS as well as on a FAIL.
+        #
+        # WHY THE `setup_wns < 0` CONDITION IS GONE (vibe-ic#1097, S8). This
+        # started as a Category-H aid: a spec-vs-technology residual (a full
+        # CPU/crypto block at a slow OSS PDK — ibex@sky130, sha256 single-cycle
+        # round) should SELF-REPORT the frequency it actually MEETs instead of a
+        # bare FAIL. That is still true, and it is not the whole use.
+        #
+        # The period a design is ASKED for reaches the SDC through a four-tier
+        # precedence walk (`l8_sta_clock_period_design_owned_check`), and every
+        # tier — down to `sdc_gen._DEFAULT_MHZ`, which is fabricated — is a
+        # number somebody REQUESTED. The achieved period is the only MEASUREMENT
+        # in that set, so it is what makes "asked" and "reached" two diffable
+        # files instead of a sentence in a log. Suppressing it on the runs that
+        # PASS kept the measurement for exactly the runs nobody needs convincing
+        # about.
+        #
+        # MEASURED on this repo's published corpus at f9c13443: 13 run roots
+        # reached post-route STA, and 2 carry `achievable_fmax.json` — the two
+        # that failed. The other 11 shipped no achieved period although the
+        # slack was on disk, and the gaps are not small:
+        #
+        #     caravel_user_project   asked 25.0 ns   reached  7.81 ns
+        #     spm/v1.10.18_sky130A   asked 10.0 ns   reached  4.76 ns
+        #     edge_llm_accel         asked 10.0 ns   reached  8.92 ns
+        #
+        # `achievable_from_slack` already handled positive slack — it reports the
+        # margin as headroom (see its own comment at the `spec_margin_ns` key) —
+        # so this is a wiring change and not a new computation.
+        #
+        # §4.05 HONESTY, unchanged and load-bearing: this is a MEASUREMENT, never
+        # a clock relaxation. `timing_closed_multi_corner` above stays as-is, the
+        # sign-off verdict is untouched, the artefact is written to its OWN path
+        # and never over the design's SDC, and `relaxation_applied` is always
+        # False. vibe-ic#1083 records ORFS's `update_ok` / `--failing` semantics
+        # — a golden that moves itself to the current run's worse value — as
+        # explicitly NOT adopted; emitting on PASS as well is the opposite of
+        # that, not a step toward it.
+        if mc_ocv_ok and setup_wns is not None:
             try:
                 from sta_achievable_fmax_report import achievable_from_slack
                 _spec_period_ns, _ = _resolve_clock_spec(project, top=top)
@@ -31056,12 +31087,21 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 (rpt_phase3 / "achievable_fmax.json").write_text(
                     json.dumps(_fmax_rep, indent=2) + "\n")
                 written.append(str(rpt_phase3 / "achievable_fmax.json"))
+                # The sentence has to be true on BOTH branches now. "setup FAIL
+                # -> achievable X" read as a repair on a run that had already
+                # MET its spec; on a PASS the same two numbers are asked-vs-
+                # reached headroom, which is a different statement about the
+                # same measurement.
+                _spec_verdict = "MET" if _fmax_rep["spec_met"] else "FAIL"
                 notes.append(
                     "achievable-Fmax reported (honest measurement, sign-off "
-                    f"verdict UNCHANGED): spec {_fmax_rep['spec_period_ns']} ns "
-                    f"({_fmax_rep['spec_fmax_mhz']} MHz) setup FAIL -> achievable "
-                    f"{_fmax_rep['achievable_period_ns']} ns "
-                    f"({_fmax_rep['achievable_fmax_mhz']} MHz) setup MET.")
+                    f"verdict UNCHANGED): asked {_fmax_rep['spec_period_ns']} ns "
+                    f"({_fmax_rep['spec_fmax_mhz']} MHz) setup {_spec_verdict} "
+                    f"-> reached {_fmax_rep['achievable_period_ns']} ns "
+                    f"({_fmax_rep['achievable_fmax_mhz']} MHz)"
+                    + (f", headroom {_fmax_rep['spec_margin_ns']} ns."
+                       if _fmax_rep["spec_met"] else
+                       ", i.e. the period at which setup would MET."))
             except Exception as _fmax_err:  # never break the flow on a report
                 notes.append(f"achievable-Fmax emit non-fatal: {_fmax_err}")
         if mc_ocv_ok and _viol:
