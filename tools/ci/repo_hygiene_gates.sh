@@ -412,39 +412,34 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # `phase3/stage3/pnr/routed.def` is a PUBLISHING decision with a real
 # repository-size cost, and that decision is not a side effect of making the
 # roll-up honest.
-# vibe-ic#1075 — SPLIT OUT of the loop below, because it is the one gate here
-# whose declaration comment states a TWO-part predicate ("a routed DEF and a
-# macro LEF") while the shared producer selected on the first half only.
-# MEASURED at 4b22e36ea the intersection is EMPTY, so the single cell the
-# shared loop handed it fails the unstated half and the checker correctly
-# answers rc 2 — permanently, since this loop is its only wiring. A declared
-# gate that can never reach a verdict still counts as a gate to anyone reading
-# the denominator; selecting it on the predicate it declares turns that into a
-# zero the loop STATES. See `_published_cell_corpus.sh` for why the producer
-# stops at "a LEF is tracked here" and does not parse for a MACRO record.
-_macro_obs_published_cell_gate() {
+# vibe-ic#1075 — `macro OBS not crossed` STAYS on the routed-DEF producer, and
+# that is a deliberate retreat from this branch's first shape, recorded rather
+# than quietly dropped.
+#
+# Its declaration comment states a two-part predicate ("a routed DEF AND a macro
+# LEF") and MEASURED at a38902d16 that intersection is EMPTY, so selecting it on
+# what it declares yields a corpus of ZERO items. #957's landed guard asserts
+# every loop corpus is non-empty, in its own words: "a disclosure that was
+# achieved by dropping a gate, or by NARROWING the corpus, would be a coverage
+# cut wearing a fix's clothes." An empty corpus is the limit case of narrowing.
+#
+# Both positions are defensible — the gate answers rc 2 CANNOT DETERMINE on the
+# one cell it is handed, every run, so nothing is lost by removing it and nothing
+# is gained by keeping it — and they cannot both hold. That is an arbitration,
+# not an implementation detail, so this branch leaves the gate where #957 expects
+# it and the empty-corpus half of #1075 stays open.
+_per_published_cell_gates() {
   local _def="$1" _cell
   _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
+  # ORGANIC #686 — a macro OBS is the vendor's statement of where the integrator
+  # may not put metal. rc 2 (nothing to look at) is tolerated, rc 1 is not.
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
 }
-gate_dispatch_over "published cells carrying a routed DEF AND a macro LEF" \
-  _macro_obs_published_cell_gate \
-  published_cells_with_routed_def_and_macro_lef
-# vibe-ic#1075 — SPLIT, because neither of these gates reads a routed DEF and
-# the routed-DEF selector was therefore not their input. MEASURED at 947547716:
-#
-#   selector the loop used (routed DEF)   1 cell
-#   roots carrying a DRC report           9
-#   IC roots carrying reports/**/*.json   9
-#
-# One cell stood in for nine in both cases, and it happened to pass, so the
-# roll-up reported a PASS covering 1/9 of each gate's real subject.
-#
-# `run_tolerating_uncheckable` is kept for both: a published root that carries a
-# DRC report but no parseable geometry, or a `reports/` tree in which nothing
-# declares a verdict, is a root the gate could not read — rc 2 — and that is a
-# state to disclose, not a defect in the commit under review. rc 1 still blocks.
+gate_dispatch_over "published cells carrying a routed DEF" \
+  _per_published_cell_gates \
+  published_cells_with_routed_def
+
 _drc_vacuous_published_cell_gate() {
   local _cell="$ROOT/$1"
   # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"

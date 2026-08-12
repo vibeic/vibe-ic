@@ -58,7 +58,7 @@ def _producer(repo, fn):
     script = (f'set -euo pipefail\nROOT="{repo}"\n'
               f'. "{CORPUS_LIB}"\n{fn}\n')
     res = subprocess.run(["bash", "-c", script], capture_output=True,
-                         text=True, timeout=120)
+                         text=True, timeout=55)
     items = [l for l in res.stdout.splitlines() if l.strip()]
     return res.returncode, items
 
@@ -143,7 +143,7 @@ def _dispatch_over(tmp_path, repo, fn, label="g"):
         f'gate_dispatch_over "the corpus" _body {fn}\n'
         f'gate_dispatch_finish\n')
     res = subprocess.run(["bash", "-c", script], capture_output=True,
-                         text=True, timeout=120)
+                         text=True, timeout=55)
     return res, json.loads(rec.read_text())
 
 
