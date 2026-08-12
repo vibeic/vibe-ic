@@ -947,3 +947,286 @@ def test_an_unmeasured_clause_is_NOT_counted_CLEAN(census, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "CLEAN       0" in out, out
     assert "N/A         1" in out, out
+# SHAPE 12 — "it measures a proxy, not the property"
+#
+# The controls here are the load-bearing part twice over. Measured on the real
+# flow, `pass_without_reading` + `content_blind_pass` fire on ONE clause of 136,
+# and a probe that reports 1/136 is one bad rule away from reporting 0/136 and
+# being believed. So every tier and every guard has a planted known positive
+# AND a planted known negative that differ in exactly one respect.
+#
+# CALIBRATION HONESTY: these are CONSTRUCTED fixtures, not restored history.
+# The search for a real historical positive INSIDE the clause population was
+# run and is reported in the PR: the two nearest real defects
+# (`transition_coverage_check` / `path_delay_coverage_check`, #219 "an absent or
+# hollow ATPG result must never read as a pass") both spawn a child process, so
+# the probe declines to score them in either arm; and `e170de81`
+# ("deliverable_verdict_consistency_check never read the completion audit it
+# cited") is a program the flow declares no clause for. The one real in-tree
+# positive the sweep did find, `vacuous_testbench_check`, is pinned separately
+# in `test_the_real_sweep_still_finds_its_one_real_positive`.
+# --------------------------------------------------------------------------
+
+_SEEDED_STEP = """
+    steps:
+      - id: 99
+        name: planted
+        required_outputs:
+          - evidence/report.json
+        gate:
+          all_of:
+            - program_exit_zero: "{prog} ."
+    """
+
+
+def test_it_fires_on_a_gate_that_passes_having_touched_nothing(census, tmp_path, capsys):
+    """The purest form: the verdict is a function of argv."""
+    progs = _programs(tmp_path, decides_on_argv="""
+        import sys
+        print("[PASS] decides_on_argv: 1/1 conformant")
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _SEEDED_STEP.format(prog="decides_on_argv")),
+                progs, "--probes", "proxy")
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "never opened, stat'd or listed ANY path" in out, out
+
+
+def test_existence_standing_in_for_substance_is_SUSPECT_never_LIAR(census, tmp_path, capsys):
+    """The `gds_size_check` tier — and the reason it is deliberately the weaker
+    verdict is stated in the probe: a gate whose declared property IS presence
+    measures exactly this, and no structure separates the two."""
+    progs = _programs(tmp_path, exists_is_enough="""
+        import pathlib, sys
+        p = pathlib.Path("evidence/report.json")
+        if p.exists() and p.stat().st_size > 4:
+            print("[PASS] exists_is_enough: evidence present")
+            sys.exit(0)
+        sys.exit(1)
+        """)
+    rc = census(_flow(tmp_path, _SEEDED_STEP.format(prog="exists_is_enough")),
+                progs, "--probes", "proxy")
+    out = capsys.readouterr().out
+    assert rc == 0, out                       # SUSPECT does not set the exit code
+    assert "LIAR        0" in out, out
+    assert "SUSPECT     1" in out, out
+    assert "existence stood in for substance" in out, out
+    # and the mutation arm CONFIRMS it rather than the probe merely asserting it
+    assert "CONFIRMED by mutation" in out, out
+
+
+def test_a_gate_that_actually_reads_its_subject_is_CLEAN(census, tmp_path, capsys):
+    """The negative control for the tier above: same file, same PASS, one
+    difference — it opens it."""
+    progs = _programs(tmp_path, reads_it="""
+        import json, pathlib, sys
+        d = json.loads(pathlib.Path("evidence/report.json").read_text())
+        print("[PASS] reads_it: n=%s" % d.get("n"))
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _SEEDED_STEP.format(prog="reads_it")),
+                progs, "--probes", "proxy")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "LIAR        0" in out and "SUSPECT     0" in out, out
+
+
+def test_the_mutation_arm_is_NOT_scored_where_the_gate_read_the_file(census, tmp_path, capsys):
+    """The false positive this probe HAD, and the reason P7 is gated on P6.
+
+    `l_doc_todo_stub_count_check` reads every L-doc, counts `TODO`, and passes
+    on both arms because neither arm contains a TODO. Its verdict is perfectly
+    content-sensitive; a byte-scramble at equal length simply handed it a second
+    COMPLIANT input. Scoring "the verdict did not move" as a finding there is
+    the probe committing shape 12 on its way to reporting it.
+    """
+    progs = _programs(tmp_path, counts_a_token="""
+        import pathlib, sys
+        t = pathlib.Path("evidence/report.json").read_text(errors="replace")
+        print("[PASS] counts_a_token: todo=%d" % t.count("TODO"))
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _SEEDED_STEP.format(prog="counts_a_token")),
+                progs, "--probes", "proxy")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "LIAR        0" in out and "SUSPECT     0" in out, out
+
+
+def test_a_gate_asserting_an_artefact_is_ABSENT_is_declined(census, tmp_path, capsys):
+    """The fail-safe class, and it is the same one #1051's `empty_tree` probe
+    had. `analog_a0_skip_forbidden_check` is the live instance."""
+    progs = _programs(tmp_path, forbidden_absent="""
+        import pathlib, sys
+        if pathlib.Path("A0_skip_decision.json").exists():
+            print("FAIL: forbidden artefact present"); sys.exit(1)
+        print("[PASS] forbidden_absent: not present")
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _SEEDED_STEP.format(prog="forbidden_absent")),
+                progs, "--probes", "proxy")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "LIAR        0" in out and "SUSPECT     0" in out, out
+    assert "its subject may BE the absence" in out, out
+
+
+def test_a_child_process_is_DROPPED_and_never_accused(census, tmp_path, capsys):
+    """The audit hook does not follow children. A gate whose reading happens in
+    `klayout` looks exactly like a gate that read nothing, and accusing it would
+    be the census publishing its own blindness as a finding."""
+    progs = _programs(tmp_path, delegates="""
+        import subprocess, sys
+        subprocess.run([sys.executable, "-c", "pass"])
+        print("[PASS] delegates: child said so")
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _SEEDED_STEP.format(prog="delegates")),
+                progs, "--probes", "proxy")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "LIAR        0" in out and "SUSPECT     0" in out, out
+    assert "spawned a child process" in out, out
+
+
+def test_a_disclosed_VACUOUS_PASS_is_declined_here_too(census, tmp_path, capsys):
+    """#1054's rule, applied to the new probes rather than re-derived: a gate
+    that prints `VACUOUS_PASS:` is not certifying the project, and the flow does
+    not record it as a PASS."""
+    progs = _programs(tmp_path, discloses="""
+        import sys
+        print("VACUOUS_PASS: discloses — nothing was examined")
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _SEEDED_STEP.format(prog="discloses")),
+                progs, "--probes", "proxy")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "LIAR        0" in out and "SUSPECT     0" in out, out
+    assert "records VACUOUS_PASS rather than PASS" in out, out
+
+
+def test_every_unscored_shape12_result_is_PRINTED_with_its_reason(census, tmp_path, capsys):
+    """Bounded coverage that does not say what it skipped reads as coverage it
+    never had."""
+    progs = _programs(tmp_path, refuses="""
+        import sys
+        print("cannot decide"); sys.exit(1)
+        """)
+    census(_flow(tmp_path, _SEEDED_STEP.format(prog="refuses")), progs, "--probes", "proxy")
+    out = capsys.readouterr().out
+    assert "DROPPED" in out, out
+    assert "does not PASS on the seeded tree" in out, out
+
+
+def test_the_OR_alternatives_are_each_seeded_as_a_path(tmp_path):
+    """` OR ` is the flow's ANY-OF separator inside one `required_outputs`
+    entry. Before it was split, the census wrote ONE file whose NAME was the
+    whole `A OR B OR C` string and then reported what a gate did with that."""
+    cl = lc.Clause(step="9", kind="program_exit_zero", cmd="g .", program="g",
+                   step_outputs=["a/x.log OR b/y.xml"])
+    got = lc.seed_declared_tree(tmp_path / "p", cl)
+    assert got == ["a/x.log", "b/y.xml"], got
+
+
+def test_a_glob_output_is_materialised_not_silently_skipped(tmp_path):
+    """Every one of step 37's declared outputs is a glob. Skipping them would
+    drop the whole step and report the gap as coverage."""
+    cl = lc.Clause(step="37", kind="program_exit_zero", cmd="g .", program="g",
+                   step_outputs=["phase3/stage4/gds/*.gds"])
+    got = lc.seed_declared_tree(tmp_path / "p", cl)
+    assert got == ["phase3/stage4/gds/liar_census_seed.gds"], got
+
+
+def test_the_subject_is_the_clause_ARGUMENT_not_the_step_report(tmp_path):
+    """The probe's own shape-12 trap. `required_outputs` is frequently the
+    gate's OWN REPORT while its subject is the positional argument beside it;
+    seeding the report and calling it the subject would measure whether the gate
+    reads its own output."""
+    cl = lc.Clause(step="2", kind="program_exit_zero",
+                   cmd="rtl_hygiene_lint phase2/stage1/rtl/*.sv --json reports/x.json",
+                   program="rtl_hygiene_lint",
+                   step_outputs=["reports/x.json", "reports/other.json"])
+    subjects, outputs = lc.clause_subject_paths(cl)
+    assert outputs == ["reports/x.json"], outputs
+    assert "phase2/stage1/rtl/*.sv" in subjects, subjects
+    assert "reports/x.json" not in subjects, subjects
+    assert "reports/other.json" in subjects, subjects
+
+
+def test_the_trace_shim_self_tests_every_channel_before_it_is_trusted(tmp_path):
+    """`pathlib` binds `os.stat` at import on some CPython versions, so a LOOK
+    can be invisible — which would UPGRADE a "looked but did not read" finding
+    into "touched nothing at all", silently, on some hosts. The shim proves each
+    channel against a scratch directory first and names any that is dark."""
+    import json as _json
+    prog = tmp_path / "p.py"
+    prog.write_text("import pathlib, sys\n"
+                    "pathlib.Path('seen.txt').exists()\n"
+                    "pathlib.Path('read.txt').read_text()\n"
+                    "sys.exit(0)\n")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "seen.txt").write_text("x")
+    (proj / "read.txt").write_text("y")
+    tr = tmp_path / "t.json"
+    rc = subprocess.run([sys.executable, str(lc.TRACE_SHIM), str(prog), str(tr)],
+                        cwd=str(proj), capture_output=True, text=True, timeout=_T).returncode
+    assert rc == 0
+    payload = _json.loads(tr.read_text())
+    assert payload["instrumentation"] == "COMPLETE", payload["instrumentation"]
+    assert payload["touched"]["seen.txt"] == ["look"], payload["touched"]
+    assert "read" in payload["touched"]["read.txt"], payload["touched"]
+
+
+def test_the_real_sweep_still_finds_its_one_real_positive(capsys):
+    """The one REAL in-population positive the shape-12 probes found, pinned.
+
+    `vacuous_testbench_check` — the gate whose entire subject is a testbench
+    that "prints a PASS and never drives the design" — returns rc 0 over a sim
+    tree that carries a `results.xml` and NO testbench source, having read none
+    of it. Reproduced by hand, independently of the census:
+
+        verdict: NOT_APPLICABLE, reason: "no testbench discovered", rc 0
+
+    The step-4 sibling `files_exist` asserts the sim RESULT, never a testbench
+    SOURCE, so nothing else in that `all_of` asks the question either.
+    """
+    rc = lc.main(["--probes", "proxy", "--only", "vacuous_testbench_check"])
+    out = capsys.readouterr().out
+    assert rc == 0, out                      # advisory tier: SUSPECT, not LIAR
+    assert "SUSPECT     1" in out, out
+    assert "vacuous_testbench_check" in out, out
+    assert "existence stood in for substance" in out, out
+
+
+def test_the_census_states_the_clauses_it_does_NOT_discover(tmp_path, capsys):
+    """#1054's most useful finding was that a probe had been scanning the wrong
+    POPULATION and reporting a confident zero over it. This census discovers two
+    clause kinds of three, and the bare-string form of those two — so 31 of the
+    flow's 167 declared clauses are outside every probe. It has to say so."""
+    missed = lc.undiscovered_clauses(lc.FLOW_YAML)
+    assert missed.get("optional_program_exit_zero"), missed
+    # the mapping form of a kind it DOES discover falls out just as silently
+    assert missed.get("program_exit_zero"), missed
+    discovered = {c.program for c in lc.discover_clauses(lc.FLOW_YAML)}
+    assert "clock_plan_check" not in discovered
+    assert any("clock_plan_check" in c for c in missed["program_exit_zero"]), missed
+
+
+def test_the_population_line_is_PRINTED_not_only_computed(census, tmp_path, capsys):
+    flow = _flow(tmp_path, """
+        steps:
+          - id: 99
+            gate:
+              all_of:
+                - program_exit_zero: "seen ."
+                - optional_program_exit_zero:
+                    command: "unseen ."
+        """)
+    progs = _programs(tmp_path, seen="import sys\nprint('[PASS]')\nsys.exit(1)\n")
+    census(flow, progs, "--probes", "empty")
+    out = capsys.readouterr().out
+    assert "POPULATION — 1 of 2 gate clauses" in out, out
+    assert "optional_program_exit_zero" in out, out
