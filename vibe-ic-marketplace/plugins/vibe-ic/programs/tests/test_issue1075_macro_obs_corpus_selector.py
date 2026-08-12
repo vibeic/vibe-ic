@@ -186,27 +186,23 @@ def test_the_script_sources_the_corpus_library():
     assert ". \"$HERE/_published_cell_corpus.sh\"" in HYGIENE.read_text()
 
 
-def test_macro_obs_is_dispatched_over_the_intersection_and_the_other_two_are_not():
-    """Pins WHICH loop each gate sits in. The whole change is the selector, so
-    a test that only checked the producers would pass while the gate stayed
-    wired to the old one."""
+def test_macro_obs_is_dispatched_over_the_intersection_it_declares():
+    """The whole change is the selector, so a test that only checked the
+    producers would pass while the gate stayed wired to the old one.
+
+    This asserted a second thing until #1075's second half landed: that the
+    other two gates were still on the routed-DEF loop. That is now false BY
+    DESIGN — they were the second half — and the statement is replaced, not
+    dropped, by `test_the_script_dispatches_each_gate_over_its_own_input`,
+    which pins each gate to its own producer and is strictly stronger.
+    """
     text = HYGIENE.read_text()
     assert ("gate_dispatch_over \"published cells carrying a routed DEF AND a "
             "macro LEF\"") in text
-    # the macro-OBS body must be the one driven by the intersection loop
     inter = text.index("published cells carrying a routed DEF AND a macro LEF\"")
     tail = text[inter:inter + 400]
     assert "_macro_obs_published_cell_gate" in tail, tail
     assert "published_cells_with_routed_def_and_macro_lef" in tail, tail
-    # and the other two must still be on the routed-DEF loop
-    body = text[text.index("_per_published_cell_gates() {"):
-                text.index("gate_dispatch_over \"published cells carrying a "
-                           "routed DEF\"")]
-    assert "drc_vacuous_pass_check.py" in body
-    assert "step_internal_fail_bubble_up_check.py" in body
-    assert "macro_obs_geometry_intersect_check.py" not in body, (
-        "macro OBS must no longer be declared inside the routed-DEF loop")
-
 
 def test_the_real_repository_intersection_is_empty_and_that_is_why():
     """Records the measured fact this change is about, against the real tree.
@@ -222,3 +218,115 @@ def test_the_real_repository_intersection_is_empty_and_that_is_why():
     assert both == [], (
         "a published cell now carries a routed DEF AND a LEF; `macro OBS not "
         f"crossed` has a real corpus again: {both}")
+
+# ---------------------------------------------------------------------------
+# The other two gates: selected on what they READ (#1075, second half)
+# ---------------------------------------------------------------------------
+DRC_REL = "phase3/reports/drc_signoff.rpt"
+REP_REL = "reports/phase3/lvs.json"
+
+
+def _repo2(tmp_path, tree):
+    """A throwaway repo whose tracked tree is exactly `tree` (path -> content)."""
+    repo = tmp_path / "repo2"
+    for rel in tree:
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+    subprocess.run(["git", "init", "-q", "."], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-qm", "corpus"], cwd=repo, check=True)
+    return repo
+
+
+def test_the_drc_producer_selects_a_root_that_has_a_drc_report(tmp_path):
+    repo = _repo2(tmp_path, [f"benchmark-data/ic/ic_a/run1/{DRC_REL}"])
+    rc, items = _producer(repo, "published_cells_with_drc_report")
+    assert rc == 0 and items == ["benchmark-data/ic/ic_a/run1"], items
+
+
+def test_the_drc_producer_skips_a_root_with_no_drc_report(tmp_path):
+    """The other direction. A producer returning every root would satisfy the
+    test above and select cells the gate cannot answer about."""
+    repo = _repo2(tmp_path, ["benchmark-data/ic/ic_b/run1/phase3/reports/sta.rpt"])
+    rc, items = _producer(repo, "published_cells_with_drc_report")
+    assert rc == 0 and items == [], items
+
+
+def test_the_drc_producer_is_not_keyed_on_a_routed_def(tmp_path):
+    """The defect this change removes, stated as a test: a cell with a routed
+    DEF and no DRC report must NOT be selected for the DRC gate, and a cell with
+    a DRC report and no DEF MUST be."""
+    repo = _repo2(tmp_path, [
+        f"benchmark-data/ic/only_def/run1/{DEF_REL}",
+        f"benchmark-data/ic/only_drc/run1/{DRC_REL}",
+    ])
+    rc, items = _producer(repo, "published_cells_with_drc_report")
+    assert rc == 0 and items == ["benchmark-data/ic/only_drc/run1"], items
+
+
+def test_the_reports_producer_selects_an_ic_with_a_reports_tree(tmp_path):
+    repo = _repo2(tmp_path, [f"benchmark-data/ic/ic_c/{REP_REL}"])
+    rc, items = _producer(repo, "published_ics_with_reports_tree")
+    assert rc == 0 and items == ["benchmark-data/ic/ic_c"], items
+
+
+def test_the_reports_producer_skips_an_ic_with_no_reports_tree(tmp_path):
+    repo = _repo2(tmp_path, [f"benchmark-data/ic/ic_d/run1/{DEF_REL}"])
+    rc, items = _producer(repo, "published_ics_with_reports_tree")
+    assert rc == 0 and items == [], items
+
+
+def test_a_root_is_not_confused_with_its_own_structural_subdirectory(tmp_path):
+    """The bug my first reducer had, pinned. `<ic>/phase3` and `<ic>/reports`
+    are not projects — they are one project seen through its own trees — and a
+    reducer that emitted them produced a list in which six entries were
+    subdirectories of another entry."""
+    repo = _repo2(tmp_path, [
+        f"benchmark-data/ic/ic_e/{DRC_REL}",
+        "benchmark-data/ic/ic_e/reports/phase3/drc_router.rpt",
+    ])
+    rc, items = _producer(repo, "published_cells_with_drc_report")
+    assert rc == 0 and items == ["benchmark-data/ic/ic_e"], items
+    assert not any(i.endswith(("/phase3", "/reports")) for i in items), items
+
+
+def test_a_run_directory_IS_part_of_the_root(tmp_path):
+    """The control for the test above: the structural-name rule must not also
+    swallow a real run directory, or every versioned cell would collapse onto
+    its IC and the gates would be handed a root they were never invoked with."""
+    repo = _repo2(tmp_path, [f"benchmark-data/ic/ic_f/v1.2.3_sky130A/{DRC_REL}"])
+    rc, items = _producer(repo, "published_cells_with_drc_report")
+    assert rc == 0 and items == ["benchmark-data/ic/ic_f/v1.2.3_sky130A"], items
+
+
+def test_the_script_dispatches_each_gate_over_its_own_input():
+    """Pins WHICH producer drives WHICH gate. The producers being right is not
+    the change — the wiring is."""
+    text = HYGIENE.read_text()
+    for corpus, producer, prog in (
+            ("published roots carrying a DRC report",
+             "published_cells_with_drc_report", "drc_vacuous_pass_check.py"),
+            ("published ICs carrying a reports/ tree",
+             "published_ics_with_reports_tree",
+             "step_internal_fail_bubble_up_check.py")):
+        i = text.index(f'gate_dispatch_over "{corpus}"')
+        assert producer in text[i:i + 200], corpus
+        # and the gate body driven by that loop names the right program
+        body_start = text.rindex("_published", 0, i)
+        assert prog in text[body_start - 900:i], (corpus, prog)
+    assert "_per_published_cell_gates" not in text, (
+        "the old shared loop must be gone; while it exists a gate can still be "
+        "selected on a predicate it does not read")
+
+
+def test_the_real_repository_populations_differ_from_the_old_selector():
+    """The measured claim, against the real tree: the routed-DEF selector is a
+    strictly smaller population than either gate's real input. If these ever
+    coincide the change stops being justified and this fires."""
+    _, defs = _producer(ROOT, "published_cells_with_routed_def")
+    _, drc = _producer(ROOT, "published_cells_with_drc_report")
+    _, reps = _producer(ROOT, "published_ics_with_reports_tree")
+    assert len(defs) < len(drc), (len(defs), len(drc))
+    assert len(defs) < len(reps), (len(defs), len(reps))
