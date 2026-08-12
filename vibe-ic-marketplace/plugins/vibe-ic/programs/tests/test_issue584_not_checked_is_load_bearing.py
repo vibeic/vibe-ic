@@ -436,6 +436,32 @@ def test_the_real_hygiene_script_declares_every_tolerance_it_takes():
             f"which prerequisite was missing: {g['exempt_reason']!r}")
 
 
+def test_no_exemption_reason_is_silently_eaten_by_the_shell():
+    """A reason is a double-quoted BASH string, so backticks and `$` expand.
+
+    MEASURED, not hypothesised: the first draft of the `blocker list contract`
+    exemption read "... predate the `blockers` key ...", and the sweep printed
+    "predate the  key" — bash ran `blockers` as a command, it failed, and the
+    empty result was substituted in silence. The reason is the whole value of
+    the exemption; one that quietly loses a word is a reason a reader cannot
+    act on, and nothing in the run says a word went missing.
+
+    Caught statically because it CANNOT be caught at run time: `uncheckable_
+    until` receives the string already expanded, so by then the word is gone.
+    """
+    bad = []
+    for m in re.finditer(r'^\s*uncheckable_until\s+\S+\s+"([^"]*)"',
+                         _SCRIPT.read_text(), re.M):
+        reason = m.group(1)
+        hits = [c for c in ("`", "$") if c in reason]
+        if hits:
+            bad.append((hits, reason[:70]))
+    assert not bad, (
+        "exemption reason(s) contain shell-expanding characters, which bash "
+        "substitutes away inside the double quotes before the dispatcher ever "
+        "sees them: " + "; ".join(f"{h} in {r!r}" for h, r in bad))
+
+
 def test_no_shipped_exemption_is_already_stale():
     """The expiry, enforced where a landing actually looks.
 
