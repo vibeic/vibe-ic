@@ -54,6 +54,8 @@ import subprocess
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 from typing import List, Optional, Tuple
 import _path_layout as _pl
 import _vacuous_exit as _vx
@@ -920,7 +922,7 @@ def run_commercial_pdk_cell_correlation(
     }
     out_path = _pl.report_path(project, "spice_correlation.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    _aa.write_text(out_path, json.dumps(report, indent=2, ensure_ascii=False))
     return report
 
 

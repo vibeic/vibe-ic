@@ -91,6 +91,8 @@ import json
 import sys
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -377,7 +379,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
     if iface:
         body["interface"] = iface
     bdir.mkdir(parents=True, exist_ok=True)
-    spec_path.write_text(json.dumps(body, indent=2, ensure_ascii=False) + "\n",
+    _aa.write_text(spec_path, json.dumps(body, indent=2, ensure_ascii=False) + "\n",
                          encoding="utf-8")
     gap_path = bdir / "spec_gap.json"
     if gap_path.is_file():

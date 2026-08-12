@@ -86,6 +86,8 @@ import json
 import sys
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -841,7 +843,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                   fam, params)
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(md, encoding="utf-8")
+    _aa.write_text(md_path, md, encoding="utf-8")
     ir_path.write_text(json.dumps(ir, indent=2, ensure_ascii=False) + "\n",
                        encoding="utf-8")
     gap = bdir / "topology_gap.json"

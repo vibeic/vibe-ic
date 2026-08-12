@@ -45,6 +45,8 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 import _path_layout as _pl
 
 # BACKLOG-v13 Wave 7 — binary-doc extensions to input_doc/.
@@ -907,9 +909,9 @@ def main(argv=None) -> int:
     md_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not json_only:
-        md_path.write_text(_emit_md(report), encoding="utf-8")
+        _aa.write_text(md_path, _emit_md(report), encoding="utf-8")
     if not md_only:
-        json_path.write_text(
+        _aa.write_text(json_path, 
             json.dumps(report, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

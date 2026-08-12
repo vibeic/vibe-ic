@@ -106,6 +106,8 @@ import lec_gate_netlist_select as _lec_gns  # ATPG-cut predicate (diagnosis only
 import _yosys_stat as _ystat  # shared yosys `stat` parser (step 9 stats.json)
 import quartus_map_audit as _qma  # step 6 .map.rpt silent-failure scanner
 import _hardmacro_stage as _hms  # staged SRAM/IP macro discovery + blackbox
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 # Path inside the iic-osic-tools container where the EDA tools live (yosys
 # + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
@@ -4922,7 +4924,7 @@ def step_full_stack_tb_gen(project: Path,
             results["source"] = (
                 "step_full_stack_tb_gen + regmap_transaction_tb_gen "
                 "(ORGANIC #186 part 2)")
-        results_path.write_text(json.dumps(results, indent=2) + "\n")
+        _aa.write_text(results_path, json.dumps(results, indent=2) + "\n")
     else:
         # File already richer; just ensure opcodes_tested is populated.
         _changed = False
@@ -4947,7 +4949,7 @@ def step_full_stack_tb_gen(project: Path,
             existing_results["ts_unix"] = time.time()
             _changed = True
         if _changed:
-            results_path.write_text(json.dumps(existing_results, indent=2) + "\n")
+            _aa.write_text(results_path, json.dumps(existing_results, indent=2) + "\n")
         results = existing_results
 
     # Honest StepResult: only claim a functional PASS when the result
@@ -5573,7 +5575,7 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
         log_rel = str(transcript.relative_to(project))
     except ValueError:
         log_rel = str(transcript)
-    (sim_dir / "pass.flag").write_text("CONNECTIVITY_PASS\n")
+    _aa.write_text(sim_dir / "pass.flag", "CONNECTIVITY_PASS\n")
     _bridge_xml = (
         "<results><verdict>CONNECTIVITY_PASS</verdict>"
         "<functional_verified>false</functional_verified>"
@@ -5588,7 +5590,7 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
         "Connectivity/structural binding to real rtl/ PASSED "
         "(FULL_STACK_TB_DONE).</waiver_reason>"
         "</results>\n")
-    (sim_dir / "results.xml").write_text(_bridge_xml)
+    _aa.write_text(sim_dir / "results.xml", _bridge_xml)
     return True
 
 
@@ -5625,7 +5627,7 @@ def _emit_oracle_sim_bridge(project: Path, transcript: Path,
         log_rel = str(transcript.relative_to(project))
     except ValueError:
         log_rel = str(transcript)
-    (sim_dir / "pass.flag").write_text("PASS\n")
+    _aa.write_text(sim_dir / "pass.flag", "PASS\n")
     _bridge_xml = (
         "<results><verdict>PASS</verdict>"
         f"<evidence>{log_rel}</evidence>"
@@ -5634,7 +5636,7 @@ def _emit_oracle_sim_bridge(project: Path, transcript: Path,
         f"<vectors_total>{n_total}</vectors_total>"
         "<verification_track>oracle_tb</verification_track>"
         "</results>\n")
-    (sim_dir / "results.xml").write_text(_bridge_xml)
+    _aa.write_text(sim_dir / "results.xml", _bridge_xml)
     # ORGANIC-20260606 #460 (reopened) — incidental cleanup: an old run may
     # have left a stale top-level sim/results.xml at the LEGACY wrong path
     # (project-root sim/, not the canonical phase2/stage1/sim/) carrying the
@@ -5663,7 +5665,7 @@ def _emit_oracle_sim_bridge(project: Path, transcript: Path,
                     _is_stale_skip = (
                         "<verdict>SKIP</verdict>" in _legacy_txt)
                 if _is_stale_skip:
-                    legacy.write_text(_bridge_xml)
+                    _aa.write_text(legacy, _bridge_xml)
         except OSError:
             pass
     # ORGANIC-20260606 #473 (MEDIUM) — the genuine oracle PASS is also the
@@ -5818,7 +5820,7 @@ def _merge_oracle_into_full_stack_results(project: Path, transcript: Path,
     }
     if connectivity_skeleton:
         merged["connectivity_skeleton"] = connectivity_skeleton
-    results_path.write_text(json.dumps(merged, indent=2) + "\n")
+    _aa.write_text(results_path, json.dumps(merged, indent=2) + "\n")
     return True
 
 
@@ -7419,7 +7421,7 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
                 ],
             },
         )
-        (full_stack / "results.json").write_text(
+        _aa.write_text(full_stack / "results.json",
             json.dumps(results, indent=2) + "\n")
         # Mirror transcript so the gate's mtime check sees a fresh file.
         # Append an audit-trail narration block. The reference TB already
@@ -9255,7 +9257,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # synth refreshing netlist_yosys.v while every check that reads the
         # canonical netlist.v kept judging the PRE-EDIT design's ghost.
         try:
-            canon_v.write_text(out_v.read_text())
+            _aa.write_text(canon_v, out_v.read_text())
         except OSError:
             pass
 
@@ -10587,7 +10589,7 @@ def _v1_6_609_upgrade_coverage_from_functional_tb(project: Path) -> bool:
     if payload is None:
         return False
     cov.parent.mkdir(parents=True, exist_ok=True)
-    cov.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    _aa.write_text(cov, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
     return True
 
 
@@ -12255,13 +12257,13 @@ def step_emit_phase2_manifests(project: Path,
             "vectors_passed": orc_vp, "vectors_total": orc_vt})
     elif ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
         log_rel = str(ref_logs[0].relative_to(project))
-        (sim_dir / "pass.flag").write_text("PASS\n")
+        _aa.write_text(sim_dir / "pass.flag", "PASS\n")
         written.append("sim/pass.flag")
         w("sim/results.xml", {
             "verdict": "PASS",
             "evidence": log_rel,
         })
-        (sim_dir / "results.xml").write_text(
+        _aa.write_text(sim_dir / "results.xml",
             "<results><verdict>PASS</verdict>"
             f"<evidence>{log_rel}</evidence>"
             "<source>step_reference_tb transcript</source>"

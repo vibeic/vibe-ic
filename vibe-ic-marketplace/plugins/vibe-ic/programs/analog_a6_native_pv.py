@@ -36,6 +36,9 @@ import shlex
 import subprocess
 import time
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -215,7 +218,7 @@ def _write_drc_report(bdir: Path, block: str, violations: int,
         f"result: {verdict}",
         "",
     ]
-    rpt.write_text("\n".join(lines))
+    _aa.write_text(rpt, "\n".join(lines))
     return rpt
 
 
@@ -225,7 +228,7 @@ def _write_lvs_report(bdir: Path, block: str, verdict: str,
     NUMBERS ONLY — device counts, never netlist content."""
     matched = str(verdict).upper() == "MATCH"
     comp = bdir / "comp.json"
-    comp.write_text(json.dumps({
+    _aa.write_text(comp, json.dumps({
         "block": block,
         "result": "match" if matched else "mismatch",
         "method": meta.get("method", "klayout_pdk_lvs"),

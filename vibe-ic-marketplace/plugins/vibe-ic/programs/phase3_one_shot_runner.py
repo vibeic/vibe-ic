@@ -8895,6 +8895,8 @@ def _v1_6_605_remap_surviving_dlatch(
 import synth_frontend as _sf
 # Staged-adder-map recipe + post-run "did it actually bind?" verification.
 import adder_map_techmap as _amt
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
@@ -18275,7 +18277,7 @@ def _emit_cts_report_if_complete(project: Path, top: str):
         # LOST (the log was overwritten by a later route/ECO run). Do NOT
         # fabricate a "no-op tree" report that masks the loss — write an
         # explicit evidence-lost marker that cts_quality_check FAILs on.
-        rpt.write_text(
+        _aa.write_text(rpt, 
             "# CTS sign-off report — EVIDENCE LOST (#568)\n"
             "# post_cts.def is present but the openroad.log no longer carries\n"
             "# the CTS section (overwritten by a later route/ECO run) and no\n"
@@ -18295,7 +18297,7 @@ def _emit_cts_report_if_complete(project: Path, top: str):
     if metrics:
         body.append("")
     body.extend(cts_lines)
-    rpt.write_text("\n".join(body) + "\n")
+    _aa.write_text(rpt, "\n".join(body) + "\n")
     # ORGANIC #568 — a JSON sidecar carrying the same CTS evidence in
     # structured form.
     #
@@ -20687,7 +20689,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "metal_fill_eco_aware": True,
             "allowlist_doc": _SPARE_YOSYS_KEEP_ALLOWLIST_DOC,
         }
-        (out_dir / "spare_cells.json").write_text(
+        _aa.write_text(out_dir / "spare_cells.json",
             json.dumps(spare_payload, indent=2, ensure_ascii=False) + "\n")
         # Coverage readiness JSON. distribution_ok is derived from the
         # grid spread (>1 distinct grid cell occupied); tie_off_ok from
@@ -20724,7 +20726,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         # would file an unknown name under reports/audit/).
         cov_path = project / "reports" / "spare_cell_coverage.json"
         cov_path.parent.mkdir(parents=True, exist_ok=True)
-        cov_path.write_text(
+        _aa.write_text(cov_path, 
             json.dumps(coverage_payload, indent=2, ensure_ascii=False) + "\n")
         spare_note = (f" | spares={spare_plan.get('count', 0)} "
                       f"(target_d={spare_dens:g} actual_d={actual_dens:g} "
@@ -25839,7 +25841,7 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
         _canon = project / "reports" / "phase3" / "drc_signoff.rpt"
         _canon.parent.mkdir(parents=True, exist_ok=True)
         if rpt.is_file():
-            _canon.write_bytes(rpt.read_bytes())
+            _aa.write_bytes(_canon, rpt.read_bytes())
             extras["drc_signoff_report"] = str(_canon)
     except Exception:  # nosec — canonical mirror is best-effort provenance
         pass
@@ -27654,7 +27656,7 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
                                / "netgen_compare.txt")
                 if lvs_rpt.is_file():
                     _netgen_txt.write_text(lvs_rpt.read_text(errors="replace"))
-                lvs_rpt.write_text(_render_klayout_lvs_report(
+                _aa.write_text(lvs_rpt, _render_klayout_lvs_report(
                     _cmp, gds_path.name, netlist.name))
             except Exception:
                 pass  # never abort LVS on the report rewrite
@@ -30332,7 +30334,7 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         pvt["corners"] = corners
         pvt["primary_corner"] = "TT"
         stamp_pvt_corner_coverage(pvt, corners)
-        pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
+        _aa.write_text(pvt_path, json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
 
     # --- Step 10: GENUINE pre-layout multi-corner STA --------------------
@@ -30400,7 +30402,7 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                   "pre-layout report composed from a post-route body is the "
                   "contradiction this step exists to remove")
         if src is not None:
-            pre_pnr.write_text(
+            _aa.write_text(pre_pnr, 
                 "# PRE-LAYOUT STA (Step 10) — genuine OpenSTA on the synth\n"
                 "# netlist + SDC, emitted BEFORE PnR. STA_BASIS is stamped in\n"
                 "# the report body; interconnect is a pre-floorplan estimate.\n"
@@ -30602,7 +30604,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         # PVT matrix — say so in the artifact instead of letting an empty
         # list wear the pvt_matrix name. ≥2 labelled corners = multi.
         stamp_pvt_corner_coverage(pvt, corners)
-        pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
+        _aa.write_text(pvt_path, json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
         # --- ORGANIC #694: durable single-corner stance attestation -------
         # When <2 Liberty corners are available (the common case on a
@@ -30746,7 +30748,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 candidate_netlists.append(extra)
         for cand in candidate_netlists:
             if cand.is_file():
-                canon_netlist.write_text(cand.read_text())
+                _aa.write_text(canon_netlist, cand.read_text())
                 written.append(str(canon_netlist))
                 break
 
@@ -30812,7 +30814,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     pre_pnr_rpt = sta_out / "pre_pnr_timing.rpt"
     if not pre_pnr_rpt.is_file():
         if primary_sta.is_file():
-            pre_pnr_rpt.write_text(
+            _aa.write_text(pre_pnr_rpt, 
                 "# Auto-staged by phase3_one_shot_runner v1.6.36\n"
                 "# Source: OpenROAD report_checks (post-link, pre-floorplan slack\n"
                 "# is approximated by the unconstrained slack in the post-PnR\n"
@@ -31090,7 +31092,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                          "re-deriving from the SPEF basis (#527)")
     if not post_route_rpt.is_file():
         if spef_sta_ok:
-            post_route_rpt.write_text(
+            _aa.write_text(post_route_rpt, 
                 "# post_route_timing.rpt — SPEF-BASED post-route STA "
                 "(canonical, #527).\n"
                 "# Basis: extracted parasitics (read_spef "
@@ -31100,7 +31102,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 + spef_sta_rpt.read_text())
             written.append(str(post_route_rpt))
         elif primary_sta.is_file():
-            post_route_rpt.write_text(primary_sta.read_text())
+            _aa.write_text(post_route_rpt, primary_sta.read_text())
             written.append(str(post_route_rpt))
 
     # --- #527: estimate-vs-SPEF discrepancy surface ----------------------
@@ -31486,7 +31488,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 _ev = _def_pdn_evidence(primary_def.read_text(errors="replace"))
             except OSError:
                 _ev = {}
-            pdn_flag.write_text(
+            _aa.write_text(pdn_flag, 
                 f"# PDN status: {'CONNECTED' if _pdn_ok else 'NOT CONNECTED'}\n"
                 f"# marker: {_pdn_mk}\n"
                 f"# measured in {primary_def.name} SPECIALNETS: "
@@ -31941,7 +31943,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     if not _eco_decision["eco_needed"]:
         # No violation at the authoritative basis → no ECO needed.
         if not _eco_flag.is_file():
-            _eco_flag.write_text(
+            _aa.write_text(_eco_flag, 
                 "no_eco_needed\n"
                 "# Auto-staged by phase3_one_shot_runner.\n"
                 f"# Basis: {_eco_decision['basis']} "
@@ -32085,7 +32087,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     "artefacts are retained and this step does NOT pass.")
             _eco_log = eco_out / "eco_log.json"
             try:
-                _eco_log.write_text(json.dumps({
+                _aa.write_text(_eco_log, json.dumps({
                     "program": "phase3_one_shot_runner.eco_auto_trigger",
                     "verdict": (("ECO_BLIND_TO_VIOLATION"
                                  if _eco_log_verdict["blind_to_violation"]
@@ -32144,7 +32146,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                          "OCV unavailable) — honest fallback, not auto-run.")
     # Durable disclosure of the trigger decision (§4.05 audit trail).
     try:
-        (eco_out / "eco_trigger_decision.json").write_text(
+        _aa.write_text(eco_out / "eco_trigger_decision.json",
             json.dumps(_eco_decision, indent=2) + "\n")
         written.append(str(eco_out / "eco_trigger_decision.json"))
     except Exception:  # pragma: no cover — defensive
@@ -32162,7 +32164,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _pwr_txt = power_rpt.read_text(errors="replace")
             _mode = ("vector_vcd" if "POWER_ANALYSIS_MODE: vector_vcd"
                      in _pwr_txt else "vectorless_sdc")
-            (rpt_phase3 / "power.json").write_text(json.dumps({
+            _aa.write_text(rpt_phase3 / "power.json", json.dumps({
                 "tool": "opensta",
                 "source": str(power_rpt.relative_to(project)),
                 "analysis_mode": _mode,
@@ -32252,12 +32254,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             f"{full_log_tail}\n"
             f"# end of routed.drc.rpt\n"
         )
-        routed_drc.write_text(body)
+        _aa.write_text(routed_drc, body)
         if str(routed_drc) not in written:
             written.append(str(routed_drc))
         # Mirror to reports/phase3/ where the gate's --json output lands
         rpt_phase3.mkdir(parents=True, exist_ok=True)
-        (rpt_phase3 / "drc_router.rpt").write_text(body)
+        _aa.write_text(rpt_phase3 / "drc_router.rpt", body)
         if str(rpt_phase3 / "drc_router.rpt") not in written:
             written.append(str(rpt_phase3 / "drc_router.rpt"))
 
@@ -32297,7 +32299,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             f"# Source: {src_drc.relative_to(project)}\n"
             f"# Tool: {_drc_tool}\n"
             "#\n")
-        drc_signoff.write_text(header + src_drc.read_text(errors="ignore"))
+        _aa.write_text(drc_signoff, header + src_drc.read_text(errors="ignore"))
         if str(drc_signoff) not in written:
             written.append(str(drc_signoff))
         # --- ORGANIC #693: provenance stamp at emit time -------------------
@@ -35583,7 +35585,7 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         # inline regex, which is the drift the module's own header warns about;
         # there is ONE implementation of the rule and this reads it.
         _psm_unconn = _cov["unconnected_instances"]
-        (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
+        _aa.write_text(ir_rpt.parent / "ir_drop.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "static_ir_drop",
             "power_nets": power_nets,
@@ -35696,7 +35698,7 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "\n# === Full PSM/EM stdout (provenance) ===\n" + log[-3000:] + "\n"
             "# end of em.rpt\n")
         em_rpt.write_text(body)
-        (em_rpt.parent / "em.json").write_text(json.dumps({
+        _aa.write_text(em_rpt.parent / "em.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "electromigration",
             "power_nets": power_nets,
@@ -35828,7 +35830,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                        f"can continue, so it is NOT visible as a routing "
                        f"failure)\n" if pins_unaccessed else "")
                     + _incomplete_note)
-                (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+                _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
                     "tool": "openroad",
                     "mode": "antenna_check_in_session_post_repair",
                     "net_violations": net_viol if have_counts else None,
@@ -35911,7 +35913,7 @@ exit
         "\n# === full antenna log (last 2 KB) ===\n" + log[-2000:] + "\n"
         "# end of antenna.rpt\n")
     antenna_rpt.write_text(body)
-    (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+    _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
         "tool": "openroad",
         "mode": "antenna_check",
         "net_violations": net_viol,
@@ -36232,7 +36234,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
             if pdk is not None and container is not None:
                 _merge_si_timing_aware(project, top, pdk, container, spef,
                                        sbody, notes)
-            (si_rpt.parent / "si_crosstalk.json").write_text(
+            _aa.write_text(si_rpt.parent / "si_crosstalk.json",
                 json.dumps(sbody, indent=2) + "\n")
             # Advisory timing-window tail (only present when the upgrade ran).
             ta = sbody.get("timing_aware_advisory")
@@ -36298,7 +36300,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
                  "structural screen, not a full SI sign-off. The OpenRCX SPEF "
                  "path (v0.2.5) produces real coupling caps when the DEF is routed."),
     }
-    (si_rpt.parent / "si_crosstalk.json").write_text(
+    _aa.write_text(si_rpt.parent / "si_crosstalk.json",
         json.dumps(body, indent=2) + "\n")
     si_rpt.write_text(
         "# Signal-integrity / crosstalk screen — emitted by\n"
@@ -36483,7 +36485,7 @@ exit
     fill_substantiated = placed_n > 0 or (
         _util_for_substance is not None and _util_for_substance >= 95.0)
     if fill_substantiated:
-        (pnr_out / "metal_fill.done").write_text(
+        _aa.write_text(pnr_out / "metal_fill.done",
             "metal_fill_done\n"
             "# OpenROAD filler_placement (ORGANIC-20260531 Step 34).\n"
             f"# fillers placed: {placed_n}\n"
@@ -36508,7 +36510,7 @@ exit
     density_rpt = project / "reports" / "density.rpt"
     density_json = project / "reports" / "density.json"
     density_rpt.parent.mkdir(parents=True, exist_ok=True)
-    density_rpt.write_text(
+    _aa.write_text(density_rpt, 
         "# Metal-fill / density report — OpenROAD filler_placement\n"
         "# (ORGANIC-20260531 Step 34). Tool: openroad.\n"
         f"# filler instances placed: {placed_n}\n"
@@ -36531,7 +36533,7 @@ exit
         "# rows-already-full path reads ROW-area utilization, not core.\n"
         "# Per-metal-layer CMP density (20-80% rule) is screened by the\n"
         "# KLayout met_min_ca_density deck at sign-off DRC.\n")
-    density_json.write_text(json.dumps({
+    _aa.write_text(density_json, json.dumps({
         "tool": "openroad-filler_placement",
         "filler_instances": placed_n,
         # v0.3.9 #510: row_utilization_pct is now the TRUE odb row-area
@@ -38474,7 +38476,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         summary["geometry_foundry_data_residual"] = geometry_residual
 
     # --- perc_equivalent.json ---------------------------------------------
-    (rpt3 / "perc_equivalent.json").write_text(json.dumps(summary, indent=2) + "\n")
+    _aa.write_text(rpt3 / "perc_equivalent.json", json.dumps(summary, indent=2) + "\n")
 
     # --- perc_equivalent.rpt (human-readable) -----------------------------
     def _line(c):
@@ -38505,7 +38507,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
            if summary["manual_review_pending"]
            else "# No MANUAL items pending (all N/A or automated).\n")
         + "# end of perc_equivalent.rpt\n")
-    (rpt3 / "perc_equivalent.rpt").write_text(body)
+    _aa.write_text(rpt3 / "perc_equivalent.rpt", body)
 
     # --- PERC_SIGNOFF_MEMO.md (program-generated; maintainer §6 template) -
     _emit_perc_signoff_memo(project, top, summary, categories)
@@ -38585,7 +38587,7 @@ def _emit_perc_signoff_memo(project: Path, top: str,
     lines.append("_Program-generated by `phase3_one_shot_runner._emit_perc_"
                  "signoff_memo` — do not hand-edit; re-run phase3 to refresh._")
     lines.append("")
-    memo.write_text("\n".join(lines))
+    _aa.write_text(memo, "\n".join(lines))
     return memo
 
 

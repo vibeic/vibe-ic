@@ -40,6 +40,8 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 sys.path.insert(0, str(Path(__file__).parent))
 import analog_real_corner_sweep as _ars  # noqa: E402  (docker/ngspice helpers)
 
@@ -454,7 +456,7 @@ def run_block(project: Path, block: str, container: str, pdk: str,
         "mc_model_section": mc_model_section,
         "mc_pdk_source": (native.get("source") if native else pdk),
     })
-    cr.write_text(json.dumps(data, indent=2) + "\n")
+    _aa.write_text(cr, json.dumps(data, indent=2) + "\n")
 
     return {"verdict": "PASS" if mc_yield >= 95.0 else "FAIL", "rc": 0,
             "mc_yield_pct": mc_yield, "mc_runs": n,

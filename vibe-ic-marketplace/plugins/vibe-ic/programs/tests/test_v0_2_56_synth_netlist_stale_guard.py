@@ -80,5 +80,12 @@ def test_runner_refreshes_canonical_alias_unconditionally():
     i = src.index('canon_v = synth_dir / "netlist.v"')
     window = src[i:i + 700]
     assert "if not canon_v.is_file()" not in window
-    assert "canon_v.write_text(out_v.read_text())" in window
+    # The pin is that the alias IS written here, unconditionally. #1082 moved
+    # the write to the atomic helper; either spelling satisfies the invariant,
+    # and requiring one of them keeps the probe from passing with no write at
+    # all present.
+    assert ("canon_v.write_text(out_v.read_text())" in window
+            or "_aa.write_text(canon_v, out_v.read_text())" in window), (
+        "the unconditional alias refresh is not in the window under either "
+        "the raw or the atomic spelling")
     assert "#426" in window  # rationale stays attached to the write

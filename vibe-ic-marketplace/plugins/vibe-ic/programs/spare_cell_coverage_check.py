@@ -24,6 +24,8 @@ import json
 import math
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -223,7 +225,7 @@ def main(argv: Optional[list] = None) -> int:
     canon = project / "reports" / "spare_cell_coverage.json"
     try:
         canon.parent.mkdir(parents=True, exist_ok=True)
-        canon.write_text(out + "\n")
+        _aa.write_text(canon, out + "\n")
     except Exception:
         pass
     if args.json:

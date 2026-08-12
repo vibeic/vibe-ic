@@ -108,6 +108,8 @@ import sys
 from collections import Counter
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 from typing import Any, Dict, List, Optional, Set, Tuple
 import _path_layout as _pl
 import sdc_constraints as _sdc
@@ -51048,7 +51050,7 @@ def emit_coverage_report(project: Path,
     out_md = _pl.report_path(project, "extraction_coverage_report.md")
     out_md.parent.mkdir(parents=True, exist_ok=True)
     out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_json.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    _aa.write_text(out_json, json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     # v1.7.72 (#499) — the document census renders next to the ratio, so
     # a reader cannot see 100% without also seeing what was not read.
     _unread_md = (
@@ -51060,7 +51062,7 @@ def emit_coverage_report(project: Path,
         + "".join(f"  - UNREAD: `{d['path']}` — {d['reason']}\n"
                   for d in _unread_docs[:10])
     )
-    out_md.write_text(
+    _aa.write_text(out_md, 
         f"# Extraction coverage report\n\n"
         f"- denominator (unique literals in input_doc/): **{denom}**\n"
         f"- numerator (cited in L*.json extraction_evidence): **{numer}**\n"

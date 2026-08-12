@@ -73,6 +73,8 @@ import json
 import re
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -485,7 +487,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     out = Path(a.out) if a.out else (synth / "stats.json")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(report, indent=2) + "\n")
+    _aa.write_text(out, json.dumps(report, indent=2) + "\n")
     print(f"[synth-stats] {out} area={report['chip_area']} "
           f"top={report['top_module']} rule={report['selection']['rule']} "
           f"line={report['selection']['source_line']}")
@@ -507,7 +509,7 @@ def emit_for_run(project: Path, log_path: Path,
             return None
         out = _pl.synth_dir(project) / "stats.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2) + "\n")
+        _aa.write_text(out, json.dumps(report, indent=2) + "\n")
         return out
     except Exception:
         return None

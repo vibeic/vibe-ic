@@ -105,6 +105,23 @@ def test_the_runner_reads_its_verdict_from_the_declared_file(path):
 # ===========================================================================
 # SATISFIABILITY — the pairing that makes each entry meetable
 # ===========================================================================
+# --------------------------------------------------------------------------
+# #1082 moved declared-output writes to the atomic helper. These probes pin
+# WHERE and IN WHICH BRANCH a write happens; which writer performs it is not
+# what they are about, so they match either spelling. `_count` and `_at` both
+# refuse to answer when NEITHER spelling is present — a probe whose subject has
+# vanished must say so, not return 0 or -1 and read as a satisfied assertion.
+# --------------------------------------------------------------------------
+def _count(hay, *spellings):
+    return sum(hay.count(s) for s in spellings)
+
+
+def _at(hay, *spellings):
+    here = [hay.index(s) for s in spellings if s in hay]
+    assert here, f"none of {spellings} is in the source under test"
+    return min(here)
+
+
 def test_em_json_is_written_in_the_same_branch_as_em_rpt(tmp_path):
     """Drive the emitter's own JSON-writing statement rather than asserting a
     substring: build the pair the way `_emit_ir_em_reports` does and confirm
@@ -114,10 +131,12 @@ def test_em_json_is_written_in_the_same_branch_as_em_rpt(tmp_path):
     # `em_ok = False` and `em_ok = True` there is exactly one branch guard.
     body = src[src.index("    em_ok = False"):src.index("    return ir_ok, em_ok")]
     assert body.count("if has_em:") == 1, body[:200]
-    assert "em_rpt.write_text(body)" in body
-    assert '(em_rpt.parent / "em.json").write_text' in body
-    assert body.index("em_rpt.write_text(body)") < body.index(
-        '(em_rpt.parent / "em.json").write_text')
+    _EM_RPT = ("em_rpt.write_text(body)", "_aa.write_text(em_rpt, body)")
+    _EM_JSON = ('(em_rpt.parent / "em.json").write_text',
+                '_aa.write_text(em_rpt.parent / "em.json"')
+    assert _count(body, *_EM_RPT) >= 1
+    assert _count(body, *_EM_JSON) >= 1
+    assert _at(body, *_EM_RPT) < _at(body, *_EM_JSON)
     assert "em_ok = True" in body
 
 
@@ -127,9 +146,12 @@ def test_antenna_json_is_written_wherever_antenna_rpt_is():
     start = _RUNNER_SRC.index("def _emit_antenna_report(")
     end = _RUNNER_SRC.index("def _parse_spef_caps(")
     body = _RUNNER_SRC[start:end]
-    assert body.count("antenna_rpt.write_text(") == 2, body.count(
-        "antenna_rpt.write_text(")
-    assert body.count('/ "antenna.json").write_text') == 2
+    n_rpt = _count(body, "antenna_rpt.write_text(",
+                   "_aa.write_text(antenna_rpt,")
+    assert n_rpt == 2, n_rpt
+    n_json = _count(body, '/ "antenna.json").write_text',
+                    '_aa.write_text(antenna_rpt.parent / "antenna.json"')
+    assert n_json == 2, n_json
 
 
 def _gate_commands(step: dict):

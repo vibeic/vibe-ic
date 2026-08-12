@@ -183,7 +183,17 @@ def test_693_source_calls_declarer_after_writing_drc_signoff(tmp_path):
     assert "#693" in _P3_SRC
     assert "drc_signoff.rpt" in _P3_SRC
     # the declarer is invoked from the drc_signoff emit block (after write).
-    idx_write = _P3_SRC.index("drc_signoff.write_text(")
+    # The ORDER is the pin; the writer is only the landmark used to find it.
+    # #1082 moved this write to the atomic helper, so accept either spelling.
+    # If NEITHER is present the probe has lost its subject, and a probe that
+    # cannot find its subject must say so rather than raise ValueError from
+    # `.index` and read as an incidental error.
+    spellings = ("drc_signoff.write_text(", "_aa.write_text(drc_signoff,")
+    present = [p for p in spellings if p in _P3_SRC]
+    assert present, (
+        "neither the raw nor the atomic write of drc_signoff.rpt is in the "
+        f"source, so this ordering pin has no subject: tried {spellings}")
+    idx_write = min(_P3_SRC.index(p) for p in present)
     idx_693 = _P3_SRC.index("#693: declared sign-off DRC report")
     assert idx_693 > idx_write
 

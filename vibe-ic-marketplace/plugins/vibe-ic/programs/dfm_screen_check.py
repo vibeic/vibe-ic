@@ -76,6 +76,8 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 
@@ -562,7 +564,7 @@ def main(argv=None) -> int:
     if rc != 2:
         canon = project / "reports" / "phase3" / "dfm_screen.json"
         canon.parent.mkdir(parents=True, exist_ok=True)
-        canon.write_text(out + "\n")
+        _aa.write_text(canon, out + "\n")
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(out)

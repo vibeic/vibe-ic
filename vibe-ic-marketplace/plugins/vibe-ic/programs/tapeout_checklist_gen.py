@@ -24,6 +24,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 sys.path.insert(0, str(Path(__file__).parent))
 import _path_layout as _pl  # noqa: E402
 
@@ -303,7 +305,7 @@ def main(argv=None) -> int:
             "foundry_handoff_package_check (Step 38, v2.3)."
         ),
     }
-    out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    _aa.write_text(out_path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps({
         "verdict": payload["verdict"],
         "blockers_present": blockers_present,
