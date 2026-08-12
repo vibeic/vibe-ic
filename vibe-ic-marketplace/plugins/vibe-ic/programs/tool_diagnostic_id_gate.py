@@ -94,25 +94,51 @@ A cell with no earlier run has nothing to compare against. That exits **2**
 0. A first run is not a clean run, and a gate that returns success for a
 comparison it could not perform is the exact defect this campaign removes.
 
-AND THE LIMIT IS NOT HYPOTHETICAL: TODAY IT IS EVERY CELL
----------------------------------------------------------
-Run over all five published cells this commit carries, the answer is **5 of 5
-NO_BASELINE**::
+THE LIMIT WAS NOT THE POPULATION. IT WAS THE NAME PARSE
+-------------------------------------------------------
+An earlier version of this section reported **5 of 5 NO_BASELINE** over five
+published cells and concluded "the comparison path is UNREACHABLE from the
+corpus… that is not a defect in the rule; it is the population". **The second
+half of that sentence was wrong**, and it is corrected here rather than quietly
+edited, because it was the reasoning that made an unusable gate look acceptable.
 
-    caravel_user_project/v1.9.43_sky130A  rc=2  (9 gated ids recorded)
-    spm/v1.10.18_sky130A                  rc=2  (5)
-    spm/v1.5.58_ihp-sg13g2                rc=2  (6)
-    spm/v1.9.96_gf180mcuD                 rc=2  (7)
-    u_hawaii_adc/v1.9.86_sky130A          rc=2  (0)
+The resolver read the PDK out of the DIRECTORY NAME. That works for
+``v1.9.96_gf180mcuD`` and cannot work for ``clean_run_v1422_20260715``, so
+``_parse_cell_name`` returned None for every directory in the repository's OTHER
+naming family and ``find_previous`` skipped them all — including the one pair
+that is genuinely like-for-like and genuinely carries a regression::
 
-No design carries two cells of the SAME PDK, and `find_previous` requires same
-PDK and a strictly lower version — correctly, because a different PDK legitimately
-emits different ids. So on this commit the comparison path is UNREACHABLE from
-the corpus. That is not a defect in the rule; it is the population, and it is
-written here because a reader of "is BLOCKING" would otherwise assume the gate is
-blocking something. `test_the_published_corpus_yields_no_comparable_pair` pins
-it, and FAILS the day a second same-PDK cell is published — which is the day
-this paragraph must be rewritten.
+    sha256/clean_run_v1427_20260715   vs   sha256/clean_run_v1422_20260715
+        NEW = DRT-0120   in reports/phase3/drc_router.rpt
+        (0 occurrences in v1422, 26 in v1427 — checked with grep, not inferred)
+
+Measured on ``94754771`` (v1.10.33), the resolver keys on :func:`pdk_key` — the
+run's OWN recorded PDK where it has one, the name where it does not — and admits
+both naming families (:func:`_cell_ordinal`):
+
+    run dir                                  pdk key     source    previous
+    caravel_user_project/v1.9.43_sky130A     sky130      measured  —
+    sha256/clean_run_v1422_20260715          sky130      measured  —
+    sha256/clean_run_v1427_20260715          sky130      measured  clean_run_v1422_20260715
+    spm/v1.10.18_sky130A                     sky130A     measured  —
+    spm/v1.5.58_ihp-sg13g2                   ihp-sg13g2  measured  —
+    spm/v1.9.96_gf180mcuD                    gf180mcuD   measured  —
+    u_hawaii_adc/v1.9.86_sky130A             sky130A     name      —
+    u_hawaii_adc/clean_run_v1422_20260715    (none)      —         —
+
+**1 comparable pair of 8, and it BLOCKS (rc 1).** The other seven are honest
+NO_BASELINEs: six have no same-key sibling at all, and one yields no key from
+either source, where refusing is the only safe answer — "I could not tell" must
+never resolve to "same". ``test_the_corpus_pair_resolves_and_the_gate_fires``
+pins the pair and the finding, so this is backed by a committed artefact and not
+only by fixtures authored beside it.
+
+TWO SPELLINGS OF ONE PDK, AND WHY IT IS STILL SAFE. The recorded values are not
+normalised: caravel and sha256 record ``sky130`` while spm records ``sky130A``.
+Comparison is exact, so a cell pair that disagreed in spelling would resolve to
+NO_BASELINE rather than compare. That is the safe direction — a missed
+comparison, never a wrong one — and it is stated because the failure it produces
+looks like "no predecessor" and could otherwise be mistaken for absence of data.
 
 NOT WIRED YET — SAID PLAINLY
 ============================
@@ -139,6 +165,7 @@ import argparse
 import json
 import re
 import sys
+from functools import lru_cache
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -439,22 +466,136 @@ def audit_acceptance(entries: List[Dict[str, Any]],
 # ---------------------------------------------------------------------------
 # previous run of the SAME cell
 # ---------------------------------------------------------------------------
-def find_previous(cell_dir: Path) -> Optional[Path]:
-    """The published cell for the same (design, PDK) at the highest version
-    strictly below this one. `None` when there is no earlier run."""
-    parsed = _parse_cell_name(cell_dir.name)
-    if parsed is None:
+#: `clean_run_v1422_20260715` -> ordinal (1422, 20260715). THE REPOSITORY USES
+#: TWO cell-naming conventions and this gate recognised one. `_parse_cell_name`
+#: returns None for every `clean_run_*` directory, so `find_previous` skipped
+#: them and `sha256/clean_run_v1427_20260715` reported NO_BASELINE with its own
+#: predecessor sitting beside it — the pair that carries the corpus' only real
+#: diagnostic regression (`DRT-0120`: absent from v1422's
+#: `reports/phase3/drc_router.rpt`, 26 occurrences in v1427's).
+_RE_RUN_SEQ = re.compile(r"^clean_run_v(?P<seq>\d+)_(?P<date>\d{8})$")
+
+#: The structured field every published cell records its PDK in. READ, never
+#: parsed out of the directory name.
+#:
+#: WHY MEASURED AND NOT PARSED. The PDK guard is the load-bearing half of this
+#: resolver: comparing two runs that differ by PDK produces "new" ids that are
+#: only a change of process, and on this corpus that mistake yields 18 false
+#: positives across three consecutive `spm` pairs. The old resolver got the
+#: guard right and paid for it by reading the PDK out of the NAME, which works
+#: for `v1.9.96_gf180mcuD` and is impossible for `clean_run_v1422_20260715` —
+#: so the whole naming family was dropped rather than compared. The run records
+#: its own PDK; reading it keeps the guard exact AND admits both families.
+_RE_PDK_FIELD = re.compile(r'"pdk"\s*:\s*"(?P<pdk>[^"]+)"')
+
+
+def _cell_ordinal(name: str) -> Optional[Tuple[str, Tuple[int, ...]]]:
+    """``(family, ordinal)`` for a run directory name, or None.
+
+    The FAMILY is returned with the ordinal and compared, because an ordinal is
+    only meaningful inside its own convention: `v1.9.96_gf180mcuD` and
+    `clean_run_v1422_20260715` both yield integers and those integers mean
+    different things. Ordering across families would be an invented fact, so it
+    is refused rather than guessed.
+    """
+    m = _RE_CELL.match(name)
+    if m:
+        return "version", tuple(int(p) for p in m.group("ver").split("."))
+    m = _RE_RUN_SEQ.match(name)
+    if m:
+        return "run_seq", (int(m.group("seq")), int(m.group("date")))
+    return None
+
+
+@lru_cache(maxsize=256)
+def measured_pdk(cell_dir: Path) -> Optional[str]:
+    """The PDK this run RECORDS, read from its own reports. None if unstated.
+
+    Structured field only. A bare token scan would be wrong and was measured to
+    be: grepping `sky130|gf180` over `sha256/clean_run_v1422_20260715` returns
+    BOTH, because tcl and rpt files mention other processes in passing. The
+    `"pdk": "..."` field is the run's own statement about itself.
+    """
+    seen: Dict[str, int] = {}
+    for p in sorted(cell_dir.rglob("*.json")):
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            continue
+        for m in _RE_PDK_FIELD.finditer(text):
+            v = m.group("pdk")
+            seen[v] = seen.get(v, 0) + 1
+    if not seen:
         return None
-    ver, pdk = parsed
+    # The most frequently recorded value. A cell that records two PDKs is a
+    # different defect and not this gate's to adjudicate; taking the modal value
+    # keeps the comparison from turning on which file happened to sort first.
+    return max(sorted(seen), key=lambda k: seen[k])
+
+
+def pdk_key(cell_dir: Path) -> Optional[str]:
+    """The PDK to compare on: MEASURED if the run records one, else the NAME.
+
+    A FALLBACK, not a replacement, and the difference is a behaviour rule rather
+    than a convenience. Requiring the measured value outright was written first
+    and was wrong: a run that records no `"pdk"` field would silently lose its
+    predecessor, so a gate that used to compare would quietly stop — the same
+    "degrade to nothing without saying so" this whole file argues against. It
+    was caught by the existing fixtures, which record no PDK and are named
+    `v1.0.0_pdkX`, all of which went NO_BASELINE.
+
+    So: prefer the run's own record; fall back to the name where the name
+    carries it. Both sides must yield a key and the keys must be EQUAL — a cell
+    that yields nothing is refused rather than matched, because "I could not
+    tell" must not resolve to "same". Mixing sources is safe in the only
+    direction that matters: if one side measured `sky130` and the other can only
+    offer the name's `sky130A`, they differ and the pair is refused. A missed
+    comparison, never a wrong one.
+    """
+    m = measured_pdk(cell_dir)
+    if m:
+        return m
+    named = _RE_CELL.match(cell_dir.name)
+    return named.group("pdk") if named else None
+
+
+def find_previous(cell_dir: Path) -> Optional[Path]:
+    """The sibling run of the same design and the same PDK, at the
+    highest ordinal strictly below this one. `None` when there is no earlier run.
+
+    Three rules, and the second is the one that was silently excluding runs:
+
+    1. same design — siblings of the same parent directory only;
+    2. same PDK via :func:`pdk_key` — the run's own record where it has one,
+       the name where it does not. Both sides must yield a key and the keys must
+       match; a side that yields neither is refused, because "I could not tell"
+       must not resolve to "same";
+    3. same naming FAMILY and a lower ordinal (:func:`_cell_ordinal`), so the
+       comparison is never ordered across two conventions whose numbers mean
+       different things.
+
+    A caller who knows better can always override all three with `--previous`.
+    """
+    mine = _cell_ordinal(cell_dir.name)
+    if mine is None:
+        return None
+    family, ordinal = mine
+    my_pdk = pdk_key(cell_dir)
+    if my_pdk is None:
+        return None
     best: Optional[Tuple[Tuple[int, ...], Path]] = None
-    for sib in cell_dir.parent.iterdir():
+    for sib in sorted(cell_dir.parent.iterdir()):
         if not sib.is_dir() or sib.name == cell_dir.name:
             continue
-        p = _parse_cell_name(sib.name)
-        if p is None or p[1] != pdk:
+        theirs = _cell_ordinal(sib.name)
+        if theirs is None or theirs[0] != family:
             continue
-        if p[0] < ver and (best is None or p[0] > best[0]):
-            best = (p[0], sib)
+        if pdk_key(sib) != my_pdk:
+            continue
+        if theirs[1] < ordinal and (best is None or theirs[1] > best[0]):
+            best = (theirs[1], sib)
     return best[1] if best else None
 
 
