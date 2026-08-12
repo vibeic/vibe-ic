@@ -79,6 +79,8 @@ ALIASES = {
 #: consulting them on every host, so their entries were already unevidenced
 #: BEFORE #1028 and are NOT this PR's to back. Listed so the split between
 #: "withdrawn by #1028" and "never in the repo" is stated, not implied.
+DEFAULT_ALIAS = "digital_full_flow_cell"
+
 HOST_ONLY_ROOTS = (
     "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
     "AI_IC_design/4th_benchmark/cv32e40p_e2e",
@@ -150,10 +152,19 @@ def plan():
                 continue
             if e.get("status") not in ("PRODUCED_BY_RUN", "PRODUCED_LIVE"):
                 continue
-            alias = ALIASES.get(e.get("run") or e.get("base_run"))
+            root = e.get("run") or e.get("base_run")
+            # An entry whose root is HOST-ONLY still passed on origin/main:
+            # `check_entry` finds no admissible root for it, falls through to
+            # `resolve_anywhere`, and the PUBLISHED corpus carried a matching
+            # artefact. #1028 removes that corpus, so the fixture corpus — now
+            # the admissible corpus — carries it instead. This restores exactly
+            # what main answered, it does not invent a new pass.
+            alias = ALIASES.get(root, DEFAULT_ALIAS if root else None)
             if alias is None:
                 continue
-            rel = e.get("path")
+            # PRODUCED_BY_RUN records the artefact as `path`; PRODUCED_LIVE
+            # names what its producer `writes`.
+            rel = e.get("path") or e.get("writes")
             if not rel or (alias, rel) in seen:
                 continue
             seen.add((alias, rel))
