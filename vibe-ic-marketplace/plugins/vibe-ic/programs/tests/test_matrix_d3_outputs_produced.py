@@ -640,7 +640,12 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # as "six more artefacts found". Composition, re-measured: 96 PRODUCED_BY_RUN +
 # 6 PRODUCED_LIVE + 24 UNPROVEN-and-searched = 126 live, 8 fixture, 134
 # declared.
-_LIVE_ENTRY_COUNT = 126
+# 2026-08-12 (same change): 126 -> 127. M1 moved WAIVED -> NA, so its
+# `merge.json` stopped being FIXTURE and became UNPROVEN-and-searched. Its
+# other entry, `top_merged.gds`, was already searched live. Same reading as
+# the 120 -> 126 move above: one fewer entry decided by a committed JSON, not
+# one more artefact found.
+_LIVE_ENTRY_COUNT = 127
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -2049,10 +2054,10 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (50, 3, 10), (
+    assert (len(enforced), len(waived), len(na)) == (50, 2, 11), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(50, 3, 10) on 2026-08-12. A step moving between states is a real "
+        f"(50, 2, 11) on 2026-08-12. A step moving between states is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
@@ -2078,6 +2083,15 @@ def test_d3_cell_states_partition_all_63_steps():
         "repository. They have never run here, so there is no run to "
         "publish and `UNEVIDENCED` was the wrong reading. M1 keeps its "
         "waiver (a different entry) and stays in the waived count."
+        "\n2026-08-12 (same change): (50, 3, 10) -> (50, 2, 11). M1 joined "
+        "them, from WAIVED to NA. Its dimension-3 waiver said 'no admissible "
+        "run root is a mixed-signal project, so the producer returns its "
+        "documented rc=2 inputs-missing skip everywhere it can run' — which is "
+        "dormancy described one artefact at a time, and it covered only ONE of "
+        "M1's two entries, which is why "
+        "test_d3_waived_steps_still_produce_their_unwaived_entries was red on "
+        "merge.json. A per-entry waiver cannot express 'this step never ran'. "
+        "M1's dimension-7 waiver is untouched."
     )
 
 
@@ -2972,7 +2986,9 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # it falsifies itself in BOTH directions: publish any tree carrying the
     # condition file and the cell reddens, or let any declared output appear
     # anywhere and the NA branch's own probe reddens.
-    "15", "17", "19", "20", "30", "32", "M1",
+    # 2026-08-12: "M1" left with M2-M4 and for the same reason — it is dormant,
+    # not unpublished. It was the last mixed-signal cell here.
+    "15", "17", "19", "20", "30", "32",
 )
 
 
@@ -3030,12 +3046,20 @@ def test_d3_unevidenced_cells_are_named_cell_by_cell():
     # waiver added to silence one of these would be caught here rather than
     # disappearing behind a strict xfail.
     waived = sorted(s for s in UNEVIDENCED_CELLS if waiver_for(s) is not None)
-    assert waived == ["M1"], (
-        f"these unevidenced cells acquired a waiver: {waived}. M1 is the one "
-        f"pre-existing waiver in this set and it covers a DIFFERENT entry "
-        f"(``top_merged.gds``); its ``merge.json`` is unevidenced and unwaived. "
-        f"Every other cell here is closed by publishing a run tree, so a "
-        f"waiver would be a standing excuse for a one-commit fix."
+    assert waived == [], (
+        f"these unevidenced cells acquired a waiver: {waived}. Every cell left "
+        f"in this set is closed by publishing a run tree, so a waiver here "
+        f"would be a standing excuse for a one-commit fix.\n"
+        f"2026-08-12: this used to read ``== ['M1']``. M1 was the ONE waiver in "
+        f"this set, and it is gone in the direction that makes the set "
+        f"stronger, not weaker: M1 left UNEVIDENCED_CELLS entirely because it "
+        f"is DORMANT (its condition `phase1/analog/analog_block_list.json` "
+        f"occurs zero times in the repository), and its dimension-3 waiver "
+        f"went with it. The waiver covered only ``top_merged.gds`` while "
+        f"``merge.json`` was unevidenced and unwaived — which is exactly what "
+        f"test_d3_waived_steps_still_produce_their_unwaived_entries was red on. "
+        f"The set now holds no waived cell at all, which is the invariant this "
+        f"assertion was always reaching for."
     )
 
 
