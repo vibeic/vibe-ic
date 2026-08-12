@@ -242,7 +242,17 @@ must state WHY the gate can be unable to run"
 
 gate_dispatch_init() {
   GATE_DISPATCH_T0="$SECONDS"
-  GATE_DISPATCH_TODAY="$(date -u +%F)"
+  GATE_DISPATCH_TODAY="$(date -u +%F 2>/dev/null || true)"
+  # Fail CLOSED on the clock. An empty or malformed `today` would make every
+  # `until` compare as not-yet-due, so every exemption would be immortal and
+  # the expiry half of #584 would be silently absent — a check that stops
+  # checking without saying so, which is the class this file exists to remove.
+  # Reported through the same channel as a mis-wired gate, so it lands as rc 2
+  # (nothing was certified) rather than as a gate verdict.
+  [[ "$GATE_DISPATCH_TODAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+    || _gate_wiring_error "could not read today's date as YYYY-MM-DD (got \
+'${GATE_DISPATCH_TODAY:-<empty>}'), so no uncheckable exemption could be \
+checked for expiry"
   while [ $# -gt 0 ]; do
     case "$1" in
       --list) GATE_DISPATCH_LIST_ONLY=1; shift ;;
