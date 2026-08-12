@@ -165,38 +165,107 @@ def test_the_fused_port_is_really_in_the_consumers_output():
     assert checked == 62, checked
 
 
-def test_e1_is_still_the_narrow_rail_the_remeasurement_left_it_as():
+E1_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "l17_e1_rail"
+
+#: The E1 truth table, owned by this test. See the fixture's README.md.
+_E1_EXPECTED = {
+    "fires_template_without_extraction": True,
+    "channels_declared": False,
+    "globals_declared": False,
+    "no_narrative": False,
+    "status_extracted": False,
+}
+
+
+def _materialise_e1_cell(tmp_path, cell: str) -> Path:
+    """Lay one owned fixture document out as a project the checker can audit."""
+    import shutil
+    proj = tmp_path / cell
+    gd = proj / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    shutil.copy(E1_FIXTURE / f"{cell}.L17_CHANNEL_CATALOG.json",
+                gd / "L17_CHANNEL_CATALOG.json")
+    shutil.copy(E1_FIXTURE / "shared.L9_INTEGRATION_SPEC.json",
+                gd / "L9_INTEGRATION_SPEC.json")
+    return proj
+
+
+def test_e1_is_still_the_narrow_rail_the_remeasurement_left_it_as(tmp_path):
     """The conjunct this increment was asked to relax is deliberately intact.
 
     Pinned because relaxing it is a one-line edit whose blast radius —
     measured — is every remaining PASS in the corpus, on the strength of a
     sentence about unrelated-protocol template content that the corpus
-    contradicts."""
+    contradicts.
+
+    THE POPULATION IS NOW ONE THIS TEST OWNS. This used to count three integers
+    over every published cell under `benchmark-data/` and assert
+    `fired == 21`, `status_nothing == 103`, `populated_anyway == 81`. None of
+    those is a property of the rail: they are properties of the publication set.
+    The #905 corpus reorganisations (`b96cdd48`, `e73601fe`) moved IC-level
+    strays into their published cells, the project list went 103 -> 104 with
+    different members, and the test went red at `fired == 16` with
+    `l17_channel_catalog_consumer_contract_check` byte-for-byte unchanged. A
+    test that is green only while nobody has republished anything is measuring
+    the release schedule, and it fails for a reason its own message cannot
+    explain.
+
+    `fixtures/l17_e1_rail/` is the truth table E1 is DEFINED over — one document
+    per cell — so the count below is exact, deterministic, and moves only when
+    the rail moves. The two rows that carry the claim are `channels_declared`
+    and `globals_declared`: dropping the `channels == 0 and global_signals == 0`
+    conjunct — the edit this rail was asked for — makes E1 fire on them, and
+    this test dies. That is the guard the integer 21 was standing in for.
+    """
+    import importlib
+    g = importlib.import_module("l17_channel_catalog_consumer_contract_check")
+
+    fired = set()
+    for cell in sorted(_E1_EXPECTED):
+        findings, info = g.audit(_materialise_e1_cell(tmp_path, cell))
+        if any(f.category == "TEMPLATE_WITHOUT_EXTRACTION" for f in findings):
+            fired.add(cell)
+        # Each cell must reach the rail for the reason the table says it does;
+        # a fixture that silently stopped declaring a catalog would make the
+        # negative rows pass for the wrong reason.
+        assert info.get("catalog_containers_refused") == [], (cell, info)
+
+    assert fired == {c for c, want in _E1_EXPECTED.items() if want}, (
+        f"E1 fired on {sorted(fired)}; the rail is defined to fire on "
+        f"{sorted(c for c, w in _E1_EXPECTED.items() if w)}")
+
+
+def test_e1_never_fires_on_a_published_cell_that_declares_a_catalog():
+    """The same conjunct, restated over whatever corpus this checkout carries.
+
+    A RELATION, NOT A COUNT — deliberately. The count this replaces drifted with
+    every publish and told the reader nothing when it broke. What the relaxation
+    would actually have done is fire E1 on cells that DO declare a catalog the
+    consumer reads, and that is checkable without knowing how many there are.
+
+    Non-vacuous by construction: the population it needs is asserted non-empty,
+    so a corpus that stopped containing such cells fails loudly instead of
+    passing over nothing.
+    """
     _need_corpus()
     import importlib
     g = importlib.import_module("l17_channel_catalog_consumer_contract_check")
-    fired = status_nothing = populated_anyway = 0
+    populated_found_nothing = []
+    offenders = []
     for proj in _projects():
         findings, info = g.audit(proj)
+        if (info.get("extraction_status") or "") not in g._STATUS_FOUND_NOTHING:
+            continue
+        if not (info.get("channels_declared")
+                or info.get("global_signals_declared")):
+            continue
+        populated_found_nothing.append(proj)
         if any(f.category == "TEMPLATE_WITHOUT_EXTRACTION" for f in findings):
-            fired += 1
-        if (info.get("extraction_status") or "") in g._STATUS_FOUND_NOTHING:
-            status_nothing += 1
-            if info.get("channels_declared") or \
-                    info.get("global_signals_declared"):
-                populated_anyway += 1
-    assert fired == 21, fired
-    # 102 -> 103: the corpus GAINED a project (the caravel_user_project cell
-    # landed in v1.9.60), and it declares no channel catalog. The two counts
-    # this test is actually about — `fired` and `populated_anyway` — did not
-    # move, which is what says the relaxation is still un-relaxed. Verified on
-    # origin/main BEFORE this batch touched anything: the number was already
-    # 103 there, so this is corpus growth and not a regression from any change
-    # here.
-    #
-    # A count over a growing corpus drifts by construction. It is kept as a
-    # count rather than a ratio because the POINT is the two that stayed put.
-    assert status_nothing == 103, status_nothing
-    # The population the relaxation would have added, and the reason it was
-    # not: these 81 declare a catalog the consumer really does read.
-    assert populated_anyway == 81, populated_anyway
+            offenders.append(proj.name)
+    assert populated_found_nothing, (
+        "no published cell reports EXTRACTION_FOUND_NOTHING over a POPULATED "
+        "catalog, so this test examined nothing — re-derive the population "
+        "before trusting it")
+    assert offenders == [], (
+        "E1 fired on cells that declare a catalog the consumer reads, which is "
+        f"exactly what relaxing the conjunct would do: {offenders}")
