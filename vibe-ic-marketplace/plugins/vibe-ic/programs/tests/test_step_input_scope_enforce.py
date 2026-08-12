@@ -342,3 +342,60 @@ def test_an_env_var_pointing_at_the_oracle_is_removed_from_the_child(tmp_path, m
     assert "ANSWER_KEY" not in out
     assert out["FLOW_CFG"] == env["FLOW_CFG"]   # the recipe survives
     assert out["PATH"] == env["PATH"]
+
+
+# --------------------------------------------------------------------------
+# THE WIRING. A capability nothing calls is the state `step_preflight`'s own
+# docstring describes: "the check was available; the BEHAVIOUR did not exist".
+# --------------------------------------------------------------------------
+
+def test_every_dispatch_site_installs_the_boundary():
+    """`gate()` is the one function all four runners' dispatch sites go
+    through, and `test_step_preflight` ALREADY pins that every declared site
+    calls it. Installing here inherits that guarantee rather than adding a
+    second thing to keep in step with it.
+
+    Asserted on the SOURCE, so a future edit that moves the install out of
+    `gate()` — or drops it — fails here rather than silently disabling §4.05.
+    """
+    src = (_PROGRAMS / "step_preflight.py").read_text(encoding="utf-8")
+    body = src[src.index("def gate(project: Path, runner: str, site: str,"):]
+    body = body[:body.index("\ndef ", 10)]
+    assert "_install_input_scope(project)" in body, (
+        "step_preflight.gate() no longer installs the §4.05 boundary, so every "
+        "runner dispatch would run unbounded while the enforcement still exists "
+        "and reports nothing")
+    import step_preflight as sp
+    assert callable(sp._install_input_scope)
+
+
+def test_the_installed_hook_records_and_does_not_raise_by_default(tmp_path, monkeypatch):
+    """OBSERVE is the default and it is a stated choice, not timidity: this hook
+    runs inside the one-shot runners, so a misfire fails every run of the flow
+    rather than one gate. Recording IS behaviour; `VIBEIC_SCOPE_DENY=1` makes
+    the read impossible.
+    """
+    project = _proj(tmp_path, {"golden/answer.txt": "42", "input/spec.md": "s"})
+    monkeypatch.setattr(se, "_INSTALLED", False, raising=False)
+    monkeypatch.setattr(se, "_INSTALLED_DENIES", False, raising=False)
+    before = len(se.OBSERVED)
+    denies = se.install(project, deny=False)
+    assert denies is False
+    (project / "golden" / "answer.txt").read_text()      # allowed, but seen
+    assert [rel for _seg, rel in se.OBSERVED[before:]] == ["golden/answer.txt"]
+    (project / "input" / "spec.md").read_text()          # in scope, not recorded
+    assert [rel for _seg, rel in se.OBSERVED[before:]] == ["golden/answer.txt"]
+
+
+def test_install_is_idempotent_so_a_second_gate_does_not_double_record(tmp_path, monkeypatch):
+    """`sys.addaudithook` cannot be removed, so a second install would record
+    every read twice and `gate()` is called once per dispatch site."""
+    project = _proj(tmp_path, {"golden/answer.txt": "42"})
+    monkeypatch.setattr(se, "_INSTALLED", False, raising=False)
+    monkeypatch.setattr(se, "_INSTALLED_DENIES", False, raising=False)
+    se.install(project, deny=False)
+    se.install(project, deny=False)
+    se.install(project, deny=False)
+    before = len(se.OBSERVED)
+    (project / "golden" / "answer.txt").read_text()
+    assert len(se.OBSERVED) - before == 1, se.OBSERVED[before:]

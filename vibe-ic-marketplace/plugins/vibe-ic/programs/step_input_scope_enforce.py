@@ -381,6 +381,90 @@ def run_scoped(argv: List[str], project: Path, deny: bool = True,
     return rc, out, [(a, b) for a, b in hits]
 
 
+#: The switch that turns OBSERVE into DENY. Default is observe, and that is a
+#: deliberate, stated choice rather than timidity: this hook runs inside the
+#: one-shot runners themselves, so a misfire does not produce one red gate, it
+#: makes every run of the flow fail. Observe-by-default makes the mechanism
+#: REACHABLE — it records and reports — while `VIBEIC_SCOPE_DENY=1` makes the
+#: violation impossible. `step_preflight`'s own docstring names the failure this
+#: avoids on the other side ("the check was available; the BEHAVIOUR did not
+#: exist"), and recording every read is behaviour, not availability.
+DENY_SWITCH = "VIBEIC_SCOPE_DENY"
+
+#: Every violation this process observed, in order. Read by the runners for
+#: their own report; never reset, because a cleared record and a clean run must
+#: not look the same.
+OBSERVED: List[Tuple[str, str]] = []
+
+
+def install(project: Path, step_id: Optional[str] = None,
+            deny: Optional[bool] = None, flow: Optional[Path] = None) -> bool:
+    """Install the §4.05 boundary in THIS process. Returns whether it denies.
+
+    The CLI (`run_scoped`) enforces on a CHILD. This enforces on the caller,
+    which is where the runners actually read the design: `phase1_one_shot_runner`
+    ingesting documents into L1-L27 is the §4.05-sensitive path, and it happens
+    in-process, so a child-only mechanism would never see it.
+
+    Idempotent by construction — `sys.addaudithook` cannot be removed, so a
+    second install would double-record. Guarded by a module flag.
+    """
+    global _INSTALLED, _INSTALLED_DENIES
+    if _INSTALLED:
+        return _INSTALLED_DENIES
+    if deny is None:
+        deny = str(os.environ.get(DENY_SWITCH, "")).strip() not in ("", "0", "false", "False")
+    root = str(project.resolve())
+    segs = frozenset(_rfb.ORACLE_TREE_SEGMENTS)
+    oracle = {rel: seg for rel, seg in resolve_oracle_files(project)}
+    declared = frozenset(declared_paths(project, step_id, flow))
+
+    def _judge(path: str, write: bool) -> Optional[Tuple[str, str]]:
+        if write:
+            return None
+        try:
+            ap = os.path.abspath(path)
+        except (OSError, ValueError):
+            return None
+        if not ap.startswith(root + os.sep):
+            return None
+        rel = os.path.relpath(ap, root)
+        if rel in declared:
+            return None
+        for part in rel.split(os.sep)[:-1]:
+            if part in segs:
+                return (part, rel)
+        if rel in oracle:
+            return (oracle[rel], rel)
+        return None
+
+    def _audit(event: str, args: tuple) -> None:
+        if event != "open" or not args:
+            return
+        path, mode, flags = (list(args) + [None, None])[:3]
+        if not isinstance(path, (str, os.PathLike)):
+            return
+        write = bool((isinstance(mode, str) and any(c in mode for c in "wax+"))
+                     or (isinstance(flags, int)
+                         and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)))
+        hit = _judge(os.fspath(path), write)
+        if hit is None:
+            return
+        OBSERVED.append(hit)
+        if deny:
+            raise PermissionError(
+                f"vibe-ic 4.05: {hit[1]} is OFF-LIMITS oracle (segment {hit[0]!r})")
+
+    sys.addaudithook(_audit)
+    _INSTALLED = True
+    _INSTALLED_DENIES = deny
+    return deny
+
+
+_INSTALLED = False
+_INSTALLED_DENIES = False
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--project", type=Path, required=True,

@@ -743,6 +743,47 @@ def _confirm_identity(project: Path, dec: Decision,
 # --------------------------------------------------------------------------- #
 # The gate itself
 # --------------------------------------------------------------------------- #
+# ── vibe-ic#1079 — the §4.05 boundary, installed where every step passes ──
+# `step_input_scope_enforce` enforces on a CHILD process. The runners read the
+# design IN-PROCESS — `phase1_one_shot_runner` ingesting documents into L1-L27
+# is the §4.05-sensitive path and never forks for it — so a child-only
+# mechanism would never see the read that matters most.
+#
+# Installed HERE rather than at each of the four runners' call sites, because
+# `gate()` is the one function every dispatch site already goes through, and
+# `test_every_declared_site_is_wired_at_a_real_call_site` ALREADY pins that.
+# Wiring it here inherits that guarantee instead of adding a second thing to
+# keep in step with it, which is the drift shape this file's own docstring is
+# about ("the check was available; the BEHAVIOUR did not exist").
+#
+# OBSERVE by default, DENY behind `VIBEIC_SCOPE_DENY=1`. A misfire here does
+# not produce one red gate — it makes every run of the flow fail — so the
+# default records and reports rather than raising, and the switch is one env
+# var away. Failure to import is NOT fatal and NOT silent: it degrades to no
+# enforcement and says so on stderr, because an enforcement that vanished
+# quietly is worth less than none.
+_SCOPE_INSTALLED = False
+
+
+def _install_input_scope(project: Path) -> None:
+    """Install the §4.05 audit boundary once per process."""
+    global _SCOPE_INSTALLED
+    if _SCOPE_INSTALLED:
+        return
+    _SCOPE_INSTALLED = True
+    try:
+        import step_input_scope_enforce as _scope  # noqa: PLC0415
+    except Exception as exc:                        # pragma: no cover
+        print(f"step_preflight: §4.05 input-scope enforcement UNAVAILABLE "
+              f"({exc}) — this run is not bounded by it", file=sys.stderr)
+        return
+    try:
+        _scope.install(Path(project))
+    except Exception as exc:                        # pragma: no cover
+        print(f"step_preflight: §4.05 input-scope enforcement FAILED TO "
+              f"INSTALL ({exc}) — this run is not bounded by it", file=sys.stderr)
+
+
 def gate(project: Path, runner: str, site: str,
          refusal_factory: Callable[[str, Dict[str, Any]], Any],
          fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -752,6 +793,8 @@ def gate(project: Path, runner: str, site: str,
     idiom is untouched. `refusal_factory(detail, extras)` builds the caller's
     own `StepResult`-shaped refusal row.
     """
+    _install_input_scope(project)
+
     flow_def = kwargs.pop("_preflight_flow_def", None)
     # WHICH INSTANCE of the site this dispatch was. `analog_one_shot_runner`
     # dispatches every A-site once PER BLOCK, so without this the ledger would
