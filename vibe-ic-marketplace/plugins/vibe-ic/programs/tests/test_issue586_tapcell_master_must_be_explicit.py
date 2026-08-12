@@ -52,6 +52,12 @@ import subprocess
 import sys
 
 import pytest
+# vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
+# one passed. Declared through `not_verified_tier` so the run's roll-up
+# cannot count them under `passed`; see that module's docstring.
+from not_verified_tier import skip_not_verified  # noqa: E402
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
+RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _REGISTRY = _PROGRAMS / "pdk_registry.json"
@@ -222,7 +228,9 @@ def test_the_declared_master_exists_in_that_pdks_own_lef(entry):
     """
     img = _image()
     if not _have_image(img):
-        pytest.skip(f"image {img} not present; this half was NOT checked")
+        skip_not_verified(
+            f"image {img} not present; this half was NOT checked",
+            PULL_REMEDY)
     cell = entry["tapcell_master"]
     r = subprocess.run(
         ["docker", "run", "--rm", "--entrypoint", "bash", img, "-lc",
