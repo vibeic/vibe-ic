@@ -451,6 +451,11 @@ doc = {
     # against the number that happened to run.
     "declared": len(gates),
     "ran": n("PASS") + n("FAIL") + n("NOT_CHECKED") + n("WROTE_CORPUS"),
+    # RAN is not DECIDED, and the gap between them is the whole subject of
+    # vibe-ic#1025: a NOT_CHECKED gate ran and concluded nothing. Derivable
+    # from the two below, and recorded anyway so a consumer cannot reach a
+    # different answer than the sentence the script printed.
+    "decided": n("PASS") + n("FAIL"),
     "passed": n("PASS"),
     "failed": n("FAIL"),
     "not_checked": n("NOT_CHECKED"),   # never folded into `passed`
@@ -479,6 +484,7 @@ PY
 
 gate_dispatch_finish() {
   local declared=${#GATE_LABELS[@]} notchecked=0 passed=0 wrote=0 i
+  local failed=0 decided=0
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
   local refused="" writers=""
   [ -z "$GATE_DISPATCH_SUMMARY_JSON" ] \
@@ -522,6 +528,10 @@ gate_dispatch_finish() {
   for (( i=0; i<declared; i++ )); do
     case "${GATE_STATES[$i]}" in
       PASS) passed=$(( passed + 1 )) ;;
+      # COUNTED, where it was not before. Every closing sentence below could
+      # state `declared` and `notchecked`; none could state how many gates
+      # actually reached a verdict, because nothing added this up.
+      FAIL) failed=$(( failed + 1 )) ;;
       NOT_CHECKED)
         notchecked=$(( notchecked + 1 ))
         refused="${refused:+$refused, }${GATE_LABELS[$i]}" ;;
@@ -530,6 +540,30 @@ gate_dispatch_finish() {
         writers="${writers:+$writers, }${GATE_LABELS[$i]}" ;;
     esac
   done
+  # A gate DECIDED when it reached a verdict about its subject: PASS or FAIL.
+  # NOT_CHECKED did not (it declined to look); WROTE_CORPUS did not either —
+  # its rc is never classified, because what it did was change the tree every
+  # later gate reads.
+  decided=$(( passed + failed ))
+
+  # THE SWEEP'S OWN DENOMINATOR (vibe-ic#1025 follow-up) is stated IN each
+  # closing sentence below, never as a line of its own.
+  #
+  # `gate_discloses_denominator_check` already demands of each gate that a PASS
+  # say how much it looked at, and #957 added the same for a loop's items. The
+  # missing level was this one: how many of the sweep's own clauses reached a
+  # verdict at all. Every sentence below was literally true without it — `0 of
+  # 6 gate(s) passed; 6 NOT CHECKED` is exact — and none of them said DECIDED,
+  # which is the number a reader is actually forming an impression about.
+  #
+  # FOLDED IN RATHER THAN APPENDED, and that is not cosmetic: #539's guard
+  # requires the roll-up to be EXACTLY ONE line
+  # (`test_the_rollup_does_not_claim_all_passed_when_a_gate_refused` asserts
+  # `len(rollup) == 1`). A separate accounting line would let the sentence a
+  # reader takes away and the caveat that qualifies it drift apart — which is
+  # the aggregation dishonesty #539 removed, re-arriving as a second line. It
+  # is also why the CLEAN sentence below still never says NOT CHECKED: a run in
+  # which nothing refused must not read as degraded.
 
   if [ "$wrote" -ne 0 ]; then
     # Named separately from a plain FAIL and BEFORE it: a gate that modified
@@ -544,9 +578,50 @@ gate_dispatch_finish() {
 
   if [ "$GATE_DISPATCH_FAIL" -ne 0 ]; then
     echo "repo_hygiene_gates: at least one gate FAILED" \
-         "($declared declared, $notchecked NOT CHECKED, $wrote WROTE CORPUS," \
-         "${total}s)" >&2
+         "($decided of $declared decided — $passed passed, $failed failed;" \
+         "$notchecked NOT CHECKED, $wrote WROTE CORPUS, ${total}s)" >&2
     exit 1
+  fi
+
+  # A SWEEP THAT DECIDED NOTHING IS NOT A PASS (vibe-ic#1025 follow-up).
+  #
+  # AFTER the FAIL branch on purpose. `failed` counts toward `decided`, so
+  # `decided == 0` can only coincide with a red run through WROTE_CORPUS —
+  # and there the writer must stay the headline (see the note above).
+  #
+  # This is the rule the file already applies ONE LEVEL DOWN, arriving through
+  # a different door. `declared == 0` is refused with exit 2 twenty lines up:
+  # a script that wired nothing cannot certify anything. A script that wired 63
+  # gates and got a verdict from none of them is in the SAME state — nothing
+  # was checked — and was exiting 0. Measured before this change, six gates all
+  # returning rc 2 under a tolerating wrapper:
+  #
+  #     repo_hygiene_gates: 0 of 6 gate(s) passed; 6 NOT CHECKED —
+  #     this is NOT a pass over: gate1, gate2, … (1s)     <-- SUITE rc 0
+  #
+  # The sentence says "this is NOT a pass" and the exit code says pass. Every
+  # `-ne 0` consumer believes the exit code: `gatekeeper-land.sh:284` wraps it
+  # in `if out="$(…)"`, and `gatekeeper_review._hygiene_verdict` returned
+  # `GateResult(rc=0)` — a green gate — with the NOT-CHECKED count riding along
+  # in descriptive text.
+  #
+  # rc 2 AND NOT rc 1, deliberately: this repo's convention is 1 = found a
+  # defect, 2 = could not determine. A vacuous sweep found no defect; it
+  # produced no result. Reporting it as 1 would announce a finding that does
+  # not exist — the mirror of the lie being removed.
+  #
+  # AND NOT "any NOT_CHECKED is non-zero": the rc-0-with-refusals branch below
+  # has a measured reason (a developer whose tree is dirty BY CONSTRUCTION
+  # would make this script permanently red, and a permanently red gate is a
+  # gate that gets skipped — the failure mode `run_tolerating_uncheckable`
+  # exists to avoid). The line drawn here is ZERO DECIDED, which is the
+  # difference between a result with caveats and no result at all.
+  if [ "$decided" -eq 0 ]; then
+    echo "repo_hygiene_gates: DECIDED NOTHING — 0 of $declared gate(s)" \
+         "reached a verdict ($notchecked NOT CHECKED). A sweep that concluded" \
+         "nothing is not a pass, for the same reason a sweep that wired no" \
+         "gate is not: NOT CHECKED over: $refused" >&2
+    exit 2
   fi
 
   # vibe-ic#539 — this line used to read `all gates passed` verbatim while
@@ -565,8 +640,8 @@ gate_dispatch_finish() {
   # carried by this line and by the machine record, not by the exit status.
   if [ "$notchecked" -ne 0 ]; then
     echo "repo_hygiene_gates: $passed of $declared gate(s) passed;" \
-         "$notchecked NOT CHECKED — this is NOT a pass over: $refused" \
-         "(${total}s)"
+         "DECIDED $decided of $declared, $notchecked NOT CHECKED —" \
+         "this is NOT a pass over: $refused (${total}s)"
     exit 0
   fi
   # vibe-ic#957 — a loop that expanded over NOTHING declares no gate, so it
@@ -576,13 +651,15 @@ gate_dispatch_finish() {
   # dishonesty #539 removed, arriving through the denominator instead of
   # through a state, so it is refused the same way — by NAME, in the sentence.
   if [ "$nempty" -ne 0 ]; then
-    echo "repo_hygiene_gates: all $declared gate(s) passed, but $nempty loop" \
+    echo "repo_hygiene_gates: all $declared gate(s) passed" \
+         "($decided of $declared decided), but $nempty loop" \
          "corpus/corpora expanded over 0 item(s) — NOTHING was checked over:" \
          "$empty (${total}s)"
     exit 0
   fi
   # Only now is the unqualified sentence true. It still states its own
   # denominator, so it cannot be read over a set that silently shrank.
-  echo "repo_hygiene_gates: all $declared gate(s) passed (${total}s)"
+  echo "repo_hygiene_gates: all $declared gate(s) passed" \
+       "($decided of $declared decided, ${total}s)"
   exit 0
 }

@@ -1112,6 +1112,38 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
                           + ", ".join(sorted(failed)[:6])
                           + (" …" if len(failed) > 6 else "")
                           + f" [{where}]")
+    # BEFORE the `script_rc != 0` branch, for the reason the `wrote` branch is
+    # before the FAIL branch: that branch's message is about an INCONSISTENCY
+    # between the record and the exit code, and here the record is perfectly
+    # consistent — every gate ran and none of them concluded anything. Reported
+    # through that branch, a wholly vacuous sweep reads as "the script and its
+    # own summary disagree", pointing a reader away from the one thing that
+    # happened.
+    #
+    # vibe-ic#1025 follow-up. This was NOT reachable before: with no failing
+    # gate and `script_rc == 0`, an all-vacuous sweep fell to the final line
+    # and returned rc 0 — a GREEN gate — with `N NOT CHECKED (not a pass)`
+    # carried only in `where`, i.e. in prose beside a passing verdict. Measured
+    # on the pre-change dispatcher, 6 declared / 6 NOT_CHECKED / 0 failed /
+    # script_rc 0 is exactly that shape.
+    #
+    # Derived from `gates` — the same source `failed` / `not_checked` /
+    # `deferred` / `wrote` above come from — and NOT from the top-level
+    # `passed` counter. A record may legitimately carry `gates` without the
+    # roll-up counters (several of this repo's fixtures do), and reading the
+    # absent counter as 0 made an all-PASS record look like it decided nothing.
+    # That is the very failure this branch exists to report, produced by the
+    # branch itself.
+    decided = len(by_state("PASS")) + len(failed)
+    # `ran` excludes LISTED. A record where everything was DEFERRED is
+    # `--list` mode, which decided nothing BY REQUEST and already says so;
+    # refusing it here would report a deliberate listing as a vacuous sweep.
+    if ran > 0 and decided == 0:
+        return GateResult(name, 2,
+                          f"ERROR — the hygiene set DECIDED NOTHING: 0 of "
+                          f"{declared} gate(s) reached a verdict, "
+                          f"{len(not_checked)} NOT CHECKED. Nothing was "
+                          f"concluded, and that is not a pass [{where}]")
     if script_rc != 0:
         # Red script, no failing gate named: a setup/summary inconsistency we
         # must not paper over.
