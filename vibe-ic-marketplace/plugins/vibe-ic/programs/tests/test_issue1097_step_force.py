@@ -125,18 +125,30 @@ def test_the_freshness_predicate_denies_reuse_when_forced(tmp_path, monkeypatch)
 
 
 def test_the_hook_is_wired_before_the_ordinary_path(tmp_path, monkeypatch):
-    """Forcing must win over every other reuse verdict, including a record
-    that would otherwise say the artefact is current."""
+    """Forcing must win over every other reuse verdict, and be ATTRIBUTABLE.
+
+    The first version of this asserted only `after is False`. That passes
+    without the wiring at all: an empty directory has no producer-identity
+    record, so the ordinary path already denies reuse and the test was vacuous
+    — it survived the red arm. The verdict alone cannot distinguish "denied
+    because forced" from "denied because stale", so the assertion is on the
+    DISCLOSURE, which only the force hook can produce.
+    """
     import phase3_one_shot_runner as R
     out = tmp_path / "synth"
     out.mkdir()
+
     monkeypatch.delenv(SF.ENV, raising=False)
-    before, _ = R._producer_cache_valid_for(out, "synth")
+    _, msg_unforced = R._producer_cache_valid_for(out, "synth")
+    assert "forced by --force-step" not in msg_unforced, msg_unforced
+
     monkeypatch.setenv(SF.ENV, "synth")
-    after, msg = R._producer_cache_valid_for(out, "synth")
-    assert after is False, msg
-    # Whatever the unforced answer was, the forced one is False.
-    assert after is not True
+    forced_ok, msg_forced = R._producer_cache_valid_for(out, "synth")
+    assert forced_ok is False, msg_forced
+    # The load-bearing half: the reason is the FORCE, not whatever the
+    # identity record happened to say.
+    assert "forced by --force-step synth" in msg_forced, msg_forced
+    assert msg_forced != msg_unforced
 
 
 # --------------------------------------------------------------------------- #
