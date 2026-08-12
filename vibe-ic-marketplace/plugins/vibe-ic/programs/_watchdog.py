@@ -76,7 +76,7 @@ import os
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional, Tuple
 
 # Distinct return codes: STALLED (no forward progress) is NOT the natural rc and
@@ -108,6 +108,10 @@ class SupervisedResult:
     elapsed_s: float = 0.0
     # The `abort_probe` reason, present ONLY on outcome == 'aborted'.
     abort_reason: str = ""
+    # §4.05 input-scope record (vibe-ic#1079): what was imposed on the child,
+    # or why nothing was. Always present, so "was it enforced?" is answerable
+    # from the result rather than from the absence of a complaint.
+    scope: dict = field(default_factory=dict)
 
     @property
     def stalled(self) -> bool:
@@ -272,6 +276,9 @@ def run_supervised(cmd, *, log_path=None,
                    kill: Optional[Callable[[object, str], None]] = None,
                    popen_factory: Optional[Callable[..., object]] = None,
                    env=None,
+                   scope_project=None,
+                   scope_step=None,
+                   scope_guard_dir=None,
                    wait_fn=None,
                    clock: Callable[[], float] = time.monotonic,
                    abort_probe: Optional[Callable[[], Optional[str]]] = None
@@ -292,6 +299,28 @@ def run_supervised(cmd, *, log_path=None,
     popen_factory = popen_factory or (
         lambda c, **kw: subprocess.Popen(c, **kw))
     kill = kill or _default_kill
+
+    # §4.05 AS A MECHANISM (vibe-ic#1079). This is the one place a supervised
+    # step becomes a process, so it is the one place its input scope can be
+    # imposed rather than reviewed. OFF unless `VIBEIC_STEP_SCOPE` is set: with
+    # the switch unset `child_env` returns `env` unchanged — including `None`,
+    # so a caller that passed nothing still INHERITS, byte-for-byte as before
+    # this existed. `scope_step` is the flow step id; the permitted paths are
+    # read from that step's `required_inputs` in the flow YAML, never from a
+    # second declaration.
+    scope_meta = {"enforced": False}
+    if scope_step is not None:
+        try:
+            import step_input_scope as _sis  # noqa: PLC0415
+            env, scope_meta = _sis.child_env(
+                env, project=scope_project, step_id=scope_step,
+                guard_dir=scope_guard_dir)
+        except Exception as _exc:  # noqa: BLE001
+            # A guard that cannot be built must SAY so. Silently continuing
+            # unenforced is the vacuous pass this repo removes from gates one
+            # at a time; the run continues (this is not a gate) but the record
+            # says the scope was not imposed.
+            scope_meta = {"enforced": False, "error": repr(_exc)}
 
     out_f = tempfile.TemporaryFile()
     err_f = tempfile.TemporaryFile()
@@ -319,7 +348,7 @@ def run_supervised(cmd, *, log_path=None,
         out_f.close()
         err_f.close()
         return SupervisedResult(127, "", f"COMMAND_NOT_FOUND: {e}",
-                                "launch_error", 0.0)
+                                "launch_error", 0.0, scope=scope_meta)
 
     meter = ProgressMeter(
         size_fn=_size,
@@ -368,20 +397,20 @@ def run_supervised(cmd, *, log_path=None,
             RC_STALLED, out,
             err + (f"\nWATCHDOG_STALLED: no forward progress (output+CPU idle) "
                    f"for > {stall_grace_s:g}s — killed as hung, not slow."),
-            "stalled", elapsed)
+            "stalled", elapsed, scope=scope_meta)
     if outcome == "ceiling":
         return SupervisedResult(
             RC_CEILING, out,
             err + (f"\nWATCHDOG_CEILING: hard backstop {hard_ceiling_s:g}s "
                    f"exceeded (pathological non-idle loop) — killed."),
-            "ceiling", elapsed)
+            "ceiling", elapsed, scope=scope_meta)
     if outcome == "aborted":
         return SupervisedResult(
             RC_ABORTED, out,
             err + (f"\nWATCHDOG_ABORTED: {_abort_reason}"),
-            "aborted", elapsed, _abort_reason)
+            "aborted", elapsed, _abort_reason, scope=scope_meta)
     return SupervisedResult(rc if rc is not None else 0, out, err,
-                            "natural", elapsed)
+                            "natural", elapsed, scope=scope_meta)
 
 
 # ===========================================================================
