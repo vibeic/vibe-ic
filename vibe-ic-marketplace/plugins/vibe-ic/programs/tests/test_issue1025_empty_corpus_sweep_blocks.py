@@ -150,14 +150,31 @@ def test_the_corpus_sweep_is_dispatched_by_a_wrapper_that_blocks_on_rc_2():
 
 
 def _suite(tmp_path, wrapper, rc):
-    """Dispatch a stub of exit code `rc` through the REAL dispatcher."""
+    """Dispatch a stub of exit code `rc` through the REAL dispatcher.
+
+    A SECOND, DECIDING gate is always dispatched alongside it, and that is not
+    padding. The sibling change in this branch makes a sweep that DECIDED
+    NOTHING exit 2 — so a one-gate vacuous sweep now exits 2 whatever wrapper
+    carried it, and the pair below would compare two runs that are equal for a
+    reason having nothing to do with wrappers. The deciding gate keeps
+    `decided > 0` so the wrapper remains the ONLY difference between the arms,
+    which is the property this pair exists to hold.
+
+    MEASURED: without it, `test_the_tolerating_wrapper_would_pass_the_same_rc_2`
+    failed when the two halves of #1025 were combined — a real semantic
+    conflict that neither half had on its own.
+    """
     stub = tmp_path / f"stub{rc}.sh"
     stub.write_text(f"#!/usr/bin/env bash\nexit {rc}\n")
     stub.chmod(0o755)
+    ok = tmp_path / "stub_ok.sh"
+    ok.write_text("#!/usr/bin/env bash\nexit 0\n")
+    ok.chmod(0o755)
     harness = tmp_path / f"harness_{wrapper}_{rc}.sh"
     harness.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
         f"source {DISPATCH}\n"
+        f'run "a gate that decides" "{tmp_path}" bash "{ok}"\n'
         f'{wrapper} "a corpus sweep" "{tmp_path}" bash "{stub}"\n'
         "gate_dispatch_finish\n")
     return subprocess.run(["bash", str(harness)], capture_output=True,
