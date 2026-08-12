@@ -230,3 +230,142 @@ def test_env_values_naming_the_oracle_are_removed(tmp_path, project):
     out, removed = sis.scrub_env(env, project, [])
     assert "GOLDEN" not in out and removed == ["GOLDEN"], (out, removed)
     assert out["RTL"] == env["RTL"], "a legitimate path was stripped"
+
+
+# ===========================================================================
+# THE BOUNDARY MUST COME FROM THE MODULE THAT DEFINES IT
+#
+# This file's original fixtures put the oracle under `score/`, which is
+# `blindness_audit`'s vocabulary — the module that answers "is this a benchmark
+# SCORING oracle". §4.05's boundary lives in `_reference_flow_boundary`, and it
+# names twelve segments. Measured before this change: the enforcement denied
+# `score/` and `canonical_samples/` and PERMITTED all twelve, `golden/`,
+# `oracle/` and `ground_truth/` among them — the literal words §4.05 is written
+# in. These tests are that gap, executable.
+# ===========================================================================
+CANONICAL_ORACLE_RELS = ("golden/g.v", "oracle/o.json", "ground_truth/t.txt",
+                         "solutions/s.py", "expected_output/e.log")
+
+
+@pytest.fixture()
+def canon_project(tmp_path):
+    """A project holding one file per CANONICAL off-limits segment, plus a
+    legitimate design input and a legitimate reference RECIPE."""
+    p = tmp_path / "canon"
+    for rel in CANONICAL_ORACLE_RELS:
+        (p / rel).parent.mkdir(parents=True, exist_ok=True)
+        (p / rel).write_text("// oracle content\n")
+    (p / INPUT_REL).parent.mkdir(parents=True, exist_ok=True)
+    (p / INPUT_REL).write_text(INPUT_BODY)
+    (p / "reference_flow").mkdir(parents=True, exist_ok=True)
+    (p / "reference_flow" / "run.tcl").write_text("source ./steps.tcl\n")
+    return p
+
+
+@pytest.mark.parametrize("rel", CANONICAL_ORACLE_RELS)
+def test_every_canonical_off_limits_segment_is_denied(tmp_path, canon_project, rel):
+    """One case per segment `_reference_flow_boundary` names. All were allowed."""
+    res = _run(_reader(tmp_path, rel), canon_project, on=True)
+    assert res.rc != 0, (
+        f"a step read {rel} and was not stopped. The §4.05 boundary module names "
+        f"that segment; enforcement must cover it.")
+
+
+def test_PAIRED_the_reference_flow_RECIPE_stays_readable(tmp_path, canon_project):
+    """THE OVER-DENIAL TWIN, and it is the reason the segments are split.
+
+    `reference_flow/` is recipe AND oracle: the tree legitimately holds the
+    reference RECIPE and only the QoR-rules artefact inside it is off limits.
+    Denying the whole tree by PATH — which the first version of this fix did —
+    refuses a legitimate read, and a mechanism that denies two reads in three is
+    one people switch off. So `reference_flow` is decided by CONTENT, in the
+    parent, and a recipe must still be readable.
+    """
+    res = _run(_reader(tmp_path, "reference_flow/run.tcl"), canon_project, on=True)
+    assert res.rc == 0, (
+        f"a legitimate reference RECIPE was denied: {res}. Only the QoR-rules "
+        f"artefact inside that tree is the oracle.")
+
+
+def test_PAIRED_a_declared_design_input_is_still_readable(tmp_path, canon_project):
+    """The other twin. Widening the deny must not deny the design INPUT."""
+    res = _run(_reader(tmp_path, INPUT_REL), canon_project, on=True)
+    assert res.rc == 0, f"the design input was denied: {res}"
+
+
+def test_the_boundary_comes_from_the_boundary_module_not_a_local_list():
+    """The vocabulary is IMPORTED, and the fallback is VISIBLE when it is not.
+
+    A silent fallback to the old narrow set reads identically to enforcement, so
+    `oracle_segments` returns its SOURCE and this asserts the real one is used.
+    """
+    segs, source = sis.oracle_segments()
+    assert source == "_reference_flow_boundary", (
+        f"the deny vocabulary came from {source!r}. §4.05's boundary has exactly "
+        f"one home and this is not reading it.")
+    import _reference_flow_boundary as rfb
+    canonical = set(getattr(rfb, "ORACLE_TREE_SEGMENTS", ()))
+    assert canonical and canonical <= set(segs), (
+        f"segments missing from the enforcement: {sorted(canonical - set(segs))}")
+    # ...and the reference_flow trees are deliberately NOT path-denied.
+    rf = set(getattr(rfb, "REFERENCE_FLOW_TREE_SEGMENTS", ()))
+    assert rf and not (rf & set(segs)), (
+        f"reference_flow segments are being PATH-denied ({sorted(rf & set(segs))}), "
+        f"which refuses the legitimate recipe. They are content-decided.")
+
+
+def test_the_shim_and_the_module_cannot_DRIFT(tmp_path):
+    """The shim carries no second copy of the vocabulary — asserted, not assumed.
+
+    The shim cannot import the plugin, so before this change it re-implemented
+    the classifier. Measured then: 0 disagreements across 11 probes — a live
+    RISK, not a live defect, and nothing pinned it. Now the parent hands the list
+    DOWN and this asserts the two answer alike.
+    """
+    import importlib.util
+    segs, _ = sis.oracle_segments()
+    os.environ[sis.ENV_DENY] = json.dumps(list(segs))
+    try:
+        d = sis.install_guard(tmp_path / "g")
+        spec = importlib.util.spec_from_file_location("shim_probe", d / "sitecustomize.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        probes = list(CANONICAL_ORACLE_RELS) + [
+            "score/s.json", INPUT_REL, "verified_netlist.v", "reference_flow/run.tcl"]
+        bad = [q for q in probes
+               if bool(sis.oracle_reason(q)) != bool(m._oracle(q))]
+        assert not bad, f"shim and module disagree on {bad}"
+    finally:
+        os.environ.pop(sis.ENV_DENY, None)
+
+
+def test_an_enforcement_that_did_not_load_is_DETECTABLE(tmp_path, canon_project):
+    """AN ENFORCEMENT WHOSE FAILURE MODE IS A GREEN TICK IS NOT ONE.
+
+    `sitecustomize` is imported by `site` only if it is FIRST on the path; a host
+    that already ships one wins silently, the shim never loads, nothing is
+    observed, and the run reports no violation — indistinguishable from a run
+    that had none. The shim writes a marker as its first act, so the two are
+    distinguishable. Both directions.
+    """
+    guard = tmp_path / "liveness_guard"
+    assert not sis.guard_loaded(guard), "marker present before any child ran"
+    res = _run(_reader(tmp_path, INPUT_REL), canon_project, on=True, guard=guard)
+    assert res.rc == 0, res
+    assert sis.guard_loaded(guard), (
+        "the child ran under enforcement and left no liveness marker, so a run "
+        "that silently skipped the shim would be indistinguishable from this one")
+
+
+def test_an_empty_deny_vocabulary_REFUSES_to_claim_enforcement(monkeypatch,
+                                                               canon_project):
+    """A guard with nothing to deny denies nothing. It must not report enforced.
+
+    The one outcome this module may not have is a run that LOOKS enforced and is
+    not, so the parent refuses rather than installing a no-op guard.
+    """
+    monkeypatch.setattr(sis, "oracle_segments", lambda: ((), "probe: empty"))
+    env, meta = sis.child_env({sis.ENV_SWITCH: "1"}, project=canon_project,
+                              step_id="14", guard_dir=None)
+    assert meta["enforced"] is False, meta
+    assert "deny" in meta.get("why", "").lower(), meta

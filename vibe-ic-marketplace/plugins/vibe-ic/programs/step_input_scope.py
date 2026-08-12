@@ -92,6 +92,13 @@ ENV_SWITCH = "VIBEIC_STEP_SCOPE"
 ENV_PROJECT = "VIBEIC_STEP_SCOPE_PROJECT"
 ENV_ALLOW = "VIBEIC_STEP_SCOPE_ALLOW"
 ENV_STEP = "VIBEIC_STEP_SCOPE_STEP"
+#: The DENY vocabulary, handed DOWN to the child instead of restated in it.
+ENV_DENY = "VIBEIC_STEP_SCOPE_DENY"
+#: The content-decided reference_flow oracle files, resolved in the parent.
+ENV_DENY_FILES = "VIBEIC_STEP_SCOPE_DENY_FILES"
+#: Where the shim records that it actually loaded. See `guard_loaded`.
+ENV_LIVE = "VIBEIC_STEP_SCOPE_LIVE"
+LIVENESS_NAME = "scope_guard_loaded"
 
 DEFAULT_FLOW_REL = "flow/phase1_phase2_phase3.yaml"
 
@@ -105,12 +112,122 @@ def enforcement_enabled(env: Optional[Dict[str, str]] = None) -> bool:
 # --------------------------------------------------------------------------- #
 # The oracle class — IMPORTED, never restated
 # --------------------------------------------------------------------------- #
+#: The FALLBACK deny vocabulary, used only when the boundary module cannot be
+#: imported, and RECORDED when it is (see `oracle_segments`). It is the set this
+#: file shipped with, kept so an import failure degrades to the previous
+#: behaviour rather than to no enforcement at all.
+_FALLBACK_SEGMENTS = ("score", "canonical_samples")
+
+
+def oracle_segments() -> Tuple[Tuple[str, ...], str]:
+    """``(segments, source)`` — the §4.05 off-limits directory names.
+
+    THE BOUNDARY COMES FROM `_reference_flow_boundary`, WHICH IS THE ONLY MODULE
+    THAT DEFINES IT. This file previously took its vocabulary from
+    `blindness_audit`, and that was the wrong single-source-of-truth: it answers
+    "is this a benchmark SCORING oracle" (`score/`, `canonical_samples/`), not
+    "where does §4.05 run". Measured consequence — every one of the twelve
+    segments the canonical boundary names was PERMITTED, `golden/`, `oracle/`
+    and `ground_truth/` among them, i.e. the literal words §4.05 is written in.
+
+    `_reference_flow_boundary`'s own docstring records that it exists because two
+    shipped programs once held contradictory positions about the same directory.
+    Taking the vocabulary from anywhere else recreates exactly that.
+
+    The SOURCE is returned, not just the segments, because a silent fallback to
+    the old narrow set would look identical to enforcement. `child_env` records
+    it in its meta so a caller can tell the two apart.
+    """
+    try:
+        import _reference_flow_boundary as _rfb  # noqa: PLC0415
+    except Exception:                            # noqa: BLE001
+        return _FALLBACK_SEGMENTS, "fallback (_reference_flow_boundary unimportable)"
+    # ORACLE_TREE_SEGMENTS ONLY, and deliberately NOT OFF_LIMITS_TREE_SEGMENTS.
+    # The difference is `reference_flow` / `ref_flow` / `reference`, which are
+    # recipe AND oracle: the tree legitimately holds the reference RECIPE, and
+    # only the QoR-rules artefact inside it is the oracle. Denying the whole tree
+    # by PATH would refuse a legitimate read, which is the over-denial that turns
+    # a mechanism into something people switch off. Those trees are handled by
+    # CONTENT instead — see `reference_flow_oracle_rels`.
+    segs = set(getattr(_rfb, "ORACLE_TREE_SEGMENTS", ()))
+    if not segs:
+        return _FALLBACK_SEGMENTS, "fallback (boundary module named no segments)"
+    # The fallback names are kept alongside: `score/` is a real oracle channel in
+    # this repo even though the §4.05 boundary module does not enumerate it.
+    segs |= set(_FALLBACK_SEGMENTS)
+    return tuple(sorted(segs)), "_reference_flow_boundary"
+
+
+def reference_flow_oracle_rels(project: Path, cap: int = 20000) -> List[str]:
+    """Project-relative paths under a `reference_flow` tree whose CONTENT is the
+    QoR oracle. Resolved HERE, in the parent, with the real boundary module.
+
+    This is the half a path rule cannot decide. `_reference_flow_boundary`
+    distinguishes the reference RECIPE (legitimate to read) from the QoR RULES
+    (the oracle) by looking at the file, so the decision needs the module — and
+    the shim cannot import the plugin. So the parent decides and hands DOWN a
+    concrete list, which is also why no second copy of the vocabulary exists.
+    """
+    try:
+        import _reference_flow_boundary as _rfb  # noqa: PLC0415
+    except Exception:                            # noqa: BLE001
+        return []
+    segs = {s.lower() for s in getattr(_rfb, "REFERENCE_FLOW_TREE_SEGMENTS", ())}
+    decide = getattr(_rfb, "is_oracle_qor_rules", None)
+    if not segs or decide is None:
+        return []
+    root = Path(project).resolve()
+    out: List[str] = []
+    seen = 0
+    for f in sorted(root.rglob("*")):
+        if seen >= cap:
+            break
+        if not f.is_file():
+            continue
+        rel = f.relative_to(root).as_posix()
+        if not any(part.lower() in segs for part in rel.split("/")[:-1]):
+            continue
+        seen += 1
+        try:
+            if decide(f.read_text(errors="replace")):
+                out.append(rel)
+        except OSError:
+            continue
+    return out
+
+
+def guard_loaded(guard_dir: Optional[Path]) -> bool:
+    """Did the shim actually load in the child?
+
+    AN ENFORCEMENT WHOSE FAILURE MODE IS A GREEN TICK IS NOT ONE. `sitecustomize`
+    is imported by `site` only if it is the FIRST one on the path; a host that
+    already ships one wins silently, the shim never loads, nothing is observed
+    and the run reports no violation — indistinguishable from a run that had
+    none. So the shim writes this marker as its first act, and a caller that
+    cares must ask rather than assume.
+    """
+    if guard_dir is None:
+        return False
+    return (Path(guard_dir) / LIVENESS_NAME).exists()
+
+
 def oracle_reason(rel: str) -> Optional[str]:
     """Why `rel` is oracle/harness, or None. Delegates to `blindness_audit`.
 
     A second copy of these patterns is a second thing to keep in step with the
     first; this repo has spent versions removing exactly that.
     """
+    parts = [q.lower() for q in rel.split("/")]
+    segments, _src = oracle_segments()
+    for d in segments:
+        if d in parts:
+            return "hidden oracle file (%s/ channel)" % d
+    # NOTE: the reference_flow trees are deliberately absent from `segments` —
+    # they are decided by CONTENT, which needs the file, not the path. A caller
+    # asking about a path alone therefore gets None for them, and that is
+    # correct: the tree is legitimate to read, one artefact inside it is not.
+    # The FILENAME patterns stay delegated — `*_test.*`, `*_ref.*`, `testbench*`,
+    # `verified_*` are `blindness_audit`'s vocabulary and it is their one home.
     try:
         import blindness_audit as ba  # noqa: PLC0415
     except Exception:                 # noqa: BLE001
@@ -223,10 +340,36 @@ except Exception:
     _ALLOW = []
 _STEP = os.environ.get("VIBEIC_STEP_SCOPE_STEP") or "?"
 
-_ORACLE_DIRS = ("score", "canonical_samples")
+# HANDED DOWN, NOT RESTATED. The parent resolves the §4.05 boundary with the one
+# module that defines it and passes the result here, so this shim carries no
+# second copy of the vocabulary to drift from the first. It still imports
+# nothing from the plugin, which is why the list travels as data.
+try:
+    _ORACLE_DIRS = tuple(json.loads(os.environ.get("VIBEIC_STEP_SCOPE_DENY") or "[]"))
+except Exception:
+    _ORACLE_DIRS = ()
+
+# The CONTENT-decided half: exact project-relative paths the parent resolved as
+# the QoR oracle inside an otherwise-legitimate reference_flow tree.
+try:
+    _ORACLE_FILES = frozenset(json.loads(os.environ.get("VIBEIC_STEP_SCOPE_DENY_FILES") or "[]"))
+except Exception:
+    _ORACLE_FILES = frozenset()
+
+# LIVENESS, written before anything else can go wrong. A run whose marker is
+# absent was NOT enforced, and must not be read as a run with no violations.
+_LIVE = os.environ.get("VIBEIC_STEP_SCOPE_LIVE") or ""
+if _LIVE:
+    try:
+        with open(_LIVE, "w") as _fh:
+            _fh.write("loaded")
+    except Exception:
+        pass
 
 
 def _oracle(rel):
+    if rel in _ORACLE_FILES:
+        return "hidden oracle file (reference_flow QoR rules, decided by content)"
     parts = [p.lower() for p in rel.split("/")]
     for d in _ORACLE_DIRS:
         if d in parts[:-1] or d in parts:
@@ -321,16 +464,33 @@ def child_env(base_env: Optional[Dict[str, str]],
 
     env = dict(os.environ if base_env is None else base_env)
     env, removed = scrub_env(env, root, specs)
+    segments, source = oracle_segments()
+    if not segments:
+        # A guard with an empty deny vocabulary denies nothing. Installing it
+        # would produce a run that looks enforced and is not, which is the one
+        # outcome this module may not have. Refuse to claim enforcement instead.
+        meta["why"] = (f"no §4.05 deny vocabulary resolved (source: {source}); "
+                       f"refusing to install a guard that would deny nothing")
+        return base_env, meta
+
     env[ENV_PROJECT] = str(root)
     env[ENV_ALLOW] = json.dumps(specs)
     env[ENV_STEP] = str(step_id)
+    env[ENV_DENY] = json.dumps(list(segments))
+    rf_oracles = reference_flow_oracle_rels(root)
+    env[ENV_DENY_FILES] = json.dumps(rf_oracles)
     if guard_dir is not None:
         gd = install_guard(Path(guard_dir))
+        env[ENV_LIVE] = str(Path(guard_dir) / LIVENESS_NAME)
         prior = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = str(gd) + (os.pathsep + prior if prior else "")
     meta.update({"enforced": True, "step": str(step_id),
                  "declared_specs": len(specs), "env_removed": removed,
-                 "guard": str(guard_dir) if guard_dir else None})
+                 "guard": str(guard_dir) if guard_dir else None,
+                 # The SOURCE is recorded, not just the count: a silent fallback
+                 # to the old narrow set reads identically to enforcement.
+                 "deny_segments": len(segments), "deny_source": source,
+                 "deny_files_reference_flow": len(rf_oracles)})
     return env, meta
 
 
