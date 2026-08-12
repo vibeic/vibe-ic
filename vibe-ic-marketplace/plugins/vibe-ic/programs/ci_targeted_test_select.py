@@ -338,6 +338,16 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     "test_wave76_skill_md_chip_agnostic.py",
     "test_all_steps_covers_flow.py",
     "test_no_vibe_ic_core_reappears.py",
+    # vibe-ic#1025 — the same reachability argument, arriving through a SHELL
+    # file. Part of what this guard pins is a property of
+    # `tools/ci/repo_hygiene_gates.sh`: that the empty-corpus sweep is
+    # dispatched by a wrapper which BLOCKS on rc 2 rather than one that records
+    # NOT_CHECKED and exits 0. That file is outside `_SOURCE_DIRS` and no test
+    # is NAMED after it, so MEASURED with the selector itself on exactly the
+    # one-token diff that breaks the wiring: 16 tests selected, this guard NOT
+    # among them. The PR that neuters the gate is precisely the PR whose
+    # changed-file set cannot reach the test that guards it. ~2 s for 7 tests.
+    "test_issue1025_empty_corpus_sweep_blocks.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
