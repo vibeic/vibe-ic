@@ -279,7 +279,7 @@ def test_cli_exits_0_for_the_same_history_inside_the_bound(tmp_path):
     if not head:
         pytest.skip("shallow history")
     res = _cli(tmp_path, _record(("a gate", "FAIL")),
-               [_row(since=head, max_commits=1000)])
+               [_row(since=head, max_commits=G.MAX_BOUND_COMMITS)])
     assert res.returncode == 0, res.stdout + res.stderr
 
 
@@ -304,7 +304,7 @@ def test_the_verdict_line_itself_carries_the_new_count(tmp_path):
     the partition has to survive on that line or it does not reach the landing
     reader at all — which would defeat the program's whole purpose."""
     res = _cli(tmp_path, _record(("today", "FAIL"), ("old", "FAIL")),
-               [_row(gate="old", since="HEAD", max_commits=1000)])
+               [_row(gate="old", since="HEAD", max_commits=G.MAX_BOUND_COMMITS)])
     last = res.stdout.strip().splitlines()[-1]
     assert "1 NEW red" in last and "1 acknowledged" in last, last
     assert "today" in last, last
@@ -313,6 +313,42 @@ def test_the_verdict_line_itself_carries_the_new_count(tmp_path):
 def test_the_verdict_line_says_zero_when_nothing_is_new(tmp_path):
     """The control: the count must track the record, not be decoration."""
     res = _cli(tmp_path, _record(("old", "FAIL")),
-               [_row(gate="old", since="HEAD", max_commits=1000)])
+               [_row(gate="old", since="HEAD", max_commits=G.MAX_BOUND_COMMITS)])
     last = res.stdout.strip().splitlines()[-1]
     assert "0 NEW red" in last and "1 acknowledged" in last, last
+
+
+# ---------------------------------------------------------------------------
+# The cap — a bound that cannot arrive is not a bound
+# ---------------------------------------------------------------------------
+def test_a_bound_beyond_the_ceiling_is_a_finding():
+    """The neutering diff, measured: without this the mechanism is switched off
+    by editing the very file it adjudicates, and every other assertion here
+    still passes."""
+    findings, _, _ = G.adjudicate(_record(("a gate", "FAIL")),
+                                  [_row(max_commits=9999999)], _age(1))
+    assert [f.kind for f in findings] == ["unbounded"]
+    assert str(G.MAX_BOUND_COMMITS) in findings[0].detail
+
+
+def test_a_bound_exactly_at_the_ceiling_is_accepted():
+    """The control. A cap that also rejected the largest legitimate bound would
+    be an off-by-one that pushes people to renew a week early forever."""
+    findings, known, _ = G.adjudicate(
+        _record(("a gate", "FAIL")),
+        [_row(max_commits=G.MAX_BOUND_COMMITS)], _age(1))
+    assert findings == [] and known == ["a gate"]
+
+
+def test_the_shipped_ledger_respects_the_ceiling():
+    for row in G.load_ledger(LEDGER):
+        assert int(row["max_commits"]) <= G.MAX_BOUND_COMMITS, row
+
+
+def test_the_guard_is_in_the_smoke_floor_so_a_ledger_diff_reaches_it():
+    """A ledger-only diff selects no test NAMED after the ledger. Measured: 16
+    selected, this file not among them, until it joined the smoke floor."""
+    sel = (PLUGIN / "programs" / "ci_targeted_test_select.py").read_text()
+    assert '"test_gate_red_since_check.py",' in sel, (
+        "the diff that switches this mechanism off must be able to select the "
+        "test that guards it")

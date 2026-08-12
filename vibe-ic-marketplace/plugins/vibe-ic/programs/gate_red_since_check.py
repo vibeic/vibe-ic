@@ -109,6 +109,16 @@ LEDGER_REL = "tools/ci/gate_red_since.json"
 
 _REQUIRED_KEYS = ("gate", "since", "max_commits")
 
+#: The largest bound that is still a bound. MEASURED while probing this
+#: program against itself: a row with `max_commits: 9999999` satisfies every
+#: other rule here and never expires, so the mechanism can be switched off by
+#: editing the file it adjudicates — the same "wired where it can never
+#: block" shape it exists to catch. The ceiling does not forbid a long
+#: remediation; it forbids an unattended one. A red that genuinely needs
+#: longer is renewed by moving `since` forward, which is a visible act that
+#: shows up in review, rather than a number nobody reads again.
+MAX_BOUND_COMMITS = 500
+
 
 class Finding:
     """One reason this program fails, in the shape the CLI prints."""
@@ -223,6 +233,13 @@ def adjudicate(record: Dict[str, Any],
             findings.append(Finding(
                 "incomplete", label,
                 f"max_commits is not an integer: {row['max_commits']!r}"))
+            continue
+        if bound > MAX_BOUND_COMMITS:
+            findings.append(Finding(
+                "unbounded", label,
+                f"max_commits is {bound}, beyond the {MAX_BOUND_COMMITS}-commit "
+                f"ceiling. A deadline that cannot arrive is not a deadline; "
+                f"renew the row by moving `since` forward instead"))
             continue
         if behind > bound:
             findings.append(Finding(
