@@ -86,6 +86,17 @@ PLUGIN = REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
 PROGRAMS = PLUGIN / "programs"
 FLOW_YAML = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 
+def _plugin_on_path() -> None:
+    """Put the real plugin's `programs/` on `sys.path`, ONCE.
+
+    Not `PROGRAMS`: that one is redirected at a planted tree under test, and a
+    fixture must never get to decide what the census imports as authority.
+    """
+    p = str(PLUGIN / "programs")
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+
 CLEAN, SUSPECT, LIAR, NA = "CLEAN", "SUSPECT", "LIAR", "N/A"
 #: A finding the census DECLINES to score, having established structurally that
 #: the question it asked cannot be load-bearing here. Printed, never hidden: a
@@ -151,7 +162,7 @@ def _consumer_reads_the_refusal(out: str) -> bool:
         # the REAL plugin, never `PROGRAMS` — that one is redirected at a planted
         # tree under test, and importing a planted `flow_compliance_check` would
         # let a fixture decide what counts as disclosure.
-        sys.path.insert(0, str(PLUGIN / "programs"))
+        _plugin_on_path()
         from flow_compliance_check import (  # noqa: PLC0415
             _stdout_signals_vacuous, _VACUOUS_HINT_PREFIX,
         )
@@ -1264,7 +1275,7 @@ def declared_atoms(cl: Clause) -> List[str]:
     #1054's rule, for #1054's reason.
     """
     try:
-        sys.path.insert(0, str(PLUGIN / "programs"))
+        _plugin_on_path()
         from flow_compliance_check import _flow_path_atoms  # noqa: PLC0415
     except Exception:                                          # pragma: no cover
         return [a.strip() for e in cl.step_outputs for a in str(e).split(" OR ")
@@ -1316,7 +1327,7 @@ def _satisfied_alternative(rel: str, cl: Clause, root: Path) -> Optional[str]:
 
 def _glob_re(pattern: str) -> "re.Pattern[str]":
     try:
-        sys.path.insert(0, str(PLUGIN / "programs"))
+        _plugin_on_path()
         from flow_compliance_check import _flow_glob_re  # noqa: PLC0415
         return _flow_glob_re(pattern)
     except Exception:                                          # pragma: no cover
