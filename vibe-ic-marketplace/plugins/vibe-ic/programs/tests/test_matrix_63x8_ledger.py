@@ -437,8 +437,24 @@ def test_output_entries_classify_into_the_four_kinds():
     # VACUOUS_PASS with both reports written becomes MISSING with none.
     # test_flow_declaration_does_not_silence_its_producer.py holds that
     # distinction live for both steps.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    #
+    # 2026-08-12: 134 -> 135, FILE 100 -> 101. The ONE new entry is step 24's
+    # `reports/phase3/dynamic_ir.json`. Its gate clause names the file
+    # POSITIONALLY and UNCONDITIONALLY (`dynamic_ir_drop_check
+    # reports/phase3/dynamic_ir.json --budget-pct 10`) and `dynamic_ir_drop_check`
+    # returns FAIL rc 1 when the report is absent or unreadable, so no run that
+    # passes step 24 can lack it — yet no step declared it. It stayed invisible
+    # to dimension 7's AST producer index because `dynamic_ir_vectored_emit`
+    # writes through an `out_json` FUNCTION PARAMETER (RESOLUTION_LIMITS entry
+    # 1), and it surfaced only once a published run's write ledger was read.
+    # Step 29's precedent applies exactly: step 24 already declares three
+    # run-produced entries, so its gate keeps running and the declaration
+    # re-grades nothing — MEASURED with `flow_compliance_check.check_step` over
+    # all 12 published run roots, 0 verdicts move (7 of 7 roots that reach the
+    # step carry the file; the rest are already MISSING/SKIPPED-CONDITION for
+    # unrelated reasons). GLOB and ANY_OF are untouched.
+    assert sum(seen.values()) == 135, seen
+    assert seen[F.FILE] == 101
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
