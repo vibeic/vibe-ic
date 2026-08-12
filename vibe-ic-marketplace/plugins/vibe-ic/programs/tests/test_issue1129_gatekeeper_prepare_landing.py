@@ -169,6 +169,27 @@ def test_commit_amends_the_tip_and_leaves_the_worktree_CLEAN(repo):
         "amend must not add a commit"
 
 
+def test_commit_amends_an_ALREADY_TAGGED_tip_without_adding_a_commit(repo):
+    """The other half of the commit branch, and it was UNPINNED until a mutant
+    said so: the fixture's tip is untagged, so only the `else` arm ran and
+    breaking the already-tagged arm killed no test.
+
+    A batch whose tip already carries its tag is the COMMON case on a re-run —
+    prepare, gate fails on something real, fix it, prepare again — so the arm
+    that was untested is the one the operator hits most.
+    """
+    _git(repo, "commit", "-q", "--amend", "-m", "base commit [v9.9.9]")
+    before_n = _git(repo, "rev-list", "--count", "HEAD").stdout.strip()
+    rc, notes, _ = _run(repo, do_commit=True)
+    assert rc == G.RC_OK, notes
+    assert not G.dirty_paths(repo), G.dirty_paths(repo)
+    subject = _git(repo, "log", "-1", "--format=%s").stdout
+    assert "[v9.9.9]" in subject, subject
+    assert subject.count("[v") == 1, f"a second tag was appended: {subject}"
+    assert _git(repo, "rev-list", "--count", "HEAD").stdout.strip() == before_n, \
+        "amend must not add a commit"
+
+
 def test_untracked_paths_are_not_treated_as_dirty(repo):
     """Scope matched to `landing_worktree_is_clean_check`, which excludes `??`.
     Widening it here would refuse preparation over somebody's scratch notes."""
