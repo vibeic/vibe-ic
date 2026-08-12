@@ -1024,24 +1024,74 @@ def test_1076_from_image_with_no_docker_reports_NOT_APPLICABLE_never_a_pass(
     assert rc == 2, f"a refusal must not exit 0 as if it had measured: rc={rc}"
 
 
-def test_1076_advisory_moves_ONLY_the_exit_code(monkeypatch, tmp_path):
+def _fail_report():
+    """A report shaped the way `_emit_human` actually reads it.
+
+    Keys taken from the emitter (`claims[].verdict/document/line/claim/reason/
+    evidence`, `counts`, `documents_scanned`), not invented — a synthetic report
+    that the emitter silently ignores would print nothing, and this test would
+    then compare two empty strings and call them equal.
+    """
+    ev = ["/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerCAP.lib",
+          "/foss/pdks/ihp-sg13g2/libs.tech/ngspice/models/cornerRES.lib"]
+    claim = {
+        "verdict": "CONTRADICTED",
+        "document": "benchmark-data/ic/u_hawaii_adc/.../L5_ANALOG_SPEC.md",
+        "line": 56,
+        "claim": "IHP SG13G2 has no public ngspice corner library",
+        "reason": "the installed PDK ships 6 artefact(s) the claim says it does not",
+        "evidence": ev,
+        "sections_discovered": {ev[0]: ["cap_typ", "cap_wcs"]},
+    }
+    second = dict(claim, document="benchmark-data/ic/u_hawaii_adc/.../L9_CONSTRAINTS.md",
+                  line=44)
+    return {
+        "verdict": "FAIL",
+        "reason": "contradicted claims",
+        "documents_scanned": 134,
+        "installed_pdk_source": "image:ghcr.io/vibeic/vibeic-eda:0.2.89",
+        "claims": [claim, second],
+        "counts": {"contradicted": 2, "corroborated": 1, "undecided": 4},
+    }
+
+
+def test_1076_advisory_moves_ONLY_the_exit_code(monkeypatch, tmp_path, capsys):
     """A gate that reports LESS when asked to block less is a second defect.
 
-    Drives the same synthetic tree twice, changing only `--advisory`, and
-    compares the JSON reports byte-for-byte.
+    THE FIRST VERSION OF THIS TEST WAS INERT and my own paired guard caught it:
+    it drove the docker-free path, where the verdict is NOT_APPLICABLE and there
+    are NO findings, so "the two runs agree" was trivially true. A mutant that
+    made `--advisory` blank the contradictions passed it. A test that cannot
+    fail on the property it names is a ban, not a check.
+
+    So it now drives a report that HAS findings, and compares what the caller
+    actually SEES — the emitted text — not only the JSON, because the JSON is
+    written before the enforcement branch runs and could never have differed.
     """
-    monkeypatch.setattr(gate.subprocess, "run",
-                        lambda argv, **kw: _FakeProc(125, "", "daemon down"))
+    monkeypatch.setattr(gate, "run", lambda *a, **k: _fail_report())
     (tmp_path / "input" / "docs").mkdir(parents=True)
-    (tmp_path / "input" / "docs" / "L1.md").write_text("# doc\n", encoding="utf-8")
     a, b = tmp_path / "a.json", tmp_path / "b.json"
 
-    gate.main([str(tmp_path), "--from-image", "--json", str(a)])
-    gate.main([str(tmp_path), "--from-image", "--advisory", "--json", str(b)])
+    rc_block = gate.main([str(tmp_path), "--json", str(a)])
+    blocking = capsys.readouterr()
+    rc_adv = gate.main([str(tmp_path), "--advisory", "--json", str(b)])
+    advisory = capsys.readouterr()
 
-    assert a.read_text() == b.read_text(), (
-        "the report changed when only the ENFORCEMENT flag changed; advisory is "
-        "a decision about blocking, never about measuring"
+    assert rc_block == 1, f"a FAIL report must block without --advisory: rc={rc_block}"
+    assert rc_adv == 0, f"--advisory must not block: rc={rc_adv}"
+
+    assert a.read_text() == b.read_text(), "the JSON report changed with the flag"
+
+    def _findings(cap):
+        return [ln for ln in (cap.out + cap.err).splitlines()
+                if "CONTRADICTED" in ln or "cornerCAP" in ln or "cornerRES" in ln]
+
+    assert _findings(blocking), (
+        "the blocking arm printed no findings, so this test compares nothing"
+    )
+    assert _findings(blocking) == _findings(advisory), (
+        "the findings changed when only the ENFORCEMENT flag changed; advisory "
+        "is a decision about blocking, never about measuring"
     )
 
 
