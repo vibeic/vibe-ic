@@ -551,3 +551,60 @@ def test_an_unbounded_expansion_is_disclosed_not_dropped(tmp_path):
     r = _run(tmp_path, tmp_path / "bl.json")
     assert "NOT expanded" in r.stdout, r.stdout
     assert str(E._MAX_EXPANSIONS) in r.stdout, r.stdout
+
+
+# ── #1044 second half: the DOCUMENT a reader is sent to ──────────────────────
+
+def test_a_dangling_document_citation_with_a_directory_reddens(tmp_path):
+    """THE PAIRED GUARD for the second half of #1044.
+
+    The issue's consequence line is about `.md` artefacts, not logs: "#1028
+    deletes four artefacts `METHODOLOGY.md` cites, and the gate still reports
+    PASS". Teaching the brace NOTATION alone did not fix that — all four are
+    `.md`, and `_EVIDENCE_EXT` did not include it, so the gate saw them and
+    still declined to judge them. Measured on
+    `origin/withdraw/nonpassing-published-runs`: 11 of 11 expansions seen, 11 of
+    11 dangling, 0 judged.
+    """
+    _doc(tmp_path, "M.md", "see `ic_alpha/RESULT.md`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "ic_alpha/RESULT.md" in r.stdout, r.stdout
+
+
+def test_a_document_citation_whose_target_EXISTS_passes(tmp_path):
+    """Without this the guard above is satisfied by a gate that reddens on
+    every `.md` token it sees."""
+    _doc(tmp_path, "M.md", "see `ic_alpha/RESULT.md`\n")
+    _doc(tmp_path, "ic_alpha/RESULT.md", "the result\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_BARE_document_name_is_prose_not_a_citation(tmp_path):
+    """`RESULT.md` names a KIND of document — every run ships one, and
+    "each run ships a RESULT.md" claims no particular file exists.
+    `ic_alpha/RESULT.md` names ONE. Measured over the default scope: 56 of the
+    108 unresolved `.md` tokens are bare, so judging them would fire on 56
+    legitimately-complete documents. A gate that fires on a complete design is
+    a bug in the gate, not a finding."""
+    _doc(tmp_path, "M.md", "every run ships a `RESULT.md` and a `SOURCE_MANIFEST.md`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_citation_resolving_ABOVE_the_scan_root_is_disclosed_not_judged(tmp_path):
+    """The artefact EXISTS; it lives above this gate's root, and the resolution
+    ladder stops at the root on purpose (`test_resolution_never_escapes_the_
+    scan_root`). Calling it dangling would be the gate reporting its own scope
+    as the document's defect — which is the shape #1044 is about. Measured: 7
+    such citations in the real corpus."""
+    scope = tmp_path / "scope"
+    scope.mkdir()
+    (tmp_path / "PUBLISHING.md").write_text("policy\n")
+    _doc(scope, "M.md", "see `PUBLISHING.md` at `outer/PUBLISHING.md`\n")
+    (tmp_path / "outer").mkdir()
+    (tmp_path / "outer" / "PUBLISHING.md").write_text("policy\n")
+    r = _run(scope, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "OUT OF SCOPE" in r.stdout, r.stdout
