@@ -489,9 +489,33 @@ steps:
       # extraction_patterns.json reached generated_docs/L*.json.
       - "reports/phase1/extraction_coverage_report.md"
       - "reports/phase1/extraction_coverage_report.json"
+    # #1119-adjacent, d4 (criteria_match): this gate declared THREE deliverables
+    # and read ONE. `required_outputs` is ALL-of-N across entries
+    # (flow_compliance_check.py:8966 states it, :8980-:8996 executes it), so the
+    # two extraction-coverage reports above were claimed by the step and visible
+    # to no clause of its own gate — `test_d4_gate_measures_what_it_claims[step1]`
+    # has been red on that since it landed.
+    #
+    # THE SHAPE MATTERS AND THE OBVIOUS FIX IS WRONG. Appending the two reports
+    # to the existing `files_exist` list would satisfy d4 and change NOTHING:
+    # `any_of: true` means one match settles the whole clause, so RTL alone would
+    # still pass and the reports would still be unenforced. That is a green
+    # bought without enforcement — the exact defect this campaign removes. So the
+    # any-of stays scoped to what it was always about (two SPELLINGS of one
+    # artefact, `.sv` or `.v`) and the reports become their own ALL-of clause.
+    #
+    # STILL files_exist-ONLY, per the AUDIT NOTE above: this adds no substance
+    # check. `phase1_coverage_report_present_check` is the program that reads the
+    # recorded coverage percentage, it is registered in flow_compliance_check's
+    # P0 umbrella, and it is wired to NO step gate clause anywhere in this file.
+    # Wiring it moves this gate to the exec branch and is deliberately a separate
+    # change; presence is what this one fixes.
     gate:
-      files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
-      any_of: true
+      all_of:
+        - files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
+          any_of: true
+        - files_exist: ["reports/phase1/extraction_coverage_report.md",
+                        "reports/phase1/extraction_coverage_report.json"]
     # The dependency was always REAL and never DECLARED. D1 is the sole member
     # of stage_phase1 and its L1-L27 output is, in this file's own words, "the
     # universal handoff to Phase 2" — spec-to-RTL literally reads
