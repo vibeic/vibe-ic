@@ -60,7 +60,7 @@ _TOLERATES_RC2 = {"run_tolerating_uncheckable"}
 
 def _gate(*args):
     return subprocess.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True, timeout=300)
+                          capture_output=True, text=True, timeout=55)
 
 
 def _corpus(root, ic="an_ic", run="clean_run_v0000_20200101", reports=None):
@@ -161,7 +161,7 @@ def _suite(tmp_path, wrapper, rc):
         f'{wrapper} "a corpus sweep" "{tmp_path}" bash "{stub}"\n'
         "gate_dispatch_finish\n")
     return subprocess.run(["bash", str(harness)], capture_output=True,
-                          text=True, cwd=str(tmp_path), timeout=300)
+                          text=True, cwd=str(tmp_path), timeout=55)
 
 
 def test_the_dispatcher_fails_the_suite_on_rc_2_from_a_blocking_wrapper(tmp_path):
