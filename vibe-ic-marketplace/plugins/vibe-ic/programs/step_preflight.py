@@ -743,15 +743,23 @@ def _confirm_identity(project: Path, dec: Decision,
 # --------------------------------------------------------------------------- #
 # The gate itself
 # --------------------------------------------------------------------------- #
-#: Set to "0" to suppress the refusal-time repro bundle (vibe-ic#1097 S7).
-#: Opt-OUT rather than opt-in: the bundle is only ever produced on a refusal,
-#: which is already an abnormal outcome someone is about to investigate, and a
-#: diagnostic nobody remembers to enable is a diagnostic that is not there when
-#: it is needed — which is the `step_required_inputs_check` shape this module
-#: was written to end.
-REPRO_BUNDLE_ENV = "VIBE_IC_REPRO_BUNDLE"
-
-
+#: THERE IS DELIBERATELY NO SWITCH FOR THIS (vibe-ic#1097 S7).
+#:
+#: The first version of this carried `VIBE_IC_REPRO_BUNDLE=0` as an opt-out.
+#: `test_there_is_no_switch_that_turns_a_refusal_into_a_pass` failed it, and
+#: that test is right: it bans EVERY `os.environ.get` in this module except
+#: `STRICT_ENV`, on the grounds that "a weakening switch would make the refusal
+#: decorative". My knob did not weaken the refusal — it only suppressed a
+#: diagnostic — but the ban is deliberately blanket, and blanket is the correct
+#: shape: it means nobody has to adjudicate "is THIS knob a weakening one?" per
+#: knob, which is the judgement call that eventually goes wrong. Moving the
+#: switch into `step_repro_bundle` to satisfy the ban's letter would be routing
+#: around a gate.
+#:
+#: So there is no switch. The bundle is produced only on a refusal — already an
+#: abnormal outcome someone is about to investigate — it is wrapped in the
+#: never-raises guard below, and it writes under `reports/repro/`. If it ever
+#: does need suppressing, that is a reviewed change, not a hidden knob.
 def _emit_repro_bundle(project: Path, dec: "Decision") -> Optional[str]:
     """Bundle the refused span's declared inputs. Returns a path, or None.
 
@@ -766,8 +774,6 @@ def _emit_repro_bundle(project: Path, dec: "Decision") -> Optional[str]:
     the evidence, not a reason to withhold it. The manifest inside the archive
     names every unresolved input, so the bundle states its own completeness.
     """
-    if os.environ.get(REPRO_BUNDLE_ENV, "1") == "0":
-        return None
     steps = [str(s) for s in (dec.flow_steps or []) if str(s)]
     if not steps:
         return None
