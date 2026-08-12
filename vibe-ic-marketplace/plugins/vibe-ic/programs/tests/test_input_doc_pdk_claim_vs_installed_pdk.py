@@ -921,3 +921,149 @@ def test_no_pdk_library_name_is_hardcoded_in_the_gate():
                   "sky130", "gf180", "sg13", "asap7", "freepdk",
                   "mos_tt", "mos_ss", "mos_ff", "typical.lib"):
         assert token not in lowered, f"{token!r} hardcoded in the gate"
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#1076 — the gate was wired with no PDK backend, so it reported
+# NOT_CHECKED over two real contradictions.
+#
+# MEASURED on the image this repo pins:
+#     as wired before:   0 input document(s), 0 candidate claim(s)  rc=2 VACUOUS
+#     with --from-image: 134 input document(s), 7 candidate claim(s),
+#                        contradicted=2 corroborated=1 undecided=4  rc=1
+#     --advisory:        the SAME 134/7/2/1/4                       rc=0
+#
+# These tests are DOCKER-FREE on purpose. The suite must not need a daemon, and
+# a test that silently skips when docker is absent is a test that reports green
+# on the hosts that matter. Everything below stubs the process runner and
+# asserts on the argv and the control flow, which is what this change owns; the
+# reader itself is already covered by the 41 synthetic PDK fixtures above.
+# ---------------------------------------------------------------------------
+#: repo root, derived from this file rather than assumed:
+#: <root>/vibe-ic-marketplace/plugins/vibe-ic/programs/tests/<this>
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+
+
+class _FakeProc:
+    def __init__(self, rc=0, out="", err=""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+def test_1076_ephemeral_container_is_TTL_BOUNDED_and_self_removing(monkeypatch):
+    """The leak bound IS the design.
+
+    `--rm` plus a bounded `sleep` means that even a SIGKILL of this process —
+    which runs no `finally` — leaves a container that removes itself. vibe-ic#1089
+    is the same lesson from the other direction: a `finally` is not a cleanup
+    strategy for a process that can be killed.
+    """
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(list(argv))
+        return _FakeProc(0, "deadbeefcafe\n")
+
+    monkeypatch.setattr(gate.subprocess, "run", fake_run)
+    with gate.ephemeral_container("img:tag") as (name, why):
+        assert name == "deadbeefcafe", (name, why)
+        assert why == ""
+
+    run_argv = seen[0]
+    assert "-d" in run_argv and "--rm" in run_argv, run_argv
+    assert "sleep" in run_argv, run_argv
+    assert str(gate._CONTAINER_TTL_S) in run_argv, (
+        "the container has no bounded lifetime, so a killed run leaks it forever"
+    )
+    assert any(a[:3] == ["docker", "rm", "-f"] for a in seen[1:]), seen
+
+
+def test_1076_docker_unusable_is_a_NAMED_reason_not_a_pass(monkeypatch):
+    """An unreachable image is not a clean PDK."""
+    def boom(argv, **kw):
+        raise OSError("no such file or directory: docker")
+
+    monkeypatch.setattr(gate.subprocess, "run", boom)
+    with gate.ephemeral_container("img:tag") as (name, why):
+        assert name is None
+        assert "docker unusable" in why, why
+
+
+def test_1076_a_nonzero_docker_run_is_a_NAMED_reason(monkeypatch):
+    monkeypatch.setattr(gate.subprocess, "run",
+                        lambda argv, **kw: _FakeProc(125, "", "no such image"))
+    with gate.ephemeral_container("img:tag") as (name, why):
+        assert name is None
+        assert "rc=125" in why and "no such image" in why, why
+
+
+def test_1076_an_empty_container_id_is_refused(monkeypatch):
+    """A blank id would be handed to `docker exec` and read as an empty PDK."""
+    monkeypatch.setattr(gate.subprocess, "run",
+                        lambda argv, **kw: _FakeProc(0, "   \n"))
+    with gate.ephemeral_container("img:tag") as (name, why):
+        assert name is None
+        assert "no container id" in why, why
+
+
+def test_1076_from_image_with_no_docker_reports_NOT_APPLICABLE_never_a_pass(
+        monkeypatch, tmp_path, capsys):
+    """The honest-degradation path, end to end through main()."""
+    monkeypatch.setattr(gate.subprocess, "run",
+                        lambda argv, **kw: _FakeProc(125, "", "daemon down"))
+    (tmp_path / "input" / "docs").mkdir(parents=True)
+    (tmp_path / "input" / "docs" / "L1.md").write_text("# doc\n", encoding="utf-8")
+    out_json = tmp_path / "r.json"
+
+    rc = gate.main([str(tmp_path), "--from-image", "--json", str(out_json)])
+
+    import json as _json
+    rep = _json.loads(out_json.read_text())
+    assert rep["verdict"] == "NOT_APPLICABLE", rep["verdict"]
+    assert "image_unreadable" in rep["reason"], rep["reason"]
+    assert rep["backend_not_exercised"] == ["from-image"], rep
+    assert rc == 2, f"a refusal must not exit 0 as if it had measured: rc={rc}"
+
+
+def test_1076_advisory_moves_ONLY_the_exit_code(monkeypatch, tmp_path):
+    """A gate that reports LESS when asked to block less is a second defect.
+
+    Drives the same synthetic tree twice, changing only `--advisory`, and
+    compares the JSON reports byte-for-byte.
+    """
+    monkeypatch.setattr(gate.subprocess, "run",
+                        lambda argv, **kw: _FakeProc(125, "", "daemon down"))
+    (tmp_path / "input" / "docs").mkdir(parents=True)
+    (tmp_path / "input" / "docs" / "L1.md").write_text("# doc\n", encoding="utf-8")
+    a, b = tmp_path / "a.json", tmp_path / "b.json"
+
+    gate.main([str(tmp_path), "--from-image", "--json", str(a)])
+    gate.main([str(tmp_path), "--from-image", "--advisory", "--json", str(b)])
+
+    assert a.read_text() == b.read_text(), (
+        "the report changed when only the ENFORCEMENT flag changed; advisory is "
+        "a decision about blocking, never about measuring"
+    )
+
+
+def test_1076_the_gate_is_WIRED_with_a_backend(tmp_path):
+    """The narrow non-negotiable: a gate in the declared count must not sit on
+    unreported findings because nobody gave it a backend."""
+    sh = (_REPO_ROOT / "tools" / "ci" / "repo_hygiene_gates.sh").read_text(encoding="utf-8")
+    idx = sh.find("input-doc claims vs installed PDK")
+    assert idx > 0, "the gate is no longer declared in the hygiene tier"
+    window = sh[idx:idx + 400]
+    assert "--from-image" in window, (
+        "the gate is wired with no PDK backend again, so it will report "
+        "NOT_CHECKED over whatever the installed PDK contradicts"
+    )
+
+
+def test_1076_the_declaration_states_BLOCKING_or_ADVISORY(tmp_path):
+    """`skills/flow-change-acceptance` wants the enforcement tier declared, not
+    inferred from the flags."""
+    sh = (_REPO_ROOT / "tools" / "ci" / "repo_hygiene_gates.sh").read_text(encoding="utf-8")
+    idx = sh.find("input-doc claims vs installed PDK")
+    head = sh[max(0, idx - 2000):idx]
+    assert "BLOCKING vs ADVISORY" in head, (
+        "the enforcement tier for this gate is not declared in its comment"
+    )

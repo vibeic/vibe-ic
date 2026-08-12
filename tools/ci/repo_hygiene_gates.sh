@@ -831,12 +831,37 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 #     CI hat, and it would make the roll-up read PASS for a gate that still has
 #     not seen one installed artefact.
 #
-# So the honest state is: the LOGIC is covered by pytest, the ARTEFACTS are
-# covered by nothing automatic, and the gate now says so in the same document
-# that carries its verdict. NOT_CHECKED in the roll-up is the correct state and
-# is deliberately left in place.
+# WIRED, and the premise above no longer holds (vibe-ic#1076). It said the
+# ARTEFACTS are "covered by nothing automatic" — but `PDK via patch vs layer min
+# width`, 350 lines up at the `--from-image` call, reaches the very same
+# /foss/pdks from CI and passes in the same run. The artefacts were reachable by
+# an already-accepted mechanism in this script; this gate simply had no flag for
+# it. It has one now.
+#
+# MEASURED, on the image this repo pins:
+#     as wired before:  0 input document(s), 0 candidate claim(s)   rc=2 VACUOUS
+#     with --from-image: 134 input document(s), 7 candidate claim(s),
+#                        contradicted=2 corroborated=1 undecided=4  rc=1
+#
+# A gate occupying a slot in the declared count while sitting on two unreported
+# contradictions is not in a correct state, whatever the comment says.
+#
+# BLOCKING vs ADVISORY: **ADVISORY**, deliberately, and for the same reason the
+# sibling at the `--from-image --advisory` line above is advisory — the fix lives
+# ELSEWHERE. Both contradictions are in published run INPUT under
+# benchmark-data/, which is the record of runs that already happened; vibe-ic#1028
+# is already withdrawing that blast radius. A BLOCKING gate here would go red on
+# main over files this repo has decided not to rewrite, and a blocking gate that
+# cannot be satisfied is a gate somebody switches off.
+#
+# Advisory moves ONLY the exit code: the findings print either way and the JSON
+# report is byte-identical (asserted by test). The contradictions are now
+# REPORTED, which is the part that was missing.
+#
+# Promote to blocking once #1028 has settled the two documents.
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
-  python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT"
+  python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT" \
+  --from-image --advisory
 
 # The flow-gate dashboard publishes a per-step dimension asking "can this step
 # actually fail", and NOTHING recomputes it — the page's own generator says so in

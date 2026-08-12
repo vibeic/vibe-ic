@@ -127,11 +127,13 @@ which is rc 2 with the `VACUOUS_PASS:` sentinel — not a pass.
 
 Usage:
     python3 input_doc_pdk_claim_vs_installed_pdk_check.py <tree>
-        [--pdks-root /foss/pdks] [--container <name>] [--json out.json|-]
+        [--pdks-root /foss/pdks] [--container <name>|--from-image]
+        [--image TAG] [--advisory] [--json out.json|-]
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -150,6 +152,22 @@ import _vacuous_exit  # noqa: E402
 GATE = "input_doc_pdk_claim_vs_installed_pdk"
 
 DEFAULT_PDKS_ROOT = "/foss/pdks"
+
+#: The EDA image whose installed PDK trees `--from-image` reads. A LIVE pointer,
+#: registered the same way the sibling checker's is: named in
+#: `tools/vibeic-eda/sync_image_version.py`'s `INSTALL_DOC_CANDIDATES`, so
+#: `--set` rewrites it and `--check` catches drift. Naming an image only in a
+#: comment is a string nothing resolves, which is how the sibling's first
+#: version went red on the image-version gate.
+DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.89"
+
+#: How long the ephemeral container lives if nobody tears it down. This is the
+#: LEAK BOUND, and it is the point: `--rm` plus a bounded `sleep` means that even
+#: a SIGKILL of this process — which runs no `finally` — leaves a container that
+#: removes itself. vibe-ic#1089 is the same lesson from the other direction: a
+#: `finally` is not a cleanup strategy for a process that can be killed.
+_CONTAINER_TTL_S = 900
+
 
 # Document formats treated as design-input prose. A document-container format
 # list, not a PDK vocabulary; overridable on the command line.
@@ -439,6 +457,57 @@ def _strip_banner(lines: Sequence[str]) -> List[str]:
             continue
         out.append(s)
     return out
+
+
+@contextlib.contextmanager
+def ephemeral_container(image: str):
+    """Run `image` just long enough to read its PDK tree. Yields (name, reason).
+
+    WHY THIS EXISTS  (vibe-ic#1076)
+    ===============================
+    This gate already had a container backend, but it took `--container <name>`
+    and needed a container someone else had started. Its sibling
+    `pdk_via_patch_meets_layer_min_width_check` takes `--from-image` and is wired
+    in CI at `repo_hygiene_gates.sh:488`, reaching the very same
+    `/foss/pdks` — so the artefacts were reachable by an already-accepted
+    mechanism in the same script, and this gate sat at NOT_CHECKED anyway.
+
+    It deliberately does NOT re-implement the backend. `docker_backends` is a
+    measured, tested reader (41 synthetic PDK fixtures, including the container
+    backend's real command strings); this only manages the container's lifetime
+    and hands the name to it. A second reader would be a second thing to keep
+    true.
+
+    DEGRADES HONESTLY. If docker is missing, the daemon is down, or the image
+    cannot be pulled, it yields `(None, reason)` and the caller reports VACUOUS
+    with that reason — never a pass. An unreachable image is not a clean PDK.
+    """
+    name: Optional[str] = None
+    try:
+        try:
+            r = subprocess.run(
+                ["docker", "run", "-d", "--rm", "--entrypoint", "sleep",
+                 image, str(_CONTAINER_TTL_S)],
+                capture_output=True, text=True, timeout=600)
+        except (OSError, subprocess.SubprocessError) as exc:
+            yield (None, f"docker unusable: {exc}")
+            return
+        if r.returncode != 0:
+            yield (None, f"docker run rc={r.returncode}: "
+                         f"{(r.stderr or '').strip()[:200]}")
+            return
+        name = (r.stdout or "").strip()
+        if not name:
+            yield (None, "docker run printed no container id")
+            return
+        yield (name, "")
+    finally:
+        if name:
+            try:
+                subprocess.run(["docker", "rm", "-f", name],
+                               capture_output=True, timeout=120)
+            except (OSError, subprocess.SubprocessError):   # pragma: no cover
+                pass                                        # the TTL still bounds it
 
 
 def docker_backends(container: str
@@ -1141,14 +1210,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         "VIBEIC_PDKS_ROOT", DEFAULT_PDKS_ROOT),
         help="installed PDK root (default %(default)s)")
     ap.add_argument("--container", default=None,
-                    help="read the installed PDK inside this container")
+                    help="read the installed PDK inside this ALREADY-RUNNING container")
+    ap.add_argument("--from-image", action="store_true",
+                    help=f"start {DEFAULT_IMAGE} and read the installed PDK inside it")
+    ap.add_argument("--image", default=DEFAULT_IMAGE,
+                    help="image for --from-image (default %(default)s)")
+    ap.add_argument("--advisory", action="store_true",
+                    help="report findings but exit 0 (see the BLOCKING-vs-ADVISORY "
+                         "declaration in this file's header)")
     ap.add_argument("--doc-suffix", action="append", default=None,
                     help="input-document suffix (repeatable)")
     ap.add_argument("--json", default=None, help="JSON report path, or - for stdout")
     args = ap.parse_args(argv)
 
-    report = run(Path(args.tree), args.pdks_root, container=args.container,
-                 doc_suffixes=tuple(args.doc_suffix or DEFAULT_DOC_SUFFIXES))
+    suffixes = tuple(args.doc_suffix or DEFAULT_DOC_SUFFIXES)
+    if args.from_image and not args.container:
+        with ephemeral_container(args.image) as (name, why):
+            if name is None:
+                report = run(Path(args.tree), args.pdks_root, container=None,
+                             doc_suffixes=suffixes)
+                report["verdict"] = "NOT_APPLICABLE"
+                report["reason"] = f"image_unreadable ({args.image}: {why})"
+                report["backend_not_exercised"] = ["from-image"]
+            else:
+                report = run(Path(args.tree), args.pdks_root, container=name,
+                             doc_suffixes=suffixes)
+                report["installed_pdk_source"] = f"image:{args.image}"
+    else:
+        report = run(Path(args.tree), args.pdks_root, container=args.container,
+                     doc_suffixes=suffixes)
 
     if args.json == "-":
         print(json.dumps(report, indent=2, ensure_ascii=False))
@@ -1160,7 +1250,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         _emit_human(report)
 
     skipped = report["verdict"] == "NOT_APPLICABLE"
-    passed = report["verdict"] != "FAIL"
+    # ADVISORY is a caller's decision about ENFORCEMENT, never about the
+    # measurement: the findings are printed either way and the JSON report is
+    # byte-identical. Only the exit code moves. Anything else would be a gate
+    # that reports less when it is asked to block less.
+    passed = report["verdict"] != "FAIL" or args.advisory
+    if args.advisory and report["verdict"] == "FAIL":
+        print(f"[ADVISORY] {GATE}: reporting only — see the BLOCKING-vs-ADVISORY "
+              f"declaration in this file's header", file=sys.stderr)
     reason = report.get("reason", "unspecified")
     print(_vacuous_exit.verdict_line(GATE, passed, skipped, reason),
           file=sys.stderr)
