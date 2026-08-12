@@ -1,12 +1,19 @@
 {
   "_comment": "Unacknowledged step-internal FAIL/MISSING reports across the PUBLISHED (git-tracked) run trees. MAY ONLY SHRINK \u2014 each one is a report declaring FAIL that no waiver and no orchestrator record names. The wrong repair is to loosen the matcher until the number falls (vibe-ic#693).",
-  "findings_total": 7,
-  "runs_swept": 17,
-  "runs_with_reports": 5,
+  "findings_total": 22,
+  "corpus_population": "benchmark-data/ic",
+  "runs_swept": 26,
+  "runs_with_reports": 26,
   "per_run": {
+    "caravel_user_project": 1,
+    "caravel_user_project/v1.9.43_sky130A": 2,
+    "edge_llm_accel": 6,
+    "edge_llm_matmul_accel": 1,
+    "ibex": 1,
+    "opentitan_aes": 1,
     "sha256/clean_run_v1422_20260715": 2,
     "sha256/clean_run_v1427_20260715": 3,
-    "u_hawaii_adc/clean_run_v1422_20260715": 1,
-    "u_hawaii_adc/clean_run_v1427_20260715": 1
+    "subservient": 4,
+    "u_hawaii_adc/v1.9.86_sky130A": 1
   }
 }
