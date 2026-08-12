@@ -1222,61 +1222,58 @@
       ]
     },
     "M2": {
-      "verdict": "ENFORCED",
+      "verdict": "NA_DORMANT_CONDITION",
       "entries": {
         "reports/analog/mixed_signal/power_domain.json": {
-          "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-          "alternative": "reports/analog/mixed_signal/power_domain.json",
-          "path": "reports/analog/mixed_signal/power_domain.json",
-          "size_bytes": 980
+          "status": "UNPROVEN"
         },
         "reports/analog/mixed_signal/level_shifter.json": {
-          "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-          "alternative": "reports/analog/mixed_signal/level_shifter.json",
-          "path": "reports/analog/mixed_signal/level_shifter.json",
-          "size_bytes": 237
+          "status": "UNPROVEN"
         },
         "reports/analog/mixed_signal/isolation.json": {
-          "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-          "alternative": "reports/analog/mixed_signal/isolation.json",
-          "path": "reports/analog/mixed_signal/isolation.json",
-          "size_bytes": 233
+          "status": "UNPROVEN"
         }
-      }
+      },
+      "unproven": [
+        "reports/analog/mixed_signal/power_domain.json",
+        "reports/analog/mixed_signal/level_shifter.json",
+        "reports/analog/mixed_signal/isolation.json"
+      ],
+      "condition_files": [
+        "phase1/analog/analog_block_list.json"
+      ]
     },
     "M3": {
-      "verdict": "ENFORCED",
+      "verdict": "NA_DORMANT_CONDITION",
       "entries": {
         "phase3/mixed_signal/cosim/mixed_signal_results.json": {
-          "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-          "alternative": "phase3/mixed_signal/cosim/mixed_signal_results.json",
-          "path": "phase3/mixed_signal/cosim/mixed_signal_results.json",
-          "size_bytes": 964
+          "status": "UNPROVEN"
         },
         "reports/analog/mixed_signal/interface_si.json": {
-          "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-          "alternative": "reports/analog/mixed_signal/interface_si.json",
-          "path": "reports/analog/mixed_signal/interface_si.json",
-          "size_bytes": 520
+          "status": "UNPROVEN"
         }
-      }
+      },
+      "unproven": [
+        "phase3/mixed_signal/cosim/mixed_signal_results.json",
+        "reports/analog/mixed_signal/interface_si.json"
+      ],
+      "condition_files": [
+        "phase1/analog/analog_block_list.json"
+      ]
     },
     "M4": {
-      "verdict": "ENFORCED",
+      "verdict": "NA_DORMANT_CONDITION",
       "entries": {
         "reports/analog/mixed_signal/signoff.json": {
-          "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
-          "alternative": "reports/analog/mixed_signal/signoff.json",
-          "path": "reports/analog/mixed_signal/signoff.json",
-          "size_bytes": 631
+          "status": "UNPROVEN"
         }
-      }
+      },
+      "unproven": [
+        "reports/analog/mixed_signal/signoff.json"
+      ],
+      "condition_files": [
+        "phase1/analog/analog_block_list.json"
+      ]
     },
     "40": {
       "verdict": "NA_DORMANT_CONDITION",

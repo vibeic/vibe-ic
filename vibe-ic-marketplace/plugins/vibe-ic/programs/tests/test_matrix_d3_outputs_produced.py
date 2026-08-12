@@ -578,8 +578,15 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 #: external is still external and still unevidenced from the commit; this
 #: records that step 29 is no longer evidenced ONLY from outside, which is a
 #: strictly weaker and strictly true statement.
+#: 2026-08-12: M2, M3 and M4 LEFT this set, and the set only ever SHRINKS
+#: honestly — "Newly external: []". They were here because the manifest
+#: recorded their entries `PRODUCED_BY_RUN` against an out-of-repo tree; they
+#: are now `NA_DORMANT_CONDITION`, which carries no run reference at all, so
+#: there is no external tree left to be attested from. See the note on
+#: :data:`UNEVIDENCED_CELLS` for why dormancy is the true reading and why for
+#: M4 the external attribution was additionally wrong in its own terms.
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
-    "17", "20", "30", "M2", "M3", "M4",
+    "17", "20", "30",
 )
 
 #: How many of the declared entries are decided LIVE on every host. An
@@ -619,7 +626,21 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-12: 120 -> 126, and the direction is the one this constant exists to
+# protect. M2/M3/M4's six entries stopped being FIXTURE and became LIVE — not
+# because new evidence arrived, but because the fixture attestation was
+# WITHDRAWN: their records are now `NA_DORMANT_CONDITION` with status UNPROVEN,
+# which the UNPROVEN branch decides by SEARCHING every admissible root. The
+# search comes back empty on every host, and there is no longer any recorded
+# run reference for a fallback to consult, so the count is host-independent by
+# construction in the way #527 requires — more strongly than before, since the
+# fixture branch was precisely the host-dependent one.
+#
+# Read the increase as "six fewer entries decided by a committed JSON", never
+# as "six more artefacts found". Composition, re-measured: 96 PRODUCED_BY_RUN +
+# 6 PRODUCED_LIVE + 24 UNPROVEN-and-searched = 126 live, 8 fixture, 134
+# declared.
+_LIVE_ENTRY_COUNT = 126
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -1990,10 +2011,10 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (53, 3, 7), (
+    assert (len(enforced), len(waived), len(na)) == (50, 3, 10), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(53, 3, 7) on 2026-08-06. A step moving between states is a real "
+        f"(50, 3, 10) on 2026-08-12. A step moving between states is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
@@ -2012,6 +2033,13 @@ def test_d3_cell_states_partition_all_63_steps():
         f"read a committed artefact, so the cell is host-independent in the "
         f"direction #527 requires. Steps 6/39 and M1 are unchanged and still "
         f"waived."
+        "\n2026-08-12: (53, 3, 7) -> (50, 3, 10). M2, M3 and M4 moved "
+        "ENFORCED -> NA together, on one cause: all four mixed-signal steps "
+        "share the condition `phase1/analog/analog_block_list.json`, which "
+        "occurs ZERO times in `git ls-tree -r HEAD` over the whole "
+        "repository. They have never run here, so there is no run to "
+        "publish and `UNEVIDENCED` was the wrong reading. M1 keeps its "
+        "waiver (a different entry) and stays in the waived count."
     )
 
 
@@ -2712,7 +2740,37 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # a published run tree closes those, and publishing one costs >1 GB of DEFs
     # against a 2.0 GB .git -- which is why they stay RED here rather than
     # becoming waivers. A red cell cannot rot; a waiver can, and did.
-    "15", "17", "19", "20", "30", "32", "M1", "M2", "M3", "M4",
+    #
+    # 2026-08-12: "M2", "M3" and "M4" LEFT this set, and NOT by being
+    # published. "Publish the run tree" was the wrong prescription for them:
+    # all four mixed-signal steps carry the SAME step-level condition,
+    #
+    #     condition: {files_exist: ["phase1/analog/analog_block_list.json"]}
+    #
+    # and that path occurs ZERO times in this repository -- not merely absent
+    # from the admissible run roots, absent from `git ls-tree -r HEAD` over the
+    # whole tree. No project here has ever met the condition, so M2-M4 have
+    # never RUN here, so there is no run to publish. They are DORMANT, which
+    # this module already has a verdict for and already uses for steps 40-44
+    # (dormant on `phase3/stage5_manufacturing/silicon_received.json`).
+    #
+    # What made them look unevidenced was the manifest recording their entries
+    # `PRODUCED_BY_RUN` against `AI_IC_design/4th_benchmark/U_Hawaii_EE628_
+    # DeltaSigma_ADC_e2e`, an out-of-repo tree. For M4 that attribution was
+    # additionally WRONG in its own terms: the entry it recorded produced,
+    # `reports/analog/mixed_signal/signoff.json`, is M4's INPUT --
+    # `mixed_signal_signoff_check`'s own docstring line 8 calls it "M4's input"
+    # and the gate FAILs when it is missing -- and no program in this
+    # repository writes it. The run's own write ledger agrees, independently:
+    # `benchmark-data/ic/spm/v1.10.18_sky130A/steps/mixed/stage_mixed_signal/
+    # M4_.../written.json` records `n_produced: 0` and a
+    # `declared_output_not_produced` finding against that exact spec.
+    #
+    # The NA is not a softening. `matrix_na_precondition` re-derives it live and
+    # it falsifies itself in BOTH directions: publish any tree carrying the
+    # condition file and the cell reddens, or let any declared output appear
+    # anywhere and the NA branch's own probe reddens.
+    "15", "17", "19", "20", "30", "32", "M1",
 )
 
 
