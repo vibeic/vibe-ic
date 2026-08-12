@@ -317,13 +317,23 @@ def test_it_discovers_the_real_flow_by_STRUCTURE(tmp_path):
     assert names == {"real_gate"}, names
 
 
-def test_the_real_flow_has_clauses_of_both_kinds(tmp_path):
-    """A census that only ever saw one clause kind would report a blocking
-    count that is really the total."""
+def test_the_real_flow_has_both_blocking_and_advisory_clauses(tmp_path):
+    """A census that only ever saw one enforcement tier would report a blocking
+    count that is really the total.
+
+    This test USED TO ASSERT `kinds == {program_exit_zero,
+    advisory_program_exit_zero}` — it PINNED the narrow population as correct,
+    so the 28 `optional_program_exit_zero` clauses were not merely missed, they
+    were held out by a green test. A test that pins a denominator has to be
+    reasoned about as a denominator; the kind set now lives in
+    `test_all_three_clause_kinds_are_swept`, which asserts against
+    `lc.CLAUSE_KINDS` rather than against a hand-typed pair.
+    """
     if not lc.FLOW_YAML.is_file():
         pytest.skip(f"flow not present: {lc.FLOW_YAML}")
-    kinds = {c.kind for c in lc.discover_clauses(lc.FLOW_YAML)}
-    assert kinds == {"program_exit_zero", "advisory_program_exit_zero"}, kinds
+    clauses = lc.discover_clauses(lc.FLOW_YAML)
+    assert any(c.blocking for c in clauses)
+    assert any(not c.blocking for c in clauses)
 
 
 if __name__ == "__main__":
@@ -730,32 +740,92 @@ def test_the_real_sweep_still_finds_its_one_real_positive(capsys):
     assert "existence stood in for substance" in out, out
 
 
-def test_the_census_states_the_clauses_it_does_NOT_discover(tmp_path, capsys):
-    """#1054's most useful finding was that a probe had been scanning the wrong
-    POPULATION and reporting a confident zero over it. This census discovers two
-    clause kinds of three, and the bare-string form of those two — so 31 of the
-    flow's 167 declared clauses are outside every probe. It has to say so."""
-    missed = lc.undiscovered_clauses(lc.FLOW_YAML)
-    assert missed.get("optional_program_exit_zero"), missed
-    # the mapping form of a kind it DOES discover falls out just as silently
-    assert missed.get("program_exit_zero"), missed
-    discovered = {c.program for c in lc.discover_clauses(lc.FLOW_YAML)}
-    assert "clock_plan_check" not in discovered
-    assert any("clock_plan_check" in c for c in missed["program_exit_zero"]), missed
 
 
-def test_the_population_line_is_PRINTED_not_only_computed(census, tmp_path, capsys):
+# --------------------------------------------------------------------------
+# THE DENOMINATOR
+#
+# Every number this census ever published silently meant "of the ones I could
+# see". These tests pin the two halves of the repair: the population is now
+# WHOLE, and the disclosure that says so survives it being whole — because the
+# next clause shape somebody invents must not drop out in silence the way
+# `optional_program_exit_zero` did for the entire campaign.
+# --------------------------------------------------------------------------
+
+def test_all_three_clause_kinds_are_swept(tmp_path):
+    kinds = {c.kind for c in lc.discover_clauses(lc.FLOW_YAML)}
+    assert kinds == set(lc.CLAUSE_KINDS), kinds
+
+
+def test_the_mapping_spelling_is_swept_as_well_as_the_string(tmp_path):
+    """Three clauses were declared `{command: …}` instead of as a bare string
+    and fell through `isinstance(val, str)` — one of them BLOCKING."""
+    progs = {c.program for c in lc.discover_clauses(lc.FLOW_YAML)}
+    assert "clock_plan_check" in progs                    # program_exit_zero, mapping
+    assert "yosys_tiecell_recipe_order_check" in progs    # advisory, mapping
+    assert "l10_tb_conformance_check" in progs            # optional, mapping
+
+
+def test_nothing_the_flow_declares_is_left_unswept(tmp_path):
+    pop = lc.population_report(lc.FLOW_YAML)
+    assert pop["unswept"] == [], pop["unswept"]
+    assert pop["swept"] == pop["declared"] == 167, pop
+    assert pop["unrecognised"] == {}, pop["unrecognised"]
+
+
+def test_an_optional_clause_is_BLOCKING_not_advisory(tmp_path):
+    """Its optionality is entirely in WHETHER IT RUNS. Once
+    `condition_files_exist` resolves, `flow_compliance_check` fails the gate on
+    a non-zero exit exactly as the mandatory slot does. Reading it as advisory
+    would have understated every finding among the 28 of them."""
+    opt = [c for c in lc.discover_clauses(lc.FLOW_YAML)
+           if c.kind == "optional_program_exit_zero"]
+    assert opt and all(c.blocking for c in opt), len(opt)
+
+
+def test_condition_files_exist_becomes_a_structural_empty_tree_guard(tmp_path):
+    """Same structural fact as a step-level `condition`, one level down: the
+    consumer returns before dispatch when none resolve, so on an empty tree the
+    program never runs and its exit code is never read."""
+    opt = [c for c in lc.discover_clauses(lc.FLOW_YAML)
+           if c.kind == "optional_program_exit_zero"]
+    assert all(any("[condition_files_exist]" in g for g in c.guards) for c in opt)
+
+
+def test_an_UNRECOGNISED_clause_shape_is_named_not_dropped(tmp_path):
+    """The requirement that survives the repair. A shape this file has never
+    seen must appear in the coverage block, not vanish from the denominator."""
     flow = _flow(tmp_path, """
         steps:
           - id: 99
             gate:
               all_of:
                 - program_exit_zero: "seen ."
-                - optional_program_exit_zero:
-                    command: "unseen ."
+                - program_exit_when_the_moon_is_full: "invented ."
         """)
-    progs = _programs(tmp_path, seen="import sys\nprint('[PASS]')\nsys.exit(1)\n")
+    pop = lc.population_report(flow)
+    assert pop["swept"] == 1, pop
+    assert pop["unrecognised"] == {"program_exit_when_the_moon_is_full": 1}, pop
+    block = lc._coverage_block(pop, 1, False)
+    assert "UNRECOGNISED SHAPE" in block, block
+    assert "program_exit_when_the_moon_is_full" in block, block
+
+
+def test_the_coverage_line_is_printed_even_when_coverage_is_TOTAL(census, tmp_path, capsys):
+    """Printing it only when there is a gap makes the gap's ABSENCE the thing
+    nobody can audit."""
+    flow = _flow(tmp_path, _UNGUARDED_STEP.format(prog="g"))
+    progs = _programs(tmp_path, g="import sys\nprint('[PASS]')\nsys.exit(1)\n")
     census(flow, progs, "--probes", "empty")
     out = capsys.readouterr().out
-    assert "POPULATION — 1 of 2 gate clauses" in out, out
-    assert "optional_program_exit_zero" in out, out
+    assert "COVERAGE — swept 1 of 1 program clause(s)" in out, out
+    assert "NOT SWEPT" not in out, out
+
+
+def test_a_clause_kind_that_runs_no_program_is_OUT_OF_SUBJECT_not_swept(tmp_path):
+    """`json_field_true` is a gate clause. Every probe here runs a program, so
+    none can address it — which is a statement the census has to make, not a
+    silence."""
+    pop = lc.population_report(lc.FLOW_YAML)
+    assert pop["non_program"] == {"json_field_true": 1}, pop["non_program"]
+    assert "OUT OF SUBJECT" in lc._coverage_block(pop, pop["swept"], False)
