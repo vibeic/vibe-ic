@@ -83,12 +83,67 @@ _EVIDENCE_EXT = (".log", ".rpt", ".sby")
 
 # A backticked token that looks like a file path. Anchored so prose in
 # backticks (a command line, a sentence) is never mistaken for a citation.
-_CITE_RE = re.compile(r"`([A-Za-z0-9_./+-]+)`")
+#
+# `{`, `}` AND `,` ARE IN THE CLASS ON PURPOSE (vibe-ic#1044). Without them a
+# BRACE-EXPANSION citation — `run/{setup,hold}_ss.rpt`, the shell notation this
+# corpus writes multi-artifact citations in — does not match this pattern AT
+# ALL, so it is not judged, not counted, and not reported. Measured over the
+# default scope: 284 such tokens across 36 of 328 documents, expanding to 608
+# paths, 12 of which carry an evidence extension and NONE of which resolve.
+#
+# The failure was invisible from outside by construction, which is what makes
+# it this campaign's own shape: the gate ran, produced a verdict, and the
+# verdict was green. `benchmark-data/ic/METHODOLOGY.md` is squarely in scope
+# and contributed ZERO citations — nothing in the output distinguished "I read
+# this document and its citations resolve" from "this document was never in my
+# population". See `_zero_citation_docs` below, which is the half of this fix
+# that makes the class un-recurrable rather than merely fixed.
+_CITE_RE = re.compile(r"`([A-Za-z0-9_./+{},-]+)`")
 
 # Tokens that are TEMPLATES / GLOBS, not citations of a specific artifact.
 # Judging these would manufacture findings against text that never claimed a
 # particular file exists.
+#
+# `\{[^}]*\}` STAYS, and the distinction it now draws is the whole fix: a
+# brace group WITH A COMMA names several specific artifacts
+# (`{setup,hold}.rpt` = two files), while a comma-less one is a placeholder
+# (`{run}.log` names none). That is not a judgement call — it is exactly what
+# a shell does: `echo {x}.log` prints `{x}.log` unexpanded, `echo {a,b}.log`
+# prints two paths. So comma groups are EXPANDED before this pattern runs and
+# comma-less ones reach it intact and are rejected as templates, as before.
+# Applied AFTER expansion, so a residual `*`, `?`, `<...>` or bare `N` is
+# rejected exactly as it always was.
 _TEMPLATE_RE = re.compile(r"[*?]|<[^>]*>|\{[^}]*\}|\bN\b")
+
+#: One brace group CONTAINING A COMMA, innermost-first. The comma is the
+#: load-bearing part — see `_TEMPLATE_RE`.
+_BRACE_RE = re.compile(r"\{([^{}]*,[^{}]*)\}")
+
+#: A citation may not expand without bound. A token with many nested groups is
+#: prose, not a citation, and expanding it would let one line of text dominate
+#: the denominator. Bounded LOUDLY: over the corpus the largest real expansion
+#: is 6, so 64 is ~10x headroom and anything above it is reported, never
+#: silently dropped.
+_MAX_EXPANSIONS = 64
+
+
+def expand_braces(tok: str) -> List[str]:
+    """`a/{x,y}.rpt` -> `['a/x.rpt', 'a/y.rpt']`; no braces -> `[tok]`.
+
+    Shell brace-expansion semantics, innermost group first, WITHOUT globbing:
+    this resolves what the author wrote, it does not consult the filesystem.
+    A token whose expansion exceeds `_MAX_EXPANSIONS` returns `[]` and is
+    reported by the caller rather than dropped.
+    """
+    m = _BRACE_RE.search(tok)
+    if not m:
+        return [tok]
+    out: List[str] = []
+    for alt in m.group(1).split(","):
+        out.extend(expand_braces(tok[:m.start()] + alt.strip() + tok[m.end():]))
+        if len(out) > _MAX_EXPANSIONS:
+            return []
+    return out
 
 # The baseline lives with the DATA it describes, not in plugin source: its
 # entries are benchmark-data document paths and therefore carry design names,
@@ -318,12 +373,26 @@ def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], 
     return out
 
 
-def scan(root: Path,
-         tracked: Optional[set] = None) -> Tuple[List[Dict[str, str]], int, int]:
-    """Return (dangling, cited_total, docs_scanned). Only TRACKED documents
-    are scanned and only TRACKED artifacts satisfy a citation when `tracked`
-    is available — see `tracked_files`."""
+def scan(root: Path, tracked: Optional[set] = None
+         ) -> Tuple[List[Dict[str, str]], int, int, List[str],
+                    List[Dict[str, str]]]:
+    """`(dangling, cited_total, docs_scanned, zero_citation_docs, oversize)`.
+
+    Only TRACKED documents are scanned and only TRACKED artifacts satisfy a
+    citation when `tracked` is available — see `tracked_files`.
+
+    `zero_citation_docs` IS PART OF THE VERDICT'S EVIDENCE, not a statistic
+    (vibe-ic#1044). A document that contributes no citation is the one shape
+    this gate cannot distinguish from a document it read and cleared, and that
+    indistinguishability is exactly how brace-notation blindness survived: the
+    gate reported `434 doc(s), 221 citation(s)` and PASS while `METHODOLOGY.md`
+    — in scope, 70 backticked tokens — contributed nothing. Reported now, so a
+    future notation this extractor cannot see shows up as a population that
+    moved rather than as a green run.
+    """
     dangling: List[Dict[str, str]] = []
+    zero_docs: List[str] = []
+    oversize: List[Dict[str, str]] = []
     disclosed = _disclosed_map(root, tracked)
     cited = 0
     docs = 0
@@ -342,15 +411,26 @@ def scan(root: Path,
         except OSError:
             continue
         docs += 1
-        for tok in _CITE_RE.findall(text):
-            if not _is_citation(tok):
+        _contributed = 0
+        for raw in _CITE_RE.findall(text):
+            expansions = expand_braces(raw)
+            if not expansions:
+                # over the bound: disclosed, never silently dropped
+                oversize.append({"doc": str(md.relative_to(root)),
+                                 "citation": raw})
                 continue
-            cited += 1
-            if resolve_citation(md, tok, root, tracked) is None:
-                _d = str(md.relative_to(root))
-                if (_d, tok) in disclosed:
+            for tok in expansions:
+                if not _is_citation(tok):
                     continue
-                dangling.append({"doc": _d, "citation": tok})
+                cited += 1
+                _contributed += 1
+                if resolve_citation(md, tok, root, tracked) is None:
+                    _d = str(md.relative_to(root))
+                    if (_d, tok) in disclosed:
+                        continue
+                    dangling.append({"doc": _d, "citation": tok})
+        if not _contributed:
+            zero_docs.append(str(md.relative_to(root)))
     _jsons = (sorted(root / t for t in tracked if t.lower().endswith(".json"))
               if tracked is not None else sorted(root.rglob("*.json")))
     for js in _jsons:
@@ -364,7 +444,7 @@ def scan(root: Path,
                 if (_d, tok) in disclosed:
                     continue
                 dangling.append({"doc": _d, "citation": f"[{field}] {tok}"})
-    return dangling, cited, docs
+    return dangling, cited, docs, zero_docs, oversize
 
 
 def _working_tree_dirt(root: Path) -> List[str]:
@@ -445,7 +525,7 @@ def main(argv=None) -> int:
     baseline_path = (Path(args.baseline) if args.baseline
                      else root.parent / _BASELINE_NAME)
     tracked = tracked_files(root)
-    dangling, cited, docs = scan(root, tracked)
+    dangling, cited, docs, zero_docs, oversize = scan(root, tracked)
     now = sorted({_key(d) for d in dangling})
 
     if args.write_baseline:
@@ -512,6 +592,13 @@ def main(argv=None) -> int:
         "docs_scanned": docs,
         "citations_checked": cited,
         "unresolved_total": len(now),
+        # THE DENOMINATOR, per vibe-ic#1044. A gate that says PASS without
+        # saying over WHAT is unfalsifiable, and this repo has ruled on that
+        # (`gate_zero_denominator_refuses_check`). `docs_contributing_zero` is
+        # the number that would have exposed the brace blindness on the day it
+        # was introduced.
+        "docs_contributing_zero_citations": len(zero_docs),
+        "oversize_tokens": oversize,
         "baseline_size": (len(base) if base is not None else None),
         "new_dangling": findings,
         "stale_baseline_entries": stale,
@@ -522,6 +609,15 @@ def main(argv=None) -> int:
 
     print(f"evidence_citation_resolves_check: {docs} doc(s), "
           f"{cited} citation(s) checked under {root}")
+    print(f"  contributed 0  : {len(zero_docs)} of {docs} document(s) yielded "
+          f"NO citation this extractor can see — not evidence of cleanliness, "
+          f"and the number that exposes a notation it is blind to (#1044)")
+    if oversize:
+        print(f"  NOT expanded   : {len(oversize)} token(s) over the "
+              f"{_MAX_EXPANSIONS}-path expansion bound, listed so a bound is "
+              f"never a silent drop:")
+        for o in oversize[:5]:
+            print(f"     {o['doc']} :: {o['citation'][:90]}")
     if not explicit_root:
         print(f"  NOT scanned    : {_DISCLOSED_OUT_OF_SCOPE[0]} — "
               f"{_DISCLOSED_OUT_OF_SCOPE[1]}")

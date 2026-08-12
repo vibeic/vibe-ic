@@ -485,3 +485,69 @@ def test_the_exemption_requires_an_EXPLICIT_false(tmp_path):
     r = _run(root, tmp_path / "bl.json")
     assert r.returncode == 1, r.stdout
     assert "gone.sby" in r.stdout and "also_gone.sby" in r.stdout
+
+
+# ── #1044: the notation the extractor could not see ──────────────────────────
+
+def test_a_dangling_BRACE_citation_reddens(tmp_path):
+    """THE PAIRED GUARD. `{setup,hold}_ss.rpt` names two specific artifacts,
+    and before #1044 the token did not match `_CITE_RE` at all — `{`, `}` and
+    `,` were outside its character class — so it was never judged, never
+    counted, and never reported. The gate ran and said PASS.
+
+    Measured over the default scope on the day this landed: 284 brace tokens
+    across 36 of 328 documents, expanding to 608 paths, 12 of them carrying an
+    evidence extension and NONE resolving. `benchmark-data/ic/METHODOLOGY.md`
+    is squarely in scope and contributed ZERO citations.
+    """
+    _doc(tmp_path, "EV.md", "corners `sta/{setup,hold}_ss.rpt`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "sta/setup_ss.rpt" in r.stdout and "sta/hold_ss.rpt" in r.stdout, r.stdout
+
+
+def test_a_brace_citation_whose_artifacts_EXIST_passes(tmp_path):
+    """The other direction, without which the guard above is satisfied by a
+    gate that simply reddens on every brace."""
+    _doc(tmp_path, "EV.md", "corners `sta/{setup,hold}_ss.rpt`\n")
+    for name in ("setup_ss.rpt", "hold_ss.rpt"):
+        p = tmp_path / "sta" / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_COMMA_LESS_brace_is_still_a_template(tmp_path):
+    """`{run}.log` names no particular file and a shell does not expand it
+    either: `echo {x}.log` prints `{x}.log`. Expanding it would manufacture a
+    finding against text that promised nothing — the failure mode the template
+    rule exists to prevent. The comma is the discriminator, not the brace."""
+    _doc(tmp_path, "EV.md", "placeholder `{run}.log` and `pre_{x}_post.rpt`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+
+
+def test_the_gate_states_how_many_documents_yielded_NOTHING(tmp_path):
+    """The denominator #1044 asks for. A gate that says PASS without saying
+    over what is unfalsifiable (`gate_zero_denominator_refuses_check` ruled on
+    this), and this is the specific number that would have exposed the brace
+    blindness the day it appeared: a document in scope, read, contributing no
+    citation, and indistinguishable in the output from one that was checked
+    and cleared."""
+    _doc(tmp_path, "HAS.md", "see `a.log`\n")
+    (tmp_path / "a.log").write_text("x")
+    _doc(tmp_path, "NONE.md", "prose with no citation at all\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "contributed 0  : 1 of 2 document(s)" in r.stdout, r.stdout
+
+
+def test_an_unbounded_expansion_is_disclosed_not_dropped(tmp_path):
+    """A bound that truncates in silence reads as 'covered everything'. This
+    one announces what it declined to expand."""
+    huge = "`" + "/".join("{a,b}" for _ in range(8)) + ".log`"
+    _doc(tmp_path, "EV.md", f"see {huge}\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert "NOT expanded" in r.stdout, r.stdout
+    assert str(E._MAX_EXPANSIONS) in r.stdout, r.stdout
