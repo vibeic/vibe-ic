@@ -1,0 +1,10 @@
+name: probe-actions-alive
+on:
+  push:
+    branches: ['probe/actions-alive-*']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "actions scheduling is alive"
