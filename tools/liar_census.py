@@ -291,18 +291,98 @@ def discover_clauses(flow_yaml: Path) -> List[Clause]:
     return out
 
 
+#: Gate-clause spellings this census does NOT discover. Named, counted and
+#: PRINTED, because #1054's most useful finding was not a repaired rule — it was
+#: that a probe had been scanning the wrong POPULATION and reporting a confident
+#: zero over it. A denominator nobody states is the next check that lies.
+_UNSEEN_KINDS = ("optional_program_exit_zero",)
+
+
+def undiscovered_clauses(flow_yaml: Path) -> Dict[str, List[str]]:
+    """Gate clauses the flow declares that `discover_clauses` does NOT return.
+
+    Two shapes, both real and both measured on the current flow:
+
+      * `optional_program_exit_zero` — a whole third clause kind, 28 of them,
+        each carrying its own `command` and `condition_files_exist`. Step 4
+        alone declares three. `flow_compliance_check` runs them
+        (`_GATE_KINDS` lists all three); this census has never looked at one.
+      * the MAPPING form of the two kinds it does discover — `{command: …}`
+        instead of a bare string. `discover_clauses` requires
+        `isinstance(val, str)`, so 3 more clauses fall out silently, one of
+        them a BLOCKING `program_exit_zero` (`clock_plan_check`).
+
+    Reported, not fixed here: scoring 31 more clauses moves every number in
+    this instrument's published table, and that needs its own before/after
+    rather than riding on a probe change.
+    """
+    import yaml  # noqa: PLC0415
+
+    doc = yaml.safe_load(flow_yaml.read_text(errors="replace"))
+    missed: Dict[str, List[str]] = {}
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, val in node.items():
+                cmd = None
+                if key in _UNSEEN_KINDS:
+                    cmd = val.get("command") if isinstance(val, dict) else val
+                elif (key in ("program_exit_zero", "advisory_program_exit_zero")
+                      and not isinstance(val, str)):
+                    cmd = val.get("command") if isinstance(val, dict) else str(val)
+                if cmd:
+                    missed.setdefault(key, []).append(str(cmd))
+                walk(val)
+        elif isinstance(node, list):
+            for val in node:
+                walk(val)
+
+    walk(doc)
+    return missed
+
+
 # --------------------------------------------------------------- invocation
+def _expand_globs_like_the_flow(args: List[str], project: Path) -> List[str]:
+    """The consumer's own argument expansion, IMPORTED, never reimplemented.
+
+    `flow_compliance_check.__check_program_exit_zero` does not hand the clause's
+    argv to the gate verbatim: it goes through `_resolve_program_cmd`, which
+    `shlex.split`s the string and expands globs relative to the project with
+    bash `nullglob` semantics. Twenty-two of the 136 clauses carry a glob
+    (`rtl_hygiene_lint phase2/stage1/rtl/*.sv …`), and a census that passed the
+    literal `*.sv` would be measuring an invocation nobody runs — the gate would
+    lint zero files and PASS, and the census would score that as the gate's
+    behaviour rather than as its own.
+
+    Degrades LOUDLY, exactly like `_consumer_reads_the_refusal`: if the consumer
+    cannot be imported, the census says so on stderr and falls back to verbatim
+    args, which UNDER-drives every globbed clause.
+    """
+    try:
+        sys.path.insert(0, str(PLUGIN / "programs"))
+        from flow_compliance_check import _expand_globs  # noqa: PLC0415
+    except Exception as exc:                                   # pragma: no cover
+        print(f"liar_census: CANNOT IMPORT the flow's argument expander ({exc}) — "
+              f"globbed clauses will be handed a literal pattern, which is NOT how "
+              f"the flow runs them; this run UNDER-drives them", file=sys.stderr)
+        return list(args)
+    return _expand_globs(list(args), project)
+
+
 def _argv_for(cmd: str, project: Path) -> List[str]:
     """Turn a clause command string into an argv, exactly as the flow would run it.
 
     The clause is written relative to a project root (`prog . --json reports/x.json`),
-    so `.` means the tree under test. We keep the clause VERBATIM -- rewriting it here
-    would be measuring an invocation nobody actually runs, which is the error that made
-    `--root` return a confident `[PASS] 504 cells` for a question nobody asked.
+    so `.` means the tree under test. We keep the clause's ARGUMENTS verbatim -- with
+    the single exception of the glob expansion the consumer itself performs, above.
+    Rewriting anything else here would be measuring an invocation nobody actually runs,
+    which is the error that made `--root` return a confident `[PASS] 504 cells` for a
+    question nobody asked.
     """
-    parts = cmd.split()
+    import shlex  # noqa: PLC0415
+    parts = shlex.split(cmd)
     prog = PROGRAMS / f"{parts[0]}.py"
-    return [sys.executable, str(prog)] + parts[1:]
+    return [sys.executable, str(prog)] + _expand_globs_like_the_flow(parts[1:], project)
 
 
 def _run(cmd: str, project: Path, timeout: int = 60) -> Tuple[int, str]:
@@ -602,6 +682,448 @@ def probe_selector_reaches_fixtures(cl: Clause) -> ProbeResult:
     return ProbeResult("selector_reaches_fixtures", CLEAN, "no unbounded walk", repro)
 
 
+# ------------------------------------------- shape 12: proxy, not property
+#: SHAPE 12 — "every step is correct, it is simply answering a different
+#: question." The hardest of the twelve and the most common. Its instances in
+#: this repo are all the same silhouette:
+#:
+#:   * vibe-ic#663  — wanting "can current reach this pin" and measuring
+#:     "does the pin's net pointer resolve". `PG_NET_OWNERSHIP_AUDIT: no_net=0`
+#:     answered its own question correctly; the rail it certified had ZERO
+#:     geometry. (It was published as `PG_CONNECT_AUDIT: unconnected=0` — "N/N
+#:     connected" — through v1.9.62, which is the same defect in the LABEL.)
+#:   * vibe-ic#1012 — wanting "is this checker wired into the flow" and
+#:     measuring "does its name appear in the flow file's bytes", so a COMMENT
+#:     counted. That one is in this file's own founding list.
+#:   * vibe-ic#1011 — wanting "was a DFT requirement stated" and measuring
+#:     "does the token appear", so a sentence DENYING it counted as evidence FOR
+#:     it.
+#:   * `gds_size_check` — wanting "is this a layout" and measuring "is the file
+#:     over 100 KB". `gds_substance_check`'s docstring records the measurement:
+#:     150 KB of `os.urandom()` behind a 4-byte HEADER signs off clean.
+#:
+#: WHAT IS AND IS NOT MECHANISABLE HERE
+#: ------------------------------------
+#: Deciding in general whether a gate's question IS the flow's question needs
+#: the flow's intent, and no amount of AST gets there. Building a probe that
+#: pretended to decide it would itself be shape 12 — a measurement of something
+#: adjacent, reported as the answer — so this file does not have one.
+#:
+#: What IS decidable is the strictly weaker, strictly observable question:
+#:
+#:     given a project, does the gate's PASS actually depend on that project?
+#:
+#: A gate cannot be measuring the property if its verdict never touched the
+#: artefact, and it cannot be measuring CONTENT if the same verdict survives
+#: the content being replaced. Both are NECESSARY conditions, never sufficient:
+#: a gate that reads every byte can still be answering the wrong question, and
+#: this census cannot tell. That residue is stated in the summary, with the
+#: cases found by hand, rather than papered over with a probe.
+_SEED_BY_SUFFIX = {
+    ".json": b'{"liar_census_seed": true, "items": [], "n": 0}\n',
+    ".yaml": b"liar_census_seed: true\nitems: []\n",
+    ".yml": b"liar_census_seed: true\nitems: []\n",
+    ".md": b"# liar_census seed\n\nA declared output, present and shaped.\n",
+    ".v": b"module liar_census_seed (input wire a, output wire y);\n"
+          b"  assign y = a;\nendmodule\n",
+    ".sv": b"module liar_census_seed (input wire a, output wire y);\n"
+           b"  assign y = a;\nendmodule\n",
+}
+_SEED_DEFAULT = b"# liar_census seed: a declared output, present and shaped.\n" + b"#\n" * 24
+
+
+def _seed_bytes(rel: str) -> bytes:
+    return _SEED_BY_SUFFIX.get(Path(rel).suffix.lower(), _SEED_DEFAULT)
+
+
+def _mutant_bytes(rel: str, n: int) -> bytes:
+    """Different bytes, IDENTICAL length. Deterministic, so the repro reproduces.
+
+    Length is held fixed on purpose: it is what separates "the verdict depends
+    on the content" from "the verdict depends on the file being N bytes long",
+    and the second is `gds_size_check`'s exact shape.
+    """
+    import hashlib  # noqa: PLC0415
+    block = hashlib.sha256(rel.encode()).digest()
+    return (block * (n // len(block) + 1))[:n]
+
+
+#: flags whose value is where the gate WRITES, not what it reads. A gate's own
+#: report is not its subject, and seeding it would put the census's bytes where
+#: the gate is about to put its own.
+_OUTPUT_FLAGS = {"--json", "--out", "--output", "--report", "--report-json",
+                 "--coverage-json", "--out-json", "--summary-json"}
+
+
+def _looks_like_a_path(tok: str) -> bool:
+    return ("/" in tok or any(ch in tok for ch in "*?")) and not tok.startswith("-")
+
+
+def clause_subject_paths(cl: Clause) -> Tuple[List[str], List[str]]:
+    """What the FLOW points this clause at, and where it tells it to write.
+
+    Both come out of the clause command string the flow itself declares, plus
+    the enclosing step's `required_outputs` — never a per-gate table.
+
+    The distinction matters and getting it wrong is how this probe would commit
+    its own shape 12: `required_outputs` is frequently the gate's OWN REPORT
+    (`rtl_hygiene_lint` declares `reports/phase2/lint/rtl_hygiene.json`), while
+    its SUBJECT is the positional argument beside it
+    (`phase2/stage1/rtl/*.sv`). Seeding the report and calling it the subject
+    would measure whether the gate reads its own output.
+    """
+    subjects: List[str] = []
+    outputs: List[str] = []
+    parts = cl.cmd.split()[1:]
+    i = 0
+    while i < len(parts):
+        tok = parts[i]
+        if tok in _OUTPUT_FLAGS and i + 1 < len(parts):
+            outputs.append(parts[i + 1])
+            i += 2
+            continue
+        if _looks_like_a_path(tok):
+            subjects.append(tok)
+        i += 1
+    for pat in cl.step_outputs:
+        if pat not in outputs:
+            subjects.append(pat)
+    return subjects, outputs
+
+
+def _concrete(pat: str) -> List[str]:
+    """Concrete instances of a declared path pattern, deterministically.
+
+    Two flow spellings are honoured, and BOTH are read the way the consumer
+    reads them rather than invented here:
+
+      * `" OR "` is the flow's ANY-OF separator inside a single
+        `required_outputs` entry (`flow_compliance_check`: "the ` OR ` spelling
+        exists for one artefact with two accepted names"). Every alternative is
+        materialised — a tree may legitimately carry all of them, and seeding
+        more of the gate's possible subjects makes a "never read it" finding
+        harder to reach, not easier. Splitting on it was not optional: without
+        it the census wrote ONE file whose NAME was the whole `A OR B OR C`
+        string, and then reported what the gate did with that.
+      * a glob declares that SOME file matching it must exist, so materialising
+        one instance is an instance of the declaration, not an invention.
+        Skipping globs instead would drop whole steps — every one of step 37's
+        outputs is a glob — and report the gap as coverage. `**` and `*`
+        collapse to one fixed token so the name is stable and the repro line
+        reproduces.
+    """
+    out: List[str] = []
+    for alt in str(pat).split(" OR "):
+        alt = alt.strip()
+        if not alt or alt.startswith(("/", "~")) or ".." in alt.split("/"):
+            continue                     # never write outside the sandbox
+        rel = re.sub(r"\*\*/?", "liar_census_seed/", alt)
+        rel = rel.replace("*", "liar_census_seed").replace("?", "x")
+        rel = re.sub(r"\[([^\]]+)\]", lambda m: m.group(1)[0], rel)
+        rel = re.sub(r"/+", "/", rel).strip("/")
+        if rel:
+            out.append(rel)
+    return out
+
+
+def seed_declared_tree(root: Path, cl: Clause, mutate: bool = False) -> List[str]:
+    """A project carrying every artefact the flow points this clause at.
+
+    Returns the project-relative paths actually written — the manifest the
+    probes use as ground truth for "this file existed when the gate looked".
+    """
+    seed_minimal_tree(root)
+    subjects, _outputs = clause_subject_paths(cl)
+    written: List[str] = []
+    for pat in subjects:
+        for rel in _concrete(pat):
+            dest = root / rel
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                payload = _seed_bytes(rel)
+                dest.write_bytes(_mutant_bytes(rel, len(payload)) if mutate else payload)
+            except OSError:
+                continue
+            written.append(rel)
+    return sorted(set(written))
+
+
+@dataclass
+class Trace:
+    """What one traced invocation actually did to the project it was pointed at."""
+    rc: int
+    out: str
+    instrumentation: str
+    read: List[str] = field(default_factory=list)
+    wrote: List[str] = field(default_factory=list)
+    looked: List[str] = field(default_factory=list)
+    spawned: bool = False
+
+    @property
+    def usable(self) -> bool:
+        return self.instrumentation == "COMPLETE" and not self.spawned and self.rc != 70
+
+
+TRACE_SHIM = HERE / "_liar_census_trace.py"
+
+
+def _run_traced(cmd: str, project: Path, timeout: int = 60) -> Trace:
+    """`_run`, but with `_liar_census_trace` recording every file the gate touched.
+
+    Still a subprocess, still `cwd=project`, still the clause command VERBATIM —
+    the only difference from `_run` is the shim wrapper inside it.
+    """
+    base = _argv_for(cmd, project)          # same resolution as `_run`, glob expansion included
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as fh:
+        tracef = Path(fh.name)
+    try:
+        argv = [sys.executable, str(TRACE_SHIM), base[1], str(tracef)] + base[2:]
+        try:
+            proc = subprocess.run(
+                argv, cwd=str(project), capture_output=True, text=True, timeout=timeout,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+            rc, out = proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        except subprocess.TimeoutExpired:
+            return Trace(124, "<TIMEOUT>", "INCOMPLETE: timed out")
+        except OSError as exc:
+            return Trace(127, f"<NOT RUNNABLE: {exc}>", "INCOMPLETE: not runnable")
+        try:
+            payload = json.loads(tracef.read_text())
+        except (OSError, ValueError):
+            return Trace(rc, out, "INCOMPLETE: the shim wrote no trace")
+    finally:
+        tracef.unlink(missing_ok=True)
+
+    tr = Trace(rc=payload.get("rc", rc), out=out,
+               instrumentation=str(payload.get("instrumentation", "INCOMPLETE: absent")))
+    proj = os.path.realpath(project)
+    for raw, channels in (payload.get("touched") or {}).items():
+        if "spawn" in channels:
+            tr.spawned = True
+        full = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(proj, raw))
+        if not (full == proj or full.startswith(proj + os.sep)):
+            continue                    # the PDK, the plugin, the stdlib: not the subject
+        rel = os.path.relpath(full, proj)
+        if "read" in channels:
+            tr.read.append(rel)
+        if "write" in channels:
+            tr.wrote.append(rel)
+        if "look" in channels:
+            tr.looked.append(rel)
+    for lst in (tr.read, tr.wrote, tr.looked):
+        lst[:] = sorted(set(lst))
+    return tr
+
+
+def _shape12_na(reason: str, repro: str) -> List[ProbeResult]:
+    return [ProbeResult("pass_without_reading", NA, reason, repro),
+            ProbeResult("content_blind_pass", NA, reason, repro)]
+
+
+def probe_proxy_not_property(cl: Clause, tmp: Path, idx: int,
+                             timeout: int) -> List[ProbeResult]:
+    """P6+P7 — shape 12, in the only two forms that can be OBSERVED rather than argued.
+
+    Both run over a tree seeded with everything the flow declares this step
+    produces, so the gate is looking at a project that has the evidence its own
+    step is supposed to leave behind.
+
+    P6 `pass_without_reading` — the gate returned 0 and never opened a single
+    file inside the project. Whatever it measured, it was not this project.
+    Two tiers, and the second is deliberately the weaker verdict:
+
+      NEVER TOUCHED   no read, no write, no stat, no listdir inside the tree.
+                      The verdict is a function of argv. LIAR if BLOCKING.
+      LOOKED, NEVER READ  it stat'd or listed a file that WAS THERE and never
+                      opened it: existence stood in for substance. Scored
+                      SUSPECT and never LIAR, because a gate whose declared
+                      property IS presence is measuring exactly the right
+                      thing, and NOTHING IN THE STRUCTURE DISTINGUISHES THE
+                      TWO. Saying otherwise would be this probe committing
+                      shape 12 on its way to reporting it.
+
+    P7 `content_blind_pass` — the CONTROL on P6, and the only construct here
+    that demonstrates rather than infers. Run again on a tree differing in
+    exactly one respect: the bytes inside the seeded artefacts, at IDENTICAL
+    length. Holding length fixed separates "the verdict reads the file" from
+    "the verdict reads the file's SIZE" — the second is `gds_size_check`'s exact
+    shape (150 KB of `os.urandom()` behind a HEADER record signs off clean, per
+    `gds_substance_check`'s own measurement).
+
+    P7 IS SCORED ONLY WHERE P6 ALREADY FIRED, and that restriction is not
+    timidity — it is the correction of a real false positive this probe had
+    when it was written the obvious way. `l_doc_todo_stub_count_check` READS
+    every L-doc, counts `TODO`, and passes on both arms because neither arm
+    contains a TODO. Its verdict is perfectly content-sensitive; the mutation
+    simply handed it a second compliant input. A byte-scramble is not a
+    SEMANTIC mutation — it cannot turn a conformant artefact into a
+    non-conformant one, only into a different conformant one — so "the verdict
+    did not move" is evidence of nothing on its own. Where P6 has already
+    established that the gate never opened the file, P7 turns that inference
+    into a demonstration; everywhere else it reports CLEAN and says what it
+    could not decide.
+
+    WHAT IS DROPPED, AND IT IS PRINTED
+    ----------------------------------
+    Neither probe scores a clause that:
+      * SPAWNED A CHILD PROCESS — the audit hook does not follow children, so a
+        gate whose real reading happens in `klayout`/`yosys` looks like a gate
+        that read nothing. Accusing it would be the census reporting its own
+        blindness as a finding.
+      * ran under INCOMPLETE instrumentation (a `stat` channel that failed its
+        own self-test on this host),
+      * crashed, timed out, or is not runnable,
+      * did not PASS on the seeded tree — there is no PASS whose basis could be
+        tested, and P7 has nothing to hold constant,
+      * has NO path the flow points it at, so the tree carries nothing to read.
+    Every one is counted and listed under DROPPED in the summary. A bounded
+    probe that does not say what it skipped reads as coverage it never had.
+
+    TWO GUARDS, both structural, both found the way #1054 found its own
+    -------------------------------------------------------------------
+    * DISCLOSED VACUITY — a gate may print `VACUOUS_PASS:` and still exit 0;
+      `flow_compliance_check` reads that on the passing path and records
+      VACUOUS_PASS, not PASS. Such a gate is not certifying the project, it is
+      declining to, out loud, on the channel the flow actually reads. The
+      predicate is IMPORTED from the consumer, never restated.
+    * ASSERTS ABSENCE — this probe's fail-safe class, and it is the same one
+      #1051's `empty_tree` probe had: a gate whose property is that a forbidden
+      artefact is NOT THERE reads nothing because there is nothing to read, and
+      that is the correct behaviour, not a proxy. Decided by structure, not by
+      name: if the gate performed no read at all and EVERY path it looked at
+      inside the project was ABSENT from the seeded tree, its subject is
+      absence. `analog_a0_skip_forbidden_check` is the live instance —
+      `[PASS] forbidden A0_skip_decision.json not present`.
+
+      THE GUARD'S OWN LIMIT, measured rather than assumed. It cannot separate
+      "this artefact is forbidden and is correctly absent" from "my evidence
+      was missing, so I passed", because from outside the two are the same
+      trace. `professional_tb_check` is the second kind and is forgiven here:
+      `NOT_APPLICABLE: no professional_tb.json (step did not run)`, rc 0,
+      BLOCKING at step 4. A presence-flip experiment was tried as a
+      discriminator and does not work — materialising the path with generic
+      content leaves BOTH gates at rc 0, since neither `{}` nor random bytes is
+      a skip verdict or a TB report. So the guard forgives and PRINTS, and the
+      adjudication is a human's. Guessing between them would be this probe
+      doing the thing it exists to report.
+    """
+    repro = (f"python3 tools/_liar_census_trace.py programs/{cl.program}.py /tmp/t.json "
+             f"{' '.join(cl.cmd.split()[1:])}  # in a tree seeded with the step's "
+             f"required_outputs; then again with those files' bytes replaced at equal length")
+
+    seed_dir = tmp / f"s12a{idx}"
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    manifest = seed_declared_tree(seed_dir, cl)
+    if not manifest:
+        return _shape12_na("dropped: the flow points this clause at no path at all, "
+                           "so there is nothing to seed and nothing to mutate", repro)
+    present = {os.path.relpath(str(p), str(seed_dir))
+               for p in seed_dir.rglob("*") if p.is_file()}
+
+    ta = _run_traced(cl.cmd, seed_dir, timeout)
+    if ta.rc in (70, 124, 127):
+        return _shape12_na(f"dropped: not observable (rc={ta.rc}) — {ta.out.strip()[:120]}", repro)
+    if ta.spawned:
+        return _shape12_na("dropped: the gate spawned a child process, and this hook does "
+                           "not follow children — its real reading may all be in there", repro)
+    if ta.instrumentation != "COMPLETE":
+        return _shape12_na(f"dropped: {ta.instrumentation} — a partly blind instrument "
+                           f"must not produce a finding", repro)
+    if ta.rc != 0:
+        return _shape12_na(f"dropped: does not PASS on the seeded tree (rc={ta.rc}), so there "
+                           f"is no PASS whose basis can be tested", repro)
+    if _consumer_reads_the_refusal(ta.out):
+        line = next((l.strip() for l in ta.out.splitlines() if _REFUSAL_LEAD.match(l)), "")
+        return [ProbeResult("pass_without_reading", GUARDED,
+                            f"exits 0 having read nothing, but discloses it on the channel "
+                            f"flow_compliance_check reads on the passing path, so the flow "
+                            f"records VACUOUS_PASS rather than PASS — {line[:90]!r}", repro),
+                ProbeResult("content_blind_pass", GUARDED,
+                            "same disclosure — the flow does not record this as a PASS", repro)]
+
+    # ---- P6
+    looked_at_something_there = sorted(set(ta.looked) & present)
+    # A path still carrying a glob metacharacter is a PATTERN the gate stat'd,
+    # not a file it found missing, so it can never be evidence that the gate's
+    # subject is an absence.
+    looked_concrete = [p for p in ta.looked if not any(c in p for c in "*?[")]
+    if not ta.read and looked_concrete and not looked_at_something_there:
+        guard = ProbeResult(
+            "pass_without_reading", GUARDED,
+            f"reads nothing, but every one of the {len(ta.looked)} path(s) it looked at "
+            f"inside the project was ABSENT ({', '.join(ta.looked[:3])}) — its subject may "
+            f"BE the absence, and a gate asserting a forbidden artefact is not there has "
+            f"nothing to read. THE GUARD CANNOT SEPARATE THAT from 'my evidence was "
+            f"missing, so I passed': both look identical from outside. Forgiven here and "
+            f"listed for a human, because a probe that guesses between them is the shape "
+            f"this census reports. Measured example of the second kind, adjudicated by "
+            f"hand: professional_tb_check → 'NOT_APPLICABLE: no professional_tb.json "
+            f"(step did not run)', rc 0, BLOCKING at step 4",
+            repro)
+        shutil.rmtree(seed_dir, ignore_errors=True)
+        return [guard, ProbeResult("content_blind_pass", GUARDED,
+                                   "same: a verdict about absence is content-blind by "
+                                   "construction, which is correct, not a finding", repro)]
+
+    if not (ta.read or ta.looked or ta.wrote):
+        sev = LIAR if cl.blocking else SUSPECT
+        p6 = ProbeResult(
+            "pass_without_reading", sev,
+            f"exits 0 over a project carrying all {len(manifest)} artefact(s) the flow "
+            f"points it at, and never opened, stat'd or listed ANY path inside it — the "
+            f"verdict is not a function of the project it was pointed at",
+            repro)
+    elif not ta.read and looked_at_something_there:
+        p6 = ProbeResult(
+            "pass_without_reading", SUSPECT,
+            f"exits 0 having LOOKED at {len(looked_at_something_there)} artefact(s) that "
+            f"were present ({', '.join(looked_at_something_there[:3])}) and READ none of "
+            f"them — existence stood in for substance. SUSPECT and never LIAR: a gate whose "
+            f"declared property IS presence measures exactly this, and nothing in the "
+            f"structure distinguishes the two",
+            repro)
+    else:
+        p6 = ProbeResult("pass_without_reading", CLEAN,
+                         f"read {len(ta.read)} path(s) inside the project", repro)
+
+    # ---- P7: the control on P6. Same paths, same lengths, different bytes.
+    if p6.verdict not in (LIAR, SUSPECT):
+        shutil.rmtree(seed_dir, ignore_errors=True)
+        return [p6, ProbeResult(
+            "content_blind_pass", CLEAN,
+            f"not scored: the gate read {len(ta.read)} path(s), so a byte-scramble at equal "
+            f"length cannot decide anything — it produces a DIFFERENT COMPLIANT input, not a "
+            f"violating one, and an unchanged verdict over it is evidence of nothing",
+            repro)]
+
+    mut_dir = tmp / f"s12b{idx}"
+    mut_dir.mkdir(parents=True, exist_ok=True)
+    seed_declared_tree(mut_dir, cl, mutate=True)
+    tb = _run_traced(cl.cmd, mut_dir, timeout)
+    if not tb.usable or tb.rc in (124, 127):
+        p7 = ProbeResult("content_blind_pass", NA,
+                         f"dropped: the mutated arm was not observable (rc={tb.rc}, "
+                         f"{tb.instrumentation})", repro)
+    elif tb.rc == 0 and not _consumer_reads_the_refusal(tb.out):
+        p7 = ProbeResult(
+            "content_blind_pass", p6.verdict,      # a confirmation, not a second charge
+            f"CONFIRMED by mutation, not inferred: the same PASS comes back when all "
+            f"{len(manifest)} artefact(s) have their bytes replaced at UNCHANGED length, so "
+            f"the verdict is a function of presence and size, never of content",
+            repro)
+    else:
+        p7 = ProbeResult("content_blind_pass", CLEAN,
+                         f"REFUTES the P6 finding on this clause — the verdict moved when "
+                         f"the bytes moved (rc {ta.rc} → {tb.rc}), so the gate is reading "
+                         f"content through a path this hook did not attribute to it",
+                         repro)
+
+    shutil.rmtree(seed_dir, ignore_errors=True)
+    shutil.rmtree(mut_dir, ignore_errors=True)
+    return [p6, p7]
+
+
 # --------------------------------------------------------------- harness
 def seed_minimal_tree(root: Path) -> Path:
     """A tree that LOOKS like a project but contains no evidence.
@@ -642,13 +1164,20 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int) -> List[C
                 shutil.rmtree(sb, ignore_errors=True)
             if "selector" in probes:
                 rep.probes.append(probe_selector_reaches_fixtures(cl))
+            if "proxy" in probes:
+                rep.probes.extend(probe_proxy_not_property(cl, Path(tmp), i, timeout))
             reports.append(rep)
             print(f"  [{i}/{len(clauses)}] step {cl.step:>4}  {cl.program[:52]:<52} {rep.worst}",
                   file=sys.stderr, flush=True)
     return reports
 
 
-ALL_PROBES = ["empty", "prose", "zero", "writes", "selector"]
+ALL_PROBES = ["empty", "prose", "zero", "writes", "selector", "proxy"]
+
+#: probes whose N/A is a BOUNDED COVERAGE decision rather than an inapplicable
+#: question — every one of these has to be listed, with its reason, or the run
+#: reads as coverage it never had.
+_BOUNDED = ("pass_without_reading", "content_blind_pass")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -671,6 +1200,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     probes = [p.strip() for p in args.probes.split(",") if p.strip()]
+    missed = undiscovered_clauses(args.flow)
+    n_missed = sum(len(v) for v in missed.values())
     print(f"liar_census: {len(clauses)} clause(s) x {len(probes)} probe(s)", file=sys.stderr)
     reports = run_census(clauses, probes, args.timeout)
 
@@ -689,6 +1220,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  SUSPECT  {len(suspects):>4}")
     print(f"  GUARDED  {len(guarded):>4}   ({discounted} probe result(s) declined, listed below)")
     print(f"  CLEAN    {len(reports) - len(liars) - len(suspects) - len(guarded):>4}")
+    # THE DENOMINATOR, stated. A census that prints only what it scored reads
+    # as a census over everything.
+    if n_missed and not args.only:
+        print()
+        print(f"  POPULATION — {len(reports)} of {len(reports) + n_missed} gate clauses the "
+              f"flow declares. NOT scored by ANY probe:")
+        for kind, cmds in sorted(missed.items()):
+            print(f"    {len(cmds):>4}  {kind}   e.g. {cmds[0].split()[0]}")
     print()
     for r in liars + suspects:
         tag = "BLOCKING" if r.kind == "program_exit_zero" else "advisory"
@@ -712,6 +1251,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print(f"      {p.detail}")
         print()
 
+    # BOUNDED COVERAGE, printed. `probe_proxy_not_property` scores only the
+    # clauses it can actually observe, and silent truncation reads as "covered
+    # everything" when it did not. Every drop is named with its reason.
+    dropped = [(r, p) for r in reports for p in r.probes
+               if p.probe in _BOUNDED and p.verdict == NA]
+    if dropped:
+        scored = sum(1 for r in reports for p in r.probes
+                     if p.probe in _BOUNDED and p.verdict != NA)
+        print("-" * 78)
+        print(f"DROPPED — {len(dropped)} shape-12 probe result(s) NOT scored "
+              f"({scored} were). These are coverage this run does NOT have:")
+        why: Dict[str, int] = {}
+        for _r, p in dropped:
+            why[p.detail.split("—")[0].strip()] = why.get(p.detail.split("—")[0].strip(), 0) + 1
+        for reason, n in sorted(why.items(), key=lambda kv: -kv[1]):
+            print(f"  {n:>4}  {reason}")
+        print()
+
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(
@@ -719,6 +1276,7 @@ def main(argv: Optional[List[str]] = None) -> int:
              "liar": len(liars), "suspect": len(suspects),
              "guarded": len(guarded), "declined_probe_results": discounted,
              "blocking_liar": len(blocking_liars),
+             "dropped_probe_results": len(dropped),
              "reports": [asdict(r) for r in reports]}, indent=1), encoding="utf-8")
 
     return 1 if liars else 0
