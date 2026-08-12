@@ -1,7 +1,0 @@
-{
-  "verdict": "SKIPPED-CONDITION",
-  "reason": "real scan-chain insertion did not produce a publishable netlist (rc=1): `fault chain` produced no scan netlist",
-  "tool_attempted": true,
-  "skips_required_output": "phase2/stage2/dft/scan_netlist.v",
-  "scan_chain_report": "reports/phase2/dft/scan_chain.json"
-}
