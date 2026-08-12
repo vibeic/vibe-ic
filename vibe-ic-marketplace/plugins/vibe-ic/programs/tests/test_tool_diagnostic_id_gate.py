@@ -310,5 +310,133 @@ def test_the_census_shape_folds_into_per_step_metrics(tmp_path):
     assert flat["reports/phase3__tool__warnings__count:RSZ-0104"] == 1
 
 
+# ===========================================================================
+# ANTI-ROT: the three claims this gate makes ABOUT THE REPOSITORY
+#
+# Everything above is decided on a fixture this file owns, which is why it is
+# host-independent. These three are different in kind: they are the statements
+# the docstring and the acceptance list make about the TREE, and the first draft
+# of both got every one of them wrong — 1068 `*.log` (57), 86,449 `Warning 1650`
+# (0, and the only four in the repository were inside this feature's own two
+# files), thirteen prefixes (16), 1,183 `DRT-0036` (692), and a worked example
+# naming two cells that do not exist. Prose cannot be trusted to stay true, so
+# each claim is re-derived here and a drift is a RED, not a stale sentence.
+# ===========================================================================
+REPO_ROOT = PLUGIN_ROOT.parents[2]
+BD_IC = REPO_ROOT / "benchmark-data" / "ic"
+
+
+def _published_cells():
+    """Every `benchmark-data/ic/<IC>/v<ver>_<PDK>/` this commit carries."""
+    if not BD_IC.is_dir():
+        return []
+    return sorted(c for d in BD_IC.iterdir() if d.is_dir()
+                  for c in d.iterdir()
+                  if c.is_dir() and G._parse_cell_name(c.name) is not None)
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_the_prefix_coverage_claim_is_re_derived():
+    """The COVERAGE claim, recomputed from the tree.
+
+    WHY THIS ONE AND NOT THE FILE COUNTS. The docstring also states 57 `*.log`
+    and 2719 scanned-suffix files. Those are pinned NOWHERE on purpose: every
+    publish or prune moves them, so asserting them would make this file go red
+    for reasons that have nothing to do with diagnostics — a test measuring the
+    publication schedule, which is the #527 defect. They are labelled in the
+    docstring as observations AT a named commit, and that label is checked
+    below instead.
+
+    The prefix SET is different in kind: it changes only when a tool that was
+    not emitting diagnostics starts to, and that IS an event this gate's
+    coverage claim depends on. The regex deliberately does not restrict the
+    prefix, so behaviour is already safe; what this protects is the SENTENCE,
+    which is what a reader uses to decide whether the gate covers their tool.
+    """
+    # Whitespace-normalised: the docstring wraps at 79 columns, so the list
+    # spans two lines. Comparing against the raw text would fail on a reflow,
+    # which is a formatting event and not a coverage event.
+    doc = " ".join(G.__doc__.split())
+    prefixes = {m.group("id").split("-")[0]
+                for p in BD_IC.rglob("*")
+                if p.is_file() and p.suffix in G._SCANNED_SUFFIXES
+                for m in G._RE_BRACKETED.finditer(p.read_text(errors="replace"))}
+    assert prefixes, "no bracketed ids found at all — the probe is broken"
+    assert " ".join(sorted(prefixes)) in doc, (
+        f"the prefix coverage sentence drifted. Tree says {sorted(prefixes)}; "
+        f"put exactly '{' '.join(sorted(prefixes))}' in the docstring. A new "
+        f"prefix means a tool started emitting diagnostics and the coverage "
+        f"claim a reader relies on is now understated.")
+    assert "4b22e36ea" in doc, (
+        "the docstring states raw file counts; they must stay attributed to the "
+        "commit they were measured at, or they read as standing facts about a "
+        "tree that has since moved")
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_the_published_corpus_yields_no_comparable_pair():
+    """5 of 5 cells exit NO_BASELINE on this commit — and that is DISCLOSED.
+
+    THIS TEST IS MEANT TO DIE. It fails the day a second cell of the same PDK is
+    published, which is the day the gate can finally compare something and the
+    day the docstring's "today it is every cell" paragraph becomes false. A
+    disclosure that outlives its premise is exactly the rot this repo keeps
+    finding, so the premise is asserted rather than described.
+    """
+    cells = _published_cells()
+    assert cells, "no published cells found — the probe itself is broken"
+    comparable = [(c.name, G.find_previous(c).name)
+                  for c in cells if G.find_previous(c) is not None]
+    assert not comparable, (
+        f"a comparable cell pair now EXISTS: {comparable}. The gate can compare "
+        f"for real, so remove the 'today it is every cell' disclosure from the "
+        f"docstring, re-run the gate over that pair, and record what it finds — "
+        f"including in tool_diagnostic_id_acceptance.json, whose text says the "
+        f"comparison path is unreachable.")
+    assert "5 of 5" in G.__doc__ or f"{len(cells)} of {len(cells)}" in G.__doc__, (
+        f"{len(cells)} published cells carry no comparable pair and the docstring "
+        f"does not say so; a reader of 'is BLOCKING' would assume it blocks.")
+
+
+def test_the_unwired_state_is_disclosed_or_gone():
+    """Wiring is MEASURED, and the disclosure dies with it.
+
+    Both directions, which is the whole point: while nothing invokes this
+    program the docstring must carry the NOT WIRED section, and the moment
+    somebody wires it this test fails and forces the section out. Neither state
+    can be reached by editing prose alone.
+    """
+    name = "tool_diagnostic_id_gate"
+    own = {GATE.name, "test_tool_diagnostic_id_gate.py",
+           "tool_diagnostic_id_acceptance.json", "INDEX.md"}
+    callers = []
+    for d in (PLUGIN_ROOT / "flow", PLUGIN_ROOT / "benchmark",
+              PLUGIN_ROOT / "programs"):
+        if not d.is_dir():
+            continue
+        for p in d.rglob("*"):
+            if not p.is_file() or p.name in own:
+                continue
+            if p.suffix not in (".py", ".yaml", ".yml", ".json", ".md"):
+                continue
+            try:
+                if name in p.read_text(errors="replace"):
+                    callers.append(p.relative_to(PLUGIN_ROOT).as_posix())
+            except OSError:
+                continue
+    disclosed = "NOT WIRED YET" in G.__doc__
+    if callers:
+        assert not disclosed, (
+            f"{name} is now referenced by {sorted(callers)} — it is wired. "
+            f"Delete the 'NOT WIRED YET' section from the docstring; a stale "
+            f"disclosure is worse than none because a reader trusts it.")
+    else:
+        assert disclosed, (
+            f"nothing in flow/, benchmark/ or programs/ invokes {name}, so it "
+            f"cannot block anything, and the docstring does not say so. An "
+            f"unwired checker presented as BLOCKING is the D9 defect this "
+            f"campaign removes.")
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
