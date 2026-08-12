@@ -106,6 +106,8 @@ import lec_gate_netlist_select as _lec_gns  # ATPG-cut predicate (diagnosis only
 import _yosys_stat as _ystat  # shared yosys `stat` parser (step 9 stats.json)
 import quartus_map_audit as _qma  # step 6 .map.rpt silent-failure scanner
 import _hardmacro_stage as _hms  # staged SRAM/IP macro discovery + blackbox
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 # Path inside the iic-osic-tools container where the EDA tools live (yosys
 # + the slang plugin, sv2v, verilator). Mirrors phase3_one_shot_runner.
@@ -5573,7 +5575,7 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
         log_rel = str(transcript.relative_to(project))
     except ValueError:
         log_rel = str(transcript)
-    (sim_dir / "pass.flag").write_text("CONNECTIVITY_PASS\n")
+    _aa.write_text(sim_dir / "pass.flag", "CONNECTIVITY_PASS\n")
     _bridge_xml = (
         "<results><verdict>CONNECTIVITY_PASS</verdict>"
         "<functional_verified>false</functional_verified>"
@@ -5588,7 +5590,7 @@ def _emit_connectivity_sim_bridge(project: Path, transcript: Path,
         "Connectivity/structural binding to real rtl/ PASSED "
         "(FULL_STACK_TB_DONE).</waiver_reason>"
         "</results>\n")
-    (sim_dir / "results.xml").write_text(_bridge_xml)
+    _aa.write_text(sim_dir / "results.xml", _bridge_xml)
     return True
 
 
@@ -5625,7 +5627,7 @@ def _emit_oracle_sim_bridge(project: Path, transcript: Path,
         log_rel = str(transcript.relative_to(project))
     except ValueError:
         log_rel = str(transcript)
-    (sim_dir / "pass.flag").write_text("PASS\n")
+    _aa.write_text(sim_dir / "pass.flag", "PASS\n")
     _bridge_xml = (
         "<results><verdict>PASS</verdict>"
         f"<evidence>{log_rel}</evidence>"
@@ -5634,7 +5636,7 @@ def _emit_oracle_sim_bridge(project: Path, transcript: Path,
         f"<vectors_total>{n_total}</vectors_total>"
         "<verification_track>oracle_tb</verification_track>"
         "</results>\n")
-    (sim_dir / "results.xml").write_text(_bridge_xml)
+    _aa.write_text(sim_dir / "results.xml", _bridge_xml)
     # ORGANIC-20260606 #460 (reopened) — incidental cleanup: an old run may
     # have left a stale top-level sim/results.xml at the LEGACY wrong path
     # (project-root sim/, not the canonical phase2/stage1/sim/) carrying the
@@ -7419,7 +7421,7 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
                 ],
             },
         )
-        (full_stack / "results.json").write_text(
+        _aa.write_text(full_stack / "results.json",
             json.dumps(results, indent=2) + "\n")
         # Mirror transcript so the gate's mtime check sees a fresh file.
         # Append an audit-trail narration block. The reference TB already
@@ -12255,13 +12257,13 @@ def step_emit_phase2_manifests(project: Path,
             "vectors_passed": orc_vp, "vectors_total": orc_vt})
     elif ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
         log_rel = str(ref_logs[0].relative_to(project))
-        (sim_dir / "pass.flag").write_text("PASS\n")
+        _aa.write_text(sim_dir / "pass.flag", "PASS\n")
         written.append("sim/pass.flag")
         w("sim/results.xml", {
             "verdict": "PASS",
             "evidence": log_rel,
         })
-        (sim_dir / "results.xml").write_text(
+        _aa.write_text(sim_dir / "results.xml",
             "<results><verdict>PASS</verdict>"
             f"<evidence>{log_rel}</evidence>"
             "<source>step_reference_tb transcript</source>"
