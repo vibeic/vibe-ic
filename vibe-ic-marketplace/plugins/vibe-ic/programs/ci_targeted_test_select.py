@@ -750,6 +750,100 @@ def import_edge_gap(
     return rows, total
 
 
+# ---------------------------------------------------------------------------
+# Rule 7 — plugin DATA files (the flow definition and its siblings).
+#
+# MEASURED HOLE. `select_tests` drops every changed path that is not `.py`
+# (`if not rel.endswith(".py"): continue`), so a change to
+# `flow/phase1_phase2_phase3.yaml` — the canonical 44-step flow, which
+# `flow_compliance_check.py` enforces and which 114 test files read — selected
+# the smoke floor and nothing else. The whole 63x8 matrix (d1..d8) recomputes
+# itself from that yaml on every run, so a flow-yaml change was verified by a
+# selection that never ran the dimensions measuring flow-yaml correctness.
+#
+# Found while fixing `test_matrix_d4_criteria_match[step1]`: the change edited
+# the flow yaml, the selection did not include the d4 file, and the only reason
+# the fix was verified at all is that the failing test was run BY HAND.
+#
+# This is a DIFFERENT hole from vibe-ic#1057/Rule 6, which reaches REPO-ROOT
+# tool scripts. Rule 6 keys on `_REPO_TOOL_DIRS` (outside the plugin); this
+# keys on plugin-relative data files, and neither subsumes the other: the flow
+# yaml is inside the plugin, and `tools/gatekeeper-land.sh` is not a plugin
+# data file.
+#
+# NOT CAPPED, for Rule 5's stated reason: a capped rule zeroes exactly the
+# large, central files where a silent break is most likely, and the flow yaml
+# is the most central file in the tree. A test that NAMES the flow definition
+# has a stated dependency on it; that is not noise needing a bound.
+#
+# Directories are read from the tree, never a filename list, so a data file
+# added tomorrow is covered without editing this module.
+_DATA_DIRS: tuple[str, ...] = ("flow", "benchmark", "agents", "skills")
+
+#: Extensions that carry declarative INPUT to the programs. `.md` is excluded
+#: on purpose: prose changes constantly, every skill is a `.md`, and a doc edit
+#: selecting 100+ files would make the selector something people route around.
+_DATA_SUFFIXES: tuple[str, ...] = (".yaml", ".yml", ".json")
+
+
+def _is_plugin_data(rel: str) -> bool:
+    """Is ``rel`` (PLUGIN-relative) a declarative data file a test may read?"""
+    rp = Path(_norm(rel))
+    if rp.suffix not in _DATA_SUFFIXES:
+        return False
+    top = rp.parts[0] if rp.parts else ""
+    return top in _DATA_DIRS
+
+
+def _build_data_reference_index(
+    plugin_root: Path, data_basenames: set[str],
+) -> dict[str, set[str]]:
+    """Map data BASENAME -> set of plugin-rel test paths that NAME it.
+
+    Keyed on the basename WITH its extension (``phase1_phase2_phase3.yaml``),
+    which is how a path-driven consumer names it, and matched as a whole path
+    token so ``flow.yaml`` cannot match inside ``subflow.yaml``.
+
+    Built LAZILY, like rules 4 and 6: nothing here reads the tree unless a
+    changed path is actually a plugin data file, so every other lane pays
+    exactly nothing.
+
+    TWO HOPS, because one is not enough — measured. The case that motivated
+    this rule, `test_matrix_d4_criteria_match.py`, does NOT contain the string
+    `phase1_phase2_phase3.yaml`. It reaches the flow through
+    `from matrix_63x8 import flowref`, and the path lives in
+    `programs/tests/matrix_63x8/flowref.py:203`. A direct-mention index alone
+    took the selection from 16 files to 131 and STILL missed the one test whose
+    failure prompted the rule — the shape that looks like a fix and does not
+    fix the subject.
+
+    So this returns BOTH:
+      * tests that name the data file themselves, and
+      * test HELPERS that name it, which the caller feeds to `_helper_consumers`
+        (rule 4) to reach every test importing them.
+    """
+    index: dict[str, set[str]] = {"": set()}
+    if not data_basenames:
+        return {}
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return {}
+    b = r"[A-Za-z0-9_.\-]"
+    pats = {n: re.compile(rf"(?<!{b}){re.escape(n)}(?!{b})")
+            for n in data_basenames}
+    index = {}
+    for pyf in sorted(tests_dir.rglob("*.py")):
+        try:
+            text = pyf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f"{_TESTS_REL}/{pyf.relative_to(tests_dir).as_posix()}"
+        for name, pat in pats.items():
+            if pat.search(text):
+                index.setdefault(name, set()).add(rel)
+    return index
+
+
 def select_tests(
     changed_paths: list[str],
     plugin_root: Path,
@@ -800,9 +894,16 @@ def select_tests(
     selected: set[str] = set(_smoke_set(plugin_root))
     changed_helpers: list[str] = []
 
+    changed_data: list[str] = []
+
     for raw in changed_paths:
         rel = _to_plugin_rel(raw, plugin_prefix)
         if not rel.endswith(".py"):
+            # (7) a changed plugin DATA file -> the tests that NAME it. This
+            # branch is why the `.py` filter below is no longer the end of the
+            # road for a non-Python change.
+            if _is_plugin_data(rel):
+                changed_data.append(rel)
             continue
         rp = Path(rel)
         # (2) a changed test file -> include directly (if it still exists).
@@ -839,6 +940,22 @@ def select_tests(
     # so the common case never reads the tree.
     if changed_helpers:
         selected |= _helper_consumers(plugin_root, changed_helpers, source_stems)
+
+    # (7) Built LAZILY too — only when a plugin data file actually changed.
+    if changed_data:
+        names = {Path(_norm(d)).name for d in changed_data}
+        hits: set[str] = set()
+        data_index = _build_data_reference_index(plugin_root, names)
+        for n in names:
+            hits |= data_index.get(n, set())
+        # Direct namers are tests; the rest are HELPERS, and rule 4 already
+        # knows how to turn a helper into the tests that import it. Composing
+        # instead of re-deriving means the second hop cannot drift from rule 4.
+        direct = {h for h in hits if Path(h).name.startswith("test_")}
+        helpers = sorted(hits - direct)
+        selected |= direct
+        if helpers:
+            selected |= _helper_consumers(plugin_root, helpers, source_stems)
 
     # Only emit tests that exist on disk (robust against a stale index entry).
     return sorted(t for t in selected if (plugin_root / t).is_file())
