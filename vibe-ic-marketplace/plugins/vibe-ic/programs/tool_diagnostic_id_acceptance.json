@@ -1,0 +1,33 @@
+{
+  "_comment": [
+    "Adjudicated tool diagnostic IDs (vibe-ic#1081). An ID listed here is one a",
+    "human LOOKED AT and decided we accept, so `tool_diagnostic_id_gate.py` does",
+    "not block on it appearing for the first time.",
+    "",
+    "THIS LIST IS ITSELF CHECKED. `audit_acceptance()` blocks on three things,",
+    "because an allowlist nobody re-examines becomes a check that lies:",
+    "  1. MALFORMED - every entry needs id, reason, accepted_on, expires_on and",
+    "     adjudicated_by. An exemption nobody signed or dated is not an",
+    "     adjudication, it is a silence with a JSON key.",
+    "  2. EXPIRED - past `expires_on` is BLOCKING, not auto-renewed and not",
+    "     quietly dropped. Expiry has to cost something or it is decoration.",
+    "  3. STALE - the ID is emitted nowhere in the current run. An exemption",
+    "     that outlived the diagnostic it excused is the same shape",
+    "     `retention.json` already blocks on for published cells.",
+    "",
+    "DELIBERATELY EMPTY ON ARRIVAL. Running the gate over the published corpus",
+    "today finds real un-adjudicated IDs - `spm/v1.9.94_sky130A` vs its",
+    "predecessor emits DRT-0290, EST-0015, ODB-0220, STA-0168, STA-0198 that",
+    "`v1.5.65_sky130A` did not, and `spm/v1.9.96_gf180mcuD` adds DRT-0349,",
+    "DRT-0701 and PSM-0079. Seeding those here to make the gate green would be",
+    "the author adjudicating his own finding, which is exactly the move this",
+    "file exists to make impossible. They stay unaccepted until someone with the",
+    "standing to accept them writes a reason and a date.",
+    "",
+    "Shape of an entry:",
+    "  {\"id\": \"RSZ-0062\", \"reason\": \"why we accept it\",",
+    "   \"accepted_on\": \"2026-08-12\", \"expires_on\": \"2026-11-10\",",
+    "   \"adjudicated_by\": \"who decided\"}"
+  ],
+  "accepted": []
+}
