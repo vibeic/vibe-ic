@@ -1272,6 +1272,48 @@ def declared_atoms(cl: Clause) -> List[str]:
     return _flow_path_atoms(cl.step_outputs)
 
 
+def declared_entries(cl: Clause) -> List[List[str]]:
+    """The step's `required_outputs`, one list of ALTERNATIVES per entry.
+
+    `declared_atoms` flattens the flow's ` OR ` notation, which is right for
+    "is this path declared" and WRONG for "is this path load-bearing". An entry
+    spelled `a.rpt OR b.json` says the step must deliver ONE of them, so taking
+    the content out of `b.json` while `a.rpt` still carries it removes nothing
+    the flow asked for.
+
+    Found by hand-adjudicating this probe's own step-9 finding, which sits on
+    exactly such an entry (`phase2/stage2/synth/area.rpt OR
+    phase2/stage2/synth/stats.json`). That finding SURVIVES — `area.rpt` does
+    not exist on the root, so `stats.json` is the entry's only satisfier — but
+    it would not have on a root that produced both, and without this the census
+    would have had no way to tell the two cases apart.
+    """
+    out: List[List[str]] = []
+    for entry in cl.step_outputs:
+        atoms = declared_atoms(Clause(step=cl.step, kind=cl.kind, cmd=cl.cmd,
+                                      program=cl.program, step_outputs=[entry]))
+        if atoms:
+            out.append(atoms)
+    return out
+
+
+def _satisfied_alternative(rel: str, cl: Clause, root: Path) -> Optional[str]:
+    """A sibling ALTERNATIVE of `rel`'s entry that still carries content."""
+    for entry in declared_entries(cl):
+        if len(entry) < 2 or not any(_glob_re(a).match(rel) for a in entry):
+            continue
+        for alt in entry:
+            if _glob_re(alt).match(rel):
+                continue
+            for hit in sorted(root.glob(alt)):
+                try:
+                    if hit.is_file() and hit.stat().st_size > 0:
+                        return str(hit.relative_to(root))
+                except OSError:
+                    continue
+    return None
+
+
 def _glob_re(pattern: str) -> "re.Pattern[str]":
     try:
         sys.path.insert(0, str(PLUGIN / "programs"))
@@ -1541,6 +1583,15 @@ def probe_ruler_blind(cl: Clause, tr: Traced, ctx: CorpusCtx) -> ProbeResult:
                      f"not complete: {', '.join(sorted(subjects)[budget:][:3])}")
     worst: Optional[ProbeResult] = None
     for rel in sorted(subjects)[:budget]:
+        alt = _satisfied_alternative(rel, cl, root)
+        if alt:
+            if worst is None:
+                worst = ProbeResult(
+                    "ruler_blind", GUARDED,
+                    f"{rel} is one ALTERNATIVE of a ` OR ` required_outputs entry and "
+                    f"{alt} still carries content, so taking this file's content away "
+                    f"removes nothing the flow asked the step to deliver", "")
+            continue
         for label, payload in _mutations(root / rel):
             repro = (f"cp -r {root.name} /tmp/t && printf '%s' {payload!r} > /tmp/t/{rel}"
                      f" && cd /tmp/t && python3 programs/{cl.program}.py "
@@ -1601,23 +1652,34 @@ def probe_ruler_blind(cl: Clause, tr: Traced, ctx: CorpusCtx) -> ProbeResult:
                              f"this mutation is UNSCORED rather than scored on the gate "
                              f"alone")
                 continue
-            now = after.get(cl.step)
-            if now != before:
+            # EVERY step, not just this clause's. The claim about to be made is
+            # "nothing ANYWHERE reacted", and a check scoped to one step cannot
+            # support it -- a later auditor reading this artefact across a step
+            # boundary is precisely the #1029 shape the campaign is about. The
+            # whole map is already in hand, so the wider check is free and the
+            # narrower one would have been the census overclaiming past its own
+            # measurement.
+            moved = {k: (v, after.get(k)) for k, v in ctx.base_status.items()
+                     if after.get(k) != v}
+            if moved:
+                where = cl.step if cl.step in moved else sorted(moved)[0]
+                was, now = moved[where]
                 if worst is None or worst.verdict == CLEAN:
                     worst = ProbeResult(
                         "ruler_blind", GUARDED,
                         f"stays rc=0 with {rel} {label} and no sibling conjunct objects, "
-                        f"but the CONSUMER moves step {cl.step} {before} -> {now}; the "
-                        f"flow owns tiers this gate never sees (EVIDENCE_MISSING #433 "
-                        f"reads emptiness directly), so the artefact is measured — just "
-                        f"not here", repro)
+                        f"but the CONSUMER moves step {where} {was} -> {now} "
+                        f"({len(moved)} step verdict(s) changed); the flow owns tiers "
+                        f"this gate never sees (EVIDENCE_MISSING #433 reads emptiness "
+                        f"directly), so the artefact is measured — just not here", repro)
                 continue
             blind = (f"declares {rel} and READS it, yet with that file {label} this "
                      f"clause stays rc=0, every sibling conjunct in step {cl.step}'s "
-                     f"gate stays rc=0, and the FLOW's own verdict for step {cl.step} "
-                     f"stays {before} — the file still exists so the presence tier is "
-                     f"satisfied, and nothing anywhere reacted to the artefact the step "
-                     f"is required to deliver losing its content")
+                     f"gate stays rc=0, and NOT ONE of the flow's "
+                     f"{len(ctx.base_status)} step verdicts moves (step {cl.step} stays "
+                     f"{before}) — the file still exists so the presence tier is "
+                     f"satisfied, and nothing anywhere in the flow reacted to the "
+                     f"artefact this step is required to deliver losing its content")
             if before not in _PASSING_TIERS:
                 # Real blindness, unproven consequence. The step is already red
                 # for some other reason, so the flow is not waving THIS through
@@ -1945,9 +2007,12 @@ def corpus_pass(clauses: List[Clause], root: Path, tmp: Path, probes: List[str],
                          "is UNSCORED — this run establishes nothing about P6")
         else:
             waved = sum(1 for v in ctx.base_status.values() if v in _PASSING_TIERS)
-            notes.append(f"P6 control arm on the unmutated root: {waved} of "
-                         f"{len(ctx.base_status)} step(s) in a passing tier; only those "
-                         f"can be shown blind, the rest are GUARDED by their own verdict")
+            notes.append(
+                f"P6 control arm on the unmutated root: {waved} of "
+                f"{len(ctx.base_status)} step(s) in a passing tier. Only those can "
+                f"carry a LIAR; a step that is FAIL or PASS-VOIDED here is capped at "
+                f"SUSPECT (blindness measured, consequence unproven) and one that never "
+                f"ran, was waived, was MISSING or disclosed vacuity is GUARDED")
     out: Dict[int, List[ProbeResult]] = {}
     for i, cl in enumerate(clauses):
         got: List[ProbeResult] = []

@@ -612,7 +612,7 @@ def test_ruler_blind_fires_when_emptying_a_declared_artefact_moves_nothing(
     out = capsys.readouterr().out
     assert rc == 1, out
     assert "ruler_blind" in out and "out/evidence.json" in out, out
-    assert "nothing anywhere reacted" in out, out
+    assert "nothing anywhere in the flow reacted" in out, out
 
 
 def test_ruler_blind_reads_CLEAN_on_a_gate_that_does_measure_the_content(
@@ -1103,7 +1103,7 @@ def test_ruler_blind_is_declined_when_the_CONSUMER_moves_the_step_verdict(
     emptiness directly. A gate-only probe scored that clause LIAR. Asking the
     consumer is what makes it a GUARDED.
     """
-    consumer_says("PASS", "FAIL")
+    consumer_says("PASS", "FAIL")   # pristine map, then the mutated map
     progs = _programs(tmp_path, blind=_BLIND)
     corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
     rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("blind ."))),
@@ -1424,3 +1424,64 @@ def test_the_mutation_is_derived_from_the_ARTEFACT_not_from_a_schema():
     finally:
         for f in (obj, arr, txt, empty):
             f.unlink(missing_ok=True)
+
+
+def test_an_OR_alternative_whose_sibling_still_carries_content_is_declined(
+        census, tmp_path, capsys, consumer_says):
+    """`a OR b` means the step must deliver ONE of them.
+
+    Hollowing `b` while `a` still carries the measurement removes nothing the
+    flow asked for. Found by hand-adjudicating this probe's own step-9 finding,
+    which sits on `phase2/stage2/synth/area.rpt OR .../stats.json` — that one
+    survives because `area.rpt` is absent on the root, and it is only because
+    the two cases are now distinguishable that it can be said to.
+    """
+    consumer_says("PASS")
+    progs = _programs(tmp_path, blind="""
+        import sys
+        open("out/evidence.json").read()
+        print("[PASS]"); sys.exit(0)
+        """)
+    flow = _flow(tmp_path, """
+        steps:
+          - id: 77
+            name: planted
+            required_outputs:
+              - out/area.rpt OR out/evidence.json
+            gate:
+              all_of:
+                - program_exit_zero: "blind ."
+        """)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}',
+                                "out/area.rpt": "area = 1234"})
+    rc = census(flow, progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "ALTERNATIVE" in out and "out/area.rpt still carries content" in out, out
+
+
+def test_an_OR_alternative_that_is_the_ONLY_satisfier_still_fires(
+        census, tmp_path, capsys, consumer_says):
+    """The other arm, and the one that keeps the step-9 finding standing: same
+    declaration, same gate — the alternative simply is not there."""
+    consumer_says("PASS")
+    progs = _programs(tmp_path, blind="""
+        import sys
+        open("out/evidence.json").read()
+        print("[PASS]"); sys.exit(0)
+        """)
+    flow = _flow(tmp_path, """
+        steps:
+          - id: 77
+            name: planted
+            required_outputs:
+              - out/area.rpt OR out/evidence.json
+            gate:
+              all_of:
+                - program_exit_zero: "blind ."
+        """)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(flow, progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "ruler_blind" in out, out
