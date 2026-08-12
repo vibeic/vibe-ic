@@ -399,3 +399,25 @@ def test_install_is_idempotent_so_a_second_gate_does_not_double_record(tmp_path,
     before = len(se.OBSERVED)
     (project / "golden" / "answer.txt").read_text()
     assert len(se.OBSERVED) - before == 1, se.OBSERVED[before:]
+
+
+def test_the_in_process_hook_honours_the_declaration_too(tmp_path, monkeypatch):
+    """The declaration excepts on BOTH paths, not just the child one.
+
+    Found by the paired guard: a mutant that made `install()` ignore the
+    declaration killed no test, because every declaration test went through
+    `run_scoped`. A step denied its own declared input inside a runner would
+    fail the whole flow, so this branch is the one that must not be a ban.
+    """
+    project = _proj(tmp_path, {"golden/answer.txt": "42",
+                               "golden/other.txt": "not declared"})
+    monkeypatch.setattr(se, "declared_paths",
+                        lambda project, step_id, flow=None: ["golden/answer.txt"])
+    monkeypatch.setattr(se, "_INSTALLED", False, raising=False)
+    monkeypatch.setattr(se, "_INSTALLED_DENIES", False, raising=False)
+    se.install(project, step_id="9", deny=False)
+    before = len(se.OBSERVED)
+    (project / "golden" / "answer.txt").read_text()   # DECLARED -> excepted
+    assert len(se.OBSERVED) == before, se.OBSERVED[before:]
+    (project / "golden" / "other.txt").read_text()    # not declared -> seen
+    assert [rel for _seg, rel in se.OBSERVED[before:]] == ["golden/other.txt"]
