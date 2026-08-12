@@ -24,20 +24,48 @@ and `flow/util/checkMetadata.py:91-95` reports an ID absent from the baseline.
 But `flow/util/genRuleFile.py:70-75` assigns `level: warning`, so a brand-new
 tool warning NEVER fails their build. We block instead.
 
-THE ID SHAPES ARE MEASURED, NOT ASSUMED
-=======================================
-Read out of 1068 real `*.log` files under `benchmark-data/ic/` rather than
-taken from the tools' documentation. Two families carry IDs:
+THE ID SHAPES ARE MEASURED, NOT ASSUMED — AND RE-MEASURED, ON THIS COMMIT
+=========================================================================
+Read out of the real files this repository carries rather than taken from the
+tools' documentation. The figures below are RE-DERIVED on ``4b22e36ea``
+(v1.10.32) by ``test_the_corpus_figures_in_this_docstring_are_re_derived``, so
+a prune or a publish moves them REDLY instead of leaving prose that was true
+about some other tree on some other day. The first draft of this section quoted
+figures none of which reproduced here — 1068 ``*.log``, 86,449 ``Warning 1650``,
+4,504 ``Warning 1648``, thirteen prefixes, 1,183 ``DRT-0036`` — and the two
+biggest were the load-bearing argument for family B. They are replaced by what
+the tree says, and pinned so the next drift is an event.
 
-  A. ``[WARNING RSZ-0104]`` — the OpenROAD suite. Thirteen prefixes occur in
-     our own logs: CTS DPL DRT EST GPL GRT IFP ODB ORD PSM RCX RSZ STA. This
-     is the family ORFS handles.
+Population, as measured AT COMMIT ``4b22e36ea``: 57 ``*.log`` and 2719 files of
+the scanned suffixes (``.log`` ``.rpt`` ``.json``) under ``benchmark-data/ic/``.
+Those two are DATED OBSERVATIONS and are written as such — every publish or
+prune moves them, so pinning them would make this file's tests measure the
+publication schedule, which is the defect #527 removed from this repo. ``.rpt``
+carries the majority — see WHICH FILES CARRY DIAGNOSTICS below; a ``*.log``-only
+scan, this program's own first draft, would have examined a small fraction.
 
-  B. ``Warning 1650: <file> line N, ...`` — STANDALONE OpenSTA, which numbers
-     its messages but does not bracket them. ORFS's regex does not match this
-     shape, and it is not a rounding error in our corpus: 86,449 occurrences of
-     `Warning 1650` and 4,504 of `Warning 1648` alone. Ignoring it would have
-     meant a check that looked comprehensive and silently examined a fraction.
+What IS pinned is the coverage claim, because that one is not about how much data
+we happen to ship:
+
+  A. ``[WARNING RSZ-0104]`` — the OpenROAD suite. The prefixes occurring in our
+     own logs are ANT CTS DPL DRT EST GPL GRT IFP ODB ORD PDN PPL PSM RCX RSZ
+     STA. This is the family ORFS handles. The regex does NOT pin this list
+     (``[A-Z][A-Z0-9]*``) precisely so a seventeenth tool is CAPTURED rather
+     than dropped — but the list is re-derived by
+     ``test_the_prefix_coverage_claim_is_re_derived``, so a new tool appearing is
+     an event that updates this sentence instead of aging it out of true.
+
+  B. ``Warning 441: <file> line N, ...`` — STANDALONE OpenSTA, which numbers its
+     messages but does not bracket them. ORFS's regex does not match this shape.
+     Honest size: 41 lines across 20 ``.rpt`` files (``aging_sta.rpt``,
+     ``power.rpt``) at the commit above, carrying five distinct numbers — 441,
+     305, 503, 168, 198. That is SMALL; the first draft of this section claimed
+     86,449 ``Warning 1650`` and 4,504 ``Warning 1648``, and neither number
+     appears anywhere in this repository. It is handled anyway, and the reason is
+     specific rather than volumetric: ``STA-0168`` and ``STA-0198`` are
+     ``Warning 168:`` and ``Warning 198:``, two of the ids the gate's own worked
+     example turns on, so dropping family B would silently drop them from the
+     comparison while the gate still reported a clean one.
 
 And one family carries NO id:
 
@@ -55,7 +83,7 @@ were not compared". A reader must never be able to mistake "no new IDs" for
 WHAT IS GATED
 =============
 WARNING and ERROR. INFO ids are censused (they fold into #1080 like the rest)
-but do NOT gate: `DRT-0036` alone occurs 1,183 times as ordinary progress
+but do NOT gate: `DRT-0036` alone occurs **692** times as ordinary progress
 chatter, and the issue's subject is a warning that was not there last time.
 The choice is stated here so it is a decision on the record, not an omission.
 
@@ -65,6 +93,41 @@ A cell with no earlier run has nothing to compare against. That exits **2**
 (NO_BASELINE) with the disclosure "no previous run; nothing compared" — never
 0. A first run is not a clean run, and a gate that returns success for a
 comparison it could not perform is the exact defect this campaign removes.
+
+AND THE LIMIT IS NOT HYPOTHETICAL: TODAY IT IS EVERY CELL
+---------------------------------------------------------
+Run over all five published cells this commit carries, the answer is **5 of 5
+NO_BASELINE**::
+
+    caravel_user_project/v1.9.43_sky130A  rc=2  (9 gated ids recorded)
+    spm/v1.10.18_sky130A                  rc=2  (5)
+    spm/v1.5.58_ihp-sg13g2                rc=2  (6)
+    spm/v1.9.96_gf180mcuD                 rc=2  (7)
+    u_hawaii_adc/v1.9.86_sky130A          rc=2  (0)
+
+No design carries two cells of the SAME PDK, and `find_previous` requires same
+PDK and a strictly lower version — correctly, because a different PDK legitimately
+emits different ids. So on this commit the comparison path is UNREACHABLE from
+the corpus. That is not a defect in the rule; it is the population, and it is
+written here because a reader of "is BLOCKING" would otherwise assume the gate is
+blocking something. `test_the_published_corpus_yields_no_comparable_pair` pins
+it, and FAILS the day a second same-PDK cell is published — which is the day
+this paragraph must be rewritten.
+
+NOT WIRED YET — SAID PLAINLY
+============================
+Nothing invokes this program. It appears in no `flow/*.yaml` step, in no
+`benchmark/CAPTURE_ROUTING.json` entry, in no runner, and in none of
+`flow_compliance_check.py`'s registered gates: on this commit the only files in
+the repository naming `tool_diagnostic_id_gate` are its own source, its test, its
+acceptance list and its `programs/INDEX.md` row.
+
+An unwired checker is the D9 defect class this campaign is actively removing, so
+it is not left to a reader to discover: `test_the_unwired_state_is_disclosed_or_gone`
+MEASURES the wiring and fails in BOTH directions — while unwired it requires this
+paragraph to exist, and the moment somebody wires it the test fails and forces
+the paragraph out. What it cannot do is decide WHICH step should own the clause;
+that is a flow declaration and it needs the ruling, not a guess.
 
 Exit codes: 0 = compared and clean, 1 = BLOCKING, 2 = could not compare (no
 previous run, or this run yields zero gated ids so the comparison would be
@@ -404,7 +467,7 @@ def _emit(report: Dict[str, Any], out: Optional[str]) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("cell_dir", help="published cell, e.g. "
-                                     "benchmark-data/ic/spm/v1.9.94_sky130A")
+                                     "benchmark-data/ic/spm/v1.9.96_gf180mcuD")
     ap.add_argument("--acceptance", default=str(
         Path(__file__).with_name("tool_diagnostic_id_acceptance.json")))
     ap.add_argument("--json", help="write the report here")
