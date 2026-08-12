@@ -98,8 +98,42 @@ GATE_DISPATCH_CORPUS_REL="${GATE_DISPATCH_CORPUS_REL:-benchmark-data}"
 #: "the guard could not run" must never be indistinguishable from "no gate
 #: wrote", which is the vacuous pass this repo removes from gates one at a time.
 GATE_DISPATCH_CORPUS_BLIND=0
+#: --- WHO WROTE OUTSIDE THE CORPUS (vibe-ic#1087) -------------------------
+#: The guard above is scoped to `benchmark-data/` ON PURPOSE, and
+#: `test_corpus_write_guard.py::test_a_write_OUTSIDE_the_corpus_is_not_a_finding`
+#: is the assertion that says so: sending output elsewhere is the redirect this
+#: guard's own remedy line RECOMMENDS, and punishing it would punish the fix.
+#:
+#: But `gatekeeper-land.sh` also takes a WHOLE-TREE write guard, and it takes it
+#: ONCE around pytest + all ~74 gates + `plugin_full_audit` — its own comment
+#: says "deliberately taken around the WHOLE tier". So a gate that writes into
+#: `programs/` is DETECTED by that guard and ATTRIBUTABLE by neither: the
+#: scoped one cannot see it, and the whole-tier one cannot say who did it.
+#: Measured instance: `policy_direction_pin_check` leaks its own mutant into
+#: `programs/matrix_mutation_ledger.py` on any kill (vibe-ic#1089), and the
+#: contamination was blamed on whichever gate happened to be nearby.
+#:
+#: This closes the attribution gap and NOTHING ELSE. It is ADDITIVE by
+#: construction: no verdict moves, no gate can go red because of it, and a
+#: write outside the corpus is recorded as an ATTRIBUTION rather than a finding.
+#: That is deliberate — this lands on a tree being assembled to go green, and a
+#: new way to fail is the last thing that tree needs.
+#:
+#: The classification of what counts as a write is NOT re-implemented here:
+#: `suite_write_guard.py` already draws that line (it is the program that owns
+#: the `__pycache__`/`.pytest_cache` "regenerable, disclosed, never blocking"
+#: rule), and a second copy of that rule in bash is the hand-maintained twin
+#: this whole file exists to avoid.
+GATE_DISPATCH_TREE_WATCH="${GATE_DISPATCH_TREE_WATCH:-1}"
+GATE_DISPATCH_TREE_GUARD=""
+#: 1 once we have said we cannot attribute. Said ONCE, for the same reason
+#: `GATE_DISPATCH_CORPUS_BLIND` is: "I could not look" must never be silent.
+GATE_DISPATCH_TREE_BLIND=0
 # `declare -a ... =()` so `set -u` is safe while the lists are still empty.
 declare -a GATE_LABELS=() GATE_STATES=() GATE_SECONDS=()
+#: Parallel to GATE_LABELS: newline-free, space-joined paths this gate wrote
+#: outside the corpus, or "" for the overwhelming majority that wrote nothing.
+declare -a GATE_OUTSIDE=()
 
 # --- LOOP-DRIVEN GATES SAY HOW MANY ITEMS THEY EXPANDED OVER (vibe-ic#957) --
 # Three of this repo's gates are wired once and executed once per PUBLISHED
@@ -194,11 +228,82 @@ _gate_dispatch_corpus_state() {
       "$GATE_DISPATCH_CORPUS_REL" 2>/dev/null | LC_ALL=C sort
 }
 
+# --- whole-tree attribution (vibe-ic#1087) ---------------------------------
+# `suite_write_guard.py` under the tree being watched, or "" when there is none
+# — which is the normal state for the THROWAWAY repositories the tests of this
+# library build. Resolved once and cached, including the empty answer.
+_gate_dispatch_tree_guard() {
+  if [ -z "$GATE_DISPATCH_TREE_GUARD" ]; then
+    local root cand
+    root="$(_gate_dispatch_corpus_root)"
+    cand="$root/vibe-ic-marketplace/plugins/vibe-ic/programs/suite_write_guard.py"
+    if [ -n "$root" ] && [ -f "$cand" ]; then
+      GATE_DISPATCH_TREE_GUARD="$cand"
+    else
+      GATE_DISPATCH_TREE_GUARD="-"
+    fi
+  fi
+  [ "$GATE_DISPATCH_TREE_GUARD" != "-" ] || return 1
+  echo "$GATE_DISPATCH_TREE_GUARD"
+}
+
+# Baseline for one gate. Prints the snapshot path; returns 1 when attribution is
+# not available, so the caller records "not attributed" rather than "wrote
+# nothing" — the same distinction NOT_CHECKED draws one level up.
+_gate_dispatch_tree_before() {
+  [ "$GATE_DISPATCH_TREE_WATCH" = "1" ] || return 1
+  local guard root snap
+  guard="$(_gate_dispatch_tree_guard)" || return 1
+  root="$(_gate_dispatch_corpus_root)"
+  snap="$(mktemp -t gd_tree.XXXXXX)" || return 1
+  if python3 "$guard" --repo "$root" --snapshot "$snap" >/dev/null 2>&1; then
+    echo "$snap"
+  else
+    rm -f "$snap"
+    return 1
+  fi
+}
+
+# Paths this gate wrote OUTSIDE the corpus, one per line; empty when none.
+#
+# The compare's EXIT CODE IS DELIBERATELY DISCARDED. `suite_write_guard` exits
+# non-zero on a blocking finding, and letting that reach the gate's verdict
+# would turn an attribution into a failure — the one thing this addition
+# promises not to do.
+_gate_dispatch_tree_after() {
+  local snap="$1" guard root rep
+  [ -n "$snap" ] || return 0
+  guard="$(_gate_dispatch_tree_guard)" || { rm -f "$snap"; return 0; }
+  root="$(_gate_dispatch_corpus_root)"
+  rep="$(mktemp -t gd_tree_rep.XXXXXX)"
+  python3 "$guard" --repo "$root" --compare "$snap" --json "$rep" >/dev/null 2>&1 || true
+  # Blocking findings only, minus anything the scoped guard above already owns:
+  # a corpus write is reported as WROTE_CORPUS and must not be counted twice.
+  python3 - "$rep" "$GATE_DISPATCH_CORPUS_REL" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+rel = sys.argv[2].rstrip("/") + "/"
+for f in doc.get("blocking", []):
+    p = f.get("path", "")
+    if p and not p.startswith(rel):
+        print(p)
+PY
+  rm -f "$snap" "$rep"
+}
+
 # `_dispatch <tolerate_rc2> <may_write_corpus> <label> <cwd> <cmd...>` — the ONE
 # place a gate is executed and the ONE place its outcome is recorded.
 _dispatch() {
   local tolerate="$1" may_write="$2" label="$3" wd="$4"; shift 4
   GATE_LABELS+=("$label")
+  #: Appended HERE, empty, so it stays index-parallel with GATE_LABELS down
+  #: every one of this function's return paths (--list, WROTE_CORPUS, normal).
+  #: Filled in by index below when there is something to say.
+  GATE_OUTSIDE+=("")
+  local _slot=$(( ${#GATE_LABELS[@]} - 1 ))
   GATE_ITEM_CORPUS+=("$GATE_DISPATCH_CORPUS_CUR")
   GATE_ITEM_IDX+=("$GATE_DISPATCH_CORPUS_IDX")
   GATE_ITEM_TOTAL+=("$GATE_DISPATCH_CORPUS_TOTAL")
@@ -228,12 +333,39 @@ _dispatch() {
   echo "── $shown"
   local t0="$SECONDS" rc=0 before="" after="" watched=1
   before="$(_gate_dispatch_corpus_state)" || watched=0
+  # vibe-ic#1087 — the whole-tree baseline, taken INSIDE the same bracket as the
+  # corpus one so the attribution is per gate rather than per tier.
+  local _tsnap=""
+  _tsnap="$(_gate_dispatch_tree_before)" || _tsnap=""
+  if [ -z "$_tsnap" ] && [ "$GATE_DISPATCH_TREE_WATCH" = "1" ] \
+     && [ "$GATE_DISPATCH_TREE_BLIND" -eq 0 ]; then
+    GATE_DISPATCH_TREE_BLIND=1
+    echo "   ^^ write ATTRIBUTION not active: suite_write_guard.py was not" \
+         "found under the watched tree, so a gate writing outside" \
+         "$GATE_DISPATCH_CORPUS_REL/ will be detected by the tier guard and" \
+         "attributed to nobody (vibe-ic#1087)" >&2
+  fi
   # `|| rc=$?` and NOT a bare `( ... ); rc=$?` — the caller runs under `set -e`,
   # where a failing subshell aborts before the next line and the disclosure
   # below would never print.
   ( cd "$wd" && "$@" ) || rc=$?
   local secs=$(( SECONDS - t0 ))
   GATE_SECONDS+=("$secs")
+  # Collected BEFORE the corpus branch below returns, so a gate that both wrote
+  # the corpus and touched the tree still gets its outside-paths recorded.
+  local _outside=""
+  if [ -n "$_tsnap" ]; then
+    _outside="$(_gate_dispatch_tree_after "$_tsnap" | tr '\n' ' ')"
+    _outside="${_outside% }"
+    GATE_OUTSIDE[$_slot]="$_outside"
+    if [ -n "$_outside" ]; then
+      # NOT a failure and NOT counted as one. Naming it is the whole point:
+      # #1089's leaked mutant was real, was outside the corpus, and cost hours
+      # precisely because no instrument would say which gate produced it.
+      echo "   ^^ wrote OUTSIDE $GATE_DISPATCH_CORPUS_REL/ (attribution," \
+           "not a verdict): $label -> $_outside" >&2
+    fi
+  fi
   if [ "$watched" -eq 0 ]; then
     if [ "$GATE_DISPATCH_CORPUS_BLIND" -eq 0 ]; then
       GATE_DISPATCH_CORPUS_BLIND=1
@@ -408,6 +540,29 @@ _gate_dispatch_corpora_rollup() {
   done
 }
 
+# vibe-ic#1087 — one line per gate that wrote outside the corpus, printed with
+# the roll-up. NOT a failure and it never touches the exit status: the whole
+# claim is "this gate, not some other one", which is the fact the tier-wide
+# guard in `gatekeeper-land.sh` structurally cannot supply.
+#
+# It prints on STDERR beside the other disclosures, and it prints even when
+# every gate passed — a contaminating write that happens to break nothing today
+# is exactly the one that gets blamed on a neighbour tomorrow.
+_gate_dispatch_outside_writers() {
+  local i n=${#GATE_LABELS[@]} any=0
+  for (( i=0; i<n; i++ )); do
+    [ -n "${GATE_OUTSIDE[$i]:-}" ] || continue
+    any=1
+    echo "repo_hygiene_gates: ${GATE_LABELS[$i]} WROTE OUTSIDE" \
+         "$GATE_DISPATCH_CORPUS_REL/: ${GATE_OUTSIDE[$i]} — every gate after it" \
+         "read a tree this one changed. Not counted as a failure (writing" \
+         "outside the corpus is what this guard's remedy recommends); recorded" \
+         "so the write has an author." >&2
+  done
+  [ "$any" -eq 0 ] || echo "repo_hygiene_gates: the writes above are an" \
+    "ATTRIBUTION, not a verdict — no gate's PASS/FAIL was changed by them" >&2
+}
+
 # A loop that did not go through `gate_dispatch_over`: one `run` line, more
 # than one gate, no expansion open. Reported for the same reason the corpus
 # above is — the roll-up cannot say how many items such a loop covered, and a
@@ -439,7 +594,8 @@ _gate_dispatch_emit() {
   for (( i=0; i<n; i++ )); do
     fields+=("${GATE_STATES[$i]}" "${GATE_SECONDS[$i]}"
              "${GATE_ITEM_CORPUS[$i]}" "${GATE_ITEM_IDX[$i]}"
-             "${GATE_ITEM_TOTAL[$i]}" "${GATE_LABELS[$i]}")
+             "${GATE_ITEM_TOTAL[$i]}" "${GATE_OUTSIDE[$i]:-}"
+             "${GATE_LABELS[$i]}")
   done
   for (( i=0; i<nc; i++ )); do
     fields+=("${GATE_CORPUS_ITEMS[$i]}" "${GATE_CORPUS_GATES[$i]}"
@@ -452,14 +608,14 @@ import json, sys
 out, total, list_only = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "1"
 ng, nc = int(sys.argv[4]), int(sys.argv[5])
 rest = sys.argv[6:]
-gf, rest = rest[:ng * 6], rest[ng * 6:]
+gf, rest = rest[:ng * 7], rest[ng * 7:]
 cf, undisclosed = rest[:nc * 4], rest[nc * 4:]
 gates = []
-for i in range(0, len(gf), 6):
+for i in range(0, len(gf), 7):
     # The three loop keys are written ONLY for a gate a loop produced, so a
     # gate wired outside one records byte-for-byte what it recorded before
     # vibe-ic#957 — the record of the other ~70 must not move either.
-    g = {"label": gf[i + 5], "state": gf[i], "seconds": int(gf[i + 1])}
+    g = {"label": gf[i + 6], "state": gf[i], "seconds": int(gf[i + 1])}
     if gf[i + 2]:
         g["corpus"] = gf[i + 2]
         g["corpus_item"] = int(gf[i + 3])
@@ -467,6 +623,11 @@ for i in range(0, len(gf), 6):
         # as per corpus: a consumer that reads one gate must not have to
         # reconstruct how many there were of it.
         g["corpus_items"] = int(gf[i + 4])
+    # vibe-ic#1087 — written ONLY for a gate that actually wrote outside the
+    # corpus, for the same reason the loop keys are: the record of every gate
+    # that wrote nothing must not move.
+    if gf[i + 5]:
+        g["wrote_outside_corpus"] = gf[i + 5].split()
     gates.append(g)
 corpora = [{"name": cf[i + 3], "items": int(cf[i]), "gates": int(cf[i + 1]),
             "expansion": cf[i + 2]}
@@ -520,6 +681,7 @@ gate_dispatch_finish() {
     # which is exactly why this must still print.
     _gate_dispatch_corpora_rollup "$declared" >&2
     _gate_dispatch_undisclosed_loops
+    _gate_dispatch_outside_writers
     echo "gate_dispatch: $declared gate(s) declared; none run (--list)" >&2
     exit 0
   fi
@@ -538,6 +700,7 @@ gate_dispatch_finish() {
   # label's scope invites a reader to assume.
   _gate_dispatch_corpora_rollup "$declared"
   _gate_dispatch_undisclosed_loops
+  _gate_dispatch_outside_writers
   # Loop corpora that expanded over nothing, named so the closing sentence can
   # refuse to stand unqualified over them.
   local empty="" nempty=0
