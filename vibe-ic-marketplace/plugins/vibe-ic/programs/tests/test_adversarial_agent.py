@@ -253,3 +253,136 @@ def test_the_json_report_round_trips(tmp_path):
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ===========================================================================
+# A FINDING IS A DEFECT, NOT A SUGGESTION — SO IT IS RATCHETED
+#
+# The first version of this feature PRINTED its findings. Nothing failed when a
+# fourteenth gate started accepting foreign evidence, and nothing noticed when
+# one stopped, so "a finding is a P0 defect" was a sentence rather than a
+# mechanism. These tests are the mechanism.
+# ===========================================================================
+def _live_recorded_attacks():
+    """Re-run exactly the attacks the ledger records, over the cells it names."""
+    led = AA.load_findings_ledger()
+    ic = REPO / "benchmark-data" / "ic"
+    cell = ic / led["cell"]
+    donor = ic / led["donor"]
+    older = ic / led["older_run"]
+    out = []
+    out += AA.attack_cross_design(PLUGIN, cell, donor)
+    out += AA.attack_stale_replay(PLUGIN, cell, older)
+    out += AA.attack_tamper_destructive(PLUGIN, cell)
+    return led, out
+
+
+@_corpus
+def test_the_findings_ratchet_holds_in_BOTH_directions():
+    """13 forged greens are recorded. A fourteenth is a regression; a twelfth is
+    progress that must be adjudicated, not absorbed."""
+    led, attempts = _live_recorded_attacks()
+    d = AA.ratchet_diff(led, attempts)
+    assert not d["newly_forging"], (
+        f"a gate started forging a green: {d['newly_forging']}. That is a P0 "
+        f"integrity regression, not a number to update — find what changed, then "
+        f"re-run tools/gen_adversarial_findings.py.")
+    assert not d["closed"], (
+        f"these findings CLOSED: {d['closed']}. That is real progress and it "
+        f"must be adjudicated rather than absorbed: name the fix that closed "
+        f"them in the PR, then re-run tools/gen_adversarial_findings.py.")
+    assert not d["unproven"], (
+        f"these findings went UNAVAILABLE: {d['unproven']}. The cell they need "
+        f"is gone, so they are UNPROVEN, not fixed. A corpus prune must never "
+        f"read as security progress.")
+    assert len(d["held"]) == len(led["forging"]), (
+        f"{len(d['held'])} of {len(led['forging'])} recorded findings still "
+        f"reproduce; the rest were neither closed nor unproven, which means the "
+        f"comparison itself is broken")
+
+
+@_corpus
+def test_PAIRED_the_ratchet_can_SEE_a_new_forgery():
+    """The twin. A ratchet that reports zero on everything is not one.
+
+    Plants a finding the record does not contain by pretending the ledger is
+    empty, and requires the diff to report every live SUCCEEDED as newly forging.
+    """
+    _led, attempts = _live_recorded_attacks()
+    d = AA.ratchet_diff({"forging": []}, attempts)
+    live_succeeded = [a for a in attempts if a.verdict == AA.SUCCEEDED]
+    assert len(d["newly_forging"]) == len(live_succeeded) >= 6, (
+        f"the ratchet reported {len(d['newly_forging'])} new forgeries against "
+        f"an empty record but {len(live_succeeded)} attacks SUCCEEDED; it cannot "
+        f"see what it is supposed to catch")
+    assert not d["held"], d["held"]
+
+
+@_corpus
+def test_PAIRED_the_ratchet_tells_CLOSED_apart_from_UNPROVEN():
+    """The distinction the whole design turns on.
+
+    A recorded finding that now DEFENDS is progress. A recorded finding whose
+    cell disappeared is not. Both make the pair vanish from the SUCCEEDED set, so
+    a ratchet that only compared sets would score a corpus prune as a security
+    win — the publication-schedule defect, one layer up.
+    """
+    fake_led = {"forging": [{"attack": "A3_CROSS_DESIGN", "target": "X:gate_a"},
+                            {"attack": "A3_CROSS_DESIGN", "target": "X:gate_b"}]}
+    attempts = [
+        AA.Attempt("A3_CROSS_DESIGN", "o", AA.DEFENDED, "gate learned", "X:gate_a"),
+        AA.Attempt("A3_CROSS_DESIGN", "o", AA.UNAVAILABLE, "cell gone", "X:gate_b"),
+    ]
+    d = AA.ratchet_diff(fake_led, attempts)
+    assert d["closed"] == ["A3_CROSS_DESIGN X:gate_a"], d
+    assert d["unproven"] == ["A3_CROSS_DESIGN X:gate_b"], d
+
+
+def test_the_ledger_is_generated_not_hand_written():
+    """A hand-edited finding list is an allowlist, and #1119 exists to stop
+    findings being negotiable."""
+    led = AA.load_findings_ledger()
+    assert led.get("schema") == "vibe-ic/adversarial-findings/v1", led.get("schema")
+    assert led.get("measured_on"), "the ledger does not say which commit it was measured on"
+    blob = " ".join(led["_comment"])
+    assert "never hand-edited" in blob, blob[:200]
+    assert (REPO / "tools" / "gen_adversarial_findings.py").is_file(), (
+        "the ledger claims to be generated and its generator is not in the tree")
+
+
+def test_the_unwired_state_is_disclosed_or_gone():
+    """Wiring is MEASURED, and the disclosure dies with it.
+
+    This author required exactly this of #1092 and had not applied it here.
+    Both directions: while nothing invokes this program the docstring must carry
+    the NOT WIRED section, and the moment somebody wires it this test fails and
+    forces the section out.
+    """
+    name = "adversarial_agent"
+    own = {"adversarial_agent.py", "test_adversarial_agent.py",
+           "adversarial_findings.json", "INDEX.md"}
+    callers = []
+    for d in (PLUGIN / "flow", PLUGIN / "benchmark", PLUGIN / "programs"):
+        if not d.is_dir():
+            continue
+        for p in d.rglob("*"):
+            if not p.is_file() or p.name in own:
+                continue
+            if p.suffix not in (".py", ".yaml", ".yml", ".json", ".md"):
+                continue
+            try:
+                if name in p.read_text(errors="replace"):
+                    callers.append(p.relative_to(PLUGIN).as_posix())
+            except OSError:
+                continue
+    disclosed = "NOT WIRED YET" in AA.__doc__
+    if callers:
+        assert not disclosed, (
+            f"{name} is now referenced by {sorted(callers)} — it is wired. "
+            f"Delete the 'NOT WIRED YET' section; a stale disclosure is worse "
+            f"than none because a reader trusts it.")
+    else:
+        assert disclosed, (
+            f"nothing invokes {name}, so it cannot block anything, and the "
+            f"docstring does not say so. That is the D9 defect this campaign "
+            f"removes, and this author required the same disclosure of #1092.")
