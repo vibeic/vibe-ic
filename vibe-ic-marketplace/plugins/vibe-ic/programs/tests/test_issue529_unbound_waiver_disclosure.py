@@ -212,15 +212,41 @@ def _corpus_waiver_entries():
 def test_corpus_waivers_dialect_carries_no_env_unavailable_entry():
     """The measurement the whole issue turns on: every `waivers`-dialect entry
     in the corpus takes the tier `continue`, so #216's mechanism protected none
-    of them. A corpus edit that changes this picture must not pass unnoticed."""
+    of them. A corpus edit that changes this picture must not pass unnoticed.
+
+    vibe-ic#1028 — RE-MEASURED, NOT RE-TYPED. The withdrawal (#1015/#1010)
+    removed `waivers.json` from five of the six waiver-bearing cells. The
+    withdrawn contribution was measured on the pre-withdrawal tree on its own,
+    so both sides of the subtraction are measured:
+
+        tier               main   − withdrawn   = here
+        WAIVED                7         5           2
+        PASS_STRUCTURAL       1         1           0
+        total                 8         6           2
+
+    The finding itself is UNCHANGED and is what the pins protect: no surviving
+    entry takes `ENV_UNAVAILABLE`, so #216's mechanism still protected none of
+    them. What the corpus no longer holds is a `PASS_STRUCTURAL` occurrence —
+    see `test_pass_structural_is_written_by_no_producer_and_read_by_no_consumer`,
+    where that absence is stated rather than quietly re-pinned to zero.
+    """
     rows = _corpus_waiver_entries()
-    assert len(rows) == 8, [(str(r[0].parent.name), r[1]) for r in rows]
+
+    # REFUSE at zero. `"ENV_UNAVAILABLE" not in tiers` is true of an empty
+    # corpus for the one reason that means nothing, and this test would then
+    # report a corpus it cannot see exactly as it reports a corpus it can.
+    assert rows, (
+        "REFUSING on an empty population rather than passing over it: the "
+        "tracked corpus carries no waivers-dialect entry at all, so the "
+        "'no ENV_UNAVAILABLE entry' finding below would hold vacuously.")
+
+    assert len(rows) == 2, [(str(r[0].parent.name), r[1]) for r in rows]
 
     tiers = {}
     for _wf, _idx, entry in rows:
         tier = (entry.get("verdict_tier") or "").strip().upper()
         tiers[tier] = tiers.get(tier, 0) + 1
-    assert tiers == {"WAIVED": 7, "PASS_STRUCTURAL": 1}, tiers
+    assert tiers == {"WAIVED": 2}, tiers
     assert "ENV_UNAVAILABLE" not in tiers, tiers
 
 
@@ -562,4 +588,20 @@ def test_pass_structural_is_written_by_no_producer_and_read_by_no_consumer():
     hand_authored = [
         (wf.parent.name, idx) for wf, idx, e in _corpus_waiver_entries()
         if (e.get("verdict_tier") or "").upper() == "PASS_STRUCTURAL"]
-    assert len(hand_authored) == 1, hand_authored
+
+    # vibe-ic#1028. This used to assert `== 1` and name the single corpus
+    # occurrence. That occurrence was `sgmii` entry 0, and it lived under a run
+    # root the withdrawal removed (#1015/#1010) — so the anchor is GONE, not
+    # disproved. The executed half above is untouched and is the actual
+    # finding: the one producer of this dialect cannot emit PASS_STRUCTURAL at
+    # all, which is measured by running it, not by reading the corpus.
+    #
+    # The corpus half is re-derived rather than retired, because at zero it
+    # still asserts something that can fail: no tracked entry may carry a tier
+    # NO producer can write. If one is hand-authored again — the exact thing
+    # that put `sgmii` there — this fires. Re-pinning to `== 1` would have been
+    # a lie, and deleting the clause would have removed the only check that
+    # notices the next hand-authored tier.
+    assert hand_authored == [], (
+        "a corpus entry carries PASS_STRUCTURAL, a tier the producer executed "
+        f"above cannot emit — so it was hand-authored: {hand_authored}")

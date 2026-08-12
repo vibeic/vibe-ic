@@ -199,8 +199,8 @@ def test_the_post_emit_hook_is_called():
 
 # ── the shipped document ────────────────────────────────────────────────────
 def test_the_real_checklist_yields_every_identifier_the_issue_names():
-    doc = (_REPO / "benchmark-data/ic/opentitan_aes/phase1/input_doc"
-           / "aes_checklist.txt")
+    doc = (_REPO / "benchmark-data/ic/opentitan_aes/input/docs"
+           / "aes_checklist.md")
     if not doc.is_file():
         pytest.skip("the tracked checklist is absent")
     got = {m["id"] for m in EM.extract_milestones(doc.read_text(errors="replace"))}
@@ -219,7 +219,14 @@ def test_it_emits_on_the_checklist_and_on_nothing_else():
     if not root.is_dir():
         pytest.skip("corpus absent")
     emitting = []
-    for p in root.rglob("phase1/input_doc/*"):
+    # BOTH published spellings of "an input document this corpus shipped":
+    # `input/docs/` is where a run's design input lives, and
+    # `phase1/input_doc/` is the runner's verbatim staged mirror of it. A run
+    # withdrawn from publication takes its mirror with it but leaves its
+    # design input in place, so scanning only the mirror can empty the
+    # denominator and turn this measurement vacuous.
+    for p in (list(root.rglob("phase1/input_doc/*"))
+              + list(root.rglob("input/docs/*"))):
         if p.suffix.lower() not in (".txt", ".md"):
             continue
         try:

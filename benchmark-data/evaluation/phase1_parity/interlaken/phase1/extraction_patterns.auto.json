@@ -1,9 +1,0 @@
-{
-  "_comment": "Auto-discovered extraction patterns (Wave 6 LL-38). Review and promote curated entries to extraction_patterns.json.",
-  "Interlaken_Protocol_Definition.txt": [
-    {
-      "literal": "6 us",
-      "label": "auto-discovered (numeric_unit)"
-    }
-  ]
-}

@@ -1,9 +1,0 @@
-{
-  "fields": {
-    "attack_surface": [
-      "MDIO has no authentication — any STA on the bus can read/write PHY/MMD registers.",
-      "A rogue device asserting a duplicate PHYAD can spoof or contend on the shared MDIO line."
-    ],
-    "security_notes": "MDIO defines no encryption or authentication; the management bus must be physically protected on the board."
-  }
-}

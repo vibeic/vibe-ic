@@ -1,7 +1,0 @@
-{
-  "verdict": "PASS_WITH_WAIVERS",
-  "exit_code": 3,
-  "message": "PASS_WITH_WAIVERS: generic_full_stack no-oracle CPU/SoC class \u2014 connectivity-PASS / functional-DEFERRED capability-gap waiver (cap:cpu_functional_oracle). The connectivity full-stack TB compiled + ran to FULL_STACK_TB_DONE against the real rtl/ (evidence: phase2/stage1/sim_full_stack/generic_full_stack_run/full_stack.log); functional verification is DEFERRED to a per-IC oracle TB (skill testbench-author). Step 4 WAIVED-DEFERRED, not a missing-file FAIL.",
-  "capability_gap": "cap:cpu_functional_oracle",
-  "gate": "cpu_functional_oracle_waiver_check"
-}

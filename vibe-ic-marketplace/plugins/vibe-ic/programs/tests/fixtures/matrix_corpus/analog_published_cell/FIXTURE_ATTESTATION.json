@@ -1,0 +1,16 @@
+{
+  "_comment": "SYNTHESIZED MATRIX FIXTURE \u2014 not a real run artefact (vibe-ic#1028)",
+  "kind": "fixture",
+  "dimension": "63x9 matrix (D3/D4/D7)",
+  "stands_in_for": "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A",
+  "withdrawn_by": "vibe-ic#1028",
+  "generated_by": "programs/tests/fixtures/matrix_corpus_gen.py",
+  "content": "synthesized, representative of artefact KIND only; never a copy of the withdrawn bytes",
+  "artefacts_written": [],
+  "disclosed_skips": [
+    {
+      "path": "phase3/analog/hardmacro/ldo/ldo.gds",
+      "reason": "gitignored by construction outside benchmark-data/ic/** (.gitignore:83-84, negated only at :172-173); PUBLISHING.md states raw geometry is never committed"
+    }
+  ]
+}

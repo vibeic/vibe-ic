@@ -235,5 +235,14 @@ def test_the_placeholder_registers_did_NOT_gain_a_width():
                    or {}).get("width")
             if got is not None and int(got) != P._REG_WIDTH_DEFAULT:
                 fabricated.append((p.name, r.get("name"), got))
-    assert placeholders >= 150, f"only {placeholders} placeholders seen"
+    # 2026-08-12, vibe-ic#1028. Same placeholder population as
+    # `test_issue377_regmap_bit_layout_reads_the_producers_key`, and it moves
+    # by the same measured subtraction — re-run over the 16 withdrawn roots
+    # alone on the pre-withdrawal tree, not inferred from the difference:
+    #     placeholders  202  -  62  =  140      (exact)
+    # The floor keeps its shape and its headroom: it was 150 against 202 (52
+    # of slack), so it moves by the 62 the withdrawal took, to 88. 140 still
+    # clears it with the same margin, so the ratchet can still notice the next
+    # unexplained drop — which re-pinning to just under 140 would have cost.
+    assert placeholders >= 88, f"only {placeholders} placeholders seen"
     assert fabricated == [], fabricated

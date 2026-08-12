@@ -772,6 +772,51 @@ def test_measured_shape_with_max_slew_violations_fails(tmp_path):
 
 
 # ── #447 convention applied here: state the denominator ────────────────────
+def _published_run_root(*parts: str):
+    """A cell that is a PUBLISHED RUN ROOT, not merely a surviving directory.
+
+    vibe-ic#1028. These three tests guarded with `cell.is_dir()`, which is a
+    weaker question than the one they need. A withdrawal does not always
+    remove a cell's whole directory — `benchmark-data/ic/subservient` keeps 12
+    tracked files while its `phase1/generated_docs/` is gone — so `is_dir()`
+    stayed True, the skip never fired, and `evaluate()` was handed a GUTTED
+    cell. It answered NOT_APPLICABLE, and the tests failed as though the gate
+    had regressed. The gate is fine; its subject was withdrawn.
+
+    A published run root is defined here the way `tools/d9_corpus_baseline.py`
+    defines it — a tracked directory carrying `phase1/generated_docs/` — so a
+    partially-withdrawn cell is correctly read as absent rather than as broken.
+
+    The two absences are SPLIT, as elsewhere in this suite: no corpus at all is
+    an outside contributor's normal state; a corpus that is present without
+    this cell is a withdrawal, and the rule lost a real-data anchor.
+    """
+    import pathlib
+    import pytest
+    ic = pathlib.Path(__file__).resolve().parents[5] / "benchmark-data" / "ic"
+    cell = ic.joinpath(*parts)
+    if (cell / "phase1" / "generated_docs").is_dir():
+        return cell
+    if not ic.is_dir():
+        pytest.skip(f"{'/'.join(parts)}: benchmark-data/ic is not in this "
+                    f"checkout at all — the question does not apply")
+    pytest.skip(
+        f"published cell {'/'.join(parts)} WITHDRAWN from publication "
+        f"(vibe-ic#1015/#1010) — benchmark-data/ic is present with "
+        f"{len(list(ic.glob('*/phase1/generated_docs'))) + len(list(ic.glob('*/*/phase1/generated_docs')))} "
+        f"run root(s) and this is not one of them"
+        + (f"; the directory still exists but carries no "
+           f"phase1/generated_docs, so it is a gutted cell rather than a "
+           f"missing one" if cell.is_dir() else "")
+        + ". Measured on the surviving corpus: NO cell has corners declared "
+          "without a sign-off corner among them, so this anchor cannot be "
+          "re-derived. The RULE is still exercised by this module's fixture "
+          "half — test_nominal_corner_alone_is_not_a_timing_verdict, "
+          "test_run_with_no_corner_declaration_is_not_applicable and "
+          "test_signoff_corner_that_analysed_no_paths_is_unreported_not_met — "
+          "what is lost is the confirmation on production output.")
+
+
 def test_a_run_with_no_signoff_corner_says_so_instead_of_claiming_MET():
     """MEASURED on a published cell. R3 — the sign-off MET rule — only examines
     rows whose `role_class` is "signoff" and SKIPS every other role. On a run
@@ -790,10 +835,7 @@ def test_a_run_with_no_signoff_corner_says_so_instead_of_claiming_MET():
     import pytest
     import sta_corner_record_completeness_check as S
 
-    cell = pathlib.Path(__file__).resolve().parents[5] / \
-        "benchmark-data" / "ic" / "subservient"
-    if not cell.is_dir():
-        pytest.skip("published cell not checked out")
+    cell = _published_run_root("subservient")
     d = S.evaluate(cell)
     assert d.get("signoff_corner_rows") == 0, d.get("signoff_corner_rows")
     joined = " ".join(d.get("reasons") or [])
@@ -808,10 +850,7 @@ def test_a_real_multi_corner_run_still_reports_its_counts():
     import pytest
     import sta_corner_record_completeness_check as S
 
-    cell = pathlib.Path(__file__).resolve().parents[5] / \
-        "benchmark-data" / "ic" / "spm" / "v1.5.65_sky130A"
-    if not cell.is_dir():
-        pytest.skip("published cell not checked out")
+    cell = _published_run_root("spm", "v1.5.65_sky130A")
     d = S.evaluate(cell)
     assert d.get("corner_rows", 0) > 1
     assert d.get("signoff_corner_rows", 0) > 0
@@ -824,10 +863,7 @@ def test_the_counts_are_exported_in_the_result():
     import pytest
     import sta_corner_record_completeness_check as S
 
-    cell = pathlib.Path(__file__).resolve().parents[5] / \
-        "benchmark-data" / "ic" / "subservient"
-    if not cell.is_dir():
-        pytest.skip("published cell not checked out")
+    cell = _published_run_root("subservient")
     d = S.evaluate(cell)
     assert "corner_rows" in d and "signoff_corner_rows" in d, sorted(d)
 

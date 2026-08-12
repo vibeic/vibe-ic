@@ -233,9 +233,17 @@ def test_emit_routing_writes_the_file_and_exits_zero(tmp_path):
 def test_the_corpus_is_measured_not_assumed():
     rep = M.check(_CORPUS, _CORPUS / "source_tier.json")
     cc = rep["citation_counts"]
-    assert sum(cc.values()) == 89, cc
-    assert cc["RESOLVES"] == 55, cc
-    assert cc["WITHHELD_ON_RECORD"] == 34, cc
+    # 2026-08-12: 89 -> 83, attributed exactly to the six protocols whose run
+    # output was withdrawn from publication under the owner ruling in
+    # vibe-ic#1015. A citation record is produced by a published L-doc naming
+    # the document it was extracted from; those L-docs are gone, so the
+    # citations go with them. Five of the six cited a document that RESOLVES
+    # (55 -> 50) and the sixth cited one WITHHELD_ON_RECORD (34 -> 33).
+    # The input documents themselves were NOT removed -- the five that had one
+    # are still tracked; what left is the L-doc doing the citing.
+    assert sum(cc.values()) == 83, cc
+    assert cc["RESOLVES"] == 50, cc
+    assert cc["WITHHELD_ON_RECORD"] == 33, cc
     # THE POINT: not one unfollowable pointer is unaccounted for. This is the
     # evidence that the corpus withholds by policy rather than dropping by
     # accident, and it is the assertion that breaks first if that ever changes.

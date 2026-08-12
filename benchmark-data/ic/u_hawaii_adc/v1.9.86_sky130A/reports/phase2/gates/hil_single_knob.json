@@ -1,6 +1,0 @@
-{
-  "gate": "analog_hil_single_knob_check",
-  "verdict": "SKIP",
-  "reason": "no hw_sizing_history.json under analog/",
-  "blocks": []
-}

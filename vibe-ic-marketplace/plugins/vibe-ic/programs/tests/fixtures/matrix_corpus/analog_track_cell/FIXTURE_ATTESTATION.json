@@ -1,0 +1,24 @@
+{
+  "_comment": "SYNTHESIZED MATRIX FIXTURE \u2014 not a real run artefact (vibe-ic#1028)",
+  "kind": "fixture",
+  "dimension": "63x9 matrix (D3/D4/D7)",
+  "stands_in_for": "benchmark-data/ic/u_hawaii_adc",
+  "withdrawn_by": "vibe-ic#1028",
+  "generated_by": "programs/tests/fixtures/matrix_corpus_gen.py",
+  "content": "synthesized, representative of artefact KIND only; never a copy of the withdrawn bytes",
+  "artefacts_written": [
+    "phase3/analog/delta_sigma/delta_sigma.sp",
+    "phase3/analog/delta_sigma/hw_measurements.json",
+    "phase3/analog/delta_sigma/layout.mag",
+    "phase3/analog/delta_sigma/lvs_match.flag",
+    "phase3/analog/delta_sigma/spec.json",
+    "phase3/analog/delta_sigma/topology.md",
+    "phase3/analog/hardmacro/delta_sigma/delta_sigma.lef",
+    "phase3/analog/hardmacro/delta_sigma/delta_sigma.lib",
+    "phase3/analog/hardmacro/delta_sigma/delta_sigma.v",
+    "phase3/analog/ldo/corner_results.json",
+    "phase3/analog/ldo/klayout_drc.lyrdb",
+    "phase3/analog/ldo/pre_vs_post.json"
+  ],
+  "disclosed_skips": []
+}

@@ -1,7 +1,0 @@
-{
-  "violations": [
-    "L1_DATASHEET.json.description_evidence.source: 'input/docs/__chip_root_docs__/phase3/stage4/foundry_handoff/README.txt'",
-    "L1_DATASHEET.json.extraction_evidence.L1_description.doc_intro[0].source: 'input/docs/__chip_root_docs__/phase3/stage4/foundry_handoff/README.txt'"
-  ],
-  "rule": "phase1 forbidden from reading the IP's own RTL or downstream build artefacts (RTL-as-oracle benchmark protocol, issue #38)"
-}

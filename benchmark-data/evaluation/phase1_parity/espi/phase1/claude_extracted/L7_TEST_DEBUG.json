@@ -1,9 +1,0 @@
-{
-  "ic_name": "Enhanced Serial Peripheral Interface (eSPI)",
-  "test_debug": {
-    "in_band_reset": "CMD 0xFF resets the link",
-    "status_poll": "GET_STATUS (0x20) reads channel FREE/AVAIL bits",
-    "config_readback": "GET_CONFIGURATION (0x22) reads negotiated frequency/mode/CRC",
-    "crc_check": "optional CRC-8 detects bit errors"
-  }
-}

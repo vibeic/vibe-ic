@@ -154,8 +154,8 @@ def test_the_section_slice_survives_a_subsection():
 # ── the shipped document ────────────────────────────────────────────────────
 @pytest.fixture(scope="module")
 def real():
-    doc = (_REPO / "benchmark-data/ic/opentitan_aes/phase1/input_doc"
-           / "aes_registers.txt")
+    doc = (_REPO / "benchmark-data/ic/opentitan_aes/input/docs"
+           / "aes_registers.md")
     if not doc.is_file():
         pytest.skip("the tracked input doc is absent")
     return {r["name"]: r for r in

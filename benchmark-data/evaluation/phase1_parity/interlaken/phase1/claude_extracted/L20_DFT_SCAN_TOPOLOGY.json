@@ -1,6 +1,0 @@
-{
-  "fields": {
-    "scan_topology": "N/A — protocol definition, no DFT defined.",
-    "in_band_diagnostics": "Per-lane Diagnostic Word (CRC-32 + lane status) provides link health observability."
-  }
-}

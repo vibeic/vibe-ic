@@ -193,9 +193,9 @@ def test_two_documents_of_one_design_agree_on_every_shared_address():
     overlap. Chip-AGNOSTIC assertion: it compares the design against ITSELF
     and hardcodes no name."""
     docs = (PROGRAMS.parent.parent.parent.parent
-            / "benchmark-data/ic/ibex/phase1/input_doc")
-    flat = docs / "ibex_cs_registers.txt"
-    paired = docs / "ibex_performance_counters.txt"
+            / "benchmark-data/ic/ibex/input/docs")
+    flat = docs / "ibex_cs_registers.rst"
+    paired = docs / "ibex_performance_counters.rst"
     if not (flat.is_file() and paired.is_file()):
         pytest.skip("corpus design not present in this checkout")
 

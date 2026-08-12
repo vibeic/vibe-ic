@@ -7,61 +7,32 @@
 
 This tree holds converged evidence AND runs that did not converge, and the folder name deliberately does not say which (`benchmark-data/PUBLISHING.md`: the verdict lives in `RESULT.md`, and a `clean_run_*`/`pass_*` prefix would strip the committed phase folders). This index is the answer that costs no JSON to read.
 
-**Nothing here is deleted for failing.** Removing a failed run would make "we never ran this" and "we ran it, it failed, and we kept the record" the same state. Cells marked `corpus: yes` are also the population two BLOCKING gates walk (`cross_layer_reference_check --corpus`, `l4_systemrdl_export audit-corpus`).
+**A run that does not pass is WITHDRAWN from publication.** Owner ruling, 2026-08-12 (vibe-ic#1015, #1010): benchmark-data that does not pass does not go on GitHub. This reverses what this index said until that date — that nothing here is deleted for failing, because removing a failed run would make "we never ran this" and "we ran it, it failed, and we kept the record" the same state. That concern is answered by GIT rather than by publication: a withdrawal is a `git rm`, so every removed run is still in history and the two states are still distinguishable to anyone who looks there. What changed is that the published tree is no longer where a failed run is kept. Cells marked `corpus: yes` are also the population two BLOCKING gates walk (`cross_layer_reference_check --corpus`, `l4_systemrdl_export audit-corpus`).
 
 | classification | cells |
 |---|---|
-| CONVERGED EVIDENCE | 4 |
-| RETAINED FAILURE | 11 |
-| UNAUDITED RECORD | 11 |
-| **total** | **26** |
+| CONVERGED EVIDENCE | 0 |
+| RETAINED FAILURE | 0 |
+| UNAUDITED RECORD | 0 |
+| **total** | **0** |
 
-## CONVERGED EVIDENCE — 4
+## CONVERGED EVIDENCE — 0
 
 The cell's own audit artefact reads PASS or PASS_WITH_WAIVERS. This is what the project means when it says a cell converged.
 
-| cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
-|---|---|---|---|---|---|---|
-| `spm/v1.10.18_sky130A` | PASS_WITH_WAIVERS | P36 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | PASS_WITH_WAIVERS | yes | converged (plugin v1.10.18, published 2026-08-09); a FRESH clean-room run whose PRODUCING and MEASURING plugin version are the same, so its orchestrator record agrees with its completion audit instead of carrying a stale derived verdict; real-GDS witness superseding v1.9.94_sky130A — see notes below for what that supersession does and does not carry forward |
-| `spm/v1.5.58_ihp-sg13g2` | PASS_WITH_WAIVERS | P35 F0 M0 W3 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged; the real-GDS source for #287/#291 and the formal-evidence-chain repro for #412/#417/#418/#420; also the current source (2026-08-07) for #235's own fixture test — see notes below |
-| `spm/v1.9.96_gf180mcuD` | PASS_WITH_WAIVERS | P34 F0 M0 W4 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | converged (plugin v1.9.96, re-published 2026-08-07 after the v1.9.96 ciel-content-addressed-hash DFT/ATPG fix and the earlier v1.9.94 metal-fill fixes); real-GDS witness superseding v1.5.66_gf180mcuD — see notes below for what that supersession does and does not carry forward |
-| `u_hawaii_adc/v1.9.86_sky130A` | PASS | P8 F0 M0 W0 | — | UNSTATED | yes | the converged analog cell, re-verified on plugin 1.9.86 (PASS=8 FAIL=0 MISSING=0, gate exit 0). No phase2/ because it runs the A-track, not the digital RTL->synth stage; the structure gate records that as a disclosed note rather than a silent pass. Its phase3/analog/ tree (hardmacro layouts, per-block specs) is published here rather than left in a pre-canonical run tree at the IC level — the publisher used to drop it, so the folder that IS the evidence did not contain it. |
+_none._
 
-## RETAINED FAILURE — 11
+## RETAINED FAILURE — 0
 
 An audit ran and did NOT converge. These are retained on purpose: deleting them would make "we never ran this" and "we ran it, it failed, and we kept the record" the same state. Read the step counts — they separate one failed gate from a flow that never reached the steps at all.
 
-| cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
-|---|---|---|---|---|---|---|
-| `caravel_user_project` | FAIL | P28 F2 M0 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | provenance-defect row in #413; inventory member of the #419/#426 layout-artefact audits |
-| `caravel_user_project/v1.9.43_sky130A` | FAIL | P5 F10 M10 W2 | vibe_ic=PASS_WITH_WAIVERS; phase3=PASS_WITH_WAIVERS; phase2=PASS_WITH_WAIVERS | PASS_WITH_WAIVERS | yes | corpus member — walked by both blocking corpus gates |
-| `edge_llm_accel` | FAIL | P22 F8 M4 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | COMPLETE | yes | read directly by tests under programs/tests/ (its input/docs/ and its published-cell layer gates); provenance-defect row in #413 |
-| `edge_llm_matmul_accel` | FAIL | P5 F3 M28 W2 | phase2=FAIL | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
-| `ibex` | FAIL | P2 F7 M27 W0 | vibe_ic=FAIL; phase2=FAIL | — | yes | the richest L4 in the repo (48 registers / 84 fields); the cell #377 (OPEN) tested its SystemRDL export hypothesis against, via phase1/systemrdl/ |
-| `opentitan_aes` | FAIL | P3 F6 M25 W1 | vibe_ic=FAIL; phase2=FAIL | — | yes | reproduction for #405 — its input/docs/ drives the real walker that returned null for everything; also read directly by tests under programs/tests/ |
-| `sha256` | FAIL | P5 F5 M25 W0 | vibe_ic=FAIL; phase2=FAIL | UNSTATED | yes | reproduction for #186 (OPEN) part 1 — the 9th top-level port reproduces on this cell |
-| `sha256/clean_run_v1422_20260715` | FAIL | P29 F3 M3 W1 | vibe_ic=FAIL; phase3=FAIL; phase2=FAIL | UNSTATED | yes | evidence artefact itemised by #140/#145/#146/#147 (closed) and #413; NOT named by #235 itself — see note below the tables |
-| `sha256/clean_run_v1427_20260715` | FAIL | P33 F3 M0 W3 | vibe_ic=FAIL; phase3=FAIL; phase2=PASS_WITH_WAIVERS | UNSTATED | yes | corpus member — walked by both blocking corpus gates |
-| `subservient` | FAIL | P24 F9 M0 W1 | vibe_ic=FAIL; phase3=FAIL; phase2=FAIL | PRODUCTION-READY | yes | reproduction for #414 (5 near-fabricated HASH_MISMATCHes) and #417 (a shipped formal PASS citing a log that does not exist); also read directly by tests under programs/tests/ |
-| `u_hawaii_adc/v1.9.86_sky130A/reports` | FAIL | P0 F0 M40 W0 | — | — | no | record only |
+_none._
 
-## UNAUDITED RECORD — 11
+## UNAUDITED RECORD — 0
 
 No `reports/audit/phase23_completion_audit.json` exists for this cell, so there is NO machine verdict either way. A claim made in its RESULT.md is unbacked by an audit artefact; that is not the same as a failure, and it is not a pass.
 
-| cell | audit verdict | steps | orchestrator | RESULT.md says | corpus | retained for |
-|---|---|---|---|---|---|---|
-| `caravel_user_project/clean_run_v1432_commercial` | — | — | — | UNSTATED | no | record only |
-| `caravel_user_project/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `ibex/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `ibex/rerun_v1346` | — | — | — | UNSTATED | no | the only CRYPTOGRAPHIC MATCH in the #426 layout-artefact recovery audit |
-| `opentitan_aes/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1335` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1431_commercial_pdk` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
-| `sha256/clean_run_v1461_0223` | — | — | — | UNSTATED | no | reproduction for #210 (sign-off corner declared with no record) and the #316 UNTYPED_STEPS discovery |
-| `subservient/clean_run_v1335` | — | — | — | UNSTATED | no | record only |
-| `subservient/clean_run_v1432int_commercial` | — | — | — | UNSTATED | no | record only |
+_none._
 
 ## Reading the columns
 
@@ -74,6 +45,7 @@ No `reports/audit/phase23_completion_audit.json` exists for this cell, so there 
 
 ## Notes
 
+- **2026-08-12 — the retained_for map is empty because the corpus it indexed is gone.** PR #1028 withdrew ALL 14 published run roots under `benchmark-data/ic/` (owner ruling, 2026-08-12). Every one of the 6 retention notes that used to live here named a run root that is no longer published, and the gate FAILS if a key names no published cell. The notes are not deleted history: the reasons a cell was retained are preserved in this file's `notes` and in the PR body. What remains under `benchmark-data/ic/` is design INPUT plus curated metadata (`facts.yaml`), never run output.
 - **The `#235` attribution is weaker than this repo repeats.** PR #421 and issue #440 both state that `sha256/clean_run_v1422_20260715` IS the #235 reproduction. Checked: #235's own body and comments name no `benchmark-data/` path at all, and the run its landing comment cites as byte-identical evidence was `spm/v1.5.65_sky130A` (retired 2026-08-07, see below) — #140/#145/#146/#147 itemise its files as evidence, but not for the reason most often given for keeping it. A citation repeated three times is not a citation checked once.
 - **No cell here is loaded as a test fixture merely by being cited in an issue.** Deleting a cited-but-unread cell would break no test and would still destroy the record an issue points at. That is the argument for labelling rather than deleting, and it is also why `retained for` is prose a maintainer writes rather than something derived from a grep.
 - **`spm/v1.5.65_sky130A` was retired 2026-08-07**, replaced by `spm/v1.9.94_sky130A` — an owner-directed re-publish after this session's plugin fixed the STA_CORNER_BASIS_MISMATCH false-positive (v1.9.93) and the density metal-fill engine's container-reachability gap (v1.9.94), both of which the v1.5.65 run predates. What supersedes and what does not: the GDS/DRC/LVS/STA/DFT-scan-coverage evidence is a fresh, independently-verified run on the current plugin (see the new cell's RESULT.md). What does NOT carry forward byte-identically: the retired cell's specific role as `#235`'s cited witness (that citation now points at a file that no longer exists — this note is the record of where it went), and its `path_delay_coverage.json`/`sdd_coverage.json` DT2/DT3 blobs, which on the new run report NOT_APPLICABLE for this design rather than the old run's graded PASS — `test_a_real_grade_is_never_downgraded_by_a_stale_record` (#235's own regression test) now sources that fixture from `spm/v1.5.58_ihp-sg13g2` instead, which still carries it.

@@ -301,9 +301,31 @@ def test_the_tracked_cells_are_still_reached():
         ["git", "-C", str(_REPO), "ls-files", "--",
          "benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def"],
         capture_output=True, text=True, timeout=_T).stdout.split()
-    assert len(percell) == len(tracked) > 0, (
+    # The two claims are SPLIT because they fail for opposite reasons and a
+    # reader has to know which one happened. Before vibe-ic#1028 they shared
+    # one `== ... > 0` and one message, so an empty corpus reported itself as
+    # a coverage cut — a true failure with a false diagnosis.
+    assert len(percell) == len(tracked), (
         "the per-cell gates no longer cover every PUBLISHED cell: %d gate(s) "
         "for %d tracked routed.def" % (len(percell), len(tracked)))
+    assert tracked, (
+        "REFUSING on an empty population rather than passing over it. The "
+        "published corpus carries ZERO cells with "
+        "phase3/stage3/pnr/routed.def, so all three post-route gates this "
+        "loop declares — macro_obs_geometry_intersect_check, "
+        "drc_vacuous_pass_check, step_internal_fail_bubble_up_check — are now "
+        "invoked over nothing. Measured across the withdrawal of "
+        "vibe-ic#1015/#1010: 1 cell -> 0.\n"
+        "This is a REAL loss and the assertion above cannot see it: with both "
+        "sides at zero the coverage claim is still true. "
+        "`repo_hygiene_gates.sh` does disclose the expansion ('expanded over "
+        "0 item(s) ... NOTHING was checked over it'), but no gate FAILS on it, "
+        "so this line is the only thing in the suite that reports it.\n"
+        "Re-deriving cannot help — the population is genuinely empty — and "
+        "deleting this clause would make an uncovered corpus print exactly "
+        "like a covered one, which is the vacuous pass "
+        "`gate_zero_denominator_refuses_check` exists to forbid. Publishing "
+        "any passing cell that carries a routed DEF clears it.")
 
 
 # ==========================================================================
