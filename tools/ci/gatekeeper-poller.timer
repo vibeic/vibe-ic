@@ -1,0 +1,20 @@
+[Unit]
+Description=Run the vibe-ic gatekeeper required-status poller every 5 minutes
+# WHY A TIMER AND NOT A WEBHOOK. A webhook needs an inbound path, which means
+# exposing a listener through the reverse proxy. Polling needs only outbound
+# HTTPS, so the runner host keeps zero inbound surface. The cost is latency: a
+# PR waits up to 5 minutes before its gate starts. That is the right trade for
+# a repo where the gate itself takes minutes anyway.
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+# If the host was down, run once on the next boot rather than silently skipping
+# the window. A gate that goes quiet while nobody is looking is the failure
+# mode this whole mechanism exists to end.
+Persistent=true
+AccuracySec=30s
+Unit=gatekeeper-poller.service
+
+[Install]
+WantedBy=timers.target
