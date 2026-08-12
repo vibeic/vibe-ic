@@ -415,9 +415,37 @@ def _published_run_trees(corpus: Path) -> List[Path]:
     # anything was reachable at all.
     #
     # `rglob` makes the two invocations agree by construction rather than by the
-    # caller remembering the right depth. The NAME pattern is unchanged: the
-    # population is still `clean_run_*` trees and this commit does not widen it.
-    on_disk = sorted(p for p in corpus.rglob("clean_run_*") if p.is_dir())
+    # caller remembering the right depth.
+    #
+    # THE NAME PATTERN WAS THE REST OF THE SAME DEFECT (vibe-ic#1015).
+    # #1025 fixed the DEPTH and said in its own words that it "does not widen"
+    # the name pattern. But `clean_run_*` is a naming convention that most of
+    # the published corpus does not follow: run roots are also published as
+    # `<design>/<version>_<pdk>`. MEASURED on v1.10.33 (`94754771`):
+    #
+    #     clean_run_* by NAME        13 swept,  3 with reports/,  5 finding(s)
+    #     + structural run roots     22 swept, 12 with reports/,  8 finding(s)
+    #
+    # So the gate #1015 calls "the only thing that can see" unacknowledged
+    # step-internal failures had never looked at two published run roots that
+    # carry three of them, and had never confirmed three others clean over
+    # 92/67/88 examined reports. A population selected by NAME reports
+    # confidently about whichever runs happened to be named the old way — the
+    # wrong-population lie this repo already has two gates for.
+    #
+    # The structural definition is `<design>/<run>` carrying a `reports/` tree,
+    # which is what a published run IS; the name pattern is kept in the union so
+    # nothing that was swept before stops being swept. Flow-phase directories
+    # are excluded by name because they are stages INSIDE a run, not runs — and
+    # every one of them examined 0 reports, so including them would add only
+    # noise to the denominator.
+    _NOT_A_RUN = {"phase1", "phase2", "phase3", "stage1", "stage2", "stage3",
+                  "reports", "audit", "orchestrator", "_logs", "input", "docs"}
+    by_name = {p for p in corpus.rglob("clean_run_*") if p.is_dir()}
+    structural = {p for p in corpus.glob("*/*")
+                  if p.is_dir() and p.name not in _NOT_A_RUN
+                  and (p / "reports").is_dir()}
+    on_disk = sorted(by_name | structural)
     if published is None:
         return on_disk
     root = corpus.resolve()
@@ -464,6 +492,43 @@ def _load_baseline(p: Path) -> Optional[int]:
     return n if isinstance(n, int) else None
 
 
+def _read_baseline_doc(p: Path) -> Dict[str, Any]:
+    if not p.is_file():
+        return {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _load_baseline_population(p: Path) -> Optional[Dict[str, int]]:
+    """The denominator the baselined count was measured over.
+
+    Returns None for a baseline recorded before the population was written
+    down — "I do not know what it was measured over" is its own answer and must
+    not be read as "it was the same".
+    """
+    d = _read_baseline_doc(p)
+    a, b = d.get("runs_swept"), d.get("runs_with_reports")
+    if isinstance(a, int) and isinstance(b, int):
+        return {"runs_swept": a, "runs_with_reports": b}
+    return None
+
+
+def baselined_runs_missing(corpus: Path, bl: Path) -> List[str]:
+    """Runs the baseline names that are no longer on disk (vibe-ic#1025/#1015).
+
+    A ratchet that names a run which has been retired keeps counting its
+    findings as outstanding debt while nothing can ever pay them down, and
+    reads the retirement as progress when the total falls.
+    """
+    per_run = _read_baseline_doc(bl).get("per_run")
+    if not isinstance(per_run, dict):
+        return []
+    return [r for r in per_run if not (corpus / r).is_dir()]
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Doctrine rule #4 — every step-internal "
@@ -490,6 +555,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"error: not a directory: {corpus}", file=sys.stderr)
             return 2
         rep = check_corpus(corpus)
+        rep["baseline_runs_missing"] = baselined_runs_missing(
+            corpus, Path(args.baseline) if args.baseline else _HERE / BASELINE_NAME)
         if args.json:
             out = Path(args.json)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -500,10 +567,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             bl.write_text(json.dumps(
                 {"_comment": (
                     "Unacknowledged step-internal FAIL/MISSING reports across "
-                    "the PUBLISHED (git-tracked) run trees. MAY ONLY SHRINK — "
-                    "each one is a report declaring FAIL that no waiver and no "
-                    "orchestrator record names. The wrong repair is to loosen "
-                    "the matcher until the number falls (vibe-ic#693)."),
+                    "the PUBLISHED (git-tracked) run trees. MAY ONLY SHRINK "
+                    "UNDER A FIXED POPULATION — each one is a report declaring "
+                    "FAIL that no waiver and no orchestrator record names. The "
+                    "wrong repair is to loosen the matcher until the number "
+                    "falls (vibe-ic#693). `runs_swept`/`runs_with_reports` are "
+                    "the DENOMINATOR this count was taken over and are part of "
+                    "the record: a fall while they shrink is runs leaving the "
+                    "corpus, not debt being paid, and the gate now says so "
+                    "instead of crediting it (vibe-ic#1015)."),
                  "findings_total": now,
                  "runs_swept": rep["runs_swept"],
                  "runs_with_reports": rep["runs_with_reports"],
@@ -511,9 +583,43 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"wrote {bl} (findings_total={now})")
             return 0
         base = _load_baseline(bl)
+        base_pop = _load_baseline_population(bl)
         print(f"corpus sweep: {rep['runs_swept']} published run tree(s), "
               f"{rep['runs_with_reports']} with a reports/ tree, "
               f"{now} unacknowledged step-internal FAIL(s)")
+        # THE DENOMINATOR TRAVELS WITH THE NUMBER (vibe-ic#1015).
+        #
+        # This ratchet compared `findings_total` against a recorded integer and
+        # nothing else. A count is only comparable over the SAME population, and
+        # this one's population is the published corpus — which shrinks whenever
+        # a cell is retired. MEASURED: #1015 adjudicated 38 findings over 16
+        # runs by hand; on v1.10.33 the same sweep says 5, and the fall is
+        # RETIREMENT, not repair — one of the four runs the baseline names does
+        # not exist on disk any more. The gate printed
+        #
+        #     [PASS] 7 -> 5; lower the baseline so the recorded number stops
+        #                    claiming debt that is paid.
+        #
+        # over runs that were withdrawn. "Debt that is paid" is precisely what
+        # it was not, and a reader deciding what to do about those runs would
+        # have been told the opposite of the truth.
+        #
+        # So the population is recorded alongside the number, and a fall is only
+        # ever called PAID when the population did not shrink under it.
+        pop_note = ""
+        if base_pop is not None:
+            gone = [r for r in rep.get("baseline_runs_missing", [])]
+            if (base_pop["runs_swept"] != rep["runs_swept"]
+                    or base_pop["runs_with_reports"] != rep["runs_with_reports"]
+                    or gone):
+                pop_note = (
+                    f"POPULATION CHANGED since the baseline: swept "
+                    f"{base_pop['runs_swept']} -> {rep['runs_swept']}, with "
+                    f"reports/ {base_pop['runs_with_reports']} -> "
+                    f"{rep['runs_with_reports']}"
+                    + (f"; {len(gone)} baselined run(s) no longer on disk: "
+                       f"{', '.join(sorted(gone))}" if gone else ""))
+                print(f"[POPULATION] {pop_note}")
         if rep["runs_with_reports"] == 0:
             print("VACUOUS_PASS: no published run tree carries a reports/ "
                   "directory — the sweep examined nothing.")
@@ -530,6 +636,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"no waiver and no orchestrator record names.")
             return 1
         if now < base:
+            if pop_note:
+                # A fall under a shrunken population is not a repair. Say which
+                # one it is instead of crediting it as progress.
+                print(f"[PASS] {base} -> {now}, but NOT as debt paid: the "
+                      f"population moved under the count. Some or all of the "
+                      f"fall is runs leaving the corpus, not failures being "
+                      f"acknowledged — re-baseline only after deciding what "
+                      f"happened to those runs (vibe-ic#1015).")
+                return 0
             print(f"[PASS] {base} -> {now}; lower the baseline so the recorded "
                   f"number stops claiming debt that is paid.")
             return 0
