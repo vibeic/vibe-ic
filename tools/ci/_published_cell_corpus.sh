@@ -113,9 +113,18 @@ published_cells_with_routed_def_and_macro_lef() {
       printf '%s\n' "$def"
     fi
   done <<<"$defs"
-  # Explicit: the last `[ -n ... ]` in the loop is false whenever the final
-  # cell has no LEF, and under `set -e` a function inheriting that status would
-  # be reported by `gate_dispatch_over` as a FAILED PRODUCER — an empty
-  # intersection announced as "git could not look".
+  # Explicit, and NOT load-bearing today — measured rather than assumed. I
+  # first wrote that without it the false `[ -n ... ]` on a last cell with no
+  # LEF would leak out and `gate_dispatch_over` would announce an empty
+  # intersection as a FAILED PRODUCER. Deleting the line and driving the real
+  # function over a DEF-only corpus returns rc 0 anyway: an `if` whose
+  # condition is false and which has no `else` is itself 0 in bash, so the
+  # loop's status is 0 regardless.
+  #
+  # It stays because the distinction it protects is one `gate_dispatch_over`
+  # acts on — a non-zero producer is reported as covering an unknown fraction
+  # of its corpus — and the next command appended after this loop would
+  # reinstate the leak silently. It is insurance, and the comment says so
+  # rather than claiming a bug it does not currently prevent.
   return 0
 }
