@@ -270,8 +270,43 @@ run_pytest() {
     echo "  FAIL  targeted test selection produced no files — not a clean result"
     FAILED=1; rm -f "$sel"; return
   fi
-  if out="$( cd "$PLUGIN" && xargs -a "$sel" python3 -m pytest -q "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread "${junit[@]+"${junit[@]}"}" 2>&1 )"; then
+  # THIS SESSION'S ENVIRONMENT IS PART OF THE GATE (vibe-ic#1047, one level up).
+  #
+  # #1047 fixed the environment of a pytest this suite SPAWNS. The same defect was
+  # sitting on the suite the LANDING GATE ITSELF runs, and it was worse, because
+  # this is the session whose exit code decides whether a change may be pushed.
+  #
+  # Bare `python3 -m pytest` autoloads every `pytest11` entry point installed on
+  # the host. Measured on the landing host 2026-08-12: of 8 installed entry points
+  # exactly one — `web3`'s `pytest_ethereum` — raises at import
+  # (`ImportError: cannot import name 'ContractName' from 'eth_typing'`), and it
+  # takes the session down AT COLLECTION. Not one test runs. A package this repo
+  # does not use, has never imported, and does not ship made the landing gate
+  # unrunnable, which is precisely why merges were going around it via
+  # `gh pr merge` — the bypass vibe-ic#1019/#1036 is about.
+  #
+  # So the session declares what it loads instead of inheriting it. The suite needs
+  # exactly ONE third-party plugin — `pytest-timeout`, for the `--timeout` flags on
+  # this very line — verified by grepping the whole suite for the fixtures and marks
+  # of every other installed plugin: requests_mock 0 files, typeguard 0, anyio 0,
+  # hydra 0, xdist mentioned only in a README.
+  #
+  # `suite_write_guard` is UNAFFECTED and must stay that way: conftest.py loads it
+  # through `pytest_plugins`, not through an entry point, so disabling autoload does
+  # not disarm the write guard. That is the check that would have made this fix a
+  # false green, so it is asserted rather than assumed — the guard's PASS/FAIL line
+  # must still appear in `out`.
+  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 xargs -a "$sel" python3 -m pytest -q -p pytest_timeout "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread "${junit[@]+"${junit[@]}"}" 2>&1 )"; then
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
+    # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
+    # the write guard from the session would be a false green, and it would look
+    # exactly like this one. The guard reports on every session it is loaded into,
+    # so its absence from the output means it did not run.
+    if ! printf '%s\n' "$out" | grep -qa 'suite_write_guard:'; then
+      echo "  FAIL  suite_write_guard did not report — the session ran WITHOUT the"
+      echo "        write guard, so 'the suite wrote nothing' was never checked."
+      FAILED=1
+    fi
   else
     printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
