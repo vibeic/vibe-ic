@@ -21,8 +21,19 @@ between a metrics system and a new place for lies to live:
    clothes. Every key whose tail is not in `DIRECTIONS` must come back
    `undeclared`, and `better`/`worse` must be absent for it.
 
-The always-fires mutant for this file is "label everything better/worse": it
-passes the delta assertions and dies on the undeclared arm.
+TWO always-fires mutants are pinned here, because the first version of this
+file only had one and the second one SURVIVED:
+
+  * `direction_for` -> always "lower" (label everything better/worse). Passes
+    the delta assertions, dies on `test_an_undeclared_key_is_never_called_...`.
+  * `key_defect` -> always `None` (accept every key). This one used to leave
+    the file 17/17 GREEN: `conformance_defects` carries an independent
+    `startswith` check that caught the only key-shape test present, so the
+    arity / empty-component / character-class rules inside `key_defect` were a
+    ban rather than a check. The three tests marked below kill it.
+
+A mutant that no test kills is the file telling you which of its assertions
+are decoration.
 """
 import json
 import subprocess
@@ -79,6 +90,46 @@ def test_a_key_that_does_not_lead_with_its_step_is_a_defect(tmp_path):
     (d / "14.json").write_text(json.dumps({"19__design__area": 1}))
     defects = sm.conformance_defects(tmp_path)
     assert any("does not lead with the step" in x for x in defects), defects
+
+
+# The three tests below exist because of a PAIRED-GUARD result, not a hunch.
+# Neutering `key_defect` to `return None` — accept every key — left the whole
+# file at 17/17 green. `conformance_defects` carries its OWN `startswith`
+# check, so the test above survives the mutant and the SHAPE rules inside
+# `key_defect` (arity, empty component, character class) had nothing standing
+# on them. Every key below LEADS WITH ITS STEP on purpose, so the independent
+# startswith check cannot fire and only `key_defect` can produce the defect.
+def test_a_key_with_fewer_than_three_parts_is_a_defect(tmp_path):
+    """`<step>__<domain>` alone is not attributable: it names no measurement."""
+    d = tmp_path / sm.METRICS_REL
+    d.mkdir(parents=True)
+    (d / "14.json").write_text(json.dumps({"14__design": 1}))
+    defects = sm.conformance_defects(tmp_path)
+    assert any("at least" in x for x in defects), defects
+
+
+def test_a_key_with_an_empty_component_is_a_defect(tmp_path):
+    """`14____area` splits to a hole. A hole is not a domain."""
+    d = tmp_path / sm.METRICS_REL
+    d.mkdir(parents=True)
+    (d / "14.json").write_text(json.dumps({"14____area": 1}))
+    defects = sm.conformance_defects(tmp_path)
+    assert any("empty path component" in x for x in defects), defects
+
+
+def test_emit_refuses_a_qualified_key_of_the_wrong_character_class(tmp_path):
+    """An already-qualified key skips the prefixing path, so it is the only
+    way a caller can put an arbitrary string into the schema. `emit` must
+    still refuse it — otherwise the one door that bypasses key construction
+    is also the one door with no lock."""
+    try:
+        sm.emit(tmp_path, "14", {"14__Design__area": 1})
+    except ValueError as exc:
+        assert "lowercase" in str(exc), exc
+    else:
+        raise AssertionError(
+            "emit accepted an upper-case component; a schema whose case is "
+            "not enforced is not greppable, which is the whole point")
 
 
 def test_emit_merges_rather_than_truncating(tmp_path):
