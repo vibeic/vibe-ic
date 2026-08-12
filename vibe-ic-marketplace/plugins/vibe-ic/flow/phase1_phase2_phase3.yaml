@@ -1834,7 +1834,27 @@ steps:
       all_of:
         - files_exist: ["phase3/analog/*/spec.json OR phase1/analog/*/spec.json"]
         - program_exit_zero: "analog_a1_spec_extract_check . --json reports/analog/a1_spec.json"
-    blocks_on: []
+    # D1 ADDED (vibe-ic#1070). A1's own `required_inputs` already declared TWO
+    # reads from D1 — `L1_DATASHEET.json` and `L5_ADI_SPEC.json` — the flow
+    # saying, in its own words, that the analog track's entry point consumes
+    # Phase 1's output. `blocks_on: []` named nothing, so D1 sat outside A1's
+    # transitive ancestry and `flow_step_execution_coverage_check.analyze()` —
+    # the ONLY consumer that can contradict a step which passed its own gate
+    # over an input whose PRODUCER failed — was disarmed for both edges. A
+    # FAILED Phase 1 could not red the analog track's entry point, which then
+    # self-certified on the presence of its own spec files.
+    #
+    # This is not an analogy to the step-1/D1 defect this flow already paid for
+    # and documents at step 1 — it is the SAME defect, on a second step, and
+    # the repair is the same one: declaring the edge arms the guard that
+    # already exists rather than adding a new one.
+    #
+    # A1 also leaves `flow_dependency_graph_check.DECLARED_ROOTS` in the same
+    # commit, because a declared entry point that has dependencies is a
+    # contradiction the checker fails on by design. That register may only
+    # SHRINK, and #923 already set the precedent when P0 left it for exactly
+    # this reason.
+    blocks_on: [D1]
 
   - id: A2
     name: "Analog Topology Selection"
