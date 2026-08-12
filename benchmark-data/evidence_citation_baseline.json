@@ -62,6 +62,7 @@
     "7af34dcb14fecc096972c9f945d142e7",
     "7b8aed359b71d11265e47e66ffd1d951",
     "7bde8a76e63ac470e9a8a6325a627a5a",
+    "7c2974c803f514da8e82de1f4090c4f7",
     "7d25ee1f674419458b501c7fa5d6e032",
     "7ff46a926d2693e3e01515562d1684f4",
     "8057d7385b4b8bb41e7177fc84d8188a",
@@ -94,6 +95,7 @@
     "c2ff0662ae7a7b936f35739959c95e14",
     "c6c6c88408a5eea425ce86fed7e8ab99",
     "c72cbe10f7a5c5d523946e1478e10bc5",
+    "c86bc8e974bb8f9d2190be3e57c37b81",
     "c885a65288ea93b1377a3504a91ae9b8",
     "cadf0dee1977bde0291358781a7ce7f2",
     "cbb86981a604fc73bdc62427ceb26a56",
@@ -139,7 +141,7 @@
     "ffe0db8af55e07c63013050d45a76c66"
   ],
   "scope_expansion": {
-    "previous_size": 98,
-    "reason": "vibe-ic#1044, both halves, measured against origin/main a38902d1. (1) The extractor could not see the BRACE notation the corpus writes multi-artefact citations in; (2) DOCUMENT citations carrying a directory (u_hawaii_adc/RESULT.md) were seen and declined. Citations checked 221 -> 301. 40 entries became newly visible; 38 are pre-existing debt and are absorbed here. The remaining 2 are a REAL REGRESSION -- benchmark-data/ic/u_hawaii_adc/{RESULT,BENCHMARK_VERIFICATION_REPORT}.md were deleted by 95787ef8 on 2026-08-06 and METHODOLOGY.md was not updated -- and are DELIBERATELY NOT BASELINED, so this gate stays RED on them. Baselining a defect a widened instrument just found is how the widening becomes laundering. Census with the full 38 and a per-class sample: vibe-ic#1168. The excluded regression: vibe-ic#1169."
+    "previous_size": 136,
+    "reason": "consolidation of #1149 into #1100 dropped two digests from the regenerated baseline: METHODOLOGY.md::u_hawaii_adc/RESULT.md and ::BENCHMARK_VERIFICATION_REPORT.md. Both artefacts are absent at 94754771 AND a38902d1, so the corpus did not change and these are the same pre-existing debt the document half of #1044 makes visible"
   }
 }
