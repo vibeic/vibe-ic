@@ -356,6 +356,28 @@ SMOKE_BASENAMES: tuple[str, ...] = (
 _SOURCE_DIRS: tuple[str, ...] = ("programs", "benchmark")
 _TESTS_REL = "programs/tests"
 
+# Rule 6 (vibe-ic#1057) — REPO-ROOT directories that sit OUTSIDE the plugin and
+# whose files the plugin's tests drive by PATH rather than by import.
+#
+# Measured hole this closes: `tools/gatekeeper-land.sh` is named by 40 test
+# files, and a change to it selected 15 — the smoke floor, and nothing else.
+# Two independent reasons, either one alone sufficient:
+#
+#   * `select_tests` drops every changed path that is not `.py`, so a shell
+#     script never reaches a rule at all; and
+#   * even `tools/foo.py` fails `rp.parent.as_posix() in _SOURCE_DIRS`, because
+#     these paths are repo-relative and `_SOURCE_DIRS` is plugin-relative.
+#
+# So the selection was the same 15 files whether the change was a one-character
+# comment or a rewrite of the landing script — a green that says nothing about
+# the file that moved. The repo has no `.github/workflows/` (only
+# `workflows-disabled/`), so this selection IS the gate; there is no broader
+# job behind it that would have caught the miss.
+#
+# This is a DIRECTORY, read from the tree — never a list of filenames, which
+# would rot the first time a script is added or renamed.
+_REPO_TOOL_DIRS: tuple[str, ...] = ("tools",)
+
 
 def _plugin_root_default() -> Path:
     """The plugin root is this file's grandparent (…/vibe-ic/programs/<me>)."""
@@ -505,6 +527,69 @@ def _build_reference_index(
         rel = f"{_TESTS_REL}/{tf.name}"
         for name in set(_IDENT.findall(text)) & source_stems:
             index.setdefault(name, set()).add(rel)
+    return index
+
+
+# ---------------------------------------------------------------------------
+# Rule 6 — repo-root TOOL scripts (vibe-ic#1057). Built LAZILY, like rule 4:
+# nothing here reads the tree unless a changed path is under a repo-root tool
+# directory, so every other lane pays exactly nothing.
+# ---------------------------------------------------------------------------
+
+
+def _is_repo_tool(repo_rel: str) -> bool:
+    """Is ``repo_rel`` (REPO-relative) a file under a repo-root tool dir?
+
+    Repo-relative on purpose: these paths are the ones `_to_plugin_rel` hands
+    back untouched precisely because they are outside the plugin.
+    """
+    p = _norm(repo_rel)
+    return any(p.startswith(d + "/") for d in _REPO_TOOL_DIRS)
+
+
+def _tool_ref_pattern(basename: str) -> re.Pattern[str]:
+    """Match ``basename`` as a whole path token, not as a substring.
+
+    The boundary class includes ``.`` and ``-`` because these names carry them
+    (``gatekeeper-land.sh``); a plain ``\\b`` would let ``land.sh`` match inside
+    ``pre-land.sh``. Anchoring on both sides is what keeps a new script named
+    with an existing one as its suffix from silently inheriting its tests.
+    """
+    b = r"[A-Za-z0-9_.\-]"
+    return re.compile(rf"(?<!{b}){re.escape(basename)}(?!{b})")
+
+
+def _build_tool_reference_index(
+    plugin_root: Path, tool_basenames: set[str],
+) -> dict[str, set[str]]:
+    """Map tool BASENAME -> set of plugin-rel test paths that NAME it.
+
+    Keyed on the basename WITH its extension (``gatekeeper-land.sh``), which is
+    how a path-driven consumer actually names the file, and never on the bare
+    stem: a stem collides across trees (``tools/spec_validator.py`` vs the
+    plugin's own ``spec_validator``) and would hand one file's edit the other
+    file's tests — a selection that looks richer while pointing at the wrong
+    code.
+
+    Unreadable files are skipped rather than failing the run: a selector that
+    cannot read one test file must still emit a list.
+    """
+    index: dict[str, set[str]] = {}
+    if not tool_basenames:
+        return index
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return index
+    pats = {b: _tool_ref_pattern(b) for b in tool_basenames}
+    for tf in sorted(tests_dir.glob("test_*.py")):
+        try:
+            text = tf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f"{_TESTS_REL}/{tf.name}"
+        for base, pat in pats.items():
+            if pat.search(text):
+                index.setdefault(base, set()).add(rel)
     return index
 
 
@@ -799,9 +884,16 @@ def select_tests(
 
     selected: set[str] = set(_smoke_set(plugin_root))
     changed_helpers: list[str] = []
+    changed_tools: set[str] = set()
 
     for raw in changed_paths:
         rel = _to_plugin_rel(raw, plugin_prefix)
+        # (6) a changed repo-root TOOL script -> the tests that NAME it.
+        # Checked BEFORE the `.py` guard below, which is one of the two reasons
+        # this population was invisible: a `.sh` never survived to reach a rule.
+        if _is_repo_tool(rel):
+            changed_tools.add(Path(rel).name)
+            continue
         if not rel.endswith(".py"):
             continue
         rp = Path(rel)
@@ -839,6 +931,20 @@ def select_tests(
     # so the common case never reads the tree.
     if changed_helpers:
         selected |= _helper_consumers(plugin_root, changed_helpers, source_stems)
+
+    # (6) Built LAZILY, same as rule 4 and for the same reason.
+    #
+    # Applies in EVERY mode, and is NOT capped. Both deliberate, and the same
+    # argument rule 4 already makes: `--mode` trades coverage against cost over
+    # a population the other rules DO see, whereas these files were seen by no
+    # rule at all — a cap here would restore the original hole for exactly the
+    # heavily-referenced scripts (`gatekeeper-land.sh` at 40 tests) where a
+    # silent break is most expensive. A test that names the script by path is
+    # a STATED dependency, not noise that needs bounding.
+    if changed_tools:
+        tool_index = _build_tool_reference_index(plugin_root, changed_tools)
+        for base in changed_tools:
+            selected |= tool_index.get(base, set())
 
     # Only emit tests that exist on disk (robust against a stale index entry).
     return sorted(t for t in selected if (plugin_root / t).is_file())
