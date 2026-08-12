@@ -4623,7 +4623,17 @@ steps:
         # cannot PASS without a real top-level LVS PASS.
         - advisory_program_exit_zero: "mixed_signal_top_lvs_run . --json reports/analog/mixed_signal/top_lvs_run.json"
         - program_exit_zero: "mixed_signal_merge_check . --json reports/analog/mixed_signal/merge.json"
-    blocks_on: [A8, 15]
+    # 37 ADDED (vibe-ic#1070). M1's own `required_inputs` already declared
+    # `from: 37  path: phase3/stage4/gds/*.gds` — the flow saying, in its own
+    # words, that this step READS the GDS stream-out. `blocks_on` did not name
+    # 37, and `flow_step_execution_coverage_check.analyze()` is the ONLY
+    # consumer that can contradict a step which passed its own gate over an
+    # input whose PRODUCER failed. Outside the transitive ancestry that guard
+    # is disarmed for the edge, so a FAILED stream-out left the A+D merge that
+    # consumes its GDS standing at PASS. Same shape as the step-1/D1 defect
+    # this flow already paid for and documents at step 1; the repair is the
+    # same one — declare the edge and the existing guard arms itself.
+    blocks_on: [A8, 15, 37]
     notes: |
       Merge each analog analog/hardmacro GDS into the digital top GDS at
       its assigned floorplan position. Verify no overlap, all macro
