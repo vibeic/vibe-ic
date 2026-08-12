@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1077
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1077)
+- **Total programs (excluding helpers / shims):** 1078
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1078)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1068 |
+| `any` | 1069 |
 
 ## Alphabetical listing
 
@@ -867,6 +867,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtllm_iface_recover` | any | — | a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base rtllm_port_bridge does not yet read. |
 | `rtllm_port_bridge` | any | — | a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output... |
 | `rtllm_tier_pipeline` | any | — | the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE. |
+| `run_metrics` | any | — | one per-step metrics schema, and "better or worse than last time". |
 | `run_output_completeness_check` | any | — | the EMPTY / MISSING / STUB deliverable gate. |
 | `run_status` | any | — | ORGANIC #599. Universal runner watchdog. |
 | `rx_byte_assembler_ibt_flush_recovery_check` | any | Wave 15 | When a single-bit drop occurs (RX glitch on a half-duplex single-wire |
@@ -1149,7 +1150,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1068 programs)
+### `any` (1069 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1986,6 +1987,7 @@ _(no programs in this group)_
 - `rtllm_iface_recover` — a GENERAL interface recoverer for the RTLLM prose header DIALECTS that the base rtllm_port_bridge does not yet read.
 - `rtllm_port_bridge` — a GENERAL prose-port-block reader for the RTLLM benchmark family (and any spec that states its interface in the same "Input ports:/Output...
 - `rtllm_tier_pipeline` — the RTLLM TIER-1->5 CONVERGE / AUTHORING-GATE PIPELINE.
+- `run_metrics` — one per-step metrics schema, and "better or worse than last time".
 - `run_output_completeness_check` — the EMPTY / MISSING / STUB deliverable gate.
 - `run_status` — ORGANIC #599. Universal runner watchdog.
 - `rx_byte_assembler_ibt_flush_recovery_check` — When a single-bit drop occurs (RX glitch on a half-duplex single-wire  _[Wave 15]_
