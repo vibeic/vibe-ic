@@ -186,24 +186,29 @@ def test_the_script_sources_the_corpus_library():
     assert ". \"$HERE/_published_cell_corpus.sh\"" in HYGIENE.read_text()
 
 
-def test_macro_obs_is_dispatched_over_the_intersection_it_declares():
-    """The whole change is the selector, so a test that only checked the
-    producers would pass while the gate stayed wired to the old one.
+def test_macro_obs_stays_on_the_routed_def_loop_until_957_is_arbitrated():
+    """The retreat, pinned so it cannot be undone by accident.
 
-    This asserted a second thing until #1075's second half landed: that the
-    other two gates were still on the routed-DEF loop. That is now false BY
-    DESIGN — they were the second half — and the statement is replaced, not
-    dropped, by `test_the_script_dispatches_each_gate_over_its_own_input`,
-    which pins each gate to its own producer and is strictly stronger.
+    Selecting `macro OBS not crossed` on the intersection its comment declares
+    ("a routed DEF AND a macro LEF") yields a corpus of ZERO items on this repo.
+    #957's landed guard asserts every loop corpus is non-empty — "a disclosure
+    that was achieved by dropping a gate, or by NARROWING the corpus, would be a
+    coverage cut wearing a fix's clothes" — and an empty corpus is the limit
+    case of narrowing. That is a disagreement with a landed test, not an
+    implementation detail, so the gate stays where #957 expects it.
+
+    The producer for the intersection SHIPS and is tested below; it is simply
+    not wired yet. When #957's empty-corpus question is arbitrated, wiring it is
+    a one-line change and this test is the thing that has to be updated with it.
     """
     text = HYGIENE.read_text()
-    assert ("gate_dispatch_over \"published cells carrying a routed DEF AND a "
-            "macro LEF\"") in text
-    inter = text.index("published cells carrying a routed DEF AND a macro LEF\"")
-    tail = text[inter:inter + 400]
-    assert "_macro_obs_published_cell_gate" in tail, tail
-    assert "published_cells_with_routed_def_and_macro_lef" in tail, tail
-
+    assert "_per_published_cell_gates" in text, (
+        "macro OBS must still be dispatched from the routed-DEF loop")
+    i = text.index("_per_published_cell_gates() {")
+    body = text[i:text.index("gate_dispatch_over", i)]
+    assert "macro_obs_geometry_intersect_check.py" in body, body[:400]
+    assert "published cells carrying a routed DEF AND a macro LEF" not in text, (
+        "the empty-corpus split is not wired on this branch — see #957")
 def test_the_real_repository_intersection_is_empty_and_that_is_why():
     """Records the measured fact this change is about, against the real tree.
 
@@ -302,8 +307,12 @@ def test_a_run_directory_IS_part_of_the_root(tmp_path):
 
 
 def test_the_script_dispatches_each_gate_over_its_own_input():
-    """Pins WHICH producer drives WHICH gate. The producers being right is not
-    the change — the wiring is."""
+    """Pins WHICH producer drives WHICH gate — the whole point of the change.
+
+    The two gates that do not read a DEF are now selected on what they DO read.
+    `macro OBS` is deliberately still on the routed-DEF loop (see the test
+    above), so this asserts the two re-pointed gates and not the third.
+    """
     text = HYGIENE.read_text()
     for corpus, producer, prog in (
             ("published roots carrying a DRC report",
@@ -313,14 +322,13 @@ def test_the_script_dispatches_each_gate_over_its_own_input():
              "step_internal_fail_bubble_up_check.py")):
         i = text.index(f'gate_dispatch_over "{corpus}"')
         assert producer in text[i:i + 200], corpus
-        # and the gate body driven by that loop names the right program
         body_start = text.rindex("_published", 0, i)
         assert prog in text[body_start - 900:i], (corpus, prog)
-    assert "_per_published_cell_gates" not in text, (
-        "the old shared loop must be gone; while it exists a gate can still be "
-        "selected on a predicate it does not read")
-
-
+    # and neither of them is still driven by the routed-DEF loop
+    j = text.index("_per_published_cell_gates() {")
+    shared = text[j:text.index("gate_dispatch_over", j)]
+    assert "drc_vacuous_pass_check.py" not in shared
+    assert "step_internal_fail_bubble_up_check.py" not in shared
 def test_the_real_repository_populations_differ_from_the_old_selector():
     """The measured claim, against the real tree: the routed-DEF selector is a
     strictly smaller population than either gate's real input. If these ever
