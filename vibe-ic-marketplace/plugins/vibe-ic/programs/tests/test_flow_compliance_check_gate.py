@@ -181,6 +181,52 @@ def _make_phase2_project(tmp_path,
     return project
 
 
+# The 13 L-doc prefixes `phase1_all_l_docs_present_check` requires, under the
+# canonical filenames step D1 declares as its `required_outputs`. Written out
+# rather than derived from the flow so that a fixture this test OWNS cannot
+# silently change shape when the flow's output list is edited.
+_L_DOCS = (
+    "L1_DATASHEET", "L2_FRS", "L3_CMD_PROTOCOL", "L4_REGMAP", "L5_ADI_SPEC",
+    "L6_CONTROL_LOGIC", "L7_TEST_DEBUG", "L8_TIMING_WAVEFORM",
+    "L8_RTL_CONSTANTS", "L9_INTEGRATION_SPEC", "L10_TEST_CASES",
+    "L11_OTP_CONTENT", "L12_BEHAVIORAL_SEQUENCES", "L13_BRINGUP",
+)
+
+
+def _satisfy_p0_ancestry(project: Path) -> Path:
+    """Give the fixture the Phase-1 chain P0 declares it depends on.
+
+    P0 (the structural-RTL pre-flight) declares `blocks_on: [1]`, and step 1
+    declares `blocks_on: [D1]`. That edge is not incidental — vibe-ic#923
+    (332b9985) wrote it down deliberately, because without it "a FAILED Phase 1
+    would not have redded" the pre-flight, and it is pinned by
+    `test_flow_blocks_on_declares_phase1_dependency`.
+
+    So a project carrying ONE .sv file and nothing else is a project whose P0
+    verdict rests on a chain that never ran, and the step-execution ordering
+    guard is right to void it. Verdict-SCOPE claims about `--strict-structural`
+    cannot be made on such a tree: whatever the scoping code does, the run
+    fails, and a test asserting otherwise is asserting the pre-#923 flow.
+
+    This adds the minimum that makes D1 and step 1 stop being MISSING, so the
+    scope claim is exercised against the thing it is actually about — steps 2-6,
+    which stay MISSING because nothing here writes lint / CDC / sim / formal /
+    FPGA artefacts.
+    """
+    gd = project / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    for name in _L_DOCS:
+        (gd / f"{name}.json").write_text(
+            json.dumps({"schema": name, "generated_by": "test fixture"}))
+    rp = project / "reports" / "phase1"
+    rp.mkdir(parents=True, exist_ok=True)
+    (rp / "extraction_coverage_report.md").write_text(
+        "# extraction coverage\n\n100%\n")
+    (rp / "extraction_coverage_report.json").write_text(
+        json.dumps({"coverage_pct": 100}))
+    return project
+
+
 def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]]):
     """Monkey-patch _run_structural_rtl_gates to report the chosen per-gate
     exit codes directly, bypassing subprocess invocation.
@@ -329,17 +375,33 @@ def test_strict_structural_only_structural_gates(tmp_path,
     step-level gates are MISSING/FAIL → with --phase 2 --strict-
     structural, Overall must NOT be FAIL because step-level gates are
     informational only. Step-level FAIL/MISSING is reported in the
-    step listing, but verdict scope is structural-RTL only."""
-    project = _make_phase2_project(tmp_path, ())
+    step listing, but verdict scope is structural-RTL only.
+
+    THE FIXTURE NOW SATISFIES P0's DECLARED ANCESTRY, and that is the repair.
+    This test used to run on a tree holding one `.sv` file, which was enough
+    only while P0 declared no dependencies. vibe-ic#923 gave P0
+    `blocks_on: [1]` on purpose, step 1 already declared `blocks_on: [D1]`, and
+    the ordering guard then — correctly — voided P0's own claim because the
+    chain under it had never run. The run failed for a reason that has nothing
+    to do with verdict SCOPE, so the scope claim was no longer being tested at
+    all. `_satisfy_p0_ancestry` closes the chain; steps 2-6 stay MISSING, which
+    is the population this test is about, and the negative arm below pins the
+    #923 behaviour so nobody "repairs" this by scoping the ordering guard out.
+    """
+    project = _satisfy_p0_ancestry(_make_phase2_project(tmp_path, ()))
 
     mod = _import_fcc()
     # No structural FAILs.
     _patch_run(monkeypatch, mod, {})
     rc = mod.main([str(project), "--phase", "2", "--strict-structural"])
     out = capsys.readouterr().out
-    # Empty-ish project will surface step-level MISSING for steps 1-6
-    # (e.g. no L*.json, no rtl etc.). Those should be reported but the
-    # verdict must NOT be FAIL purely because of them.
+    # PRECONDITION, not decoration: if steps 2-6 were not MISSING this test
+    # would be asserting that a clean run is clean.
+    for sid in (2, 3, 4, 5, 6):
+        assert re.search(rf"^\s*\S*\s*\[MISSING\s*\] Step\s+{sid}:",
+                         out, re.M), (
+            f"precondition: step {sid} must be MISSING for the scope claim "
+            f"to mean anything:\n{out}")
     assert "Phase 2 strict-structural mode" not in out, out
     # Overall verdict could be PASS or PASS_WITH_WAIVERS (but never
     # FAIL purely due to step-level MISSING when structural gates
@@ -348,6 +410,31 @@ def test_strict_structural_only_structural_gates(tmp_path,
         "structural-only mode should NOT FAIL on step-level "
         "MISSING/FAIL alone:\n" + out)
     assert rc == 0, out
+
+
+def test_strict_structural_does_not_excuse_a_broken_p0_ancestry(
+        tmp_path, monkeypatch, capsys):
+    """The other half of the scope, and the reason the fixture above grew.
+
+    `--strict-structural` narrows the verdict to P0 — it does not make P0's own
+    claim unfalsifiable. On the tree the test above used to run on (RTL only, no
+    Phase 1), P0 depends on a chain that never ran, so the step-execution
+    ordering guard voids it and the run FAILs. vibe-ic#923 wrote that edge down
+    for exactly this outcome.
+
+    Pinned here so the paired repair is visible: the run above is green because
+    its chain is closed, NOT because step-level state stopped counting.
+    """
+    project = _make_phase2_project(tmp_path, ())   # deliberately bare
+
+    mod = _import_fcc()
+    _patch_run(monkeypatch, mod, {})
+    rc = mod.main([str(project), "--phase", "2", "--strict-structural"])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "Overall: FAIL" in out, out
+    assert "Step-execution ordering violations" in out, out
+    assert re.search(r"\[P0\].*marked done while dependency", out), out
 
 
 def test_strict_step_artifacts_includes_step_gates(tmp_path,
