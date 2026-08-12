@@ -983,7 +983,11 @@ run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.
 # own diagnosis. Promoting it to `run` (blocking) is a policy call with a measured
 # blast radius: ZERO on a host carrying the anchored image, and every landing
 # refused on a host without it. One word changes it when that is wanted.
-uncheckable_until 2027-02-28 "the anchored EDA image may legitimately be absent on a host that has not pulled it; the hole is REPORTED as NOT_CHECKED rather than blocking until the owner rules on refusing landings from such a host"
+# WHY TOLERATING: the anchored EDA image may legitimately be absent on a host
+# that has not pulled it. The hole is REPORTED as NOT_CHECKED rather than
+# blocking, until the owner rules on refusing landings from such a host.
+# (`uncheckable_until` is #1072's proposed directive and does not exist on main;
+# this comment carries the same disclosure without depending on an unlanded PR.)
 run_tolerating_uncheckable "image-gated verifications are not silently skipped" "$PLUGIN" \
   python3 programs/image_gated_verification_check.py
 
