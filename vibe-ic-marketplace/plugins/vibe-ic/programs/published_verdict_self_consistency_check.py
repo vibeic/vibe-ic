@@ -61,6 +61,11 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _vacuous_exit as _vx  # noqa: E402
+
+GATE = "published_verdict_self_consistency_check"
+
 # Fields a gate report uses to carry its verdict, in precedence order.
 VERDICT_FIELDS = ("verdict", "overall", "overall_status", "status",
                   "gate_status", "result", "pass_fail")
@@ -188,6 +193,25 @@ def main(argv=None) -> int:
                        for r, n, items in bad]},
                   sys.stdout, indent=2)
         sys.stdout.write("\n")
+
+    # A ZERO POPULATION IS NOT A PASS (#1028).
+    #
+    # PR #1028 empties `benchmark-data/ic/`, so this gate's population can now
+    # legitimately be zero — and a gate that answers 0 over an empty corpus is
+    # lie-shape #2 ("passes over a zero denominator") and #3 ("passes on an
+    # empty tree") at once. Printing the count is NOT sufficient: prose is not
+    # an exit code, and every automated consumer reads the code. The tier is
+    # decided by rc alone (`flow_compliance_check._check_program_exit_zero`
+    # promotes rc 2 to VACUOUS_PASS), so this must exit 2, not 0.
+    if not roots:
+        reason = "no-published-run-root"
+        _vx.announce_vacuous(GATE, reason)
+        print(f"[VACUOUS] {GATE}: 0 published run root(s) under "
+              f"{args.corpus!r} — no directory carrying a RESULT.md was "
+              f"found, so no run's verdict has been compared against its own "
+              f"gate reports. Nothing about this corpus has been judged.",
+              file=sys.stderr)
+        return _vx.RC_VACUOUS
 
     if not bad:
         print(f"[PASS] {len(roots)} published run root(s) examined; no "

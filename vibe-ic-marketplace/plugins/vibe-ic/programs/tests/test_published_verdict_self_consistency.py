@@ -201,6 +201,46 @@ def test_declared_verdict_reads_only_verdict_bearing_lines(text, expected):
     assert declared_verdict(text) == expected
 
 
+# --------------------------------------------------------------------------
+# A ZERO POPULATION IS NOT A PASS (#1028)
+#
+# PR #1028 empties `benchmark-data/ic/`, so this gate's population can now be
+# zero for real. rc 0 there would be lie-shape #2 (zero denominator) and #3
+# (empty tree) at once, and printing the count does not help: the tier is
+# decided by the exit code alone.
+# --------------------------------------------------------------------------
+
+def test_an_empty_corpus_is_rc2_not_rc0(tmp_path):
+    (tmp_path / "ic").mkdir()
+    code, out = _run(tmp_path)
+    assert code == 2, (
+        f"a corpus with no published run root must exit RC_VACUOUS(2), not "
+        f"{code} — prose is not an exit code:\n{out}")
+
+
+def test_the_vacuous_exit_discloses_the_zero_population(tmp_path):
+    (tmp_path / "ic").mkdir()
+    _code, out = _run(tmp_path)
+    assert "VACUOUS_PASS:" in out, (
+        "the rc-independent VACUOUS_PASS sentinel must be emitted so a "
+        f"consumer reading only the stream still sees it:\n{out}")
+    assert "0 published run root" in out, out
+
+
+def test_a_real_population_still_reaches_the_pass_tier(as_published, tmp_path):
+    """The vacuity guard must not swallow genuine PASSes."""
+    dst = tmp_path / "ok"
+    _corrected(as_published, dst)
+    code, out = _run(dst)
+    assert code == 0, f"a non-empty clean corpus must still be rc 0:\n{out}"
+
+
+def test_a_real_population_still_reaches_the_fail_tier(as_published):
+    """And must not swallow genuine FAILs."""
+    code, _out = _run(as_published)
+    assert code == 1
+
+
 def test_gate_is_blocking_not_advisory(as_published):
     """Declared BLOCKING — prove the non-zero exit actually happens."""
     assert main(["--corpus", str(as_published)]) == 1
