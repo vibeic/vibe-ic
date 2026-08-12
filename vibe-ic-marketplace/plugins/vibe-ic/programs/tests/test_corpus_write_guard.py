@@ -365,3 +365,100 @@ def test_a_clean_record_is_unaffected():
     doc["gates"] = [{"label": "a reader", "state": "FAIL"}]
     bad = GR._hygiene_verdict(doc, script_rc=1)
     assert bad.rc == 1 and "FAILED" in bad.summary, bad
+
+
+# --- vibe-ic#1087: a write OUTSIDE the corpus gets an AUTHOR ----------------
+# The scoped guard above is right to ignore these (see
+# `test_a_write_OUTSIDE_the_corpus_is_not_a_finding`), and `gatekeeper-land.sh`
+# takes its whole-tree guard ONCE around ~76 steps, so it cannot say WHO wrote.
+# Between the two, a gate that contaminates `programs/` is detected and
+# attributed to nobody — measured on `policy_direction_pin_check`, which leaks
+# its own mutant into `programs/matrix_mutation_ledger.py` on any kill (#1089),
+# and whose contamination was blamed on a neighbouring gate.
+#
+# These tests drive the REAL dispatch, like every other test in this file.
+
+def _with_write_guard(root: Path) -> Path:
+    """Install the REAL `suite_write_guard.py` where the dispatcher looks.
+
+    A stub would let the attribution and the program that owns the
+    "regenerable cache artefacts are never a write" rule drift apart, which is
+    the second-copy defect `_gate_dispatch.sh` exists to avoid.
+    """
+    dst = root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    dst.mkdir(parents=True, exist_ok=True)
+    (dst / "suite_write_guard.py").write_text(
+        (_PROGRAMS / "suite_write_guard.py").read_text())
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-qm", "guard"],
+                   check=True)
+    return dst / "suite_write_guard.py"
+
+
+def test_a_write_outside_the_corpus_is_ATTRIBUTED_to_the_gate(tmp_path):
+    """The gap #1087 measures: named, and named as an ATTRIBUTION."""
+    r = _corpus_repo(tmp_path)
+    _with_write_guard(r)
+    _writer(r, "w", "programs/leftover_from_a_gate.py")
+    out = _run(r, f'run "a gate that contaminates" "$ROOT" python3 "{r}/w.py"\n')
+    both = out.stdout + out.stderr
+    # NOT a failure. The scoped guard's remedy RECOMMENDS writing outside the
+    # corpus, so turning this into a verdict would punish the recommended fix.
+    assert out.returncode == 0, both
+    assert "WROTE INTO THE CORPUS" not in both
+    # But it now has an author, and the author is the gate's own label.
+    assert "a gate that contaminates" in both
+    assert "WROTE OUTSIDE" in both
+    assert "programs/leftover_from_a_gate.py" in both
+    assert "ATTRIBUTION, not a verdict" in both
+
+
+def test_the_attribution_reaches_the_machine_record(tmp_path):
+    """A consumer must not have to scrape stderr to learn who wrote."""
+    r = _corpus_repo(tmp_path)
+    _with_write_guard(r)
+    _writer(r, "w", "programs/leftover_from_a_gate.py")
+    rec = tmp_path / "rec.json"
+    out = _run(r, f'run "a gate that contaminates" "$ROOT" python3 "{r}/w.py"\n',
+               record=rec)
+    assert out.returncode == 0, out.stdout + out.stderr
+    doc = json.loads(rec.read_text())
+    g = doc["gates"][0]
+    assert g["state"] == "PASS", g          # the verdict did NOT move
+    assert g["wrote_outside_corpus"] == ["programs/leftover_from_a_gate.py"], g
+
+
+def test_a_read_only_gate_gets_NO_attribution(tmp_path):
+    """The paired guard for the two above.
+
+    An attribution that fires for everyone names nobody. A mutant that makes
+    `_gate_dispatch_tree_after` always emit a path is killed HERE and only
+    here — the two tests above would pass unchanged against it.
+    """
+    r = _corpus_repo(tmp_path)
+    _with_write_guard(r)
+    _reader(r, "ro")
+    rec = tmp_path / "rec.json"
+    out = _run(r, f'run "a read-only gate" "$ROOT" python3 "{r}/ro.py"\n',
+               record=rec)
+    both = out.stdout + out.stderr
+    assert out.returncode == 0, both
+    assert "WROTE OUTSIDE" not in both
+    doc = json.loads(rec.read_text())
+    assert "wrote_outside_corpus" not in doc["gates"][0], doc["gates"][0]
+
+
+def test_it_SAYS_SO_when_it_cannot_attribute(tmp_path):
+    """No `suite_write_guard.py` under the tree -> attribution is impossible.
+
+    Said once and said out loud. "I could not look" must never be
+    indistinguishable from "nobody wrote" — the distinction this whole file
+    exists to keep.
+    """
+    r = _corpus_repo(tmp_path)                    # deliberately NO guard
+    _writer(r, "w", "programs/leftover_from_a_gate.py")
+    out = _run(r, f'run "a gate that contaminates" "$ROOT" python3 "{r}/w.py"\n')
+    both = out.stdout + out.stderr
+    assert out.returncode == 0, both
+    assert "attribution not active" in both.lower(), both
+    assert "attributed to nobody" in both.lower(), both
