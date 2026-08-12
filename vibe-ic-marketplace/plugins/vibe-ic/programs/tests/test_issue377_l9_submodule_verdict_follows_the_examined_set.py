@@ -251,8 +251,43 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
         "no tracked project reaches the examined-set-empty arm any more, so "
         "the arm this landing added is exercised by nothing and a regression "
         "in it would be invisible in every other number here")
-    # Pinned so a silent vocabulary drift in the producer shows up as a diff
-    # rather than as a quietly shrinking denominator.
+    # THE DENOMINATOR RELATION, not the census.
+    #
+    # What stood at the end of this block was
+    # `(nonempty, declared, examined, all_skipped) == (35, 130, 64, 14)`, and
+    # the paragraphs below are its own maintenance record: (36,130,62,16) ->
+    # (37,132,64,16) -> (35,130,64,14), re-typed three times, each time with an
+    # essay explaining that the CORPUS moved and the reader did not. That is
+    # the tell. The tuple never once caught a reader regression; every firing
+    # it ever had was a publish or a retirement, and each cost a
+    # re-measurement to prove innocence.
+    #
+    # It is also a shape a `len(...) == <int>` sweep does not find — it was
+    # missed by the scan that produced this batch and surfaced only when a
+    # two-arm control on a withdrawn cell went red. `programs/
+    # corpus_cardinality_pin_scan.py` now looks for the tuple form too.
+    #
+    # The sentences it was standing in for, both true at any corpus size:
+    #   * no non-empty L9 document is silently dropped — `all_skipped` is a
+    #     strict subset of `nonempty`, so the reader resolves SOMETHING
+    #     somewhere;
+    #   * the reader examines a real share of what the corpus declares, so a
+    #     vocabulary drift that quietly stops the port layer resolving shows
+    #     up as a collapsed ratio rather than as a smaller number nobody can
+    #     tell apart from a withdrawal.
+    #
+    # The ratio floor is deliberately loose (a third). It is not a target: it
+    # is the level below which "the reader still reads this corpus" stops
+    # being true. Measured at 64/130 = 49% on the tree this landed against.
+    assert examined <= declared, (examined, declared)
+    assert all_skipped < nonempty, (
+        f"every one of the {nonempty} non-empty L9 document(s) is now FULLY "
+        f"skipped — the reader resolves nothing anywhere, which is the "
+        f"vocabulary drift this guard exists for")
+    assert examined * 3 >= declared, (
+        f"the reader now examines {examined} of {declared} declared "
+        f"submodule(s) — under a third. A drift in the producer's vocabulary "
+        f"that stops the port layer resolving looks exactly like this.")
     #
     # 2026-08-04, vibe-ic#744: (36, 130, 62, 16) -> (37, 132, 64, 16). The
     # reader learned three further spellings of the L9 port layer, so it now
@@ -283,4 +318,3 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     #
     # `new_arm` is deliberately NOT moved: it holds at 6 across the retirement,
     # so the arm this landing added is still reached by every project it was.
-    assert (nonempty, declared, examined, all_skipped) == (35, 130, 64, 14)
