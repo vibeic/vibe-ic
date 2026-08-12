@@ -274,3 +274,71 @@ def test_it_runs_as_a_cli(tmp_path):
         capture_output=True, text=True, timeout=_T)
     assert r.returncode == 1, r.stdout + r.stderr
     assert "golden/a.txt" in r.stdout, r.stdout
+
+
+# --------------------------------------------------------------------------
+# The three channels the first draft did not have. Each is here because it is
+# a read the earlier `io.open`-rebinding version could not see or a case it
+# judged wrongly — so each test fails if that capability is taken back out.
+# --------------------------------------------------------------------------
+
+def test_the_hook_sees_a_read_that_BYPASSES_the_python_open_name(tmp_path, capsys):
+    """Rebinding `io.open` misses anything that did not go through the name.
+
+    This child captures `open` into a local BEFORE the read and reaches the
+    file through `os.open` at the descriptor level — neither touches the
+    rebound `builtins.open`. `sys.addaudithook` sits under both because
+    CPython raises the `open` event from C.
+    """
+    project = _proj(tmp_path, {"golden/answer.txt": "42"})
+    child = _prog(tmp_path, """
+        import os, sys
+        try:
+            fd = os.open("golden/answer.txt", os.O_RDONLY)
+        except PermissionError:
+            sys.exit(3)
+        os.close(fd); sys.exit(0)
+        """)
+    rc = _run(project, child)
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "child rc=3" in out, out          # the descriptor was never handed out
+
+
+def test_a_DECLARED_input_is_not_denied_even_inside_an_oracle_named_tree(
+        tmp_path, capsys, monkeypatch):
+    """The declaration WINS. A step cannot be denied its own declared input.
+
+    Used as an EXCEPTION to the ban, never as an allow-list: measured, the
+    declared set covers 29% of real reads, so as an allow-list it would deny
+    two reads in three.
+    """
+    project = _proj(tmp_path, {"golden/answer.txt": "42"})
+    monkeypatch.setattr(se, "declared_paths",
+                        lambda project, step_id, flow=None:
+                        ["golden/answer.txt"] if step_id else [])
+    child = _prog(tmp_path, """
+        print(open("golden/answer.txt").read())
+        """)
+    assert _run(project, child, "--step", "9") == 0, capsys.readouterr().out
+    # and WITHOUT the declaration the very same read is refused
+    capsys.readouterr()
+    assert _run(project, child) == 1, capsys.readouterr().out
+
+
+def test_an_env_var_pointing_at_the_oracle_is_removed_from_the_child(tmp_path, monkeypatch):
+    """The second channel. Small here by measurement — the plugin's whole env
+    surface is container images, PDK roots and tool paths — but real, and
+    closing it costs one pass over the environment."""
+    project = _proj(tmp_path, {"reference_flow/metadata.json": _ORACLE_JSON,
+                               "reference_flow/config.json": _RECIPE_JSON})
+    oracle = [r for r, _s in se.resolve_oracle_files(project)]
+    assert oracle == ["reference_flow/metadata.json"], oracle
+    env = {"ANSWER_KEY": str(project / "reference_flow" / "metadata.json"),
+           "FLOW_CFG": str(project / "reference_flow" / "config.json"),
+           "PATH": "/usr/bin:/bin"}
+    out, dropped = se.scrub_env(env, project, oracle)
+    assert dropped == ["ANSWER_KEY"], dropped
+    assert "ANSWER_KEY" not in out
+    assert out["FLOW_CFG"] == env["FLOW_CFG"]   # the recipe survives
+    assert out["PATH"] == env["PATH"]

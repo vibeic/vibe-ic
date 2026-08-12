@@ -94,6 +94,14 @@ sys.path.insert(0, str(HERE))
 
 import _reference_flow_boundary as _rfb  # noqa: E402
 
+FLOW_YAML = HERE.parent / "flow" / "phase1_phase2_phase3.yaml"
+
+
+def _plugin_programs_on_path() -> None:
+    """`programs/` on sys.path once, so the declaration module is importable."""
+    if str(HERE) not in sys.path:
+        sys.path.insert(0, str(HERE))
+
 #: The shim's first write. Its ABSENCE is the only thing separating "nothing
 #: was reached" from "nothing was watched", and the two must never share a
 #: verdict. See the module docstring.
@@ -107,14 +115,14 @@ boundary calls oracle. Deliberately tiny: it runs inside every child process
 of the step under enforcement, so anything it imports it pays for on every
 fork.
 """
-import builtins
-import io
 import os
 
 _log = os.environ.get("VIBEIC_SCOPE_LOG")
 _root = os.path.abspath(os.environ.get("VIBEIC_SCOPE_ROOT", "."))
 _deny = os.environ.get("VIBEIC_SCOPE_DENY") == "1"
 _segs = frozenset((os.environ.get("VIBEIC_SCOPE_SEGMENTS") or "").split(":")) - {""}
+_declared = frozenset(
+    (os.environ.get("VIBEIC_SCOPE_DECLARED") or "").split("\n")) - {""}
 _oracle_files = {}
 for _e in (os.environ.get("VIBEIC_SCOPE_ORACLE_FILES") or "").split("\n"):
     if "\t" in _e:
@@ -143,6 +151,15 @@ if _log:
         if not p.startswith(_root + os.sep):
             return None
         rel = os.path.relpath(p, _root)
+        # THE DECLARATION WINS. If the flow says this step reads this artefact,
+        # the ban does not apply to it -- a step cannot be denied its own
+        # declared input. This is the ONE place `required_inputs` is
+        # load-bearing here, and it is used as an EXCEPTION rather than as an
+        # allow-list, for the reason measured in the module docstring: the
+        # declared set covers 29% of real reads, so as an allow-list it denies
+        # two reads in three.
+        if rel in _declared:
+            return None
         seg = _offending_segment(rel)
         if seg:
             return (seg, rel)
@@ -156,38 +173,49 @@ if _log:
             return (_oracle_files[rel], rel)
         return None
 
-    _real_open = io.open
+    # INTERCEPTION IS AN AUDIT HOOK, not a rebinding of `io.open`.
+    #
+    # A first draft patched `io.open` / `builtins.open` / `os.open`. That is
+    # weaker in three ways that all end the same place — a read the enforcement
+    # cannot see:
+    #   * `import io; io.open(...)` re-fetched from the module still went
+    #     through the patched name, but a module that captured `open` BEFORE
+    #     the shim loaded did not;
+    #   * a C extension opening a file never touches either Python name;
+    #   * anything reached through `os.fdopen`, `pathlib`'s internal accessor,
+    #     or a future CPython refactor of where `open` actually lives.
+    # `sys.addaudithook` sits under all of them: CPython raises the `open`
+    # audit event from the C layer, so the hook sees the call however it was
+    # spelled, and a hook cannot be removed once installed.
+    #
+    # Adopted from the sibling implementation on #1093, which reached the audit
+    # hook first; the oracle VOCABULARY below is the half that one is missing.
+    import sys
 
-    def _traced_open(file, mode="r", *a, **k):
-        if isinstance(file, (str, os.PathLike)):
-            hit = _judge(os.fspath(file),
-                         isinstance(mode, str) and any(c in mode for c in "wax+"))
-            if hit:
-                _f.write("X\t%s\t%s\n" % hit)
-                if _deny:
-                    raise PermissionError(
-                        "vibe-ic 4.05: %s is OFF-LIMITS oracle (segment %r)"
-                        % (hit[1], hit[0]))
-        return _real_open(file, mode, *a, **k)
+    def _audit(event, args):
+        if event != "open" or not args:
+            return
+        path, mode, flags = (list(args) + [None, None])[:3]
+        if not isinstance(path, (str, os.PathLike)):
+            return
+        # BOTH arms of the event, because the two callers fill different slots:
+        # `io.open(p, "w")` carries the MODE STRING and `os.open(p, flags)`
+        # carries the INT. Reading only one would let half the writes be judged
+        # as reads and fire on the flow's own output.
+        write = bool(
+            (isinstance(mode, str) and any(c in mode for c in "wax+"))
+            or (isinstance(flags, int)
+                and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)))
+        hit = _judge(os.fspath(path), write)
+        if not hit:
+            return
+        _f.write("X\t%s\t%s\n" % hit)
+        if _deny:
+            raise PermissionError(
+                "vibe-ic 4.05: %s is OFF-LIMITS oracle (segment %r)"
+                % (hit[1], hit[0]))
 
-    io.open = _traced_open
-    builtins.open = _traced_open
-
-    _real_os_open = os.open
-
-    def _scoped_os_open(path, flags, *a, **k):
-        if isinstance(path, (str, os.PathLike)):
-            hit = _judge(os.fspath(path),
-                         bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)))
-            if hit:
-                _f.write("X\t%s\t%s\n" % hit)
-                if _deny:
-                    raise PermissionError(
-                        "vibe-ic 4.05: %s is OFF-LIMITS oracle (segment %r)"
-                        % (hit[1], hit[0]))
-        return _real_os_open(path, flags, *a, **k)
-
-    os.open = _scoped_os_open
+    sys.addaudithook(_audit)
 '''
 
 def resolve_oracle_files(project: Path, cap: int = 20000) -> List[Tuple[str, str]]:
@@ -224,6 +252,78 @@ def resolve_oracle_files(project: Path, cap: int = 20000) -> List[Tuple[str, str
     return out
 
 
+def declared_paths(project: Path, step_id: Optional[str],
+                   flow: Optional[Path] = None) -> List[str]:
+    """Concrete files this step DECLARED it reads, resolved on this tree.
+
+    Read through `step_required_inputs_check` — the same module the declaration
+    CHECKER uses — so the enforcement and the check cannot disagree about what
+    a step declared. Returns [] when no step is named: an enforcement with no
+    declaration to consult must ban the oracle, not guess at exceptions.
+    """
+    if not step_id:
+        return []
+    try:
+        _plugin_programs_on_path()
+        import step_required_inputs_check as sri  # noqa: PLC0415
+        steps, err = sri.load_flow(Path(flow) if flow else FLOW_YAML)
+        if err:
+            return []
+    except Exception:                                          # pragma: no cover
+        return []
+    by_id = {str(s.get("id")): s for s in steps}
+    step = by_id.get(str(step_id))
+    if step is None:
+        return []
+    specs: List[str] = []
+    for entry in (step.get("required_inputs") or []):
+        try:
+            pairs = sri.expand(entry, by_id)
+        except (KeyError, TypeError):
+            continue
+        for _producer, spec in pairs:
+            for atom in str(spec or "").split(" OR "):
+                atom = atom.strip()
+                if atom and atom != ".":
+                    specs.append(atom)
+    out: List[str] = []
+    for spec in specs:
+        for hit in sorted(project.glob(spec)):
+            if hit.is_file():
+                out.append(str(hit.relative_to(project)))
+    return out
+
+
+def scrub_env(env: dict, project: Path, oracle_rels: List[str]) -> Tuple[dict, List[str]]:
+    """Remove any variable whose VALUE names a denied path under the project.
+
+    The SECOND channel. ORFS's is the only channel because ORFS steps take
+    their inputs through named variables; ours mostly do not (measured in the
+    module docstring: the whole env surface is container images, PDK roots and
+    tool paths). It is cheap and it is real, so it is closed too — but it is
+    not where the leak travels here, and saying otherwise would be the census's
+    own "guard the channel nobody uses" defect.
+    """
+    denied = {str((project / r).resolve()) for r in oracle_rels}
+    dropped: List[str] = []
+    out = dict(env)
+    for k, v in list(env.items()):
+        if not isinstance(v, str) or "/" not in v:
+            continue
+        for tok in v.split(os.pathsep):
+            tok = tok.strip()
+            if not tok:
+                continue
+            try:
+                if str(Path(tok).resolve()) in denied:
+                    out.pop(k, None)
+                    dropped.append(k)
+                    break
+            except OSError:
+                continue
+    return out, dropped
+
+
 def write_shim(where: Path) -> Path:
     where.mkdir(parents=True, exist_ok=True)
     (where / "sitecustomize.py").write_text(_SHIM, encoding="utf-8")
@@ -232,6 +332,8 @@ def write_shim(where: Path) -> Path:
 
 def run_scoped(argv: List[str], project: Path, deny: bool = True,
                timeout: int = 55, shim_dir: Optional[Path] = None,
+               step_id: Optional[str] = None, flow: Optional[Path] = None,
+               scrubbed: Optional[List[str]] = None,
                ) -> Tuple[int, str, Optional[List[Tuple[str, str]]]]:
     """Run `argv` in `project`, returning (rc, output, violations).
 
@@ -244,9 +346,15 @@ def run_scoped(argv: List[str], project: Path, deny: bool = True,
         shim_dir = write_shim(Path(tmp) / "shim")
     log = shim_dir / "scope.log"
     log.write_text("", encoding="utf-8")
+    oracle_rels = [rel for rel, _seg in resolve_oracle_files(project)]
+    base_env, dropped = scrub_env(dict(os.environ), project, oracle_rels)
+    if scrubbed is not None:
+        scrubbed.extend(dropped)
     env = {
-        **os.environ,
+        **base_env,
         "PYTHONDONTWRITEBYTECODE": "1",
+        "VIBEIC_SCOPE_DECLARED": "\n".join(
+            declared_paths(project, step_id, flow)),
         "VIBEIC_SCOPE_LOG": str(log),
         "VIBEIC_SCOPE_ROOT": str(project.resolve()),
         "VIBEIC_SCOPE_DENY": "1" if deny else "0",
@@ -298,9 +406,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"REFUSE — project {args.project} is not a directory.")
         return 2
 
+    scrubbed: List[str] = []
     rc, out, hits = run_scoped(cmd, args.project, deny=not args.observe_only,
-                               timeout=args.timeout)
+                               timeout=args.timeout, step_id=args.step,
+                               scrubbed=scrubbed)
     report = {"step": args.step, "project": str(args.project), "cmd": cmd,
+              "env_scrubbed": sorted(set(scrubbed)),
+              "declared_exceptions": len(declared_paths(args.project, args.step)),
               "child_rc": rc, "enforced": not args.observe_only,
               "segments": sorted(_rfb.ORACLE_TREE_SEGMENTS),
               "mixed_segments": sorted(_rfb.REFERENCE_FLOW_TREE_SEGMENTS)}
