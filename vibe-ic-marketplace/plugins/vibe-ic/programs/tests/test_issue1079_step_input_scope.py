@@ -192,9 +192,16 @@ def test_with_the_switch_unset_the_environment_is_untouched():
     assert env is base and meta == {"enforced": False}
 
 
-def test_a_caller_passing_no_env_still_inherits_when_off():
+def test_a_caller_passing_no_env_still_inherits_when_off(monkeypatch):
     """`None` must stay `None`. Turning it into a dict would change what every
-    unscoped child inherits — the way to break every step at once."""
+    unscoped child inherits — the way to break every step at once.
+
+    The switch is cleared EXPLICITLY rather than assumed absent: with
+    `base_env=None`, `enforcement_enabled` falls back to `os.environ`, so this
+    test read the ambient switch and failed when the blast-radius measurement
+    exported it globally. The premise has to be established, not inherited.
+    """
+    monkeypatch.delenv(sis.ENV_SWITCH, raising=False)
     env, meta = sis.child_env(None, project=Path("/tmp"), step_id="14")
     assert env is None and meta["enforced"] is False
 
