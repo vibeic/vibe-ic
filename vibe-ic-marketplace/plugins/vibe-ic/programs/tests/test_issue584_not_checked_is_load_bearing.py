@@ -287,6 +287,35 @@ def test_a_mis_wired_gate_does_not_leak_its_exemption_onto_the_next_gate(tmp_pat
         f"the exemption leaked forward onto the next gate:\n{text}")
 
 
+def test_an_unreadable_clock_refuses_rather_than_making_exemptions_immortal(tmp_path):
+    """Fail CLOSED on the clock.
+
+    Every expiry decision is `until < today`. With `today` empty or malformed,
+    no `until` ever compares as due, so every exemption becomes immortal and
+    the expiry half of this change is silently absent — a check that stops
+    checking without saying so. It has to be rc 2, not a quiet pass.
+    """
+    root = tmp_path / "r"; root.mkdir()
+    _ok_and_refusing(root)
+    # Shadow `date` with one that cannot answer, ahead of the real one on PATH.
+    shim = root / "bin"; shim.mkdir()
+    (shim / "date").write_text("#!/bin/sh\nexit 1\n")
+    (shim / "date").chmod(0o755)
+
+    script = _fixture_script(root, _GREEN_GATE
+                             + f'uncheckable_until {_PAST} "long expired"\n'
+                             + _refusing_gate())
+    import os
+    env = dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}")
+    proc = subprocess.run(["bash", str(script)], cwd=str(root), env=env,
+                          capture_output=True, text=True, timeout=120)
+    text = proc.stdout + proc.stderr
+    assert proc.returncode == 2, (
+        "an unreadable clock let a long-expired exemption through — every "
+        f"exemption is immortal in this state:\n{text}")
+    assert "could not read today's date" in text, text
+
+
 # ==========================================================================
 # 4. `--list` — static wiring is enforced; a wall-clock verdict is not
 # ==========================================================================
