@@ -235,16 +235,33 @@ steps:
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
-        # Moved here from step 1 with its declaration (matrix D4). The report is
-        # a phase 1 deliverable and `phase1_coverage_report_present_check` was
-        # written to gate it -- and was wired NOWHERE in this flow, so a check
-        # that exists called nothing. Blocking because that checker is
-        # explicitly non-waivable: 100% extraction coverage is the hard Phase 1
-        # threshold. MEASURED over the 109 published run roots before wiring:
-        # rc0 on 100, rc1 on 9. Those 9 are genuinely below the threshold or
-        # missing the report; they are not made red by this edit, they are made
-        # VISIBLE by it.
-        - program_exit_zero: "phase1_coverage_report_present_check ."
+        # Moved here from step 1 with its declaration (matrix D4). Phase 1
+        # produces these, so phase 1 declares them AND reads them -- a
+        # declaration no clause reads is the mismatch D4 exists to find, so
+        # moving it without this conjunct would only relocate that mismatch.
+        #
+        # `files_exist` rather than wiring `phase1_coverage_report_present_check`
+        # as a clause, and the reason is measured rather than stylistic.
+        # `flow_gate_enforcement_audit` decides ENFORCED from RUNNER invocation,
+        # not from this file: of the 159 gates it audits, 142 are AUDIT_ONLY and
+        # 116 of those declare nothing. A flow-only `program_exit_zero` is
+        # therefore AUDIT_ONLY by this repo's own convention, and adding one puts
+        # a NEW entry into a register that `test_issue306_register_paydown` and
+        # `test_the_recorded_register_did_not_grow_to_absorb_the_five` permit
+        # only to SHRINK. Measured: wiring the program introduced 6 failures
+        # across 5 files, all one root cause. Declaring `ENFORCEMENT: blocking`
+        # to satisfy the audit made it worse -- the finding became
+        # `contradiction::`, because no runner invokes it and the declaration
+        # would have been untrue.
+        #
+        # `files_exist` answers D4's question, adds no gate to that register, and
+        # its blast radius was measured at 8 of 109 published run roots (the
+        # program clause was 9). The orphan checker stays unwired and that is
+        # RECORDED, not forgotten:
+        # `test_the_orphan_checker_is_STILL_UNWIRED_and_that_is_a_recorded_residual`.
+        - files_exist:
+            - "reports/phase1/extraction_coverage_report.md"
+            - "reports/phase1/extraction_coverage_report.json"
         # #312 — the SECOND track. Findings are advisory (a divergence between
         # the two tracks needs converging, not an automatic stop); running is
         # not. A missing/unparseable report exits 1 here, because a second

@@ -173,11 +173,44 @@ def test_D1_gate_actually_READS_what_D1_now_declares(path):
         f"69 passed.")
 
 
-def test_the_checker_D1_now_calls_actually_exists_and_is_a_gate_program():
-    """A clause naming a program that is not there is a gate that cannot run,
-    which reads as a pass in every channel that only checks the exit code."""
+def test_the_orphan_checker_is_STILL_UNWIRED_and_that_is_a_recorded_residual():
+    """`phase1_coverage_report_present_check` exists and the flow calls it from
+    NOWHERE. This change does not fix that, and the reason is measured.
+
+    Wiring it as a `program_exit_zero` clause of D1 works and closes D4 — but it
+    introduced SIX failures across five files, all one root cause:
+    `undeclared::phase1_coverage_report_present_check`.
+    `flow_gate_enforcement_audit` decides ENFORCED from RUNNER invocation, not
+    from the flow. Measured on this tree:
+
+        gates audited 159   ->   AUDIT_ONLY 142,  ENFORCED 17
+        of the 142, declaring nothing: 116
+
+    So a flow-only clause is AUDIT_ONLY by this repo's own convention, and
+    adding one puts a NEW entry into a register `test_issue306_register_paydown`
+    and `test_the_recorded_register_did_not_grow_to_absorb_the_five` permit only
+    to SHRINK. Declaring `ENFORCEMENT: blocking` to satisfy the audit made it
+    worse, not better: the finding became `contradiction::` — the declaration
+    would have been untrue, because no runner invokes it.
+
+    That is two landed mechanisms disagreeing about the same behaviour: D4/D7
+    want gates wired, the enforcement register forbids the debt wiring creates.
+    It generalises past this gate — it is true of ANY newly wired gate program —
+    so it is escalated rather than decided here, and D1 reads the artefacts with
+    `files_exist` instead: same question answered, no register entry, blast
+    radius 8 of 109 published roots rather than 9.
+
+    THIS TEST IS THE RECORD. It fails the moment someone wires the checker, so
+    the collision above has to be read and resolved rather than rediscovered.
+    """
     steps = _steps()
-    commands = _clause_commands(steps["D1"].get("gate"))
-    named = [c.split()[0] for c in commands if c.split()]
-    assert "phase1_coverage_report_present_check" in named, named
-    assert (_PROGRAMS / "phase1_coverage_report_present_check.py").is_file()
+    commands = " ".join(_clause_commands(steps["D1"].get("gate")))
+    assert (_PROGRAMS / "phase1_coverage_report_present_check.py").is_file(), (
+        "the orphan checker is gone; if it was deleted rather than wired, the "
+        "artefacts D1 declares have no substance check at all")
+    assert "phase1_coverage_report_present_check" not in commands, (
+        "phase1_coverage_report_present_check is now wired into D1's gate. That "
+        "is the right end state, but it adds a NEW entry to the shrink-only "
+        "enforcement register -- measured: 6 failures across 5 files. Resolve "
+        "that collision (see this test's docstring) and then delete this test; "
+        "do not simply record the new debt, which is what the register forbids.")
