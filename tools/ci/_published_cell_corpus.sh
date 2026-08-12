@@ -128,3 +128,87 @@ published_cells_with_routed_def_and_macro_lef() {
   # rather than claiming a bug it does not currently prevent.
   return 0
 }
+
+# --- the two gates whose selector was not their input (#1075) ----------------
+#
+# MEASURED at 947547716, driving each gate over the population it actually
+# reads, with `git status --porcelain --ignored=traditional -- benchmark-data`
+# clean before and after every invocation (no corpus writes):
+#
+#   selector the loop used (routed DEF)              1 cell
+#   cells carrying a DRC report                     12
+#   IC roots carrying reports/**/*.json              9
+#
+# `step_internal_fail_bubble_up_check` over those 9: six return rc 1 naming 14
+# unacknowledged step-internal FAILs, one returns 0 (sha256 — 26 reports, every
+# FAIL acknowledged, which is what the gate passing looks like), two return 2.
+# Under the old selector all nine were represented by ONE cell that happened to
+# pass, so the roll-up counted a PASS that covered 1/9 of the subject.
+#
+# The 14 are not suppressed here and no baseline is recorded for them. A
+# register that lists them would be a register whose subject #1028 deletes —
+# it withdraws every `reports/` tree involved — so it would outlive its truth on
+# the next landing. The gate firing over real unacknowledged FAILs is the gate
+# working; acknowledging or withdrawing them is a separate decision with its own
+# PR.
+
+#: Pathspec for a DRC report, mirroring `drc_vacuous_pass_check._DRC_GLOBS`
+#: (`*drc*.{rpt,log,txt,out}`, both cases). Kept as a pathspec list rather than
+#: a regex so the producer stays a `git ls-files` question about the COMMIT.
+PUBLISHED_DRC_PATHSPECS=(
+  'benchmark-data/ic/*drc*.rpt'  'benchmark-data/ic/*drc*.log'
+  'benchmark-data/ic/*drc*.txt'  'benchmark-data/ic/*drc*.out'
+  'benchmark-data/ic/*DRC*.rpt'  'benchmark-data/ic/*DRC*.log'
+  'benchmark-data/ic/*DRC*.txt'  'benchmark-data/ic/*DRC*.out'
+)
+
+# Project roots under `benchmark-data/ic/` that carry at least one DRC report.
+#
+# The unit is the PROJECT ROOT the gate is invoked with, and it is derived from
+# where the artefact sits rather than assumed to be at a fixed depth: published
+# cells are `ic/<ic>/<run>/` in some places and `ic/<ic>/` in others, and a
+# depth-4 rule would silently drop the second shape — which is the same
+# narrowing #1075 records for the routed-DEF pathspec.
+#
+# `drc_vacuous_pass_check` walks with `rglob`, so a root that CONTAINS a report
+# at any depth is a root it can answer about.
+published_cells_with_drc_report() {
+  git -C "${ROOT:?ROOT must be set}" ls-files -- "${PUBLISHED_DRC_PATHSPECS[@]}" \
+    | _published_project_roots
+}
+
+# IC roots carrying a `reports/**/*.json` — what
+# `step_internal_fail_bubble_up_check` reads (its `_published_run_trees` walks
+# `reports/`), as opposed to a routed DEF, which it never opens.
+published_ics_with_reports_tree() {
+  git -C "${ROOT:?ROOT must be set}" ls-files -- 'benchmark-data/ic/*/reports/*.json' \
+    | sed -n 's|^\(benchmark-data/ic/[^/]*\)/.*|\1|p' | LC_ALL=C sort -u
+}
+
+# Shared reducer: artefact paths -> the distinct project roots holding them.
+#
+# The corpus carries BOTH shapes — `ic/<ic>/<run>/…` and `ic/<ic>/…` — and the
+# gates are invoked with either. So a fixed depth is wrong in one direction or
+# the other, which is exactly the narrowing #1075 records for the routed-DEF
+# pathspec (`ic/*/*/` can never match the three trees that sit one level up).
+#
+# The rule instead: the component after `<ic>` is part of the root ONLY if it is
+# not one of the flow's STRUCTURAL directory names. `caravel_user_project/phase3`
+# is not a project — it is `caravel_user_project` seen through its phase3 tree —
+# and an earlier sed-only version of this reducer emitted exactly that, plus
+# `<ic>/reports`, as if they were roots. Measured before the fix: 14 "roots" of
+# which 6 were subdirectories of another entry in the same list.
+_PUBLISHED_STRUCTURAL_DIRS="phase1 phase2 phase3 reports steps input input_doc analog audit"
+
+_published_project_roots() {
+  awk -v structural="$_PUBLISHED_STRUCTURAL_DIRS" '
+    BEGIN { n = split(structural, s, " "); for (i = 1; i <= n; i++) st[s[i]] = 1 }
+    {
+      split($0, p, "/")
+      # p[1]=benchmark-data p[2]=ic p[3]=<ic> p[4]=<run>|<structural>
+      if (p[3] == "") next
+      root = p[1] "/" p[2] "/" p[3]
+      if (p[4] != "" && !(p[4] in st)) root = root "/" p[4]
+      print root
+    }' | LC_ALL=C sort -u
+}
