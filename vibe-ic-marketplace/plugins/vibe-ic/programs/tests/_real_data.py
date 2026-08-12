@@ -180,7 +180,16 @@ def _tracked() -> Optional[frozenset]:
     try:
         r = subprocess.run(
             ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
-            capture_output=True, text=True, timeout=120,
+            # 55s, not 120s. `ci_harness_timeout_ceiling_check` refuses any inner
+            # bound above 60s, and the reason is not tidiness: the pytest harness
+            # kills at 180s, so an inner bound that can outlive it takes down the
+            # SESSION instead of the test — you lose every other result in the run
+            # and learn nothing about the one that hung.
+            # 120 was never a measurement. Measured here on 21,779 tracked files,
+            # three consecutive runs: 0.00s each. 55s is still ~4 orders of
+            # magnitude of headroom, and it matches the `_T = 55` convention the
+            # rest of this suite already uses.
+            capture_output=True, text=True, timeout=55,
         )
     except (OSError, subprocess.SubprocessError):
         return None
