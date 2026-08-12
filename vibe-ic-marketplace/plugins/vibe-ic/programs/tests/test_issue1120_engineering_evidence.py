@@ -188,6 +188,31 @@ def test_a_shallow_clone_REFUSES_and_never_reports_a_smaller_number(
     assert _gen(shallow, "--check") == ge.RC_REFUSED
 
 
+def test_the_freshness_gate_is_WIRED_into_the_hygiene_sweep() -> None:
+    """A generator nothing invokes produces no verdict.
+
+    This repo has a gate for that class (`gate_is_wired_check`) which
+    classifies by filename suffix — `*_check`/`*_lint`/`*_audit`/`*_guard` — so
+    a `gen_*.py` under `tools/` is invisible to it. The wiring is therefore
+    asserted HERE, by name, or nothing would notice it being removed. It is
+    also the red arm for this change: `git checkout origin/main --
+    tools/ci/repo_hygiene_gates.sh` fails this test and nothing else.
+    """
+    sweep = (_ROOT / "tools" / "ci" / "repo_hygiene_gates.sh").read_text()
+    assert "gen_engineering_evidence.py" in sweep, \
+        "the freshness check is not invoked by the hygiene sweep"
+    assert "--check" in sweep, sweep[:200]
+    # `run_tolerating_uncheckable`, not `run`: rc 2 means "this clone is
+    # shallow and cannot answer", which must be loud and non-fatal. Pinned so
+    # a future edit to plain `run` is a visible decision, not a silent one.
+    line = next(ln for ln in sweep.splitlines()
+                if "gen_engineering_evidence.py" in ln or
+                ("engineering evidence fresh" in ln))
+    block = sweep[sweep.index("engineering evidence fresh") - 200:
+                  sweep.index("gen_engineering_evidence.py") + 60]
+    assert "run_tolerating_uncheckable" in block, line
+
+
 def test_the_shallow_guard_does_not_fire_on_a_complete_clone(
         repo: Path, tmp_path: Path) -> None:
     """Paired with the above: a guard that refused every clone would pass the
