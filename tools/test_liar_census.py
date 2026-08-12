@@ -473,3 +473,139 @@ def test_the_selector_probe_asks_where_the_walk_is_ROOTED(census, tmp_path, caps
     else:
         assert rc == 0, out
         assert "LIAR        0" in out, out
+
+
+# --------------------------------------------------------------------------
+# P6 present_but_empty (vibe-ic#1115) — the producer ran and emitted nothing.
+#
+# This is the population `probe_empty_tree` DISCOUNTS: measured on the real
+# flow, all 136 clauses are `guarded_on_empty`, and that probe answers GUARDED
+# for every one of them, saying so in as many words — "it says nothing about a
+# POPULATED tree with no substance". Both guards it honours are EXISTENCE
+# guards, and a producer that runs, succeeds and emits an empty report
+# satisfies them exactly as well as one that emitted a real report.
+# --------------------------------------------------------------------------
+
+_STEP_WITH_OUTPUTS = """
+    steps:
+      - id: 99
+        name: planted
+        required_outputs:
+          - reports/metrics.json
+          - reports/drc.rpt
+        gate:
+          all_of:
+            - program_exit_zero: "{prog} ."
+    """
+
+
+def test_it_fires_when_a_gate_passes_over_declared_outputs_that_are_EMPTY(
+        census, tmp_path, capsys):
+    """LibreLane's `klayout.py:486-490` shape: the producer emits nothing and
+    the checker reads the absence as consent."""
+    progs = _programs(tmp_path, reads_absence_as_consent="""
+        import json, pathlib, sys
+        p = pathlib.Path("reports/metrics.json")
+        data = json.loads(p.read_text() or "{}") if p.exists() else {}
+        if not data:
+            # no metric to check -> nothing to complain about
+            print("[PASS] drc check complete")
+            sys.exit(0)
+        sys.exit(1)
+        """)
+    rc = census(_flow(tmp_path, _STEP_WITH_OUTPUTS.format(
+        prog="reads_absence_as_consent")), progs, "--probes", "empty_output")
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "present_but_empty" in out, out
+    assert "EXIST and are EMPTY" in out, out
+    assert "1   (1 of them BLOCKING)" in out, out
+
+
+def test_a_gate_that_REFUSES_over_empty_outputs_is_clean(census, tmp_path, capsys):
+    """The false-positive control. Without it the probe could be `return LIAR`."""
+    progs = _programs(tmp_path, refuses="""
+        import json, pathlib, sys
+        p = pathlib.Path("reports/metrics.json")
+        data = json.loads(p.read_text() or "{}") if p.exists() else {}
+        if not data:
+            print("NOT CHECKED: the producer emitted no metric (rc=2)")
+            sys.exit(2)
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _STEP_WITH_OUTPUTS.format(prog="refuses")),
+                progs, "--probes", "empty_output")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "LIAR        0" in out, out
+
+
+def test_the_documented_vacuous_channel_is_GUARDED_not_a_liar(
+        census, tmp_path, capsys):
+    """"Zero violations" is a legitimate pass, and an empty report is what zero
+    violations looks like. The discriminator is not the emptiness — it is
+    whether the gate SAYS the population was empty on the channel
+    `flow_compliance_check` reads on the PASSING path."""
+    progs = _programs(tmp_path, discloses="""
+        import sys
+        print("VACUOUS_PASS: the producer emitted no metric; 0 of 0 checked")
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _STEP_WITH_OUTPUTS.format(prog="discloses")),
+                progs, "--probes", "empty_output")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "GUARDED" in out, out
+    assert "LIAR        0" in out, out
+
+
+def test_a_step_declaring_no_outputs_is_NA_and_never_clean(
+        census, tmp_path, capsys):
+    """There is nothing to emit emptily, so the question was not asked. Saying
+    CLEAN there would be the census's own vacuous pass."""
+    progs = _programs(tmp_path, whatever="""
+        import sys
+        print("[PASS] fine")
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="whatever")),
+                progs, "--probes", "empty_output")
+    out = capsys.readouterr().out
+    assert "N/A" in out or "declares no outputs" in out, out
+    assert "LIAR        0" in out, out
+
+
+def test_the_probe_actually_creates_the_declared_outputs(tmp_path):
+    """The seeding is the whole experiment. If it silently made nothing, every
+    clause would come back CLEAN and the census would print a confident zero —
+    the shape this file exists to refuse."""
+    made = lc._seed_present_but_empty(
+        tmp_path, ["reports/metrics.json", "reports/drc.rpt",
+                   "reports/logs/*.log", "reports/subdir"])
+    assert made == 4, made
+    assert (tmp_path / "reports/metrics.json").read_text().strip() == "{}"
+    assert (tmp_path / "reports/drc.rpt").exists()
+    assert (tmp_path / "reports/drc.rpt").stat().st_size == 0
+    assert (tmp_path / "reports/logs/any.log").exists(), "a * pattern was skipped"
+    assert (tmp_path / "reports/subdir").is_dir()
+
+
+def test_it_is_not_a_duplicate_of_the_zero_denominator_probe(
+        census, tmp_path, capsys):
+    """`probe_zero_denominator` fires when the gate PRINTS a zero population and
+    passes anyway. This one fires when it prints no population at all — the
+    quieter half, and the one a reader cannot catch."""
+    progs = _programs(tmp_path, silent_over_empty="""
+        import sys
+        print("[PASS] drc check complete")
+        sys.exit(0)
+        """)
+    flow = _flow(tmp_path, _STEP_WITH_OUTPUTS.format(prog="silent_over_empty"))
+    rc_zero = census(flow, progs, "--probes", "zero")
+    out_zero = capsys.readouterr().out
+    assert rc_zero == 0, ("the zero-denominator probe fired, so this gate is "
+                          f"not the quiet case:\n{out_zero}")
+    rc_new = census(flow, progs, "--probes", "empty_output")
+    out_new = capsys.readouterr().out
+    assert rc_new == 1, ("the new probe did not fire on a gate the existing one "
+                         f"cannot see:\n{out_new}")
