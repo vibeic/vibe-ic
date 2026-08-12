@@ -996,6 +996,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `staged_rtl_reused_ip_manifest_emit` | any | — | ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path. |
 | `step_input_scope` | any | — | §4.05 as a MECHANISM: a step cannot read the oracle. vibe-ic#1079. |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
+| `step_metrics` | any | — | One per-step metrics schema, emitted by whoever computed the number. #1080. |
 | `step_output_collector` | any | — | materialize a per-STEP output subfolder view. |
 | `step_preflight` | any | — | the ORCHESTRATOR side of `required_inputs`. |
 | `step_required_inputs_check` | any | — | refuse to run a step that has nothing to read. |
@@ -2119,6 +2120,7 @@ _(no programs in this group)_
 - `staged_rtl_reused_ip_manifest_emit` — ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path.
 - `step_input_scope` — §4.05 as a MECHANISM: a step cannot read the oracle. vibe-ic#1079.
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
+- `step_metrics` — One per-step metrics schema, emitted by whoever computed the number. #1080.
 - `step_output_collector` — materialize a per-STEP output subfolder view.
 - `step_preflight` — the ORCHESTRATOR side of `required_inputs`.
 - `step_required_inputs_check` — refuse to run a step that has nothing to read.
