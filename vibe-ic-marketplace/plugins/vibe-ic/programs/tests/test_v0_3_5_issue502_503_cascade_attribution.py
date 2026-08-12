@@ -249,4 +249,17 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
             seen.add(pid)
             queue.extend(parents.get(pid, []))
         total += len(seen)
-    assert total == 1221, total
+    # RE-MEASURED 2026-08-12 (vibe-ic#1070): 1221 -> 1311, +90.
+    #
+    # The ordering graph gained three edges that the flow ALREADY DECLARED as
+    # `required_inputs` and that no `blocks_on` guarded — A1<-D1, 25<-24,
+    # M1<-37. The width growing is the POINT of that repair, not a side effect:
+    # each of the 90 new pairs is an ordering relation that was already real and
+    # is now visible to `flow_step_execution_coverage_check.analyze()`.
+    #
+    # The number this test exists to contrast against did NOT move:
+    # `test_declared_dependency_relation_is_small` still pins exactly 6 declared
+    # dependency pairs. That is the softening surface, and it is unchanged — so
+    # the gap this test measures got WIDER (1221:6 -> 1311:6), which is the
+    # direction that makes the six-entry list more meaningful, not less.
+    assert total == 1311, total
