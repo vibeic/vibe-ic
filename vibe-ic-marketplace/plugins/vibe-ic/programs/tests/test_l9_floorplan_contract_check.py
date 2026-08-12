@@ -91,7 +91,14 @@ def test_no_floorplan_mandate_skips(tmp_path):
     _l9_md(tmp_path, "# fixture_top\n\nNo floorplan is mandated; the tool "
                      "decides the die.\n")
     proc, report = _run(tmp_path)
-    assert proc.returncode == 0, proc.stdout
+    # vibe-ic#1051 follow-up: an input-missing skip is the DISCLOSED tier, not a
+    # plain pass. rc 2 is `_vacuous_exit.RC_VACUOUS`, which `flow_compliance_check`
+    # records as VACUOUS_PASS; the `VACUOUS_PASS:` sentinel is the second,
+    # rc-independent channel the same consumer reads. Asserting BOTH is the point —
+    # either one alone can regress silently while the other keeps the test green.
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "VACUOUS_PASS:" in (proc.stdout + proc.stderr), proc.stdout + proc.stderr
+    assert report["summary"]["skip_kind"] == "input-missing"
     assert report["summary"]["skipped_reason"]
 
 
