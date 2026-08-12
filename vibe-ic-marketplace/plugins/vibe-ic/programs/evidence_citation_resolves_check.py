@@ -231,6 +231,54 @@ def _is_citation(tok: str) -> bool:
     return True
 
 
+#: A suffix that reads as a real file extension rather than a version number
+#: or a sentence's full stop. Bounded on purpose: `.json` yes, `.5` no,
+#: `.markdown` yes, `.and-then-some` no.
+_EXT_RE = re.compile(r"^\.[A-Za-z0-9]{1,8}$")
+
+
+def unjudged_dangling_ext(md: Path, tok: str, root: Path,
+                          tracked: Optional[set] = None) -> Optional[str]:
+    """The extension of `tok` when it is a citation this gate SEES, does NOT
+    judge, and which does not resolve. `None` otherwise. vibe-ic#1044.
+
+    THE SECOND HALF OF #1044, AND THE SAME SHAPE AS THE FIRST.
+
+    The brace fix stopped tokens being invisible to the PATTERN. This stops
+    the next layer down being invisible to the OUTPUT: a token that matched,
+    expanded, names one specific artifact, and points at nothing — but whose
+    extension is outside `_EVIDENCE_EXT`, so `_is_citation` drops it with a
+    bare `continue`. Not counted, not printed, indistinguishable from a token
+    that was judged and cleared. That is the exact indistinguishability this
+    issue was filed about, one level in.
+
+    MEASURED on `origin/withdraw/nonpassing-published-runs` (a8e254ad): the
+    four artifacts `METHODOLOGY.md` cites are deleted on that branch, the
+    brace fix makes all of its expansions VISIBLE, and every one of them is
+    `.md` or a directory — so the gate saw eleven dangling references and
+    said PASS anyway. The verdict was right by its own declared scope and
+    useless to the person asking "did the withdrawal break a citation".
+
+    THIS DISCLOSES; IT DOES NOT JUDGE. Widening `_EVIDENCE_EXT` is a scope
+    change with a corpus cost that was measured and argued in #1044 and NOT
+    granted (224 `.json`, 97 `.v`, 69 `.md`, 69 `.py`, 45 `.gds` backticked
+    tokens sit behind that line). Making the decision here, unilaterally,
+    would be exactly the move the issue says is not proposed. So the count
+    is printed and the verdict is untouched: a reader can see the number and
+    decide, which they could not do before.
+    """
+    if _TEMPLATE_RE.search(tok):
+        return None                      # a template names no artifact
+    ext = Path(tok).suffix
+    if not _EXT_RE.match(ext):
+        return None                      # not a file reference
+    if ext.lower() in _EVIDENCE_EXT:
+        return None                      # judged by the gate proper
+    if resolve_citation(md, tok, root, tracked) is not None:
+        return None                      # points at something; nothing to say
+    return ext.lower()
+
+
 def resolve_citation(md: Path, cite: str, root: Path,
                      tracked: Optional[set] = None) -> Optional[Path]:
     """Resolve `cite` against the ladder: the citing document's directory,
@@ -375,8 +423,9 @@ def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], 
 
 def scan(root: Path, tracked: Optional[set] = None
          ) -> Tuple[List[Dict[str, str]], int, int, List[str],
-                    List[Dict[str, str]]]:
-    """`(dangling, cited_total, docs_scanned, zero_citation_docs, oversize)`.
+                    List[Dict[str, str]], List[Dict[str, str]]]:
+    """`(dangling, cited_total, docs_scanned, zero_citation_docs, oversize,
+    unjudged)`.
 
     Only TRACKED documents are scanned and only TRACKED artifacts satisfy a
     citation when `tracked` is available — see `tracked_files`.
@@ -393,6 +442,7 @@ def scan(root: Path, tracked: Optional[set] = None
     dangling: List[Dict[str, str]] = []
     zero_docs: List[str] = []
     oversize: List[Dict[str, str]] = []
+    unjudged: List[Dict[str, str]] = []
     disclosed = _disclosed_map(root, tracked)
     cited = 0
     docs = 0
@@ -421,6 +471,12 @@ def scan(root: Path, tracked: Optional[set] = None
                 continue
             for tok in expansions:
                 if not _is_citation(tok):
+                    # SEEN, NOT JUDGED — disclosed rather than dropped
+                    # silently. See `unjudged_dangling_ext`. #1044.
+                    _ux = unjudged_dangling_ext(md, tok, root, tracked)
+                    if _ux is not None:
+                        unjudged.append({"doc": str(md.relative_to(root)),
+                                         "citation": tok, "ext": _ux})
                     continue
                 cited += 1
                 _contributed += 1
@@ -444,7 +500,7 @@ def scan(root: Path, tracked: Optional[set] = None
                 if (_d, tok) in disclosed:
                     continue
                 dangling.append({"doc": _d, "citation": f"[{field}] {tok}"})
-    return dangling, cited, docs, zero_docs, oversize
+    return dangling, cited, docs, zero_docs, oversize, unjudged
 
 
 def _working_tree_dirt(root: Path) -> List[str]:
@@ -525,7 +581,8 @@ def main(argv=None) -> int:
     baseline_path = (Path(args.baseline) if args.baseline
                      else root.parent / _BASELINE_NAME)
     tracked = tracked_files(root)
-    dangling, cited, docs, zero_docs, oversize = scan(root, tracked)
+    dangling, cited, docs, zero_docs, oversize, unjudged = scan(
+        root, tracked)
     now = sorted({_key(d) for d in dangling})
 
     if args.write_baseline:
@@ -599,6 +656,10 @@ def main(argv=None) -> int:
         # was introduced.
         "docs_contributing_zero_citations": len(zero_docs),
         "oversize_tokens": oversize,
+        # SEEN but outside `_EVIDENCE_EXT`, and dangling. Disclosed,
+        # never folded into the verdict — see `unjudged_dangling_ext`.
+        "unjudged_dangling": unjudged,
+        "unjudged_dangling_count": len(unjudged),
         "baseline_size": (len(base) if base is not None else None),
         "new_dangling": findings,
         "stale_baseline_entries": stale,
@@ -618,6 +679,22 @@ def main(argv=None) -> int:
               f"never a silent drop:")
         for o in oversize[:5]:
             print(f"     {o['doc']} :: {o['citation'][:90]}")
+    # SEEN, NOT JUDGED. Printed unconditionally when non-empty, and worded so
+    # a green verdict cannot be read as "no dangling references": it is
+    # "no dangling references OF THE KIND THIS GATE JUDGES". #1044.
+    if unjudged:
+        _exts: Dict[str, int] = {}
+        for u in unjudged:
+            _exts[u["ext"]] = _exts.get(u["ext"], 0) + 1
+        _top = ", ".join(f"{e} x{n}" for e, n in
+                         sorted(_exts.items(), key=lambda kv: -kv[1])[:6])
+        print(f"  SEEN not judged: {len(unjudged)} citation(s) point at "
+              f"nothing but carry an extension outside "
+              f"{'/'.join(_EVIDENCE_EXT)}, so this gate does NOT rule on "
+              f"them — a PASS below means 'no dangling EVIDENCE citation', "
+              f"not 'no dangling citation' ({_top})")
+        for u in unjudged[:5]:
+            print(f"     {u['doc']} :: {u['citation'][:90]}")
     if not explicit_root:
         print(f"  NOT scanned    : {_DISCLOSED_OUT_OF_SCOPE[0]} — "
               f"{_DISCLOSED_OUT_OF_SCOPE[1]}")

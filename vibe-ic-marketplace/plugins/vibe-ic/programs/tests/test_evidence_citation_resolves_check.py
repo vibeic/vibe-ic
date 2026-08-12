@@ -518,6 +518,49 @@ def test_a_brace_citation_whose_artifacts_EXIST_passes(tmp_path):
     assert r.returncode == 0, r.stdout
 
 
+def test_a_dangling_NON_EVIDENCE_citation_is_disclosed_not_dropped(tmp_path):
+    """THE SECOND HALF OF #1044, and the same shape as the first.
+
+    The brace fix stopped tokens being invisible to the PATTERN. A token can
+    still be invisible to the OUTPUT: matched, expanded, naming one specific
+    artifact, pointing at nothing — and dropped by `_is_citation` with a bare
+    `continue` because its extension is outside `_EVIDENCE_EXT`. Not counted,
+    not printed, indistinguishable from a token that was judged and cleared.
+
+    MEASURED against `origin/withdraw/nonpassing-published-runs` (a8e254ad),
+    which is the branch #1044 named: `METHODOLOGY.md` alone carries 20 such
+    citations there, and before this the gate's output mentioned none of them.
+    """
+    _doc(tmp_path, "EV.md", "see `notes/DESIGN.md` and `src/top.v`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert "SEEN not judged" in r.stdout, r.stdout
+    assert "notes/DESIGN.md" in r.stdout, r.stdout
+
+
+def test_the_disclosure_does_NOT_change_the_verdict(tmp_path):
+    """Widening `_EVIDENCE_EXT` is a scope change #1044 explicitly does not
+    propose, and one this PR does not make unilaterally. A disclosure that
+    quietly reddened the tree would BE that scope change, arrived at by the
+    back door."""
+    _doc(tmp_path, "EV.md", "see `notes/DESIGN.md`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "SEEN not judged" in r.stdout, r.stdout
+
+
+def test_a_NON_EVIDENCE_citation_that_RESOLVES_is_not_disclosed(tmp_path):
+    """The inverse, without which the guard above is satisfied by a gate that
+    lists every non-evidence token it ever saw. Only the DANGLING ones are the
+    finding; a path that points at something has nothing to disclose."""
+    _doc(tmp_path, "EV.md", "see `notes/DESIGN.md`\n")
+    p = tmp_path / "notes" / "DESIGN.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("x")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "SEEN not judged" not in r.stdout, r.stdout
+
+
 def test_a_COMMA_LESS_brace_is_still_a_template(tmp_path):
     """`{run}.log` names no particular file and a shell does not expand it
     either: `echo {x}.log` prints `{x}.log`. Expanding it would manufacture a
