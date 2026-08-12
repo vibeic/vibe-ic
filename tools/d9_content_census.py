@@ -91,6 +91,11 @@ NO_DENOMINATOR = "NO-DENOMINATOR"
 #: different absences, and folding them into one bucket hides which half is
 #: missing — the ruler or the thing to measure.
 NO_RULER = "NO-BLOCKING-RULER"
+#: The run could not DECIDE. Kept apart from DARK, which is a finding about the
+#: gate; this is a finding about the SAMPLE. A run whose arm A is not CLEAN
+#: cannot serve as the baseline for "the verdict did not change", so scoring it
+#: EXISTENCE-ONLY reports the sample's limit as the gate's defect.
+INCONCLUSIVE = "INCONCLUSIVE"
 
 #: A deterministic seed. The corruption must be REPRODUCIBLE — a finding whose
 #: repro line does not reproduce is a rumour.
@@ -247,6 +252,41 @@ def corrupt_declared_outputs(root: Path, step_id: str,
 
 
 # ───────────────────────────────────────────────────────────── the three arms
+def followed_the_bytes(arm_a: Dict[str, Any], arm_c: Dict[str, Any]) -> bool:
+    """Did the verdict move when ONLY the bytes moved?
+
+    Deliberately NOT `d9_flow_gate_reality.verdict_moved`, and the difference is
+    the point. That function requires arm A to be content-derived (CLEAN or
+    FINDING) before it will believe a move, which is right for ITS question —
+    it compares against a DELETION, and a gate that reported NO-INPUT before the
+    delete tells you nothing about the delete.
+
+    Here the mutation leaves the file in place, so a gate that said NO-INPUT and
+    then reported a FINDING once the bytes were corrupted has DEMONSTRABLY read
+    those bytes. Measured on `spm/v1.10.18_sky130A`: `dft_signoff_check` goes
+    `NO-INPUT/rc=0 -> FINDING/rc=1` under corruption alone, and the whitelist
+    discarded that as DARK — the census reporting "not measuring this step"
+    about a gate that had just proved it was.
+    """
+    return (arm_a.get("bucket") != arm_c.get("bucket")
+            or arm_a.get("rc") != arm_c.get("rc"))
+
+
+def can_baseline_a_non_move(arm_a: Dict[str, Any]) -> bool:
+    """Only a CLEAN arm A can support "the verdict did not change".
+
+    A gate that was ALREADY FINDING in arm A is failing for a reason the
+    mutation did not cause; its arm C staying FINDING is not evidence that the
+    bytes went unread, because the pre-existing finding masks any second one.
+    Measured on `caravel_user_project/v1.9.43_sky130A`:
+    `dft_atpg_coverage_check` reads `A=FINDING -> C=FINDING` and was scored
+    EXISTENCE-ONLY — while on the two runs where its arm A is CLEAN the same
+    gate is plainly CONTENT-SENSITIVE. The accusation was the sample's, not the
+    gate's.
+    """
+    return arm_a.get("bucket") == R.CLEAN
+
+
 def three_arm_cell(step_id: str, run_rel: str, programs: Sequence[str],
                    repo: Path, scratch: Path, timeout: int) -> Dict[str, Any]:
     """Drive every BLOCKING gate program of one step three times on one run.
@@ -271,11 +311,12 @@ def three_arm_cell(step_id: str, run_rel: str, programs: Sequence[str],
         per_program = {}
         for p in progs:
             a, c, b = arm_a[p], arm_c.get(p, {}), arm_b.get(p, {})
-            follows_bytes = R.verdict_moved(a, c)
-            follows_existence = R.verdict_moved(a, b)
-            if follows_bytes:
+            if followed_the_bytes(a, c):
                 verdict = CONTENT_SENSITIVE
-            elif follows_existence:
+            elif not can_baseline_a_non_move(a):
+                # the sample cannot decide; say so instead of accusing the gate
+                verdict = INCONCLUSIVE
+            elif followed_the_bytes(a, b):
                 verdict = EXISTENCE_ONLY
             else:
                 verdict = DARK
@@ -301,16 +342,19 @@ def cell_verdict(runs: Sequence[Dict[str, Any]]) -> str:
     read the bytes", and one run proving it is enough. The pessimistic direction
     would let a run with a thin artefact set mask a gate that does read content.
     """
-    best = DARK
-    seen = False
+    order = {CONTENT_SENSITIVE: 3, EXISTENCE_ONLY: 2, DARK: 1, INCONCLUSIVE: 0}
+    best, seen = None, False
     for r in runs:
         for info in r.get("programs", {}).values():
             seen = True
-            if info["verdict"] == CONTENT_SENSITIVE:
+            v = info["verdict"]
+            if v == CONTENT_SENSITIVE:
                 return CONTENT_SENSITIVE
-            if info["verdict"] == EXISTENCE_ONLY:
-                best = EXISTENCE_ONLY
-    return best if seen else NO_DENOMINATOR
+            if best is None or order.get(v, 0) > order.get(best, 0):
+                best = v
+    if not seen:
+        return NO_DENOMINATOR
+    return best
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -378,7 +422,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("=" * 74)
     print(f"D9 CONTENT CENSUS — {len(rows)} step(s), {len(runs)} published run(s)")
     print("=" * 74)
-    for k in (CONTENT_SENSITIVE, EXISTENCE_ONLY, DARK, NO_DENOMINATOR, NO_RULER):
+    for k in (CONTENT_SENSITIVE, EXISTENCE_ONLY, DARK, INCONCLUSIVE,
+              NO_DENOMINATOR, NO_RULER):
         print(f"  {k:<20} {tally.get(k, 0):>4}")
     if dropped:
         print(f"  ({dropped} (step,run) pair(s) dropped by --limit-per-step "
