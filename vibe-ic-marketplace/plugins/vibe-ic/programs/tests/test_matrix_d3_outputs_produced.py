@@ -1504,17 +1504,55 @@ def check_entry(step_id, entry: str, rec: Dict) -> EntryVerdict:
         rr = run_roots().get(rec["run"])
         if rr is not None:
             hit, rejected = resolve(rr.path, entry, step_id)
-            if hit is None:
-                return EntryVerdict(False, LIVE, (
-                    f"the recorded run root {rec['run']!r} resolves at {rr.path} "
-                    f"but no longer yields a committed non-empty artefact for "
-                    f"{entry!r} (recorded: {rec['path']} at {rec['size_bytes']} B)"
+            if hit is not None:
+                return EntryVerdict(True, LIVE,
+                                    f"{hit.path} ({hit.size_bytes} B) in {rec['run']!r}"
+                                    + _ledger_state(step_id, entry))
+            # THE RECORDED ROOT IS HERE AND NO LONGER CARRIES IT. Until now
+            # that ended the search, while the ABSENT-root branch below asked
+            # every admissible root — so an entry was strictly LESS likely to
+            # be evidenced when the manifest happened to name a root that
+            # exists. Measured on this checkout: steps 21 and 22 recorded
+            # `phase3/stage3/pnr/routed.def` and `phase3/stage3/extracted/
+            # *.spef` against `spm/v1.9.96_gf180mcuD` — a PUBLISHED CELL, i.e.
+            # a curated subset of the run the manifest was measured on, which
+            # never carried either path in any commit — while
+            # `spm/v1.5.58_ihp-sg13g2`, an admissible root already registered
+            # in this same manifest, carries both non-empty and tracked at
+            # HEAD. Both cells read "not produced" with the artefact sitting in
+            # the repository.
+            #
+            # This only ADDS the search the sibling branch already performs,
+            # through the identical `resolve_anywhere`, so nothing becomes
+            # evidence here that is not non-empty, non-symlink, tracked at HEAD
+            # and un-refused by that root's own write ledger. What it removes
+            # is a verdict decided by WHICH root the manifest names rather than
+            # by what the commit carries. The stale record is reported, not
+            # swallowed: a reader is told the recorded root lost the artefact
+            # and which root answered instead, so the manifest gets repaired
+            # rather than quietly relied upon.
+            elsewhere, rej_all = resolve_anywhere(entry, step_id)
+            if elsewhere is not None:
+                return EntryVerdict(True, LIVE, (
+                    f"{elsewhere.path} ({elsewhere.size_bytes} B) in "
+                    f"{elsewhere.root!r} — STALE MANIFEST RECORD: the recorded "
+                    f"run root {rec['run']!r} resolves at {rr.path} but no "
+                    f"longer yields a committed non-empty artefact for "
+                    f"{entry!r} (recorded: {rec['path']} at "
+                    f"{rec['size_bytes']} B). Re-point the record at "
+                    f"{elsewhere.root!r}"
                     f"{_rejected_note({rec['run']: rejected})}"
-                    f"{_ledger_state(step_id, entry)}"
+                    + _ledger_state(step_id, entry)
                 ))
-            return EntryVerdict(True, LIVE,
-                                f"{hit.path} ({hit.size_bytes} B) in {rec['run']!r}"
-                                + _ledger_state(step_id, entry))
+            return EntryVerdict(False, LIVE, (
+                f"the recorded run root {rec['run']!r} resolves at {rr.path} "
+                f"but no longer yields a committed non-empty artefact for "
+                f"{entry!r} (recorded: {rec['path']} at {rec['size_bytes']} B), "
+                f"and nothing matching it resolves in any of the "
+                f"{len(run_roots())} admissible run roots either"
+                f"{_rejected_note(rej_all or {rec['run']: rejected})}"
+                f"{_ledger_state(step_id, entry)}"
+            ))
         hit, rejected = resolve_anywhere(entry, step_id)
         if hit is not None:
             return EntryVerdict(True, LIVE, (
@@ -2689,6 +2727,170 @@ def test_d3_a_present_artefact_still_reads_as_produced(monkeypatch):
         v = check_entry(sid, entry, dict(rec, run="probe"))
         assert v.produced is True and v.mode == LIVE, (
             f"the recorded-run-root path regressed: {v}")
+
+
+def test_d3_a_recorded_root_that_lost_the_artefact_still_searches_the_others(
+        monkeypatch):
+    """THE THIRD SHAPE — recorded root PRESENT, artefact somewhere ELSE.
+
+    ``test_d3_a_present_artefact_still_reads_as_produced`` covers the two
+    shapes where the recorded root is either absent or is the one holding the
+    artefact. The shape between them had no control and no fall-through: the
+    recorded root RESOLVES and no longer carries the entry, while another
+    admissible root does. The ``PRODUCED_BY_RUN`` arm stopped at the recorded
+    root and reported "not produced", so an entry was strictly LESS likely to
+    be evidenced when the manifest happened to name a root that exists than
+    when it named one that does not — the absent-root branch has searched
+    everywhere since #527.
+
+    It is not hypothetical. Steps 21 and 22 recorded ``phase3/stage3/pnr/
+    routed.def`` and ``phase3/stage3/extracted/*.spef`` against
+    ``spm/v1.9.96_gf180mcuD``, a PUBLISHED CELL — a curated subset of the run
+    the manifest was measured on, which has never carried either path in any
+    commit — while ``spm/v1.5.58_ihp-sg13g2``, registered in the same manifest
+    and admissible on every host, carries both non-empty and tracked at HEAD.
+    Two cells read "not produced" with the artefact in the repository.
+
+    BOTH DIRECTIONS, because a fall-through that always says yes is worse than
+    the bug it replaces. The reverse half plants NOTHING and asserts the cell
+    stays red: the rule must reject the ABSENCE of evidence, not the shape of
+    the manifest record.
+    """
+    sid, entry = "17", "phase3/stage3/pnr/placed.def"
+    assert entry in F.required_outputs(sid), "control is stale"
+    rec = dict(step_record(sid)["entries"][entry])
+
+    with _probe_run_root("d3_stale_rec_") as (stale, stale_commit):
+        with _probe_run_root("d3_stale_oth_") as (other, other_commit):
+            (stale / "reports" / "orchestrator").mkdir(parents=True)
+            (other / "reports" / "orchestrator").mkdir(parents=True)
+            # The recorded root exists and is admissible; it simply does not
+            # carry the entry. Give it an unrelated committed file so it is a
+            # real run root rather than an empty directory.
+            (stale / "reports" / "orchestrator" / "summary.json").write_text("{}")
+            stale_commit("reports/orchestrator/summary.json")
+            monkeypatch.setattr(
+                sys.modules[__name__], "run_roots",
+                lambda: {"stale": RunRoot("stale", _IN_REPO_KIND, stale),
+                         "other": RunRoot("other", _IN_REPO_KIND, other)})
+
+            # ---- reverse half FIRST: nothing anywhere, still red ----------
+            v = check_entry(sid, entry, dict(rec, run="stale"))
+            assert v.produced is False, (
+                f"no admissible root carries {entry!r} and the entry was still "
+                f"reported produced: {v}. The fall-through must add a SEARCH, "
+                f"not an answer.")
+
+            # ---- forward half: the other root has it ---------------------
+            target = other / entry
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("VERSION 5.8 ;\nDESIGN probe ;\nEND DESIGN\n")
+            other_commit(entry)
+            assert is_tracked(other, entry) and target.stat().st_size > 0
+
+            v = check_entry(sid, entry, dict(rec, run="stale"))
+            assert v.produced is True and v.mode == LIVE, (
+                f"the recorded run root lost the artefact, another admissible "
+                f"root carries it committed and non-empty, and the entry still "
+                f"reads unproduced: {v}")
+            assert "STALE MANIFEST RECORD" in v.detail and "'other'" in v.detail, (
+                f"the stale record must be REPORTED, not swallowed — a reader "
+                f"has to be told the manifest points at the wrong root and "
+                f"which root answered: {v.detail}")
+
+
+def _live_records() -> List[Tuple[str, str, Dict]]:
+    """``(step_id, entry, record)`` for every ``PRODUCED_LIVE`` manifest entry."""
+    out: List[Tuple[str, str, Dict]] = []
+    for cell in cells_for(DIM):
+        rec = step_record(cell.step_id)
+        if rec["verdict"].startswith("NA_"):
+            continue
+        for entry, erec in rec["entries"].items():
+            if erec.get("status") == "PRODUCED_LIVE":
+                out.append((F.normalize_id(cell.step_id), entry, erec))
+    return out
+
+
+def live_records_the_commit_already_carries(
+        records: Optional[List[Tuple[str, str, Dict]]] = None) -> Tuple[str, ...]:
+    """Every ``PRODUCED_LIVE`` record whose target its base run already carries.
+
+    ``produce_live`` refuses exactly this case, and says why in its own words:
+    a live production cannot be proved against a tree that already holds the
+    artefact, and *"in that case the entry is not a live production at all; it
+    should be recorded PRODUCED_BY_RUN"*. Nothing ever looked for the condition
+    itself, so the drift surfaced as four unexplained cell failures (23, 24,
+    25, 26) instead of as the one-line status correction it is. A record and
+    the tree it cites are both in the commit, so this is decidable here, on
+    every host, without running anything.
+
+    *records* exists so the guard can be pointed at a PLANTED record — an
+    invariant that only ever measures zero has not been shown able to measure
+    one.
+    """
+    bad: List[str] = []
+    for step_id, entry, erec in (_live_records() if records is None else records):
+        rr = run_roots().get(erec.get("base_run"))
+        if rr is None:
+            continue
+        if is_tracked(rr.path, erec["writes"]):
+            bad.append(
+                f"step {step_id} {entry!r}: recorded PRODUCED_LIVE against base "
+                f"run {erec['base_run']!r}, which now carries {erec['writes']} "
+                f"tracked at HEAD. `produce_live` cannot prove a live "
+                f"production against a tree that already holds the target; "
+                f"record it PRODUCED_BY_RUN against that run instead")
+    return tuple(bad)
+
+
+def test_d3_no_live_production_record_names_an_artefact_the_commit_carries(
+        monkeypatch):
+    """The status drift above, caught at the RECORD instead of at the cell.
+
+    A ``PRODUCED_LIVE`` record is a claim that this checkout can WATCH the
+    producer write the artefact. The moment the base run is published carrying
+    it, that claim stops being provable — not because production regressed but
+    because the evidence got stronger and the record did not follow. Reported
+    here as what it is, so the repair is "correct the status" rather than a
+    hunt through a cell failure that names neither the record nor the reason.
+    """
+    bad = live_records_the_commit_already_carries()
+    assert not bad, (
+        "PRODUCED_LIVE records whose base run already carries the artefact:\n  "
+        + "\n  ".join(bad))
+
+    # THE PAIRED GUARD. An invariant that measures zero has not been shown to
+    # be able to measure anything, and this one measures zero on a clean tree
+    # by construction. Plant the exact violation and require it to be found;
+    # then take the artefact out of the commit and require it NOT to be, so the
+    # guard is answering "the commit carries it" and not "a record exists".
+    entry = "phase3/stage3/pnr/placed.def"
+    planted = [("probe-step", entry, {"status": "PRODUCED_LIVE",
+                                      "producer": "sta_report_check",
+                                      "argv": ["."],
+                                      "writes": entry,
+                                      "base_run": "probe",
+                                      "size_bytes": 1})]
+    with _probe_run_root("d3_liverec_") as (probe, commit):
+        (probe / "reports" / "orchestrator").mkdir(parents=True)
+        _probe_only(monkeypatch, "probe", probe)
+
+        assert not live_records_the_commit_already_carries(planted), (
+            "the base run does NOT carry the artefact, so this record is a "
+            "legitimate live-production claim and must not be reported")
+
+        target = probe / entry
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("VERSION 5.8 ;\nDESIGN probe ;\nEND DESIGN\n")
+        commit(entry)
+        assert is_tracked(probe, entry)
+
+        found = live_records_the_commit_already_carries(planted)
+        assert any(entry in f for f in found), (
+            f"a PRODUCED_LIVE record whose base run carries the artefact "
+            f"tracked at HEAD was NOT reported: {found}. The guard measures "
+            f"zero on this checkout, so it has to be shown it can measure one.")
 
 
 #: Every dimension-3 cell that declares at least one entry NO admissible run
