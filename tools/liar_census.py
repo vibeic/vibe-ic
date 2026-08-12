@@ -144,6 +144,20 @@ def _consumer_reads_the_refusal(out: str) -> bool:
     Degrades LOUDLY: if the consumer cannot be imported the census says so on stderr
     and treats nothing as disclosed, so the failure shows up as noisy LIARs rather
     than as a quiet amnesty.
+
+    A SECOND DISCLOSURE CHANNEL THIS DOES NOT READ, disclosed rather than assumed
+    away. `flow_compliance_check._json_report_signals_vacuous` reads a vacuity
+    verdict out of the gate's OWN `--json` report — `{"verdict": "NOT_APPLICABLE"}`
+    and six siblings — in BOTH the mandatory and the optional slot. This census
+    reads only the stdout/rc channel. The difference is deliberate and it is not
+    symmetric: that bucket is documented as "strictly ONE-DIRECTIONAL", promoting a
+    step only when EVERY clause that dispatched a program disclosed vacuity, so a
+    single clause's JSON disclosure does NOT stop the step being recorded PASS and
+    could not license a per-clause GUARDED here. MEASURED after widening the
+    population to all 167: no clause is accused on a basis this channel would
+    overturn — the one new LIAR is `writes_its_subject`, which the channel does not
+    touch. Stated because it is a real consumer channel and the next reader should
+    not have to re-derive that it was considered.
     """
     if not out:
         return False
@@ -163,10 +177,56 @@ def _consumer_reads_the_refusal(out: str) -> bool:
     return bool(_stdout_signals_vacuous(out) or out.startswith(_VACUOUS_HINT_PREFIX))
 
 
+#: EVERY clause kind that dispatches a gate PROGRAM. All three, because
+#: `flow_compliance_check` runs all three and this census used to read two —
+#: which made its own denominator the thing it had never printed. See
+#: `population_report`.
+CLAUSE_KINDS = ("program_exit_zero", "advisory_program_exit_zero",
+                "optional_program_exit_zero")
+
+#: Keys that STRUCTURE a gate rather than declare a clause. Kept explicit and
+#: short so that anything else appearing inside a `gate:` subtree falls out as
+#: an UNRECOGNISED SHAPE and gets printed, instead of silently leaving the
+#: population the way `optional_program_exit_zero` did for the whole campaign.
+_GATE_STRUCTURE_KEYS = frozenset({"all_of", "any_of", "files_exist"})
+
+#: Clause spellings that carry a program but are NOT judged by an exit code, so
+#: no probe here can address them. Named rather than skipped.
+_NON_PROGRAM_CLAUSE_KEYS = frozenset({"json_field_true"})
+
+
+def _clause_spec(key: str, val: Any) -> Optional[Tuple[str, List[str]]]:
+    """`(command, condition_files_exist)` for either YAML spelling, or None.
+
+    The flow writes a clause TWO ways and the consumer accepts both:
+
+        - program_exit_zero: "gate_prog . --json reports/x.json"
+        - optional_program_exit_zero:
+            command: "gate_prog . --json reports/x.json"
+            condition_files_exist: ["phase1/generated_docs/L10_TEST_CASES.json"]
+
+    The old walker tested `isinstance(val, str)` and nothing else, so the
+    mapping form fell through to `walk()`, which descended into the dict, saw
+    `command:` under a key that is not a clause kind, and recorded nothing.
+    Three clauses left the population that way — one of them BLOCKING
+    (`clock_plan_check`) — on top of the 28 that left because their KIND was
+    never in the key test at all.
+    """
+    if key not in CLAUSE_KINDS:
+        return None
+    if isinstance(val, str):
+        return (val, [])
+    if isinstance(val, dict) and isinstance(val.get("command"), str):
+        cond = val.get("condition_files_exist")
+        return (val["command"],
+                [str(p) for p in cond] if isinstance(cond, list) else [])
+    return None
+
+
 @dataclass
 class Clause:
     step: str
-    kind: str          # program_exit_zero | advisory_program_exit_zero
+    kind: str          # any of CLAUSE_KINDS
     cmd: str
     program: str
     #: Existence guards the flow declares ABOVE this clause, which an empty tree
@@ -178,7 +238,17 @@ class Clause:
 
     @property
     def blocking(self) -> bool:
-        return self.kind == "program_exit_zero"
+        """Does a non-zero exit here FAIL the step?
+
+        `optional_program_exit_zero` IS blocking, and reading it as advisory
+        would have understated every finding among the 28 of them. Its
+        optionality is entirely in WHETHER IT RUNS, not in what happens if it
+        objects — `flow_compliance_check`, optional slot: an unmet
+        `condition_files_exist` `return True` before dispatch, but once the
+        condition is met, `if not passed: reasons.append("optional program
+        failed: …")` and the gate fails exactly as the mandatory slot does.
+        """
+        return self.kind in ("program_exit_zero", "optional_program_exit_zero")
 
     @property
     def guarded_on_empty(self) -> bool:
@@ -303,6 +373,12 @@ class ClauseReport:
     probes: List[ProbeResult] = field(default_factory=list)
 
     @property
+    def blocking(self) -> bool:
+        """Same rule as `Clause.blocking`, and it must stay the same rule —
+        two spellings of "does this fail the step" is two places to drift."""
+        return self.kind in ("program_exit_zero", "optional_program_exit_zero")
+
+    @property
     def worst(self) -> str:
         for want in (LIAR, SUSPECT, GUARDED, CLEAN):
             if any(p.verdict == want for p in self.probes):
@@ -383,10 +459,22 @@ def discover_clauses(flow_yaml: Path) -> List[Clause]:
                                 f"gate is read unless one of {len(pats)} declared output(s) "
                                 f"resolves, e.g. {pats[0]}",)
             for key, val in node.items():
-                if key in ("program_exit_zero", "advisory_program_exit_zero") and isinstance(val, str):
-                    prog = val.split()[0] if val.split() else ""
-                    out.append(Clause(step=here or "?", kind=key, cmd=val,
-                                      program=prog, guards=list(here_guards),
+                spec = _clause_spec(key, val)
+                if spec is not None:
+                    cmd, cond_files = spec
+                    # `condition_files_exist` is the SAME structural fact as a
+                    # step-level `condition`, one level down: the consumer
+                    # `return True`s before dispatch when none of these
+                    # resolve, so on an empty tree the program never runs and
+                    # its exit code is never read. Read off the clause node,
+                    # never off a list of gate names.
+                    clause_guards = here_guards + tuple(
+                        f"[condition_files_exist] the consumer skips this clause "
+                        f"before dispatch unless files_exist: {pat}"
+                        for pat in cond_files)
+                    prog = cmd.split()[0] if cmd.split() else ""
+                    out.append(Clause(step=here or "?", kind=key, cmd=cmd,
+                                      program=prog, guards=list(clause_guards),
                                       step_outputs=list(here_outputs)))
                 elif key != "condition":
                     walk(val, here, here_guards, here_outputs)
@@ -409,54 +497,101 @@ def discover_clauses(flow_yaml: Path) -> List[Clause]:
     return out
 
 
-#: Gate-clause spellings this census does NOT discover. Named, counted and
-#: PRINTED, because #1054's most useful finding was not a repaired rule — it was
-#: that a probe had been scanning the wrong POPULATION and reporting a confident
-#: zero over it. A denominator nobody states is the next check that lies.
-_UNSEEN_KINDS = ("optional_program_exit_zero",)
+def population_report(flow_yaml: Path) -> Dict[str, Any]:
+    """The census's own DENOMINATOR, derived from the same YAML structure.
 
+    WHY THIS EXISTS
+    ===============
+    Every number this instrument has published — "136 clauses, LIAR n,
+    SUSPECT n" — silently meant *of the ones I could see*. A reader takes it to
+    mean *of all of them*. That is the empty-tree lie wearing a denominator: not
+    a wrong answer, a right answer to a narrower question than the reader thinks
+    was asked, and this campaign exists because of denominators nobody printed.
 
-def undiscovered_clauses(flow_yaml: Path) -> Dict[str, List[str]]:
-    """Gate clauses the flow declares that `discover_clauses` does NOT return.
+    Two causes were measured, and two more were HYPOTHESISED AND DISPROVED —
+    both stated here because "I looked and there was nothing" is a result:
 
-    Two shapes, both real and both measured on the current flow:
+      A. A CLAUSE KIND THE KEY TEST DID NOT NAME — 28 `optional_program_exit_zero`.
+         `flow_compliance_check` runs all three kinds; this census read two.
+      B. THE MAPPING SPELLING of a kind it did name — 3 clauses written
+         `{command: …, condition_files_exist: […]}` rather than as a bare
+         string, one of them BLOCKING (`clock_plan_check`). See `_clause_spec`.
+      -  NOT a cause: a clause hidden under a `condition:` subtree the walker
+         skips. Measured: 0 of 167.
+      -  NOT a cause: a clause declared outside any `gate:` key, or in another
+         flow file. Measured: 0 of 167, and `phase1_phase2_phase3.yaml` is the
+         only YAML in the plugin that contains the string at all.
 
-      * `optional_program_exit_zero` — a whole third clause kind, 28 of them,
-        each carrying its own `command` and `condition_files_exist`. Step 4
-        alone declares three. `flow_compliance_check` runs them
-        (`_GATE_KINDS` lists all three); this census has never looked at one.
-      * the MAPPING form of the two kinds it does discover — `{command: …}`
-        instead of a bare string. `discover_clauses` requires
-        `isinstance(val, str)`, so 3 more clauses fall out silently, one of
-        them a BLOCKING `program_exit_zero` (`clock_plan_check`).
+    WHAT THIS RETURNS, AND WHY IT IS OPEN-ENDED
+    ===========================================
+    Not a list of known gaps — a list of everything inside a `gate:` subtree
+    that this file does not recognise. `_GATE_STRUCTURE_KEYS` and `CLAUSE_KINDS`
+    are the closed vocabulary; ANY other key becomes an `unrecognised` entry and
+    is printed. That is the point of the disclosure surviving the repair: the
+    NEXT clause shape somebody invents must not drop out of the population in
+    silence the way `optional_program_exit_zero` did.
 
-    Reported, not fixed here: scoring 31 more clauses moves every number in
-    this instrument's published table, and that needs its own before/after
-    rather than riding on a probe change.
+    Keys:
+      swept          clauses `discover_clauses` returns
+      by_kind        {clause kind: count} over everything declared
+      unswept        [{kind, cmd, why}] — declared, program-bearing, not swept
+      non_program    {key: count} — gate clauses that run NO program, so no
+                     probe here can address them (today: `json_field_true`)
+      unrecognised   {key: count} — a shape this file has never seen
     """
     import yaml  # noqa: PLC0415
 
     doc = yaml.safe_load(flow_yaml.read_text(errors="replace"))
-    missed: Dict[str, List[str]] = {}
+    by_kind: Dict[str, int] = {}
+    declared: List[Tuple[str, str, List[str]]] = []
+    non_program: Dict[str, int] = {}
+    unrecognised: Dict[str, int] = {}
 
-    def walk(node: Any) -> None:
+    def in_gate(node: Any) -> None:
         if isinstance(node, dict):
             for key, val in node.items():
-                cmd = None
-                if key in _UNSEEN_KINDS:
-                    cmd = val.get("command") if isinstance(val, dict) else val
-                elif (key in ("program_exit_zero", "advisory_program_exit_zero")
-                      and not isinstance(val, str)):
-                    cmd = val.get("command") if isinstance(val, dict) else str(val)
-                if cmd:
-                    missed.setdefault(key, []).append(str(cmd))
-                walk(val)
+                spec = _clause_spec(key, val)
+                if spec is not None:
+                    by_kind[key] = by_kind.get(key, 0) + 1
+                    declared.append((key, spec[0], spec[1]))
+                    continue                     # a clause node is a leaf here
+                if key in CLAUSE_KINDS:
+                    # the KIND is known, the SPELLING is not — never silent
+                    by_kind[key] = by_kind.get(key, 0) + 1
+                    declared.append((key, f"<unparseable {type(val).__name__}>", []))
+                    continue
+                if key in _NON_PROGRAM_CLAUSE_KEYS:
+                    non_program[key] = non_program.get(key, 0) + 1
+                    continue                     # runs no program: not our subject
+                if key not in _GATE_STRUCTURE_KEYS:
+                    unrecognised[key] = unrecognised.get(key, 0) + 1
+                in_gate(val)
         elif isinstance(node, list):
             for val in node:
-                walk(val)
+                in_gate(val)
 
-    walk(doc)
-    return missed
+    def find_gates(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, val in node.items():
+                if key == "gate":
+                    in_gate(val)
+                else:
+                    find_gates(val)
+        elif isinstance(node, list):
+            for val in node:
+                find_gates(val)
+
+    find_gates(doc)
+
+    swept = discover_clauses(flow_yaml)
+    seen = {(c.kind, c.cmd) for c in swept}
+    unswept = [{"kind": k, "cmd": c,
+                "why": ("the KIND is not in CLAUSE_KINDS" if k not in CLAUSE_KINDS
+                        else "declared in a spelling `_clause_spec` cannot parse")}
+               for k, c, _ in declared if (k, c) not in seen]
+    return {"swept": len(swept), "declared": len(declared), "by_kind": by_kind,
+            "unswept": unswept, "non_program": non_program,
+            "unrecognised": unrecognised}
 
 
 # --------------------------------------------------------------- invocation
@@ -1716,8 +1851,44 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
     return reports
 
 
-ALL_PROBES = ["empty", "prose", "zero", "writes", "selector",
-              "blocks", "depth", "spelling", "proxy"]
+ALL_PROBES = ["empty", "prose", "zero", "writes", "selector", "blocks", "depth", "spelling", "proxy"]
+def _coverage_block(pop: Dict[str, Any], scored: int, filtered: bool) -> str:
+    """The coverage line, printed on EVERY run — including the runs where it is
+    100%, and that is the requirement, not an oversight.
+
+    A census whose numbers imply full coverage when they do not is the empty-tree
+    lie one level up: a right answer to a narrower question than the reader
+    thinks was asked. Printing it only when there is a gap would mean the gap's
+    ABSENCE is the thing nobody can audit — and the next clause shape somebody
+    invents would drop out of the population exactly as quietly as
+    `optional_program_exit_zero` did for this entire campaign.
+    """
+    lines = ["-" * 78]
+    declared, unswept = pop["declared"], pop["unswept"]
+    if filtered:
+        lines.append(f"COVERAGE — {scored} clause(s) scored under --only, out of "
+                     f"{pop['swept']} swept of {declared} program clause(s) declared.")
+    else:
+        lines.append(f"COVERAGE — swept {pop['swept']} of {declared} program clause(s) "
+                     f"the flow declares"
+                     + ("." if not unswept else f"; {len(unswept)} NOT reachable by this "
+                                               f"instrument, listed below:"))
+        for kind, n in sorted(pop["by_kind"].items()):
+            lines.append(f"    {n:>4}  {kind}"
+                         + ("   [BLOCKING]" if kind != "advisory_program_exit_zero" else ""))
+    for u in unswept:
+        lines.append(f"  NOT SWEPT  {u['kind']}: {u['cmd'].split()[0] if u['cmd'] else '?'}"
+                     f"  — {u['why']}")
+    for key, n in sorted(pop["non_program"].items()):
+        lines.append(f"  OUT OF SUBJECT  {n} x `{key}` — a gate clause that dispatches no "
+                     f"program, so no probe here can address it (every probe runs one).")
+    for key, n in sorted(pop["unrecognised"].items()):
+        lines.append(f"  UNRECOGNISED SHAPE  {n} x `{key}` inside a `gate:` subtree — this "
+                     f"instrument has never seen it and is NOT scoring it. Widen "
+                     f"CLAUSE_KINDS/_GATE_STRUCTURE_KEYS or say why it is out of subject.")
+    return "\n".join(lines) + "\n"
+
+
 
 #: probes whose N/A is a BOUNDED COVERAGE decision rather than an inapplicable
 #: question — every one of these has to be listed, with its reason, or the run
@@ -1752,8 +1923,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     probes = [p.strip() for p in args.probes.split(",") if p.strip()]
     variants = max(0, min(args.spelling_variants, len(SPELLINGS)))
-    missed = undiscovered_clauses(args.flow)
-    n_missed = sum(len(v) for v in missed.values())
+    pop = population_report(args.flow)
     print(f"liar_census: {len(clauses)} clause(s) x {len(probes)} probe(s)", file=sys.stderr)
     reports = run_census(clauses, probes, args.timeout, graph=graph,
                          spelling_variants=variants)
@@ -1769,7 +1939,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # measurements — a census reporting a population it never reached, which is
     # the shape this file exists to find, in this file.
     unmeasured = [r for r in reports if r.worst == NA]
-    blocking_liars = [r for r in liars if r.kind == "program_exit_zero"]
+    blocking_liars = [r for r in liars if r.blocking]
     # every discounted probe result, however its clause was finally scored
     discounted = sum(1 for r in reports for p in r.probes if p.verdict == GUARDED)
     clean = (len(reports) - len(liars) - len(suspects)
@@ -1786,17 +1956,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  N/A      {len(unmeasured):>4}   (every probe returned N/A — NOT measured, "
           f"and deliberately NOT counted clean)")
     print(f"  CLEAN    {len(reports) - len(liars) - len(suspects) - len(guarded):>4}")
-    # THE DENOMINATOR, stated. A census that prints only what it scored reads
-    # as a census over everything.
-    if n_missed and not args.only:
-        print()
-        print(f"  POPULATION — {len(reports)} of {len(reports) + n_missed} gate clauses the "
-              f"flow declares. NOT scored by ANY probe:")
-        for kind, cmds in sorted(missed.items()):
-            print(f"    {len(cmds):>4}  {kind}   e.g. {cmds[0].split()[0]}")
     print()
+    print(_coverage_block(pop, len(reports), bool(args.only)))
     for r in liars + suspects:
-        tag = "BLOCKING" if r.kind == "program_exit_zero" else "advisory"
+        tag = "BLOCKING" if r.blocking else "advisory"
         print(f"[{r.worst}] step {r.step} ({tag})  {r.cmd}")
         for p in r.probes:
             if p.verdict in (LIAR, SUSPECT):
