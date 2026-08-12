@@ -42,6 +42,7 @@ EXIT CODES
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -498,30 +499,107 @@ def probe_writes_its_subject(cl: Clause, sandbox: Path,
         repro)
 
 
+def _repo_anchored_names(tree: "ast.Module") -> set:
+    """Module-level names whose value derives from `__file__`.
+
+    These are the only roots that point AT THE CHECKOUT rather than at the
+    project under test, so they are the only ones from which a walk can reach
+    the suite's own fixtures.
+    """
+    out: set = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and any(
+                isinstance(x, ast.Name) and x.id == "__file__"
+                for x in ast.walk(n.value)):
+            out |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+    for _ in range(4):                     # X = SOME_ANCHORED_CONST / "sub"
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Assign) and {
+                    x.id for x in ast.walk(n.value) if isinstance(x, ast.Name)} & out:
+                out |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+    return out
+
+
+def _walk_root(call: "ast.Call") -> Optional[str]:
+    """The left-most Name of the expression a walk is rooted at."""
+    cur: Any = call.func
+    while True:
+        if isinstance(cur, ast.Attribute):
+            cur = cur.value
+        elif isinstance(cur, ast.Call):
+            cur = cur.func
+        elif isinstance(cur, ast.BinOp):
+            cur = cur.left
+        elif isinstance(cur, ast.Subscript):
+            cur = cur.value
+        else:
+            break
+    return cur.id if isinstance(cur, ast.Name) else None
+
+
 def probe_selector_reaches_fixtures(cl: Clause) -> ProbeResult:
     """P5 -- can its input selection walk reach a fixture tree?  (vibe-ic#1037)
 
-    STATIC. `_real_spef()` fell back to an unbounded `rglob` and returned the suite's own
-    fixture, and two tests then described it as production extraction output. It was
-    caught by luck: the fixture happened to contradict the assertion. A fixture that
-    agreed would have shipped green.
+    STATIC. `_real_spef()` fell back to an unbounded `rglob` and returned the suite's
+    own fixture, and two tests then described it as production extraction output. It
+    was caught by luck: the fixture happened to contradict the assertion. A fixture
+    that agreed would have shipped green.
+
+    THE QUESTION IS WHERE THE WALK IS ROOTED, not whether the file mentions fixtures.
+    This probe used to ask the second, and got it wrong in both directions: "the file
+    names `tests/` somewhere" forgave walks that were never dangerous, and its absence
+    accused 30 gates that walk only what the CALLER handed them. A walk rooted at the
+    project argument cannot reach `programs/tests/fixtures/` unless the project IS the
+    checkout; a walk rooted at a `__file__`-derived module constant can, always, on
+    every invocation. That is decidable from the AST and it is the actual rule.
+
+    MEASURED, and the measurement is the finding: on all 136 clauses, ZERO gate
+    programs walk from a `__file__`-anchored root. #1037's defect was never in this
+    population -- `_real_spef` lives in `programs/tests/_real_data.py`, a TEST helper
+    no gate clause names. Pointing this probe at the test tree is a different
+    instrument over a different population, and it is filed rather than bolted on
+    here: a probe that silently scans the wrong population is how a census reports a
+    confident zero.
     """
     src = PROGRAMS / f"{cl.program}.py"
-    repro = f"read programs/{cl.program}.py — look for an unbounded walk used to SELECT evidence"
+    repro = (f"python3 -c \"import ast;…\" over programs/{cl.program}.py — find every "
+             f"rglob/glob('**')/os.walk and ask whether its ROOT derives from __file__")
     if not src.is_file():
         return ProbeResult("selector_reaches_fixtures", NA, "program not found", repro)
-    text = src.read_text(errors="replace")
-    walks = re.findall(r"\.rglob\(|glob\(\s*[\"']\*\*|os\.walk\(", text)
-    if not walks:
-        return ProbeResult("selector_reaches_fixtures", CLEAN, "no unbounded walk", repro)
-    guarded = re.search(r"tests?/|fixtures?/|is_tracked|ls-files|git_tracked", text)
-    if guarded:
-        return ProbeResult("selector_reaches_fixtures", CLEAN,
-                           f"{len(walks)} unbounded walk(s), but the file names a tracked/fixture guard",
+    try:
+        tree = ast.parse(src.read_text(errors="replace"))
+    except SyntaxError as exc:
+        return ProbeResult("selector_reaches_fixtures", SUSPECT,
+                           f"cannot parse, so cannot answer: {exc}", repro)
+
+    anchored = _repo_anchored_names(tree)
+    hits: List[str] = []
+    walks = 0
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
+            continue
+        if n.func.attr not in ("rglob", "glob", "walk"):
+            continue
+        if n.func.attr == "glob" and not (
+                n.args and isinstance(n.args[0], ast.Constant)
+                and "**" in str(n.args[0].value)):
+            continue
+        walks += 1
+        root = _walk_root(n)
+        if root and root in anchored:
+            hits.append(f"{root} (line {n.lineno})")
+
+    if hits:
+        return ProbeResult("selector_reaches_fixtures", LIAR,
+                           f"{len(hits)} unbounded walk(s) rooted at a __file__-derived "
+                           f"constant, so the walk reaches the CHECKOUT and can select "
+                           f"the suite's own fixtures as evidence: {', '.join(hits[:3])}",
                            repro)
-    return ProbeResult("selector_reaches_fixtures", SUSPECT,
-                       f"{len(walks)} unbounded walk(s) and no fixture/tracked guard in the file",
-                       repro)
+    if walks:
+        return ProbeResult("selector_reaches_fixtures", CLEAN,
+                           f"{walks} unbounded walk(s), all rooted at caller-supplied "
+                           f"paths — they cannot reach the checkout's fixtures", repro)
+    return ProbeResult("selector_reaches_fixtures", CLEAN, "no unbounded walk", repro)
 
 
 # --------------------------------------------------------------- harness

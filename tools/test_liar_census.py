@@ -430,3 +430,46 @@ def test_a_producer_whose_consumer_is_in_the_SAME_step_is_declined(census, tmp_p
     assert rc == 0, out
     assert "GUARDED" in out, out
     assert "OWN gate" in out, out
+
+
+@pytest.mark.parametrize("body,verdict", [
+    # rooted at a __file__-derived constant: reaches the CHECKOUT, every run
+    ("""
+     import pathlib, sys
+     HERE = pathlib.Path(__file__).resolve().parent
+     CORPUS = HERE / "fixtures"
+     def pick():
+         return next(CORPUS.rglob("*.spef"), None)
+     print("[PASS] picked", pick()); sys.exit(0)
+     """, "LIAR"),
+    # rooted at what the caller handed it: cannot reach the checkout
+    ("""
+     import pathlib, sys
+     def pick(project):
+         return next(pathlib.Path(project).rglob("*.spef"), None)
+     print("[PASS] picked", pick(sys.argv[1])); sys.exit(0)
+     """, "CLEAN"),
+])
+def test_the_selector_probe_asks_where_the_walk_is_ROOTED(census, tmp_path, capsys,
+                                                          body, verdict):
+    """Same walk, same glob, same absence of the word `fixtures` — only the ROOT
+    differs, and only the root decides.
+
+    The old rule asked whether the file happened to mention `tests/` or
+    `fixtures/` anywhere, which forgave the dangerous case whenever the file
+    said the word and accused the safe case whenever it did not. Measured on
+    the real flow, it produced 30 accusations and zero true positives.
+
+    This test is why a probe that now reports zero can be believed: the first
+    parameter is a known positive it still catches.
+    """
+    progs = _programs(tmp_path, selector=body)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="selector")),
+                progs, "--probes", "selector")
+    out = capsys.readouterr().out
+    if verdict == "LIAR":
+        assert rc == 1, out
+        assert "__file__-derived" in out, out
+    else:
+        assert rc == 0, out
+        assert "LIAR        0" in out, out
