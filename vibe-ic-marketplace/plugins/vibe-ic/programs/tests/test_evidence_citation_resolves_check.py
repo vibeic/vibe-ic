@@ -485,3 +485,80 @@ def test_the_exemption_requires_an_EXPLICIT_false(tmp_path):
     r = _run(root, tmp_path / "bl.json")
     assert r.returncode == 1, r.stdout
     assert "gone.sby" in r.stdout and "also_gone.sby" in r.stdout
+
+
+# ══════════════════════════════════════════════════════════════════════
+# BRACE-SET CITATIONS — `hold_{ss,tt,ff}.rpt` names three artifacts
+# ══════════════════════════════════════════════════════════════════════
+def test_a_brace_set_citation_is_judged_per_expansion(tmp_path):
+    """THE DEFECT. `_CITE_RE`'s class carries no `{`, `}` or `,`, so a
+    brace-set token was never MATCHED — the `_TEMPLATE_RE` clause below it
+    never got the chance to fire. MEASURED on `4b22e36ea`: 12 such expansions
+    ending in an evidence extension, 10 of them dangling, while the gate
+    printed `[PASS] every cited evidence artifact resolves`."""
+    _doc(tmp_path, "sub/EV.md", "corners: `sta_{ss,tt,ff}.rpt`\n")
+    (tmp_path / "sub" / "sta_ss.rpt").write_text("ok\n")
+    (tmp_path / "sub" / "sta_tt.rpt").write_text("ok\n")
+    # sta_ff.rpt deliberately absent
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 1, r.stdout
+    assert "sta_ff.rpt" in r.stdout, r.stdout
+    # the two that DO ship must not be reported — per-expansion, not per-token
+    assert "sta_ss.rpt" not in r.stdout and "sta_tt.rpt" not in r.stdout, r.stdout
+
+
+def test_a_fully_shipped_brace_set_passes(tmp_path):
+    """The other direction: expansion must not manufacture a finding when
+    every member of the set is present."""
+    _doc(tmp_path, "sub/EV.md", "corners: `sta_{ss,tt,ff}.rpt`\n")
+    for c in ("ss", "tt", "ff"):
+        (tmp_path / "sub" / f"sta_{c}.rpt").write_text("ok\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_verilog_concatenation_is_never_judged(tmp_path):
+    """THE SAFETY ARGUMENT, as a test rather than a claim.
+
+    Most braces in this corpus are RTL concatenation — `{b3,b2,b1,b0}`,
+    `{16'd0, field}`. Expanding and judging those would manufacture findings
+    against Verilog syntax, which is exactly what `_TEMPLATE_RE` exists to
+    prevent. The extension filter is what makes it impossible: no bus slice
+    ends in `.log` / `.rpt` / `.sby`."""
+    _doc(tmp_path, "sub/EV.md",
+         "the bus is `{b3,b2,b1,b0}` and the pad is `{16'd0, field}`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "b3" not in r.stdout and "16'd0" not in r.stdout, r.stdout
+
+
+def test_a_brace_group_without_a_comma_is_still_a_template(tmp_path):
+    """`{step}` names a placeholder, not a set. Only a comma makes it an
+    alternation, so the old template treatment must survive unchanged —
+    otherwise the fix trades one class of false finding for another."""
+    _doc(tmp_path, "sub/EV.md", "see `reports/{step}.log`\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout
+    assert "{step}" not in r.stdout and "step.log" not in r.stdout, r.stdout
+    assert E.expand_brace_sets("reports/{step}.log") == []
+
+
+def test_brace_expansion_is_capped(tmp_path):
+    """A pathological token must not multiply the scan. Refusing past the cap
+    is safe in the direction that matters: an unexpanded token is simply not
+    judged, which is today's behaviour for every one of them."""
+    tok = "x" + "{a,b}" * 8 + ".rpt"          # 2**8 = 256 > the 64 cap
+    assert E.expand_brace_sets(tok) == []
+    small = "x{a,b}{c,d}.rpt"                 # 4, under the cap
+    assert sorted(E.expand_brace_sets(small)) == [
+        "xac.rpt", "xad.rpt", "xbc.rpt", "xbd.rpt"]
+
+
+def test_whitespace_after_a_comma_is_stripped(tmp_path):
+    """This corpus writes `{floorplan.def, placed.def, openroad.log}` with
+    spaces. A resolver that kept them would look for a filename with a
+    leading blank and report every one of them dangling."""
+    _doc(tmp_path, "sub/EV.md", "`{placed.def, openroad.log}`\n")
+    (tmp_path / "sub" / "openroad.log").write_text("ok\n")
+    r = _run(tmp_path, tmp_path / "bl.json")
+    assert r.returncode == 0, r.stdout

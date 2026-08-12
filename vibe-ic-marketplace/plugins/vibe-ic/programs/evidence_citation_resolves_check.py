@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import re
 import subprocess
@@ -89,6 +90,78 @@ _CITE_RE = re.compile(r"`([A-Za-z0-9_./+-]+)`")
 # Judging these would manufacture findings against text that never claimed a
 # particular file exists.
 _TEMPLATE_RE = re.compile(r"[*?]|<[^>]*>|\{[^}]*\}|\bN\b")
+
+# ── BRACE-SET CITATIONS ────────────────────────────────────────────────
+# `hold_{ss,tt,ff}.rpt` names THREE specific artifacts, not a template. It is
+# shell brace expansion, and this tree writes sign-off evidence that way.
+#
+# `_CITE_RE`'s character class carries no `{`, `}` or `,`, so such a token was
+# never even MATCHED — the `_TEMPLATE_RE` clause below it is a second line of
+# defence that never got the chance to fire. MEASURED on `4b22e36ea` over the
+# default scope: 30 distinct brace tokens, 12 expansions ending in an evidence
+# extension, and **10 of 10 checkable ones DANGLING** while the gate printed
+# `[PASS] every cited evidence artifact resolves` — the exact silent failure
+# this program's own docstring opens by naming.
+#
+# WHY THE EXTENSION FILTER IS THE WHOLE SAFETY ARGUMENT. Most braces in this
+# corpus are Verilog concatenation — `{b3,b2,b1,b0}`, `{16'd0, field}`,
+# `{fill, carry_bit, data[MSB-1:0]}`. Expanding those and judging them would
+# manufacture findings against RTL syntax, which is precisely what
+# `_TEMPLATE_RE` exists to prevent. It cannot happen here: an expansion is
+# kept only if it survives `_is_citation`, i.e. ends in `.log` / `.rpt` /
+# `.sby`. No concatenation in the measured corpus does, and the property is
+# structural rather than lucky — a bus slice does not end in a report suffix.
+#
+# A BRACE GROUP WITH NO COMMA IS STILL A TEMPLATE. `{step}` / `{corner}` name
+# a placeholder, not a set, so they keep the old treatment and are skipped.
+# Only a comma makes it an alternation.
+_BRACE_CITE_RE = re.compile(r"`([A-Za-z0-9_./+{},\s-]*\{[^{}]*\}"
+                            r"[A-Za-z0-9_./+{},\s-]*)`")
+_BRACE_GROUP_RE = re.compile(r"\{([^{}]*)\}")
+
+#: Cap on expansions from one token. A pathological `{a,b}{c,d}{e,f}...`
+#: multiplies; refusing past the cap keeps the scan linear and is safe in the
+#: direction that matters — an unexpanded token is simply not judged, which is
+#: today's behaviour for every one of them.
+_MAX_BRACE_EXPANSIONS = 64
+
+
+def expand_brace_sets(tok: str) -> List[str]:
+    """Every concrete path a brace-set token names, or [] if it names none.
+
+    Returns [] for a token with no brace group, for a group with no comma
+    (a placeholder, not a set), and past :data:`_MAX_BRACE_EXPANSIONS`.
+    Whitespace after a comma is stripped: this corpus writes
+    `{floorplan.def, placed.def}`.
+    """
+    groups = _BRACE_GROUP_RE.findall(tok)
+    if not groups or any("," not in g for g in groups):
+        return []
+    # ONE whitespace mechanism, not two. An earlier draft ALSO stripped each
+    # alternative here; the `"".join(...split())` below already removes every
+    # blank, so the strip was dead and its test could not fail — a mutant that
+    # deleted it killed nothing. Redundant belt-and-braces in a gate is worse
+    # than useless: it makes a test look like a check when it is a ban.
+    alts = [[a for a in g.split(",") if a.strip()] for g in groups]
+    total = 1
+    for a in alts:
+        total *= max(len(a), 1)
+    if total > _MAX_BRACE_EXPANSIONS:
+        return []
+    out = []
+    for combo in itertools.product(*alts):
+        rebuilt, i = tok, 0
+
+        def _sub(_m, _combo=combo):
+            nonlocal i
+            v = _combo[i]
+            i += 1
+            return v
+        rebuilt = _BRACE_GROUP_RE.sub(_sub, rebuilt)
+        rebuilt = "".join(rebuilt.split())
+        if rebuilt:
+            out.append(rebuilt)
+    return out
 
 # The baseline lives with the DATA it describes, not in plugin source: its
 # entries are benchmark-data document paths and therefore carry design names,
@@ -342,7 +415,14 @@ def scan(root: Path,
         except OSError:
             continue
         docs += 1
-        for tok in _CITE_RE.findall(text):
+        # Plain tokens, then the brace-set expansions. `dict.fromkeys` keeps
+        # first-seen order and de-duplicates: `{a,a}.rpt` is one artifact, and
+        # counting it twice would inflate both the `cited` denominator and the
+        # finding list.
+        _toks = list(_CITE_RE.findall(text))
+        for _btok in _BRACE_CITE_RE.findall(text):
+            _toks.extend(expand_brace_sets(_btok))
+        for tok in dict.fromkeys(_toks):
             if not _is_citation(tok):
                 continue
             cited += 1
