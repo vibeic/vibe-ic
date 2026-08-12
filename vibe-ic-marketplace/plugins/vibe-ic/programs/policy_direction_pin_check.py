@@ -529,23 +529,35 @@ def select_tests(site: Dict[str, Any], tests_dir: Path) -> List[Path]:
     return [p for _, _, p in out]
 
 
-def flip_source(src: str, site: Dict[str, Any], new_value: str) -> str:
-    """Replace exactly the literal at (arg_line, arg_col) with ``new_value``."""
+def _literal_span(src: str, arg_line: int, arg_col: int):
+    """``(lines, idx, start_body, end_body)`` for the literal at that position.
+
+    Factored out of ``flip_source`` so that the WRITE path and the
+    read-HEAD path below cannot drift into two slightly different ideas of
+    where the literal is. Raises ``ValueError`` with a reason, never guesses.
+    """
     lines = src.splitlines(keepends=True)
-    idx = site["arg_line"] - 1
+    idx = arg_line - 1
     if idx < 0 or idx >= len(lines):
         raise ValueError("argument line out of range")
     line = lines[idx]
-    col = site["arg_col"]
-    rest = line[col:]
+    rest = line[arg_col:]
     m = re.match(r"""(?P<p>[rbuRBU]{0,2})(?P<q>'''|\"\"\"|'|")""", rest)
     if not m:
         raise ValueError("no string literal at the recorded column")
     quote = m.group("q")
-    start_body = col + m.end()
+    start_body = arg_col + m.end()
     end_body = line.find(quote, start_body)
     if end_body < 0:
         raise ValueError("string literal is not closed on its own line")
+    return lines, idx, start_body, end_body
+
+
+def flip_source(src: str, site: Dict[str, Any], new_value: str) -> str:
+    """Replace exactly the literal at (arg_line, arg_col) with ``new_value``."""
+    lines, idx, start_body, end_body = _literal_span(
+        src, site["arg_line"], site["arg_col"])
+    line = lines[idx]
     if line[start_body:end_body] != site["value"]:
         raise ValueError("literal at the recorded column is not the recorded value")
     lines[idx] = line[:start_body] + new_value + line[end_body:]
@@ -705,6 +717,109 @@ def recover_journal(journal: Path) -> Tuple[int, List[str]]:
         f"THE MUTATION and reported a consistent verdict over a corrupt tree."]
 
 
+# --------------------------------------------------------------------------
+# THE LEFTOVER THIS GATE CANNOT REPAIR, AND MUST THEREFORE REFUSE (#1089)
+# --------------------------------------------------------------------------
+# The journal above repairs a mutation whose run died while the journal was on
+# disk. That is the crash this gate causes. It is not the only way its own
+# mutant ends up in a tree:
+#
+#   * a leftover from a run that PRE-DATES the journal — every checkout carrying
+#     one today, which is the population #1089 was filed about;
+#   * `/tmp` cleared by a reboot or a tmp reaper while the working tree survives;
+#   * the journal is keyed by `sha256(root.resolve())`, so MOVING or renaming a
+#     worktree orphans it while the leftover stays exactly where it was.
+#
+# In every one of those the file is mutated and no journal exists, and
+# `recover_journal` returns `RC_OK, []` — "nothing to repair" — which is true
+# and useless. The sweep then re-derives the argued value FROM the leftover,
+# flips *that*, watches the tests pass, and reports the site UNPINNED.
+#
+# MEASURED 2026-08-12 against the FIXED tool on `4b22e36e` + #1090, journal
+# confirmed absent, one site (`--only matrix_mutation_ledger`):
+#
+#   clean         md5 f572930b…   [PINNED]   mode='witness'   rc 0
+#   leftover      md5 28b755fe…   [UNPINNED] mode='all'       rc 1
+#
+# Note the second line reports `mode='all'` — the gate is naming the leftover as
+# the authored value. `UNPINNED` reads as "this argued direction is unprotected,
+# go write a test", and the direction is fine; the tree is dirty.
+#
+# WHY REFUSE RATHER THAN REPAIR. Without a journal this gate cannot prove the
+# difference is its own — an author editing that literal produces byte-identical
+# evidence — and `recover_journal` already draws exactly this line for the case
+# it CAN see. So the residue is converted from a false finding into a named
+# refusal, which is what `run` at `repo_hygiene_gates.sh:964` should block on.
+#
+# WHY THE SIGNATURE IS NARROW. Refusing on "the file differs from HEAD" would
+# refuse on every in-flight edit anywhere in a 2000-line module and make the
+# gate permanently red for anyone mid-change — the failure mode
+# `run_tolerating_uncheckable` exists to avoid. It refuses only when the
+# difference is AT THE ARGUED LITERAL and HEAD's value is one of the closed
+# alternatives this gate itself flips between. That is this gate's own
+# fingerprint and nothing else's.
+
+#: Sites whose HEAD copy could not be read, and why. Reported once, because
+#: "I could not look" must never reach a reader as "I looked and it matched".
+_HEAD_BLIND: List[str] = []
+
+
+def _git_show_head(repo: Path, rel: str) -> str:
+    p = subprocess.run(["git", "-C", str(repo), "show", f"HEAD:{rel}"],
+                       capture_output=True, text=True, timeout=30)
+    if p.returncode != 0:
+        raise ValueError((p.stderr or "").strip().splitlines()[-1:][0]
+                         if (p.stderr or "").strip() else "git show failed")
+    return p.stdout
+
+
+def leftover_signature(root: Path, site: Dict[str, Any]) -> Optional[str]:
+    """Why this site cannot be measured, or ``None`` to go ahead.
+
+    Returns a sentence naming both values and the remedy — never a bare bool,
+    because the whole defect is a verdict a reader cannot act on.
+    """
+    target = root / site["file"]
+    try:
+        repo = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=30)
+        if repo.returncode != 0:
+            raise ValueError("not inside a git work tree")
+        repo_root = Path(repo.stdout.strip())
+        rel = target.resolve().relative_to(repo_root.resolve()).as_posix()
+        head_src = _git_show_head(repo_root, rel)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _HEAD_BLIND.append(f"{site['file']}: {exc}")
+        return None
+    try:
+        lines, idx, start, end = _literal_span(
+            head_src, site["arg_line"], site["arg_col"])
+        head_value = lines[idx][start:end]
+    except ValueError:
+        # The line moved, or HEAD has something else there. Then the difference
+        # is NOT a bare literal flip and this is not the shape being detected.
+        return None
+    if head_value == site["value"]:
+        return None
+    # BOTH ends must be in the closed set, and the working-tree end is the one
+    # that is easy to forget. This gate only ever writes a value FROM
+    # `alternatives`, so a literal that is not one cannot be its leftover no
+    # matter what HEAD says — that is somebody's real edit, and refusing it
+    # would be a guess. Caught by
+    # `test_an_edit_to_the_literal_outside_the_closed_set_is_not_refused`,
+    # which failed against the first version of this condition.
+    if (head_value not in site["alternatives"]
+            or site["value"] not in site["alternatives"]):
+        return None
+    return (f"this file differs from HEAD AT THIS CALL SITE and HEAD carries "
+            f"{head_value!r}, another of this parameter's alternatives "
+            f"{site['alternatives']} -- indistinguishable from a mutant this "
+            f"gate left behind when a previous run was killed. Measuring it "
+            f"would re-derive the argued value from the leftover. "
+            f"Restore with: git checkout HEAD -- {site['file']}")
+
+
 def run_pytest(paths: Sequence[Path], cwd: Path, basetemp: Path,
                extra: Sequence[str] = ()) -> Tuple[int, str]:
     env = dict(os.environ)
@@ -727,6 +842,14 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
     result: Dict[str, Any] = {
         "candidate_tests": [str(p.relative_to(root)) for p in candidates],
     }
+    # BEFORE the no-candidates branch, not after it. A site with no candidate
+    # tests over a leftover reports UNPINNED just as confidently, and that
+    # verdict is exactly as untrustworthy.
+    stale = leftover_signature(root, site)
+    if stale is not None:
+        result["state"] = "ABSTAIN"
+        result["why"] = stale
+        return result
     if not candidates:
         result["state"] = "UNPINNED"
         result["why"] = "no test file names this program together with the parameter or callee"
@@ -905,6 +1028,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     finally:
         if not args.basetemp:
             shutil.rmtree(basetemp, ignore_errors=True)
+
+    if _HEAD_BLIND:
+        # Never folded into a pass. A site whose HEAD copy could not be read was
+        # measured WITHOUT the leftover check, so its verdict carries the risk
+        # this check exists to remove — and a reader has to be told which ones.
+        print(f"[INFO] policy_direction_pin_check: {len(_HEAD_BLIND)} site(s) "
+              f"could not be compared against HEAD, so a leftover mutant there "
+              f"would not have been noticed: "
+              + "; ".join(_HEAD_BLIND[:5]), file=sys.stderr)
 
     report["verified"] = {"pinned": len(pinned), "unpinned": len(unpinned),
                           "abstained": len(abstained), "selected": len(selected)}
