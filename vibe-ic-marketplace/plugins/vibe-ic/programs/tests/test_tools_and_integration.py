@@ -60,15 +60,52 @@ def _seed_plugin_copy(tmp_path, *scripts):
     return plugin
 
 
-def _snapshot(root, pattern):
-    """Map RELATIVE PATH -> content.
+# --- the two keyings, named, so the defect can be RUN and not merely described.
+# `_key_by_name` is the vibe-ic#1045 defect preserved as a control. It has one
+# caller: the paired guard below, which drives both keyings over the same write
+# and asserts the old one is blind to it. Nothing else may use it.
+def _key_by_path(root, p):
+    return str(p.relative_to(root))
+
+
+def _key_by_name(root, p):
+    return p.name
+
+
+def _snapshot(root, pattern, key=_key_by_path):
+    """Map RELATIVE PATH -> content, and REPORT THE DENOMINATOR.
 
     Keyed by relative path, not by `p.name`: every one of these files is named
     `SKILL.md` (or `compliance.yaml`), so keying by name collapsed 63 files into
-    one dict entry and compared only whichever the glob yielded last.
+    one dict entry and compared only whichever the glob yielded last
+    (vibe-ic#1029, diagnosed in #1045).
+
+    Two things the rekeying alone did not do, and #1045 asks for (both here):
+
+    * the count is PRINTED. "63 files -> 1 entry" was true for years and no
+      reader could have seen it, because nothing emitted it. A denominator that
+      is never shown cannot be recognised as absurd;
+    * a collapse is FATAL for the production key, not merely unlikely. This is
+      the assertion that survives a careless refactor back to `p.name` --
+      `assert before` does not: a one-entry dict is truthy, which is exactly why
+      the collapsed comparison passed.
     """
-    return {str(p.relative_to(root)): p.read_text(errors="replace")
-            for p in sorted(root.glob(pattern))}
+    files = sorted(root.glob(pattern))
+    snap = {key(root, p): p.read_text(errors="replace") for p in files}
+    print(f"[denominator] {len(snap)} key(s) from {len(files)} file(s) "
+          f"matching {pattern!r} under {root} (key={key.__name__})")
+    if key is _key_by_path:
+        assert len(snap) == len(files), (
+            f"key collision: {len(files)} files collapsed into {len(snap)} "
+            f"dict entries, so the comparison would measure a subset and call "
+            f"it the whole. Key on the path, not the basename (#1045).")
+    return snap
+
+
+def _skill_count(skills_root):
+    """The denominator every skill-wide comparison below must reach."""
+    return len([d for d in skills_root.iterdir()
+                if d.is_dir() and (d / "SKILL.md").exists()])
 
 
 def _digest_tree(root):
@@ -181,7 +218,12 @@ class TestMaintenanceTools:
         plugin = _seed_plugin_copy(tmp_path, "bootstrap_compliance.py")
         skills = plugin / "skills"
         before = _snapshot(skills, "*/compliance.yaml")
-        assert before, "seeded copy carries no compliance.yaml — nothing measured"
+        # Not `assert before`: the collapsed dict was truthy too. The claim is
+        # "every skill was compared", so the denominator is asserted against the
+        # skill count, and it is in the message when it is not met.
+        assert len(before) == _skill_count(skills), (
+            f"compared {len(before)} compliance.yaml, expected one per skill "
+            f"({_skill_count(skills)}) — the comparison is not skill-wide")
         res = subprocess.run(
             [sys.executable, str(plugin / "_shared" / "bootstrap_compliance.py")],
             capture_output=True, text=True, cwd=str(plugin))
@@ -264,13 +306,103 @@ class TestMaintenanceTools:
                                capture_output=True, text=True, cwd=str(plugin))
         assert first.returncode == 0, first.stderr
         before = _snapshot(skills, "*/SKILL.md")
-        assert before, "seeded copy carries no SKILL.md — nothing measured"
+        # The denominator, asserted and reported. `assert before` passed for
+        # years against a dict of ONE entry (#1045); one entry is truthy, and a
+        # comparison of one arbitrary file out of 63 is what let #1029 sit.
+        assert len(before) == _skill_count(skills), (
+            f"compared {len(before)} SKILL.md, expected one per skill "
+            f"({_skill_count(skills)}) — the comparison is not skill-wide")
         second = subprocess.run([sys.executable, str(script)],
                                 capture_output=True, text=True, cwd=str(plugin))
         assert second.returncode == 0, second.stderr
         after = _snapshot(skills, "*/SKILL.md")
         assert before == after, "add_compliance_gate mutated files on 2nd run"
         assert "Added Compliance gate to 0 SKILL.md files." in second.stdout
+
+    def test_basename_key_is_blind_to_a_non_idempotent_write(self, tmp_path):
+        """The PAIRED GUARD for #1045: the control that proves the fix is a fix.
+
+        `test_add_gate_is_idempotent` above is green under BOTH keyings — the
+        tool is idempotent, so `before == after` holds whether the dict holds 63
+        entries or 1. A green test therefore says nothing about the key, and
+        nothing in this suite reddened when the key was reverted (measured: the
+        two idempotency tests passed under `p.name`). So the rekeying that
+        #1046 landed had no guard, and the next careless refactor restores
+        #1045 silently.
+
+        This test supplies the missing evidence by making the operation
+        genuinely NON-idempotent for exactly ONE skill -- deliberately NOT the
+        one the basename key would have retained -- and driving both keyings
+        over the same write:
+
+            old key (`p.name`)  -> before == after   BLIND, the defect
+            new key (path)      -> before != after   CAUGHT, the fix
+
+        Revert `_snapshot`'s key to `p.name` and this test dies on the second
+        assertion, which is the property `test_add_gate_is_idempotent` cannot
+        have: it is the only place where the two keyings disagree.
+        """
+        plugin = _seed_plugin_copy(tmp_path, "add_compliance_gate.py")
+        script = plugin / "_shared" / "add_compliance_gate.py"
+        skills = plugin / "skills"
+        assert subprocess.run([sys.executable, str(script)], cwd=str(plugin),
+                              capture_output=True, text=True).returncode == 0
+
+        # The basename dict keeps whichever file the glob yields LAST, so the
+        # single entry it compares is the LAST skill in sorted order. Mutate a
+        # different one -- otherwise the old key would catch it by luck and the
+        # control would prove nothing.
+        every = sorted(skills.glob("*/SKILL.md"))
+        assert len(every) > 1, "one skill cannot demonstrate a key collision"
+        old_key_would_compare = every[-1]
+        victim = every[0]
+        assert victim != old_key_would_compare
+        assert victim.name == old_key_would_compare.name == "SKILL.md", (
+            "the collision premise no longer holds: these files no longer "
+            "share a basename, so this control has nothing to demonstrate")
+
+        # Make the OPERATION non-idempotent, for that one skill only: defeat
+        # its already-applied skip so it re-appends the section every run.
+        src = script.read_text()
+        guard = "if 'Compliance gate' in content:"
+        assert guard in src, (
+            "add_compliance_gate.py no longer carries the skip this control "
+            "subverts; re-derive the non-idempotent variant before trusting it")
+        script.write_text(src.replace(
+            guard,
+            f"if 'Compliance gate' in content "
+            f"and md.parent.name != {victim.parent.name!r}:"))
+
+        before_by_path = _snapshot(skills, "*/SKILL.md")
+        before_by_name = _snapshot(skills, "*/SKILL.md", key=_key_by_name)
+        assert len(before_by_path) == _skill_count(skills)
+        assert len(before_by_name) == 1, (
+            "the basename key no longer collapses; the defect being guarded "
+            "against is not reproducible and this control is vacuous")
+
+        res = subprocess.run([sys.executable, str(script)], cwd=str(plugin),
+                             capture_output=True, text=True)
+        assert res.returncode == 0, res.stderr
+        assert f"UPDATED: plugins/vibe-ic/skills/{victim.parent.name}/SKILL.md" \
+            in res.stdout, "the seeded non-idempotent write did not happen"
+
+        after_by_path = _snapshot(skills, "*/SKILL.md")
+        after_by_name = _snapshot(skills, "*/SKILL.md", key=_key_by_name)
+
+        # THE CONTROL, both halves.
+        assert before_by_name == after_by_name, (
+            "expected the basename key to be blind here; if it now sees the "
+            "write, the victim was chosen wrong and the comparison below "
+            "proves nothing")
+        assert before_by_path != after_by_path, (
+            "the path key MISSED a non-idempotent write to "
+            f"skills/{victim.parent.name}/SKILL.md -- the same blindness "
+            "#1045 describes")
+
+        changed = {k for k in after_by_path
+                   if after_by_path[k] != before_by_path[k]}
+        assert changed == {str(victim.relative_to(skills))}, (
+            f"expected exactly the seeded skill to move, got {sorted(changed)}")
 
 
 # ---------------------------------------------------------------------------

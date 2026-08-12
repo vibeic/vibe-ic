@@ -320,7 +320,7 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # because a change to `skills/*/SKILL.md` does not select a test file
     # under `programs/tests/`. The PR that breaks a global invariant over the
     # shipped skills is exactly the PR whose changed-file set cannot reach the
-    # test that guards it. ~4 s for 15 tests — cheap enough for the floor.
+    # test that guards it. ~5 s for 19 tests — cheap enough for the floor.
     "test_tools_and_integration.py",
     # The promised survey (see the commit that added the line above): every
     # test that asserts a property of the WHOLE shipped tree has the same
