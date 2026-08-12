@@ -1,6 +1,0 @@
-{
-  "gate": "analog_a9_hw_verify_check",
-  "verdict": "VACUOUS_PASS",
-  "reason": "all 2 block(s) missing hw_measurements.json; defer to skill `analog-hw-measure`.",
-  "findings": []
-}

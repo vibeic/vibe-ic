@@ -1,9 +1,0 @@
-{
-  "disclosed": false,
-  "log": "phase3/stage3/pnr/openroad.log",
-  "trades": [],
-  "clock_trades": [],
-  "clock_evidence_available": true,
-  "congestion_aborted": false,
-  "note": "global routing removed a non-default rule from these nets to buy routability; on a clock net this trades R / skew / crosstalk margin. DISCLOSURE ONLY — the verdict tier is unchanged (§4.05); a human decides whether the trade is acceptable."
-}
