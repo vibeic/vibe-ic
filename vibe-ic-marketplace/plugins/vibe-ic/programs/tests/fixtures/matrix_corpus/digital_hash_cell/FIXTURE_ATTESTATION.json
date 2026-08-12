@@ -18,8 +18,7 @@
     "phase3/stage4/foundry_handoff/corner_test_vectors.json",
     "phase3/stage4/foundry_handoff/mask_spec.json",
     "phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt",
-    "phase3/stage4/foundry_handoff/wat_plan.json",
-    "reports/phase3/sta/pre_pnr_summary.json"
+    "phase3/stage4/foundry_handoff/wat_plan.json"
   ],
   "disclosed_skips": []
 }

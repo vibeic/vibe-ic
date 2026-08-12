@@ -13,19 +13,13 @@
     "phase1/generated_docs/L13_LAB_CALIBRATION.json",
     "phase1/generated_docs/L1_DATASHEET.json",
     "phase1/generated_docs/L2_FRS.json",
-    "phase1/generated_docs/L3_CMD_PROTOCOL.json",
     "phase1/generated_docs/L4_REGMAP.json",
     "phase1/generated_docs/L5_ADI_SPEC.json",
-    "phase1/generated_docs/L6_CONTROL_LOGIC.json",
     "phase1/generated_docs/L7_TEST_DEBUG.json",
     "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
     "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
-    "phase2/stage1/rtl/spm.v",
     "phase2/stage2/constraints/pvt_matrix.json",
-    "phase2/stage2/constraints/spm.sdc",
     "phase2/stage2/synth/netlist.v",
-    "phase2/stage2/synth/post_dft_netlist.v",
-    "phase2/stage2/synth/stats.json",
     "phase3/stage3/cts/clock_plan.json",
     "phase3/stage3/cts/clock_tree.rpt",
     "phase3/stage3/eco/eco_log.json",
@@ -80,18 +74,5 @@
     "reports/phase3/sta/sta_corner_record_completeness.json",
     "reports/spare_cell_coverage.json"
   ],
-  "disclosed_skips": [
-    {
-      "path": "phase3/stage3/extracted/spm.spef",
-      "reason": "gitignored by construction outside benchmark-data/ic/** (.gitignore:83-84, negated only at :172-173); PUBLISHING.md states raw geometry is never committed"
-    },
-    {
-      "path": "phase3/stage3/pnr/routed.def",
-      "reason": "gitignored by construction outside benchmark-data/ic/** (.gitignore:83-84, negated only at :172-173); PUBLISHING.md states raw geometry is never committed"
-    },
-    {
-      "path": "phase3/stage4/gds/spm.gds",
-      "reason": "gitignored by construction outside benchmark-data/ic/** (.gitignore:83-84, negated only at :172-173); PUBLISHING.md states raw geometry is never committed"
-    }
-  ]
+  "disclosed_skips": []
 }
