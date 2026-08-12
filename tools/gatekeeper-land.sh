@@ -209,10 +209,9 @@ echo "--- full tier (minutes; stamps the tree on success) ---"
 
 # vibe-ic#1029 — the full tier is the window in which the gates read the tree,
 # and it is the window in which they have three times been caught WRITING to
-# it. `landing_worktree_is_clean_check --expect-fingerprint` at the end of this
-# tier already refuses the stamp when a TRACKED file moved; what it does not do
-# is name what moved, or see the untracked (`??`) half that `git add -A` would
-# sweep just the same.
+# it. The fingerprint comparison at the end of this tier already refuses the
+# stamp when a TRACKED file moved; what it does not do is name what moved, or
+# see the untracked (`??`) half that `git add -A` would sweep just the same.
 #
 # This baseline pairs with the compare below to answer, by name, "did the full
 # tier write into the tree". It is deliberately taken around the WHOLE tier
