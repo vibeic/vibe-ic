@@ -53,6 +53,10 @@ cd "$ROOT"
 # additive, and with neither this script behaves exactly as it did before, which
 # is how both CI workflows still call it.
 . "$HERE/_gate_dispatch.sh"
+# vibe-ic#1075 — the per-cell populations, each named for the predicate it
+# actually applies. Sourced for the same reason the dispatch library is: a test
+# drives the REAL producer rather than a fixture copy of its pathspec.
+. "$HERE/_published_cell_corpus.sh"
 gate_dispatch_init "$@"
 
 # --- repo-root scoped ------------------------------------------------------
@@ -412,12 +416,29 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # `phase3/stage3/pnr/routed.def` is a PUBLISHING decision with a real
 # repository-size cost, and that decision is not a side effect of making the
 # roll-up honest.
-_per_published_cell_gates() {
+# vibe-ic#1075 — SPLIT OUT of the loop below, because it is the one gate here
+# whose declaration comment states a TWO-part predicate ("a routed DEF and a
+# macro LEF") while the shared producer selected on the first half only.
+# MEASURED at 4b22e36ea the intersection is EMPTY, so the single cell the
+# shared loop handed it fails the unstated half and the checker correctly
+# answers rc 2 — permanently, since this loop is its only wiring. A declared
+# gate that can never reach a verdict still counts as a gate to anyone reading
+# the denominator; selecting it on the predicate it declares turns that into a
+# zero the loop STATES. See `_published_cell_corpus.sh` for why the producer
+# stops at "a LEF is tracked here" and does not parse for a MACRO record.
+_macro_obs_published_cell_gate() {
   local _def="$1" _cell
   _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
   uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no readable macro/OBS geometry, so the intersection has no population -- an intersection it CAN compute and finds is rc 1"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
+}
+gate_dispatch_over "published cells carrying a routed DEF AND a macro LEF" \
+  _macro_obs_published_cell_gate \
+  published_cells_with_routed_def_and_macro_lef
+_per_published_cell_gates() {
+  local _def="$1" _cell
+  _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
   # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
   # certificate over an empty layout is the strongest form of an absence
   # rendering as a pass, and the gate written for it was reachable only if an
@@ -444,8 +465,7 @@ _per_published_cell_gates() {
 # still does not abort the ~70 gates that have nothing to do with this corpus.
 gate_dispatch_over "published cells carrying a routed DEF" \
   _per_published_cell_gates \
-  git -C "$ROOT" ls-files -- \
-    'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def'
+  published_cells_with_routed_def
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the
