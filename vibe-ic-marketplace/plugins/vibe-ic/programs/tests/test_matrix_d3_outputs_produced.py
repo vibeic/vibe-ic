@@ -543,7 +543,10 @@ _PUBLISHED_KIND = "published"
 #: Both kinds live in the commit, so both are decided live on every checkout.
 #: Everywhere the question is "does the repository carry this root" rather than
 #: "how was its provenance proved", this pair is what is meant.
-_IN_REPO_KINDS: Tuple[str, ...] = (_IN_REPO_KIND, _PUBLISHED_KIND)
+#: ``"fixture"`` (defined below, with its own proof) joins these because it is
+#: in-repo in exactly the sense that matters here: the commit carries it, so
+#: every checkout decides its entries live and two hosts agree.
+_IN_REPO_KINDS: Tuple[str, ...] = (_IN_REPO_KIND, _PUBLISHED_KIND, "fixture")
 
 #: Manifest run roots that live INSIDE this repository, so every checkout has
 #: them and their entries are always decided live. Derived from the manifest's
@@ -790,12 +793,47 @@ def _is_published_cell(path: Path) -> bool:
     return verdict in _bep._CONVERGED
 
 
+#: A cell the TEST SUITE OWNS, under ``programs/tests/fixtures/matrix_corpus/``.
+#:
+#: ADDED 2026-08-12 (vibe-ic#1028). Until this kind existed, every in-repo root
+#: this dimension stood on was a PUBLISHED cell under ``benchmark-data/ic/``.
+#: #1028 withdraws all four, and D3 loses its evidence base entirely — 61 cells
+#: collapse at once. That is not a #1028 defect; #1028 is the proof of a defect
+#: the matrix always had, that its population was "whatever happened to be
+#: published" and therefore read differently depending on the week.
+#:
+#: This is a THIRD predicate for the same reason ``_is_published_cell`` was a
+#: second one: it proves provenance POSITIVELY and on its own terms, so it
+#: cannot loosen the other two. A fixture root is admitted iff it carries
+#: ``FIXTURE_ATTESTATION.json`` declaring ``kind == "fixture"`` AND naming the
+#: withdrawn root it stands in for. A directory that merely sits under
+#: ``fixtures/`` is refused, and a fixture can never be mistaken for published
+#: evidence: the attestation says what it is, in the tree, next to the files.
+_FIXTURE_KIND = "fixture"
+_FIXTURE_ATTESTATION = "FIXTURE_ATTESTATION.json"
+
+
+def _is_fixture_cell(path: Path) -> bool:
+    """A representative cell the suite owns, attested as such in the tree."""
+    att = path / _FIXTURE_ATTESTATION
+    if not att.is_file():
+        return False
+    try:
+        doc = json.loads(att.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return False
+    return (isinstance(doc, dict)
+            and doc.get("kind") == _FIXTURE_KIND
+            and bool(doc.get("stands_in_for")))
+
+
 #: How each in-repo ``kind`` proves it is evidence rather than a directory.
 #: One entry per kind, so a manifest ``kind`` nobody has taught this module
 #: about resolves to nothing instead of silently defaulting to admitted.
 _ADMISSIBILITY = {
     _IN_REPO_KIND: _is_flow_run,
     _PUBLISHED_KIND: _is_published_cell,
+    _FIXTURE_KIND: _is_fixture_cell,
 }
 
 
