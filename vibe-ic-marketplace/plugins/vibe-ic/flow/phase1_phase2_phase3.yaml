@@ -228,9 +228,37 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # Phase 1 extraction-coverage REPORT (companion to LL-38). Per-doc
+      # diagnostic of which verbatim literals from `extraction_patterns.json`
+      # reached `generated_docs/L*.json`. MOVED HERE FROM STEP 1 (Spec-to-RTL),
+      # which declared it but whose gate — files_exist-only on RTL, by design —
+      # could never read it. `phase1_coverage_report_gen` writes both at
+      # end-of-Phase-1, and `_path_layout.report_path` puts them exactly here.
+      # Measured over the published corpus: 14 of 14 runs that carry
+      # `phase1/generated_docs/` also carry both files, so this entry costs
+      # nothing and asserts something that is already true.
+      - "reports/phase1/extraction_coverage_report.md"
+      - "reports/phase1/extraction_coverage_report.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
+        # THE GATE THAT WAS WRITTEN FOR THIS AND NEVER WIRED. Its own docstring
+        # says why it exists: "Wave 4 added `phase1_coverage_report_gen.py`
+        # which always emits the report, but the report was never required as
+        # a wired gate. A fresh agent could skip the report-gen invocation
+        # entirely and still claim Phase 1 complete." It then shipped unwired —
+        # `grep phase1_coverage_report_present_check` over this file returned
+        # NOTHING — so the gap it was written to close stayed open, and the
+        # deliverable was declared on a step that could not check it.
+        #
+        # Moving the two entries to D1 without this clause would only MOVE the
+        # d4 finding from step 1 to D1: an entry no clause of the step's gate
+        # reads is the defect, wherever it is declared. The pair is the fix.
+        #
+        # BLOCKING, and measured before being wired: PASS on 14 of 14 published
+        # runs, 0 findings. A gate that fires on a legitimately complete design
+        # is a bug in the gate, so it was swept first.
+        - program_exit_zero: "phase1_coverage_report_present_check ."
         # #312 — the SECOND track. Findings are advisory (a divergence between
         # the two tracks needs converging, not an automatic stop); running is
         # not. A missing/unparseable report exits 1 here, because a second
@@ -483,12 +511,17 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-      # Phase 1 extraction-coverage REPORT
-      # (companion to LL-38 gate). Mandatory deliverable; per-doc
-      # diagnostic of which verbatim literals from
-      # extraction_patterns.json reached generated_docs/L*.json.
-      - "reports/phase1/extraction_coverage_report.md"
-      - "reports/phase1/extraction_coverage_report.json"
+      # The two `reports/phase1/extraction_coverage_report.*` entries USED TO BE
+      # DECLARED HERE and have moved to D1, which is the step that produces them
+      # (`phase1_coverage_report_gen`, at end-of-Phase-1). They were unreachable
+      # from this step's gate by construction: this gate is files_exist-only on
+      # RTL by design (see the AUDIT NOTE above), so nothing here could ever read
+      # a Phase-1 report. `test_matrix_d4_criteria_match[step1]` measured exactly
+      # that — "2 of 3 declared required_outputs ENTRIES are read by no clause of
+      # this step's gate" — and d4 deliberately does not choose which side is
+      # wrong. The evidence that the STEP was wrong, not the gate: the paths are
+      # `reports/phase1/`, the producer is a Phase-1 program, and this step's own
+      # `required_inputs` are `from: D1`.
     gate:
       files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
       any_of: true
