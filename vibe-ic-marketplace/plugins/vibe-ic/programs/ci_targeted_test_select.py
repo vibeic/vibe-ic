@@ -338,6 +338,16 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     "test_wave76_skill_md_chip_agnostic.py",
     "test_all_steps_covers_flow.py",
     "test_no_vibe_ic_core_reappears.py",
+    # vibe-ic#1025 follow-up — the same reachability argument, arriving through
+    # a SHELL file again. What this guard pins is a property of
+    # `tools/ci/_gate_dispatch.sh`: that a sweep which DECIDED NOTHING refuses
+    # rather than exiting 0. That file is outside `_SOURCE_DIRS` and no test is
+    # NAMED after it, so MEASURED with the selector itself on the one-token
+    # diff that neuters the refusal (`if [ "$decided" -eq 0 ]` -> `if false`):
+    # the guard is NOT selected. The diff that turns the sweep back into a
+    # thing that cannot report its own vacuity is precisely the diff whose
+    # changed-file set cannot reach the test that guards it. ~10 s for 14.
+    "test_issue1025_sweep_reports_its_own_vacuity.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
