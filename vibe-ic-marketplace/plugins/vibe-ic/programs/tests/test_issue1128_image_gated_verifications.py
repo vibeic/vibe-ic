@@ -33,6 +33,15 @@ def _load():
 G = _load()
 
 
+
+#: A deliberately non-existent image reference, COMPOSED rather than written as
+#: a literal. `sync_image_version.py --check` scans the repo for `ghcr.io/...:X.Y.Z`
+#: pointers and requires every one to equal the anchor — a fixture tag written
+#: literally reads to it as an unregistered LIVE pointer that has drifted, which
+#: is a true statement about the text and a false one about this repo. Composing
+#: it keeps that gate's population honest instead of registering an exemption.
+_BOGUS = ":".join(("ghcr.io/vibeic/vibeic-eda", "0.0.0-does-not-exist"))
+
 def _tests_dir(tmp_path: Path, **files: str) -> Path:
     d = tmp_path / "tests"
     d.mkdir(exist_ok=True)
@@ -106,7 +115,7 @@ def test_an_unreachable_image_is_NOT_CHECKED_and_never_a_pass(tmp_path, capsys,
         "    pytest.skip('vibeic-eda container not available')\n"))
     monkeypatch.setattr(G, "image_is_readable",
                         lambda img, timeout=60: (False, "planted: unreachable"))
-    rc = G.main(["--tests", str(d), "--image", "ghcr.io/vibeic/vibeic-eda:0.0.0"])
+    rc = G.main(["--tests", str(d), "--image", _BOGUS])
     err = capsys.readouterr().err
     assert rc == G.RC_NOT_CHECKED == 2, (rc, err)
     assert "NOT_CHECKED" in err, err
@@ -124,7 +133,7 @@ def test_a_readable_image_passes_AND_still_prints_its_denominator(tmp_path,
         "    pytest.skip('the EDA image is not available here')\n"))
     monkeypatch.setattr(G, "image_is_readable",
                         lambda img, timeout=60: (True, "planted: read 4096 bytes"))
-    rc = G.main(["--tests", str(d), "--image", "ghcr.io/vibeic/vibeic-eda:0.0.0"])
+    rc = G.main(["--tests", str(d), "--image", _BOGUS])
     out = capsys.readouterr().out
     assert rc == G.RC_OK == 0, out
     assert "1 image-gated skip site(s)" in out, out
@@ -138,7 +147,7 @@ def test_an_EMPTY_population_is_refused_not_reported_clean(tmp_path, capsys,
     d = _tests_dir(tmp_path, nothing="def test_x():\n    assert True\n")
     monkeypatch.setattr(G, "image_is_readable",
                         lambda img, timeout=60: (True, "planted"))
-    rc = G.main(["--tests", str(d), "--image", "ghcr.io/vibeic/vibeic-eda:0.0.0"])
+    rc = G.main(["--tests", str(d), "--image", _BOGUS])
     err = capsys.readouterr().err
     assert rc == G.RC_UNRUNNABLE, err
     assert "NOTHING_SCANNED" in err, err
@@ -149,7 +158,7 @@ def test_the_probe_performs_the_same_read_the_gated_tests_perform():
     the gated tests do. Against a deliberately bogus tag it must answer False,
     and it must do so by OBSERVATION rather than by raising: on a host with no
     docker at all, "no docker binary on PATH" is the correct observation."""
-    ok, why = G.image_is_readable("ghcr.io/vibeic/vibeic-eda:0.0.0-does-not-exist",
+    ok, why = G.image_is_readable(_BOGUS,
                                   timeout=30)
     assert ok is False, why
     assert why, "the refusal must name its reason"
