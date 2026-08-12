@@ -579,7 +579,29 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 #: records that step 29 is no longer evidenced ONLY from outside, which is a
 #: strictly weaker and strictly true statement.
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
-    "17", "20", "30", "M2", "M3", "M4",
+    # 2026-08-12: M2, M3 and M4 LEFT this set, and the population SHRANK — the
+    # only direction this pin is allowed to move without an argument.
+    #
+    # All three recorded every entry as PRODUCED_BY_RUN from
+    # `AI_IC_design/4th_benchmark/...`, a tree this repository does not carry,
+    # measured on the campaign host on 2026-07-27. That is the exact property
+    # this pin exists to bound: those cells went green on the committed
+    # manifest rather than on the repository.
+    #
+    # Nothing was manufactured to close them. The flow declares
+    # `condition.files_exist: ["phase1/analog/analog_block_list.json"]` for all
+    # four M-steps, no published run root carries that file, and steps 40-44
+    # with an unmet condition are recorded NA_DORMANT_CONDITION. M2/M3/M4 were
+    # recorded ENFORCED with `condition_files: null` — the condition the flow
+    # declares was simply never carried into the manifest — so dimension 3
+    # asserted production of artefacts that no program in this plugin writes
+    # (verified: every occurrence under programs/ is a consumer, a declaration
+    # or a docstring, and `power_domain_crossing_check` says so in its own
+    # header). Recording the condition routes them through the dormant branch,
+    # which re-verifies live that the condition is unmet AND that the artefacts
+    # do not exist anywhere, so the cells re-arm the moment an analog run is
+    # published.
+    "17", "20", "30",
 )
 
 #: How many of the declared entries are decided LIVE on every host. An
@@ -619,7 +641,20 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-12: 120 -> 126. This is the ONE direction the paragraph above warns
+# about — "more means something outside the commit is being counted again" —
+# so it needs the opposite argument stated explicitly, because here the cause
+# is the reverse.
+#
+# M2/M3/M4 carried nine entries recorded PRODUCED_BY_RUN against
+# `AI_IC_design/4th_benchmark/...`, a tree this repository does not carry.
+# `check_entry` classified those nine as FIXTURE-attested. Recording the
+# dormancy condition the flow already declares for those steps turns the nine
+# into UNPROVEN-and-searched, which is decided LIVE on every host. So the rise
+# is external attestation being REMOVED and replaced by a live search of this
+# commit — evidence moving INTO the commit, not out of it. `fixture` falls by
+# the same nine, and EXTERNALLY_ATTESTED_STEPS shrinks from six cells to three.
+_LIVE_ENTRY_COUNT = 126
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -1990,7 +2025,26 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (53, 3, 7), (
+    # 2026-08-12: (53, 3, 7) -> (50, 3, 10). THREE cells moved, all in the same
+    # direction and all for one reason, re-reviewed rather than absorbed.
+    #
+    # M2, M3 and M4 moved ENFORCED -> NA_DORMANT_CONDITION. The flow declares
+    # `condition.files_exist: ["phase1/analog/analog_block_list.json"]` for
+    # every M-step; no published run root carries that file; and steps 40-44
+    # whose condition is likewise unmet are already recorded
+    # NA_DORMANT_CONDITION. These three were recorded ENFORCED with
+    # `condition_files: null` — the flow's condition was never carried into the
+    # manifest — so dimension 3 demanded production of three artefacts that no
+    # program in this plugin writes. That is not a step failing to produce; it
+    # is a dormant step misfiled as an enforced one, and the evidence cited for
+    # it was an external tree measured on one host on 2026-07-27.
+    #
+    # WAIVED is unchanged at 3, which is the load-bearing part: nothing was
+    # waived to achieve this. The three cells did not become exempt, they
+    # became inapplicable, and the dormant branch re-verifies both halves of
+    # that live — the condition is still unmet, and the artefacts still do not
+    # exist anywhere, by any route.
+    assert (len(enforced), len(waived), len(na)) == (50, 3, 10), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
         f"(53, 3, 7) on 2026-08-06. A step moving between states is a real "
@@ -2712,7 +2766,17 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # a published run tree closes those, and publishing one costs >1 GB of DEFs
     # against a 2.0 GB .git -- which is why they stay RED here rather than
     # becoming waivers. A red cell cannot rot; a waiver can, and did.
-    "15", "17", "19", "20", "30", "32", "M1", "M2", "M3", "M4",
+    # 2026-08-12: M2, M3 and M4 LEFT this set, and NOT because a run tree
+    # closed them — the wording this assertion prints ("say which run tree
+    # closed them") does not fit, so the honest answer is stated here instead:
+    # NO run tree closed them and none can. They are no longer measured for
+    # UNEVIDENCED entries because they are no longer ENFORCED; the flow's own
+    # `condition.files_exist` for the M-steps is unmet in every published run
+    # root, so they are now NA_DORMANT_CONDITION alongside steps 40-44. Their
+    # artefacts remain absent and the dormant branch asserts exactly that, plus
+    # that the condition is still unmet — so if an analog run is ever published
+    # both assertions fire and these cells come back for real measurement.
+    "15", "17", "19", "20", "30", "32", "M1",
 )
 
 
