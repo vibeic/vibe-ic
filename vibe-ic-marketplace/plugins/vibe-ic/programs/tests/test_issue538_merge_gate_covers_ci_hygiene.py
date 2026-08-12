@@ -297,6 +297,13 @@ def test_a_gate_that_refused_is_reported_apart_from_the_ones_that_passed(tmp_pat
     must not fail a developer whose tree has scratch in it — but "I could not
     look" must not reach a reader as "I looked and it was clean". This is the
     `_vacuous_exit` convention applied to the hygiene set as a whole.
+
+    Since #584 the tolerance must be BOUGHT with a dated, reasoned
+    `uncheckable_until`; that is why the fixture carries one. The property
+    asserted here is unchanged and is the one #584 had to preserve — an
+    EXEMPTED refusal is still non-blocking, because a permanently red script
+    is a skipped script. The unexempted arm is
+    `test_issue584_not_checked_is_load_bearing.py`.
     """
     root = tmp_path / "r"
     root.mkdir()
@@ -308,6 +315,8 @@ def test_a_gate_that_refused_is_reported_apart_from_the_ones_that_passed(tmp_pat
     """)
     script = _fixture_script(root, (
         f'run "a green gate" "$ROOT" python3 "{root}/p_ok.py"\n'
+        f'uncheckable_until 2999-01-01 "needs a clean checkout, which a '
+        f'developer tree is not obliged to be"\n'
         f'run_tolerating_uncheckable "a refusing gate" "$ROOT" '
         f'python3 "{root}/p_refuse.py"\n'))
     res = GR.repo_hygiene_gate(root, script=script)
@@ -479,6 +488,10 @@ def test_the_rollup_does_not_claim_all_passed_when_a_gate_refused(tmp_path):
     """)
     out = _run_fixture_script(root, (
         f'run "a green gate" "$ROOT" python3 "{root}/p_ok.py"\n'
+        # #584 — the tolerance is now bought at the wiring site. The roll-up
+        # properties this test pins are unchanged.
+        f'uncheckable_until 2999-01-01 "needs a clean checkout to compare '
+        f'against a fresh worktree at the same commit"\n'
         f'run_tolerating_uncheckable "gates are host-independent" "$ROOT" '
         f'python3 "{root}/p_refuse.py"\n'))
     text = out.stdout + out.stderr

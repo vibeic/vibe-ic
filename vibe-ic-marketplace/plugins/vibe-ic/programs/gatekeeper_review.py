@@ -932,6 +932,26 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
                           if g.get("state") == s]
     failed, not_checked = by_state("FAIL"), by_state("NOT_CHECKED")
     deferred = by_state("LISTED")
+
+    # vibe-ic#584 — the two lists that make NOT_CHECKED load-bearing HERE and
+    # not only in the script's exit code. Derived from the per-gate records when
+    # the top-level key is absent, and derived FAIL-SAFE: a record written by a
+    # script that predates the exemption mechanism has no `exempt_until` on any
+    # gate, so every NOT_CHECKED in it reads as UNEXEMPTED and refuses. The
+    # alternative default — treat an unknown record as exempt — would make an
+    # old or hand-written summary the way to buy silence, which is the shape
+    # this whole change removes.
+    wiring = [str(w) for w in (doc.get("wiring_errors") or [])]
+    unexempted = doc.get("not_checked_unexempted")
+    if unexempted is None:
+        unexempted = [str(g.get("label")) for g in gates
+                      if g.get("state") == "NOT_CHECKED"
+                      and not g.get("exempt_until")]
+    expired = doc.get("exemptions_expired")
+    if expired is None:
+        expired = [str(g.get("label")) for g in gates
+                   if g.get("exemption_expired")]
+
     ran = declared - len(deferred)
     secs = doc.get("seconds")
     where = f"{ran}/{declared} gate(s) ran"
@@ -949,12 +969,42 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
         return GateResult(name, 2,
                           "ERROR — the hygiene script declared 0 gates; "
                           "nothing was checked and this is NOT a pass")
+    if wiring:
+        # The set's own DECLARATION is wrong, so no count it reports means what
+        # it says. ERROR rather than FAIL: nothing was concluded about the tree.
+        return GateResult(name, 2,
+                          f"ERROR — {len(wiring)} wiring error(s) in the "
+                          f"hygiene gate declarations, so the set certifies "
+                          f"nothing: " + "; ".join(wiring[:3])
+                          + (" …" if len(wiring) > 3 else "") + f" [{where}]")
+    # A gate that RAN and found something leads, ahead of the two coverage
+    # defects below: all three are rc 1, so the ordering decides only which
+    # sentence a maintainer reads first, and a real finding is the one to act
+    # on. The two below are still named in `where`, so neither is lost.
     if failed:
         return GateResult(name, 1,
                           f"{len(failed)} hygiene gate(s) FAILED: "
                           + ", ".join(sorted(failed)[:6])
                           + (" …" if len(failed) > 6 else "")
                           + f" [{where}]")
+    if unexempted:
+        # The lie-shape this gate is for: the sweep NAMED a gate it could not
+        # run and the merge gate answered MERGE_OK over it. A gate allowed to
+        # go unchecked must have said so in advance, with a date and a reason.
+        return GateResult(name, 1,
+                          f"{len(unexempted)} gate(s) NOT CHECKED with no "
+                          f"declared exemption — the hygiene set is smaller "
+                          f"than it reports: " + ", ".join(sorted(unexempted)[:6])
+                          + (" …" if len(unexempted) > 6 else "")
+                          + f" [{where}]")
+    if expired:
+        return GateResult(name, 1,
+                          f"{len(expired)} uncheckable exemption(s) are PAST "
+                          f"their review date; re-review the gate and either "
+                          f"restate the date with a reason that is still true "
+                          f"or remove the tolerance: "
+                          + ", ".join(sorted(expired)[:6])
+                          + (" …" if len(expired) > 6 else "") + f" [{where}]")
     if script_rc != 0:
         # Red script, no failing gate named: a setup/summary inconsistency we
         # must not paper over.

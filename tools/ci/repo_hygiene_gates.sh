@@ -120,7 +120,9 @@ run "practical notes specificity"   "$PLUGIN" python3 programs/practical_notes_s
 # is between excluding it deliberately and excluding it by luck. The directive
 # below is read by `gate_host_independence_check` — it must stay on the line
 # IMMEDIATELY above the gate, and if it drifts the gate is probed again (a
-# visible returning flake) rather than silently dropped.
+# visible returning flake) rather than silently dropped. The
+# `uncheckable_until` line therefore goes ABOVE it, not between it and the gate.
+uncheckable_until 2027-02-28 "needs a REACHABLE ghcr registry: --require-remote resolves the pinned tag over the network, and rc 2 means the registry could not be asked at all (an unresolvable tag is rc 1, a real FAIL)"
 # host-independence: EXCLUDE — resolves a tag on a remote registry (--require-remote), so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "image-version pins resolve" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --check --require-remote
 
@@ -134,6 +136,7 @@ run_tolerating_uncheckable "image-version pins resolve" "$ROOT" python3 "$ROOT/t
 # Cheap when clean: one `gh repo list`, and the per-branch comparison only runs
 # for an upstream that actually appears twice. rc 2 when it cannot ask, so an
 # offline run is NOT_CHECKED rather than a verdict.
+uncheckable_until 2027-02-28 "needs an AUTHENTICATED gh + network: it lists the org's repos live, and rc 2 means the org could not be asked (a duplicate it CAN see is rc 1)"
 # host-independence: EXCLUDE — reads live org state over the network, so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs/org_duplicate_fork_check.py vibeic
 
@@ -180,7 +183,13 @@ run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_tar
 # returned rc 0 on a `sta` with 0 of 10 commands. A register describing a debt
 # that no longer exists is not conservative, it is a blind spot the exact size
 # of the bug it used to describe.
+uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE present on the host: it invokes both STA engines inside it, and rc 2 means neither could be started (an engine that answers and disagrees is rc 1)"
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
+# NOTE (#584): the blank line below DETACHES the directive above, so this gate
+# is in fact still PROBED by `gate_host_independence_check` — that parser reads
+# only the line IMMEDIATELY above the `run`. Left exactly as found: closing it
+# would change which gates that probe covers, which is a different change from
+# this one and belongs in its own commit with its own measurement.
 
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
@@ -349,6 +358,7 @@ run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_c
 # class has produced FIVE instances, two of them inside the fixes for the
 # previous ones. Refuses (rc 2) on a dirty checkout rather than reporting the
 # uncommitted work as findings.
+uncheckable_until 2027-02-28 "needs a CLEAN checkout: it compares the working tree against a fresh worktree at the same commit, and rc 2 means tracked modifications made the comparison meaningless (a genuine host-dependent gate is rc 1)"
 run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
