@@ -228,9 +228,30 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # MOVED HERE FROM STEP 1 (D4 [step1]). The per-doc diagnostic of which
+      # verbatim literals from `extraction_patterns.json` reached
+      # `generated_docs/L*.json` — companion to the LL-38 gate, and a mandatory
+      # deliverable of THIS step: `phase1_doc_one_shot_runner` and
+      # `phase1_coverage_report_gen` write it, and nothing in Phase 2 does.
+      # Declared on Step 1 (Spec-to-RTL) it was a Phase-1 artefact hung on a
+      # Phase-2 step whose gate read neither entry.
+      #
+      # BLAST RADIUS: present in 105 of the 105 tracked roots that carry
+      # `L1_DATASHEET.json` (`git ls-files benchmark-data`), so declaring it
+      # changes no published verdict — the same measurement, on the same
+      # population, as `L8_RTL_CONSTANTS.json` above.
+      - "reports/phase1/extraction_coverage_report.md"
+      - "reports/phase1/extraction_coverage_report.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
+        # The clause that READS the two entries added above. This checker
+        # already existed and was wired into NOTHING — `grep` finds it in no
+        # flow row and no runner, so it had only ever judged its own unit test.
+        # That is the "a checker only its own unit test ever runs" class this
+        # repo removes one gate at a time; here it is also the difference
+        # between D1 declaring the artefact and D1 verifying it.
+        - program_exit_zero: "phase1_coverage_report_present_check ."
         # #312 — the SECOND track. Findings are advisory (a divergence between
         # the two tracks needs converging, not an automatic stop); running is
         # not. A missing/unparseable report exits 1 here, because a second
@@ -483,12 +504,27 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-      # Phase 1 extraction-coverage REPORT
-      # (companion to LL-38 gate). Mandatory deliverable; per-doc
-      # diagnostic of which verbatim literals from
-      # extraction_patterns.json reached generated_docs/L*.json.
-      - "reports/phase1/extraction_coverage_report.md"
-      - "reports/phase1/extraction_coverage_report.json"
+      # vibe-ic#1015-adjacent (D4 [step1]) — the two
+      # `reports/phase1/extraction_coverage_report.{md,json}` entries that used
+      # to be declared HERE have moved to D1, which is what produces them.
+      # They were a PHASE 1 artefact declared as an output of a PHASE 2 step,
+      # and no clause of this gate read either one, so `required_outputs` (which
+      # is ALL-of across entries) claimed two deliverables nothing verified.
+      #
+      # NOT repaired by widening this gate, which was the obvious move and is
+      # wrong. MEASURED: 8 of the 40 published roots carrying step-1 RTL ship no
+      # coverage report, and ALL 8 have NO PHASE 1 AT ALL — zero
+      # `phase1/generated_docs/L*.json`, zero `reports/phase1/`. They are CVDP
+      # and parity runs that enter at Phase 2 with the RTL already given.
+      # Requiring a Phase-1 artefact of them would have failed 8 runs for not
+      # producing something they were never asked to produce: 8 false positives
+      # from a gate reading the wrong population, which is the shape this repo
+      # removes rather than adds.
+      #
+      # At D1 the same requirement is free: all 105 published roots that carry
+      # `phase1/generated_docs/L1_DATASHEET.json` already ship both files, so no
+      # published verdict changes. Same reasoning, and the same 0-blast-radius
+      # measurement, as the `L8_RTL_CONSTANTS.json` entry in D1 below.
     gate:
       files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
       any_of: true
