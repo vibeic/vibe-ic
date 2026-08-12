@@ -53,6 +53,10 @@ cd "$ROOT"
 # additive, and with neither this script behaves exactly as it did before, which
 # is how both CI workflows still call it.
 . "$HERE/_gate_dispatch.sh"
+# vibe-ic#1075 — the per-cell populations, each named for the predicate it
+# actually applies. Sourced for the same reason the dispatch library is: a test
+# drives the REAL producer rather than a fixture copy of its pathspec.
+. "$HERE/_published_cell_corpus.sh"
 gate_dispatch_init "$@"
 
 # --- repo-root scoped ------------------------------------------------------
@@ -408,37 +412,61 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # `phase3/stage3/pnr/routed.def` is a PUBLISHING decision with a real
 # repository-size cost, and that decision is not a side effect of making the
 # roll-up honest.
-_per_published_cell_gates() {
+# vibe-ic#1075 — SPLIT OUT of the loop below, because it is the one gate here
+# whose declaration comment states a TWO-part predicate ("a routed DEF and a
+# macro LEF") while the shared producer selected on the first half only.
+# MEASURED at 4b22e36ea the intersection is EMPTY, so the single cell the
+# shared loop handed it fails the unstated half and the checker correctly
+# answers rc 2 — permanently, since this loop is its only wiring. A declared
+# gate that can never reach a verdict still counts as a gate to anyone reading
+# the denominator; selecting it on the predicate it declares turns that into a
+# zero the loop STATES. See `_published_cell_corpus.sh` for why the producer
+# stops at "a LEF is tracked here" and does not parse for a MACRO record.
+_macro_obs_published_cell_gate() {
   local _def="$1" _cell
   _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
+}
+gate_dispatch_over "published cells carrying a routed DEF AND a macro LEF" \
+  _macro_obs_published_cell_gate \
+  published_cells_with_routed_def_and_macro_lef
+# vibe-ic#1075 — SPLIT, because neither of these gates reads a routed DEF and
+# the routed-DEF selector was therefore not their input. MEASURED at 947547716:
+#
+#   selector the loop used (routed DEF)   1 cell
+#   roots carrying a DRC report           9
+#   IC roots carrying reports/**/*.json   9
+#
+# One cell stood in for nine in both cases, and it happened to pass, so the
+# roll-up reported a PASS covering 1/9 of each gate's real subject.
+#
+# `run_tolerating_uncheckable` is kept for both: a published root that carries a
+# DRC report but no parseable geometry, or a `reports/` tree in which nothing
+# declares a verdict, is a root the gate could not read — rc 2 — and that is a
+# state to disclose, not a defect in the commit under review. rc 1 still blocks.
+_drc_vacuous_published_cell_gate() {
+  local _cell="$ROOT/$1"
   # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
   # certificate over an empty layout is the strongest form of an absence
-  # rendering as a pass, and the gate written for it was reachable only if an
-  # agent read a skill and remembered to run it. MEASURED on the published
-  # cells: it parses real geometry (8290 shapes, 35 violations) — a live
-  # verdict, not a shape that can only ever say "nothing to look at".
-  run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$(dirname "$_cell")"))" \
+  # rendering as a pass.
+  run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$1"))" \
     "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
+}
+gate_dispatch_over "published roots carrying a DRC report" \
+  _drc_vacuous_published_cell_gate \
+  published_cells_with_drc_report
+
+_bubble_up_published_ic_gate() {
+  local _cell="$ROOT/$1"
   # Another of the 35. Its subject is an inner FAIL that never reaches the outer
-  # verdict, and nothing ran it. It also had the defect: "nothing to examine"
-  # exited 0 printing VACUOUS_PASS, one branch above a test in its own file
-  # stating that "I could not look" must never share an exit code with "I looked
-  # and it was clean". MEASURED on the published cells: 67-68 reports examined
-  # each, so this is a live verdict over a real denominator.
-  run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
+  # verdict, and its input is `reports/**/*.json` — never a DEF.
+  run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$1"))" \
     "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
 }
-# NO `|| true` ANY MORE, and that is a repair rather than an omission: it used
-# to turn "git could not look" into an empty corpus, which is the vacuous pass
-# this repo removes from gates one at a time. `gate_dispatch_over` keeps the
-# producer's exit status and says so; an empty result is still not an error and
-# still does not abort the ~70 gates that have nothing to do with this corpus.
-gate_dispatch_over "published cells carrying a routed DEF" \
-  _per_published_cell_gates \
-  git -C "$ROOT" ls-files -- \
-    'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def'
+gate_dispatch_over "published ICs carrying a reports/ tree" \
+  _bubble_up_published_ic_gate \
+  published_ics_with_reports_tree
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the
