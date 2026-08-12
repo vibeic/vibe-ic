@@ -328,3 +328,105 @@ def test_the_real_flow_has_clauses_of_both_kinds(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(subprocess.call([sys.executable, "-m", "pytest", "-q", __file__]))
+
+
+# --------------------------------------------------------------------------
+# THE CENSUS'S OWN REPAIRS (#1051 follow-up). Every one of these was a way the
+# INSTRUMENT lied, found while adjudicating its output by hand. Each gets a
+# control, because a probe repaired once and never pinned regresses silently.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("line", [
+    "VACUOUS_PASS: l_doc_todo_stub_count_check — scanned=0",
+    "SKIP_NO_ANALOG_DIR: nothing to do",
+    "SKIPPED_CONDITION: step condition unmet",
+    "SKIP_MISSING_ORACLE: no oracle for this cell",
+])
+def test_the_refusal_pattern_sees_SCREAMING_SNAKE_verdict_tokens(line):
+    """`\\b` does not match between `VACUOUS` and `_`, so the pattern was blind
+    to this repo's OWN canonical refusal tokens — `VACUOUS_PASS` appears 139
+    times in `programs/`. A refusal detector that cannot see the standard
+    refusal token is the census's version of the defect it hunts."""
+    assert lc._REFUSAL_LEAD.match(line), line
+
+
+@pytest.mark.parametrize("line,is_empty_population", [
+    ("[PASS] compared 0 librar(ies) across 0 log(s)", True),   # #1002's evidence
+    ("INCOMPLETE: … 0 segment", True),                          # #1017's evidence
+    ("[PASS] 504 cells screened, 0 violations", False),         # a NUMERATOR
+    ("VACUOUS_PASS: … scanned=0 docs_with_todo=0", False),      # also a numerator
+])
+def test_the_zero_pattern_tells_a_denominator_from_a_numerator(line, is_empty_population):
+    """`\\w*` let `doc` swallow `s_with_todo`, so a violation COUNT of zero read
+    as an empty POPULATION — and on a clean project that zero is the correct
+    answer. Both real historical denominators must still match."""
+    assert bool(lc._ZERO_POP.search(line)) is is_empty_population, line
+
+
+def test_a_refusal_the_CONSUMER_reads_is_disclosed_not_laundered(census, tmp_path, capsys):
+    """rc 0 beside a refusal is only laundering if nothing reads the refusal.
+
+    `flow_compliance_check` promotes a step to VACUOUS_PASS when it sees a
+    `VACUOUS_PASS:` line, on the PASSING path, rc-independently. 11 of 17
+    clauses this probe accused were using that channel correctly, 8 of them
+    BLOCKING.
+    """
+    progs = _programs(tmp_path, discloses_properly="""
+        import sys
+        print("VACUOUS_PASS: discloses_properly examined nothing (reason: no input)")
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="discloses_properly")),
+                progs, "--probes", "prose")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "GUARDED" in out and "VACUOUS_PASS" in out, out
+
+
+def test_free_prose_no_consumer_reads_is_STILL_a_liar(census, tmp_path, capsys):
+    """The other side of the same rule, and the one that keeps #1017 caught:
+    `INCOMPLETE:` and `skipped:` are not the sentinel and reach nobody."""
+    for body in ("INCOMPLETE: nothing was compared", "skipped: no L7 document"):
+        progs = _programs(tmp_path, free_prose=f"""
+            import sys
+            print({body!r})
+            sys.exit(0)
+            """)
+        rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="free_prose")),
+                    progs, "--probes", "prose")
+        out = capsys.readouterr().out
+        assert rc == 1, out
+        assert "no consumer reads" in out, out
+
+
+def test_a_producer_whose_consumer_is_in_the_SAME_step_is_declined(census, tmp_path, capsys):
+    """The flow's own M1 adjudication, as a rule: "PRODUCER, advisory on
+    purpose: producing is not a verdict … the BLOCKING verdict stays with
+    mixed_signal_merge_check, which reads what this writes."
+
+    Same write, same consumer — only the STEP membership differs between this
+    test and the cross-step one above, and only that decides.
+    """
+    progs = _programs(
+        tmp_path,
+        producer="""
+        import pathlib, sys
+        p = pathlib.Path("reports/planted_evidence.json")
+        p.parent.mkdir(parents=True, exist_ok=True); p.write_text("{}")
+        print("[FAIL] producer"); sys.exit(1)
+        """,
+        checker_same_step="""
+        # names reports/planted_evidence.json
+        """)
+    rc = census(_flow(tmp_path, """
+    steps:
+      - id: 99
+        gate:
+          all_of:
+            - advisory_program_exit_zero: "producer ."
+            - program_exit_zero: "checker_same_step ."
+    """), progs, "--probes", "writes")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "GUARDED" in out, out
+    assert "OWN gate" in out, out

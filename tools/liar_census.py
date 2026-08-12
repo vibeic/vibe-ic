@@ -71,18 +71,69 @@ GUARDED = "GUARDED"
 #: clauses. Anchored at line start on purpose: gates narrate these words in docstrings
 #: and explanatory paragraphs all the time, and only a line that LEADS with one is the
 #: gate's own verdict line.
+#:
+#: THE `_SUFFIX` CLAUSE IS LOAD-BEARING, and it was missing (found while adjudicating
+#: `l_doc_todo_stub_count_check` for #1051's follow-up). `\b` does not match between
+#: `VACUOUS` and `_`, because `_` is a word character -- so the pattern was blind to
+#: `VACUOUS_PASS`, which is THIS REPO'S OWN canonical disclosed-skip verdict token and
+#: appears 139 times in `programs/`. It was equally blind to `SKIP_NO_ANALOG_DIR`,
+#: `SKIPPED_CONDITION`, `SKIP_MISSING_ORACLE` and every other SCREAMING_SNAKE variant
+#: the gates actually print. A refusal detector that cannot see the repo's standard
+#: refusal token is the census's own version of the defect it hunts.
 _REFUSAL_LEAD = re.compile(
-    r"^\s*(INCOMPLETE|NOT[ _-]?CHECKED|NOT[ _-]?SCREENED|SKIPPED|CANNOT|COULD NOT|"
-    r"UNABLE|NO DATA|NOTHING TO|INSUFFICIENT|UNDECIDED|UNMEASURED|VACUOUS)\b",
+    r"^\s*(?:INCOMPLETE|NOT[ _-]?CHECKED|NOT[ _-]?SCREENED|SKIPPED|SKIP|CANNOT|"
+    r"COULD NOT|UNABLE|NO DATA|NOTHING TO|INSUFFICIENT|UNDECIDED|UNMEASURED|"
+    r"VACUOUS)(?:_[A-Z0-9_]+)?\b",
     re.I | re.M,
 )
 
 #: A population word next to a zero. `gate_zero_denominator_refuses_check` owns the
 #: full rule; this is the cheap textual smell so the census can flag it per-clause.
+#:
+#: THE TRAILING `\b` IS ALSO LOAD-BEARING, and was `\w*`, which could not tell a
+#: DENOMINATOR from a NUMERATOR. `0 docs_with_todo` matched -- `doc` plus `\w*`
+#: swallowing `s_with_todo` -- and on a real clean project `docs_with_todo=0` is the
+#: CORRECT answer, so the census was reporting a violation count as if it were an
+#: empty population. With `s?\b` the compound findings word no longer matches (`docs`
+#: is followed by `_`, not a boundary) while #1002's real evidence still does:
+#: `0 librar(ies) across 0 log(s)`, and #1017's `0 segment`.
+#:
+#: `violation` was dropped from the word list for the same reason: it counts what the
+#: gate FOUND, never what it looked at, so `504 cells screened, 0 violations` is a
+#: clean result and reading it as an empty population is backwards.
 _ZERO_POP = re.compile(
-    r"\b0\s+(run|cell|file|report|net|pin|gate|check|document|doc|entry|entries|"
-    r"segment|sample|corner|step|violation|instance|point|library|librar)\w*", re.I
+    r"\b0\s+(?:run|cell|file|report|net|pin|gate|check|document|doc|entry|entries|"
+    r"segment|sample|corner|step|instance|point|library|librar)s?\b", re.I
 )
+
+
+def _consumer_reads_the_refusal(out: str) -> bool:
+    """Does `flow_compliance_check` READ this refusal, or does it reach nobody?
+
+    Imported from the consumer, never reimplemented. A census that carried its own
+    copy of this predicate would keep scoring by a rule the flow had moved on from —
+    and it would do so silently, which is the whole family of defect being hunted.
+
+    Degrades LOUDLY: if the consumer cannot be imported the census says so on stderr
+    and treats nothing as disclosed, so the failure shows up as noisy LIARs rather
+    than as a quiet amnesty.
+    """
+    if not out:
+        return False
+    try:
+        # the REAL plugin, never `PROGRAMS` — that one is redirected at a planted
+        # tree under test, and importing a planted `flow_compliance_check` would
+        # let a fixture decide what counts as disclosure.
+        sys.path.insert(0, str(PLUGIN / "programs"))
+        from flow_compliance_check import (  # noqa: PLC0415
+            _stdout_signals_vacuous, _VACUOUS_HINT_PREFIX,
+        )
+    except Exception as exc:                                   # pragma: no cover
+        print(f"liar_census: CANNOT IMPORT the vacuity consumer ({exc}) — scoring "
+              f"every refusal as unread; this run OVERSTATES the LIAR count",
+              file=sys.stderr)
+        return False
+    return bool(_stdout_signals_vacuous(out) or out.startswith(_VACUOUS_HINT_PREFIX))
 
 
 @dataclass
@@ -307,6 +358,24 @@ def probe_prose_vs_exit(cl: Clause, empty: Path) -> ProbeResult:
     only the CHEAPEST way to reach this code path; the path itself is "the authority is
     missing, so return 0", and a populated tree reaches it too. #1017 measured exactly
     that: 92 published run directories, every one rc 0, none of them empty.
+
+    WHAT MAKES A REFUSAL A LIE IS THE CONSUMER, NOT THE EXIT CODE
+    ------------------------------------------------------------
+    rc 0 beside a refusal is only laundering if NOTHING READS THE REFUSAL. This repo
+    has a documented, rc-INDEPENDENT second channel: a gate may print a line beginning
+    `VACUOUS_PASS:` and still exit 0, and `flow_compliance_check` promotes the step to
+    the VACUOUS_PASS tier on the PASSING path when it sees it
+    (`_check_program_exit_zero`: "A gate program may disclose the vacuous tier by
+    PRINTING `VACUOUS_PASS:` while still exiting 0 — which is exactly what the shared
+    analog helper `_analog_a_check_common.vacuous_pass()` does for every A-track gate").
+
+    Scoring those LIAR was this probe's own version of the defect it hunts: reading a
+    verdict off prose without asking what consumes it. Measured — 11 of 17 flagged
+    clauses were using the channel correctly, including 8 BLOCKING ones.
+
+    The predicate is IMPORTED from the consumer rather than reimplemented, so the
+    census cannot drift from the thing that actually decides. #1017's gates are
+    untouched by it: `INCOMPLETE:` is not the sentinel and reaches no consumer.
     """
     rc, out = _run(cl.cmd, empty)
     repro = f"cd <empty dir> && python3 programs/{cl.program}.py … ; echo rc=$?"
@@ -315,8 +384,16 @@ def probe_prose_vs_exit(cl: Clause, empty: Path) -> ProbeResult:
     hit = _REFUSAL_LEAD.search(out or "")
     if rc == 0 and hit:
         line = next((l.strip() for l in out.splitlines() if _REFUSAL_LEAD.match(l)), "")
+        if _consumer_reads_the_refusal(out):
+            return ProbeResult(
+                "prose_vs_exit", GUARDED,
+                f"refuses and exits 0, but on the documented rc-independent channel "
+                f"flow_compliance_check reads on the passing path, so the flow records "
+                f"VACUOUS_PASS rather than PASS — {line[:100]!r}",
+                repro)
         return ProbeResult("prose_vs_exit", LIAR,
-                           f"stdout leads a line with a refusal word but rc=0 — {line[:120]!r}",
+                           f"stdout leads a line with a refusal word but rc=0, and the "
+                           f"refusal is in free prose no consumer reads — {line[:110]!r}",
                            repro)
     return ProbeResult("prose_vs_exit", CLEAN, f"rc={rc}", repro)
 
@@ -342,7 +419,8 @@ def probe_zero_denominator(cl: Clause, empty: Path) -> ProbeResult:
     return ProbeResult("zero_denominator", CLEAN, f"rc={rc}", repro)
 
 
-def probe_writes_its_subject(cl: Clause, sandbox: Path) -> ProbeResult:
+def probe_writes_its_subject(cl: Clause, sandbox: Path,
+                             same_step: Optional[set] = None) -> ProbeResult:
     """P4 -- does RUNNING it modify the tree it is judging?  (vibe-ic#1029)
 
     The instrument perturbing its subject. Measured on a sandbox seeded with a minimal
@@ -383,6 +461,29 @@ def probe_writes_its_subject(cl: Clause, sandbox: Path) -> ProbeResult:
     names = ", ".join(rels[:4])
     if consumers:
         rel, reader = consumers[0]
+        # DECLARED PRODUCER, by structure. If the consumer is another clause in
+        # the SAME step's gate, the two run in one conjunction on one invocation
+        # and the flow declared them as a pair -- there is no later auditor and
+        # no step boundary for the artefact to cross as evidence. The flow says
+        # so itself at M1: "PRODUCER, advisory on purpose: producing is not a
+        # verdict ... the BLOCKING verdict stays with mixed_signal_merge_check,
+        # which reads what this writes."
+        #
+        # Deliberately CONSERVATIVE: it only ever forgives. A cross-step consumer
+        # is NOT automatically a lie -- `step_internal_fail_bubble_up_check`
+        # (step 36) reads earlier gates' reports by design, and reads their FAIL
+        # CONTENT, so a writer fabricating a PASS would simply not trigger it.
+        # Separating content-reading from existence-reading consumers is the rule
+        # this does not yet have, and it is stated in the summary rather than
+        # guessed at here.
+        if same_step and reader in same_step:
+            return ProbeResult(
+                "writes_its_subject", GUARDED,
+                f"writes {rel}, read by {reader} — but {reader} is another clause in "
+                f"step {cl.step}'s OWN gate, so the flow declares them as one "
+                f"producer/checker pair in a single conjunction, not an artefact "
+                f"handed across a step boundary as evidence",
+                repro)
         return ProbeResult(
             "writes_its_subject", LIAR,
             f"wrote {len(undeclared)} undeclared path(s) into the tree it judges "
@@ -438,6 +539,11 @@ def seed_minimal_tree(root: Path) -> Path:
 
 def run_census(clauses: List[Clause], probes: List[str], timeout: int) -> List[ClauseReport]:
     reports: List[ClauseReport] = []
+    #: which programs each step declares as gate clauses -- the structure the
+    #: producer/checker discount in `probe_writes_its_subject` reads.
+    by_step: Dict[str, set] = {}
+    for c in clauses:
+        by_step.setdefault(c.step, set()).add(c.program)
     with tempfile.TemporaryDirectory() as tmp:
         empty = Path(tmp) / "empty"
         empty.mkdir()
@@ -453,7 +559,8 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int) -> List[C
             if "writes" in probes:
                 sb = Path(tmp) / f"sb{i}"
                 shutil.copytree(skeleton, sb)
-                rep.probes.append(probe_writes_its_subject(cl, sb))
+                rep.probes.append(probe_writes_its_subject(
+                    cl, sb, same_step=by_step.get(cl.step, set()) - {cl.program}))
                 shutil.rmtree(sb, ignore_errors=True)
             if "selector" in probes:
                 rep.probes.append(probe_selector_reaches_fixtures(cl))
