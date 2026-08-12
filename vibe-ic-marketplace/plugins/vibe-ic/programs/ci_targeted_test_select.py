@@ -356,6 +356,63 @@ SMOKE_BASENAMES: tuple[str, ...] = (
 _SOURCE_DIRS: tuple[str, ...] = ("programs", "benchmark")
 _TESTS_REL = "programs/tests"
 
+# Rule 6 (vibe-ic#1057) — REPO-ROOT directories that sit OUTSIDE the plugin and
+# whose files the plugin's tests drive by PATH rather than by import.
+#
+# Measured hole this closes: `tools/gatekeeper-land.sh` is named by 40 test
+# files, and a change to it selected 15 — the smoke floor, and nothing else.
+# Two independent reasons, either one alone sufficient:
+#
+#   * `select_tests` drops every changed path that is not `.py`, so a shell
+#     script never reaches a rule at all; and
+#   * even `tools/foo.py` fails `rp.parent.as_posix() in _SOURCE_DIRS`, because
+#     these paths are repo-relative and `_SOURCE_DIRS` is plugin-relative.
+#
+# So the selection was the same 15 files whether the change was a one-character
+# comment or a rewrite of the landing script — a green that says nothing about
+# the file that moved. The repo has no `.github/workflows/` (only
+# `workflows-disabled/`), so this selection IS the gate; there is no broader
+# job behind it that would have caught the miss.
+#
+# This is a DIRECTORY, read from the tree — never a list of filenames, which
+# would rot the first time a script is added or renamed.
+_REPO_TOOL_DIRS: tuple[str, ...] = ("tools",)
+
+# vibe-ic#1058 — the directory list above turned out to be the wrong shape, and
+# the audit that produced this constant's replacement is why.
+#
+# `tools/` was not special; it was the one we happened to notice. Probing EVERY
+# top-level directory with a trivial change, and counting only selections BEYOND
+# the smoke floor (a floor hit is not a targeted selection):
+#
+#   flow/phase1_phase2_phase3.yaml   114 covering tests    0 selected beyond floor
+#   skills/rtl-review/SKILL.md        67                   0
+#   .claude-plugin/plugin.json        35                   0
+#   .claude-plugin/marketplace.json   17                   0
+#   agents/ic-expert-agent.md         15                   0
+#   pytest.ini / conftest.py / hooks.json / run_tests.sh / SKILL_INVENTORY.json
+#                                     1-4 each             0
+#
+# Every path outside `programs/` and `benchmark/` selected exactly the 15-file
+# floor. `flow/phase1_phase2_phase3.yaml` is the canonical 44-step flow — the
+# repo's single source of truth — and a change to it selected nothing that reads
+# it. Enumerating directories would have to keep pace with every new one; the
+# generalisation below needs no list at all, so there is nothing to keep in step.
+#
+# RULE 7 supersedes rule 6: ANY changed path that no other rule mapped is keyed
+# by the most specific suffix of its own path that is UNIQUE in the tree, and
+# selects the tests that name that key. `tools/` now flows through this rule;
+# `_REPO_TOOL_DIRS` is retained only because rule 6's tests pin it as the
+# narrower case that must keep working.
+#
+# Uniqueness is what makes the rule safe to apply to everything. `README.md`
+# exists 41 times and `SKILL.md` 64 times: their basenames identify no file, so
+# they key on a longer suffix that tests do not spell, and select NOTHING rather
+# than dragging in every test that mentions a readme. Under-selecting an
+# ambiguous name is recoverable; over-selecting teaches people to ignore the
+# selection. Measured: 1158 of 6529 distinct basenames in this repo are
+# ambiguous, so this is the common case, not a corner.
+
 
 def _plugin_root_default() -> Path:
     """The plugin root is this file's grandparent (…/vibe-ic/programs/<me>)."""
@@ -505,6 +562,121 @@ def _build_reference_index(
         rel = f"{_TESTS_REL}/{tf.name}"
         for name in set(_IDENT.findall(text)) & source_stems:
             index.setdefault(name, set()).add(rel)
+    return index
+
+
+# ---------------------------------------------------------------------------
+# Rule 6 — repo-root TOOL scripts (vibe-ic#1057). Built LAZILY, like rule 4:
+# nothing here reads the tree unless a changed path is under a repo-root tool
+# directory, so every other lane pays exactly nothing.
+# ---------------------------------------------------------------------------
+
+
+def _is_repo_tool(repo_rel: str) -> bool:
+    """Is ``repo_rel`` (REPO-relative) a file under a repo-root tool dir?
+
+    Repo-relative on purpose: these paths are the ones `_to_plugin_rel` hands
+    back untouched precisely because they are outside the plugin.
+    """
+    p = _norm(repo_rel)
+    return any(p.startswith(d + "/") for d in _REPO_TOOL_DIRS)
+
+
+def _tool_ref_pattern(basename: str) -> re.Pattern[str]:
+    """Match ``basename`` as a whole path token, not as a substring.
+
+    The boundary class includes ``.`` and ``-`` because these names carry them
+    (``gatekeeper-land.sh``); a plain ``\\b`` would let ``land.sh`` match inside
+    ``pre-land.sh``. Anchoring on both sides is what keeps a new script named
+    with an existing one as its suffix from silently inheriting its tests.
+    """
+    b = r"[A-Za-z0-9_.\-]"
+    return re.compile(rf"(?<!{b}){re.escape(basename)}(?!{b})")
+
+
+def _repo_files(repo_root: Path) -> list[str] | None:
+    """Every tracked repo-relative path, or None if the tree cannot be listed.
+
+    None is a real answer, not a failure: a synthetic tree (a unit-test fixture)
+    is not a git repo, and the caller degrades to basename keying there. What it
+    must never do is raise — a selector that cannot list the tree still has to
+    emit a list.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return [ln for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def _distinctive_key(changed: str, repo_files: list[str] | None) -> str | None:
+    """The shortest suffix of ``changed`` that identifies exactly ONE repo file.
+
+    Walks the path from the basename upward — ``marketplace.json``, then
+    ``.claude-plugin/marketplace.json``, and so on — and returns the first
+    suffix that no OTHER tracked file also ends with. That suffix is the most
+    specific thing a test could write and still mean this file, so it is the
+    right key to search test text for.
+
+    Returns None when NO suffix distinguishes the file. That is not a defect and
+    not a rare one: a path can be a proper suffix of a longer path, so it can
+    never be spelled unambiguously. `.claude-plugin/marketplace.json` (repo
+    root) is exactly this — `vibe-ic-marketplace/.claude-plugin/marketplace.json`
+    ends with it, so every reference to the short form is also a reference to the
+    long one. Selecting on it would attribute the plugin manifest's tests to the
+    repo manifest. None says "this cannot be mapped", and the caller discloses it
+    rather than guessing (vibe-ic#1058).
+    """
+    parts = _norm(changed).split("/")
+    if not parts or not parts[-1]:
+        return None
+    if repo_files is None:
+        return parts[-1]          # synthetic tree: basename is all we have
+    for i in range(len(parts) - 1, -1, -1):
+        suffix = "/".join(parts[i:])
+        owners = [f for f in repo_files
+                  if f == suffix or f.endswith("/" + suffix)]
+        if len(owners) == 1:
+            return suffix
+    return None
+
+
+def _build_tool_reference_index(
+    plugin_root: Path, tool_basenames: set[str],
+) -> dict[str, set[str]]:
+    """Map tool BASENAME -> set of plugin-rel test paths that NAME it.
+
+    Keyed on the basename WITH its extension (``gatekeeper-land.sh``), which is
+    how a path-driven consumer actually names the file, and never on the bare
+    stem: a stem collides across trees (``tools/spec_validator.py`` vs the
+    plugin's own ``spec_validator``) and would hand one file's edit the other
+    file's tests — a selection that looks richer while pointing at the wrong
+    code.
+
+    Unreadable files are skipped rather than failing the run: a selector that
+    cannot read one test file must still emit a list.
+    """
+    index: dict[str, set[str]] = {}
+    if not tool_basenames:
+        return index
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return index
+    pats = {b: _tool_ref_pattern(b) for b in tool_basenames}
+    for tf in sorted(tests_dir.glob("test_*.py")):
+        try:
+            text = tf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f"{_TESTS_REL}/{tf.name}"
+        for base, pat in pats.items():
+            if pat.search(text):
+                index.setdefault(base, set()).add(rel)
     return index
 
 
@@ -799,10 +971,22 @@ def select_tests(
 
     selected: set[str] = set(_smoke_set(plugin_root))
     changed_helpers: list[str] = []
+    changed_tools: set[str] = set()
+    unmapped: list[str] = []
 
     for raw in changed_paths:
         rel = _to_plugin_rel(raw, plugin_prefix)
+        # (6) a changed repo-root TOOL script -> the tests that NAME it.
+        # Checked BEFORE the `.py` guard below, which is one of the two reasons
+        # this population was invisible: a `.sh` never survived to reach a rule.
+        if _is_repo_tool(rel):
+            changed_tools.add(Path(rel).name)
+            continue
         if not rel.endswith(".py"):
+            # (7) anything else the rules below cannot classify. Formerly a
+            # silent `continue`, which is precisely how a change to the canonical
+            # flow YAML came to select the smoke floor and nothing else.
+            unmapped.append(raw)
             continue
         rp = Path(rel)
         # (2) a changed test file -> include directly (if it still exists).
@@ -834,14 +1018,103 @@ def select_tests(
             # edge pointing at the module that changed.
             elif mode == MODE_IMPORT_EDGE:
                 selected |= edge_index.get(rp.stem, set())
+        else:
+            # (7) a `.py` inside the plugin but NOT under a source dir — the
+            # second half of the same hole. `conftest.py` and `pytest.ini` sit
+            # here, as does anything under `mcp-eda/`.
+            unmapped.append(raw)
 
     # (4) Built LAZILY — only when a shared test-helper module actually changed,
     # so the common case never reads the tree.
     if changed_helpers:
         selected |= _helper_consumers(plugin_root, changed_helpers, source_stems)
 
+    # (6) Built LAZILY, same as rule 4 and for the same reason.
+    #
+    # Applies in EVERY mode, and is NOT capped. Both deliberate, and the same
+    # argument rule 4 already makes: `--mode` trades coverage against cost over
+    # a population the other rules DO see, whereas these files were seen by no
+    # rule at all — a cap here would restore the original hole for exactly the
+    # heavily-referenced scripts (`gatekeeper-land.sh` at 40 tests) where a
+    # silent break is most expensive. A test that names the script by path is
+    # a STATED dependency, not noise that needs bounding.
+    if changed_tools:
+        tool_index = _build_tool_reference_index(plugin_root, changed_tools)
+        for base in changed_tools:
+            selected |= tool_index.get(base, set())
+
+    # (7) Everything no other rule claimed. LAZY like rules 4 and 6: the tree is
+    # listed only when such a path is actually in the diff, so the common case
+    # (a change under `programs/`) still reads nothing extra.
+    #
+    # `unmappable` is collected, not discarded — `select_unmappable` re-derives
+    # it for the CLI, which discloses these paths instead of letting them pass
+    # as a silent floor-only selection.
+    if unmapped:
+        repo_files = _repo_files(_repo_root_of(plugin_root, plugin_prefix))
+        keys = {k for k in (_distinctive_key(u, repo_files) for u in unmapped)
+                if k}
+        if keys:
+            key_index = _build_tool_reference_index(plugin_root, keys)
+            for k in keys:
+                selected |= key_index.get(k, set())
+
     # Only emit tests that exist on disk (robust against a stale index entry).
     return sorted(t for t in selected if (plugin_root / t).is_file())
+
+
+def _repo_root_of(plugin_root: Path, plugin_prefix: str) -> Path:
+    """The repo root implied by ``plugin_root`` and ``plugin_prefix``.
+
+    Derived by stripping the prefix's segments, NOT by asking git — the caller
+    may be operating on a synthetic tree, and this must stay a pure function of
+    its arguments so the same call is reproducible off a real checkout.
+    """
+    if not plugin_prefix:
+        return plugin_root
+    root = plugin_root
+    for _ in [p for p in _norm(plugin_prefix).split("/") if p]:
+        root = root.parent
+    return root
+
+
+def select_unmappable(changed_paths: list[str], plugin_root: Path,
+                      plugin_prefix: str = "") -> list[str]:
+    """Changed paths that map to NO test set — the honest gap in a selection.
+
+    Separate from `select_tests` so the selection itself stays a pure list and
+    every caller keeps working unchanged. See the `--strict-unmapped` flag: this
+    is the input to the loud-missing-answer path (vibe-ic#1058).
+    """
+    repo_files = _repo_files(_repo_root_of(plugin_root, plugin_prefix))
+    index_cache: dict[str, set[str]] | None = None
+    out: list[str] = []
+    for raw in changed_paths:
+        rel = _to_plugin_rel(raw, plugin_prefix)
+        rp = Path(rel)
+        mapped_by_other_rule = (
+            (rel.startswith(_TESTS_REL + "/") and rp.name.startswith("test_"))
+            or _is_test_helper(rel)
+            or (rel.endswith(".py")
+                and rp.parent.as_posix() in _SOURCE_DIRS
+                and not rp.name.startswith("test_"))
+        )
+        if mapped_by_other_rule:
+            continue
+        key = (Path(rel).name if _is_repo_tool(rel)
+               else _distinctive_key(raw, repo_files))
+        if not key:
+            out.append(raw)          # no suffix identifies it — unmappable
+            continue
+        if index_cache is None:
+            index_cache = {}
+        hits = index_cache.get(key)
+        if hits is None:
+            hits = _build_tool_reference_index(plugin_root, {key}).get(key, set())
+            index_cache[key] = hits
+        if not hits:
+            out.append(raw)          # identifiable, but no test names it
+    return sorted(set(out))
 
 
 def _git_changed_files(base: str, repo_root: Path) -> list[str] | None:
@@ -923,6 +1196,14 @@ def main(argv: list[str] | None = None) -> int:
                          "because of it. 'ownership' remains available and is "
                          "now the opt-IN narrowing; see the module docstring for "
                          "the measured coverage/cost frontier.")
+    ap.add_argument("--strict-unmapped", action="store_true",
+                    help="EXIT 3 if any changed path maps to no test set, and "
+                         "name those paths on stderr (vibe-ic#1058). Off by "
+                         "default: prose and generated corpora legitimately map "
+                         "to nothing, so ON by default would fail most diffs and "
+                         "be switched off within a week. The DISCLOSURE below is "
+                         "unconditional — this flag only decides whether an "
+                         "unmapped path is fatal.")
     ap.add_argument("--ref-max-tests", type=int, default=DEFAULT_REF_MAX_TESTS,
                     help="reference-capped only: a stem named by more than this "
                          "many test files contributes nothing through the "
@@ -998,6 +1279,30 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[ci_targeted_test_select] import-edge gap report "
                   f"unavailable ({_gap_exc}) — the selection above stands, but "
                   f"what it left out is UNKNOWN, not zero", file=sys.stderr)
+
+    # vibe-ic#1058 — UNMAPPED disclosure. Unconditional, because the failure this
+    # closes is not "the selection was wrong" but "the selection was silently
+    # generic and read as coverage". Naming the paths converts that into a fact
+    # a reviewer can act on. `--strict-unmapped` decides only whether it is fatal.
+    try:
+        unmapped = select_unmappable(changed, plugin_root, plugin_prefix)
+    except Exception as _un_exc:                     # noqa: BLE001
+        print(f"[ci_targeted_test_select] unmapped-path report unavailable "
+              f"({_un_exc}) — the selection above stands, but whether every "
+              f"changed path reached a test set is UNKNOWN, not yes",
+              file=sys.stderr)
+        return 0
+    if unmapped:
+        print(f"[ci_targeted_test_select] UNMAPPED — {len(unmapped)} changed "
+              f"path(s) map to NO test set. The selection above covers the rest; "
+              f"for these it is the smoke floor, which is not evidence about "
+              f"them:", file=sys.stderr)
+        for u in unmapped:
+            print(f"    {u}", file=sys.stderr)
+        if args.strict_unmapped:
+            print("    --strict-unmapped: failing rather than reporting a green "
+                  "over paths nothing verified (vibe-ic#1058)", file=sys.stderr)
+            return 3
     return 0
 
 
