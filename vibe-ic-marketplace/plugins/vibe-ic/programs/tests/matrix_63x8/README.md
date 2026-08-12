@@ -512,8 +512,21 @@ that matter most:
 
 ### Can a cell be reddened by changing a number in a PUBLISHED REPORT?
 
-**8 artefact mutations registered; 4 currently prove the cell they target cannot
-redden.**
+**8<!--figure:artefact_mutations_registered--> artefact mutations registered;
+1<!--figure:artefact_cannot_redden--> currently prove the cell they target
+cannot redden.**
+
+Both digits are ANCHORED and re-derived by
+`tools/gen_matrix_63x8_census.py --check-figures` against
+`matrix_mutation_ledger` itself. They were hand-typed until 2026-08-12 and by
+then the first was right and the second was wrong by three: the ledger's own
+count moved 4 -> 2 -> 1 across `46dbf43d` and `fc664a57`, each time in the
+change that closed the gap it measured, and this file went on publishing 4 with
+a four-row table naming three gates as unable to fail that had learned to fail.
+The replay guards the LEDGER; nothing guarded its PUBLICATION. A stale "this
+gate cannot fail" is the worse direction of that error — it reads as a disclosed
+known gap, so it collects the credit for honesty while describing a gate that is
+now doing its job.
 
 That is the `ARTEFACT_MUTATION` channel of `programs/matrix_mutation_ledger.py`,
 added because the ledger's first two channels both edit the SOURCE — the flow
@@ -528,19 +541,40 @@ gate through the flow's own verdict mapping. Run it with
 `matrix_mutation_ledger.py --replay-artefacts` (3.1 s for all 8) and read the
 count with `--census`.
 
-The four that prove a cell CANNOT redden are the point of the channel, not its
-residue:
+The ones that prove a cell CANNOT redden are the point of the channel, not its
+residue. The table below is the LIVE finding set and every cell named in it must
+be one `matrix_mutation_ledger.artefact_findings()` currently returns —
+`test_matrix_artefact_mutation_channel.test_the_readme_publishes_the_live_finding_set`
+compares the two in BOTH directions, so a finding that closes cannot be left
+standing here and a finding that opens cannot be left unpublished.
+
+<!-- ARTEFACT FINDINGS TABLE — the `cell` column must equal
+     matrix_mutation_ledger.artefact_findings(); do not edit by hand without
+     re-running --replay-artefacts -->
 
 | cell | edit | what the gate did |
 |---|---|---|
-| 25/d2 | peak power-grid segment current 1.96e-04 A → 5.0 A (~25000x) | PASS, zero findings — no Jmax is resolved, so no current is refusable |
 | 33/d2 | every non-zero power figure x1000 | PASS — tool signature and categories are checked; the numbers are read against nothing |
-| 9/d2 | 221 `$_NAND_` → `$_AND_` | PASS — the gate's own report *enumerates* `$_AND_` and counts cells, and forms no view on which primitive belongs |
-| 21/d2 | router's FINAL iteration `DRT-0199` 0 → 12 | PASS, still printing `real_violation_total=0` — the count comes from the RUNNER's summary line, not the router's last word |
 
-The last one is the sharpest: the SAME gate on the SAME file *does* redden when
-the runner's summary is edited 0 → 17. So step 21's green is a statement about
-the runner's arithmetic, not the router's result.
+<!-- END ARTEFACT FINDINGS TABLE -->
+
+**Three entries left this table by being FIXED, and what they were is worth
+keeping.** `ART-EM-CURRENT-DENSITY` (25/d2, peak power-grid segment current
+1.96e-04 A → 5.0 A) passed because no Jmax was resolved, so no current was
+refusable; it reddens now that a peak current has a declared authority to be
+compared against. `ART-NETLIST-PRIMITIVE-SWAP` (9/d2, 221 `$_NAND_` → `$_AND_`)
+and `ART-ROUTER-FINAL-ITERATION` (21/d2, the router's FINAL iteration
+`DRT-0199` 0 → 12) both passed because the gate believed a summary the RUNNER
+wrote instead of the output the TOOL wrote — step 21 kept printing
+`real_violation_total=0` while the same gate on the same file *did* redden when
+the runner's summary was edited 0 → 17. Its green was a statement about the
+runner's arithmetic, not the router's result. That is the shape to look for
+next, and it is the reason these three are recorded here rather than deleted.
+
+The remaining entry is not open work in the same sense as the three that closed:
+the ledger's own note records that step 33's cell REFUSES, naming the budget it
+lacks, and no published run declares the budget that would let it redden. A cell
+that refuses is not a cell that passes.
 
 These are pinned by `ARTEFACT_CANNOT_REDDEN_AS_MEASURED`, and pinned is not
 waived — the day a gate learns to read its artefact, its replay stops matching
