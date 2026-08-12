@@ -538,6 +538,130 @@ def probe_zero_denominator(cl: Clause, empty: Path) -> ProbeResult:
     return ProbeResult("zero_denominator", CLEAN, f"rc={rc}", repro)
 
 
+#: How to make a declared output EXIST while carrying nothing. Keyed on suffix
+#: because that is what a producer's own writer keys on: an empty JSON object is
+#: what `json.dump({}, f)` leaves, and a zero-byte file is what a report writer
+#: that found nothing to say leaves.
+_EMPTY_BY_SUFFIX = {".json": "{}\n", ".yaml": "{}\n", ".yml": "{}\n"}
+
+
+def _seed_present_but_empty(root: Path, outputs: List[str]) -> int:
+    """Materialise every declared output as PRESENT AND EMPTY. Returns how many.
+
+    A `*` in a declared pattern is bound to a concrete name rather than skipped:
+    the question is what the gate does when the artefact is THERE and says
+    nothing, and a pattern nobody instantiates cannot ask it.
+    """
+    made = 0
+    for pat in outputs:
+        rel = pat.strip().lstrip("/").replace("*", "any")
+        if not rel:
+            continue
+        target = root / rel
+        try:
+            if rel.endswith("/") or not Path(rel).suffix:
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(_EMPTY_BY_SUFFIX.get(Path(rel).suffix, ""),
+                                  encoding="utf-8")
+        except OSError:
+            continue
+        made += 1
+    return made
+
+
+def probe_present_but_empty(cl: Clause, sandbox: Path) -> ProbeResult:
+    """P6 -- the producer RAN, emitted NOTHING, and the gate said PASS. (#1115)
+
+    THE POPULATION THIS PROBE EXISTS FOR IS THE ONE `probe_empty_tree` DISCOUNTS.
+    That probe answers GUARDED for every clause whose step declares
+    `required_outputs` or a `files_exist` condition, and says so in as many
+    words: "this probe cannot establish a lie here (it says nothing about a
+    POPULATED tree with no substance)". Measured on this flow, that is **all 136
+    clauses** -- so the whole gate population is currently unprobed for the case
+    where the artefact is there and carries nothing.
+
+    Both of those guards are EXISTENCE guards. A producer that runs, succeeds,
+    and emits an empty report satisfies them exactly as well as one that emitted
+    a real one. That is the hole.
+
+    THE SHAPE, from vibe-ic#1115's study of LibreLane 3.0.8
+    ------------------------------------------------------
+    `librelane/steps/klayout.py:486-490` returns `{}` when the PDK has no DRC
+    deck -- no metric is emitted -- and the downstream `Checker.KLayoutDRC`
+    finds nothing to check, warns, and passes. The same shape holds in
+    `KLayout.Density`, `KLayout.Antenna`, `KLayout.SealRing` and `Magic.Filler`.
+    What makes it a defect rather than a choice is that the same flow contains
+    the counter-example: `classic.py:294-302` gates `Checker.MagicDRC` on
+    `RUN_MAGIC_DRC`, so a *user* disabling the producer disables the checker
+    too. Only the path where the PRODUCER skips itself has no such gating.
+
+    WHY rc 0 HERE IS NOT AUTOMATICALLY A LIE, and what separates the two
+    -------------------------------------------------------------------
+    "Zero violations" is a legitimate pass, and an empty violations report is
+    what zero violations looks like. The discriminator is not the emptiness --
+    it is whether the gate SAYS the population was empty. This repo already has
+    the channel: a gate may print `VACUOUS_PASS:` and still exit 0, and
+    `flow_compliance_check` promotes the step to the vacuous tier on the passing
+    path when it sees it. So a clause that uses that channel is GUARDED here,
+    exactly as in `probe_prose_vs_exit`, and the predicate is IMPORTED from the
+    consumer rather than restated, so this cannot drift from what decides.
+
+    A clause that exits 0 over artefacts it can see are empty, and says nothing
+    at all, has read an absence as consent.
+
+    NOT A DUPLICATE of `probe_zero_denominator`: that one fires when the gate
+    PRINTS a zero population and passes anyway. This one fires when it prints no
+    population at all -- the quieter half, and the one a reader cannot catch.
+
+    THE FALSE-POSITIVE CLASS, DISCLOSED RATHER THAN SILENTLY DISCOUNTED
+    ------------------------------------------------------------------
+    A gate whose EVIDENCE IS AN ABSENCE is flagged by this probe and should not
+    be. `analog_a0_skip_forbidden_check` passes with "forbidden
+    A0_skip_decision.json not present at any of ..." -- its subject is a file
+    that must NOT exist, so an empty tree is a genuine PASS and no producer
+    emitted anything for it to read.
+
+    MEASURED on this flow: 1 of the 8 clauses this probe flags. That rate is
+    stated here because a probe that hid its own false-positive rate would be
+    the shape it hunts. It is NOT auto-discounted, because every structural
+    discriminator I could find for "this gate's evidence is an absence" is also
+    true of the real offenders, and a NAME LIST would rot silently -- which is
+    the drift this file's `guards` machinery exists to avoid. So the probe
+    reports it and a human adjudicates, once, per clause.
+    """
+    made = _seed_present_but_empty(sandbox, cl.step_outputs)
+    repro = (f"seed {made} declared output(s) as empty, then: "
+             f"python3 programs/{cl.program}.py {' '.join(cl.cmd.split()[1:])}")
+    if made == 0:
+        return ProbeResult("present_but_empty", NA,
+                           "the step declares no outputs, so there is nothing "
+                           "to emit emptily", repro)
+    rc, out = _run(cl.cmd, sandbox)
+    if rc == 127:
+        return ProbeResult("present_but_empty", NA, out.strip()[:160], repro)
+    if rc == 124:
+        return ProbeResult("present_but_empty", SUSPECT,
+                           f"timed out over {made} empty declared output(s)", repro)
+    if rc != 0:
+        return ProbeResult("present_but_empty", CLEAN,
+                           f"rc={rc} over {made} empty declared output(s) "
+                           f"(refused or objected)", repro)
+    if _consumer_reads_the_refusal(out):
+        return ProbeResult(
+            "present_but_empty", GUARDED,
+            f"exits 0 over {made} empty declared output(s), but on the "
+            f"documented rc-independent channel flow_compliance_check reads on "
+            f"the passing path, so the flow records VACUOUS_PASS", repro)
+    sev = LIAR if cl.blocking else SUSPECT
+    return ProbeResult(
+        "present_but_empty", sev,
+        f"exits 0 over {made} declared output(s) that EXIST and are EMPTY, and "
+        f"discloses nothing — the producer emitting nothing is read as consent",
+        repro)
+
+
 def probe_writes_its_subject(cl: Clause, sandbox: Path,
                              same_step: Optional[set] = None) -> ProbeResult:
     """P4 -- does RUNNING it modify the tree it is judging?  (vibe-ic#1029)
@@ -1174,6 +1298,15 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
                 rep.probes.append(probe_writes_its_subject(
                     cl, sb, same_step=by_step.get(cl.step, set()) - {cl.program}))
                 shutil.rmtree(sb, ignore_errors=True)
+            if "empty_output" in probes:
+                # Its OWN sandbox, seeded from the skeleton like the writes
+                # probe: this one deliberately creates files, so sharing a tree
+                # with another clause would let one clause's seeding answer
+                # another clause's question.
+                sb2 = Path(tmp) / f"eo{i}"
+                shutil.copytree(skeleton, sb2)
+                rep.probes.append(probe_present_but_empty(cl, sb2))
+                shutil.rmtree(sb2, ignore_errors=True)
             if "selector" in probes:
                 rep.probes.append(probe_selector_reaches_fixtures(cl))
             if "blocks" in probes:
@@ -1194,7 +1327,7 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
     return reports
 
 
-ALL_PROBES = ["empty", "prose", "zero", "writes", "selector",
+ALL_PROBES = ["empty", "prose", "zero", "writes", "empty_output", "selector",
               "blocks", "depth", "spelling"]
 
 
@@ -1241,6 +1374,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     # the shape this file exists to find, in this file.
     unmeasured = [r for r in reports if r.worst == NA]
     blocking_liars = [r for r in liars if r.kind == "program_exit_zero"]
+    # N/A IS ITS OWN BUCKET, AND USED NOT TO BE (vibe-ic#1115).
+    #
+    # `CLEAN` was computed by SUBTRACTION — reports minus liar minus suspect
+    # minus guarded — so a clause on which every probe returned N/A, meaning the
+    # question could not be asked at all, was counted as CLEAN. That is the
+    # exact rule #1115 states ("an absent input is not measured, and
+    # not-measured must never render as passed"), committed by the instrument
+    # built to hunt it. Found by its own new probe's control test.
+    #
+    # CLEAN is now counted POSITIVELY. Subtraction is what let this hide: any
+    # verdict nobody thought to bucket silently became a pass.
     # every discounted probe result, however its clause was finally scored
     discounted = sum(1 for r in reports for p in r.probes if p.verdict == GUARDED)
     clean = (len(reports) - len(liars) - len(suspects)
