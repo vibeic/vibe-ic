@@ -1,0 +1,8 @@
+{
+  "_fixture": "SYNTHESIZED MATRIX FIXTURE \u2014 not a real run artefact (vibe-ic#1028)",
+  "_declared_path": "phase3/stage4/foundry_handoff/corner_test_vectors.json",
+  "_declared_size_bytes": 1069,
+  "_generated_by": "matrix_corpus_gen.py",
+  "verdict": "PASS",
+  "_representative_of_kind": "json report"
+}

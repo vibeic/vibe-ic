@@ -58,12 +58,34 @@ CORPUS = HERE / "matrix_corpus"
 #: Run roots whose evidence PR #1028 withdraws, mapped to the fixture alias
 #: that replaces them. The alias is deliberately NOT the published path: a
 #: reader must never mistake a fixture for the cell it stands in for.
+#: The four roots the manifest REGISTERED get a cell each. The three below them
+#: were never registered as run roots, but entries name them as the run that
+#: produced an artefact, and on `origin/main` those artefacts resolved because
+#: the published trees carried them. #1028 withdraws those trees too, so they
+#: are backed here as well — folded into the cell whose flow they belong to
+#: rather than given a root of their own, because the manifest has no root for
+#: them to be.
 ALIASES = {
     "benchmark-data/ic/sha256": "digital_hash_cell",
     "benchmark-data/ic/spm/v1.9.96_gf180mcuD": "digital_full_flow_cell",
     "benchmark-data/ic/u_hawaii_adc": "analog_track_cell",
     "benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A": "analog_published_cell",
+    "benchmark-data/ic/sha256/clean_run_v1427_20260715": "digital_hash_cell",
+    "benchmark-data/ic/subservient": "digital_full_flow_cell",
+    "benchmark-data/ic/caravel_user_project": "digital_full_flow_cell",
 }
+
+#: Roots that live on a campaign HOST, not in this repository. #527 stopped
+#: consulting them on every host, so their entries were already unevidenced
+#: BEFORE #1028 and are NOT this PR's to back. Listed so the split between
+#: "withdrawn by #1028" and "never in the repo" is stated, not implied.
+HOST_ONLY_ROOTS = (
+    "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
+    "AI_IC_design/4th_benchmark/cv32e40p_e2e",
+    "AI_IC_design/4th_benchmark/ibex_e2e",
+    "campaign_pdk/spm/_aborted_tmpplugin_run",
+    "campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721",
+)
 
 #: Extensions the repository refuses to commit anywhere outside
 #: `benchmark-data/ic/**`. Not a policy invented here — see the module
@@ -124,9 +146,11 @@ def plan():
     seen, out = set(), []
     for _sid, step in man["steps"].items():
         for _key, e in (step.get("entries") or {}).items():
-            if not isinstance(e, dict) or e.get("status") != "PRODUCED_BY_RUN":
+            if not isinstance(e, dict):
                 continue
-            alias = ALIASES.get(e.get("run"))
+            if e.get("status") not in ("PRODUCED_BY_RUN", "PRODUCED_LIVE"):
+                continue
+            alias = ALIASES.get(e.get("run") or e.get("base_run"))
             if alias is None:
                 continue
             rel = e.get("path")
