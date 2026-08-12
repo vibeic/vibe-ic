@@ -490,8 +490,31 @@ steps:
       - "reports/phase1/extraction_coverage_report.md"
       - "reports/phase1/extraction_coverage_report.json"
     gate:
-      files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
-      any_of: true
+      # vibe-ic#1092 / d4 — ALL THREE declared deliverables are measured.
+      #
+      # This was a single any_of over the RTL globs, so two of the three
+      # `required_outputs` entries above were promised and read by no clause.
+      # `required_outputs` is ALL-of-N ACROSS entries (flow_compliance_check.py
+      # :8966 states it, :8980-:8996 executes it, :9479 demotes a passing gate
+      # to MISSING on it) — only ' OR ' INSIDE one entry is any-of. So the
+      # coverage report was a separate deliverable, not an alternative spelling
+      # of the RTL.
+      #
+      # Repaired on the GATE side rather than by dropping the entries: the
+      # reports are really produced (32 of the 40 tracked project roots that
+      # carry step-1 RTL also carry both), and a step that stopped claiming them
+      # would be the flow promising less instead of the gate measuring more.
+      all_of:
+        - files_exist:
+            - "phase2/stage1/rtl/*.sv"
+            - "phase2/stage1/rtl/*.v"
+          any_of: true
+        # BOTH, and not any_of: the .md is the human diagnostic and the .json is
+        # what `extraction_coverage_check` and the audit read. One without the
+        # other is half a deliverable, and the step declares them separately.
+        - files_exist:
+            - "reports/phase1/extraction_coverage_report.md"
+            - "reports/phase1/extraction_coverage_report.json"
     # The dependency was always REAL and never DECLARED. D1 is the sole member
     # of stage_phase1 and its L1-L27 output is, in this file's own words, "the
     # universal handoff to Phase 2" — spec-to-RTL literally reads
