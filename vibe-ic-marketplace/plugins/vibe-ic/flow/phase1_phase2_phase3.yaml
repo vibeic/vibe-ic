@@ -489,9 +489,41 @@ steps:
       # extraction_patterns.json reached generated_docs/L*.json.
       - "reports/phase1/extraction_coverage_report.md"
       - "reports/phase1/extraction_coverage_report.json"
+    # vibe-ic#1092 — the gate measured ONE of the three deliverables above.
+    #
+    # `required_outputs` is ALL-of-N ACROSS entries (only `" OR "` INSIDE one
+    # entry is any-of), so the two extraction-coverage reports were separate
+    # mandatory deliverables — this file calls them "Mandatory deliverable" in
+    # its own words at :487 — that no clause of this gate could see. d4
+    # (`criteria_match`) is the dimension that reports exactly that mismatch,
+    # and it was the single failing node on main that no open PR touched.
+    #
+    # REPAIRED ON THE GATE SIDE, NOT THE CLAIM SIDE. d4 deliberately "does not
+    # choose which side is wrong", so the choice is made here and on evidence:
+    # of the 9 published cells, all 7 that produced stage-1 RTL also produced
+    # BOTH reports; the only 2 without them (spm, u_hawaii_adc) have zero RTL,
+    # i.e. they never ran this step at all. So the claim is satisfiable and
+    # already satisfied in practice — the measurement, not the claim, was the
+    # thing that was wrong. Deleting the entries would have made d4 green by
+    # withdrawing a mandatory deliverable, which is the failure mode this
+    # dimension exists to catch.
+    #
+    # SHAPE: `all_of` of three clauses, because the top-level `any_of: true`
+    # applied to ONE `files_exist` list and would have made the two reports
+    # ALTERNATIVES to the RTL rather than companions of it — a gate that got
+    # weaker while appearing to check more. The RTL's two spellings keep their
+    # own `any_of` INSIDE their clause, which is the `" OR "` in the entry.
+    # Step 27 is the shipped precedent for this exact nesting (31 in this file).
+    #
+    # The AUDIT NOTE above still holds: this gate stays files_exist-only. It
+    # gained no deterministic spec->RTL checker, only the two artefacts the
+    # step already said it delivers.
     gate:
-      files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
-      any_of: true
+      all_of:
+        - files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
+          any_of: true
+        - files_exist: ["reports/phase1/extraction_coverage_report.md"]
+        - files_exist: ["reports/phase1/extraction_coverage_report.json"]
     # The dependency was always REAL and never DECLARED. D1 is the sole member
     # of stage_phase1 and its L1-L27 output is, in this file's own words, "the
     # universal handoff to Phase 2" — spec-to-RTL literally reads
