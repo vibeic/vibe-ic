@@ -142,6 +142,62 @@ def _representative(rel: str, declared_bytes: int) -> str:
     return f"# {note}\nstatus: representative\n"
 
 
+def _existed_on_main(root: str, rel: str) -> bool:
+    """Did the WITHDRAWN cell actually carry this artefact at origin/main?
+
+    Asked of git, not of the manifest — see the call site for the step-12
+    measurement that made this necessary. A declaration is a claim about the
+    past; ``git cat-file -e`` is the tree.
+    """
+    import subprocess
+    for ref in ("origin/main", "main"):
+        r = subprocess.run(
+            ["git", "cat-file", "-e", f"{ref}:{root}/{rel}"],
+            cwd=str(HERE), capture_output=True)
+        if r.returncode == 0:
+            return True
+        if b"Not a valid object name" in (r.stderr or b"") and ref == "main":
+            return False
+    return False
+
+
+_LEDGER_CACHE: dict = {}
+
+
+def _ledger_written(root: str):
+    """The set of paths the withdrawn run's OWN write ledger says it produced.
+
+    ``None`` when that cell carried no ledger (then nothing is refuted, exactly
+    as ``ledger_says`` decides it).
+
+    READ, never copied. The ledger is run output and this corpus does not
+    resurrect run output; but omitting an entry the ledger REFUTES is the only
+    way a fixture can preserve the refutation. Without it, step 12 went green:
+    the artefact is present on main at 77802 B, and the cell is red there
+    because the run's ledger records this step as NOT having written it. A
+    fixture cell with no ledger loses that entirely and reports a pass the real
+    cell never gave.
+    """
+    if root in _LEDGER_CACHE:
+        return _LEDGER_CACHE[root]
+    import subprocess
+    out = None
+    for ref in ("origin/main", "main"):
+        r = subprocess.run(
+            ["git", "cat-file", "-p", f"{ref}:{root}/reports/write_ledger.json"],
+            cwd=str(HERE), capture_output=True)
+        if r.returncode == 0:
+            try:
+                doc = json.loads(r.stdout.decode("utf-8", "replace"))
+                out = {w.get("rel") for w in (doc.get("written") or [])
+                       if isinstance(w, dict) and w.get("produced")}
+            except ValueError:
+                out = None
+            break
+    _LEDGER_CACHE[root] = out
+    return out
+
+
 def plan():
     """[(alias, rel, declared_bytes, committable)] for every declared entry."""
     man = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -176,6 +232,27 @@ def plan():
             # names what its producer `writes`.
             rel = e.get("path") or e.get("writes")
             if not rel or (alias, rel) in seen:
+                continue
+            # THE MANIFEST IS NOT EVIDENCE THAT THE ARTEFACT EXISTED.
+            #
+            # MEASURED on step 12: the manifest declares
+            # `phase2/stage2/synth/post_dft_netlist.v` at 77802 B against
+            # `spm/v1.9.96_gf180mcuD`, and that cell on origin/main DOES NOT
+            # CARRY IT — the cell was red there for a real reason. Generating
+            # the artefact from the declaration would close that cell by
+            # circular reasoning: the manifest says it should exist, so we make
+            # it exist, so the test passes. That is a fake green, and it turned
+            # a genuinely-red cell green until this check was added.
+            #
+            # So a fixture may only carry what the WITHDRAWN CELL ACTUALLY HAD
+            # at origin/main. Anything the real cell lacked stays lacking, and
+            # its cell stays red.
+            if not _existed_on_main(root, rel):
+                continue
+            # And if the withdrawn run's own ledger refutes it, the fixture
+            # must not carry it either — see `_ledger_written`.
+            led = _ledger_written(root)
+            if led is not None and rel not in led:
                 continue
             seen.add((alias, rel))
             ok = os.path.splitext(rel)[1].lower() not in UNCOMMITTABLE
