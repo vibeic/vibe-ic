@@ -802,9 +802,15 @@ def leftover_signature(root: Path, site: Dict[str, Any]) -> Optional[str]:
         return None
     if head_value == site["value"]:
         return None
-    if head_value not in site["alternatives"]:
-        # An edit to this literal, but not into the closed set this gate flips
-        # between — so not something this gate could have written.
+    # BOTH ends must be in the closed set, and the working-tree end is the one
+    # that is easy to forget. This gate only ever writes a value FROM
+    # `alternatives`, so a literal that is not one cannot be its leftover no
+    # matter what HEAD says — that is somebody's real edit, and refusing it
+    # would be a guess. Caught by
+    # `test_an_edit_to_the_literal_outside_the_closed_set_is_not_refused`,
+    # which failed against the first version of this condition.
+    if (head_value not in site["alternatives"]
+            or site["value"] not in site["alternatives"]):
         return None
     return (f"this file differs from HEAD AT THIS CALL SITE and HEAD carries "
             f"{head_value!r}, another of this parameter's alternatives "
