@@ -67,6 +67,23 @@ def test_the_image_named_in_a_COMMENT_or_DOCSTRING_is_not_counted(tmp_path):
     assert G.image_gated_sites(d) == []
 
 
+def test_a_NON_SKIP_call_that_names_the_image_is_not_counted(tmp_path):
+    """It must be a `skip`, not merely a call that mentions the image.
+
+    This test exists because a mutant SURVIVED without it: dropping the
+    `name != "skip"` guard still passed, since the comment/docstring case above
+    tests non-CALL prose and says nothing about a `print` or a `fail` whose
+    argument happens to name the container. A gate counting those would report a
+    denominator made of logging.
+    """
+    d = _tests_dir(tmp_path, noisy=(
+        "import pytest\n"
+        "def test_x():\n"
+        "    print('the EDA image is not available here')\n"
+        "    pytest.fail('vibeic-eda container not available')\n"))
+    assert G.image_gated_sites(d) == []
+
+
 def test_a_skip_for_an_unrelated_reason_is_not_counted(tmp_path):
     d = _tests_dir(tmp_path, other=(
         "import pytest\n"
