@@ -49,9 +49,9 @@ FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 # (consumer, producer) -> why it is still open. SHRINK-ONLY.
 KNOWN_UNGUARDED = {
     ("A1", "D1"): "#1070 deferred: transitive, would newly route 44 of 71 steps "
-                  "through D1; needs its own landing with a corpus number",
-    ("25", "24"): "#1070 deferred: transitive, 18 of 71 steps once M1->37 exists "
-                  "(14 before it)",
+                  "through D1 — 62% of the flow. Needs its own landing with a "
+                  "corpus number, and the DECLARED_ROOTS entry that baselines A1 "
+                  "as an entry point re-read against it.",
 }
 
 
@@ -107,6 +107,18 @@ def _unguarded():
 # ---------------------------------------------------------------------------
 # the edge this PR declares
 # ---------------------------------------------------------------------------
+def test_25_orders_the_ir_drop_output_it_consumes_wholesale():
+    """Step 25 declares `from: 24, outputs: all` — EM consumes EVERY output of
+    the IR-drop step. Without the ordering edge a FAILED IR-drop left an
+    electromigration LIFETIME verdict standing at PASS over those numbers."""
+    _steps_, _ids, _blocks, ancestry = _graph()
+    assert "24" in ancestry("25"), (
+        "step 25 declares `required_inputs: from: 24, outputs: all` and 24 is "
+        "not in its transitive blocks_on ancestry, so a FAILED IR-drop cannot "
+        "contradict a PASSing EM check")
+    assert ("25", "24") not in _unguarded()
+
+
 def test_M1_orders_the_gds_it_declares_it_reads():
     """M1 consumes `phase3/stage4/gds/*.gds` from step 37. Without the ordering
     edge a FAILED stream-out left the A+D merge that consumes its GDS at PASS."""
@@ -155,7 +167,7 @@ def test_the_allowlist_does_not_outlive_its_truth():
 
 def test_the_debt_is_exactly_what_1070_measured():
     """Pinned so the count cannot drift upward quietly under a passing suite."""
-    assert len(_unguarded()) == 2, sorted(_unguarded())
+    assert len(_unguarded()) == 1, sorted(_unguarded())
 
 
 @pytest.mark.parametrize("consumer,producer", sorted(KNOWN_UNGUARDED))

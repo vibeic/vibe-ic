@@ -3271,7 +3271,17 @@ steps:
         # measured and rejected — no published run carries a tech LEF, so its
         # honest rc 3 SKIP would have failed the step on all of them.
         - program_exit_zero: "em_peak_current_authority_check . --json reports/phase3/em_current_authority.json"
-    blocks_on: [22]
+    # 24 ADDED (vibe-ic#1070). Step 25's own required_inputs already said
+    # `from: 24, outputs: all` — EM consumes EVERY declared output of the
+    # IR-drop step. blocks_on named only 22, and
+    # flow_step_execution_coverage_check.analyze() is the ONLY consumer that
+    # can contradict a step which passed its own gate over an input whose
+    # PRODUCER failed. Outside the transitive ancestry that guard is disarmed
+    # for the edge, so a FAILED IR-drop left the EM sign-off — an
+    # electromigration LIFETIME verdict — standing at PASS over numbers it
+    # consumes wholesale. Same shape as the step-1/D1 defect this flow
+    # already paid for; declaring the edge arms the guard that exists.
+    blocks_on: [22, 24]
 
   - id: 26
     name: "🔁 Antenna check (gate-oxide protection)"
