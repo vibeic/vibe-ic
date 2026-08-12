@@ -1,8 +1,0 @@
-{
-  "_fixture": "SYNTHESIZED MATRIX FIXTURE \u2014 not a real run artefact (vibe-ic#1028)",
-  "_declared_path": "phase3/mixed_signal/cosim/mixed_signal_results.json",
-  "_declared_size_bytes": 964,
-  "_generated_by": "matrix_corpus_gen.py",
-  "verdict": "PASS",
-  "_representative_of_kind": "json report"
-}

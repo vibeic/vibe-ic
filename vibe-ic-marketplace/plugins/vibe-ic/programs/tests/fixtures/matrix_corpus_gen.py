@@ -153,13 +153,23 @@ def plan():
             if e.get("status") not in ("PRODUCED_BY_RUN", "PRODUCED_LIVE"):
                 continue
             root = e.get("run") or e.get("base_run")
-            # An entry whose root is HOST-ONLY still passed on origin/main:
-            # `check_entry` finds no admissible root for it, falls through to
-            # `resolve_anywhere`, and the PUBLISHED corpus carried a matching
-            # artefact. #1028 removes that corpus, so the fixture corpus — now
-            # the admissible corpus — carries it instead. This restores exactly
-            # what main answered, it does not invent a new pass.
-            alias = ALIASES.get(root, DEFAULT_ALIAS if root else None)
+            # ONLY roots #1028 withdrew are backed here.
+            #
+            # An earlier revision of this generator gave every unrecognised
+            # root a default cell, on the reasoning that host-root entries had
+            # passed on `origin/main` via `resolve_anywhere` finding a match in
+            # the published corpus. MEASURED, that was wrong in the way that
+            # matters: it turned EIGHT cells green that are RED on main —
+            # steps 12, 30, 32, M2, M3, M4 and two population guards. Those
+            # cells are red BY POLICY. `UNEVIDENCED_CELLS` and this module's
+            # own docstring say committing the real run trees is what closes
+            # them; closing them with synthesized fixtures instead would be
+            # precisely the "green square that means nothing" this corpus
+            # exists to prevent, and it would have read as #1028 repairing
+            # something it deleted.
+            #
+            # So a host-only root gets NOTHING here and its cell stays red.
+            alias = ALIASES.get(root)
             if alias is None:
                 continue
             # PRODUCED_BY_RUN records the artefact as `path`; PRODUCED_LIVE
