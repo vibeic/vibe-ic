@@ -285,6 +285,29 @@ def _describe(step_id, findings):
     return "\n".join(lines)
 
 
+#: W2 findings that the PUBLISHED write records evidenced, measured on
+#: ``origin/main`` immediately before PR #1028 withdrew the run roots that
+#: carried them (``spm/v1.10.18_sky130A`` and ``spm/v1.9.96_gf180mcuD``).
+#:
+#: WHY THIS PIN EXISTS. Those two cells were W2's only producer evidence beyond
+#: the AST. Withdrawing them made six red cells go green — not because the flow
+#: yaml started declaring these artefacts, but because the evidence that they
+#: are produced stopped being readable. A dimension that goes quiet when its
+#: evidence is deleted reports a repair it did not perform, which is exactly
+#: what this PR must never do. So the finding is carried here as a DEBT: each
+#: path stays charged against its step until the flow declares it (or a waiver
+#: with evidence retires it). Deleting a row to get green is the one edit this
+#: pin forbids.
+WITHDRAWN_EVIDENCE_W2_DEBT: Dict[str, Tuple[str, ...]] = {
+    "11": ("phase2/stage2/dft/coverage.yml",),
+    "24": ("reports/phase3/dynamic_ir.json",),
+    "27": ("reports/phase3/si_mcf_sta.json",),
+    "34": ("reports/phase3/cmp_fill_emit.json",),
+    "D1": ("reports/audit/phase1/expert_parse_track.json",),
+    "M2": ("phase1/generated_docs/L21_POWER_INTENT.json",),
+}
+
+
 @pytest.mark.parametrize("cell", _params(), ids=lambda c: f"step{c.step_id}")
 def test_d7_required_outputs_list_is_complete(cell, record_property):
     """Every load-bearing artefact step S emits is named in S's required_outputs.
@@ -331,6 +354,27 @@ def test_d7_required_outputs_list_is_complete(cell, record_property):
     )
 
     findings = G.findings_for(sid)
+
+    # A debt charged by evidence this PR withdrew stays charged. It is settled
+    # ONLY by the flow declaring the artefact — never by the evidence for it
+    # becoming unreadable.
+    # str(): numeric steps carry an int step_id, lettered ones a str.
+    debt = WITHDRAWN_EVIDENCE_W2_DEBT.get(str(sid), ())
+    unsettled = tuple(p for p in debt if G.declaring_entry(p) is None)
+    assert not unsettled, (
+        f"step {sid}: required_outputs is INCOMPLETE — "
+        f"{len(unsettled)} load-bearing artefact(s) it never declares, carried "
+        f"as debt because the evidence was WITHDRAWN, not because it was "
+        f"fixed:\n"
+        + "".join(f"    * [W2:produced_consumed_undeclared] {p!r} — measured "
+                  f"on origin/main against the published write records of "
+                  f"spm/v1.10.18_sky130A and spm/v1.9.96_gf180mcuD, which "
+                  f"PR #1028 withdrew\n" for p in unsettled)
+        + f"  This cell was RED before the withdrawal and the flow yaml has "
+          f"not changed since. Declare the artefact in step {sid}'s "
+          f"required_outputs, or retire it with an evidenced waiver — do not "
+          f"drop the row from WITHDRAWN_EVIDENCE_W2_DEBT.")
+
     assert not findings, _describe(sid, findings)
 
 
@@ -1449,6 +1493,31 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: yaml or waived with evidence — not discovered later from a cell that
 #: quietly changed colour.
 RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+
+
+def test_the_withdrawn_evidence_debt_is_actually_charged():
+    """The debt pin must bind to real cells, and must still be a debt.
+
+    Both halves are load-bearing and both were measured wrong once. The keys
+    are matched against ``cell.step_id``, which is an ``int`` for numeric steps
+    and a ``str`` for lettered ones — a pin keyed only by ``str`` silently
+    charged nothing on steps 11/24/27/34 while looking entirely correct. And a
+    row whose artefact HAS since been declared is no longer a debt: it must be
+    removed deliberately, not left to rot into a pin that asserts nothing.
+    """
+    real = {str(c.values[0].step_id) for c in _params()}
+    unbound = sorted(k for k in WITHDRAWN_EVIDENCE_W2_DEBT if k not in real)
+    assert not unbound, (
+        f"debt pinned against step(s) that no cell carries: {unbound}. "
+        f"A key that matches nothing charges nothing and reads as settled.")
+
+    settled = {sid: [p for p in paths if G.declaring_entry(p) is not None]
+               for sid, paths in WITHDRAWN_EVIDENCE_W2_DEBT.items()}
+    settled = {k: v for k, v in settled.items() if v}
+    assert not settled, (
+        f"these artefacts are now DECLARED by the flow, so they are no longer "
+        f"debt: {settled}. Remove the settled row(s) from "
+        f"WITHDRAWN_EVIDENCE_W2_DEBT in the same commit that declared them.")
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():
