@@ -107,7 +107,7 @@ def _run(root: Path, gate_lines: str, *args: str):
     rec = root / "record.json"
     proc = subprocess.run(
         ["bash", str(script), "--summary-json", str(rec), *args],
-        cwd=str(root), capture_output=True, text=True, timeout=120)
+        cwd=str(root), capture_output=True, text=True, timeout=60)
     doc = json.loads(rec.read_text()) if rec.is_file() else None
     return proc, doc
 
@@ -308,7 +308,7 @@ def test_an_unreadable_clock_refuses_rather_than_making_exemptions_immortal(tmp_
     import os
     env = dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}")
     proc = subprocess.run(["bash", str(script)], cwd=str(root), env=env,
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=60)
     text = proc.stdout + proc.stderr
     assert proc.returncode == 2, (
         "an unreadable clock let a long-expired exemption through — every "
@@ -419,7 +419,7 @@ def test_the_real_hygiene_script_declares_every_tolerance_it_takes():
         rec = Path(td) / "record.json"
         out = subprocess.run(
             ["bash", str(_SCRIPT), "--list", "--summary-json", str(rec)],
-            cwd=str(_REPO), capture_output=True, text=True, timeout=120)
+            cwd=str(_REPO), capture_output=True, text=True, timeout=60)
         assert out.returncode == 0, (
             "the shipped hygiene script is mis-wired:\n"
             f"{out.stdout}\n{out.stderr}")
