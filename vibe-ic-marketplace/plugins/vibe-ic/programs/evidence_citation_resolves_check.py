@@ -81,6 +81,30 @@ from typing import Dict, List, Optional, Tuple
 # judges "the proof you pointed at is missing", not "every path in prose".
 _EVIDENCE_EXT = (".log", ".rpt", ".sby")
 
+# DOCUMENTS a reader is sent to (vibe-ic#1044, second half). A sign-off document
+# that says "see `u_hawaii_adc/RESULT.md`" and ships no such file is exactly as
+# unverifiable as one pointing at a missing log — and #1044's own consequence
+# line is about these, not about logs: the four artefacts #1028 deletes that
+# `METHODOLOGY.md` cites are `.md` files.
+#
+# THE DIRECTORY COMPONENT IS THE DISCRIMINATOR, and it is what keeps this from
+# manufacturing findings. Measured over the default scope, unresolved `.md`
+# citations split cleanly in two:
+#
+#     56  BARE filename       `RESULT.md`, `SOURCE_MANIFEST.md`
+#     52  carries a directory `u_hawaii_adc/RESULT.md`, `spm/RESULT.md`
+#
+# A bare `RESULT.md` names a KIND of document — every run has one, and the
+# sentence "each run ships a RESULT.md" claims no particular file exists.
+# `u_hawaii_adc/RESULT.md` names ONE. Judging the first class would fire on
+# 56 legitimately-complete documents, which is a bug in the gate rather than a
+# finding; judging the second catches every citation #1044 names.
+#
+# Same shape of rule as the comma-in-a-brace-group one above: the notation the
+# author used says which of the two they meant, and the gate reads it rather
+# than guessing.
+_DOCUMENT_EXT = (".md",)
+
 # A backticked token that looks like a file path. Anchored so prose in
 # backticks (a command line, a sentence) is never mistaken for a citation.
 #
@@ -223,8 +247,38 @@ def tracked_files(root: Path) -> Optional[set]:
     return {n for n in names}
 
 
+
+def _resolves_outside_the_scan_root(cite: str, root: Path) -> bool:
+    """Does `cite` name a real file that simply lives ABOVE the scan root?
+
+    Structural, and it consults the filesystem rather than a list of directory
+    names — a name list would rot the moment a top-level directory is added,
+    and this file already argues that case for `_REPO_TOOL_DIRS` elsewhere in
+    the repo. Walks up from the root and asks whether the citation resolves
+    against any ancestor; if it does, the document is correct and this gate is
+    simply not the one that judges it.
+    """
+    if Path(cite).is_absolute():
+        return False              # absolute is non-portable; already never resolvable
+    base = root.parent
+    for _ in range(4):            # benchmark-data/ic -> benchmark-data -> repo root
+        try:
+            if (base / cite).is_file():
+                return True
+        except OSError:
+            return False
+        if base.parent == base:
+            break
+        base = base.parent
+    return False
+
 def _is_citation(tok: str) -> bool:
-    if not tok.lower().endswith(_EVIDENCE_EXT):
+    low = tok.lower()
+    if low.endswith(_EVIDENCE_EXT):
+        pass
+    elif low.endswith(_DOCUMENT_EXT) and "/" in tok:
+        pass                      # see `_DOCUMENT_EXT`: the directory is the claim
+    else:
         return False
     if _TEMPLATE_RE.search(tok):
         return False
@@ -393,6 +447,7 @@ def scan(root: Path, tracked: Optional[set] = None
     dangling: List[Dict[str, str]] = []
     zero_docs: List[str] = []
     oversize: List[Dict[str, str]] = []
+    outside: List[Dict[str, str]] = []
     disclosed = _disclosed_map(root, tracked)
     cited = 0
     docs = 0
@@ -428,6 +483,15 @@ def scan(root: Path, tracked: Optional[set] = None
                     _d = str(md.relative_to(root))
                     if (_d, tok) in disclosed:
                         continue
+                    if _resolves_outside_the_scan_root(tok, root):
+                        # The artefact EXISTS; it just lives above this gate's
+                        # root, so the resolution ladder — which stops at the
+                        # root on purpose — cannot see it. Measured: 7 such
+                        # citations. Calling them dangling would be the gate
+                        # reporting its own scope as the document's defect,
+                        # which is the exact failure #1044 is about.
+                        outside.append({"doc": _d, "citation": tok})
+                        continue
                     dangling.append({"doc": _d, "citation": tok})
         if not _contributed:
             zero_docs.append(str(md.relative_to(root)))
@@ -444,7 +508,7 @@ def scan(root: Path, tracked: Optional[set] = None
                 if (_d, tok) in disclosed:
                     continue
                 dangling.append({"doc": _d, "citation": f"[{field}] {tok}"})
-    return dangling, cited, docs, zero_docs, oversize
+    return dangling, cited, docs, zero_docs, oversize, outside
 
 
 def _working_tree_dirt(root: Path) -> List[str]:
@@ -525,7 +589,7 @@ def main(argv=None) -> int:
     baseline_path = (Path(args.baseline) if args.baseline
                      else root.parent / _BASELINE_NAME)
     tracked = tracked_files(root)
-    dangling, cited, docs, zero_docs, oversize = scan(root, tracked)
+    dangling, cited, docs, zero_docs, oversize, outside = scan(root, tracked)
     now = sorted({_key(d) for d in dangling})
 
     if args.write_baseline:
@@ -599,6 +663,7 @@ def main(argv=None) -> int:
         # was introduced.
         "docs_contributing_zero_citations": len(zero_docs),
         "oversize_tokens": oversize,
+        "out_of_scan_root": len(outside),
         "baseline_size": (len(base) if base is not None else None),
         "new_dangling": findings,
         "stale_baseline_entries": stale,
@@ -609,6 +674,10 @@ def main(argv=None) -> int:
 
     print(f"evidence_citation_resolves_check: {docs} doc(s), "
           f"{cited} citation(s) checked under {root}")
+    if outside:
+        print(f"  OUT OF SCOPE   : {len(outside)} citation(s) resolve against the "
+              f"repository but ABOVE this gate's scan root — the document is "
+              f"correct and this gate is not the one that judges it")
     print(f"  contributed 0  : {len(zero_docs)} of {docs} document(s) yielded "
           f"NO citation this extractor can see — not evidence of cleanliness, "
           f"and the number that exposes a notation it is blind to (#1044)")
