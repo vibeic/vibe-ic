@@ -404,3 +404,113 @@ def test_the_gate_that_wrote_still_records_its_own_verdict(tmp_path):
     assert states["a writer that passes"] == "PASS", (
         "the write overwrote the gate's own verdict in the record:\n"
         f"{states}\n{out.stdout}{out.stderr}")
+
+
+# --------------------------------------------------------------------------
+# isolation — the user's instinct, priced and bounded
+# --------------------------------------------------------------------------
+def test_an_isolated_mutator_leaves_the_shared_tree_untouched(tmp_path):
+    """The two arms of the fix, on one fixture.
+
+    ARM 1: the declared mutator runs in the shared tree and leaves its artefact
+           there, where every gate after it will read it.
+    ARM 2: the same gate, the same command, isolated — and the shared tree is
+           byte-identical afterwards.
+    """
+    r = _repo(tmp_path)
+    _leaver(r, "declared", "src/left.txt")
+    line = (f'run_mutating_the_tree "declared mutator" "$ROOT" '
+            f'python3 "{r}/declared.py"\n')
+
+    a = _run(r, line, mode="report")
+    assert (r / "src" / "left.txt").exists(), (
+        "arm 1 did not construct the contamination, so arm 2 proves nothing:\n"
+        + a.stdout + a.stderr)
+    (r / "src" / "left.txt").unlink()
+
+    env = {"GATE_TREE_ISOLATE": "1"}
+    import os as _os
+    s = r / "tools" / "ci" / "gates.sh"
+    b = subprocess.run(
+        ["bash", str(s)], cwd=str(r), capture_output=True, text=True,
+        timeout=_T,
+        env={"PATH": _os.environ["PATH"],
+             "HOME": _os.environ.get("HOME", str(r)),
+             "GATE_TREE_GUARD": "report", **env})
+    text = b.stdout + b.stderr
+    assert "isolated: running in a throwaway checkout" in text, text
+    assert not (r / "src" / "left.txt").exists(), (
+        "the gate wrote into the shared tree despite isolation — the "
+        f"substitution did not reach its paths:\n{text}")
+    assert "WROTE INTO THE SOURCE TREE" not in text, text
+
+
+def test_isolation_that_could_not_be_obtained_says_so(tmp_path):
+    """"I asked for isolation" must never be indistinguishable from "I got it".
+
+    A non-repository cannot produce a worktree, and the gate then runs in the
+    shared tree exactly as it would have without the flag — which is safe only
+    because it is LOUD.
+    """
+    r = tmp_path / "notarepo"
+    (r / "tools" / "ci").mkdir(parents=True)
+    (r / "src").mkdir()
+    _leaver(r, "declared", "src/left.txt")
+    s = r / "tools" / "ci" / "gates.sh"
+    s.write_text(textwrap.dedent(f"""\
+        set -euo pipefail
+        ROOT="{r}"
+        . "{_LIB}"
+        gate_dispatch_init "$@"
+        run_mutating_the_tree "m" "$ROOT" python3 "{r}/declared.py"
+        gate_dispatch_finish
+        """))
+    import os as _os
+    out = subprocess.run(
+        ["bash", str(s)], cwd=str(r), capture_output=True, text=True,
+        timeout=_T,
+        env={"PATH": _os.environ["PATH"],
+             "HOME": _os.environ.get("HOME", str(r)),
+             "GATE_TREE_GUARD": "report", "GATE_TREE_ISOLATE": "1"})
+    assert "ISOLATION ASKED FOR AND NOT OBTAINED" in out.stdout + out.stderr, (
+        out.stdout + out.stderr)
+
+
+# --------------------------------------------------------------------------
+# the landing gate's own full tier
+# --------------------------------------------------------------------------
+_LAND = _REPO / "tools" / "gatekeeper-land.sh"
+
+
+def test_every_full_tier_stage_is_bracketed():
+    """The tier's existing guard is taken around the WHOLE window, which can
+    answer "did the tier write" and not "which stage" — and only the second
+    form is actionable, because the damage is that every stage AFTER the writer
+    measured what it left.
+
+    Wiring is asserted statically for the reason `gate_is_wired_check` exists:
+    running the tier to find out costs ~57 min, so nobody would run it, so the
+    wiring would rot.
+    """
+    src = _LAND.read_text()
+    tier = src.split("--- full tier", 1)[1]
+    for stage in ("targeted tests", "repo hygiene gates", "plugin full audit"):
+        assert (f'stage "{stage}"' in tier
+                or f'stage_bracket "{stage}"' in tier), (
+            f"full-tier stage {stage!r} is not bracketed, so a write it makes "
+            f"is attributed to nothing:\n{tier[:400]}")
+    assert "--deep" in tier, (
+        "the tier's per-stage bracket does not ask for the reverted channel, "
+        "and two of the three known writers put the tree back")
+
+
+def test_the_per_stage_bracket_is_a_report_not_a_second_refusal():
+    """The tier already refuses a write via `--compare "$WG_BASE"`. Stating the
+    same refusal twice would fail one landing twice for one cause; what was
+    missing was never the refusal, it was the ATTRIBUTION."""
+    src = _LAND.read_text()
+    body = src.split("stage_bracket() {", 1)[1].split("\n}", 1)[0]
+    assert "FAILED=1" not in body, (
+        "the per-stage bracket sets the run's failure flag, duplicating the "
+        f"whole-tier refusal below it:\n{body}")
+    assert "REPORT" in body, body

@@ -405,7 +405,33 @@ _dispatch() {
   # the cost and attribute the inner run's writes to an inner gate, when the
   # thing the outer run needs to know is that THIS gate perturbed the tree it
   # was handed. One bracket, at the outermost layer that owns the tree.
+  #
+  # ISOLATION, when the gate DECLARED that it mutates and the run asked for it.
+  # Every argument that names the subject root is rewritten to the throwaway
+  # checkout, and so is the working directory. The substitution is mechanical
+  # and stated rather than clever: a gate is invoked as `<label> <cwd> <cmd…>`
+  # with `$ROOT`-rooted paths, so rewriting the prefix is the whole job. A gate
+  # whose paths are NOT `$ROOT`-rooted is left alone and would still write into
+  # the real tree — the bracket below then says so, which is the property that
+  # makes this safe to get wrong.
+  local iso="" root_now
+  if [ "$may_mutate" -eq 1 ] && [ "$GATE_TREE_ISOLATE" = "1" ]; then
+    root_now="$(_gate_dispatch_corpus_root)"
+    if iso="$(_gate_iso_make)"; then
+      local -a argv=(); local a
+      for a in "$@"; do argv+=("${a/#$root_now/$iso}"); done
+      set -- "${argv[@]}"
+      wd="${wd/#$root_now/$iso}"
+      echo "   ~~ isolated: running in a throwaway checkout of HEAD ($iso)"
+    else
+      iso=""
+      echo "   ^^ ISOLATION ASKED FOR AND NOT OBTAINED for \"$label\": could" \
+           "not stand up a throwaway checkout, so this gate is about to write" \
+           "into the tree every gate after it reads" >&2
+    fi
+  fi
   ( cd "$wd" && GATE_TREE_GUARD=off "$@" ) || rc=$?
+  [ -z "$iso" ] || _gate_iso_drop "$iso"
   local secs=$(( SECONDS - t0 ))
   GATE_SECONDS+=("$secs")
   _dispatch_tree_verdict "$tree_watched" "$may_mutate" "$label" "$secs"
@@ -484,6 +510,58 @@ run_writing_the_corpus() {                # <label> <cwd> <cmd...>
 # because nobody knows which ones need it.
 run_mutating_the_tree() {                 # <label> <cwd> <cmd...>
   _dispatch 0 0 1 "$@"
+}
+
+# --- ISOLATION, and what it actually costs (measured 4b22e36e) --------------
+# `GATE_TREE_ISOLATE=1` runs every `run_mutating_the_tree` gate against a
+# throwaway `git worktree` of HEAD, so it cannot leave anything in the tree the
+# other gates read.
+#
+# THE COST, because the reason to reach for a cheaper fix was an estimate
+# nobody had measured:
+#
+#     git worktree add --detach HEAD    1.8 s warm cache / ~40 s cold
+#     git worktree remove --force       0.5 s
+#     disk, transient                   556 MB (21 779 files)
+#
+# Against a tier that takes ~57 min, isolating the declared mutators is ~2 s
+# each. It is cheap because `git worktree add` writes from the object store
+# rather than copying a working tree. `cp --reflink` is not an alternative
+# here: this host is ext4, which has no CoW; and `cp -al` is actively WRONG,
+# because a gate that writes in place through a hard link corrupts the original
+# — which is the exact damage being prevented.
+#
+# SO WHY IS THIS NOT THE WHOLE FIX. Because it can only be applied to gates
+# somebody has already identified as mutators, and that list has been wrong
+# three times. The bracket above DERIVES the list from behaviour; this isolates
+# what the bracket names. In that order, and not the other way round.
+#
+# OFF BY DEFAULT. Turning it on changes what every declared mutator MEASURES —
+# a gate whose subject is the working checkout (`gate_host_independence_check`
+# compares the checkout against a fresh worktree; `neutered_gate_tree_check`
+# asks what an interrupted probe left in THIS checkout) is answering a question
+# about the tree it is handed, and handing it a different tree does not isolate
+# it, it silently changes its subject. Isolation is correct for a mutator whose
+# subject is the CONTENT at HEAD, and it must be a per-gate decision made by
+# someone who knows which of the two a gate is.
+GATE_TREE_ISOLATE="${GATE_TREE_ISOLATE:-0}"
+
+# Stand up a throwaway checkout of HEAD; print its path. rc 1 = could not.
+_gate_iso_make() {
+  local root; root="$(_gate_dispatch_corpus_root)"
+  [ -n "$root" ] || return 1
+  local d; d="$(mktemp -d -t gate_iso.XXXXXX)" || return 1
+  rmdir "$d" 2>/dev/null
+  git -C "$root" worktree add -q --detach "$d" HEAD >/dev/null 2>&1 || return 1
+  printf '%s\n' "$d"
+}
+
+_gate_iso_drop() {
+  local root d="$1"
+  root="$(_gate_dispatch_corpus_root)"
+  [ -n "$d" ] && [ -d "$d" ] || return 0
+  git -C "$root" worktree remove --force "$d" >/dev/null 2>&1 \
+    || { rm -rf "$d"; git -C "$root" worktree prune >/dev/null 2>&1; }
 }
 
 # --- the only way to wire a gate PER ITEM (vibe-ic#957) ---------------------
@@ -672,6 +750,12 @@ PY
 gate_dispatch_finish() {
   local declared=${#GATE_LABELS[@]} notchecked=0 passed=0 wrote=0 i
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
+  # The tree guard's scratch snapshot (~3 MB on this repo). Removed on BOTH
+  # exit paths below, which is every path through this function. A run killed
+  # before it gets here leaks one file into $TMPDIR — deliberately not fixed
+  # with a `trap … EXIT` here, because this library is SOURCED and would be
+  # overwriting a trap the calling gate script owns.
+  [ -z "$GATE_TREE_SNAP" ] || rm -f "$GATE_TREE_SNAP"
   local refused="" writers=""
   [ -z "$GATE_DISPATCH_SUMMARY_JSON" ] \
     || _gate_dispatch_emit "$GATE_DISPATCH_SUMMARY_JSON"
