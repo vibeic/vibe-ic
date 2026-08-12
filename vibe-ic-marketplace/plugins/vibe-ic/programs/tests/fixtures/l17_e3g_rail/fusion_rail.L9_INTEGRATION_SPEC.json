@@ -1,0 +1,16 @@
+{
+  "layer": "L9",
+  "title": "Integration spec (synthetic test fixture)",
+  "top_level_ports": [
+    {
+      "direction": "in",
+      "name": "clk",
+      "width": 1
+    },
+    {
+      "direction": "in",
+      "name": "rst_n",
+      "width": 1
+    }
+  ]
+}
