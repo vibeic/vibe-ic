@@ -530,6 +530,35 @@ def test_d4_selfcheck_cli_probe_can_report_a_rejection():
     )
 
 
+def test_d4_selfcheck_a_WILDCARD_root_still_spans_namespaces():
+    """The namespace guard must not over-tighten into a second false ruler.
+
+    The guard refuses a float-match across top-level namespaces, but a pattern
+    whose ROOT is a glob is a deliberate "anywhere under the project" read and
+    must keep grounding. Measured: of 132 grounded entries across every gated
+    step, exactly ONE rests on a cross-namespace match, and it is this one.
+
+    Pinned against the REAL step-31 entry rather than against a literal pair,
+    so that if the flow stops declaring it this test says so instead of
+    quietly proving something about a string.
+    """
+    entry = "reports/phase3/erc.rpt"
+    assert entry in F.required_outputs(31), (
+        f"this test is anchored to step 31 declaring {entry!r}; it no longer "
+        f"does, so the exemption it pins is pinned to nothing — step 31 "
+        f"declares {F.required_outputs(31)}"
+    )
+    hit = P.ground(31, entry)
+    assert hit is not None, (
+        "the wildcard-root exemption regressed: step 31's own declared "
+        f"{entry!r} is no longer grounded, so the namespace guard has "
+        "over-tightened into a false negative"
+    )
+    assert P.covers("*/phase3/erc.rpt", entry), (
+        "a glob-rooted pattern must still span namespaces"
+    )
+
+
 def test_d4_selfcheck_exec_branch_can_fail_on_an_UNGROUNDED_output(monkeypatch):
     """The EXEC branch must be able to reject a declared output nobody reads.
 
