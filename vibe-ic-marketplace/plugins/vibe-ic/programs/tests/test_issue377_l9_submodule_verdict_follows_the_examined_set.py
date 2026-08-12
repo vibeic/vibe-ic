@@ -242,9 +242,15 @@ def test_no_tracked_document_can_reach_PASS_having_examined_nothing():
     # Pinned separately from `all_skipped`: these are the documents that
     # USED to reach PASS. If this reaches 0 the regression is invisible in
     # every other number here.
-    assert new_arm == 6, (
-        f"expected 6 tracked projects to reach the examined-set-empty arm, "
-        f"saw {new_arm}")
+    # `new_arm == 6` was the corpus' size, and the comment above says what it
+    # was FOR in its own words: "if this reaches 0 the regression is invisible
+    # in every other number here". Zero is the condition; six was the day's
+    # weather. Asserted as the condition, so publishing or withdrawing a cell
+    # no longer breaks it and reaching zero still does.
+    assert new_arm > 0, (
+        "no tracked project reaches the examined-set-empty arm any more, so "
+        "the arm this landing added is exercised by nothing and a regression "
+        "in it would be invisible in every other number here")
     # Pinned so a silent vocabulary drift in the producer shows up as a diff
     # rather than as a quietly shrinking denominator.
     #
