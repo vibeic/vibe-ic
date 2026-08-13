@@ -23,35 +23,20 @@ HARNESS = PLUGIN / "benchmark"
 sys.path.insert(0, str(HARNESS))
 import cvdp_gate as G  # noqa: E402
 
-_HAS_IVERILOG = shutil.which("iverilog") is not None
+#: The guard's definition lives in `_sim_tools` so it exists ONCE rather
+#: than once per file — eight copies of `shutil.which("yosys")` is the
+#: drift shape this repo removes from registries one at a time. Same
+#: semantics: skip only on genuine absence, and name the missing tool.
+#: See that module for the measured 38-test / 8-file cluster.
+from _sim_tools import (  # noqa: E402
+    MISSING as _MISSING_SIM, NEEDS_SIM as _NEEDS_SIM)
 
-#: The gate needs BOTH simulators, and the guard used to name only one.
-#:
-#: `cvdp_gate` refuses (rc=2) when yosys is absent, deliberately and by design:
-#: "refusing to emit responses gated on iverilog alone (a yosys-absent host
-#: degraded the synth gate to a silent no-op PASS, #604)". So a host with
-#: iverilog and WITHOUT yosys is not a host these tests can run on — but the
-#: skipif said only `not _HAS_IVERILOG`, so on such a host all 13 executed and
-#: asserted `rc == 0` against the refusal, failing with a bare `assert 2 == 0`
-#: that names neither tool.
-#:
-#: MEASURED on 8HD-8 (`a38902d16`, iverilog present, yosys absent): 13 failed.
-#: The tests were never capable of passing there; they simply stated half their
-#: precondition. This is not a widening of what is skipped — on a host carrying
-#: both tools every one of them still runs and still asserts exactly what it
-#: did before.
-#:
-#: The reason string names the MISSING tool rather than saying "a tool", so a
-#: reader of the run learns which coverage was lost. A skip is green, and a
-#: green that does not say what it stopped checking is the shape vibe-ic#1128
-#: is about.
-_HAS_YOSYS = shutil.which("yosys") is not None
-_MISSING = [t for t, present in (("iverilog", _HAS_IVERILOG),
-                                 ("yosys", _HAS_YOSYS)) if not present]
-_NEEDS_SIM = pytest.mark.skipif(
-    bool(_MISSING),
-    reason="cvdp_gate needs iverilog AND yosys; missing on this host: "
-           + ", ".join(_MISSING or ["-"]))
+#: Derived from the shared set rather than probed a second time. This
+#: file already guarded 18 OTHER tests on `_HAS_IVERILOG and _HAS_YOSYS`
+#: — the both-tools rule was always this file's intent; the 13 fixed
+#: here were simply left on the older iverilog-only marker.
+_HAS_IVERILOG = "iverilog" not in _MISSING_SIM
+_HAS_YOSYS = "yosys" not in _MISSING_SIM
 
 GOOD = """Here is the fix:
 
@@ -383,7 +368,6 @@ def test_review_report_discloses_iverilog_version(tmp_path):
 
 # ── #531 yosys smoke + #535 transmission integrity ─────────────────────────
 
-_HAS_YOSYS = shutil.which("yosys") is not None
 
 IVERILOG_OK_YOSYS_EMPTY = "```verilog\n// no module at all — just a comment\n```"
 
