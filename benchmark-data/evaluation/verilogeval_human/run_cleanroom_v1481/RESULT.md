@@ -46,6 +46,29 @@ Both fails are Category A2 floors with **this run's** evidence (§ 4.1).
 Machine-checked: `triage_record_check.py` PASS,
 `benchmark_triage_absorption_audit.py` PASS (0 absorbed, 2 floor-exempt).
 
+> **Re-verifiability note (2 floors) — vibe-ic#1293, added 2026-08-13.**
+> The two machine checks cited immediately above are **not re-runnable from this
+> published record.** Both `triage_record_check.py` and
+> `benchmark_triage_absorption_audit.py` take their triage JSON as a *required
+> positional argument*, and no `triage_records*.json` was ever published in this
+> run directory. Across the whole repo exactly one such file exists
+> (`benchmark-data/evaluation/cvdp/run_v1239_converge/`), it belongs to a
+> different corpus, and nothing in `programs/`, `tools/`, `skills/` or `flow/`
+> produces one — the absorption audit is registered NOT WIRED in
+> `checker_skill_only_reasons.json` for precisely this reason.
+>
+> This is a gap in the *evidence trail*, not a retraction. The claim is
+> well-formed and corpus-specific: `PASS (0 absorbed, 2 floor-exempt)` is the
+> program's own output string (`benchmark_triage_absorption_audit.py:446`) and
+> its record count matches the 2 fails enumerated below, so it reads as a real
+> run whose input was simply not committed. But a reader can only *read* it, not
+> *reproduce* it. Treat both as **UNREPRODUCED** until a producer lands and the
+> input is published beside the result.
+>
+> **Scope: the pass@1 headline in §1 is unaffected.** It comes from the official
+> scorer, whose inputs are published; only the §4.2 convergence-bar line depends
+> on the missing file.
+
 ### Prob062_bugs_mux2 — Category A2 — TRUE_FLOOR
 
 This run's scorer re-flagged `suspected_defective_golden` (vetted canonical sample
@@ -113,7 +136,7 @@ both fails proven dataset defects). Official v1.4.81, all four guards PASS.
 | pass@1 | **154/156 = 98.72 %** (identical across all three campaign rounds) |
 | Non-floor residuals | **0** |
 | Floors | 2, both with this-run § 4.1 evidence (A2 / A2) |
-| § 4.2 convergence bar | PASS (0 absorbed, 2 floor-exempt) |
+| § 4.2 convergence bar | PASS (0 absorbed, 2 floor-exempt) — **UNREPRODUCED**, input unpublished (§ 4 note, #1293) |
 | Convergence count | **zero-backlog round #1 of 2** (jointly with VE-v2) |
 
 Next: run /vibe-ic-benchmark verilogeval-human clean-room once more for
