@@ -37,6 +37,24 @@ OLDER = IC / "sha256" / "clean_run_v1422_20260715"
 FORGEABLE = ("drc_report_check", (".",))
 DEFENDING = ("sta_report_check", (".", "--mode", "sta"))
 
+#: The bound on every CLI subprocess below (vibe-ic#1241).
+#:
+#: WHY NOT 1500. `--timeout-method=thread` kills the SESSION rather than the
+#: test, so an inner bound above the harness's own can never fire: pytest ends
+#: the run at 180 s first and every other file in the subset loses its verdict.
+#: `ci_harness_timeout_ceiling_check` resolves the ceiling from the workflows
+#: as `min(180, 300) // 3` = 60 s. 1500 s was 25x the harness itself.
+#:
+#: WHY 45 AND NOT 60. Chosen from the clock, not by lowering 1500 until the
+#: gate went quiet — these tests DO real work (the CLI runs `FORGEABLE` over a
+#: published cell), so the measurement is the point. With the corpus present
+#: the whole 21-test file runs in 33.57 s and its slowest bounded test is
+#: 9.28 s, so 45 s is ~4.8x the slowest measured call. It stays clear of the
+#: 60 s ceiling rather than sitting on it: a bound exactly at the limit is one
+#: workflow edit away from being a violation again, and each test here makes
+#: ONE such call, so it needs no more.
+_CLI_BOUND_S = 45
+
 _corpus = pytest.mark.skipif(
     not (CELL.is_dir() and DONOR.is_dir()),
     reason="published cells absent from this checkout")
@@ -227,7 +245,7 @@ def test_the_cli_reports_the_forgery_and_exits_1():
     """The shipped CLI, in a subprocess, because the exit code is the product."""
     r = subprocess.run(
         [sys.executable, str(PROG), str(CELL), "--donor", str(DONOR)],
-        capture_output=True, text=True, timeout=1500)
+        capture_output=True, text=True, timeout=_CLI_BOUND_S)
     assert r.returncode == 1, (r.returncode, r.stdout[-800:], r.stderr[-400:])
     assert "FORGED GREEN" in r.stdout, r.stdout[-800:]
     assert "P0 integrity defect" in r.stdout, r.stdout[-800:]
@@ -241,7 +259,7 @@ def test_the_json_report_round_trips(tmp_path):
     AA.run_campaign(PLUGIN, CELL, DONOR, None, gates=(FORGEABLE,))
     r = subprocess.run(
         [sys.executable, str(PROG), str(CELL), "--donor", str(DONOR),
-         "--json", str(out)], capture_output=True, text=True, timeout=1500)
+         "--json", str(out)], capture_output=True, text=True, timeout=_CLI_BOUND_S)
     assert r.returncode == 1, r.stdout[-400:]
     doc = json.loads(out.read_text())
     assert doc["schema"] == AA.SCHEMA
