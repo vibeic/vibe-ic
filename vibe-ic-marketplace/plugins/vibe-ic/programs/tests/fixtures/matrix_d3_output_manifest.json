@@ -168,6 +168,20 @@
           "alternative": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
           "path": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
           "size_bytes": 3207
+        },
+        "reports/phase1/extraction_coverage_report.md": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase1/extraction_coverage_report.md",
+          "path": "reports/phase1/extraction_coverage_report.md",
+          "size_bytes": 1694
+        },
+        "reports/phase1/extraction_coverage_report.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase1/extraction_coverage_report.json",
+          "path": "reports/phase1/extraction_coverage_report.json",
+          "size_bytes": 4610
         }
       }
     },
@@ -180,20 +194,6 @@
           "alternative": "phase2/stage1/rtl/*.v",
           "path": "phase2/stage1/rtl/spm.v",
           "size_bytes": 5442
-        },
-        "reports/phase1/extraction_coverage_report.md": {
-          "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "alternative": "reports/phase1/extraction_coverage_report.md",
-          "path": "reports/phase1/extraction_coverage_report.md",
-          "size_bytes": 1415
-        },
-        "reports/phase1/extraction_coverage_report.json": {
-          "status": "PRODUCED_BY_RUN",
-          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "alternative": "reports/phase1/extraction_coverage_report.json",
-          "path": "reports/phase1/extraction_coverage_report.json",
-          "size_bytes": 3139
         }
       }
     },
@@ -992,7 +992,7 @@
         },
         "reports/phase3/lvs.json": {
           "status": "PRODUCED_BY_RUN",
-          "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) \u2014 same class as perc_signoff.json above.",
+          "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) — same class as perc_signoff.json above.",
           "run": "benchmark-data/ic/caravel_user_project",
           "alternative": "reports/phase3/lvs.json",
           "path": "reports/phase3/lvs.json",
@@ -1000,7 +1000,7 @@
         },
         "reports/phase2/gates/erc_density.json": {
           "status": "PRODUCED_BY_RUN",
-          "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) \u2014 same class as perc_signoff.json above.",
+          "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) — same class as perc_signoff.json above.",
           "run": "benchmark-data/ic/caravel_user_project",
           "alternative": "reports/phase2/gates/erc_density.json",
           "path": "reports/phase2/gates/erc_density.json",
