@@ -496,8 +496,28 @@ def test_shipped_skills_tree_is_untouched_by_this_module():
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
     assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
-        "tool against a copy — see _seed_plugin_copy().")
+        "some test in THIS PYTEST SESSION wrote into the SHIPPED skills/ "
+        "tree — not necessarily one in this module.\n"
+        "\n"
+        "The baseline is captured at IMPORT time (see "
+        "`_SHIPPED_SKILLS_MD5_AT_IMPORT`), and pytest imports every selected "
+        "module before running any test, so this compares the tree across the "
+        "WHOLE session. Running this module alone will pass while a full "
+        "selection fails; that is the mechanism, not a flake.\n"
+        "\n"
+        "`git status skills/` will very likely show NOTHING even when this "
+        "fires: the digest walks every file via `rglob('*')`, including "
+        "`__pycache__/` which is ignored (.gitignore:2). Do not read a quiet "
+        "`git status` as 'nothing was written'. To see what moved, diff the "
+        "file list under `skills/`, or use "
+        "`suite_write_guard.py --snapshot/--compare`, which reports the "
+        "ignored class explicitly.\n"
+        "\n"
+        "Two shapes cause it: a test that runs a tool against the real tree "
+        "(run it against a copy — see `_seed_plugin_copy()`), or a test that "
+        "SPAWNS pytest/python at a path under `skills/`, which leaves "
+        "bytecode behind (pass `-p no:cacheprovider` and "
+        "`PYTHONDONTWRITEBYTECODE=1`).")
 
 
 if __name__ == "__main__":

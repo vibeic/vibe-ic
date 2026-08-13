@@ -117,13 +117,33 @@ def test_touched_skill_compliance_tests_green():
     rr = PT.repo_root()
     if rr is None:
         pytest.skip("cache tree — compliance pin runs on the source tree")
+    import os
     import subprocess
     skill_tests = SKILL.parent / "tests"
     if not skill_tests.is_dir():
         pytest.skip("core-agent-loop/tests absent on this tree")
+    # This spawns pytest at the SHIPPED tree on purpose — the assertion is
+    # that the shipped skill's own tests are green in place, so pointing it
+    # at a copy would verify the copy instead. What must not happen is the
+    # subprocess leaving anything behind: importing those modules writes
+    # `__pycache__/*.pyc` (including pytest's assertion-rewrite caches) into
+    # `skills/core-agent-loop/{tests,programs}/`, and that trips
+    # `test_shipped_skills_tree_is_untouched_by_this_module`, whose digest
+    # walks EVERY file under `skills/` via `rglob("*")`.
+    #
+    # It was invisible for a long time because `__pycache__/` is ignored
+    # (.gitignore:2), so `git status --short skills/` reports nothing while
+    # the digest moves. MEASURED on a pristine 24ff9530 worktree, this test
+    # alone: 213 files -> 216, digest dc6774b5... -> 5edc4c73..., and
+    # `git status --short skills/` still zero lines.
+    #
+    # `no:cacheprovider` is the same treatment already used at
+    # test_control_substance_check.py:43 for a spawned pytest.
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     r = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", str(skill_tests)],
-        capture_output=True, text=True,
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         str(skill_tests)],
+        capture_output=True, text=True, env=env,
     )
     assert r.returncode == 0, (
         "core-agent-loop skill tests must stay green:\n"
