@@ -469,8 +469,16 @@ def sweep_abandoned_scratch(repo_root: Path,
             "kept": [{"path": p, "why": w} for p, w in rep.kept]}
 
 
-def audit(repo_root: Path, timeout: int = 600) -> Audit:
-    scratch = sweep_abandoned_scratch(repo_root)
+def audit(repo_root: Path, timeout: int = 600,
+          tmp_root: Optional[Path] = None) -> Audit:
+    """`tmp_root` is the same test seam `sweep_abandoned_scratch` documents,
+    threaded one level up. Without it the seam stops here: a test that drives
+    `audit` has no way to keep off the real `/tmp`, so it both PLANTS and
+    OBSERVES in the namespace every other agent's probe is using — the thing
+    this module exists to be careful about. Production passes nothing and is
+    unaffected.
+    """
+    scratch = sweep_abandoned_scratch(repo_root, tmp_root)
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
     gates = corpus_gates(script)
     declared = len(gates)
@@ -524,7 +532,8 @@ def audit(repo_root: Path, timeout: int = 600) -> Audit:
     # A LOCKED scratch directory, not a bare `mkdtemp`. The lock is what a later
     # run reads to decide this one is dead; the `finally` below is the tidy
     # path, and the reaper is the one that holds under `SIGKILL`.
-    res, _ = _scratch.reserve(_SCRATCH_PREFIX, remover=_unregister_worktree)
+    res, _ = _scratch.reserve(_SCRATCH_PREFIX, remover=_unregister_worktree,
+                              root=tmp_root)
     wt = res.path / "wt"
     try:
         r = subprocess.run(
