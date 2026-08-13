@@ -122,13 +122,55 @@ def test_the_gate_list_is_PARSED_from_the_ci_script_not_duplicated():
     assert "chip-AGNOSTIC source guard" in labels, sorted(labels)[:5]
 
 
+#: Aggregate wall-clock budget for the CI sweep in this suite (vibe-ic#1181).
+#: 600s against a measured 192.9s idle: generous enough that an ordinary run is
+#: never truncated, small enough that a pathological one cannot outlive the
+#: harness. It is a CEILING, not a target — a run that hits it is disclosed as
+#: NOT_CHECKED rather than quietly reported clean.
+_CI_SWEEP_BUDGET_S = 600.0
+
+
 def test_the_real_ci_gate_set_is_currently_clean():
     """The measured state at land time: every CI gate discloses what it
     examined. A zero baseline is the right shape for a regression guard — it
-    can only fire on a NEW instance."""
+    can only fire on a NEW instance.
+
+    BOUNDED, because unbounded it hung the whole suite (vibe-ic#1181).
+    `audit_ci` drives 74 declared gates with a 120s timeout EACH and nothing
+    capped the sum: measured on an idle host at a38902d1, 50 driven in 192.9s
+    — already past the suite's own `--timeout=180`, worst case 50 x 120s. The
+    wait is inside `subprocess.run`, which `--timeout-method=thread` cannot
+    interrupt, so pytest printed its stack dump and the invocation still never
+    finished. The whole run then produced NO SUMMARY LINE, which greps as
+    neither pass nor fail and silently unmeasured every other file in the
+    selection.
+
+    WHAT IS ASSERTED IS UNCHANGED, and is asserted more directly. `verdict ==
+    "PASS"` was a proxy for "no gate answered PASS without disclosing its
+    denominator"; `findings == []` is that claim itself, and it holds whether
+    or not the budget truncated the sweep. The truncation is then asserted to
+    be DISCLOSED rather than tolerated — a partial sweep may not read as a
+    clean one, which is why `audit_ci` returns NOT_CHECKED and not PASS.
+    """
     import pytest
     script = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
     if not script.is_file():
         pytest.skip("CI script not present")
-    verdict, findings = G.audit(_REPO)
-    assert verdict == "PASS", findings
+    res = G.audit_ci(_REPO, budget=_CI_SWEEP_BUDGET_S)
+
+    # THE CLAIM. Any gate that passes over an empty tree without disclosing it
+    # is a finding, and a finding is a finding however far the sweep got.
+    assert res.findings == [], res.findings
+
+    # NON-VACUITY. A budget so small that nothing ran would satisfy the line
+    # above by examining nothing — the exact shape this program exists to
+    # remove from everybody else.
+    assert res.declared >= 20, res.declared
+    assert res.probed >= 1, (res.probed, res.declared)
+
+    # AND THE TRUNCATION, IF ANY, IS DISCLOSED — never folded into a pass.
+    if res.truncated:
+        assert res.verdict == "NOT_CHECKED", res.verdict
+        assert any("aggregate budget" in w for _g, w in res.not_driven)
+    else:
+        assert res.verdict == "PASS", res.findings
