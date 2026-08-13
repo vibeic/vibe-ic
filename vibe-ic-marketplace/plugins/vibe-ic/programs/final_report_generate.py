@@ -1282,7 +1282,22 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
     # violation falls in std-cell-library layer rules, and substitutes the
     # Magic count when a re-stream is authoritative. A report that
     # contradicts the run it summarises is worse than one that under-reports.
-    if pv.get("drc_signoff") == "(report missing)":
+    #
+    # ORGANIC #399 (cont.) — the echo must also fire when the file is PRESENT
+    # but states no verdict. Some runs do carry a `drc_signoff.json`, written
+    # by `eda_report_audit:drc`, whose schema is `passed`/`summary`/`findings`
+    # and carries neither `verdict` nor `status` — the same producer-schema
+    # mismatch already fixed for LVS above. The loop then resolved "?", which
+    # is not "(report missing)", so this echo was skipped and the summary
+    # contradicted the runner: measured on all 3 tracked runs that have the
+    # file, `step_drc` recorded PASS while the summary said "?".
+    #
+    # "?" is resolved by echoing the RUNNER, not by reading the producer's
+    # `passed`: `passed` is a raw audit outcome, while the runner re-tiers to
+    # WAIVED when every violation is a std-cell-library layer rule. Echoing
+    # `passed` would reintroduce exactly the contradiction the paragraph above
+    # rejects, just from a different source.
+    if pv.get("drc_signoff") in ("(report missing)", "?"):
         _st, _ex = _runner_step_record(project, "drc")
         if _st:
             _bits = [f"{k}={_ex[k]}" for k in
