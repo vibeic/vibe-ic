@@ -228,6 +228,24 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # vibe-ic#1043-adjacent (d7 W2): PRODUCED BY THE FLOW, READ BY A GATE,
+      # DECLARED BY NOBODY. `l21_macro_supply_rail_declared_check` is one of
+      # D1's own advisory clauses and M2's gate reads it too, yet no step's
+      # `required_outputs` named it — which is exactly the shape dimension 7
+      # exists to report, and it was charging the finding to step M2 (the
+      # CONSUMER) because there was no producer to charge it to.
+      #
+      # D1 is the producer: this step's own name is "Phase 1 Doc Extraction
+      # (17 skills + dialogue entry -> L1-L27)", and it declared L1-L13 only.
+      #
+      # BLAST RADIUS, measured the same way as L8_RTL_CONSTANTS above: present
+      # in 104 of the 105 tracked roots that carry L1_DATASHEET.json, and it
+      # RESOLVES in an admissible run root
+      # (benchmark-data/ic/caravel_user_project, 531 B), so declaring it closes
+      # the d7 finding without opening a d3 one. Declaring an artefact d3
+      # cannot then evidence would move the gap between dimensions rather than
+      # close it — the failure mode M1's own d7 waiver names.
+      - "phase1/generated_docs/L21_POWER_INTENT.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."

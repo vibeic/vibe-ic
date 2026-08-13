@@ -645,7 +645,17 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # other entry, `top_merged.gds`, was already searched live. Same reading as
 # the 120 -> 126 move above: one fewer entry decided by a committed JSON, not
 # one more artefact found.
-_LIVE_ENTRY_COUNT = 127
+# 2026-08-12 (same change): 127 -> 128. D1 declared
+# `phase1/generated_docs/L21_POWER_INTENT.json`, which dimension 7 was
+# reporting as produced-by-the-flow / read-by-a-gate / declared-by-nobody and
+# charging to M2 (the CONSUMER) for want of a producer to charge. The entry
+# resolves in an admissible run root (caravel_user_project, 531 B) and is
+# recorded PRODUCED_BY_RUN, so it is decided LIVE like the other 127 and adds
+# no fixture attestation. Declaring an artefact d3 could NOT evidence would
+# have moved the finding from d7 to d3 rather than closing it -- which is what
+# the first attempt did, and is why the manifest record is measured by asking
+# `resolve_anywhere`, never typed.
+_LIVE_ENTRY_COUNT = 128
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.

@@ -168,6 +168,13 @@
           "alternative": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
           "path": "phase1/generated_docs/L8_RTL_CONSTANTS.json",
           "size_bytes": 3207
+        },
+        "phase1/generated_docs/L21_POWER_INTENT.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/caravel_user_project",
+          "alternative": "phase1/generated_docs/L21_POWER_INTENT.json",
+          "path": "phase1/generated_docs/L21_POWER_INTENT.json",
+          "size_bytes": 531
         }
       }
     },
