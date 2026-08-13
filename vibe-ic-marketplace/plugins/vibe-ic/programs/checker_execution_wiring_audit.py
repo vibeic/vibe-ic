@@ -409,6 +409,29 @@ def skill_only_register(path: Path) -> Dict[str, str]:
 _MIN_DECISION_REASON = 120
 
 
+def classify_disclosures(skill_only, reasons: Dict[str, str]):
+    """Split SKILL-only checkers into (disclosed, gestured).
+
+    `disclosed`  an entry whose reason meets `_MIN_DECISION_REASON` — the same
+                 bar `check_unwired_by_decision` already holds the other
+                 register to, because both answer the same question.
+    `gestured`   an entry that EXISTS and does not. Membership used to be the
+                 whole test, so a reason of `""` printed as "(skill-only,
+                 reason recorded)" and counted toward "N carry a written
+                 reason". That is worse than no entry: silence does not
+                 misreport itself, a blank claim does.
+
+    A checker with NO entry is in NEITHER list. That population stays
+    non-blocking on purpose — see the note at the call site.
+    """
+    disclosed = [c for c in skill_only
+                 if len((reasons.get(c) or "").strip()) >= _MIN_DECISION_REASON]
+    gestured = sorted(c for c in skill_only
+                      if c in reasons and c not in disclosed)
+    return disclosed, gestured
+
+
+
 def check_unwired_by_decision(rep: dict, decisions: Dict[str, str],
                               known: List[str]) -> List[str]:
     """Enforce the `unwired_by_decision` block. Returns problem lines.
@@ -593,7 +616,19 @@ def main(argv=None) -> int:
           f"program(s) of {rep['all_programs']} in programs/")
     reasons = skill_only_register(here.parent / _SKILL_ONLY_NAME)
     so = rep.get("skill_only") or []
-    named = [c for c in so if c in reasons]
+    # A recorded reason must BE one. Membership in the register used to be the
+    # whole test, so an entry whose reason was `""` still printed as
+    # "(skill-only, reason recorded)" and still counted toward the "N carry a
+    # written reason" line — a claim of disclosure with nothing behind it, which
+    # is strictly worse than no entry, because silence does not misreport
+    # itself. `check_unwired_by_decision` already refuses a gesture at
+    # `_MIN_DECISION_REASON`; both registers answer the same question, so they
+    # get the same standard.
+    #
+    # SILENCE IS DELIBERATELY LEFT ALONE. The 28 SKILL-only checkers with no
+    # entry at all stay REPORTED-never-blocking; requiring a reason from them
+    # is a separate decision with a 28-row blast radius, and is not made here.
+    named, gesture = classify_disclosures(so, reasons)
     print(f"  SKILL-only (the weakest runner): {len(so)} — "
           f"{len(named)} carry a written reason in {_SKILL_ONLY_NAME}, "
           f"{len(so) - len(named)} do not. REPORTED, never blocking.")
@@ -631,7 +666,16 @@ def main(argv=None) -> int:
               f"licence, not a disclosure:")
         for line in stale:
             print(line)
-    if new or paid or stale:
+    if gesture:
+        print(f"[FAIL] {len(gesture)} SKILL-only entr(ies) in "
+              f"{_SKILL_ONLY_NAME} claim a reason and do not state one "
+              f"(>= {_MIN_DECISION_REASON} chars of MEASUREMENT). Leaving the "
+              f"entry out is honest and does not block; writing an empty one "
+              f"is a disclosure that discloses nothing:")
+        for c in gesture:
+            got = len((reasons.get(c) or "").strip())
+            print(f"   {c}: reason is {got} char(s)")
+    if new or paid or stale or gesture:
         return 1
     print(f"[PASS] no NEW test-only checker ({len(now)} recorded)"
           + (f"; {len(decisions)} deliberately unwired, disclosed"
