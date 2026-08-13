@@ -1795,7 +1795,34 @@ def _glob_real(root: Path, pattern: str) -> List[Path]:
     get their turn. Filtering only at the end would let a link-to-nowhere in
     the first probe suppress the fallbacks and turn a findable artefact into
     a spurious MISSING.
+
+    A pattern that names the ROOT rather than something under it matches no
+    artefact, and is answered here instead of being handed to `Path.glob`,
+    which THROWS on all three of its spellings (3.12 — each compiles to no
+    selectable part):
+
+        Path.glob(".")   IndexError: tuple index out of range
+        Path.glob("")    ValueError: Unacceptable pattern
+        Path.glob("./")  AttributeError: '_TerminatingSelector' object has no
+                         attribute 'select_from'
+
+    None is hypothetical. `"."` is what `Path("seed.flag").parent` is for ANY
+    project-root-relative declaration, and `_sibling_self_skip_for_missing`
+    hands that parent straight to this function for every missing `files_exist`
+    pattern; `""` is what the analog-remap branch of `_glob_first` computes as
+    `tail` when a pattern equals its own prefix. `check_step` runs in a
+    `ThreadPoolExecutor` and `main()` re-raises via `_fut.result()`, so the
+    throw does not fail one gate — it aborts the entire audit with a traceback,
+    no report and no exit code, which is strictly worse than the MISSING it was
+    on its way to computing.
+
+    Empty rather than "the root itself": the root is not an artefact any caller
+    is looking for, and the one caller that wants it as a DIRECTORY
+    (`_sibling_self_skip_for_missing`) already holds it as `project /
+    parent_rel` — `Path(p) / "." == Path(p)` — so nothing is lost.
     """
+    if pattern.strip() in ("", ".", "./"):
+        return []
     return sorted(m for m in root.glob(pattern)
                   if _resolves_to_real_artefact(m))
 
