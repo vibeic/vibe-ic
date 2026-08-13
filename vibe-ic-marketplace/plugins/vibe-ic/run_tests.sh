@@ -1,11 +1,18 @@
 #!/bin/bash
 # Full test suite for the vibe-ic-d plugin.
 #
-# Runs four test tiers:
-#   1. tests/               - driver core, YAML parser, cross-checks, integration
-#   2. programs/tests/      - the 6 deterministic programs (CRC, lint, etc.)
-#   3. skills/*/tests/      - per-skill compliance regression (auto-generated)
-#   4. Coverage audit       - every skill has compliance.yaml + tests
+# Runs these tiers, and this list is kept honest against the discovery block
+# below — a tier named here but not discovered there is a lie about coverage,
+# which is the defect #1391 was filed for:
+#   1. tests/                    - driver core, integration. DOES NOT EXIST in
+#                                  this repo; the `[ -d tests ]` guard below
+#                                  skips it silently and the tier report prints
+#                                  `0 dir`. Kept named so the 0 is legible.
+#   2. programs/tests/           - the deterministic programs
+#   3. tools/phase1_engine/tests/ - the Phase-1 gap/render engine (#1391)
+#   4. mcp-eda/test/             - the MCP EDA server sub-project
+#   5. skills/*/tests/           - per-skill compliance regression (generated)
+#   6. Coverage audit            - every skill has compliance.yaml + tests
 #
 # Exit 0 = all pass. Non-zero = failures (see stdout).
 set -e
@@ -31,6 +38,12 @@ mapfile -t TEST_DIRS < <(
     # keeps the two copies from diverging.
     [ -d tools/phase1_engine/tests ] && echo tools/phase1_engine/tests
 
+    # MCP EDA server sub-project. Named by the PR template and CONTRIBUTING as
+    # a SEPARATE `pytest -q mcp-eda/test`, and by no runner at all — prose in a
+    # checklist is not automation, so its 201 tests ran only when a human
+    # remembered to. 193 pass / 8 tool-gated skips.
+    [ -d mcp-eda/test ] && echo mcp-eda/test
+
     # Per-skill tests
     find skills -type d -name tests 2>/dev/null | while read -r d; do
         if compgen -G "$d/test_*.py" > /dev/null; then
@@ -49,10 +62,12 @@ plugin_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -E '^tests$' | wc -l)
 prog_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -E '^programs/tests$' | wc -l)
 skill_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -c 'skills/' || true)
 engine_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -cE '^tools/phase1_engine/tests$' || true)
+mcp_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -cE '^mcp-eda/test$' || true)
 printf "  %-35s %d dir\n" "Plugin-level (driver/integration)" "$plugin_tests"
 printf "  %-35s %d dir\n" "Deterministic programs" "$prog_tests"
 printf "  %-35s %d dirs\n" "Per-skill compliance" "$skill_tests"
 printf "  %-35s %d dir\n" "Phase-1 engine" "$engine_tests"
+printf "  %-35s %d dir\n" "MCP EDA server" "$mcp_tests"
 echo ""
 
 # Coverage audit - every skill must have compliance.yaml + tests
