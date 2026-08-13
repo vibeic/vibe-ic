@@ -7,26 +7,34 @@ SUBSET of main's". That sentence has no meaning while `main's` varies with the
 host, and it does. MEASURED 2026-08-13, same commit `a38902d16`, two hosts in
 this fleet, both clean and `porcelain=0`:
 
-    host A   iverilog ABSENT    147 failed   121 non-matrix   20 collection ERRORs
-    8HD-8    iverilog PRESENT   122 failed    95 non-matrix   37 collection ERRORs
+    host A   iverilog ABSENT    147 failed   121 non-matrix
+    8HD-8    iverilog PRESENT   122 failed    95 non-matrix
 
-One tool's difference. **25 failures and 17 errors of divergence.**
+One tool's difference. **25 failures of divergence** — far larger than the delta
+most PRs produce, so a branch measured on one host and a baseline taken on the
+other are not comparable.
 
-THE RED SET IS NOT MONOTONIC IN TOOLCHAIN COMPLETENESS, which is the part that
-defeats the obvious workaround. The intuitive fix is "baseline on the barest
-host, then every richer host is a subset". It is false here and measurably so:
-host A, with FEWER tools, reported FEWER errors (20) than 8HD-8 with more (37).
-The reason is that a gate which bails at its first absent tool never reaches its
-second check —
+WHAT THIS DOES NOT CLAIM, BECAUSE I GOT IT WRONG ONCE
+------------------------------------------------------
+An earlier draft of this module said the red set is "not monotonic in toolchain
+completeness", on the strength of host A reporting 20 collection ERRORs against
+8HD-8's 37. **That comparison was invalid and the claim is withdrawn.** The 37
+were `ERROR: ` lines printed on stdout by `cvdp_gate.py`; 8HD-8's run reported
+ZERO pytest errors — no `ERRORS` section, no `ERROR <nodeid>` summary rows. I
+compared another host's pytest errors against my own host's program output.
 
-    cvdp_gate.py:3028  "ERROR: yosys not available — the synthesizability smoke
-                        (#531) cannot be enforced; refusing to emit responses
-                        gated on iverilog alone (a yosys-absent host degraded
-                        the synth gate to a silent no-op PASS, #604)"
+On the corrected numbers the richer host had FEWER failures (122 vs 147) and
+fewer errors (0 vs 20), which is consistent with monotonicity, not against it.
+So "baseline on the barest host" is NOT refuted by this measurement, and this
+module must not be read as evidence against it.
 
-— so `iverilog` ABSENT stops the walk early and hides the 37 `yosys` refusals
-that a host WITH iverilog goes on to report. Adding a tool ADDED errors. No
-ordering over hosts makes one host's red set a subset of another's.
+The divergence itself is what justifies this module, and it stands on the two
+summary lines alone: **147 vs 122 failed for the same commit**. Whether the
+relationship is monotonic is a separate question this data does not settle —
+a subset relation needs the failure SETS compared node by node, which nobody
+has done across two hosts. Until someone does, "comparable" cannot be inferred
+from "richer", and a differing profile is a reason to refuse rather than to
+subtract.
 
 WHAT THIS REFUSES, AND WHY REFUSING IS THE POINT
 ------------------------------------------------
