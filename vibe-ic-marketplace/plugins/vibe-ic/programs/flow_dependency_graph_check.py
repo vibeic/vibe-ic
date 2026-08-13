@@ -66,7 +66,15 @@ except ImportError:                                     # pragma: no cover
 # vibe-ic#923 — P0 left this set when it gained the ordering edge its own
 # `required_inputs: [{from: 1}]` had always implied. The set may only SHRINK,
 # and this is what shrinking looks like.
-DECLARED_ROOTS = {"D1", "A1"}
+# vibe-ic#1070 — A1 left it for the identical reason. A1 declared TWO
+# `required_inputs` from D1 (`L1_DATASHEET.json`, `L5_ADI_SPEC.json`) while
+# carrying `blocks_on: []`, so it was baselined here as a legitimate entry
+# point on a justification its own declarations contradicted. Now that the
+# edge is declared, keeping A1 here would be the contradiction this checker
+# fails on by design ("a declared entry point but now has dependencies").
+# Measured before the shrink: with the YAML edge declared and this line
+# unchanged, the checker returns rc 1 on exactly that message.
+DECLARED_ROOTS = {"D1"}
 
 
 def load_steps(path: Path) -> Optional[List[dict]]:
