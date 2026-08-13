@@ -63,7 +63,7 @@ def test_the_sweep_stops_at_its_budget(tmp_path):
     """THE BOUND. 20 gates x 1s cannot run inside a 3s budget; the loop stops."""
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
     t0 = time.monotonic()
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=60, budget=3.0)
     elapsed = time.monotonic() - t0
 
     assert res.truncated, "a 20s sweep inside a 3s budget was not truncated"
@@ -75,7 +75,7 @@ def test_the_sweep_stops_at_its_budget(tmp_path):
 def test_a_truncated_sweep_is_NOT_CHECKED_and_never_PASS(tmp_path):
     """"I could not look" must not arrive as "I looked and it was clean"."""
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=60, budget=3.0)
     assert res.findings == [], "the fixture's gates all disclose; no finding"
     assert res.verdict == "NOT_CHECKED", res.verdict
     assert res.verdict != "PASS"
@@ -83,7 +83,7 @@ def test_a_truncated_sweep_is_NOT_CHECKED_and_never_PASS(tmp_path):
 
 def test_the_dropped_gates_are_NAMED_not_merely_counted(tmp_path):
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=60, budget=3.0)
     dropped = [g for g, w in res.not_driven if "aggregate budget" in w]
     assert dropped, res.not_driven
     assert all(g.startswith("sleepy gate") for g in dropped), dropped
@@ -93,7 +93,7 @@ def test_an_untruncated_sweep_still_PASSES(tmp_path):
     """The false-positive control. A budget the sweep fits inside must leave
     the verdict exactly as it was before this change."""
     root = _repo(tmp_path, n_gates=3, sleep_s=0.05)
-    res = G.audit_ci(root, timeout=120, budget=60.0)
+    res = G.audit_ci(root, timeout=60, budget=60.0)
     assert not res.truncated
     assert res.verdict == "PASS", res.findings
     assert res.probed == res.declared == 3
@@ -102,7 +102,7 @@ def test_an_untruncated_sweep_still_PASSES(tmp_path):
 def test_no_budget_is_the_previous_behaviour(tmp_path):
     """`budget=None` is unbounded — the shape every existing caller has."""
     root = _repo(tmp_path, n_gates=3, sleep_s=0.05)
-    res = G.audit_ci(root, timeout=120, budget=None)
+    res = G.audit_ci(root, timeout=60, budget=None)
     assert not res.truncated and res.verdict == "PASS"
 
 
@@ -122,7 +122,7 @@ def test_a_FINDING_outranks_truncation(tmp_path):
     body.insert(1, f'run "silent gate" "$ROOT" python3 "{silent}"')
     script.write_text("\n".join(body))
 
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=60, budget=3.0)
     assert res.findings, "the silent gate should have been caught"
     assert res.truncated, "and the sweep should still have run out of budget"
     assert res.verdict == "FAIL", (
@@ -136,7 +136,7 @@ def test_the_cli_exits_2_on_a_truncated_sweep(tmp_path):
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
     r = subprocess.run(
         [sys.executable, str(_PROG), str(root), "--budget", "3"],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 2, (r.returncode, r.stderr[-400:])
     assert "NOT CHECKED" in r.stderr
     assert "aggregate budget" in r.stderr or "NOT PROBED" in r.stderr
@@ -148,7 +148,7 @@ def test_the_json_record_discloses_truncation(tmp_path):
     out = tmp_path / "rec.json"
     subprocess.run(
         [sys.executable, str(_PROG), str(root), "--budget", "3",
-         "--json", str(out)], capture_output=True, text=True, timeout=120)
+         "--json", str(out)], capture_output=True, text=True, timeout=60)
     rec = json.loads(out.read_text())
     assert rec["truncated"] is True, rec
     assert rec["gates_probed"] < rec["gates_declared"], rec
@@ -162,7 +162,7 @@ def test_one_slow_gate_cannot_outlive_the_budget(tmp_path):
     """
     root = _repo(tmp_path, n_gates=1, sleep_s=30.0)
     t0 = time.monotonic()
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=60, budget=3.0)
     elapsed = time.monotonic() - t0
     assert elapsed < 15, (
         f"one gate ran {elapsed:.1f}s against a 3s budget — the per-gate "
