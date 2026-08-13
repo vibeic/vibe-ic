@@ -296,7 +296,7 @@ query($cur: String) {
     pullRequests(states:OPEN, first:50, after:$cur) {
       totalCount
       pageInfo { hasNextPage endCursor }
-      nodes { number title body headRefName baseRefName
+      nodes { number title body headRefName baseRefName headRefOid updatedAt
               files(first:100){ totalCount nodes{ path changeType } } } } } }
 """
 # A PR with more than 100 changed files needs its own pagination; the list
@@ -364,6 +364,8 @@ def fetch_open_prs() -> List[dict]:
                 "number": n["number"], "title": n["title"],
                 "body": n.get("body") or "",
                 "headRefName": n.get("headRefName"),
+                "headRefOid": n.get("headRefOid"),
+                "updatedAt": n.get("updatedAt"),
                 "baseRefName": n.get("baseRefName"),
                 "files": [f["path"] for f in files],
                 "added": [f["path"] for f in files
@@ -433,6 +435,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     addadd = add_add_pairs(prs)
     scored = sum(1 for p in prs if "added" in p)
+    tips = {p["number"]: (p.get("headRefOid") or "?")[:9] for p in prs}
     print(f"\npairs that CREATE the same path                   {len(addadd)}"
           f"   [{scored}/{len(prs)} PRs carry changeType]")
     if addadd:
@@ -442,6 +445,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"  #{a} x #{b}   {len(paths)}: "
                   f"{', '.join(p.rsplit('/', 1)[-1] for p in paths[:3])}"
                   f"{' …' if len(paths) > 3 else ''}")
+            # THE TIP EACH VERDICT WAS COMPUTED FROM, so the reader can re-verify
+            # it instead of re-deriving it. Measured 2026-08-14: a branch in this
+            # queue moved between one analysis fetching it and that analysis
+            # finishing, and the stale ref said the PR no longer added the file at
+            # all — the opposite of the truth. A pair reported here without its
+            # tips cannot be checked later, because by then the tips have moved.
+            print(f"          tips: #{a}@{tips.get(a, '?')}  #{b}@{tips.get(b, '?')}"
+                  f"   (verify: git ls-remote origin <branch>)")
     elif scored:
         print("  none — every open PR creates paths no other open PR creates.")
 
