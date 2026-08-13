@@ -1480,6 +1480,35 @@ RECORD_BOUND_ROOTS: Tuple[str, ...] = (
 )
 
 
+def _synthetic_root(donor):
+    """A run root that does NOT exist, for the publication half of the guard.
+
+    Publication cannot be simulated by patching ``_load``: :func:`record_roots`
+    is already filtered to roots whose ``reports/write_ledger.json`` is tracked
+    at HEAD, so every root inside it is bound by construction and there is no
+    unbound one to promote. The new root has to be introduced into that
+    population itself.
+
+    It borrows *donor*'s on-disk path so any code that touches the filesystem
+    still finds a real directory; only the label is fictional, and the label is
+    what the pin compares.
+    """
+    return R.RecordRoot(rel=donor.rel + "__published_by_the_paired_guard",
+                        path=donor.path)
+
+
+def _bound_population() -> Tuple[str, ...]:
+    """The roots whose write record actually decides this dimension.
+
+    Extracted so the paired guard below exercises THIS expression rather than a
+    re-typed copy of it — a guard that re-implements the measurement proves the
+    copy fires, not the assertion.
+    """
+    return tuple(sorted(
+        r.label for r in R.record_roots() if R.observed_writes() is not None
+        and R._load(r)[0] is not None))
+
+
 def test_d7_the_write_record_population_is_named_root_by_root():
     """Backward compatibility, stated rather than assumed.
 
@@ -1490,9 +1519,7 @@ def test_d7_the_write_record_population_is_named_root_by_root():
     pre-binding behaviour is never silent.
     """
     _unbind()
-    measured = tuple(sorted(
-        r.label for r in R.record_roots() if R.observed_writes() is not None
-        and R._load(r)[0] is not None))
+    measured = _bound_population()
     assert measured == tuple(sorted(RECORD_BOUND_ROOTS)), (
         f"the set of run roots whose write record decides this dimension "
         f"changed.\n  measured: {list(measured)}\n"
@@ -1510,6 +1537,105 @@ def test_d7_the_write_record_population_is_named_root_by_root():
         assert R.observed_writes() == {}, (
             f"no root is bound, yet the observation index is non-empty: "
             f"{sorted(R.observed_writes())[:5]}")
+    else:
+        # 2026-08-13: reachable for the FIRST TIME. The branch above is the
+        # empty half of a two-sided invariant and had been the only half ever
+        # written, because the population had always been empty. Moving the pin
+        # silently killed it, so the other half is written here rather than
+        # left as a gap the next reader would have to notice.
+        #
+        # A pin may not name a root that contributes nothing: that is how a
+        # population becomes decorative — the names look maintained while the
+        # oracle behind them is dead.
+        assert R.observed_writes(), (
+            f"{len(RECORD_BOUND_ROOTS)} roots are pinned as bound, yet the "
+            f"observation index is EMPTY. Either the records stopped being "
+            f"read or the pin names roots that decide nothing.\n"
+            f"  pinned:   {list(RECORD_BOUND_ROOTS)}\n"
+            f"  per root: {list(R.binding_notes())}")
+
+
+def test_d7_the_population_pin_fires_when_the_bound_set_changes(monkeypatch):
+    """PAIRED GUARD for the pin above — the reason it is not just a constant.
+
+    The pin was advanced from ``()`` to two roots. The failure mode of any such
+    move is that the assertion becomes true by construction and never speaks
+    again; a pin that cannot fail is worth less than no pin, because it reads
+    like a maintained invariant that is in fact inert.
+
+    Both directions are perturbed, because they fail differently:
+
+    WITHDRAWAL — a root stops carrying an admissible record. This is the
+    likelier accident: a ledger is deleted, or renamed, or its schema drifts
+    and ``_load`` starts rejecting it, and the dimension quietly returns to the
+    AST-only oracle for that tree.
+
+    PUBLICATION — a NEW root ships a ledger. This is the event the module's
+    "the day one is published" paragraph is written about, and it CANNOT be
+    simulated by patching ``_load`` alone: :func:`record_roots` is already
+    filtered to roots whose ledger is tracked at HEAD, so an unbound root does
+    not exist inside that population to promote. An earlier version of this
+    guard assumed it did and asserted its way to a failure — the assertion
+    message is preserved as :func:`_synthetic_root`'s docstring so the next
+    person does not re-derive it.
+    """
+    _unbind()
+    baseline = _bound_population()
+    assert baseline == tuple(sorted(RECORD_BOUND_ROOTS)), (
+        "guard precondition: the pin must be accurate before it is perturbed")
+    assert len(baseline) >= 1, "nothing is bound; there is no pin to guard"
+
+    real_roots, real_load = R.record_roots, R._load
+    bound = {r.label: r for r in real_roots() if r.label in baseline}
+    donor = bound[baseline[0]]
+    borrowed = real_load(donor)[0]
+    assert borrowed is not None
+
+    # ── WITHDRAWAL ──
+    def _withheld(root):
+        if root.label == donor.label:
+            return None, "record withdrawn by the paired guard"
+        return real_load(root)
+
+    monkeypatch.setattr(R, "_load", _withheld)
+    R.clear_caches()
+    shrunk = _bound_population()
+    assert donor.label not in shrunk, (
+        "the guard failed to withdraw anything; it is measuring something "
+        "other than what the pin measures")
+    assert shrunk != tuple(sorted(RECORD_BOUND_ROOTS)), (
+        f"a bound root stopped carrying an admissible record and the pinned "
+        f"population did not notice. The pin is decorative.\n"
+        f"  pinned:  {list(RECORD_BOUND_ROOTS)}\n"
+        f"  shrunk:  {list(shrunk)}")
+    monkeypatch.undo()
+    R.clear_caches()
+
+    # ── PUBLICATION ──
+    planted = _synthetic_root(donor)
+
+    def _with_planted():
+        return real_roots() + (planted,)
+
+    def _load_planted(root):
+        if root.label == planted.label:
+            return borrowed, "record planted by the paired guard"
+        return real_load(root)
+
+    monkeypatch.setattr(R, "record_roots", _with_planted)
+    monkeypatch.setattr(R, "_load", _load_planted)
+    R.clear_caches()
+    grown = _bound_population()
+    assert planted.label in grown, (
+        "the guard failed to plant anything; a new root did not reach the "
+        "population the pin is compared against")
+    assert grown != tuple(sorted(RECORD_BOUND_ROOTS)), (
+        f"a new root published a write record and the pinned population did "
+        f"not notice. The pin is decorative.\n"
+        f"  pinned:  {list(RECORD_BOUND_ROOTS)}\n"
+        f"  grown:   {list(grown)}")
+    monkeypatch.undo()
+    R.clear_caches()
 
 
 # ══════════════════════════════════════════════════════════════════════
