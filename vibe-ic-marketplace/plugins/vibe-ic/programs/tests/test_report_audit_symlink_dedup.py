@@ -295,42 +295,76 @@ def test_a_scoped_loop_cannot_buy_a_green(tmp_path):
         doc['findings']
 
 
-def test_filtered_alias_does_not_burn_the_canonical_reports_key(tmp_path):
+@pytest.mark.parametrize('alias_first', [True, False],
+                         ids=['alias_first', 'canonical_first'])
+def test_filtered_alias_does_not_burn_the_canonical_reports_key(
+        tmp_path, monkeypatch, alias_first):
     """A backup alias reached FIRST must not consume the key its target needs.
 
     `_is_backup_path` keys on the LITERAL path, `seen` keys on the RESOLVED
     one. With `seen.add(key)` above the filters, a same-inode alias under a
     `*_bak/` directory claimed the resolved key and was then dropped, so the
     canonical report was skipped as a duplicate of a path that is not in the
-    output. `rglob` yields shallower matches first and siblings in directory
-    order, so the alias's NAME AND DEPTH decided whether the audit saw the
-    report at all. Measured, one report plus one alias::
+    output. Measured, one report plus one alias::
 
         alias reached first   _discover -> []            files_found=0
         alias reached later   _discover -> [drc_signoff] files_found=1
 
     Only a path that SURVIVES the filters may claim the key.
+
+    ORDER IS FORCED, NOT ASSUMED. This test used to build the "alias reached
+    first" condition by asserting that `rglob` yields the shallower
+    `backup_bak/` match before `reports/phase3/`. `Path.rglob` walks each
+    directory in `os.scandir` order, which is filesystem-dependent, so that
+    precondition is not a property of `rglob` at all -- on ext4 here the walk
+    comes back `['reports/phase3/drc_signoff.rpt', 'backup_bak/drc_signoff.rpt']`
+    and the test fails in its own fixture without ever reaching the behaviour it
+    exists to check.
+
+    Since the guarantee under test is that the verdict is INDEPENDENT of walk
+    order, the order is now pinned explicitly and the property asserted in BOTH
+    directions. That is strictly stronger than the original: it no longer needs
+    a particular filesystem to construct the interesting case, and it now also
+    covers the order the original could never reach.
     """
     (tmp_path / 'reports/phase3').mkdir(parents=True)
     rpt = tmp_path / 'reports/phase3/drc_signoff.rpt'
     rpt.write_text(_klayout_drc(11))
 
-    # `backup_bak/` sorts and nests so that rglob reaches it BEFORE
-    # reports/phase3/ — the shallower match is yielded first.
     alias_dir = tmp_path / 'backup_bak'
     alias_dir.mkdir()
     (alias_dir / 'drc_signoff.rpt').symlink_to(rpt.resolve())
 
+    # Pin the walk order instead of hoping the filesystem produces it. The
+    # harness assertion below fails loudly if the ordering did not take, so a
+    # silently-unordered run cannot masquerade as a pass.
+    real_rglob = Path.rglob
+
+    def _ordered_rglob(self, pattern):
+        hits = list(real_rglob(self, pattern))
+        hits.sort(key=lambda p: (0 if 'backup_bak' in p.parts else 1))
+        if not alias_first:
+            hits.reverse()
+        return iter(hits)
+
+    monkeypatch.setattr(Path, 'rglob', _ordered_rglob)
+
     walk = [str(p.relative_to(tmp_path)) for p in tmp_path.rglob('drc*.rpt')]
-    assert walk[0].startswith('backup_bak/'), (
-        f"fixture precondition: the filtered alias must be walked first "
-        f"(got {walk})")
+    wanted = 'backup_bak/' if alias_first else 'reports/'
+    assert walk[0].startswith(wanted), (
+        f"order harness did not take: wanted {wanted!r} first, got {walk}")
 
     found = era._discover(tmp_path, ['drc*.rpt'])
     assert [str(p.relative_to(tmp_path)) for p in found] == [
         'reports/phase3/drc_signoff.rpt'], (
-        f"the canonical report must survive a filtered alias that precedes it "
-        f"(got {[str(p.relative_to(tmp_path)) for p in found]})")
+        f"the canonical report must survive a filtered alias regardless of walk "
+        f"order (alias_first={alias_first}, walk={walk}, got "
+        f"{[str(p.relative_to(tmp_path)) for p in found]})")
+
+    # The audit itself is a SUBPROCESS, so the in-process ordering patch above
+    # does not reach it; these two assertions are therefore order-agnostic
+    # properties of the shipped program, which is what we want from them.
+    monkeypatch.setattr(Path, 'rglob', real_rglob)
 
     _, summary = _audit(tmp_path, tmp_path / 'out.json')
     assert summary['files_found'] == 1, (
