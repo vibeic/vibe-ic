@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import re
 import subprocess
@@ -83,12 +84,78 @@ _EVIDENCE_EXT = (".log", ".rpt", ".sby")
 
 # A backticked token that looks like a file path. Anchored so prose in
 # backticks (a command line, a sentence) is never mistaken for a citation.
-_CITE_RE = re.compile(r"`([A-Za-z0-9_./+-]+)`")
+# `{`, `}` and `,` are IN the class (vibe-ic#1044). Brace expansion is not a
+# template: `hold_{ss,tt,ff}.rpt` names three SPECIFIC files, enumerably, and a
+# reader is being asked to believe all three exist. Excluding the braces from
+# the charset made the whole token unmatchable, so such a citation was never
+# extracted at all — and `_TEMPLATE_RE` below would have discarded it a second
+# time. MEASURED on v1.10.35: 86 brace tokens across the default scope, 208
+# alternatives after expansion, of which 10 qualify as citations and ALL TEN
+# are dangling (three multicorner STA corner reports, a spare-cell PnR log
+# pair, and two extension pairs). The gate reported PASS over every one.
+#
+# Tokens that are NOT brace expansion stay unmatchable, because the charset
+# still excludes what makes them something else: `'{...}` (SystemVerilog
+# assignment pattern) has a quote, `${REPO_TOP}/...` has a dollar, and
+# `{floorplan.def, placed.def}` has spaces. Measured: 4 such tokens in scope,
+# all still rejected.
+_CITE_RE = re.compile(r"`([A-Za-z0-9_./+{},-]+)`")
+
+#: One `{a,b,c}` group. Nested braces are not shell-legal and are not
+#: handled. The COMMA is required, and that is the whole discriminator
+#: between an enumeration and a placeholder: bash expands `{a,b}` and
+#: leaves `{x}` literal, and this repo already reads `{x}.log` as a
+#: placeholder exactly like `<run>.log`
+#: (`test_template_and_glob_tokens_are_not_judged`). Without the comma
+#: requirement this fix would have re-classified every such placeholder
+#: as a citation and manufactured findings against text that promised
+#: nothing — which is the failure mode `_TEMPLATE_RE` exists to prevent.
+_BRACE_GROUP_RE = re.compile(r"\{([^{}]*,[^{}]*)\}")
 
 # Tokens that are TEMPLATES / GLOBS, not citations of a specific artifact.
 # Judging these would manufacture findings against text that never claimed a
 # particular file exists.
+#
+# `\{[^}]*\}` STAYS here on purpose. Expansion happens first, so by the time a
+# string reaches this test it carries no braces; the clause remains as the
+# backstop for a brace token that expansion declined to handle (an empty group,
+# or a `{` with no `}`), which must still be treated as a template rather than
+# resolved literally.
 _TEMPLATE_RE = re.compile(r"[*?]|<[^>]*>|\{[^}]*\}|\bN\b")
+
+
+def expand_braces(tok: str) -> List[str]:
+    """`a/{x,y}/b.rpt` -> ['a/x/b.rpt', 'a/y/b.rpt']; no braces -> [tok].
+
+    The cartesian product over every group, so `x_{a,b}.{log,rpt}` yields four.
+    An empty alternative (`{a,}`) is kept as the empty string, which is what
+    shell brace expansion does and which simply fails to resolve — dropping it
+    would silently narrow the claim the document made.
+
+    Returns [tok] unchanged when there is no group to expand, so every caller
+    can treat this as the identity for ordinary citations.
+    """
+    groups = _BRACE_GROUP_RE.findall(tok)
+    if not groups:
+        return [tok]
+    # A pathological token (many groups) would explode combinatorially. The
+    # bound is disclosed rather than silent: past it the token is returned
+    # unexpanded and `_TEMPLATE_RE` then discards it as a template, which is
+    # the pre-#1044 behaviour and is the safe direction.
+    if len(groups) > 4 or any(len(g.split(",")) > 16 for g in groups):
+        return [tok]
+    out: List[str] = []
+    for combo in itertools.product(*(g.split(",") for g in groups)):
+        idx = 0
+
+        def _sub(_m, _c=combo):
+            nonlocal idx
+            v = _c[idx]
+            idx += 1
+            return v
+
+        out.append(_BRACE_GROUP_RE.sub(_sub, tok))
+    return out
 
 # The baseline lives with the DATA it describes, not in plugin source: its
 # entries are benchmark-data document paths and therefore carry design names,
@@ -327,6 +394,13 @@ def scan(root: Path,
     disclosed = _disclosed_map(root, tracked)
     cited = 0
     docs = 0
+    # #1044 — what the extractor DISCARDED is part of the denominator.
+    # "221 citations checked" without it cannot be told from "221 of 3000
+    # tokens were legible and the rest were silently dropped", which is the
+    # shape that hid brace notation for as long as it did.
+    discarded = 0
+    brace_tokens = 0
+    brace_alts = 0
     # ENUMERATE FROM THE TRACKED LIST, never from a filesystem walk. A
     # walk-then-filter enumerated 440 documents locally and 422 in CI on the
     # SAME commit — directory traversal is environment-dependent (symlinks,
@@ -343,14 +417,26 @@ def scan(root: Path,
             continue
         docs += 1
         for tok in _CITE_RE.findall(text):
-            if not _is_citation(tok):
-                continue
-            cited += 1
-            if resolve_citation(md, tok, root, tracked) is None:
-                _d = str(md.relative_to(root))
-                if (_d, tok) in disclosed:
+            # EXPAND FIRST (vibe-ic#1044). `hold_{ss,tt,ff}.rpt` is a claim
+            # about three files; judging the unexpanded token would either
+            # discard it as a template or try to resolve a path that was never
+            # meant to exist literally. Each alternative then faces the
+            # unchanged `_is_citation` rule, so a glob that survives expansion
+            # (`{a,spare_*}.json`) is still correctly treated as a template.
+            alts = expand_braces(tok)
+            if len(alts) > 1:
+                brace_tokens += 1
+                brace_alts += len(alts)
+            for _cite in alts:
+                if not _is_citation(_cite):
+                    discarded += 1
                     continue
-                dangling.append({"doc": _d, "citation": tok})
+                cited += 1
+                if resolve_citation(md, _cite, root, tracked) is None:
+                    _d = str(md.relative_to(root))
+                    if (_d, _cite) in disclosed:
+                        continue
+                    dangling.append({"doc": _d, "citation": _cite})
     _jsons = (sorted(root / t for t in tracked if t.lower().endswith(".json"))
               if tracked is not None else sorted(root.rglob("*.json")))
     for js in _jsons:
@@ -364,7 +450,7 @@ def scan(root: Path,
                 if (_d, tok) in disclosed:
                     continue
                 dangling.append({"doc": _d, "citation": f"[{field}] {tok}"})
-    return dangling, cited, docs
+    return dangling, cited, docs, discarded, brace_tokens, brace_alts
 
 
 def _working_tree_dirt(root: Path) -> List[str]:
@@ -445,7 +531,8 @@ def main(argv=None) -> int:
     baseline_path = (Path(args.baseline) if args.baseline
                      else root.parent / _BASELINE_NAME)
     tracked = tracked_files(root)
-    dangling, cited, docs = scan(root, tracked)
+    dangling, cited, docs, discarded, brace_tokens, brace_alts = scan(
+        root, tracked)
     now = sorted({_key(d) for d in dangling})
 
     if args.write_baseline:
@@ -522,6 +609,13 @@ def main(argv=None) -> int:
 
     print(f"evidence_citation_resolves_check: {docs} doc(s), "
           f"{cited} citation(s) checked under {root}")
+    # #1044 — the DENOMINATOR of the extractor itself. A gate that says
+    # "221 checked" without saying how many tokens it declined cannot be
+    # told from one that could not see them, which is exactly how brace
+    # notation stayed invisible while the verdict read PASS.
+    print(f"  extractor      : {cited} citation(s) kept, {discarded} token(s) "
+          f"discarded as template/non-evidence; {brace_tokens} brace token(s) "
+          f"expanded into {brace_alts} alternative(s)")
     if not explicit_root:
         print(f"  NOT scanned    : {_DISCLOSED_OUT_OF_SCOPE[0]} — "
               f"{_DISCLOSED_OUT_OF_SCOPE[1]}")
