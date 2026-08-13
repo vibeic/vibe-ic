@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+
+import pytest
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
@@ -122,13 +124,61 @@ def test_the_gate_list_is_PARSED_from_the_ci_script_not_duplicated():
     assert "chip-AGNOSTIC source guard" in labels, sorted(labels)[:5]
 
 
-def test_the_real_ci_gate_set_is_currently_clean():
-    """The measured state at land time: every CI gate discloses what it
-    examined. A zero baseline is the right shape for a regression guard — it
-    can only fire on a NEW instance."""
-    import pytest
-    script = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
-    if not script.is_file():
+#: vibe-ic#1277. This assertion used to be ONE pytest item that re-drove the
+#: whole CI population: 188.61s MEASURED, against the targeted subset's 180s
+#: harness bound. `--timeout-method=thread` does not fail the test at that
+#: bound, it takes the SESSION down — so the item could never pass, and every
+#: other file in the subset lost its verdict with it. Observed live while
+#: verifying #1180: both arms died at ~23% of a 50-file selection.
+#:
+#: The remedy is per-gate items, not a smaller assertion. Same population, same
+#: judgement, same code path (`G.judge_one`, which `audit_ci` also calls) —
+#: MEASURED, the slowest single gate is 31.46s, so every item now sits ~6x
+#: under the bound. #1241's other option, moving the test out of the targeted
+#: subset, is wrong here: this is not a fast test dodging the rule, and the
+#: repo has no subset-exclusion mechanism to move it with.
+_CI_SCRIPT = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
+_CI_GATES = G.parse_declarations(_CI_SCRIPT) if _CI_SCRIPT.is_file() else []
+
+
+@pytest.fixture(scope="module")
+def _ci_scratch():
+    """Built ONCE for the whole module. MEASURED at 0.07s, so rebuilding it per
+    item would cost only ~5.5s over 74 gates — shared anyway, because the
+    per-gate items are then measuring the gate and nothing else."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        yield G._scratch_repo(Path(td))
+
+
+@pytest.mark.skipif(not _CI_GATES, reason="CI script not present")
+@pytest.mark.parametrize("decl", _CI_GATES,
+                         ids=[d.label[:48] for d in _CI_GATES])
+def test_each_real_ci_gate_discloses_its_denominator(decl, _ci_scratch):
+    """The measured state at land time, one gate at a time: every CI gate
+    discloses what it examined. A zero baseline is the right shape for a
+    regression guard — it can only fire on a NEW instance, and now it names
+    WHICH gate rather than handing back a list."""
+    finding, _why = G.judge_one(decl, _REPO, _ci_scratch)
+    assert finding is None, finding
+
+
+def test_the_ci_population_is_large_enough_to_be_a_denominator():
+    """The split must not become a green run over an empty parametrisation —
+    zero items would pass vacuously and look identical to a clean sweep."""
+    if not _CI_SCRIPT.is_file():
         pytest.skip("CI script not present")
-    verdict, findings = G.audit(_REPO)
-    assert verdict == "PASS", findings
+    assert len(_CI_GATES) >= 20, len(_CI_GATES)
+
+
+def test_judge_one_still_FIRES_on_a_gate_that_passes_without_disclosing(tmp_path):
+    """PAIRED GUARD. The split is only safe if the per-gate judgement can still
+    fail. Drives a synthetic gate that exits 0 and discloses nothing, through
+    the SAME entry point the parametrised test uses, and requires a finding."""
+    liar = tmp_path / "liar.py"
+    liar.write_text("print('[PASS] everything is fine')\n", encoding="utf-8")
+    decl = G.GateDecl(label="synthetic liar", cwd_token="$ROOT",
+                      cmd=f"python3 {liar}", lineno=0, runtime_expansion=None)
+    finding, why = G.judge_one(decl, _REPO, tmp_path)
+    assert why is None, why
+    assert finding is not None and finding["kind"] == "PASS_WITHOUT_DENOMINATOR", finding
