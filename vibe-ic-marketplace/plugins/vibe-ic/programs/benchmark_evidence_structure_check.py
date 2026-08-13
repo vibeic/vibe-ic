@@ -594,9 +594,17 @@ def _changed_evidence_roots(base: str, targets: List[Path]) -> Tuple[Optional[Li
     """Filter `targets` to the evidence folders that have >= 1 file changed since
     `base` (added/modified; deletions ignored). Returns (kept, mode).
 
-    `kept is None` signals "could not determine the change set" — the caller
-    fail-OPENS (checks nothing, exits 0) so CI plumbing never becomes a flaky
-    blocker; the real guards are the per-folder rules + the publish self-check.
+    `kept is None` signals "could not determine the change set". The caller
+    REFUSES with rc 2 (vibe-ic#1254) — it used to fail-OPEN with rc 0 so CI
+    plumbing never became a flaky blocker, but rc 0 is the one thing every
+    caller branches on, so the disclosure in the message was invisible where it
+    counted. rc 2 keeps the anti-flake promise without the lie: it is this
+    file's own disclosed-skip convention (see the header's citation of
+    `gate_zero_denominator_refuses_check`), and the pre-push hook renders it as
+    `NOT CHECKED — the gate could not run`, not as a finding against the change.
+
+    Distinct from "determined, and nothing changed", which is still rc 0 with a
+    disclosure — that is a real answer, and grandfathering depends on it.
     """
     changed, mode = _changed_file_set(base, targets[0] if targets else Path.cwd())
     if changed is None:
@@ -813,6 +821,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         ic_dirs = _discover_ic_dirs(Path(args.tree))
 
     if not targets and not ic_dirs:
+        # DISCOVERING NOTHING BECAUSE THE TREE IS NOT THERE IS NOT A CLEAN RESULT
+        # (vibe-ic#1254). `--tree benchmark-data` is a RELATIVE path, so a caller
+        # whose cwd is not the repo root discovers zero folders and, before this,
+        # exited 0 -- the gate reported clean over a tree it never found. The
+        # pre-push hook invokes it exactly that way, which is where it matters:
+        # the enforced gate on what reaches the remote.
+        #
+        # An EMPTY-but-present tree still returns 0 below: that is a real
+        # determination ("I looked, there is nothing"), and collapsing it into
+        # this branch would be the same error in the other direction.
+        if args.tree and not Path(args.tree).is_dir():
+            print(f"UNDETERMINED: --tree {args.tree} is not a directory, so this "
+                  f"gate discovered nothing and scanned nothing. A check that "
+                  f"could not look has not passed.", file=sys.stderr)
+            return 2
         if args.changed_since:
             print(f"benchmark_evidence_structure_check: no evidence folders "
                   f"discovered (nothing to diff against {args.changed_since}).")
@@ -824,9 +847,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.changed_since:
         kept, mode = _changed_evidence_roots(args.changed_since, targets)
         if kept is None:
-            print(f"benchmark_evidence_structure_check: change set undeterminable "
-                  f"({mode}); checking nothing (fail-open).")
-            return 0
+            # FAIL-OPEN IN AN ENFORCED GATE IS A LICENCE, NOT A DISCLOSURE
+            # (vibe-ic#1254). The old text said "checking nothing (fail-open)"
+            # and then exited 0, so the sentence was honest and the exit code
+            # was not -- and only the exit code is read by the pre-push hook,
+            # by CI, and by every caller that branches on rc. The stated reason
+            # for the fail-open was that CI plumbing must not become a flaky
+            # blocker; rc 2 keeps that promise honestly, because the hook
+            # renders 2 as `NOT CHECKED - the gate could not run` rather than
+            # as a finding against the change, which is exactly the
+            # distinction it was written to draw.
+            print(f"UNDETERMINED: benchmark_evidence_structure_check could not "
+                  f"determine the change set ({mode}), so it scanned NOTHING. "
+                  f"This is not a pass.", file=sys.stderr)
+            return 2
         kept_ic, _ = _changed_ic_dirs(args.changed_since, ic_dirs,
                                       args.include_staged)
         ic_dirs = kept_ic or []
