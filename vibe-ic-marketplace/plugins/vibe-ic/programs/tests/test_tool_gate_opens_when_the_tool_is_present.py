@@ -26,7 +26,8 @@ failure the repo calls a check that passes over an empty population.
 WHY THE REGISTER IS KEYED ON THE PATTERN AND NOT ON ONE NAME (#1385)
 ────────────────────────────────────────────────────────────────────
 The first version scanned for the literal substring `_HAVE_TOOLS`. Measured on
-`24ff95307`, that is one spelling out of eleven in use:
+`24ff95307`, that is one spelling out of TWENTY in use, across two
+prefixes:
 
     _HAVE_IVERILOG 90   _HAVE_VERILATOR 9    _HAVE_TOOLS 5
     _HAVE_IV       24   _HAVE_DATASET   8    _HAVE_YOSYS 4
@@ -41,8 +42,8 @@ a single one of them.
 The key is the constant's DEFINITION, not its use in a `skipif(...)`. Both
 gating shapes are in use here and only the definition catches both:
 
-    @pytest.mark.skipif(not _HAVE_X, ...)      45 pairs
-    if not _HAVE_X: pytest.skip(...)            8 pairs   <- in-body
+    @pytest.mark.skipif(not _HA(VE|S)_X, ...)  the majority
+    if not _HA(VE|S)_X: pytest.skip(...)        the rest   <- in-body
 
 Keying on `skipif(` would have dropped 7 pairs, SIX OF THEM modules this file
 already covers — the widening would have narrowed it. The definition is also
@@ -60,9 +61,33 @@ moved there to silence a failure fails immediately. An exclusion that must
 prove it deserves the exclusion is the difference between a reasoned carve-out
 and the silent omission that produced this gap in the first place.
 
-MEASURED COST, this host: 59 pairs, 118 module reloads, 1.67 s total
-(0.028 s per pair). Nothing here shells out; `_HAVE_CONTAINER` is the one entry
-whose probe attempts a real subprocess, and it fails closed immediately.
+CORRECTION, AND IT IS AGAINST THE FIRST VERSION OF THIS FILE
+────────────────────────────────────────────────────────────
+The first version keyed on the `_HAVE_` prefix alone. That is ALSO one spelling,
+and it covered 59 of 100 pairs — missing 41 across nine `_HAS_*` names, found
+while verifying #1430, which adds nine skips under `_HAS_IVERILOG`:
+
+    _HAS_IVERILOG   27 pairs   <- the MOST common tool gate in this directory,
+    _HAVE_IVERILOG  22 pairs      more frequent than the spelling I keyed on
+
+I under-counted for exactly the reason the original defect existed: I censused
+the population using the prefix I had already decided was the population. The
+key is now `_HA(?:VE|S)_`, and the "eleven names" figure above was wrong — it
+is twenty.
+
+Widening also swept in two constants that share the prefix and are NOT gates
+(a fixture string and an argv list). They are in `NOT_A_GATE` with the value
+type that disqualifies them, and guarded: a bool cannot hide there.
+
+    WHICH_GATES      84    shut under which->None, open under which->path
+    NOT_WHICH_GATES  14    corpus dir, package import, two-stage docker probe
+    NOT_A_GATE        2    not booleans; not gates at all
+                    ---
+                    100    every `_HA(VE|S)_*` definition in this directory
+
+MEASURED COST, this host: 100 pairs, 200 module reloads, 0.96 s total.
+Nothing here shells out; `_HAVE_CONTAINER` is the one entry whose probe
+attempts a real subprocess, and it fails closed immediately.
 """
 from __future__ import annotations
 
@@ -81,7 +106,11 @@ if str(_TESTS) not in sys.path:
 #: A module-level `_HAVE_* =` binding. This is the population key: it catches
 #: the decorator and in-body gating shapes alike, and it names exactly the
 #: attribute the assertions below read back off the reloaded module.
-_DEFN = re.compile(r"^(_HAVE_[A-Z0-9_]+)\s*=", re.M)
+#: BOTH prefixes. `_HAS_` is not a variant spelling to be tidied away —
+#: `_HAS_IVERILOG` (27 pairs) is the single most common tool-gate constant
+#: in this directory, more frequent than `_HAVE_IVERILOG`. Keying on
+#: `_HAVE_` alone covered 59 of 100 pairs and missed 41 across nine names.
+_DEFN = re.compile(r"^(_HA(?:VE|S)_[A-Z0-9_]+)\s*=", re.M)
 
 _SELF = Path(__file__).stem
 
@@ -115,79 +144,125 @@ _PRESENT = lambda name, *_a, **_k: f"/usr/bin/{name}"  # noqa: E731
 #: finds nothing and open when it reports a path. Measured, not hand-listed.
 WHICH_GATES = (
     ("test_bcd_synth", "_HAVE_SIM"),
+    ("test_cvdp_gate", "_HAS_IVERILOG"),
+    ("test_cvdp_gate", "_HAS_YOSYS"),
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_EDA"),
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_IVERILOG"),
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_YOSYS"),
+    ("test_determinism_gates_promoted_to_phase2", "_HAS_IVERILOG"),
     ("test_dff_primitive_synth", "_HAVE_IVERILOG"),
+    ("test_gate_directed_rtl_repair", "_HAS_IVERILOG"),
     ("test_general_synth", "_HAVE_IV"),
+    ("test_hamming_synth", "_HAS_IVERILOG"),
     ("test_issue186_p2_regmap_transaction_oracle", "_HAVE_IVERILOG"),
+    ("test_issue716_intended_transparent_latch_emit", "_HAS_AB"),
+    ("test_issue716_intended_transparent_latch_emit", "_HAS_VERILATOR"),
+    ("test_mbist_wrapper_gen", "_HAS_IVERILOG"),
+    ("test_mux_compare_synth", "_HAS_IVERILOG"),
+    ("test_organic_20260722_chip_top_power_pin_connect_guard", "_HAS_IVERILOG"),
     ("test_prompt_example_selftest", "_HAVE_IVERILOG"),
+    ("test_ramp_waveform_oracle_check", "_HAS_IVERILOG"),
     ("test_round15_rs232_clear_control", "_HAVE_IVERILOG"),
     ("test_round16_latency_clear_prefix_localparam", "_HAVE_TOOLS"),
     ("test_round17_latency_inclusive_origin", "_HAVE_IVERILOG"),
+    ("test_rtl_transitive_cone", "_HAS_IVERILOG"),
+    ("test_rtl_transitive_cone", "_HAS_VVP"),
     ("test_rtllm_tier_pipeline", "_HAVE_IV"),
     ("test_serial_parallel_mul_synth", "_HAVE_IVERILOG"),
     ("test_table_lut_synth", "_HAVE_SIM"),
     ("test_v0_2_46_transcripts_ladder_canonical", "_HAVE_TOOLS"),
+    ("test_v0_3_26_issue530_hygiene_prefixed_reset_mem_array", "_HAS_IVERILOG"),
+    ("test_v0_3_27_issue533_fix_compile_neutrality", "_HAS_IVERILOG"),
+    ("test_v1_0_23_issue626_cvdp_gate_defence_emit", "_HAS_IVERILOG"),
+    ("test_v1_0_26_issue629_tb_reconcile_rtl_surface", "_HAS_IVERILOG"),
+    ("test_v1_0_36_issue643_soc_wrapper_tb_compile", "_HAS_IVERILOG"),
+    ("test_v1_0_37_issue645_use_power_pins_tb_consistency", "_HAS_IVERILOG"),
     ("test_v1_0_48_issue678_shapeb_export_preserves_variant_alias_wrapper", "_HAVE_IVERILOG"),
+    ("test_v1_0_50_issue680_cvdp_gate_emit_format_normalize", "_HAS_IVERILOG"),
+    ("test_v1_0_50_issue680_cvdp_gate_emit_format_normalize", "_HAS_TOOLS"),
+    ("test_v1_0_50_issue680_cvdp_gate_emit_format_normalize", "_HAS_YOSYS"),
     ("test_v1_0_51_issue683_synth_top_graph_root_fallback", "_HAVE_YOSYS"),
+    ("test_v1_0_53_issue688_harness_exact_selfverify", "_HAS_AB"),
+    ("test_v1_0_53_issue688_harness_exact_selfverify", "_HAS_ABC"),
+    ("test_v1_0_53_issue688_harness_exact_selfverify", "_HAS_IVERILOG"),
+    ("test_v1_0_53_issue688_harness_exact_selfverify", "_HAS_VERILATOR"),
+    ("test_v1_0_53_issue688_harness_exact_selfverify", "_HAS_VVP"),
     ("test_v1_0_63_issue700_diff_verify_harness", "_HAVE_IVERILOG"),
     ("test_v1_0_64_issue705_latency_conformance", "_HAVE_IVERILOG"),
+    ("test_v1_0_66_issue707_shapeb_port_reorder", "_HAS_IVERILOG"),
+    ("test_v1_0_68_issue707r2_shapeb_tb_inferred_order", "_HAS_IVERILOG"),
+    ("test_v1_0_71_issue707r3_scoreside_port_permutation", "_HAS_IVERILOG"),
     ("test_v1_0_75_issue717_tb_vcs_construct_remediate", "_HAVE_IV"),
     ("test_v1_0_78_issue728_spec_example_smoke_tb", "_HAVE_IVERILOG"),
     ("test_v1_0_78_issue729_ppa_area_threshold", "_HAVE_IVERILOG"),
     ("test_v1_0_80_issue738_regmap_indirection", "_HAVE_IVERILOG"),
+    ("test_v1_0_80_issue742_shapeb_binding_contracts", "_HAS_IVERILOG"),
+    ("test_v1_0_83_issue518r2_colon_form_arstn", "_HAS_IVERILOG"),
+    ("test_v1_0_83_issue742r2_apply_order_inline_comment", "_HAS_IVERILOG"),
     ("test_v1_0_83_issue755_latency_param_clear_multifile", "_HAVE_IVERILOG"),
     ("test_v1_0_85_issue767_unpacked_array_tb", "_HAVE_IV"),
     ("test_v1_0_87_issue770r2_latency_arbiter_onehot", "_HAVE_IVERILOG"),
     ("test_v1_0_93_issue784_emit_assert_discriminators", "_HAVE_TOOLS"),
     ("test_v1_1_1_issue787_latency_conformance_multibit_datapath", "_HAVE_IVERILOG"),
+    ("test_v1_1_60_combdly_blkseq_style_suppress", "_HAS_VERILATOR"),
+    ("test_v1_1_61_lint_advisory_iverilog_scored", "_HAS_IVERILOG"),
+    ("test_v1_1_61_lint_advisory_iverilog_scored", "_HAS_VERILATOR"),
     ("test_v1_1_63_full_moore_fsm_synth", "_HAVE_TOOLS"),
     ("test_v1_1_64_fsm_tabular_format", "_HAVE_TOOLS"),
     ("test_v1_1_65_ff_and_comb_state_synth", "_HAVE_TOOLS"),
     ("test_v1_1_76_behavioral_fsm", "_HAVE_IVERILOG"),
     ("test_v1_1_76_encoder_decoder", "_HAVE_IVERILOG"),
     ("test_v1_1_76_mealy_sequence", "_HAVE_TOOLS"),
+    ("test_v1_1_76_nextstate_misc", "_HAS_IVERILOG"),
     ("test_v1_1_76_waveform_ext", "_HAVE_TOOLS"),
     ("test_v1_1_83_new_canonicals", "_HAVE_IV"),
     ("test_v1_1_84_arith_prose_fold", "_HAVE_IV"),
     ("test_v1_1_85_fsm_detector_fold", "_HAVE_IV"),
     ("test_v1_1_85_seq_mult_latency", "_HAVE_IV"),
+    ("test_v1_3_79_tbgen_dut_output_clk_reset", "_HAS_IVERILOG"),
     ("test_verilator_timing_fallback_check", "_HAVE_VERILATOR"),
     ("test_verilog_selfcheck_lint", "_HAVE_VERILATOR"),
     ("test_verilogeval_human_tier1_solvers", "_HAVE_IVERILOG"),
     ("test_verilogeval_human_tier_pipeline", "_HAVE_IVERILOG"),
     ("test_verilogeval_tier_pipeline", "_HAVE_IVERILOG"),
     ("test_waveform_table_conformance", "_HAVE_IVERILOG"),
+    ("test_worked_example_sequence_oracle_check", "_HAS_IVERILOG"),
 )
 
 #: Gates `shutil.which` cannot decide, each with the discriminator that DOES
 #: decide it. Every entry is asserted to be genuinely which-insensitive below,
 #: so this tuple cannot be used to park a broken tool gate.
 NOT_WHICH_GATES = (
-    # corpus on disk — `_DATASET.is_dir()` / `.exists()`; no binary involved
     ("test_dff_primitive_synth", "_HAVE_DATASET", "corpus dir"),
-    ("test_verilogeval_human_tier1_solvers", "_HAVE_DATASET", "corpus dir"),
-    ("test_verilogeval_human_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
-    ("test_verilogeval_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
-    # corpus on disk — `_RTLLM_ROOT.is_dir()` / `_DS.is_dir()`
     ("test_general_synth", "_HAVE_DS", "corpus dir"),
-    ("test_rtllm_tier_pipeline", "_HAVE_DS", "corpus dir"),
-    ("test_v1_1_76_encoder_decoder", "_HAVE_DS", "corpus dir"),
-    ("test_v1_1_76_waveform_ext", "_HAVE_DS", "corpus dir"),
-    # python package import — `try: import systemrdl`
     ("test_l4_systemrdl_export", "_HAVE_RDL", "package import"),
-    # TWO-STAGE probe: `_container_up()` checks `which("docker")` FIRST and
-    # then runs a real `docker inspect`. Patching `which` gets past stage one
-    # and dies at stage two, so `which` alone can never open it.
+    ("test_rtllm_tier_pipeline", "_HAVE_DS", "corpus dir"),
     ("test_v1_0_78_issue729_ppa_area_threshold", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_0_80_issue739_ppa_unreachable_target_escape", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_0_83_issue756_ppa_disjunctive_clauses", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_0_85_issue768_ppa_reachability_submission_independent", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_0_85_issue769_ppa_generic_meets_target", "_HAVE_CONTAINER", "docker probe"),
+    ("test_v1_1_76_encoder_decoder", "_HAVE_DS", "corpus dir"),
+    ("test_v1_1_76_waveform_ext", "_HAVE_DS", "corpus dir"),
+    ("test_verilogeval_human_tier1_solvers", "_HAVE_DATASET", "corpus dir"),
+    ("test_verilogeval_human_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
+    ("test_verilogeval_tier_pipeline", "_HAVE_DATASET", "corpus dir"),
 )
 
 _NOT_WHICH_PAIRS = tuple((m, c) for m, c, _ in NOT_WHICH_GATES)
+
+#: Constants that match the prefix but are NOT gates. Widening the key to
+#: `_HAS_` swept in two module-level constants whose names collide with the
+#: convention and whose values are not booleans at all — a fixture blob and an
+#: argv list. They are recorded with the value TYPE that disqualifies them, and
+#: `test_a_declared_non_gate_is_really_not_a_boolean` checks each one, so this
+#: tuple cannot become a place to park a gate that has started failing.
+NOT_A_GATE = (
+    ("test_signoff_cell_aware_feol_cfg", "_HAS_GEOMETRY", "str: fixture report text"),
+    ("test_verilator_coverage_measure", "_HAS_TOOLCHAIN", "list: argv fragment"),
+)
+
+_NOT_A_GATE_PAIRS = tuple((m, c) for m, c, _ in NOT_A_GATE)
 
 
 @pytest.mark.parametrize("modname,const", WHICH_GATES)
@@ -230,6 +305,27 @@ def test_a_declared_non_which_gate_is_really_not_which_keyed(modname, const, why
         f"`which` gate: move it to WHICH_GATES, where both directions are proved.")
 
 
+@pytest.mark.parametrize("modname,const,why", NOT_A_GATE)
+def test_a_declared_non_gate_is_really_not_a_boolean(modname, const, why):
+    """The guard ON `NOT_A_GATE`.
+
+    A constant excluded for "not being a gate" must not be a bool. A real tool
+    gate is True or False, so if one is moved here to stop it being probed —
+    the obvious way to silence a gate that has started failing — this fails.
+    The reason string carries the type that disqualifies it, and the type is
+    re-derived here rather than trusted.
+    """
+    mod = _reload_with_which(modname, _ABSENT)
+    value = getattr(mod, const)
+    assert not isinstance(value, bool), (
+        f"{modname}.{const} is declared a non-gate ({why}) but it IS a bool "
+        f"({value!r}). Booleans are gates: move it to WHICH_GATES, or to "
+        f"NOT_WHICH_GATES if `which` is not its discriminator.")
+    assert type(value).__name__ in why, (
+        f"{modname}.{const} is recorded as `{why}` but measures as "
+        f"{type(value).__name__}. The recorded type must match the tree.")
+
+
 def test_every_defined_gate_is_registered():
     """The register must name every `_HAVE_*` in the directory, in one list or
     the other.
@@ -239,7 +335,8 @@ def test_every_defined_gate_is_registered():
     this repo removes everywhere else. Keyed on the pattern, so a TWELFTH
     spelling is covered the day it appears without an edit here.
     """
-    registered = set(WHICH_GATES) | set(_NOT_WHICH_PAIRS)
+    registered = (set(WHICH_GATES) | set(_NOT_WHICH_PAIRS)
+                  | set(_NOT_A_GATE_PAIRS))
     found = _scan()
     assert found == registered, (
         f"defined but not registered: {sorted(found - registered)}; "
@@ -254,8 +351,8 @@ def test_the_register_is_not_checking_an_empty_population():
     silence it exists to prevent.
     """
     found = _scan()
-    assert len(found) >= 50, (
-        f"only {len(found)} `_HAVE_*` definitions found; 59 were present when "
-        f"this was written. The scan is broken, not the tree.")
-    assert len(WHICH_GATES) >= 40, (
-        f"only {len(WHICH_GATES)} which-keyed gates registered; 45 when written")
+    assert len(found) >= 90, (
+        f"only {len(found)} `_HA(VE|S)_*` definitions found; 100 were present "
+        f"when this was written. The scan is broken, not the tree.")
+    assert len(WHICH_GATES) >= 75, (
+        f"only {len(WHICH_GATES)} which-keyed gates registered; 84 when written")
