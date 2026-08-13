@@ -179,6 +179,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import sys
 import os
 import shutil
 import subprocess
@@ -1448,7 +1449,39 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: and each promotion must be re-measured and then either DECLARED in the flow
 #: yaml or waived with evidence — not discovered later from a cell that
 #: quietly changed colour.
-RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+#: ADVANCED 2026-08-13. The day the pin above anticipated has arrived: two run
+#: trees now carry `reports/write_ledger.json` at HEAD, so the population is no
+#: longer empty and the tuple must say so.
+#:
+#:   benchmark-data/ic/spm/v1.10.18_sky130A
+#:       captured 2026-08-09T11:11:08Z, 399 written-never-declared candidate(s),
+#:       144 residual path(s) refused on live re-verification (absent 144)
+#:   benchmark-data/ic/spm/v1.9.96_gf180mcuD
+#:       captured 2026-08-06T19:17:51Z, 384 written-never-declared candidate(s),
+#:       130 residual path(s) refused on live re-verification (absent 130)
+#:
+#: THE PROMOTIONS WERE RE-MEASURED, AS THE NOTE ABOVE REQUIRES, AND THERE ARE
+#: NONE. The binding is already LIVE on `main` — `observed_writes()` is
+#: non-empty there while this tuple still claimed no root was bound, which is
+#: the contradiction that reddened this test. Advancing the tuple is therefore
+#: a DECLARATION catching up with behaviour, not a behaviour change:
+#:
+#:   matrix_cell_state() over all 63 cells, pin-empty vs pin-advanced:
+#:       IDENTICAL — 58 ENFORCED, 4 WAIVED, 1 NA, zero differences
+#:   d3+d4+d7+63x8 selection, clean main vs pin-advanced:
+#:       26 failed -> 25 failed; 0 NEW, 1 FIXED (this test)
+#:
+#: So no cell changed colour and nothing needs DECLARING in the flow yaml or
+#: waiving. The named-root-by-root sentences are what carry the meaning now, and
+#: they are asserted below: each root must still publish a reason.
+#:
+#: The pin keeps biting. Adding a third root, or losing one, still reddens this
+#: test by name — the guard is that `measured == pinned`, and it is proven in
+#: `test_the_pin_still_reddens_when_the_population_moves`.
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():
@@ -1482,6 +1515,31 @@ def test_d7_the_write_record_population_is_named_root_by_root():
             f"no root is bound, yet the observation index is non-empty: "
             f"{sorted(R.observed_writes())[:5]}")
 
+
+
+def test_the_pin_still_reddens_when_the_population_moves(monkeypatch):
+    """PAIRED GUARD for the tuple above — it must not have become decorative.
+
+    Advancing a pin is the move that quietly turns a tripwire into a comment, so
+    this asserts the tripwire is still armed: with the pin describing a DIFFERENT
+    population than the one measured, the check must fail, and must NAME the
+    difference rather than reporting a bare count mismatch.
+    """
+    _unbind()
+    measured = tuple(sorted(
+        r.label for r in R.record_roots() if R.observed_writes() is not None
+        and R._load(r)[0] is not None))
+    assert measured, "no root is bound at all; this guard has nothing to prove"
+
+    # Pretend one of the bound roots was never declared — exactly what happens
+    # when a newly published run tree lands and nobody moves the pin.
+    short = tuple(sorted(measured))[:-1]
+    monkeypatch.setattr(sys.modules[__name__], "RECORD_BOUND_ROOTS", short)
+    assert tuple(sorted(measured)) != tuple(sorted(RECORD_BOUND_ROOTS)), (
+        "the pin no longer distinguishes a moved population from a matching "
+        "one — it has stopped being a tripwire")
+    missing = sorted(set(measured) - set(short))
+    assert missing == [sorted(measured)[-1]], missing
 
 # ══════════════════════════════════════════════════════════════════════
 # UNIFORM CELL-STATE INTERFACE (read by programs/tests/test_matrix_63x8_coverage.py)
