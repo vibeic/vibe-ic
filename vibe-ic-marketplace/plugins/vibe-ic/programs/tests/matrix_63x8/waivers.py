@@ -462,7 +462,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "flow/phase1_phase2_phase3.yaml, the AUDIT NOTE comment directly "
             "above step id 1 ('this gate is files_exist-only ON PURPOSE ... "
             "Do not re-flag as a missing checker'). "
-            "programs/flow_compliance_check.py:2439-2441 (`passed = "
+            "programs/flow_compliance_check.py:2457 (`passed = "
             "len(found) > 0` on the any_of branch) is the entire predicate — "
             "re-executed live by programs/tests/test_matrix_d2_falsifiable.py"
             "::test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file "
@@ -489,7 +489,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "flow/phase1_phase2_phase3.yaml, the comment on step id 35's "
             "ADVISORY half (#306) naming Step 31/34's ownership and the "
             "absent OpenROAD repair pass. "
-            "programs/flow_compliance_check.py:2439-2441 (`passed = "
+            "programs/flow_compliance_check.py:2459 (`passed = "
             "len(missing) == 0`) is the blocking term's entire predicate; "
             "flowref.GateClause.is_advisory excludes the DFM clause from "
             "this dimension by the module's own rule 1. Re-executed live by "
@@ -887,7 +887,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "verification, not a declaration change."
         ),
         evidence=(
-            "producer programs/phase3_one_shot_runner.py:29941-29964 (the "
+            "producer programs/phase3_one_shot_runner.py:30621-30646 (the "
             "`len(corners) < 2` guard around the `rpt_phase3 / "
             "'single_corner_stance.json'` write; line number re-verified "
             "2026-08-08 after v1.9.99's CTS fix shifted earlier-file line "
@@ -964,11 +964,11 @@ WAIVERS: Tuple[Waiver, ...] = (
             "first; then (b) follows as OR-pairs that can actually fail."
         ),
         evidence=(
-            "producers programs/phase3_one_shot_runner.py:30169 and :30286 "
+            "producers programs/phase3_one_shot_runner.py:30849 and :30966 "
             "(sta_out / 'sta_spef_based.rpt', sta_out / "
-            "'sta_mcorner_ocv.rpt') with mirrors at :30175 and :30316, and "
+            "'sta_mcorner_ocv.rpt') with mirrors at :30855 and :30996, and "
             "the two stance emissions — 'multi_corner_spef_stance.json' "
-            "guarded at :30188, 'mcorner_ocv_stance.json' guarded at :30288 "
+            "guarded at :30865, 'mcorner_ocv_stance.json' guarded at :30967 "
             "— both guarded by `if primary_def.is_file() and "
             "_signoff_regen(...)` (line numbers re-verified 2026-08-08, "
             "shifted downward by roughly one hundred fifty lines after "
