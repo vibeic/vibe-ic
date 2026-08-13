@@ -41,6 +41,7 @@ import _path_layout as _pl
 import _waiver_entries as _we
 import _vacuous_exit as _vx
 from _analog_stub_marker import is_stub_text  # v1.6.177 (#72 P1-6)
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 GF180_MODEL_MARKERS = ("design.ngspice", "sm141064.ngspice")
@@ -644,7 +645,7 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
 
     # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
     skipped = _vx.summary_is_skipped(result.summary)
