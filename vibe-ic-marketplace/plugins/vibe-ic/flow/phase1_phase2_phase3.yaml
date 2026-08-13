@@ -241,6 +241,16 @@ steps:
       # declaring the artefact there was a mis-filed obligation, not a missing
       # gate clause. The obligation MOVED, it was not dropped — the clause
       # `phase1_coverage_report_present_check` below reads it.
+      #
+      # AND MEASURED ON THE PUBLISHED CORPUS, independently of the
+      # provenance argument above — the two supports do not overlap:
+      # Phase 1 extraction-coverage REPORT (companion to LL-38 gate);
+      # per-doc diagnostic of which verbatim literals from
+      # extraction_patterns.json reached generated_docs/L*.json.
+      # MOVED HERE FROM STEP 1 (Spec-to-RTL): measured on the published
+      # corpus, 75 of the 107 run roots that carry this report carry NO
+      # RTL at all, and 105 of 107 carry D1's own L1_DATASHEET.json --
+      # so it is produced by Phase 1 doc extraction, not by Spec-to-RTL.
       - "reports/phase1/extraction_coverage_report.md"
       - "reports/phase1/extraction_coverage_report.json"
     gate:
