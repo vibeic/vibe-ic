@@ -437,8 +437,25 @@ def test_output_entries_classify_into_the_four_kinds():
     # VACUOUS_PASS with both reports written becomes MISSING with none.
     # test_flow_declaration_does_not_silence_its_producer.py holds that
     # distinction live for both steps.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    # 2026-08-14: 134 -> 139, FILE 100 -> 105. The FIVE new entries are the
+    # write-ledger promotions this branch declares, each on the step that
+    # produces it:
+    #     D1  reports/audit/phase1/expert_parse_track.json
+    #     11  phase2/stage2/dft/coverage.yml
+    #     24  reports/phase3/dynamic_ir.json
+    #     27  reports/phase3/si_mcf_sta.json
+    #     34  reports/phase3/cmp_fill_emit.json
+    # GLOB 12 and ANY_OF 22 are untouched, which is what says all five are
+    # plain FILE entries and not new shapes: measured Counter is
+    # {FILE: 105, ANY_OF: 22, GLOB: 12}.
+    #
+    # NOTE for whoever lands the declare cluster: #1310 declares these SAME
+    # five plus `phase1/generated_docs/L21_POWER_INTENT.json` (pin 140), and
+    # #1463 declares that L21 entry alone (pin 135). The three overlap, so the
+    # pin is per-branch and must be re-measured ONCE by whichever lands second
+    # — 139 + 135 is not 140, and this count is the thing that notices.
+    assert sum(seen.values()) == 139, seen
+    assert seen[F.FILE] == 105
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
