@@ -119,7 +119,9 @@ def _digest_tree(root):
     return h.hexdigest()
 
 
-# Recorded at import, asserted at the END of this module. See
+# Recorded at IMPORT, asserted at the end of this module. Note the scope: pytest
+# imports every selected module during COLLECTION, before running any test, so
+# this digest predates the whole session and not just this file. See
 # `test_shipped_skills_tree_is_untouched_by_this_module`.
 _SHIPPED_SKILLS_MD5_AT_IMPORT = _digest_tree(PLUGIN / "skills")
 
@@ -484,7 +486,7 @@ class TestCoreSkillSchema:
 # The regression guard for vibe-ic#1029, kept LAST on purpose.
 # ---------------------------------------------------------------------------
 def test_shipped_skills_tree_is_untouched_by_this_module():
-    """No test in this file may leave a byte of `skills/` different.
+    """No test in this SESSION may leave a byte of `skills/` different.
 
     pytest runs a module's tests in definition order, so this runs after every
     test above. Against the pre-fix file it goes RED: the maintenance-tool
@@ -492,12 +494,45 @@ def test_shipped_skills_tree_is_untouched_by_this_module():
     `skills/fork-gatekeeper-loop/SKILL.md`. That modification is what made
     `gatekeeper-land.sh` line 213 fail and the landing stamp never get written.
 
+    THE SCOPE IS THE SESSION, NOT THIS MODULE, and the name kept saying
+    otherwise. `_SHIPPED_SKILLS_MD5_AT_IMPORT` is bound when this module is
+    IMPORTED, and pytest imports every selected module during collection before
+    running anything — so the digest predates the entire run, and a write from
+    any OTHER selected file fails THIS assertion. The old message sent the
+    reader to search this file for a writer that need not be in it: the
+    expensive kind of wrong message, because it is confident and specific and
+    names the wrong place to look.
+
+    Both edges of the window were measured rather than assumed:
+
+      * a write made BEFORE the session starts is invisible — it is already in
+        the import-time digest (planted, then run: 19 passed);
+      * a write made by a module that RUNS AFTER this test is also invisible —
+        this test is last in its own file, not last in the session (planted
+        after, run: 20 passed);
+      * a write by any test that RAN BEFORE it is caught (planted before,
+        run: 1 failed, 19 passed).
+
+    So the honest scope is "anything that ran before this assertion in this
+    session", which is wider than one module and narrower than the whole run.
+    That residue is real and is not closed here: `landing_worktree_is_clean_check.py`
+    owns the whole tree and is what actually gates the landing.
+
+    The scope is deliberate and worth keeping — a shipped tree mutated by a
+    neighbouring module is exactly as fatal to the landing as one mutated here.
+    Only the description was narrower than the mechanism.
+
     This assertion is the test-side of the gate; it does not replace
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
     assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
-        "tool against a copy — see _seed_plugin_copy().")
+        "a test that ran BEFORE this one in this SESSION wrote into the "
+        "SHIPPED skills/ tree — not necessarily a test in this module: the "
+        "digest is taken at collection time, so an earlier selected file's "
+        "writes land here. Fix the WRITER (run the tool against a copy — see "
+        "_seed_plugin_copy()), never this digest. To find it, re-run the same "
+        "selection with `-p suite_write_guard --write-guard=per-test`, which "
+        "attributes the write to its node id.")
 
 
 if __name__ == "__main__":
