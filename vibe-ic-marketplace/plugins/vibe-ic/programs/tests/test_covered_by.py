@@ -2,7 +2,31 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+#: The module under test lives in `tools/core_agent/`, but this test lives in
+#: `programs/tests/` — because `pytest.ini` sets `testpaths = programs/tests`,
+#: and a test outside that tree is NEVER COLLECTED. Measured on this PR's own
+#: first push: the plugin suite collected 32700 with the test file sitting in
+#: `tools/core_agent/`, and 32700 without it. It contributed nothing.
+#:
+#: `ci_targeted_test_select.py` says the same thing from the other side — it
+#: reported both of this PR's paths UNMAPPED, so the targeted gate could not
+#: select them either. A test that never runs is exactly the vacuous pass this
+#: module exists to refuse, so it would have been the wrong file to ship.
+#: Located by WALKING UP for `tools/core_agent`, not by a parent index. A fixed
+#: depth is a second place the layout is written down, and it breaks silently
+#: the day the plugin moves — the same class of defect as a pytest.ini naming a
+#: tree that does not exist (vibe-ic#1308).
+def _tool_dir() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        cand = parent / "tools" / "core_agent"
+        if cand.is_dir():
+            return cand
+    raise AssertionError(
+        "tools/core_agent is not above this test; the module under test cannot "
+        "be located, and a skipped import here would silently stop measuring")
+
+
+sys.path.insert(0, str(_tool_dir()))
 
 import covered_by as C  # noqa: E402
 
@@ -99,3 +123,29 @@ def test_measure_classifies_each_branch_from_its_own_run():
                     checkout=lambda n: f"wt{n}",
                     runner=lambda wt, node: runs[wt])
     assert got == {1077: C.PASSED, 1159: C.FAILED}
+
+
+# ── enumeration, parsed offline ───────────────────────────────────────────
+def test_pr_files_are_parsed_into_a_candidate_index():
+    payload = ('[{"number": 1077, "files": [{"path": "a/test_d7.py"}]},'
+               ' {"number": 1264, "files": [{"path": "b/other.py"}]}]')
+    got = C.parse_pr_files(payload)
+    assert got == {1077: ["a/test_d7.py"], 1264: ["b/other.py"]}
+    assert C.candidates(got, "test_d7.py") == [1077]
+
+
+def test_a_broken_enumeration_yields_no_candidates_rather_than_a_crash():
+    """gh returning an error sentence must not read as 'no PR touches this'."""
+    for bad in ("", "gh: API rate limit exceeded", '{"message": "Not Found"}'):
+        assert C.parse_pr_files(bad) == {}
+
+
+def test_an_empty_enumeration_decides_UNKNOWN_not_UNCOVERED():
+    """The join of the two guards: no candidates is never 'the work is yours'."""
+    assert C.decide(C.parse_pr_files("")) [0] == 2
+
+
+def test_a_pr_row_without_files_is_kept_but_matches_nothing():
+    got = C.parse_pr_files('[{"number": 7, "files": []}]')
+    assert got == {7: []}
+    assert C.candidates(got, "test_x.py") == []
