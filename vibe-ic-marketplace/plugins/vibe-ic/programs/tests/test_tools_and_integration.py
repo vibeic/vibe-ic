@@ -119,7 +119,10 @@ def _digest_tree(root):
     return h.hexdigest()
 
 
-# Recorded at import, asserted at the END of this module. See
+# Recorded at MODULE IMPORT — which pytest does during COLLECTION, before any
+# test in the session runs — and asserted at the END of this module. The window
+# between those two points therefore contains every test the session ran in
+# between, NOT just this module's. See
 # `test_shipped_skills_tree_is_untouched_by_this_module`.
 _SHIPPED_SKILLS_MD5_AT_IMPORT = _digest_tree(PLUGIN / "skills")
 
@@ -484,20 +487,42 @@ class TestCoreSkillSchema:
 # The regression guard for vibe-ic#1029, kept LAST on purpose.
 # ---------------------------------------------------------------------------
 def test_shipped_skills_tree_is_untouched_by_this_module():
-    """No test in this file may leave a byte of `skills/` different.
+    """No test in THIS SESSION may leave a byte of `skills/` different.
 
-    pytest runs a module's tests in definition order, so this runs after every
-    test above. Against the pre-fix file it goes RED: the maintenance-tool
-    tests ran `add_compliance_gate.py` as shipped and it appended a section to
+    The baseline is taken at module import — i.e. at COLLECTION, before any test
+    runs — so this compares against the tree as it was before the session
+    started, not before this module started. Any module that ran in between can
+    move it. The name says "by_this_module" for history; the mechanism is
+    session-scoped and the message below says so.
+
+    Against the pre-fix file it goes RED: the maintenance-tool tests ran
+    `add_compliance_gate.py` as shipped and it appended a section to
     `skills/fork-gatekeeper-loop/SKILL.md`. That modification is what made
     `gatekeeper-land.sh` line 213 fail and the landing stamp never get written.
+
+    WHY IT IS INTERMITTENT, which costs the most time when it is missing:
+    alphabetically this module sorts BEFORE e.g. `test_v0_3_4_…`, so in default
+    order the assertion runs first and sees nothing. It fires only when a writer
+    is ordered ahead of it — which `pytest-randomly` arranges on some seeds and
+    not others. Reproduce deterministically by naming the suspected writer first
+    with `-p no:randomly`.
+
+    A second reason it is easy to miss: the write may be `__pycache__`, which is
+    GITIGNORED, so `git status skills/` stays empty while this digest moves.
 
     This assertion is the test-side of the gate; it does not replace
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
     assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
-        "tool against a copy — see _seed_plugin_copy().")
+        "a test in THIS SESSION wrote into the SHIPPED skills/ tree — the "
+        "baseline is taken at collection, so the writer may be in ANY module "
+        "that ran before this one, not necessarily this file. Re-run with "
+        "`-p no:randomly`, putting the suspected writer first, to pin it "
+        "deterministically. Two remedies, by cause: if a tool mutated content, "
+        "run it against a copy (see _seed_plugin_copy()); if a child process "
+        "merely CACHED there (`__pycache__`, which `git status` will NOT show), "
+        "give it PYTHONDONTWRITEBYTECODE=1 and "
+        "PYTEST_ADDOPTS=-p no:cacheprovider.")
 
 
 if __name__ == "__main__":
