@@ -14,7 +14,7 @@ proves three things, and deliberately nothing else:
 
   2. The `flowref` accessors agree with the yaml about which steps declare
      what — including the two places where the circulating numbers are subtly
-     wrong (see `test_blocks_on_presence_is_62_but_non_empty_is_60`).
+     wrong (see `test_the_blocks_on_census_is_pinned_and_only_the_two_roots_are_empty`).
 
   3. The waiver registry cannot carry a placeholder. Every waiver needs a
      reason AND evidence, both non-empty and both substantive.
@@ -65,8 +65,21 @@ CENSUS_GATE_PRESENT = 62
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
-CENSUS_BLOCKS_ON_PRESENT = 62
-CENSUS_BLOCKS_ON_NON_EMPTY = 60
+# 62 -> 63 / 60 -> 61 on 2026-08-13: step P0 ("Structural-RTL pre-flight")
+# gained `blocks_on: [1]` in 332b9985 (vibe-ic#923 / #929) and this census was
+# never re-pinned, so the ledger has been red on clean main ever since. The edge
+# is CORRECT and the pins were the stale half: P0 runs chip-agnostic structural
+# gates over RTL, and step 1 is the step that declares
+# `phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v` — a pre-flight cannot
+# precede the step that produces what it reads.
+#
+# The INVARIANT this pair exists to state is unchanged, which is why re-pinning
+# is the right move rather than relaxing the assertion: presence minus non-empty
+# is still exactly 2, and still exactly {A1, D1}, the flow's two genuine roots.
+# Both numbers moved together (+1/+1) because P0 had no `blocks_on` key at all
+# before, so it entered both populations at once.
+CENSUS_BLOCKS_ON_PRESENT = 63
+CENSUS_BLOCKS_ON_NON_EMPTY = 61
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -276,7 +289,7 @@ def test_gate_presence_matches_the_yaml(raw_steps):
             assert F.gate_programs(sid) == ()
 
 
-def test_blocks_on_presence_is_62_but_non_empty_is_60(raw_steps):
+def test_the_blocks_on_census_is_pinned_and_only_the_two_roots_are_empty(raw_steps):
     """The two are NOT the same set, and conflating them is a real error.
 
     `blocks_on` is DECLARED on 62 steps but declared EMPTY on D1 and A1 — the
