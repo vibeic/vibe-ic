@@ -69,6 +69,21 @@ def _project(tmp_path: Path, *, cached_die: str, cached_util: float) -> Path:
     (pnr / f"{TOP}.def").write_text(
         "DIEAREA ( 0 0 ) ( 1233000 1233000 ) ;\nPINS 0 ;\nEND PINS\n")
     (pnr / f"{TOP}.gds").write_text("STALE GDS FROM THE PREVIOUS DIE\n")
+    # The DECLARED INPUTS of the steps this fixture drives. The runner now
+    # preflights a step's declared inputs and REFUSES to dispatch when one is
+    # absent, so without these the pnr/drc/lvs steps were never entered at all
+    # and the #593 guard under test never executed — the monkeypatched
+    # `step_pnr` cannot run if the step is blocked upstream of it.
+    #
+    # Staging them is faithful to this fixture's own premise ("everything
+    # already exists from the PREVIOUS run"): a previous run that produced a
+    # DEF and a GDS necessarily produced these too. They are written as inputs
+    # the guard reads past, never as a way to switch the preflight off — the
+    # preflight stays real, and test_step_input_ordering owns its coverage.
+    (synth / "post_dft_netlist.v").write_text(
+        f"module {TOP}(); endmodule\n")          # owed by step 12, read by 15
+    (pnr / "routed.def").write_text(             # owed by step 21, read by 31
+        "DIEAREA ( 0 0 ) ( 1233000 1233000 ) ;\nPINS 0 ;\nEND PINS\n")
     R._write_pnr_args_sidecar(pnr, cached_die, cached_util)
     # The fixture's premise is "a PREVIOUS RUN produced these", and a previous
     # run is now IDENTIFIED — the cache is keyed on the producing build as well
