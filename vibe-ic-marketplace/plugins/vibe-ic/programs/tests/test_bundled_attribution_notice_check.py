@@ -308,3 +308,24 @@ def test_scan_reaches_the_shared_polarity_vocabulary(tmp_path):
               if isinstance(n, ast.FunctionDef) and n.name == "scan")
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
     assert {"is_denied", "sentence_scope"} & names, sorted(names)
+
+
+#: The canonical real-world denial, from #1249's independent fix of this row —
+#: US-government sources carry it verbatim and they DO get vendored.
+_US_GOV_RTL = """// No copyright is claimed in the United States under Title 17, U.S. Code.
+// SPDX-License-Identifier: Apache-2.0
+module usgov; endmodule
+"""
+
+
+def test_a_US_government_notice_is_not_a_rightsholder(tmp_path, capsys):
+    """Read blind this yields the holder "is claimed in the United States under
+    Title 17, U.S. Code." — a fabricated party in a gate whose whole output is
+    the list of people this repo owes attribution to. Getting it wrong invents
+    a legal obligation rather than missing one."""
+    root = _tree(tmp_path, _OURS, {"vendor/usgov.sv": _US_GOV_RTL})
+    assert bc.scan(root) == {}, bc.scan(root)
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert "Title 17" not in out, out
