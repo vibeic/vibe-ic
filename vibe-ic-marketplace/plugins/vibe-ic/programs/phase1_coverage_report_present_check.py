@@ -2,6 +2,7 @@
 """
 phase1_coverage_report_present_check.py — gate (BACKLOG-v13 Wave 5).
 
+
 Wave 23 (v0.119.55) — extraction coverage is non-waivable. 100% is
 the HARD acceptance threshold for Phase 1 (doc-extraction). If a literal cannot be
 extracted by the auto-discovery patterns, the agent MUST add a
