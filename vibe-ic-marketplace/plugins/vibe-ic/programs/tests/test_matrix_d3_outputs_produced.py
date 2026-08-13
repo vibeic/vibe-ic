@@ -824,11 +824,63 @@ def tracked_under(root: Path) -> frozenset:
             "exists on this machine' (#527)"
         ) from exc
     if proc.returncode != 0:
+        # git RAN and FAILED. Two very different worlds produce this, and the
+        # empty set is the honest answer to only one of them:
+        #
+        #  * *root* is genuinely not a git work tree (a flattened install
+        #    cache, an unpacked archive) — nothing there is committed, so
+        #    nothing there is admissible as evidence. Empty is correct.
+        #
+        #  * *root* IS a checkout whose git metadata this process cannot
+        #    reach — a worktree whose gitdir lives outside a container mount,
+        #    a bad GIT_DIR, a permissions failure. The artefacts ARE committed;
+        #    git simply could not say so. Returning empty here does not report
+        #    "unknown", it reports "NOT TRACKED AT HEAD" for every path in the
+        #    tree, which this module's callers read as "the artefact is not
+        #    produced" — a confident wrong answer, indistinguishable from a
+        #    real finding.
+        #
+        # MEASURED (#1348 / #1356): mounting this repo's worktree into a
+        # container, where `.git` points at a host path that does not exist
+        # there, turned 16 d3 contradictions into 54. The extra 38 were
+        # artefacts that ARE committed and ARE present — the failure message
+        # listed each one WITH ITS SIZE and still called it "matched but NOT
+        # tracked at HEAD — a local build product, not evidence".
+        #
+        # The discriminator is whether anything CLAIMS to be a checkout here.
+        # If a `.git` exists at or above *root* and git still cannot answer,
+        # the environment is broken and this module must refuse — exactly as
+        # it already refuses when the git binary is missing, and for the same
+        # reason: it cannot tell a committed artefact from a local build
+        # product and must not guess (#527).
+        if _claims_to_be_a_checkout(root):
+            raise AssertionError(
+                f"`git ls-tree -r HEAD` exited {proc.returncode} under {root}, "
+                f"which DOES carry git metadata — so this is a broken "
+                f"environment, not a tree without commits. Refusing to read "
+                f"that as 'nothing is tracked at HEAD': every artefact below "
+                f"would be reported NOT PRODUCED while it sits committed on "
+                f"disk. git said: "
+                f"{(proc.stderr or b'').decode('utf-8', 'replace').strip()[:200]!r}"
+            )
         return frozenset()
     return frozenset(
         b.decode("utf-8", "surrogateescape")
         for b in proc.stdout.split(b"\0") if b
     )
+
+
+def _claims_to_be_a_checkout(root: Path) -> bool:
+    """Does anything at or above *root* claim this is a git checkout?
+
+    A directory (normal clone) or a file (`git worktree`, submodule) named
+    ``.git``. Deliberately a filesystem question, not a git one: it has to
+    stay answerable when git itself is the thing that is failing.
+    """
+    for d in (root, *root.parents):
+        if (d / ".git").exists():
+            return True
+    return False
 
 
 def is_tracked(root: Path, rel: str) -> bool:
