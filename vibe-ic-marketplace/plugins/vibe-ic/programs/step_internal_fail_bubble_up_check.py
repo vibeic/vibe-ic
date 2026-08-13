@@ -600,9 +600,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"no waiver and no orchestrator record names.")
             return 1
         if now < base:
-            print(f"[PASS] {base} -> {now}; lower the baseline so the recorded "
-                  f"number stops claiming debt that is paid.")
-            return 0
+            # A PAID DEBT THAT STAYS ON THE REGISTER IS SLACK, NOT A PASS
+            # (vibe-ic#1025). This used to print the same sentence and return
+            # 0, so nothing ever forced the number down: the baseline sat at 7
+            # while the sweep measured 5, and the gate would then have called a
+            # regrowth back to 7 "no NEW". Two findings of permission, granted
+            # by a suggestion nobody was obliged to act on.
+            #
+            # This repo has already ruled on the shape one gate over.
+            # `evidence_citation_resolves_check` FAILS on "entries the baseline
+            # claims are broken but that now resolve — the debt was paid and
+            # the register must be updated, else the register slowly turns into
+            # permission". Same register, same rule.
+            #
+            # Non-zero, and it names the one action that clears it. The
+            # ratchet may only shrink, and now it must.
+            print(f"[FAIL] the recorded baseline claims {base} unacknowledged "
+                  f"step-internal FAIL(s) and the sweep measures {now}: "
+                  f"{base - now} of them are PAID and still on the register. "
+                  f"A register that keeps a paid debt is permission for the "
+                  f"number to grow back to it unnoticed. Re-record it with "
+                  f"--write-baseline; the ratchet may only shrink, and it must.")
+            return 1
         print(f"[PASS] no NEW unacknowledged step-internal FAIL ({now} recorded)")
         return 0
 
