@@ -228,6 +228,7 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      - "reports/audit/phase1/expert_parse_track.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
@@ -1526,6 +1527,7 @@ steps:
       - "phase2/stage2/dft/transition_atpg_plan.md"
       - "reports/phase2/dft/coverage.json"
       - "reports/phase2/dft/bsdl_plan.json"
+      - "phase2/stage2/dft/coverage.yml"
     # NOTE on invocation: flow-orchestrate/SKILL.md directs the agent to
     # invoke `fault_atpg_run` with the design's clock name and the
     # already-synthesised netlist. FOUNDRY BAR: stuck-at must reach the
@@ -3171,6 +3173,7 @@ steps:
       # on run 2, and a verdict that depends on how many times it has been
       # evaluated is not a measurement.
       - "reports/phase3/ir_drop_signoff.json"
+      - "reports/phase3/dynamic_ir.json"
     gate:
       all_of:
         # OUTPUT-PATH COLLISION (same shape as step 25's, fixed with it in
@@ -4028,6 +4031,7 @@ steps:
       # accept either location, so both are accepted here too.
       - "reports/density.json OR reports/phase3/density.json"
       - "reports/density.rpt OR reports/phase3/density.rpt"
+      - "reports/phase3/cmp_fill_emit.json"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/filled.def", "phase3/stage3/pnr/metal_fill.done"]

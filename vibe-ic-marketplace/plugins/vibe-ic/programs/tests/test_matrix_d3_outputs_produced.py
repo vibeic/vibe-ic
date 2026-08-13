@@ -643,7 +643,33 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # file si_mcf_sta_check.json, which remains undeclared and conditional --
 # it is precisely the conditional finding the exemption control anchors on,
 # so declaring it too would take the control's subject away again.
-_LIVE_ENTRY_COUNT = 121
+# 2026-08-13 (second move, same session): 121 -> 125, 135 -> 139 declared.
+# Four of the five remaining d7 INCOMPLETE reds were each ONE load-bearing
+# artefact
+# the flow produces and a gate reads that no step declared:
+#   D1  reports/audit/phase1/expert_parse_track.json   7399 B
+#   11  phase2/stage2/dft/coverage.yml                28797 B
+#   24  reports/phase3/dynamic_ir.json                  728 B
+#   34  reports/phase3/cmp_fill_emit.json              3854 B
+# The FIFTH, M2's phase1/generated_docs/L21_POWER_INTENT.json, is
+# deliberately NOT declared: measured, it reddens d5 for steps D1 and 15,
+# which READ that file, and M2 already has D1 in its own ancestry -- so
+# declaring it on M2 asserts a CIRCULAR dependency. M2 is not that
+# artefact's owner and the d7 red for M2 is left standing rather than
+# closed by a declaration that is wrong.
+#
+# Each is decided LIVE, and admissibility was CHECKED rather than assumed:
+# every size above is measured in a root that is both named in the
+# manifest's own run_roots AND tracked at HEAD (`git ls-files
+# --error-unmatch`). No new root is admitted -- all five resolve inside
+# roots this pin already searched -- and nothing reaches $HOME.
+#
+# All five also have a producer OUTSIDE the declaring step's own gate
+# (phase1_expert_parse_track.py, dft_test_coverage.py,
+# dynamic_ir_vectored_emit.py, metal_fill_emit.py, and the L21 protocol
+# synthesisers), so this is independently-produced evidence and not an
+# auditor crediting files it caused to exist.
+_LIVE_ENTRY_COUNT = 125
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
