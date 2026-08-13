@@ -440,3 +440,24 @@ def test_the_unwired_state_is_disclosed_or_gone():
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# --- vibe-ic#1241: polarity, and that it discriminates ---------------------
+def test_a_DENIED_id_is_not_counted_as_an_emission():
+    """`prose_polarity_consulted_check` only asks whether the module is
+    CONSULTED. A call whose result is discarded satisfies it and changes
+    nothing, so the behaviour is pinned here instead."""
+    out = G.scan_log("no [WARNING RSZ-0104] were emitted this run\n")
+    assert out["ids"] == {}, out
+    assert out["denied_count"] == 1, out
+
+
+def test_a_NEGATION_INSIDE_THE_MESSAGE_still_counts_as_an_emission():
+    """THE PAIRED HALF, and the one that matters. A diagnostic line IS the
+    emission; its message is ordinary English that routinely negates something
+    about the design. Scanning the whole sentence dropped every id in this
+    file's fixtures and turned eight tests rc 2 VACUOUS — measured, which is
+    why the span is what PRECEDES the match."""
+    out = G.scan_log("[WARNING RSZ-0104] no clock found for register bank\n")
+    assert out["ids"] == {"WARNING": {"RSZ-0104": 1}}, out
+    assert out["denied_count"] == 0, out

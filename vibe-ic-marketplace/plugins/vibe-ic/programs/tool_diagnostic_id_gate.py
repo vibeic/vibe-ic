@@ -143,6 +143,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import _prose_polarity as _polarity   # vibe-ic#1241
+
 SCHEMA = "tool_diagnostic_id_census/v1"
 
 #: Family A — the OpenROAD suite's bracketed form. The level word is captured
@@ -189,21 +191,77 @@ def _norm_sta(num: str) -> str:
     return f"STA-{int(num):04d}"
 
 
+#: vibe-ic#1241 — a diagnostic id read out of a sentence that DENIES it.
+#:
+#: This extractor's whole job is "which ids did this run emit", and a regex
+#: cannot tell an emission from a statement about the absence of one. Both of
+#: these appear in real tool output:
+#:
+#:     [WARN ORDER-1234] pin access blocked        <- emitted
+#:     no [WARN ORDER-1234] warnings were emitted  <- explicitly NOT emitted
+#:
+#: Counting the second is not a near miss: this gate BLOCKS on an id that was
+#: not in the predecessor run, so a denial read as an emission invents a
+#: regression and stops a landing. That is the direction that costs most.
+#:
+#: `extra_breaks=("\n",)` because this input is NOT prose — consecutive lines of
+#: a tool log are unrelated RECORDS, and `_prose_polarity.sentence_scope`
+#: documents that a caller with record-structured input declares that itself
+#: rather than every prose reader paying for it. Without it a denial on one line
+#: would retract an id emitted on the next.
+#:
+#: DENIALS ARE COUNTED, NEVER SILENTLY DROPPED. A reader has to be able to tell
+#: "this run emitted nothing" from "this extractor discarded what it read" —
+#: which is the same requirement this repository puts on every other gate.
 def scan_log(text: str) -> Dict[str, Any]:
-    """Extract every diagnostic id from ONE log's text."""
+    """Extract every diagnostic id from ONE log's text.
+
+    An id whose sentence denies it is NOT an emission and is excluded, with the
+    count reported as `denied_count`.
+    """
     by_level: Dict[str, Dict[str, int]] = {}
+    denied = 0
+
+    def _emitted(start: int, end: int) -> bool:
+        """False only when the sentence denies THE OCCURRENCE of this id.
+
+        THE SPAN IS WHAT PRECEDES THE MATCH, and that is the whole correctness
+        of this check. A diagnostic line IS the emission, and its message text
+        is ordinary English that very often negates something about the design:
+
+            [WARNING RSZ-0104] no clock found       <- EMITTED. "no" is about
+                                                       the clock, not the id.
+            no [WARNING RSZ-0104] were emitted      <- NOT emitted.
+
+        Scanning the whole sentence conflates the two — measured, not reasoned:
+        doing so dropped every id in this file's own fixtures, the run then
+        yielded zero gated ids, and the gate correctly answered rc 2 VACUOUS on
+        eight tests. A denial governs what FOLLOWS it, so only the text from the
+        sentence start up to the match can retract it.
+        """
+        lo, _hi = _polarity.sentence_scope(text, start, end,
+                                           extra_breaks=("\n",))
+        return _polarity.is_denied(text[lo:start]) is None
+
     for m in _RE_BRACKETED.finditer(text):
+        if not _emitted(m.start(), m.end()):
+            denied += 1
+            continue
         by_level.setdefault(m.group("level"), {})
         d = by_level[m.group("level")]
         d[m.group("id")] = d.get(m.group("id"), 0) + 1
     for m in _RE_STA_NUMBERED.finditer(text):
+        if not _emitted(m.start(), m.end()):
+            denied += 1
+            continue
         lvl = m.group("level").upper()
         by_level.setdefault(lvl, {})
         d = by_level[lvl]
         key = _norm_sta(m.group("num"))
         d[key] = d.get(key, 0) + 1
     unkeyed = len(_RE_UNKEYED.findall(text))
-    return {"ids": by_level, "unkeyed_count": unkeyed}
+    return {"ids": by_level, "unkeyed_count": unkeyed,
+            "denied_count": denied}
 
 
 #: WHICH FILES CARRY DIAGNOSTICS — measured over the published cells, not
