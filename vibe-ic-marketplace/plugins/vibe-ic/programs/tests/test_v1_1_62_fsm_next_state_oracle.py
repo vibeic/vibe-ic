@@ -30,11 +30,21 @@ import pytest  # noqa: E402
 #: two neighbours that call the same `_verdict()` helper are GREEN without a
 #: toolchain, because they assert a SKIP the oracle reaches before it compiles,
 #: and one marked test uses no helper at all.
-_HAS_IVERILOG = shutil.which("iverilog") is not None
+#: BOTH binaries, measured rather than assumed: `iverilog` COMPILES and
+#: `vvp` RUNS, and this oracle does both. Hiding either one alone fails the
+#: same seven tests by name, so a guard naming only the compiler still dies
+#: on a host that has it without the runtime — #1409 exactly ("guards on
+#: iverilog alone, but ... also refuses without yosys"), and #1355 ("named
+#: the BINARY, not the behaviour it needs"). `yosys` is deliberately NOT
+#: required: hiding it leaves these files fully green, and over-declaring
+#: skips on hosts that could have run.
+_HAS_ORACLE_TOOLCHAIN = (shutil.which("iverilog") is not None
+                         and shutil.which("vvp") is not None)
 _needs_iverilog = pytest.mark.skipif(
-    not _HAS_IVERILOG,
-    reason="the oracle compiles and runs the design; without iverilog this dies "
-           "with FileNotFoundError before asserting anything")
+    not _HAS_ORACLE_TOOLCHAIN,
+    reason="the oracle compiles (iverilog) and runs (vvp) the design; without "
+           "EITHER binary this dies with FileNotFoundError before asserting "
+           "anything")
 
 
 PROMPT = """
