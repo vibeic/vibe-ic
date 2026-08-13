@@ -278,14 +278,23 @@ def publishes_an_aggregate(run_dir: Path) -> Optional[str]:
     return None
 
 
-def changed_run_dirs(tree: Path, base: str) -> List[Path]:
-    """Scored-run directories touched since `base`.
+def changed_run_dirs(tree: Path, base: str) -> Optional[List[Path]]:
+    """Scored-run directories touched since `base`, or None if that could not
+    be determined.
 
     Scoped like `benchmark_evidence_structure_check --changed-since`, and for
     the same reason: 20 of the 25 runs already published carry no name set, and
     a gate applied retroactively would fail every landing over work nobody is
     doing today. What must not happen again is a NEW number arriving without
     its composition.
+
+    RETURNS None RATHER THAN [] WHEN GIT FAILS (vibe-ic#1254). `[]` and "git
+    could not answer" were the same value, and the caller renders `[]` as
+    `PASS - 0 run director(y/ies) touched`. So a gate that could not look
+    reported that it had looked and found nothing wrong -- in the pre-push
+    hook, the one enforced gate on what reaches the remote. The two states are
+    now distinct at the only place that can tell them apart; deciding what a
+    non-answer is worth belongs to the caller.
     """
     import subprocess
     # 30 s, measured at 0.00 s over the real `benchmark-data` tree. Kept under
@@ -293,7 +302,7 @@ def changed_run_dirs(tree: Path, base: str) -> List[Path]:
     r = subprocess.run(["git", "diff", "--name-only", f"{base}...HEAD", "--",
                         str(tree)], capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
-        return []
+        return None
     seen: Dict[str, Path] = {}
     for line in r.stdout.splitlines():
         parts = Path(line).parts
@@ -336,6 +345,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     if a.cmd == "check":
         if a.tree and a.changed_since:
             dirs = changed_run_dirs(Path(a.tree), a.changed_since)
+            # A CHECK THAT COULD NOT LOOK HAS NOT PASSED (vibe-ic#1254). rc 2 is
+            # this repo's "the question could not be put", and the pre-push hook
+            # already renders it as `NOT CHECKED` rather than as a finding -- the
+            # distinction the hook's own comment insists on. Before this, the
+            # undeterminable case fell through to the `not scored` branch below
+            # and printed PASS.
+            if dirs is None:
+                print(f"UNDETERMINED: benchmark_run_manifest could not determine what "
+                      f"changed since {a.changed_since} (git diff failed), so it "
+                      f"scanned NOTHING. This is not a pass.", file=sys.stderr)
+                return 2
             scored = [(d, publishes_an_aggregate(d)) for d in dirs]
             scored = [(d, s) for d, s in scored if s]
             if not scored:
