@@ -68,6 +68,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _prose_polarity as _polarity   # noqa: E402  vibe-ic#1241
+
 #: Source extensions carrying an SPDX header. Deliberately the HDL set plus the
 #: scripting set: this gate is about work BUNDLED as source, and a licence
 #: header in a build script binds exactly as one in RTL does.
@@ -183,10 +187,46 @@ def unaccounted(root: Path, notice: Path) -> Tuple[List[str], Dict[str, Dict[str
         token = _distinctive(holder)
         if token.lower() in own_tokens:
             continue                       # our own work, not a bundled one
-        if re.search(re.escape(token), text, re.I):
+        if _named_without_denial(text, token):
             continue
         missing.append(holder)
     return missing, result, own
+
+
+def _named_without_denial(notice_text: str, token: str) -> bool:
+    """Is `token` named in NOTICE by a sentence that does NOT deny the bundling?
+
+    NOTICE IS PROSE, AND THIS USED TO BE A BARE SUBSTRING SEARCH (vibe-ic#1241).
+    `re.search(token, text)` accepted the holder's name ANYWHERE, so a sentence
+    that DENIES the bundling satisfied the very requirement it denies.
+    Demonstrated on this branch: cutting the Efabless entry from NOTICE and
+    re-adding the name only inside
+
+        Note: Efabless Corporation source is NOT bundled in this repository
+        and no attribution is required for it.
+
+    returned `[PASS] 7 holder(s) over 513 SPDX-headered file(s)`, rc 0 — 27
+    Apache-2.0 files distributed with their section 4(d) record satisfied by a
+    sentence saying no record is required.
+
+    WHY THE _NOT_PROSE EXEMPTION DOES NOT APPLY HERE, since it is the obvious
+    reading and it is wrong. This checker has two text surfaces: the SPDX
+    headers it reads holders OUT OF, and the NOTICE it matches them AGAINST.
+    `SPDX-License-Identifier:` is a licence-expression grammar with no negation
+    production, so polarity there would be a call that can never fire. NOTICE is
+    English written by hand. The verdict is decided on the prose side, which is
+    the side the exemption does not cover.
+
+    EVERY mention is examined, not the first. A holder is accounted for when at
+    least ONE sentence names it without denial — a NOTICE that both attributes a
+    work and elsewhere discusses what is not bundled is normal, and treating the
+    first hit as decisive would fail it for the wrong reason.
+    """
+    for m in re.finditer(re.escape(token), notice_text, re.I):
+        lo, hi = _polarity.sentence_scope(notice_text, m.start(), m.end())
+        if _polarity.is_denied(notice_text[lo:hi]) is None:
+            return True
+    return False
 
 
 def main(argv: Optional[List[str]] = None) -> int:
