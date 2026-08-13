@@ -10,13 +10,27 @@ from pathlib import Path
 
 
 def _load():
-    """Locate the module by WALKING UP, never by a parent index (#1308's shape)."""
+    """Locate the module by WALKING UP, never by a parent index (#1308's shape).
+
+    Bytecode writing is suppressed for the duration of the load. `skills/` is
+    the SHIPPED tree, and importing a file from it makes CPython drop
+    `__pycache__/api_health.cpython-3XX.pyc` NEXT TO the source — a new file
+    inside the tree `test_tools_and_integration.py` digests byte-for-byte.
+    Nothing else in the chain sees it (it is gitignored, so `git status`,
+    `git add -A` and `suite_write_guard` all pass), which is why it presents
+    as an unattributable session-wide failure rather than as this import.
+    """
     for parent in Path(__file__).resolve().parents:
         cand = (parent / "skills" / "core-agent-loop" / "programs" / "api_health.py")
         if cand.is_file():
             spec = importlib.util.spec_from_file_location("api_health", cand)
             mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
+            _no_bytecode = sys.dont_write_bytecode
+            sys.dont_write_bytecode = True
+            try:
+                spec.loader.exec_module(mod)
+            finally:
+                sys.dont_write_bytecode = _no_bytecode
             return mod
     raise AssertionError("api_health.py not found above this test")
 
