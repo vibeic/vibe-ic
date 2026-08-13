@@ -92,6 +92,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
@@ -536,7 +537,31 @@ def _driveable(argv: List[str]) -> Optional[str]:
     return None
 
 
-def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
+#: TOTAL wall clock this probe may spend driving gates, in seconds (#1181).
+#:
+#: `timeout` is PER GATE. There are 74 of them, so the per-gate bound places no
+#: bound at all on the sweep: measured on `a38902d1` this loop takes 204 s, and
+#: the landing gate runs pytest at `--timeout=180`.
+#:
+#: WHAT THAT COSTS, and it is not "one slow test". `pytest-timeout`'s `thread`
+#: method cannot interrupt a blocking `subprocess.wait`, so when it fires it
+#: DUMPS STACKS AND CALLS `os._exit(1)` -- its own docstring says so. That kills
+#: the interpreter, so pytest never writes a summary line, and EVERY OTHER FILE
+#: in the same invocation loses its result. Measured: exit 1, no `N passed`, no
+#: `N failed`, for the whole selection.
+#:
+#: 900 s is a BACKSTOP, deliberately far above the 204 s a healthy host needs.
+#: Sizing it to "just fit" would trade a crash for a FLAKY test: the sweep
+#: drives 50 real gates, so its wall clock moves with host load, and a budget
+#: near the measured time would fail on a busy machine and pass on a quiet one.
+#: The test's own fit is handled where it belongs -- a `pytest.mark.timeout` on
+#: the test -- and this bound exists so the loop cannot run unbounded if a gate
+#: starts hanging.
+DEFAULT_CI_BUDGET_S = 900
+
+
+def audit_ci(repo_root: Path, timeout: int = 120,
+             budget_s: float = DEFAULT_CI_BUDGET_S) -> CiAudit:
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
     gates = parse_declarations(script)
     if not gates:
@@ -545,10 +570,21 @@ def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
 
     findings: List[Dict] = []
     not_driven: List[Tuple[str, str]] = []
+    #: Gates the CLOCK stopped us reaching, kept SEPARATE from `not_driven`.
+    #: "this gate cannot be driven by construction" and "I ran out of budget
+    #: before I got to it" are different facts: the first is a permanent
+    #: property of the gate and is already disclosed as a PASS-compatible
+    #: exclusion; the second means this run's denominator is smaller than it
+    #: looks, and a run that cannot state its own reach is not a result.
+    unreached: List[str] = []
+    _deadline = time.monotonic() + float(budget_s) if budget_s else None
     with tempfile.TemporaryDirectory() as td:
         scratch = _scratch_repo(Path(td))
         for decl in gates:
             label, cmd = decl.label, decl.cmd
+            if _deadline is not None and time.monotonic() >= _deadline:
+                unreached.append(label)
+                continue
             argv = _expand(cmd, repo_root, scratch)
             why = _driveable(argv)
             if why is not None:
@@ -574,13 +610,32 @@ def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
                     "output_tail": out.strip().splitlines()[-1][:200]
                     if out.strip() else "(no output at all)",
                 })
+    if unreached:
+        # NOT a PASS, and not folded into `not_driven` either. The probe spent
+        # its clock before reaching these, so it cannot say whether they
+        # disclose their denominator -- which is the one thing it exists to
+        # say. Named, so the reader can see exactly which coverage was lost.
+        findings.append({
+            "gate": f"({len(unreached)} gate(s) unreached)",
+            "kind": "BUDGET_EXHAUSTED",
+            "detail": (f"the {budget_s:.0f}s probe budget ran out with "
+                       f"{len(unreached)} of {len(gates)} gate(s) never "
+                       f"driven, so this run's denominator is "
+                       f"{len(gates) - len(not_driven) - len(unreached)} and "
+                       f"not {len(gates) - len(not_driven)}: "
+                       + ", ".join(unreached[:8])
+                       + (" …" if len(unreached) > 8 else "")),
+        })
     return CiAudit("FAIL" if findings else "PASS", findings, len(gates),
-                   len(gates) - len(not_driven), not_driven)
+                   len(gates) - len(not_driven) - len(unreached),
+                   not_driven + [(g, "unreached: probe budget exhausted")
+                                 for g in unreached])
 
 
-def audit(repo_root: Path, timeout: int = 120) -> Tuple[str, List[Dict]]:
+def audit(repo_root: Path, timeout: int = 120,
+          budget_s: float = DEFAULT_CI_BUDGET_S) -> Tuple[str, List[Dict]]:
     """Back-compatible view of `audit_ci` — the verdict and the findings."""
-    res = audit_ci(repo_root, timeout=timeout)
+    res = audit_ci(repo_root, timeout=timeout, budget_s=budget_s)
     return res.verdict, res.findings
 
 
