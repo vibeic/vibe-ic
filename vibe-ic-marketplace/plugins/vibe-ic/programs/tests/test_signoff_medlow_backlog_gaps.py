@@ -769,15 +769,38 @@ def test_a_files_exist_only_step_is_not_gateless(fcc):
     list therefore fired it 0 times on the entire population it was written
     for. The summary names the gate that did not run; only a step with NO gate
     at all summarises to nothing.
+
+    The exemplar is chosen BY PROPERTY, never by step number. This test used to
+    hard-code step 12 and assert as a "precondition" that step 12 declares no
+    program; step 12 later gained `dft_post_optimization_scan_survival_check`
+    and the test went red while the behaviour it guards never changed. A step
+    number is not a stable name for "a step shaped like this".
     """
     assert fcc._declared_gate_summary(None) == ""
     assert fcc._declared_gate_summary({}) == ""
 
-    summary = fcc._declared_gate_summary(_step(12)["gate"])
-    assert summary, "step 12 declares a gate; the summary must describe it"
-    assert "post_dft_netlist.v" in summary, summary
-    assert fcc._declared_gate_commands(_step(12)["gate"]) == [], (
-        "precondition: step 12's gate declares no program")
+    # The shape itself, independent of which real step happens to carry it
+    # today — this arm cannot drift.
+    synthetic = {"files_exist": ["phase2/stage1/rtl/example.sv"]}
+    assert fcc._declared_gate_commands(synthetic) == []
+    summary = fcc._declared_gate_summary(synthetic)
+    assert summary, "a files_exist-only gate must not summarise to nothing"
+    assert "example.sv" in summary, summary
+
+    # ...and the same property over the REAL flow, for whichever steps have
+    # that shape now. An empty population is itself reportable: the advisory
+    # was written for it, so it must not silently vanish.
+    programless = [(st.get("id"), st["gate"]) for st in _flow_steps()
+                   if st.get("gate")
+                   and not fcc._declared_gate_commands(st["gate"])]
+    assert programless, (
+        "no flow step declares a gate without a program — the population this "
+        "advisory was written for is now empty; re-derive the disclosure "
+        "rather than deleting this assertion")
+    for sid, gate in programless:
+        assert fcc._declared_gate_summary(gate), (
+            f"step {sid} declares a gate but summarises to nothing, so the "
+            f"disclosure would report it as gateless")
 
 
 def test_declared_gate_summary_covers_the_predicate_kinds(fcc):
@@ -953,20 +976,64 @@ def test_declared_outputs_are_all_required(fcc, tmp_path, sid, files, dropped):
     assert any(dropped.rsplit("/", 1)[-1] in r for r in res.reasons)
 
 
-def test_step33_gate_audit_trail_is_not_written_over_its_own_input():
-    """Step 33's gate must not point --json at reports/phase3/power.json.
+def _gate_program_commands(gate):
+    """Every `program_exit_zero` COMMAND STRING in a possibly-nested gate.
 
-    That path is the step's declared required_output and holds the runner's
-    power summary; the checker writes a different schema, so honouring the flag
-    (which the wrapper now does) would overwrite the power data with an audit
-    of it.
+    `fcc._declared_gate_commands` yields program NAMES; the property below is
+    about the arguments, so the full command is needed. Recurses through
+    `all_of`/`any_of` because a gate that starts as one bare predicate is
+    routinely rewrapped when a second program is added — which is exactly what
+    happened here.
     """
-    gate = _step(33)["gate"]
-    cmd = gate["program_exit_zero"]
-    assert "power_report_check" in cmd
-    assert "--json" in cmd
-    assert "reports/phase3/power.json" not in cmd
-    assert "reports/phase3/power.json" in _step(33)["required_outputs"]
+    found = []
+    if isinstance(gate, dict):
+        if "program_exit_zero" in gate:
+            found.append(gate["program_exit_zero"])
+        for key in ("all_of", "any_of"):
+            if gate.get(key):
+                found.extend(_gate_program_commands(gate[key]))
+    elif isinstance(gate, list):
+        for sub in gate:
+            found.extend(_gate_program_commands(sub))
+    return found
+
+
+def test_step33_gate_audit_trail_is_not_written_over_its_own_input():
+    """Step 33's gate must not point --json at its own required_outputs.
+
+    Those paths hold the runner's power summary; the checker writes a different
+    schema, so honouring the flag (which the wrapper now does) would overwrite
+    the power data with an audit of it.
+
+    Read through the gate's STRUCTURE rather than by subscripting one key. The
+    previous version did `gate["program_exit_zero"]` and raised KeyError once a
+    second power program was added and the gate was rewrapped in `all_of` — the
+    property still held, only the accessor broke. Walking the structure also
+    makes this strictly stronger: every program in the gate is checked, not the
+    single one that happened to sit at the top.
+    """
+    step = _step(33)
+    outs = step["required_outputs"]
+    assert "reports/phase3/power.json" in outs
+
+    cmds = _gate_program_commands(step["gate"])
+    assert cmds, "step 33 declares no program gate at all"
+    assert any("power_report_check" in c for c in cmds), cmds
+    for cmd in cmds:
+        assert "--json" in cmd, f"gate program writes no audit trail: {cmd}"
+        for out in outs:
+            assert out not in cmd, (
+                f"step 33's gate points --json at its own required output "
+                f"{out!r}, which would overwrite the runner's power data with "
+                f"an audit of it: {cmd}")
+
+    # PAIRED: the walker must actually catch the violation it exists to find,
+    # or the loop above is green for the wrong reason.
+    violating = {"all_of": [{"program_exit_zero":
+                             f"power_report_check . --json {outs[1]}"}]}
+    caught = [c for c in _gate_program_commands(violating) if outs[1] in c]
+    assert caught, ("the walker cannot see a gate that DOES target its own "
+                    "required output, so the assertion above proves nothing")
 
 
 def _all_missing_results(fcc, waived=(), failed=()):
