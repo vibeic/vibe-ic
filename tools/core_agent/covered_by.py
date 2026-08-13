@@ -40,10 +40,13 @@ EXIT CODES
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import (Callable, Dict, List, Optional,
+                    Sequence, Tuple)
 
 #: pytest's own end-of-run line. Its ABSENCE is the false zero described above.
 _SUMMARY_RE = re.compile(
@@ -134,17 +137,85 @@ def measure(prs: Sequence[int], node: str, checkout: Callable[[int], Optional[st
     return out
 
 
+def parse_pr_files(payload: str) -> Dict[int, List[str]]:
+    """`{pr: [changed files]}` from `gh pr list --json number,files` output.
+
+    Parsed rather than shelled per-PR: one API call for the whole fleet. A
+    per-PR fan-out is what tripped GitHub's secondary rate limit on 2026-08-13
+    while the primary counters still read 315/5000, which looks like a
+    permission error and is not one.
+    """
+    try:
+        rows = json.loads(payload or "[]")
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(rows, list):
+        return {}
+    out: Dict[int, List[str]] = {}
+    for r in rows:
+        if not isinstance(r, dict) or "number" not in r:
+            continue
+        files = [f.get("path", "") for f in (r.get("files") or [])
+                 if isinstance(f, dict)]
+        out[int(r["number"])] = [f for f in files if f]
+    return out
+
+
+def open_pr_files(repo: str) -> Dict[int, List[str]]:
+    payload, _ = _run(["gh", "pr", "list", "--repo", repo, "--state", "open",
+                       "--json", "number,files", "--limit", "400"])
+    return parse_pr_files(payload)
+
+
+def worktree_checkout(repo_dir: str, work_dir: str, repo: str):
+    """A `checkout(pr) -> path | None` that fetches the head and detaches it.
+
+    Returns None on any failure, which `measure` records as UNMEASURED — never
+    as "this branch does not fix it".
+    """
+    def checkout(pr: int) -> Optional[str]:
+        ref, rc = _run(["gh", "api", f"repos/{repo}/pulls/{pr}", "--jq", ".head.ref"])
+        ref = (ref or "").strip()
+        # An API failure yields '' or an error sentence. Fetching that would
+        # silently resolve to HEAD and measure the WRONG TREE (measured while
+        # verifying vibe-ic#1308), so refuse rather than guess.
+        if rc != 0 or not ref or " " in ref or "rate limit" in ref.lower():
+            return None
+        dest = str(Path(work_dir) / f"cb{pr}")
+        _run(["git", "-C", repo_dir, "worktree", "remove", "--force", dest])
+        _, rc = _run(["git", "-C", repo_dir, "fetch", "-q", "origin",
+                      f"+{ref}:refs/remotes/origin/cbtmp{pr}"])
+        if rc != 0:
+            return None
+        _, rc = _run(["git", "-C", repo_dir, "worktree", "add", "--detach", dest,
+                      f"origin/cbtmp{pr}"])
+        return dest if rc == 0 else None
+    return checkout
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("node", help="pytest node id, e.g. path/test_x.py::test_y")
     ap.add_argument("--repo", default="vibeic/vibe-ic")
+    ap.add_argument("--repo-dir", default=".", help="local clone to make worktrees in")
+    ap.add_argument("--work-dir", default="/tmp", help="where worktrees are created")
     ap.add_argument("--also", action="append", default=[],
                     help="extra file(s) that make a PR a candidate")
     a = ap.parse_args(argv)
-    print("covered_by is a library-first tool; wire --repo enumeration in the "
-          "caller. Decision logic and the false-zero refusal are unit-tested.",
-          file=sys.stderr)
-    return 2
+
+    test_file = a.node.split("::", 1)[0]
+    pr_files = open_pr_files(a.repo)
+    if not pr_files:
+        print(report(2, [], [], a.node))
+        return 2
+    cands = candidates(pr_files, test_file, a.also)
+    print(f"{len(pr_files)} open PR(s); {len(cands)} touch {test_file}: "
+          + (", ".join(f"#{n}" for n in cands) or "none"), file=sys.stderr)
+    results = measure(cands, a.node,
+                      checkout=worktree_checkout(a.repo_dir, a.work_dir, a.repo))
+    code, cov, unk = decide(results)
+    print(report(code, cov, unk, a.node))
+    return code
 
 
 if __name__ == "__main__":
