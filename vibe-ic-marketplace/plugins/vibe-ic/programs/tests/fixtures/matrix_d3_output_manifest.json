@@ -437,6 +437,13 @@
           "alternative": "reports/phase2/dft/bsdl_plan.json",
           "path": "reports/phase2/dft/bsdl_plan.json",
           "size_bytes": 1179
+        },
+        "phase2/stage2/dft/coverage.yml": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase2/stage2/dft/coverage.yml",
+          "path": "phase2/stage2/dft/coverage.yml",
+          "size_bytes": 28797
         }
       }
     },

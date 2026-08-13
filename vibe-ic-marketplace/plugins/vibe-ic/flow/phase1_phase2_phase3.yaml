@@ -1544,6 +1544,25 @@ steps:
       - "phase2/stage2/dft/transition_atpg_plan.md"
       - "reports/phase2/dft/coverage.json"
       - "reports/phase2/dft/bsdl_plan.json"
+      # vibe-ic#1241-adjacent (d7 W2): PRODUCED BY THE FLOW, READ BY THIS
+      # STEP'S OWN GATE, DECLARED BY NOBODY. `dft_atpg_coverage_check` and
+      # `fault_atpg_run` both write it and step 11's gate reads it, yet no
+      # step's `required_outputs` named it — so d7 had a load-bearing artefact
+      # with no declared producer.
+      #
+      # BLAST RADIUS, measured against the RIGHT population. "3 of 105 tracked
+      # roots" is the wrong reading: 102 of those never ran phase2/stage2/dft
+      # at all. Of the roots where step 11 ACTUALLY RAN — i.e. that carry its
+      # five already-declared outputs — this artefact is present in 2 of 2.
+      # The one root that reaches the stage directory without it,
+      # `edge_llm_matmul_accel`, carries NONE of step 11's five declared
+      # outputs either, so step 11 never ran there and it is not a
+      # counter-example.
+      #
+      # It RESOLVES in an admissible run root (spm/v1.9.96_gf180mcuD, 28797 B)
+      # and is recorded in the dimension-3 manifest, so declaring it closes the
+      # d7 finding without opening a d3 one.
+      - "phase2/stage2/dft/coverage.yml"
     # NOTE on invocation: flow-orchestrate/SKILL.md directs the agent to
     # invoke `fault_atpg_run` with the design's clock name and the
     # already-synthesised netlist. FOUNDRY BAR: stuck-at must reach the
