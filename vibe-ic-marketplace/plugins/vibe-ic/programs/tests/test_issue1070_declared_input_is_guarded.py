@@ -47,12 +47,25 @@ PLUGIN = Path(__file__).resolve().parent.parent.parent
 FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 
 # (consumer, producer) -> why it is still open. SHRINK-ONLY.
-KNOWN_UNGUARDED = {
-    ("A1", "D1"): "#1070 deferred: transitive, would newly route 44 of 71 steps "
-                  "through D1; needs its own landing with a corpus number",
-    ("25", "24"): "#1070 deferred: transitive, 18 of 71 steps once M1->37 exists "
-                  "(14 before it)",
-}
+#
+# EMPTY, because #1070's three edges landed together (#1132 M1->37, #1167
+# 25->24, #1177 A1->D1). Each of those PRs recorded the OTHER two here as
+# deferred debt, with its own blast-radius number, because each expected to land
+# alone. Combined, every entry this register held has been repaired, so the
+# register is empty — and its own rule says so: "delete the entry in the same
+# commit that repaired the edge".
+#
+# An empty register is the STRONGEST state, not a weakened one. With no entries,
+# `test_no_new_unguarded_declared_input` fails on ANY declared input that no
+# ordering edge guards, rather than on any beyond a forgiven set. There is
+# nothing left to forgive.
+#
+# NOTE for whoever adds the next deferral: `test_each_known_edge_is_a_real_
+# declared_read` is parametrised over this dict, so with it empty that test
+# collects zero cases and asserts nothing. That is correct here (there are no
+# entries to validate) but it means the guard silently returns the moment an
+# entry is added — it is dormant, not deleted.
+KNOWN_UNGUARDED: dict = {}
 
 
 def _steps():
@@ -154,8 +167,20 @@ def test_the_allowlist_does_not_outlive_its_truth():
 
 
 def test_the_debt_is_exactly_what_1070_measured():
-    """Pinned so the count cannot drift upward quietly under a passing suite."""
-    assert len(_unguarded()) == 2, sorted(_unguarded())
+    """Pinned so the count cannot drift upward quietly under a passing suite.
+
+    2 -> 0 because #1070's three edges land together here rather than one at a
+    time. RE-MEASURED on the combined tree, not arithmetic: `_unguarded()`
+    returns the empty set with all three edges present. Each contributing PR
+    saw a different number from its own branch (M1->37 alone left 2; 25->24
+    alone left 2; A1->D1 alone left 2) because each was measuring a tree where
+    the other two edges were still missing.
+
+    Zero is a real assertion here, not a vacuous one: it says every declared
+    `required_inputs` edge in the flow is guarded by an ordering edge, and any
+    regression in any of the three makes this non-zero immediately.
+    """
+    assert len(_unguarded()) == 0, sorted(_unguarded())
 
 
 @pytest.mark.parametrize("consumer,producer", sorted(KNOWN_UNGUARDED))
