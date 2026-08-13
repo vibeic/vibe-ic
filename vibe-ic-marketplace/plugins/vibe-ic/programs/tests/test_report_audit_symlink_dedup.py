@@ -35,6 +35,8 @@ and the cheaper of the two: it also collapses a HARD-linked publication, which
 symlink loop) on its own literal key, which is exactly the pre-dedup behaviour
 for that path.  Both are pinned below.
 """
+import ast
+import inspect
 import json
 import os
 import subprocess
@@ -423,7 +425,65 @@ _STA_MET = (
 )
 
 
-def test_an_excluded_name_alias_does_not_erase_the_sta_report(tmp_path):
+def _sta_exclude_tokens():
+    """The token tuple `_check_sta` really passes, read from its source.
+
+    `_STA_EXCLUDE` is a LOCAL of `_check_sta`, so a test cannot import it. The
+    two remaining options are to restate the tuple here — which is the drift
+    shape this file exists to remove, and which would let the test keep
+    asserting about a token list the program no longer uses — or to read it
+    off the program. This reads it: the `exclude_name_tokens=` keyword at the
+    `_discover` call site, resolved back to the literal it is bound to.
+
+    Deriving it from the CALL SITE rather than from the assignment is
+    deliberate. A tuple that is assigned but never passed is exactly the defect
+    this test guards against, so the thing worth reading is what `_discover`
+    actually receives.
+    """
+    tree = ast.parse(inspect.getsource(era._check_sta).lstrip())
+    literals = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
+                isinstance(node.targets[0], ast.Name):
+            try:
+                literals[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                pass
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg != 'exclude_name_tokens':
+                continue
+            if isinstance(kw.value, ast.Name):
+                return literals[kw.value.id]
+            return ast.literal_eval(kw.value)
+    raise AssertionError(
+        "_check_sta no longer passes `exclude_name_tokens` to _discover — the "
+        "name filter has moved back OUT of the dedup, which is the defect this "
+        "test exists to catch. Do not delete this test to make it pass.")
+
+
+def test_the_sta_name_filter_is_passed_into_discover_not_applied_after():
+    """The capability the test below exercises must actually be WIRED.
+
+    Forcing a walk order and asserting `_discover` survives it proves nothing
+    if the shipped `_check_sta` filters downstream of the dedup instead. This
+    reads the real call site, so a refactor that moves the filter back out
+    fails HERE with a message that says so, rather than leaving the order test
+    passing over a code path the program stopped using.
+    """
+    tokens = _sta_exclude_tokens()
+    assert tokens, "_check_sta passes an EMPTY exclude list — nothing is filtered"
+    assert 'drc' in tokens, (
+        f"the alias basename used by the order test below carries 'drc', which "
+        f"must be one of the tokens _check_sta excludes (got {tokens})")
+
+
+@pytest.mark.parametrize('alias_first', [True, False],
+                         ids=['alias_first', 'canonical_first'])
+def test_an_excluded_name_alias_does_not_erase_the_sta_report(
+        tmp_path, monkeypatch, alias_first):
     """The name filter must run INSIDE `_discover`, for the same reason.
 
     `_check_sta` drops names carrying a foreign report class
@@ -441,20 +501,61 @@ def test_an_excluded_name_alias_does_not_erase_the_sta_report(tmp_path):
     `step_output_collector` renames a mirrored artefact to
     `{parent.name}__{basename}` on a basename collision, so a mirror basename
     the canonical report does not have is a shape the flow itself produces.
+
+    ORDER IS FORCED, NOT ASSUMED — and only where it can be. This test used to
+    build "the alias is reached first" by asserting that `rglob` yields the
+    shallower `steps/` match before `phase3/stage3/sta/`. `Path.rglob` walks
+    each directory in `os.scandir` order, which is filesystem-dependent, so
+    that was never a property of `rglob`: on ext4 here the walk comes back
+    `['phase3/stage3/sta/pre_pnr_timing.rpt', 'steps/drc_lvs__pre_pnr_timing.rpt']`
+    and the test died in its own precondition without reaching the behaviour it
+    names.
+
+    The guarantee is that the verdict is INDEPENDENT of walk order, so the
+    order is pinned explicitly and asserted in BOTH directions against
+    `_discover` — which is where the fix lives and which runs in-process.
+
+    The `_sta` assertions below stay order-agnostic on purpose: `sta_report_check`
+    is a SUBPROCESS, so an in-process `Path.rglob` patch cannot reach it. They
+    are re-run unchanged in both parametrisations as properties of the shipped
+    program, and the patch is reverted before them rather than pretending to a
+    reach it does not have.
     """
     (tmp_path / 'phase3/stage3/sta').mkdir(parents=True)
     rpt = tmp_path / 'phase3/stage3/sta/pre_pnr_timing.rpt'
     rpt.write_text(_STA_MET)
 
-    # shallower than the canonical -> rglob yields it first
     step = tmp_path / 'steps'
     step.mkdir()
     (step / 'drc_lvs__pre_pnr_timing.rpt').symlink_to(rpt.resolve())
 
+    real_rglob = Path.rglob
+
+    def _ordered_rglob(self, pattern):
+        hits = list(real_rglob(self, pattern))
+        hits.sort(key=lambda p: (0 if 'steps' in p.parts else 1))
+        if not alias_first:
+            hits.reverse()
+        return iter(hits)
+
+    monkeypatch.setattr(Path, 'rglob', _ordered_rglob)
+
     walk = [str(p.relative_to(tmp_path)) for p in tmp_path.rglob('*timing*.rpt')]
-    assert walk[0].startswith('steps/'), (
-        f"fixture precondition: the excluded-name alias must be walked first "
-        f"(got {walk})")
+    wanted = 'steps/' if alias_first else 'phase3/'
+    assert walk[0].startswith(wanted), (
+        f"order harness did not take: wanted {wanted!r} first, got {walk}")
+
+    found = era._discover(tmp_path, ['*sta*.rpt', '*timing*.rpt', '*STA*.rpt',
+                                     '*timing*.log'],
+                          exclude_name_tokens=_sta_exclude_tokens())
+    assert [str(p.relative_to(tmp_path)) for p in found] == [
+        'phase3/stage3/sta/pre_pnr_timing.rpt'], (
+        f"an alias the name filter deletes must not take the canonical STA "
+        f"report with it, whichever order the walk yields "
+        f"(alias_first={alias_first}, walk={walk}, got "
+        f"{[str(p.relative_to(tmp_path)) for p in found]})")
+
+    monkeypatch.setattr(Path, 'rglob', real_rglob)
 
     rc, doc = _sta(tmp_path, tmp_path / 'sta.json')
     rules = {f.get('rule') for f in doc.get('findings') or []}
