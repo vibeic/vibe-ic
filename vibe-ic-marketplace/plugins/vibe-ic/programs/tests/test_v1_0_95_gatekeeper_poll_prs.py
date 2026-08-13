@@ -44,7 +44,30 @@ def _load():
     pdir = str(_POLL_PRS.parent)
     if pdir not in sys.path:
         sys.path.insert(0, pdir)
-    spec.loader.exec_module(mod)
+    # `_POLL_PRS` lives in the SHIPPED `skills/` tree, so executing it writes
+    # `skills/gatekeeper-loop/programs/__pycache__/poll_prs.*.pyc` into the
+    # tree under test. `test_shipped_skills_tree_is_untouched_by_this_module`
+    # digests EVERY file under `skills/` via `rglob("*")`, so that bytecode
+    # moves the digest — and `git status` never shows it, because
+    # `__pycache__/` is ignored (.gitignore:2).
+    #
+    # This is an IN-PROCESS import, so the `PYTHONDONTWRITEBYTECODE` that
+    # guards a SPAWNED pytest cannot reach it: an env var set on a child
+    # process says nothing about this interpreter.
+    #
+    # It also decides the guard's verdict by ARGUMENT ORDER, because the
+    # guard snapshots at import time and pytest imports every selected module
+    # during collection. MEASURED on this branch, same two files:
+    #     guard first, importer second -> 1 failed
+    #     importer first, guard second -> 32 passed
+    # A real selection sorts by path, and `test_tools_and_integration.py`
+    # sorts BEFORE this file, so a real run gets the failing order.
+    _prev = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = _prev
     return mod
 
 
