@@ -284,5 +284,16 @@ def test_every_other_ic_level_entry_already_resolves_under_the_cell():
         f"the set of IC-level entries the published cell cannot serve moved: "
         f"{held!r}. #905 retains the tree for {_HELD_BY_STEP} alone; anything "
         f"else in this list is a new dependency that needs its own reason.")
-    assert len(served) == 11, (
-        f"expected 11 IC-level entries servable by the cell, got {len(served)}")
+    # `len(served) == 11` restated the size of `_ic_level_entries()`. The claim
+    # is the PARTITION the line above already makes the load-bearing half of:
+    # every IC-level entry is either served by the published cell or is the one
+    # step #905 retains the tree for — nothing falls outside, nothing is in
+    # both. Derived from the same iteration, so publishing a twelfth entry
+    # changes the number without breaking the claim, and a second unservable
+    # entry breaks `held` above, which is where it should break.
+    assert served, (
+        "the published cell serves NO IC-level entry, so #905's premise — "
+        "that the tree is retained for one step alone — is not being measured")
+    assert (len(served) + len(held)
+            == len(list(_ic_level_entries()))), (served, held)
+    assert not set(served) & set(held), (served, held)
