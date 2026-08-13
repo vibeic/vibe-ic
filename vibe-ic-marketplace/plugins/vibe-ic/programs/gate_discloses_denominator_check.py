@@ -92,6 +92,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
@@ -536,28 +537,109 @@ def _driveable(argv: List[str]) -> Optional[str]:
     return None
 
 
-def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
+#: Wall-clock ceiling for the WHOLE CI-population audit, seconds.
+#:
+#: WHY AN AGGREGATE ONE WHEN EVERY CALL ALREADY HAS `timeout` (vibe-ic#1181).
+#: The per-call bound was never the problem. This drives 50 gates, and 50 x the
+#: 120 s default is 100 MINUTES against a suite whose harness bound is 180 s.
+#: MEASURED on `a38902d1`: median gate 0.1 s, but the tail is six gates worth
+#: ~114 s and the slowest (`triage notes state a true reason`) is 32.1 s — a
+#: real serial total of ~189 s, just over the 180 s harness.
+#:
+#: What that looked like was NOT "one slow test". `--timeout-method=thread`
+#: cannot interrupt a blocking `subprocess.communicate`, so pytest printed its
+#: stack dump and the invocation never returned — **the whole selection
+#: produced no summary line**, which greps as neither pass nor fail. That is
+#: the ambiguity #1181 was filed for.
+CI_AUDIT_BUDGET_S = 150
+
+
+def _scratch_fingerprint(root: Path):
+    """Cheap identity of the scratch tree: every path plus its size.
+
+    One directory walk, used only to answer "did a driven gate write here".
+    Not a hash: content equality is not the question, and hashing 42 entries
+    per audit to answer a yes/no would be cost for nothing.
+    """
+    try:
+        return {str(p.relative_to(root)): (p.stat().st_size if p.is_file() else -1)
+                for p in root.rglob("*")}
+    except OSError:
+        return None
+
+
+def audit_ci(repo_root: Path, timeout: int = 120,
+             budget: Optional[float] = None, workers: int = 0) -> CiAudit:
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
     gates = parse_declarations(script)
     if not gates:
         # Never a silent PASS — this program's own denominator.
         return CiAudit("NOTHING_SCANNED", [], 0, 0, [])
 
+    budget = CI_AUDIT_BUDGET_S if budget is None else budget
     findings: List[Dict] = []
     not_driven: List[Tuple[str, str]] = []
     with tempfile.TemporaryDirectory() as td:
         scratch = _scratch_repo(Path(td))
+
+        #: CONCURRENT, like BOTH sibling populations in this file already are.
+        #: `audit_project_gates` (:751) and its absent-project twin (:803) each
+        #: drive their gates through a `ThreadPoolExecutor`; this one — the
+        #: oldest — was the only population still serial, which is the whole
+        #: reason its total ran past the harness. Same idiom, same worker cap.
+        #:
+        #: THE SHARED SCRATCH IS SAFE HERE, MEASURED, NOT ASSUMED. The sibling
+        #: uses a fresh dir per gate because "gates write into the project they
+        #: audit". These do not: driving all 50 against one scratch tree and
+        #: diffing it entry-by-entry gave **0 writers, 42 entries before and
+        #: 42 after**. A fresh tree per gate would multiply setup by 50 to
+        #: insure against a risk measured at zero — so the sharing stays, and
+        #: `scratch_mutated` below is the tripwire that says if that ever stops
+        #: being true, because with concurrency a writer would make the verdict
+        #: order-dependent instead of merely wrong.
+        before = _scratch_fingerprint(scratch)
+        work = []
         for decl in gates:
-            label, cmd = decl.label, decl.cmd
-            argv = _expand(cmd, repo_root, scratch)
+            argv = _expand(decl.cmd, repo_root, scratch)
             why = _driveable(argv)
             if why is not None:
-                not_driven.append((label, why))
-                continue
+                not_driven.append((decl.label, why))
+            else:
+                work.append((decl.label, argv))
+
+        deadline = time.monotonic() + budget
+        n_workers = workers or min(8, (os.cpu_count() or 2))
+
+        def _drive(item):
+            label, argv = item
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return (label, None, None)
             try:
                 r = subprocess.run(argv, cwd=str(scratch), capture_output=True,
-                                   text=True, timeout=timeout)
+                                   text=True, timeout=min(timeout, left))
+                return (label, r, None)
             except (OSError, subprocess.SubprocessError) as exc:
+                return (label, None, exc)
+
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=n_workers) as ex:
+            results = list(ex.map(_drive, work))
+
+        scratch_mutated = _scratch_fingerprint(scratch) != before
+
+        for label, r, exc in results:
+            if r is None and exc is None:
+                # The budget ran out before this gate was reached. RECORDED,
+                # never dropped: the verdict below refuses to be PASS while
+                # this list is non-empty, because trading a loud hang for a
+                # quiet under-count is the defect this file exists to name.
+                not_driven.append((
+                    label,
+                    f"the {budget:g}s aggregate audit budget was exhausted "
+                    f"before this gate was driven"))
+                continue
+            if exc is not None:
                 findings.append({
                     "gate": label, "kind": "GATE_UNRUNNABLE",
                     "detail": f"could not be driven against a scratch tree: {exc}",
@@ -574,13 +656,46 @@ def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
                     "output_tail": out.strip().splitlines()[-1][:200]
                     if out.strip() else "(no output at all)",
                 })
-    return CiAudit("FAIL" if findings else "PASS", findings, len(gates),
+    if scratch_mutated:
+        # The shared scratch is only sound because nothing writes to it, and
+        # that is a MEASUREMENT (0 writers) rather than a guarantee. If it ever
+        # stops holding, concurrency makes the verdict order-dependent — so it
+        # becomes a finding, not a footnote.
+        findings.append({
+            "gate": "(the probe itself)", "kind": "SCRATCH_MUTATED",
+            "detail": ("a driven gate WROTE into the shared scratch tree, so "
+                       "later gates no longer saw an empty project and, under "
+                       "the concurrent driver, which ones did is not "
+                       "deterministic. Give each gate its own scratch (as "
+                       "`_drive_on_empty_project` does) before trusting this "
+                       "run."),
+        })
+    #: BUDGET-EXHAUSTED IS NOT A PASS, AND THIS IS THE LOAD-BEARING HALF.
+    #: `audit()` below returns only `(verdict, findings)` — it drops
+    #: `not_driven` — so a budget that silently shortened the population would
+    #: have handed the caller a clean PASS over a set it never finished. That
+    #: would trade #1181's loud hang for a quiet under-count, which is strictly
+    #: worse: a hang is at least impossible to mistake for success.
+    cut = [lab for lab, why in not_driven if "budget was exhausted" in why]
+    if findings:
+        verdict = "FAIL"
+    elif cut:
+        verdict = "INCOMPLETE"
+    else:
+        verdict = "PASS"
+    return CiAudit(verdict, findings, len(gates),
                    len(gates) - len(not_driven), not_driven)
 
 
-def audit(repo_root: Path, timeout: int = 120) -> Tuple[str, List[Dict]]:
-    """Back-compatible view of `audit_ci` — the verdict and the findings."""
-    res = audit_ci(repo_root, timeout=timeout)
+def audit(repo_root: Path, timeout: int = 120,
+          budget: Optional[float] = None) -> Tuple[str, List[Dict]]:
+    """Back-compatible view of `audit_ci` — the verdict and the findings.
+
+    `INCOMPLETE` reaches the caller through the verdict, so an assertion of
+    `verdict == "PASS"` fails when the budget cut the population short instead
+    of passing over a partial sweep.
+    """
+    res = audit_ci(repo_root, timeout=timeout, budget=budget)
     return res.verdict, res.findings
 
 
