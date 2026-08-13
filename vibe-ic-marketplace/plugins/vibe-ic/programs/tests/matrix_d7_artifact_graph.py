@@ -243,6 +243,21 @@ ARTIFACT_SUFFIXES: FrozenSet[str] = frozenset(
 #: ``open()`` modes that write. ``r`` alone never matches; ``r+`` does.
 _WRITE_MODE_RE = re.compile(r"[waxWAX+]")
 
+#: Module-level atomic writers whose FIRST ARGUMENT is the destination path.
+#: `#1082` replaced `p.write_text(...)` with `_atomic_output.atomic_write_text(p, ...)`
+#: in verdict-bearing programs, and this walk knew only the receiver form — so a
+#: converted program read as writing NOTHING and its declared output looked
+#: unproduced (`#1265`, measured: d7 10 -> 11 on `24ff9530`).
+#:
+#: Kept as a NAME set rather than folded into the tuple above because these are
+#: functions, not methods: the path is `n.args[0]`, and resolving `fn.value`
+#: would yield the imported MODULE. Both spellings are listed because two
+#: helpers are in flight for #1082 (`_atomic_output`, `_atomic_artefact`) and a
+#: detector that knows only the one that lands first re-opens this hole.
+_ATOMIC_WRITERS = frozenset((
+    "atomic_write_text", "atomic_write_bytes", "atomic_write_json",
+))
+
 #: Classification of an undeclared artefact.
 LOAD_BEARING = "LOAD_BEARING"
 EVIDENCE = "EVIDENCE"
@@ -471,6 +486,13 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
         if isinstance(fn, ast.Attribute):
             if fn.attr in ("write_text", "write_bytes"):
                 add(fn.value)
+            elif fn.attr in _ATOMIC_WRITERS and n.args:
+                # MODULE-LEVEL function, so the path is the first ARGUMENT and
+                # NOT the receiver: `_atomic_output.atomic_write_text(p, text)`
+                # has `fn.value` = the module. Adding the name to the tuple
+                # above would resolve `_atomic_output` and keep detecting
+                # nothing while looking fixed.
+                add(n.args[0])
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
@@ -702,6 +724,10 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
         elif isinstance(fn, ast.Attribute):
             if fn.attr in ("write_text", "write_bytes"):
                 target = fn.value
+            elif fn.attr in _ATOMIC_WRITERS and n.args:
+                # the path is the ARGUMENT, not the receiver — see the note at
+                # the sibling site in `_written_paths`.
+                target = n.args[0]
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
