@@ -544,8 +544,37 @@ def main(argv=None) -> int:
         return 2
 
     rep = audit(plugin, root)
-    if a.json_out:
-        Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
+
+    def _emit(rc: int) -> int:
+        """Write the JSON carrying the verdict this process ACTUALLY exits with.
+
+        `audit()` stamps `passed: True` when it builds the report, and the report
+        used to be written HERE — before a single verdict had been computed. So
+        the field was a constant: on a run that printed `[FAIL]` and exited 1,
+        the machine-readable output still said `passed: true`, and anything
+        reading the JSON instead of the exit code saw a clean run.
+
+        Measured 2026-08-13 on vibe-ic#1241's wiring rows: one invocation over
+        PR #1151 exited 1 with
+
+            [FAIL] 1 checker(s) that NOTHING but their own test runs:
+               bundled_attribution_notice_check.py
+
+        while the `--json` file it wrote in that same run reported
+        `"passed": true`. A reader keying on the field reported the row as
+        answered — the wrong verdict on the only unanswered row of the six.
+
+        That is this file's own subject one level up: its docstring argues that
+        a checker nobody runs is a gate that never met an artefact, and its
+        report said PASS while blocking. Emitting at the EXIT is what makes the
+        two agree by construction, rather than by remembering to keep them in
+        step at five separate return sites.
+        """
+        if a.json_out:
+            rep["passed"] = (rc == 0)
+            Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
+        return rc
+
     bl = Path(a.baseline) if a.baseline else here.parent / _BASELINE_NAME
     now = sorted(rep["test_only"] + rep["no_runner_at_all"])
 
@@ -553,7 +582,7 @@ def main(argv=None) -> int:
         if a.scope_expanded is not None and len(a.scope_expanded.strip()) < 30:
             print("[FAIL] --scope-expanded needs a real reason (>=30 chars) "
                   "naming what the audit now looks at that it did not before.")
-            return 1
+            return _emit(1)
         prev = _load_baseline(bl)
         if (prev is not None and len(now) > len(prev)
                 and a.scope_expanded is None):
@@ -562,7 +591,7 @@ def main(argv=None) -> int:
                   f"real runner is a regression, not a fact to record. If the "
                   f"audit now LOOKS at more than it did, say so with "
                   f"--scope-expanded '<why>'.")
-            return 1
+            return _emit(1)
         prev_triage = {}
         if bl.is_file():
             try:
@@ -587,7 +616,7 @@ def main(argv=None) -> int:
              "unwired_by_decision": _load_decisions(bl)},
             indent=2, ensure_ascii=False) + "\n")
         print(f"wrote {bl} ({len(now)} entr(ies))")
-        return 0
+        return _emit(0)
 
     print(f"checker_execution_wiring_audit: {rep['checkers']} checker-shaped "
           f"program(s) of {rep['all_programs']} in programs/")
@@ -632,11 +661,11 @@ def main(argv=None) -> int:
         for line in stale:
             print(line)
     if new or paid or stale:
-        return 1
+        return _emit(1)
     print(f"[PASS] no NEW test-only checker ({len(now)} recorded)"
           + (f"; {len(decisions)} deliberately unwired, disclosed"
              if decisions else ""))
-    return 0
+    return _emit(0)
 
 
 if __name__ == "__main__":
