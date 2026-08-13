@@ -438,16 +438,59 @@ class _PathResolver:
         return tuple(segs)
 
 
+#: vibe-ic#1265 — the ATOMIC-WRITE FAMILY, defined ONCE and consulted by both
+#: write detectors below. A durable write goes through a helper that writes a
+#: temp sibling and ``os.replace``s it into place, so the DESTINATION is the
+#: helper's FIRST ARGUMENT, not the receiver — structurally distinct from
+#: ``p.write_text(...)``, so the two can never be confused.
+#:
+#: Two spellings are in flight and both put the destination first:
+#: ``_atomic_output.atomic_write_text`` (#1265) and
+#: ``_atomic_artefact.write_json`` (#1110). A family, not a hand-list of two.
+#:
+#: MEASURED over 3632 modules on main and 3630 on #1265's branch before the rule
+#: was chosen: it matches 0 on main — no false positive — and exactly the two
+#: real call sites on #1265. A looser ``atomic_*`` prefix was REJECTED: it also
+#: matches ``atomic_output``, a context manager that writes nothing by itself,
+#: which would have invented producers.
+ATOMIC_WRITE_FUNCS = frozenset((
+    "atomic_write_text", "atomic_write_json", "atomic_write_bytes", "write_json",
+))
+
+
 def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
     """Tail segments of every path this module WRITES.
 
     Write positions recognised, all structurally (never by name matching):
       * ``open(p, "w"|"a"|"wb"|...)`` and ``p.open("w")``
       * ``p.write_text(...)`` / ``p.write_bytes(...)``
+      * an ATOMIC write helper — ``atomic_write_text(p, ...)``,
+        ``write_json(p, ...)`` — where the destination is the FIRST ARGUMENT
+        rather than the receiver. Structurally distinct from the method form
+        above, so the two cannot be confused.
       * ``shutil.copy/copy2/copyfile/move(src, DEST)`` — the DEST argument
       * ``json.dump(obj, fh)`` is NOT a path write: ``fh`` is a handle, and
         the handle's path was already captured at its ``open()``.
     """
+    #: vibe-ic#1265. A durable write goes through a helper that writes a temp
+    #: sibling and ``os.replace``s it into place, so the DESTINATION is the
+    #: helper's first ARGUMENT, not the receiver. Before this, the walk saw
+    #: ``p.write_text(...)`` but not ``atomic_write_text(p, ...)`` — so a
+    #: program that was made MORE durable read as writing nothing, and its
+    #: dimension-7 cell reported a declared artefact with no producer. The fix
+    #: for a durability improvement must not be to undo it.
+    #:
+    #: TWO spellings are in flight and both put the destination first:
+    #: ``_atomic_output.atomic_write_text`` (#1265) and
+    #: ``_atomic_artefact.write_json`` (#1110). Naming a family rather than a
+    #: hand-list of two keeps this from becoming a second registry that drifts
+    #: the way #527/#530 did.
+    #:
+    #: MEASURED before choosing the rule, over 3632 modules on main and 3630 on
+    #: #1265's branch: this family matches 0 on main (no false positive) and
+    #: exactly the two real call sites on #1265. A looser ``atomic_*`` prefix
+    #: was rejected — it also matches ``atomic_output``, a context manager that
+    #: writes nothing by itself, which would have invented producers.
     resolver = _PathResolver(tree)
     out: Set[Tuple[str, ...]] = set()
 
@@ -460,6 +503,14 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
         if not isinstance(n, ast.Call):
             continue
         fn = n.func
+        # Atomic helper, EITHER spelling: `atomic_write_text(p, ...)` (imported
+        # by name) or `_atomic_output.atomic_write_text(p, ...)` (via module).
+        # Both are a call whose FIRST ARG is the destination.
+        _nm = (fn.id if isinstance(fn, ast.Name)
+               else fn.attr if isinstance(fn, ast.Attribute) else None)
+        if _nm in ATOMIC_WRITE_FUNCS and n.args:
+            add(n.args[0])
+            continue
         if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
             for kw in n.keywords:
@@ -692,7 +743,18 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
             continue
         fn = n.func
         target: Optional[ast.AST] = None
-        if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
+        # vibe-ic#1265, SECOND site. The delegate walk asks "does the module this
+        # wrapper forwards argv to actually WRITE the flag's destination?" and it
+        # carried its own copy of the write vocabulary, so teaching
+        # `_collect_writes` alone was not enough — MEASURED: the named failure
+        # survived that fix and only cleared when both sites learned the family.
+        # Two copies of one vocabulary is the drift #527/#530 removed elsewhere;
+        # they are unified below rather than edited in parallel.
+        _nm = (fn.id if isinstance(fn, ast.Name)
+               else fn.attr if isinstance(fn, ast.Attribute) else None)
+        if _nm in ATOMIC_WRITE_FUNCS and n.args:
+            target = n.args[0]
+        elif isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
             for kw in n.keywords:
                 if kw.arg == "mode":
