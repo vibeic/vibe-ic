@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1082
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1082)
+- **Total programs (excluding helpers / shims):** 1083
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1083)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1073 |
+| `any` | 1074 |
 
 ## Alphabetical listing
 
@@ -416,6 +416,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_host_independence_check` | any | — | the same commit must give the same verdict. |
 | `gate_is_wired_check` | any | — | A gate no automatic verdict consults. vibe-ic#693. |
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
+| `gate_red_since_check` | any | — | an acknowledged red must EXPIRE. vibe-ic#1025. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
 | `gate_skip_routing_check` | any | — | every gate, and whether its skip REACHES the machine that reads the verdict (#528). |
@@ -1154,7 +1155,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1073 programs)
+### `any` (1074 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1542,6 +1543,7 @@ _(no programs in this group)_
 - `gate_host_independence_check` — the same commit must give the same verdict.
 - `gate_is_wired_check` — A gate no automatic verdict consults. vibe-ic#693.
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
+- `gate_red_since_check` — an acknowledged red must EXPIRE. vibe-ic#1025.
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
 - `gate_skip_routing_check` — every gate, and whether its skip REACHES the machine that reads the verdict (#528).
