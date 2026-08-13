@@ -128,14 +128,39 @@ file is not a produced artefact, and an untracked path is a property of one
 working tree. A record is a claim about the past; it is not evidence about
 today.
 
-MEASURED ON THIS COMMIT: **0 cells change.** No tracked
-``reports/write_ledger.json`` exists anywhere in the repository, so W2's
-oracle is the AST alone, exactly as before — and that is not silent: every
-dimension-7 failure message and every cell's ``record_property`` carries the
-:func:`matrix_d7_write_record.binding_notes` sentence saying so, and
-:data:`RECORD_BOUND_ROOTS` pins the empty population.
+MEASURED ON THIS COMMIT (2026-08-13): **two roots are bound.**
+``benchmark-data/ic/spm/v1.10.18_sky130A`` and
+``benchmark-data/ic/spm/v1.9.96_gf180mcuD`` each carry a tracked
+``reports/write_ledger.json``, so W2's oracle is no longer the AST alone. The
+paragraph below used to read "0 cells change, no tracked ledger exists
+anywhere" — that was true until those roots were published, and the pin
+reddened to say so rather than letting the cells drift.
 
-MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
+The two records offer 399 and 384 written-never-declared candidates; the live
+re-verification rules refuse 144 and 130 of them (all for ABSENCE — 0 zero-byte,
+0 symlinked, 0 untracked), leaving a 323-path observation index. That index
+promotes 18 W2 findings over four steps, and every one is accounted for:
+
+===========  ========  ==================================================
+step         findings  disposition
+===========  ========  ==================================================
+7                   2  WAIVED with evidence (``7/d7``)
+23                 14  WAIVED with evidence (``23/d7``)
+M1                  1  WAIVED with evidence (``M1/d7``)
+M2                  1  NOT waived — its d7 cell is RED and stays red
+===========  ========  ==================================================
+
+M2's is ``phase1/generated_docs/L21_POWER_INTENT.json``, which cannot be closed
+by declaring it: steps D1 and 15 READ that file and M2 already has D1 in its
+ancestry, so the declaration d7 asks for would assert a circular dependency.
+It is left red deliberately. Nothing here changed colour quietly, which is the
+whole property this pin protects.
+
+MEASURED ON TWO REAL RUNS — kept as HISTORY, not as current evidence. These
+two trees are outside the repository, and by this dimension's own admissibility
+rule a number measured on a tree the commit does not carry says nothing about
+this commit. The live numbers are in the table above; these are retained
+because the triage they document is still the triage a reader needs.
 ``$HOME/_sky130A_r3_run`` and
 ``$HOME/campaign_v1544/spm/converge_1.5.44_gf180mcuD`` yield 335 and
 264 written-never-declared candidates. **That is not 335 findings, and the
@@ -1448,7 +1473,10 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: and each promotion must be re-measured and then either DECLARED in the flow
 #: yaml or waived with evidence — not discovered later from a cell that
 #: quietly changed colour.
-RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():
