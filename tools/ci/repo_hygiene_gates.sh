@@ -325,6 +325,24 @@ run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_p
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log
 # is unverifiable, and the failure is silent.
 run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_resolves_check.py"
+
+# vibe-ic#1043 — Apache-2.0 s4(b)/s4(d) attach to distributing the WORK, not to
+# publishing a run that used it, so withdrawing a run does not withdraw the duty:
+# while the vendored file is in the tree, the record naming its origin must be
+# too. Until this line the duty was met by habit, and habit leaves no verdict
+# behind — which is why nobody could say whether a withdrawal branch had broken
+# it. MEASURED at wiring time on a38902d16: 493 shipped files DECLARE Apache-2.0,
+# 491 were covered, and 2 third-party PDK cell models under benchmark-data/ic/spm
+# had no SOURCE_MANIFEST.md at or above them. This commit adds that record, so
+# the gate is 493/493 and any NEW uncovered file is red.
+#
+# BELONGS HERE and not in the flow: it is a repo-wide invariant over what the
+# tree ships, needs no design, no PDK and no run directory — this file's own
+# definition of what a repo-hygiene gate is. `run`, not
+# `run_tolerating_uncheckable`: it reads only the checkout, so its rc 2 means the
+# corpus could not be listed at all, which is a broken repo rather than an
+# environment a developer can be forgiven for.
+run "vendored attribution present"      "$ROOT" python3 "$PG/vendored_attribution_present_check.py" "$ROOT"
 # The record the gate above now TRUSTS for its disclosures. It may only say
 # a citation resolves when it does — verified against the cell as committed,
 # because the publisher computes the decision against the tree it had and
