@@ -510,19 +510,35 @@ def test_shipped_skills_tree_is_untouched_by_this_module():
     A second reason it is easy to miss: the write may be `__pycache__`, which is
     GITIGNORED, so `git status skills/` stays empty while this digest moves.
 
+    A third, and the one that defeats every "which test did it" search: the
+    writer may not be a test. `pytest --collect-only` over `programs/tests/`
+    is enough on its own — importing the test modules imports a module living
+    under `skills/`, and CPython writes the `.pyc` beside it before anything
+    runs. For that case the race is tighter than seed ordering: this module's
+    baseline is taken at import too, so the write and the baseline compete
+    inside collection and collection order alone decides.
+
     This assertion is the test-side of the gate; it does not replace
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
     assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in THIS SESSION wrote into the SHIPPED skills/ tree — the "
-        "baseline is taken at collection, so the writer may be in ANY module "
-        "that ran before this one, not necessarily this file. Re-run with "
-        "`-p no:randomly`, putting the suspected writer first, to pin it "
-        "deterministically. Two remedies, by cause: if a tool mutated content, "
-        "run it against a copy (see _seed_plugin_copy()); if a child process "
-        "merely CACHED there (`__pycache__`, which `git status` will NOT show), "
-        "give it PYTHONDONTWRITEBYTECODE=1 and "
-        "PYTEST_ADDOPTS=-p no:cacheprovider.")
+        "something in THIS SESSION wrote into the SHIPPED skills/ tree. The "
+        "baseline is taken at module import — i.e. during COLLECTION — so the "
+        "writer may be in ANY module, and may not be a TEST at all: importing "
+        "a module that lives under skills/ makes CPython write its .pyc there "
+        "before a single test runs (`pytest --collect-only` alone reproduces "
+        "that). Reproduce deterministically with `-p no:randomly`, suspected "
+        "writer first. THREE causes, and the remedy differs for each:\n"
+        "  1. a tool mutated CONTENT   -> run it against a copy, "
+        "see _seed_plugin_copy()\n"
+        "  2. a CHILD PROCESS cached   -> give it PYTHONDONTWRITEBYTECODE=1 "
+        "and PYTEST_ADDOPTS=-p no:cacheprovider\n"
+        "  3. an IMPORT cached         -> load it without writing bytecode, or "
+        "import from a copy; no env var on a child helps, because the import "
+        "happens in THIS process during collection\n"
+        "In cases 2 and 3 `git status skills/` stays EMPTY, because "
+        "`__pycache__` is gitignored — so a clean `git status` is NOT evidence "
+        "that nothing was written.")
 
 
 if __name__ == "__main__":
