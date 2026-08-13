@@ -84,6 +84,22 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+#: vibe-ic#1052. This gate reached the right conclusion and shipped it on the
+#: wrong channel: it computed `VACUOUS_PASS`, printed it, and returned 0.
+#:
+#: The printed token is a REAL channel — `flow_compliance_check` promotes the
+#: step when `_stdout_signals_vacuous` sees it, rc-independently — which is why
+#: I first cleared this gate. That was wrong, and `gate_skip_routing_check` says
+#: why in one sentence: "channel B survives only in the last 300 characters of
+#: stdout+stderr that _check_program_exit_zero keeps; rc 2 has no such window,
+#: which is why _vacuous_exit gives BOTH". `_OUTPUT_SNIPPET_CHARS = 300` is the
+#: window. A disclosure that survives only if the gate stays quiet enough is not
+#: a disclosure; the repo counts that tier separately and calls it fragile.
+#:
+#: So: rc 2 AND the sentinel. Same repair as #1002, #1018 and the three L-layer
+#: gates in this same change.
+import _vacuous_exit as _vx
+
 TODO_TOKEN = "__TODO__"
 
 
@@ -114,6 +130,7 @@ def scan(target: Path) -> Tuple[str, List[DocFinding], Dict[str, Any]]:
     gen_dir = _find_gen_dir(target)
     if gen_dir is None:
         return "VACUOUS_PASS", [], {
+            "reason": "no generated_docs directory in the project",
             "generated_docs": None,
             "l_docs_scanned": 0,
             "total_todo": 0,
@@ -147,6 +164,7 @@ def scan(target: Path) -> Tuple[str, List[DocFinding], Dict[str, Any]]:
     }
     if not l_files:
         # generated_docs exists but holds no L*.json — nothing extracted.
+        summary["reason"] = "generated_docs holds no L*.json — nothing extracted"
         return "VACUOUS_PASS", findings, summary
     if total > 0 or unreadable > 0:
         return "FAIL", findings, summary
@@ -195,8 +213,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  [{tag}] {f.file}")
 
     if verdict == "FAIL":
-        return 1
-    return 0
+        return _vx.RC_FAIL
+    if verdict == "VACUOUS_PASS":
+        # the second channel, on stderr so a `--json -` document stays parseable
+        _vx.announce_vacuous("l_doc_todo_stub_count_check",
+                             _vx.skip_reason(summary, "no L*.json examined"))
+        return _vx.RC_VACUOUS
+    return _vx.RC_PASS
 
 
 if __name__ == "__main__":
