@@ -653,19 +653,34 @@ def test_w1_still_fires_on_an_unconditionally_produced_undeclared_output(tmp_pat
 
 
 def _conditional_anchor():
-    """``(step, path)`` of a CONDITIONAL finding on an OTHERWISE-CLEAN step.
+    """``(step, path)`` of a CONDITIONAL finding whose PATH carries no W1 charge.
 
-    "Otherwise clean" is what makes the control a control. Step 23 also
-    carries a conditional output, but it is red for thirteen unrelated W2
-    findings, so a red observed after mutating it would prove nothing about
-    the exemption. The anchor is therefore the conditional finding whose step
-    has no other finding at all — on the current flow that is step 27, and it
-    is found by measurement rather than named.
+    What makes this a control is that the mutation's effect must be
+    attributable. The original form demanded a step with no finding of ANY
+    rule, and named step 27 as the one that qualified. Step 27 has since
+    acquired a single ``W2:produced_consumed_undeclared`` finding on a
+    DIFFERENT path (``reports/phase3/si_mcf_sta.json``), so the anchor
+    disappeared and both parametrisations failed with "this control measures
+    nothing" — the control was lost to a change it does not measure.
+
+    The requirement is therefore stated over what the control actually
+    asserts. Every assertion below is about ``path`` under **W1**
+    (:func:`_w1_paths`), so the condition that makes the mutation
+    attributable is that ``path`` carries no W1 charge BEFORE it — not that
+    the step is silent under every other rule. A W2 finding on another path
+    cannot produce, mask, or explain a W1 charge on this one.
+
+    This is narrower than the old test, not looser: it pins the same
+    before/after transition on the same path, and it no longer goes vacuous
+    the next time an unrelated rule fires on the same step.
     """
     for sid in F.step_ids():
         findings = G.conditional_findings(sid)
-        if findings and not G.findings_for(sid):
-            return F.normalize_id(sid), findings[0].path
+        if not findings:
+            continue
+        path = findings[0].path
+        if path not in _w1_paths(sid):
+            return F.normalize_id(sid), path
     return None
 
 
@@ -699,9 +714,9 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
         "control measures nothing"
     )
     step, path = anchor
-    assert not G.findings_for(step), (
-        f"step {step} is already red before the mutation; the control cannot "
-        f"attribute the red to the mutation"
+    assert path not in _w1_paths(step), (
+        f"step {step} already carries a W1 charge on {path} before the "
+        f"mutation; the control cannot attribute the charge to the mutation"
     )
 
     def edit(doc):
@@ -738,7 +753,7 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
 
     # And back: the exemption returns with the flow's own optionality.
     assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
-    assert not G.findings_for(step)
+    assert path not in _w1_paths(step)
 
 
 def _no_list_but_writes_anchor():
