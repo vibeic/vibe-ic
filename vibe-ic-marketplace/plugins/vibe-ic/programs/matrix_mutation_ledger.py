@@ -1651,7 +1651,19 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: against P0 on 2026-08-11 and REDDENED it. Raising this number without that
 #: replay would be exactly the "widen the baseline until it is green" move the
 #: gate exists to refuse.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 482)
+#:
+#: 482 -> 477 on 2026-08-13 (vibe-ic#1351). FIVE dimension-7 cells moved
+#: ENFORCED -> WAIVED — D1, 11, 24, 34 and M2 — after two published run roots
+#: landed carrying a tracked ``reports/write_ledger.json`` and turned on W2's
+#: second producer oracle for the first time. The grid did not grow or lose a
+#: step (63 both sides) and no ENFORCED cell lost its mutation: this number
+#: went DOWN, which SHRINKS the population that owes a replayed mutation
+#: rather than widening a baseline until it is green. Each of the five carries
+#: an evidence-backed entry in ``matrix_63x8.waivers`` naming what closes it,
+#: and each is ``xfail(strict=True)``, so a cell that stops failing turns this
+#: number back up and forces the replay before it can be counted ENFORCED
+#: again.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 477)
 
 
 # ══════════════════════════════════════════════════════════════════════
