@@ -48,8 +48,6 @@ FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 
 # (consumer, producer) -> why it is still open. SHRINK-ONLY.
 KNOWN_UNGUARDED = {
-    ("A1", "D1"): "#1070 deferred: transitive, would newly route 44 of 71 steps "
-                  "through D1; needs its own landing with a corpus number",
 }
 
 
@@ -153,7 +151,7 @@ def test_the_allowlist_does_not_outlive_its_truth():
 
 def test_the_debt_is_exactly_what_1070_measured():
     """Pinned so the count cannot drift upward quietly under a passing suite."""
-    assert len(_unguarded()) == 1, sorted(_unguarded())
+    assert len(_unguarded()) == 0, sorted(_unguarded())
 
 
 @pytest.mark.parametrize("consumer,producer", sorted(KNOWN_UNGUARDED))
