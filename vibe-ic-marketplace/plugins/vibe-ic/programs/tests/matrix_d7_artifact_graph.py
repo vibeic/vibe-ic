@@ -241,6 +241,14 @@ ARTIFACT_SUFFIXES: FrozenSet[str] = frozenset(
 )
 
 #: ``open()`` modes that write. ``r`` alone never matches; ``r+`` does.
+#: Atomic write helpers (`programs/_atomic_output.py`). The PATH IS ARGUMENT 0,
+#: not the attribute's value: `_atomic_output.atomic_write_text(dest, text)` is an
+#: `ast.Attribute` whose `.value` is the MODULE. Folding these into the
+#: `write_text`/`write_bytes` tuple would make the detector record `_atomic_output`
+#: as the artefact — a write it "sees" but attributes to the wrong path, which is
+#: worse than the miss it repairs. vibe-ic#1241.
+_ATOMIC_WRITE_FUNCS = ("atomic_write_text", "atomic_write_json")
+
 _WRITE_MODE_RE = re.compile(r"[waxWAX+]")
 
 #: Classification of an undeclared artefact.
@@ -471,6 +479,8 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
         if isinstance(fn, ast.Attribute):
             if fn.attr in ("write_text", "write_bytes"):
                 add(fn.value)
+            elif fn.attr in _ATOMIC_WRITE_FUNCS and n.args:
+                add(n.args[0])
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
@@ -582,6 +592,7 @@ def writers_of(path: str) -> FrozenSet[str]:
 # ──────────────────────────────────────────────────────────────────────
 def _arg_dest(flag: str) -> str:
     return flag.lstrip("-").replace("-", "_")
+
 
 
 def _mentions_args_attr(node: ast.AST, dest: str, aliases: Set[str]) -> bool:
@@ -702,6 +713,8 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
         elif isinstance(fn, ast.Attribute):
             if fn.attr in ("write_text", "write_bytes"):
                 target = fn.value
+            elif fn.attr in _ATOMIC_WRITE_FUNCS and n.args:
+                target = n.args[0]
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
