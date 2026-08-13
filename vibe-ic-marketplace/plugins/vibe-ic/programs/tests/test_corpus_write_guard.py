@@ -255,9 +255,16 @@ def test_the_hygiene_lane_declares_a_host_independent_number_of_gates():
     with tempfile.TemporaryDirectory() as td:
         clone = Path(td) / "c"
         subprocess.run(["git", "init", "-q", str(clone)], check=True)
-        for rel in ("tools/ci/_gate_dispatch.sh", "tools/ci/repo_hygiene_gates.sh"):
+        # EVERY `tools/ci/*.sh`, not a hand-listed two. The script sources its
+        # libraries by name, so a clone missing one dies before writing the
+        # record and this test fails with FileNotFoundError about `rec.json`
+        # rather than about the thing it measures. vibe-ic#1075 added a third
+        # (`_published_cell_corpus.sh`) and that is exactly what happened; a
+        # glob means the fourth cannot repeat it.
+        for src in sorted((_REPO / "tools" / "ci").glob("*.sh")):
+            rel = src.relative_to(_REPO)
             (clone / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(_REPO / rel, clone / rel)
+            shutil.copy2(src, clone / rel)
         cell = clone / "benchmark-data/ic/fam/tracked/phase3/stage3/pnr"
         cell.mkdir(parents=True)
         (cell / "routed.def").write_text("DESIGN t ;\nEND DESIGN\n")

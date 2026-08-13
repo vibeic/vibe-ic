@@ -53,6 +53,10 @@ cd "$ROOT"
 # additive, and with neither this script behaves exactly as it did before, which
 # is how both CI workflows still call it.
 . "$HERE/_gate_dispatch.sh"
+# vibe-ic#1075 — the per-cell populations, each named for the predicate it
+# actually applies. Sourced for the same reason the dispatch library is: a test
+# drives the REAL producer rather than a fixture copy of its pathspec.
+. "$HERE/_published_cell_corpus.sh"
 gate_dispatch_init "$@"
 
 # --- repo-root scoped ------------------------------------------------------
@@ -408,37 +412,56 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # `phase3/stage3/pnr/routed.def` is a PUBLISHING decision with a real
 # repository-size cost, and that decision is not a side effect of making the
 # roll-up honest.
+# vibe-ic#1075 — `macro OBS not crossed` STAYS on the routed-DEF producer, and
+# that is a deliberate retreat from this branch's first shape, recorded rather
+# than quietly dropped.
+#
+# Its declaration comment states a two-part predicate ("a routed DEF AND a macro
+# LEF") and MEASURED at a38902d16 that intersection is EMPTY, so selecting it on
+# what it declares yields a corpus of ZERO items. #957's landed guard asserts
+# every loop corpus is non-empty, in its own words: "a disclosure that was
+# achieved by dropping a gate, or by NARROWING the corpus, would be a coverage
+# cut wearing a fix's clothes." An empty corpus is the limit case of narrowing.
+#
+# Both positions are defensible — the gate answers rc 2 CANNOT DETERMINE on the
+# one cell it is handed, every run, so nothing is lost by removing it and nothing
+# is gained by keeping it — and they cannot both hold. That is an arbitration,
+# not an implementation detail, so this branch leaves the gate where #957 expects
+# it and the empty-corpus half of #1075 stays open.
 _per_published_cell_gates() {
   local _def="$1" _cell
   _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
+  # ORGANIC #686 — a macro OBS is the vendor's statement of where the integrator
+  # may not put metal. rc 2 (nothing to look at) is tolerated, rc 1 is not.
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
-  # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
-  # certificate over an empty layout is the strongest form of an absence
-  # rendering as a pass, and the gate written for it was reachable only if an
-  # agent read a skill and remembered to run it. MEASURED on the published
-  # cells: it parses real geometry (8290 shapes, 35 violations) — a live
-  # verdict, not a shape that can only ever say "nothing to look at".
-  run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$(dirname "$_cell")"))" \
-    "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
-  # Another of the 35. Its subject is an inner FAIL that never reaches the outer
-  # verdict, and nothing ran it. It also had the defect: "nothing to examine"
-  # exited 0 printing VACUOUS_PASS, one branch above a test in its own file
-  # stating that "I could not look" must never share an exit code with "I looked
-  # and it was clean". MEASURED on the published cells: 67-68 reports examined
-  # each, so this is a live verdict over a real denominator.
-  run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
-    "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
 }
-# NO `|| true` ANY MORE, and that is a repair rather than an omission: it used
-# to turn "git could not look" into an empty corpus, which is the vacuous pass
-# this repo removes from gates one at a time. `gate_dispatch_over` keeps the
-# producer's exit status and says so; an empty result is still not an error and
-# still does not abort the ~70 gates that have nothing to do with this corpus.
 gate_dispatch_over "published cells carrying a routed DEF" \
   _per_published_cell_gates \
-  git -C "$ROOT" ls-files -- \
-    'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def'
+  published_cells_with_routed_def
+
+_drc_vacuous_published_cell_gate() {
+  local _cell="$ROOT/$1"
+  # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
+  # certificate over an empty layout is the strongest form of an absence
+  # rendering as a pass.
+  run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$1"))" \
+    "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
+}
+gate_dispatch_over "published roots carrying a DRC report" \
+  _drc_vacuous_published_cell_gate \
+  published_cells_with_drc_report
+
+_bubble_up_published_ic_gate() {
+  local _cell="$ROOT/$1"
+  # Another of the 35. Its subject is an inner FAIL that never reaches the outer
+  # verdict, and its input is `reports/**/*.json` — never a DEF.
+  run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$1"))" \
+    "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
+}
+gate_dispatch_over "published ICs carrying a reports/ tree" \
+  _bubble_up_published_ic_gate \
+  published_ics_with_reports_tree
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the
@@ -831,12 +854,39 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 #     CI hat, and it would make the roll-up read PASS for a gate that still has
 #     not seen one installed artefact.
 #
-# So the honest state is: the LOGIC is covered by pytest, the ARTEFACTS are
-# covered by nothing automatic, and the gate now says so in the same document
-# that carries its verdict. NOT_CHECKED in the roll-up is the correct state and
-# is deliberately left in place.
+# THAT PREMISE WAS FALSE, AND A SIBLING IN THIS FILE DISPROVED IT (vibe-ic#1076).
+# "the ARTEFACTS are covered by nothing automatic" is contradicted 350 lines
+# above: `PDK via patch vs layer min width` (see the --from-image call earlier)
+# reaches the installed PDKs from CI and passes in the same run. The mechanism
+# was already accepted here; this checker simply had no flag for it. It now has
+# the same one, so the artefacts ARE reachable and NOT_CHECKED stops being the
+# honest state — it was a slot in the 74-gate count occupied by a gate sitting
+# on two unreported contradictions.
+#
+# MEASURED with the image this repo pins (read from tools/vibeic-eda/VERSION):
+#   as wired before : 0 input document(s), 0 candidate claim(s), rc=2 NOT_CHECKED
+#   with --from-image: 134 input document(s), 7 candidate claim(s),
+#                      contradicted=2 corroborated=1 undecided=4, rc=1
+#
+# DECLARED ADVISORY, NOT BLOCKING — the explicit declaration
+# `skills/flow-change-acceptance` requires, with its reason:
+#   * the two contradictions are in PUBLISHED RUN INPUT
+#     (u_hawaii_adc/clean_run_v1422_20260715/input/docs/{L5_ANALOG_SPEC,
+#     L9_CONSTRAINTS}.md), both justifying a LEVEL=1 corner-sim standin on the
+#     premise that IHP SG13G2 ships no ngspice corner library. It ships six,
+#     with named corner sections. The REPAIR is to those documents (or to the
+#     run), and #1028 is already withdrawing non-passing published output, so
+#     the fix lives outside this file;
+#   * a BLOCKING gate whose repair lives elsewhere is the gate that gets
+#     switched off, which is precisely the tension line ~488 already resolves
+#     the same way for its sibling.
+# `--advisory` changes the EXIT CODE and nothing else: the verdict word stays
+# FAIL and both contradictions stay printed in full, so this cannot be read as
+# a gate that found nothing. Flip to blocking by deleting `--advisory` once the
+# two documents are dispositioned.
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
-  python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT"
+  python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT" \
+  --from-image --advisory
 
 # The flow-gate dashboard publishes a per-step dimension asking "can this step
 # actually fail", and NOTHING recomputes it — the page's own generator says so in
