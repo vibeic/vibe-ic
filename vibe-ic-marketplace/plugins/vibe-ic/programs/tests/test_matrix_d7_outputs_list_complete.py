@@ -653,20 +653,52 @@ def test_w1_still_fires_on_an_unconditionally_produced_undeclared_output(tmp_pat
 
 
 def _conditional_anchor():
-    """``(step, path)`` of a CONDITIONAL finding on an OTHERWISE-CLEAN step.
+    """``(step, path, undeclared)`` — a CONDITIONAL finding, plus the paths that
+    must be declared to make its step OTHERWISE-CLEAN.
 
-    "Otherwise clean" is what makes the control a control. Step 23 also
-    carries a conditional output, but it is red for thirteen unrelated W2
-    findings, so a red observed after mutating it would prove nothing about
-    the exemption. The anchor is therefore the conditional finding whose step
-    has no other finding at all — on the current flow that is step 27, and it
-    is found by measurement rather than named.
+    "Otherwise clean" is what makes the control a control. Step 23 also carries
+    a conditional output, but it is red for fourteen unrelated W2 findings, so
+    a red observed after mutating it would prove nothing about the exemption.
+
+    This used to require the SHIPPED flow to CONTAIN an already-clean such step,
+    and step 27 was it. That coupling broke: step 27 acquired ONE unrelated
+    `W2:produced_consumed_undeclared` finding (`reports/phase3/si_mcf_sta.json`,
+    part of the clusters #1296 reports as staffed), the anchor became ``None``,
+    and both halves of the control stopped measuring anything — for a reason
+    with nothing to do with what they test.
+
+    So the clean baseline is MANUFACTURED now, exactly as
+    `_no_list_but_writes_anchor` describes for W4: "must be proved on a MUTATED
+    FLOW instead of asserted into the source and never exercised". W2 is by
+    definition cleared by DECLARING the path, so the blocking paths are
+    returned here and the caller declares them in a scratch yaml. They are
+    DERIVED from the findings and never hardcoded — a flow that grows another
+    blocker stays measurable instead of silently going vacuous again.
+
+    Only W2 blockers are clearable this way, so a step carrying any other rule
+    is skipped rather than papered over. Fewest blockers wins: the least
+    manufacturing that still yields a clean baseline.
     """
+    best = None
     for sid in F.step_ids():
         findings = G.conditional_findings(sid)
-        if findings and not G.findings_for(sid):
-            return F.normalize_id(sid), findings[0].path
-    return None
+        if not findings:
+            continue
+        others = list(G.findings_for(sid))
+        if any(f.rule != G.W2 for f in others):
+            continue
+        cand = (F.normalize_id(sid), findings[0].path,
+                tuple(sorted({f.path for f in others})))
+        if best is None or len(cand[2]) < len(best[2]):
+            best = cand
+    return best
+
+
+def _edit_step(doc, step, fn):
+    """Apply ``fn`` to the one step whose normalized id is ``step``."""
+    for s in doc["steps"]:
+        if F.normalize_id(s["id"]) == step:
+            fn(s)
 
 
 @pytest.mark.parametrize(
@@ -694,31 +726,56 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
     """
     anchor = _conditional_anchor()
     assert anchor is not None, (
-        "no step is GREEN solely because of the optionality exemption, so "
-        "removing the optionality cannot be shown to redden anything and this "
-        "control measures nothing"
+        "no step carries a conditional finding whose only other findings are "
+        "W2, so no clean baseline can be manufactured and removing the "
+        "optionality cannot be shown to redden anything"
     )
-    step, path = anchor
-    assert not G.findings_for(step), (
-        f"step {step} is already red before the mutation; the control cannot "
-        f"attribute the red to the mutation"
-    )
+    step, path, undeclared = anchor
+
+    def declare(s):
+        """Clear the unrelated W2 blockers by declaring what they name.
+
+        This is the manufactured half. W2 IS "produced, consumed, declared by
+        nobody", so declaring the path is precisely what clears it — the step
+        becomes clean without touching the optionality this test is about.
+        """
+        s["required_outputs"] = list(s.get("required_outputs") or []) + [
+            p for p in undeclared if p not in (s.get("required_outputs") or [])
+        ]
+
+    def optionality(s):
+        for clause in (s.get("gate") or {}).get("all_of") or []:
+            spec = clause.get(F.K_OPTIONAL)
+            if not isinstance(spec, dict):
+                continue
+            if path not in str(spec.get("command", "")):
+                continue
+            if mutation == "retype_clause_unconditional":
+                del clause[F.K_OPTIONAL]
+                clause[F.K_PROGRAM] = spec["command"]
+            else:
+                spec["condition_files_exist"] = []
+
+    # THE BASELINE IS ASSERTED, NOT ASSUMED. A manufactured anchor that is not
+    # actually clean, or no longer exempt, would make the red below attributable
+    # to the manufacturing rather than to the mutation.
+    base = _mutated_flow(tmp_path, f"d7_{mutation}_base.yaml",
+                         lambda doc: _edit_step(doc, step, declare))
+    with _SwappedFlow(base):
+        assert not G.findings_for(step), (
+            f"step {step}: declaring {list(undeclared)} was supposed to leave "
+            f"it clean, and it did not — the control cannot attribute a later "
+            f"red to the mutation. Findings: "
+            f"{[str(f) for f in G.findings_for(step)]}"
+        )
+        assert path in {p for p, _w, _c in G.conditional_output_targets(step)}, (
+            f"step {step}: {path} is not exempt-by-optionality even before the "
+            f"mutation, so there is no exemption here to take away"
+        )
 
     def edit(doc):
-        for s in doc["steps"]:
-            if F.normalize_id(s["id"]) != step:
-                continue
-            for clause in (s.get("gate") or {}).get("all_of") or []:
-                spec = clause.get(F.K_OPTIONAL)
-                if not isinstance(spec, dict):
-                    continue
-                if path not in str(spec.get("command", "")):
-                    continue
-                if mutation == "retype_clause_unconditional":
-                    del clause[F.K_OPTIONAL]
-                    clause[F.K_PROGRAM] = spec["command"]
-                else:
-                    spec["condition_files_exist"] = []
+        _edit_step(doc, step, declare)
+        _edit_step(doc, step, optionality)
 
     mutated = _mutated_flow(tmp_path, f"d7_{mutation}.yaml", edit)
     with _SwappedFlow(mutated):
@@ -736,9 +793,17 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
             f"{[str(f) for f in G.findings_for(step)]}"
         )
 
-    # And back: the exemption returns with the flow's own optionality.
+    # And back: the exemption returns with the flow's own optionality. The
+    # shipped flow is NOT finding-free here — the step carries exactly the W2
+    # blockers the manufactured baseline declared away, and asserting their
+    # exact set is what shows the swap restored the tree rather than left a
+    # mutation behind.
     assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
-    assert not G.findings_for(step)
+    assert {f.path for f in G.findings_for(step)} == set(undeclared), (
+        f"step {step}: after restoring the flow its findings are "
+        f"{sorted(f.path for f in G.findings_for(step))}, not the "
+        f"{sorted(undeclared)} it started with"
+    )
 
 
 def _no_list_but_writes_anchor():
