@@ -91,24 +91,6 @@ _COPYRIGHT = re.compile(
 #: top by convention and by the licences' own instructions.
 HEADER_LINES = 40
 
-# vibe-ic#712 / #1241 — THE ONE negation vocabulary, not a private copy. A
-# copyright line is normally a DECLARATION, but the identical words appear in
-# text that SHOWS a header instead of carrying one: a doc quoting an example
-# header, a fixture asserting what would be detected, a file stating that no
-# copyright is claimed over its contents. Recording those would put a holder
-# into NOTICE that this repository does not actually distribute — an
-# over-attribution, which is the same polarity blindness as #706/#711 pointing
-# the other way.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _prose_polarity import is_denied, sentence_scope  # noqa: E402
-
-#: A licence header is consecutive comment RECORDS, not prose: "you may not use
-#: this file except in compliance with the License" is the Apache-2.0 boilerplate
-#: two lines below the copyright line, and it denies nothing about the holder.
-#: `sentence_scope` owns scoping, so this caller declares its record boundary
-#: rather than growing its own windowing rule (see `_prose_polarity`).
-_HEADER_BREAKS = ("\n",)
-
 
 def _clean_holder(raw: str) -> str:
     """The holder name, with punctuation and trailing noise removed."""
@@ -157,16 +139,12 @@ def scan(root: Path) -> Dict[str, Dict[str, object]]:
         if not lic:
             continue
         holder = None
-        for m in _COPYRIGHT.finditer(head):
-            # Ask whether the record this match sits in DENIES it before
-            # treating it as a declaration (#712 vocabulary, #1241 row).
-            lo, hi = sentence_scope(head, m.start(), m.end(),
-                                    extra_breaks=_HEADER_BREAKS)
-            if is_denied(head[lo:hi]):
-                continue
-            holder = _clean_holder(m.group(1))
-            if holder:
-                break
+        for line in head.splitlines():
+            m = _COPYRIGHT.search(line)
+            if m:
+                holder = _clean_holder(m.group(1))
+                if holder:
+                    break
         if not holder:
             continue
         rec = found[holder]
