@@ -108,10 +108,28 @@ def _skill_count(skills_root):
                 if d.is_dir() and (d / "SKILL.md").exists()])
 
 
+#: Machine-regenerable interpreter/test caches, excluded from the digest below.
+#: Same class and same reasoning as `suite_write_guard._CACHE_NOISE`: Python
+#: rewrites these on import and pytest on startup, so ANY session that imports a
+#: module under `skills/` creates them. They are cache CONTENT only, they are
+#: gitignored, and `gatekeeper-land.sh:213` — the landing gate this assertion
+#: exists to protect — reads `git status --porcelain`, which never sees them.
+#: Digesting them made the guard fire on bytecode churn while the tracked tree
+#: was provably clean.
+_DIGEST_CACHE_NOISE = ("__pycache__", ".pytest_cache", ".mypy_cache")
+
+
 def _digest_tree(root):
-    """md5 over (relative path, bytes) of every file under `root`."""
+    """md5 over (relative path, bytes) of every TRACKABLE file under `root`.
+
+    Regenerable caches are skipped — see `_DIGEST_CACHE_NOISE`. Every other
+    file is digested by path AND bytes exactly as before, so a write to any
+    file a commit could carry still moves the digest.
+    """
     h = hashlib.md5()
-    for p in sorted(q for q in root.rglob("*") if q.is_file()):
+    for p in sorted(q for q in root.rglob("*") if q.is_file()
+                    and not any(part in _DIGEST_CACHE_NOISE
+                                for part in q.relative_to(root).parts)):
         h.update(str(p.relative_to(root)).encode())
         h.update(b"\0")
         h.update(p.read_bytes())
@@ -496,7 +514,10 @@ def test_shipped_skills_tree_is_untouched_by_this_module():
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
     assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
+        "a test in this SESSION wrote into the SHIPPED skills/ tree. The "
+        "digest is taken at module IMPORT and pytest imports every module "
+        "before running any test, so the writer can be ANY test in the run, "
+        "not only one in this file. Bisect with `-p no:randomly` and run the "
         "tool against a copy — see _seed_plugin_copy().")
 
 
