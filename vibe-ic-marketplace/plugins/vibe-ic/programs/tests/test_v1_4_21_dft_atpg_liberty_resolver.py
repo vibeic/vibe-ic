@@ -100,26 +100,27 @@ def test_source_flop_presence_blocks_false_not_applicable():
 # PI/PO pairs, 0 residual flops — so DT1/DT2 measure real coverage instead of a
 # false N/A. Skipped when the vibeic-eda container is unavailable.
 # ---------------------------------------------------------------------------
-def _docker_image_available() -> bool:
-    import shutil
-    import subprocess
-    if not shutil.which("docker"):
-        return False
-    try:
-        r = subprocess.run(["docker", "image", "inspect",
-                            "ghcr.io/vibeic/vibeic-eda:0.2.89"],
-                           capture_output=True, timeout=30)
-        return r.returncode == 0
-    except Exception:
-        return False
+def _image_probe():
+    """Probe the LOCAL image store, distinguishing absent from unanswerable.
+
+    The previous form collapsed a probe that TIMED OUT into "image absent"
+    (vibe-ic#1283), so under fleet load this test silently stopped running and
+    the suite still read green. `eda_container_probe` keeps the three outcomes
+    apart; an absent image still skips, exactly as before.
+    """
+    import eda_container_probe as ecp
+    return ecp.image_available("ghcr.io/vibeic/vibeic-eda:0.2.89")
 
 
 import pytest  # noqa: E402
 
 
-@pytest.mark.skipif(not _docker_image_available(),
-                    reason="vibeic-eda container not available")
 def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path):
+    # In the BODY, not a `skipif` decorator: the decorator is evaluated at
+    # collection and can only skip, so an unanswerable probe could not be
+    # routed differently from an absent image (vibe-ic#1283).
+    import eda_container_probe as ecp
+    ecp.require(_image_probe(), "the vibeic-eda image")
     import fault_atpg_run as far  # noqa: E402
     nl = tmp_path / "phase2" / "stage2" / "synth" / "spm_synth.v"
     nl.parent.mkdir(parents=True)
