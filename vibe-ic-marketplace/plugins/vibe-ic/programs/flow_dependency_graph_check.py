@@ -66,7 +66,7 @@ except ImportError:                                     # pragma: no cover
 # vibe-ic#923 — P0 left this set when it gained the ordering edge its own
 # `required_inputs: [{from: 1}]` had always implied. The set may only SHRINK,
 # and this is what shrinking looks like.
-DECLARED_ROOTS = {"D1", "A1"}
+DECLARED_ROOTS = {"D1"}
 
 
 def load_steps(path: Path) -> Optional[List[dict]]:
