@@ -135,6 +135,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+#: vibe-ic#1051 follow-up. This gate announced a skip in its own stdout and
+#: returned 0, so `flow_compliance_check` recorded a plain PASS — to every
+#: automated consumer, indistinguishable from a gate that read the layer and
+#: found it correct. The refusal itself was right and is unchanged; only the
+#: CHANNEL changes, so it survives into the flow record as VACUOUS_PASS. Same
+#: repair as #1002 and #1018, through the house rule `_vacuous_exit`.
+#:
+#: `skip_kind` exists because `skipped_reason` was overloaded: it carries BOTH
+#: "there was nothing to examine" AND "a human waived a finding". Only the
+#: first is vacuous. A waiver is a judgement ABOUT findings the gate made over
+#: artefacts it read, so routing it to rc 2 would claim the gate examined
+#: nothing when it examined everything and was overruled — and rc 3
+#: (PASS_WITH_WAIVERS) is a different tier that `_vacuous_exit` explicitly
+#: disclaims. The gate's own tests caught that; the distinction is recorded as
+#: a FIELD rather than re-derived from the reason text.
+import _vacuous_exit as _vx
+
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
@@ -346,6 +363,7 @@ def inspect(project: Path, tol_pct: float = DEFAULT_TOL_PCT
 
     docs = _load_l8_docs(project)
     if not docs:
+        summary["skip_kind"] = "input-missing"
         summary["skipped_reason"] = "no L8 document in project"
         return findings, summary
     summary["l8_files"] = [str(p.relative_to(project)) for p, _ in docs]
@@ -357,6 +375,7 @@ def inspect(project: Path, tol_pct: float = DEFAULT_TOL_PCT
     summary["tick_constants"] = len(ticks)
 
     if not records and not ticks:
+        summary["skip_kind"] = "input-missing"
         summary["skipped_reason"] = (
             "L8 declares no clock records and no tick-denominated constants "
             "— nothing the SDC/turnaround consumers dereference")
@@ -601,7 +620,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"=== l8_clock_period_actionability_check ({project.name}) ===")
     if summary.get("skipped_reason"):
         print(f"skipped: {summary['skipped_reason']}")
-        return 0
+        if summary.get("skip_kind") != "input-missing":
+            return 0          # a waiver is not an empty examination
+        # disclose on BOTH channels the consumer reads: the
+        # rc-independent `VACUOUS_PASS:` sentinel (stderr, so a
+        # `--json -` document on stdout stays parseable) and the rc.
+        _vx.announce_vacuous("l8_clock_period_actionability_check", summary["skipped_reason"])
+        return _vx.RC_VACUOUS
     print(f"L8 files: {summary['l8_files']}")
     print(f"clock records: {summary['clock_records']}  "
           f"tick constants: {summary['tick_constants']}")
