@@ -113,6 +113,7 @@ from typing import List, Dict, Set, Tuple, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _provenance as _prov  # noqa: E402  (ORGANIC #770)
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -6375,7 +6376,7 @@ def main():
         print(f"{fd.file}:{fd.line}: [{fd.severity}] {fd.rule}: {fd.message}{suffix}")
 
     if args.json:
-        Path(args.json).write_text(json.dumps([asdict(f) for f in filtered], indent=2))
+        atomic_write_text(Path(args.json), json.dumps([asdict(f) for f in filtered], indent=2))
 
     # ORGANIC #770 round-2 — only a BLOCK-eligible finding hard-blocks (trips
     # rc=1). A STRUCTURAL / corroborated finding (a genuine bug) stays
