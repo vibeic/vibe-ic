@@ -548,6 +548,25 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # Published, not on-disk, on purpose: 46 vs 17 is exactly the host-dependence
 # `_published_tree` exists to remove from a baseline.
 run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic"
+# vibe-ic#1081 — a tool diagnostic id that was NOT there last time is decidable
+# without an oracle, so it BLOCKS. The gate shipped with nothing but its own
+# fixture running it (vibe-ic#1241, `checker execution wiring` row), which is
+# the defect two gates up: the fixture proves the parse, never the corpus.
+#
+# BLOCKING, and it can afford to be, MEASURED on this branch before wiring:
+# 20 diagnostic ids over the published corpus (CTS/DPL/DRT/EST/GRT/IFP/ODB/PSM
+# — real OpenROAD ids, not fixture strings), recorded into
+# `programs/tool_warning_id_baseline.json`, and rc 0 on the first wired run.
+#
+# `run` and NOT `run_tolerating_uncheckable`, deliberately: this gate answers
+# rc 2 VACUOUS when the baseline is missing or when no log carries an id, and
+# both of those are the "an empty result reads as a clean one" shape the rest
+# of this file exists to refuse. A missing baseline must be LOUD, not tolerated.
+#
+# Scope is `benchmark-data/` and not "$ROOT": the plugin's own tests ship
+# fixture logs with invented ids, and folding those into the baseline would
+# make the ratchet measure our fixtures instead of our tool output.
+run "new tool diagnostic id"            "$ROOT" python3 "$PG/tool_warning_id_novelty_check.py" "$ROOT/benchmark-data" --baseline "$PG/tool_warning_id_baseline.json"
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard
 # on that list's contract — complete over the non-PASS steps, inventing none,
