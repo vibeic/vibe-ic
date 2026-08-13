@@ -203,8 +203,17 @@ def test_the_gate_it_found_still_exists_and_is_a_real_program():
     ("checker_execution_wiring_audit.py", [], "checker-shaped program(s)"),
 ])
 def test_the_wiring_gates_state_their_denominator_on_a_clean_run(prog, args, needle):
+    #: 55s, not 170s. The harness runs this suite under `--timeout=180` and
+    #: `ci_harness_timeout_ceiling_check` derives a per-call ceiling of
+    #: `min(180, 300) // 3 = 60s` from it. A bound ABOVE that promises time the
+    #: harness will not give: pytest-timeout's thread method cannot interrupt a
+    #: blocking subprocess, so it calls `os._exit(1)` and takes the whole
+    #: SESSION down instead of failing this one test.
+    #: MEASURED, 3 runs each on a loaded host: `gate_is_wired_check` 14.3-14.7s,
+    #: `checker_execution_wiring_audit` 18.9-20.3s. 55s is ~2.7x the slowest
+    #: observed and still inside the ceiling.
     p = subprocess.run([sys.executable, str(_PROGRAMS / prog), *args],
-                       capture_output=True, text=True, timeout=170)
+                       capture_output=True, text=True, timeout=55)
     out = p.stdout + p.stderr
     assert needle in out, out[:600]
     assert re.search(r"\d", out), out[:600]
