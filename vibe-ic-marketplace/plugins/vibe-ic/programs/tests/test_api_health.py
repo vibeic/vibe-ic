@@ -14,9 +14,28 @@ def _load():
     for parent in Path(__file__).resolve().parents:
         cand = (parent / "skills" / "core-agent-loop" / "programs" / "api_health.py")
         if cand.is_file():
+            # vibe-ic#1321 / batch R4: loading a module BY PATH out of the SHIPPED
+            # `skills/` tree makes CPython write `__pycache__/api_health.*.pyc`
+            # NEXT TO IT. `test_shipped_skills_tree_is_untouched_by_this_module`
+            # digests every file under `skills/` (rglob('*'), no filter), so that
+            # .pyc moves the digest and fails the whole session — and
+            # gatekeeper-land.sh:213 then fails the landing. `git status` does NOT
+            # show it, because __pycache__ is ignored; only the digest sees it.
+            #
+            # MEASURED on this branch: digest 72403603f61a5f52c612f4a9cd8ae99c
+            # without the .pyc, c31ff97d7eb9461ee41771fa46616385 with it.
+            #
+            # Suppressed rather than cleaned up afterwards: a test that writes and
+            # then deletes still races any concurrent digest, and the shipped tree
+            # must not be written at all.
             spec = importlib.util.spec_from_file_location("api_health", cand)
             mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
+            _prev = sys.dont_write_bytecode
+            sys.dont_write_bytecode = True
+            try:
+                spec.loader.exec_module(mod)
+            finally:
+                sys.dont_write_bytecode = _prev
             return mod
     raise AssertionError("api_health.py not found above this test")
 
