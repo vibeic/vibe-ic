@@ -140,3 +140,186 @@ def test_the_json_report_names_the_blocked_set(tmp_path):
     doc = json.loads(out.read_text())
     assert doc["blocked"] == [2, 3]
     assert doc["orphans"] == [{"pr": 2, "base": "feat/dead", "parent": 1}]
+
+
+# ---------------------------------------------------------------------------
+# The CARRIED pass. Every test below builds a real throwaway git repository,
+# because the defect being guarded is in the commit graph and a mocked graph
+# would only prove the mock agrees with itself.
+# ---------------------------------------------------------------------------
+
+import subprocess
+
+
+def _repo(tmp_path):
+    """A repo with `origin/main` and a helper to branch off it."""
+    d = tmp_path / "r"
+    d.mkdir()
+
+    def g(*a):
+        subprocess.run(["git", "-C", str(d), *a], check=True,
+                       capture_output=True, text=True)
+
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@t"); g("config", "user.name", "t")
+    (d / "f").write_text("0\n")
+    g("add", "f"); g("commit", "-qm", "base")
+    g("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    def branch(ref, content, parent="refs/remotes/origin/main"):
+        g("checkout", "-q", "--detach", parent)
+        (d / "f").write_text(content)
+        g("add", "f"); g("commit", "-qm", ref)
+        g("update-ref", f"refs/remotes/origin/{ref}", "HEAD")
+
+    return d, g, branch
+
+
+def test_a_pr_declaring_MAIN_that_CARRIES_a_rejected_parent_is_CAUGHT(tmp_path):
+    """THE REGRESSION. This is the case the first revision could not see.
+
+    `baseRefName` reads `main`, so the DECLARED pass calls it healthy — which
+    is exactly what happened to #1290 after it took this file's own (wrong)
+    advice to retarget. Only the commit graph knows.
+    """
+    d, _, branch = _repo(tmp_path)
+    branch("dead", "rejected\n")
+    branch("live", "mine\n", parent="refs/remotes/origin/dead")
+
+    prs = [_pr(1, "dead", state="CLOSED", merged=None), _pr(2, "live")]
+    hits, refusal = G.carried_rejects(prs, str(d))
+    assert refusal is None, refusal
+    assert [h["pr"]["number"] for h in hits] == [2]
+    assert hits[0]["parent"]["number"] == 1
+
+
+def test_carrying_a_MERGED_parent_is_not_a_finding(tmp_path):
+    """PAIRED GUARD: the check must not fire on the normal case.
+
+    A merged parent's commits are supposed to be there. If this fired, the
+    check would flag most of the queue and be turned off.
+    """
+    d, _, branch = _repo(tmp_path)
+    branch("done", "landed\n")
+    branch("live", "mine\n", parent="refs/remotes/origin/done")
+
+    prs = [_pr(1, "done", state="CLOSED", merged="2026-01-01T00:00:00Z"),
+           _pr(2, "live")]
+    hits, refusal = G.carried_rejects(prs, str(d))
+    assert refusal is None and hits == []
+
+
+def test_a_rejected_parent_whose_commits_ARE_in_main_is_not_a_finding(tmp_path):
+    """Closed unmerged, but the commits reached `main` some other way. Carrying
+    them resurrects nothing."""
+    d, g, branch = _repo(tmp_path)
+    branch("dead", "rejected\n")
+    g("update-ref", "refs/remotes/origin/main", "refs/remotes/origin/dead")
+    branch("live", "mine\n", parent="refs/remotes/origin/dead")
+
+    prs = [_pr(1, "dead", state="CLOSED", merged=None), _pr(2, "live")]
+    hits, refusal = G.carried_rejects(prs, str(d))
+    assert refusal is None and hits == []
+
+
+def test_a_clean_branch_is_not_a_finding(tmp_path):
+    d, _, branch = _repo(tmp_path)
+    branch("dead", "rejected\n")
+    branch("live", "mine\n")
+
+    prs = [_pr(1, "dead", state="CLOSED", merged=None), _pr(2, "live")]
+    hits, refusal = G.carried_rejects(prs, str(d))
+    assert refusal is None and hits == []
+
+
+def test_an_unfetched_head_REFUSES_rather_than_reporting_clean(tmp_path):
+    """Rule of the file: a pass this run could not perform is not a pass.
+
+    Without this the check answers 0 over the branches it could not resolve —
+    the exact shape it exists to catch, one level up.
+    """
+    d, _, branch = _repo(tmp_path)
+    branch("dead", "rejected\n")
+
+    prs = [_pr(1, "dead", state="CLOSED", merged=None), _pr(2, "never-fetched")]
+    hits, refusal = G.carried_rejects(prs, str(d))
+    assert hits == []
+    assert refusal and "do not resolve" in refusal
+
+
+def test_no_git_repo_REFUSES(tmp_path):
+    hits, refusal = G.carried_rejects([_pr(1, "a")], str(tmp_path / "nope"))
+    assert hits == [] and refusal
+
+
+def test_a_run_without_repo_dir_SAYS_the_carried_pass_did_not_run(tmp_path, capsys):
+    """A clean bill must state its own scope. `[PASS] ... base chain only` and
+    `[PASS] ... AND carried commits` are different verdicts."""
+    _run(tmp_path, [_pr(1, "feat/a")])
+    out = capsys.readouterr().out
+    assert "CARRIED pass NOT ESTABLISHED" in out
+    assert "base chain only" in out
+
+
+def test_require_carried_turns_a_missing_pass_into_a_REFUSAL(tmp_path):
+    assert _run(tmp_path, [_pr(1, "feat/a")],
+                extra=("--require-carried",)) == G.RC_REFUSE
+
+
+def test_a_DELETED_parent_branch_is_skipped_not_a_refusal(tmp_path):
+    """A closed PR whose branch is gone carries nothing into anybody.
+
+    Added because a mutant that removed the `ref not in known` skip SURVIVED
+    the suite: without this the deleted ref reaches `for-each-ref --contains`,
+    which errors, and the whole pass degrades to a refusal — turning the most
+    ordinary state in the queue (485 unmerged PRs here, most with the branch
+    long deleted) into "could not establish".
+    """
+    d, _, branch = _repo(tmp_path)
+    branch("live", "mine\n")
+
+    prs = [_pr(1, "deleted-long-ago", state="CLOSED", merged=None),
+           _pr(2, "live")]
+    hits, refusal = G.carried_rejects(prs, str(d))
+    assert refusal is None, refusal
+    assert hits == []
+
+
+def test_an_open_pr_SHARING_a_head_with_a_closed_copy_does_not_carry_itself(tmp_path):
+    """Every branch contains itself, so the self-exclusion is load-bearing.
+
+    Two PRs on one head branch is irregular but real (a reopened/duplicated
+    PR). Without the `head == ref` skip the OPEN one is reported as carrying
+    the CLOSED one — a finding that is true of the graph and false of the
+    world, and the author has no way to act on it. Added because a mutant that
+    dropped the skip SURVIVED.
+    """
+    d, _, branch = _repo(tmp_path)
+    branch("shared", "x\n")
+
+    prs = [_pr(1, "shared", state="CLOSED", merged=None), _pr(2, "shared")]
+    hits, refusal = G.carried_rejects(prs, str(d))
+    assert refusal is None, refusal
+    assert hits == [], f"a branch was reported as carrying itself: {hits}"
+
+
+def test_EVERY_carrier_of_one_dead_branch_is_reported(tmp_path):
+    """One rejected branch can be carried by several PRs, and each one has to
+    be told — a per-PR remedy cannot be acted on by a PR that was not named.
+
+    This is not hypothetical: in the live queue #1134
+    (`fix/1043-vendored-attribution-retained`, closed unmerged) is carried by
+    BOTH #1301 and #1309. Added because a mutant that reported only the first
+    carrier SURVIVED the suite.
+    """
+    d, _, branch = _repo(tmp_path)
+    branch("dead", "rejected\n")
+    branch("live-a", "a\n", parent="refs/remotes/origin/dead")
+    branch("live-b", "b\n", parent="refs/remotes/origin/dead")
+
+    prs = [_pr(1, "dead", state="CLOSED", merged=None),
+           _pr(2, "live-a"), _pr(3, "live-b")]
+    hits, refusal = G.carried_rejects(prs, str(d))
+    assert refusal is None, refusal
+    assert sorted(h["pr"]["number"] for h in hits) == [2, 3], (
+        f"only some carriers of the dead branch were reported: {hits}")

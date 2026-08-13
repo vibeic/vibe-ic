@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""pr_base_reachability_check.py — a PR whose base cannot reach `main` is not
-landable, and `mergeable` cannot say so (vibe-ic#1364).
+"""pr_base_reachability_check.py — a PR that declares a dead base, or that
+merely CARRIES a closed-unmerged PR's commits, is not landable; `mergeable`
+reports CLEAN for both (vibe-ic#1364).
 
 THE FALSE GREEN
 ===============
@@ -26,12 +27,36 @@ rooted on a CLOSED-unmerged one**, and every one of the four reports
 `MERGEABLE/CLEAN`. Two of the four are the root of a further stack, so **7 open
 PRs cannot reach `main`** while none of them says so.
 
-WHAT THIS CHECKS, AND WHAT IT DOES NOT
-======================================
-It answers one question — can this PR's base chain terminate at `main` — and
-nothing else. It does not judge whether the PR is correct, whether it conflicts,
-or whether the parent SHOULD have been closed. A stack on an OPEN parent is
-healthy and is reported as such; the parent landing first is the normal order.
+TWO QUESTIONS, AND NEITHER ANSWERS THE OTHER
+============================================
+DECLARED — does `baseRefName` chain terminate at `main`?  (metadata only)
+CARRIED  — does the branch CONTAIN a closed-unmerged PR's commits?  (`--repo-dir`)
+
+The first revision of this file asked only the DECLARED question and told
+authors to fix a finding with `gh pr edit <n> --base main`. That remedy silences
+the DECLARED question **without removing the parent's commits**, so a branch
+that took the advice becomes invisible to the very check that gave it.
+
+#1290 is the worked example. #1364 recorded its base as
+`fix/63x8-waiver-citations-reverified`; it now reads `main`, reports MERGEABLE,
+and still contains #1259's `3d5ecf73`. #1259 was closed WITHOUT merging.
+
+Re-measured 2026-08-13 over the full population — 218 open, 760 closed of which
+485 unmerged, 87 of those with a branch still live and not in `main` (counts
+taken by REST pagination, because `gh pr list --limit 400` returned exactly 400
+and was silently truncating):
+
+    DECLARED only ....... #1110
+    CARRIED only ........ #1078  #1197  #1239  #1290      <- all declare `main`
+    both ................ #1265  #1301  #1309
+
+Eight PRs, and **each pass alone misses at least one of them**. That is why both
+run, and why a run that could not perform the CARRIED pass says so rather than
+printing a clean bill.
+
+It still does not judge whether the PR is correct, whether it conflicts, or
+whether the parent SHOULD have been closed. A stack on an OPEN parent is healthy
+and is reported as such; the parent landing first is the normal order.
 
 REFUSAL IS A VERDICT
 ====================
@@ -148,6 +173,104 @@ def audit(prs: List[dict]) -> Tuple[List[dict], List[dict], List[int], Set[int]]
     return orphans, unresolved, healthy, blocked
 
 
+def _git(repo_dir: str, *args: str) -> Tuple[int, str]:
+    try:
+        r = subprocess.run(["git", "-C", repo_dir, *args], capture_output=True,
+                           text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return 128, ""
+    return r.returncode, r.stdout.strip()
+
+
+def _resolves(repo_dir: str, ref: str) -> bool:
+    return _git(repo_dir, "rev-parse", "--verify", "-q", ref)[0] == 0
+
+
+def carried_rejects(prs: List[dict], repo_dir: str,
+                    remote: str = "origin") -> Tuple[List[dict], Optional[str]]:
+    """`(hits, refusal)` — open PRs whose HEAD CONTAINS a closed-unmerged PR.
+
+    This is a different question from the one `audit()` asks, and neither
+    subsumes the other:
+
+      * `audit()` reads `baseRefName` — what the PR SAYS it targets;
+      * this reads the commit graph — what the branch actually CARRIES.
+
+    Retargeting an orphan to `main` changes the first and changes nothing about
+    the second. #1290 is the worked example: #1364 recorded its base as
+    `fix/63x8-waiver-citations-reverified`; today it reads `main`, reports
+    MERGEABLE, and still contains #1259's `3d5ecf73`. Landing it would land the
+    content of a PR that was closed WITHOUT merging, under a different number
+    and with none of that PR's review.
+
+    A parent whose commits are already ancestors of `main` is skipped: its
+    content landed, so carrying it is not a resurrection.
+
+    WHAT ANCESTRY CAN AND CANNOT PROVE. `--is-ancestor` is exact about commits
+    and silent about content. This repository squash-merges, so a rejected
+    branch whose *content* was later re-landed under another number still fails
+    the ancestry test and will be reported here. The finding is therefore
+    "carries commits that never landed as such", which is precisely what a
+    reviewer needs to look at — not "carries content nobody approved". Stated
+    so the next reader does not have to re-derive it.
+    """
+    if _git(repo_dir, "rev-parse", "--git-dir")[0] != 0:
+        return [], f"{repo_dir} is not a git repository"
+    if not _resolves(repo_dir, f"{remote}/{TRUNK}"):
+        return [], f"{remote}/{TRUNK} does not resolve"
+
+    open_prs = [p for p in prs if p.get("state") == "OPEN"]
+    dead = [p for p in prs if is_dead_parent(p)]
+
+    # Batched, because the natural shape is O(open x dead) subprocesses — 218 x
+    # 87 in this repo, measured at 52s wall with almost all of it spawn cost,
+    # and both factors only grow. `for-each-ref` answers each question in one
+    # call. A gate that takes a minute is a gate somebody turns off.
+    def refs(*extra: str) -> Optional[Set[str]]:
+        rc, out = _git(repo_dir, "for-each-ref", "--format=%(refname:strip=3)",
+                       *extra, f"refs/remotes/{remote}/")
+        return set(out.split("\n")) - {""} if rc == 0 else None
+
+    known = refs()
+    in_trunk = refs("--merged", f"{remote}/{TRUNK}")
+    if known is None or in_trunk is None:
+        return [], f"could not enumerate refs under {remote}/"
+
+    live: Dict[str, dict] = {}
+    for p in dead:
+        ref = p.get("headRefName")
+        if not ref or ref not in known:
+            continue                       # branch deleted — carries nothing
+        if ref in in_trunk:
+            continue                       # already in main — not a resurrection
+        live[ref] = p
+
+    missing = [int(p["number"]) for p in open_prs
+               if p.get("headRefName") not in known]
+    if missing:
+        return [], (f"{len(missing)} open PR head branch(es) do not resolve "
+                    f"under {remote}/ ({sorted(missing)[:8]}...): run "
+                    f"`git fetch {remote} '+refs/heads/*:refs/remotes/{remote}/*'` "
+                    f"first. Containment over a partial set would answer 0 for "
+                    f"the branches this run could not see")
+
+    by_head: Dict[str, List[dict]] = {}
+    for p in open_prs:
+        by_head.setdefault(p["headRefName"], []).append(p)
+
+    hits: List[dict] = []
+    for ref, parent in sorted(live.items()):
+        carriers = refs("--contains", f"{remote}/{ref}")
+        if carriers is None:
+            return [], f"could not list branches containing {remote}/{ref}"
+        for head in sorted(carriers & set(by_head)):
+            if head == ref:
+                continue
+            for p in by_head[head]:
+                hits.append({"pr": p, "parent": parent})
+    return hits, None
+
+
 def _report(orphans, unresolved, healthy, blocked, total_open) -> None:
     print(f"pr_base_reachability: {total_open} open PR(s); "
           f"{len(healthy)} reach {TRUNK}; {len(orphans)} rooted on a "
@@ -169,6 +292,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--from-json", type=str, default=None,
                     help="read the PR list from a file instead of the gh CLI")
     ap.add_argument("--json", dest="json_out", type=str, default=None)
+    ap.add_argument("--repo-dir", type=str, default=None,
+                    help="git checkout to read the commit graph from; enables "
+                         "the CARRIED pass, which baseRefName cannot see")
+    ap.add_argument("--remote", type=str, default="origin")
+    ap.add_argument("--require-carried", action="store_true",
+                    help="REFUSE (rc 2) if the CARRIED pass could not run, "
+                         "instead of reporting it as not established")
     args = ap.parse_args(argv)
 
     if args.from_json:
@@ -189,6 +319,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     total_open = sum(1 for p in prs if p.get("state") == "OPEN")
     _report(orphans, unresolved, healthy, blocked, total_open)
 
+    carried: List[dict] = []
+    carried_refusal: Optional[str] = None
+    if args.repo_dir:
+        carried, carried_refusal = carried_rejects(prs, args.repo_dir,
+                                                   args.remote)
+        if carried_refusal:
+            print(f"   CARRIED pass NOT ESTABLISHED — {carried_refusal}")
+        else:
+            print(f"   CARRIED pass: {len(carried)} open PR(s) contain commits "
+                  f"of a CLOSED-unmerged PR whose branch never reached {TRUNK}")
+            for h in sorted(carried, key=lambda x: int(x["pr"]["number"])):
+                print(f"      #{h['pr']['number']} "
+                      f"(base={h['pr'].get('baseRefName')}) carries "
+                      f"#{h['parent']['number']} "
+                      f"({h['parent']['headRefName']})")
+    else:
+        carried_refusal = ("no --repo-dir given, so nothing was established "
+                           "about what the branches CARRY")
+        print(f"   CARRIED pass NOT ESTABLISHED — {carried_refusal}")
+
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as fh:
             json.dump({
@@ -199,6 +349,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "parent": o["parent"]["number"]} for o in orphans],
                 "unresolved": [p["number"] for p in unresolved],
                 "blocked": sorted(blocked),
+                # Absent/empty `carried` and a non-null `carried_not_established`
+                # are different facts. A consumer that reads only `carried`
+                # would turn "not measured" into "none found".
+                "carried": [{"pr": h["pr"]["number"],
+                             "base": h["pr"].get("baseRefName"),
+                             "parent": h["parent"]["number"]} for h in carried],
+                "carried_not_established": carried_refusal,
             }, fh, indent=1)
 
     if unresolved:
@@ -208,15 +365,38 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"is incomplete, so a clean verdict would be over a set this run "
               f"could not see.")
         return RC_REFUSE
-    if orphans:
-        print(f"[FAIL] {len(orphans)} open PR(s) are based on a branch whose "
-              f"PR was closed without merging. Retarget each to {TRUNK} "
-              f"(`gh pr edit <n> --base {TRUNK}`) — the branch already carries "
-              f"its parent's commits, so retargeting makes that explicit rather "
-              f"than losing it.")
+    if args.require_carried and carried_refusal:
+        print(f"REFUSE — the CARRIED pass could not run ({carried_refusal}) "
+              f"and --require-carried was given. A declared base of {TRUNK} is "
+              f"not evidence that a branch carries nothing rejected.")
+        return RC_REFUSE
+    if orphans or carried:
+        if orphans:
+            print(f"[FAIL] {len(orphans)} open PR(s) DECLARE a base whose PR "
+                  f"was closed without merging.")
+        if carried:
+            print(f"[FAIL] {len(carried)} open PR(s) CARRY the commits of a "
+                  f"closed-unmerged PR.")
+        print(
+            f"   REMEDY. Retargeting to {TRUNK} (`gh pr edit <n> --base "
+            f"{TRUNK}`) fixes only the DECLARED base. It does not remove the "
+            f"parent's commits, and once the base reads {TRUNK} the declared "
+            f"pass above goes quiet — which is how these branches became "
+            f"invisible in the first place. An earlier revision of THIS FILE "
+            f"recommended exactly that and nothing else; the recommendation "
+            f"was wrong and is corrected here.\n"
+            f"   Decide, per PR, which of these two is true, and say which:\n"
+            f"     * the parent's change is NOT wanted — rebase it out "
+            f"(`git rebase --onto {TRUNK} <parent-tip> <head>`), so the PR "
+            f"carries only its own work;\n"
+            f"     * the parent's change IS wanted — say so in the PR body, "
+            f"name the closed PR, and have it reviewed HERE, because closing "
+            f"it removed the review it would otherwise have had.")
         return RC_FAIL
-    print(f"[PASS] every one of the {total_open} open PR(s) has a base chain "
-          f"that terminates at {TRUNK}")
+    scope = ("base chain AND carried commits" if not carried_refusal
+             else f"base chain only — {carried_refusal}")
+    print(f"[PASS] every one of the {total_open} open PR(s) is clean on: "
+          f"{scope}")
     return RC_OK
 
 
