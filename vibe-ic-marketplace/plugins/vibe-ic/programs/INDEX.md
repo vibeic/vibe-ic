@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1089
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1089)
+- **Total programs (excluding helpers / shims):** 1090
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1090)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1080 |
+| `any` | 1081 |
 
 ## Alphabetical listing
 
@@ -31,6 +31,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `accumulate_synth` | any | — | deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family: |
 | `ace_protocol_synth` | any | — | AMBA AXI/ACE coherency-extension protocol synth helper. |
 | `adder_map_techmap` | any | — | make a DECLARED adder techmap actually bind, and never claim it bound without evidence from yosys's own log. |
+| `adversarial_agent` | any | — | a role whose objective is to make PASS a lie. #1119. |
 | `afdx_protocol_synth` | any | — | AFDX / ARINC 664 Part 7 protocol synth helper. |
 | `agent_checkin_scope_guard` | any | — | role-based check-in (commit) path-scope gate. |
 | `agent_report_presence_check` | any | — | verify the project ships a structured top-level AGENT_REPORT.md summarising what the run delivered. |
@@ -1161,7 +1162,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1080 programs)
+### `any` (1081 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1169,6 +1170,7 @@ _(no programs in this group)_
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
 - `adder_map_techmap` — make a DECLARED adder techmap actually bind, and never claim it bound without evidence from yosys's own log.
+- `adversarial_agent` — a role whose objective is to make PASS a lie. #1119.
 - `afdx_protocol_synth` — AFDX / ARINC 664 Part 7 protocol synth helper.
 - `agent_checkin_scope_guard` — role-based check-in (commit) path-scope gate.
 - `agent_report_presence_check` — verify the project ships a structured top-level AGENT_REPORT.md summarising what the run delivered.
