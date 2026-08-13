@@ -126,6 +126,7 @@ def _distinctive(holder: str) -> str:
     return holder
 
 
+
 def scan(root: Path) -> Dict[str, Dict[str, object]]:
     """`{holder: {"licences": {...}, "files": [...], "n": int}}` for the tree."""
     found: Dict[str, Dict[str, object]] = defaultdict(
@@ -146,6 +147,15 @@ def scan(root: Path) -> Dict[str, Dict[str, object]]:
         for line in head.splitlines():
             m = _COPYRIGHT.search(line)
             if m:
+                # vibe-ic#1241 — the denial is looked for INSIDE the match's own
+                # sentence and BEFORE it, which is `_prose_polarity`'s rule: a
+                # denial retracts the value it precedes, not one further on.
+                # Written here rather than in a helper because the gate reads
+                # THIS function's body, and the locality is the point — the
+                # polarity question belongs where the extraction happens.
+                lo, _hi = _polarity.sentence_scope(line, m.start(), m.end())
+                if _polarity.is_denied(line[lo:m.start()]) is not None:
+                    continue
                 holder = _clean_holder(m.group(1))
                 if holder:
                     break

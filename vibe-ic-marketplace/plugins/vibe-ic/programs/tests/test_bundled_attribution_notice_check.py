@@ -201,3 +201,69 @@ def test_THIS_repository_accounts_for_everything_it_bundles(capsys):
     rc = bc.main([str(repo)])
     out = capsys.readouterr().out
     assert rc == 0, out
+
+
+# --------------------------------------------------------------------------
+# POLARITY — vibe-ic#1241. A sentence that DENIES the copyright must not be
+# read as one that asserts it.
+#
+# `_COPYRIGHT` matches `[Cc]opyright` wherever the word falls on a line and
+# captures the rest, so before this guard an English header comment produced a
+# holder IDENTICAL to a real attribution:
+#
+#     // Copyright 2020 Acme Corporation             -> ['Acme Corporation']
+#     // This file is not copyright Acme Corporation -> ['Acme Corporation']
+#
+# Both directions are asserted. A "fix" that dropped every line containing a
+# negation would satisfy the denial cases and destroy the control — and the
+# control is the one that matters, because losing a real holder means shipping
+# a bundled work with no attribution recorded.
+# --------------------------------------------------------------------------
+
+_DENIED_RTL = """// This file is not copyright Acme Corporation.
+// SPDX-License-Identifier: Apache-2.0
+module m; endmodule
+"""
+
+_DENIED_CLAIMED = """// No copyright is claimed by Acme Corporation for this file.
+// SPDX-License-Identifier: Apache-2.0
+module m; endmodule
+"""
+
+_ASSERTED_RTL = """// Copyright 2020 Acme Corporation
+// SPDX-License-Identifier: Apache-2.0
+module m; endmodule
+"""
+
+
+@pytest.mark.parametrize("header", [_DENIED_RTL, _DENIED_CLAIMED])
+def test_a_denied_copyright_is_not_a_holder(tmp_path, header):
+    """The denial cases: no holder may be extracted."""
+    root = _tree(tmp_path, _OURS, {"vendor/m.sv": header})
+    assert bc.scan(root) == {}, (
+        "a sentence denying the copyright produced a holder, so a file saying "
+        "it is NOT copyright X is indistinguishable from one attributing X")
+
+
+def test_PAIRED_a_plain_copyright_is_still_a_holder(tmp_path):
+    """The control, which the denial guard must not break.
+
+    Without this, dropping every line containing a negation would pass the two
+    tests above while silently losing real attributions.
+    """
+    root = _tree(tmp_path, _OURS, {"vendor/m.sv": _ASSERTED_RTL})
+    assert list(bc.scan(root)) == ["Acme Corporation"]
+
+
+def test_a_denial_does_not_suppress_a_real_holder_elsewhere_in_the_header(tmp_path):
+    """Scoping: the denial retracts its own sentence, not the whole file.
+
+    A header may disclaim one party and attribute another. Line-scoped polarity
+    keeps the second; a file-wide "does it contain a negation" test would not.
+    """
+    header = ("// This file is not copyright Acme Corporation.\n"
+              "// Copyright 2020 Beta Industries\n"
+              "// SPDX-License-Identifier: Apache-2.0\n"
+              "module m; endmodule\n")
+    root = _tree(tmp_path, _OURS, {"vendor/m.sv": header})
+    assert list(bc.scan(root)) == ["Beta Industries"]
