@@ -228,6 +228,16 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # L21 is a phase-1 LAYER document like the thirteen above it, not a
+      # mixed-signal deliverable. d7 charged it to M2 because that is where its
+      # readers were first seen; but every L-doc this flow declares at all is
+      # declared HERE and nowhere else (13 of 13, measured), and step D1 is
+      # itself the step that runs `l21_macro_supply_rail_declared_check`.
+      # Declaring it on M2 asserts D1 -> M2 while M2 already descends from D1,
+      # which is why that form reddens d5[D1] and d5[15] with a CIRCULAR
+      # dependency. On its real producer the edge is intra-step: no closure
+      # changes and no cycle is asserted.
+      - "phase1/generated_docs/L21_POWER_INTENT.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
