@@ -83,9 +83,21 @@ def test_a_new_root_fails(tmp_path):
 def test_a_declared_root_that_gained_dependencies_forces_the_list_to_shrink(tmp_path):
     """The half people forget — and the half that caught a stale-tree baseline
     on this check's first real run."""
-    assert len(_ROOTS) >= 2, f"premise: need two declared roots, got {_ROOTS}"
-    first, rest = _ROOTS[0], _ROOTS[1:]
-    steps = [_s(first, [rest[0]])] + [_s(r) for r in rest]
+    # The premise used to be `len(_ROOTS) >= 2`, and it built the fixture by
+    # pointing one DECLARED root at another. That coupled the guard to the
+    # CARDINALITY of a production constant: vibe-ic#1070 declares A1's real
+    # dependency on D1, so A1 stops being an entry point and DECLARED_ROOTS
+    # shrinks to a single id — at which point this guard could not build its
+    # fixture at all and skipped straight to an premise failure.
+    #
+    # The property under test never needed two roots. It is "a DECLARED root
+    # that has dependencies must force the list to shrink", so one declared
+    # root pointed at any non-root step exercises it exactly, and the guard now
+    # survives the list shrinking to one — or growing again later.
+    assert _ROOTS, f"premise: need at least one declared root, got {_ROOTS}"
+    root = _ROOTS[0]
+    non_root = 9001                     # not in _ROOTS, so `root` gains a real edge
+    steps = [_s(root, [non_root])] + [_s(non_root)] + [_s(r) for r in _ROOTS[1:]]
     rc, out = _run(_flow(tmp_path, steps))
     assert rc == 1, out
     assert "must shrink" in out
