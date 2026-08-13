@@ -77,6 +77,34 @@ SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh", ".vhd", ".vhdl",
 #: Directories that are not part of what this repository distributes.
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".venv"}
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _prose_polarity import is_denied, sentence_scope  # noqa: E402
+
+#: vibe-ic#1241 — `scan` read a holder out of a licence header and wrote it as a
+#: declaration without asking whether the header DENIES it.
+#:
+#: WHY THIS ONE IS A REAL CONSULT AND NOT AN UNREACHABLE BRANCH. The two halves
+#: of this extractor are not the same class. `SPDX-License-Identifier: MIT` is a
+#: tag-value production of the SPDX grammar and has no negation form — nobody can
+#: write `SPDX-License-Identifier: NOT MIT` — and on that half alone a
+#: `_NOT_PROSE` exemption would be the honest answer. But `_COPYRIGHT` also
+#: accepts the BARE `Copyright ...` spelling and captures the remainder of the
+#: line with `(.+)`, which is free English in a hand-written file header, and
+#: denial there is both spellable and SPELLED in the wild. The canonical case is
+#: the US-government notice that real vendored sources carry:
+#:
+#:     No copyright is claimed in the United States under Title 17, U.S. Code.
+#:
+#: Read blind, that line yields the holder "is claimed in the United States
+#: under Title 17, U.S. Code." — a fabricated third-party rightsholder, in a
+#: gate whose entire output is a list of parties this repository owes attribution
+#: to under Apache-2.0 §4(d). Getting that wrong invents a legal obligation.
+#:
+#: The scope is taken within the matched LINE, because a licence header is a
+#: LINE-RECORD block rather than flowing prose — the module's own docstring says
+#: a bare newline is a soft wrap in prose but a record boundary in machine-shaped
+#: input, and that the caller must declare which it has. Scoping across the whole
+#: header would let one denial suppress its innocent neighbours.
 _SPDX_LICENSE = re.compile(r"SPDX-License-Identifier:\s*([A-Za-z0-9.\-+]+)")
 #: Both spellings, because upstreams use both and a gate that saw one would
 #: report a confident zero on a tree full of the other.
@@ -141,10 +169,21 @@ def scan(root: Path) -> Dict[str, Dict[str, object]]:
         holder = None
         for line in head.splitlines():
             m = _COPYRIGHT.search(line)
-            if m:
-                holder = _clean_holder(m.group(1))
-                if holder:
-                    break
+            if not m:
+                continue
+            # POLARITY, before the value is believed. A denied notice is
+            # SKIPPED rather than recorded — the next line in the same header
+            # still gets its turn, which is why this is `continue` and not a
+            # `break`: a file whose first notice is "No copyright is claimed"
+            # may carry a real one underneath it.
+            # Scoped within the LINE, because `m` was matched against `line` —
+            # its offsets are line-relative, and the line IS the record here.
+            lo, hi = sentence_scope(line, m.start(), m.end())
+            if is_denied(line[lo:hi]):
+                continue
+            holder = _clean_holder(m.group(1))
+            if holder:
+                break
         if not holder:
             continue
         rec = found[holder]

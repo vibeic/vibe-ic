@@ -445,6 +445,23 @@ gate_dispatch_over "published cells carrying a routed DEF" \
 # real one (nothing calls it). vibe-ic#659.
 run "triage notes state a true reason"  "$ROOT" python3 "$PG/triage_note_answers_the_question_check.py"
 
+# vibe-ic#1241 — authored, tested and merged with NOTHING but its own unit test
+# invoking it, which is the shape `checker_execution_wiring_audit` blocks on.
+# Its subject is a DISTRIBUTION obligation (Apache-2.0 §4(d)): the duty attaches
+# to shipping the work, so the tree it must be run over is the whole repository
+# and the run has to happen on every landing, not when an agent remembers.
+#
+# MEASURED on this tree before wiring, so the roll-up gains a live verdict and
+# not a new red: `[PASS] every bundled third-party holder is named in NOTICE:
+# 7 holder(s) over 513 SPDX-headered file(s)`, rc=0.
+#
+# `run`, not `run_tolerating_uncheckable`: this gate's rc=2 means "no SPDX
+# source found, so nothing was established", which on THIS repository would mean
+# the 513 files stopped being readable — a real defect, not an uncheckable
+# environment. Tolerating it here would convert exactly the emptiness the gate
+# was written to refuse into a pass.
+run "bundled works named in NOTICE"     "$ROOT" python3 "$PG/bundled_attribution_notice_check.py" "$ROOT"
+
 # The three NDA guards all scan a DELTA (commit messages, an added diff, the
 # plugin source). None can see a token that is ALREADY tracked, so one that
 # landed before a guard existed stays served by the repo forever while every
