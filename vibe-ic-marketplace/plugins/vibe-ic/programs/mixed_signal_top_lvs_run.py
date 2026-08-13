@@ -79,6 +79,8 @@ from def_gds_port_power_restore import (  # noqa: E402
     def_design_name,
     def_rank,
 )
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 TOOLS_IN_CONTAINER = "/foss/tools"
 PDKS_IN_CONTAINER = "/foss/pdks"
@@ -916,7 +918,7 @@ def run(project: Path, top: str, container: str, pdk: str,
     }
     (rpt_dir / "top_lvs.json").write_text(
         json.dumps(top_lvs, indent=2) + "\n")
-    (rpt_dir / "merge.json").write_text(json.dumps({
+    _aa.write_text(rpt_dir / "merge.json", json.dumps({
         "gate": "mixed_signal_merge",
         "verdict": "PASS" if lvs_pass else "FAIL",
         "merged_gds": str(merged.relative_to(project)),
