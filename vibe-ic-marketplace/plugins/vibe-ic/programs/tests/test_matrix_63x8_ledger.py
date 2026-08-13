@@ -437,8 +437,35 @@ def test_output_entries_classify_into_the_four_kinds():
     # VACUOUS_PASS with both reports written becomes MISSING with none.
     # test_flow_declaration_does_not_silence_its_producer.py holds that
     # distinction live for both steps.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    #
+    # 2026-08-13: 134 -> 135, FILE 100 -> 101. The ONE new entry is step 27's
+    # `reports/phase3/si_mcf_sta.json`, the MCF-bounded OpenSTA report the
+    # step-27 gate reads as its `condition_files_exist` while no step declared
+    # it. Dimension 7 records it as `W2:produced_consumed_undeclared` with
+    # producer `run-record:ambiguous`: `phase3_one_shot_runner` invokes
+    # `si_mcf_sta.py run` best-effort and no step's `programs:` claimed it.
+    # GLOB and ANY_OF are untouched.
+    #
+    # Step 27 is the STEP-29 shape, not the FS1 shape, and that was checked
+    # rather than assumed: it already declares a run-produced entry
+    # (`si_crosstalk.rpt OR si_crosstalk.json`), so the "every declared entry
+    # absent -> MISSING before the gate runs" early return cannot fire and the
+    # producer keeps running.
+    #
+    # WHAT IT COSTS, measured on the full 18-file matrix against `a38902d1`:
+    # THREE cells go green — d7 `[step27]` and BOTH parameters of
+    # `test_the_exemption_rests_on_the_flows_optionality_and_nothing_else`,
+    # which were red because `_conditional_anchor()` returned None: the anchor
+    # requires a step carrying a conditional finding and NO other finding, and
+    # this W2 was step 27's only other finding. The exemption control was
+    # measuring nothing for as long as this entry was missing.
+    # ONE cell goes red: d3 `[step27]`, because a declared output must be
+    # produced and `si_mcf_sta.py` is NONFATAL — a missing EDA container, an
+    # OpenSTA error or a timeout leaves the report absent while the SPEF is
+    # present. That is the same D7-declaration-creates-a-D3-obligation coupling
+    # under arbitration on #1235, and it is NOT waived here.
+    assert sum(seen.values()) == 135, seen
+    assert seen[F.FILE] == 101
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

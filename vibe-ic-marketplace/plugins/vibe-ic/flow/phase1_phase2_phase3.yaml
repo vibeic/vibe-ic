@@ -3362,6 +3362,7 @@ steps:
       # The NOISE/GLITCH axis. Emitted by the runner's SI screen; hard-gated
       # below by the `files_exist` any_of.
       - "reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json"
+      - "reports/phase3/si_mcf_sta.json"
       # The MCF crosstalk-DELAY verdict — and, since the tape-out SI blocking
       # condition began reading it, a CROSS-STEP fact rather than this gate's
       # private bookkeeping. `signoff_audit._classify_si` opens exactly this
