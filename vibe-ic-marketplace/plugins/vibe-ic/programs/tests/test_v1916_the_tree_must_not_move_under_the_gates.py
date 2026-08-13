@@ -177,11 +177,45 @@ def test_the_pre_existing_dirty_rule_is_unchanged(tmp_path):
 
 
 # ── the wiring, which is where the value actually is ─────────────────────────
+def _executable_text(src: str) -> str:
+    """`src` with comment-only lines blanked, keeping every byte offset intact.
+
+    The order tests below locate stages by character offset (`index`, `rindex`)
+    over this script. Comments MENTION the same flags they assert the order of
+    — `gatekeeper-land.sh:212` reads
+
+        # it. `landing_worktree_is_clean_check --expect-fingerprint` at the end
+
+    so `index("--expect-fingerprint")` returned that PROSE at offset 11699 while
+    the real invocation sits at 18981. The comparison then measured a sentence
+    against a command and reported the stages out of order when they are not:
+
+        assert 18042 < 11699   ->  "the comparison runs before the last suite"
+
+    Blanking rather than deleting is deliberate: line and offset arithmetic
+    stays comparable to the file on disk, so a failure message still points at
+    a plausible place.
+
+    This is the failure this module's own docstring names — "the program can be
+    perfectly correct and wired into a place where it answers nothing" — with
+    the test on the wrong side of it.
+    """
+    out = []
+    for line in src.splitlines(True):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            out.append(" " * (len(line) - 1) + "\n" if line.endswith("\n")
+                       else " " * len(line))
+        else:
+            out.append(line)
+    return "".join(out)
+
+
 @pytest.fixture(scope="module")
 def land_sh():
     if not _LAND_SH.is_file():
         pytest.skip(f"{_LAND_SH} absent")
-    return _LAND_SH.read_text(encoding="utf-8")
+    return _executable_text(_LAND_SH.read_text(encoding="utf-8"))
 
 
 def test_the_landing_gate_takes_a_fingerprint_and_compares_it(land_sh):
@@ -305,3 +339,24 @@ def test_the_fingerprint_path_is_per_run(land_sh):
     fixed path would make the second run compare against the first's tree."""
     assert "mktemp" in land_sh.split("--emit-fingerprint")[0][-600:], (
         "the fingerprint file is not per-run")
+
+
+def test_the_order_tests_read_COMMANDS_not_COMMENTS():
+    """The fixture must blank prose and keep offsets, or the order tests lie.
+
+    Both halves are asserted because either alone is satisfiable the wrong way:
+    a fixture that deleted comments would pass the first and break offsets, and
+    one that did nothing would pass the second and keep the bug.
+    """
+    src = (
+        'run "a" python3 x.py\n'
+        "# a comment naming --expect-fingerprint before the real one\n"
+        'run "b" python3 y.py --expect-fingerprint "$FP"\n'
+    )
+    out = _executable_text(src)
+
+    assert len(out) == len(src), "offsets must survive, so blank rather than delete"
+    assert out.index("--expect-fingerprint") > out.index("y.py"), (
+        "the first hit must be the INVOCATION, not the comment that names it")
+    assert "a comment naming" not in out, "comment text must not survive"
+    assert 'run "a" python3 x.py' in out, "executable lines must be untouched"
