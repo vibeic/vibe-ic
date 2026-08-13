@@ -438,12 +438,29 @@ class _PathResolver:
         return tuple(segs)
 
 
+#: Crash-safe write DELEGATES: `f(path, payload)`, path FIRST.
+#:
+#: One vocabulary because both recognisers below need it and they sit ~200
+#: lines apart -- teaching one and not the other is how a detector comes to
+#: disagree with itself. Two helper spellings are in flight (`_atomic_output`
+#: and `_atomic_artefact`), so the NAMES are matched, not the module:
+#: whichever helper wins, a call through it is still a write.
+_DELEGATE_WRITERS = frozenset({
+    "atomic_write_text", "atomic_write_bytes", "atomic_write_json",
+})
+
+
 def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
     """Tail segments of every path this module WRITES.
 
     Write positions recognised, all structurally (never by name matching):
       * ``open(p, "w"|"a"|"wb"|...)`` and ``p.open("w")``
       * ``p.write_text(...)`` / ``p.write_bytes(...)``
+      * ``atomic_write_text(p, ...)`` / ``atomic_write_bytes(p, ...)`` — the
+        crash-safe DELEGATE. Structurally unlike `write_text`: the path is the
+        first ARGUMENT, not the receiver, so it cannot be recognised by adding
+        a name to the tuple above. A module that adopted the safer writer
+        stopped being seen to write at all (#1265).
       * ``shutil.copy/copy2/copyfile/move(src, DEST)`` — the DEST argument
       * ``json.dump(obj, fh)`` is NOT a path write: ``fh`` is a handle, and
         the handle's path was already captured at its ``open()``.
@@ -477,6 +494,11 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
                     add(fn.value)
             elif fn.attr in ("copy", "copy2", "copyfile", "move") and len(n.args) > 1:
                 add(n.args[1])
+            elif fn.attr in _DELEGATE_WRITERS and n.args:
+                add(n.args[0])
+        elif isinstance(fn, ast.Name) and fn.id in _DELEGATE_WRITERS and n.args:
+            # `from _atomic_output import atomic_write_text` -- same call, bare name.
+            add(n.args[0])
     return out
 
 
@@ -708,6 +730,10 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
                     target = fn.value
             elif fn.attr in ("copy", "copy2", "copyfile", "move") and len(n.args) > 1:
                 target = n.args[1]
+            elif fn.attr in _DELEGATE_WRITERS and n.args:
+                target = n.args[0]
+        elif isinstance(fn, ast.Name) and fn.id in _DELEGATE_WRITERS and n.args:
+            target = n.args[0]
         if target is not None and _mentions_args_attr(target, dest, aliases):
             return True
     return False
