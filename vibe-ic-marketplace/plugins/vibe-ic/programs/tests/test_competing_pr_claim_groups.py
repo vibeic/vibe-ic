@@ -295,3 +295,49 @@ def test_two_branches_off_MAIN_sharing_a_file_are_still_competitors():
            _stk(2, ["p/a.py"], "feat/y", "main")]
     assert G.stacked(prs) == frozenset()
     assert [(a, b) for a, b, _, _ in G.path_overlap_pairs(prs)] == [(1, 2)]
+
+
+# --------------------------------------------------------------------------
+# a verdict must name the tree it was computed from (2026-08-14)
+# --------------------------------------------------------------------------
+def test_the_add_add_verdict_names_the_tip_it_was_computed_from(tmp_path, capsys):
+    """A pair reported without its tips cannot be re-checked later.
+
+    MEASURED on this queue: a branch moved between one analysis fetching it and
+    that analysis finishing. The stale ref said the PR no longer created the
+    file at all — the exact opposite of the truth — and the API's file list was
+    the correct one. By the time anyone reads a verdict, the tips have moved, so
+    the verdict has to carry them or it is unfalsifiable.
+    """
+    import json
+    prs = [{"number": 11, "title": "a", "body": "", "files": ["p/x.py"],
+            "added": ["p/x.py"], "headRefOid": "aaaaaaaaaaaa1111"},
+           {"number": 22, "title": "b", "body": "", "files": ["p/x.py"],
+            "added": ["p/x.py"], "headRefOid": "bbbbbbbbbbbb2222"}]
+    f = tmp_path / "prs.json"
+    f.write_text(json.dumps(prs))
+    G.main(["--prs-json", str(f)])
+    out = capsys.readouterr().out
+    assert "#11 x #22" in out, out
+    # the SHORT tips, both of them, on the line that follows the pair
+    assert "aaaaaaaaa" in out and "bbbbbbbbb" in out, (
+        "the add/add verdict does not name the tips it was computed from, so a "
+        f"reader cannot re-verify it against a branch that has since moved:\n{out}")
+
+
+def test_a_pr_without_a_recorded_tip_is_shown_as_unknown_not_omitted(tmp_path, capsys):
+    """PAIRED GUARD. Printing nothing when the tip is absent would read as
+    'no tip needed' rather than 'tip unknown', which is the silent-omission
+    shape this repo removes elsewhere."""
+    import json
+    prs = [{"number": 11, "title": "a", "body": "", "files": ["p/x.py"],
+            "added": ["p/x.py"]},                      # no headRefOid
+           {"number": 22, "title": "b", "body": "", "files": ["p/x.py"],
+            "added": ["p/x.py"]}]
+    f = tmp_path / "prs.json"
+    f.write_text(json.dumps(prs))
+    G.main(["--prs-json", str(f)])
+    out = capsys.readouterr().out
+    assert "#11 x #22" in out, out
+    assert "#11@?" in out and "#22@?" in out, (
+        f"an absent tip must be shown as unknown, not omitted:\n{out}")
