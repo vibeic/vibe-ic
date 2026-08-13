@@ -3582,8 +3582,20 @@ def ledger_staleness(root: Path) -> Tuple[str, ...]:
                     f"({finding.get('reason')}) but the commit that carries the "
                     f"ledger also carries {hit.path} ({hit.size_bytes} B, a "
                     f"regular file tracked at HEAD). The record is stale and "
-                    f"this dimension would refuse a real artefact on its word — "
-                    f"re-emit the ledger over the tree as it now is")
+                    f"this dimension would refuse a real artefact on its word. "
+                    f"DO NOT re-emit the ledger over the published tree to "
+                    f"close this: measured on 2026-08-12, "
+                    f"step_write_ledger.py run against a git checkout of this "
+                    f"cell returns mtime_fidelity.flattened=true, "
+                    f"distinct_mtimes=1, run_window.known=false and "
+                    f"in_run_window=0 — the emitter itself withholds every "
+                    f"time-derived conclusion because a checkout records the "
+                    f"copy, not the run. That ledger would attribute NOTHING "
+                    f"and would replace a real capture with a blind one. What "
+                    f"closes this is a ledger captured DURING a run of this "
+                    f"cell (the original run directory, or a fresh published "
+                    f"run) — a data change with its own review, not a repair "
+                    f"available from the checkout")
     return tuple(problems)
 
 
@@ -3877,3 +3889,69 @@ def matrix_cell_state(step_id) -> str:
     if waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+def _committed_write_ledgers():
+    """(label, path, doc) for every write ledger this commit carries."""
+    import json as _json
+    out = []
+    for label, rr in run_roots().items():
+        p = rr.path / "reports" / "write_ledger.json"
+        if not p.is_file():
+            continue
+        try:
+            out.append((label, p, _json.loads(p.read_text(encoding="utf-8"))))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def test_d3_no_committed_ledger_was_captured_from_a_checkout():
+    """A ledger walked over a git checkout attributes nothing — refuse it.
+
+    THE TRAP THIS CLOSES, measured 2026-08-12. When a committed ledger records
+    a spec as never written and the same commit carries the artefact,
+    ``_ledger_refuted_by_its_commit`` reports it — and its remediation text used
+    to read "re-emit the ledger over the tree as it now is". Following that
+    advice is destructive. `step_write_ledger.py` run against a git checkout of
+    ``spm/v1.9.96_gf180mcuD`` returns:
+
+        mtime_fidelity.flattened   true      (distinct_mtimes 1, share 1.0)
+        run_window.known           false     (t0_source withheld_flattened_mtimes)
+        counts.in_run_window       0
+        counts.produced_in_run_window 0
+
+    because git does not preserve mtimes, so the emitter correctly withholds
+    every time-derived conclusion. The resulting ledger is not a fresher record
+    of the same run — it is a BLIND one, and committing it would replace a real
+    capture (this cell's is `flattened: false`, 77 distinct mtimes, a known run
+    window) with a record that can attribute no write to any step.
+
+    So the assertion is on the ledgers this commit CARRIES: each must be a live
+    capture. It passes today on every committed ledger and fires the moment one
+    is replaced by a checkout walk — which is exactly when a reviewer needs to
+    be told, because the diff looks like a routine refresh.
+    """
+    ledgers = _committed_write_ledgers()
+    if not ledgers:
+        pytest.skip("this commit carries no write ledger")
+
+    blind = []
+    for label, path, doc in ledgers:
+        fid = doc.get("mtime_fidelity") or {}
+        win = doc.get("run_window") or {}
+        if fid.get("flattened") is True or win.get("known") is False:
+            blind.append(
+                f"{label} ({path.name}): mtime_fidelity.flattened="
+                f"{fid.get('flattened')!r}, run_window.known="
+                f"{win.get('known')!r}, in_run_window="
+                f"{(doc.get('counts') or {}).get('in_run_window')!r} — this "
+                f"ledger was walked over a copy, not captured during a run, so "
+                f"it attributes no write to any step. Restore the live capture; "
+                f"a ledger emitted from a checkout is strictly less evidence "
+                f"than none, because the dimension trusts it"
+            )
+    assert not blind, (
+        "committed write ledger(s) captured from a checkout rather than a run:"
+        "\n  " + "\n  ".join(blind)
+    )
