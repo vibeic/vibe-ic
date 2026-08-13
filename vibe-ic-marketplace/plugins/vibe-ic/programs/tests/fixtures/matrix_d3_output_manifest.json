@@ -776,20 +776,12 @@
           "size_bytes": 3229
         },
         "reports/phase3/sta/post_route_summary.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "sta_report_check",
-          "argv": [
-            ".",
-            "--mode",
-            "sta",
-            "--under",
-            "phase3/stage3/sta/post_route_timing.rpt",
-            "--json",
-            "reports/phase3/sta/post_route_summary.json"
-          ],
-          "writes": "reports/phase3/sta/post_route_summary.json",
-          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "size_bytes": 870
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/sta/post_route_summary.json",
+          "path": "reports/phase3/sta/post_route_summary.json",
+          "size_bytes": 1152,
+          "note": "2026-08-12 - was PRODUCED_LIVE, producer sta_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
         },
         "reports/phase3/sta/sta_corner_record_completeness.json": {
           "status": "PRODUCED_BY_RUN",
@@ -818,18 +810,12 @@
           "size_bytes": 600
         },
         "reports/phase3/ir_drop_signoff.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "ir_drop_report_check",
-          "argv": [
-            ".",
-            "--mode",
-            "ir_drop",
-            "--json",
-            "reports/phase3/ir_drop_signoff.json"
-          ],
-          "writes": "reports/phase3/ir_drop_signoff.json",
-          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "size_bytes": 508
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/ir_drop_signoff.json",
+          "path": "reports/phase3/ir_drop_signoff.json",
+          "size_bytes": 555,
+          "note": "2026-08-12 - was PRODUCED_LIVE, producer ir_drop_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
         }
       }
     },
@@ -851,18 +837,12 @@
           "size_bytes": 292
         },
         "reports/phase3/em_signoff.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "em_report_check",
-          "argv": [
-            ".",
-            "--mode",
-            "em",
-            "--json",
-            "reports/phase3/em_signoff.json"
-          ],
-          "writes": "reports/phase3/em_signoff.json",
-          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "size_bytes": 168
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/em_signoff.json",
+          "path": "reports/phase3/em_signoff.json",
+          "size_bytes": 717,
+          "note": "2026-08-12 - was PRODUCED_LIVE, producer em_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
         }
       }
     },
@@ -884,18 +864,12 @@
           "size_bytes": 236
         },
         "reports/phase3/antenna_signoff.json": {
-          "status": "PRODUCED_LIVE",
-          "producer": "antenna_report_check",
-          "argv": [
-            ".",
-            "--mode",
-            "antenna",
-            "--json",
-            "reports/phase3/antenna_signoff.json"
-          ],
-          "writes": "reports/phase3/antenna_signoff.json",
-          "base_run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
-          "size_bytes": 188
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/antenna_signoff.json",
+          "path": "reports/phase3/antenna_signoff.json",
+          "size_bytes": 188,
+          "note": "2026-08-12 - was PRODUCED_LIVE, producer antenna_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
         }
       }
     },
@@ -1010,7 +984,7 @@
         },
         "reports/phase3/lvs.json": {
           "status": "PRODUCED_BY_RUN",
-          "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) — same class as perc_signoff.json above.",
+          "provenance_note": "the recorded copy is `eda_report_audit:lvs` output (step 31's own gate) \u2014 same class as perc_signoff.json above.",
           "run": "benchmark-data/ic/caravel_user_project",
           "alternative": "reports/phase3/lvs.json",
           "path": "reports/phase3/lvs.json",
@@ -1018,7 +992,7 @@
         },
         "reports/phase2/gates/erc_density.json": {
           "status": "PRODUCED_BY_RUN",
-          "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) — same class as perc_signoff.json above.",
+          "provenance_note": "the recorded copy is `erc_density_check` output (step 31's own gate) \u2014 same class as perc_signoff.json above.",
           "run": "benchmark-data/ic/caravel_user_project",
           "alternative": "reports/phase2/gates/erc_density.json",
           "path": "reports/phase2/gates/erc_density.json",

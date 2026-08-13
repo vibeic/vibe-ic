@@ -314,9 +314,9 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
 
-**504 cells: 459 ENFORCED, 23 ENFORCED-CONTRADICTED, 11 WAIVED, 11 NA.**
+**504 cells: 466 ENFORCED, 16 ENFORCED-CONTRADICTED, 11 WAIVED, 11 NA.**
 
-The 23 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 459: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+The 16 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 466: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
 **What these 504 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
 
@@ -324,7 +324,7 @@ The 23 CONTRADICTED cells are configured as enforcing while their own predicate 
 
 * **16** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
 * **45** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
-* **398** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
+* **405** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
 
 The 11 WAIVED and 11 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
 
@@ -332,13 +332,13 @@ The 11 WAIVED and 11 NA cells are not enforcing anything and enter none of those
 |-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------:|---:|
 | 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 63 | 0 | 0 | 0 |
 | 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 60 | 0 | 2 | 1 |
-| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 37 | 16 | 3 | 7 |
+| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 44 | 9 | 3 | 7 |
 | 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 62 | 1 | 0 | 0 |
 | 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 62 | 0 | 1 | 0 |
 | 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 1 | 0 |
 | 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 52 | 6 | 4 | 1 |
 | 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 16 | 45 | 0 | 0 | 0 | 2 |
-| **total** | | **16** | **45** | **398** | **23** | **11** | **11** |
+| **total** | | **16** | **45** | **405** | **16** | **11** | **11** |
 
 Regenerate (never edit this block by hand, and never quote it without re-running):
 
@@ -512,8 +512,21 @@ that matter most:
 
 ### Can a cell be reddened by changing a number in a PUBLISHED REPORT?
 
-**8 artefact mutations registered; 4 currently prove the cell they target cannot
-redden.**
+**8<!--figure:artefact_mutations_registered--> artefact mutations registered;
+1<!--figure:artefact_cannot_redden--> currently prove the cell they target
+cannot redden.**
+
+Both digits are ANCHORED and re-derived by
+`tools/gen_matrix_63x8_census.py --check-figures` against
+`matrix_mutation_ledger` itself. They were hand-typed until 2026-08-12 and by
+then the first was right and the second was wrong by three: the ledger's own
+count moved 4 -> 2 -> 1 across `46dbf43d` and `fc664a57`, each time in the
+change that closed the gap it measured, and this file went on publishing 4 with
+a four-row table naming three gates as unable to fail that had learned to fail.
+The replay guards the LEDGER; nothing guarded its PUBLICATION. A stale "this
+gate cannot fail" is the worse direction of that error — it reads as a disclosed
+known gap, so it collects the credit for honesty while describing a gate that is
+now doing its job.
 
 That is the `ARTEFACT_MUTATION` channel of `programs/matrix_mutation_ledger.py`,
 added because the ledger's first two channels both edit the SOURCE — the flow
@@ -528,19 +541,40 @@ gate through the flow's own verdict mapping. Run it with
 `matrix_mutation_ledger.py --replay-artefacts` (3.1 s for all 8) and read the
 count with `--census`.
 
-The four that prove a cell CANNOT redden are the point of the channel, not its
-residue:
+The ones that prove a cell CANNOT redden are the point of the channel, not its
+residue. The table below is the LIVE finding set and every cell named in it must
+be one `matrix_mutation_ledger.artefact_findings()` currently returns —
+`test_matrix_artefact_mutation_channel.test_the_readme_publishes_the_live_finding_set`
+compares the two in BOTH directions, so a finding that closes cannot be left
+standing here and a finding that opens cannot be left unpublished.
+
+<!-- ARTEFACT FINDINGS TABLE — the `cell` column must equal
+     matrix_mutation_ledger.artefact_findings(); do not edit by hand without
+     re-running --replay-artefacts -->
 
 | cell | edit | what the gate did |
 |---|---|---|
-| 25/d2 | peak power-grid segment current 1.96e-04 A → 5.0 A (~25000x) | PASS, zero findings — no Jmax is resolved, so no current is refusable |
 | 33/d2 | every non-zero power figure x1000 | PASS — tool signature and categories are checked; the numbers are read against nothing |
-| 9/d2 | 221 `$_NAND_` → `$_AND_` | PASS — the gate's own report *enumerates* `$_AND_` and counts cells, and forms no view on which primitive belongs |
-| 21/d2 | router's FINAL iteration `DRT-0199` 0 → 12 | PASS, still printing `real_violation_total=0` — the count comes from the RUNNER's summary line, not the router's last word |
 
-The last one is the sharpest: the SAME gate on the SAME file *does* redden when
-the runner's summary is edited 0 → 17. So step 21's green is a statement about
-the runner's arithmetic, not the router's result.
+<!-- END ARTEFACT FINDINGS TABLE -->
+
+**Three entries left this table by being FIXED, and what they were is worth
+keeping.** `ART-EM-CURRENT-DENSITY` (25/d2, peak power-grid segment current
+1.96e-04 A → 5.0 A) passed because no Jmax was resolved, so no current was
+refusable; it reddens now that a peak current has a declared authority to be
+compared against. `ART-NETLIST-PRIMITIVE-SWAP` (9/d2, 221 `$_NAND_` → `$_AND_`)
+and `ART-ROUTER-FINAL-ITERATION` (21/d2, the router's FINAL iteration
+`DRT-0199` 0 → 12) both passed because the gate believed a summary the RUNNER
+wrote instead of the output the TOOL wrote — step 21 kept printing
+`real_violation_total=0` while the same gate on the same file *did* redden when
+the runner's summary was edited 0 → 17. Its green was a statement about the
+runner's arithmetic, not the router's result. That is the shape to look for
+next, and it is the reason these three are recorded here rather than deleted.
+
+The remaining entry is not open work in the same sense as the three that closed:
+the ledger's own note records that step 33's cell REFUSES, naming the budget it
+lacks, and no published run declares the budget that would let it redden. A cell
+that refuses is not a cell that passes.
 
 These are pinned by `ARTEFACT_CANNOT_REDDEN_AS_MEASURED`, and pinned is not
 waived — the day a gate learns to read its artefact, its replay stops matching

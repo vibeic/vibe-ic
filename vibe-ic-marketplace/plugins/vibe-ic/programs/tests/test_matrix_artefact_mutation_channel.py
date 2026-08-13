@@ -323,6 +323,95 @@ def test_the_published_finding_count_is_pinned(record_property):
         f"entry and move the pin up. Never adjust the pin alone.")
 
 
+#: The README block that PUBLISHES the finding set, and the sentinels that
+#: bound it. Sentinels rather than "the first table after the heading": a
+#: section grows paragraphs, and a locator that drifts with the prose would
+#: start comparing the wrong table and say nothing about it.
+_README = F.PLUGIN_ROOT / "programs" / "tests" / "matrix_63x8" / "README.md"
+_TABLE_BEGIN = "<!-- ARTEFACT FINDINGS TABLE"
+_TABLE_END = "<!-- END ARTEFACT FINDINGS TABLE -->"
+
+
+def _readme_published_cells() -> List[str]:
+    """The `cell` column of the README's artefact-findings table."""
+    text = _README.read_text(encoding="utf-8")
+    start, stop = text.find(_TABLE_BEGIN), text.find(_TABLE_END)
+    assert 0 <= start < stop, (
+        f"{_README} no longer carries the artefact-findings table sentinels "
+        f"({_TABLE_BEGIN!r} .. {_TABLE_END!r}). A hand edit that removed them "
+        f"would make this comparison silently vacuous, so it is a failure.")
+    out: List[str] = []
+    for line in text[start:stop].splitlines():
+        line = line.strip()
+        if not line.startswith("|") or line.startswith("|---"):
+            continue
+        cell = line.strip("|").split("|")[0].strip()
+        if cell.lower() == "cell":
+            continue
+        out.append(cell)
+    return out
+
+
+def test_the_readme_publishes_the_live_finding_set():
+    """The PUBLICATION of the finding set, guarded in both directions.
+
+    THIS IS THE LOCK THAT WAS MISSING, and its absence cost exactly what the
+    channel exists to prevent. Every mechanism above guards the LEDGER: the
+    replay re-executes each entry, and
+    :func:`test_the_published_finding_count_is_pinned` refuses a pin that moves
+    without its entry. All of it worked — `ARTEFACT_CANNOT_REDDEN_AS_MEASURED`
+    went 4 -> 2 -> 1 across `46dbf43d` and `fc664a57`, each move landing in the
+    change that closed the gap.
+
+    What nothing guarded was the README, which is where a reader actually meets
+    this finding. It kept a four-row table naming 25/d2, 9/d2 and 21/d2 as
+    unable to fail for three commits after all three had learned to fail,
+    byte-identical since the channel landed at `615a44b8`.
+
+    A stale "this gate cannot fail" is the WORSE direction of a stale figure. An
+    over-count of coverage claims credit it has not earned and a reviewer knows
+    to distrust it; an over-count of DISCLOSED GAPS claims credit for honesty
+    while describing gates that are doing their job, and it invites someone to
+    go "fix" three gates that need nothing.
+
+    Both directions, so neither kind of drift can hide:
+      * a finding the README does not publish is an undisclosed gap;
+      * a cell the README publishes that is no longer a finding is this defect.
+    """
+    live = sorted(f"{m.step_id}/d{m.dim}" for m in L.artefact_findings())
+    published = sorted(_readme_published_cells())
+    assert published == live, (
+        f"the README's artefact-findings table and the ledger disagree.\n"
+        f"  published: {published}\n"
+        f"  live     : {live}\n"
+        f"  unpublished finding(s): {sorted(set(live) - set(published))}\n"
+        f"  stale claim(s) that a gate cannot fail: "
+        f"{sorted(set(published) - set(live))}\n"
+        f"Re-run `matrix_mutation_ledger.py --replay-artefacts`, then edit the "
+        f"table between its sentinels in {_README.name}. A cell that LEARNED "
+        f"to read its artefact leaves the table in the same change that closes "
+        f"it — publishing a gap that no longer exists is not the safe "
+        f"direction to be wrong in.")
+
+
+def test_the_readme_finding_table_is_not_vacuously_empty():
+    """A parser that silently found nothing would satisfy the test above.
+
+    If the table degenerates to zero rows while the ledger still reports
+    findings, the comparison above catches it. If BOTH go empty the comparison
+    passes on `[] == []` — which is the right answer only when the channel
+    genuinely has no finding. Assert the two agree on that, from the ledger's
+    own count rather than from the row parser, so an empty table can never be a
+    parsing accident.
+    """
+    rows = _readme_published_cells()
+    assert len(rows) == L.ARTEFACT_CANNOT_REDDEN_AS_MEASURED, (
+        f"the README publishes {len(rows)} finding row(s) while the ledger "
+        f"pins {L.ARTEFACT_CANNOT_REDDEN_AS_MEASURED}. If the table parsed to "
+        f"nothing, the sentinels or the row shape moved and the comparison "
+        f"above went vacuous.")
+
+
 # ══════════════════════════════════════════════════════════════════════
 # LOCK 2 — replay, and it is the only lock that is proof
 # ══════════════════════════════════════════════════════════════════════
