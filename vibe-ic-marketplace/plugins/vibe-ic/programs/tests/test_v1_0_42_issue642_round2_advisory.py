@@ -29,6 +29,9 @@ silent) and emitted — the scorer arbitrates (a wrong TOPLEVEL ELAB_ERRORs).
 chip-AGNOSTIC: pure id-string / prompt-prose structure; no chip/vendor/SKU
 literal.
 """
+import shutil
+
+import pytest
 import importlib
 import json
 import sys
@@ -37,6 +40,15 @@ from pathlib import Path
 PLUGIN = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGIN / "benchmark"))
 import cvdp_gate as G  # noqa: E402
+
+#: `cvdp_gate` REFUSES to emit when iverilog is absent — "the gate cannot
+#: enforce; refusing to emit ungated responses (#528)" — and writes no
+#: responses/report file at all. Every test below that drives the gate then
+#: fails on the ABSENCE of that file, naming a tmp path and never naming the
+#: tool. A check that could not run is not a check that failed; the guard is
+#: the one `test_cvdp_gate.py` already uses.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+
 importlib.reload(G)
 
 _V = "```verilog\n"
@@ -63,6 +75,7 @@ def _prompts(tmp_path, mapping):
 
 
 # ── ACCEPTANCE: filename-stem != module name → emitted (advisory) ───────────
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_filename_vs_module_name_emits_with_warn(tmp_path):
     """The field-agent's exact repro: save-file `rtl/foo_top.sv`, module
     `bar_core`. v1.0.40 BLOCKED (emitted=0); round-2 → PASS + WARN, emitted."""
@@ -84,6 +97,7 @@ def test_filename_vs_module_name_emits_with_warn(tmp_path):
 
 
 # ── the 7-case pattern: module name == harness top, filename differs ────────
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_correct_module_name_with_different_filename_emits(tmp_path):
     """cont_adder_0006 class: file `rtl/cont_adder_top.sv`, the harness top is
     the module `continuous_adder` (which the completion declares). It must be
@@ -101,6 +115,7 @@ def test_correct_module_name_with_different_filename_emits(tmp_path):
 
 
 # ── NO-LEAK: a genuine mismatch is still surfaced (advisory) + emitted ──────
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_noleak_genuine_mismatch_surfaced_and_emitted(tmp_path):
     """A completion whose module disagrees with every prompt name hint is NOT
     silently passed: it carries an advisory WARN (so a reviewer/scorer sees the
@@ -120,6 +135,7 @@ def test_noleak_genuine_mismatch_surfaced_and_emitted(tmp_path):
 
 
 # ── never a hard-block: filename_conformance is never set on a name mismatch ─
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_name_conformance_never_hard_blocks(tmp_path):
     recs, _ = _run(tmp_path, [{
         "id": "cvdp_copilot_foo_0099",

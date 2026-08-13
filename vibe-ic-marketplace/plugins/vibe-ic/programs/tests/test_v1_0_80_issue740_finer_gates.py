@@ -251,6 +251,7 @@ def test_g5_context_satisfies_prompt_named_submodule_port():
     assert not any(x.kind == "MISSING-PORT" and "wr_ptr" in x.message for x in f1)
 
 
+@pytest.mark.skipif(not HAVE_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_g5_embedded_call_passes_extracted_code_and_context(tmp_path, monkeypatch):
     """END-STATE: the embedded iface-check inside cvdp_gate routes through the
     extracted RTL + the record's context RTL — proven by capturing the args the
