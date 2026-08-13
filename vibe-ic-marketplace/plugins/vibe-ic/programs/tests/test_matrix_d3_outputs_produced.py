@@ -2270,6 +2270,27 @@ def _probe_run_root(prefix: str):
                "GIT_CONFIG_VALUE_1": "false"}
         subprocess.run(["git", "init", "-q"], cwd=root, check=True, env=env,
                        capture_output=True)
+        # Auto-gc DETACHES (`gc.autoDetach` defaults on), so a commit here can
+        # leave a `git gc` running after this helper returns. It writes into
+        # `.git/objects` while `TemporaryDirectory.__exit__` is deleting the
+        # same tree, and `rmtree` dies with `OSError: [Errno 39] Directory not
+        # empty: 'objects'`.
+        #
+        # MEASURED on clean main: the owning test failed 3/3 run ALONE and
+        # passed 3/3 inside its full targeted list — the same tree giving
+        # opposite answers depending on what ran before it, because the timing
+        # of the detached gc changed. It also flipped between two runs of one
+        # identical file list. That made it produce a FALSE "new failure" on
+        # PRs #1063, #1139 and #1274, none of which touch this code.
+        #
+        # Turned off rather than retried: a retry loop would hide a race that
+        # is not ours to have, and `ignore_cleanup_errors` would delete the
+        # evidence that anything went wrong. With no auto-gc there is no
+        # second writer, so the cleanup is deterministic.
+        for _k, _v in (("gc.auto", "0"), ("gc.autoDetach", "false"),
+                       ("maintenance.auto", "false")):
+            subprocess.run(["git", "config", _k, _v], cwd=root, check=True,
+                           env=env, capture_output=True)
 
         def commit(*rels: str) -> None:
             if rels:
