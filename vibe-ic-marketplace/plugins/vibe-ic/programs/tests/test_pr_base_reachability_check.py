@@ -323,3 +323,50 @@ def test_EVERY_carrier_of_one_dead_branch_is_reported(tmp_path):
     assert refusal is None, refusal
     assert sorted(h["pr"]["number"] for h in hits) == [2, 3], (
         f"only some carriers of the dead branch were reported: {hits}")
+
+
+# ---------------------------------------------------------------------------
+# --advisory (the wiring tier). It lowers the exit code and NOTHING else.
+# ---------------------------------------------------------------------------
+
+def _orphan_pop():
+    return [_pr(1, "feat/dead", state="CLOSED", merged=None),
+            _pr(2, "feat/b", base="feat/dead")]
+
+
+def test_advisory_lowers_a_FAIL_to_zero(tmp_path):
+    assert _run(tmp_path, _orphan_pop()) == G.RC_FAIL
+    assert _run(tmp_path, _orphan_pop(), extra=("--advisory",)) == G.RC_OK
+
+
+def test_advisory_still_PRINTS_every_finding_and_still_says_FAIL(tmp_path, capsys):
+    """The whole risk of an advisory tier is that it becomes a mute button.
+
+    A lowered exit code with the findings still on stdout is a disclosure; a
+    lowered exit code with nothing printed is a waiver nobody voted for.
+    """
+    _run(tmp_path, _orphan_pop(), extra=("--advisory",))
+    out = capsys.readouterr().out
+    assert "[FAIL]" in out, "the advisory tier hid the verdict, not just the rc"
+    assert "#2" in out and "#1" in out, "the finding itself stopped being named"
+    assert "advisory" in out, "the rc was lowered without saying so"
+
+
+def test_advisory_does_NOT_lower_a_REFUSAL(tmp_path):
+    """`I could not look` must never share an exit code with `I looked and it
+    was clean` — the rule this whole file is written around. An advisory flag
+    that collapsed rc 2 would turn every offline CI run into a silent pass."""
+    assert G.main(["--from-json", str(tmp_path / "absent.json"),
+                   "--advisory"]) == G.RC_REFUSE
+    assert _run(tmp_path, [_pr(2, "feat/b", base="feat/ghost")],
+                extra=("--advisory",)) == G.RC_REFUSE
+    assert _run(tmp_path, [_pr(1, "feat/a")],
+                extra=("--advisory", "--require-carried")) == G.RC_REFUSE
+
+
+def test_advisory_does_not_invent_a_pass_out_of_a_clean_run(tmp_path, capsys):
+    """A clean population under --advisory must be indistinguishable from a
+    clean population without it — no FAIL text, no advisory note."""
+    assert _run(tmp_path, [_pr(1, "feat/a")], extra=("--advisory",)) == G.RC_OK
+    out = capsys.readouterr().out
+    assert "[FAIL]" not in out and "advisory" not in out

@@ -299,6 +299,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--require-carried", action="store_true",
                     help="REFUSE (rc 2) if the CARRIED pass could not run, "
                          "instead of reporting it as not established")
+    ap.add_argument("--advisory", action="store_true",
+                    help="lower a FAIL to rc 0. Every finding is still printed "
+                         "and the verdict line still says FAIL. Does NOT lower "
+                         "a REFUSAL: 'I could not look' must never share an "
+                         "exit code with 'I looked and it was clean'")
     args = ap.parse_args(argv)
 
     if args.from_json:
@@ -392,6 +397,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"     * the parent's change IS wanted — say so in the PR body, "
             f"name the closed PR, and have it reviewed HERE, because closing "
             f"it removed the review it would otherwise have had.")
+        if args.advisory:
+            print("   (--advisory: exit code lowered to 0. The verdict above "
+                  "is FAIL and every finding is printed. Nothing is baselined "
+                  "or waived — the only thing that can make this print zero is "
+                  "the branches being fixed.)")
+            return RC_OK
         return RC_FAIL
     scope = ("base chain AND carried commits" if not carried_refusal
              else f"base chain only — {carried_refusal}")
