@@ -249,4 +249,18 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
             seen.add(pid)
             queue.extend(parents.get(pid, []))
         total += len(seen)
-    assert total == 1221, total
+    # 1221 -> 1311 (vibe-ic#1070, ALL THREE edges: 25->24, A1->D1, M1->37).
+    #
+    # These three PRs each move this ONE constant, which is why they could not
+    # land in parallel. #1177's author left the note that makes the combination
+    # safe, and it is followed here rather than trusted: "Measured separately
+    # against a38902d1 — 25 -> 24: +1 (1222). A1 -> D1: +9 (1230). M1 -> 37:
+    # +80 (1301). All three together: +90 (1311). Re-measure after each lands;
+    # do not add the deltas blind."
+    #
+    # RE-MEASURED HERE on the combined tree rather than summed: the number below
+    # is what `sum(len(ancestors(s)) for s in steps)` actually returns with all
+    # three edges present. The deltas do NOT add — 1+9+80 = 90 only because the
+    # three edges touch disjoint ancestries; had they overlapped, the union
+    # would have been smaller and adding would have overstated it.
+    assert total == 1311, total
