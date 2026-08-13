@@ -967,17 +967,25 @@ run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_
 # `bundled_attribution_notice_check.py`, which is the finding #1241 records for
 # it: a fixture the author wrote proves the logic and never proves the artefacts.
 #
-# SCOPE IS "$ROOT", NOT "$ROOT/benchmark-data", AND THE DIFFERENCE IS MEASURED.
-# Bundled third-party source is not confined to the corpus, and the two scopes
-# do not see the same repository:
+# SCOPE IS "$ROOT", NOT "$ROOT/benchmark-data", AND THE REASON IS STRUCTURAL —
+# NOT the holder counts, which do not support it. The two scopes report:
 #
 #     "$ROOT"                 7 holder(s) over 513 SPDX-headered file(s)   rc 0
 #     "$ROOT/benchmark-data"  6 holder(s) over 512 SPDX-headered file(s)   rc 0
 #
-# The narrower scope misses one holder outright, so it would report a clean
-# NOTICE while a bundled work went unnamed — the shape this gate exists to
-# catch. (#1156 chose the corpus scope for `tool_warning_id_novelty_check`
-# because tool logs only live there; that reasoning does not carry to bundled
+# Those counts are real, and the obvious reading of them is WRONG. Measured by
+# removing each of NOTICE's 106 lines in turn and running BOTH scopes on each:
+# exactly one line changes any verdict (the Efabless Apache-2.0 entry), and the
+# narrow scope catches it too. The 7th holder is the project's OWN attribution,
+# which the checker excludes by design — so on today's tree there is no
+# third-party holder that only the wide scope protects.
+#
+# The reason to keep "$ROOT" is that scoping to the corpus bakes in an
+# assumption — that bundled third-party source only ever lands under
+# benchmark-data — which holds until someone vendors a file elsewhere, at which
+# point the gate silently stops covering it. "$ROOT" needs no such assumption.
+# (#1156 chose the corpus scope for `tool_warning_id_novelty_check` because tool
+# logs genuinely only live there; that reasoning does not carry to bundled
 # sources.)
 #
 # rc 2 is "refused — no SPDX-headered source found, so nothing was established",
