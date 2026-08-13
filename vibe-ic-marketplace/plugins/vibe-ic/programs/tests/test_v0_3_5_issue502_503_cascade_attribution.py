@@ -249,4 +249,17 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
             seen.add(pid)
             queue.extend(parents.get(pid, []))
         total += len(seen)
-    assert total == 1221, total
+    # 1221 -> 1302 (vibe-ic#1070). This pin is doing its job: it is an exact
+    # equality on a STRUCTURAL measurement of the ordering graph, kept so a
+    # change to `blocks_on` anywhere in the flow cannot widen the ancestry
+    # without somebody acknowledging it. Two edges were declared in the commit
+    # that moved this number — 25 -> 24 (EM reads all of IR-drop) and
+    # M1 -> 37 (the A+D merge reads the GDS) — both of which the flow already
+    # declared as `required_inputs` and neither of which the ordering graph
+    # guarded. Declaring an edge is transitive, so the pair count rises by more
+    # than two: +81, measured, not predicted.
+    #
+    # NOT a relaxation. The assertion is still an exact equality on a number
+    # nobody may change silently; only the recorded value moved, and it moved
+    # because the graph deliberately did.
+    assert total == 1302, total
