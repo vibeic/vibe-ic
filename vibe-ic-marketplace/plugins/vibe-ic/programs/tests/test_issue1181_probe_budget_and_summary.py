@@ -121,16 +121,33 @@ def _repo_with(tmp_path: Path, body: str) -> Path:
     return repo
 
 
+def _prog(tmp_path: Path, name: str, source: str) -> str:
+    """A gate program at an ABSOLUTE path, because `_driveable` requires one.
+
+    `_driveable` refuses any gate whose ``argv[1]`` is not an absolute path to
+    an existing file — deliberately, and it is main's rule, not this PR's:
+    "21 of 59 gates are `$PLUGIN`-relative … and this probe runs every gate
+    from the scratch tree, so the interpreter never found the file". A fixture
+    that writes `sleep 5` or `true` hands it `5` / nothing, so every gate is
+    refused BEFORE launch, `probed` stays 0, and the budget can never be
+    reached. Both tests below need gates that actually run.
+    """
+    p = tmp_path / name
+    p.write_text(source)
+    return f'python3 "{p}"'
+
+
 def test_an_exhausted_budget_is_a_NAMED_finding_not_a_quiet_shrink(tmp_path):
     """PAIRED GUARD. If truncation were folded into the ordinary result, the
     audit would report a clean verdict over a SMALLER DENOMINATOR — which is
     the exact defect this program exists to detect in everybody else, committed
     by the program itself.
     """
+    slow = _prog(tmp_path, "slow.py", "import time\ntime.sleep(5)\n")
     repo = _repo_with(tmp_path,
-                      'run "slow one" "$ROOT" sleep 5\n'
-                      'run "slow two" "$ROOT" sleep 5\n'
-                      'run "slow three" "$ROOT" sleep 5\n')
+                      f'run "slow one" "$ROOT" {slow}\n'
+                      f'run "slow two" "$ROOT" {slow}\n'
+                      f'run "slow three" "$ROOT" {slow}\n')
     res = G.audit_ci(repo, timeout=30, budget=0.001)
 
     assert res.truncated is True, (
@@ -146,7 +163,8 @@ def test_an_exhausted_budget_is_a_NAMED_finding_not_a_quiet_shrink(tmp_path):
 def test_a_generous_budget_does_not_fire(tmp_path):
     """FALSE-POSITIVE CONTROL: without it the guard above is satisfied by an
     `always truncate`, and `truncated` would carry no information."""
-    repo = _repo_with(tmp_path, 'run "quick" "$ROOT" true\n')
+    quick = _prog(tmp_path, "quick.py", "print('checked 1 of 1')\n")
+    repo = _repo_with(tmp_path, f'run "quick" "$ROOT" {quick}\n')
     res = G.audit_ci(repo, timeout=30, budget=900)
     assert res.truncated is False, res
     assert not any("aggregate budget" in why for _l, why in res.not_driven), \
