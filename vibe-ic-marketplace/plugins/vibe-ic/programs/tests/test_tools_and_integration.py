@@ -21,7 +21,9 @@ GEN_TESTS = PLUGIN / "_shared" / "gen_compliance_tests.py"
 ADD_GATE = PLUGIN / "_shared" / "add_compliance_gate.py"
 
 sys.path.insert(0, str(PLUGIN / "_shared"))
+sys.path.insert(0, str(PLUGIN / "programs"))
 import skill_compliance_check as scc  # noqa: E402
+import suite_write_guard as _swg  # noqa: E402
 import bootstrap_compliance as bc      # noqa: E402
 
 
@@ -117,12 +119,19 @@ def _skill_count(skills_root):
 #: Those bytes are git-ignored, so `git status skills/` stays EMPTY while the
 #: digest moves, which is why the failure reads as a phantom.
 #:
-#: This is an ALIGNMENT, not a relaxation. `suite_write_guard`'s contract is
-#: TRACKED blocking / UNTRACKED blocking / IGNORED advisory-never-blocking, and
-#: counting bytecode made this assertion stricter than the gate it is the
-#: test-side of, in the one direction that can never reach a commit. Nothing
-#: else is excluded: a real shippable file planted in the tree still fails.
-_REGENERABLE = frozenset(("__pycache__", ".pytest_cache"))
+#: THE PREDICATE IS THE SIBLING GATE'S OWN, not a copy of it. This assertion
+#: calls itself the test-side of `suite_write_guard`, whose contract is TRACKED
+#: blocking / UNTRACKED blocking / IGNORED advisory-never-blocking. Re-deriving
+#: the ignore set here would make the alignment "nearly true": a first draft of
+#: this change listed `__pycache__` and `.pytest_cache` only, and would have
+#: kept tripping on `.mypy_cache`, `.ruff_cache` and `.hypothesis` — which
+#: anyone running ruff or mypy from a root containing the plugin creates — while
+#: the gate it mirrors treated them as advisory. Importing the predicate makes
+#: the two sets the same set by construction, and picks up `.pyo` as well.
+#:
+#: Nothing else is excluded: a real shippable file planted in the tree still
+#: fails the assertion.
+_is_regenerable = _swg._is_cache_noise
 
 
 def _digest_tree(root):
@@ -130,7 +139,7 @@ def _digest_tree(root):
     h = hashlib.md5()
     for p in sorted(q for q in root.rglob("*") if q.is_file()):
         rel = p.relative_to(root)
-        if p.suffix == ".pyc" or _REGENERABLE & set(rel.parts):
+        if _is_regenerable(str(rel)):
             continue
         h.update(str(p.relative_to(root)).encode())
         h.update(b"\0")
