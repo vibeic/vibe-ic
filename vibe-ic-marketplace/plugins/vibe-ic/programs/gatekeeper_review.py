@@ -992,7 +992,8 @@ _HYGIENE_TIMEOUT_S = 3600
 
 def repo_hygiene_gate(repo: Path,
                       script: Optional[Path] = None,
-                      timeout: int = _HYGIENE_TIMEOUT_S) -> GateResult:
+                      timeout: int = _HYGIENE_TIMEOUT_S,
+                      summary_out: Optional[Path] = None) -> GateResult:
     """Run `tools/ci/repo_hygiene_gates.sh` and report its own coverage record.
 
     `script` is a test seam in the same spirit as `override_files` — it lets a
@@ -1047,7 +1048,60 @@ def repo_hygiene_gate(repo: Path,
             return GateResult(name, 2,
                               f"ERROR — unreadable coverage record: {exc}")
 
+        # vibe-ic#1025 — hand the record on to a caller that has a second
+        # question about it. Before this, the ONLY production copy of the
+        # dispatcher's record was this temp file, destroyed on the next line,
+        # so no consumer could ask anything a single run cannot answer — which
+        # is why `a permanently red gate is a gate that gets skipped` had no
+        # machinery under it. Copied rather than relocated: the temp dir stays
+        # the owner, so a caller that passes nothing is byte-for-byte
+        # unaffected.
+        if summary_out is not None:
+            try:
+                summary_out.write_text(json.dumps(doc, indent=2,
+                                                  ensure_ascii=False) + "\n",
+                                       encoding="utf-8")
+            except OSError as exc:
+                return GateResult(name, 2,
+                                  f"ERROR — could not hand on the coverage "
+                                  f"record: {exc}")
+
     return _hygiene_verdict(doc, proc.returncode)
+
+
+def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
+    """Adjudicate this run's reds against the acknowledgement ledger (#1025).
+
+    A SEPARATE gate rather than a clause folded into `repo_hygiene_gates`,
+    because the two answer different questions and a reader has to be able to
+    tell them apart: the hygiene gate says WHICH gates are red, this one says
+    which of those reds is NEW and which acknowledgement has run out of time.
+    Folding them would report an expired deadline under the headline
+    "repo_hygiene_gates FAILED", pointing the reader at the gate rather than at
+    the row that came due.
+
+    It is also deliberately NOT wired into `_gate_dispatch.sh`. The dispatcher's
+    rc is pinned by vibe-ic#1025's own guard (`run` blocks on rc 2,
+    `run_tolerating_uncheckable` does not), and a ledger that could move that rc
+    would be a ledger that can buy a green.
+    """
+    name = "gate_red_since"
+    prog = Path(__file__).resolve().parent / "gate_red_since_check.py"
+    if not prog.is_file():                      # pragma: no cover - packaging
+        return GateResult(name, -1, "skipped — checker not present")
+    if not record.is_file():
+        # The hygiene gate errored before writing a record. It has already
+        # reported that; saying "no red is overdue" over a record that does not
+        # exist would be this program committing the defect it audits for.
+        return GateResult(name, -1,
+                          "skipped — 0 gate state(s) examined: the hygiene set "
+                          "produced no record to adjudicate")
+    rc, out, err = _run_program(prog, ["--record", str(record),
+                                       "--repo", str(repo)])
+    line = (out.strip().splitlines() or [""])[-1]
+    if rc == 2:
+        return GateResult(name, -1, f"skipped — {line}")
+    return GateResult(name, rc, line or (err.strip()[:200] or "no output"))
 
 
 def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
@@ -1285,7 +1339,15 @@ def review(base: str, head: str, *,
     # #538 — LAST because it is by far the longest, so every cheap machine gate
     # has already printed by the time this starts. It is the whole CI hygiene
     # set, invoked (not re-listed) so that MERGE_OK means what it reads as.
-    gates.append(repo_hygiene_gate(repo, script=hygiene_script))
+    # #1025 — the hygiene record is adjudicated a second time, for a question
+    # one run cannot answer: is any of this red OLD, and has any of it outlived
+    # the deadline its acknowledgement set? The record is handed over rather
+    # than the set re-run.
+    with tempfile.TemporaryDirectory(prefix="gate_red_since_") as _td:
+        _record = Path(_td) / "hygiene.json"
+        gates.append(repo_hygiene_gate(repo, script=hygiene_script,
+                                       summary_out=_record))
+        gates.append(gate_red_since_gate(repo, _record))
 
     # 5. verdict.
     blocking = [f"{g.name}: {g.summary}" for g in gates if not g.green]
