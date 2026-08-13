@@ -35,6 +35,7 @@ v1.0.27 could only do so via the OPTIONAL `rtl/<name>.sv` filename pattern.
 chip-AGNOSTIC: pure id-string / prompt-prose structure (the CVDP harness's
 universal naming scheme); no chip / vendor / SKU literal.
 """
+import shutil
 import importlib
 import json
 import sys
@@ -46,6 +47,15 @@ PLUGIN = Path(__file__).resolve().parents[2]
 HARNESS = PLUGIN / "benchmark"
 sys.path.insert(0, str(HARNESS))
 import cvdp_gate as G  # noqa: E402
+
+#: `cvdp_gate` REFUSES to emit when iverilog is absent — "the gate cannot
+#: enforce; refusing to emit ungated responses (#528)" — and writes no
+#: responses/report file at all. Every test below that drives the gate then
+#: fails on the ABSENCE of that file, naming a tmp path and never naming the
+#: tool. A check that could not run is not a check that failed; the guard is
+#: the one `test_cvdp_gate.py` already uses.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+
 importlib.reload(G)
 
 _V = "```verilog\n"
@@ -112,6 +122,7 @@ def test_filename_extractor_still_works():
 
 # ── (B) THE FIX: id-derived mismatch is ADVISORY (PASS + WARN), not BLOCK ──────
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_id_derived_mismatch_passes_with_warn_no_prompts(tmp_path):
     """The documented --batch-dir flow (no --prompts): a completion declaring
     the functional top — NOT `cvdp_copilot_<stem>` — must PASS (emitted) with
@@ -129,6 +140,7 @@ def test_id_derived_mismatch_passes_with_warn_no_prompts(tmp_path):
     assert "filename_conformance" not in recs[0]
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_id_derived_advisory_note_is_clearly_advisory(tmp_path):
     """The WARN must SAY it is advisory (the id stem is not the harness top
     for ~97%) so a reader is not misled into thinking it is a real failure."""
@@ -142,6 +154,7 @@ def test_id_derived_advisory_note_is_clearly_advisory(tmp_path):
 
 # ── (C) STRENGTHEN + NO-LEAK: prompt-derived names still hard-block ───────────
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_module_name_mismatch_is_advisory_not_block(tmp_path):
     """ORGANIC #642 round-2 — a name hint mismatch is ADVISORY (WARN + emit),
     NOT a hard-BLOCK. Even a `Module Name:` hint is not guaranteed to equal the
@@ -164,6 +177,7 @@ def test_module_name_mismatch_is_advisory_not_block(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_module_name_match_passes(tmp_path):
     """NO-LEAK: the correctly-named completion for the same prompt PASSes
     (the corrected gate is not a blanket block)."""
@@ -177,6 +191,7 @@ def test_module_name_match_passes(tmp_path):
     assert "cvdp_copilot_foo_0007" in passed
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_filename_pinned_top_is_advisory_not_block(tmp_path):
     """ORGANIC #642 round-2 — a SAVE-FILENAME hint (`rtl/<X>.sv`) is NOT the
     harness TOPLEVEL (the cocotb harness sets TOPLEVEL from the module
@@ -200,6 +215,7 @@ def test_filename_pinned_top_is_advisory_not_block(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_prompts_advisory_flag_still_passes(tmp_path):
     """ORGANIC #642 round-2 — `--prompts-advisory` is retained for compat and
     still yields PASS + WARN (conformance is now always advisory regardless of
@@ -217,6 +233,7 @@ def test_prompts_advisory_flag_still_passes(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_non_cvdp_id_no_requirement(tmp_path):
     """NO-LEAK: a draft id NOT following the cvdp_copilot_ convention imposes
     no id-derived requirement (gate behaves as before)."""
@@ -230,6 +247,7 @@ def test_non_cvdp_id_no_requirement(tmp_path):
         "module-name-conformance" in n for n in recs[0].get("notes", []))
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_doc_only_unaffected(tmp_path):
     """NO-LEAK: a doc-only completion stays doc_only (no module-name path
     fires)."""

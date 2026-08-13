@@ -23,6 +23,7 @@ CORRECTED behaviour (this file pins the v1.0.39 semantics):
 chip-AGNOSTIC: pure id-string / prompt-prose structure (the CVDP harness's
 universal naming scheme); no chip / vendor / SKU literal.
 """
+import shutil
 import json
 import sys
 from pathlib import Path
@@ -33,6 +34,15 @@ PLUGIN = Path(__file__).resolve().parents[2]
 HARNESS = PLUGIN / "benchmark"
 sys.path.insert(0, str(HARNESS))
 import cvdp_gate as G  # noqa: E402
+
+#: `cvdp_gate` REFUSES to emit when iverilog is absent — "the gate cannot
+#: enforce; refusing to emit ungated responses (#528)" — and writes no
+#: responses/report file at all. Every test below that drives the gate then
+#: fails on the ABSENCE of that file, naming a tmp path and never naming the
+#: tool. A check that could not run is not a check that failed; the guard is
+#: the one `test_cvdp_gate.py` already uses.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+
 
 _V = "```verilog\n"
 
@@ -62,6 +72,7 @@ def _prompts(tmp_path, mapping):
 
 # ── (1) the round-2 fix: id-derived mismatch is ADVISORY, not a hard block ────
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_id_derived_mismatch_is_advisory_not_blocked(tmp_path):
     """Without --prompts (the documented --batch-dir flow), a completion whose
     top is the functional name — NOT `cvdp_copilot_<stem>` — must PASS with a
@@ -80,6 +91,7 @@ def test_id_derived_mismatch_is_advisory_not_blocked(tmp_path):
 
 # ── (2) NEGATIVE no-leak: prompt-derived names still hard-block ───────────────
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_prompt_module_name_mismatch_is_advisory_NOLEAK(tmp_path):
     """ORGANIC #642 round-2 — a `Module Name:` hint is NOT guaranteed to equal
     the hidden harness TOPLEVEL, so a mismatch is ADVISORY (WARN + emit), never
@@ -98,6 +110,7 @@ def test_prompt_module_name_mismatch_is_advisory_NOLEAK(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_filename_pinned_top_is_advisory_NOLEAK(tmp_path):
     """ORGANIC #642 round-2 — a SAVE-FILENAME hint (`rtl/<X>.sv`) is NOT the
     harness TOPLEVEL (cocotb sets it from the module DECLARATION name). Field
@@ -117,6 +130,7 @@ def test_filename_pinned_top_is_advisory_NOLEAK(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_prompt_module_name_match_passes_NOLEAK(tmp_path):
     recs, passed = _run(tmp_path, [{
         "id": "cvdp_copilot_16qam_mapper_0001",
@@ -129,6 +143,7 @@ def test_prompt_module_name_match_passes_NOLEAK(tmp_path):
     assert "cvdp_copilot_16qam_mapper_0001" in passed
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_correct_id_stem_top_passes_NOLEAK(tmp_path):
     """A completion ALREADY declaring `cvdp_copilot_<stem>` passes (no
     mismatch at all)."""
@@ -140,6 +155,7 @@ def test_correct_id_stem_top_passes_NOLEAK(tmp_path):
     assert "cvdp_copilot_bus_arbiter_0001" in passed
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_doc_only_stays_doc_only_NOLEAK(tmp_path):
     recs, _ = _run(tmp_path, [{
         "id": "cvdp_copilot_bar_0003",
@@ -148,6 +164,7 @@ def test_doc_only_stays_doc_only_NOLEAK(tmp_path):
     assert recs[0]["verdict"] == "PASS_DOC_ONLY"
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="the CVDP gate REFUSES to emit without iverilog (#528), so this drives nothing — a skip, not a red")
 def test_non_cvdp_id_imposes_no_requirement_NOLEAK(tmp_path):
     """A draft id NOT following the cvdp_copilot_ convention imposes no
     id-derived top requirement — the gate behaves exactly as before."""
