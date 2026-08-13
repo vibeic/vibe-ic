@@ -329,24 +329,66 @@ def test_function_exists_and_returns_stepresult():
 
 
 def test_main_calls_prelayout_signoff_before_pnr():
-    """WIRING + ORDER: main() must call step_prelayout_signoff and it must
-    appear textually before the step_pnr call (the emit must precede PnR)."""
+    """WIRING + ORDER: main() must dispatch step_prelayout_signoff and it must
+    appear textually before the step_pnr dispatch (the emit must precede PnR).
+
+    "Dispatch" rather than "call" because the coarse steps reach the plan
+    through `_spf.gate(..., step_pnr, ...)` — by reference — while
+    step_prelayout_signoff is still called directly. See `_first_call_line`.
+    """
     tree = ast.parse(_SRC)
     main_fn = next(n for n in ast.walk(tree)
                    if isinstance(n, ast.FunctionDef) and n.name == "main")
 
     def _first_call_line(name):
+        """First line where `main()` DISPATCHES `name`, in either spelling.
+
+        A coarse step reaches the plan two ways, and both are a dispatch:
+
+          * called directly           `step_prelayout_signoff(project, ...)`
+          * handed to the preflight   `_spf.gate(project, "...", "pnr",
+            gate by REFERENCE           _preflight_refusal("pnr"),
+                                        step_pnr, project, ...)`
+
+        The second form is what `step_preflight` means by "the runners
+        dispatch ~8 coarse ones": the wrapper decides whether the span may run
+        at all, then calls the step. Matching only the first spelling made this
+        test report `main() never calls step_pnr` on a runner that had just
+        become MORE careful — every coarse step now goes through a refusal
+        gate. Measured on origin/main: step_synth, step_pnr, step_gds,
+        step_drc and step_lvs are all dispatched by reference, and
+        step_prelayout_signoff is still called directly, so this test must
+        understand both or it can only ever see half the flow.
+
+        NOT a loosening. A bare `ast.Name` load of a step function inside
+        `main()` is a dispatch — there is nowhere else for the reference to
+        go — and a step that is neither called nor referenced still returns
+        None, so "never dispatched" still fails.
+        """
+        best = None
         for node in ast.walk(main_fn):
+            hit = None
             if (isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Name)
                     and node.func.id == name):
-                return node.lineno
-        return None
+                hit = node.lineno
+            elif (isinstance(node, ast.Name)
+                    and node.id == name
+                    and isinstance(node.ctx, ast.Load)):
+                # a reference, not a call — the by-reference dispatch above.
+                hit = node.lineno
+            if hit is not None and (best is None or hit < best):
+                best = hit
+        return best
 
     pls = _first_call_line("step_prelayout_signoff")
     pnr = _first_call_line("step_pnr")
-    assert pls is not None, "main() never calls step_prelayout_signoff"
-    assert pnr is not None, "main() never calls step_pnr"
+    assert pls is not None, (
+        "main() never dispatches step_prelayout_signoff — neither called nor "
+        "handed to the preflight gate")
+    assert pnr is not None, (
+        "main() never dispatches step_pnr — neither called nor handed to the "
+        "preflight gate")
     assert pls < pnr, (
-        f"step_prelayout_signoff (line {pls}) must be called BEFORE "
+        f"step_prelayout_signoff (line {pls}) must be dispatched BEFORE "
         f"step_pnr (line {pnr}) — the pre-layout emit must not sit behind PnR")
