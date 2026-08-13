@@ -151,11 +151,64 @@ def verify_digests(project: Path, recs: Sequence[dict]) -> Tuple[List[str], int]
     return out, checked
 
 
+#: vibe-ic#1116 / BATCH IDX group (a) — CORPUS MODE, and why it REFUSES instead
+#: of passing. This checker was reachable only from its own test: a fixture the
+#: author wrote proves the logic, never the artefacts. Wiring it needs a
+#: population, and the population is every run root that carries a ledger.
+#:
+#: MEASURED 2026-08-14 on this branch: 22 tracked ledgers, and after the
+#: vacuous-pass repair below, 22 of 22 are NOT_CHECKED — `chain_prev` is
+#: introduced by this very PR, so no published run can carry one yet. A corpus
+#: whose every member is uncheckable must not report PASS, which is why the
+#: hygiene script calls this through `run_tolerating_uncheckable`: it exits 2
+#: and says how many, instead of printing a green line over 22 unverified
+#: ledgers. The day a chained run lands, this decides with no further change.
+
+
+def corpus_roots(corpus: Path) -> List[Path]:
+    """Run roots under `corpus` carrying a ledger. Denominator, disclosed."""
+    return sorted(q.parent for q in corpus.rglob(LEDGER_NAME) if q.is_file())
+
+
+def check_corpus(corpus: Path) -> int:
+    roots = corpus_roots(corpus)
+    print(f"provenance_chain_check --corpus {corpus}: "
+          f"{len(roots)} run root(s) carrying {LEDGER_NAME}")
+    if not roots:
+        print("VACUOUS: no run root under this corpus carries a provenance "
+              "ledger, so no chain was verified. This is NOT a pass. rc=2.",
+              file=sys.stderr)
+        return RC_UNRUNNABLE
+    tamper, unchecked, ok = [], [], []
+    for r in roots:
+        rc = main([str(r)])
+        (tamper if rc == RC_TAMPER else ok if rc == RC_OK else unchecked).append(r)
+    print(f"provenance_chain_check --corpus: {len(ok)} verified, "
+          f"{len(unchecked)} NOT_CHECKED, {len(tamper)} TAMPER "
+          f"(of {len(roots)} root(s))")
+    if tamper:
+        return RC_TAMPER
+    if not ok:
+        print(f"NOT_CHECKED: all {len(roots)} ledger(s) were unverifiable, so "
+              f"this gate has never met a chain it could check. Reporting PASS "
+              f"here would be a green line over {len(roots)} unverified "
+              f"ledgers. rc=2.", file=sys.stderr)
+        return RC_UNRUNNABLE
+    return RC_OK
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("project", type=Path)
+    ap.add_argument("project", type=Path, nargs="?")
+    ap.add_argument("--corpus", type=Path, default=None, metavar="DIR",
+                    help="verify every run root under DIR that carries "
+                         "a ledger; exits 2 when none is verifiable")
     ap.add_argument("--json", type=Path)
     args = ap.parse_args(list(argv) if argv is not None else None)
+    if args.corpus is not None:
+        return check_corpus(args.corpus.resolve())
+    if args.project is None:
+        ap.error("give a project path or --corpus DIR")
 
     project = args.project.resolve()
     ledger = project / LEDGER_NAME
@@ -196,12 +249,29 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return RC_TAMPER
 
-    if len(recs) > 1 and chained == 0:
-        print(f"NOT_CHECKED: {len(recs)} records and NONE carries `chain_prev` "
-              f"— this ledger predates vibe-ic#1116. The digests still "
-              f"re-derived ({digests_checked} checked), which catches a file "
-              f"edited without its ledger line, but nothing here can detect a "
-              f"ledger edited to match. Not a pass.", file=sys.stderr)
+    #: A chain over ZERO chained records is vacuously intact, and reporting it
+    #: as [PASS] is the shape this program exists to refuse — one level up.
+    #: The guard used to read `len(recs) > 1 and chained == 0`, so a ledger with
+    #: exactly ONE record escaped it and printed "chain intact across 0 chained
+    #: record(s)". MEASURED on this tree: 13 of the 22 tracked ledgers are
+    #: single-record, so wiring this checker into the corpus run would have
+    #: reported 13 PASSes having verified no chain at all.
+    #:
+    #: The two reasons are distinct and are said separately, because "cannot"
+    #: and "did not" are different facts about the evidence:
+    #:   * ONE record  — `chain_prev` lives on records[1:], so a lone record can
+    #:     never carry one. Structurally unchainable, not a defect in the run.
+    #:   * MANY records, none chained — written before the chain existed.
+    if chained == 0:
+        why = ("a single record: `chain_prev` is written on the records AFTER "
+               "the first, so a one-record ledger is structurally unchainable"
+               if len(recs) <= 1 else
+               f"{len(recs)} records and NONE carries `chain_prev` — this "
+               f"ledger predates vibe-ic#1116")
+        print(f"NOT_CHECKED: {why}. The digests still re-derived "
+              f"({digests_checked} checked), which catches a file edited "
+              f"without its ledger line, but nothing here can detect a ledger "
+              f"edited to match. Not a pass.", file=sys.stderr)
         return RC_UNRUNNABLE
 
     print(f"[PASS] chain intact across {chained} chained record(s); "
