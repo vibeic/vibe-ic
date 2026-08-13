@@ -35,10 +35,27 @@ vacuous by wiring a program that always exits 0:
     report present at 100%%                         -> rc 0   passes
 
 `test_step1_files_exist_block_still_holds_only_rtl` is the anti-regression arm
-for #1175's trap: `any_of: true` is a MODIFIER on the `files_exist` block
-(`flow_compliance_check.py:7538, :7596`), so appending the two report paths to
-step 1's list would make that gate pass on ANY ONE of four files — strictly
-weaker than requiring the RTL. That arm fails if anyone "fixes" step 1 that way.
+against the NAIVE repair: `any_of: true` is a MODIFIER on the `files_exist`
+block (`flow_compliance_check.py:7538, :7596`), so appending the two report
+paths to step 1's existing list would make that gate pass on ANY ONE of four
+files — strictly weaker than requiring the RTL. That arm fails if anyone
+"fixes" step 1 that way.
+
+CORRECTION, 2026-08-14: an earlier version of this docstring called that
+"#1175's trap". That was WRONG and unfair to #1175, and I checked it by parsing
+its yaml rather than reading its diff. #1175 restructures into `all_of` with the
+reports in a SEPARATE `files_exist` block, so `any_of: true` stays scoped to the
+RTL block and its gate is strictly stronger, not weaker:
+
+    all_of:
+      - files_exist: [rtl/*.sv, rtl/*.v]      any_of: true
+      - files_exist: [coverage_report.md, coverage_report.json]
+
+#1175 is the loser here for ONE reason and it is not a mechanical error: it
+keeps the declaration on step 1 and makes the gate ENFORCE it, when the
+declaration is what is false. Every writer of the report is a Phase-1 program,
+so a step named `spec-to-rtl` would be blocked on an artefact it does not write.
+Enforcing a claim is the right instinct; it is only right once the claim is.
 """
 from __future__ import annotations
 
@@ -156,7 +173,8 @@ def test_wired_clause_skips_a_project_that_never_attempted_phase1(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# #1175's trap, kept as an anti-regression arm
+# the NAIVE repair, kept as an anti-regression arm (NOT #1175's shape — see the
+# 2026-08-14 correction in the module docstring; #1175 scoped `any_of` correctly)
 # --------------------------------------------------------------------------- #
 def test_step1_files_exist_block_still_holds_only_rtl():
     gate = _step(_flow(), _SPEC_TO_RTL).get("gate") or {}
@@ -170,3 +188,55 @@ def test_step1_files_exist_block_still_holds_only_rtl():
             "adding the coverage report here makes the gate pass on ANY ONE of "
             "four files — weaker than requiring the RTL. Declare it on its "
             "producer (D1) instead, or use a nested all_of sub-gate.")
+
+
+# ---------------------------------------------------------------------------
+# CARRIED FROM #1131, which this PR supersedes (vibe-ic#1219 step 2: the
+# replacement carries the UNION of what survives, so closing the superseded
+# branch loses no assertion). Neither PR was a superset of the other: #1131
+# owned these two and this file owned the gate-wiring arm and its paired guard.
+# ---------------------------------------------------------------------------
+def test_PREMISE_the_repo_itself_files_this_artefact_under_phase1():
+    """The attribution, taken from the repo's own path layout rather than from
+    a reading of docstrings.
+
+    `_path_layout.py` maps every report basename to the phase that owns it and
+    files both spellings of this one under `phase1`. That map is what
+    `report_path()` uses to decide where the writers put the file, so it is the
+    same fact the producers act on — not a second opinion about it. If it ever
+    stops saying `phase1`, the step that should declare this must be re-derived
+    before anything in this file is trusted.
+
+    #1131 recorded a SECOND premise it attempted and WITHDREW, and the reasoning
+    is worth keeping: it tried to assert "every program that WRITES this report
+    is a phase-1 program", and both heuristics were wrong. Name + `write_text`/
+    `json.dump` in the same file flagged `flow_compliance_check.py` (a legacy
+    alias table) and `_path_layout.py` (the map itself), neither of which writes
+    it; and matching `report_path(project, "extraction_coverage_report…")`
+    flagged the READERS too, since `phase1_coverage_report_present_check.py` and
+    `extraction_coverage_denominator_audit.py` resolve the same path in order to
+    read it. Telling a writer from a reader needs real dataflow, and a premise
+    tuned until it agrees is the claim wearing a test.
+    """
+    layout = (_PLUGIN / "programs" / "_path_layout.py").read_text(
+        encoding="utf-8")
+    for name in ("extraction_coverage_report.json",
+                 "extraction_coverage_report.md"):
+        assert f'"{name}": "phase1"' in layout, (
+            f"_path_layout no longer files {name} under phase1 — the step that "
+            f"should declare it must be re-derived before trusting this file")
+
+
+def test_the_report_is_required_by_EXACTLY_ONE_step():
+    """Two steps requiring one artefact is the MIRROR defect: it makes some
+    other step MISSING for an output it does not write, which is exactly what
+    step 1 was. Moving the entry without this arm could satisfy
+    `test_d1_declares_it` and `test_step1_no_longer_declares_it` while a third
+    step quietly also claimed it.
+    """
+    owners = {str(s.get("id")) for s in _flow().get("steps", [])
+              if any("extraction_coverage_report" in str(e)
+                     for e in (s.get("required_outputs") or []))}
+    assert owners == {"D1"}, (
+        f"the extraction-coverage report is required by {sorted(owners)}; "
+        f"exactly one step must own a deliverable")
