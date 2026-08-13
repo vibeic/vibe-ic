@@ -50,13 +50,21 @@ elif mode == "atomic":
 '''
 
 
+#: vibe-ic#1241 — `--timeout-method=thread` kills the SESSION, not the test,
+#: so a bound above the harness ceiling (`min(180,300) // 3` = 60 s) can never
+#: fire: pytest ends the run first and every other file in the subset loses
+#: its verdict. MEASURED rather than tuned until the gate went quiet — the whole 16-test file runs in 1.37 s and its slowest test is 0.10 s, so
+#: 30 s is ~300x the slowest measured call and half the ceiling.
+_BOUND_S = 30
+
+
 def _sigkill_writer(tmp_path: Path, mode: str, name: str = "report.json"):
     tmp_path.mkdir(parents=True, exist_ok=True)
     script = tmp_path / f"killer_{mode}.py"
     script.write_text(_KILLER.format(programs=str(PLUGIN / "programs")))
     target = tmp_path / name
     r = subprocess.run([sys.executable, str(script), str(target), mode],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=_BOUND_S)
     return target, r
 
 
@@ -277,7 +285,7 @@ def test_the_shared_report_writer_now_publishes_atomically(tmp_path):
     r = subprocess.run(
         [sys.executable, str(prog), str(_CELL), "--mode", "sta",
          "--json", str(out)],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=_BOUND_S)
     assert r.returncode == 0, (r.returncode, r.stdout[-400:], r.stderr[-400:])
     assert out.is_file() and json.loads(out.read_text()), out
     assert not list(tmp_path.glob(AO.atomic_output_tmp_glob())), \
