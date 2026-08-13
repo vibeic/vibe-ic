@@ -74,18 +74,48 @@ def test_changed_test_file_included_directly():
 
 
 def test_no_code_change_is_smoke_only():
-    """Docs / version-only diff -> exactly the smoke set, never empty."""
+    """A diff of PROSE only -> exactly the smoke set, never empty.
+
+    vibe-ic#1058 narrowed this deliberately. It used to also assert that
+    `.claude-plugin/plugin.json` contributes nothing, which was the DEFECT being
+    asserted as the contract: the manifest is not prose, and the tests that read
+    it say so in their own source —
+
+        test_issue636_prepush_gates_by_destination:58
+            _PJSON = _REPO / "…/.claude-plugin/plugin.json"
+        test_v1_1_7_gatekeeper_assign_version:69
+            (plugin_root / ".claude-plugin" / "plugin.json").write_text(…)
+
+    Those are dependencies, not mentions, and rule 7 now selects them; the
+    sibling test below pins that. What survives here is the part that was always
+    right and must not regress: a genuinely prose diff stays at the floor.
+    `README.md` is the honest case — 41 files in this repo share that basename,
+    so no suffix identifies which one changed and the selector declines to guess.
+    """
     out = sel.select_tests(
-        [
-            "README.md",
-            "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json",
-            "vibe-ic-marketplace/plugins/vibe-ic/skills/phase1/SKILL.md",
-        ],
+        ["README.md", "CONTRIBUTING.md", "docs/some-note.md"],
         PLUGIN_ROOT,
         plugin_prefix="vibe-ic-marketplace/plugins/vibe-ic",
     )
     assert out, "selection must never be empty"
     assert set(out) == sel._smoke_set(PLUGIN_ROOT)
+
+
+def test_the_plugin_manifest_reaches_the_tests_that_read_it():
+    """The half split out of the test above (vibe-ic#1058).
+
+    Measured before the fix: 35 test files name the manifest and a change to it
+    selected 0 of them beyond the smoke floor.
+    """
+    floor = sel._smoke_set(PLUGIN_ROOT)
+    out = set(sel.select_tests(
+        ["vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"],
+        PLUGIN_ROOT, plugin_prefix="vibe-ic-marketplace/plugins/vibe-ic"))
+    beyond = out - floor
+    assert beyond, "the manifest again selects nothing that reads it"
+    for t in ("test_v1_1_7_gatekeeper_assign_version.py",
+              "test_issue636_prepush_gates_by_destination.py"):
+        assert f"{TESTS_REL}/{t}" in beyond, t
 
 
 def test_longest_owning_stem_no_cross_module_bleed():
@@ -391,10 +421,23 @@ def test_waiver_registry_change_does_not_select_the_whole_tree():
 
 
 def test_helper_rule_does_not_widen_unrelated_selections():
-    """Rule 4 must be inert for diffs that touch no tests-dir helper."""
+    """Rule 4 must be inert for diffs that touch no tests-dir helper.
+
+    vibe-ic#1058 changed ONE fixture here and nothing about the intent. The
+    "docs only" row used to pass `{TESTS_REL}/{_MATRIX_PKG}/README.md`, which is
+    not docs: `test_matrix_63x8_census_freshness.py:66` does
+    `text = README.read_text(...)` and asserts on its contents. Four tests read
+    it. Rule 7 selects them, correctly — so that fixture no longer isolates
+    rule 4, which is all this test was ever measuring.
+
+    Swapped for a path that is genuinely inert (nothing reads it), so the test
+    still fails if rule 4 leaks. The now-covered artefact is asserted positively
+    in `test_a_read_artefact_selects_the_tests_that_read_it` instead — the
+    coverage is kept, not dropped.
+    """
     for changed, label in (
         ([], "empty diff"),
-        (["README.md", f"{TESTS_REL}/{_MATRIX_PKG}/README.md"], "docs only"),
+        (["README.md", "docs/unread-prose.md"], "docs only"),
         ([f"{TESTS_REL}/{_MATRIX_PKG}/waivers.txt"], "non-.py in the helper dir"),
     ):
         out = set(sel.select_tests(changed, PLUGIN_ROOT, plugin_prefix=""))
