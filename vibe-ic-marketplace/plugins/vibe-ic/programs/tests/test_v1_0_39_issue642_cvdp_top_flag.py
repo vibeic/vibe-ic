@@ -37,6 +37,7 @@ universal naming scheme); no chip / vendor / SKU literal.
 """
 import importlib
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -51,11 +52,25 @@ importlib.reload(G)
 
 _V = "```verilog\n"
 
+# The end-state tests below drive the REAL gate via `G.main`, which by DESIGN
+# refuses (rc=2, writes NOTHING) when `iverilog` (#528) or `yosys` (#604) is
+# absent — that refusal is the anti-false-PASS guard, not a defect. Without
+# this precondition the helper below read a report the gate deliberately never
+# wrote and raised a misleading FileNotFoundError instead of reporting an
+# unmet environment requirement. Same idiom as the sibling cvdp_gate suites
+# (test_v1_0_74_issue715 / test_v1_0_79_issue734). The `Module Name:`
+# extractor tests (root cause #1) are PURE and stay unconditional.
+HAVE_GATE_TOOLS = (shutil.which("iverilog") is not None
+                   and shutil.which("yosys") is not None)
+
 
 def _run(tmp_path, recs, extra=None):
     """Run the REAL gate (G.main) on a drafts JSONL → (report_records,
     passed_ids). End state = each record's verdict + whether it was emitted
     to the scoring responses JSONL."""
+    if not HAVE_GATE_TOOLS:
+        pytest.skip("iverilog/yosys not available — the gate refuses to emit "
+                    "(#528/#604), so its end state cannot be observed")
     b = tmp_path / "drafts.jsonl"
     b.write_text("".join(json.dumps(r) + "\n" for r in recs))
     out = tmp_path / "responses.jsonl"
