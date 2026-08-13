@@ -445,6 +445,29 @@ gate_dispatch_over "published cells carrying a routed DEF" \
 # real one (nothing calls it). vibe-ic#659.
 run "triage notes state a true reason"  "$ROOT" python3 "$PG/triage_note_answers_the_question_check.py"
 
+# vibe-ic#1241 — authored, tested and merged with NOTHING but its own unit test
+# invoking it, which is the shape `checker_execution_wiring_audit` blocks on: a
+# fixture the author wrote proves the logic and proves nothing about the 525
+# real licence-declaring files it exists to cover.
+#
+# Wired over the whole repository because its subject is what the repository
+# SHIPS: an attribution record is a distribution obligation, so it has to be
+# re-established on every landing rather than when an agent remembers to look.
+#
+# MEASURED on this tree before wiring, so the roll-up gains a live verdict over
+# a real denominator and not a new red:
+#
+#     17217 tracked file(s) under benchmark-data, 525 declaring an SPDX licence,
+#     11 attribution record(s)
+#     [PASS] every one of the 525 licence-declaring file(s) is covered
+#     rc=0
+#
+# `run`, not `run_tolerating_uncheckable`: there is no environment in which this
+# gate legitimately cannot look — the corpus is tracked in the repository, so a
+# refusal here would mean the tree itself became unreadable, which is a finding
+# rather than a condition to tolerate.
+run "vendored attribution retained"     "$ROOT" python3 "$PG/vendored_attribution_retained_check.py" "$ROOT"
+
 # The three NDA guards all scan a DELTA (commit messages, an added diff, the
 # plugin source). None can see a token that is ALREADY tracked, so one that
 # landed before a guard existed stays served by the repo forever while every
