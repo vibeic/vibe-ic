@@ -17,6 +17,7 @@ copy of the logic would drift from the code that actually runs.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import textwrap
@@ -537,6 +538,99 @@ def test_declaring_the_edge_is_the_whole_difference(census, tmp_path, capsys,
     property of the WIRING and not of the gate, which is the entire claim."""
     rc = census(_flow(tmp_path, _READS_BUT_DOES_NOT_BLOCK_ON.format(edges="[7]")),
                 _two_gates, "--probes", "blocks")
+
+# P6 (ruler_blind) and P9 (self_upstream). Both need a POPULATED tree, so both
+# get a planted corpus root as well as a planted gate. The mutation is the same
+# one the real probe makes -- truncate to zero bytes -- and the guards are
+# exercised one at a time so a guard that silently swallowed everything would
+# leave the FIRES tests red rather than pass unnoticed.
+# --------------------------------------------------------------------------
+
+_CORPUS_STEP = """
+    steps:
+      - id: 77
+        name: planted
+        required_outputs:
+          - out/evidence.json
+        gate:
+          all_of:
+{clauses}
+    """
+
+
+def _corpus(tmp_path: Path, files: dict) -> Path:
+    """A tree shaped like a published run root: one dir named by the first
+    segment of a declared output, so `discover_corpus_roots` finds it the same
+    structural way it finds a real one."""
+    root = tmp_path / "corpus" / "run1"
+    for rel, text in files.items():
+        f = root / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+    return tmp_path / "corpus"
+
+
+@pytest.fixture()
+def consumer_says(monkeypatch):
+    """Pin what the AUTHORITY (`flow_compliance_check`) answers.
+
+    The real consumer takes ~6s and knows nothing about a planted flow, so
+    these tests fix its answer and assert on the DECISION the census makes
+    given that answer. The consumer's real behaviour on a real root is
+    measured in the PR body, not simulated here -- the two are different
+    claims and neither substitutes for the other.
+    """
+    def _set(*statuses: str):
+        seq = list(statuses)
+        def _fake(project, tmp, timeout):
+            return {"77": seq.pop(0) if len(seq) > 1 else seq[0]}
+        monkeypatch.setattr(lc, "_flow_step_status", _fake)
+    return _set
+
+
+def _clauses(*cmds: str) -> str:
+    return "\n".join(f"            - program_exit_zero: \"{c}\"" for c in cmds)
+
+
+_BLIND = """
+    import json, sys
+    json.load(open("out/evidence.json")) if open("out/evidence.json").read().strip() else None
+    print("[PASS] evidence considered")
+    sys.exit(0)
+    """
+
+
+def test_ruler_blind_fires_when_emptying_a_declared_artefact_moves_nothing(
+        census, tmp_path, capsys, consumer_says):
+    """The shape: it DECLARES the artefact, it OPENS the artefact, and the
+    artefact's content decides nothing."""
+    consumer_says("PASS")
+    progs = _programs(tmp_path, blind=_BLIND)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("blind ."))),
+                progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "ruler_blind" in out and "out/evidence.json" in out, out
+    assert "nothing anywhere in the flow reacted" in out, out
+
+
+def test_ruler_blind_reads_CLEAN_on_a_gate_that_does_measure_the_content(
+        census, tmp_path, capsys, consumer_says):
+    """The other arm. Same declaration, same read, same corpus -- the only
+    difference is that this gate's verdict depends on what it found."""
+    consumer_says("PASS")
+    progs = _programs(tmp_path, measures="""
+        import json, sys
+        try:
+            doc = json.load(open("out/evidence.json"))
+        except Exception:
+            print("FAIL: evidence unreadable"); sys.exit(1)
+        print("[PASS] %d violation(s)" % doc["violations"]); sys.exit(0)
+        """)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("measures ."))),
+                progs, "--probes", "ruler", "--corpus", str(corpus))
     out = capsys.readouterr().out
     assert rc == 0, out
     assert "LIAR        0" in out, out
@@ -947,3 +1041,447 @@ def test_an_unmeasured_clause_is_NOT_counted_CLEAN(census, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "CLEAN       0" in out, out
     assert "N/A         1" in out, out
+
+def test_ruler_blind_is_declined_when_the_gate_REWROTE_what_was_emptied(
+        census, tmp_path, capsys, consumer_says):
+    """Producer, not ruler. A gate that regenerates the artefact will always
+    survive its deletion, and that says nothing about whether it measures it."""
+    consumer_says("PASS")
+    progs = _programs(tmp_path, producer="""
+        import pathlib, sys
+        pathlib.Path("out/evidence.json").read_text()
+        pathlib.Path("out/evidence.json").write_text('{"violations": 0}')
+        print("[PASS] regenerated"); sys.exit(0)
+        """)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("producer ."))),
+                progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "REWROTE that file" in out, out
+
+
+def test_ruler_blind_is_declined_when_a_SIBLING_conjunct_objects(
+        census, tmp_path, capsys, consumer_says):
+    """The measured version of #1051's `[sibling]` guard.
+
+    The gate list is an `all_of`, so a conjunct that turns red on the same
+    mutation makes the whole conjunction fail and this clause's rc 0 cannot
+    wave anything through. #1051 could only read this off a DECLARED
+    `files_exist` sibling; here the sibling is RUN, which also catches one that
+    objects on substance.
+    """
+    consumer_says("PASS")
+    progs = _programs(tmp_path, blind=_BLIND, strict="""
+        import json, sys
+        try:
+            doc = json.load(open("out/evidence.json"))
+        except Exception:
+            doc = {}
+        if "violations" not in doc:
+            print("FAIL: evidence carries no measurement"); sys.exit(1)
+        sys.exit(0)
+        """)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(
+        clauses=_clauses("blind .", "strict ."))),
+        progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "turns red on the same mutation" in out, out
+    assert "strict" in out, out
+
+
+def test_ruler_blind_is_declined_when_the_CONSUMER_moves_the_step_verdict(
+        census, tmp_path, capsys, consumer_says):
+    """The census's own first false positive, pinned.
+
+    On `benchmark-data/ic/spm/v1.10.18_sky130A`, emptying
+    `reports/phase3/ir_drop.json` leaves BOTH of step 24's gate clauses at rc 0
+    -- and the flow still moves the step PASS-VOIDED -> FAIL, because
+    `flow_compliance_check` owns an EVIDENCE_MISSING (#433) tier that reads
+    emptiness directly. A gate-only probe scored that clause LIAR. Asking the
+    consumer is what makes it a GUARDED.
+    """
+    consumer_says("PASS", "FAIL")   # pristine map, then the mutated map
+    progs = _programs(tmp_path, blind=_BLIND)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("blind ."))),
+                progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "PASS -> FAIL" in out, out
+    assert "measured — just not here" in out, out
+
+
+def test_ruler_blind_declines_a_step_whose_gate_is_NOT_WHAT_DECIDES(
+        census, tmp_path, capsys, consumer_says):
+    """Where the gate's rc is not the thing the step turns on, a blind ruler
+    certifies nothing.
+
+    `SKIPPED-CONDITION` is #1051's `[condition]` guard arriving from the
+    consumer instead of from the YAML — same rule, read off the thing that
+    actually decides.
+    """
+    consumer_says("SKIPPED-CONDITION")
+    progs = _programs(tmp_path, blind=_BLIND)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("blind ."))),
+                progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "not what the step turns on" in out, out
+
+
+def test_ruler_blind_is_CAPPED_at_suspect_when_the_step_is_red_anyway(
+        census, tmp_path, capsys, consumer_says):
+    """Blindness measured, consequence unproven — and the two are said apart.
+
+    The gate IS blind: the artefact went to zero bytes and nothing moved. But
+    the step is FAIL on this root for some other reason, so the flow is not
+    waving this particular emptiness through here. Promoting that to LIAR would
+    be claiming a consequence the run did not measure.
+    """
+    consumer_says("FAIL")
+    progs = _programs(tmp_path, blind=_BLIND)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("blind ."))),
+                progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "SUSPECT" in out and "capped at SUSPECT" in out, out
+    assert "LIAR        0" in out, out
+
+
+def test_ruler_blind_only_mutates_what_the_STEP_DECLARES(
+        census, tmp_path, capsys, consumer_says):
+    """Reading a file is not enough; the flow has to have declared it.
+
+    Without this the probe would accuse `l7_debug_access_grounding_check` of
+    lying because emptying `L11_OTP_CONTENT.json` -- which it reads for context
+    and which step D1 declares for a DIFFERENT clause -- does not move it.
+    """
+    consumer_says("PASS")
+    progs = _programs(tmp_path, side="""
+        import sys
+        open("side/notes.txt").read()
+        print("[PASS] read something undeclared"); sys.exit(0)
+        """)
+    corpus = _corpus(tmp_path, {"out/evidence.json": "{}", "side/notes.txt": "hello"})
+    report = tmp_path / "census.json"
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("side ."))),
+                progs, "--probes", "ruler", "--corpus", str(corpus),
+                "--json", str(report))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    # N/A is not printed anywhere -- and an N/A that reads as CLEAN in the
+    # summary is exactly the confident zero this file is about, so the
+    # assertion goes to the machine-readable record rather than the text.
+    probe = json.loads(report.read_text())["reports"][0]["probes"][0]
+    assert probe["verdict"] == "N/A", probe
+    assert "no declared artefact to empty" in probe["detail"], probe
+
+
+# ------------------------------- P9: the gate as its own upstream ----------
+
+_SELF_UPSTREAM = """
+    import json, pathlib, sys
+    prior = pathlib.Path("out/verdict.json")
+    inherited = prior.read_text().strip() if prior.exists() else ""
+    if not inherited:
+        print("FAIL: nothing to stand on"); sys.exit(1)
+    prior.write_text(json.dumps({"verdict": "PASS"}))
+    print("[PASS] carried forward"); sys.exit(0)
+    """
+
+_CYCLE_STEP = """
+    steps:
+      - id: 77
+        name: planted
+        required_outputs:
+          - out/verdict.json
+        gate:
+          all_of:
+            - program_exit_zero: "{prog} ."
+    """
+
+
+def test_self_upstream_fires_when_the_gate_reads_the_report_it_WROTE(
+        census, tmp_path, capsys):
+    """The literal shape: it opens its own report BEFORE writing it, and what
+    it found there is what carried the verdict."""
+    progs = _programs(tmp_path, carries=_SELF_UPSTREAM)
+    corpus = _corpus(tmp_path, {"out/verdict.json": '{"verdict": "PASS"}'})
+    rc = census(_flow(tmp_path, _CYCLE_STEP.format(prog="carries")),
+                progs, "--probes", "cycle", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "reads its OWN report before writing it" in out, out
+    assert "rc 0 -> 1" in out, out
+
+
+def test_self_upstream_is_declined_when_the_read_is_a_READ_BACK(
+        census, tmp_path, capsys):
+    """Order is the whole discriminator.
+
+    Same file, same two operations, opposite sequence: writing first and
+    reading back is a value THIS run produced. A set-based view of the same
+    trace cannot tell these two apart, which is why the tracer keeps order.
+    """
+    progs = _programs(tmp_path, readback="""
+        import json, pathlib, sys
+        p = pathlib.Path("out/verdict.json")
+        p.write_text(json.dumps({"verdict": "PASS"}))
+        assert json.loads(p.read_text())["verdict"] == "PASS"
+        print("[PASS] wrote then verified"); sys.exit(0)
+        """)
+    corpus = _corpus(tmp_path, {"out/verdict.json": '{"verdict": "PASS"}'})
+    rc = census(_flow(tmp_path, _CYCLE_STEP.format(prog="readback")),
+                progs, "--probes", "cycle", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "only AFTER writing it" in out, out
+
+
+def test_self_upstream_is_SUSPECT_when_the_cycle_is_not_load_bearing(
+        census, tmp_path, capsys):
+    """A cycle it does not lean on is reported, not promoted.
+
+    The trace can only show that the artefact was opened. Whether the verdict
+    RESTS on it is a separate question and it is answered by mutation, not by
+    inference -- so this gate, which opens its own prior report and ignores it,
+    is SUSPECT and says exactly why.
+    """
+    progs = _programs(tmp_path, ignores="""
+        import json, pathlib, sys
+        p = pathlib.Path("out/verdict.json")
+        if p.exists():
+            p.read_text()
+        p.write_text(json.dumps({"verdict": "PASS"}))
+        print("[PASS] did not care"); sys.exit(0)
+        """)
+    corpus = _corpus(tmp_path, {"out/verdict.json": '{"verdict": "PASS"}'})
+    rc = census(_flow(tmp_path, _CYCLE_STEP.format(prog="ignores")),
+                progs, "--probes", "cycle", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "not load-bearing on this root" in out, out
+    assert "SUSPECT" in out, out
+
+
+def test_self_upstream_is_SUSPECT_not_LIAR_when_the_gate_CRASHES(
+        census, tmp_path, capsys):
+    """A traceback is a robustness defect, not proof of laundering.
+
+    Scoring it LIAR would be the census inferring a verdict from an exit code
+    it did not understand -- which is the family it exists to find.
+    """
+    progs = _programs(tmp_path, crashes="""
+        import json, pathlib, sys
+        p = pathlib.Path("out/verdict.json")
+        doc = json.loads(p.read_text())        # blows up on an empty file
+        p.write_text(json.dumps(doc))
+        print("[PASS]"); sys.exit(0)
+        """)
+    corpus = _corpus(tmp_path, {"out/verdict.json": '{"verdict": "PASS"}'})
+    rc = census(_flow(tmp_path, _CYCLE_STEP.format(prog="crashes")),
+                progs, "--probes", "cycle", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "CRASHES when that artefact is emptied" in out, out
+
+
+# ------------------------------- the instrument's own failure modes --------
+
+def test_the_tracer_records_reads_and_writes_IN_ORDER(tmp_path):
+    """The unit the two probes rest on. If this stops working every
+    trace-derived verdict silently becomes N/A -- which is the point of the
+    liveness marker, tested next."""
+    tracer = lc.make_tracer(tmp_path / "tracer")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "in.txt").write_text("x")
+    prog = tmp_path / "programs" / "seq.py"
+    prog.parent.mkdir(exist_ok=True)
+    prog.write_text("import pathlib\n"
+                    "pathlib.Path('in.txt').read_text()\n"
+                    "pathlib.Path('made.txt').write_text('y')\n"
+                    "pathlib.Path('made.txt').read_text()\n")
+    lc.PROGRAMS = prog.parent
+    rc, _out, events = lc._run_traced("seq", proj, tracer, _T)
+    assert rc == 0
+    assert events is not None
+    assert ("r", "in.txt") in events
+    assert events.index(("w", "made.txt")) < events.index(("r", "made.txt"))
+    tr = lc.Traced(rc=rc, out="", events=events)
+    assert tr.reads_before_writing("in.txt") is True
+    assert tr.reads_before_writing("made.txt") is False
+
+
+def test_a_tracer_that_did_not_load_scores_NA_and_NEVER_clean(
+        census, tmp_path, capsys, monkeypatch):
+    """`sitecustomize` loses to any earlier one on PYTHONPATH, and loses
+    SILENTLY. A census that scored the resulting empty trace CLEAN would print
+    a confident zero over a population it never observed -- so the tracer
+    stamps a liveness marker and its absence is N/A, out loud.
+
+    Simulated by handing the census a tracer dir with no tracer in it, which is
+    exactly what a shadowed `sitecustomize` produces.
+    """
+    monkeypatch.setattr(lc, "make_tracer", lambda where: (where.mkdir(parents=True,
+                        exist_ok=True) or where))
+    progs = _programs(tmp_path, carries=_SELF_UPSTREAM)
+    corpus = _corpus(tmp_path, {"out/verdict.json": '{"verdict": "PASS"}'})
+    rc = census(_flow(tmp_path, _CYCLE_STEP.format(prog="carries")),
+                progs, "--probes", "cycle", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "LIAR        0" in out, out
+    assert "tracer failed to load" in out, out
+    assert "UNDERSTATES" in out, out
+
+
+def test_a_corpus_that_reaches_NOTHING_says_so_instead_of_reporting_clean(
+        census, tmp_path, capsys):
+    """vibe-ic#1025's shape, in the census's own instrument: a corpus sweep
+    that reached nothing unless the caller typed the right path depth. Reaching
+    nothing and printing CLEAN is the confident zero this whole file exists to
+    prevent."""
+    progs = _programs(tmp_path, blind=_BLIND)
+    empty = tmp_path / "no_such_corpus"
+    empty.mkdir()
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("blind ."))),
+                progs, "--probes", "ruler", "--corpus", str(empty))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "NO POPULATED CORPUS ROOT" in out, out
+    assert "establishes NOTHING" in out, out
+
+
+def test_the_corpus_root_is_found_by_STRUCTURE_not_by_a_path_list(tmp_path):
+    """The root is recognised because one of its children is named by the first
+    segment of a pattern the FLOW declares. Rename the layout in the flow and
+    the discovery follows it; a hardcoded `benchmark-data/ic/...` list would
+    not, and would rot in silence."""
+    cl = lc.Clause(step="77", kind="program_exit_zero", cmd="x .", program="x",
+                   step_outputs=["weird_layout/evidence.json"])
+    corpus = tmp_path / "c"
+    (corpus / "run1" / "weird_layout").mkdir(parents=True)
+    (corpus / "run1" / "weird_layout" / "evidence.json").write_text("{}")
+    (corpus / "decoy" / "unrelated").mkdir(parents=True)
+    found = lc.discover_corpus_roots(corpus, [cl], limit=4)
+    assert [p.name for p, _ in found] == ["run1"], found
+
+
+def test_the_mutation_must_be_HOLLOW_and_not_merely_truncated(
+        census, tmp_path, capsys, consumer_says):
+    """The probe's own calibration failure, pinned so it cannot come back.
+
+    This gate is blind to content and red on garbage: it parses the artefact
+    and passes on ANY valid JSON. Truncating to zero bytes makes it exit 1 --
+    the parser dies -- which reads exactly like a gate that measures what it
+    reads. Only a mutation that stays VALID and carries NO CONTENT separates
+    the two.
+
+    That is not hypothetical. The first version of P6 truncated and nothing
+    else, and calibrating it against the pre-#219 `transition_coverage_check`
+    ("an absent or HOLLOW at-speed ATPG result must never read as a pass")
+    returned CLEAN on the broken arm and CLEAN on the repaired one. A probe
+    whose mutation kills every gate distinguishes none of them.
+    """
+    consumer_says("PASS")
+    progs = _programs(tmp_path, parses_only="""
+        import json, sys
+        try:
+            json.load(open("out/evidence.json"))
+        except Exception:
+            print("FAIL: evidence unreadable"); sys.exit(1)
+        print("[PASS] it was JSON, so it must be fine"); sys.exit(0)
+        """)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(_flow(tmp_path, _CORPUS_STEP.format(clauses=_clauses("parses_only ."))),
+                progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "hollowed to {}" in out, out
+
+
+def test_the_mutation_is_derived_from_the_ARTEFACT_not_from_a_schema():
+    """`_mutations` reads the shape off the file, so it stays chip-AGNOSTIC and
+    does not rot when a report gains a key."""
+    d = Path(__file__).resolve().parent
+    obj, arr, txt, empty = (d / "_m1.json", d / "_m2.json", d / "_m3.rpt", d / "_m4.json")
+    try:
+        obj.write_text('{"a": 1}')
+        arr.write_text('[1, 2]')
+        txt.write_text("not json at all")
+        empty.write_text("{}")
+        assert [p for _l, p in lc._mutations(obj)] == ["{}", ""]
+        assert [p for _l, p in lc._mutations(arr)] == ["[]", ""]
+        assert [p for _l, p in lc._mutations(txt)] == [""]
+        # an ALREADY hollow container has no hollow mutation to make
+        assert [p for _l, p in lc._mutations(empty)] == [""]
+    finally:
+        for f in (obj, arr, txt, empty):
+            f.unlink(missing_ok=True)
+
+
+def test_an_OR_alternative_whose_sibling_still_carries_content_is_declined(
+        census, tmp_path, capsys, consumer_says):
+    """`a OR b` means the step must deliver ONE of them.
+
+    Hollowing `b` while `a` still carries the measurement removes nothing the
+    flow asked for. Found by hand-adjudicating this probe's own step-9 finding,
+    which sits on `phase2/stage2/synth/area.rpt OR .../stats.json` — that one
+    survives because `area.rpt` is absent on the root, and it is only because
+    the two cases are now distinguishable that it can be said to.
+    """
+    consumer_says("PASS")
+    progs = _programs(tmp_path, blind="""
+        import sys
+        open("out/evidence.json").read()
+        print("[PASS]"); sys.exit(0)
+        """)
+    flow = _flow(tmp_path, """
+        steps:
+          - id: 77
+            name: planted
+            required_outputs:
+              - out/area.rpt OR out/evidence.json
+            gate:
+              all_of:
+                - program_exit_zero: "blind ."
+        """)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}',
+                                "out/area.rpt": "area = 1234"})
+    rc = census(flow, progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "ALTERNATIVE" in out and "out/area.rpt still carries content" in out, out
+
+
+def test_an_OR_alternative_that_is_the_ONLY_satisfier_still_fires(
+        census, tmp_path, capsys, consumer_says):
+    """The other arm, and the one that keeps the step-9 finding standing: same
+    declaration, same gate — the alternative simply is not there."""
+    consumer_says("PASS")
+    progs = _programs(tmp_path, blind="""
+        import sys
+        open("out/evidence.json").read()
+        print("[PASS]"); sys.exit(0)
+        """)
+    flow = _flow(tmp_path, """
+        steps:
+          - id: 77
+            name: planted
+            required_outputs:
+              - out/area.rpt OR out/evidence.json
+            gate:
+              all_of:
+                - program_exit_zero: "blind ."
+        """)
+    corpus = _corpus(tmp_path, {"out/evidence.json": '{"violations": 7}'})
+    rc = census(flow, progs, "--probes", "ruler", "--corpus", str(corpus))
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "ruler_blind" in out, out
