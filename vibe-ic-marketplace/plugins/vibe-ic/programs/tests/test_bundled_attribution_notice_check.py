@@ -201,3 +201,61 @@ def test_THIS_repository_accounts_for_everything_it_bundles(capsys):
     rc = bc.main([str(repo)])
     out = capsys.readouterr().out
     assert rc == 0, out
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# vibe-ic#1241 — A SENTENCE THAT DENIES THE BUNDLING IS NOT AN ATTRIBUTION
+# ═══════════════════════════════════════════════════════════════════════
+# The match against NOTICE used to be a bare `re.search(token, text)`, which
+# accepts the holder's name ANYWHERE — so a sentence denying the bundling
+# satisfied the very requirement it denies.
+#
+# MEASURED on this branch's base (`31406fb4`) before the fix, by replacing the
+# real Efabless entry in the repo's own NOTICE with
+#
+#     Note: Efabless Corporation source is NOT bundled in this repository
+#     and no attribution is required for it.
+#
+#     base   [PASS] 7 holder(s) over 513 SPDX-headered file(s)   rc 0
+#     fixed  [FAIL] Efabless Corporation — 27 file(s), Apache-2.0
+#
+# 27 Apache-2.0 files were distributed with their section 4(d) record satisfied
+# by a sentence stating no record was required.
+#
+# These two exist because the fix landed with NO test: both arms of the suite
+# passed identically, so reverting `_named_without_denial` to `re.search` would
+# have left the suite green and the defect silent.
+def test_PAIRED_a_NOTICE_sentence_DENYING_the_bundling_is_not_attribution(
+        tmp_path, capsys):
+    """THE DEFECT. The name is present; a substring match finds it and passes."""
+    notice = _OURS + (
+        "\nNote: lowRISC contributors (OpenTitan project) source is NOT "
+        "bundled in this repository and no attribution is required for it.\n")
+    root = _tree(tmp_path, notice, {"vendor/aes.sv": _THIRD_PARTY_RTL})
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    assert rc == 1, (
+        "a sentence DENYING the bundling satisfied the attribution it "
+        "denies — this is the #1241 polarity defect:\n" + out)
+    assert "lowRISC" in out, out
+
+
+def test_the_denial_rule_does_not_reject_a_REAL_entry_beside_a_denial(
+        tmp_path, capsys):
+    """THE CONTROL, and the reason the rule examines EVERY mention.
+
+    A NOTICE that attributes a work AND elsewhere discusses what is not
+    bundled is ordinary. A first-hit-decides implementation fails this for the
+    wrong reason, which would be worse than the defect it replaced: it would
+    demand attribution for work already attributed.
+    """
+    notice = _OURS + (
+        "\nBUNDLED: lowRISC contributors (OpenTitan project), Apache-2.0\n"
+        "\nNote: lowRISC contributors (OpenTitan project) tooling is NOT "
+        "bundled here; only its RTL is.\n")
+    root = _tree(tmp_path, notice, {"vendor/aes.sv": _THIRD_PARTY_RTL})
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    assert rc == 0, (
+        "a real attribution was rejected because a DIFFERENT sentence "
+        "mentioned the same holder in a denial:\n" + out)
