@@ -14,7 +14,7 @@ proves three things, and deliberately nothing else:
 
   2. The `flowref` accessors agree with the yaml about which steps declare
      what — including the two places where the circulating numbers are subtly
-     wrong (see `test_blocks_on_presence_is_62_but_non_empty_is_60`).
+     wrong (see `test_blocks_on_presence_is_63_but_non_empty_is_61`).
 
   3. The waiver registry cannot carry a placeholder. Every waiver needs a
      reason AND evidence, both non-empty and both substantive.
@@ -65,8 +65,19 @@ CENSUS_GATE_PRESENT = 62
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
-CENSUS_BLOCKS_ON_PRESENT = 62
-CENSUS_BLOCKS_ON_NON_EMPTY = 60
+# 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, #929): step P0
+# (Structural-RTL pre-flight) gained `blocks_on: [1]`. P0's `required_inputs`
+# already declared `from: 1`, so the DATA edge was there and only the ORDERING
+# edge was missing — P0 was a stage1 step whose ancestry did not reach Phase 1,
+# so a FAILED Phase 1 would not have redded it. It was invisible while
+# `stages[].steps` was a second membership declaration that never listed P0;
+# deleting that roster made the stage1-ancestry guard see it. P0 correspondingly
+# left `flow_dependency_graph_check`'s DECLARED_ROOTS, whose contract is that it
+# may only shrink — so this moved the shrink-only register in its allowed
+# direction. Presence is now TOTAL (63 of 63) and is asserted as a set below,
+# not only as a count.
+CENSUS_BLOCKS_ON_PRESENT = 63
+CENSUS_BLOCKS_ON_NON_EMPTY = 61
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -276,13 +287,18 @@ def test_gate_presence_matches_the_yaml(raw_steps):
             assert F.gate_programs(sid) == ()
 
 
-def test_blocks_on_presence_is_62_but_non_empty_is_60(raw_steps):
+def test_blocks_on_presence_is_63_but_non_empty_is_61(raw_steps):
     """The two are NOT the same set, and conflating them is a real error.
 
-    `blocks_on` is DECLARED on 62 steps but declared EMPTY on D1 and A1 — the
-    flow's two genuine roots. "62 steps have blocks_on" is a presence count; a
-    test that reads it as "62 steps have upstream dependencies" would demand an
-    edge from a root and be wrong twice over.
+    `blocks_on` is DECLARED on all 63 steps but declared EMPTY on D1 and A1 —
+    the flow's two genuine roots. "63 steps have blocks_on" is a presence
+    count; a test that reads it as "63 steps have upstream dependencies" would
+    demand an edge from a root and be wrong twice over.
+
+    Presence became TOTAL on 2026-08-11 when P0 gained `blocks_on: [1]` (see
+    the census note above). That is a stronger property than the count, so it
+    is asserted as a SET: a step added later without `blocks_on` fails here by
+    NAME, rather than as an arithmetic mismatch the reader has to resolve.
     """
     present = {F.normalize_id(s["id"]) for s in raw_steps if "blocks_on" in s}
     non_empty = {
@@ -290,6 +306,9 @@ def test_blocks_on_presence_is_62_but_non_empty_is_60(raw_steps):
     }
     assert len(present) == CENSUS_BLOCKS_ON_PRESENT
     assert len(non_empty) == CENSUS_BLOCKS_ON_NON_EMPTY
+    assert present == {F.normalize_id(s["id"]) for s in raw_steps}, (
+        f"every step must declare `blocks_on`, even as an empty list — "
+        f"missing on {sorted({F.normalize_id(s['id']) for s in raw_steps} - present)}")
     assert present - non_empty == {"D1", "A1"}
 
     assert {
