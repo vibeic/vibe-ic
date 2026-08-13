@@ -437,8 +437,23 @@ def test_output_entries_classify_into_the_four_kinds():
     # VACUOUS_PASS with both reports written becomes MISSING with none.
     # test_flow_declaration_does_not_silence_its_producer.py holds that
     # distinction live for both steps.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    # 2026-08-12: 134 -> 135, FILE 100 -> 101 (vibe-ic#1241-adjacent, d7 W2).
+    # The ONE new entry is D1's `phase1/generated_docs/L21_POWER_INTENT.json`.
+    # Dimension 7 was reporting it produced-by-the-flow / read-by-a-gate /
+    # declared-by-nobody and charging the finding to stepM2 — the CONSUMER —
+    # because there was no declared producer to charge it to. D1 is the
+    # producer: this flow's own name for it is "Phase 1 Doc Extraction (17
+    # skills + dialogue entry -> L1-L27)" and it declared L1-L13 only.
+    #
+    # It is a plain FILE, so GLOB (12) and ANY_OF (22) are untouched, which is
+    # what the per-kind assertions below re-check independently of this total.
+    #
+    # Recorded in the dimension-3 manifest with the run root, path and byte
+    # size it was MEASURED at (benchmark-data/ic/caravel_user_project, 531 B) —
+    # declaring an artefact d3 cannot then evidence would move the finding from
+    # d7 to d3 rather than close it.
+    assert sum(seen.values()) == 135, seen
+    assert seen[F.FILE] == 101
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
