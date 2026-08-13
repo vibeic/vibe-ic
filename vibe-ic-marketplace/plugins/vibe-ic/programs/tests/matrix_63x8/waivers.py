@@ -462,7 +462,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "flow/phase1_phase2_phase3.yaml, the AUDIT NOTE comment directly "
             "above step id 1 ('this gate is files_exist-only ON PURPOSE ... "
             "Do not re-flag as a missing checker'). "
-            "programs/flow_compliance_check.py:2439-2441 (`passed = "
+            "programs/flow_compliance_check.py:2456-2460 (`passed = "
             "len(found) > 0` on the any_of branch) is the entire predicate — "
             "re-executed live by programs/tests/test_matrix_d2_falsifiable.py"
             "::test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file "
@@ -489,7 +489,7 @@ WAIVERS: Tuple[Waiver, ...] = (
             "flow/phase1_phase2_phase3.yaml, the comment on step id 35's "
             "ADVISORY half (#306) naming Step 31/34's ownership and the "
             "absent OpenROAD repair pass. "
-            "programs/flow_compliance_check.py:2439-2441 (`passed = "
+            "programs/flow_compliance_check.py:2456-2460 (`passed = "
             "len(missing) == 0`) is the blocking term's entire predicate; "
             "flowref.GateClause.is_advisory excludes the DFM clause from "
             "this dimension by the module's own rule 1. Re-executed live by "
@@ -887,11 +887,11 @@ WAIVERS: Tuple[Waiver, ...] = (
             "verification, not a declaration change."
         ),
         evidence=(
-            "producer programs/phase3_one_shot_runner.py:29941-29964 (the "
+            "producer programs/phase3_one_shot_runner.py:30621-30644 (the "
             "`len(corners) < 2` guard around the `rpt_phase3 / "
             "'single_corner_stance.json'` write; line number re-verified "
-            "2026-08-08 after v1.9.99's CTS fix shifted earlier-file line "
-            "counts — was 29776-29796); consumer "
+            "2026-08-13 after v1.10.x shifted earlier-file line counts — was "
+            "29941-29964, and 29776-29796 before that); consumer "
             "programs/pvt_matrix_check.py:44-45 then :105. MEASURED "
             "2026-07-28 with flow_compliance_check.check_step over the nine "
             "tracked roots holding phase2/stage2/constraints/pvt_matrix.json: "
@@ -964,15 +964,16 @@ WAIVERS: Tuple[Waiver, ...] = (
             "first; then (b) follows as OR-pairs that can actually fail."
         ),
         evidence=(
-            "producers programs/phase3_one_shot_runner.py:30169 and :30286 "
+            "producers programs/phase3_one_shot_runner.py:30849 and :30966 "
             "(sta_out / 'sta_spef_based.rpt', sta_out / "
-            "'sta_mcorner_ocv.rpt') with mirrors at :30175 and :30316, and "
+            "'sta_mcorner_ocv.rpt') with mirrors at :30855 and :30996, and "
             "the two stance emissions — 'multi_corner_spef_stance.json' "
-            "guarded at :30188, 'mcorner_ocv_stance.json' guarded at :30288 "
+            "guarded at :30867, 'mcorner_ocv_stance.json' guarded at :30967 "
             "— both guarded by `if primary_def.is_file() and "
-            "_signoff_regen(...)` (line numbers re-verified 2026-08-08, "
-            "shifted downward by roughly one hundred fifty lines after "
-            "v1.9.99's CTS fix inserted earlier-file content); consumer "
+            "_signoff_regen(...)` (line numbers re-verified 2026-08-13; they "
+            "shifted downward by roughly seven hundred lines since the "
+            "2026-08-08 re-verification, which is why the previous set no "
+            "longer resolved); consumer "
             "programs/sta_corner_record_completeness_check.py:194-223 "
             "(_PROCESS_STANCE_CANDIDATES / _RC_STANCE_CANDIDATES / "
             "_MULTICORNER_CANDIDATES / _MCORNER_OCV_CANDIDATES / "
@@ -982,6 +983,204 @@ WAIVERS: Tuple[Waiver, ...] = (
             "two stance files moves phase1_parity/{espi,lpc/phase3,mdio,"
             "sgmii} and benchmark-data/ic/caravel_user_project from PASS to "
             "MISSING (5 of 8); the other three are FAIL before and after."
+        ),
+    ),
+    Waiver(
+        step_id="D1",
+        dim=7,
+        reason=(
+            "reports/audit/phase1/expert_parse_track.json is the Phase-1 "
+            "EXPERT track's report — #312's second rail — and it is a REAL "
+            "omission, not a conditional artefact: phase1_one_shot_runner runs "
+            "the track in the step body and returns 1 when the report is "
+            "absent, so today's flow cannot complete Phase 1 without it, while "
+            "the only reader, phase1_expert_track_evidence_check, sits on an "
+            "advisory clause that cannot fail the step. DECLARING IT IS THE "
+            "FIX and it was PREPARED, measured and then held back, because "
+            "adding the entry is a FLOW change with cross-dimension "
+            "consequences that this dimension may not take on its own: "
+            "dimension 3 immediately reddens ('never measured' — the artefact "
+            "is absent from the d3 output manifest and d3 asks whether a "
+            "DECLARED output is genuinely produced, which has to be answered "
+            "on real roots before the declaration lands), and the 63x8 figure "
+            "corpus and ledger classification are pinned to the yaml's entry "
+            "set. Closing this: measure the artefact into the d3 manifest, "
+            "add the entry, regenerate the census/figure/ledger artefacts, and "
+            "accept the three published roots the entry reddens — all in one "
+            "change with its own verification."
+        ),
+        evidence=(
+            "producer programs/phase1_one_shot_runner.py:510 "
+            "(`_pl.report_path(project, \"phase1/expert_parse_track.json\")`) "
+            "with the hard failure on absence at :542 (`if not "
+            "report.is_file():` -> return 1), and the track's own write at "
+            "programs/phase1_expert_parse_track.py:980-983; consumer "
+            "programs/phase1_expert_track_evidence_check.py:97. Surfaced by "
+            "W2's run-record oracle — the reports/audit/ routing is decided "
+            "INSIDE report_path, so no AST write position resolves the full "
+            "path and writers_of found no producer until the two published "
+            "ledgers named it. MEASURED 2026-08-13 with "
+            "flow_compliance_check.check_step on a FRESH copy of each of the "
+            "12 tracked run roots per variant (base and plus may not share a "
+            "tree: the gate writes into what it audits): adding the entry "
+            "moves benchmark-data/ic/spm/v1.5.58_ihp-sg13g2, "
+            "benchmark-data/ic/sha256/clean_run_v1422_20260715 and "
+            "benchmark-data/ic/sha256/clean_run_v1427_20260715 from "
+            "VACUOUS_PASS to MISSING and leaves the other nine unchanged; all "
+            "three predate #312. Same result strict and default."
+        ),
+    ),
+    Waiver(
+        step_id="24",
+        dim=7,
+        reason=(
+            "reports/phase3/dynamic_ir.json is named by an UNCONDITIONAL gate "
+            "clause of this very step (`dynamic_ir_drop_check "
+            "reports/phase3/dynamic_ir.json --budget-pct 10`) whose checker "
+            "scores an absent file as SKIPPED_CONDITION rc 0, so a run whose "
+            "transient PSM solve never happened scored exactly like a run "
+            "whose dynamic droop came in under budget. That is this "
+            "dimension's disease, and the producer runs whenever the step is "
+            "applicable at all — phase3_one_shot_runner guards the emit on "
+            "`primary_def.is_file()`, and that DEF is the routed.def this step "
+            "already declares as a required_input. DECLARING IT IS THE FIX, it "
+            "costs NOTHING on the corpus (0 of 12 roots move), and it is held "
+            "back only for the cross-dimension reason: the artefact is absent "
+            "from the dimension-3 output manifest, so the entry lands d3 on "
+            "'never measured' the moment it exists, and the 63x8 figure and "
+            "ledger artefacts are pinned to the yaml's entry set. Closing "
+            "this: measure it into the d3 manifest, add the entry, regenerate "
+            "the pinned artefacts, in one change with its own verification."
+        ),
+        evidence=(
+            "producer programs/phase3_one_shot_runner.py:31320 (`dyn_ir_json = "
+            "rpt_phase3 / \"dynamic_ir.json\"`) emitted at :31343 by "
+            "`dynamic_ir_vectored_emit.py --out <dyn_ir_json>`; the emitter's "
+            "own contract is at programs/dynamic_ir_vectored_emit.py:31. "
+            "Surfaced by W2's run-record oracle: the path reaches the emitter "
+            "as an argv value, so no AST write position resolves it. MEASURED "
+            "2026-08-13 with flow_compliance_check.check_step on a FRESH copy "
+            "of each of the 12 tracked run roots per variant: ZERO verdicts "
+            "move, strict and default. A control probe substituting a "
+            "nonexistent path on the same harness moved 12, so the zero is a "
+            "measurement and not a broken comparison."
+        ),
+    ),
+    Waiver(
+        step_id="11",
+        dim=7,
+        reason=(
+            "phase2/stage2/dft/coverage.yml is written by the ATPG ENGINE "
+            "inside the container (`fault atpg`), not by this plugin, so it "
+            "exists only when that subprocess ran to completion — while the "
+            "two entries already declared above it, scan_netlist.v and "
+            "atpg_coverage.rpt, are written by fault_atpg_run in PYTHON after "
+            "the subprocess returns, with no return-code guard. On the "
+            "cut-ok / atpg-failed shape the declared pair is present and the "
+            "engine's own metadata is not, so an unconditional entry would "
+            "report MISSING for an engine failure the flow already discloses "
+            "through phase2/stage2/dft/dft_atpg_not_run.json. This is ground "
+            "(a) of the withdrawal step 11's own yaml comment already records "
+            "for the sibling engine artefact tv.json, restated for the file "
+            "the 2026-08-06 run-record oracle surfaced. Its presence is not "
+            "even a function of the flow's control path: "
+            "dft_atpg_coverage_check._engine_metadata_left_behind exists "
+            "BECAUSE a docker client timeout kills the client while the "
+            "container keeps running and writes this file afterwards, so the "
+            "flow has already recorded 'no measurement' when it appears. "
+            "Closing this needs the producer's failure path handled first — "
+            "emit the Python-side artefacts only when the engine ran, or "
+            "declare the engine's three files together — not a declaration "
+            "added on its own."
+        ),
+        evidence=(
+            "producer programs/fault_atpg_run.py:1605 (`cov_out = "
+            "\"phase2/stage2/dft/coverage.yml\"`, handed to the engine as an "
+            "output path); consumer programs/dft_atpg_coverage_check.py:574 "
+            "(_ENGINE_COVERAGE_META) and the asynchronous-write rationale at "
+            "programs/dft_atpg_coverage_check.py:581-590. MEASURED 2026-08-13 "
+            "with flow_compliance_check.check_step on a FRESH copy of each of "
+            "the 12 tracked run roots per variant: adding the entry moves "
+            "ZERO verdicts. That measurement does NOT support declaring it — "
+            "the two roots that PASS step 11 (spm/v1.10.18_sky130A, "
+            "spm/v1.9.96_gf180mcuD) are both SUCCESSFUL engine runs and carry "
+            "the file, and a successful run cannot speak to the failure path "
+            "the reason above rests on. It is recorded so the withdrawal is "
+            "not read as resting on the corpus."
+        ),
+    ),
+    Waiver(
+        step_id="34",
+        dim=7,
+        reason=(
+            "reports/phase3/cmp_fill_emit.json is metal_fill_emit's OWN "
+            "default report, and the only consumer W2 can find is "
+            "metal_fill_emit itself: step 34's gate runs `metal_fill_emit . "
+            "--verify-only --json reports/phase2/gates/cmp_fill_emit.json`, "
+            "and verify_only() re-reads the default path a previous emit "
+            "wrote. That is the self-verifying shape W1 classifies as "
+            "EVIDENCE and does not enforce ('the gate program both produces "
+            "and checks them in the same invocation'); W2 has no such filter, "
+            "which is the whole reason one artefact is a finding under one "
+            "rule and not under the other. It is also not produced "
+            "unconditionally: metal_fill_emit returns DISCLOSED_SKIP without "
+            "writing any report when no KLayout runner is available, and a "
+            "PUBLISHED converged root refutes the unconditional claim "
+            "directly — benchmark-data/ic/spm/v1.10.18_sky130A carries no "
+            "such file while benchmark-data/ic/spm/v1.9.96_gf180mcuD does. "
+            "Closing this needs W2 to gain the self-verifying filter W1 "
+            "already has, which first needs writers_of to resolve a write "
+            "spelled `project / <module-level constant>` so metal_fill_emit "
+            "is identified as the writer at all — a resolution change with "
+            "its own blast radius, not a declaration."
+        ),
+        evidence=(
+            "producer and consumer are the same program: "
+            "programs/metal_fill_emit.py:82 (_REPORT_REL), :133 (verify_only "
+            "reads _REPORT_REL) and :319 (the emit path writes it). MEASURED "
+            "2026-08-13, `git ls-files` over the 12 tracked run roots: 1 of "
+            "12 carries reports/phase3/cmp_fill_emit.json. "
+            "flow_compliance_check.check_step on a FRESH copy of each root "
+            "per variant moves ZERO verdicts, because step 34 is already FAIL "
+            "or MISSING on every root that reaches it."
+        ),
+    ),
+    Waiver(
+        step_id="M2",
+        dim=7,
+        reason=(
+            "phase1/generated_docs/L21_POWER_INTENT.json is a PHASE-1 "
+            "L-document, not an output of the mixed-signal step. W2's "
+            "attribution cascade charged it to M2 only because M2's "
+            "power_domain_signal_crossing_check is its single gate consumer "
+            "in the whole flow, and rule 2 of the cascade assigns the sole "
+            "consumer. The program reads it as one of two ALTERNATIVE "
+            "power-intent sources — phase2/stage2/constraints/*.upf OR the "
+            "L21 fields, first available wins — and returns SKIP rc 2 when "
+            "neither is present, so it is not a required output of M2 under "
+            "any reading. Declaring it here would state that a mixed-signal "
+            "step emits a Phase-1 document. Declaring it at D1 instead is a "
+            "different change with a different subject: D1's list stops at "
+            "L13 and the flow's own phase1_all_l_docs_present_check matches "
+            "L-docs by L<n>_ prefix, so whether L14..L27 belong in D1 is one "
+            "decision about fourteen documents and it is not taken from a "
+            "single promoted path. M2 additionally carries a declared "
+            "known_gap saying no program in this plugin writes its declared "
+            "outputs; adding a fifteenth-document argument to that step is "
+            "not how that gap gets closed."
+        ),
+        evidence=(
+            "consumer programs/power_domain_signal_crossing_check.py:91 "
+            "(_L21_REL) reached from the layered-input contract at :53 "
+            "('OR phase1/generated_docs/L21_POWER_INTENT.json#fields'); "
+            "producers are the protocol-synth family, e.g. "
+            "programs/coresight_protocol_synth.py:1554 and "
+            "programs/sdmmc_protocol_synth.py:1489. MEASURED 2026-08-13: "
+            "flow_compliance_check.check_step on a FRESH copy of each of the "
+            "12 tracked run roots per variant moves ZERO verdicts — M2 is "
+            "SKIPPED-CONDITION or MISSING on all 12, so the corpus can say "
+            "nothing about this entry either way, which is itself why the "
+            "reason above rests on the flow text and not on the corpus."
         ),
     ),
 )
