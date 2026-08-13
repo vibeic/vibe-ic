@@ -92,6 +92,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
@@ -536,7 +537,33 @@ def _driveable(argv: List[str]) -> Optional[str]:
     return None
 
 
-def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
+def audit_ci(repo_root: Path, timeout: int = 120,
+             budget: Optional[float] = None) -> CiAudit:
+    """Drive every declared CI gate against a scratch tree.
+
+    `timeout` bounds ONE subprocess. `budget` bounds the WHOLE walk, and
+    without it there is no aggregate bound at all — which is vibe-ic#1181.
+
+    THE PER-CALL BOUND IS NOT AN AGGREGATE BOUND.
+
+    `repo_hygiene_gates.sh` declares 74 gates on `a38902d1`. At the default
+    `timeout=120` each subprocess is bounded, and the walk is 74 x 120s =
+    8880s = 148 minutes worst case. `test_gate_discloses_denominator` called
+    `audit(_REPO)` with no bound of any kind, so the test could not finish.
+
+    Worse than slow: the wait is `subprocess.communicate` -> `selector.poll`,
+    which pytest's `--timeout-method=thread` CANNOT interrupt. The timeout
+    fires, prints its stack, and the invocation still never returns — it dies
+    only to an outer `timeout(1)`. What the operator sees is not "one test
+    timed out" but an invocation with NO SUMMARY LINE, which greps as neither
+    a pass nor a failure. That is the same ambiguity as `no tests ran`, and it
+    silently removed a whole file from a real measurement.
+
+    A gate not reached inside `budget` is added to `not_driven` with a reason,
+    which is the vocabulary this function already had: `not_driven` shrinks
+    `probed` while `declared` stays put, so the denominator discloses itself.
+    And an exhausted budget never returns a bare PASS — see the verdict below.
+    """
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
     gates = parse_declarations(script)
     if not gates:
@@ -545,9 +572,20 @@ def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
 
     findings: List[Dict] = []
     not_driven: List[Tuple[str, str]] = []
+    started = time.monotonic()
+    exhausted = False
     with tempfile.TemporaryDirectory() as td:
         scratch = _scratch_repo(Path(td))
         for decl in gates:
+            if budget is not None and not exhausted \
+                    and time.monotonic() - started >= budget:
+                exhausted = True
+            if exhausted:
+                not_driven.append(
+                    (decl.label,
+                     f"not reached within the {budget:g}s aggregate budget "
+                     f"(#1181) — DISCLOSED, never counted as examined"))
+                continue
             label, cmd = decl.label, decl.cmd
             argv = _expand(cmd, repo_root, scratch)
             why = _driveable(argv)
@@ -574,13 +612,23 @@ def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
                     "output_tail": out.strip().splitlines()[-1][:200]
                     if out.strip() else "(no output at all)",
                 })
-    return CiAudit("FAIL" if findings else "PASS", findings, len(gates),
+    if findings:
+        verdict = "FAIL"
+    elif exhausted:
+        # NEVER a bare PASS. A walk that stopped early examined fewer
+        # gates than it declared, and "no findings" over a truncated
+        # population is not the same sentence as "no findings". #1181.
+        verdict = "BUDGET_EXHAUSTED"
+    else:
+        verdict = "PASS"
+    return CiAudit(verdict, findings, len(gates),
                    len(gates) - len(not_driven), not_driven)
 
 
-def audit(repo_root: Path, timeout: int = 120) -> Tuple[str, List[Dict]]:
+def audit(repo_root: Path, timeout: int = 120,
+          budget: Optional[float] = None) -> Tuple[str, List[Dict]]:
     """Back-compatible view of `audit_ci` — the verdict and the findings."""
-    res = audit_ci(repo_root, timeout=timeout)
+    res = audit_ci(repo_root, timeout=timeout, budget=budget)
     return res.verdict, res.findings
 
 
