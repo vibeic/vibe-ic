@@ -238,7 +238,7 @@ from matrix_63x8 import cells as C, flowref as F, waivers as W
 
 The ledger's unit is a step, but dimensions 2 (falsifiability), 4
 (criteria-match) and 6 (skip discipline) each ask their question of a gate
-CLAUSE — 164<!--figure:blocking_clauses--> blocking clauses over 62<!--figure:gated_steps--> gated steps. A cell-level
+CLAUSE — 165<!--figure:blocking_clauses--> blocking clauses over 62<!--figure:gated_steps--> gated steps. A cell-level
 `xfail(strict=True)` cannot express "5 of this step's 6 clauses are proven and
 the 6th is not", so those modules carry an in-module per-clause register with
 the same both-directions anti-rot semantics (a stale entry reddens; an entry
@@ -331,9 +331,9 @@ The 11 WAIVED and 11 NA cells are not enforcing anything and enter none of those
 | dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |
 |-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------:|---:|
 | 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 63 | 0 | 0 | 0 |
-| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 60 | 0 | 2 | 1 |
+| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 59 | 1 | 2 | 1 |
 | 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 44 | 9 | 3 | 7 |
-| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 62 | 1 | 0 | 0 |
+| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 63 | 0 | 0 | 0 |
 | 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 62 | 0 | 1 | 0 |
 | 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 1 | 0 |
 | 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 52 | 6 | 4 | 1 |
