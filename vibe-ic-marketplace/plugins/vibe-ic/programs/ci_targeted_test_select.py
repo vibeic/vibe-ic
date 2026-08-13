@@ -348,6 +348,16 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # among them. The PR that neuters the gate is precisely the PR whose
     # changed-file set cannot reach the test that guards it. ~2 s for 7 tests.
     "test_issue1025_empty_corpus_sweep_blocks.py",
+    # vibe-ic#1025 follow-up — the same reachability argument, arriving through
+    # a SHELL file again. What this guard pins is a property of
+    # `tools/ci/_gate_dispatch.sh`: that a sweep which DECIDED NOTHING refuses
+    # rather than exiting 0. That file is outside `_SOURCE_DIRS` and no test is
+    # NAMED after it, so MEASURED with the selector itself on the one-token
+    # diff that neuters the refusal (`if [ "$decided" -eq 0 ]` -> `if false`):
+    # the guard is NOT selected. The diff that turns the sweep back into a
+    # thing that cannot report its own vacuity is precisely the diff whose
+    # changed-file set cannot reach the test that guards it. ~10 s for 14.
+    "test_issue1025_sweep_reports_its_own_vacuity.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
