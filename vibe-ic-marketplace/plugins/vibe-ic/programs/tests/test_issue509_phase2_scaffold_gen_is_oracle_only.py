@@ -75,6 +75,58 @@ def _mentions_oracle(text: str) -> List[str]:
     return [t for t in ORACLE_TOKENS if t in text]
 
 
+def _flow_values(path: Path) -> List[str]:
+    """Every SCALAR the flow declares, comments excluded.
+
+    vibe-ic#1012 IN THIS FILE. `test_no_flow_step_names_the_scaffold_oracle`
+    read the yaml as raw TEXT and asked whether the token appeared anywhere in
+    it, so a program named in a `#` COMMENT counted as a flow step naming it.
+    Measured on `a38902d16`: the sole occurrence of `emit_fsm_v` in
+    `phase1_phase2_phase3.yaml` is line 317, inside a comment explaining why a
+    gate is NOT blocking —
+
+        # WHY NOT BLOCKING. Every one of the 41 is a TRUE finding — L6 declares
+        # states and zero transitions, and `emit_fsm_v()`'s body really is
+        # `// TODO — transition logic per L6.fsm_transitions`.
+
+    — and the flow wires it nowhere. The test was red on main for a mention in
+    prose about the oracle's own body, which is the one place the oracle is
+    SUPPOSED to be discussed.
+
+    The same file already knows the rule: `_subprocess_invocations_of_oracle`
+    is AST-based precisely "so a mention in a comment, a docstring or a string
+    constant is not counted". This gives the yaml reader the same standard.
+    `yaml.safe_load` drops comments by construction, so walking the parsed
+    document cannot see one — the fix is structural, not a smarter regex.
+
+    A file that is not yaml, or does not parse, falls back to the raw text: a
+    reader that silently skipped what it could not parse would turn a real
+    wiring into a pass, which is the opposite failure and the worse one.
+    """
+    try:
+        import yaml  # noqa: PLC0415
+        doc = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:                                   # noqa: BLE001
+        return [path.read_text(encoding="utf-8", errors="replace")]
+    if doc is None:
+        return []
+    out: List[str] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                out.append(str(k))
+                walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v)
+        elif node is not None:
+            out.append(str(node))
+
+    walk(doc)
+    return out
+
+
 def _parse(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8", errors="replace"))
 
@@ -212,10 +264,10 @@ def test_no_flow_step_names_the_scaffold_oracle():
     offenders: Dict[str, List[str]] = {}
     for s in specs:
         try:
-            text = s.read_text(encoding="utf-8", errors="replace")
+            values = _flow_values(s)
         except OSError:
             continue
-        hits = _mentions_oracle(text)
+        hits = sorted({t for v in values for t in _mentions_oracle(v)})
         if hits:
             offenders[str(s.relative_to(FLOW))] = hits
     assert not offenders, (
