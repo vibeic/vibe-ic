@@ -158,8 +158,8 @@ file-existence-only gate and legitimately names none.
 --------------------------------------------------------------------
 5. ``blocks_on``
 --------------------------------------------------------------------
-95<!--figure:blocks_on_edges--> edges, mixed types
-(79<!--figure:blocks_on_edges_int--> int, 16<!--figure:blocks_on_edges_str--> str),
+96<!--figure:blocks_on_edges--> edges, mixed types
+(80<!--figure:blocks_on_edges_int--> int, 16<!--figure:blocks_on_edges_str--> str),
 every target resolving to a declared step id — no dangling references at time of writing. Compare with
 :func:`normalize_id` on both sides; the real consumers stringify
 (``{str(id): [str(e) for e in blocks_on]}``).

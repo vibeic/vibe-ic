@@ -3271,7 +3271,7 @@ steps:
         # measured and rejected — no published run carries a tech LEF, so its
         # honest rc 3 SKIP would have failed the step on all of them.
         - program_exit_zero: "em_peak_current_authority_check . --json reports/phase3/em_current_authority.json"
-    blocks_on: [22]
+    blocks_on: [22, 24]
 
   - id: 26
     name: "🔁 Antenna check (gate-oxide protection)"
