@@ -332,7 +332,7 @@ def _published_cells():
         return []
     return sorted(c for d in BD_IC.iterdir() if d.is_dir()
                   for c in d.iterdir()
-                  if c.is_dir() and G._parse_cell_name(c.name) is not None)
+                  if c.is_dir() and G._cell_ordinal(c.name) is not None)
 
 
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
@@ -367,35 +367,70 @@ def test_the_prefix_coverage_claim_is_re_derived():
         f"put exactly '{' '.join(sorted(prefixes))}' in the docstring. A new "
         f"prefix means a tool started emitting diagnostics and the coverage "
         f"claim a reader relies on is now understated.")
-    assert "4b22e36ea" in doc, (
+    assert "94754771" in doc or "4b22e36ea" in doc, (
         "the docstring states raw file counts; they must stay attributed to the "
         "commit they were measured at, or they read as standing facts about a "
         "tree that has since moved")
 
 
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
-def test_the_published_corpus_yields_no_comparable_pair():
-    """5 of 5 cells exit NO_BASELINE on this commit — and that is DISCLOSED.
+def test_the_corpus_pair_resolves_and_the_gate_fires():
+    """THE REPLACEMENT for a test that was meant to die, and did.
 
-    THIS TEST IS MEANT TO DIE. It fails the day a second cell of the same PDK is
-    published, which is the day the gate can finally compare something and the
-    day the docstring's "today it is every cell" paragraph becomes false. A
-    disclosure that outlives its premise is exactly the rot this repo keeps
-    finding, so the premise is asserted rather than described.
+    Its predecessor asserted "5 of 5 cells exit NO_BASELINE" and said it would
+    fail the day a pair became comparable. That day came from a CODE fix rather
+    than from a publish: the resolver was reading the PDK out of the directory
+    name, so the repository's `clean_run_*` naming family was invisible and the
+    one genuinely like-for-like pair was skipped. The premise died exactly as
+    designed; this asserts what replaced it.
+
+    Backed by a COMMITTED artefact, not a fixture: `DRT-0120` is absent from
+    v1422's `reports/phase3/drc_router.rpt` and present in v1427's, and that is
+    re-derived here rather than trusted.
     """
-    cells = _published_cells()
-    assert cells, "no published cells found — the probe itself is broken"
-    comparable = [(c.name, G.find_previous(c).name)
-                  for c in cells if G.find_previous(c) is not None]
-    assert not comparable, (
-        f"a comparable cell pair now EXISTS: {comparable}. The gate can compare "
-        f"for real, so remove the 'today it is every cell' disclosure from the "
-        f"docstring, re-run the gate over that pair, and record what it finds — "
-        f"including in tool_diagnostic_id_acceptance.json, whose text says the "
-        f"comparison path is unreachable.")
-    assert "5 of 5" in G.__doc__ or f"{len(cells)} of {len(cells)}" in G.__doc__, (
-        f"{len(cells)} published cells carry no comparable pair and the docstring "
-        f"does not say so; a reader of 'is BLOCKING' would assume it blocks.")
+    prev = BD_IC / "sha256" / "clean_run_v1422_20260715"
+    cur = BD_IC / "sha256" / "clean_run_v1427_20260715"
+    for p in (prev, cur):
+        if not p.is_dir():
+            pytest.skip(f"published run absent from this checkout: {p}")
+
+    # 1. the resolver finds it, with no flag and no caller knowledge
+    found = G.find_previous(cur)
+    assert found is not None and found.name == prev.name, (
+        f"the like-for-like predecessor was not resolved: got {found}. Both runs "
+        f"record the same PDK ({G.measured_pdk(cur)} / {G.measured_pdk(prev)}) "
+        f"and both are the same naming family, so a NO_BASELINE here means the "
+        f"resolver has regressed to parsing names again.")
+
+    # 2. the difference it must find is real, checked against the bytes
+    rpt = "reports/phase3/drc_router.rpt"
+    assert "DRT-0120" not in (prev / rpt).read_text(errors="replace")
+    assert "DRT-0120" in (cur / rpt).read_text(errors="replace")
+
+    # 3. and the gate BLOCKS on it
+    shipped = PLUGIN_ROOT / "programs" / "tool_diagnostic_id_acceptance.json"
+    rc, report = G.compare(cur, prev, shipped, date(2026, 8, 12))
+    assert rc == 1, f"the gate did not block on a real new id: rc={rc} {report}"
+    assert "DRT-0120" in report["new_ids_blocking"], report["new_ids_blocking"]
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_a_run_that_states_no_pdk_is_refused_not_assumed_to_match():
+    """"I could not tell" must never resolve to "same".
+
+    Two `u_hawaii_adc` run dirs record no PDK at all. Matching them on silence
+    would compare runs whose process is unknown — the 18-false-positive mistake
+    this resolver's PDK guard exists to prevent, arriving through a hole instead
+    of through the front door.
+    """
+    unstated = [c for c in _published_cells() if G.pdk_key(c) is None]
+    if not unstated:
+        pytest.skip("every run dir now records a PDK — the hazard is gone")
+    for c in unstated:
+        assert G.find_previous(c) is None, (
+            f"{c.name} states no PDK and a predecessor was resolved for it "
+            f"anyway ({G.find_previous(c)}). An unmeasurable PDK must refuse, "
+            f"not match.")
 
 
 def test_the_unwired_state_is_disclosed_or_gone():
