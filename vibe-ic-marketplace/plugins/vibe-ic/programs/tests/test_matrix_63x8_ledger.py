@@ -450,10 +450,16 @@ def test_output_entries_classify_into_the_four_kinds():
     #
     # Recorded in the dimension-3 manifest with the run root, path and byte
     # size it was MEASURED at (benchmark-data/ic/caravel_user_project, 531 B) —
+    #
+    # 2026-08-12 (same change): 135 -> 136, FILE 101 -> 102. Step 11's
+    # `phase2/stage2/dft/coverage.yml`, the same d7 W2 shape: written by
+    # dft_atpg_coverage_check / fault_atpg_run, read by step 11's own gate,
+    # declared by nobody. Present in 2 of the 2 roots where step 11 actually
+    # ran, and resolves at spm/v1.9.96_gf180mcuD (28797 B).
     # declaring an artefact d3 cannot then evidence would move the finding from
     # d7 to d3 rather than close it.
-    assert sum(seen.values()) == 135, seen
-    assert seen[F.FILE] == 101
+    assert sum(seen.values()) == 136, seen
+    assert seen[F.FILE] == 102
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

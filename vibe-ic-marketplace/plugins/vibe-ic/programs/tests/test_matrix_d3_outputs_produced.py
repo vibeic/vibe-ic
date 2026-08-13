@@ -655,7 +655,11 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # have moved the finding from d7 to d3 rather than closing it -- which is what
 # the first attempt did, and is why the manifest record is measured by asking
 # `resolve_anywhere`, never typed.
-_LIVE_ENTRY_COUNT = 128
+# 2026-08-12 (same change): 128 -> 129. Step 11's
+# `phase2/stage2/dft/coverage.yml`, declared for the same d7 W2 reason as L21
+# above and recorded PRODUCED_BY_RUN at spm/v1.9.96_gf180mcuD (28797 B). It is
+# decided LIVE like the other 128 and adds no fixture attestation.
+_LIVE_ENTRY_COUNT = 129
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
