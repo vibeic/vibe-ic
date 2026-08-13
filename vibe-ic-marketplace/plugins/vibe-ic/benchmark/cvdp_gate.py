@@ -580,6 +580,20 @@ def iverilog_gate(code: str, workdir: Path) -> Tuple[bool, str, str]:
     rc, out, err = _run(["iverilog", "-g2012", "-t", "null", str(f)])
     if rc == 0:
         return True, "compile clean", ""
+    # The iverilog BINARY IS ABSENT (rc=127 is _run's FileNotFoundError
+    # sentinel). Falling through would reach the "elaboration-only tolerated
+    # diagnostics" return below — a sentence that asserts elaboration RAN and
+    # produced only benign messages — and would degrade this gate to a NO-OP
+    # while the report reads clean: gibberish that is not Verilog at all comes
+    # back ok=True. That is the #604 silent false-PASS class, which `yosys_smoke`
+    # already refuses ("yosys-smoke CANNOT ENFORCE ... no yosys start banner").
+    # The same refusal belongs here: a check that COULD NOT RUN and a check that
+    # found nothing wrong are not the same result.
+    if rc == 127:
+        return False, ("iverilog_gate CANNOT ENFORCE: iverilog did not run "
+                       "(rc=127; binary absent) — install iverilog or run on a "
+                       "host that has it. Refusing to report an absent tool as "
+                       "elaboration diagnostics (#604 class)."), ""
     offending, missing = _offending_lines((out or "") + "\n" + (err or ""))
     if offending:
         return False, "; ".join(offending[:4]), ""
