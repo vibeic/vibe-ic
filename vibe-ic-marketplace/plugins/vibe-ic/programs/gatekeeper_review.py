@@ -1178,9 +1178,52 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
 # --------------------------------------------------------------------------
 # subprocess runner for the file-walking gates.
 # --------------------------------------------------------------------------
-def _run_program(prog: Path, args: List[str]) -> Tuple[int, str, str]:
-    proc = subprocess.run([sys.executable, str(prog), *args],
-                          capture_output=True, text=True)
+#: What ONE driven program may spend before this gate stops waiting for it.
+#: vibe-ic#1208.
+#:
+#: MUST BE TIGHTER THAN THE HARNESS TIMEOUT ABOVE IT, and the first version of
+#: this fix was not. At 300s under the suite's `--timeout=180`, pytest's own
+#: timeout fires FIRST, and because it is thread-based it cannot interrupt a
+#: subprocess wait — so the invocation still produced no summary and the bound
+#: never got a chance to act. MEASURED: wall=181.63s, no summary, unchanged.
+#: A bound only helps if whatever is waiting on it is prepared to wait longer.
+_PROGRAM_TIMEOUT_S = 90.0
+
+
+def _run_program(prog: Path, args: List[str],
+                 timeout: float = _PROGRAM_TIMEOUT_S) -> Tuple[int, str, str]:
+    """Drive `prog` as a subprocess. Returns `(rc, stdout, stderr)`.
+
+    BOUNDED (vibe-ic#1208). This had no `timeout=` at all, and it is the one
+    chokepoint all 15 gate drivers go through — `plugin_audit_gate` puts
+    `plugin_full_audit.py` over the entire plugin root through it.
+
+    An unbounded wait here is not "a slow gate". The wait lands in
+    `subprocess.communicate` -> `selector.poll`, which pytest's
+    `--timeout-method=thread` CANNOT interrupt: the timeout fires, prints its
+    stack, and the invocation still never returns. What the operator sees is
+    not "one test timed out" but a run with NO SUMMARY LINE — which greps as
+    neither a pass nor a failure. Three of this program's own test modules
+    could not be run in a pinned selection on clean `a38902d1` because of it,
+    and this is the program that decides whether a batch may land.
+
+    A TIMEOUT RETURNS 124, NEVER 0. Every caller here treats non-zero as a
+    failing gate, so "I could not determine this" lands on the safe side of
+    the verdict. A bounded wait that returned 0 would be a worse defect than
+    the hang: it would convert "never finished" into "clean".
+    """
+    try:
+        proc = subprocess.run([sys.executable, str(prog), *args],
+                              capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        def _txt(v) -> str:
+            if v is None:
+                return ""
+            return v.decode("utf-8", "replace") if isinstance(v, bytes) else v
+        return 124, _txt(exc.stdout), (
+            f"{prog.name}: exceeded the {timeout:g}s bound and was stopped "
+            f"(#1208) — this gate is UNDETERMINED, which is reported as a "
+            f"failure because it is not a clean result\n" + _txt(exc.stderr))
     return proc.returncode, proc.stdout, proc.stderr
 
 
