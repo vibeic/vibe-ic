@@ -235,7 +235,7 @@ def _cli(tmp_path, record, ledger_rows, name="r"):
     led.write_text(json.dumps({"acknowledged": ledger_rows}))
     return subprocess.run(
         [sys.executable, str(PROG), "--record", str(rec), "--ledger", str(led),
-         "--repo", str(ROOT)], capture_output=True, text=True, timeout=300)
+         "--repo", str(ROOT)], capture_output=True, text=True, timeout=60)
 
 
 def test_cli_exits_0_when_every_red_is_new(tmp_path):
