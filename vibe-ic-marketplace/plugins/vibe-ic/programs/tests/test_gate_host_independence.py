@@ -686,3 +686,120 @@ def test_the_peer_detector_sees_a_real_process():
         time.sleep(0.05)
     pytest.fail("a DEAD process is still reported as a live peer, which would "
                 "disable the legacy sweep permanently")
+
+
+# --------------------------------------------------------------------------
+# A DIFFERENCE THAT DOES NOT REPRODUCE IS NOT EVIDENCE (vibe-ic#1029 class)
+#
+# Measured on `3febf537`: this probe reported
+#
+#   [HOST_DEPENDENT_VERDICT] 63x8 census freshness
+#       checkout: rc=1 AssertionError: the outcome run for
+#                 test_matrix_d7_outputs_list_complete.py did not finish within 60s
+#       worktree: rc=0 [PASS] 63x8 census fresh: 504 cells over 8 dimensions
+#
+# The two arms did not disagree about the SUBJECT. One arm ran out of wall
+# clock. `_OUTCOME_TIMEOUT_S = 60` in `test_matrix_63x8_coverage` is a bound on
+# an inner pytest, and this probe drives 66 gates twice, so the checkout arm is
+# the one under load. Whether it fires depends on the machine, which is why the
+# same tool reported 6/6 clean on one run and 5/6 on the next.
+#
+# `TimeoutExpired` raised at THIS level is already handled — it becomes
+# GATE_UNRUNNABLE. The gap is a gate that enforces its own deadline and
+# therefore RETURNS rc=1 with a message: indistinguishable, to a single
+# comparison, from a real verdict.
+#
+# The discriminator is not the text of the message — this file's own header
+# rejects deciding a tier by grepping prose. It is REPRODUCIBILITY: a gate that
+# reads local state disagrees every time; a gate that ran out of clock does not.
+# --------------------------------------------------------------------------
+
+def _flapping_repo(tmp_path: Path, marker: Path, *, name: str = "r") -> Path:
+    """A gate whose FIRST invocation misses a deadline and whose later ones do not.
+
+    The marker lives OUTSIDE the repo on purpose: a counter file inside it
+    would be a leftover of the fixture and would change what the probe is
+    being shown.
+    """
+    r = _repo_with(tmp_path, 'run "flaky" "$ROOT" python3 flaky.py\n',
+                   untracked=True, name=name)
+    (r / "flaky.py").write_text(
+        "import pathlib, sys\n"
+        f"m = pathlib.Path({str(marker)!r})\n"
+        "n = int(m.read_text()) if m.is_file() else 0\n"
+        "m.write_text(str(n + 1))\n"
+        "if n == 0:\n"
+        "    print('AssertionError: the outcome run did not finish within 60s')\n"
+        "    sys.exit(1)\n"
+        "print('PASS (1 item examined)')\n")
+    subprocess.run(["git", "-C", str(r), "add", "flaky.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "flaky"], check=True)
+    return r
+
+
+def test_a_ONE_OFF_disagreement_is_not_reported_as_host_dependence(tmp_path):
+    """THE DEFECT. A gate that misses its own deadline once is not reading
+    local state, and must not be reported as if it were."""
+    marker = tmp_path / "counter.txt"
+    r = _flapping_repo(tmp_path, marker)
+    res = G.audit(r, timeout=_T)
+
+    kinds = [f["kind"] for f in res.findings]
+    assert "HOST_DEPENDENT_VERDICT" not in kinds, (
+        "a one-off disagreement was reported as host dependence: "
+        f"{res.findings}")
+
+
+def test_a_ONE_OFF_disagreement_is_NAMED_rather_than_silently_dropped(tmp_path):
+    """...and it is not swallowed either. A gate that cannot reproduce its own
+    verdict is not usable evidence; it is a different defect, not no defect."""
+    marker = tmp_path / "counter.txt"
+    r = _flapping_repo(tmp_path, marker)
+    res = G.audit(r, timeout=_T)
+
+    kinds = [f["kind"] for f in res.findings]
+    assert "NON_DETERMINISTIC_VERDICT" in kinds, res.findings
+    assert res.verdict == "FAIL", (
+        "an unreproducible verdict must not be folded into a pass — that is "
+        "weakening the assertion to get green")
+    f = [x for x in res.findings if x["kind"] == "NON_DETERMINISTIC_VERDICT"][0]
+    assert "flaky" == f["gate"], f
+    # both observations are carried, so a reader can see WHICH way it flapped
+    assert "did not finish within 60s" in (f["checkout"] + f["worktree"]), f
+    assert "second" in json.dumps(f).lower() or "reran" in json.dumps(f).lower()
+
+
+def test_a_STABLE_disagreement_is_still_host_dependence(tmp_path):
+    """THE PAIRED GUARD. The fix must not buy its green by making the probe
+    unable to fire: a gate that really does read local state disagrees on
+    EVERY round, and must still be caught."""
+    r = _counter_repo(tmp_path, ignore_dat=True)
+    (r / "leftover.dat").write_text("x\n")          # ignored: invisible stimulus
+    res = G.audit(r, timeout=_T)
+
+    kinds = [f["kind"] for f in res.findings]
+    assert "HOST_DEPENDENT_VERDICT" in kinds, res.findings
+    assert res.verdict == "FAIL", res
+
+
+def test_the_reproduce_step_costs_nothing_when_the_arms_AGREE(tmp_path):
+    """A gate that agrees is driven exactly twice, not four times.
+
+    The probe already takes ~44 min over 66 gates; paying the re-drive on the
+    agreeing majority would be a real cost for no information.
+    """
+    marker = tmp_path / "calls.txt"
+    r = _repo_with(tmp_path, 'run "agreeable" "$ROOT" python3 agreeable.py\n',
+                   untracked=True)
+    (r / "agreeable.py").write_text(
+        "import pathlib\n"
+        f"m = pathlib.Path({str(marker)!r})\n"
+        "n = int(m.read_text()) if m.is_file() else 0\n"
+        "m.write_text(str(n + 1))\n"
+        "print('PASS (1 item examined)')\n")
+    subprocess.run(["git", "-C", str(r), "add", "agreeable.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "a"], check=True)
+
+    G.audit(r, timeout=_T)
+    assert marker.read_text() == "2", (
+        f"an agreeing gate was driven {marker.read_text()} times, not 2")
