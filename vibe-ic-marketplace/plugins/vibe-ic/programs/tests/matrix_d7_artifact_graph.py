@@ -438,6 +438,71 @@ class _PathResolver:
         return tuple(segs)
 
 
+#: The write helpers `_atomic_artefact` exports. A program that routes its
+#: artefact through one of these is writing exactly as much as `p.write_text`
+#: does — the atomicity is in HOW the bytes land, not WHETHER they land.
+_ATOMIC_WRITERS = frozenset({"write_text", "write_bytes", "write_json"})
+_ATOMIC_MODULE = "_atomic_artefact"
+
+
+def _atomic_write_bindings(tree: ast.AST) -> Tuple[Set[str], Set[str]]:
+    """(bare-call names, module aliases) bound to `_atomic_artefact`'s writers.
+
+    Resolved from the module's own IMPORT statements, never from a guessed
+    spelling. That matters here: 52 of the converted programs bind the helper
+    under a LOCAL name --
+
+        from _atomic_artefact import write_text as atomic_write_text
+
+    -- so a detector keyed on the string "atomic_write_text" would be matching a
+    convention rather than a fact, and would miss the next program that spells
+    the alias differently. Eight more bind the module instead
+    (`import _atomic_artefact as _aa`, then `_aa.write_text(dest, payload)`).
+    Both forms are read off the imports, which is the same standard the rest of
+    this module holds: structural, never by name.
+
+    WHY THIS EXISTS. `_collect_writes` knew `open()`, `p.open("w")`,
+    `p.write_text`, `p.write_bytes` and the shutil destinations. An atomic write
+    is none of those: the path is an ARGUMENT to a free function, not the
+    receiver of a method. So every converted program looked like a program that
+    writes nothing, and d7 -- the dimension that asks whether a declared output
+    has a producer -- would have gone quiet on all of them at once. MEASURED on
+    the conversion stack: #1110 takes the count from 1 to 12 programs and #1138
+    to 54, and on clean main NOTHING imports this module, so the blindness would
+    have arrived with the conversion and not before it.
+    """
+    fn_names: Set[str] = set()
+    mod_names: Set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and (n.module or "").endswith(_ATOMIC_MODULE):
+            for a in n.names:
+                if a.name in _ATOMIC_WRITERS:
+                    fn_names.add(a.asname or a.name)
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name.split(".")[-1] == _ATOMIC_MODULE:
+                    mod_names.add(a.asname or a.name.split(".")[-1])
+    return fn_names, mod_names
+
+
+def _atomic_write_target(node: ast.Call, fn_names: Set[str],
+                         mod_names: Set[str]) -> Optional[ast.AST]:
+    """The PATH argument of an atomic write call, or None if it is not one.
+
+    `write_text(path, data)` -- the artefact is `args[0]`, unlike the method
+    forms where it is the receiver.
+    """
+    if not node.args:
+        return None
+    fn = node.func
+    if isinstance(fn, ast.Name) and fn.id in fn_names:
+        return node.args[0]
+    if (isinstance(fn, ast.Attribute) and fn.attr in _ATOMIC_WRITERS
+            and isinstance(fn.value, ast.Name) and fn.value.id in mod_names):
+        return node.args[0]
+    return None
+
+
 def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
     """Tail segments of every path this module WRITES.
 
@@ -449,6 +514,7 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
         the handle's path was already captured at its ``open()``.
     """
     resolver = _PathResolver(tree)
+    _atomic_fns, _atomic_mods = _atomic_write_bindings(tree)
     out: Set[Tuple[str, ...]] = set()
 
     def add(node: ast.AST) -> None:
@@ -460,6 +526,10 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
         if not isinstance(n, ast.Call):
             continue
         fn = n.func
+        _atomic = _atomic_write_target(n, _atomic_fns, _atomic_mods)
+        if _atomic is not None:
+            add(_atomic)
+            continue
         if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
             for kw in n.keywords:
@@ -671,6 +741,7 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
         if verdicts and all(v is False for v in verdicts):
             return False
         return None
+    _atomic_fns2, _atomic_mods2 = _atomic_write_bindings(tree)
     aliases: Set[str] = set()
     for _ in range(3):
         grew = False
@@ -691,15 +762,16 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
         if not isinstance(n, ast.Call):
             continue
         fn = n.func
-        target: Optional[ast.AST] = None
-        if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
+        target: Optional[ast.AST] = _atomic_write_target(n, _atomic_fns2,
+                                                         _atomic_mods2)
+        if target is None and isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
             for kw in n.keywords:
                 if kw.arg == "mode":
                     mode = _const_str(kw.value)
             if mode and _WRITE_MODE_RE.search(mode):
                 target = n.args[0]
-        elif isinstance(fn, ast.Attribute):
+        elif target is None and isinstance(fn, ast.Attribute):
             if fn.attr in ("write_text", "write_bytes"):
                 target = fn.value
             elif fn.attr == "open" and n.args:
