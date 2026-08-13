@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1077
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1077)
+- **Total programs (excluding helpers / shims):** 1078
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1078)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1068 |
+| `any` | 1069 |
 
 ## Alphabetical listing
 
@@ -803,6 +803,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `protocol_reference_tb_pass_check` | any | Wave 28 | Wave 28/29 (v0.119.60+) gate. |
 | `protocol_timeline_assert_gen` | any | v0.1.50 | Half-duplex protocol turnaround cocotb TB generator (Type-A). |
 | `protocol_turnaround_audit` | any | v0.1.50 | Half-duplex protocol turnaround audit (Type-A extraction). |
+| `provenance_chain_check` | any | — | was the ledger itself edited?  (vibe-ic#1116) |
 | `provenance_check` | any | — | Verify a file was produced by a logged tool run. |
 | `provenance_correction_note_check` | any | — | a correction may not claim a repair the row it sits on never received. |
 | `provenance_declared_output_check` | any | — | a declared output must be findable, or be recorded as not shipped. |
@@ -1149,7 +1150,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1068 programs)
+### `any` (1069 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1923,6 +1924,7 @@ _(no programs in this group)_
 - `protocol_reference_tb_pass_check` — Wave 28/29 (v0.119.60+) gate.  _[Wave 28]_
 - `protocol_timeline_assert_gen` — Half-duplex protocol turnaround cocotb TB generator (Type-A).  _[v0.1.50]_
 - `protocol_turnaround_audit` — Half-duplex protocol turnaround audit (Type-A extraction).  _[v0.1.50]_
+- `provenance_chain_check` — was the ledger itself edited?  (vibe-ic#1116)
 - `provenance_check` — Verify a file was produced by a logged tool run.
 - `provenance_correction_note_check` — a correction may not claim a repair the row it sits on never received.
 - `provenance_declared_output_check` — a declared output must be findable, or be recorded as not shipped.
