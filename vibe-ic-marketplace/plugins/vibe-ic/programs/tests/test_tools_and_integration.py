@@ -119,7 +119,10 @@ def _digest_tree(root):
     return h.hexdigest()
 
 
-# Recorded at import, asserted at the END of this module. See
+# Recorded at MODULE IMPORT — which pytest does during COLLECTION, before any
+# test in the session runs — and asserted at the END of this module. The window
+# between those two points therefore contains every test the session ran in
+# between, NOT just this module's. See
 # `test_shipped_skills_tree_is_untouched_by_this_module`.
 _SHIPPED_SKILLS_MD5_AT_IMPORT = _digest_tree(PLUGIN / "skills")
 
@@ -484,20 +487,58 @@ class TestCoreSkillSchema:
 # The regression guard for vibe-ic#1029, kept LAST on purpose.
 # ---------------------------------------------------------------------------
 def test_shipped_skills_tree_is_untouched_by_this_module():
-    """No test in this file may leave a byte of `skills/` different.
+    """No test in THIS SESSION may leave a byte of `skills/` different.
 
-    pytest runs a module's tests in definition order, so this runs after every
-    test above. Against the pre-fix file it goes RED: the maintenance-tool
-    tests ran `add_compliance_gate.py` as shipped and it appended a section to
+    The baseline is taken at module import — i.e. at COLLECTION, before any test
+    runs — so this compares against the tree as it was before the session
+    started, not before this module started. Any module that ran in between can
+    move it. The name says "by_this_module" for history; the mechanism is
+    session-scoped and the message below says so.
+
+    Against the pre-fix file it goes RED: the maintenance-tool tests ran
+    `add_compliance_gate.py` as shipped and it appended a section to
     `skills/fork-gatekeeper-loop/SKILL.md`. That modification is what made
     `gatekeeper-land.sh` line 213 fail and the landing stamp never get written.
+
+    WHY IT IS INTERMITTENT, which costs the most time when it is missing:
+    alphabetically this module sorts BEFORE e.g. `test_v0_3_4_…`, so in default
+    order the assertion runs first and sees nothing. It fires only when a writer
+    is ordered ahead of it — which `pytest-randomly` arranges on some seeds and
+    not others. Reproduce deterministically by naming the suspected writer first
+    with `-p no:randomly`.
+
+    A second reason it is easy to miss: the write may be `__pycache__`, which is
+    GITIGNORED, so `git status skills/` stays empty while this digest moves.
+
+    A third, and the one that defeats every "which test did it" search: the
+    writer may not be a test. `pytest --collect-only` over `programs/tests/`
+    is enough on its own — importing the test modules imports a module living
+    under `skills/`, and CPython writes the `.pyc` beside it before anything
+    runs. For that case the race is tighter than seed ordering: this module's
+    baseline is taken at import too, so the write and the baseline compete
+    inside collection and collection order alone decides.
 
     This assertion is the test-side of the gate; it does not replace
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
     assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
-        "tool against a copy — see _seed_plugin_copy().")
+        "something in THIS SESSION wrote into the SHIPPED skills/ tree. The "
+        "baseline is taken at module import — i.e. during COLLECTION — so the "
+        "writer may be in ANY module, and may not be a TEST at all: importing "
+        "a module that lives under skills/ makes CPython write its .pyc there "
+        "before a single test runs (`pytest --collect-only` alone reproduces "
+        "that). Reproduce deterministically with `-p no:randomly`, suspected "
+        "writer first. THREE causes, and the remedy differs for each:\n"
+        "  1. a tool mutated CONTENT   -> run it against a copy, "
+        "see _seed_plugin_copy()\n"
+        "  2. a CHILD PROCESS cached   -> give it PYTHONDONTWRITEBYTECODE=1 "
+        "and PYTEST_ADDOPTS=-p no:cacheprovider\n"
+        "  3. an IMPORT cached         -> load it without writing bytecode, or "
+        "import from a copy; no env var on a child helps, because the import "
+        "happens in THIS process during collection\n"
+        "In cases 2 and 3 `git status skills/` stays EMPTY, because "
+        "`__pycache__` is gitignored — so a clean `git status` is NOT evidence "
+        "that nothing was written.")
 
 
 if __name__ == "__main__":
