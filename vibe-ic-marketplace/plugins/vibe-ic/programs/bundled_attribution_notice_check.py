@@ -143,12 +143,24 @@ def scan(root: Path) -> Dict[str, Dict[str, object]]:
         if not lic:
             continue
         holder = None
-        for line in head.splitlines():
-            m = _COPYRIGHT.search(line)
-            if m:
-                holder = _clean_holder(m.group(1))
-                if holder:
-                    break
+        for m in _COPYRIGHT.finditer(head):
+            cand = _clean_holder(m.group(1))
+            if not cand:
+                continue
+            # A FILE HEADER IS PROSE TOO (vibe-ic#1241, IDX group (c)).
+            # `_named_without_denial` already asks this of NOTICE; the same
+            # question was never asked of the header the holder is read OUT of,
+            # so a header stating the work is NOT bundled — "originally
+            # Copyright X, no longer vendored here" — was recorded as an
+            # attribution the sentence explicitly disclaims, and NOTICE was
+            # then required to account for a holder the source denies.
+            # Same helper and same shape as the sibling above, so the two
+            # halves of this gate cannot drift apart.
+            lo, hi = _polarity.sentence_scope(head, m.start(), m.end())
+            if _polarity.is_denied(head[lo:hi]) is not None:
+                continue
+            holder = cand
+            break
         if not holder:
             continue
         rec = found[holder]
