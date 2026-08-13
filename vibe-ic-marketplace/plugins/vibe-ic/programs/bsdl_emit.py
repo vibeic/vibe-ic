@@ -60,6 +60,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 try:
     import _path_layout as _pl  # type: ignore
@@ -750,7 +751,7 @@ def main(argv: Optional[list] = None) -> int:
         json_path = Path(args.json) if args.json else _plan_path(project)
         try:
             json_path.parent.mkdir(parents=True, exist_ok=True)
-            json_path.write_text(json.dumps({
+            atomic_write_text(json_path, json.dumps({
                 "program": _PROGRAM,
                 "version": _VERSION,
                 "project_dir": str(project),
@@ -773,7 +774,7 @@ def main(argv: Optional[list] = None) -> int:
     json_path = Path(args.json) if args.json else _plan_path(project)
     try:
         json_path.parent.mkdir(parents=True, exist_ok=True)
-        json_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False)
+        atomic_write_text(json_path, json.dumps(plan, indent=2, ensure_ascii=False)
                              + "\n")
     except OSError as exc:  # pragma: no cover - IO edge
         print(f"WARN: could not write plan JSON {json_path}: {exc}",
