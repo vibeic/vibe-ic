@@ -119,14 +119,14 @@ replaces a hand-counted table of raw ``all_of`` members: the raw table counted
 a different population from the accessor this module tells you to use, so the
 two could not be reconciled by a reader and only one of them was derived.
 
-    program_exit_zero          103<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
+    program_exit_zero          104<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
     advisory_program_exit_zero 36<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
     files_exist                32<!--figure:gate_clauses_files_exist-->
     optional_program_exit_zero 28<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
-    total                     200<!--figure:gate_clauses_total-->, of which
-                              164<!--figure:blocking_clauses--> block
+    total                     201<!--figure:gate_clauses_total-->, of which
+                              165<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
   * ``program_exit_zero``          — blocking.
@@ -141,8 +141,8 @@ Use :func:`gate_clauses` (typed) rather than re-walking the dict.
 4. Program resolution
 --------------------------------------------------------------------
 A gate command's FIRST whitespace token is the program basename. All
-158<!--figure:gate_program_tokens_distinct--> distinct tokens across the
-167<!--figure:gate_commands_total--> gate commands resolve to
+159<!--figure:gate_program_tokens_distinct--> distinct tokens across the
+168<!--figure:gate_commands_total--> gate commands resolve to
 ``programs/<token>.py`` — there are 0<!--figure:gate_programs_unresolved-->
 unresolvable tokens and zero commands
 that shell out via ``python3 <file>``. :func:`gate_programs` returns only

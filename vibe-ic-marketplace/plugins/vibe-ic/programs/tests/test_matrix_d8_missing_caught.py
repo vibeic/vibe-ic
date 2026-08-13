@@ -653,13 +653,33 @@ NA_STEPS_AS_MEASURED: Tuple[str, ...] = ("FS1", "P0")
 #: the decision is conscious rather than silent.
 PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 
-#: Steps declaring FEWER THAN TWO ``required_outputs`` entries, measured
-#: 2026-07-27 (27 of 63). They cannot express "one artefact present, the rest
+#: Steps declaring FEWER THAN TWO ``required_outputs`` entries, RE-MEASURED
+#: 2026-08-14 (27 of 63). They cannot express "one artefact present, the rest
 #: absent", so the pooled-evidence check has no shape to build; the population
 #: is pinned so a step that gains a second entry cannot slip past it silently.
+#:
+#: TWO CHANGES vs the 2026-07-27 measurement, and they are independent:
+#:
+#:   + "1"   this change moves `reports/phase1/extraction_coverage_report.{md,json}`
+#:           off step 1, taking it from THREE entries to ONE. It therefore joins
+#:           the population, and d8 says so itself: "step 1 declares 1
+#:           required_output(s) — fewer than the 2 this shape needs — but it is
+#:           not in the measured single-entry population ... Re-measure and
+#:           update the pin in the same change."
+#:
+#:   - "29"  step 29 declares TWO entries (`.../sim_postlayout/results.log OR
+#:           .../pass.flag` and `reports/phase2/gates/post_layout_sim.json`) and
+#:           does so on clean `24ff9530` as well, so it was already stale before
+#:           this change and is NOT this change's doing. It is dropped because
+#:           the count in this comment is a claim: measured over the flow, the
+#:           population is 26 on main and 27 here, and leaving "29" in would have
+#:           made the stated figure wrong in the other direction after adding
+#:           "1". The membership assertion is one-directional — it fires only
+#:           when a single-entry step is ABSENT from this tuple — which is why a
+#:           stale member sat here without reddening anything.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
-    "8", "FS1", "DT1", "DT2", "DT3", "12", "A1", "A2", "A3", "A4", "A5", "A7",
-    "A9", "14", "16", "17", "20", "22", "27", "29", "35", "36", "37", "M4",
+    "1", "8", "FS1", "DT1", "DT2", "DT3", "12", "A1", "A2", "A3", "A4", "A5",
+    "A7", "A9", "14", "16", "17", "20", "22", "27", "35", "36", "37", "M4",
     "42", "44", "P0",
 )
 
