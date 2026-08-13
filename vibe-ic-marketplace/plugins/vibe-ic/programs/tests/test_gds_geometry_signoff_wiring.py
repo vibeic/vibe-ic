@@ -234,14 +234,46 @@ def runner():
     return r
 
 
+def _tree_unreachable_reason(runner):
+    """Why can this runner not drive the vendored engines from THIS tree?
+
+    Returns a reason string, or None when the tree is reachable.
+
+    The scratch dir is not the only path that must be inside the runner's
+    mounts — the ENGINE SCRIPTS must be too. A container runner opens them by
+    HOST path, so a tree it does not cover fails with
+
+        ERROR: Unable to open file: /tmp/.../metal_fill/gen_fixtures.py (errno=2)
+
+    on the SCRIPT, before the output path is ever consulted. That matters
+    because it makes the failure un-rescuable by scratch-dir choice: picking a
+    covered scratch (e.g. under $HOME, the sole mount of `vibeic-eda`) converts
+    seven honest skips into seven FALSE FAILURES, which is strictly worse than
+    not running them. Diagnose the tree, do not re-home the output.
+    """
+    if not runner.covers(PROGRAMS):
+        return (
+            f"the KLayout runner covers no path containing this tree, so it "
+            f"cannot read the vendored engines under {PROGRAMS} (a container "
+            f"opens them by host path). This is a property of WHERE THIS TREE "
+            f"SITS, not of the host: the same runner passes these tests from a "
+            f"covered checkout. Re-run from a covered path — choosing a "
+            f"different scratch dir cannot fix it.")
+    return None
+
+
 @pytest.fixture(scope="module")
 def workdir(runner, tmp_path_factory):
     """A scratch dir the runner can actually see.
 
     pytest's tmp_path lives under /tmp, which the EDA container does not bind
     mount, so container runs would fail on an unreachable path. Fall back to a
-    dir beside the plugin, which is inside the mounted tree.
+    dir beside the plugin — which is inside the mounted tree only when the
+    CHECKOUT is, so the tree itself is checked first and named as the cause.
     """
+    reason = _tree_unreachable_reason(runner)
+    if reason:
+        pytest.skip(reason)
     cand = tmp_path_factory.mktemp("geomsignoff")
     if runner.covers(cand):
         return cand
@@ -250,6 +282,44 @@ def workdir(runner, tmp_path_factory):
     if not runner.covers(local):
         pytest.skip("no scratch dir reachable by the KLayout runner")
     return local
+
+
+class _FakeRunner:
+    """Covers exactly the prefixes it is given. No container required."""
+
+    def __init__(self, covered):
+        self._covered = [str(Path(p)) for p in covered]
+
+    def covers(self, host_path):
+        return any(str(Path(host_path)).startswith(c) for c in self._covered)
+
+
+def test_a_tree_outside_every_mount_is_named_as_the_cause():
+    reason = _tree_unreachable_reason(_FakeRunner([]))
+    assert reason is not None
+    assert str(PROGRAMS) in reason, "the reason must name the unreachable tree"
+    assert "WHERE THIS TREE SITS" in reason
+
+
+def test_a_covered_tree_is_not_reported_unreachable():
+    assert _tree_unreachable_reason(_FakeRunner([PROGRAMS])) is None
+
+
+def test_a_covered_scratch_does_not_rescue_an_unreachable_tree():
+    """The trap this guard exists for, measured 2026-08-13 on 8HD-9.
+
+    `vibeic-eda` binds exactly one path, $HOME. A worktree under /tmp is
+    therefore uncovered while $HOME is covered — so "find a scratch dir the
+    runner covers" succeeds and the seven geometry tests then FAIL on the
+    unreadable engine script instead of skipping. Same host, same commit:
+    26 passed from a covered checkout, 19 passed + 7 skipped from /tmp.
+    """
+    runner = _FakeRunner([Path.home()])
+    if runner.covers(PROGRAMS):
+        pytest.skip("this tree is inside $HOME, so it is not the trap case")
+    assert runner.covers(Path.home() / ".cache"), "premise: scratch IS covered"
+    assert _tree_unreachable_reason(runner) is not None, \
+        "a covered scratch must not be mistaken for a reachable tree"
 
 
 def _antenna_project(runner, workdir, name, met1_len, met2_len=0.0,
