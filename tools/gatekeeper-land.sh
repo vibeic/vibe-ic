@@ -11,7 +11,26 @@
 #            and the pre-push hook REFUSES a push whose commit has no matching
 #            stamp. That makes the expensive tier enforced rather than optional.
 #
-# Usage:  tools/gatekeeper-land.sh [--cheap-only]
+# Usage:  tools/gatekeeper-land.sh [--cheap-only] [--prepare]
+#
+# --prepare (vibe-ic#1129) — do the three MECHANICAL things this script would
+# otherwise refuse a batch for, before the cheap tier runs, and let the gates
+# refuse only what is left:
+#
+#     version_bump_monotonic_check    the version was not bumped
+#     landing_is_one_commit          no [vX.Y.Z]-tagged commit on the tip
+#     test_programs_index_freshness  programs/INDEX.md is stale
+#
+# None of those is a judgement, each already has a program that owns it, and a
+# refusal for one of them costs an hour of gate wall-clock while saying nothing
+# about the code under test. OFF BY DEFAULT: it rewrites the tip commit, which
+# is the operator's call, not a side effect of asking for a verdict.
+#
+# The preparation is delegated to `gatekeeper_prepare_landing.py`, which REFUSES
+# if anything outside the set its writers declared is dirty — the gate must not
+# become a path for editing its own subject (#1029, #1089). If preparation
+# refuses, this script stops: a landing whose preparation could not be
+# attributed is not a landing worth an hour.
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -21,7 +40,14 @@ PJSON="$PLUGIN/.claude-plugin/plugin.json"
 BASE="${GATEKEEPER_BASE:-origin/main}"
 RANGE="${BASE}..HEAD"
 CHEAP_ONLY=0
-[ "${1:-}" = "--cheap-only" ] && CHEAP_ONLY=1
+PREPARE=0
+for _arg in "$@"; do
+  case "$_arg" in
+    --cheap-only) CHEAP_ONLY=1 ;;
+    --prepare)    PREPARE=1 ;;
+    *) echo "gatekeeper-land: unknown argument '$_arg'" >&2; exit 2 ;;
+  esac
+done
 
 FAILED=0
 # REPORT, not a gate. Prints what a probe found and NEVER touches FAILED.
@@ -69,6 +95,20 @@ run() {                              # run <label> <cmd…>
 }
 
 echo "=== gatekeeper landing gates — base=$BASE ==="
+
+# vibe-ic#1129 — the mechanical repairs, BEFORE anything measures them. A gate
+# that refuses for a reason a program can fix spends an hour saying so.
+if [ "$PREPARE" = "1" ]; then
+  echo "--- prepare (vibe-ic#1129: the mechanical three, then get out of the way) ---"
+  if python3 "$PROGRAMS/gatekeeper_prepare_landing.py" --repo "$ROOT" --commit; then
+    :
+  else
+    echo "  FAIL  preparation REFUSED — see above. Not proceeding: a landing whose"
+    echo "        preparation could not be attributed is not one worth an hour."
+    exit 1
+  fi
+fi
+
 echo "--- cheap tier (also enforced by the pre-push hook) ---"
 
 # An empty range means nothing new is being landed; the NDA checkers correctly
