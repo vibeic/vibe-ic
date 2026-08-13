@@ -363,3 +363,81 @@ def test_a_nested_worktree_copy_inside_the_repo_is_still_skipped(tmp_path):
     hay = M._haystacks(tmp_path / "vibe-ic-marketplace/plugins/vibe-ic", tmp_path)
     assert not any("worktrees" in p for p in hay["TOOLS"])
     assert _run(tmp_path)["no_runner_at_all"] == ["sample_check.py"]
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#1130 — the population was a NAME LIST, and a gate could leave it by
+# being renamed.
+#
+# #693 widened `*_check/_audit` to five suffixes after finding a real gate
+# outside them. That fixed the instance and left the structure: the population
+# is still decided by what a file is CALLED. These tests pin the replacement
+# rule — a program the FLOW declares as a gate clause is in the population
+# because the flow runs it, whatever its name.
+# ---------------------------------------------------------------------------
+import fnmatch as _fnmatch
+
+
+_FLOW = (Path(__file__).resolve().parents[2] / "flow" / "phase1_phase2_phase3.yaml")
+_SUFFIXES = ("*_check.py", "*_audit.py", "*_guard.py", "*_lint.py", "*_gate.py")
+
+
+def test_a_flow_declared_gate_outside_the_filename_glob_is_IN_the_population():
+    """The two-arm property. On origin/main these programs are absent from the
+    population purely because of what they are called.
+
+    MEASURED on a38902d1: the flow declares 127 gate programs, SEVEN of which
+    match none of the five suffixes — four of them BLOCKING (`bsdl_emit` at
+    step 11, `fmeda_fault_injection_coverage` at FS1, `phase1_expert_parse_track`
+    at D1, `verilator_coverage_measure` at step 4).
+    """
+    if not _FLOW.is_file():
+        pytest.skip("flow yaml not present")
+    programs = Path(__file__).resolve().parents[1]
+    declared = M.flow_declared_gate_programs(_FLOW)
+    outside = sorted(n for n in declared
+                     if (programs / n).is_file()
+                     and not any(_fnmatch.fnmatch(n, s) for s in _SUFFIXES))
+    assert outside, (
+        "the flow declares no gate program outside the filename glob, so this "
+        "property has no subject on this tree and would pass vacuously")
+    population = set(M.checker_population(programs, _FLOW))
+    missing = [n for n in outside if n not in population]
+    assert not missing, (
+        f"{len(missing)} program(s) the FLOW declares as gate clauses are absent "
+        f"from the wiring audit's population purely because of their filename: "
+        f"{missing}")
+
+
+def test_the_flow_is_parsed_STRUCTURALLY_not_grepped(tmp_path):
+    """vibe-ic#1012: a substring test over the raw YAML counted a program named
+    in a COMMENT as wired, so documenting a hold made the held checker
+    unmeasurable. Discovery must parse."""
+    f = tmp_path / "flow.yaml"
+    f.write_text(
+        "steps:\n"
+        "  - id: 9\n"
+        "    # - program_exit_zero: \"commented_out_gate .\"\n"
+        "    gate:\n"
+        "      all_of:\n"
+        "        - program_exit_zero: \"real_gate .\"\n"
+        "        - optional_program_exit_zero:\n"
+        "            command: \"optional_gate .\"\n"
+        "            condition_files_exist: [\"x\"]\n",
+        encoding="utf-8")
+    got = M.flow_declared_gate_programs(f)
+    assert got == {"real_gate.py", "optional_gate.py"}, got
+
+
+def test_the_population_never_invents_a_program_this_checkout_lacks(tmp_path):
+    """A clause naming a program that is not shipped here is a DIFFERENT defect
+    (`gate_is_wired` owns it). Adding it to this population would make the audit
+    report on a file it never opened."""
+    f = tmp_path / "flow.yaml"
+    f.write_text(
+        "steps:\n  - id: 9\n    gate:\n      all_of:\n"
+        "        - program_exit_zero: \"no_such_program_anywhere .\"\n",
+        encoding="utf-8")
+    programs = Path(__file__).resolve().parents[1]
+    assert "no_such_program_anywhere.py" in M.flow_declared_gate_programs(f)
+    assert "no_such_program_anywhere.py" not in M.checker_population(programs, f)
