@@ -206,8 +206,15 @@ def test_chip_specific_addendum_link_when_present(tmp_path):
 
 def test_chip_specific_addendum_message_when_absent(tmp_path):
     r = _run([str(tmp_path), "--no-audit"])
+    assert r.returncode == 0
     text = (tmp_path / "reports" / "final_summary.md").read_text()
-    assert "No `reports/chip_specific_summary.md` present" in text
+    # #1168: the guidance is unchanged, but the path of a file this run does NOT
+    # ship is no longer spelled as a backticked citation (see
+    # test_issue1168_generators_cite_only_shipped_artefacts.py).
+    assert "No chip-specific addendum present" in text
+    assert "reports/chip_specific_summary.md" in text
+    assert "Author it by hand" in text
+    assert "`reports/chip_specific_summary.md`" not in text
 
 
 def test_explicit_out_path(tmp_path):
