@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
-# install-git-hooks.sh — symlink this repo's tracked hooks into .git/hooks/.
+# install-git-hooks.sh — symlink this repo's tracked hooks into .git/hooks/,
+# and register this repo's tracked merge drivers in .git/config.
 #
 # `.git/hooks/` is NOT tracked by git, so a hook committed to the repo does
 # nothing until it is installed. This installer symlinks (not copies) so a later
 # `git pull` that improves a hook takes effect immediately, with no re-install.
+#
+# `.git/config` is not tracked either, and a merge driver NAMED by the tracked
+# `.gitattributes` is inert until it is DEFINED there — the same failure mode one
+# step over, and a quieter one: git falls back to the ordinary 3-way merge without
+# a word, so an uninstalled driver is indistinguishable from no driver at all.
+# Both are therefore installed by the same command.
 #
 # Usage:
 #     tools/install-git-hooks.sh            # install (refuses to clobber)
@@ -48,6 +55,21 @@ for src in "$SRC_DIR"/*; do
   echo "installed $name -> $src"
   installed=$((installed + 1))
 done
+
+# ---------------------------------------------------------------------------
+# Merge drivers. `.gitattributes` NAMES them; `.git/config` DEFINES them.
+# ---------------------------------------------------------------------------
+DRIVER_SRC="$REPO_ROOT/tools/git-merge-drivers/programs_index_merge.sh"
+if [ -f "$DRIVER_SRC" ]; then
+  chmod +x "$DRIVER_SRC"
+  git config merge.programs-index.name \
+    "regenerate programs/INDEX.md from the merged tree (tools/gen_programs_index.py)"
+  git config merge.programs-index.driver "'$DRIVER_SRC' %O %A %B %P"
+  echo "installed merge driver programs-index -> $DRIVER_SRC"
+else
+  echo "SKIP     merge driver programs-index — $DRIVER_SRC not found." >&2
+  skipped=$((skipped + 1))
+fi
 
 echo
 echo "$installed hook(s) installed, $skipped skipped, into $DST_DIR"

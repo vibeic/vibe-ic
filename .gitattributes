@@ -1,0 +1,7 @@
+# Generated in full by tools/gen_programs_index.py, whose --check fails CI on any
+# drift; the file has no hand-authored content, so a conflict in it has exactly one
+# correct answer: regenerate from the merged tree. Driver lives in
+# tools/git-merge-drivers/programs_index_merge.sh and is registered in .git/config by
+# tools/install-git-hooks.sh — .git/config is not tracked, so this line alone is inert
+# until that installer has been run.
+vibe-ic-marketplace/plugins/vibe-ic/programs/INDEX.md merge=programs-index
