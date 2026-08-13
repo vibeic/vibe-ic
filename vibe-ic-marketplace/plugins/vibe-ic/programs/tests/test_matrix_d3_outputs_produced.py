@@ -578,8 +578,22 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 #: external is still external and still unevidenced from the commit; this
 #: records that step 29 is no longer evidenced ONLY from outside, which is a
 #: strictly weaker and strictly true statement.
+#
+#: 2026-08-12 — M3 left this set. Its two entries were recorded
+#: PRODUCED_BY_RUN against `AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e`,
+#: a run root this repository does not carry, so the cell was green on the
+#: manifest and red on the repo. M3 is dormant behind
+#: `condition.files_exist: [phase1/analog/analog_block_list.json]`, and that
+#: file resolves in 0 of the 10 admissible run roots — every published run is
+#: pure-digital. Recorded NA_DORMANT_CONDITION, which routes the cell to the
+#: dormancy branch's four live assertions instead of demanding artefacts from
+#: a step that cannot run. M2 and M4 are the identical defect and are NOT
+#: 2026-08-12 (same change): M2 and M4 followed M3 for the identical
+#: reason — same condition, same phantom run root, same ENFORCED
+#: misclassification. The mixed-signal stage now carries no externally
+#: attested cell at all; every remaining member of this set is digital.
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
-    "17", "20", "30", "M2", "M3", "M4",
+    "17", "20", "30",
 )
 
 #: How many of the declared entries are decided LIVE on every host. An
@@ -619,7 +633,18 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-12: 120 -> 122. M3's two entries stopped being attested by an
+# external run root and became UNPROVEN-and-searched, which this test counts
+# as LIVE (the composition note above: PRODUCED_BY_RUN + PRODUCED_LIVE +
+# UNPROVEN-and-searched). The number rose, and the warning attached to a rise
+# — 'evidence is coming from outside the commit again' — is the OPPOSITE of
+# what happened: two entries stopped depending on a tree outside the commit.
+# `fixture` fell by the same 2, which is the half that carries that meaning.
+# Same change, M2 (+3 entries) and M4 (+1): 122 -> 126. Same direction and
+# same meaning as the M3 note above — four more entries stopped being
+# attested by `AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e`,
+# a tree no clone carries, and are now searched in-repo. `fixture` fell by 4.
+_LIVE_ENTRY_COUNT = 126
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -2028,10 +2053,10 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (53, 3, 7), (
+    assert (len(enforced), len(waived), len(na)) == (50, 3, 10), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(53, 3, 7) on 2026-08-06. A step moving between states is a real "
+        f"(50, 3, 10) on 2026-08-12. A step moving between states is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
@@ -2040,6 +2065,14 @@ def test_d3_cell_states_partition_all_63_steps():
         f"EDA container that CI does not have, and the 6/39 NA's own "
         f"self-invalidating assertion fires on a host that HAS Quartus. "
         f"Neither survived the host-independence rule (#527).\n"
+        f"2026-08-12: (53, 3, 7) -> (50, 3, 10) — M2, M3 and M4 moved together, "
+        f"from ENFORCED "
+        f"to NA_DORMANT_CONDITION. Its entries were recorded PRODUCED_BY_RUN "
+        f"against a run root this repo does not carry; M3 is dormant behind "
+        f"phase1/analog/analog_block_list.json, which resolves in 0 of the 10 "
+        f"admissible run roots. All three carried the SAME phantom run root, so "
+        f"they are one defect and move as one. M1 is untouched: it is WAIVED, "
+        f"not dormant. "
         f"2026-08-06: (52, 4, 7) -> (53, 3, 7) — A8 alone moved, from WAIVED "
         f"to ENFORCED, and NOT on the 2026-07-28 argument. Commit b1665ec8 "
         f"published benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A/phase3/"
@@ -2914,7 +2947,15 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # a published run tree closes those, and publishing one costs >1 GB of DEFs
     # against a 2.0 GB .git -- which is why they stay RED here rather than
     # becoming waivers. A red cell cannot rot; a waiver can, and did.
-    "15", "17", "19", "20", "30", "32", "M1", "M2", "M3", "M4",
+    # 2026-08-12 — M3 removed: NOT because a run tree closed it, but because
+    # the cell is now NA_DORMANT_CONDITION. An NA cell has no evidenced/
+    # unevidenced question to answer; the dormancy branch polices it instead,
+    # and re-reddens the moment any run root grows
+    # phase1/analog/analog_block_list.json.
+    # 2026-08-12 (same change): M2 and M4 removed with M3, and for the same
+    # reason — NA cells, not newly evidenced ones. M1 stays: it is WAIVED,
+    # not dormant, so it still owes an evidenced/unevidenced answer.
+    "15", "17", "19", "20", "30", "32", "M1",
 )
 
 
