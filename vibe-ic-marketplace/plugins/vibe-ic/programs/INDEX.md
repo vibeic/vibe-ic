@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1079
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1079)
+- **Total programs (excluding helpers / shims):** 1080
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1080)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1070 |
+| `any` | 1071 |
 
 ## Alphabetical listing
 
@@ -1029,6 +1029,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tilelink_protocol_synth` | any | v0.1.84 | TileLink-class protocol synth helper. |
 | `timer_freeze_after_state_check` | any | — | Static heuristic for the "counter must freeze after state transition" RTL anti-pattern. |
 | `toggle_divider_hierarchical_clock_check` | any | v0.119.30 | gate (LL-31) extending LL-27 (`fpga_clock_divider_antipattern_check`) across module boundaries. |
+| `tool_diagnostic_id_gate` | any | — | a tool diagnostic ID that was not there last time is BLOCKING (vibe-ic#1081). |
 | `tool_substitution_disclose` | any | — | emit the mandatory RESULT.md tool-substitution disclosure block from a fixed lookup table. |
 | `top_level_outputs_in_canonical_check` | any | — | enforce that the project root contains ONLY the canonical Phase/Stage/Step folders + 3 cross-phase metadata files (v1.6.25 hygiene gate). |
 | `tpm_protocol_synth` | any | v0.1.84 | TPM 2.0 trusted-platform-module protocol synth helper. |
@@ -1151,7 +1152,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1070 programs)
+### `any` (1071 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2149,6 +2150,7 @@ _(no programs in this group)_
 - `tilelink_protocol_synth` — TileLink-class protocol synth helper.  _[v0.1.84]_
 - `timer_freeze_after_state_check` — Static heuristic for the "counter must freeze after state transition" RTL anti-pattern.
 - `toggle_divider_hierarchical_clock_check` — gate (LL-31) extending LL-27 (`fpga_clock_divider_antipattern_check`) across module boundaries.  _[v0.119.30]_
+- `tool_diagnostic_id_gate` — a tool diagnostic ID that was not there last time is BLOCKING (vibe-ic#1081).
 - `tool_substitution_disclose` — emit the mandatory RESULT.md tool-substitution disclosure block from a fixed lookup table.
 - `top_level_outputs_in_canonical_check` — enforce that the project root contains ONLY the canonical Phase/Stage/Step folders + 3 cross-phase metadata files (v1.6.25 hygiene gate).
 - `tpm_protocol_synth` — TPM 2.0 trusted-platform-module protocol synth helper.  _[v0.1.84]_
