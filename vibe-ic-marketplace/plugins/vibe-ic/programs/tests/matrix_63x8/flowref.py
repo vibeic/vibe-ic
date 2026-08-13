@@ -38,11 +38,11 @@ run ``--fix-figures``, and ``--check`` fails on drift (vibe-ic#961).
         non-empty on 61<!--figure:required_output_steps--> (absent on FS1 and P0)
     blocks_on
         present on 63<!--figure:blocks_on_declared--> steps,
-        non-empty on 61<!--figure:blocks_on_nonempty--> (declared on every step;
+        non-empty on 62<!--figure:blocks_on_nonempty--> (declared on every step;
         PRESENT-BUT-EMPTY on D1 and A1, the two genuine graph roots)
 
 The ``present`` column is a PRESENCE count. ``blocks_on`` is non-empty on only
-61<!--figure:blocks_on_nonempty--> steps. Any test that conflates the two will
+62<!--figure:blocks_on_nonempty--> steps. Any test that conflates the two will
 be wrong about D1 and A1.
 
 Top-level ``total_steps: 44`` counts the numeric steps ONLY. It is NOT
@@ -121,12 +121,12 @@ two could not be reconciled by a reader and only one of them was derived.
 
     program_exit_zero          103<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
     advisory_program_exit_zero 36<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
-    files_exist                32<!--figure:gate_clauses_files_exist-->
+    files_exist                33<!--figure:gate_clauses_files_exist-->
     optional_program_exit_zero 28<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
-    total                     200<!--figure:gate_clauses_total-->, of which
-                              164<!--figure:blocking_clauses--> block
+    total                     201<!--figure:gate_clauses_total-->, of which
+                              165<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
   * ``program_exit_zero``          — blocking.
@@ -158,8 +158,8 @@ file-existence-only gate and legitimately names none.
 --------------------------------------------------------------------
 5. ``blocks_on``
 --------------------------------------------------------------------
-94<!--figure:blocks_on_edges--> edges, mixed types
-(78<!--figure:blocks_on_edges_int--> int, 16<!--figure:blocks_on_edges_str--> str),
+95<!--figure:blocks_on_edges--> edges, mixed types
+(78<!--figure:blocks_on_edges_int--> int, 17<!--figure:blocks_on_edges_str--> str),
 every target resolving to a declared step id — no dangling references at time of writing. Compare with
 :func:`normalize_id` on both sides; the real consumers stringify
 (``{str(id): [str(e) for e in blocks_on]}``).
