@@ -135,6 +135,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `benchmark_shape_classify` | any | — | classify a benchmark's run-shape (A/B/C/D/E) from its on-disk layout. |
 | `benchmark_triage_absorption_audit` | any | — | open-benchmark-methodology § 4.2 |
 | `benchmark_verify_report` | any | — | normalized per-benchmark-IC verification report. |
+| `beta_probe_check` | any | — | synthetic program used only to reproduce the INDEX.md collision. |
 | `binary_doc_low_extraction_warn` | any | — | gate (LL-36). |
 | `bist_window_calculator` | any | — | Size BIST response-capture windows for worst-case. |
 | `bit_count_modulo_check` | any | — | M3: Verify that serial RX bit assemblers validate bit-count alignment at frame boundaries. |
@@ -1263,6 +1264,7 @@ _(no programs in this group)_
 - `benchmark_shape_classify` — classify a benchmark's run-shape (A/B/C/D/E) from its on-disk layout.
 - `benchmark_triage_absorption_audit` — open-benchmark-methodology § 4.2
 - `benchmark_verify_report` — normalized per-benchmark-IC verification report.
+- `beta_probe_check` — synthetic program used only to reproduce the INDEX.md collision.
 - `binary_doc_low_extraction_warn` — gate (LL-36).
 - `bist_window_calculator` — Size BIST response-capture windows for worst-case.
 - `bit_count_modulo_check` — M3: Verify that serial RX bit assemblers validate bit-count alignment at frame boundaries.
