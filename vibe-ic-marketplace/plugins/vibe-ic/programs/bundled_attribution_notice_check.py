@@ -68,6 +68,15 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# vibe-ic#1241 — the shared denial vocabulary. A holder read out of a
+# header comment is a value read out of PROSE, so the same question the
+# `pdk_target` / `die_area_budget_um` defects turned on applies here:
+# does the surrounding sentence DENY it?
+from _prose_polarity import (  # type: ignore  # noqa: E402
+    is_denied as _is_denied,
+    sentence_scope as _sentence_scope,
+)
+
 #: Source extensions carrying an SPDX header. Deliberately the HDL set plus the
 #: scripting set: this gate is about work BUNDLED as source, and a licence
 #: header in a build script binds exactly as one in RTL does.
@@ -139,12 +148,30 @@ def scan(root: Path) -> Dict[str, Dict[str, object]]:
         if not lic:
             continue
         holder = None
-        for line in head.splitlines():
-            m = _COPYRIGHT.search(line)
-            if m:
-                holder = _clean_holder(m.group(1))
-                if holder:
-                    break
+        for m in _COPYRIGHT.finditer(head):
+            cand = _clean_holder(m.group(1))
+            if not cand:
+                continue
+            # vibe-ic#1241 — CONSULT POLARITY BEFORE RECORDING.
+            #
+            # A licence header is a COMMENT BLOCK, so unlike the LEF/DEF and
+            # Python-lexer extractors in `_NOT_PROSE`, denial is spellable here
+            # and costs nothing to spell: "no longer maintained by X",
+            # "not attributed to X" sit one line from the `Copyright (c) X`
+            # this reads. Recording the holder anyway would make this gate
+            # demand NOTICE name a party the file itself disclaims — the
+            # `pdk_target` / `die_area_budget_um` failure shape exactly.
+            #
+            # The window is the SENTENCE the match sits in, not the whole
+            # header: a denial retracts the value it genuinely denies and
+            # nothing else, so an unrelated "not" further down must not
+            # suppress a live copyright line.
+            lo, hi = _sentence_scope(head, m.start(), m.end(),
+                                     extra_breaks=("\n",))
+            if _is_denied(head[lo:hi]):
+                continue
+            holder = cand
+            break
         if not holder:
             continue
         rec = found[holder]

@@ -756,6 +756,23 @@ run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary
 # or a gate whose rules changed without re-review — fails.
 run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
 
+# vibe-ic#1043 / #1241 — Apache-2.0 §4(d) makes NOTICE the file that must account
+# for every third-party work this repo BUNDLES, and nothing ran the checker that
+# keeps it true: `checker_execution_wiring_audit` found it TEST-ONLY, i.e. a
+# fixture the author wrote proved the logic and no artefact ever reached it.
+#
+# `run_tolerating_uncheckable`, deliberately. The checker's own contract is
+# rc=1 BLOCKS / rc=2 REFUSES-rather-than-passes when it found nothing to check,
+# and that is exactly the split this wrapper draws: rc 1 is a FAIL, rc 2 is
+# recorded NOT_CHECKED and never folded into `passed`. Wiring it with plain
+# `run` would turn "there was nothing to audit" into a landing refusal, which is
+# the opposite of what the rc=2 path was written for.
+#
+# Blast radius measured before wiring, not after: rc=0 on this tree
+# ([PASS] 7 holder(s) over 513 SPDX-headered file(s)), so this reddens nothing.
+run_tolerating_uncheckable "bundled works accounted for in NOTICE" "$ROOT" \
+  python3 "$PG/bundled_attribution_notice_check.py"
+
 # vibe-ic#904 — a design-input document made a CHECKABLE factual claim about the
 # installed PDK, the claim was false, and nothing in the flow noticed. The
 # disclosure it mandated ("label every corner result a LEVEL=1 standin") then
