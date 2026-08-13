@@ -228,9 +228,40 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # Moved from step 1 (matrix D4): phase 1 produces it, so phase 1 declares
+      # it, and the clause above is what reads it.
+      - "reports/phase1/extraction_coverage_report.md"
+      - "reports/phase1/extraction_coverage_report.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
+        # Moved here from step 1 with its declaration (matrix D4). Phase 1
+        # produces these, so phase 1 declares them AND reads them -- a
+        # declaration no clause reads is the mismatch D4 exists to find, so
+        # moving it without this conjunct would only relocate that mismatch.
+        #
+        # `files_exist` rather than wiring `phase1_coverage_report_present_check`
+        # as a clause, and the reason is measured rather than stylistic.
+        # `flow_gate_enforcement_audit` decides ENFORCED from RUNNER invocation,
+        # not from this file: of the 159 gates it audits, 142 are AUDIT_ONLY and
+        # 116 of those declare nothing. A flow-only `program_exit_zero` is
+        # therefore AUDIT_ONLY by this repo's own convention, and adding one puts
+        # a NEW entry into a register that `test_issue306_register_paydown` and
+        # `test_the_recorded_register_did_not_grow_to_absorb_the_five` permit
+        # only to SHRINK. Measured: wiring the program introduced 6 failures
+        # across 5 files, all one root cause. Declaring `ENFORCEMENT: blocking`
+        # to satisfy the audit made it worse -- the finding became
+        # `contradiction::`, because no runner invokes it and the declaration
+        # would have been untrue.
+        #
+        # `files_exist` answers D4's question, adds no gate to that register, and
+        # its blast radius was measured at 8 of 109 published run roots (the
+        # program clause was 9). The orphan checker stays unwired and that is
+        # RECORDED, not forgotten:
+        # `test_the_orphan_checker_is_STILL_UNWIRED_and_that_is_a_recorded_residual`.
+        - files_exist:
+            - "reports/phase1/extraction_coverage_report.md"
+            - "reports/phase1/extraction_coverage_report.json"
         # #312 — the SECOND track. Findings are advisory (a divergence between
         # the two tracks needs converging, not an automatic stop); running is
         # not. A missing/unparseable report exits 1 here, because a second
@@ -483,12 +514,12 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-      # Phase 1 extraction-coverage REPORT
-      # (companion to LL-38 gate). Mandatory deliverable; per-doc
-      # diagnostic of which verbatim literals from
-      # extraction_patterns.json reached generated_docs/L*.json.
-      - "reports/phase1/extraction_coverage_report.md"
-      - "reports/phase1/extraction_coverage_report.json"
+      # The Phase 1 extraction-coverage REPORT used to be declared here. It is
+      # not step 1's to deliver: `phase1_coverage_report_gen` writes it, the
+      # path is reports/phase1/, and step 1 is Spec-to-RTL in phase 2. Moved to
+      # D1, where the producer is. Found by matrix D4 — this step's gate checks
+      # only the RTL globs, so 2 of its 3 declared entries were read by no
+      # clause of its own gate.
     gate:
       files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
       any_of: true
