@@ -7,6 +7,7 @@ Two more table-artifact families moved bucket-② -> bucket-①:
 All host-score PASS. §4.05: SKIP on any incomplete table / missing encoding /
 unrecognized cell token.
 """
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,13 @@ if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import ff_truth_table_synth as FF       # noqa: E402
 import comb_state_table_synth as CS      # noqa: E402
+
+import pytest
+
+#: The repo's existing tool gate (197 files use this shape). Without
+#: it this module raises FileNotFoundError on a host that lacks the
+#: tool, instead of disclosing a skip.
+_HAVE_TOOLS = bool(shutil.which("iverilog"))
 
 _HDR = ("I would like you to implement a module named TopModule with the following\n"
         "interface. All input and output ports are one bit unless otherwise specified.\n\n")
@@ -39,6 +47,8 @@ ONEHOT = COMB.replace("state (2 bits)", "state (4 bits)").replace(
 
 
 def _compiles(rtl, tmp_path):
+    if not _HAVE_TOOLS:
+        pytest.skip("iverilog not installed on this host")
     f = tmp_path / "m.sv"
     f.write_text(rtl)
     cp = subprocess.run(["iverilog", "-g2012", "-o", str(tmp_path / "a.out"), str(f)],
