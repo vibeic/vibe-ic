@@ -496,12 +496,21 @@ def test_a_real_difference_still_survives_normalisation(tmp_path):
 def test_a_clean_run_leaves_no_scratch_behind(tmp_path):
     """The easy half, and the one a `finally` already satisfied. Kept as the
     control: without it, a reaper that removes everything unconditionally
-    would pass the kill test below and destroy live peers in production."""
-    import tempfile
+    would pass the kill test below and destroy live peers in production.
+
+    MEASURED IN A PRIVATE ROOT, not the shared temp. This used to glob the
+    system temp, so any PEER that created a scratch while `audit` ran landed in
+    `after - before` and was reported as this run's leak. On a host with more
+    than one agent that is a coin flip, and it fired for real: it reddened two
+    tests of an unrelated PR's verification and then did not reproduce.
+    A private root makes the assertion a statement about THIS run.
+    """
+    scratch_root = tmp_path / "tmproot"
+    scratch_root.mkdir()
     r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
-    before = set(Path(tempfile.gettempdir()).glob(G._SCRATCH_PREFIX + "*"))
-    G.audit(r, timeout=_T)
-    after = set(Path(tempfile.gettempdir()).glob(G._SCRATCH_PREFIX + "*"))
+    before = set(scratch_root.glob(G._SCRATCH_PREFIX + "*"))
+    G.audit(r, timeout=_T, tmp_root=scratch_root)
+    after = set(scratch_root.glob(G._SCRATCH_PREFIX + "*"))
     assert after - before == set(), (
         "a clean run left scratch behind: %s" % (after - before))
 
