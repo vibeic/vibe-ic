@@ -660,6 +660,16 @@ def _try_lifo(prompt: str, ins, outs, params, top) -> Optional[str]:
         "    localparam AW = $clog2(DEPTH);",
         f"    reg [{_w_hi(wexpr)}:0] mem [0:DEPTH-1];",
         "    reg [AW:0] sp;",  # stack pointer / count = number of valid entries (0..DEPTH)
+        # DECREMENT THEN TRUNCATE. `sp` is [AW:0] — one bit wider than the
+        # address — so it can represent the full count DEPTH. Writing
+        # `sp[AW-1:0] - 1'b1` truncates FIRST, and on a FULL stack
+        # (sp == DEPTH, e.g. 4'b1000) that leaves 3'b000 and then subtracts 1,
+        # which only reaches the top entry if the subtraction wraps inside AW
+        # bits. It does not: the index evaluates wider, `0 - 1` is -1, and
+        # mem[-1] reads X. Computing `sp - 1'b1` in sp's own width gives
+        # 8 - 1 = 7 before the assignment narrows it, which is right for every
+        # sp in 1..DEPTH.
+        f"    wire [AW-1:0] top_idx = sp - 1'b1;",
         f"    wire do_push = {push_n} && !{full_n};",
         f"    wire do_pop  = {pop_n} && !{empty_n};",
         f"    always @({sens}) begin",
@@ -684,12 +694,12 @@ def _try_lifo(prompt: str, ins, outs, params, top) -> Optional[str]:
         f"                mem[sp[AW-1:0]] <= {din_n};",
         "                sp <= sp + 1;",
         "            end else if (do_pop && !do_push) begin",
-        f"                {dout_n} <= mem[sp[AW-1:0] - 1'b1];",
+        f"                {dout_n} <= mem[top_idx];",
         "                sp <= sp - 1;",
         "            end else if (do_push && do_pop) begin",
         # simultaneous push+pop on a non-empty stack: replace the top element.
-        f"                mem[sp[AW-1:0] - 1'b1] <= {din_n};",
-        f"                {dout_n} <= mem[sp[AW-1:0] - 1'b1];",
+        f"                mem[top_idx] <= {din_n};",
+        f"                {dout_n} <= mem[top_idx];",
         "            end",
         "            // flags reflect the post-update occupancy",
         f"            {empty_n} <= ((sp + (do_push && !do_pop ? 1 : 0)"
