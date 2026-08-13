@@ -108,11 +108,33 @@ def _skill_count(skills_root):
                 if d.is_dir() and (d / "SKILL.md").exists()])
 
 
+#: Bytecode caches are NOT tree content. `skills/` contains 67 `test_*.py`
+#: modules of its own, and CPython writes `__pycache__/*.pyc` beside a module
+#: the moment anything imports it — so a session that merely COLLECTS one of
+#: them changed this digest, with no tool and no test having written anything.
+#: Measured on `a38902d1`: running a single `skills/**/test_compliance.py`
+#: takes the tree from 213 files to 214, the new file being
+#: `skills/analog-layout/tests/__pycache__/test_compliance.cpython-312-pytest-9.0.3.pyc`,
+#: while `git status skills/` stays EMPTY because git reports it `!!` ignored.
+#:
+#: THIS IS NOT A RELAXATION, it is an alignment. The landing gate this assertion
+#: calls itself "the test-side of" is `suite_write_guard.py`, and its contract is
+#: explicit: TRACKED blocking, UNTRACKED blocking, `IGNORED (!!) ADVISORY, named,
+#: never blocking`. Counting `.pyc` as content made this test STRICTER than the
+#: gate it protects, and strict in the one direction that cannot matter — a
+#: bytecode cache is regenerable, gitignored, and can never reach a commit.
+#: Every byte git would ship is still hashed.
+_CACHE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+
+
 def _digest_tree(root):
-    """md5 over (relative path, bytes) of every file under `root`."""
+    """md5 over (relative path, bytes) of every SHIPPABLE file under `root`."""
     h = hashlib.md5()
     for p in sorted(q for q in root.rglob("*") if q.is_file()):
-        h.update(str(p.relative_to(root)).encode())
+        rel = p.relative_to(root)
+        if _CACHE_DIRS.intersection(rel.parts) or p.suffix == ".pyc":
+            continue
+        h.update(str(rel).encode())
         h.update(b"\0")
         h.update(p.read_bytes())
         h.update(b"\0")
@@ -496,8 +518,14 @@ def test_shipped_skills_tree_is_untouched_by_this_module():
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
     assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
-        "tool against a copy — see _seed_plugin_copy().")
+        "a test in this SESSION wrote into the SHIPPED skills/ tree. Run the "
+        "tool against a copy — see _seed_plugin_copy().\n"
+        "SESSION, not this module: the baseline above is captured at module "
+        "IMPORT, and pytest imports every selected module during COLLECTION, "
+        "before any test runs. So the digest is exposed to the whole session "
+        "and any test in it can move this, while this file's own tests are "
+        "merely the ones that happen to run in between. Bisect across the "
+        "selection, not within this file — the module passes alone.")
 
 
 if __name__ == "__main__":
