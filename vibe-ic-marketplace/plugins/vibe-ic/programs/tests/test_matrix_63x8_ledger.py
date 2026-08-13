@@ -448,8 +448,15 @@ def test_output_entries_classify_into_the_four_kinds():
     # VACUOUS_PASS with both reports written becomes MISSING with none.
     # test_flow_declaration_does_not_silence_its_producer.py holds that
     # distinction live for both steps.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    # 134 -> 140: the six write-ledger promotions this branch declares.
+    # The SAME move is already recorded in test_matrix_d3_outputs_produced
+    # ('120 -> 126, and 134 -> 140 declared'); this is the second copy of
+    # that number and it did not travel with the first.
+    assert sum(seen.values()) == 140, seen
+    # 100 -> 106. All six promotions are plain file paths, so FILE moves by
+    # exactly six and GLOB/ANY_OF/PROGRAM_EXIT do not move at all — which is
+    # what makes 134 -> 140 above self-consistent rather than just larger.
+    assert seen[F.FILE] == 106
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
