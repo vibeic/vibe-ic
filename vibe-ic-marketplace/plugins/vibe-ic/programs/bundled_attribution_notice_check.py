@@ -77,6 +77,8 @@ SOURCE_SUFFIXES = (".v", ".sv", ".vh", ".svh", ".vhd", ".vhdl",
 #: Directories that are not part of what this repository distributes.
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".venv"}
 
+import _prose_polarity as _polarity   # vibe-ic#712 vocabulary
+
 _SPDX_LICENSE = re.compile(r"SPDX-License-Identifier:\s*([A-Za-z0-9.\-+]+)")
 #: Both spellings, because upstreams use both and a gate that saw one would
 #: report a confident zero on a tree full of the other.
@@ -122,6 +124,51 @@ def _distinctive(holder: str) -> str:
     return holder
 
 
+def _polarity_span(head: str, m: "re.Match") -> str:
+    """The sentence around a copyright match, with the HOLDER'S NAME blanked.
+
+    Returned rather than judged so that :func:`scan` — the function that
+    publishes the holder — is the one that asks `is_denied`. The question and
+    the record it guards belong in the same place.
+
+    A header can TAKE A COPYRIGHT BACK — "this file is no longer derived from
+    Copyright (c) 2019 Acme Corp" — and a scanner that records the holder
+    anyway publishes the OPPOSITE of what the file says, then charges NOTICE
+    for attributing work the repository does not bundle.
+
+    THE HOLDER'S OWN NAME IS BLANKED OUT OF THE SPAN before the question is
+    asked, length-preserving so the offsets still index `head`. That is not
+    defensive dressing, it is the whole difficulty, and it is measured:
+
+        "Copyright (c) 2024 Non-Profit Foundation"
+
+    `\\bnon-?\\b` matches inside the HOLDER, so the line denies itself and a
+    real holder disappears — silently, which is the bad direction. vibe-ic#1249
+    shipped exactly that bug and #1257 corrected it by ending the scope at
+    `m.start(1)`. That correction is NOT sufficient here and this is the second
+    time the lesson has had to be learned: `sentence_scope`'s forward budget
+    reaches PAST the scope end to the sentence terminator, so the name is
+    re-admitted no matter which end offset is passed. Only removing the name
+    from the text works. Driven both ways --
+
+        end=m.end()      Non-Profit Foundation -> DENIED   (wrong)
+        end=m.start(1)   Non-Profit Foundation -> DENIED   (wrong)
+        name blanked     Non-Profit Foundation -> kept     (right)
+                         "no longer derived from ... Acme" -> denied (right)
+
+    `extra_breaks=("\\n",)` because a licence header is a stack of RECORDS, not
+    a flowing paragraph: a denial on one line must not reach the copyright on
+    the next.
+    """
+    lo, hi = _polarity.sentence_scope(head, m.start(), m.start(1),
+                                      extra_breaks=("\n",))
+    span = head[lo:hi]
+    a, b = m.start(1) - lo, m.end(1) - lo
+    if 0 <= a < b <= len(span):
+        span = span[:a] + (" " * (b - a)) + span[b:]
+    return span
+
+
 def scan(root: Path) -> Dict[str, Dict[str, object]]:
     """`{holder: {"licences": {...}, "files": [...], "n": int}}` for the tree."""
     found: Dict[str, Dict[str, object]] = defaultdict(
@@ -139,12 +186,15 @@ def scan(root: Path) -> Dict[str, Dict[str, object]]:
         if not lic:
             continue
         holder = None
-        for line in head.splitlines():
-            m = _COPYRIGHT.search(line)
-            if m:
-                holder = _clean_holder(m.group(1))
-                if holder:
-                    break
+        for m in _COPYRIGHT.finditer(head):
+            # A header can TAKE A COPYRIGHT BACK. Recording the holder anyway
+            # publishes the opposite of what the file says, and then charges
+            # NOTICE for work the repository does not bundle.
+            if _polarity.is_denied(_polarity_span(head, m)):
+                continue
+            holder = _clean_holder(m.group(1))
+            if holder:
+                break
         if not holder:
             continue
         rec = found[holder]
