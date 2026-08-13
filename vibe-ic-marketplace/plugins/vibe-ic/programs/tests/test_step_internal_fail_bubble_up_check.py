@@ -279,13 +279,34 @@ def _fail_report(root, ic: str, run: str, name: str):
                     "detail": "unacknowledged"}) + "\n", encoding="utf-8")
 
 
+#: Every inner subprocess bound in this file. MEASURED, not tuned (#1241).
+#:
+#: The harness runs pytest at `--timeout=180` and kills the SESSION, not the
+#: test, so any inner bound above the per-call ceiling of 60s (= 180 // 3, a
+#: figure `ci_harness_timeout_ceiling_check` DERIVES from the workflows rather
+#: than a convention) is a promise the harness will not keep: the session dies
+#: first and takes every other test with it.
+#:
+#: The number comes from a run, not from picking something comfortably small:
+#: the whole 19-test file completes in 1.03s and its slowest test is 0.17s
+#: (`test_the_shipped_register_agrees_with_the_shipped_corpus`, the only one
+#: that sweeps the real corpus). 30s is ~175x the slowest observed call and
+#: still less than the ceiling.
+#:
+#: That corpus test is fast because the sweep walks PUBLISHED RUN TREES, not
+#: all 17216 tracked files under `benchmark-data` — verified real rather than
+#: assumed: 13 run trees, 3 carrying a `reports/` tree, 5 findings, 0.161s. A
+#: sweep that found nothing because it looked at nothing would also be fast.
+_BOUND_S = 30
+
+
 def _sweep(corpus, baseline, *extra):
     import subprocess
     prog = Path(__file__).resolve().parents[1] / "step_internal_fail_bubble_up_check.py"
     return subprocess.run(
         [sys.executable, str(prog), "--corpus", str(corpus),
          "--baseline", str(baseline), *extra],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=_BOUND_S)
 
 
 def test_a_baseline_that_still_claims_a_PAID_debt_fails(tmp_path):
@@ -352,5 +373,5 @@ def test_the_shipped_register_agrees_with_the_shipped_corpus():
     repo = prog.resolve().parents[4]
     r = subprocess.run(
         [sys.executable, str(prog), "--corpus", str(repo / "benchmark-data")],
-        capture_output=True, text=True, timeout=600, cwd=str(repo))
+        capture_output=True, text=True, timeout=_BOUND_S, cwd=str(repo))
     assert r.returncode == 0, r.stdout + r.stderr
