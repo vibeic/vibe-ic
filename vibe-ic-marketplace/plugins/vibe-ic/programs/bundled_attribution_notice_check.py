@@ -68,6 +68,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _prose_polarity import (  # noqa: E402
+    DENIAL_CORE_RE, is_denied, sentence_scope)
+
 #: Source extensions carrying an SPDX header. Deliberately the HDL set plus the
 #: scripting set: this gate is about work BUNDLED as source, and a licence
 #: header in a build script binds exactly as one in RTL does.
@@ -90,6 +94,29 @@ _COPYRIGHT = re.compile(
 #: How many lines of a file may carry the header. Licence headers are at the
 #: top by convention and by the licences' own instructions.
 HEADER_LINES = 40
+
+
+def _is_bare_denial(holder: str) -> Optional[str]:
+    """The denial word, when the holder name is NOTHING BUT denial vocabulary.
+
+    SPDX specifies the literal values ``NONE`` and ``NOASSERTION`` for
+    `SPDX-FileCopyrightText`, and ``NONE`` means precisely "there is no
+    copyright holder". Read blind, it becomes a bundled third-party holder
+    named "NONE" that `NOTICE` is then required to name.
+
+    WHOLE-STRING, NOT SUBSTRING, and that is the load-bearing part. `Non-Profit
+    Foundation` has `_distinctive` "Non-Profit", and `\\bnon-?\\b` matches
+    inside it — so a `is_denied(holder)` here would drop a real holder and the
+    gate would go quietly green on work it never attributed. `_prose_polarity`
+    names that direction as the silent one; this is the shape it warns about.
+    """
+    core = re.sub(r"[^A-Za-z/]+", " ", holder or "").strip()
+    if not core:
+        return None
+    words = core.split()
+    if all(DENIAL_CORE_RE.fullmatch(w) for w in words):
+        return words[0]
+    return None
 
 
 def _clean_holder(raw: str) -> str:
@@ -139,12 +166,49 @@ def scan(root: Path) -> Dict[str, Dict[str, object]]:
         if not lic:
             continue
         holder = None
+        pos = 0
         for line in head.splitlines():
             m = _COPYRIGHT.search(line)
             if m:
-                holder = _clean_holder(m.group(1))
-                if holder:
+                cand = _clean_holder(m.group(1))
+                # POLARITY (vibe-ic#712, wired here by #1241). Two ways this
+                # assertion can be denied, and they need different instruments:
+                #
+                #   * the NAME is a bare SPDX sentinel. SPDX specifies the
+                #     literal `NONE` for `SPDX-FileCopyrightText`, meaning
+                #     "there is no copyright holder"; read blind it becomes a
+                #     bundled holder called "NONE" that NOTICE must then name.
+                #   * the SENTENCE denies it: "this file is not copyrighted by
+                #     Acme Corp" is read as the holder `ed by Acme Corp`,
+                #     because `[Cc]opyright` matches inside *copyrighted*. Its
+                #     `_distinctive` token is `ed`, and NOTICE contains "ed" as
+                #     a substring of ordinary English — so the fabricated holder
+                #     is silently accounted for. A loud failure gets found; that
+                #     one never would.
+                #
+                # The scope EXCLUDES the captured name, because `Non-Profit
+                # Foundation` matches `\bnon-?\b` and a denial read off the name
+                # would DROP a real holder and take the gate quietly green —
+                # the silent direction `_prose_polarity` names.
+                #
+                # The reach comes from `sentence_scope`, not a private "the
+                # line" rule, with `extra_breaks=("\n",)` because a licence
+                # header is a block of RECORDS rather than flowing prose.
+                denial = None
+                if cand:
+                    lo, _hi = sentence_scope(head, pos + m.start(),
+                                             pos + m.start(1),
+                                             extra_breaks=("\n",))
+                    denial = (_is_bare_denial(cand)
+                              or is_denied(head[lo:pos + m.start(1)]))
+                # A DENIED assertion is not this file's holder. Keep reading —
+                # a header may deny in one line and assert in the next, and
+                # stopping at the denial would report the file as unattributed
+                # when it is attributed one line down.
+                if cand and not denial:
+                    holder = cand
                     break
+            pos += len(line) + 1
         if not holder:
             continue
         rec = found[holder]
