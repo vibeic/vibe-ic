@@ -174,6 +174,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
@@ -1663,7 +1664,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if out_path is not None:
         try:
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(json.dumps(res, indent=2) + "\n")
+            atomic_write_text(out_path, json.dumps(res, indent=2) + "\n")
         except OSError as e:
             print(f"{_PROGRAM}: cannot write {out_path}: {e}", file=sys.stderr)
             return 2
