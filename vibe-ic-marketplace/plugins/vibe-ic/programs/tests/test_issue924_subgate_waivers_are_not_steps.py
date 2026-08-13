@@ -102,6 +102,7 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _flow_verdict_tiers as _T  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
+from _p0_ancestry_fixture import satisfy_p0_ancestry  # noqa: E402
 
 #: The producer's own headline. Group order is the producer's own field order.
 _HEADLINE = re.compile(
@@ -164,6 +165,16 @@ def _run(tmp_path, monkeypatch, *, n_subgate_waivers=0, waived_steps=(),
     population is the independent variable. Everything under test —
     the `counts` tally, `total_required`, the headline, the tally line and the
     Overall verdict — is `main()`'s own code and is untouched by the stub.
+
+    P0's DECLARED ANCESTRY is satisfied for the same reason: vibe-ic#923 gave
+    P0 the edge `blocks_on: [1]` (and step 1 `blocks_on: [D1]`), and this
+    fixture's project has neither step's artefacts, so the ordering guard saw a
+    done-claim resting on a MISSING dependency, rewrote P0's PASS to
+    `PASS_VOIDED_BY_DEPENDENCY` and forced `Overall: FAIL` on EVERY arm —
+    collapsing base and arm onto the same word and leaving the verdict guards
+    below unable to distinguish anything. That is what
+    `test_a_subgate_waiver_still_forces_PASS_WITH_WAIVERS`'s own drift check
+    was reporting. See `_p0_ancestry_fixture`.
     """
     # A FRESH tree per invocation. Two arms of one test can be identically
     # parameterised (in the N=0 case the base arm IS the arm), and a shared
@@ -200,6 +211,7 @@ def _run(tmp_path, monkeypatch, *, n_subgate_waivers=0, waived_steps=(),
     monkeypatch.setattr(F, "_run_structural_rtl_gates", _stub)
     monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES",
                         tuple(r["name"] for r in records))
+    satisfy_p0_ancestry(monkeypatch)
 
     report = proj / "report.json"
     buf, err = io.StringIO(), io.StringIO()
@@ -364,10 +376,10 @@ def test_the_numerator_never_exceeds_the_denominator(
     `X/Y executed PASS` with X > Y is not a ratio, and the deflated denominator
     is how a committed audit log came to publish `4/3`. But reaching X > Y needs
     a numerator large enough to overtake the shrunken denominator, and this
-    fixture's project passes exactly one step, so this assertion holds against
-    the UNFIXED program too. It is recorded here as a permanent floor on the
-    published pair — not as evidence that the fix works. The tests above are
-    that evidence.
+    fixture's project passes only P0 and the ancestry P0 declares (3 of a
+    39-step denominator), so this assertion holds against the UNFIXED program
+    too. It is recorded here as a permanent floor on the published pair — not as
+    evidence that the fix works. The tests above are that evidence.
     """
     r = _run(tmp_path, monkeypatch, n_subgate_waivers=n,
              waived_steps=(33, 34))
