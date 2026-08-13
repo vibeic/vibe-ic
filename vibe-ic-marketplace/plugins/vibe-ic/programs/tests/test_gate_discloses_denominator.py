@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+
+import pytest
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parent.parent
@@ -122,6 +124,23 @@ def test_the_gate_list_is_PARSED_from_the_ci_script_not_duplicated():
     assert "chip-AGNOSTIC source guard" in labels, sorted(labels)[:5]
 
 
+# MEASURED 204 s on a38902d1 (74 gates declared, 50 driven, 24 not driveable).
+# The landing gate runs pytest at `--timeout=180`, and `pytest-timeout`'s
+# `thread` method cannot interrupt a blocking `subprocess.wait` -- so when it
+# fires it DUMPS STACKS AND CALLS `os._exit(1)`, which its own docstring says in
+# as many words. That kills the interpreter before pytest writes a summary, so
+# the whole invocation reports neither pass nor fail and EVERY OTHER FILE in the
+# selection loses its result too (#1181).
+#
+# Two-arm at `--timeout=180`, same tree, same command:
+#     without this marker   Timeout dump, no summary line at all, exit 1
+#     with it               `8 passed in 202.89s`, exit 0
+#
+# The marker is the honest fit: this test drives 50 real gates and legitimately
+# needs ~3.5 min. Sizing the PROGRAM's budget to squeeze under 180 s instead
+# would trade a crash for a flaky test, because the wall clock moves with host
+# load. The program's `DEFAULT_CI_BUDGET_S` is a far-above backstop, not a fit.
+@pytest.mark.timeout(600)
 def test_the_real_ci_gate_set_is_currently_clean():
     """The measured state at land time: every CI gate discloses what it
     examined. A zero baseline is the right shape for a regression guard — it
