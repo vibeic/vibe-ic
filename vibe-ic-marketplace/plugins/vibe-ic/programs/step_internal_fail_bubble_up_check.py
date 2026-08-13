@@ -453,15 +453,102 @@ def check_corpus(corpus: Path) -> Dict[str, Any]:
     return out
 
 
-def _load_baseline(p: Path) -> Optional[int]:
+def _load_baseline(p: Path) -> Optional[dict]:
+    """The WHOLE recorded baseline, not just its total (vibe-ic#1025).
+
+    This used to return `findings_total` alone. The file has always carried a
+    `per_run` map and nothing ever read it back, so the ratchet compared one
+    scalar against another and had no way to ask WHICH runs the difference came
+    from — see :func:`_decompose_shrink` for why that distinction is the whole
+    point of the rule.
+    """
     if not p.is_file():
         return None
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    n = d.get("findings_total")
-    return n if isinstance(n, int) else None
+    if not isinstance(d.get("findings_total"), int):
+        return None
+    per = d.get("per_run")
+    d["per_run"] = per if isinstance(per, dict) else {}
+    return d
+
+
+def _run_key(rel: str) -> str:
+    """`<design>/<run>`, whichever corpus root the caller happened to name.
+
+    THE RECORDED BASELINE AND THE LIVE SWEEP HAVE NEVER AGREED ON THIS, and
+    that is the second half of why the ratchet could not decide anything
+    (vibe-ic#1025). The committed baseline keys read
+
+        sha256/clean_run_v1422_20260715
+
+    while a sweep of `benchmark-data` emits
+
+        ic/sha256/clean_run_v1422_20260715
+
+    because the run root is reported relative to the corpus argument, and the
+    baseline was recorded against `benchmark-data/ic`. Compared verbatim, EVERY
+    baseline run looks absent from EVERY sweep — so a comparison that reads
+    `per_run` at all would have called all seven findings withdrawn, including
+    the five sitting right there in the same output.
+
+    Normalises by dropping a leading `ic/` corpus component. Deliberately only
+    that one, and only at the front: matching on a bare tail would let
+    `foo/clean_run_x` answer for `bar/clean_run_x`, which is a different run.
+    """
+    parts = [p for p in str(rel).strip("/").split("/") if p]
+    if parts and parts[0] == "ic":
+        parts = parts[1:]
+    return "/".join(parts)
+
+
+def _decompose_shrink(base: dict, rep: dict) -> dict:
+    """Split a fall in the count into REPAIRED and WITHDRAWN.
+
+    THE DEFECT THIS EXISTS TO REMOVE (vibe-ic#1025). The ratchet's doctrine is
+    "the number MAY ONLY SHRINK", and on a shrink it printed
+
+        [PASS] 7 -> 5; lower the baseline so the recorded number stops claiming
+        debt that is paid.
+
+    "debt that is paid" is a claim about WORK. A total can also fall because a
+    run left the published corpus, and a withdrawal is not a repair — the
+    reports still say FAIL, nobody looked at them, they are simply no longer
+    published. MEASURED on this repo at `a38902d1`, which is exactly that case:
+
+        sha256/clean_run_v1422_20260715   baseline 2 -> now 2   unchanged
+        sha256/clean_run_v1427_20260715   baseline 3 -> now 3   unchanged
+        u_hawaii_adc/clean_run_v1422...   baseline 1 -> WITHDRAWN
+        u_hawaii_adc/clean_run_v1427...   baseline 1 -> WITHDRAWN
+
+    7 -> 5, and **zero findings were repaired**. Recording that shrink as debt
+    paid would credit a publishing decision as engineering, and — because the
+    number may only ever go down — would permanently lower the bar on the
+    strength of it.
+
+    Returns the two populations by name. It decides no verdict; the caller
+    reports them, because "which of these two happened" is the thing a reader
+    needs and neither one is a failure on its own.
+    """
+    base_runs = {_run_key(k): v for k, v in (base.get("per_run") or {}).items()}
+    now_runs = {_run_key(k): v for k, v in (rep.get("per_run") or {}).items()}
+
+    repaired, withdrawn = {}, {}
+    for run, was in sorted(base_runs.items()):
+        if run in now_runs:
+            is_now = int(now_runs[run])
+            if is_now < int(was):
+                repaired[run] = (int(was), is_now)
+        else:
+            withdrawn[run] = int(was)
+    return {
+        "repaired": repaired,
+        "withdrawn": withdrawn,
+        "repaired_total": sum(w - n for w, n in repaired.values()),
+        "withdrawn_total": sum(withdrawn.values()),
+    }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -535,20 +622,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         bl = Path(args.baseline) if args.baseline else _HERE / BASELINE_NAME
         now = rep["findings_total"]
         if args.write_baseline:
-            bl.write_text(json.dumps(
-                {"_comment": (
+            prev = _load_baseline(bl)
+            # CARRY THE WITHDRAWALS FORWARD (vibe-ic#1025). Without this the
+            # rewrite drops any run that left the corpus, and the next reader
+            # sees only a smaller number — indistinguishable from work. The
+            # ledger accumulates, because a run withdrawn twice is still one
+            # unexamined finding.
+            withdrawn = dict((prev or {}).get("withdrawn_unexamined") or {})
+            if prev:
+                split = _decompose_shrink(prev, rep)
+                for run, was in split["withdrawn"].items():
+                    withdrawn[run] = was
+            doc = {
+                "_comment": (
                     "Unacknowledged step-internal FAIL/MISSING reports across "
                     "the PUBLISHED (git-tracked) run trees. MAY ONLY SHRINK — "
                     "each one is a report declaring FAIL that no waiver and no "
                     "orchestrator record names. The wrong repair is to loosen "
                     "the matcher until the number falls (vibe-ic#693)."),
-                 "findings_total": now,
-                 "runs_swept": rep["runs_swept"],
-                 "runs_with_reports": rep["runs_with_reports"],
-                 "per_run": rep["per_run"]}, indent=2) + "\n")
-            print(f"wrote {bl} (findings_total={now})")
+                "_withdrawn_comment": (
+                    "Runs whose findings left this count because the run left "
+                    "the published corpus, NOT because anyone examined them "
+                    "(vibe-ic#1025). Kept so a fall in findings_total can never "
+                    "be read as debt paid. These reports still say FAIL."),
+                "findings_total": now,
+                "runs_swept": rep["runs_swept"],
+                "runs_with_reports": rep["runs_with_reports"],
+                "per_run": rep["per_run"],
+                "withdrawn_unexamined": withdrawn,
+            }
+            bl.write_text(json.dumps(doc, indent=2) + "\n")
+            print(f"wrote {bl} (findings_total={now}, "
+                  f"withdrawn_unexamined={sum(withdrawn.values())})")
             return 0
-        base = _load_baseline(bl)
+        base_doc = _load_baseline(bl)
         print(f"corpus sweep: {rep['runs_swept']} published run tree(s), "
               f"{rep['runs_with_reports']} with a reports/ tree, "
               f"{now} unacknowledged step-internal FAIL(s)")
@@ -556,10 +663,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("VACUOUS_PASS: no published run tree carries a reports/ "
                   "directory — the sweep examined nothing.")
             return 2
-        if base is None:
+        if base_doc is None:
             print(f"[NOT CHECKED] no baseline at {bl} — record one with "
                   f"--write-baseline before this can ratchet.")
             return 2
+        base = base_doc["findings_total"]
         for run, n in sorted(rep["per_run"].items()):
             print(f"   {run}: {n}")
         if now > base:
@@ -568,6 +676,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"no waiver and no orchestrator record names.")
             return 1
         if now < base:
+            split = _decompose_shrink(base_doc, rep)
+            # WHICH of the two happened is the finding, not the arithmetic.
+            # A withdrawal is not a repair: the reports still say FAIL, nobody
+            # looked at them, they are merely no longer published (vibe-ic#1025).
+            for run, (was, is_now) in sorted(split["repaired"].items()):
+                print(f"   REPAIRED  {run}: {was} -> {is_now}")
+            for run, was in sorted(split["withdrawn"].items()):
+                print(f"   WITHDRAWN {run}: {was} finding(s) left the published "
+                      f"corpus without being examined")
+            if split["withdrawn_total"] and not split["repaired_total"]:
+                print(f"[PASS] {base} -> {now}, and NONE of it is repair: "
+                      f"{split['withdrawn_total']} finding(s) left because their "
+                      f"run was withdrawn from publication. Those reports still "
+                      f"say FAIL. Lower the baseline only with "
+                      f"`--write-baseline`, which records the withdrawal so the "
+                      f"drop is not later read as work someone did.")
+                return 0
+            if split["withdrawn_total"]:
+                print(f"[PASS] {base} -> {now}: {split['repaired_total']} "
+                      f"repaired, {split['withdrawn_total']} withdrawn without "
+                      f"being examined. Only the first is debt paid.")
+                return 0
             print(f"[PASS] {base} -> {now}; lower the baseline so the recorded "
                   f"number stops claiming debt that is paid.")
             return 0
