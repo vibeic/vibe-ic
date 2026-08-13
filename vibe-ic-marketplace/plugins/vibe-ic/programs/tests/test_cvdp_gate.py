@@ -788,7 +788,13 @@ def _yosys_probe_blob(sv_text, top):
         p.write_text(sv_text)
         r = _sp.run(["yosys", "-p",
                      f"read_verilog -sv {p}; synth -top {top}; stat"],
-                    capture_output=True, text=True, timeout=300)
+                    # 60s, not 300: the pytest harness cap is 180s, so a bound above
+                    # it means a hung yosys kills the SESSION and loses every other
+                    # result, instead of failing this one test. 60 = 180 // 3 is the
+                    # ceiling ci_harness_timeout_ceiling_check enforces, and a
+                    # capability probe on a probe-sized blob that cannot finish in a
+                    # minute is a finding, not a slow machine.
+                    capture_output=True, text=True, timeout=60)
     blob = (r.stdout or "") + "\n" + (r.stderr or "")
     assert _re_p.search(r"Yosys\s+[\d.]|Executing\s+\w+\s+pass|/----", blob), (
         "host yosys did not RUN for the capability probe — refusing to "
