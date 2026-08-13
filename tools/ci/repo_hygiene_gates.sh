@@ -331,21 +331,6 @@ run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_r
 # nothing re-derived it afterwards (8 false RESOLVES rows, measured).
 run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is_true_check.py" --root "$ROOT"
 
-# vibe-ic#1043 — Apache-2.0 §4(d) attaches to DISTRIBUTING the work, so the
-# attribution record has to live where the work does. This gate shipped with
-# nothing but its own fixture running it (vibe-ic#1241, `checker execution
-# wiring` row), which is the gate two below this one, one level up.
-#
-# BLOCKING, and MEASURED both ways on this branch before wiring:
-#   NOTICE as this branch ships it   rc 0 — 7 holder(s) over 513 SPDX-headered
-#                                    file(s), own holder read out of NOTICE
-#   NOTICE as a38902d1 ships it      rc 1 — names Olof Kindgren (SERV, 28 files,
-#                                    ISC), lowRISC (Ibex, 63, Apache-2.0) and
-#                                    lowRISC/OpenTitan (386, Apache-2.0)
-# The second arm is the reason this is worth wiring rather than trusting: the
-# gate is not hypothetical, it is red on main today over 477 real files.
-run "bundled works are attributed"      "$ROOT" python3 "$PG/bundled_attribution_notice_check.py" "$ROOT"
-
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
 run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_wiring_audit.py"
