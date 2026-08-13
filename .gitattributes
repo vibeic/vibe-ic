@@ -1,0 +1,5 @@
+# Generated in full by tools/gen_programs_index.py; conflicts are resolved by
+# regenerating from the merged tree. See tools/git-merge-drivers/programs_index_merge.sh
+# and tools/install-git-hooks.sh (the driver must be registered in .git/config,
+# which is not tracked, so this line alone does nothing until installed).
+vibe-ic-marketplace/plugins/vibe-ic/programs/INDEX.md merge=programs-index
