@@ -41,6 +41,8 @@ if str(_TESTS) not in sys.path:
 #: a module gated later and not added here is simply unguarded, and
 #: `test_every_gated_module_is_covered_here` fails when that happens.
 GATED = (
+    "test_v0_2_46_transcripts_ladder_canonical",
+    "test_v1_0_93_issue784_emit_assert_discriminators",
     "test_v1_1_63_full_moore_fsm_synth",
     "test_v1_1_64_fsm_tabular_format",
     "test_v1_1_65_ff_and_comb_state_synth",
