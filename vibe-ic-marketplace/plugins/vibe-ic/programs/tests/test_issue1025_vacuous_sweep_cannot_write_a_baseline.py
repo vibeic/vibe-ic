@@ -40,6 +40,14 @@ REAL_BASELINE = PROGRAMS / "step_internal_fail_bubble_up_baseline.json"
 RC_VACUOUS = 2
 
 
+#: vibe-ic#1241 — `--timeout-method=thread` kills the SESSION, not the test,
+#: so a bound above the harness ceiling (`min(180,300) // 3` = 60 s) can never
+#: fire: pytest ends the run first and every other file in the subset loses
+#: its verdict. MEASURED rather than tuned until the gate went quiet — the whole 3-test file runs in 1.10 s and its slowest test is 0.17 s, so
+#: 30 s is ~175x the slowest measured call and half the ceiling.
+_BOUND_S = 30
+
+
 def _empty_corpus(tmp_path: Path) -> Path:
     """A corpus with no published run tree — the zero-reach condition."""
     corpus = tmp_path / "empty_corpus"
@@ -56,7 +64,7 @@ def _baseline_copy(tmp_path: Path) -> Path:
 
 def _run(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=_BOUND_S)
 
 
 def test_write_baseline_refuses_a_sweep_that_examined_nothing(tmp_path):
