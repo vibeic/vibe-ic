@@ -55,8 +55,13 @@ def _sigkill_writer(tmp_path: Path, mode: str, name: str = "report.json"):
     script = tmp_path / f"killer_{mode}.py"
     script.write_text(_KILLER.format(programs=str(PLUGIN / "programs")))
     target = tmp_path / name
+    # vibe-ic#1241 — 120s -> 60s. The harness bound is 180s across 3 pytest
+    # invocations, so the per-call ceiling is 60s; a bound above it can outlive
+    # the harness, and `--timeout-method=thread` then takes the whole SESSION
+    # down instead of failing this test. MEASURED: this script writes a partial
+    # file and SIGKILLs itself in 0.00s, so 60s is ~unbounded headroom for it.
     r = subprocess.run([sys.executable, str(script), str(target), mode],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=60)
     return target, r
 
 
@@ -277,7 +282,13 @@ def test_the_shared_report_writer_now_publishes_atomically(tmp_path):
     r = subprocess.run(
         [sys.executable, str(prog), str(_CELL), "--mode", "sta",
          "--json", str(out)],
-        capture_output=True, text=True, timeout=600)
+        # vibe-ic#1241 — 600s -> 60s, and this one was MEASURED rather than
+        # clamped, because the issue asks for a per-test judgement and 600s
+        # suggests someone expected a slow gate. Three runs of this exact
+        # invocation over `spm/v1.9.96_gf180mcuD`: 0.08s, 0.06s, 0.06s. The
+        # gate reads a committed report and re-derives a verdict; it does not
+        # invoke an EDA tool. 60s leaves ~750x headroom over the slowest run.
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, (r.returncode, r.stdout[-400:], r.stderr[-400:])
     assert out.is_file() and json.loads(out.read_text()), out
     assert not list(tmp_path.glob(AO.atomic_output_tmp_glob())), \
