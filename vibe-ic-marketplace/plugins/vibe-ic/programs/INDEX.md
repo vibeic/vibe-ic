@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1081
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1081)
+- **Total programs (excluding helpers / shims):** 1082
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1082)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1072 |
+| `any` | 1073 |
 
 ## Alphabetical listing
 
@@ -994,6 +994,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `stage4_compliance` | any | — | Stage 4 (Output + Validation) interim gate. |
 | `staged_rtl_closure_preflight` | any | — | ORGANIC #586. |
 | `staged_rtl_reused_ip_manifest_emit` | any | — | ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path. |
+| `step_input_scope_enforce` | any | — | §4.05 as a MECHANISM, not a review finding. |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `step_output_collector` | any | — | materialize a per-STEP output subfolder view. |
 | `step_preflight` | any | — | the ORCHESTRATOR side of `required_inputs`. |
@@ -1153,7 +1154,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1072 programs)
+### `any` (1073 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2116,6 +2117,7 @@ _(no programs in this group)_
 - `stage4_compliance` — Stage 4 (Output + Validation) interim gate.
 - `staged_rtl_closure_preflight` — ORGANIC #586.
 - `staged_rtl_reused_ip_manifest_emit` — ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path.
+- `step_input_scope_enforce` — §4.05 as a MECHANISM, not a review finding.
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `step_output_collector` — materialize a per-STEP output subfolder view.
 - `step_preflight` — the ORCHESTRATOR side of `required_inputs`.
