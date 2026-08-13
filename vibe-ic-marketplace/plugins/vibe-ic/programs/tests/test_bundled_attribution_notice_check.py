@@ -201,3 +201,54 @@ def test_THIS_repository_accounts_for_everything_it_bundles(capsys):
     rc = bc.main([str(repo)])
     out = capsys.readouterr().out
     assert rc == 0, out
+
+
+# --------------------------------------------------------------------------
+# POLARITY (vibe-ic#1241). NOTICE is prose, and the check used to be a bare
+# `re.search(token, text)` — so a sentence DENYING the bundling satisfied the
+# very requirement it denies. Without these, reverting `_named_without_denial`
+# to that substring search leaves the whole suite green, which would make the
+# fix indistinguishable from its absence.
+# --------------------------------------------------------------------------
+
+_DENIAL = _OURS + """
+Note: lowRISC contributors source is NOT bundled in this repository and no
+attribution is required for it.
+"""
+
+_ATTRIBUTION = _OURS + """
+This distribution bundles source from lowRISC contributors (OpenTitan project),
+licensed under the Apache License, Version 2.0.
+"""
+
+
+def test_a_NOTICE_that_DENIES_the_bundling_does_not_account_for_it(tmp_path, capsys):
+    """THE DEFECT: the holder is named, but only by a sentence saying it is
+    not bundled. The file IS bundled, so section 4(d) is unsatisfied."""
+    root = _tree(tmp_path, _DENIAL, {"vendor/aes.sv": _THIRD_PARTY_RTL})
+    rc = bc.main([str(root)])
+    out = capsys.readouterr().out
+    assert rc == 1, (
+        "a denial sentence must not account for a work that IS bundled; "
+        f"got rc={rc}\n{out}")
+    assert "lowRISC" in out
+
+
+def test_PAIRED_a_plain_attribution_DOES_account_for_it(tmp_path, capsys):
+    """The other half: the same tree with a real attribution must PASS, so the
+    test above cannot be satisfied by a checker that simply always fails."""
+    root = _tree(tmp_path, _ATTRIBUTION, {"vendor/aes.sv": _THIRD_PARTY_RTL})
+    rc = bc.main([str(root)])
+    assert rc == 0, capsys.readouterr().out
+
+
+def test_a_denial_ELSEWHERE_does_not_defeat_a_real_attribution(tmp_path, capsys):
+    """`_named_without_denial` examines EVERY mention, not the first. A NOTICE
+    that attributes a work and elsewhere discusses what is not bundled is
+    normal, and must not fail for the wrong reason."""
+    notice = _ATTRIBUTION + """
+Note: lowRISC contributors also publish work that is NOT bundled here.
+"""
+    root = _tree(tmp_path, notice, {"vendor/aes.sv": _THIRD_PARTY_RTL})
+    rc = bc.main([str(root)])
+    assert rc == 0, capsys.readouterr().out

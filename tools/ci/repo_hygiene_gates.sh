@@ -62,6 +62,13 @@ run "chip-AGNOSTIC source guard"        "$ROOT" python3 "$PG/source_chip_agnosti
 # by DIRECT PUSH, so the guard had never run on any of it. Measured when first
 # wired: 4 non-portable paths, all in a test fixture committed the day before.
 run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_check.py" "$PLUGIN"
+# vibe-ic#1241 group 1 — this checker was TEST-ONLY: the only thing that ever
+# ran it was the fixture its own author wrote, which proves the logic and never
+# the artefacts. `checker_execution_wiring_audit` scored it as the one NEW
+# test-only checker on this branch (baseline 31 on clean main -> 32 here, rc=1),
+# and that single row is what held #1241 open. Repo-root scoped because the
+# question is about what THIS distribution bundles, and `NOTICE` is at the root.
+run "bundled work is named in NOTICE" "$ROOT" python3 "$PG/bundled_attribution_notice_check.py" "$ROOT"
 # vibe-ic#621 — the JSON manifests were guarded and the PROSE was not: the three
 # READMEs a reader meets first advertised v1.5.12 / v1.4.72 / v1.4.61 against a
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one
