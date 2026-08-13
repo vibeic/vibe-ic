@@ -109,9 +109,32 @@ def _skill_count(skills_root):
 
 
 def _digest_tree(root):
-    """md5 over (relative path, bytes) of every file under `root`."""
+    """md5 over (relative path, bytes) of every TRACKABLE file under `root`.
+
+    `__pycache__` IS EXCLUDED, and that is not a relaxation. CPython writes
+    bytecode there on any import of a module that lives under `skills/`, so a
+    session that merely IMPORTS a skills-resident program mutates this digest
+    while changing nothing that ships:
+
+        skills/core-agent-loop/programs/__pycache__/api_health.cpython-310.pyc
+        skills/gatekeeper-loop/programs/__pycache__/poll_prs.cpython-310.pyc
+
+    Those paths are gitignored (`.gitignore:2`), so `git status skills/` is
+    CLEAN while they exist — which is why this guard could fire on a tree the
+    landing gate calls untouched, and why it fired only in a full selection and
+    never for the module alone.
+
+    The protection is unchanged. What this guard exists to catch is the real
+    incident in the caller's docstring below — a test rewriting
+    `skills/fork-gatekeeper-loop/SKILL.md`, a TRACKED source file — and
+    `gatekeeper-land.sh:213` fails on `git status`, which cannot see bytecode
+    at all. Excluding files git refuses to track removes no coverage from the
+    failure this asserts against; keeping them only manufactures a red that
+    recurs on every change of collection order.
+    """
     h = hashlib.md5()
-    for p in sorted(q for q in root.rglob("*") if q.is_file()):
+    for p in sorted(q for q in root.rglob("*")
+                    if q.is_file() and "__pycache__" not in q.parts):
         h.update(str(p.relative_to(root)).encode())
         h.update(b"\0")
         h.update(p.read_bytes())
@@ -496,8 +519,11 @@ def test_shipped_skills_tree_is_untouched_by_this_module():
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
     assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
-        "tool against a copy — see _seed_plugin_copy().")
+        "a test in THIS SESSION wrote into the SHIPPED skills/ tree. The "
+        "digest is taken at module IMPORT, which pytest does during "
+        "collection — before any test runs — so any test in the whole "
+        "selection trips this, not only one in this module. Run the tool "
+        "against a copy — see _seed_plugin_copy().")
 
 
 if __name__ == "__main__":
