@@ -140,6 +140,23 @@ run "severity=ERROR is consumed" "$PLUGIN" python3 programs/error_diagnostic_con
 run "watchdog compliance"           "$PLUGIN" python3 programs/loop_watchdog_compliance_check.py
 run "marketplace version sync"      "$PLUGIN" python3 programs/marketplace_version_sync_check.py
 run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit.py
+# vibe-ic#1241 — authored, tested and merged with NOTHING but its own unit test
+# invoking it, which is the shape `checker_execution_wiring_audit` blocks on.
+# This one is a RATCHET, and a ratchet nothing runs is not a ratchet: its whole
+# value is refusing the 566th non-atomic writer, which it can only do if it is
+# recomputed on every landing.
+#
+# MEASURED on this tree before wiring — a live verdict over a real denominator,
+# not a new red:
+#
+#     1138 program(s) parsed; 565 write their declared report destination
+#     NON-atomically (residual baseline 565)
+#     [PASS] no new non-atomic declared-report write.   rc=0
+#
+# The 565 residual is disclosed by the gate on every run rather than hidden
+# behind the PASS, which is what makes "no NEW one" an honest verdict instead
+# of a clean-looking number over an unstated debt.
+run "atomic declared-report writes" "$PLUGIN" python3 programs/atomic_artifact_write_check.py programs
 
 # vibe-ic#559 — two PLUGIN-scoped self-checks that were registered in the
 # per-project P0 umbrella, which cannot invoke them: they take no project, so
