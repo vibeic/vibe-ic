@@ -441,6 +441,85 @@ def derived_dependencies(step_id) -> Tuple[Tuple[str, str, str], ...]:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# LAYER 3 — WHAT THE FLOW ITSELF SAYS, which layers 1 and 2 never asked
+# ══════════════════════════════════════════════════════════════════════
+#: Layers 1 and 2 RECONSTRUCT the consumer relation from evidence: paths the
+#: gate names, string constants the gate program holds. That reconstruction is
+#: careful and it is live, and it finds 16 pairs over 12 steps.
+#:
+#: The flow WRITES THE ANSWER DOWN. `required_inputs: [{from: X, path: …}]` is
+#: the flow stating, in its own grammar, which step this one reads from — 75
+#: intra-flow pairs over 54 of the 63 steps. This dimension asks "is blocks_on
+#: the true upstream set" and, until this layer, checked it against a 16-pair
+#: reconstruction while a 69-pair declaration sat unread in the same file.
+#:
+#: This is not a hypothesis about the field's meaning. `flow_dependency_graph_
+#: check`'s own docstring states it: P0 "gained the ordering edge its own
+#: `required_inputs: [{from: 1}]` had always implied". And the flow says it at
+#: step 1, at the point of the repair: "The dependency was always REAL and
+#: never DECLARED … Declaring the edge arms the guard that already exists."
+#:
+#: THE FAIL-SAFE CLASS, BY STRUCTURE: a `from` value naming no step this flow
+#: declares is an input from OUTSIDE the flow — the user's documents, the PDK,
+#: a board. No `blocks_on` edge to a step that does not exist is possible, so
+#: demanding one would accuse every genuine entry point. Decided with the same
+#: test `flow_dependency_graph_check` uses for a dangling reference, never by
+#: matching the word `external`: a word list with one word in it is still a
+#: word list.
+@functools.lru_cache(maxsize=None)
+def declared_input_dependencies(step_id) -> Tuple[Tuple[str, str], ...]:
+    """``((producer_step, evidence), ...)`` from this step's `required_inputs`.
+
+    Only entries whose ``from`` names a step THIS FLOW DECLARES. Deduped and
+    sorted; ``producer == consumer`` dropped (a step declaring it reads its own
+    output is not an ordering dependency).
+    """
+    consumer = F.normalize_id(step_id)
+    out: Set[Tuple[str, str]] = set()
+    for entry in (F.step_by_id(step_id).get("required_inputs") or []):
+        if not isinstance(entry, dict) or entry.get("from") is None:
+            continue
+        raw = entry["from"]
+        producer = F.normalize_id(raw)
+        if not F.has_step(producer) or producer == consumer:
+            continue
+        what = entry.get("path") or entry.get("outputs") or "outputs"
+        out.add((producer,
+                 f"required_inputs declares `from: {raw}` for {what!r}"))
+    return tuple(sorted(out))
+
+
+@functools.lru_cache(maxsize=None)
+def external_input_declarations(step_id) -> Tuple[str, ...]:
+    """``from`` values that name no declared step — inputs from outside."""
+    out: Set[str] = set()
+    for entry in (F.step_by_id(step_id).get("required_inputs") or []):
+        if isinstance(entry, dict) and entry.get("from") is not None:
+            if not F.has_step(F.normalize_id(entry["from"])):
+                out.add(str(entry["from"]))
+    return tuple(sorted(out))
+
+
+#: SHRINK-ONLY. The steps whose layer-3 edge is a KNOWN, FILED, DEFERRED
+#: defect: vibe-ic#1070. Every one of them is a real unguarded dependency and
+#: the repair is one yaml list each; the owner deferred it on SEQUENCING —
+#: declaring these edges is transitive and would newly put the producer into
+#: the ancestry of 44 / 14 / 4 of the 63 steps, which on an already-red main
+#: destroys the only delta the repair agents have to read.
+#:
+#: This register may only SHRINK. A NEW step in this state fails immediately;
+#: these three are named, evidenced and pointed at the issue rather than
+#: silently forgiven. When #1070 lands, this set empties and
+#: `test_d5_the_deferred_register_only_shrinks` reddens if it does not.
+_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {
+    "A1": ("D1",),      # reads L1_DATASHEET.json + L5_ADI_SPEC.json
+    "25": ("24",),      # reads IR-drop's outputs: all
+    "M1": ("37",),      # reads phase3/stage4/gds/*.gds
+}
+
+
+
+# ══════════════════════════════════════════════════════════════════════
 # The declared graph
 # ══════════════════════════════════════════════════════════════════════
 @functools.lru_cache(maxsize=1)
@@ -629,6 +708,26 @@ def d5_problems(step_id) -> List[str]:
             f"required_output of step {producer}, but {producer} is not in "
             f"{sid}'s blocks_on closure (blocks_on={list(parents)}, closure="
             f"{sorted(closure)}). Evidence: {evidence}{consequence}"
+        )
+
+    # ── D5-DECLARED-INPUT-UNORDERED (layer 3) ────────────────────────
+    # The half of "is blocks_on the true upstream set" that reads the flow's
+    # own answer instead of reconstructing one. Deliberately SEPARATE from
+    # D5-MISSING-EDGE: that clause's evidence is an artefact read, this one's
+    # is a DECLARATION, and collapsing them would lose which of the two found
+    # the defect — the distinction that decides whether the repair is an edge
+    # or a corrected `required_inputs` entry.
+    for producer, evidence in declared_input_dependencies(step_id):
+        if producer in closure:
+            continue
+        if producer in _DEFERRED_LAYER3_EDGES.get(sid, ()):
+            continue                      # named in the shrink-only register
+        problems.append(
+            f"D5-DECLARED-INPUT-UNORDERED: step {sid} declares it reads step "
+            f"{producer}'s output, but {producer} is not in {sid}'s blocks_on "
+            f"closure (blocks_on={list(parents)}, closure={sorted(closure)}), "
+            f"so flow_step_execution_coverage_check's ordering guard cannot "
+            f"red {sid} when {producer} FAILs. Evidence: {evidence}"
         )
 
     # ── D5-GRAPH-DISAGREE (cross-check, not delegation) ──────────────
@@ -1140,3 +1239,121 @@ def matrix_cell_state(step_id) -> str:
     if _waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# LAYER 3's own anti-starvation and anti-forgiveness guards
+# ══════════════════════════════════════════════════════════════════════
+#: Live floors, same idiom as the layer-1+2 trio above: a FLOOR, so a new
+#: `required_inputs` entry is free and a silent shrink is not.
+_DECLARED_DEP_STEPS_FLOOR = 54
+_DECLARED_DEP_PAIRS_FLOOR = 69
+
+
+def test_d5_declared_input_denominator_is_disclosed():
+    """Layer 3 must not quietly become vacuous either.
+
+    The measured figures on the tree that added this layer, and the reason the
+    layer exists at all:
+
+        layer 1+2 (RECONSTRUCTED from artefact reads) : 12 steps, 16 pairs
+        layer 3   (DECLARED by the flow itself)       : 54 steps, 69 pairs
+
+    A dimension asking "is `blocks_on` the true upstream set" was checking it
+    against the 16 and had never read the 69. If `required_inputs` is ever
+    renamed, restructured or emptied, this clause resolves to zero pairs and
+    all 63 cells go green on a question nobody asked — the exact starvation
+    shape `test_d5_derived_dependency_denominator_is_disclosed` exists for.
+    """
+    steps = [sid for sid in F.step_ids() if declared_input_dependencies(sid)]
+    pairs = {(F.normalize_id(sid), p)
+             for sid in F.step_ids()
+             for p, _ in declared_input_dependencies(sid)}
+    assert len(steps) >= _DECLARED_DEP_STEPS_FLOOR, (
+        f"layer-3 consumer relation SHRANK: {len(steps)} steps declare an "
+        f"intra-flow `required_inputs.from`, floor is "
+        f"{_DECLARED_DEP_STEPS_FLOOR}. A shrinking denominator is how this "
+        f"clause becomes a suite of vacuous passes."
+    )
+    assert len(pairs) >= _DECLARED_DEP_PAIRS_FLOOR, (
+        f"layer-3 pairs SHRANK: {len(pairs)} < {_DECLARED_DEP_PAIRS_FLOOR}"
+    )
+
+
+def test_d5_external_inputs_are_named_not_silently_dropped():
+    """The fail-safe class, counted rather than assumed.
+
+    Layer 3 declines every `from` that names no declared step. That discount
+    is correct — no edge to a non-existent step is possible — and it is also
+    the one place layer 3 could silently forgive everything: if `has_step`
+    ever started returning False for real ids, every pair would be discounted
+    as "external" and the clause would go green over nothing.
+    """
+    external = {F.normalize_id(sid): external_input_declarations(sid)
+                for sid in F.step_ids() if external_input_declarations(sid)}
+    total_from = sum(
+        1 for sid in F.step_ids()
+        for e in (F.step_by_id(sid).get("required_inputs") or [])
+        if isinstance(e, dict) and e.get("from") is not None
+    )
+    n_ext = sum(len(v) for v in external.values())
+    assert n_ext < total_from / 2, (
+        f"{n_ext} of {total_from} `required_inputs.from` values resolve to no "
+        f"declared step. Layer 3 discounts every one of them, so at this "
+        f"proportion the clause is forgiving more than it measures: {external}"
+    )
+    assert external, (
+        "no step declares an input from outside the flow, so the fail-safe "
+        "branch of layer 3 is unreachable and untested on this tree"
+    )
+
+
+def test_d5_the_deferred_register_only_shrinks():
+    """`_DEFERRED_LAYER3_EDGES` is an admission, not an exemption.
+
+    Every entry must still be a LIVE defect. When vibe-ic#1070 lands, each
+    edge gains its `blocks_on` declaration, the entry stops describing
+    anything, and this test reddens until it is deleted — so the register
+    cannot outlive the debt it records, which is how a shrink-only baseline
+    turns into a permanent amnesty.
+    """
+    stale = []
+    for sid, producers_ in sorted(_DEFERRED_LAYER3_EDGES.items()):
+        assert F.has_step(sid), f"deferred register names unknown step {sid!r}"
+        closure = ancestors(sid)
+        declared = {p for p, _ in declared_input_dependencies(sid)}
+        for producer in producers_:
+            if producer not in declared:
+                stale.append(f"{sid} no longer declares it reads {producer}")
+            elif producer in closure:
+                stale.append(
+                    f"{sid} -> {producer} is now ORDERED (closure="
+                    f"{sorted(closure)}); vibe-ic#1070 has landed for this "
+                    f"edge, so delete the register entry"
+                )
+    assert not stale, (
+        "the deferred-edge register no longer describes live defects — it may "
+        "only SHRINK, and shrinking means deleting the entry: " + "; ".join(stale)
+    )
+
+
+def test_d5_the_deferred_register_is_the_only_thing_holding_those_cells_green():
+    """Paired control: remove the forgiveness and the three cells must go red.
+
+    A register that forgives nothing is indistinguishable from no register,
+    and would let a future edit quietly drop the real charge while this file
+    still looked like it was tracking three defects.
+    """
+    # deduped by (consumer, producer): A1 declares `from: D1` TWICE, once for
+    # L1_DATASHEET.json and once for L5_ADI_SPEC.json. Two declarations, one
+    # missing edge — the register records edges, so the comparison must too.
+    charged = {(sid, producer)
+               for sid in _DEFERRED_LAYER3_EDGES
+               for producer, _ in declared_input_dependencies(sid)
+               if producer not in ancestors(sid)}
+    registered = {(sid, p)
+                  for sid, ps in _DEFERRED_LAYER3_EDGES.items() for p in ps}
+    assert charged == registered, (
+        f"the register and the live measurement disagree: measured "
+        f"{sorted(charged)}, registered {sorted(registered)}"
+    )
