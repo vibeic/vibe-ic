@@ -366,7 +366,15 @@ def test_l_rst_async_n_wrong_fails():
 # --------------------------------------------------------------------------
 # (m) TRIGGER guard: a clocked arithmetic example with an un-timed start/valid
 #     handshake -> SKIP (cannot reproduce the pulse), never a false block.
+#
+#     Marked, unlike the other unmarked tests in this file, because it asserts
+#     WHICH skip: without iverilog the verdict is SKIP too, for an unrelated
+#     reason ("iverilog/vvp not on PATH"), so `verdict == "SKIP"` alone is
+#     satisfied by a cause this test is not about. The reason-check below is
+#     what tells the two apart, and it needs the toolchain to be present for
+#     the trigger reason to be the one that fires.
 # --------------------------------------------------------------------------
+@_skip_no_iv
 def test_m_untimed_trigger_skips():
     prompt = "Pipelined mult. Example: 6 * 7 = 42.\n"
     rtl = ("module pm(input clk, input start, input [7:0] a, input [7:0] b,\n"
