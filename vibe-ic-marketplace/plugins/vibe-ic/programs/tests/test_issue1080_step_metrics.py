@@ -47,9 +47,29 @@ sys.path.insert(0, str(PROGRAMS))
 import step_metrics as sm  # noqa: E402
 
 
+#: Every bounded call in this file, so the four sites cannot drift apart the
+#: way four hand-copied literals did (vibe-ic#1241).
+#:
+#: WHY 30 AND NOT 120/180. `--timeout-method=thread` takes the SESSION down,
+#: not the test, so a bound above the harness ceiling is a promise the harness
+#: will not keep: pytest kills the run at 180 s first and every other file in
+#: the subset loses its verdict. `ci_harness_timeout_ceiling_check` resolves
+#: that ceiling from the workflows as `min(harness bound) // 3` = **60 s**, and
+#: the four bounds here were 120 s and 180 s — above it, therefore unreachable.
+#:
+#: 30 s is chosen from MEASUREMENT, not by lowering 180 until the gate is
+#: quiet. Every call this file bounds is one short `python3 <program>` run over
+#: an empty `tmp_path` project; the whole 20-test file runs in **1.08 s** and
+#: its slowest single test is **0.08 s**. 30 s is ~375x the slowest measured
+#: call, so it still absorbs a loaded CI box by a wide margin, and it is half
+#: the ceiling, so a test making two such calls is still inside the budget.
+_BOUND_S = 30
+
+
 def _run(*args):
     return subprocess.run([sys.executable, str(PROGRAMS / "step_metrics.py"),
-                           *args], capture_output=True, text=True, timeout=120)
+                           *args], capture_output=True, text=True,
+                          timeout=_BOUND_S)
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +254,7 @@ def test_the_wired_gate_emits_its_own_metric(tmp_path):
     proj.mkdir()
     subprocess.run([sys.executable,
                     str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
-                   capture_output=True, text=True, timeout=180)
+                   capture_output=True, text=True, timeout=_BOUND_S)
     merged, prov = sm.collect(proj)
     assert prov["step_count"] == 1, (prov, merged)
     assert "11__coverage__passed" in merged, merged
@@ -248,7 +268,7 @@ def test_the_metrics_sink_cannot_change_the_gate_s_verdict(tmp_path, monkeypatch
     proj.mkdir()
     a = subprocess.run([sys.executable,
                         str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=_BOUND_S)
     broken = tmp_path / "broken"
     broken.mkdir()
     (broken / "step_metrics.py").write_text("raise RuntimeError('sink down')\n")
@@ -256,5 +276,5 @@ def test_the_metrics_sink_cannot_change_the_gate_s_verdict(tmp_path, monkeypatch
     env["PYTHONPATH"] = str(broken)
     b = subprocess.run([sys.executable,
                         str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
-                       capture_output=True, text=True, timeout=180, env=env)
+                       capture_output=True, text=True, timeout=_BOUND_S, env=env)
     assert a.returncode == b.returncode, (a.returncode, b.returncode)
