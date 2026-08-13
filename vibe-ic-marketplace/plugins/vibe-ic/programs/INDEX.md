@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1101
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1101)
+- **Total programs (excluding helpers / shims):** 1102
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1102)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1092 |
+| `any` | 1093 |
 
 ## Alphabetical listing
 
@@ -797,6 +797,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ppa_area_threshold_check` | any | — | v1.0 plugin gate (ORGANIC #729). |
 | `ppa_head_to_head_check` | any | — | A PPA head-to-head is a claim about SILICON, so it has to survive the four ways such a claim goes wrong. vibe-ic#1121. |
 | `ppa_predict_aggregate` | any | v0.1.50 | PPA predict aggregator (Pattern-B → program). |
+| `pr_base_reachability_check` | any | — | a PR whose base cannot reach `main` is not landable, and `mergeable` cannot say so (vibe-ic#1364). |
 | `practical_notes_specificity_check` | any | — | meta-gate for plugin docs. |
 | `pre_awake_silence_check` | any | — | M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak... |
 | `prefix_adder_synth_recipe` | any | — | parallel-prefix adder structuring (QoR recipe). |
@@ -1173,7 +1174,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1092 programs)
+### `any` (1093 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1941,6 +1942,7 @@ _(no programs in this group)_
 - `ppa_area_threshold_check` — v1.0 plugin gate (ORGANIC #729).
 - `ppa_head_to_head_check` — A PPA head-to-head is a claim about SILICON, so it has to survive the four ways such a claim goes wrong. vibe-ic#1121.
 - `ppa_predict_aggregate` — PPA predict aggregator (Pattern-B → program).  _[v0.1.50]_
+- `pr_base_reachability_check` — a PR whose base cannot reach `main` is not landable, and `mergeable` cannot say so (vibe-ic#1364).
 - `practical_notes_specificity_check` — meta-gate for plugin docs.
 - `pre_awake_silence_check` — M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak...
 - `prefix_adder_synth_recipe` — parallel-prefix adder structuring (QoR recipe).
