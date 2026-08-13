@@ -619,7 +619,27 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-13: 120 -> 121, and 134 -> 135 declared. Step D1 now declares
+# `phase1/generated_docs/L21_POWER_INTENT.json`, the phase-1 layer document that
+# no step owned. d7 charged it to M2, but declaring it there asserts D1 -> M2
+# while M2 already descends from D1 -- a CIRCULAR edge that reddens d5[D1] and
+# d5[15]. Every L-doc this flow declares at all is declared on D1 (13 of 13,
+# measured), and D1 is itself the step that runs
+# `l21_macro_supply_rail_declared_check`, so on its real producer the edge is
+# intra-step and no closure changes.
+#
+# The new entry is decided LIVE like the other 120 -- PRODUCED_BY_RUN resolved
+# against spm/v1.9.96_gf180mcuD, the same root the twelve sibling L-doc entries
+# cite. The guarded property -- "no evidence from outside the commit" -- was
+# CHECKED, not assumed: `git ls-files --error-unmatch` exits 0 on that path, it
+# is 758 B non-empty at HEAD, and nothing here resolves through $HOME. The size
+# was measured from the tracked tree rather than transcribed from a sibling row.
+#
+# Scope of the increase: 9 of the 10 admissible run roots carry the artefact
+# (only the unversioned `benchmark-data/ic/u_hawaii_adc` parent does not), so
+# this is not one lucky root. It is NOT an increase in independently-produced
+# evidence -- the 104 protocol synthesisers ENRICH L21, they do not create it.
+_LIVE_ENTRY_COUNT = 121
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.

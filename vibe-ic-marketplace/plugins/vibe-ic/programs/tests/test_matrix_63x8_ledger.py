@@ -437,8 +437,15 @@ def test_output_entries_classify_into_the_four_kinds():
     # VACUOUS_PASS with both reports written becomes MISSING with none.
     # test_flow_declaration_does_not_silence_its_producer.py holds that
     # distinction live for both steps.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    #
+    # 2026-08-14: 134 -> 135, FILE 100 -> 101. The ONE new entry is step D1's
+    # `phase1/generated_docs/L21_POWER_INTENT.json`, moved onto its real
+    # producer by this branch — D1 runs `l21_macro_supply_rail_declared_check`
+    # and already declares the other 13 of 13 L-docs. GLOB and ANY_OF are
+    # untouched, which is what says the entry is a plain FILE and not a new
+    # shape: measured Counter is {FILE: 101, ANY_OF: 22, GLOB: 12}.
+    assert sum(seen.values()) == 135, seen
+    assert seen[F.FILE] == 101
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
