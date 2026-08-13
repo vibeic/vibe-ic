@@ -148,3 +148,150 @@ def test_cli_reads_a_json_file_and_needs_no_network(tmp_path, capsys):
     assert "#10" in out
     # It must not present itself as a verdict.
     assert "NOT 'duplicate'" in out
+
+
+# --------------------------------------------------------------------------
+# region 3 — same FILE, no conflict, no shared claim (vibe-ic#1413 review)
+#
+# Measured on this program's own branch: of eight PRs in four hand-found
+# competing groups, SIX claim no issue, so claim-grouping had nothing to group
+# them by. These pin the extension that covers them.
+# --------------------------------------------------------------------------
+def _pra(number, files, body="", title="", added=None):
+    pr = _pr(number, files, body, title)
+    if added is not None:
+        pr["added"] = added
+    return pr
+
+
+def test_two_unclaimed_prs_sharing_a_file_are_reported():
+    """The six-of-eight case: no claim anywhere, so only the path can group."""
+    prs = [_pra(1, ["programs/a.py"]), _pra(2, ["programs/a.py"])]
+    assert [(a, b) for a, b, _, _ in G.path_overlap_pairs(prs)] == [(1, 2)]
+
+
+def test_unclaimed_prs_sharing_NOTHING_are_not_reported():
+    """The paired guard for the test above. A rule that reported every pair
+    would 'find' all 19110 pairs in the queue and be worthless."""
+    prs = [_pra(1, ["programs/a.py"]), _pra(2, ["programs/b.py"])]
+    assert G.path_overlap_pairs(prs) == []
+
+
+def test_a_shared_claim_is_left_to_the_claim_report():
+    """Not because it matters less — `invisible_pairs` already has it, and a
+    reviewer reading both lists wants them disjoint."""
+    prs = [_pra(1, ["programs/a.py"], body="Closes #9"),
+           _pra(2, ["programs/a.py"], body="Closes #9")]
+    assert G.path_overlap_pairs(prs) == []
+    # ...and it is genuinely reported by the other list, not merely dropped.
+    assert [(a, b) for _, a, b in G.invisible_pairs(prs)] == []  # they collide
+    assert G.shares_a_file(prs) is True
+
+
+def test_pairs_are_ranked_by_how_much_they_overlap():
+    """An identical file set must outrank a one-file brush, because the output
+    is read top-down and truncated wherever the reader loses interest."""
+    prs = [_pra(1, ["p/a.py", "p/b.py"]),
+           _pra(2, ["p/a.py", "p/b.py"]),          # identical -> 100%
+           _pra(3, ["p/a.py"] + [f"p/x{i}.py" for i in range(8)])]
+    ranked = G.path_overlap_pairs(prs)
+    assert (ranked[0][0], ranked[0][1]) == (1, 2)
+    assert ranked[0][2] == 1.0
+    assert ranked[0][2] > ranked[-1][2]
+
+
+def test_the_hot_floor_drops_the_generated_index_but_keeps_the_flow_yaml():
+    """Measured on the 196-PR queue of 2026-08-14: INDEX.md 27 PRs,
+    repo_hygiene_gates.sh 14, flow yaml 9. The floor must sit ABOVE 9 — the
+    flow yaml's nine include #1239/#1258, a real competing pair this program
+    exists to surface, so swallowing it would defeat the extension."""
+    assert G.default_hot_floor(196) == 10
+    assert G.default_hot_floor(196) > 9
+    # tiny queues must not end up with a floor of 0, which would hide everything
+    assert G.default_hot_floor(1) == 5
+
+    prs = [_pra(i, ["shared/hot.py", f"p/own{i}.py"]) for i in range(12)]
+    assert "shared/hot.py" in G.hot_paths(prs, floor=10)
+    assert G.path_overlap_pairs(prs, floor=10) == []
+    # paired guard: below the floor the SAME file is signal again
+    assert G.path_overlap_pairs(prs, floor=99) != []
+
+
+# --------------------------------------------------------------------------
+# add/add — the one output here that is a fact, not advice
+# --------------------------------------------------------------------------
+def test_two_prs_creating_the_same_path_cannot_both_land():
+    """Measured 2026-08-14: four such pairs among 196 open PRs, every one
+    reporting MERGEABLE on BOTH sides, because that flag compares a PR to main
+    and never to its batch-mates. #1066/#1336 was one; it was closed that
+    afternoon on exactly this evidence."""
+    prs = [_pra(1066, ["p/probe.py"], added=["p/probe.py"]),
+           _pra(1336, ["p/probe.py"], added=["p/probe.py"])]
+    assert G.add_add_pairs(prs) == [(1066, 1336, ["p/probe.py"])]
+
+
+def test_editing_a_file_both_prs_did_not_create_is_not_an_add_add():
+    """The paired guard. Two PRs modifying one existing file usually merge, so
+    calling that un-landable would be a false certainty in the only output of
+    this program that carries a verdict."""
+    prs = [_pra(1, ["p/existing.py"], added=[]),
+           _pra(2, ["p/existing.py"], added=[])]
+    assert G.add_add_pairs(prs) == []
+    # it is still surfaced by the softer report, which is the correct home
+    assert [(a, b) for a, b, _, _ in G.path_overlap_pairs(prs)] == [(1, 2)]
+
+
+def test_a_pr_without_changeType_is_silent_rather_than_guessed():
+    """If `added` is absent, treating every changed path as new would report
+    the whole queue as un-landable. A silence is the honest failure here."""
+    prs = [_pr(1, ["p/a.py"]), _pr(2, ["p/a.py"])]        # no `added` key
+    assert G.add_add_pairs(prs) == []
+    prs2 = [_pra(1, ["p/a.py"], added=["p/a.py"]), _pr(2, ["p/a.py"])]
+    assert G.add_add_pairs(prs2) == []
+
+
+def test_add_add_ignores_the_generated_index():
+    """Every PR adding a program adds its INDEX.md row; that is bookkeeping and
+    regenerates, so it must not be reported as an un-landable collision."""
+    prs = [_pra(1, ["programs/INDEX.md"], added=["programs/INDEX.md"]),
+           _pra(2, ["programs/INDEX.md"], added=["programs/INDEX.md"])]
+    assert G.add_add_pairs(prs) == []
+
+
+# --------------------------------------------------------------------------
+# stacks are related, never competing
+# --------------------------------------------------------------------------
+def _stk(number, files, head, base, body="", title=""):
+    pr = _pra(number, files, body, title)
+    pr["headRefName"], pr["baseRefName"] = head, base
+    return pr
+
+
+def test_a_pr_built_on_another_is_a_stack_not_a_competitor():
+    """#1262 targets #1247's branch, so it shares #1247's files BY
+    CONSTRUCTION. The reviewer's top-ranked "duplicate" was exactly this."""
+    prs = [_stk(1247, ["p/a.py"], "fix/alias-order", "main"),
+           _stk(1262, ["p/a.py"], "fix/sta-alias", "fix/alias-order")]
+    assert G.stacked(prs) == frozenset({(1247, 1262)})
+    assert G.path_overlap_pairs(prs) == []
+
+
+def test_stack_detection_is_transitive():
+    """The queue chains three deep (#1257 <- #1328 <- #1465). Stopping at one
+    hop would call the two ENDS of a chain competitors, which is the same false
+    positive one link further out."""
+    prs = [_stk(1257, ["p/a.py"], "b1", "main"),
+           _stk(1328, ["p/a.py"], "b2", "b1"),
+           _stk(1465, ["p/a.py"], "b3", "b2")]
+    assert G.stacked(prs) == frozenset({(1257, 1328), (1328, 1465),
+                                        (1257, 1465)})
+    assert G.path_overlap_pairs(prs) == []
+
+
+def test_two_branches_off_MAIN_sharing_a_file_are_still_competitors():
+    """The paired guard. If the stack filter swallowed same-base pairs it would
+    silence the whole report — every ordinary PR is based on main."""
+    prs = [_stk(1, ["p/a.py"], "feat/x", "main"),
+           _stk(2, ["p/a.py"], "feat/y", "main")]
+    assert G.stacked(prs) == frozenset()
+    assert [(a, b) for a, b, _, _ in G.path_overlap_pairs(prs)] == [(1, 2)]
