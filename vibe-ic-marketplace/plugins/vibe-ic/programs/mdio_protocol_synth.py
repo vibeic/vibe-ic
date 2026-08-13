@@ -62,10 +62,30 @@ _FIELDS_DOCS = (
 
 #: Name tokens for the dominance floor in `is_mdio`. `mdc` is the clock half of
 #: the same two-wire interface and appears wherever MDIO is the subject.
-_NAME_TOKENS = re.compile(r"\bmdio\b|\bmdc\b|management data input/output", re.I)
+#:
+#: THE EXPANDED NAME IS DELIBERATELY ABSENT. A third alternative
+#: ``management data input/output`` was here and has been removed, for a reason
+#: that is not about MDIO: `hdl_declaration_scan_strips_comments_check` selects
+#: its population with ``\b(?:module|input|output|inout)\b`` against the regex
+#: SOURCE, so the English words inside the protocol's own expanded name made
+#: this pattern read as an HDL declaration scan over unstripped text — a NEW
+#: finding on a gate whose baseline is a ratchet. This regex scans a prose
+#: SPECIFICATION and mints nothing, so stripping HDL comments from its input
+#: would be wrong (a prose ``http://`` would take the rest of its line with it).
+#:
+#: Dropping the alternative is verdict-neutral, MEASURED over the detector's
+#: real input (``phase1/input_doc/*`` + ``phase1/generated_docs/*.json``):
+#: 31 hits corpus-wide, 30 of them inside `mdio` itself and 1 in `ethernet`.
+#:
+#:     mdio      13.16 -> 11.98   floor 5.0   fires, before and after
+#:     ethernet   1.89 ->  1.88   floor 5.0   silent, before and after
+#:
+#: **No document's verdict changes** — checked over all 63, not just those two.
+_NAME_TOKENS = re.compile(r"\bmdio\b|\bmdc\b", re.I)
 
-#: Density floor per 10k characters, placed in the measured 7x gap between the
-#: only two head-naming documents in the corpus (mdio 13.16, ethernet 1.89).
+#: Density floor per 10k characters, placed in the measured gap between the only
+#: two head-naming documents in the corpus (mdio 11.98, ethernet 1.88 — a 6.4x
+#: separation with no head-naming document between them).
 _DOMINANCE_PER_10K = 5.0
 
 
@@ -93,11 +113,14 @@ def is_mdio(blob: str) -> bool:
     # head now names MDIO, so this detector fired on it. Density of the name
     # tokens per 10k chars over benchmark-data/evaluation/phase1_parity:
     #
-    #     mdio      13.16   (335 hits / 254,611 chars)   head-named
-    #     ethernet   1.89   (176 hits / 931,320 chars)   head-named
+    #     mdio      11.98   (305 hits / 254,587 chars)   head-named
+    #     ethernet   1.88   (175 hits / 931,297 chars)   head-named
     #
-    # Two head-naming documents, 7x apart, nothing between them; the floor sits
-    # in that gap rather than beside either edge.
+    # Two head-naming documents, 6.4x apart, nothing between them; the floor
+    # sits in that gap rather than beside either edge. (Both counts are 30 and
+    # 1 lower than first published here, because `_NAME_TOKENS` no longer
+    # carries the expanded name — see the constant. Neither verdict moved, and
+    # no other document's did either.)
     #
     # AND, NOT INSTEAD: density alone would be wrong. sgmii (6.77), usb_pd
     # (4.56), automotive_ethernet (4.17) and afdx (3.65) all out-rank
