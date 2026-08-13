@@ -228,6 +228,15 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # Phase 1 extraction-coverage REPORT (companion to LL-38 gate);
+      # per-doc diagnostic of which verbatim literals from
+      # extraction_patterns.json reached generated_docs/L*.json.
+      # MOVED HERE FROM STEP 1 (Spec-to-RTL): measured on the published
+      # corpus, 75 of the 107 run roots that carry this report carry NO
+      # RTL at all, and 105 of 107 carry D1's own L1_DATASHEET.json --
+      # so it is produced by Phase 1 doc extraction, not by Spec-to-RTL.
+      - "reports/phase1/extraction_coverage_report.md"
+      - "reports/phase1/extraction_coverage_report.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
@@ -483,12 +492,6 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-      # Phase 1 extraction-coverage REPORT
-      # (companion to LL-38 gate). Mandatory deliverable; per-doc
-      # diagnostic of which verbatim literals from
-      # extraction_patterns.json reached generated_docs/L*.json.
-      - "reports/phase1/extraction_coverage_report.md"
-      - "reports/phase1/extraction_coverage_report.json"
     gate:
       files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
       any_of: true
