@@ -153,6 +153,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple  # noqa: F401
+from _atomic_write import write_json_atomic
 
 
 _FAIL_VERDICTS = {"FAIL", "MISSING"}
@@ -491,9 +492,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         rep = check_corpus(corpus)
         if args.json:
-            out = Path(args.json)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(json.dumps(rep, indent=2) + "\n")
+            write_json_atomic(args.json, rep)
         bl = Path(args.baseline) if args.baseline else _HERE / BASELINE_NAME
         now = rep["findings_total"]
         if args.write_baseline:
@@ -554,9 +553,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "findings": [asdict(f) for f in findings[:200]],
     }
     if args.json:
-        out = Path(args.json)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2) + "\n")
+        write_json_atomic(args.json, report)
 
     if verdict == "NOT_EXAMINED":
         why = ("no reports/ tree (pre-output project)"

@@ -76,6 +76,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from _atomic_write import write_json_atomic
 
 # Extensions that carry sign-off EVIDENCE. Deliberately narrow: this gate
 # judges "the proof you pointed at is missing", not "every path in prose".
@@ -518,7 +519,7 @@ def main(argv=None) -> int:
         "passed": not findings and not stale,
     }
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(result, indent=2) + "\n")
+        write_json_atomic(args.json_out, result)
 
     print(f"evidence_citation_resolves_check: {docs} doc(s), "
           f"{cited} citation(s) checked under {root}")

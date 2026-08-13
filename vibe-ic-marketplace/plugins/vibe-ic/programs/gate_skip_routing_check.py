@@ -190,6 +190,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+from _atomic_write import write_text_atomic
 
 _HERE = Path(__file__).resolve().parent
 _PLUGIN = _HERE.parent
@@ -1115,9 +1116,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.json == "-":
             print(text)
         else:
-            out = Path(args.json)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(text + "\n", encoding="utf-8")
+            write_text_atomic(args.json, text + "\n")
 
     if args.table:
         _print_table(res, args.tier or [TIER_CONSUMED, TIER_GATE_SHAPED,
