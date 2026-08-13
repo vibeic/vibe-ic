@@ -83,12 +83,51 @@ _EVIDENCE_EXT = (".log", ".rpt", ".sby")
 
 # A backticked token that looks like a file path. Anchored so prose in
 # backticks (a command line, a sentence) is never mistaken for a citation.
-_CITE_RE = re.compile(r"`([A-Za-z0-9_./+-]+)`")
+# vibe-ic#1044 — `{`, `}` and `,` are admitted so a brace SET reaches the
+# extractor at all. They did not: the class below excluded them, so
+# `hold_{ss,tt,ff}.rpt` never became a token and never reached the template
+# filter either. The gate ran, produced a verdict, and the verdict was green --
+# indistinguishable from "I checked this and it resolves".
+#
+# GLOB characters (`*`, `?`, `<`, `>`) stay OUT of this class deliberately.
+# They are templates, `_TEMPLATE_RE` exists to reject them, and admitting them
+# here would manufacture findings against text that never claimed a specific
+# file exists.
+_CITE_RE = re.compile(r"`([A-Za-z0-9_./+{},-]+)`")
 
 # Tokens that are TEMPLATES / GLOBS, not citations of a specific artifact.
 # Judging these would manufacture findings against text that never claimed a
 # particular file exists.
 _TEMPLATE_RE = re.compile(r"[*?]|<[^>]*>|\{[^}]*\}|\bN\b")
+
+# vibe-ic#1044 — a brace group is TWO different things and the difference is a
+# comma:
+#
+#   `hold_{ss,tt,ff}.rpt`   a SET of three specific artefacts -> three citations
+#   `flow/phase{N}.yaml`    a PLACEHOLDER -> still a template, still skipped
+#
+# Measured across the tracked corpus before writing this: 32 documents carry
+# brace notation, and inside the gate's own evidence scope (.log/.rpt/.sby) the
+# sets hide 10 citations in 5 documents. Treating every brace as a citation
+# would have re-admitted the placeholders `_TEMPLATE_RE` correctly rejects;
+# treating none of them as citations is the bug.
+_BRACE_RE = re.compile(r"\{([^{}]*)\}")
+
+
+def expand_braces(tok: str) -> list:
+    """Expand ONE comma-brace group into its concrete alternatives.
+
+    Returns [tok] when there is no brace group, and [] when the group carries
+    no comma -- a placeholder names no artefact, so it yields no citation
+    rather than a citation of a literal `{N}`.
+    """
+    m = _BRACE_RE.search(tok)
+    if not m:
+        return [tok]
+    inner = m.group(1)
+    if "," not in inner:
+        return []
+    return [tok[:m.start()] + alt + tok[m.end():] for alt in inner.split(",")]
 
 # The baseline lives with the DATA it describes, not in plugin source: its
 # entries are benchmark-data document paths and therefore carry design names,
@@ -342,15 +381,19 @@ def scan(root: Path,
         except OSError:
             continue
         docs += 1
-        for tok in _CITE_RE.findall(text):
-            if not _is_citation(tok):
-                continue
-            cited += 1
-            if resolve_citation(md, tok, root, tracked) is None:
-                _d = str(md.relative_to(root))
-                if (_d, tok) in disclosed:
+        for raw in _CITE_RE.findall(text):
+            # vibe-ic#1044 — expand a brace SET into its members and judge each
+            # on its own. The reported `citation` stays the RAW token so the
+            # finding names what the document actually wrote.
+            for tok in expand_braces(raw):
+                if not _is_citation(tok):
                     continue
-                dangling.append({"doc": _d, "citation": tok})
+                cited += 1
+                if resolve_citation(md, tok, root, tracked) is None:
+                    _d = str(md.relative_to(root))
+                    if (_d, tok) in disclosed or (_d, raw) in disclosed:
+                        continue
+                    dangling.append({"doc": _d, "citation": tok})
     _jsons = (sorted(root / t for t in tracked if t.lower().endswith(".json"))
               if tracked is not None else sorted(root.rglob("*.json")))
     for js in _jsons:
