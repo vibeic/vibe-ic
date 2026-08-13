@@ -26,6 +26,19 @@ PLUGIN = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PLUGIN / "programs"))
 import _atomic_output as AO  # noqa: E402
 
+#: vibe-ic#1241. `ci_harness_timeout_ceiling_check` puts the per-call ceiling at
+#: harness_bound/3 = 180/3 = 60s. A call bounded ABOVE it cannot fire before the
+#: harness does, and pytest's thread-method timeout then kills the SESSION
+#: rather than the test -- the invocation ends with no summary line at all,
+#: which is worse than a failure because nothing names the cause.
+#:
+#: This file's two calls were 120s and 600s. MEASURED, `--durations`: the
+#: slowest test in this module is 0.16s and the whole module is 1.23s over 16
+#: tests. 30s is ~190x the measured worst case and half the ceiling. The bounds
+#: were over-provisioned, not load-bearing; lowering them removes a promise the
+#: harness would not keep rather than tightening a real constraint.
+_SUBPROC_S = 30
+
 REPO = PLUGIN.parents[2]
 
 # A writer that opens its target, writes a PARTIAL document, and is SIGKILLed.
@@ -56,7 +69,7 @@ def _sigkill_writer(tmp_path: Path, mode: str, name: str = "report.json"):
     script.write_text(_KILLER.format(programs=str(PLUGIN / "programs")))
     target = tmp_path / name
     r = subprocess.run([sys.executable, str(script), str(target), mode],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=_SUBPROC_S)
     return target, r
 
 
@@ -277,7 +290,7 @@ def test_the_shared_report_writer_now_publishes_atomically(tmp_path):
     r = subprocess.run(
         [sys.executable, str(prog), str(_CELL), "--mode", "sta",
          "--json", str(out)],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=_SUBPROC_S)
     assert r.returncode == 0, (r.returncode, r.stdout[-400:], r.stderr[-400:])
     assert out.is_file() and json.loads(out.read_text()), out
     assert not list(tmp_path.glob(AO.atomic_output_tmp_glob())), \
