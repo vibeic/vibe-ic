@@ -355,3 +355,129 @@ def test_json_passed_always_agrees_with_the_exit_code(tmp_path, wired):
     assert rep["passed"] is (rc == 0), (
         f"exit={rc} but json.passed={rep['passed']!r}; the report and the "
         "process disagree about the same run")
+# ---------------------------------------------------------------------------
+# The SKILL-only disclosure register must disclose something (vibe-ic#1130).
+#
+# Measured before this was written: deleting an entry from
+# checker_skill_only_reasons.json left the audit at [PASS] exit 0, and setting
+# its reason to "" ALSO left it at [PASS] exit 0 while still printing
+# "(skill-only, reason recorded)" and counting it in "N carry a written
+# reason". Membership was the whole test, so the register could not make a
+# disclosure mean anything.
+#
+# Three-way control, because either arm alone proves nothing:
+#   real reason  -> disclosed, not blocking
+#   blank claim  -> gestured, BLOCKING
+#   no entry     -> neither, not blocking   (pins the policy: silence is
+#                   honest and stays non-blocking; 28 checkers rely on it)
+# ---------------------------------------------------------------------------
+_REAL = ("MEASURED: nothing in the repo produces this checker's input; the "
+         "three discriminating schema fields appear in zero files outside its "
+         "own unit test, and its CLI takes one positional record with no "
+         "corpus loop. Reachable today from the skill that authors the record.")
+
+
+def test_a_real_reason_is_a_disclosure():
+    disclosed, gestured = M.classify_disclosures(["sample_check.py"],
+                                                 {"sample_check.py": _REAL})
+    assert disclosed == ["sample_check.py"]
+    assert gestured == []
+
+
+@pytest.mark.parametrize("reason", ["", "   ", "\n", "unwired", "see above"])
+def test_a_claim_without_a_measurement_is_gestured_not_disclosed(reason):
+    """The bug. Each of these used to count as a written reason."""
+    disclosed, gestured = M.classify_disclosures(["sample_check.py"],
+                                                 {"sample_check.py": reason})
+    assert disclosed == []
+    assert gestured == ["sample_check.py"], reason
+
+
+def test_no_entry_at_all_is_neither_and_stays_non_blocking():
+    """The paired half that keeps the repair honest.
+
+    Without this, the cheapest way to make the gesture check pass is to make
+    ABSENCE blocking too — which would redden the 28 SKILL-only checkers that
+    correctly say nothing, and is a different decision from this one.
+    """
+    disclosed, gestured = M.classify_disclosures(["sample_check.py"], {})
+    assert disclosed == []
+    assert gestured == []
+
+
+def test_the_gesture_finding_actually_blocks(tmp_path, monkeypatch, capsys):
+    """End to end: a blank claim must reach rc=1, not merely be printed.
+
+    The register path is resolved from the PROGRAM's directory, not from
+    --repo-root, so the shipped file is the only one main() can read; the
+    register loader is substituted rather than the file, which is what makes
+    this testable at all.
+    """
+    _tree(tmp_path, skill="run programs/sample_check.py\n")
+    # THREE shipped registers (skill-only reasons, unwired_by_decision, and
+    # the test-only baseline) are read from the PROGRAM's directory
+    # regardless of --repo-root, and each describes checkers this tmp tree
+    # does not have — any one of them decides rc on its own. All three are
+    # substituted so rc answers ONLY the property under test.
+    monkeypatch.setattr(M, "_load_decisions", lambda _p: {})
+    monkeypatch.setattr(M, "_load_baseline", lambda _p: None)
+    monkeypatch.setattr(M, "skill_only_register",
+                        lambda _p: {"sample_check.py": ""})
+    rc = M.main(["--repo-root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "claim a reason and do not state one" in out, out
+    assert "sample_check.py: reason is 0 char(s)" in out, out
+
+
+def test_the_same_tree_with_a_real_reason_does_not_block(tmp_path, monkeypatch,
+                                                          capsys):
+    """The paired arm of the test above, on the identical tree."""
+    _tree(tmp_path, skill="run programs/sample_check.py\n")
+    monkeypatch.setattr(M, "_load_decisions", lambda _p: {})
+    monkeypatch.setattr(M, "_load_baseline", lambda _p: None)
+    monkeypatch.setattr(M, "skill_only_register",
+                        lambda _p: {"sample_check.py": _REAL})
+    rc = M.main(["--repo-root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "(skill-only, reason recorded) sample_check.py" in out, out
+
+
+def test_the_gesture_exit_ALSO_agrees_with_the_json(tmp_path, monkeypatch):
+    """The exit this branch ADDS must take the `_emit` route, not a bare
+    `return 1`.
+
+    vibe-ic#1320 moved the JSON write to the exit specifically so that a
+    verdict added afterwards cannot go on reporting `passed: true` while the
+    process blocks, and its own text names the hazard: *"any `return 1` added
+    below would silently inherit the same lie."* The gesture branch below IS
+    the first exit added after that change, so it is exactly that case — and
+    it is the arm where the lie would be hardest to spot, because it is the
+    newest and fires on the fewest runs.
+
+    Asserting rc alone would not catch it: a bare `return 1` still exits 1.
+    Only the JSON distinguishes the two routes.
+    """
+    root = tmp_path / "repo"
+    _tree(root, skill="run programs/sample_check.py\n")
+    monkeypatch.setattr(M, "skill_only_register",
+                        lambda _p: {"sample_check.py": ""})
+    rc, rep = _main_with_json(tmp_path, root)
+    assert rc == 1, rep
+    assert rep["passed"] is False, (
+        "the gesture exit blocked but its JSON still says passed=true — the "
+        "new branch bypassed `_emit` and re-introduced vibe-ic#1320")
+
+
+def test_PAIRED_a_real_reason_leaves_the_json_passing(tmp_path, monkeypatch):
+    """The other direction on the identical tree: with a real disclosure the
+    gesture branch does not fire, and the JSON must say so rather than being
+    hardcoded false."""
+    root = tmp_path / "repo"
+    _tree(root, skill="run programs/sample_check.py\n")
+    monkeypatch.setattr(M, "skill_only_register",
+                        lambda _p: {"sample_check.py": _REAL})
+    rc, rep = _main_with_json(tmp_path, root)
+    assert rc == 0, rep
+    assert rep["passed"] is True, rep
