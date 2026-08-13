@@ -18,9 +18,12 @@ reset-state transition is clean.  Empirical false-positive surface over all
 chip-AGNOSTIC: fixtures use generic TopModule/clk/resetn/state shapes only.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
@@ -287,6 +290,21 @@ def _stage(tmp_path, prompt_text, sample_body):
     return ds, tmp_path / "run"
 
 
+#: `gates_atomic.py` shells out to `iverilog` and, when it is absent, REFUSES —
+#: correctly — and writes no `gates.json`. The two end-to-end tests below then
+#: read that report and die on `FileNotFoundError` for a path the gate
+#: deliberately never created. A refusal and a disagreement are not the same
+#: result, and a traceback cannot tell them apart.
+#:
+#: Same guard as #1430 / #1433 applied to the same shape in this file; the 11
+#: rule-level tests above need no toolchain and are deliberately left unmarked.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_gate = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="gates_atomic runs iverilog and refuses without it, writing no "
+           "gates.json — these two assert on that report's contents")
+
+
 def _run_gate(ds, run):
     return subprocess.run(
         [sys.executable, str(GATES), "--prob", "ProbP",
@@ -301,6 +319,7 @@ def _block_rules(run):
     return gates, {f["rule"] for f in blk.get("findings", [])}
 
 
+@_needs_gate
 def test_gate_blocks_bug_form(tmp_path):
     ds, run = _stage(tmp_path, _SPEC, _BUG_TERNARY)
     r = _run_gate(ds, run)
@@ -311,6 +330,7 @@ def test_gate_blocks_bug_form(tmp_path):
     assert not (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_canonical_form(tmp_path):
     ds, run = _stage(tmp_path, _SPEC, _CLEAN)
     r = _run_gate(ds, run)
