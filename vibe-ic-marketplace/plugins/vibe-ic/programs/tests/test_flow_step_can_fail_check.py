@@ -103,7 +103,12 @@ def test_a_baseline_entry_that_gained_a_real_gate_forces_the_baseline_to_shrink(
                           "gate": {"optional_program_exit_zero": "x"}},
                          {"id": 1, "name": "still weak",
                           "gate": {"files_exist": ["a"]}},
-                         {"id": 12, "name": "w", "gate": {"files_exist": ["a"]}},
+                         # NOT step 12: it was STRUCK OFF the BASELINE when it
+                         # gained a gate that can fail on content — which is the
+                         # very shrink this test asserts. Listing it here as
+                         # still-weak made the checker report it as a NEW ungated
+                         # step, and that finding is emitted INSTEAD of the
+                         # "must shrink" line this test reads.
                          {"id": 18, "name": "w", "gate": {"files_exist": ["a"]}},
                          {"id": 27, "name": "w", "gate": {"files_exist": ["a"]}},
                          {"id": 32, "name": "w", "gate": {"files_exist": ["a"]}},
