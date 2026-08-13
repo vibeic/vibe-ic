@@ -689,6 +689,61 @@ def replay_results() -> Tuple[L.ReplayResult, ...]:
     return L.replay_many(plan, jobs=8, timeout=REPLAY_TIMEOUT)
 
 
+#: LOCK 2 can fail for reasons that call for OPPOSITE actions, and one sentence
+#: cannot serve them. `ALREADY_RED` means the replay measured NOTHING — the
+#: witness was red before the mutation was applied, so baseline and mutant are
+#: indistinguishable and the ledger is not implicated. `STAYED_GREEN` means the
+#: replay measured, and the gate did not catch an edit it is recorded as
+#: catching. Telling the first story with the second one's words sends the
+#: reader to re-record the ledger, which is the one repair that would delete
+#: the evidence.
+#:
+#: MEASURED COST (vibe-ic#1403): the single sentence this replaces — "the ledger
+#: says this edit reddens the cell; re-running it says otherwise, so the
+#: recorded proof no longer holds" — was printed for an `ALREADY_RED` verdict on
+#: batch R1, and became a standing instruction to investigate "a gate that used
+#: to have teeth no longer does". The witness had been pre-reddened by a PR
+#: adding an unevidenced declaration to step D1. `verdict` carried the right
+#: word all along; the prose beside it contradicted it, and the prose is what
+#: tells the reader what to do.
+_NOT_PROVED_REMEDY = {
+    "ALREADY_RED":
+        "The witness was ALREADY RED before the mutation was applied "
+        "(baseline_rc != 0), so baseline and mutant are indistinguishable and "
+        "this replay proves NOTHING — in either direction. This is the "
+        "anti-vacuity guard refusing a proof it cannot make; the gate has NOT "
+        "lost its teeth and the ledger is NOT stale. Find what reddened the "
+        "WITNESS and fix that. Do NOT re-record the ledger, and do NOT re-pick "
+        "the witness to something still green: both convert a real regression "
+        "in the witness into a green ledger.",
+    "STAYED_GREEN":
+        "The mutation WAS applied and the cell stayed GREEN. This is the real "
+        "one: a gate recorded as catching this edit no longer catches it. Do "
+        "NOT re-record the ledger to match — that deletes the evidence of the "
+        "regression. Fix the gate.",
+    "RED_FOR_ANOTHER_REASON":
+        "The cell went red, but WITHOUT the entry's declared `red_signal`, so "
+        "it failed for a different reason than the one recorded — an import "
+        "error or an unrelated breakage can do this. Read the detail below "
+        "before treating it as either a gate regression or a stale record.",
+    "NO_EDIT_SITE":
+        "The mutation found NO EDIT SITE, so nothing was changed and nothing "
+        "was measured. The recorded edit no longer matches the tree; the "
+        "ledger entry needs its site re-located, not its verdict rewritten.",
+    "NOT_REPLAYABLE":
+        "The replay could not be performed at all — see `not_replayable` in "
+        "the detail. A replay that could not run is never a quiet pass.",
+}
+
+
+def _why_not_proved(r) -> str:
+    """The remedy that matches THIS verdict, not a single catch-all sentence."""
+    return _NOT_PROVED_REMEDY.get(
+        r.verdict,
+        "The ledger says this edit reddens the cell; re-running it says "
+        "otherwise, so the recorded proof no longer holds.")
+
+
 @pytest.mark.parametrize("name", [m.name for m in L.MUTATIONS])
 def test_lock2_the_mutation_really_reddens_its_witness(name):
     """LOCK 2: perform the edit for real and watch the cell go PASS -> FAIL.
@@ -710,8 +765,45 @@ def test_lock2_the_mutation_really_reddens_its_witness(name):
     for r in mine:
         assert r.proved, (
             f"{name} @ step {r.step_id}: {r.verdict}.\n"
-            f"The ledger says this edit reddens the cell; re-running it says "
-            f"otherwise, so the recorded proof no longer holds.\n{r.detail}")
+            f"{_why_not_proved(r)}\n{r.detail}")
+
+
+def test_a_pre_reddened_witness_is_not_reported_as_a_gate_that_lost_its_teeth():
+    """vibe-ic#1403 — the two failures that call for OPPOSITE actions must not
+    share a sentence.
+
+    `ALREADY_RED` (the replay measured nothing) once printed the `STAYED_GREEN`
+    remedy, and that text became a standing instruction to hunt a gate that had
+    not regressed. Both directions are asserted, because a fix that made every
+    verdict say "could not measure" would be the same defect mirrored.
+    """
+    from matrix_mutation_ledger import ReplayResult
+
+    already_red = ReplayResult(
+        mutation="X", dim=3, step_id="D1", applied=True, baseline_rc=1,
+        mutant_rc=1, signal_seen=True, detail="")
+    stayed_green = ReplayResult(
+        mutation="X", dim=3, step_id="D1", applied=True, baseline_rc=0,
+        mutant_rc=0, signal_seen=True, detail="")
+    assert already_red.verdict == "ALREADY_RED"
+    assert stayed_green.verdict == "STAYED_GREEN"
+
+    red_msg = _why_not_proved(already_red)
+    green_msg = _why_not_proved(stayed_green)
+    assert red_msg != green_msg, "the two verdicts still share one sentence"
+
+    # ALREADY_RED must EXONERATE the gate and the ledger, and must not send the
+    # reader to re-record or re-pick — the two evidence-deleting repairs.
+    assert "proves NOTHING" in red_msg
+    assert "NOT lost its teeth" in red_msg
+    assert "Do NOT re-record" in red_msg and "do NOT re-pick" in red_msg
+    assert "no longer catches it" not in red_msg
+
+    # STAYED_GREEN must still accuse the gate — this is the real regression and
+    # softening it would be the worse failure.
+    assert "no longer catches it" in green_msg
+    assert "Fix the gate." in green_msg
+    assert "proves NOTHING" not in green_msg
 
 
 def test_the_replay_actually_ran_and_is_not_starved(record_property):
