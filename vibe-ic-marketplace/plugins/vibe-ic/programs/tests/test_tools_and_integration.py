@@ -108,10 +108,30 @@ def _skill_count(skills_root):
                 if d.is_dir() and (d / "SKILL.md").exists()])
 
 
+#: REGENERABLE, not shipped, and the reason this gate cried wolf.
+#:
+#: `skills/` carries importable `.py` files, so merely COLLECTING one makes
+#: CPython write `__pycache__/*.pyc` beside it — with no tool run and no test
+#: having written any CONTENT. Measured: `pytest --collect-only` on a single
+#: `skills/**/test_*.py`, executing nothing, takes the tree from 0 `.pyc` to 1.
+#: Those bytes are git-ignored, so `git status skills/` stays EMPTY while the
+#: digest moves, which is why the failure reads as a phantom.
+#:
+#: This is an ALIGNMENT, not a relaxation. `suite_write_guard`'s contract is
+#: TRACKED blocking / UNTRACKED blocking / IGNORED advisory-never-blocking, and
+#: counting bytecode made this assertion stricter than the gate it is the
+#: test-side of, in the one direction that can never reach a commit. Nothing
+#: else is excluded: a real shippable file planted in the tree still fails.
+_REGENERABLE = frozenset(("__pycache__", ".pytest_cache"))
+
+
 def _digest_tree(root):
-    """md5 over (relative path, bytes) of every file under `root`."""
+    """md5 over (relative path, bytes) of every SHIPPABLE file under `root`."""
     h = hashlib.md5()
     for p in sorted(q for q in root.rglob("*") if q.is_file()):
+        rel = p.relative_to(root)
+        if p.suffix == ".pyc" or _REGENERABLE & set(rel.parts):
+            continue
         h.update(str(p.relative_to(root)).encode())
         h.update(b"\0")
         h.update(p.read_bytes())
