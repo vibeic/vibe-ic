@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1077
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1077)
+- **Total programs (excluding helpers / shims):** 1078
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1078)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1068 |
+| `any` | 1069 |
 
 ## Alphabetical listing
 
@@ -1062,6 +1062,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `vacuous_testbench_check` | any | — | Phase-2 gate against VACUOUS testbenches. |
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vector_ops_synth` | any | — | deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder. |
+| `velocity_report_gen` | any | — | the four public dimensions, derived, with landed-and-gated as the only legal denominator (vibe-ic#1120). |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables. |
 | `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C). |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
@@ -1149,7 +1150,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1068 programs)
+### `any` (1069 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2180,6 +2181,7 @@ _(no programs in this group)_
 - `vacuous_testbench_check` — Phase-2 gate against VACUOUS testbenches.
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vector_ops_synth` — deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder.
+- `velocity_report_gen` — the four public dimensions, derived, with landed-and-gated as the only legal denominator (vibe-ic#1120).
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables.  _[v0.119.30]_
 - `verdict_token_propagation_check` — META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C).
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
