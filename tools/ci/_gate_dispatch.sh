@@ -87,6 +87,11 @@
 # --- state -----------------------------------------------------------------
 GATE_DISPATCH_SUMMARY_JSON=""
 GATE_DISPATCH_LIST_ONLY=0
+#: `--shard I/N` (vibe-ic#1144). -1 = not sharded, run everything.
+GATE_DISPATCH_SHARD_I=-1
+GATE_DISPATCH_SHARD_N=0
+#: Labels this host owns, newline-separated, from `hygiene_shard_plan.py`.
+GATE_DISPATCH_SHARD_LABELS=""
 GATE_DISPATCH_FAIL=0
 GATE_DISPATCH_T0=0
 #: Repo whose corpus is watched, and the path inside it. Both overridable so a
@@ -144,6 +149,23 @@ gate_dispatch_init() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --list) GATE_DISPATCH_LIST_ONLY=1; shift ;;
+      --shard)
+        # `I/N`. The LABEL SET is supplied by --shard-labels rather than
+        # computed here: six hosts must agree on the assignment, and the
+        # one way to guarantee that is for all of them to read the same
+        # plan produced from the same measured profile.
+        case "${2:-}" in
+          */*) GATE_DISPATCH_SHARD_I="${2%%/*}"
+               GATE_DISPATCH_SHARD_N="${2##*/}" ;;
+          *) echo "gate_dispatch: --shard wants I/N" >&2; exit 2 ;;
+        esac
+        shift 2 ;;
+      --shard-labels)
+        [ -r "${2:-}" ] || {
+          echo "gate_dispatch: --shard-labels needs a readable PATH" >&2
+          exit 2; }
+        GATE_DISPATCH_SHARD_LABELS="$(cat "$2")"
+        shift 2 ;;
       --summary-json)
         GATE_DISPATCH_SUMMARY_JSON="${2:-}"
         [ -n "$GATE_DISPATCH_SUMMARY_JSON" ] || {
@@ -151,6 +173,7 @@ gate_dispatch_init() {
         shift 2 ;;
       -h|--help)
         echo "usage: $(basename "${0}") [--list] [--summary-json PATH]"
+        echo "       [--shard I/N --shard-labels PATH]"
         exit 0 ;;
       # An unknown flag is refused rather than ignored: a caller that thinks it
       # asked for a narrower run and silently got the default would read the
@@ -158,6 +181,22 @@ gate_dispatch_init() {
       *) echo "gate_dispatch: unknown argument: $1" >&2; exit 2 ;;
     esac
   done
+  # A shard with no label set would run EVERY gate while reporting itself as a
+  # shard, so six hosts would each run everything and the aggregator would still
+  # see full coverage. Refused rather than defaulted.
+  if [ "$GATE_DISPATCH_SHARD_I" -ge 0 ] && [ -z "$GATE_DISPATCH_SHARD_LABELS" ]
+  then
+    echo "gate_dispatch: --shard needs --shard-labels; refusing to run every" \
+         "gate while calling itself a shard" >&2
+    exit 2
+  fi
+}
+
+#: True when this host owns `$1`. Whole-line match against the plan, so one
+#: label cannot be matched by another that contains it.
+_gate_dispatch_owns() {
+  [ "$GATE_DISPATCH_SHARD_I" -ge 0 ] || return 0
+  printf '%s\n' "$GATE_DISPATCH_SHARD_LABELS" | grep -qxF -- "$1"
 }
 
 # The tree the corpus guard watches: the one the gates are being run against.
@@ -223,6 +262,16 @@ _dispatch() {
   if [ "$GATE_DISPATCH_LIST_ONLY" -eq 1 ]; then
     GATE_STATES+=("LISTED"); GATE_SECONDS+=("0")
     echo "$shown"
+    return 0
+  fi
+  # vibe-ic#1144 — declared here, executed on another host. Its OWN state: not
+  # a pass (nothing ran), not LISTED (this is not --list), not NOT_CHECKED
+  # (nothing refused). The aggregator reconciles the shards' records and proves
+  # every gate ran exactly once; without a distinct state it could not tell
+  # "another host owns this" from "nobody does", and a shard that died would
+  # shrink the denominator silently.
+  if ! _gate_dispatch_owns "$label"; then
+    GATE_STATES+=("OTHER_SHARD"); GATE_SECONDS+=("0")
     return 0
   fi
   echo "── $shown"
@@ -445,11 +494,14 @@ _gate_dispatch_emit() {
     fields+=("${GATE_CORPUS_ITEMS[$i]}" "${GATE_CORPUS_GATES[$i]}"
              "${GATE_CORPUS_STATE[$i]}" "${GATE_CORPUS_NAMES[$i]}")
   done
+  GATE_DISPATCH_SHARD_ID="$([ "$GATE_DISPATCH_SHARD_I" -ge 0 ] \
+      && echo "$GATE_DISPATCH_SHARD_I/$GATE_DISPATCH_SHARD_N")" \
   python3 - "$path" "$total" "$GATE_DISPATCH_LIST_ONLY" "$n" "$nc" \
       ${fields[@]+"${fields[@]}"} \
       ${GATE_UNDISCLOSED_LOOPS[@]+"${GATE_UNDISCLOSED_LOOPS[@]}"} <<'PY'
-import json, sys
+import json, os, sys
 out, total, list_only = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "1"
+SHARD = os.environ.get("GATE_DISPATCH_SHARD_ID") or None
 ng, nc = int(sys.argv[4]), int(sys.argv[5])
 rest = sys.argv[6:]
 gf, rest = rest[:ng * 6], rest[ng * 6:]
@@ -492,6 +544,11 @@ doc = {
     # consumer has to be able to tell those two apart.
     "wrote_corpus": n("WROTE_CORPUS"),
     "deferred": n("LISTED"),
+    # Never folded into `passed` or `deferred`: this host declared the gate
+    # and another host is responsible for it. The aggregator needs the
+    # distinction to prove single coverage.
+    "other_shard": n("OTHER_SHARD"),
+    "shard": SHARD,
     # vibe-ic#957 — `declared` counts GATES. A loop-driven gate's subject is an
     # ITEM, and three green gates over one item is not three items checked.
     # One entry per expansion, present even when it produced no gate at all,
