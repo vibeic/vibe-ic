@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1079
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1079)
+- **Total programs (excluding helpers / shims):** 1080
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1080)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1070 |
+| `any` | 1071 |
 
 ## Alphabetical listing
 
@@ -201,6 +201,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `comb_gate_synth` | any | — | deterministic SOLVER for the COMBINATIONAL GATE / WIRE / BOOLEAN-EXPRESSION family (spec -> RTL). |
 | `comb_state_table_synth` | any | — | deterministic SOLVER for a COMBINATIONAL state transition + output table (the Moore-FSM "combinational portion"). |
 | `commit_msg_nda_check` | any | — | NDA guard for commit MESSAGE text. |
+| `competing_pr_claim_groups` | any | — | Group open PRs by the ISSUE they claim, and name the groups that a merge conflict can never surface (vibe-ic#1411). |
 | `compose_synth` | any | — | a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine. |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
@@ -1151,7 +1152,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1070 programs)
+### `any` (1071 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1326,6 +1327,7 @@ _(no programs in this group)_
 - `comb_gate_synth` — deterministic SOLVER for the COMBINATIONAL GATE / WIRE / BOOLEAN-EXPRESSION family (spec -> RTL).
 - `comb_state_table_synth` — deterministic SOLVER for a COMBINATIONAL state transition + output table (the Moore-FSM "combinational portion").
 - `commit_msg_nda_check` — NDA guard for commit MESSAGE text.
+- `competing_pr_claim_groups` — Group open PRs by the ISSUE they claim, and name the groups that a merge conflict can never surface (vibe-ic#1411).
 - `compose_synth` — a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine.
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
