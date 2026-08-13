@@ -143,12 +143,41 @@ def scan(root: Path) -> Dict[str, Dict[str, object]]:
         if not lic:
             continue
         holder = None
-        for line in head.splitlines():
-            m = _COPYRIGHT.search(line)
-            if m:
-                holder = _clean_holder(m.group(1))
-                if holder:
-                    break
+        for m in _COPYRIGHT.finditer(head):
+            cand = _clean_holder(m.group(1))
+            if not cand:
+                continue
+            # A FILE HEADER IS PROSE TOO (vibe-ic#1241, IDX group (c)).
+            # `_named_without_denial` already asks this of NOTICE; the same
+            # question was never asked of the header the holder is read OUT of,
+            # so a header stating the work is NOT bundled — "originally
+            # Copyright X, no longer vendored here" — was recorded as an
+            # attribution the sentence explicitly disclaims, and NOTICE was
+            # then required to account for a holder the source denies.
+            # Same helper as the sibling above, so the two halves of this gate
+            # cannot drift apart — but scoped to the copyright's OWN LINE.
+            #
+            # MEASURED, and the reason the wide scope is wrong here: NOTICE is
+            # prose written by us; a source header is prose followed by LICENCE
+            # BOILERPLATE. Apache-2.0's own text says "you may not use this
+            # file except in compliance", so an unbounded sentence window
+            # around the copyright returns is_denied='not' on an ORDINARY
+            # Apache header and the holder is SILENTLY DROPPED — turning a gate
+            # against unattributed bundling into a way to lose attributions.
+            # Both directions are pinned by
+            # test_issue1241_header_polarity_is_consulted.py.
+            #
+            # Erring toward the line is the safe direction: a missed denial
+            # over-reports a holder (NOTICE names one work too many — visible,
+            # harmless), a false denial under-reports one (bundled work shipped
+            # with no attribution, which is the §4(d) failure this gate exists
+            # to prevent).
+            lo, hi = _polarity.sentence_scope(
+                head, m.start(), m.end(), extra_breaks=("\n",))
+            if _polarity.is_denied(head[lo:hi]) is not None:
+                continue
+            holder = cand
+            break
         if not holder:
             continue
         rec = found[holder]
