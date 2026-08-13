@@ -11902,6 +11902,28 @@ def _producer_cache_valid_for(out_dir: Path, kind: str) -> Tuple[bool, str]:
     cur_v, cur_r = now["plugin_version"], now["recipe_sha256"]
     rec = _read_producer_identity(out_dir, kind)
 
+    # vibe-ic#1097 S6 — `--force-step <kind>`. ORFS ships `do-2_1_floorplan`
+    # beside `2_1_floorplan` (`flow/Makefile:366-405`) so an external caller can
+    # bypass make's UP-TO-DATE judgement and execute the stage anyway; without
+    # it a close-loop repair re-runs the whole phase to re-test one step.
+    #
+    # WIRED HERE, AND ONLY HERE. This predicate is the ONE freshness authority
+    # the three cache sites consult (:38958 synth, :39053 pnr, :39189 gds) and
+    # each ANDs its answer into the reuse decision, so denying here reaches all
+    # three without touching a call site.
+    #
+    # FRESHNESS ONLY. It does NOT touch `step_preflight`'s input contract: that
+    # answers "does this step have what the flow says it reads", which is not
+    # make's question, and `test_there_is_no_switch_that_turns_a_refusal_into_
+    # a_pass` bans exactly the switch that would weaken it. Forcing means "do
+    # the work again", never "do it blind" — see `step_force`'s docstring.
+    try:
+        import step_force as _sf  # noqa: PLC0415
+        if _sf.is_forced(kind):
+            return (False, _sf.disclosure(kind))
+    except Exception:  # noqa: BLE001 — a missing helper must not break reuse
+        pass
+
     def _deny_unless_forced(msg: str) -> Tuple[bool, str]:
         if os.environ.get(_STALE_PRODUCER_ENV) == "1":
             # The reuse still happens, but it can never LOOK fresh: the token
@@ -38709,7 +38731,37 @@ def main() -> int:
                    help=("Design-for-ECO spare-cell density as a fraction "
                          "of placed cells (default 0.02 = 2%%; clamped to "
                          "[0, 0.2]). 0 disables spare insertion."))
+    # vibe-ic#1097 S6 — ORFS `do-<stage>` (`flow/Makefile:366-405`).
+    p.add_argument("--force-step", action="append", metavar="KIND",
+                   default=None,
+                   help=("Re-run this step even if its cached artefact looks "
+                         "current (repeatable; also comma-separated). "
+                         "Bypasses the FRESHNESS check only — the step's "
+                         "declared input contract is still enforced. "
+                         "An unrecognised KIND is refused, not ignored."))
     args = p.parse_args()
+
+    # vibe-ic#1097 S6 — validate AT THE CLI BOUNDARY and publish through the
+    # environment. The freshness predicate that consumes this sits deep in this
+    # module and is called from three sites; threading a parameter to it would
+    # mean changing the signatures `step_preflight.py:20-40` documents as
+    # un-wrappable. So the flag SETS the channel and the predicate READS it.
+    #
+    # `resolve()` RAISES on an unrecognised kind and we exit 2 rather than
+    # continuing: a run that silently forced nothing reads exactly like one
+    # that re-ran the step, which is the defect class this repo keeps removing.
+    if getattr(args, "force_step", None):
+        import step_force as _sf  # noqa: PLC0415
+        _toks = [t for chunk in args.force_step
+                 for t in str(chunk).replace(",", " ").split()]
+        try:
+            os.environ[_sf.ENV] = _sf.as_env_value(_toks)
+        except _sf.UnknownStep as exc:
+            print(f"[phase3] {exc}", file=sys.stderr)
+            return 2
+        print(f"[phase3] --force-step: {os.environ[_sf.ENV]} "
+              f"(freshness bypass only; the input contract still applies)",
+              file=sys.stderr)
 
     # The container name is threaded EXPLICITLY into every step (step_pnr,
     # step_drc, ...), but several PDK-resolution helpers read it from
