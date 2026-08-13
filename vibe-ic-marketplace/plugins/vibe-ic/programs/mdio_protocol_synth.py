@@ -33,6 +33,7 @@ Module-level ``is_mdio(blob)`` is the content-only detector.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -59,6 +60,15 @@ _FIELDS_DOCS = (
 )
 
 
+#: Name tokens for the dominance floor in `is_mdio`. `mdc` is the clock half of
+#: the same two-wire interface and appears wherever MDIO is the subject.
+_NAME_TOKENS = re.compile(r"\bmdio\b|\bmdc\b|management data input/output", re.I)
+
+#: Density floor per 10k characters, placed in the measured 7x gap between the
+#: only two head-naming documents in the corpus (mdio 13.16, ethernet 1.89).
+_DOMINANCE_PER_10K = 5.0
+
+
 def is_mdio(blob: str) -> bool:
     """Content-only MDIO detector with I2C / SPI / JTAG MUTEX."""
     if not blob:
@@ -77,6 +87,23 @@ def is_mdio(blob: str) -> bool:
     name_in_head = ("mdio" in head or "management data input/output" in head
                     or "management data input" in head)
     if not name_in_head:
+        return False
+    # SUBJECT-DOMINANCE, MEASURED (residue of vibe-ic#1351). Naming the protocol
+    # in the head WAS the whole test, and the corpus outgrew it: `ethernet`'s
+    # head now names MDIO, so this detector fired on it. Density of the name
+    # tokens per 10k chars over benchmark-data/evaluation/phase1_parity:
+    #
+    #     mdio      13.16   (335 hits / 254,611 chars)   head-named
+    #     ethernet   1.89   (176 hits / 931,320 chars)   head-named
+    #
+    # Two head-naming documents, 7x apart, nothing between them; the floor sits
+    # in that gap rather than beside either edge.
+    #
+    # AND, NOT INSTEAD: density alone would be wrong. sgmii (6.77), usb_pd
+    # (4.56), automotive_ethernet (4.17) and afdx (3.65) all out-rank
+    # `ethernet` and are correctly silent today only because they never name it
+    # up front.
+    if len(_NAME_TOKENS.findall(low)) * 10000.0 / max(len(low), 1) < _DOMINANCE_PER_10K:
         return False
     # Name token (structural identifier) — NECESSARY condition.
     name_token = ("mdio" in low or "management data input/output" in low
