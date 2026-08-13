@@ -241,6 +241,13 @@ ARTIFACT_SUFFIXES: FrozenSet[str] = frozenset(
 )
 
 #: ``open()`` modes that write. ``r`` alone never matches; ``r+`` does.
+# vibe-ic#1265 — a write routed through `_atomic_output` is still a write.
+# These are ARGUMENT-typed (path is arg 0), unlike `write_text`/`write_bytes`
+# which are receiver-typed. `atomic_output()` (the context manager) is NOT
+# here: it yields a TEMP path and the write happens through that name, so it
+# needs a `with`-aware walk rather than a call-name match.
+_ATOMIC_WRITE_DELEGATES = ("atomic_write_text", "atomic_write_json",
+                           "atomic_write_bytes")
 _WRITE_MODE_RE = re.compile(r"[waxWAX+]")
 
 #: Classification of an undeclared artefact.
@@ -477,6 +484,10 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
                     add(fn.value)
             elif fn.attr in ("copy", "copy2", "copyfile", "move") and len(n.args) > 1:
                 add(n.args[1])
+            elif fn.attr in _ATOMIC_WRITE_DELEGATES and n.args:
+                # ARGUMENT-typed, not receiver-typed: the path is arg 0 and the
+                # receiver is the `_atomic_output` module (vibe-ic#1265).
+                add(n.args[0])
     return out
 
 
@@ -708,6 +719,8 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
                     target = fn.value
             elif fn.attr in ("copy", "copy2", "copyfile", "move") and len(n.args) > 1:
                 target = n.args[1]
+            elif fn.attr in _ATOMIC_WRITE_DELEGATES and n.args:
+                target = n.args[0]          # vibe-ic#1265, see _writes_in
         if target is not None and _mentions_args_attr(target, dest, aliases):
             return True
     return False
