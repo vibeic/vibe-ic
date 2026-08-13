@@ -356,13 +356,61 @@ def format_report(rc: int, report: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+#: vibe-ic#1241 — CORPUS MODE, and why it refuses instead of passing.
+#:
+#: This checker validates a record someone else produced; it computes nothing.
+#: At the time it was wired, the corpus carried ZERO head-to-head records — the
+#: first head-to-head run has not happened, which is the whole point of #1121
+#: ("the first landable step is not a number, it is the record schema").
+#:
+#: So wiring it as an ordinary gate would have printed PASS over an empty
+#: population — a gate that has never met an artefact reporting success, which
+#: is the exact shape `gate_zero_denominator_refuses_check` exists to refuse and
+#: the shape #1241 is cleaning up. Instead it exits 2 (NOT CHECKED) and says how
+#: many records it found, and the hygiene script calls it through
+#: `run_tolerating_uncheckable`. The day a record lands the gate starts deciding
+#: with no further change.
+_RECORD_GLOB = "**/*head_to_head*.json"
+
+
+def corpus_records(corpus: Path):
+    """Head-to-head records under `corpus`, by name. The denominator is
+    disclosed on every run so "none found" can never read as "all clean"."""
+    return sorted(p for p in corpus.glob(_RECORD_GLOB) if p.is_file())
+
+
+def check_corpus(corpus: Path) -> int:
+    recs = corpus_records(corpus)
+    print(f"ppa_head_to_head_check --corpus {corpus}: "
+          f"{len(recs)} head-to-head record(s) found")
+    if not recs:
+        print("VACUOUS: the corpus carries no head-to-head record, so nothing "
+              "was validated. This is NOT a pass — the first head-to-head run "
+              "has not been published yet (vibe-ic#1121). rc=2.",
+              file=sys.stderr)
+        return 2
+    worst = 0
+    for r in recs:
+        rc = main([str(r)])
+        worst = max(worst, rc)
+    return worst
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Refuse a PPA head-to-head record that cannot support the "
                     "claim printed on it (vibe-ic#1121).")
-    ap.add_argument("record", help="path to the head-to-head JSON record")
+    ap.add_argument("record", nargs="?",
+                    help="path to the head-to-head JSON record")
+    ap.add_argument("--corpus", default=None, metavar="DIR",
+                    help="validate every head-to-head record under DIR; "
+                         "exits 2 when the corpus carries none (#1241)")
     ap.add_argument("--json", default=None, help="optional JSON report path")
     args = ap.parse_args(argv)
+    if args.corpus is not None:
+        return check_corpus(Path(args.corpus).resolve())
+    if not args.record:
+        ap.error("give a record path or --corpus DIR")
 
     rc, report = evaluate(Path(args.record))
     print(format_report(rc, report))
