@@ -30,6 +30,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `acceptance_evidence_in_fix_comment_check` | any | v0.2.97 | Deterministic pre-close gate for the core-agent loop (issue #478, Bucket A |
 | `accumulate_synth` | any | — | deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family: |
 | `ace_protocol_synth` | any | — | AMBA AXI/ACE coherency-extension protocol synth helper. |
+| `achieved_period_recorded_check` | any | — | "asked" and "reached" must both be on disk. |
 | `adder_map_techmap` | any | — | make a DECLARED adder techmap actually bind, and never claim it bound without evidence from yosys's own log. |
 | `afdx_protocol_synth` | any | — | AFDX / ARINC 664 Part 7 protocol synth helper. |
 | `agent_checkin_scope_guard` | any | — | role-based check-in (commit) path-scope gate. |
@@ -1163,6 +1164,7 @@ _(no programs in this group)_
 - `acceptance_evidence_in_fix_comment_check` — Deterministic pre-close gate for the core-agent loop (issue #478, Bucket A  _[v0.2.97]_
 - `accumulate_synth` — deterministic SOLVER for the CVDP sequential ACCUMULATOR / running-op family:
 - `ace_protocol_synth` — AMBA AXI/ACE coherency-extension protocol synth helper.
+- `achieved_period_recorded_check` — "asked" and "reached" must both be on disk.
 - `adder_map_techmap` — make a DECLARED adder techmap actually bind, and never claim it bound without evidence from yosys's own log.
 - `afdx_protocol_synth` — AFDX / ARINC 664 Part 7 protocol synth helper.
 - `agent_checkin_scope_guard` — role-based check-in (commit) path-scope gate.
