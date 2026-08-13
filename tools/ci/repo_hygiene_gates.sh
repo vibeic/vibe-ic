@@ -963,22 +963,22 @@ run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.
 # against checks that go green by declining to look, and that includes itself.
 run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins
 
-# vibe-ic#1241, BATCH IDX group (a). This checker shipped with NOTHING but its
-# own tests running it — `checker_execution_wiring_audit` classified it
-# `test_only` — so the one thing standing between a crashed run and a
-# half-written report that reads as a complete one was never consulted.
+# vibe-ic#1241 — WIRED HERE, not left to its own test. The audit
+# (`checker_execution_wiring_audit`) named this checker as one that nothing but
+# its own fixture ever ran: "a fixture the author wrote proves the logic, never
+# the artefacts."
 #
-# It is the FLOOR for group (d) of the same batch ("seventeen programs newly
-# write a declared report destination without `_atomic_artefact`"). Those
-# seventeen are not a separate finding: they are what gets through while this
-# gate is unwired. Fixing the seventeen and leaving it unwired means the
-# eighteenth arrives silently.
+# This surface and not the flow, because the subject is SHIPPED SOURCE, not a
+# design's artefacts: it parses every program under `programs/` and asks whether
+# a write to a declared report destination goes through `_atomic_artefact`. That
+# is the same population and the same cadence as the pinned-direction gate
+# directly above, which is why it sits beside it.
 #
-# BLAST RADIUS, measured on this PR's head: 0 red. It is a SHRINK-ONLY ratchet
-# — 1138 programs parsed, residual baseline 525, `[PASS] no new non-atomic
-# declared-report write`, rc=0. It reddens only on a NEW non-atomic write,
-# which is exactly the event nothing was watching for.
-run "a gate report appears whole or not at all" "$PLUGIN" python3 programs/atomic_artifact_write_check.py programs
+# MEASURED before wiring, so this adds a gate that passes rather than a new red:
+#   1138 program(s) parsed; 565 non-atomic declared-report writes (residual
+#   baseline 565); rc=0 "[PASS] no new non-atomic declared-report write."
+# The 565 are a recorded residual, not a waiver — the gate fails on a NEW one.
+run "declared reports are written atomically" "$PLUGIN" python3 programs/atomic_artifact_write_check.py programs
 
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
