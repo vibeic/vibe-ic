@@ -521,8 +521,29 @@ steps:
       # only the RTL globs, so 2 of its 3 declared entries were read by no
       # clause of its own gate.
     gate:
-      files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
-      any_of: true
+      # 63x9 dimension 4: this gate read ONE of the three deliverables the step
+      # declares. d4 reported `2 of 3 declared required_outputs ENTRIES are read
+      # by no clause of this step's gate`, and the corpus decides which side was
+      # wrong: d3 derives its manifest from the PUBLISHED runs, and those runs
+      # produced `reports/phase1/extraction_coverage_report.*` attributed to this
+      # step. So the claim is correct and the GATE was the side not measuring it.
+      #
+      # The shape matters. `any_of: true` is a MODIFIER on a files_exist block
+      # (flow_compliance_check.py:7538, :7596), so appending the two reports to
+      # the existing any-of list would have made the gate pass on ANY ONE of four
+      # files — strictly weaker than before. Nested `all_of` sub-gates keep the
+      # RTL pair any-of (it is one entry with two spellings) while requiring the
+      # two reports, which `required_outputs` declares as SEPARATE entries and
+      # which the checker treats as ALL-of across entries (:8966, :8980-:8996).
+      #
+      # The audit note above still holds: this step adds no deterministic
+      # spec->RTL checker. It checks the files it already claimed to deliver.
+      all_of:
+        - files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
+          any_of: true
+        - files_exist:
+            - "reports/phase1/extraction_coverage_report.md"
+            - "reports/phase1/extraction_coverage_report.json"
     # The dependency was always REAL and never DECLARED. D1 is the sole member
     # of stage_phase1 and its L1-L27 output is, in this file's own words, "the
     # universal handoff to Phase 2" — spec-to-RTL literally reads
