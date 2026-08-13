@@ -61,6 +61,8 @@ Falls back rc=2 if simulator unreachable. chip-AGNOSTIC.
 from __future__ import annotations
 import argparse, hashlib, json, os, re, shlex, subprocess, sys, time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 try:
     from . import _container_exec                            # type: ignore
@@ -2312,7 +2314,7 @@ def _write_upstream_netlist_gap(bdir: Path, project: Path, block: str,
     rec["design_content"] = DESIGN_CONTENT_NONE
     rec["design_content_meaning"] = _DESIGN_CONTENT_MEANING[DESIGN_CONTENT_NONE]
     bdir.mkdir(parents=True, exist_ok=True)
-    (bdir / "corner_results.json").write_text(json.dumps(rec, indent=2))
+    _aa.write_text(bdir / "corner_results.json", json.dumps(rec, indent=2))
     return rec
 
 
@@ -2898,8 +2900,8 @@ def run_block(project, block, container, pdk, topology_override):
                 "real_ngspice_partial.") if block_partial else "")),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
-    (bdir / "corner_results.json").write_text(json.dumps(real_corner, indent=2))
-    (sl_dir / "results.json").write_text(json.dumps(
+    _aa.write_text(bdir / "corner_results.json", json.dumps(real_corner, indent=2))
+    _aa.write_text(sl_dir / "results.json", json.dumps(
         {"block":block,"block_type":btype,"sized_point":best,
          "runs":runs,"verdict":verdict,
          "partial_measurement":block_partial,
