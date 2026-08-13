@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1079
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1079)
+- **Total programs (excluding helpers / shims):** 1080
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1080)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1070 |
+| `any` | 1071 |
 
 ## Alphabetical listing
 
@@ -39,6 +39,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `aging_derate_sta_check` | any | — | aging-corner STA sign-off gate for tapeout. |
 | `ahb_apb_protocol_synth` | any | v0.1.84 | AHB + APB-class protocol synth helper. |
 | `aid_class_rtl_gen` | aid_class_half_duplex, aid_class_half_duplex_single_wire, mixed_signal_otp, digital_cmd_driven | Wave 56 | Vibe-IC plugin Phase 2 RTL generator for AID-class half-duplex protocol. |
+| `alpha_probe_check` | any | — | synthetic program used only to reproduce the INDEX.md collision. |
 | `ams_analysis_select` | any | — | deterministic spec -> SPICE-analysis selector. |
 | `an_validator` | any | — | Application-Note (AN) validator / quality scorer, 0-80. |
 | `analog_a0_skip_forbidden_check` | any | Wave 47 | forbidden-artefact gate (Wave 47). |
@@ -1151,7 +1152,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1070 programs)
+### `any` (1071 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1166,6 +1167,7 @@ _(no programs in this group)_
 - `agentic_jsonl_to_shape_d` — generic agentic-JSONL → Shape-D project-dir extractor.  _[v0.1.59]_
 - `aging_derate_sta_check` — aging-corner STA sign-off gate for tapeout.
 - `ahb_apb_protocol_synth` — AHB + APB-class protocol synth helper.  _[v0.1.84]_
+- `alpha_probe_check` — synthetic program used only to reproduce the INDEX.md collision.
 - `ams_analysis_select` — deterministic spec -> SPICE-analysis selector.
 - `an_validator` — Application-Note (AN) validator / quality scorer, 0-80.
 - `analog_a0_skip_forbidden_check` — forbidden-artefact gate (Wave 47).  _[Wave 47]_
