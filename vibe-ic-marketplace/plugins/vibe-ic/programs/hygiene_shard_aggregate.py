@@ -96,7 +96,14 @@ def main(argv=None) -> int:
     seconds = 0
 
     for path, doc in docs:
-        if not doc.get("shard"):
+        # `is None`, not truthiness: shard indices are 0-BASED (see
+        # `hygiene_shard_plan.py --shard`, and its `assignment` array), and
+        # `bool(0)` is False. Written as `if not ...`, the record from shard 0
+        # — present in every sharded run, and the one the planner hands the
+        # single most expensive gate — was reported as a host that had ignored
+        # its plan. Every real aggregation failed, naming the one thing that
+        # had not gone wrong.
+        if doc.get("shard") is None:
             problems.append(
                 f"{path}: carries no `shard`, so this host ran UNSHARDED while "
                 f"being aggregated as a shard — its verdicts cover a different "
