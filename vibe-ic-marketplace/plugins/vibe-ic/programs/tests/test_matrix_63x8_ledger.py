@@ -65,8 +65,21 @@ CENSUS_GATE_PRESENT = 62
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
-CENSUS_BLOCKS_ON_PRESENT = 62
-CENSUS_BLOCKS_ON_NON_EMPTY = 60
+# 62 -> 63 and 60 -> 61 on 2026-08-11 by `332b9985` (#923/#929), and the change
+# is the one this tripwire exists to force a reviewer to look at. P0 declared no
+# `blocks_on` AT ALL, so a FAILED Phase 1 would not have redded it, while its own
+# `required_inputs: [{from: 1}]` already declared that it reads step 1's output.
+# That commit wrote the ordering edge down to match the data edge the flow had
+# already declared, so P0 left `flow_dependency_graph_check`'s DECLARED_ROOTS —
+# a set whose contract is that it may only SHRINK, and it did.
+#
+# Both numbers moved by exactly one and by the same step, which is the signature
+# of a step gaining a NON-EMPTY `blocks_on` rather than of a root appearing. The
+# root set is unchanged: `present - non_empty` is still exactly {D1, A1}, and
+# that assertion is derived live below, so it — not these counts — is what makes
+# the distinction this test is named for.
+CENSUS_BLOCKS_ON_PRESENT = 63
+CENSUS_BLOCKS_ON_NON_EMPTY = 61
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -276,13 +289,20 @@ def test_gate_presence_matches_the_yaml(raw_steps):
             assert F.gate_programs(sid) == ()
 
 
-def test_blocks_on_presence_is_62_but_non_empty_is_60(raw_steps):
+def test_blocks_on_presence_and_non_empty_are_different_sets(raw_steps):
     """The two are NOT the same set, and conflating them is a real error.
 
-    `blocks_on` is DECLARED on 62 steps but declared EMPTY on D1 and A1 — the
-    flow's two genuine roots. "62 steps have blocks_on" is a presence count; a
-    test that reads it as "62 steps have upstream dependencies" would demand an
+    `blocks_on` is DECLARED on every step but declared EMPTY on D1 and A1 — the
+    flow's two genuine roots. "N steps have blocks_on" is a presence count; a
+    test that reads it as "N steps have upstream dependencies" would demand an
     edge from a root and be wrong twice over.
+
+    The counts live in the census pins at the top of this file and move with the
+    flow; the DISTINCTION is asserted live below as `present - non_empty ==
+    {D1, A1}` and cannot drift. The name no longer carries the numbers: it read
+    `..._is_62_but_non_empty_is_60`, and when `332b9985` legitimately moved them
+    to 63/61 the name became false while describing a test that was correct —
+    a stale label on a working check is the failure this file is written against.
     """
     present = {F.normalize_id(s["id"]) for s in raw_steps if "blocks_on" in s}
     non_empty = {
