@@ -128,12 +128,44 @@ file is not a produced artefact, and an untracked path is a property of one
 working tree. A record is a claim about the past; it is not evidence about
 today.
 
-MEASURED ON THIS COMMIT: **0 cells change.** No tracked
-``reports/write_ledger.json`` exists anywhere in the repository, so W2's
-oracle is the AST alone, exactly as before — and that is not silent: every
-dimension-7 failure message and every cell's ``record_property`` carries the
-:func:`matrix_d7_write_record.binding_notes` sentence saying so, and
-:data:`RECORD_BOUND_ROOTS` pins the empty population.
+MEASURED ON THIS COMMIT (re-measured 2026-08-14): **7 paths promote and 6
+cells change colour.** The empty population above was true on 2026-08-06 and
+is no longer: two published run trees now carry a tracked
+``reports/write_ledger.json`` — ``benchmark-data/ic/spm/v1.10.18_sky130A``
+(captured 2026-08-09T11:11:08Z) and ``benchmark-data/ic/spm/v1.9.96_gf180mcuD``
+(captured 2026-08-06T19:17:51Z) — so W2's oracle is no longer the AST alone.
+
+Measured bound against unbound on this commit, over all 63 steps: the W2
+population goes **16 -> 23, 7 gained, 0 lost**, and every one of the 7 is a
+path the record's own live re-verification accepted (present, tracked,
+non-empty, not a symlink, in both run trees unless noted)::
+
+    step 11   phase2/stage2/dft/coverage.yml                     (sky130A only)
+    step 24   reports/phase3/dynamic_ir.json
+    step 27   reports/phase3/si_mcf_sta.json
+    step 34   reports/phase3/cmp_fill_emit.json                  (gf180mcuD only)
+    step D1   reports/audit/phase1/expert_parse_track.json
+    step M2   phase1/generated_docs/L21_POWER_INTENT.json
+    step 23   reports/phase3/sta/post_route_signoff_corner.json
+
+Six of those steps are ENFORCED and had NO W2 finding before the binding, so
+each goes red: 11, 24, 27, 34, D1 and M2. The seventh, step 23, is already
+WAIVED and already carried 13 W2 findings, so it changes count but not colour.
+No cell's ENFORCED/WAIVED/NA state changes; what changes is six verdicts.
+
+These six are NOT artefacts of a stale record. Each promoted path was
+re-verified live on this commit and is a tracked, non-empty, regular file in
+the run tree that recorded writing it. They are the real thing this binding
+was built to surface: an artefact the flow produces and a gate reads, that no
+step's ``required_outputs`` names. Each must be DECLARED in the flow yaml or
+WAIVED with evidence; until one of those happens the six cells stay red, and
+that is the correct colour, not a defect in the pin.
+
+The producer evidence is weaker than the two openroad cases tabulated below:
+four promote as ``run-record:unwitnessed`` and three as ``run-record:ambiguous``
+— the record witnesses the write but cannot name the program. That is enough
+for W2, which asks whether ANYONE produced the path, and is NOT enough to
+attribute it to a named producer.
 
 MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
 ``$HOME/_sky130A_r3_run`` and
@@ -1434,11 +1466,32 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
     _unbind()
 
 
-#: Run roots whose write record this dimension consults. MEASURED 2026-08-06
-#: and EMPTY: ``git ls-tree -r --name-only HEAD | grep -c write_ledger.json``
-#: is 0 — ``step_write_ledger`` landed the same day and no run tree has been
-#: re-published since — so W2's producer oracle is the AST alone and every one
-#: of the 63 cells is decided exactly as it was before the binding.
+#: Run roots whose write record this dimension consults. RE-MEASURED
+#: 2026-08-14, and no longer empty. It was EMPTY when first measured on
+#: 2026-08-06: ``git ls-tree -r --name-only HEAD | grep -c write_ledger.json``
+#: was 0, so W2's producer oracle was the AST alone and every one of the 63
+#: cells was decided exactly as it was before the binding.
+#:
+#: Two run trees have since been published carrying a tracked ledger, which is
+#: precisely the named event the pin below was written to force:
+#:
+#:   * ``benchmark-data/ic/spm/v1.10.18_sky130A``  (6ce93142, captured
+#:     2026-08-09T11:11:08Z, 399 written-never-declared candidates)
+#:   * ``benchmark-data/ic/spm/v1.9.96_gf180mcuD`` (51517e71, captured
+#:     2026-08-06T19:17:51Z, 384 written-never-declared candidates)
+#:
+#: The re-measurement the old pin demanded is DONE and written into this
+#: module's docstring: W2's population 16 -> 23, 7 gained and 0 lost, reddening
+#: steps 11, 24, 27, 34, D1 and M2 and adding a 14th finding to already-waived
+#: step 23. Those six red cells are TRUE and still owe a declaration in the
+#: flow yaml or a waiver with evidence; moving this pin records that the
+#: promotion happened and was counted, and does NOT resolve them.
+#:
+#: Do not "fix" a future failure of the test below by widening this tuple
+#: without redoing that measurement. The tuple is not a list of roots that
+#: exist — it is the assertion that every root deciding this dimension has had
+#: its promotions counted. A root added here without a re-measured docstring
+#: is the silent population growth the test exists to prevent.
 #:
 #: The pin is what makes the first published record a LOUD, NAMED event. The
 #: per-step promotions this module's docstring tabulates (12 on
@@ -1448,7 +1501,10 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: and each promotion must be re-measured and then either DECLARED in the flow
 #: yaml or waived with evidence — not discovered later from a cell that
 #: quietly changed colour.
-RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():
@@ -1481,6 +1537,19 @@ def test_d7_the_write_record_population_is_named_root_by_root():
         assert R.observed_writes() == {}, (
             f"no root is bound, yet the observation index is non-empty: "
             f"{sorted(R.observed_writes())[:5]}")
+    else:
+        # The mirror, so that moving the pin off () does not quietly retire the
+        # only cross-check on it. A bound root that contributes no observation
+        # is a record that was read and then had no effect, which is
+        # indistinguishable from not reading it at all -- and it would let the
+        # pin above keep passing while the binding had silently gone inert.
+        assert R.observed_writes(), (
+            f"{len(RECORD_BOUND_ROOTS)} root(s) are pinned as deciding this "
+            f"dimension, yet the observation index is EMPTY. Either the "
+            f"records stopped being read or every observation is now refused; "
+            f"both mean the pinned population is a claim nothing supports.\n"
+            f"  pinned:   {list(RECORD_BOUND_ROOTS)}\n"
+            f"  per root: {list(R.binding_notes())}")
 
 
 # ══════════════════════════════════════════════════════════════════════
