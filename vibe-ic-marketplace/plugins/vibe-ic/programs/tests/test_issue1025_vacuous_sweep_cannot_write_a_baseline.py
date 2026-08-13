@@ -54,9 +54,22 @@ def _baseline_copy(tmp_path: Path) -> Path:
     return dst
 
 
+#: vibe-ic#1241 — 120s was above the 60s inner ceiling, and a bound above it can
+#: outlive the 180s harness, which kills the SESSION rather than the test.
+#:
+#: MEASURED before lowering rather than snapped to the ceiling: the slowest test
+#: in this file is 0.17s wall and each makes one `_run` call, so the real cost of
+#: this subprocess is under 0.2s. 60s is ~350x that — margin for a loaded host
+#: several times over, and still low enough that this call's own timeout fires
+#: before the harness ends the session, which is the whole property the ceiling
+#: exists to guarantee.
+_GATE_TIMEOUT_S = 60
+
+
 def _run(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(GATE), *args],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True,
+                          timeout=_GATE_TIMEOUT_S)
 
 
 def test_write_baseline_refuses_a_sweep_that_examined_nothing(tmp_path):
