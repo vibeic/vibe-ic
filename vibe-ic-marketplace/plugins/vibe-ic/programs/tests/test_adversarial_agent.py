@@ -227,7 +227,7 @@ def test_the_cli_reports_the_forgery_and_exits_1():
     """The shipped CLI, in a subprocess, because the exit code is the product."""
     r = subprocess.run(
         [sys.executable, str(PROG), str(CELL), "--donor", str(DONOR)],
-        capture_output=True, text=True, timeout=1500)
+        capture_output=True, text=True, timeout=60)
     assert r.returncode == 1, (r.returncode, r.stdout[-800:], r.stderr[-400:])
     assert "FORGED GREEN" in r.stdout, r.stdout[-800:]
     assert "P0 integrity defect" in r.stdout, r.stdout[-800:]
@@ -241,7 +241,7 @@ def test_the_json_report_round_trips(tmp_path):
     AA.run_campaign(PLUGIN, CELL, DONOR, None, gates=(FORGEABLE,))
     r = subprocess.run(
         [sys.executable, str(PROG), str(CELL), "--donor", str(DONOR),
-         "--json", str(out)], capture_output=True, text=True, timeout=1500)
+         "--json", str(out)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 1, r.stdout[-400:]
     doc = json.loads(out.read_text())
     assert doc["schema"] == AA.SCHEMA
