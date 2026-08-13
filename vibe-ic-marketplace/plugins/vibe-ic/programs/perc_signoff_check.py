@@ -61,6 +61,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 #: The human-readable projections step 28 declares, exactly as the flow yaml
 #: spells them, paired with the regex that extracts the verdict each states.
@@ -210,7 +211,7 @@ def main(argv=None) -> int:
     out = json.dumps(rep, indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
     print(out)
     return rc
 

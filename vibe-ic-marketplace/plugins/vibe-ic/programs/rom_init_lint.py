@@ -41,6 +41,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 @dataclass
@@ -192,9 +193,7 @@ def main(argv: List[str] | None = None) -> int:
         all_findings.extend(scan_file(path))
 
     if args.json:
-        Path(args.json).write_text(
-            json.dumps([asdict(x) for x in all_findings], indent=2)
-        )
+        atomic_write_text(Path(args.json), json.dumps([asdict(x) for x in all_findings], indent=2))
 
     if not all_findings:
         print("rom_init_lint: OK — no Quartus-unsafe ROM initializers found")

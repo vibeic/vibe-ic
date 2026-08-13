@@ -69,6 +69,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 def strip_comments(src: str) -> str:
@@ -368,7 +369,7 @@ def main(argv: List[str] | None = None) -> int:
     if args.json:
         outp = Path(args.json)
         outp.parent.mkdir(parents=True, exist_ok=True)
-        outp.write_text(json.dumps([asdict(f) for f in findings], indent=2))
+        atomic_write_text(outp, json.dumps([asdict(f) for f in findings], indent=2))
     return 1 if fail else 0
 
 

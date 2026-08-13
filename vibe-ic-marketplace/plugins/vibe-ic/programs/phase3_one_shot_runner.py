@@ -8895,6 +8895,8 @@ def _v1_6_605_remap_surviving_dlatch(
 import synth_frontend as _sf
 # Staged-adder-map recipe + post-run "did it actually bind?" verification.
 import adder_map_techmap as _amt
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
@@ -20687,7 +20689,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "metal_fill_eco_aware": True,
             "allowlist_doc": _SPARE_YOSYS_KEEP_ALLOWLIST_DOC,
         }
-        (out_dir / "spare_cells.json").write_text(
+        _aa.write_text(out_dir / "spare_cells.json",
             json.dumps(spare_payload, indent=2, ensure_ascii=False) + "\n")
         # Coverage readiness JSON. distribution_ok is derived from the
         # grid spread (>1 distinct grid cell occupied); tie_off_ok from
@@ -32144,7 +32146,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                          "OCV unavailable) — honest fallback, not auto-run.")
     # Durable disclosure of the trigger decision (§4.05 audit trail).
     try:
-        (eco_out / "eco_trigger_decision.json").write_text(
+        _aa.write_text(eco_out / "eco_trigger_decision.json",
             json.dumps(_eco_decision, indent=2) + "\n")
         written.append(str(eco_out / "eco_trigger_decision.json"))
     except Exception:  # pragma: no cover — defensive
@@ -32162,7 +32164,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _pwr_txt = power_rpt.read_text(errors="replace")
             _mode = ("vector_vcd" if "POWER_ANALYSIS_MODE: vector_vcd"
                      in _pwr_txt else "vectorless_sdc")
-            (rpt_phase3 / "power.json").write_text(json.dumps({
+            _aa.write_text(rpt_phase3 / "power.json", json.dumps({
                 "tool": "opensta",
                 "source": str(power_rpt.relative_to(project)),
                 "analysis_mode": _mode,
@@ -32257,7 +32259,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(routed_drc))
         # Mirror to reports/phase3/ where the gate's --json output lands
         rpt_phase3.mkdir(parents=True, exist_ok=True)
-        (rpt_phase3 / "drc_router.rpt").write_text(body)
+        _aa.write_text(rpt_phase3 / "drc_router.rpt", body)
         if str(rpt_phase3 / "drc_router.rpt") not in written:
             written.append(str(rpt_phase3 / "drc_router.rpt"))
 
@@ -35583,7 +35585,7 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         # inline regex, which is the drift the module's own header warns about;
         # there is ONE implementation of the rule and this reads it.
         _psm_unconn = _cov["unconnected_instances"]
-        (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
+        _aa.write_text(ir_rpt.parent / "ir_drop.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "static_ir_drop",
             "power_nets": power_nets,
@@ -35696,7 +35698,7 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "\n# === Full PSM/EM stdout (provenance) ===\n" + log[-3000:] + "\n"
             "# end of em.rpt\n")
         em_rpt.write_text(body)
-        (em_rpt.parent / "em.json").write_text(json.dumps({
+        _aa.write_text(em_rpt.parent / "em.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "electromigration",
             "power_nets": power_nets,
@@ -35828,7 +35830,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                        f"can continue, so it is NOT visible as a routing "
                        f"failure)\n" if pins_unaccessed else "")
                     + _incomplete_note)
-                (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+                _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
                     "tool": "openroad",
                     "mode": "antenna_check_in_session_post_repair",
                     "net_violations": net_viol if have_counts else None,
@@ -35911,7 +35913,7 @@ exit
         "\n# === full antenna log (last 2 KB) ===\n" + log[-2000:] + "\n"
         "# end of antenna.rpt\n")
     antenna_rpt.write_text(body)
-    (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+    _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
         "tool": "openroad",
         "mode": "antenna_check",
         "net_violations": net_viol,
@@ -36232,7 +36234,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
             if pdk is not None and container is not None:
                 _merge_si_timing_aware(project, top, pdk, container, spef,
                                        sbody, notes)
-            (si_rpt.parent / "si_crosstalk.json").write_text(
+            _aa.write_text(si_rpt.parent / "si_crosstalk.json",
                 json.dumps(sbody, indent=2) + "\n")
             # Advisory timing-window tail (only present when the upgrade ran).
             ta = sbody.get("timing_aware_advisory")
@@ -36298,7 +36300,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
                  "structural screen, not a full SI sign-off. The OpenRCX SPEF "
                  "path (v0.2.5) produces real coupling caps when the DEF is routed."),
     }
-    (si_rpt.parent / "si_crosstalk.json").write_text(
+    _aa.write_text(si_rpt.parent / "si_crosstalk.json",
         json.dumps(body, indent=2) + "\n")
     si_rpt.write_text(
         "# Signal-integrity / crosstalk screen — emitted by\n"
@@ -36483,7 +36485,7 @@ exit
     fill_substantiated = placed_n > 0 or (
         _util_for_substance is not None and _util_for_substance >= 95.0)
     if fill_substantiated:
-        (pnr_out / "metal_fill.done").write_text(
+        _aa.write_text(pnr_out / "metal_fill.done",
             "metal_fill_done\n"
             "# OpenROAD filler_placement (ORGANIC-20260531 Step 34).\n"
             f"# fillers placed: {placed_n}\n"
@@ -38474,7 +38476,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         summary["geometry_foundry_data_residual"] = geometry_residual
 
     # --- perc_equivalent.json ---------------------------------------------
-    (rpt3 / "perc_equivalent.json").write_text(json.dumps(summary, indent=2) + "\n")
+    _aa.write_text(rpt3 / "perc_equivalent.json", json.dumps(summary, indent=2) + "\n")
 
     # --- perc_equivalent.rpt (human-readable) -----------------------------
     def _line(c):
@@ -38505,7 +38507,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
            if summary["manual_review_pending"]
            else "# No MANUAL items pending (all N/A or automated).\n")
         + "# end of perc_equivalent.rpt\n")
-    (rpt3 / "perc_equivalent.rpt").write_text(body)
+    _aa.write_text(rpt3 / "perc_equivalent.rpt", body)
 
     # --- PERC_SIGNOFF_MEMO.md (program-generated; maintainer §6 template) -
     _emit_perc_signoff_memo(project, top, summary, categories)
