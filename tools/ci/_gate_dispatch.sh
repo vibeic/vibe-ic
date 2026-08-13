@@ -103,6 +103,13 @@ GATE_DISPATCH_CORPUS_REL="${GATE_DISPATCH_CORPUS_REL:-benchmark-data}"
 #: "the guard could not run" must never be indistinguishable from "no gate
 #: wrote", which is the vacuous pass this repo removes from gates one at a time.
 GATE_DISPATCH_CORPUS_BLIND=0
+#: vibe-ic#1087 — per-gate WHOLE-TREE attribution. OFF unless the tier asks
+#: for it, because it costs ~0.08s per snapshot and the corpus guard above
+#: is the blocking one. `1` = record which gate wrote outside the corpus.
+GATE_DISPATCH_ATTRIBUTE_TREE="${GATE_DISPATCH_ATTRIBUTE_TREE:-0}"
+#: Names of gates that changed the tree outside `benchmark-data/`. Reported
+#: with the roll-up, never folded into a failure.
+declare -a GATE_TREE_WRITERS=()
 # `declare -a ... =()` so `set -u` is safe while the lists are still empty.
 declare -a GATE_LABELS=() GATE_STATES=() GATE_SECONDS=()
 
@@ -233,6 +240,23 @@ _gate_dispatch_corpus_state() {
       "$GATE_DISPATCH_CORPUS_REL" 2>/dev/null | LC_ALL=C sort
 }
 
+# One WHOLE-TREE snapshot, via the tier's own instrument (vibe-ic#1087).
+#
+# `suite_write_guard.py` and not a `git status` pathspec: the regenerable-cache
+# line is already drawn there and a second copy in bash is the drift this repo
+# keeps paying for. Same program as the tier verdict, so a per-gate finding and
+# the whole-tier finding cannot disagree about what a write is.
+#
+# Prints nothing and returns 1 when it cannot look, so the caller can say so
+# rather than read a missing snapshot as a clean one.
+_gate_dispatch_tree_snapshot() {
+  local root; root="$(_gate_dispatch_corpus_root)"
+  [ -n "$root" ] || return 1
+  local prog="$root/vibe-ic-marketplace/plugins/vibe-ic/programs/suite_write_guard.py"
+  [ -f "$prog" ] || return 1
+  python3 "$prog" --repo "$root" --snapshot "$1" >/dev/null 2>&1 || return 1
+}
+
 # `_dispatch <tolerate_rc2> <may_write_corpus> <label> <cwd> <cmd...>` — the ONE
 # place a gate is executed and the ONE place its outcome is recorded.
 _dispatch() {
@@ -277,12 +301,32 @@ _dispatch() {
   echo "── $shown"
   local t0="$SECONDS" rc=0 before="" after="" watched=1
   before="$(_gate_dispatch_corpus_state)" || watched=0
+  # vibe-ic#1087 — the whole-tree baseline, when attribution is asked for.
+  local _tsnap="" _twatched=0
+  if [ "$GATE_DISPATCH_ATTRIBUTE_TREE" = "1" ]; then
+    _tsnap="$(mktemp)"
+    if _gate_dispatch_tree_snapshot "$_tsnap"; then _twatched=1; fi
+  fi
   # `|| rc=$?` and NOT a bare `( ... ); rc=$?` — the caller runs under `set -e`,
   # where a failing subshell aborts before the next line and the disclosure
   # below would never print.
   ( cd "$wd" && "$@" ) || rc=$?
   local secs=$(( SECONDS - t0 ))
   GATE_SECONDS+=("$secs")
+  # vibe-ic#1087 — ATTRIBUTION, not fault. A gate writing its own report outside
+  # the corpus is doing what guard A's own remedy line tells it to do, so this
+  # never sets GATE_DISPATCH_FAIL and never changes an exit code. It records WHO
+  # wrote, which is the one thing neither existing guard could say.
+  if [ "$_twatched" -eq 1 ]; then
+    local _root; _root="$(_gate_dispatch_corpus_root)"
+    local _prog="$_root/vibe-ic-marketplace/plugins/vibe-ic/programs/suite_write_guard.py"
+    if ! python3 "$_prog" --repo "$_root" --compare "$_tsnap" >/dev/null 2>&1; then
+      GATE_TREE_WRITERS+=("$label")
+      echo "   ^^ wrote into the tree OUTSIDE $GATE_DISPATCH_CORPUS_REL/:" \
+           "$label — recorded, NOT a failure (vibe-ic#1087)" >&2
+    fi
+  fi
+  [ -z "$_tsnap" ] || rm -f "$_tsnap"
   if [ "$watched" -eq 0 ]; then
     if [ "$GATE_DISPATCH_CORPUS_BLIND" -eq 0 ]; then
       GATE_DISPATCH_CORPUS_BLIND=1
@@ -659,6 +703,14 @@ gate_dispatch_finish() {
     echo "repo_hygiene_gates: $wrote gate(s) WROTE INTO" \
          "$GATE_DISPATCH_CORPUS_REL/ — verdicts after them were taken over a" \
          "tree this run modified: $writers" >&2
+  fi
+
+  # vibe-ic#1087 — named BEFORE any verdict, because its whole purpose is that
+  # the next tier write can be attributed to a gate rather than guessed at.
+  if [ "${#GATE_TREE_WRITERS[@]}" -ne 0 ]; then
+    echo "repo_hygiene_gates: ${#GATE_TREE_WRITERS[@]} gate(s) wrote into the" \
+         "tree OUTSIDE $GATE_DISPATCH_CORPUS_REL/ (attribution, not a" \
+         "failure): ${GATE_TREE_WRITERS[*]}" >&2
   fi
 
   if [ "$GATE_DISPATCH_FAIL" -ne 0 ]; then
