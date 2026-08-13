@@ -493,17 +493,48 @@ def test_a_real_difference_still_survives_normalisation(tmp_path):
 # still registered as a worktree of the repository every agent shares. The
 # `finally` that removes them is correct and does not run on `SIGKILL`.
 
+def _scratch_added_by(root: Path, run) -> set:
+    """The `hostindep-*` directories `run` ADDS to `root`.
+
+    A difference of two globs is only a measurement of `run` when `run` is the
+    only writer of the namespace being globbed. Against the real `/tmp` it is
+    not: a peer's directory created between the two globs lands in the
+    difference and is attributed to `run`.
+    """
+    before = set(root.glob(G._SCRATCH_PREFIX + "*"))
+    run()
+    return set(root.glob(G._SCRATCH_PREFIX + "*")) - before
+
+
 def test_a_clean_run_leaves_no_scratch_behind(tmp_path):
     """The easy half, and the one a `finally` already satisfied. Kept as the
     control: without it, a reaper that removes everything unconditionally
-    would pass the kill test below and destroy live peers in production."""
-    import tempfile
+    would pass the kill test below and destroy live peers in production.
+
+    OBSERVED IN A PRIVATE ROOT, for the reason `_legacy_leftover` gives below
+    about planting: the real `/tmp` is shared with every other agent's probe,
+    so `after - before` there counts a PEER's directory as this run's leak.
+    Measured 2026-08-13 — with a sibling process creating and removing
+    `hostindep-*` in the observed root, this test failed while the other 24
+    passed; with no peer, 25 passed. The assertion is unchanged in strength: a
+    leak by `audit` still lands in this root, which the guard below drives.
+    """
+    priv = tmp_path / "tmproot"
+    priv.mkdir()
     r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
-    before = set(Path(tempfile.gettempdir()).glob(G._SCRATCH_PREFIX + "*"))
-    G.audit(r, timeout=_T)
-    after = set(Path(tempfile.gettempdir()).glob(G._SCRATCH_PREFIX + "*"))
-    assert after - before == set(), (
-        "a clean run left scratch behind: %s" % (after - before))
+
+    leaked = _scratch_added_by(priv, lambda: G.audit(r, timeout=_T,
+                                                     tmp_root=priv))
+    assert leaked == set(), "a clean run left scratch behind: %s" % (leaked,)
+
+    # PAIRED GUARD. An observation scoped to a root nothing writes to passes by
+    # being blind, which is the same green as a clean run. Plant one and the
+    # SAME expression must see it.
+    planted = _scratch_added_by(
+        priv, lambda: (priv / (G._SCRATCH_PREFIX + "planted")).mkdir())
+    assert len(planted) == 1, (
+        "the scoped observation cannot see a leak planted in the very root it "
+        "watches, so the assertion above proves nothing: %s" % (planted,))
 
 
 def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
