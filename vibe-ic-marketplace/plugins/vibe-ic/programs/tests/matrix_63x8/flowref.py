@@ -107,11 +107,11 @@ either call the real helper or document that it is using the strict form.
 Top-level shapes over 62<!--figure:gated_steps--> gates — how many gates carry
 each key (a gate may carry more than one, so these do not partition):
 
-    {'all_of': [...]}                 48<!--figure:gate_shape_all_of-->
+    {'all_of': [...]}                 49<!--figure:gate_shape_all_of-->
     {'program_exit_zero': <str|dict>} 13<!--figure:gate_shape_program_exit_zero-->
                                       (dict form once, on step 16:
                                        {'command': '...'} )
-    {'files_exist': [...]}             1<!--figure:gate_shape_files_exist-->
+    {'files_exist': [...]}             0<!--figure:gate_shape_files_exist-->
                                       (step 1, with 'any_of': True)
 
 Clause census, NORMALISED by :func:`gate_clauses` over every gated step. This
@@ -121,12 +121,12 @@ two could not be reconciled by a reader and only one of them was derived.
 
     program_exit_zero          103<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
     advisory_program_exit_zero 36<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
-    files_exist                32<!--figure:gate_clauses_files_exist-->
+    files_exist                33<!--figure:gate_clauses_files_exist-->
     optional_program_exit_zero 28<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
-    total                     200<!--figure:gate_clauses_total-->, of which
-                              164<!--figure:blocking_clauses--> block
+    total                     201<!--figure:gate_clauses_total-->, of which
+                              165<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
   * ``program_exit_zero``          — blocking.
