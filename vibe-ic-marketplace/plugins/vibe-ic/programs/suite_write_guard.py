@@ -246,9 +246,21 @@ def compare(before: Dict[str, list], after: Dict[str, list]) -> dict:
     return {"findings": findings, "blocking": blocking, "advisory": advisory}
 
 
-def format_report(result: dict, *, where: str = "this run") -> str:
+def format_report(result: dict, *, where: str = "this run",
+                  can_attribute: bool = True) -> str:
     """Name EVERY offending path. #1029: 'It must name every offending path,
     not just fail.' A count is what made three writers cost three discoveries.
+
+    `can_attribute` says whether the CALLER can vouch for what its snapshot
+    bracketed. The pytest plugin can: its window is one session and the report
+    names it. The `--compare` CLI cannot: it compares two snapshots of the whole
+    tree across whatever the caller wrapped, which in `gatekeeper-land.sh` is
+    `run_pytest` + ~74 hygiene gates + `plugin_full_audit`. #1087 measured what
+    that costs — a tier write was reported against `63x8 census freshness`,
+    which does not write — so when the window is unattributable the report now
+    SAYS SO instead of leaving a reader to take a gate name off the surrounding
+    log. This changes no verdict and adds no failure; it removes a false
+    accusation the output was inviting.
     """
     lines: List[str] = []
     blocking, advisory = result["blocking"], result["advisory"]
@@ -262,6 +274,16 @@ def format_report(result: dict, *, where: str = "this run") -> str:
             "  Nothing that READS this tree may write to it — not a test, and "
             "not a gate. Direct the write into a tmp dir, or copy the subject "
             "before mutating it.")
+        if not can_attribute:
+            lines.append(
+                "  THIS FINDING NAMES PATHS, NOT A WRITER. The snapshot pair "
+                "spans everything the caller bracketed, so nothing here "
+                "identifies which step or gate inside that window wrote these "
+                "paths — do not read one off the surrounding log. The guard "
+                "that CAN attribute (`_gate_dispatch.sh`, per gate) watches "
+                "only $GATE_DISPATCH_CORPUS_REL, so a write outside it is "
+                "visible here and attributable nowhere (vibe-ic#1087). Bisect "
+                "by re-running the bracketed steps individually.")
     named = [f for f in advisory if not _is_cache_noise(f["path"])]
     noise = len(advisory) - len(named)
     if named:
@@ -325,7 +347,12 @@ def _main(argv=None) -> int:
               "NOT a pass (rc=2)")
         return RC_NOT_CHECKED
 
-    print(format_report(result, where=f"the run against {repo}"))
+    # can_attribute=False: this entry point brackets whatever its CALLER
+    # wrapped and has no way to learn what that was. It is the whole-tier arm
+    # in `gatekeeper-land.sh` (#1087), and claiming attribution it cannot
+    # perform is what put a tier write on a named gate that does not write.
+    print(format_report(result, where=f"the run against {repo}",
+                        can_attribute=False))
     if a.json:
         Path(a.json).write_text(json.dumps(result, indent=1) + "\n")
     return RC_WROTE if result["blocking"] else RC_CLEAN
