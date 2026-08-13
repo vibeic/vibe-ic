@@ -3271,7 +3271,27 @@ steps:
         # measured and rejected — no published run carries a tech LEF, so its
         # honest rc 3 SKIP would have failed the step on all of them.
         - program_exit_zero: "em_peak_current_authority_check . --json reports/phase3/em_current_authority.json"
-    blocks_on: [22]
+    # 24 ADDED (vibe-ic#1070). Step 25's own `required_inputs` already declared
+    # `from: 24  outputs: all` — the flow saying, in its own words, that EM
+    # consumes the ENTIRETY of IR-drop's output. `blocks_on` named only 22, so
+    # 24 sat outside 25's transitive ancestry, and
+    # `flow_step_execution_coverage_check.analyze()` — the ONLY consumer that
+    # can contradict a step which passed its own gate over an input whose
+    # PRODUCER failed — was disarmed for this edge. A FAILED IR-drop therefore
+    # left the EM sign-off standing at PASS over numbers it had no right to
+    # trust: EM lifetime is computed from the current densities step 24
+    # produces, so a failed producer does not make the consumer's verdict
+    # doubtful, it makes it meaningless.
+    #
+    # Same shape as the step-1/D1 defect this flow already paid for and
+    # documents at step 1 ("The dependency was always REAL and never
+    # DECLARED"), and the repair is the same one: declaring the edge arms the
+    # guard that already exists rather than adding a new one.
+    #
+    # MEASURED before landing (#1070 criterion 2), over every published run
+    # tree that records both steps: 4 of 4 record 24=PASS and 25=PASS, so this
+    # flips ZERO published verdicts. The transitive reach is 14 of 63 steps.
+    blocks_on: [22, 24]
 
   - id: 26
     name: "🔁 Antenna check (gate-oxide protection)"
