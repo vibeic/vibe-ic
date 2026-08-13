@@ -50,8 +50,6 @@ FLOW = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 KNOWN_UNGUARDED = {
     ("A1", "D1"): "#1070 deferred: transitive, would newly route 44 of 71 steps "
                   "through D1; needs its own landing with a corpus number",
-    ("25", "24"): "#1070 deferred: transitive, 18 of 71 steps once M1->37 exists "
-                  "(14 before it)",
 }
 
 
@@ -155,7 +153,7 @@ def test_the_allowlist_does_not_outlive_its_truth():
 
 def test_the_debt_is_exactly_what_1070_measured():
     """Pinned so the count cannot drift upward quietly under a passing suite."""
-    assert len(_unguarded()) == 2, sorted(_unguarded())
+    assert len(_unguarded()) == 1, sorted(_unguarded())
 
 
 @pytest.mark.parametrize("consumer,producer", sorted(KNOWN_UNGUARDED))
