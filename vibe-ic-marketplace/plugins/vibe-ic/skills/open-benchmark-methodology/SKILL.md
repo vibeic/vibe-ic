@@ -771,6 +771,54 @@ For honesty + reproducibility, every benchmark RESULT.md MUST contain:
 7. **Sequence/plan status** — if this benchmark was chosen out of a roadmap (e.g. open-benchmark.md),
    say which others were intentionally skipped and why (Shape E).
 
+### § 6.5 — A PPA HEAD-TO-HEAD is a different claim from a pass rate, and it has its own gate (vibe-ic#1121, wired here by #1241)
+
+A pass rate proves an AI can produce relatively correct RTL. It does **not** prove
+it can produce better SILICON, and a reviewer is entitled to answer our
+153/156, 49/50 and 243/302 with "so what?". The question that measures the
+property is: *given an IDENTICAL specification and an IDENTICAL PDK, can this
+project produce better PPA than a human, a LibreLane, or an OpenECOS baseline?*
+
+**If you publish such a comparison, run the gate on the record BEFORE the number
+reaches a RESULT.md:**
+
+```bash
+python3 programs/ppa_head_to_head_check.py <head-to-head-record.json> [--json OUT]
+```
+
+It computes nothing about a design — it reads a record you authored and refuses
+it when the record cannot support the claim printed on it. Exit 0 = the record
+is checkable; 1 = REFUSED (each refusal named); 2 = UNDETERMINED, which is what
+an unmeasured axis yields and is **never** a win on the axes that were measured.
+
+The five things it will refuse, each one of #1121's own constraints:
+
+| | refusal |
+|---|---|
+| C1 | arms declaring a different spec digest, PDK, clock target or corner set — two flows on two problems are not a comparison |
+| C2 | a missing axis, or a collapsed single scalar. Area, timing and power trade against each other, so one figure is a **proxy for the property, not the property** — and the scalar is the thing that gets quoted |
+| C3 | a baseline arm without `tuned_by_this_project: false` and a named configuration source. *A baseline we tune ourselves is an oracle we wrote* |
+| C4 | an arm claiming `silicon` without naming the evidence. PPA off a signed-off GDS is far better than a pass rate and it is still not a wafer |
+| C5 | a stated verdict that disagrees with the one derived from the numbers — the only direction of dishonesty a head-to-head has room for |
+
+The verdict is a **triple** of per-axis verdicts. There is deliberately no
+`overall` field to quote. #1121: *"Report the triple with the constraints that
+produced it, or do not report it."*
+
+> **WHY THIS INSTRUCTION IS THE GATE'S RUNNER, and not a CI line.** Its subject
+> is a document a person authors, not an artefact a run drops — its CLI takes one
+> positional `record` path, with no glob and no corpus loop. MEASURED on this
+> branch: the three discriminating schema fields appear in **0** files outside the
+> gate's own unit test, `head_to_head` appears **0** times in the flow YAML, and
+> the only non-test file naming it under `programs/` or `tools/` is `INDEX.md` —
+> a catalogue entry, not a producer. Pointed at the 12 JSON artefacts that DO
+> exist under `benchmark-data/`, it returns rc=1 on 10 and rc=2 on 2, every one
+> the spurious `TOO_FEW_ARMS`: those files are not failed comparisons, they are
+> not comparisons. So a CI glob is wrong in both available spellings — matching
+> nothing today is the vacuous pass, and matching those files is ten red gates
+> that train readers to ignore the eleventh. The instruction lives where the
+> record is born.
+
 ## § 7 — When in doubt
 
 If a future benchmark doesn't cleanly fit A/B/C/D/E:

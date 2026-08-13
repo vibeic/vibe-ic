@@ -318,3 +318,54 @@ def test_the_checker_is_chip_and_pdk_agnostic():
         assert literal not in body.lower(), (
             f"{literal!r} appears in the logic; this gate must not know any "
             "PDK, vendor or process name")
+
+
+# --------------------------------------------------------------------------
+# THE RUNNER (vibe-ic#1241). This gate was one of six that NOTHING but its own
+# test ran. Its runner is a SKILL instruction rather than a CI line, because its
+# subject is a document a person authors — so the instruction has to be a real
+# INVOCATION, not a prose mention. That distinction is not academic: #1241's own
+# wiring row was mis-measured once by a grep that matched a checker's name
+# inside a comment and called it wired.
+# --------------------------------------------------------------------------
+
+_PLUGIN = Path(__file__).resolve().parents[2]
+_SKILL = _PLUGIN / "skills" / "open-benchmark-methodology" / "SKILL.md"
+_REGISTER = _PLUGIN / "programs" / "checker_skill_only_reasons.json"
+
+
+def test_the_skill_carries_a_runnable_invocation_not_a_mention():
+    """A named runner must be a command someone can run. Asserted on a fenced
+    `python3 programs/<gate>.py <arg>` line, so a future edit that demotes it to
+    prose goes red here rather than silently unwiring the gate."""
+    import re
+    text = _SKILL.read_text(errors="replace")
+    invocations = re.findall(
+        r"^\s*python3\s+programs/ppa_head_to_head_check\.py\s+\S+", text, re.M)
+    assert invocations, (
+        "skills/open-benchmark-methodology/SKILL.md must INVOKE the gate, not "
+        "merely name it — a name in prose is what `checker_execution_wiring_"
+        "audit` exists to reject")
+
+
+def test_the_recorded_reason_states_the_condition_that_ends_it():
+    """A disclosure that cannot expire is permission. The register's own rule is
+    that an entry says what was MEASURED and what would make the gate wireable;
+    this asserts the entry actually carries both rather than gesturing."""
+    reasons = json.loads(_REGISTER.read_text())["reasons"]
+    entry = reasons.get("ppa_head_to_head_check.py")
+    assert entry, sorted(reasons)
+    assert "WIREABLE WHEN" in entry, entry[:200]
+    assert "MEASURED" in entry, entry[:200]
+    # The measurement must carry the numbers it claims, not the word alone.
+    assert "0 files" in entry and "TOO_FEW_ARMS" in entry, entry[:200]
+
+
+def test_the_gate_still_REFUSES_what_the_skill_promises_it_refuses(tmp_path):
+    """PAIRED GUARD. Documenting a gate must not be mistaken for the gate
+    working: the skill promises C3 refuses a self-tuned baseline, so drive that
+    refusal through the real program and require rc=1."""
+    doc = copy.deepcopy(CLEAN)
+    doc["arms"][1]["tuned_by_this_project"] = True
+    rc, rep = _run(tmp_path, doc)
+    assert rc == 1, rep
