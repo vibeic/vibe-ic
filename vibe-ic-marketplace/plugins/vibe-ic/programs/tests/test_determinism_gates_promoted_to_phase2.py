@@ -241,6 +241,7 @@ def test_buggy_top_still_caught_despite_sibling(tmp_path):
     assert RTL_MOORE.strip() not in joined        # top actually rewritten
 
 
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
 def test_unrepairable_buggy_top_still_fails_despite_sibling(tmp_path):
     # The FAIL path must survive the repair wiring: a top whose defect no
     # transform can fix still reports FAIL, with the sibling untouched.
