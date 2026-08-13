@@ -263,9 +263,24 @@ def _check(project: Path) -> tuple[int, str]:
                 "phase1_coverage_report_present_check: SKIP — "
                 "facts.yaml marks `phase1_skipped_path_a: true` "
                 "(Wave 36 Path A flow)")
-        return 0, ("phase1_coverage_report_present_check: SKIP — "
+        # vibe-ic#1185 — A DECLINE-TO-LOOK MUST NOT BE COUNTED AS A PASS.
+        #
+        # This returned 0 with a bare `SKIP —` line, and `flow_compliance_check`
+        # reads only the return code plus a LINE-START `VACUOUS_PASS` /
+        # `PASS_WITH_WAIVERS` sentinel (`:3658`, `line.lstrip().startswith`).
+        # So the self-declared skip had no channel to the tier at all: the step
+        # resolved PASS while this clause had examined nothing. #1185 measured
+        # exactly that on `test_matrix_d6_skip_discipline[step1]`.
+        #
+        # rc 2 is this program's OWN existing convention for "cannot look" (it
+        # already returns 2 for a missing project dir, `:239`) and is what
+        # `flow_compliance_check:3056` documents as the input-missing skip.
+        # Both channels are used, because either alone is one edit away from
+        # being silently dropped.
+        return 2, ("VACUOUS_PASS: phase1_coverage_report_present_check: SKIP — "
                    "Phase 1 (doc-extraction) not attempted and no input/docs/ "
-                   "(bare-skeleton project)")
+                   "(bare-skeleton project) — nothing was measured, and this "
+                   "is NOT a pass over the coverage report")
 
     md = _pl.report_path(project, "extraction_coverage_report.md")
     js = _pl.report_path(project, "extraction_coverage_report.json")
@@ -328,12 +343,17 @@ def _check(project: Path) -> tuple[int, str]:
         )
 
     if pct is None or total in (None, 0):
-        # Report exists but no patterns/L docs were available — treat
-        # as silent skip so we don't penalize empty-pattern projects.
-        return 0, (
-            "phase1_coverage_report_present_check: SKIP — "
-            "report present but coverage not measured "
-            f"(hit={hit}, total={total})"
+        # vibe-ic#1185 — the SECOND decline-to-look, and its own comment used to
+        # say so: "treat as silent skip so we don't penalize empty-pattern
+        # projects". Not penalising an empty-pattern project is right; reporting
+        # it as a PASS over a coverage report that was never measured is not.
+        # The report EXISTS here but carries no measurement, so this gate has
+        # still examined nothing — same state, same disclosure.
+        return 2, (
+            "VACUOUS_PASS: phase1_coverage_report_present_check: SKIP — "
+            "report present but coverage NOT measured "
+            f"(hit={hit}, total={total}) — nothing was measured, and this is "
+            "NOT a pass over the coverage report"
         )
 
     try:
