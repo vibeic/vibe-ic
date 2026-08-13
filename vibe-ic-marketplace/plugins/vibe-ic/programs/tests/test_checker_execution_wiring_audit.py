@@ -191,11 +191,25 @@ def test_checker_referenced_by_nothing_is_reported_separately(tmp_path):
     assert rep["test_only"] == []
 
 
+#: vibe-ic#1241. `ci_harness_timeout_ceiling_check` puts the per-call ceiling at
+#: harness_bound/3 = 180/3 = 60s. A bound ABOVE it cannot fire before the
+#: harness does, and pytest's thread-method timeout then kills the SESSION
+#: rather than the test — the invocation ends with no summary line.
+#:
+#: I wrote this helper at 600s in the SAME PR that fixes a reporting defect in
+#: this very audit, which is the honest version of how this class survives.
+#: MEASURED, `--durations`: the three tests that use `_cli` are 0.05s each. The
+#: module's 31.17s belongs to `test_real_repo_runs_and_is_deterministic`, which
+#: is pre-existing and does not go through here. 30s is ~600x the measured worst
+#: case for this helper and half the ceiling.
+_CLI_S = 30
+
+
 def _cli(root: Path, *extra):
     """Run the audit as the landing gate runs it, and return the process."""
     return subprocess.run(
         [sys.executable, str(PROG), "--repo-root", str(root), *extra],
-        capture_output=True, text=True, timeout=600)
+        capture_output=True, text=True, timeout=_CLI_S)
 
 
 def test_the_zero_is_STATED_not_left_silent(tmp_path):
