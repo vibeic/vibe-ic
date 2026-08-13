@@ -85,6 +85,7 @@ import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 # Forbidden trees — every file/directory under these MUST be a real
@@ -234,7 +235,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2) + "\n")
+        atomic_write_text(out, json.dumps(report, indent=2) + "\n")
 
     if verdict == "VACUOUS_PASS":
         print(f"VACUOUS_PASS: {report['reason']}")
