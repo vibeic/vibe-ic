@@ -308,6 +308,39 @@ state the substitution explicitly.
 > `auto_run.py` does `os.chdir(design); make vcs`; forgetting this caused 3 false fails in our
 > 2026-05-28 RTLLM run.
 
+## § 3.10 — A PPA head-to-head must be REFUSED before anyone reads the number (vibe-ic#1121, BINDING)
+
+Every benchmark number this repo publishes so far proves an AI can write RTL that PASSES. None of
+them proves it makes BETTER SILICON. #1121 is the move to a PPA head-to-head on an identical spec
+and PDK — and a head-to-head is the single easiest number in this project to publish dishonestly,
+because four different mistakes all produce a headline that looks the same:
+
+* the arms are not running the same problem (different spec sha, PDK, clock target or corner set),
+* the three axes are collapsed into one "score", so a power win hides an area loss,
+* the baseline is one WE tuned, so the comparison measures our effort and not the flows,
+* an axis nobody measured is reported as a win rather than as UNDETERMINED.
+
+**So the record is refused BEFORE it is read, not reviewed after it is published:**
+
+```bash
+python3 <plugin>/programs/ppa_head_to_head_check.py <record.json>
+#   rc 0  the record can support the claim printed on it
+#   rc 1  REFUSED — the refusal names which of the four it is
+#   rc 2  UNDETERMINED — no record, or nothing measurable in it. NOT a pass.
+```
+
+Run it as the LAST step of producing the record and before the number appears in any RESULT.md,
+issue comment or dashboard. A refused record is not a failed benchmark — it is a record that has
+not yet earned its sentence.
+
+> **Why this invocation lives in a skill and not in `repo_hygiene_gates.sh`.** MEASURED on
+> 2026-08-13 over all 8177 tracked `.json` files in this repository: **0** carry the record shape
+> the gate parses, 0 carry an `arms` list, 0 even carry a `ppa` key. There is nothing in the tree
+> for a corpus gate to judge, so a `run` line would answer rc 2 on every invocation — an empty
+> result indistinguishable from a clean one, which is the exact defect `checker_execution_wiring_audit`
+> exists to find. The honest wiring is the step that PRODUCES the record, which is here. When the
+> first head-to-head record lands in the corpus, move this to a machine gate over it.
+
 ## § 3.9 — SPEC-FIRST COVERAGE ATTRIBUTION before any FLOOR label (ORGANIC #697, BINDING)
 
 A hidden scoring testbench is generated from the **same specification the author sees**, so
