@@ -174,14 +174,14 @@
           "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "reports/phase1/extraction_coverage_report.md",
           "path": "reports/phase1/extraction_coverage_report.md",
-          "size_bytes": 1415
+          "size_bytes": 1694
         },
         "reports/phase1/extraction_coverage_report.json": {
           "status": "PRODUCED_BY_RUN",
           "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "reports/phase1/extraction_coverage_report.json",
           "path": "reports/phase1/extraction_coverage_report.json",
-          "size_bytes": 3139
+          "size_bytes": 4610
         }
       }
     },
