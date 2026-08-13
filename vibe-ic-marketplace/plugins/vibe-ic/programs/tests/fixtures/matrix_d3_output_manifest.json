@@ -882,6 +882,13 @@
           "alternative": "reports/phase3/si_crosstalk.json",
           "path": "reports/phase3/si_crosstalk.json",
           "size_bytes": 860
+        },
+        "reports/phase3/si_mcf_sta.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/si_mcf_sta.json",
+          "path": "reports/phase3/si_mcf_sta.json",
+          "size_bytes": 2750
         }
       }
     },
