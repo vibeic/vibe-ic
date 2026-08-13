@@ -126,12 +126,18 @@ def _fake_opensta(calls: list, fail_corners=()):
     def _run(container, cmd, timeout=1800, *, marker=None, log_path=None,
              stall_grace_s=None, hard_ceiling_s=None, poll_s=None,
              outputs=None):
-        rpt = Path(outputs[0])
-        corner = rpt.stem[len("sta_"):]
+        # ORGANIC #443: derived from `marker` -- the tcl the runner hands the
+        # tool -- NOT from `outputs=`. The declaration was removed at the call
+        # site because the unlinked branch deletes the report it declared, and
+        # a stand-in that learns its own output path from a PROVENANCE kwarg is
+        # reading something real OpenSTA never sees. The tool is told the tcl
+        # and writes what the tcl says; so is this.
+        tcl = Path(marker)
+        corner = tcl.stem[len("sta_"):]
+        rpt = tcl.with_suffix(".rpt")
         calls.append(corner)
         if corner in fail_corners:
             return (1, "", f"OpenSTA: {corner} run did not converge")
-        tcl = rpt.parent / f"sta_{corner}.tcl"
         m = re.search(r'puts \$_bf "STA_BASIS: ([A-Z_]+)"', tcl.read_text())
         assert m, f"runner emitted no STA_BASIS stamp for {corner}"
         _write(rpt,
