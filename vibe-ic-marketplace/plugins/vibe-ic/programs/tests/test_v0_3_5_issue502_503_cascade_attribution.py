@@ -249,4 +249,16 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
             seen.add(pid)
             queue.extend(parents.get(pid, []))
         total += len(seen)
-    assert total == 1221, total
+    # 1221 -> 1230 (vibe-ic#1070, the A1 -> D1 edge). A measurement being
+    # re-measured, not a bound loosened: diffing per-step ancestry SETS shows
+    # exactly 9 steps grow, A1 through A9 — the analog track and nothing else.
+    #
+    # #1070 predicted 44 of 63. The other 35 predicted descendants already
+    # reached D1 through step 1, so the practical radius is the analog track.
+    #
+    # NOTE for whoever lands the sibling edges: this ONE constant is moved by
+    # all three of #1070's edges and they collide here. Measured separately
+    # against a38902d1 — 25 -> 24: +1 (1222). A1 -> D1: +9 (1230). M1 -> 37:
+    # +80 (1301). All three together: +90 (1311). Re-measure after each lands;
+    # do not add the deltas blind.
+    assert total == 1230, total
