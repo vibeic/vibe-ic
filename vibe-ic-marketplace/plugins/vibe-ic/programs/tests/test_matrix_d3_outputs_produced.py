@@ -2214,8 +2214,31 @@ def _probe_run_root(prefix: str):
     with tempfile.TemporaryDirectory(prefix=prefix) as td:
         root = Path(td) / "probe"
         root.mkdir()
+        # AUTO-GC IS OFF, and the two lines above are WHY it has to be said
+        # here. Neutralising global+system config is right — the probe must not
+        # inherit a host's opinions — but it also discards any `gc.auto=0` the
+        # host happened to set, so git's DEFAULT applies and `git commit` forks
+        # `gc --auto`. That detached repack writes `.git/objects/pack/tmp_pack_*`
+        # (mode 0444) WHILE `TemporaryDirectory` is unlinking the tree, so
+        # `rmtree` empties `objects/`, gc refills it, and cleanup dies with
+        # `OSError: [Errno 39] Directory not empty: 'objects'`.
+        #
+        # The failure is the reason this is worth a comment rather than a flag:
+        # it is raised from `__exit__`, so pytest reports it against the `with
+        # _probe_run_root(...)` LINE, and the test reads as the property being
+        # violated when the property in fact holds. A teardown race that
+        # impersonates a real finding is worse than one that merely flakes.
+        #
+        # `autoDetach=false` as well as `auto=0`: `auto=0` stops gc being
+        # scheduled, and `autoDetach=false` means that if anything ever does
+        # schedule one it runs in the foreground, where it finishes before
+        # cleanup starts instead of racing it.
         env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
-               "GIT_CONFIG_SYSTEM": os.devnull}
+               "GIT_CONFIG_SYSTEM": os.devnull,
+               "GIT_CONFIG_COUNT": "2",
+               "GIT_CONFIG_KEY_0": "gc.auto", "GIT_CONFIG_VALUE_0": "0",
+               "GIT_CONFIG_KEY_1": "gc.autoDetach",
+               "GIT_CONFIG_VALUE_1": "false"}
         subprocess.run(["git", "init", "-q"], cwd=root, check=True, env=env,
                        capture_output=True)
 
