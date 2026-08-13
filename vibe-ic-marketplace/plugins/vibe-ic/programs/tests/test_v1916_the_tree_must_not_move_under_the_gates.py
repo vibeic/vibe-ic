@@ -177,11 +177,35 @@ def test_the_pre_existing_dirty_rule_is_unchanged(tmp_path):
 
 
 # ── the wiring, which is where the value actually is ─────────────────────────
+def _code_only(src: str) -> str:
+    """`src` with COMMENT-ONLY lines blanked, byte offsets preserved.
+
+    The ordering tests below locate steps by `index`/`rindex` of a command's
+    spelling. Prose that NAMES a step is indistinguishable from the step, and
+    that is not hypothetical: the `#1029` comment block in `gatekeeper-land.sh`
+    mentions both `--expect-fingerprint` and `plugin_full_audit.py` while
+    EXPLAINING the ordering these tests assert. `index()` then found the
+    comment's mention at offset 11699 and `rindex()` the real run at 18042, so
+    the assertion compared a sentence against a command and failed on
+    `18042 < 11699` — while the actual order (suite line 320, comparison line
+    336) was correct all along.
+
+    Blanked rather than removed so every offset keeps its meaning and the
+    assertions stay literal comparisons of position. Only lines whose first
+    non-space character is `#` are blanked, so a `${VAR#pattern}` expansion in
+    real code is untouched.
+    """
+    out = []
+    for line in src.split("\n"):
+        out.append(" " * len(line) if line.lstrip().startswith("#") else line)
+    return "\n".join(out)
+
+
 @pytest.fixture(scope="module")
 def land_sh():
     if not _LAND_SH.is_file():
         pytest.skip(f"{_LAND_SH} absent")
-    return _LAND_SH.read_text(encoding="utf-8")
+    return _code_only(_LAND_SH.read_text(encoding="utf-8"))
 
 
 def test_the_landing_gate_takes_a_fingerprint_and_compares_it(land_sh):
