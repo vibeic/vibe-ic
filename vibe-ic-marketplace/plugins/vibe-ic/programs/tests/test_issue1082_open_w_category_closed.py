@@ -57,6 +57,36 @@ def _open_w_sites():
     return out
 
 
+_SYNTHETIC = '''\
+import argparse
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--json", dest="json_out")
+    a = ap.parse_args()
+    with open(a.json_out, "w") as fh:
+        fh.write("{}")
+'''
+
+
+def test_the_detector_actually_finds_this_shape(tmp_path):
+    """POSITIVE CONTROL, and it is load-bearing.
+
+    Every other assertion in this file is of the form "zero sites found". All
+    of them pass vacuously if `scan_program` is broken and returns nothing —
+    MEASURED: mutating it to `return []` killed ZERO of them. A file that can
+    only say "I found nothing" cannot distinguish a converted tree from a blind
+    detector, which is the exact empty-tree shape #1082 is about, one level up.
+
+    So: hand the detector a program that unambiguously has the defect and
+    require it to say so. Now "zero in the shipped tree" is a measurement.
+    """
+    p = tmp_path / "synthetic_offender.py"
+    p.write_text(_SYNTHETIC)
+    sites = G.scan_program(p) or []
+    assert sites, "the detector found nothing in a program that plainly has the defect"
+    assert any(s.get("form") != ".write_text(...)" for s in sites), sites
+
+
 def test_no_declared_report_is_written_through_open_w():
     """THE CATEGORY. Zero sites of this form anywhere in the shipped tree."""
     bad = _open_w_sites()
