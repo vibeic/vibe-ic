@@ -1651,7 +1651,40 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: against P0 on 2026-08-11 and REDDENED it. Raising this number without that
 #: replay would be exactly the "widen the baseline until it is green" move the
 #: gate exists to refuse.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 482)
+#:
+#: MOVED 482 -> 479 in THIS change, and it is the same commit that causes it,
+#: which is the whole point — the note above records the arithmetic sitting one
+#: short "for three days rather than failing on the day it drifted", and the
+#: cure for that is to move the pin WITH the reclassification, never after it.
+#:
+#: A LOWERING carries the mirror of the risk named above. Raising can smuggle in
+#: an uncovered cell; lowering can quietly drop a cell that genuinely LOST its
+#: mutation coverage out of the denominator, which reads as tidy arithmetic and
+#: hides a gate that stopped catching. So the three are named, and what makes
+#: them admissible is that they were never legitimately ENFORCED:
+#:
+#:     ('M2', 3)  ENFORCED -> NA
+#:     ('M3', 3)  ENFORCED -> NA
+#:     ('M4', 3)  ENFORCED -> NA
+#:
+#: Their steps are dormant by the FLOW's own declaration, unchanged by this PR
+#: and present on main:
+#:
+#:     - id: M2
+#:       condition:
+#:         files_exist: ["phase1/analog/analog_block_list.json"]
+#:
+#: The manifest recorded them ENFORCED anyway, so d3 was enforcing three steps
+#: the flow says are asleep — and all three were RED on main for that reason.
+#: The authority here is the flow, not the manifest, so honouring it LOWERS the
+#: true measurement. No mutation stopped reddening: nothing was replayed against
+#: these cells and lost its teeth; they leave the ENFORCED set because they
+#: never belonged in it.
+#:
+#: Measured on this branch rebased onto ``origin/main``: 63 steps, 479 ENFORCED,
+#: with exactly those three the difference from main's 482 — recomputed via
+#: ``cell_states()`` on both trees and diffed, not inferred from the count.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 479)
 
 
 # ══════════════════════════════════════════════════════════════════════
