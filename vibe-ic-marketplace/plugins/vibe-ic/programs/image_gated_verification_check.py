@@ -65,6 +65,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 from typing import List, Optional, Sequence, Tuple
 
 HERE = Path(__file__).resolve().parent
@@ -185,7 +186,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "verdict": "OK" if ok else "NOT_CHECKED"}
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps(report, indent=1), encoding="utf-8")
+        atomic_write_text(args.json, json.dumps(report, indent=1))
 
     if ok:
         print(f"[PASS] the anchored image is readable here ({why}) — the "

@@ -52,6 +52,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 
 RC_PASS, RC_FAIL, RC_VACUOUS = 0, 1, 2
 
@@ -197,7 +198,7 @@ def main(argv=None) -> int:
 
     rep = audit(run_dir, baseline_path, args.accept)
     if args.json_out:
-        args.json_out.write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(args.json_out, json.dumps(rep, indent=2) + "\n")
 
     if rep["verdict"] == "VACUOUS":
         print(f"[VACUOUS] tool_warning_id_novelty: {rep['reason']}",
