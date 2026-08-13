@@ -108,11 +108,37 @@ def _skill_count(skills_root):
                 if d.is_dir() and (d / "SKILL.md").exists()])
 
 
+#: REGENERABLE, not shipped. `skills/` carries 69 importable `.py` files
+#: (`skills/*/tests/test_compliance.py`, `skills/core-agent-loop/programs/poll.py`,
+#: …), so merely COLLECTING them makes CPython write `__pycache__/*.pyc` inside
+#: the tree this digest covers. Those bytes are not a mutation of the shipped
+#: tree: they are gitignored, they are what `git status` already declines to
+#: report, and `landing_worktree_is_clean_check --expect-fingerprint` — the gate
+#: this assertion proxies — refuses the stamp on a TRACKED file only.
+#:
+#: This is not a new judgement about what counts as a write. `suite_write_guard`
+#: already draws the same line and says so out loud:
+#:     [INFO] suite_write_guard: +2 regenerable cache artefact(s)
+#:            (__pycache__/.pytest_cache/*.pyc) not listed.
+#: The two guards disagreed about one question, and the stricter one was the one
+#: producing a false red.
+_REGENERABLE = frozenset(("__pycache__", ".pytest_cache"))
+
+
 def _digest_tree(root):
-    """md5 over (relative path, bytes) of every file under `root`."""
+    """md5 over (relative path, bytes) of every SHIPPED file under `root`.
+
+    Bytecode caches are excluded — see `_REGENERABLE`. Nothing else is: a
+    changed `SKILL.md`, a new skill, a deleted one, and an untracked source
+    file all still move this digest, and each of those is pinned by a test
+    below.
+    """
     h = hashlib.md5()
     for p in sorted(q for q in root.rglob("*") if q.is_file()):
-        h.update(str(p.relative_to(root)).encode())
+        rel = p.relative_to(root)
+        if p.suffix == ".pyc" or _REGENERABLE & set(rel.parts):
+            continue
+        h.update(str(rel).encode())
         h.update(b"\0")
         h.update(p.read_bytes())
         h.update(b"\0")
@@ -485,6 +511,46 @@ class TestCoreSkillSchema:
 # ---------------------------------------------------------------------------
 # The regression guard for vibe-ic#1029, kept LAST on purpose.
 # ---------------------------------------------------------------------------
+def test_the_digest_ignores_bytecode_and_NOTHING_else(tmp_path):
+    """The exclusion is exactly bytecode. Every real mutation still moves it.
+
+    A cache exclusion is one edit away from an exclusion that hides a real
+    change, so each class is pinned separately rather than trusting the
+    predicate to stay narrow. If someone widens `_REGENERABLE` to buy a green,
+    one of the four below dies.
+    """
+    root = tmp_path / "skills"
+    (root / "a-skill").mkdir(parents=True)
+    (root / "a-skill" / "SKILL.md").write_text("# a\n")
+    base = _digest_tree(root)
+
+    # 1. bytecode is IGNORED — the whole point
+    cache = root / "a-skill" / "__pycache__"
+    cache.mkdir()
+    (cache / "poll.cpython-310.pyc").write_bytes(b"\x00compiled\x00")
+    (root / "a-skill" / "stray.pyc").write_bytes(b"\x00compiled\x00")
+    assert _digest_tree(root) == base, (
+        "bytecode moved the digest — the exclusion is not working")
+
+    # 2. an edited SKILL.md still moves it
+    (root / "a-skill" / "SKILL.md").write_text("# a\nedited\n")
+    assert _digest_tree(root) != base, "an edited SKILL.md must move the digest"
+    (root / "a-skill" / "SKILL.md").write_text("# a\n")
+    assert _digest_tree(root) == base
+
+    # 3. an untracked NEW source file still moves it — the `git add -A` half
+    #    `gatekeeper-land.sh` says its own fingerprint check cannot see
+    (root / "a-skill" / "planted.py").write_text("x = 1\n")
+    assert _digest_tree(root) != base, (
+        "an untracked source file must still move the digest")
+    (root / "a-skill" / "planted.py").unlink()
+    assert _digest_tree(root) == base
+
+    # 4. a deleted skill still moves it
+    (root / "a-skill" / "SKILL.md").unlink()
+    assert _digest_tree(root) != base, "a deleted SKILL.md must move the digest"
+
+
 def test_shipped_skills_tree_is_untouched_by_this_module():
     """No test in this SESSION may leave a byte of `skills/` different.
 
