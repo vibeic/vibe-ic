@@ -37,6 +37,7 @@ that is a harness-environment bug, fixed in the harness, not here.
 
 chip-AGNOSTIC: synthetic 3-line drafts; pure path/plumbing structure.
 """
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -122,6 +123,36 @@ def test_clean_design_not_false_blocked_on_hostile_path(tmp_path, component):
     assert "frontend-gap" not in (entry.get("synth") or ""), (
         f"the smoke did not really run under workdir component "
         f"{component!r}: {entry.get('synth')!r}")
+
+
+# ── the structural half: EVERY site, not just the one the fixture drives ─────
+def test_every_read_verilog_interpolation_in_the_gate_is_QUOTED():
+    """vibe-ic#1379. The behavioural test above drives ONE call site.
+
+    Measured by the reviewer: unquoting the other two (`cvdp_gate.py:654` and
+    `:925`) leaves the whole suite GREEN, because the fixture only reaches
+    `:1009`. Two thirds of the fix was therefore unpinned, and a future edit
+    dropping either quote would reintroduce a silent no-op gate — the failure
+    mode here is not a red test, it is the synth pass never running while the
+    record still says PASS.
+
+    So this asserts the PROPERTY over the whole population rather than the
+    three sites known today: any `read_verilog` whose path is interpolated must
+    have that interpolation inside double quotes. A fourth site added tomorrow
+    is covered the day it is written, which a list of line numbers would not be.
+    """
+    src = (PLUGIN / "benchmark" / "cvdp_gate.py").read_text(encoding="utf-8")
+
+    # every `read_verilog ...` up to the statement separator or closing quote
+    sites = re.findall(r"read_verilog[^;'\"]*", src)
+    assert sites, "no read_verilog call sites found — the guard would be vacuous"
+
+    unquoted = [s for s in sites if re.search(r'(?<!")\{[^}]+\}(?!")', s)]
+    assert not unquoted, (
+        "a yosys -p script interpolates a path WITHOUT quotes, so a workdir "
+        "containing a space splits the argument and read_verilog aborts before "
+        "synth ever runs — the gate then reports a tolerated frontend gap "
+        "instead of a failure:\n  " + "\n  ".join(unquoted))
 
 
 if __name__ == "__main__":
