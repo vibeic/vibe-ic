@@ -28,6 +28,14 @@ import gate_red_since_check as G  # noqa: E402
 SHA = "a" * 40
 
 
+#: vibe-ic#1241 — `--timeout-method=thread` kills the SESSION, not the test,
+#: so a bound above the harness ceiling (`min(180,300) // 3` = 60 s) can never
+#: fire: pytest ends the run first and every other file in the subset loses
+#: its verdict. MEASURED rather than tuned until the gate went quiet — the whole 34-test file runs in 1.34 s and its slowest test is 0.03 s, so
+#: 30 s is ~1000x the slowest measured call and half the ceiling.
+_BOUND_S = 30
+
+
 def _record(*gates, declared=None, listed_only=False):
     """A dispatch record in the exact shape `_gate_dispatch.sh` emits."""
     rows = [{"label": lbl, "state": st, "seconds": 0} for lbl, st in gates]
@@ -235,7 +243,7 @@ def _cli(tmp_path, record, ledger_rows, name="r"):
     led.write_text(json.dumps({"acknowledged": ledger_rows}))
     return subprocess.run(
         [sys.executable, str(PROG), "--record", str(rec), "--ledger", str(led),
-         "--repo", str(ROOT)], capture_output=True, text=True, timeout=300)
+         "--repo", str(ROOT)], capture_output=True, text=True, timeout=_BOUND_S)
 
 
 def test_cli_exits_0_when_every_red_is_new(tmp_path):
