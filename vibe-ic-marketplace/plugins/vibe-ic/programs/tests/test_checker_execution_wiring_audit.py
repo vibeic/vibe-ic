@@ -296,3 +296,62 @@ def test_a_nested_worktree_copy_inside_the_repo_is_still_skipped(tmp_path):
     hay = M._haystacks(tmp_path / "vibe-ic-marketplace/plugins/vibe-ic", tmp_path)
     assert not any("worktrees" in p for p in hay["TOOLS"])
     assert _run(tmp_path)["no_runner_at_all"] == ["sample_check.py"]
+
+
+# ── the JSON verdict must be the verdict the process exits with ──────────────
+#
+# Every test above drives `M.audit()`, which BUILDS the report — and the report
+# is stamped `passed: True` at construction. Nothing here drove `main()`, and
+# nothing asserted the field at all, so a hardcoded constant survived: on a run
+# that printed `[FAIL]` and exited 1, the `--json` file still said
+# `"passed": true`.
+#
+# Measured 2026-08-13 against vibe-ic#1241's wiring rows. One invocation over
+# PR #1151 exited 1 with `[FAIL] bundled_attribution_notice_check.py` while its
+# JSON reported `passed: true`; a reader keying on the field called that row
+# ANSWERED, which was the wrong verdict on the only unanswered row of six.
+#
+# The invariant is asserted in BOTH directions on purpose. A one-sided test
+# ("a failing run says false") is satisfied by hardcoding the field to False,
+# which would break every passing run instead.
+
+def _main_with_json(tmp_path, root):
+    """`(rc, parsed_json)` from a real `main()` invocation on `root`."""
+    out = tmp_path / "audit.json"
+    base = tmp_path / "baseline.json"          # never the repo's own baseline
+    base.write_text(json.dumps({"known": [], "unwired_by_decision": {}}) + "\n")
+    rc = M.main(["--repo-root", str(root), "--json", str(out),
+                 "--baseline", str(base)])
+    assert out.is_file(), "main() wrote no --json output"
+    return rc, json.loads(out.read_text())
+
+
+def test_json_passed_is_false_when_the_run_fails(tmp_path):
+    """A FAILING run must not report `passed: true` to a machine reader."""
+    _tree(tmp_path, test="import sample_check\n")     # only its own test runs it
+    rc, rep = _main_with_json(tmp_path, tmp_path)
+    assert rc != 0, "precondition: a test-only checker must make main() fail"
+    assert rep["passed"] is False, (
+        "the run exited nonzero and printed [FAIL], but its JSON says "
+        f"passed={rep['passed']!r} — a consumer reading the report sees a "
+        "clean run where the gate blocked")
+
+
+def test_json_passed_is_true_when_the_run_passes(tmp_path):
+    """PAIRED: the fix must not simply invert the field."""
+    _tree(tmp_path, test="import sample_check\n",
+          ci="run: python3 sample_check.py\n")        # a real runner
+    rc, rep = _main_with_json(tmp_path, tmp_path)
+    assert rc == 0, "precondition: a wired checker must make main() pass"
+    assert rep["passed"] is True, rep
+
+
+@pytest.mark.parametrize("wired", [False, True])
+def test_json_passed_always_agrees_with_the_exit_code(tmp_path, wired):
+    """The property itself, stated once: the field IS the exit code."""
+    _tree(tmp_path, test="import sample_check\n",
+          ci="run: python3 sample_check.py\n" if wired else "")
+    rc, rep = _main_with_json(tmp_path, tmp_path)
+    assert rep["passed"] is (rc == 0), (
+        f"exit={rc} but json.passed={rep['passed']!r}; the report and the "
+        "process disagree about the same run")
