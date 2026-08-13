@@ -51,6 +51,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +456,7 @@ def main(argv: list = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(report_json)
+        atomic_write_text(Path(args.json), report_json)
 
     print(report_json)
     return 0 if result.passed else 1
