@@ -92,6 +92,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
@@ -511,6 +512,13 @@ class CiAudit(NamedTuple):
     declared: int
     probed: int
     not_driven: List[Tuple[str, str]]   # (label, why)
+    #: vibe-ic#1181 — the loop ran out of its AGGREGATE budget and stopped
+    #: early. Carried as its own field, not folded into `not_driven`, because
+    #: the two are different sentences: a gate that is `not_driven` was
+    #: examined and found undriveable, and a gate dropped by the budget was
+    #: never looked at. Only the second one makes the verdict unsafe to read
+    #: as clean.
+    truncated: bool = False
 
 
 def _driveable(argv: List[str]) -> Optional[str]:
@@ -536,7 +544,32 @@ def _driveable(argv: List[str]) -> Optional[str]:
     return None
 
 
-def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
+def audit_ci(repo_root: Path, timeout: int = 120,
+             budget: Optional[float] = None) -> CiAudit:
+    """Drive every declared CI gate over an empty scratch tree.
+
+    `timeout` bounds ONE gate. `budget` bounds the WHOLE loop, and vibe-ic#1181
+    is why it exists: without it this function's runtime is the SUM of up to 74
+    per-gate timeouts and nothing caps it. MEASURED on an idle host at
+    a38902d1 — 74 declared, 50 driven, **192.9s**, slowest single gate 35.1s.
+    That is already past the suite's own `--timeout=180`, and the worst case is
+    50 x 120s.
+
+    Why the per-test timeout could not save it: the wait is inside
+    `subprocess.run`, and `pytest-timeout --timeout-method=thread` cannot
+    interrupt a blocking syscall. The timeout fired, printed its stack, and the
+    invocation still never finished — so the WHOLE pytest run produced no
+    summary line and every other file in that selection went unmeasured. That
+    is the same ambiguity as `no tests ran`: it greps as neither pass nor fail.
+
+    TRUNCATION IS NOT A PASS. When the budget runs out the remaining gates are
+    recorded in `not_driven` and `truncated` is set, and the verdict becomes
+    `NOT_CHECKED` rather than `PASS` — "I could not look" must never arrive as
+    "I looked and it was clean". A FINDING still outranks it: a violation found
+    over a partial view is still a violation, which is the same rule
+    `flow_step_execution_coverage_check` applies to its own partial sweeps.
+    """
+
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
     gates = parse_declarations(script)
     if not gates:
@@ -545,42 +578,121 @@ def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
 
     findings: List[Dict] = []
     not_driven: List[Tuple[str, str]] = []
-    with tempfile.TemporaryDirectory() as td:
-        scratch = _scratch_repo(Path(td))
-        for decl in gates:
-            label, cmd = decl.label, decl.cmd
+    truncated = False
+    deadline = None if budget is None else time.monotonic() + float(budget)
+
+    # PARALLEL, AND A FRESH SCRATCH PER GATE — the two are one decision.
+    #
+    # vibe-ic#1181: serially this loop measured 192.9s on an idle host (74
+    # declared, 50 driven), already past the suite's `--timeout=180`, and the
+    # per-test timeout could not end it because the wait is inside
+    # `subprocess.run`. Fanning the gates out brings the wall clock under the
+    # harness bound, which is what actually closes the issue; the aggregate
+    # `budget` below stays as the backstop for the pathological case.
+    #
+    # A FRESH SCRATCH PER GATE — and NOT because these gates write today.
+    #
+    # An earlier revision of this comment justified the fresh tree by citing
+    # `_drive_on_empty_project`: "a fresh directory per gate, never a shared
+    # one: gates write into the project they audit". That is true of THAT
+    # population — `programs/*_check.py` driven with the project as cwd — and
+    # it does NOT transfer here. MEASURED on `a38902d1`, driving all 50
+    # driveable CI gates serially in declaration order against ONE shared
+    # scratch and fingerprinting the tree after every single gate so a writer
+    # would be attributed to the gate that wrote it:
+    #
+    #     declared 74, driven 50, skipped 24
+    #     entries before 42, entries after 42, WRITERS: 0
+    #
+    # So the shared tree was order-independent, and anyone who re-measures
+    # will find the same thing and have an argument for deleting this.
+    #
+    # It stays anyway, for the reason that survives the measurement: under a
+    # fan-out the cost of being wrong changes. Serially, a gate that started
+    # writing would corrupt the population in a FIXED order — reproducible,
+    # and eventually noticed. Concurrently it would corrupt it in a different
+    # order every run, which is the failure mode that gets diagnosed as
+    # flakiness and waived. One `git init` per gate buys immunity by
+    # construction: measured at 38.1s with the fresh trees against 37.0s
+    # sharing one, so the whole insurance costs ~1s of 38.
+    #
+    # `test_the_fan_out_gives_every_gate_its_own_scratch` pins it, so removing
+    # it is a decision someone has to make on purpose rather than a tidy-up.
+    def _probe(decl):
+        """Drive one gate in its own empty repo. Returns (kind, label, payload)."""
+        label, cmd = decl.label, decl.cmd
+        if deadline is not None and time.monotonic() >= deadline:
+            return ("budget", label,
+                    f"aggregate budget of {budget:g}s exhausted before this "
+                    f"gate was launched (vibe-ic#1181)")
+        # Driveability is a property of the ARGV SHAPE, so it is
+        # decided before a scratch tree is made — making one for a
+        # gate that will not be driven is 74 wasted `git init`s.
+        # The placeholder never reaches a subprocess: the argv that
+        # runs is re-expanded against the real scratch below.
+        argv = _expand(cmd, repo_root, Path('/nonexistent-probe'))
+        why = _driveable(argv)
+        if why is not None:
+            return ("not_driven", label, why)
+        per_gate = timeout
+        if deadline is not None:
+            per_gate = max(1, min(timeout, int(deadline - time.monotonic())))
+        with tempfile.TemporaryDirectory() as gd:
+            scratch = _scratch_repo(Path(gd))
             argv = _expand(cmd, repo_root, scratch)
-            why = _driveable(argv)
-            if why is not None:
-                not_driven.append((label, why))
-                continue
             try:
                 r = subprocess.run(argv, cwd=str(scratch), capture_output=True,
-                                   text=True, timeout=timeout)
+                                   text=True, timeout=per_gate)
+            except subprocess.TimeoutExpired as exc:
+                if per_gate < timeout:
+                    return ("budget", label,
+                            f"aggregate budget of {budget:g}s ran out while "
+                            f"this gate was running (vibe-ic#1181)")
+                return ("unrunnable", label, str(exc))
             except (OSError, subprocess.SubprocessError) as exc:
-                findings.append({
-                    "gate": label, "kind": "GATE_UNRUNNABLE",
-                    "detail": f"could not be driven against a scratch tree: {exc}",
-                })
-                continue
+                return ("unrunnable", label, str(exc))
             out = (r.stdout or "") + (r.stderr or "")
             if r.returncode == 0 and not discloses(out):
+                return ("silent", label, out)
+            return ("ok", label, "")
+
+    workers = min(8, (os.cpu_count() or 2))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        for kind, label, payload in ex.map(_probe, gates):
+            if kind == "budget":
+                truncated = True
+                not_driven.append((label, payload))
+            elif kind == "not_driven":
+                not_driven.append((label, payload))
+            elif kind == "unrunnable":
+                findings.append({
+                    "gate": label, "kind": "GATE_UNRUNNABLE",
+                    "detail": f"could not be driven against a scratch tree: "
+                              f"{payload}",
+                })
+            elif kind == "silent":
                 findings.append({
                     "gate": label, "kind": "PASS_WITHOUT_DENOMINATOR",
                     "detail": ("answered PASS over an EMPTY tree without "
                                "disclosing that it examined nothing — this "
                                "output is indistinguishable from a real clean "
                                "run"),
-                    "output_tail": out.strip().splitlines()[-1][:200]
-                    if out.strip() else "(no output at all)",
+                    "output_tail": payload.strip().splitlines()[-1][:200]
+                    if payload.strip() else "(no output at all)",
                 })
-    return CiAudit("FAIL" if findings else "PASS", findings, len(gates),
-                   len(gates) - len(not_driven), not_driven)
+
+    # ORDER IS THE CLAIM. A finding survives truncation — a violation seen
+    # over a partial view is still a violation. Absence does not: with the
+    # loop cut short, "no findings" is a statement about how far it got.
+    verdict = "FAIL" if findings else ("NOT_CHECKED" if truncated else "PASS")
+    return CiAudit(verdict, findings, len(gates),
+                   len(gates) - len(not_driven), not_driven, truncated)
 
 
-def audit(repo_root: Path, timeout: int = 120) -> Tuple[str, List[Dict]]:
+def audit(repo_root: Path, timeout: int = 120,
+          budget: Optional[float] = None) -> Tuple[str, List[Dict]]:
     """Back-compatible view of `audit_ci` — the verdict and the findings."""
-    res = audit_ci(repo_root, timeout=timeout)
+    res = audit_ci(repo_root, timeout=timeout, budget=budget)
     return res.verdict, res.findings
 
 
@@ -1074,13 +1186,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "*_check.py (default: this program's own directory)")
     ap.add_argument("--timeout", type=int, default=120,
                     help="per-gate probe budget in seconds (default 120)")
+    ap.add_argument("--budget", type=float, default=None,
+                    help="AGGREGATE wall-clock budget for the whole CI sweep "
+                         "in seconds. Unset = unbounded, which is what "
+                         "vibe-ic#1181 measured at 192.9s on an idle host. "
+                         "On exhaustion the sweep stops and reports "
+                         "NOT_CHECKED, never PASS.")
     a = ap.parse_args(argv)
 
     if a.population == "project":
         return _main_project_population(a)
 
     root = Path(a.repo_root).resolve() if a.repo_root else _PLUGIN.parents[2]
-    res = audit_ci(root, timeout=a.timeout)
+    res = audit_ci(root, timeout=a.timeout, budget=a.budget)
     verdict, findings = res.verdict, res.findings
 
     if a.json_out:
@@ -1092,8 +1210,24 @@ def main(argv: Optional[List[str]] = None) -> int:
              # gates the interpreter never opened were reported as disclosing.
              "gates_declared": res.declared,
              "gates_probed": res.probed,
+             "truncated": res.truncated,
              "not_driven": [{"gate": g, "why": w} for g, w in res.not_driven],
              "findings": findings}, indent=2) + "\n")
+
+    # vibe-ic#1181 — a sweep the budget cut short exits 2 NOT CHECKED, never
+    # 0. rc 0 from this program is read by the tier as "every CI gate discloses
+    # what it examined"; over a truncated sweep that sentence is about how far
+    # the loop got, not about the gates.
+    if verdict == "NOT_CHECKED":
+        print(f"NOT CHECKED: the CI sweep stopped after probing {res.probed} "
+              f"of {res.declared} declared gate(s) — its aggregate budget ran "
+              f"out. No finding was seen in what it did probe, but that is not "
+              f"a clean result over the gate set (vibe-ic#1181).",
+              file=sys.stderr)
+        for g, w in res.not_driven:
+            if "aggregate budget" in w:
+                print(f"    NOT PROBED  {g}", file=sys.stderr)
+        return 2
 
     if verdict == "NOTHING_SCANNED":
         print(f"NOTHING_SCANNED: no `run` lines parsed from "
