@@ -2214,8 +2214,40 @@ def _probe_run_root(prefix: str):
     with tempfile.TemporaryDirectory(prefix=prefix) as td:
         root = Path(td) / "probe"
         root.mkdir()
+        # AUTO-GC IS OFF, and the two `os.devnull` lines are WHY it has to be
+        # said here (vibe-ic#1266; diagnosis and fix from the closed #1275,
+        # whose analysis is better than the one I opened #1274 with).
+        # Neutralising global+system config is right — the probe must not
+        # inherit a host's opinions — but it also discards any `gc.auto=0` the
+        # host happened to set, so git's DEFAULT applies and `git commit` forks
+        # `gc --auto`. That detached repack writes `.git/objects/pack/tmp_pack_*`
+        # WHILE `TemporaryDirectory` is unlinking the tree: `rmtree` empties
+        # `objects/`, gc refills it, and cleanup dies with
+        #
+        #     OSError: [Errno 39] Directory not empty: 'objects'
+        #
+        # raised from `__exit__`, so pytest reports it against the `with
+        # _probe_run_root(...)` line and the test reads as the property being
+        # VIOLATED when the property in fact holds. A teardown race that
+        # impersonates a real finding is worse than one that merely flakes.
+        #
+        # `autoDetach=false` as well as `auto=0`: `auto=0` stops gc being
+        # scheduled, and `autoDetach=false` means that if anything ever does
+        # schedule one it runs in the FOREGROUND, finishing before cleanup
+        # starts instead of racing it.
+        #
+        # Deliberately NOT `TemporaryDirectory(ignore_cleanup_errors=True)`,
+        # which is what #1274 originally did. That swallows EVERY teardown
+        # failure, not just this one, so a future teardown fault that is not
+        # background-gc could never fail this test again — "robust by asserting
+        # nothing", which is the one outcome this suite's standard names as
+        # worst. Removing the cause keeps every other teardown failure loud.
         env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
-               "GIT_CONFIG_SYSTEM": os.devnull}
+               "GIT_CONFIG_SYSTEM": os.devnull,
+               "GIT_CONFIG_COUNT": "2",
+               "GIT_CONFIG_KEY_0": "gc.auto", "GIT_CONFIG_VALUE_0": "0",
+               "GIT_CONFIG_KEY_1": "gc.autoDetach",
+               "GIT_CONFIG_VALUE_1": "false"}
         subprocess.run(["git", "init", "-q"], cwd=root, check=True, env=env,
                        capture_output=True)
 
