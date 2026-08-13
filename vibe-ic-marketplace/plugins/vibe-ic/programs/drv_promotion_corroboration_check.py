@@ -185,6 +185,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     rep = check(project)
     print(f"=== DRV promotion corroboration ===\n"
           f"verdict: {rep['verdict']}\n{rep['reason']}")
+    if rep["verdict"] == "VACUOUS_PASS":
+        # vibe-ic#1115. The word was already right and the SHAPE was not:
+        # `flow_compliance_check._stdout_signals_vacuous` matches the prefix at
+        # line start, so "verdict: VACUOUS_PASS" reached nobody and the step was
+        # recorded as an ordinary PASS. Measured against the consumer directly.
+        print(f"VACUOUS_PASS: {rep['reason']}")
     if a.json:
         Path(a.json).write_text(json.dumps(rep, indent=2, ensure_ascii=False))
     return rep["rc"]
