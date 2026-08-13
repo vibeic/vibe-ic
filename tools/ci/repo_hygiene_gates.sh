@@ -963,6 +963,28 @@ run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.
 # against checks that go green by declining to look, and that includes itself.
 run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins
 
+# vibe-ic#1241 — until this line existed, NOTHING but its own unit test ran
+# `bundled_attribution_notice_check.py`, which is the finding #1241 records for
+# it: a fixture the author wrote proves the logic and never proves the artefacts.
+#
+# SCOPE IS "$ROOT", NOT "$ROOT/benchmark-data", AND THE DIFFERENCE IS MEASURED.
+# Bundled third-party source is not confined to the corpus, and the two scopes
+# do not see the same repository:
+#
+#     "$ROOT"                 7 holder(s) over 513 SPDX-headered file(s)   rc 0
+#     "$ROOT/benchmark-data"  6 holder(s) over 512 SPDX-headered file(s)   rc 0
+#
+# The narrower scope misses one holder outright, so it would report a clean
+# NOTICE while a bundled work went unnamed — the shape this gate exists to
+# catch. (#1156 chose the corpus scope for `tool_warning_id_novelty_check`
+# because tool logs only live there; that reasoning does not carry to bundled
+# sources.)
+#
+# rc 2 is "refused — no SPDX-headered source found, so nothing was established",
+# and it BLOCKS rather than passing: an empty scan must not read as a clean one.
+run "NOTICE accounts for what is bundled" "$ROOT" \
+    python3 "$PG/bundled_attribution_notice_check.py" "$ROOT" --notice "$ROOT/NOTICE"
+
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
 gate_dispatch_finish
