@@ -56,6 +56,8 @@ _PROGRAMS = _TESTS.parent
 _REPO = _PROGRAMS.parents[3]
 _SCRIPT = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 _LIB = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
+#: The producer library the script sources (vibe-ic#1075).
+_CORPUS_LIB = _REPO / "tools" / "ci" / "_published_cell_corpus.sh"
 
 #: Every fixture gate returns instantly, and the real script's `--list` is
 #: measured at 0.03 s. This only stops a hung one from taking the pytest
@@ -84,27 +86,41 @@ _538 = _load(_TESTS, "test_issue538_merge_gate_covers_ci_hygiene")
 
 
 # ── what the script's corpus IS, discovered rather than declared ────────────
-def _published_corpus() -> list:
-    """The items the gate script's own producer selects, run for real.
+def _published_corpora() -> dict:
+    """{corpus_name: [items]} — every loop corpus the script declares.
 
-    The glob is SCRAPED from the script — the single quoted pattern under
-    `benchmark-data` — so this test cannot disagree with the script about what
-    the corpus is, and cannot go stale when the layout moves. Present in the
-    script both before and after #957, so the discovery works in both arms and
-    only the disclosure assertions can fail.
+    Was `_published_corpus()` returning ONE list, because the script drove one
+    loop over one corpus. vibe-ic#1075 gives two of the three per-cell gates the
+    population they actually READ (a DRC report; a `reports/` tree), so there
+    are now three. Every assertion in this file is applied per corpus; none was
+    dropped to accommodate the count.
+
+    INDEPENDENCE IS PRESERVED, which is the point of the original. #957 scraped
+    the glob out of the script and ran `git ls-files` itself so it could not
+    agree with the record by construction. Reading `doc["corpora"]` for the
+    counts would be circular — a record that over-counted would validate
+    itself. So this parses the `gate_dispatch_over` lines for (name, producer),
+    SOURCES the shipped producer library, and RUNS each producer for real. The
+    counts compared against the record are the producers' own output.
     """
     text = _SCRIPT.read_text(errors="replace")
-    globs = sorted({m.group(1) for m in
-                    re.finditer(r"'(benchmark-data/[^']*\*[^']*)'", text)})
-    assert len(globs) == 1, (
-        "the hygiene script no longer names exactly one published-corpus "
-        f"glob, so this test cannot know what the loop expands over: {globs}")
-    out = subprocess.run(["git", "-C", str(_REPO), "ls-files", "--", globs[0]],
-                         capture_output=True, text=True, timeout=_T)
-    assert out.returncode == 0, out.stderr
-    return [p for p in out.stdout.split() if p]
-
-
+    joined = re.sub(r"\\\s*\n\s*", " ", text)
+    decls = [(m.group(1), m.group(3)) for m in
+             re.finditer(r'gate_dispatch_over\s+"([^"]+)"\s+(\S+)\s+(\S+)', joined)]
+    assert decls, (
+        "the hygiene script declares no loop corpus at all, so this test "
+        "cannot know what any loop expands over")
+    assert _CORPUS_LIB.is_file(), (
+        f"the script sources {_CORPUS_LIB.name} but it is absent, so the "
+        "shipped producers cannot be driven")
+    out = {}
+    for name, fn in decls:
+        sh = f'set -euo pipefail\nROOT="{_REPO}"\n. "{_CORPUS_LIB}"\n{fn}\n'
+        res = subprocess.run(["bash", "-c", sh], capture_output=True,
+                             text=True, timeout=_T)
+        assert res.returncode == 0, f"producer {fn} failed: {res.stderr}"
+        out[name] = [ln for ln in res.stdout.splitlines() if ln.strip()]
+    return out
 def _templated_decls():
     """The `run` lines a LOOP drives: the parser says so, this file does not."""
     return [d for d in GD.parse_declarations(_SCRIPT) if d.runtime_expansion]
@@ -140,64 +156,54 @@ _DENOM_RE = re.compile(r"\bof\s+(\d+)\b")
 # THE DISCLOSURE
 # ==========================================================================
 def test_every_loop_driven_row_states_how_many_items_the_loop_expanded_over():
-    """The defect, over the REAL script.
-
-    Three gates ran over one cell and every row read like a statement about
-    "the published cells". A reader could not see the denominator anywhere,
-    because it was written down nowhere.
-    """
-    items = _published_corpus()
+    """Per corpus. The assertion is unchanged; it is applied to each of them."""
     templated = _templated_decls()
     assert templated, "the script no longer drives any gate from a loop"
-    assert items, (
-        "the published corpus is empty, so this test cannot distinguish a "
-        "disclosure from silence; it is not the fix's job to populate it")
-
-    stdout, _, _ = _list_run(_SCRIPT, _REPO)
+    stdout, _, _doc = _list_run(_SCRIPT, _REPO)
     rows = [ln for ln in stdout.splitlines() if ln.strip()]
-    loop_rows = [ln for ln in rows
-                 if any(ln.startswith(_literal_prefix(d.label))
-                        for d in templated)]
-    assert len(loop_rows) == len(templated) * len(items), (
-        f"{len(loop_rows)} loop-driven row(s) for {len(templated)} looping "
-        f"`run` line(s) over {len(items)} published item(s)")
-    for ln in loop_rows:
-        m = _DENOM_RE.search(ln)
-        assert m, (
-            "a loop-driven gate row states no denominator — a reader cannot "
-            "tell whether this verdict covers the corpus or one item of it:\n"
-            f"  {ln}")
-        assert int(m.group(1)) == len(items), (
-            f"the row claims a denominator of {m.group(1)} over a corpus of "
-            f"{len(items)}:\n  {ln}")
-
-
+    for name, items in _published_corpora().items():
+        assert items, (
+            f"loop corpus {name!r} expanded over NOTHING. A disclosure achieved "
+            "by narrowing a corpus to zero is a coverage cut wearing a fix's "
+            "clothes, which is what this guard exists to refuse")
+        mine = [ln for ln in rows if "[item " in ln and name in ln]
+        assert mine, f"no loop-driven row names corpus {name!r}"
+        for ln in mine:
+            m = re.search(r"of (\d+) over ", ln)
+            assert m, f"a loop row states no denominator: {ln}"
+            assert int(m.group(1)) == len(items), (
+                f"row says {m.group(1)} item(s); the shipped producer for "
+                f"{name!r} selects {len(items)}: {ln}")
 def test_the_rollup_names_the_corpus_and_the_size_it_expanded_over():
     """The roll-up is what a reader believes, and it is where this was missing.
 
-    Per-row disclosure is not enough on its own: the sentence that counts the
-    gates is the one that reads as coverage.
+    Per corpus now: EVERY declared corpus must be named in the roll-up with the
+    size it expanded over. `len(corpora) == 1` is gone — that was an assumption
+    about the script's SHAPE, not a guard — and every guard it stood beside is
+    applied to all of them instead of one.
     """
-    items = _published_corpus()
     stdout, stderr, doc = _list_run(_SCRIPT, _REPO)
-
-    corpora = doc.get("corpora")
-    assert corpora, (
+    record = doc.get("corpora")
+    assert record, (
         "the machine record carries no corpus entry, so a consumer of the "
         "record — which is what the merge gate reads — still cannot tell how "
         "many items the loop-driven gates covered")
-    assert len(corpora) == 1, corpora
-    c = corpora[0]
-    assert c["items"] == len(items), (c, items)
-    assert c["gates"] == len(_templated_decls()) * len(items), c
-
-    said = [ln for ln in (stdout + stderr).splitlines()
-            if c["name"] in ln and re.search(rf"\b{len(items)}\b", ln)]
-    assert said, (
-        "no line of the roll-up names the corpus and how many items it "
-        f"expanded over:\n{stderr}")
-
-
+    corpora = _published_corpora()
+    assert len(record) == len(corpora), (
+        f"the record declares {len(record)} corpus/corpora; the script drives "
+        f"{len(corpora)}")
+    by_name = {c["name"]: c for c in record}
+    for name, items in corpora.items():
+        assert name in by_name, f"the record carries no entry for {name!r}"
+        c = by_name[name]
+        assert c["items"] == len(items), (
+            f"{name!r}: record says {c['items']} item(s); the shipped producer "
+            f"selects {len(items)}")
+        said = [ln for ln in (stdout + stderr).splitlines()
+                if name in ln and re.search(rf"\b{len(items)}\b", ln)]
+        assert said, (
+            f"no line of the roll-up names {name!r} and how many items it "
+            f"expanded over ({len(items)}):\n{stderr}")
 def test_the_declared_count_is_still_a_count_of_GATES_not_of_items():
     """PAIRED with the two above: the disclosure must not be bought by
     inflating `declared`, which is the number the merge gate reports coverage
@@ -371,13 +377,28 @@ def test_the_record_still_carries_the_gate_LABEL_as_its_identity():
 
 def test_every_published_cell_is_still_covered_by_every_per_cell_gate():
     """The other half: a disclosure that was achieved by dropping a gate, or by
-    narrowing the corpus, would be a coverage cut wearing a fix's clothes."""
-    items = _published_corpus()
-    stdout, _, _ = _list_run(_SCRIPT, _REPO)
+    narrowing the corpus, would be a coverage cut wearing a fix's clothes.
+
+    Per corpus. A gate must fire over every item of ITS OWN corpus, which is a
+    STRICTER statement than the original once the corpora differ: a gate can no
+    longer be credited by a corpus it does not read.
+    """
+    stdout, _, _doc = _list_run(_SCRIPT, _REPO)
     rows = [ln for ln in stdout.splitlines() if ln.strip()]
-    for d in _templated_decls():
-        pref = _literal_prefix(d.label)
-        got = [ln for ln in rows if ln.startswith(pref)]
-        assert len(got) == len(items), (
-            f"`{pref}…` fired {len(got)} time(s) over {len(items)} published "
-            "item(s)")
+    for name, items in _published_corpora().items():
+        mine = [ln for ln in rows if "[item " in ln and name in ln]
+        assert mine, f"no gate fired over corpus {name!r}"
+        # Group by the LITERAL PREFIX, not the whole label: a per-cell label
+        # embeds the item (`DRC PASS is not vacuous (spm/v1.5.58…)`), so the
+        # full string is unique per row and would count 1 every time. This is
+        # the same `_literal_prefix` the original used, applied per corpus.
+        prefixes = {_literal_prefix(d.label) for d in _templated_decls()}
+        fired = {p: [ln for ln in mine if ln.startswith(p)] for p in prefixes}
+        for pref, got in fired.items():
+            if not got:
+                continue          # that gate belongs to a different corpus
+            assert len(got) == len(items), (
+                f"`{pref}…` fired {len(got)} time(s) over {len(items)} item(s) "
+                f"of corpus {name!r}")
+        assert any(fired.values()), (
+            f"no templated gate fired over corpus {name!r}")
