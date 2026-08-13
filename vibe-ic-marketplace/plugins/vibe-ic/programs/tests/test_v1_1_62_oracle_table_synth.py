@@ -17,6 +17,23 @@ if str(PROG_DIR) not in sys.path:
 import oracle_table_synth as S            # noqa: E402
 import kmap_truth_table_oracle_check as K  # noqa: E402
 
+import shutil  # noqa: E402
+import pytest  # noqa: E402
+
+#: The marked tests below reach `iverilog` — through the oracle's own simulate
+#: step — and without it they die with FileNotFoundError BEFORE any assertion
+#: runs. That is not a verdict about the RTL; it is the tool never having been
+#: there. Marked ONE BY ONE from a measured list, not by helper and not by name:
+#: two neighbours that call the same `_verdict()` helper are GREEN without a
+#: toolchain, because they assert a SKIP the oracle reaches before it compiles,
+#: and one marked test uses no helper at all.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_iverilog = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="the oracle compiles and runs the design; without iverilog this dies "
+           "with FileNotFoundError before asserting anything")
+
+
 TRUTH = """
 I would like you to implement a module named TopModule with the following
 interface. All input and output ports are one bit unless otherwise specified.
@@ -89,10 +106,12 @@ def _synth_then_gate(tmp_path, prompt):
     return K.check(prompt, str(f))[0]
 
 
+@_needs_iverilog
 def test_truth_table_solver_emits_correct_rtl(tmp_path):
     assert _synth_then_gate(tmp_path, TRUTH) == "PASS"
 
 
+@_needs_iverilog
 def test_fsm_next_state_solver_emits_correct_rtl(tmp_path):
     assert _synth_then_gate(tmp_path, FSM) == "PASS"
 
@@ -109,6 +128,7 @@ def test_emitted_rtl_has_correct_interface(tmp_path):
     assert "case ({y, w})" in rtl
 
 
+@_needs_iverilog
 def test_truth_table_emitted_matches_hand_truth(tmp_path):
     # exhaustively confirm the emitted RTL realizes the declared table
     rtl = S.synth(TRUTH, "TopModule")

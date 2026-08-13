@@ -20,6 +20,23 @@ if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import kmap_truth_table_oracle_check as K  # noqa: E402
 
+import shutil  # noqa: E402
+import pytest  # noqa: E402
+
+#: The marked tests below reach `iverilog` — through the oracle's own simulate
+#: step — and without it they die with FileNotFoundError BEFORE any assertion
+#: runs. That is not a verdict about the RTL; it is the tool never having been
+#: there. Marked ONE BY ONE from a measured list, not by helper and not by name:
+#: two neighbours that call the same `_verdict()` helper are GREEN without a
+#: toolchain, because they assert a SKIP the oracle reaches before it compiles,
+#: and one marked test uses no helper at all.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_iverilog = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="the oracle compiles and runs the design; without iverilog this dies "
+           "with FileNotFoundError before asserting anything")
+
+
 PROMPT = """
 I would like you to implement a module named TopModule with the following
 interface. All input and output ports are one bit unless otherwise
@@ -97,19 +114,23 @@ def _verdict(tmp_path, prompt, rtl, name="s.sv"):
     return K.check(prompt, str(r))[0]
 
 
+@_needs_iverilog
 def test_fsm_correct_passes(tmp_path):
     assert _verdict(tmp_path, PROMPT, CORRECT) == "PASS"
 
 
+@_needs_iverilog
 def test_fsm_wrong_blocks(tmp_path):
     assert _verdict(tmp_path, PROMPT, WRONG) == "BLOCK"
 
 
+@_needs_iverilog
 def test_fsm_alt_correct_not_false_blocked(tmp_path):
     # §4.05: a different correct implementation must NOT be blocked
     assert _verdict(tmp_path, PROMPT, ALT_CORRECT) == "PASS"
 
 
+@_needs_iverilog
 def test_fsm_dontcare_unused_codes_pass(tmp_path):
     # §4.05: unused state codes are don't-care; garbage there must NOT block
     assert _verdict(tmp_path, PROMPT, DONTCARE) == "PASS"
