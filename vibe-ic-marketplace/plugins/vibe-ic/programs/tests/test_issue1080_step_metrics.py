@@ -40,6 +40,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+#: vibe-ic#1241. `ci_harness_timeout_ceiling_check` sets the per-call ceiling
+#: at harness_bound/3 = 180/3 = 60s, so a call bounded ABOVE it is a promise
+#: the harness will not keep: pytest kills the SESSION, not the test, and the
+#: invocation ends with no summary line.
+#:
+#: This file's four calls were 120s and 3x180s. MEASURED, `--durations`: the
+#: slowest test in this module is 0.11s and the whole module is 1.56s. 30s is
+#: ~270x the measured worst case and half the ceiling -- lowered because the
+#: old bounds were over-provisioned, NOT to dodge the rule. A test that
+#: genuinely needed longer would belong outside the targeted subset instead.
+_SUBPROC_S = 30
+
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 PROGRAMS = PLUGIN / "programs"
 
@@ -49,7 +61,7 @@ import step_metrics as sm  # noqa: E402
 
 def _run(*args):
     return subprocess.run([sys.executable, str(PROGRAMS / "step_metrics.py"),
-                           *args], capture_output=True, text=True, timeout=120)
+                           *args], capture_output=True, text=True, timeout=_SUBPROC_S)
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +246,7 @@ def test_the_wired_gate_emits_its_own_metric(tmp_path):
     proj.mkdir()
     subprocess.run([sys.executable,
                     str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
-                   capture_output=True, text=True, timeout=180)
+                   capture_output=True, text=True, timeout=_SUBPROC_S)
     merged, prov = sm.collect(proj)
     assert prov["step_count"] == 1, (prov, merged)
     assert "11__coverage__passed" in merged, merged
@@ -248,7 +260,7 @@ def test_the_metrics_sink_cannot_change_the_gate_s_verdict(tmp_path, monkeypatch
     proj.mkdir()
     a = subprocess.run([sys.executable,
                         str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=_SUBPROC_S)
     broken = tmp_path / "broken"
     broken.mkdir()
     (broken / "step_metrics.py").write_text("raise RuntimeError('sink down')\n")
@@ -256,5 +268,5 @@ def test_the_metrics_sink_cannot_change_the_gate_s_verdict(tmp_path, monkeypatch
     env["PYTHONPATH"] = str(broken)
     b = subprocess.run([sys.executable,
                         str(PROGRAMS / "coverage_metric_check.py"), str(proj)],
-                       capture_output=True, text=True, timeout=180, env=env)
+                       capture_output=True, text=True, timeout=_SUBPROC_S, env=env)
     assert a.returncode == b.returncode, (a.returncode, b.returncode)
