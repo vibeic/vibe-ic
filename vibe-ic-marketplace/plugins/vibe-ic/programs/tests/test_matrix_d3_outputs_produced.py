@@ -2210,8 +2210,35 @@ def _probe_run_root(prefix: str):
     Yields ``(root, commit)``. ``commit(*rels)`` stages those exact paths —
     never ``-A``, so what is tracked is always stated — and clears the
     trackedness cache so the next ``resolve`` sees the new commit.
+
+    ``ignore_cleanup_errors`` — the probe is a REAL git repository, and tearing
+    one down is not reliably atomic (vibe-ic#1266). `TemporaryDirectory` walks
+    the tree and then `rmdir`s each directory; git may still be settling inside
+    `.git/objects` when the walk reaches it, so the `rmdir` finds it repopulated
+    and raises::
+
+        OSError: [Errno 39] Directory not empty: 'objects'
+
+    That error escapes from `__exit__`, AFTER every assertion in the body has
+    already passed — so a green measurement is reported as a failure. Measured
+    on clean `main` (`a38902d16`), same command, same worktree, back to back:
+    **5 of 6 runs failed this way**, each in ~1.6 s against ~7.5 s for a real
+    pass, and the fast ones never reached an assertion at all.
+
+    The consequence is bigger than one red test: this dimension's baseline
+    stops being reproducible, so any delta measured against a single baseline
+    run of d3 can be off by one in either direction for reasons that have
+    nothing to do with the change under test. This flake alone moved the
+    d3/d4/d7 total between 22 and 23 on an unmodified tree.
+
+    Cleanup is still ATTEMPTED in full; only the failure to complete it is
+    ignored, which is exactly what the sibling probe in
+    `test_matrix_d7_outputs_list_complete._probe_run_root` already does with
+    `shutil.rmtree(..., ignore_errors=True)`. Nothing about what the test
+    MEASURES changes — every assertion in the body is untouched.
     """
-    with tempfile.TemporaryDirectory(prefix=prefix) as td:
+    with tempfile.TemporaryDirectory(prefix=prefix,
+                                     ignore_cleanup_errors=True) as td:
         root = Path(td) / "probe"
         root.mkdir()
         env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
