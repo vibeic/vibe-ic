@@ -1,0 +1,25 @@
+{
+  "_comment": "Tool diagnostic ids observed in this cell (vibe-ic#1081). An id absent here and unaccepted is BLOCKING on the next run.",
+  "ids": [
+    "CTS-0041",
+    "CTS-0082",
+    "CTS-0083",
+    "DPL-0006",
+    "DPL-0033",
+    "DRT-0120",
+    "DRT-0290",
+    "DRT-0349",
+    "DRT-0701",
+    "EST-0015",
+    "GRT-0121",
+    "IFP-0028",
+    "ODB-0220",
+    "ODB-0369",
+    "PSM-0079",
+    "RSZ-0020",
+    "RSZ-0074",
+    "RSZ-0095",
+    "STA-0441",
+    "STA-1651"
+  ]
+}
