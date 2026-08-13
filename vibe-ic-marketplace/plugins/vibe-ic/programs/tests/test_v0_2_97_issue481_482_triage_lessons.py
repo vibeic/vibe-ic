@@ -199,12 +199,31 @@ def test_482_skill_compliance_tests_still_pass():
     """The skill's own structure/compliance test module must still import +
     its core invariants hold after our SKILL.md / compliance.yaml edits."""
     import importlib.util
+    import sys
 
     comp_test = (SKILL_MD.parent / "tests" / "test_compliance.py")
     assert comp_test.exists()
     spec = importlib.util.spec_from_file_location("obm_compliance_test", comp_test)
     m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+    # `comp_test` lives in the SHIPPED `skills/` tree, so executing it writes
+    # `skills/open-benchmark-methodology/tests/__pycache__/test_compliance.*.pyc`
+    # into the tree under test. That moves the digest
+    # `test_shipped_skills_tree_is_untouched_by_this_session` takes over EVERY
+    # file under `skills/`, and `git status` cannot see it because
+    # `__pycache__/` is ignored — so the session reads as having written
+    # nothing while the shipped tree has in fact moved.
+    #
+    # This is the remedy that guard's own message prescribes, and the same one
+    # #1404 landed for `test_v1_0_95_gatekeeper_poll_prs`. The import is
+    # IN-PROCESS, so `PYTHONDONTWRITEBYTECODE` on a spawned child never reaches
+    # it — #1404 fixed the spawned tool and that one importer, and this third
+    # one was left live on `764fea6d`.
+    _no_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(m)
+    finally:
+        sys.dont_write_bytecode = _no_bytecode
     # compliance.yaml still loads and declares the skill correctly.
     reqs = m.load_requirements()
     assert reqs.get("skill") == "open-benchmark-methodology"
