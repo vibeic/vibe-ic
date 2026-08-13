@@ -536,7 +536,57 @@ def _driveable(argv: List[str]) -> Optional[str]:
     return None
 
 
-def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
+#: Per-gate subprocess bound. vibe-ic#1277.
+#:
+#: WAS 120s, which is twice `ci_harness_timeout_ceiling_check`'s 60s ceiling —
+#: and invisible to it, because the bound reaches the call site as a PARAMETER
+#: rather than a literal, so the gate reported rc=0 over it. MEASURED on this
+#: tree: 74 gates declared, 50 drivable, and the SLOWEST single gate is 31.46s
+#: ("triage notes state a true reason"), with the next four at 21.8/18.4/17.0/
+#: 14.4s. 60s is the ceiling and ~1.9x the measured worst case; it is not
+#: lowered to make a gate quiet, it is lowered because 120 was never reachable.
+_PER_GATE_S = 60
+
+
+def judge_one(decl, repo_root: Path, scratch: Path,
+              timeout: int = _PER_GATE_S) -> Tuple[Optional[Dict], Optional[str]]:
+    """Drive ONE declared gate against `scratch`: `(finding, not_driven_reason)`.
+
+    Extracted (vibe-ic#1277) so the audit and its test judge by the SAME code.
+    The test used to re-drive the whole population in a single pytest item —
+    188.61s measured, against a 180s harness bound, so `--timeout-method=thread`
+    took the SESSION down and every other file in the subset lost its verdict.
+    Splitting it per gate makes the slowest item 31.46s. A private copy of this
+    judgement in the test would be the divergence-by-second-copy this repo has
+    removed three times; there is one copy, here, and both callers use it.
+    """
+    argv = _expand(decl.cmd, repo_root, scratch)
+    why = _driveable(argv)
+    if why is not None:
+        return None, why
+    try:
+        r = subprocess.run(argv, cwd=str(scratch), capture_output=True,
+                           text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "gate": decl.label, "kind": "GATE_UNRUNNABLE",
+            "detail": f"could not be driven against a scratch tree: {exc}",
+        }, None
+    out = (r.stdout or "") + (r.stderr or "")
+    if r.returncode == 0 and not discloses(out):
+        return {
+            "gate": decl.label, "kind": "PASS_WITHOUT_DENOMINATOR",
+            "detail": ("answered PASS over an EMPTY tree without "
+                       "disclosing that it examined nothing — this "
+                       "output is indistinguishable from a real clean "
+                       "run"),
+            "output_tail": out.strip().splitlines()[-1][:200]
+            if out.strip() else "(no output at all)",
+        }, None
+    return None, None
+
+
+def audit_ci(repo_root: Path, timeout: int = _PER_GATE_S) -> CiAudit:
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
     gates = parse_declarations(script)
     if not gates:
@@ -548,32 +598,11 @@ def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
     with tempfile.TemporaryDirectory() as td:
         scratch = _scratch_repo(Path(td))
         for decl in gates:
-            label, cmd = decl.label, decl.cmd
-            argv = _expand(cmd, repo_root, scratch)
-            why = _driveable(argv)
+            finding, why = judge_one(decl, repo_root, scratch, timeout=timeout)
             if why is not None:
-                not_driven.append((label, why))
-                continue
-            try:
-                r = subprocess.run(argv, cwd=str(scratch), capture_output=True,
-                                   text=True, timeout=timeout)
-            except (OSError, subprocess.SubprocessError) as exc:
-                findings.append({
-                    "gate": label, "kind": "GATE_UNRUNNABLE",
-                    "detail": f"could not be driven against a scratch tree: {exc}",
-                })
-                continue
-            out = (r.stdout or "") + (r.stderr or "")
-            if r.returncode == 0 and not discloses(out):
-                findings.append({
-                    "gate": label, "kind": "PASS_WITHOUT_DENOMINATOR",
-                    "detail": ("answered PASS over an EMPTY tree without "
-                               "disclosing that it examined nothing — this "
-                               "output is indistinguishable from a real clean "
-                               "run"),
-                    "output_tail": out.strip().splitlines()[-1][:200]
-                    if out.strip() else "(no output at all)",
-                })
+                not_driven.append((decl.label, why))
+            elif finding is not None:
+                findings.append(finding)
     return CiAudit("FAIL" if findings else "PASS", findings, len(gates),
                    len(gates) - len(not_driven), not_driven)
 
