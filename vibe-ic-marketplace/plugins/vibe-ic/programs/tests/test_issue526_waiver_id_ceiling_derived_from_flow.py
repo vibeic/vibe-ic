@@ -520,7 +520,13 @@ def _tracked_corpus_waivers():
     """
     r = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "benchmark-data"],
-        capture_output=True, timeout=120)
+        # 10s, not the 120s this first carried. These tests run under a 180s
+        # pytest-timeout harness, so an inner bound is a slice of THAT budget --
+        # 120s was two thirds of it for a call measured at 0.00s (the whole item
+        # is 0.23s). An over-wide inner bound is the #1241 session-killer shape:
+        # enough of them and the harness dies without emitting a verdict at all,
+        # which greps as zero failures. 10s is ~43x the measured item.
+        capture_output=True, timeout=10)
     if r.returncode != 0:
         return None
     out = r.stdout.decode("utf-8", "replace")
