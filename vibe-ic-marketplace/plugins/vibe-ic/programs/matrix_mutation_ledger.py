@@ -683,6 +683,25 @@ class Mutation:
 #: not a failure of the ledger — it is the finding the ledger exists to publish.
 REDDENS = "REDDENED"
 CANNOT_REDDEN = "STAYED_GREEN"
+
+#: The witness was ALREADY RED before the mutation was applied, so the replay
+#: measured nothing (vibe-ic#1432). This is NOT a third recordable `expected`
+#: value — no ledger entry may declare it — it is what a replay reports when it
+#: could not perform the experiment.
+#:
+#: `replay_artefact`'s docstring already said this ("a mutation against an
+#: already-red gate proves nothing and is reported ALREADY_RED, never skipped")
+#: and `verdict` already returned it. What was missing is that `proved` and
+#: `as_recorded` are both False for it, so the two consumers scored an
+#: unmeasurable pair identically to `STAYED_GREEN` — "the gate lost its teeth".
+#: That is the same conflation `_vacuous_exit` exists to prevent everywhere else
+#: in this repo: COULD NOT LOOK is not LOOKED AND FOUND NOTHING.
+#:
+#: `policy_direction_pin_check` already handles the identical situation the
+#: other way, and in the same words — it ABSTAINS on a call site whose candidate
+#: tests are red before any flip, "so a kill proves nothing about this call
+#: site". One instrument abstained; this one scored it as a defect.
+ALREADY_RED = "ALREADY_RED"
 ARTEFACT_EXPECTATIONS = (REDDENS, CANNOT_REDDEN)
 
 
@@ -1930,10 +1949,27 @@ class ReplayResult:
         if not self.applied:
             return "NO_EDIT_SITE"
         if self.baseline_rc != 0:
-            return "ALREADY_RED"
+            return ALREADY_RED
         if self.mutant_rc in (None, 0):
             return "STAYED_GREEN"
         return "RED_FOR_ANOTHER_REASON"
+
+    @property
+    def unmeasurable(self) -> bool:
+        """The witness was red BEFORE the edit, so nothing was demonstrated.
+
+        Distinct from :attr:`proved` being False. A pair that stays green under
+        a mutation is a finding about the GATE; a pair whose baseline was
+        already red is a finding about the TREE, and reading the second as the
+        first is how a red witness comes to look like a gate that lost its
+        teeth (vibe-ic#1432).
+
+        Deliberately NOT a skip: these are counted, disclosed and ratcheted by
+        `test_the_replay_actually_ran_and_is_not_starved`, because a gate that
+        stops catching AND whose witness happens to be red must not become
+        invisible.
+        """
+        return self.verdict == ALREADY_RED
 
     @property
     def as_recorded(self) -> bool:
