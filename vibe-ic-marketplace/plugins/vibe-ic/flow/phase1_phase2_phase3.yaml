@@ -228,6 +228,13 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # MOVED HERE FROM STEP 1 (63x9 d4/step1). Per-doc diagnostic of
+      # which verbatim literals from extraction_patterns.json reached
+      # generated_docs/L*.json — a Phase 1 deliverable, produced by
+      # `phase1_coverage_report_gen.py` and judged by the gate clause
+      # `phase1_coverage_report_present_check` added below.
+      - "reports/phase1/extraction_coverage_report.md"
+      - "reports/phase1/extraction_coverage_report.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
@@ -236,6 +243,13 @@ steps:
         # not. A missing/unparseable report exits 1 here, because a second
         # track that can quietly not run is the same as no second track.
         - program_exit_zero: "phase1_expert_parse_track ."
+        # The checker for the two entries moved here from step 1. It was
+        # shipped and wired NOWHERE — the #725 shape this flow keeps
+        # finding. MEASURED: rc 1 when Phase 1 ran and the report is
+        # absent, rc 0 when present, rc 0 (honest skip) on a
+        # bare-skeleton project with no input/docs, so it can block and
+        # does not fire on projects that never attempted Phase 1.
+        - program_exit_zero: "phase1_coverage_report_present_check ."
         # vibe-ic#693 — the forbidden-artefact rule from
         # `skills/analog-spec-extract/SKILL.md`: `analog/A0_skip_decision.json`
         # may not encode a top-level analog skip. Wired HERE, at the
@@ -483,12 +497,15 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-      # Phase 1 extraction-coverage REPORT
-      # (companion to LL-38 gate). Mandatory deliverable; per-doc
-      # diagnostic of which verbatim literals from
-      # extraction_patterns.json reached generated_docs/L*.json.
-      - "reports/phase1/extraction_coverage_report.md"
-      - "reports/phase1/extraction_coverage_report.json"
+      # MOVED TO D1 (vibe-ic 63x9 d4/step1). The Phase 1 extraction-coverage
+      # report was declared HERE and checked NOWHERE: this step's gate is
+      # `files_exist` over the RTL glob and is files_exist-only ON PURPOSE (see
+      # the AUDIT NOTE above), so two of its three declared entries were read by
+      # no clause of its own gate — which is precisely what dimension 4 reports.
+      # The artefact is a PHASE 1 deliverable in every other respect: it lives
+      # under `reports/phase1/`, `phase1_coverage_report_gen.py` writes it, and
+      # `phase1_coverage_report_present_check.py` judges it. It is now declared
+      # on D1, whose gate runs that checker.
     gate:
       files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
       any_of: true
