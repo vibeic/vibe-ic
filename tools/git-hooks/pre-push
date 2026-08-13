@@ -99,6 +99,43 @@ done
 PROGRAMS="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
 PJSON="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
 
+# SHOW THE FINDING, NOT THE LAST THREE LINES.
+#
+# `tail -3` was the wrong selector, and it failed in the one direction that
+# matters: gates print their FINDINGS first and their PASSING entries after, so
+# on a failure the last three lines are reliably a [PASS] entry, a blank, and the
+# count. Measured 2026-08-13, blocking a 57-PR batch. The hook printed:
+#
+#     pre-push: FAILED — benchmark evidence structure
+#         [PASS] …/spm/v1.9.96_gf180mcuD  (verdict=PASS_WITH_WAIVERS)
+#
+#         benchmark_evidence_structure_check: 1/2 conformant, 1 nonconformant
+#
+# Three lines, none of them the finding. The actual sentence — a file sitting at
+# the IC level where only `input/` and `v<ver>_<PDK>` cells may live — was four
+# lines above and never reached the person who had to act on it. Re-running the
+# gate by hand was the only way to learn what had failed.
+#
+# A failure report whose entire body is a PASS is precisely the lie-shape this
+# repository exists to remove, and it had been sitting in the hook that guards
+# every push. So select on WHAT THE LINE SAYS rather than on where it sits:
+# finding-shaped lines first, and the summary line always, because it carries the
+# counts. Fall back to `tail` only when nothing is finding-shaped — a gate with an
+# unrecognised output format must still print something.
+_gate_excerpt() {
+  _ge_out="$1"
+  _ge_hits=$(printf '%s\n' "$_ge_out" |
+             grep -E '^\[(FAIL|ERROR)\]|^[[:space:]]+x |^(FAIL|ERROR)[: ]|^[[:space:]]*(FAILED|MISSING|BLOCKED)\b' |
+             head -12)
+  if [ -n "$_ge_hits" ]; then
+    printf '%s\n' "$_ge_hits" | sed 's/^/    /'
+    # the last line of a gate is its count; without it "1 nonconformant" is lost
+    printf '%s\n' "$_ge_out" | tail -1 | sed 's/^/    /'
+  else
+    printf '%s\n' "$_ge_out" | tail -3 | sed 's/^/    /'
+  fi
+}
+
 run_gate() {                       # run_gate <label> <program> [args…]
   label="$1"; prog="$2"; shift 2
   if [ ! -f "$PROGRAMS/$prog" ]; then
@@ -160,11 +197,11 @@ run_gate() {                       # run_gate <label> <program> [args…]
   # sentence changes, and the sentence is what a reader acts on.
   if [ "$rc" = "2" ]; then
     echo "pre-push: NOT CHECKED — $label (the gate could not run)" >&2
-    printf '%s\n' "$out" | tail -3 | sed 's/^/    /' >&2
+    _gate_excerpt "$out" >&2
     FAILED=1
   elif [ "$rc" != "0" ]; then
     echo "pre-push: FAILED — $label" >&2
-    printf '%s\n' "$out" | tail -3 | sed 's/^/    /' >&2
+    _gate_excerpt "$out" >&2
     FAILED=1
   fi
 }
