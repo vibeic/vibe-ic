@@ -788,7 +788,20 @@ def _yosys_probe_blob(sv_text, top):
         p.write_text(sv_text)
         r = _sp.run(["yosys", "-p",
                      f"read_verilog -sv {p}; synth -top {top}; stat"],
-                    capture_output=True, text=True, timeout=300)
+                    # 60s, NOT 300. The pytest harness runs with --timeout=180, so a
+                    # bound ABOVE the harness cap is not a longer allowance — it is a
+                    # different failure mode. A hung yosys reaches 180s first and
+                    # `--timeout-method=thread` kills the SESSION, losing every other
+                    # result in the run, instead of failing this one test with a name.
+                    # That is why `ci_harness_timeout_ceiling_check` refuses it: the
+                    # ceiling is 60 = 180 // 3.
+                    #
+                    # Measured: batch R4 (22 PRs) failed BOTH its gates on this one
+                    # line — `FAIL targeted tests +++ Timeout +++` with zero named
+                    # failures, and `[FAIL] 1 inner bound(s) above the 60s ceiling`.
+                    # The timeout named nothing because the session died; the hygiene
+                    # gate is the only one that could say why.
+                    capture_output=True, text=True, timeout=60)
     blob = (r.stdout or "") + "\n" + (r.stderr or "")
     assert _re_p.search(r"Yosys\s+[\d.]|Executing\s+\w+\s+pass|/----", blob), (
         "host yosys did not RUN for the capability probe — refusing to "
