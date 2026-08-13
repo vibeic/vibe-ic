@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1099
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1099)
+- **Total programs (excluding helpers / shims):** 1100
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1100)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1090 |
+| `any` | 1091 |
 
 ## Alphabetical listing
 
@@ -1048,6 +1048,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tool_diagnostic_id_gate` | any | — | a tool diagnostic ID that was not there last time is BLOCKING (vibe-ic#1081). |
 | `tool_substitution_disclose` | any | — | emit the mandatory RESULT.md tool-substitution disclosure block from a fixed lookup table. |
 | `tool_warning_id_novelty_check` | any | — | a tool diagnostic ID that was not there last time is BLOCKING (vibe-ic#1081). |
+| `toolchain_profile` | any | — | a red-test baseline is only comparable to one measured under the SAME toolchain, so the baseline has to carry it. |
 | `top_level_outputs_in_canonical_check` | any | — | enforce that the project root contains ONLY the canonical Phase/Stage/Step folders + 3 cross-phase metadata files (v1.6.25 hygiene gate). |
 | `tpm_protocol_synth` | any | v0.1.84 | TPM 2.0 trusted-platform-module protocol synth helper. |
 | `tracked_blob_size_guard` | any | — | the size guard `.gitignore` already promised. |
@@ -1171,7 +1172,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1090 programs)
+### `any` (1091 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2188,6 +2189,7 @@ _(no programs in this group)_
 - `tool_diagnostic_id_gate` — a tool diagnostic ID that was not there last time is BLOCKING (vibe-ic#1081).
 - `tool_substitution_disclose` — emit the mandatory RESULT.md tool-substitution disclosure block from a fixed lookup table.
 - `tool_warning_id_novelty_check` — a tool diagnostic ID that was not there last time is BLOCKING (vibe-ic#1081).
+- `toolchain_profile` — a red-test baseline is only comparable to one measured under the SAME toolchain, so the baseline has to carry it.
 - `top_level_outputs_in_canonical_check` — enforce that the project root contains ONLY the canonical Phase/Stage/Step folders + 3 cross-phase metadata files (v1.6.25 hygiene gate).
 - `tpm_protocol_synth` — TPM 2.0 trusted-platform-module protocol synth helper.  _[v0.1.84]_
 - `tracked_blob_size_guard` — the size guard `.gitignore` already promised.
