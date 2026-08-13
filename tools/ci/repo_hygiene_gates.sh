@@ -452,6 +452,22 @@ run "triage notes state a true reason"  "$ROOT" python3 "$PG/triage_note_answers
 # is the normal state for an outside contributor and is NOT a clean result.
 run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_scan.py"
 
+# vibe-ic#1241 — this checker was run by NOTHING but its own test. A fixture the
+# author writes proves the logic; it never proves the artefacts, and this one's
+# subject is 152k lines of vendored Apache-2.0 that either do or do not carry a
+# record naming where they came from. That is a property of the TRACKED TREE, so
+# it belongs beside the NDA scan above rather than in a per-cell loop.
+#
+# `run`, not `run_tolerating_uncheckable`: MEASURED on this tree before wiring —
+#   17217 tracked file(s) under benchmark-data, 525 declaring an SPDX licence,
+#   11 attribution record(s)
+#   [PASS] every one of the 525 licence-declaring file(s) is covered
+#   rc=0
+# It has a real population and a live verdict, so there is no "could not look"
+# state to tolerate. A licence-declaring file that loses its record is a
+# distribution obligation broken, and that must fail rather than warn.
+run "vendored attribution retained"     "$ROOT" python3 "$PG/vendored_attribution_retained_check.py" "$ROOT"
+
 # vibe-ic#408/#389 — a PDK the image ships must be SELECTABLE by the name
 # `--pdk` matches, and every asset the registry DECLARES must resolve. The
 # name half is pure registry data and runs everywhere; the asset half needs
