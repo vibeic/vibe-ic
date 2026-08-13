@@ -129,6 +129,7 @@ Run::
     python3 tools/gen_matrix_63x8_census.py <root> --check  # …for THAT tree
     python3 tools/gen_matrix_63x8_census.py --check-figures # anchors only (cheap)
     python3 tools/gen_matrix_63x8_census.py --fix-figures   # rewrite the anchors
+    python3 tools/gen_matrix_63x8_census.py --fix          # anchors AND census block
 """
 from __future__ import annotations
 
@@ -837,7 +838,9 @@ def run_figures(args) -> Tuple[int, Dict, List[str]]:
                 lines.append(f"  [FAIL] {f['rel']}:{a.line}  {a.describe()}")
         lines.append(
             f"[FAIL] {len(stale)} anchored figure(s) disagree with the tree; "
-            f"re-run `python3 tools/gen_matrix_63x8_census.py --fix-figures`")
+            f"re-run `python3 tools/gen_matrix_63x8_census.py --fix` "
+            f"(--fix-figures repairs these anchors but leaves the README "
+            f"census block stale, which still exits 1)")
         return 1, report, lines
     lines.append(
         f"[PASS] 63x8 derived figures fresh: {report['guarded_anchored']} "
@@ -866,6 +869,15 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--fix-figures", action="store_true",
                     help="rewrite every anchored figure in the corpus from the "
                          "live flow yaml, then exit")
+    # BOTH HALVES IN ONE INVOCATION (vibe-ic#1382). The repair has always been
+    # two commands — `--fix-figures` for the anchors, the plain run for the
+    # README census block — and each failure message named only its own half.
+    # Running one and stopping leaves a failure that reads exactly like the one
+    # it was supposed to clear, which is worse than not having repaired at all.
+    ap.add_argument("--fix", action="store_true",
+                    help="rewrite the anchored figures AND the README census "
+                         "block — the complete repair. `--fix-figures` alone "
+                         "leaves the census block stale and still exits 1")
     # These three default to None, not to a path. A path baked in here could
     # not be told apart from one the caller chose, so `repo_root` would have
     # been unable to move them — which is how the subject came to be ignored in
@@ -897,7 +909,7 @@ def main(argv: List[str]) -> int:
             sys.stderr.write(line + "\n")
         return 2
 
-    if args.fix_figures:
+    if args.fix_figures or args.fix:
         figures_root = Path(args.figures_root).resolve()
         if not figures_root.is_dir():
             sys.stderr.write(f"[ERROR] no such --figures-root: {figures_root}\n")
@@ -908,7 +920,10 @@ def main(argv: List[str]) -> int:
             print(line)
         print(f"rewrote anchored figures in {len(written)} file(s)"
               + (": " + ", ".join(written) if written else ""))
-        return 0
+        if args.fix_figures:
+            return 0
+        # `--fix` falls through to the census block below. The anchors are now
+        # fresh, so the re-scan that follows costs a pass and returns 0.
 
     if args.check_figures:
         rc, report, lines = run_figures(args)
@@ -952,7 +967,9 @@ def main(argv: List[str]) -> int:
         if updated != text:
             sys.stderr.write(
                 f"{path} census block is stale; re-run "
-                f"`python3 tools/gen_matrix_63x8_census.py`\n")
+                f"`python3 tools/gen_matrix_63x8_census.py --fix` "
+                f"(the plain run repairs this block but leaves any stale "
+                f"anchored figure, which still exits 1)\n")
             return 1
         if fig_rc:
             return fig_rc
