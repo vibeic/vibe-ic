@@ -228,6 +228,12 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # The Phase-1 extraction-coverage REPORT (moved here from step 1, which
+      # claimed a deliverable it does not write — see the note there). Per-doc
+      # diagnostic of which verbatim literals from extraction_patterns.json
+      # reached generated_docs/L*.json; companion to the LL-38 gate.
+      - "reports/phase1/extraction_coverage_report.md"
+      - "reports/phase1/extraction_coverage_report.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
@@ -483,12 +489,14 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
-      # Phase 1 extraction-coverage REPORT
-      # (companion to LL-38 gate). Mandatory deliverable; per-doc
-      # diagnostic of which verbatim literals from
-      # extraction_patterns.json reached generated_docs/L*.json.
-      - "reports/phase1/extraction_coverage_report.md"
-      - "reports/phase1/extraction_coverage_report.json"
+      # The Phase-1 extraction-coverage REPORT used to be declared here and is
+      # now declared by D1, which produces it (vibe-ic d4 step1). Both writers
+      # are phase-1 programs — `phase1_doc_one_shot_runner.py` and
+      # `phase1_coverage_report_gen.py`, whose own docstring calls it the
+      # "Phase 1 (doc-extraction) extraction-coverage REPORT" that "always runs
+      # at end-of-Phase 1" and measures input/docs -> generated_docs/L*.json.
+      # Spec-to-RTL consumes L-docs; it does not write that report. The
+      # obligation MOVED to D1, it was not dropped.
     gate:
       files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
       any_of: true
