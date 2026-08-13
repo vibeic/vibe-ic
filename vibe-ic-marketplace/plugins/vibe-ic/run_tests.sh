@@ -24,6 +24,13 @@ mapfile -t TEST_DIRS < <(
     # Program tests
     [ -d programs/tests ] && echo programs/tests
 
+    # Phase-1 engine tests. Collected by NOTHING before #1391 — not by this
+    # script, not by pytest.ini's testpaths — while carrying failing tests on
+    # main. The repo-root copy of the tree is not reachable from here (this
+    # script cds into the plugin); `test_both_engine_copies_agree` is what
+    # keeps the two copies from diverging.
+    [ -d tools/phase1_engine/tests ] && echo tools/phase1_engine/tests
+
     # Per-skill tests
     find skills -type d -name tests 2>/dev/null | while read -r d; do
         if compgen -G "$d/test_*.py" > /dev/null; then
@@ -41,9 +48,11 @@ echo "Test tiers discovered (${#TEST_DIRS[@]} dirs):"
 plugin_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -E '^tests$' | wc -l)
 prog_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -E '^programs/tests$' | wc -l)
 skill_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -c 'skills/' || true)
+engine_tests=$(printf '%s\n' "${TEST_DIRS[@]}" | grep -cE '^tools/phase1_engine/tests$' || true)
 printf "  %-35s %d dir\n" "Plugin-level (driver/integration)" "$plugin_tests"
 printf "  %-35s %d dir\n" "Deterministic programs" "$prog_tests"
 printf "  %-35s %d dirs\n" "Per-skill compliance" "$skill_tests"
+printf "  %-35s %d dir\n" "Phase-1 engine" "$engine_tests"
 echo ""
 
 # Coverage audit - every skill must have compliance.yaml + tests
