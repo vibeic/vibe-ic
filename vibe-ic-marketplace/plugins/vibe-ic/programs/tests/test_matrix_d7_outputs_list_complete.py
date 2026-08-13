@@ -128,12 +128,68 @@ file is not a produced artefact, and an untracked path is a property of one
 working tree. A record is a claim about the past; it is not evidence about
 today.
 
-MEASURED ON THIS COMMIT: **0 cells change.** No tracked
-``reports/write_ledger.json`` exists anywhere in the repository, so W2's
-oracle is the AST alone, exactly as before — and that is not silent: every
-dimension-7 failure message and every cell's ``record_property`` carries the
-:func:`matrix_d7_write_record.binding_notes` sentence saying so, and
-:data:`RECORD_BOUND_ROOTS` pins the empty population.
+MEASURED ON THIS COMMIT (re-measured 2026-08-14, and the previous paragraph
+was stale): **two records are now carried and they promote 7 findings.** The
+text here used to read "0 cells change — no tracked ``reports/write_ledger
+.json`` exists anywhere in the repository, so W2's oracle is the AST alone".
+That stopped being true when ``benchmark-data/ic/spm/v1.10.18_sky130A`` and
+``benchmark-data/ic/spm/v1.9.96_gf180mcuD`` were committed carrying one.
+:data:`RECORD_BOUND_ROOTS` reddened on exactly the day it was designed to,
+and this paragraph is the re-measurement it demanded.
+
+The two records are consulted (399 and 384 written-never-declared candidates,
+captured 2026-08-09 and 2026-08-06) and then almost entirely REFUSED on live
+re-verification — 144 and 130 residual paths, every one absent from the tree
+today, 0 zero-byte, 0 symlinked, 0 untracked. What survives promotes **7** W2
+findings the AST alone would not raise:
+
+===========  ====================================================
+step         artefact promoted by the record
+===========  ====================================================
+``D1``       ``reports/audit/phase1/expert_parse_track.json``
+``11``       ``phase2/stage2/dft/coverage.yml``
+``23``       ``reports/phase3/sta/post_route_signoff_corner.json``
+``24``       ``reports/phase3/dynamic_ir.json``
+``27``       ``reports/phase3/si_mcf_sta.json``
+``34``       ``reports/phase3/cmp_fill_emit.json``
+``M2``       ``phase1/generated_docs/L21_POWER_INTENT.json``
+===========  ====================================================
+
+Two of these seven are the artefacts that have absorbed the most review effort
+in the repository — ``si_mcf_sta.json`` (a declare-vs-waive dispute spanning
+six PRs) and ``L21_POWER_INTENT.json`` (vibe-ic#1454).
+
+AND NOT ONE OF THE SEVEN IS ATTRIBUTED. This is the part that matters, and an
+earlier draft of this docstring got it exactly backwards by saying they exist
+"because a committed write record says a producer wrote them". The record says
+no such thing. ``step_write_ledger`` grades every residual entry on a
+producer-confidence ladder whose top two rungs — ``provenance_output`` and
+``window`` — name a producer, and whose lower three — ``ambiguous``,
+``unwitnessed``, ``unattributable`` — record that it could NOT be determined.
+Measured on this commit, rung by rung:
+
+===========  ======================  ============================
+step         rung                    names a producer?
+===========  ======================  ============================
+``D1``       ``unwitnessed``         no
+``11``       ``unwitnessed``         no
+``23``       ``unwitnessed``         no
+``24``       ``ambiguous``           no
+``27``       ``ambiguous``           no
+``34``       ``ambiguous``           no
+``M2``       ``unwitnessed``         no
+===========  ======================  ============================
+
+**0 of 7 attributed.** These are not producer claims; they are the reader
+turning "I could not tell" into an affirmative one, because
+``Observation.producer_label`` falls back to ``producer_confidence`` when
+``producer`` is ``None``. vibe-ic#1077 diagnoses exactly this and repairs the
+reader; the table above is that defect counted from the other side, and it is
+why the seven must NOT be declared on the strength of the record alone.
+
+Nothing is declared or waived by this docstring. Recording what the records
+promote is a separate act from deciding what to do about each one, and the
+second is not this module's to make.
 
 MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
 ``$HOME/_sky130A_r3_run`` and
@@ -1448,7 +1504,19 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: and each promotion must be re-measured and then either DECLARED in the flow
 #: yaml or waived with evidence — not discovered later from a cell that
 #: quietly changed colour.
-RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+#:
+#: MOVED 2026-08-14, () -> two roots, with the promotions re-measured FIRST.
+#: The pin fired exactly as designed: two run trees carrying a
+#: ``reports/write_ledger.json`` were committed, and this test reddened rather
+#: than letting seven cells change colour quietly. The seven promotions are
+#: tabulated in this module's docstring. Moving the pin without that table
+#: would be re-recording the ledger to match the behaviour — which is the one
+#: repair this campaign forbids, because it deletes the evidence of the change
+#: it is supposed to announce.
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():
