@@ -35,6 +35,27 @@ import gate_discloses_denominator_check as G  # noqa: E402
 
 _PROG = PROGRAMS / "gate_discloses_denominator_check.py"
 
+#: Every bound in this file — the per-gate `timeout=` handed to `audit_ci` and
+#: the CLI subprocesses below (vibe-ic#1241).
+#:
+#: WHY NOT 120, WHICH IS WHAT THIS FILE SHIPPED WITH. `--timeout-method=thread`
+#: takes the SESSION down rather than the test, so a bound above the harness's
+#: own can never fire: pytest ends the run at 180s first and every other file in
+#: the subset loses its verdict. `ci_harness_timeout_ceiling_check` resolves the
+#: per-call ceiling as `180 // 3` = 60s, and 120 is double it.
+#:
+#: THE IRONY IS THE POINT. This file was added by the PR that fixed the CI sweep
+#: for overrunning that same harness, and it did so with nine bounds of its own
+#: above the ceiling — two of them judged (`subprocess.run`) and seven only
+#: advisory, because the gate cannot follow a bound into `audit_ci`. Advisory is
+#: not absolution: `audit_ci(timeout=120)` genuinely gives each gate 120s.
+#:
+#: 30 IS MEASURED, not lowered until the gate went quiet. Every gate this file
+#: drives is a synthetic `sleep`, the whole 11-test file runs in 22.73s, and its
+#: slowest single test is 3.42s — so 30s is ~9x the slowest measured test and
+#: half the ceiling, leaving room for a test that makes two bounded calls.
+_BOUND_S = 30
+
 
 def _repo(tmp_path: Path, n_gates: int, sleep_s: float) -> Path:
     """A scratch repo declaring `n_gates` gates that each sleep `sleep_s`.
@@ -63,7 +84,7 @@ def test_the_sweep_stops_at_its_budget(tmp_path):
     """THE BOUND. 20 gates x 1s cannot run inside a 3s budget; the loop stops."""
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
     t0 = time.monotonic()
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=_BOUND_S, budget=3.0)
     elapsed = time.monotonic() - t0
 
     assert res.truncated, "a 20s sweep inside a 3s budget was not truncated"
@@ -75,7 +96,7 @@ def test_the_sweep_stops_at_its_budget(tmp_path):
 def test_a_truncated_sweep_is_NOT_CHECKED_and_never_PASS(tmp_path):
     """"I could not look" must not arrive as "I looked and it was clean"."""
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=_BOUND_S, budget=3.0)
     assert res.findings == [], "the fixture's gates all disclose; no finding"
     assert res.verdict == "NOT_CHECKED", res.verdict
     assert res.verdict != "PASS"
@@ -83,7 +104,7 @@ def test_a_truncated_sweep_is_NOT_CHECKED_and_never_PASS(tmp_path):
 
 def test_the_dropped_gates_are_NAMED_not_merely_counted(tmp_path):
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=_BOUND_S, budget=3.0)
     dropped = [g for g, w in res.not_driven if "aggregate budget" in w]
     assert dropped, res.not_driven
     assert all(g.startswith("sleepy gate") for g in dropped), dropped
@@ -93,7 +114,7 @@ def test_an_untruncated_sweep_still_PASSES(tmp_path):
     """The false-positive control. A budget the sweep fits inside must leave
     the verdict exactly as it was before this change."""
     root = _repo(tmp_path, n_gates=3, sleep_s=0.05)
-    res = G.audit_ci(root, timeout=120, budget=60.0)
+    res = G.audit_ci(root, timeout=_BOUND_S, budget=60.0)
     assert not res.truncated
     assert res.verdict == "PASS", res.findings
     assert res.probed == res.declared == 3
@@ -102,7 +123,7 @@ def test_an_untruncated_sweep_still_PASSES(tmp_path):
 def test_no_budget_is_the_previous_behaviour(tmp_path):
     """`budget=None` is unbounded — the shape every existing caller has."""
     root = _repo(tmp_path, n_gates=3, sleep_s=0.05)
-    res = G.audit_ci(root, timeout=120, budget=None)
+    res = G.audit_ci(root, timeout=_BOUND_S, budget=None)
     assert not res.truncated and res.verdict == "PASS"
 
 
@@ -122,7 +143,7 @@ def test_a_FINDING_outranks_truncation(tmp_path):
     body.insert(1, f'run "silent gate" "$ROOT" python3 "{silent}"')
     script.write_text("\n".join(body))
 
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=_BOUND_S, budget=3.0)
     assert res.findings, "the silent gate should have been caught"
     assert res.truncated, "and the sweep should still have run out of budget"
     assert res.verdict == "FAIL", (
@@ -136,7 +157,7 @@ def test_the_cli_exits_2_on_a_truncated_sweep(tmp_path):
     root = _repo(tmp_path, n_gates=20, sleep_s=1.0)
     r = subprocess.run(
         [sys.executable, str(_PROG), str(root), "--budget", "3"],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, timeout=_BOUND_S)
     assert r.returncode == 2, (r.returncode, r.stderr[-400:])
     assert "NOT CHECKED" in r.stderr
     assert "aggregate budget" in r.stderr or "NOT PROBED" in r.stderr
@@ -148,7 +169,7 @@ def test_the_json_record_discloses_truncation(tmp_path):
     out = tmp_path / "rec.json"
     subprocess.run(
         [sys.executable, str(_PROG), str(root), "--budget", "3",
-         "--json", str(out)], capture_output=True, text=True, timeout=120)
+         "--json", str(out)], capture_output=True, text=True, timeout=_BOUND_S)
     rec = json.loads(out.read_text())
     assert rec["truncated"] is True, rec
     assert rec["gates_probed"] < rec["gates_declared"], rec
@@ -157,12 +178,17 @@ def test_the_json_record_discloses_truncation(tmp_path):
 def test_one_slow_gate_cannot_outlive_the_budget(tmp_path):
     """The per-gate timeout is CLAMPED to what is left.
 
-    Without the clamp a single gate declaring a 120s wait would carry the loop
-    120s past a 3s budget — the bound would exist and not hold.
+    Without the clamp a single gate declaring a 20s wait would carry the loop
+    20s past a 3s budget — the bound would exist and not hold.
     """
-    root = _repo(tmp_path, n_gates=1, sleep_s=30.0)
+    # sleep_s 30 -> 20 so the per-gate bound (30s) still strictly EXCEEDS
+    # what the gate would take. At 30/30 a failure could mean the
+    # subprocess hit its own timeout rather than the budget clamping it,
+    # and those are different mechanisms. 20s against a 3s budget still
+    # overruns the `elapsed < 15` assertion if the clamp is removed.
+    root = _repo(tmp_path, n_gates=1, sleep_s=20.0)
     t0 = time.monotonic()
-    res = G.audit_ci(root, timeout=120, budget=3.0)
+    res = G.audit_ci(root, timeout=_BOUND_S, budget=3.0)
     elapsed = time.monotonic() - t0
     assert elapsed < 15, (
         f"one gate ran {elapsed:.1f}s against a 3s budget — the per-gate "
