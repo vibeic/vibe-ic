@@ -507,7 +507,26 @@ def test_every_tracked_corpus_waiver_file_validates_without_an_id_error():
                if f.rule in ("id-range", "id-missing",
                              "id-noncanonical-spelling")]
         assert bad == [], f"{path}: {bad}"
-    assert seen >= 11, f"corpus shrank to {seen} waiver files — re-measure"
+    # DENOMINATOR FLOOR. Without it the loop above passes vacuously the day
+    # the glob stops matching, which is the one failure a per-file assertion
+    # cannot see.
+    #
+    # 2026-08-13: 11 -> 9, and STATED rather than absorbed. The two files did
+    # not regress; they were removed by ordinary data lifecycle, both on
+    # 2026-08-07:
+    #
+    #     51517e71  publish(benchmark-data): spm x gf180mcuD converges on v1.9.96
+    #     6ce93142  data(spm): retire v1.5.65_sky130A, publish v1.9.94_sky130A
+    #
+    # A republished cell carries its waivers under the new version directory,
+    # so the retired copy leaves and the count drops. Verified by enumerating
+    # `git ls-files` rather than by trusting the glob: 9 tracked waivers.json,
+    # 6 under evaluation/phase1_parity and 3 under ic/.
+    #
+    # LOWERED ONLY BECAUSE THE REMOVALS WERE ADJUDICATED. If this ever fails
+    # again, re-derive the same way — `git log --diff-filter=D` over the glob
+    # names the commits — and do NOT lower it for a deletion nobody can name.
+    assert seen >= 9, f"corpus shrank to {seen} waiver files — re-measure"
 
 
 # ----------------------------------------------------------------------
