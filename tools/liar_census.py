@@ -1327,26 +1327,14 @@ def probe_producer_emitted_nothing(cl: Clause, sandbox: Path) -> ProbeResult:
             f"sentinel `flow_compliance_check._stdout_signals_vacuous` reads, so "
             f"`check_step` PROMOTES the step to VACUOUS_PASS rather than PASS",
             repro)
-    if channel == _CH_COUNTED:
-        # THE STATE THE TWO CONSOLIDATED PRs DISAGREED ABOUT (vibe-ic#1226).
-        # The gate does disclose — into the JSON channel, which
-        # `flow_compliance_check` records as `__JSON_VACUOUS_HINT__` and, in its
-        # own words, keeps "apart from the legacy bucket ... SO IT CANNOT ALTER
-        # ANY TIER"; "counted - never tiered". The STEP STILL REPORTS PASS.
-        #
-        # So this is not clean. It is #1115 with a paper trail: the producer
-        # emitted nothing, the gate said so, and the flow still records
-        # "checked, fine". It is a WEAKER class than disclosing nowhere —
-        # the disclosure exists and a consumer that tiered it would find it —
-        # so it is SUSPECT even on a blocking clause, never LIAR.
-        return ProbeResult(
-            "producer_emitted_nothing", SUSPECT,
-            f"passes over {made} empty declared input(s) and discloses ONLY in "
-            f"its --json report. flow_compliance_check counts that "
-            f"(`__JSON_VACUOUS_HINT__`) but deliberately never tiers it, so the "
-            f"STEP STILL RECORDS PASS — the disclosure reaches no verdict. "
-            f"Printing the stdout sentinel as well is the one-line repair "
-            f"(vibe-ic#1115)", repro)
+    # NO `_CH_COUNTED` BRANCH HERE, AND THAT IS NOT AN OMISSION. Reaching this
+    # line at all requires `disclosed` to have been True above, and `disclosed`
+    # IS `channel == _CH_TIERED` — so `channel` cannot be `_CH_COUNTED` by the
+    # time control arrives. A branch for it would be unreachable: a case-handler
+    # that can never fire, which is the shape this census exists to find. The
+    # json-counted state is graded in the `rc == 0 and not disclosed` branch
+    # above, which is where it is actually reachable, and a mutant that disables
+    # it kills `test_a_json_only_disclosure_is_still_a_finding`.
     sev = LIAR if cl.blocking else SUSPECT
     return ProbeResult(
         "producer_emitted_nothing", sev,
