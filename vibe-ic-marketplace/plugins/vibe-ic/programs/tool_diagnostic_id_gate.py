@@ -525,6 +525,25 @@ def measured_pdk(cell_dir: Path) -> Optional[str]:
         except OSError:
             continue
         for m in _RE_PDK_FIELD.finditer(text):
+            # ASK WHETHER THE SENTENCE DENIES IT. The scan is over raw text, so
+            # `"pdk": "sky130A"` quoted inside a note saying it was NOT used
+            # reads identically to a real declaration, and the modal rule below
+            # means enough denials outvote the truth.
+            #
+            # `ignore_bracketed=False` is load-bearing and was measured: the
+            # default blanks bracketed spans, and a JSON document is entirely
+            # inside `{...}`, so the prose default blanks the whole file and
+            # `is_denied` can never fire. With the default this consult would be
+            # a no-op that looks like a check.
+            #
+            # `extra_breaks=("\n",)` because these are machine-generated
+            # records, not prose: `_prose_polarity` leaves bare newlines out of
+            # SENTENCE_BREAKS on purpose and has the caller declare them, so a
+            # denial on one record cannot retract a value on another.
+            lo, hi = _polarity.sentence_scope(
+                text, m.start(), m.end(), extra_breaks=("\n",))
+            if _polarity.is_denied(text[lo:hi], ignore_bracketed=False):
+                continue
             v = m.group("pdk")
             seen[v] = seen.get(v, 0) + 1
     if not seen:

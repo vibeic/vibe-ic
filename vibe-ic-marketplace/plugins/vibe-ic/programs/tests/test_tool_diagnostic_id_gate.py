@@ -487,6 +487,85 @@ def test_a_DENIED_id_is_not_counted_as_an_emission():
     assert out["denied_count"] == 1, out
 
 
+def _pdk_cell(tmp_path, **files):
+    """A run directory holding *files*, for `measured_pdk` to read."""
+    d = tmp_path / "cell"
+    d.mkdir()
+    for name, text in files.items():
+        (d / name).write_text(text)
+    return d
+
+
+def test_a_DENIED_pdk_is_not_counted_as_a_declaration(tmp_path):
+    """BATCH IDX (c). `measured_pdk` scans RAW TEXT and takes the modal value,
+    so records that deny a value used to outvote the one real declaration and
+    the gate compared two runs on a PDK neither of them used.
+
+    Two things in the consult are load-bearing and were measured:
+    `ignore_bracketed=False`, because the prose default blanks `{...}` and a
+    JSON document is entirely inside braces — with the default this check is a
+    no-op that reads like a check; and `extra_breaks=("\n",)`, because these
+    are machine-generated records, not prose.
+    """
+    cell = _pdk_cell(
+        tmp_path,
+        **{"audit.json": '{"pdk": "sky130A", "staged": false, '
+                         '"note": "libraries were not staged"}\n'
+                         '{"pdk": "sky130A", "status": "superseded by the '
+                         'gf180 rerun"}\n',
+           "run.json": '{"pdk": "gf180mcuD"}\n'})
+    # Both sky130A records match the regex — without that this proves nothing.
+    text = (cell / "audit.json").read_text()
+    assert len(list(G._RE_PDK_FIELD.finditer(text))) == 2
+    assert G.measured_pdk(cell) == "gf180mcuD"
+
+
+def test_a_DENIAL_ON_ANOTHER_RECORD_does_not_retract_this_one(tmp_path):
+    """THE PAIRED HALF. A report full of ordinary negations must still yield
+    its PDK, or the consult trades a loud wrong answer for a silent missing
+    one — which this module's own docstring calls the worse failure, because
+    nothing goes red to say the extractor published less than it read."""
+    cell = _pdk_cell(
+        tmp_path,
+        **{"a.json": '{"pdk": "sky130A"}\n'
+                     '{"note": "no clock found for register bank"}\n'
+                     '{"drc": "no errors found"}\n'})
+    assert G.measured_pdk(cell) == "sky130A"
+
+
+def test_a_plain_declaration_is_untouched(tmp_path):
+    """The consult must not cost the ordinary case anything."""
+    cell = _pdk_cell(tmp_path, **{"a.json": '{"pdk": "sky130A"}\n'})
+    assert G.measured_pdk(cell) == "sky130A"
+
+
+def test_the_known_limit_is_pinned_rather_than_hidden(tmp_path):
+    """A denial in a SIBLING FIELD of the same record drops the value, even
+    when it denies something else entirely.
+
+    This is a FALSE NEGATIVE and it is pinned deliberately, because the two
+    shapes are structurally identical —
+
+        {"pdk": "sky130A", "status": "superseded by the gf180 rerun"}   deny
+        {"pdk": "sky130A", "drc": "no errors found"}                    keep
+
+    — and separating them needs to know what the denial is ABOUT, which no
+    scoping rule can. The direction chosen is the one `pdk_key` already argues
+    for: a dropped measurement falls back to the NAME, so this degrades to the
+    pre-existing comparison rather than to nothing, while the opposite error
+    would make the gate compare on a PDK neither run used.
+
+    MEASURED COST: 0 of the 9 `"pdk"` declarations in the tracked corpus sit in
+    a record carrying a denial, so this costs nothing today. If that number
+    moves, this test is where to come back to — change it by NARROWING the
+    scope, never by dropping the consult.
+    """
+    cell = _pdk_cell(
+        tmp_path,
+        **{"a.json": '{"pdk": "sky130A", "drc": "no errors found"}\n'})
+    assert G.measured_pdk(cell) is None
+
+
 def test_a_NEGATION_INSIDE_THE_MESSAGE_still_counts_as_an_emission():
     """THE PAIRED HALF, and the one that matters. A diagnostic line IS the
     emission; its message is ordinary English that routinely negates something
