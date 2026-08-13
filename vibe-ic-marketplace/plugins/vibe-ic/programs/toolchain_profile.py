@@ -29,12 +29,28 @@ So "baseline on the barest host" is NOT refuted by this measurement, and this
 module must not be read as evidence against it.
 
 The divergence itself is what justifies this module, and it stands on the two
-summary lines alone: **147 vs 122 failed for the same commit**. Whether the
-relationship is monotonic is a separate question this data does not settle —
-a subset relation needs the failure SETS compared node by node, which nobody
-has done across two hosts. Until someone does, "comparable" cannot be inferred
-from "richer", and a differing profile is a reason to refuse rather than to
-subtract.
+summary lines alone: **147 vs 122 failed for the same commit**.
+
+MEASURED AFTERWARDS, node by node, over the 12 `test_cvdp_gate*` files — the
+family where the toolchain decides, and where 41 of this host's 122 failures
+live. Identical invocation both sides, only the environment differing:
+
+    bare host (iverilog only)     29 failed, 135 passed, 51 skipped
+    container (full toolchain)     0 failed, 212 passed,  3 skipped
+
+    in container but NOT bare  ->  NONE
+    in bare but NOT container  ->  all 29
+
+So for that family the relation is a strict SUBSET: more tools removed 29
+failures and introduced none, and 48 skips became real runs that all passed.
+"Baseline on the barest host" is SUPPORTED there, not refuted. Scope is one
+family; the other ~81 non-matrix failures have not been compared this way.
+
+THAT DOES NOT LICENSE SUBTRACTION, which is the point this module turns on.
+Even where the subset holds, a gate that subtracts a bare-host baseline from a
+container-run branch attributes all 29 to a PR that touched none of them. The
+counts are incomparable regardless of which way the sets nest, so a differing
+profile is a reason to REFUSE rather than to subtract.
 
 WHAT THIS REFUSES, AND WHY REFUSING IS THE POINT
 ------------------------------------------------
