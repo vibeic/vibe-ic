@@ -142,6 +142,27 @@ _NOT_PROSE: Dict[str, str] = {
         "would not import. Contrast the two defects this gate was built from "
         "(#706 pdk_target, #711 die_area_budget_um): both read English design "
         "documents, where denial is spellable and was spelled.",
+    "tool_diagnostic_id_gate::scan_log":
+        "EDA tool diagnostic syntax, in three families, none of which is "
+        "English. `[WARNING ODB-0220]` is the OpenROAD/ODB bracketed form "
+        "`\\[(WARNING|ERROR|INFO) <TOOL>-<NNNN>\\]`; `Warning 1234:` is "
+        "OpenSTA's numbered form, anchored at line start; the third counts "
+        "unkeyed `Warning:` / `Error:` prefixes. All three are emitted by the "
+        "tool's own diagnostic printer, and none has a form that DENIES a "
+        "diagnostic: a tool cannot emit 'this run did NOT produce [ERROR] "
+        "ABC-0042'. A diagnostic either appears in the log or it does not, and "
+        "absence is already how this function reports it -- the id simply "
+        "never enters `by_level`, and the report publishes `unkeyed_count` "
+        "beside the keyed ids so a reader can see what was counted but not "
+        "keyed. The anchoring is itself the evidence that prose was considered "
+        "and excluded: `_RE_STA_NUMBERED` carries `re.MULTILINE` with a `^` "
+        "specifically, in its own words, 'so the digits are the message number "
+        "and not a coincidence inside prose'. Consulting `_prose_polarity` "
+        "here would add a branch that can never fire, and a call that can "
+        "never fire is a green light rather than a check. Contrast the two "
+        "defects this gate was built from (#706 pdk_target, #711 "
+        "die_area_budget_um): both read English design documents, where "
+        "denial is spellable and was spelled.",
     "policy_direction_pin_check::flip_source":
         "Python's own string-literal grammar, matched at a RECORDED (line, "
         "column). The matched text is `[rbuRBU]{0,2}` followed by an opening "

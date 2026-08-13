@@ -439,6 +439,44 @@ gate_dispatch_over "published cells carrying a routed DEF" \
   _per_published_cell_gates \
   git -C "$ROOT" ls-files -- \
     'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def'
+# vibe-ic#1241 — `tool_diagnostic_id_gate` was authored, tested and merged with
+# NOTHING but its own unit test invoking it, which is the exact shape
+# `checker_execution_wiring_audit` blocks on: a fixture the author wrote proves
+# the logic and proves nothing about the artefacts.
+#
+# The population is the gate's OWN stated one (`benchmark-data/ic/*/v*_*/`),
+# keyed on `RESULT.md` because every published cell carries one — MEASURED, all
+# 5 of 5. The routed-DEF dispatcher above reaches only 1 of those 5, so reusing
+# it would have wired the gate to a fifth of its subject.
+#
+# WHAT IT ACTUALLY DOES ON THIS CORPUS, measured rather than assumed — all five
+# cells return rc=2 NO_BASELINE, and the id censuses are real (9, 5, 6, 7 and 0
+# gated ids read out of the cells' own logs):
+#
+#     caravel_user_project/v1.9.43_sky130A   rc=2   9 gated id(s)
+#     spm/v1.10.18_sky130A                   rc=2   5
+#     spm/v1.5.58_ihp-sg13g2                 rc=2   6
+#     spm/v1.9.96_gf180mcuD                  rc=2   7
+#     u_hawaii_adc/v1.9.86_sky130A           rc=2   0
+#
+# So state the limit plainly: the EXTRACTION arm is live and reads real tool
+# output, and the COMPARISON arm is dormant, because the gate compares a cell
+# against a previous run of the SAME design+PDK and this corpus contains no two
+# such cells — spm's three are sky130A, gf180mcuD and ihp-sg13g2, and the other
+# two are different designs. `run_tolerating_uncheckable` is therefore the
+# correct wrapper and not a softening: rc=2 stays LOUD and non-fatal, rc=1 (a
+# genuinely new id) still fails. When a second run of any published design+PDK
+# lands, this becomes a comparing gate with no further wiring.
+_per_published_cell_diagnostic_ids() {
+  local _res="$1" _cell
+  _cell="${_res%/RESULT.md}"
+  run_tolerating_uncheckable "tool diagnostic ids ($(basename "$_cell"))" \
+    "$ROOT" python3 "$PG/tool_diagnostic_id_gate.py" "$ROOT/$_cell"
+}
+gate_dispatch_over "published cells carrying a RESULT.md" \
+  _per_published_cell_diagnostic_ids \
+  git -C "$ROOT" ls-files -- 'benchmark-data/ic/*/v*_*/RESULT.md'
+
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the
