@@ -21,6 +21,7 @@ and the touched skill's structure/compliance tests stay green — both
 pinned here.
 """
 import re
+import os
 import sys
 from pathlib import Path
 
@@ -121,9 +122,28 @@ def test_touched_skill_compliance_tests_green():
     skill_tests = SKILL.parent / "tests"
     if not skill_tests.is_dir():
         pytest.skip("core-agent-loop/tests absent on this tree")
+    # The child must not CACHE inside the shipped tree. Python writes
+    # `__pycache__` beside every module it imports, and pytest writes
+    # `.pytest_cache`, so running these tests in place left bytecode under
+    # `skills/` — measured: 0 -> 2 `__pycache__` dirs, and the skills digest
+    # moved. `git status` stays EMPTY because those paths are gitignored, which
+    # is why this read as "passes alone, so it must be an interaction".
+    #
+    # `test_shipped_skills_tree_is_untouched_by_this_module` hashes every file
+    # under `skills/` with no cache filter, so it sees that as a write to the
+    # shipped tree — and `suite_write_guard` (`_CACHE_NOISE`) does not, because
+    # it calls `__pycache__` churn "universal, unavoidable, and harmless".
+    #
+    # Fixed at the WRITER rather than by relaxing either check: the child is
+    # told not to cache. The subject is unchanged — these are still the SHIPPED
+    # skill's own tests, run in place, which is what this test is about. A real
+    # content write into `skills/` still trips the digest exactly as before.
+    _env = {**os.environ,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTEST_ADDOPTS": "-p no:cacheprovider"}
     r = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", str(skill_tests)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=_env,
     )
     assert r.returncode == 0, (
         "core-agent-loop skill tests must stay green:\n"
