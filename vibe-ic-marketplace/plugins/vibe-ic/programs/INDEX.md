@@ -787,6 +787,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `power_total_vs_budget_check` | any | — | the total power figure must reach a COMPARISON, or the step must REFUSE and name the budget it lacks. |
 | `ppa_area_threshold_check` | any | — | v1.0 plugin gate (ORGANIC #729). |
 | `ppa_predict_aggregate` | any | v0.1.50 | PPA predict aggregator (Pattern-B → program). |
+| `pr_base_reachability_check` | any | — | a PR that declares a dead base, or that merely CARRIES a closed-unmerged PR's commits, is not landable; `mergeable` reports CLEAN for bot... |
 | `practical_notes_specificity_check` | any | — | meta-gate for plugin docs. |
 | `pre_awake_silence_check` | any | — | M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak... |
 | `prefix_adder_synth_recipe` | any | — | parallel-prefix adder structuring (QoR recipe). |
@@ -1912,6 +1913,7 @@ _(no programs in this group)_
 - `power_total_vs_budget_check` — the total power figure must reach a COMPARISON, or the step must REFUSE and name the budget it lacks.
 - `ppa_area_threshold_check` — v1.0 plugin gate (ORGANIC #729).
 - `ppa_predict_aggregate` — PPA predict aggregator (Pattern-B → program).  _[v0.1.50]_
+- `pr_base_reachability_check` — a PR that declares a dead base, or that merely CARRIES a closed-unmerged PR's commits, is not landable; `mergeable` reports CLEAN for bot...
 - `practical_notes_specificity_check` — meta-gate for plugin docs.
 - `pre_awake_silence_check` — M1: Verify that any protocol with a wake/sleep state correctly gates command dispatch behind an awake flag, AND that all spec-defined wak...
 - `prefix_adder_synth_recipe` — parallel-prefix adder structuring (QoR recipe).
