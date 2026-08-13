@@ -39,6 +39,7 @@ import re
 import sys
 from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 _DEFAULT_FLOOR_PCT = 30.0
 _DEFAULT_MARGIN = 0.05          # fill target = floor + margin, so >floor with headroom
@@ -371,7 +372,7 @@ def main(argv=None) -> int:
         return 2
     text = json.dumps(cfg, indent=2)
     if ns.out:
-        with open(ns.out, "w") as f:
+        with atomic_writing(ns.out) as f:
             f.write(text)
     print(text)
     return 0
