@@ -112,6 +112,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Spec to enforce (chip-AGNOSTIC): |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
 | `atpg_untestable_fault_classify` | any | — | which stuck-at faults NO test can detect. |
+| `attribution_record_present_check` | any | — | vendored third-party code may not lose its attribution record while the code stays in the tree. vibe-ic#1043. |
 | `auto_diagnostic_led_synth` | any | v0.114 | v0.114 (BACKLOG-v6 D1). |
 | `automotive_ethernet_protocol_synth` | any | v0.1.91 | Automotive Ethernet (single-twisted-pair Ethernet PHY) protocol synth. |
 | `avalon_protocol_synth` | any | — | Intel/Altera Avalon Interface protocol synth helper (protocol #54). |
@@ -1239,6 +1240,7 @@ _(no programs in this group)_
 - `assertion_covers_l3_constraints_check` — Spec to enforce (chip-AGNOSTIC):  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.
 - `atpg_untestable_fault_classify` — which stuck-at faults NO test can detect.
+- `attribution_record_present_check` — vendored third-party code may not lose its attribution record while the code stays in the tree. vibe-ic#1043.
 - `auto_diagnostic_led_synth` — v0.114 (BACKLOG-v6 D1).  _[v0.114]_
 - `automotive_ethernet_protocol_synth` — Automotive Ethernet (single-twisted-pair Ethernet PHY) protocol synth.  _[v0.1.91]_
 - `avalon_protocol_synth` — Intel/Altera Avalon Interface protocol synth helper (protocol #54).
