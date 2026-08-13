@@ -24,6 +24,7 @@ chip-AGNOSTIC: pure id-string / prompt-prose structure (the CVDP harness's
 universal naming scheme); no chip / vendor / SKU literal.
 """
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -33,6 +34,29 @@ PLUGIN = Path(__file__).resolve().parents[2]
 HARNESS = PLUGIN / "benchmark"
 sys.path.insert(0, str(HARNESS))
 import cvdp_gate as G  # noqa: E402
+
+# EXTERNAL-TOOL PRECONDITION (undeclared until now — vibe-ic#1351).
+# Every test below that calls `_run` drives the REAL gate via `G.main`.
+# `cvdp_gate` DELIBERATELY refuses to run when its enforcement tools are
+# absent: it exits 2 without writing --report when `iverilog` is missing
+# (#528, cvdp_gate.py:3019) or when `yosys` is missing (#531, :3028), on the
+# principle that emitting UNGATED responses is worse than not running. That
+# refusal is correct behaviour and is NOT what these tests are about — but
+# with no rep.json on disk, `_run`'s unconditional read died with
+# `FileNotFoundError: .../rep.json`, an error that names the symptom and
+# hides the cause. On a host without the EDA tools that turned all 7
+# gate-driving tests red and said nothing true about the gate.
+#
+# Declared the way the rest of this test family already declares it — see
+# test_cvdp_gate_selfverify_wiring.py:59-62, which uses this exact idiom.
+# The `test_required_top_from_id` cases below are deliberately NOT guarded:
+# they exercise a pure id-string function that needs no tools and must keep
+# running everywhere.
+_HAVE_IVERILOG = shutil.which("iverilog") is not None and \
+    shutil.which("vvp") is not None
+_HAVE_YOSYS = shutil.which("yosys") is not None
+_HAVE_EDA = _HAVE_IVERILOG and _HAVE_YOSYS
+_needs_eda = pytest.mark.skipif(not _HAVE_EDA, reason="needs iverilog + yosys")
 
 _V = "```verilog\n"
 
@@ -62,6 +86,7 @@ def _prompts(tmp_path, mapping):
 
 # ── (1) the round-2 fix: id-derived mismatch is ADVISORY, not a hard block ────
 
+@_needs_eda
 def test_id_derived_mismatch_is_advisory_not_blocked(tmp_path):
     """Without --prompts (the documented --batch-dir flow), a completion whose
     top is the functional name — NOT `cvdp_copilot_<stem>` — must PASS with a
@@ -80,6 +105,7 @@ def test_id_derived_mismatch_is_advisory_not_blocked(tmp_path):
 
 # ── (2) NEGATIVE no-leak: prompt-derived names still hard-block ───────────────
 
+@_needs_eda
 def test_prompt_module_name_mismatch_is_advisory_NOLEAK(tmp_path):
     """ORGANIC #642 round-2 — a `Module Name:` hint is NOT guaranteed to equal
     the hidden harness TOPLEVEL, so a mismatch is ADVISORY (WARN + emit), never
@@ -98,6 +124,7 @@ def test_prompt_module_name_mismatch_is_advisory_NOLEAK(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@_needs_eda
 def test_filename_pinned_top_is_advisory_NOLEAK(tmp_path):
     """ORGANIC #642 round-2 — a SAVE-FILENAME hint (`rtl/<X>.sv`) is NOT the
     harness TOPLEVEL (cocotb sets it from the module DECLARATION name). Field
@@ -117,6 +144,7 @@ def test_filename_pinned_top_is_advisory_NOLEAK(tmp_path):
                for n in recs[0].get("notes", []))
 
 
+@_needs_eda
 def test_prompt_module_name_match_passes_NOLEAK(tmp_path):
     recs, passed = _run(tmp_path, [{
         "id": "cvdp_copilot_16qam_mapper_0001",
@@ -129,6 +157,7 @@ def test_prompt_module_name_match_passes_NOLEAK(tmp_path):
     assert "cvdp_copilot_16qam_mapper_0001" in passed
 
 
+@_needs_eda
 def test_correct_id_stem_top_passes_NOLEAK(tmp_path):
     """A completion ALREADY declaring `cvdp_copilot_<stem>` passes (no
     mismatch at all)."""
@@ -140,6 +169,7 @@ def test_correct_id_stem_top_passes_NOLEAK(tmp_path):
     assert "cvdp_copilot_bus_arbiter_0001" in passed
 
 
+@_needs_eda
 def test_doc_only_stays_doc_only_NOLEAK(tmp_path):
     recs, _ = _run(tmp_path, [{
         "id": "cvdp_copilot_bar_0003",
@@ -148,6 +178,7 @@ def test_doc_only_stays_doc_only_NOLEAK(tmp_path):
     assert recs[0]["verdict"] == "PASS_DOC_ONLY"
 
 
+@_needs_eda
 def test_non_cvdp_id_imposes_no_requirement_NOLEAK(tmp_path):
     """A draft id NOT following the cvdp_copilot_ convention imposes no
     id-derived top requirement — the gate behaves exactly as before."""
