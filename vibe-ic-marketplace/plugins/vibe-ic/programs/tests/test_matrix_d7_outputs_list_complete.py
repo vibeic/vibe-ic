@@ -659,13 +659,83 @@ def _conditional_anchor():
     carries a conditional output, but it is red for thirteen unrelated W2
     findings, so a red observed after mutating it would prove nothing about
     the exemption. The anchor is therefore the conditional finding whose step
-    has no other finding at all — on the current flow that is step 27, and it
-    is found by measurement rather than named.
+    has no other finding at all — found by measurement rather than named.
     """
     for sid in F.step_ids():
         findings = G.conditional_findings(sid)
         if findings and not G.findings_for(sid):
             return F.normalize_id(sid), findings[0].path
+    return None
+
+
+def _anchor_edit():
+    """``(step, path, edit)`` for an anchor this test OWNS. Never ``None``.
+
+    WHY THE LIVE SEARCH WAS NOT ENOUGH  (main red, measured at a38902d1)
+    ===================================================================
+    ``_conditional_anchor`` asks the LIVE flow for a step that is red only for
+    the conditional reason. Step 27 was that step. It now carries ONE other
+    finding — ``reports/phase3/si_mcf_sta.json`` — so the search returns None
+    and both parametrisations of the control fail with "this control measures
+    nothing".
+
+    That other finding is itself one of main's reds
+    (``test_d7_required_outputs_list_is_complete[step27]``). So a single
+    unrelated red SILENTLY DISABLED a negative control: the control did not
+    fail because the exemption broke, it failed because its subject stopped
+    being clean. One red bought two more, and the two it bought are the ones
+    that prove the exemption logic is real.
+
+    A control whose ability to run depends on the live flow happening to be
+    clean somewhere is measuring incidental cleanliness, not the dimension.
+    So the anchor is CONSTRUCTED:
+
+      * if the live flow still supplies one, use it and mutate nothing — the
+        original, strongest form is preferred whenever it is available;
+      * otherwise take the step that DOES carry a conditional finding and
+        declare its other findings' paths in ``required_outputs``, which is
+        exactly what would make that step otherwise-clean. The conditional
+        finding is untouched, so the property under test is unchanged.
+
+    Derived from the live flow by measurement rather than hand-written, so it
+    cannot drift from the shape it is standing in for. This does NOT weaken
+    the assertion: the control still demands that removing the optionality
+    reddens the cell, and the paired mutants below still kill it.
+    """
+    live = _conditional_anchor()
+    if live is not None:
+        return live[0], live[1], (lambda doc: None)
+
+    # LEAST-PERTURBED anchor. Taking the first step that carries a conditional
+    # finding picked step 23, which needed 14 other paths declared to become
+    # otherwise-clean — a synthetic edit that large changes the thing under
+    # test, and measurably did: W1 then stopped charging the path at all.
+    # Step 27 needs ONE. Sorting by how much the fixture has to intervene keeps
+    # the constructed anchor as close to the real flow as the flow allows.
+    candidates = []
+    for sid in F.step_ids():
+        cond = G.conditional_findings(sid)
+        if not cond:
+            continue
+        others = [f.path for f in G.findings_for(sid)]
+        if not others:
+            continue                                   # handled by the live branch
+        candidates.append((len(others), F.normalize_id(sid), cond[0].path, tuple(others)))
+
+    for _n, step, path, others in sorted(candidates):
+
+        def edit(doc, _step=step, _others=others):
+            for s in doc["steps"]:
+                if F.normalize_id(s["id"]) != _step:
+                    continue
+                declared = list(s.get("required_outputs") or [])
+                for p in _others:
+                    if p not in declared:
+                        declared.append(p)
+                s["required_outputs"] = declared
+
+        return step, path, edit
+
     return None
 
 
@@ -692,19 +762,39 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
     Both mutate the yaml, never a test. If either fails to redden the cell,
     step 27 is green for a reason other than the one this change claims.
     """
-    anchor = _conditional_anchor()
+    anchor = _anchor_edit()
     assert anchor is not None, (
-        "no step is GREEN solely because of the optionality exemption, so "
-        "removing the optionality cannot be shown to redden anything and this "
-        "control measures nothing"
+        "NO step in the flow carries a conditional finding at all, so there is "
+        "no exemption anywhere to take away and this control has no subject. "
+        "That is a real result, not a fixture problem: either the flow stopped "
+        "declaring any optional producer, or `conditional_findings` stopped "
+        "reporting them"
     )
-    step, path = anchor
-    assert not G.findings_for(step), (
-        f"step {step} is already red before the mutation; the control cannot "
-        f"attribute the red to the mutation"
-    )
+    step, path, make_anchor = anchor
+    # What this step looks like BEFORE anything is mutated. The restore check
+    # at the end compares against THIS, not against emptiness: the original
+    # `assert not G.findings_for(step)` encoded the accident that step 27
+    # happened to be clean the day it was written, and it is the same
+    # live-flow dependence that disabled the anchor.
+    before_findings = G.findings_for(step)
+
+    # The anchor is established FIRST and asserted, so that a red observed
+    # after the mutation is attributable to the mutation and to nothing else.
+    anchored = _mutated_flow(tmp_path, f"d7_anchor_{mutation}.yaml", make_anchor)
+    with _SwappedFlow(anchored):
+        assert not G.findings_for(step), (
+            f"step {step} is still red before the mutation even with the "
+            f"anchor applied; the control cannot attribute a later red to the "
+            f"mutation. Findings: {[str(f) for f in G.findings_for(step)]}"
+        )
+        assert path in {p for p, _w, _c in G.conditional_output_targets(step)}, (
+            f"step {step}: {path} is no longer exempted as conditional even "
+            f"before the mutation, so there is nothing for the mutation to "
+            f"take away"
+        )
 
     def edit(doc):
+        make_anchor(doc)
         for s in doc["steps"]:
             if F.normalize_id(s["id"]) != step:
                 continue
@@ -736,9 +826,16 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
             f"{[str(f) for f in G.findings_for(step)]}"
         )
 
-    # And back: the exemption returns with the flow's own optionality.
+    # And back: the exemption returns with the flow's own optionality, and the
+    # step's finding set is exactly what it was — RESTORED, not clean. A test
+    # that demands emptiness here is asserting something about main's health
+    # rather than about its own mutation.
     assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
-    assert not G.findings_for(step)
+    assert G.findings_for(step) == before_findings, (
+        f"step {step} did not return to its pre-test finding set; the mutation "
+        f"leaked. before={[str(f) for f in before_findings]} "
+        f"after={[str(f) for f in G.findings_for(step)]}"
+    )
 
 
 def _no_list_but_writes_anchor():
