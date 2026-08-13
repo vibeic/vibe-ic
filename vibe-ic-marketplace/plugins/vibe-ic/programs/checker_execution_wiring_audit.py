@@ -409,6 +409,29 @@ def skill_only_register(path: Path) -> Dict[str, str]:
 _MIN_DECISION_REASON = 120
 
 
+def classify_disclosures(skill_only, reasons: Dict[str, str]):
+    """Split SKILL-only checkers into (disclosed, gestured).
+
+    `disclosed`  an entry whose reason meets `_MIN_DECISION_REASON` — the same
+                 bar `check_unwired_by_decision` already holds the other
+                 register to, because both answer the same question.
+    `gestured`   an entry that EXISTS and does not. Membership used to be the
+                 whole test, so a reason of `""` printed as "(skill-only,
+                 reason recorded)" and counted toward "N carry a written
+                 reason". That is worse than no entry: silence does not
+                 misreport itself, a blank claim does.
+
+    A checker with NO entry is in NEITHER list. That population stays
+    non-blocking on purpose — see the note at the call site.
+    """
+    disclosed = [c for c in skill_only
+                 if len((reasons.get(c) or "").strip()) >= _MIN_DECISION_REASON]
+    gestured = sorted(c for c in skill_only
+                      if c in reasons and c not in disclosed)
+    return disclosed, gestured
+
+
+
 def check_unwired_by_decision(rep: dict, decisions: Dict[str, str],
                               known: List[str]) -> List[str]:
     """Enforce the `unwired_by_decision` block. Returns problem lines.
@@ -544,8 +567,37 @@ def main(argv=None) -> int:
         return 2
 
     rep = audit(plugin, root)
-    if a.json_out:
-        Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
+
+    def _emit(rc: int) -> int:
+        """Write the JSON carrying the verdict this process ACTUALLY exits with.
+
+        `audit()` stamps `passed: True` when it builds the report, and the report
+        used to be written HERE — before a single verdict had been computed. So
+        the field was a constant: on a run that printed `[FAIL]` and exited 1,
+        the machine-readable output still said `passed: true`, and anything
+        reading the JSON instead of the exit code saw a clean run.
+
+        Measured 2026-08-13 on vibe-ic#1241's wiring rows: one invocation over
+        PR #1151 exited 1 with
+
+            [FAIL] 1 checker(s) that NOTHING but their own test runs:
+               bundled_attribution_notice_check.py
+
+        while the `--json` file it wrote in that same run reported
+        `"passed": true`. A reader keying on the field reported the row as
+        answered — the wrong verdict on the only unanswered row of the six.
+
+        That is this file's own subject one level up: its docstring argues that
+        a checker nobody runs is a gate that never met an artefact, and its
+        report said PASS while blocking. Emitting at the EXIT is what makes the
+        two agree by construction, rather than by remembering to keep them in
+        step at five separate return sites.
+        """
+        if a.json_out:
+            rep["passed"] = (rc == 0)
+            Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
+        return rc
+
     bl = Path(a.baseline) if a.baseline else here.parent / _BASELINE_NAME
     now = sorted(rep["test_only"] + rep["no_runner_at_all"])
 
@@ -553,7 +605,7 @@ def main(argv=None) -> int:
         if a.scope_expanded is not None and len(a.scope_expanded.strip()) < 30:
             print("[FAIL] --scope-expanded needs a real reason (>=30 chars) "
                   "naming what the audit now looks at that it did not before.")
-            return 1
+            return _emit(1)
         prev = _load_baseline(bl)
         if (prev is not None and len(now) > len(prev)
                 and a.scope_expanded is None):
@@ -562,7 +614,7 @@ def main(argv=None) -> int:
                   f"real runner is a regression, not a fact to record. If the "
                   f"audit now LOOKS at more than it did, say so with "
                   f"--scope-expanded '<why>'.")
-            return 1
+            return _emit(1)
         prev_triage = {}
         if bl.is_file():
             try:
@@ -587,13 +639,25 @@ def main(argv=None) -> int:
              "unwired_by_decision": _load_decisions(bl)},
             indent=2, ensure_ascii=False) + "\n")
         print(f"wrote {bl} ({len(now)} entr(ies))")
-        return 0
+        return _emit(0)
 
     print(f"checker_execution_wiring_audit: {rep['checkers']} checker-shaped "
           f"program(s) of {rep['all_programs']} in programs/")
     reasons = skill_only_register(here.parent / _SKILL_ONLY_NAME)
     so = rep.get("skill_only") or []
-    named = [c for c in so if c in reasons]
+    # A recorded reason must BE one. Membership in the register used to be the
+    # whole test, so an entry whose reason was `""` still printed as
+    # "(skill-only, reason recorded)" and still counted toward the "N carry a
+    # written reason" line — a claim of disclosure with nothing behind it, which
+    # is strictly worse than no entry, because silence does not misreport
+    # itself. `check_unwired_by_decision` already refuses a gesture at
+    # `_MIN_DECISION_REASON`; both registers answer the same question, so they
+    # get the same standard.
+    #
+    # SILENCE IS DELIBERATELY LEFT ALONE. The 28 SKILL-only checkers with no
+    # entry at all stay REPORTED-never-blocking; requiring a reason from them
+    # is a separate decision with a 28-row blast radius, and is not made here.
+    named, gesture = classify_disclosures(so, reasons)
     print(f"  SKILL-only (the weakest runner): {len(so)} — "
           f"{len(named)} carry a written reason in {_SKILL_ONLY_NAME}, "
           f"{len(so) - len(named)} do not. REPORTED, never blocking.")
@@ -631,12 +695,27 @@ def main(argv=None) -> int:
               f"licence, not a disclosure:")
         for line in stale:
             print(line)
-    if new or paid or stale:
-        return 1
+    if gesture:
+        print(f"[FAIL] {len(gesture)} SKILL-only entr(ies) in "
+              f"{_SKILL_ONLY_NAME} claim a reason and do not state one "
+              f"(>= {_MIN_DECISION_REASON} chars of MEASUREMENT). Leaving the "
+              f"entry out is honest and does not block; writing an empty one "
+              f"is a disclosure that discloses nothing:")
+        for c in gesture:
+            got = len((reasons.get(c) or "").strip())
+            print(f"   {c}: reason is {got} char(s)")
+    # `_emit`, NOT a bare `return 1`. vibe-ic#1320 moved the JSON write to the
+    # exit precisely so a verdict added here cannot go on saying `passed: true`
+    # while the process blocks — and this branch is the first one added after
+    # it, i.e. exactly the case that PR predicted ("any `return 1` added below
+    # would silently inherit the same lie"). The gesture path is the ONE arm
+    # where the lie would be hardest to notice, because it is the newest.
+    if new or paid or stale or gesture:
+        return _emit(1)
     print(f"[PASS] no NEW test-only checker ({len(now)} recorded)"
           + (f"; {len(decisions)} deliberately unwired, disclosed"
              if decisions else ""))
-    return 0
+    return _emit(0)
 
 
 if __name__ == "__main__":
