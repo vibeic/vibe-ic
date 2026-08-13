@@ -260,6 +260,11 @@ W4 = "W4:no_required_outputs_but_gate_writes"
 #: The REPORTED (never enforced) class for a flow-declared-optional producer.
 C1 = "C1:conditional_producer_output"
 
+#: The REPORTED (never enforced) class for a path whose ONLY role in every gate
+#: that reads it is to BE an ``optional_program_exit_zero`` clause's
+#: ``condition_files_exist``. See :func:`condition_sentinels`.
+C2 = "C2:conditional_sentinel_consumed"
+
 #: What this module provably CANNOT see. Quoted verbatim into `known_gap`.
 RESOLUTION_LIMITS: Tuple[str, ...] = (
     "A write whose path root is a function PARAMETER (`def _find(root): "
@@ -1024,6 +1029,75 @@ def _step_condition_basenames() -> FrozenSet[str]:
 
 
 @lru_cache(maxsize=1)
+def condition_sentinels() -> Dict[str, FrozenSet[str]]:
+    """``{path: {steps}}`` read ONLY as an optional clause's own condition.
+
+    #537's argument, applied to the CONDITION side of the same clause::
+
+        - optional_program_exit_zero:
+            command: "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
+            condition_files_exist: ["reports/phase3/si_mcf_sta.json"]
+
+    ``condition_files_exist`` is the flow saying, in its own vocabulary, what
+    to do when the path is ABSENT: skip the clause. A step whose gate touches a
+    path ONLY there is therefore stating that the artefact legitimately may not
+    be produced. ``required_outputs`` is ALL-of-N and unconditional
+    (``flow_compliance_check`` returns MISSING the moment a declared entry is
+    absent), so moving such a path into it would assert a production the very
+    clause below it is written to survive the absence of — and it would make
+    the ``optional_`` spelling dead, because the condition could never fail.
+    W1 and W4 have refused that inference since #537; W2 charged it anyway, and
+    the promotion of ``reports/phase3/si_mcf_sta.json`` onto step 27 by the
+    2026-08-06 run-record oracle is the first time the gap had a live subject.
+
+    UNANIMOUS PER PATH, ACROSS THE WHOLE FLOW — the same guard
+    :func:`conditional_output_targets` applies to the output side, so the
+    exemption cannot launder a real omission. A path is disqualified by ANY of:
+
+      * a gate PROGRAM naming it as a literal (it is read by code, not merely
+        existence-tested by the clause);
+      * any clause reading it as a command input, a ``files_exist`` probe or a
+        ``json_field_true`` file;
+      * any clause DESIGNATING it as a written output (W1/W4 own it);
+      * a STEP-level ``condition.files_exist`` naming it (that is an upstream
+        applicability input, already handled by
+        :func:`_step_condition_basenames`);
+      * membership in the ``condition_files_exist`` of any clause that is NOT
+        ``optional_program_exit_zero``, or of an ``optional_`` clause with an
+        EMPTY condition list — such a clause runs on every project and its
+        condition is not an optionality statement at all.
+    """
+    cand: Dict[str, Set[str]] = {}
+    disqualified: Set[str] = set()
+    for sid in F.step_ids():
+        key = F.normalize_id(sid)
+        for prog in F.gate_programs(sid):
+            disqualified.update(program_literals(prog))
+        cond = F.step_condition(sid)
+        if cond:
+            disqualified.update(
+                str(f).lstrip("./") for f in cond.get("files_exist") or [])
+        for clause in F.gate_clauses(sid):
+            if clause.command is not None:
+                _outs, ins = split_command(clause.command)
+                disqualified.update(ins)
+            disqualified.update(f.lstrip("./") for f in clause.files)
+            if clause.json_file:
+                disqualified.add(clause.json_file.lstrip("./"))
+            for path, _prog in clause_output_targets(clause):
+                disqualified.add(path)
+            files = [str(f).lstrip("./") for f in clause.condition_files]
+            if clause.kind != F.K_OPTIONAL or not files:
+                # A condition on a clause that runs anyway says nothing about
+                # optionality; treat those paths as ordinary consumptions.
+                disqualified.update(files)
+                continue
+            for cf in files:
+                cand.setdefault(cf, set()).add(key)
+    return {p: frozenset(s) for p, s in cand.items() if p not in disqualified}
+
+
+@lru_cache(maxsize=1)
 def _same_dir_declarers() -> Dict[str, FrozenSet[str]]:
     """``{directory: {steps declaring a required_output in it}}``."""
     acc: Dict[str, Set[str]] = {}
@@ -1057,6 +1131,7 @@ def _w2_population() -> Tuple[Tuple[str, Optional[str], FrozenSet[str], FrozenSe
     same_dir = _same_dir_declarers()
     consumers = _gate_consumers()
     skip_basenames = _step_condition_basenames()
+    sentinels = condition_sentinels()
 
     out: List[Tuple[str, Optional[str], FrozenSet[str], FrozenSet[str]]] = []
     for path in sorted(consumers):
@@ -1067,6 +1142,11 @@ def _w2_population() -> Tuple[Tuple[str, Optional[str], FrozenSet[str], FrozenSe
         if os.path.basename(path) in skip_basenames:
             continue
         if declaring_entry(path):
+            continue
+        if path in sentinels:
+            # The flow's OWN optionality, on the condition side — see
+            # condition_sentinels(). Not dropped: REPORTED by
+            # conditional_sentinel_findings() and graded there.
             continue
         producers = writers_of(path)
         if not producers:
@@ -1276,6 +1356,55 @@ def conditional_findings(step_id) -> Tuple[Finding, ...]:
 
 
 @lru_cache(maxsize=None)
+def conditional_sentinel_findings(step_id) -> Tuple[Finding, ...]:
+    """Undeclared paths W2 SKIPS because the flow's own gate marks them optional.
+
+    Reported, never enforced — and reported for the same reason
+    :func:`conditional_findings` is: "not enforced" must never be able to mean
+    "not written down". This is the population W2 would have charged, exempted
+    by :func:`condition_sentinels`.
+
+    Kept SEPARATE from :func:`conditional_findings` on purpose. That list is
+    graded by ``test_conditional_class_is_earned_from_the_flows_own_gate``,
+    which re-derives from the yaml that every member is a gate-DESIGNATED
+    OUTPUT. A condition sentinel is an INPUT the clause existence-tests, so
+    folding it in would have silently widened what that test believes it is
+    grading. It gets its own grader instead.
+
+    ``detail`` quotes the flow's own condition clause, so the exemption can be
+    checked against the yaml without trusting this module.
+    """
+    key = F.normalize_id(step_id)
+    out: List[Finding] = []
+    for path, steps in sorted(condition_sentinels().items()):
+        if key not in steps:
+            continue
+        if declaring_entry(path):
+            continue
+        producers = writers_of(path) or frozenset(
+            _record.observed_producers_of(path))
+        if not producers:
+            continue  # nothing produces it — not a d7 question at all
+        out.append(
+            Finding(
+                step_id=key,
+                rule=C2,
+                path=path,
+                klass=CONDITIONAL,
+                producer=",".join(sorted(producers)[:3]),
+                consumers=tuple(f"gate:step{s}" for s in sorted(steps)),
+                detail=(
+                    "every gate that reads this path reads it ONLY as an "
+                    "optional_program_exit_zero clause's condition_files_exist, "
+                    "so the flow itself states the artefact may legitimately be "
+                    "absent; required_outputs is unconditional and cannot say it"
+                ),
+            )
+        )
+    return tuple(out)
+
+
+@lru_cache(maxsize=None)
 def evidence_findings(step_id) -> Tuple[Finding, ...]:
     """Undeclared gate outputs whose ONLY reader is their own writer.
 
@@ -1355,11 +1484,13 @@ def clear_flow_caches() -> None:
         _all_declared,
         _all_declared_basenames,
         _step_condition_basenames,
+        condition_sentinels,
         _same_dir_declarers,
         _gate_consumers,
         _w2_population,
         findings_for,
         conditional_findings,
+        conditional_sentinel_findings,
         evidence_findings,
     ):
         fn.cache_clear()
@@ -1378,6 +1509,7 @@ __all__ = [
     "W3",
     "W4",
     "C1",
+    "C2",
     "Finding",
     "is_artifact_path",
     "split_command",
@@ -1394,6 +1526,8 @@ __all__ = [
     "writers_of",
     "findings_for",
     "conditional_findings",
+    "condition_sentinels",
+    "conditional_sentinel_findings",
     "evidence_findings",
     "unattributable_findings",
     "flag_value_is_written",

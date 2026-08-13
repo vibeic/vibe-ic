@@ -11,8 +11,8 @@ and takes its "absent" branch, and the run reports PASS.
 One cell per flow step, 63 in all, each ending in exactly one of three
 machine-checkable states:
 
-  ENFORCED  the live predicate runs and passes            58
-  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason   4
+  ENFORCED  the live predicate runs and passes            53
+  WAIVED    ``xfail(strict=True)`` with an evidence-backed reason   9
   NA        the NA precondition is asserted LIVE           1
 
 ====================================================================
@@ -128,12 +128,50 @@ file is not a produced artefact, and an untracked path is a property of one
 working tree. A record is a claim about the past; it is not evidence about
 today.
 
-MEASURED ON THIS COMMIT: **0 cells change.** No tracked
-``reports/write_ledger.json`` exists anywhere in the repository, so W2's
-oracle is the AST alone, exactly as before — and that is not silent: every
-dimension-7 failure message and every cell's ``record_property`` carries the
-:func:`matrix_d7_write_record.binding_notes` sentence saying so, and
-:data:`RECORD_BOUND_ROOTS` pins the empty population.
+THE PIN FIRED (2026-08-13, vibe-ic#1351). Two published run roots —
+``benchmark-data/ic/spm/v1.10.18_sky130A`` (ledger captured 2026-08-09) and
+``benchmark-data/ic/spm/v1.9.96_gf180mcuD`` (2026-08-06) — landed carrying a
+tracked ``reports/write_ledger.json``, which is the LOUD, NAMED event
+:data:`RECORD_BOUND_ROOTS` was written to make. Six cells acquired a W2
+finding: D1, 11, 24, 27, 34 and M2. **Not one of the six was a record-oracle
+artefact.** Five of the six paths are ordinary PYTHON write positions that
+``writers_of`` simply failed to resolve (an argv value, a
+``_pl.report_path()`` indirection, a ``project / <module constant>``); the
+record did not lower the bar, it raised RECALL and exposed a blind spot that
+had been there all along. Each was then re-measured and resolved on its own
+merits, which is what the pin's own instruction demands:
+
+  * 27 ``reports/phase3/si_mcf_sta.json`` — EXEMPTED, and the exemption is
+    #537's own argument applied to the CONDITION side of the same clause: the
+    only thing any gate in the flow does with this path is existence-test it
+    as an ``optional_program_exit_zero``'s ``condition_files_exist``, i.e. the
+    flow states in its own vocabulary that the artefact may legitimately be
+    absent, and ``required_outputs`` is ALL-of-N and cannot say that. See
+    ``matrix_d7_artifact_graph.condition_sentinels``; reported by
+    ``conditional_sentinel_findings`` and graded + mutation-controlled below.
+    MEASURED: the exemption moves exactly this one cell and no other, and no
+    already-waived cell.
+  * D1, 11, 24, 34, M2 — WAIVED with evidence in the ONE registry, and the
+    five reasons are NOT one reason five times. 11 and 34 and M2 must NOT be
+    declared: engine-written metadata that exists only if the container
+    subprocess completed; a self-verifying report whose only consumer is its
+    own writer and which a published converged root does not carry; and a
+    Phase-1 L-document charged to a mixed-signal step by the cascade's
+    sole-consumer rule. D1 and 24 SHOULD be declared and the declaration was
+    written, measured (3 of 12 roots move for D1, all three pre-#312; 0 of 12
+    for 24) and then held back — adding a ``required_outputs`` entry is a FLOW
+    change this dimension may not make alone. It reddens dimension 3
+    immediately ("never measured": d3 asks whether a DECLARED output is
+    genuinely produced and its manifest has to be re-measured first) and it
+    moves the pinned 63x8 figure corpus and ledger classification. Both
+    waivers carry the measurement so the flow change can be taken with the
+    numbers already in hand.
+
+That none of this is silent is the point: every dimension-7 failure message
+and every cell's ``record_property`` carries the
+:func:`matrix_d7_write_record.binding_notes` sentence naming which producer
+oracle answered, and :data:`RECORD_BOUND_ROOTS` now pins the two-root
+population so a THIRD published record is the next loud event.
 
 MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
 ``$HOME/_sky130A_r3_run`` and
@@ -277,6 +315,15 @@ def _describe(step_id, findings):
         )
         for f in exempt:
             lines.append(f"    - {f.path} (condition: see gate)")
+    sentinels = G.conditional_sentinel_findings(step_id)
+    if sentinels:
+        lines.append(
+            f"  [{len(sentinels)} further undeclared artefact(s) NOT charged — "
+            f"every gate that reads them reads them ONLY as an "
+            f"optional_program_exit_zero clause's condition_files_exist:]"
+        )
+        for f in sentinels:
+            lines.append(f"    - {f.path} (produced by {f.producer})")
     # WHICH producer oracle answered. Stated in BOTH directions on purpose:
     # if only the bound case were annotated, "the AST alone decided this"
     # would become the meaning of SILENCE and a reader would be inferring it
@@ -328,6 +375,14 @@ def test_d7_required_outputs_list_is_complete(cell, record_property):
     record_property(
         "d7_conditional_undeclared",
         [f.path for f in G.conditional_findings(sid)],
+    )
+    # The SECOND exempted class, published for the same reason: W2 skipped it
+    # because the flow's own gate reads it only as an optional clause's
+    # condition, and "W2 skipped it" must be a recorded property of the run
+    # rather than a silent branch in the analyser.
+    record_property(
+        "d7_condition_sentinel_undeclared",
+        [f.path for f in G.conditional_sentinel_findings(sid)],
     )
 
     findings = G.findings_for(sid)
@@ -754,6 +809,211 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
     # And back: the exemption returns with the flow's own optionality.
     assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
     assert path not in _w1_paths(step)
+
+
+def test_condition_sentinel_class_is_earned_from_the_flows_own_gate():
+    """W2's optionality exemption is re-derived HERE from the yaml, per path.
+
+    Same standard as ``test_conditional_class_is_earned_from_the_flows_own_gate``
+    applies to W1's exemption, and for the same reason: this is the one thing
+    in this dimension that turns a red cell green without anybody declaring
+    anything, so it is the one most able to launder a real omission. Every
+    claim it rests on is re-derived from ``flowref.gate_clauses`` rather than
+    by asking :func:`matrix_d7_artifact_graph.condition_sentinels` back, so a
+    bug in the predicate is caught and not confirmed:
+
+      * the charged step really does carry a clause naming the path in
+        ``condition_files_exist``;
+      * every clause ANYWHERE in the flow naming it there is
+        ``optional_program_exit_zero`` with a NON-EMPTY condition list (an
+        ``optional_`` clause with no condition runs on every project and its
+        condition states no optionality at all);
+      * no clause anywhere DESIGNATES it as a written output, reads it as a
+        command input, a ``files_exist`` probe or a ``json_field_true`` file,
+        and no gate PROGRAM names it as a literal — the exemption is for a
+        path the flow only ever existence-tests, never one it reads;
+      * it is genuinely UNdeclared, so the exemption is not applied to a
+        non-finding; and
+      * something produces it under one of W2's two oracles, so the exempted
+        path is a real artefact and not a phantom.
+    """
+    population = [
+        (F.normalize_id(sid), f)
+        for sid in F.step_ids()
+        for f in G.conditional_sentinel_findings(sid)
+    ]
+    # THE FLOOR. An empty class makes every loop below run zero times and a
+    # green result would mean the exemption is unexamined, not sound.
+    assert population, (
+        "no step has an undeclared, produced path that every gate reads ONLY "
+        "as an optional_program_exit_zero clause's condition_files_exist, so "
+        "W2's optionality exemption is asserting nothing. If the flow "
+        "genuinely no longer has one, remove the exemption from "
+        "matrix_d7_artifact_graph in the same change rather than leaving an "
+        "unexercised branch in the analyser."
+    )
+
+    for sid, finding in population:
+        own = [
+            c for c in F.gate_clauses(sid)
+            if finding.path in [str(f).lstrip("./") for f in c.condition_files]
+        ]
+        assert own, (
+            f"step {sid}: {finding.path} is exempted from W2 as this step's "
+            f"condition sentinel, but no gate clause of this step names it in "
+            f"condition_files_exist at all"
+        )
+        for other in F.step_ids():
+            for clause in F.gate_clauses(other):
+                where = F.normalize_id(other)
+                conds = [str(f).lstrip("./") for f in clause.condition_files]
+                if finding.path in conds:
+                    assert clause.kind == F.K_OPTIONAL, (
+                        f"{finding.path} is exempted as conditionally "
+                        f"produced, but step {where} conditions on it in a "
+                        f"{clause.kind} clause, which runs on every project"
+                    )
+                    assert conds, "unreachable: membership implies non-empty"
+                assert finding.path not in [
+                    p for p, _prog in G.clause_output_targets(clause)
+                ], (
+                    f"{finding.path} is exempted as a condition sentinel, but "
+                    f"step {where}'s gate DESIGNATES it as a written output — "
+                    f"W1/W4 own it and the exemption is hiding their subject"
+                )
+                assert finding.path not in [
+                    f.lstrip("./") for f in clause.files
+                ], (
+                    f"{finding.path} is exempted as a condition sentinel, but "
+                    f"step {where}'s gate asserts it EXISTS in a files_exist "
+                    f"clause — that is an unconditional dependency"
+                )
+                if clause.command is not None:
+                    _outs, ins = G.split_command(clause.command)
+                    assert finding.path not in ins, (
+                        f"{finding.path} is exempted as a condition sentinel, "
+                        f"but step {where} passes it to a gate command as an "
+                        f"input — it is read, not merely existence-tested"
+                    )
+            for prog in F.gate_programs(other):
+                assert finding.path not in G.program_literals(prog), (
+                    f"{finding.path} is exempted as a condition sentinel, but "
+                    f"step {where}'s gate program {prog} names it as a "
+                    f"literal — its CONTENT is read by code"
+                )
+        assert G.declaring_entry(finding.path) is None, (
+            f"step {sid}: {finding.path} is declared after all — the exemption "
+            f"is carrying a non-finding"
+        )
+        assert G.writers_of(finding.path) or R.observed_producers_of(
+            finding.path), (
+            f"step {sid}: {finding.path} has no producer under either oracle, "
+            f"so the exempted class is carrying a phantom"
+        )
+
+    # ...and the three reported classes partition; nothing is reported twice.
+    for sid in F.step_ids():
+        sent = {f.path for f in G.conditional_sentinel_findings(sid)}
+        cond = {f.path for f in G.conditional_findings(sid)}
+        ev = {f.path for f in G.evidence_findings(sid)}
+        charged = {f.path for f in G.findings_for(sid)}
+        assert not (sent & cond) and not (sent & ev) and not (sent & charged), (
+            f"step {F.normalize_id(sid)}: {sorted(sent & (cond | ev | charged))} "
+            f"is reported in more than one class"
+        )
+
+
+def _condition_sentinel_anchor():
+    """``(step, path)`` of a condition sentinel on an OTHERWISE-CLEAN step.
+
+    "Otherwise clean" is what makes the control a control: a red observed
+    after mutating a step that was already red would prove nothing about the
+    exemption. Found by measurement, never named — on the current flow it is
+    step 27 and ``reports/phase3/si_mcf_sta.json``.
+    """
+    for sid in F.step_ids():
+        findings = G.conditional_sentinel_findings(sid)
+        if findings and not G.findings_for(sid):
+            return F.normalize_id(sid), findings[0].path
+    return None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["condition_becomes_files_exist", "an_unconditional_reader_appears"],
+)
+def test_the_w2_sentinel_exemption_rests_on_the_flows_optionality(
+    tmp_path, mutation
+):
+    """Take the optionality away and the cell goes red again.
+
+    Two independent ways to remove it, because the exemption has two
+    independent legs and either alone would be a hole:
+
+      ``condition_becomes_files_exist``   the ``optional_program_exit_zero``
+          clause is retyped ``program_exit_zero`` and the path it conditioned
+          on becomes a ``files_exist`` assertion. The flow now says the
+          artefact must be there on every project, so W2/W3 must charge it.
+      ``an_unconditional_reader_appears`` the optional clause is left exactly
+          as it is and a plain ``files_exist`` clause naming the same path is
+          added beside it. The UNANIMITY leg is what this exercises: one
+          non-optional reader anywhere and the exemption must lift, or a real
+          omission could be laundered by parking an optional clause next to it.
+
+    Both mutate the yaml, never a test. If either fails to redden the cell,
+    the cell is green for a reason other than the one this change claims.
+    """
+    anchor = _condition_sentinel_anchor()
+    assert anchor is not None, (
+        "no step is GREEN solely because of W2's condition-sentinel "
+        "exemption, so removing the optionality cannot be shown to redden "
+        "anything and this control measures nothing"
+    )
+    step, path = anchor
+    assert not G.findings_for(step), (
+        f"step {step} is already red before the mutation; the control cannot "
+        f"attribute the red to the mutation"
+    )
+
+    def edit(doc):
+        for s in doc["steps"]:
+            if F.normalize_id(s["id"]) != step:
+                continue
+            clauses = (s.get("gate") or {}).get("all_of") or []
+            if mutation == "an_unconditional_reader_appears":
+                clauses.append({"files_exist": [path]})
+                return
+            for clause in clauses:
+                spec = clause.get(F.K_OPTIONAL)
+                if not isinstance(spec, dict):
+                    continue
+                conds = [str(f).lstrip("./")
+                         for f in (spec.get("condition_files_exist") or [])]
+                if path not in conds:
+                    continue
+                command = spec["command"]
+                del clause[F.K_OPTIONAL]
+                clause[F.K_PROGRAM] = command
+                clauses.append({"files_exist": [path]})
+                return
+
+    mutated = _mutated_flow(tmp_path, f"d7_sentinel_{mutation}.yaml", edit)
+    with _SwappedFlow(mutated):
+        assert path not in G.condition_sentinels(), (
+            f"step {step}: after {mutation!r} the flow no longer reads {path} "
+            f"only as an optional clause's condition, yet the analyser still "
+            f"exempts it — the exemption is not reading the gate"
+        )
+        charged = {f.path for f in G.findings_for(step)}
+        assert path in charged, (
+            f"step {step}: after {mutation!r} the flow depends on {path} "
+            f"unconditionally and nothing declares it, so it must be charged. "
+            f"It was not: findings were {sorted(charged)}"
+        )
+
+    # And back: the exemption returns with the flow's own optionality.
+    assert path in G.condition_sentinels()
+    assert not G.findings_for(step)
 
 
 def _no_list_but_writes_anchor():
@@ -1449,21 +1709,26 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
     _unbind()
 
 
-#: Run roots whose write record this dimension consults. MEASURED 2026-08-06
-#: and EMPTY: ``git ls-tree -r --name-only HEAD | grep -c write_ledger.json``
-#: is 0 — ``step_write_ledger`` landed the same day and no run tree has been
-#: re-published since — so W2's producer oracle is the AST alone and every one
-#: of the 63 cells is decided exactly as it was before the binding.
+#: Run roots whose write record this dimension consults. MEASURED 2026-08-13:
+#: ``git ls-tree -r --name-only HEAD | grep write_ledger.json`` returns exactly
+#: these two, published by commits 51517e71 (gf180mcuD, ledger captured
+#: 2026-08-06) and e8998ced (sky130A, captured 2026-08-09).
 #:
-#: The pin is what makes the first published record a LOUD, NAMED event. The
-#: per-step promotions this module's docstring tabulates (12 on
-#: ``_sky130A_r3_run``, 9 on ``converge_1.5.44_gf180mcuD``, over steps 11, 21,
-#: 23, 24, 27, 30, D1, DT2, DT3 and M2) were measured against run trees the
-#: commit does not carry. On the day one of them IS carried, this test reddens
-#: and each promotion must be re-measured and then either DECLARED in the flow
-#: yaml or waived with evidence — not discovered later from a cell that
-#: quietly changed colour.
-RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+#: THE PIN FIRED, AND IT WAS MOVED THE WAY IT SAYS TO MOVE IT. It was empty
+#: from 2026-08-06 until those two roots landed; the promotions they caused
+#: were re-measured one path at a time and each was either EXEMPTED by the
+#: flow's own optionality vocabulary or WAIVED with evidence in the one
+#: registry — the per-path triage is in this module's docstring and the
+#: arithmetic is 6 cells promoted, 1 exempted, 5 waived, 0 left to be
+#: discovered later from a cell that quietly changed colour.
+#:
+#: The pin keeps doing its job: a THIRD published record, or the withdrawal of
+#: either of these two, reddens this test and forces the same re-measurement
+#: before any cell may change colour on it.
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():
