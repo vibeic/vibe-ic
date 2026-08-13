@@ -119,9 +119,22 @@ def _digest_tree(root):
     return h.hexdigest()
 
 
-# Recorded at import, asserted at the END of this module. See
-# `test_shipped_skills_tree_is_untouched_by_this_module`.
+def _digest_files(root):
+    """{relative path: md5} for every file under `root`.
+
+    Same inputs as `_digest_tree`, kept per-file so a failure can NAME what
+    moved. Diagnosis only — the verdict is still the whole-tree digest.
+    """
+    return {str(p.relative_to(root)): hashlib.md5(p.read_bytes()).hexdigest()
+            for p in sorted(q for q in root.rglob("*") if q.is_file())}
+
+
+# Recorded at IMPORT — which pytest does during COLLECTION, before it runs a
+# single test. So this snapshot predates the entire session, not just this
+# module, and the assertion below is session-scoped whether or not it is read
+# that way. See `test_shipped_skills_tree_is_untouched_by_the_session`.
 _SHIPPED_SKILLS_MD5_AT_IMPORT = _digest_tree(PLUGIN / "skills")
+_SHIPPED_SKILLS_FILES_AT_IMPORT = _digest_files(PLUGIN / "skills")
 
 
 # ---------------------------------------------------------------------------
@@ -483,8 +496,8 @@ class TestCoreSkillSchema:
 # ---------------------------------------------------------------------------
 # The regression guard for vibe-ic#1029, kept LAST on purpose.
 # ---------------------------------------------------------------------------
-def test_shipped_skills_tree_is_untouched_by_this_module():
-    """No test in this file may leave a byte of `skills/` different.
+def test_shipped_skills_tree_is_untouched_by_the_session():
+    """No test in this SESSION may leave a byte of `skills/` different.
 
     pytest runs a module's tests in definition order, so this runs after every
     test above. Against the pre-fix file it goes RED: the maintenance-tool
@@ -495,9 +508,31 @@ def test_shipped_skills_tree_is_untouched_by_this_module():
     This assertion is the test-side of the gate; it does not replace
     `landing_worktree_is_clean_check.py`, which still owns the whole tree.
     """
-    assert _digest_tree(PLUGIN / "skills") == _SHIPPED_SKILLS_MD5_AT_IMPORT, (
-        "a test in this module wrote into the SHIPPED skills/ tree. Run the "
-        "tool against a copy — see _seed_plugin_copy().")
+    # THE VERDICT — unchanged, byte-for-byte, and deliberately computed before
+    # any diagnosis so that no amount of reporting can weaken it.
+    moved = _digest_tree(PLUGIN / "skills") != _SHIPPED_SKILLS_MD5_AT_IMPORT
+
+    now = _digest_files(PLUGIN / "skills")
+    then = _SHIPPED_SKILLS_FILES_AT_IMPORT
+    changed = sorted(p for p in now.keys() & then.keys() if now[p] != then[p])
+    added = sorted(now.keys() - then.keys())
+    removed = sorted(then.keys() - now.keys())
+
+    assert not moved, (
+        "the SHIPPED skills/ tree changed during this pytest SESSION.\n"
+        f"  modified: {changed or 'none'}\n"
+        f"  added:    {added or 'none'}\n"
+        f"  removed:  {removed or 'none'}\n"
+        "The snapshot is taken at MODULE IMPORT, and pytest imports every "
+        "selected module during COLLECTION — before running anything. So the "
+        "writer is any test that RAN BEFORE this one, not necessarily one in "
+        "this file: this module passes alone. (A writer scheduled AFTER this "
+        "test is not caught here — `suite_write_guard` owns that half, and "
+        "reports it at session end.) Bisect the whole selection with "
+        "`-p no:randomly`, then fix the WRITER to run the tool against a copy "
+        "(`_seed_plugin_copy()`). Do NOT relax this digest — "
+        "`gatekeeper-land.sh:213` fails the entire landing when the shipped "
+        "tree moves under the gates.")
 
 
 if __name__ == "__main__":
