@@ -45,6 +45,7 @@ PROGRAMS = PLUGIN_ROOT / "programs"
 sys.path.insert(0, str(PROGRAMS))
 import _gate_invocation as GI  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
+from _p0_ancestry_fixture import satisfy_p0_ancestry  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +64,15 @@ def _stub_umbrella(monkeypatch, records, fails, skips, waivers=()):
 
     Both channels are published exactly as the real umbrella publishes them:
     the 4-tuple carries the prose buckets, `records_out` carries the records.
+
+    P0's DECLARED ANCESTRY is satisfied at the same time, because every test
+    below reads the run's verdict and vibe-ic#923 put an ordering edge between
+    that verdict and this fixture's subject: `P0 blocks_on [1]`, step 1
+    `blocks_on [D1]`, and this project has neither step's artefacts, so the
+    ordering guard forced `Overall: FAIL` no matter what the records said. That
+    reddened the two `rc == 0` tests AND made every `rc == 1` test here vacuous
+    — a consumer reading prose and a consumer reading records were no longer
+    distinguishable by the verdict. See `_p0_ancestry_fixture`.
     """
     def _stub(_project, **kw):
         out = kw.get("records_out")
@@ -71,6 +81,7 @@ def _stub_umbrella(monkeypatch, records, fails, skips, waivers=()):
         return (not any(r["verdict"] == "FAIL" for r in records),
                 list(fails), list(skips), list(waivers))
     monkeypatch.setattr(F, "_run_structural_rtl_gates", _stub)
+    satisfy_p0_ancestry(monkeypatch)
 
 
 def _rec(name, verdict, message="", **evidence):
