@@ -65,8 +65,18 @@ CENSUS_GATE_PRESENT = 62
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
-CENSUS_BLOCKS_ON_PRESENT = 62
-CENSUS_BLOCKS_ON_NON_EMPTY = 60
+# 62 -> 63 and 60 -> 61 on 2026-08-14: `P0` gained `blocks_on: [1]` in
+# 332b9985 ("flow: stage membership was declared twice and the copies
+# disagreed"). Attributed by parsing every revision of the yaml rather than
+# grepping it — `grep -c '^  - id:'` answers 71 against a parsed 63, so the
+# proxy is wrong by eight and would have named the wrong commit.
+#
+# BOTH counts moved by exactly one and the ROOT SET DID NOT MOVE:
+# `present - non_empty` is still `{D1, A1}`, which is the property this pair of
+# numbers exists to protect. P0 declared a real upstream dependency; it did not
+# stop a root being a root. Only the census was stale.
+CENSUS_BLOCKS_ON_PRESENT = 63
+CENSUS_BLOCKS_ON_NON_EMPTY = 61
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
