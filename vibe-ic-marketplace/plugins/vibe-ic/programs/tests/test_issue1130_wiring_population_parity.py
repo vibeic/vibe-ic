@@ -64,6 +64,34 @@ def _population_giw() -> set:
 
 
 def _population_wiring() -> set:
+    """The CHECKER-SHAPED-BY-NAME population, read from the audit's constant.
+
+    DELIBERATELY NOT `WIR.checker_population()`, and this is the load-bearing
+    choice in this file. PR #1174 — same issue, no file overlap with this PR,
+    open at the time of writing — widens that FUNCTION from
+    `_CHECKER_SUFFIXES` to `suffixes | programs the flow names`. MEASURED on
+    the two branches merged together:
+
+        _CHECKER_SUFFIXES constant   585
+        checker_population(+flow)    593    -> +8
+
+    and the 8 are `bsdl_emit.py`, `metal_fill_emit.py`, `coverage_closure.py`,
+    `fmeda_fault_injection_coverage.py`, `mixed_signal_top_lvs_run.py`,
+    `phase1_expert_parse_track.py` and their kind — EMITTERS and producers the
+    flow invokes, not gates.
+
+    Reading the function would make this test assert that every one of those
+    must be visible to `gate_is_wired_check`, i.e. that an emitter is a gate.
+    That is the "population chosen for convenience rather than for the
+    question" defect `checker_execution_wiring_audit`'s own docstring rejected
+    with measurements, and asserting it here would be adopting it.
+
+    So the parity claimed is the one that is TRUE and is what this PR fixed:
+    every CHECKER-SHAPED-BY-NAME program the wiring audit sees must also be a
+    gate `gate_is_wired_check` can see. Whether `gate_is_wired` should also
+    cover #1174's flow-named additions is a separate question about what a gate
+    IS, and it belongs to whoever lands these two — not to this test.
+    """
     return {p.name for suf in WIR._CHECKER_SUFFIXES
             for p in _PROGRAMS.glob(suf)}
 
