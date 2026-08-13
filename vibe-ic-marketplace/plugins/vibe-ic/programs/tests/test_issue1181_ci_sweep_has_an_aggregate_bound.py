@@ -168,3 +168,88 @@ def test_one_slow_gate_cannot_outlive_the_budget(tmp_path):
         f"one gate ran {elapsed:.1f}s against a 3s budget — the per-gate "
         f"timeout is not clamped to the remaining budget")
     assert res.probed <= res.declared
+
+
+# ===========================================================================
+# THE FAN-OUT'S ISOLATION, PINNED (vibe-ic#1268)
+#
+# The fresh scratch per gate is NOT justified by these gates writing today:
+# driving all 50 real CI gates serially against one shared tree and
+# fingerprinting after each gives 42 entries before, 42 after, WRITERS: 0. The
+# next person to measure that has an argument for sharing one tree and saving
+# 50 `git init`s (~1s of 38).
+#
+# It is justified by what being wrong COSTS once the loop is concurrent: a gate
+# that starts writing corrupts the population in a different order every run,
+# which reads as flakiness and gets waived rather than diagnosed. So the
+# property is pinned here, and removing it has to be a decision rather than a
+# tidy-up.
+# ===========================================================================
+def _repo_recording_cwd(tmp_path: Path, n_gates: int, ledger: Path) -> Path:
+    """A scratch repo whose gates each append the cwd they were driven in."""
+    root = tmp_path / "repo_cwd"
+    (root / "tools" / "ci").mkdir(parents=True)
+    prog = root / "whereami.py"
+    prog.write_text(
+        "import os, sys\n"
+        "with open(sys.argv[1], 'a') as fh:\n"
+        "    fh.write(os.getcwd() + '\\n')\n"
+        "print('examined 0 item(s): nothing to look at')\n")
+    lines = ["#!/usr/bin/env bash\n"]
+    for i in range(n_gates):
+        lines.append(
+            f'run "cwd gate {i}" "$ROOT" python3 "{prog}" "{ledger}"\n')
+    (root / "tools" / "ci" / "repo_hygiene_gates.sh").write_text("".join(lines))
+    return root
+
+
+def test_the_fan_out_gives_every_gate_its_own_scratch(tmp_path):
+    """Each driven gate must be driven in a scratch NO other gate can see.
+
+    Asserted by having every gate record the directory it actually ran in, so
+    this measures the isolation the implementation delivers rather than the
+    presence of a `TemporaryDirectory` call.
+    """
+    ledger = tmp_path / "cwds.txt"
+    root = _repo_recording_cwd(tmp_path, 6, ledger)
+    res = G.audit_ci(root)
+
+    assert res.verdict == "PASS", (res.verdict, res.findings)
+    seen = [ln for ln in ledger.read_text().splitlines() if ln.strip()]
+    assert len(seen) == 6, (
+        f"expected all 6 gates to be driven; the ledger recorded "
+        f"{len(seen)}: {seen}")
+    assert len(set(seen)) == 6, (
+        f"two or more gates were driven in the SAME scratch tree, so one "
+        f"gate's writes can become another's input and — under the fan-out — "
+        f"in a different order every run.\n  distinct: "
+        f"{len(set(seen))} of {len(seen)}\n  {sorted(set(seen))}")
+
+
+def test_PAIRED_the_isolation_check_can_SEE_a_shared_scratch(tmp_path):
+    """THE TWIN. Without it, the assertion above could be trivially true.
+
+    Drives the same six gates through ONE shared tree — the pre-fan-out shape
+    — and requires the distinctness test to fail on it. If this ever stops
+    failing, the check above has stopped measuring isolation.
+    """
+    import tempfile
+
+    ledger = tmp_path / "cwds_shared.txt"
+    root = _repo_recording_cwd(tmp_path, 6, ledger)
+    gates = G.parse_declarations(root / "tools" / "ci" / "repo_hygiene_gates.sh")
+    assert len(gates) == 6, gates
+
+    with tempfile.TemporaryDirectory() as td:
+        shared = G._scratch_repo(Path(td))
+        for decl in gates:
+            argv = G._expand(decl.cmd, root, shared)
+            assert G._driveable(argv) is None, (decl.label, argv)
+            subprocess.run(argv, cwd=str(shared), capture_output=True,
+                           text=True, timeout=30)
+
+    seen = [ln for ln in ledger.read_text().splitlines() if ln.strip()]
+    assert len(seen) == 6, seen
+    assert len(set(seen)) == 1, (
+        "the shared-scratch control did not actually share a tree, so it "
+        f"cannot show the isolation check has teeth: {sorted(set(seen))}")
