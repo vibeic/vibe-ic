@@ -404,3 +404,69 @@ def test_density_fill_raises_a_sparse_layer_to_target(runner, workdir):
     again = _run(FILL_GATE, proj, "--verify-only")
     assert again.returncode == 0
     assert gds.stat().st_size == size_after, "an audit mutated the GDS"
+
+
+# ---------------------------------------------------------------------------
+# $VIBEIC_KLAYOUT_TOOLS — the documented route by which a NEWER fork engine
+# overrides the vendored copy.
+#
+# `test_engines_are_vendored` above calls find_engine with NO env var set, so it
+# validates the vendored FALLBACK and never the override. The override itself
+# had never been exercised, and it was broken: the KLayout fork names its engine
+# directories with hyphens (`metal-fill/`, `gds-antenna/`, and likewise
+# `mp-color/`, `perc-latchup/`, ...) while every caller here passes the
+# underscored plugin spelling (`metal_fill`, `gds_antenna`). Pointing the
+# variable at a fork checkout — which is exactly what the fork's
+# plugin-wiring/README.md instructs — resolved to nothing and fell through to
+# the vendored copy SILENTLY, so a maintainer who set it believed the fork
+# engine was running when it was not.
+# ---------------------------------------------------------------------------
+
+def _fork_shaped_tools_root(root: Path) -> Path:
+    """A tree with the fork's OWN directory spelling (hyphens)."""
+    for fork_dir, name in (("metal-fill", "metal_fill.py"),
+                           ("gds-antenna", "antenna_check.py"),
+                           ("gds-antenna", "xcheck_router.py")):
+        d = root / fork_dir
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text("# fork engine\n", encoding="utf-8")
+    return root
+
+
+def test_env_override_reaches_the_forks_own_directory_spelling(tmp_path, monkeypatch):
+    """The documented override must resolve against a real fork checkout."""
+    root = _fork_shaped_tools_root(tmp_path / "klayout-fork")
+    monkeypatch.setenv("VIBEIC_KLAYOUT_TOOLS", str(root))
+    for sub, fork_dir, name in (("metal_fill", "metal-fill", "metal_fill.py"),
+                                ("gds_antenna", "gds-antenna", "antenna_check.py"),
+                                ("gds_antenna", "gds-antenna", "xcheck_router.py")):
+        got = klaunch.find_engine(sub, name)
+        assert got == root / fork_dir / name, (
+            f"$VIBEIC_KLAYOUT_TOOLS did not reach {fork_dir}/{name}; "
+            f"find_engine returned {got}")
+
+
+def test_env_override_still_prefers_the_underscored_spelling(tmp_path, monkeypatch):
+    """A tools root that already uses the plugin spelling keeps working, and
+    wins over the hyphenated one when both are present."""
+    root = _fork_shaped_tools_root(tmp_path / "both")
+    (root / "metal_fill").mkdir(parents=True)
+    (root / "metal_fill" / "metal_fill.py").write_text("# exact\n", encoding="utf-8")
+    monkeypatch.setenv("VIBEIC_KLAYOUT_TOOLS", str(root))
+    assert klaunch.find_engine("metal_fill", "metal_fill.py") == \
+        root / "metal_fill" / "metal_fill.py"
+
+
+def test_env_override_that_resolves_to_nothing_is_not_silent(tmp_path, monkeypatch, capsys):
+    """Falling through to the vendored copy is legitimate; doing it silently is
+    not — that is what made the spelling mismatch survive."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("VIBEIC_KLAYOUT_TOOLS", str(empty))
+    got = klaunch.find_engine("metal_fill", "metal_fill.py")
+    assert got is not None and str(empty) not in str(got), \
+        "precondition: this root carries no engine, so the vendored copy is used"
+    err = capsys.readouterr().err
+    assert "VIBEIC_KLAYOUT_TOOLS" in err and "metal_fill.py" in err, \
+        ("the override was set, resolved to nothing and said nothing; a silent "
+         f"fall-through is the defect. stderr was: {err!r}")
