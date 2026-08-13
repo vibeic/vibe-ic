@@ -1282,7 +1282,25 @@ def _gather_gds(project: Path) -> Optional[Dict[str, Any]]:
     # violation falls in std-cell-library layer rules, and substitutes the
     # Magic count when a re-stream is authoritative. A report that
     # contradicts the run it summarises is worse than one that under-reports.
-    if pv.get("drc_signoff") == "(report missing)":
+    # ORGANIC-20260808 — the premise above ("nothing in this tree writes
+    # `drc_signoff.json`") STOPPED BEING TRUE. `eda_report_audit:drc` now
+    # stages one, and its schema is the same one ORGANIC-20260726 had to teach
+    # this function for LVS: it records `passed` / `summary` and carries
+    # NEITHER `verdict` NOR `status`. So the loop above resolves "?" — not
+    # "(report missing)" — and this echo, keyed on the old sentinel alone,
+    # stopped firing for exactly the runs that gained a report.
+    #
+    # MEASURED on a38902d16: 3 committed cells carry `drc_signoff.json` and
+    # all 3 lack both fields, so all 3 read "?" while their runner record says
+    # PASS. `test_organic399_drc_signoff_verdict_echoes_the_runner` catches it
+    # on `spm/v1.9.96_gf180mcuD` — runner "PASS", summary "?".
+    #
+    # UNRESOLVED IS THE SAME STATE AS ABSENT for this purpose: in both cases
+    # the JSON gave no verdict, so the runner's record is what the summary has
+    # to echo. #399's rule is untouched — the verdict still comes from the
+    # runner and is still never re-derived from the raw `.rpt`, which is the
+    # prototype #399 measured and rejected for contradicting five WAIVED runs.
+    if pv.get("drc_signoff") in ("(report missing)", "?"):
         _st, _ex = _runner_step_record(project, "drc")
         if _st:
             _bits = [f"{k}={_ex[k]}" for k in
