@@ -249,16 +249,18 @@ def test_ordering_ancestry_is_two_orders_of_magnitude_wider():
             seen.add(pid)
             queue.extend(parents.get(pid, []))
         total += len(seen)
-    # 1221 -> 1222 (vibe-ic#1070, the 25 -> 24 edge). This is a MEASUREMENT
-    # being re-measured, not a bound being loosened: the edge adds exactly one
-    # entry to exactly one step's ancestry (`25: +[24]`), verified by diffing
-    # the per-step ancestry SETS across the two flow files rather than by
-    # accepting whatever number made the assertion pass.
+    # 1221 -> 1311 (vibe-ic#1070, ALL THREE edges: 25->24, A1->D1, M1->37).
     #
-    # The blast radius is smaller than #1070 predicted, and the difference is
-    # worth recording. The issue put it at "14 of 63 (25 + 13 descendants)".
-    # Measured: 25 has exactly those 13 descendants, and ALL 13 ALREADY had 24
-    # in their ancestry through other paths, so the only ancestry this edit
-    # changes is step 25's own. Nominally 14 steps can reach 24; practically
-    # one step's ordering changed.
-    assert total == 1222, total
+    # These three PRs each move this ONE constant, which is why they could not
+    # land in parallel. #1177's author left the note that makes the combination
+    # safe, and it is followed here rather than trusted: "Measured separately
+    # against a38902d1 — 25 -> 24: +1 (1222). A1 -> D1: +9 (1230). M1 -> 37:
+    # +80 (1301). All three together: +90 (1311). Re-measure after each lands;
+    # do not add the deltas blind."
+    #
+    # RE-MEASURED HERE on the combined tree rather than summed: the number below
+    # is what `sum(len(ancestors(s)) for s in steps)` actually returns with all
+    # three edges present. The deltas do NOT add — 1+9+80 = 90 only because the
+    # three edges touch disjoint ancestries; had they overlapped, the union
+    # would have been smaller and adding would have overstated it.
+    assert total == 1311, total
