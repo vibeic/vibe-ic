@@ -128,12 +128,21 @@ file is not a produced artefact, and an untracked path is a property of one
 working tree. A record is a claim about the past; it is not evidence about
 today.
 
-MEASURED ON THIS COMMIT: **0 cells change.** No tracked
-``reports/write_ledger.json`` exists anywhere in the repository, so W2's
-oracle is the AST alone, exactly as before — and that is not silent: every
-dimension-7 failure message and every cell's ``record_property`` carries the
-:func:`matrix_d7_write_record.binding_notes` sentence saying so, and
-:data:`RECORD_BOUND_ROOTS` pins the empty population.
+MEASURED ON THIS COMMIT: **0 cells change**, and as of 2026-08-13 that is true
+for a DIFFERENT reason than when it was written. Two tracked
+``reports/write_ledger.json`` files now exist — ``benchmark-data/ic/spm/
+v1.10.18_sky130A`` and ``.../v1.9.96_gf180mcuD`` — so W2's oracle is no longer
+the AST alone. The sentence that used to stand here, "No tracked
+``reports/write_ledger.json`` exists anywhere in the repository", is now FALSE
+and is corrected rather than deleted, because a reader who believed it would
+mis-read every number below it.
+
+What survives is the conclusion, re-measured: those two records promote nothing
+W2 was not already charging, so 0 cells change. The disclosure is unchanged —
+every dimension-7 failure message and every cell's ``record_property`` carries
+the :func:`matrix_d7_write_record.binding_notes` sentence — and
+:data:`RECORD_BOUND_ROOTS` now pins the two-root population instead of the
+empty one.
 
 MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
 ``$HOME/_sky130A_r3_run`` and
@@ -1448,7 +1457,27 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: and each promotion must be re-measured and then either DECLARED in the flow
 #: yaml or waived with evidence — not discovered later from a cell that
 #: quietly changed colour.
-RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+#: 2026-08-13: () -> the two roots that now ship a write ledger. This is the
+#: "named event" the section above promises, arriving for the first time.
+#:
+#: MEASURED before moving it, because the module's own instruction is to
+#: re-measure and not merely bump: over dimension 7, moving the pin fixes
+#: exactly this test and changes NOTHING else — 10 failures -> 9, zero new. The
+#: per-cell findings are byte-identical either side; step 24 reports the same
+#: single `reports/phase3/dynamic_ir.json (written by run-record:ambiguous)`
+#: with the pin empty and with it filled.
+#:
+#: That is not the outcome the paragraph above predicted, and the reason is
+#: worth writing down rather than leaving as a happy surprise. The 4 -> 13
+#: steps / +12 findings figure was measured on `$HOME/_sky130A_r3_run` and
+#: `$HOME/campaign_v1544/...`, trees with 335 and 264 residual paths. The two
+#: ledgers actually committed here promote nothing W2 was not already charging
+#: from the AST alone. The prediction was not wrong; it was about different
+#: trees, and it stays above as the record of what was expected.
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():
