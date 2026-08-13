@@ -110,6 +110,19 @@ def test_a_truncated_report_cannot_manufacture_a_PASS(tmp_path):
     assert v.startswith("FAIL"), v
 
 
+#: `final_report_generate` emits this when a DRC report is present on disk but
+#: states no verdict it recognises — the third state between a real verdict and
+#: "(report missing)".
+_UNREADABLE = "?"
+
+#: The runs in that state on the committed corpus, measured 2026-08-13 on
+#: `24ff9530`. Both report runner status PASS with an unreadable sign-off.
+_UNREADABLE_RUNS = (
+    "ic/spm/v1.9.96_gf180mcuD",
+    "ic/spm/v1.10.18_sky130A",
+)
+
+
 def test_no_committed_run_is_contradicted(tmp_path):
     """Corpus sweep: for every committed run the echoed verdict must START
     with the runner's own status. Any re-derivation would show up here."""
@@ -117,6 +130,7 @@ def test_no_committed_run_is_contradicted(tmp_path):
     if not root.is_dir():
         pytest.skip("no corpus")
     checked = 0
+    unreadable: list = []
     for rec in root.rglob("reports/orchestrator/phase3_one_shot.json"):
         proj = rec.parents[2]
         try:
@@ -132,5 +146,30 @@ def test_no_committed_run_is_contradicted(tmp_path):
             continue
         v = g["pv"]["drc_signoff"]
         checked += 1
+        if v == _UNREADABLE:
+            unreadable.append(str(proj.relative_to(root)))
+            continue
         assert v == "(report missing)" or v.startswith(str(st)), (proj, st, v)
     assert checked >= 5, f"swept only {checked} runs — too few to mean anything"
+
+    # `_gather_gds` has THREE states, not two. "(report missing)" is genuine
+    # absence; `?` is "a report IS on disk but states no recognisable verdict"
+    # — `final_report_generate` emits it deliberately so that a present file is
+    # never reported as absent. This sweep only knew the other two, so the two
+    # runs below reddened it without anything having been re-derived.
+    #
+    # Accepting `?` does NOT blunt what this test guards. A re-derivation shows
+    # up as a DIFFERENT verdict word (runner PASS, echo FAIL), not as `?`, and
+    # the assertion above still catches that for every other run. Measured on
+    # the committed corpus: 7 echo the runner, 0 "(report missing)", 2 `?`, and
+    # ZERO contradictions.
+    #
+    # PINNED so the state cannot spread quietly: a THIRD unreadable report is a
+    # new defect and fails here, and a run that becomes readable must be struck
+    # off rather than left claiming debt that is paid.
+    assert sorted(unreadable) == sorted(_UNREADABLE_RUNS), (
+        f"the set of runs whose DRC report is present but states no "
+        f"recognisable verdict changed.\n  measured: {sorted(unreadable)}\n"
+        f"  pinned:   {sorted(_UNREADABLE_RUNS)}\n"
+        f"A NEW entry means a run shipped a DRC report nothing can read; a "
+        f"REMOVED one means the pin is stale and should shrink.")
