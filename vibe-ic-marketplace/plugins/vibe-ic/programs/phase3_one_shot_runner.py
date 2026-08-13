@@ -33614,7 +33614,18 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"sta -no_init -exit {tcl_c} 2>&1 | tee {out_dir}/sta_{corner}.log"
         )
-        rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt])
+        # ORGANIC #443: `rpt` is NOT declared here, deliberately. The unlinked
+        # branch below DELETES it, and `_log_invocation` hashes declared outputs
+        # BEFORE that branch runs — so declaring it wrote a digest for
+        # sta_{corner}.rpt into provenance.jsonl and then removed the file,
+        # leaving the audit to read FILE_MISSING and accuse a tool that did
+        # exactly what it was told. Identical to the `merged`/`snapped.gds`
+        # shape #443 rejected, and CONDITIONAL on the design being black-boxed,
+        # which is the worse kind: it reads as a real defect in whichever
+        # design happens to trip it. The ledger is append-only, so there is no
+        # honest way to retract the entry once written. Per #443's own rule,
+        # the honest gap beats the false attestation.
+        rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
         _bb = _sta_blackboxed_masters(out_dir / f"sta_{corner}.log")
         if rc != 0 or not rpt.is_file():
             # #437(c): NO single-corner stand-in. The old fallback copied
