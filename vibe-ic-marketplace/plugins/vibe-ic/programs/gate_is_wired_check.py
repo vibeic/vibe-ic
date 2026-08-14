@@ -25,7 +25,7 @@ Every one of those is the gate that would have caught a defect found by hand.
 layout, the strongest form of this defect — was a fifth, and is now run per
 published cell from `tools/ci/repo_hygiene_gates.sh`.
 
-A NAME IS NOT A CALL, AND THIS GATE LEARNED IT TWICE.
+A NAME IS NOT A CALL, AND THIS GATE LEARNED IT THREE TIMES.
 
   1. Its own docstring names its subjects, and counting that as wiring made all
      of them read as consulted: 34 instead of 38.
@@ -41,6 +41,51 @@ anything is searched, in `.py`, `.yaml` and shell alike. Applying it moved the
 count from 29 to 73 — 44 gates had been held up by a comment somewhere. The
 tree did not get worse; the measurement stopped being generous. Every gate the
 tree really does invoke still reads as wired, verified by name.
+
+  3. vibe-ic#1473. `executable_text()` keeps STRINGS, and it must: a real call
+     is `subprocess.run(["python3", "foo_check.py"])` and the name only ever
+     appears there as a literal. But a string is not thereby a call, and one
+     class of string had been counting as wiring for gates nothing runs —
+     A TEST FIXTURE. MEASURED on `24ff9530`/`3d13e2c5`:
+
+         gds_topcell_name_check   wired by exactly ONE site, and it is
+             tools/ci/test_staged_version_claim_check.py:274
+                 "vibe-ic-marketplace/plugins/vibe-ic/programs/"
+                 "gds_topcell_name_check.py",
+
+     a made-up staged-file PATH inside a synthetic git diff, in the unit test
+     of a DIFFERENT program (`staged_version_claim_check`). It invokes
+     nothing. Whole-tree, the only other names are checklist item 6 of
+     `skills/phase3-backend-verify/SKILL.md` (recorded, and by this gate's own
+     rule NOT wiring), `programs/INDEX.md` (documentation, excluded), its own
+     file and its own test. So a Phase-3 sign-off gate whose docstring says it
+     exists "so it runs identically every time instead of by hand" runs BY
+     HAND ONLY — and this gate had already absorbed the mistake: the name is
+     absent from the shipped register, which may only shrink, so the gate
+     could never re-find it.
+
+     THE RULE THIS GATE ALREADY HELD, NOW STATED. `wiring()` skipped
+     `test_<gate>.py` — a gate's own test does not wire it. And the plugin's
+     entire test tree was already excluded, but only as an accident of glob
+     shape: `programs/*.py` does not match `programs/tests/`. Repo-level tests
+     live BESIDE the tools they test, in `tools/` and `tools/ci/`, so
+     `tools/*.py` and `tools/ci/*` swept them in and the same rule did not
+     apply. `_is_test()` makes it one rule for both: a gate's own test does not
+     wire it, AND NEITHER DOES ANYONE ELSE'S.
+
+     A test verifies the GATE. It produces no verdict over a design or over
+     the tree, so it cannot catch the defect the gate exists to catch — which
+     is the whole question here. MEASURED: six repo-level test files were being
+     counted as wiring sites; excluding them moves exactly one gate,
+     `gds_topcell_name_check`, from wired to unwired. Every other gate the tree
+     really does invoke still reads as wired. The change can only ADD to the
+     unwired set, never remove — it cannot buy a green.
+
+     THE DEBT IS PAID, NOT PARKED. `gds_topcell_name_check` is now declared per
+     published cell from `tools/ci/repo_hygiene_gates.sh`, against the routed
+     DEF's own `DESIGN <name> ;` — so the recorded set is UNCHANGED at 59 names
+     and the register did not move. What changed is why one name is absent from
+     it: a real caller instead of a fixture string.
 
 WHY THE EXISTING RATCHET DID NOT SEE THEM. `gate_skip_routing_check` tracks
 gates whose SKIP path does not reach a verdict, and reports `98 unrouted skip
@@ -109,6 +154,26 @@ _REPO_GLOBS = ("tools/ci/*", "tools/*.py", "tools/*.sh", ".github/workflows/*")
 
 #: Recorded, never counted as wired.
 _SKILL_GLOBS = ("skills/**/*.md", "agents/**/*.md", "commands/**/*.md")
+
+
+def _is_test(path: Path) -> bool:
+    """A test file is not a wiring site. vibe-ic#1473.
+
+    A test verifies the GATE; it issues no verdict over a design or over the
+    tree, so it cannot catch what the gate exists to catch. This gate already
+    held the rule for a gate's OWN test, and — by the accident that
+    `programs/*.py` does not match `programs/tests/` — for the plugin's whole
+    test tree. Repo-level tests sit beside the tools they test, so `tools/*.py`
+    and `tools/ci/*` swept them in.
+
+    MEASURED: `tools/ci/test_staged_version_claim_check.py` names
+    `programs/gds_topcell_name_check.py` as a fake staged path in a synthetic
+    diff, and that lone fixture string was the ONLY thing making a Phase-3
+    sign-off gate read as consulted.
+    """
+    n = path.name
+    return (n.startswith("test_") or n.endswith("_test.py")
+            or n in ("conftest.py", "conftest.pyi"))
 
 
 def gates(plugin: Path) -> Set[str]:
@@ -206,9 +271,14 @@ def wiring(plugin: Path, repo: Path) -> Dict[str, Dict[str, List[str]]]:
         # An auditor naming what it audits is not a caller.
         if f.stem == Path(__file__).stem:
             continue
+        # A gate's own test does not wire it, AND NEITHER DOES ANYONE ELSE'S —
+        # vibe-ic#1473. This subsumes the former per-name `test_{name}` skip,
+        # which held the rule for the subject's own test only.
+        if _is_test(f):
+            continue
         for name in g:
-            # A gate's OWN file does not wire it, and neither does its own test.
-            if f.stem == name or f.stem == f"test_{name}":
+            # A gate's OWN file does not wire it.
+            if f.stem == name:
                 continue
             if name in t:
                 out[name]["executable"].append(str(f))

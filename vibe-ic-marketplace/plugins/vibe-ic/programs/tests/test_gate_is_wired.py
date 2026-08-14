@@ -130,6 +130,67 @@ def test_a_STRING_naming_a_gate_IS_a_caller(tmp_path):
     assert giw.unwired(root, root)[0] == []
 
 
+def test_a_gate_named_only_in_a_TEST_FIXTURE_is_not_wired(tmp_path):
+    """vibe-ic#1473. The other edge of the string rule, and it was wrong.
+
+    MEASURED on `24ff9530`/`3d13e2c5`: `gds_topcell_name_check` read as
+    CONSULTED, and its ONLY site was `tools/ci/test_staged_version_claim_check
+    .py:274` —
+
+        "vibe-ic-marketplace/plugins/vibe-ic/programs/gds_topcell_name_check.py",
+
+    a made-up staged-file PATH inside a synthetic git diff, in the unit test of
+    a DIFFERENT program. It invokes nothing. Whole-tree, the only other names
+    were a skill checklist item (recorded, and by this gate's own rule not
+    wiring), `INDEX.md`, its own file and its own test — so a Phase-3 sign-off
+    gate ran by hand only, and the gate had already absorbed the mistake into a
+    register that may only shrink.
+    """
+    root = _tree(tmp_path, gates=["a_check"])
+    (root / "tools" / "ci" / "test_some_other_program.py").write_text(
+        "def test_a_diff_over_a_made_up_path(tmp_path):\n"
+        "    run(_diff('programs/a_check.py', 'VERSION = \"1.0.0\"'))\n")
+    names, w = giw.unwired(root, root)
+    assert names == ["a_check"], (
+        f"a fixture string wired it: {w['a_check']['executable']}")
+
+
+def test_a_NON_test_file_in_the_SAME_directory_still_wires(tmp_path):
+    """The control for the case above, and the direction that matters more.
+
+    The fix must not be "stop reading `tools/ci`" — that is where the repo
+    wires most of its hygiene gates, and dropping it would report dozens of
+    genuinely-wired gates as unwired. Same directory, same string, non-test
+    filename: still wired."""
+    root = _tree(tmp_path, gates=["a_check"])
+    (root / "tools" / "ci" / "some_other_program.py").write_text(
+        "import subprocess\n"
+        "subprocess.run(['python3', 'programs/a_check.py'])\n")
+    assert giw.unwired(root, root)[0] == []
+
+
+@pytest.mark.parametrize("fname", ["test_x.py", "x_test.py", "conftest.py"])
+def test_every_test_naming_convention_is_covered(tmp_path, fname):
+    """`test_*.py` is this repo's convention; the other two are pytest's and
+    cost nothing to honour. A gate whose only site is any of them is unwired."""
+    root = _tree(tmp_path, gates=["a_check"])
+    (root / "tools" / fname).write_text(
+        "CASES = ['programs/a_check.py']\n")
+    assert giw.unwired(root, root)[0] == ["a_check"], fname
+
+
+def test_a_gates_own_test_still_does_not_wire_it(tmp_path):
+    """The rule the gate held before #1473, which `_is_test` now subsumes
+    rather than replaces."""
+    root = _tree(tmp_path, gates=["a_check"])
+    (root / "programs" / "test_a_check.py").write_text(
+        "import subprocess\n"
+        "subprocess.run(['python3', 'a_check.py'])\n")
+    # (the planted test ends in `_check`, so it joins the census itself — the
+    # claim under test is only about its SUBJECT.)
+    assert "a_check" in giw.unwired(root, root)[0]
+
+
 def test_a_yaml_comment_is_not_a_caller(tmp_path):
     root = _tree(tmp_path, gates=["a_check"])
     (root / "flow" / "phase1_phase2_phase3.yaml").write_text(
@@ -305,6 +366,52 @@ def test_the_four_are_reachable_from_an_executable_location():
         assert w[name]["executable"], (
             f"{name} is recorded as wired but is named in no executable "
             f"location")
+
+
+# ---------------------------- vibe-ic#1473, on the REAL tree ----------------
+
+def test_no_gate_on_the_real_tree_is_wired_by_a_TEST_FILE():
+    """The general form, so the NEXT masked gate is caught rather than this one.
+
+    MEASURED before the fix: six repo-level test files were being counted as
+    wiring sites, and for one gate a test file was the ONLY site. This asserts
+    the rule structurally — no gate anywhere sources its wiring from a test —
+    which is stronger than naming the one gate that was affected.
+
+    The predicate is spelled out here rather than imported from the program, so
+    this reads RED against a tree where the rule is absent instead of erroring
+    on a missing helper."""
+    def _test_shaped(p: Path) -> bool:
+        return (p.name.startswith("test_") or p.name.endswith("_test.py")
+                or p.name.startswith("conftest."))
+
+    plugin = _real_plugin()
+    w = giw.wiring(plugin, _real_repo(plugin))
+    offenders = {n: [p for p in v["executable"] if _test_shaped(Path(p))]
+                 for n, v in w.items()}
+    offenders = {n: v for n, v in offenders.items() if v}
+    assert not offenders, (
+        f"a test file is being counted as wiring: {offenders}")
+
+
+def test_the_gds_topcell_gate_is_wired_where_it_can_ISSUE_a_verdict():
+    """The gate the fixture had been masking. It is now declared per published
+    cell from `tools/ci/repo_hygiene_gates.sh`, over the routed DEF's own
+    `DESIGN <name> ;` — never a per-chip constant.
+
+    Measured through the gate's own `wiring()`, whose `executable_text()`
+    strips comments and docstrings first, so the long note beside the wiring
+    cannot stand in for the wiring."""
+    plugin = _real_plugin()
+    repo = _real_repo(plugin)
+    sites = giw.wiring(plugin, repo)["gds_topcell_name_check"]["executable"]
+    assert sites, ("gds_topcell_name_check is named in no executable location "
+                   "— vibe-ic#1473 regressed")
+    assert any(Path(p).name == "repo_hygiene_gates.sh" for p in sites), sites
+    recorded = json.loads(
+        (plugin / "programs" / "gate_is_wired_baseline.json").read_text(
+            encoding="utf-8"))
+    assert "gds_topcell_name_check" not in recorded["unwired"]
 
 
 def test_the_shipped_register_still_refuses_to_GROW(tmp_path):

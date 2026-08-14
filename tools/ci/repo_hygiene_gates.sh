@@ -409,7 +409,7 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # repository-size cost, and that decision is not a side effect of making the
 # roll-up honest.
 _per_published_cell_gates() {
-  local _def="$1" _cell
+  local _def="$1" _cell _g _gds _design
   _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
@@ -429,6 +429,47 @@ _per_published_cell_gates() {
   # each, so this is a live verdict over a real denominator.
   run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
     "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
+  # vibe-ic#1473 — a third of the same 35, and it did not stay invisible for
+  # want of this line. `gate_is_wired_check` READ IT AS CONSULTED, because
+  # `tools/ci/test_staged_version_claim_check.py` names
+  # `programs/gds_topcell_name_check.py` as a made-up staged-file PATH inside a
+  # synthetic diff, in the unit test of a DIFFERENT program. A fixture string is
+  # not a caller. The only other mention is `skills/phase3-backend-verify`
+  # checklist item 6, which says "Do NOT eyeball the cell name" — which is
+  # exactly what the tree did, because nothing ran the gate.
+  #
+  # THE EXPECTED NAME IS NOT TYPED HERE and is not a per-chip constant: it is
+  # the ROUTED DESIGN's own name, read from the DEF's `DESIGN <name> ;` — the
+  # same authority `gds_port_label_check` pairs a DEF to a GDS on. So the
+  # assertion is "the stream-out defines the design that was actually routed",
+  # which is checkable on any design and invented for none.
+  #
+  # MEASURED on the published cell that carries both: 28 structures parsed, the
+  # routed design DEFINED and referenced by no other structure, rc 0 — a live
+  # verdict over real geometry, not a shape that can only ever say "nothing to
+  # look at".
+  #
+  # DECLARED ONLY WHERE IT CAN LOOK, and the absence is PRINTED rather than
+  # implied. This gate FAILs (rc 1) on a missing file by deliberate design — its
+  # own docstring says so — so declaring it over a cell that publishes no
+  # stream-out would turn a PUBLISHING decision into a suite failure, which is
+  # the same conflation the loop above refuses to make.
+  _gds=""
+  for _g in "$_cell"/phase3/stage4/gds/*.gds; do
+    if [ -f "$_g" ]; then _gds="$_g"; break; fi
+  done
+  _design="$(sed -n 's/^DESIGN[[:space:]]\{1,\}\([A-Za-z0-9_]\{1,\}\).*/\1/p' \
+    "$_cell/phase3/stage3/pnr/routed.def" 2>/dev/null | head -1 || true)"
+  if [ -n "$_gds" ] && [ -n "$_design" ]; then
+    run "GDS top cell is the routed design ($(basename "$(dirname "$_cell")"))" \
+      "$ROOT" python3 "$PG/gds_topcell_name_check.py" \
+        --gds-file "$_gds" --top-name "$_design"
+  else
+    echo "   ^^ NOT DECLARED — GDS top-cell name for" \
+         "$(basename "$(dirname "$_cell")"): needs BOTH a stream-out under" \
+         "phase3/stage4/gds/ and a \`DESIGN <name> ;\` in the routed DEF." \
+         "This cell has gds=${_gds:-none} design=${_design:-none}." >&2
+  fi
 }
 # NO `|| true` ANY MORE, and that is a repair rather than an omission: it used
 # to turn "git could not look" into an empty corpus, which is the vacuous pass
