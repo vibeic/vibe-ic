@@ -42,6 +42,7 @@ A hand-written copy of either would pass while the real wiring stayed broken.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import time
@@ -159,10 +160,28 @@ def test_an_empty_tree_is_refused_as_a_zero_denominator_and_refused_fast(
     assert G.discloses(out), (
         f"the refusal does not disclose what it examined, which is the rule "
         f"this very probe enforces on everybody else:\n{out}")
-    assert "504" not in out, (
+    # Match the SHAPE of the claim, not the digits of one recorded instance.
+    #
+    # This was `assert "504" not in out`, and `out` embeds absolute paths: the
+    # refusal ends with "or omit the argument to census <this script's own
+    # root>". So the assertion fired on any checkout whose PATH contains those
+    # three digits, with nothing wrong with the gate at all. Measured on
+    # 3d13e2c59, same commit, same basetemp, only the checkout path differing:
+    #
+    #     /tmp/.../5bd54937-551b-4504-8f2a-.../m2   1 failed   <- "4504"
+    #     /tmp/claude-1000/mainclean                1 passed
+    #
+    # A per-agent scratch path decided the verdict, which is how this sat in a
+    # red list attributed to main. The defect being guarded is REPORTING A
+    # NON-ZERO CELL COUNT over an empty tree, so ask exactly that: every cell
+    # count the output states must be zero. "0 of 0 cells" still passes,
+    # "504 cells over 8 dimensions" still fails, and no path can reach it.
+    counts = [int(n) for n in re.findall(r"(\d+)\s+cells\b", out)]
+    assert counts and not any(counts), (
         f"the gate reported the real suite's cell count over an EMPTY tree — "
         f"this is the defect verbatim (measured 6525cf05: '504 cells over 8 "
-        f"dimensions' in 1m50.203s over a directory holding one file):\n{out}")
+        f"dimensions' in 1m50.203s over a directory holding one file). "
+        f"cell counts stated: {counts}\n{out}")
     assert elapsed < _FAST_S, (
         f"refusing an empty tree took {elapsed:.1f}s (bound {_FAST_S}s). The "
         f"110s measured at 6525cf05 were spent AFTER everything needed to "
