@@ -259,16 +259,31 @@ def test_a_baseline_PREDATING_version_keying_refuses_rather_than_matching():
     assert "re-measure" in why.lower(), why
 
 
-def test_an_INSTALLED_tool_whose_version_is_unreadable_is_not_the_same_as_ABSENT():
-    """`?` is its own state. Folding it into "absent" would let a host with a
-    broken-but-present tool compare SAME against one that lacks it entirely."""
+def test_an_UNREADABLE_version_never_collides_with_a_REAL_one():
+    """`?` must be a value no tool can actually report.
+
+    CORRECTED after my own paired guard caught it. The first version of this
+    test compared an installed-unreadable profile against an ABSENT one and
+    asserted they differ — which they do, but because the PRESENCE bool differs,
+    not because of the sentinel. It passed with `UNKNOWN_VERSION` set to
+    anything at all, so it was checking a property adjacent to its own name.
+
+    The real risk is collision: a sentinel that happens to look like a version
+    makes a host that CANNOT read the version fingerprint identically to one
+    running that version. So the comparison has to hold PRESENCE equal and vary
+    only the version.
+    """
     present = {t: True for t in T.KEYED_TOOLS}
-    absent = {**present, "iverilog": False}
-    unreadable = T.fingerprint(present, {"iverilog": None, "yosys": "0.33",
-                                         "verilator": "5.020"})
-    missing = T.fingerprint(absent, {"iverilog": None, "yosys": "0.33",
-                                     "verilator": "5.020"})
-    assert unreadable != missing
+    others = {"yosys": "0.33", "verilator": "5.020"}
+    unreadable = T.fingerprint(present, {"iverilog": None, **others})
+    for real in ("11.0", "14.0", "0.33", "5.020"):
+        assert unreadable != T.fingerprint(present, {"iverilog": real, **others}), (
+            f"an unreadable iverilog version fingerprints the same as {real} — "
+            f"UNKNOWN_VERSION collides with a version a tool can report, so a "
+            f"host that cannot answer reads as comparable to one that can")
+    assert not T._VERSION_RE.fullmatch(T.UNKNOWN_VERSION), (
+        f"UNKNOWN_VERSION={T.UNKNOWN_VERSION!r} parses as a version numeral, so "
+        f"a real tool could report it")
 
 
 def test_the_version_probe_reads_THIS_host_and_is_not_hardcoded():
