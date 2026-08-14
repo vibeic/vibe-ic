@@ -71,6 +71,7 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # a RECORD rather than a design, and the corpus carries none yet (#1121's first
 # head-to-head has not run), so it is wired through the uncheckable channel: it
 # exits 2 and says so, rather than printing PASS over an empty population.
+uncheckable_until 2026-11-30 "KNOWN DEBT, not a missing prerequisite: it validates a RECORD and the corpus carries none yet (#1121's first head-to-head has not run), so rc 2 says the population is empty rather than printing PASS over it. Goes green by itself on the first head-to-head committed"
 run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/benchmark-data"
 
@@ -275,6 +276,7 @@ run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs
 # ONE LINE, no `\` continuation — the denominator probe and the host-independence
 # probe both parse this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
 # host-independence: EXCLUDE — reads live queue state over the network, so two invocations can differ for a reason that is not in the commit
+uncheckable_until 2027-02-28 "needs an AUTHENTICATED gh + network: it asks the GitHub API for each PR's base, and rc 2 means the API could not be asked at all -- a base it CAN read and finds unreachable is rc 1"
 run_tolerating_uncheckable "PR bases reach main" "$ROOT" python3 "$PG/pr_base_reachability_check.py" --repo-dir "$ROOT" --advisory
 
 # vibe-ic#306/#316 — the audit that measures which gates can actually stop a
@@ -496,6 +498,7 @@ _per_published_cell_gates() {
   # the expected answer today and must be LOUD and non-fatal; rc 1, a genuinely
   # new diagnostic id, still fails the suite. The day a second same-PDK cell is
   # published the comparison path becomes live without this line changing.
+  uncheckable_until 2027-02-28 "per published cell: the gate's documented contract is rc 2 = NO_BASELINE, and on this corpus that is EVERY cell -- no design carries two cells of the same PDK, so find_previous has nothing to compare against. A genuinely new diagnostic id is rc 1"
   run_tolerating_uncheckable "new tool diagnostic id ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/tool_diagnostic_id_gate.py "$_cell"
 }
@@ -713,6 +716,7 @@ run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_program
 # therefore "this clone cannot answer", which is the normal state for a
 # developer's `--depth` checkout and must be LOUD and non-fatal; CI checks out
 # complete and genuinely checks. rc 1 (a hand-edited figure) still fails.
+uncheckable_until 2027-02-28 "needs a COMPLETE clone: every velocity figure is history-derived, and on a shallow one the generator measured 86 of 89 commits where main carries 2007 -- wrong by ~22x and entirely plausible, so it now refuses (rc 2) instead of reporting the smaller number. A hand-edited figure is rc 1"
 run_tolerating_uncheckable "engineering evidence fresh" \
     "$ROOT" python3 "$ROOT/tools/gen_engineering_evidence.py" --check
 
@@ -1118,8 +1122,9 @@ run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.
 # WHY TOLERATING: the anchored EDA image may legitimately be absent on a host
 # that has not pulled it. The hole is REPORTED as NOT_CHECKED rather than
 # blocking, until the owner rules on refusing landings from such a host.
-# (`uncheckable_until` is #1072's proposed directive and does not exist on main;
-# this comment carries the same disclosure without depending on an unlanded PR.)
+# (#1072 has since LANDED as 5a93f2691, so the directive this comment was
+# standing in for now exists — and is required. It is stated below.)
+uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: the check exits 2 when the anchored image is unreachable, which is legitimate on a host that has not pulled it. Blocking instead is a policy call the owner has not made -- ZERO blast radius with the image, every landing refused without it"
 run_tolerating_uncheckable "image-gated verifications are not silently skipped" "$PLUGIN" \
   python3 programs/image_gated_verification_check.py
 
