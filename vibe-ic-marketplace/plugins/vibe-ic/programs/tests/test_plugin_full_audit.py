@@ -101,3 +101,77 @@ def test_shipped_plugin_d2_clean():
     # programs mid-development; D2 is the structural invariant).
     d2 = A.audit_d2(plugin)
     assert d2["passed"], d2["findings"]
+
+
+# ── vibe-ic#1208: the one-pass word index must answer the SAME question ──────
+#
+# `audit_d1` used to re-scan a 23.5 MB concatenation of every test file with up
+# to three regexes PER PROGRAM. `\b<s>\b` asks exactly "is s a maximal run of
+# word characters in the blob", so that population is now collected in one pass
+# and answered by set membership. These pin the two places where the set is NOT
+# a drop-in for the regex, because those are the only ways the speedup could
+# have changed a verdict.
+
+
+def test_d1_a_name_matched_only_as_a_dot_py_suffix_is_still_referenced(tmp_path):
+    """`{s}\\.py\\b` has NO leading boundary, so it matches INSIDE a longer word.
+
+    `foo_check` appears in the blob only as `myfoo_check.py`. The word form
+    `\\bfoo_check\\b` does NOT match there (it is preceded by `y`), and the word
+    INDEX does not contain it either — the only maximal runs are `myfoo_check`
+    and `py`. So this program is referenced solely through the `.py` pattern,
+    and it is why that pattern is kept as a separate search rather than folded
+    into the index. Fold it in and this test goes red.
+    """
+    plug = _mk_plugin(tmp_path, {"foo_check": None},
+                      {"test_other": "path = 'tools/myfoo_check.py'\n"})
+    d1 = A.audit_d1(plug)
+    assert d1["untested_gaps"] == [], d1
+    assert d1["passed"] is True
+
+
+def test_d1_a_stem_with_a_non_word_character_falls_back_to_the_search(tmp_path):
+    """The index equivalence holds only for word-characters-only names.
+
+    A stem like `foo-bar` is not a single `\\w+` run, so `'foo-bar' in words` is
+    FALSE however often the name appears — the index splits it into `foo` and
+    `bar`. Answering from the index there would report a referenced program as
+    an untested gap. The guarded fall-back to the original search is what keeps
+    it exact; remove the guard and this test goes red.
+
+    Measured on the shipped tree when this landed: 0 of 1138 stems contain a
+    non-word character, so this case is latent — which is precisely why it
+    needs a test rather than an assumption.
+    """
+    plug = _mk_plugin(tmp_path, {"foo-bar": None},
+                      {"test_other": "# exercises foo-bar directly\n"})
+    d1 = A.audit_d1(plug)
+    assert d1["untested_gaps"] == [], d1
+
+
+def test_d1_a_name_that_appears_nowhere_is_still_a_gap(tmp_path):
+    """PAIRED GUARD: the fast path must not turn every program green.
+
+    A one-pass index that answered YES too readily would empty
+    `untested_gaps` and the whole dimension would stop measuring anything.
+    `lonely_check` appears in no test file in any form.
+    """
+    plug = _mk_plugin(tmp_path, {"lonely_check": None},
+                      {"test_other": "import something_else\n"})
+    d1 = A.audit_d1(plug)
+    assert d1["untested_gaps"] == ["lonely_check"], d1
+    assert d1["passed"] is False
+
+
+def test_d1_a_substring_of_a_longer_word_is_NOT_a_reference(tmp_path):
+    """The index must preserve the WORD boundary, not degrade to `in`.
+
+    `foo` occurs inside `foobar_check` and inside `myfoo`, and in neither place
+    is it a reference. A `s in test_blob` shortcut — the obvious cheap fix, and
+    the one I measured first — would call this referenced and silently drop a
+    real gap.
+    """
+    plug = _mk_plugin(tmp_path, {"foo": None},
+                      {"test_other": "import foobar_check\nx = 'myfoo'\n"})
+    d1 = A.audit_d1(plug)
+    assert d1["untested_gaps"] == ["foo"], d1
