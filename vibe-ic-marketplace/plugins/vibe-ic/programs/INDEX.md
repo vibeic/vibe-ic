@@ -157,6 +157,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `bringup_plan_gen` | any | — | emit bring-up plan from L13_LAB_CALIBRATION. |
 | `bsdl_emit` | any | — | IEEE 1149.1 BSDL + boundary-scan-cell-per-pad plan emitter. |
 | `buffer_occupancy_flag_latency_check` | any | — | chip-AGNOSTIC structural gate. |
+| `bundled_attribution_notice_check` | any | — | every BUNDLED third-party work must be accounted for in NOTICE. |
 | `bus_turnaround_consumes_spec_constant_check` | any | v0.106 | For any half-duplex protocol project, scan the L2/L8 timing package for |
 | `byte_assembler_explicit_9bit_reject_check` | aid_class_half_duplex | Wave 37 | Wave 37 (v0.119.69). |
 | `calendar_counter_synth` | any | — | deterministic, chip-AGNOSTIC SOLVER for the CASCADED modulo-counter family (a perpetual calendar / digital clock: sec/min/hour, or any nu... |
@@ -1299,6 +1300,7 @@ _(no programs in this group)_
 - `bringup_plan_gen` — emit bring-up plan from L13_LAB_CALIBRATION.
 - `bsdl_emit` — IEEE 1149.1 BSDL + boundary-scan-cell-per-pad plan emitter.
 - `buffer_occupancy_flag_latency_check` — chip-AGNOSTIC structural gate.
+- `bundled_attribution_notice_check` — every BUNDLED third-party work must be accounted for in NOTICE.
 - `bus_turnaround_consumes_spec_constant_check` — For any half-duplex protocol project, scan the L2/L8 timing package for  _[v0.106]_
 - `calendar_counter_synth` — deterministic, chip-AGNOSTIC SOLVER for the CASCADED modulo-counter family (a perpetual calendar / digital clock: sec/min/hour, or any nu...
 - `can_protocol_synth` — CAN-class protocol synth helper.  _[v0.1.81]_
