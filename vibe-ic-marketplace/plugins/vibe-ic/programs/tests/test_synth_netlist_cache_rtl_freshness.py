@@ -42,13 +42,43 @@ def _mk(tmp_path, netlist_mtime, rtl_mtime, rtl_name="top.v"):
     return netlist, rtl
 
 
+#: Where the cache-guard region ENDS: the point at which the reuse decision is
+#: dispatched. The dispatch has been spelled two ways, and this file pinned only
+#: the older one.
+#:
+#: `plan.append(step_synth(` was the direct call. Commit dc0593709 ("the
+#: pre-flight now runs") wrapped it — `step_synth` is now passed as a CALLABLE
+#: into `_spf.gate(...)`, which runs a pre-flight refusal check before
+#: dispatching. So the old anchor stopped matching, `_cache_guard_block()` began
+#: raising, and the two region-based tests below failed while the guard they
+#: measure was untouched and still correct.
+#:
+#: Both spellings are accepted so this file measures the GUARD'S BEHAVIOUR
+#: rather than one commit's phrasing of the dispatch. This does not widen what
+#: is asserted: the region is still bounded by the first dispatch after the
+#: guard, and the assertions on its contents are unchanged.
+_GUARD_END_ANCHORS = (
+    "plan.append(_spf.gate(",     # current — pre-flight-gated dispatch
+    "plan.append(step_synth(",    # pre-dc0593709 — direct call
+)
+
+
 def _cache_guard_block() -> str:
     """The region of main() that decides whether to reuse a cached netlist."""
     start = RUNNER_SRC.find("_nl_pdk_ok = (netlist_existing.is_file()")
     assert start != -1, "netlist cache guard not found"
-    end = RUNNER_SRC.find("plan.append(step_synth(", start)
-    assert end != -1, "step_synth fallback not found after the cache guard"
-    return RUNNER_SRC[start:end]
+    ends = [pos for pos in (RUNNER_SRC.find(a, start)
+                            for a in _GUARD_END_ANCHORS) if pos != -1]
+    # FAIL, never widen. With no end anchor the honest options are "raise" or
+    # "return the rest of the file"; the second would make every assertion
+    # below pass on text from unrelated steps, which is a vacuous green and
+    # worse than this red. If the dispatch is respelled again, add the spelling.
+    assert ends, (
+        "the synth dispatch was not found after the cache guard — none of "
+        f"{_GUARD_END_ANCHORS} appears. The region these tests measure could "
+        "not be located, so their assertions would be vacuous. Re-anchor on "
+        "the new dispatch spelling; do not widen the region.")
+    return RUNNER_SRC[start:min(ends)]
 
 
 def test_freshness_check_compares_mtimes_against_the_rtl_dir():
