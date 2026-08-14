@@ -315,21 +315,37 @@ def test_filtered_alias_does_not_burn_the_canonical_reports_key(tmp_path):
     rpt = tmp_path / 'reports/phase3/drc_signoff.rpt'
     rpt.write_text(_klayout_drc(11))
 
-    # `backup_bak/` sorts and nests so that rglob reaches it BEFORE
-    # reports/phase3/ — the shallower match is yielded first.
     alias_dir = tmp_path / 'backup_bak'
     alias_dir.mkdir()
-    (alias_dir / 'drc_signoff.rpt').symlink_to(rpt.resolve())
+    alias = alias_dir / 'drc_signoff.rpt'
+    alias.symlink_to(rpt.resolve())
 
-    walk = [str(p.relative_to(tmp_path)) for p in tmp_path.rglob('drc*.rpt')]
-    assert walk[0].startswith('backup_bak/'), (
-        f"fixture precondition: the filtered alias must be walked first "
-        f"(got {walk})")
+    # BOTH walk orders, FORCED. `rglob` yields a directory's children in
+    # `os.scandir` order — the filesystem's, neither sorted nor by depth — so
+    # nothing about the alias's name or nesting decides which is reached first.
+    # This fixture used to assert `walk[0].startswith('backup_bak/')` as a
+    # precondition; on ext4 here the walk is
+    # ['reports/phase3/drc_signoff.rpt', 'backup_bak/drc_signoff.rpt'] and the
+    # test died before reaching its own property. Measured: with the defect
+    # reintroduced it failed at the SAME precondition, so its verdict carried
+    # no information about the property on this host.
+    for first, label in ((alias, 'alias first'), (rpt, 'canonical first')):
+        order = [first, rpt if first is alias else alias]
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(Path, 'rglob', lambda self, pat, _o=order: iter(_o))
+            found = era._discover(tmp_path, ['drc*.rpt'])
+        assert [str(p.relative_to(tmp_path)) for p in found] == [
+            'reports/phase3/drc_signoff.rpt'], (
+            f"[{label}] the canonical report must survive a filtered alias "
+            f"whatever the walk order "
+            f"(got {[str(p.relative_to(tmp_path)) for p in found]})")
 
+    # and once on the REAL walk, so a forced order is never the only thing
+    # this test exercises
     found = era._discover(tmp_path, ['drc*.rpt'])
     assert [str(p.relative_to(tmp_path)) for p in found] == [
         'reports/phase3/drc_signoff.rpt'], (
-        f"the canonical report must survive a filtered alias that precedes it "
+        f"the canonical report must survive on the real filesystem walk too "
         f"(got {[str(p.relative_to(tmp_path)) for p in found]})")
 
     _, summary = _audit(tmp_path, tmp_path / 'out.json')
@@ -412,15 +428,27 @@ def test_an_excluded_name_alias_does_not_erase_the_sta_report(tmp_path):
     rpt = tmp_path / 'phase3/stage3/sta/pre_pnr_timing.rpt'
     rpt.write_text(_STA_MET)
 
-    # shallower than the canonical -> rglob yields it first
     step = tmp_path / 'steps'
     step.mkdir()
-    (step / 'drc_lvs__pre_pnr_timing.rpt').symlink_to(rpt.resolve())
+    alias = step / 'drc_lvs__pre_pnr_timing.rpt'
+    alias.symlink_to(rpt.resolve())
 
-    walk = [str(p.relative_to(tmp_path)) for p in tmp_path.rglob('*timing*.rpt')]
-    assert walk[0].startswith('steps/'), (
-        f"fixture precondition: the excluded-name alias must be walked first "
-        f"(got {walk})")
+    # Same correction as the backup-alias test above: `rglob` order is the
+    # filesystem's, so "shallower -> yielded first" is not a property anything
+    # guarantees. Force both orders against `_discover` directly — the
+    # end-to-end `_sta` call below cannot be monkeypatched (it is a subprocess),
+    # so it keeps exercising the real walk.
+    for first, label in ((alias, 'alias first'), (rpt, 'canonical first')):
+        order = [first, rpt if first is alias else alias]
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(Path, 'rglob', lambda self, pat, _o=order: iter(_o))
+            found = era._discover(tmp_path, ['*timing*.rpt'],
+                                  exclude_name_tokens=('drc', 'lvs'))
+        assert [str(p.relative_to(tmp_path)) for p in found] == [
+            'phase3/stage3/sta/pre_pnr_timing.rpt'], (
+            f"[{label}] an alias the NAME filter deletes must not take the "
+            f"canonical STA report with it "
+            f"(got {[str(p.relative_to(tmp_path)) for p in found]})")
 
     rc, doc = _sta(tmp_path, tmp_path / 'sta.json')
     rules = {f.get('rule') for f in doc.get('findings') or []}
