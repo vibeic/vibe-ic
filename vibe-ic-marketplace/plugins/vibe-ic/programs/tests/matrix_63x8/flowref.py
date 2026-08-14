@@ -67,11 +67,11 @@ OR a sim ``*.log`` OR a ``pass.flag``; a ``drc_clean.flag`` OR a ``.lyrdb``).
 The consumer splits on the literal ``" OR "`` (spaces included) and strips each
 alternative — :func:`split_any_of` reproduces exactly that.
 
-Live entry census — 134<!--figure:required_output_entries--> entries over
+Live entry census — 136<!--figure:required_output_entries--> entries over
 61<!--figure:required_output_steps--> steps, classified by
 :func:`classify_output` (digits derived; see the anchor note in §1):
 
-    FILE          100<!--figure:required_outputs_file-->
+    FILE          102<!--figure:required_outputs_file-->
         plain relative path, no wildcard, no " OR "
     GLOB          12<!--figure:required_outputs_glob-->
         wildcard, no " OR " (e.g. ``phase1/generated_docs/L13_*.json``)
@@ -83,7 +83,7 @@ Live entry census — 134<!--figure:required_output_entries--> entries over
 
 **Contradiction with the brief, reported deliberately**: there is NO
 ``program_exit_zero: "<cmd>"`` form anywhere in ``required_outputs``. All
-134<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
+136<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
 That form exists only inside ``gate`` clauses (§3). :data:`PROGRAM_EXIT` is
 still returned by :func:`classify_output` for forward compatibility, but on the
 current yaml it never fires — a sibling that branches on it is writing dead
