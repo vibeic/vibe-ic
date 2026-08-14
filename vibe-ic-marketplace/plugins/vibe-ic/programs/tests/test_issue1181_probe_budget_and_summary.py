@@ -121,17 +121,71 @@ def _repo_with(tmp_path: Path, body: str) -> Path:
     return repo
 
 
+def _repo_with_driveable(tmp_path: Path, n: int, secs: float = 1.0) -> Path:
+    """`n` gates the probe CAN actually launch.
+
+    NON-VACUITY, and it is the whole reason this helper exists. `_driveable`
+    refuses any argv whose `argv[1]` is not an ABSOLUTE path to an existing
+    file, so `run "slow one" "$ROOT" sleep 5` — the shape these tests used —
+    is refused before anything runs: argv[1] is the literal `5`. MEASURED on
+    this branch, inside pytest:
+
+        probed=0  declared=3  truncated=True   verdict=NOT_CHECKED
+        not_driven[0] = 'the gate names a path relative to its own cwd (5)'
+        not_driven[1] = 'aggregate budget of 0.001s exhausted ...'
+
+    So the budget assertions were satisfied over a population in which NO gate
+    was ever driven, and "the budget stopped a real sweep" was indistinguishable
+    from "nothing here could be launched". A gate named by absolute path to a
+    real script removes that ambiguity.
+    """
+    repo = tmp_path / "repo"
+    (repo / "tools" / "ci").mkdir(parents=True)
+    binp = repo / "bin"
+    binp.mkdir()
+    prog = binp / "slow.py"
+    prog.write_text(f"import time\ntime.sleep({secs})\nprint('ok')\n")
+    (repo / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        "".join(f'run "slow {i}" "$ROOT" python3 "{prog}"\n' for i in range(n)))
+    return repo
+
+
+def _refusals(res):
+    """(budget refusals, everything-else refusals)."""
+    budget = [w for _l, w in res.not_driven if "aggregate budget" in w]
+    other = [w for _l, w in res.not_driven if "aggregate budget" not in w]
+    return budget, other
+
+
 def test_an_exhausted_budget_is_a_NAMED_finding_not_a_quiet_shrink(tmp_path):
     """PAIRED GUARD. If truncation were folded into the ordinary result, the
     audit would report a clean verdict over a SMALLER DENOMINATOR — which is
     the exact defect this program exists to detect in everybody else, committed
     by the program itself.
     """
-    repo = _repo_with(tmp_path,
-                      'run "slow one" "$ROOT" sleep 5\n'
-                      'run "slow two" "$ROOT" sleep 5\n'
-                      'run "slow three" "$ROOT" sleep 5\n')
+    repo = _repo_with_driveable(tmp_path, 3)
     res = G.audit_ci(repo, timeout=30, budget=0.001)
+
+    # NON-VACUITY, and it is asserted on a SEPARATE generous-budget run of the
+    # SAME fixture rather than on this one. Asserting "every refusal cites the
+    # budget" here looks equivalent and is not: with a 0.001s deadline the
+    # budget sometimes expires during setup, so gate 1 is refused by the budget
+    # before it is ever examined for launchability, and the assertion passes
+    # over an un-launchable population anyway. MEASURED — reverting the fixture
+    # to the old `sleep 5` shape left this test GREEN. The control below cannot
+    # race, because 900s never expires.
+    control = G.audit_ci(_repo_with_driveable(tmp_path / "ctl", 3),
+                         timeout=30, budget=900)
+    assert control.probed == control.declared >= 1, (
+        f"this fixture is not launchable at all, so 'the budget stopped the "
+        f"sweep' is indistinguishable from 'nothing here could run': "
+        f"probed={control.probed} declared={control.declared} "
+        f"not_driven={control.not_driven}")
+
+    budget_refusals, _other = _refusals(res)
+    assert budget_refusals, (
+        f"the sweep was cut short and no gate says the budget did it: "
+        f"{res.not_driven}")
 
     assert res.truncated is True, (
         f"the budget stopped the sweep and `truncated` stayed False: {res}")
@@ -146,8 +200,17 @@ def test_an_exhausted_budget_is_a_NAMED_finding_not_a_quiet_shrink(tmp_path):
 def test_a_generous_budget_does_not_fire(tmp_path):
     """FALSE-POSITIVE CONTROL: without it the guard above is satisfied by an
     `always truncate`, and `truncated` would carry no information."""
-    repo = _repo_with(tmp_path, 'run "quick" "$ROOT" true\n')
+    repo = _repo_with_driveable(tmp_path, 2, secs=0.05)
     res = G.audit_ci(repo, timeout=30, budget=900)
+
+    # NON-VACUITY, the other half. `truncated is False` is trivially true of a
+    # sweep that never ran: the old fixture was `run "quick" "$ROOT" true`,
+    # whose argv has no argv[1] at all ("no program to launch"), so probed was
+    # 0. Assert the work STARTED, not merely that nothing complained.
+    assert res.probed >= 1, (
+        f"no gate was driven, so a generous budget 'not firing' says nothing: "
+        f"probed={res.probed} declared={res.declared} "
+        f"not_driven={res.not_driven}")
     assert res.truncated is False, res
     assert not any("aggregate budget" in why for _l, why in res.not_driven), \
         res.not_driven
