@@ -263,3 +263,115 @@ def test_a_narrower_root_still_narrows_the_population(tmp_path):
     one = M._published_run_trees(root / "ic" / "alpha")
     assert len(one) == 1, [str(p) for p in one]
     assert one[0].name == "clean_run_v1_20200101"
+
+import subprocess
+PROG = Path(__file__).resolve().parents[1] / 'step_internal_fail_bubble_up_check.py'
+
+
+
+# ── #1025: a paid debt that stays on the register is slack, not a pass ───────
+
+def _fail_report(root, ic: str, run: str, name: str):
+    d = root / "ic" / ic / run / "reports"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(
+        json.dumps({"program": name, "verdict": "FAIL",
+                    "detail": "unacknowledged"}) + "\n", encoding="utf-8")
+
+
+#: Every inner subprocess bound in this file. MEASURED, not tuned (#1241).
+#:
+#: The harness runs pytest at `--timeout=180` and kills the SESSION, not the
+#: test, so any inner bound above the per-call ceiling of 60s (= 180 // 3, a
+#: figure `ci_harness_timeout_ceiling_check` DERIVES from the workflows rather
+#: than a convention) is a promise the harness will not keep: the session dies
+#: first and takes every other test with it.
+#:
+#: The number comes from a run, not from picking something comfortably small:
+#: the whole 19-test file completes in 1.03s and its slowest test is 0.17s
+#: (`test_the_shipped_register_agrees_with_the_shipped_corpus`, the only one
+#: that sweeps the real corpus). 30s is ~175x the slowest observed call and
+#: still less than the ceiling.
+#:
+#: That corpus test is fast because the sweep walks PUBLISHED RUN TREES, not
+#: all 17216 tracked files under `benchmark-data` — verified real rather than
+#: assumed: 13 run trees, 3 carrying a `reports/` tree, 5 findings, 0.161s. A
+#: sweep that found nothing because it looked at nothing would also be fast.
+_BOUND_S = 30
+
+
+def _sweep(corpus, baseline, *extra):
+    import subprocess
+    prog = Path(__file__).resolve().parents[1] / "step_internal_fail_bubble_up_check.py"
+    return subprocess.run(
+        [sys.executable, str(prog), "--corpus", str(corpus),
+         "--baseline", str(baseline), *extra],
+        capture_output=True, text=True, timeout=_BOUND_S)
+
+
+def test_a_baseline_that_still_claims_a_PAID_debt_fails(tmp_path):
+    """THE PAIRED GUARD for #1025's remaining half.
+
+    The shrink path printed "lower the baseline" and returned 0, and NO test
+    covered it. So nothing ever forced the number down: measured on a38902d1
+    the shipped register claimed 7 while the sweep measured 5, and a regrowth
+    back to 7 would then have read as "no NEW unacknowledged FAIL". Two
+    findings of permission, granted by a suggestion nobody had to act on.
+
+    The same rule `evidence_citation_resolves_check` already enforces one gate
+    over: "the debt was paid and the register must be updated, else the
+    register slowly turns into permission."
+    """
+    root = _corpus_tree(tmp_path / "bd")
+    _fail_report(root, "alpha", "clean_run_v1_20200101", "step_x_check")
+    bl = tmp_path / "bl.json"
+    assert _sweep(root, bl, "--write-baseline").returncode == 0
+    # pay the debt: the FAIL report goes away, the register still claims it
+    (root / "ic" / "alpha" / "clean_run_v1_20200101" / "reports"
+     / "step_x_check.json").unlink()
+    r = _sweep(root, bl)
+    assert r.returncode == 1, r.stdout
+    assert "PAID and still on the register" in r.stdout, r.stdout
+
+
+def test_re_recording_the_register_clears_it(tmp_path):
+    """The inverse. Without it the guard above is satisfied by a gate that
+    fails on every shrink and can never be cleared — a ban, not a check."""
+    root = _corpus_tree(tmp_path / "bd")
+    _fail_report(root, "alpha", "clean_run_v1_20200101", "step_x_check")
+    bl = tmp_path / "bl.json"
+    assert _sweep(root, bl, "--write-baseline").returncode == 0
+    (root / "ic" / "alpha" / "clean_run_v1_20200101" / "reports"
+     / "step_x_check.json").unlink()
+    assert _sweep(root, bl).returncode == 1
+    assert _sweep(root, bl, "--write-baseline").returncode == 0
+    r = _sweep(root, bl)
+    assert r.returncode == 0, r.stdout
+    assert "no NEW unacknowledged step-internal FAIL" in r.stdout, r.stdout
+
+
+def test_growth_is_still_told_apart_from_a_paid_debt(tmp_path):
+    """Shrink now fails too, so this pins that the two remain distinguishable.
+    A gate that said the same thing about both would have made the ratchet
+    directionless — it could no longer tell a regression from progress."""
+    root = _corpus_tree(tmp_path / "bd")
+    _fail_report(root, "alpha", "clean_run_v1_20200101", "step_x_check")
+    bl = tmp_path / "bl.json"
+    assert _sweep(root, bl, "--write-baseline").returncode == 0
+    _fail_report(root, "beta", "clean_run_v2_20200101", "step_y_check")
+    r = _sweep(root, bl)
+    assert r.returncode == 1, r.stdout
+    assert "GREW" in r.stdout, r.stdout
+    assert "PAID and still on the register" not in r.stdout, r.stdout
+
+
+def test_the_shipped_register_agrees_with_the_shipped_corpus():
+    """The register and the tree must agree on THIS commit, not on whichever
+    day somebody last ran it by hand. Without this, #1025 recurs in silence."""
+    import subprocess
+    prog = Path(__file__).resolve().parents[1] / "step_internal_fail_bubble_up_check.py"
+    repo = prog.resolve().parents[4]
+    r = subprocess.run(
+        [sys.executable, str(prog), "--corpus", str(repo / "benchmark-data")],
+        capture_output=True, text=True, timeout=_BOUND_S, cwd=str(repo))
+    assert r.returncode == 0, r.stdout + r.stderr

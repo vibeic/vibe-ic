@@ -7,6 +7,8 @@
   "not_checked": 3,
   "wrote_corpus": 0,
   "deferred": 0,
+  "other_shard": 0,
+  "shard": null,
   "corpora": [
     {
       "name": "published cells carrying a routed DEF",
@@ -16,17 +18,17 @@
     }
   ],
   "undisclosed_loops": [],
-  "seconds": 3750,
+  "seconds": 3966,
   "gates": [
     {
       "label": "chip-AGNOSTIC source guard",
       "state": "PASS",
-      "seconds": 5
+      "seconds": 6
     },
     {
       "label": "shipped-path portability",
       "state": "PASS",
-      "seconds": 9
+      "seconds": 8
     },
     {
       "label": "plugin version stated in prose",
@@ -36,7 +38,7 @@
     {
       "label": "container exec deadlines",
       "state": "PASS",
-      "seconds": 9
+      "seconds": 8
     },
     {
       "label": "container login-banner parses",
@@ -51,27 +53,27 @@
     {
       "label": "severity=ERROR is consumed",
       "state": "PASS",
-      "seconds": 18
+      "seconds": 19
     },
     {
       "label": "watchdog compliance",
       "state": "PASS",
-      "seconds": 8
+      "seconds": 7
     },
     {
       "label": "marketplace version sync",
       "state": "PASS",
-      "seconds": 0
+      "seconds": 1
     },
     {
       "label": "plugin full audit",
       "state": "PASS",
-      "seconds": 99
+      "seconds": 97
     },
     {
       "label": "openroad TCL deprecations",
       "state": "PASS",
-      "seconds": 5
+      "seconds": 6
     },
     {
       "label": "practical notes specificity",
@@ -91,7 +93,7 @@
     {
       "label": "upstream image currency (report-only)",
       "state": "PASS",
-      "seconds": 8
+      "seconds": 2
     },
     {
       "label": "no upstream forked twice",
@@ -101,7 +103,7 @@
     {
       "label": "flow-gate enforcement audit",
       "state": "PASS",
-      "seconds": 15
+      "seconds": 17
     },
     {
       "label": "stage membership declared once",
@@ -116,7 +118,7 @@
     {
       "label": "tracked-symlink portability",
       "state": "PASS",
-      "seconds": 0
+      "seconds": 1
     },
     {
       "label": "tracked-symlink target present",
@@ -156,12 +158,12 @@
     {
       "label": "checker execution wiring",
       "state": "PASS",
-      "seconds": 15
+      "seconds": 22
     },
     {
       "label": "gates are wired to something",
       "state": "PASS",
-      "seconds": 12
+      "seconds": 16
     },
     {
       "label": "prose extractors read polarity",
@@ -171,7 +173,7 @@
     {
       "label": "per-source record merges",
       "state": "PASS",
-      "seconds": 19
+      "seconds": 22
     },
     {
       "label": "declaration scans strip comments",
@@ -205,17 +207,17 @@
     {
       "label": "triage notes state a true reason",
       "state": "PASS",
-      "seconds": 31
+      "seconds": 34
     },
     {
       "label": "NDA scan of the TRACKED tree",
       "state": "PASS",
-      "seconds": 8
+      "seconds": 12
     },
     {
       "label": "PDK registry selectable",
       "state": "PASS",
-      "seconds": 24
+      "seconds": 23
     },
     {
       "label": "PDK via patch vs layer min width",
@@ -225,7 +227,7 @@
     {
       "label": "tracked blob size ceiling",
       "state": "PASS",
-      "seconds": 1
+      "seconds": 0
     },
     {
       "label": "layout-artefact size policy",
@@ -245,12 +247,12 @@
     {
       "label": "artefact-defect close discipline",
       "state": "PASS",
-      "seconds": 7
+      "seconds": 6
     },
     {
       "label": "cross-layer reference regression",
       "state": "PASS",
-      "seconds": 0
+      "seconds": 1
     },
     {
       "label": "step FAIL bubbles up",
@@ -270,7 +272,7 @@
     {
       "label": "L4 -> SystemRDL disposition",
       "state": "PASS",
-      "seconds": 1
+      "seconds": 0
     },
     {
       "label": "published-evidence index honest",
@@ -290,7 +292,7 @@
     {
       "label": "gates disclose their denominator",
       "state": "PASS",
-      "seconds": 185
+      "seconds": 208
     },
     {
       "label": "stated corpus figures are derived, not typed",
@@ -305,22 +307,22 @@
     {
       "label": "gate skips reach the vacuous tier",
       "state": "PASS",
-      "seconds": 6
+      "seconds": 5
     },
     {
       "label": "gates are host-independent",
       "state": "FAIL",
-      "seconds": 2440
+      "seconds": 2556
     },
     {
       "label": "no gate is left neutered",
       "state": "PASS",
-      "seconds": 1
+      "seconds": 0
     },
     {
       "label": "argparse help format",
       "state": "PASS",
-      "seconds": 11
+      "seconds": 8
     },
     {
       "label": "dead plugin path",
@@ -345,7 +347,7 @@
     {
       "label": "waveform artifact hygiene",
       "state": "PASS",
-      "seconds": 1
+      "seconds": 0
     },
     {
       "label": "gitignore scratch guard",
@@ -355,17 +357,17 @@
     {
       "label": "silent remedy decline",
       "state": "PASS",
-      "seconds": 22
+      "seconds": 13
     },
     {
       "label": "final-summary roll-up consistency",
       "state": "PASS",
-      "seconds": 1
+      "seconds": 0
     },
     {
       "label": "published records not superseded",
       "state": "PASS",
-      "seconds": 3
+      "seconds": 2
     },
     {
       "label": "input-doc claims vs installed PDK",
@@ -390,12 +392,12 @@
     {
       "label": "63x8 census freshness",
       "state": "PASS",
-      "seconds": 181
+      "seconds": 148
     },
     {
       "label": "an argued direction is pinned",
       "state": "PASS",
-      "seconds": 534
+      "seconds": 646
     }
   ]
 }

@@ -578,8 +578,15 @@ _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
 #: external is still external and still unevidenced from the commit; this
 #: records that step 29 is no longer evidenced ONLY from outside, which is a
 #: strictly weaker and strictly true statement.
+#: 2026-08-12: M2, M3 and M4 LEFT this set, and the set only ever SHRINKS
+#: honestly — "Newly external: []". They were here because the manifest
+#: recorded their entries `PRODUCED_BY_RUN` against an out-of-repo tree; they
+#: are now `NA_DORMANT_CONDITION`, which carries no run reference at all, so
+#: there is no external tree left to be attested from. See the note on
+#: :data:`UNEVIDENCED_CELLS` for why dormancy is the true reading and why for
+#: M4 the external attribution was additionally wrong in its own terms.
 EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
-    "17", "20", "30", "M2", "M3", "M4",
+    "17", "20", "30",
 )
 
 #: How many of the declared entries are decided LIVE on every host. An
@@ -619,7 +626,40 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-12: 120 -> 126, and the direction is the one this constant exists to
+# protect. M2/M3/M4's six entries stopped being FIXTURE and became LIVE — not
+# because new evidence arrived, but because the fixture attestation was
+# WITHDRAWN: their records are now `NA_DORMANT_CONDITION` with status UNPROVEN,
+# which the UNPROVEN branch decides by SEARCHING every admissible root. The
+# search comes back empty on every host, and there is no longer any recorded
+# run reference for a fallback to consult, so the count is host-independent by
+# construction in the way #527 requires — more strongly than before, since the
+# fixture branch was precisely the host-dependent one.
+#
+# Read the increase as "six fewer entries decided by a committed JSON", never
+# as "six more artefacts found". Composition, re-measured: 96 PRODUCED_BY_RUN +
+# 6 PRODUCED_LIVE + 24 UNPROVEN-and-searched = 126 live, 8 fixture, 134
+# declared.
+# 2026-08-12 (same change): 126 -> 127. M1 moved WAIVED -> NA, so its
+# `merge.json` stopped being FIXTURE and became UNPROVEN-and-searched. Its
+# other entry, `top_merged.gds`, was already searched live. Same reading as
+# the 120 -> 126 move above: one fewer entry decided by a committed JSON, not
+# one more artefact found.
+# 2026-08-12 (same change): 127 -> 128. D1 declared
+# `phase1/generated_docs/L21_POWER_INTENT.json`, which dimension 7 was
+# reporting as produced-by-the-flow / read-by-a-gate / declared-by-nobody and
+# charging to M2 (the CONSUMER) for want of a producer to charge. The entry
+# resolves in an admissible run root (caravel_user_project, 531 B) and is
+# recorded PRODUCED_BY_RUN, so it is decided LIVE like the other 127 and adds
+# no fixture attestation. Declaring an artefact d3 could NOT evidence would
+# have moved the finding from d7 to d3 rather than closing it -- which is what
+# the first attempt did, and is why the manifest record is measured by asking
+# `resolve_anywhere`, never typed.
+# 2026-08-12 (same change): 128 -> 129. Step 11's
+# `phase2/stage2/dft/coverage.yml`, declared for the same d7 W2 reason as L21
+# above and recorded PRODUCED_BY_RUN at spm/v1.9.96_gf180mcuD (28797 B). It is
+# decided LIVE like the other 128 and adds no fixture attestation.
+_LIVE_ENTRY_COUNT = 129
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -2080,10 +2120,10 @@ def test_d3_cell_states_partition_all_63_steps():
         f"waived cells {sorted(F.normalize_id(s) for s in waived)} do not match "
         f"the registered waivers {sorted(declared)}"
     )
-    assert (len(enforced), len(waived), len(na)) == (53, 3, 7), (
+    assert (len(enforced), len(waived), len(na)) == (50, 2, 11), (
         f"the ENFORCED/WAIVED/NA split changed to "
         f"({len(enforced)}, {len(waived)}, {len(na)}); it was measured as "
-        f"(53, 3, 7) on 2026-08-06. A step moving between states is a real "
+        f"(50, 2, 11) on 2026-08-12. A step moving between states is a real "
         f"change in what dimension {DIM} enforces and must be re-reviewed, not "
         f"absorbed.\n"
         f"2026-07-28: a convergence pass proposed (53, 1, 9) — A8 ENFORCED on "
@@ -2102,6 +2142,22 @@ def test_d3_cell_states_partition_all_63_steps():
         f"read a committed artefact, so the cell is host-independent in the "
         f"direction #527 requires. Steps 6/39 and M1 are unchanged and still "
         f"waived."
+        "\n2026-08-12: (53, 3, 7) -> (50, 3, 10). M2, M3 and M4 moved "
+        "ENFORCED -> NA together, on one cause: all four mixed-signal steps "
+        "share the condition `phase1/analog/analog_block_list.json`, which "
+        "occurs ZERO times in `git ls-tree -r HEAD` over the whole "
+        "repository. They have never run here, so there is no run to "
+        "publish and `UNEVIDENCED` was the wrong reading. M1 keeps its "
+        "waiver (a different entry) and stays in the waived count."
+        "\n2026-08-12 (same change): (50, 3, 10) -> (50, 2, 11). M1 joined "
+        "them, from WAIVED to NA. Its dimension-3 waiver said 'no admissible "
+        "run root is a mixed-signal project, so the producer returns its "
+        "documented rc=2 inputs-missing skip everywhere it can run' — which is "
+        "dormancy described one artefact at a time, and it covered only ONE of "
+        "M1's two entries, which is why "
+        "test_d3_waived_steps_still_produce_their_unwaived_entries was red on "
+        "merge.json. A per-entry waiver cannot express 'this step never ran'. "
+        "M1's dimension-7 waiver is untouched."
     )
 
 
@@ -2987,7 +3043,39 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # a published run tree closes those, and publishing one costs >1 GB of DEFs
     # against a 2.0 GB .git -- which is why they stay RED here rather than
     # becoming waivers. A red cell cannot rot; a waiver can, and did.
-    "15", "17", "19", "20", "30", "32", "M1", "M2", "M3", "M4",
+    #
+    # 2026-08-12: "M2", "M3" and "M4" LEFT this set, and NOT by being
+    # published. "Publish the run tree" was the wrong prescription for them:
+    # all four mixed-signal steps carry the SAME step-level condition,
+    #
+    #     condition: {files_exist: ["phase1/analog/analog_block_list.json"]}
+    #
+    # and that path occurs ZERO times in this repository -- not merely absent
+    # from the admissible run roots, absent from `git ls-tree -r HEAD` over the
+    # whole tree. No project here has ever met the condition, so M2-M4 have
+    # never RUN here, so there is no run to publish. They are DORMANT, which
+    # this module already has a verdict for and already uses for steps 40-44
+    # (dormant on `phase3/stage5_manufacturing/silicon_received.json`).
+    #
+    # What made them look unevidenced was the manifest recording their entries
+    # `PRODUCED_BY_RUN` against `AI_IC_design/4th_benchmark/U_Hawaii_EE628_
+    # DeltaSigma_ADC_e2e`, an out-of-repo tree. For M4 that attribution was
+    # additionally WRONG in its own terms: the entry it recorded produced,
+    # `reports/analog/mixed_signal/signoff.json`, is M4's INPUT --
+    # `mixed_signal_signoff_check`'s own docstring line 8 calls it "M4's input"
+    # and the gate FAILs when it is missing -- and no program in this
+    # repository writes it. The run's own write ledger agrees, independently:
+    # `benchmark-data/ic/spm/v1.10.18_sky130A/steps/mixed/stage_mixed_signal/
+    # M4_.../written.json` records `n_produced: 0` and a
+    # `declared_output_not_produced` finding against that exact spec.
+    #
+    # The NA is not a softening. `matrix_na_precondition` re-derives it live and
+    # it falsifies itself in BOTH directions: publish any tree carrying the
+    # condition file and the cell reddens, or let any declared output appear
+    # anywhere and the NA branch's own probe reddens.
+    # 2026-08-12: "M1" left with M2-M4 and for the same reason — it is dormant,
+    # not unpublished. It was the last mixed-signal cell here.
+    "15", "17", "19", "20", "30", "32",
 )
 
 
@@ -3045,12 +3133,20 @@ def test_d3_unevidenced_cells_are_named_cell_by_cell():
     # waiver added to silence one of these would be caught here rather than
     # disappearing behind a strict xfail.
     waived = sorted(s for s in UNEVIDENCED_CELLS if waiver_for(s) is not None)
-    assert waived == ["M1"], (
-        f"these unevidenced cells acquired a waiver: {waived}. M1 is the one "
-        f"pre-existing waiver in this set and it covers a DIFFERENT entry "
-        f"(``top_merged.gds``); its ``merge.json`` is unevidenced and unwaived. "
-        f"Every other cell here is closed by publishing a run tree, so a "
-        f"waiver would be a standing excuse for a one-commit fix."
+    assert waived == [], (
+        f"these unevidenced cells acquired a waiver: {waived}. Every cell left "
+        f"in this set is closed by publishing a run tree, so a waiver here "
+        f"would be a standing excuse for a one-commit fix.\n"
+        f"2026-08-12: this used to read ``== ['M1']``. M1 was the ONE waiver in "
+        f"this set, and it is gone in the direction that makes the set "
+        f"stronger, not weaker: M1 left UNEVIDENCED_CELLS entirely because it "
+        f"is DORMANT (its condition `phase1/analog/analog_block_list.json` "
+        f"occurs zero times in the repository), and its dimension-3 waiver "
+        f"went with it. The waiver covered only ``top_merged.gds`` while "
+        f"``merge.json`` was unevidenced and unwaived — which is exactly what "
+        f"test_d3_waived_steps_still_produce_their_unwaived_entries was red on. "
+        f"The set now holds no waived cell at all, which is the invariant this "
+        f"assertion was always reaching for."
     )
 
 
@@ -3760,10 +3856,32 @@ def test_d3_the_ledger_binding_is_exercised_by_the_repos_own_evidence():
       Asserted directly — the unbound answer for every entry must match the
       one the real root gives.
 
-    MEASURED 2026-08-06: 8 roots x 133 entries = 1064 bound resolutions, 1064
-    answered by the ledger, 0 differences. A difference is not a bug in this
-    test — it is the ledger and the glob disagreeing about one artefact, which
-    is the finding.
+    RE-MEASURED 2026-08-13: 10 roots x 134 entries = 1340 bound resolutions,
+    1340 answered by the ledger, 0 differences. A difference is not a bug in
+    this test — it is the ledger and the glob disagreeing about one artefact,
+    which is the finding.
+
+    WAS `2026-08-06: 8 roots x 133 entries = 1064`. The shape of the result did
+    not move — every bound resolution is still answered and nothing differs —
+    but the population did, and a recorded number that describes a tree the
+    repository no longer has is the defect this file elsewhere calls out (see
+    the `RECORD_BOUND_ROOTS` note in the d7 module: "re-measure them, then move
+    the pin"). Nothing asserts these three numbers, which is exactly why they
+    were free to rot: the only thing that would have caught them is somebody
+    re-deriving them, so that is what this is.
+
+    WHAT THE POPULATION LOOKS LIKE NOW, so the next reader has the list rather
+    than the count: the corpus publishes run trees in TWO shapes and
+    `run_roots()` admits both, so three ICs each contribute a pair —
+    `ic/sha256` and `ic/sha256/clean_run_v1427_20260715`, `ic/caravel_user_project`
+    and `.../v1.9.43_sky130A`, `ic/u_hawaii_adc` and `.../v1.9.86_sky130A` —
+    alongside four singletons: `evaluation/phase1_parity/espi`,
+    `ic/spm/v1.5.58_ihp-sg13g2`, `ic/spm/v1.9.96_gf180mcuD`, `ic/subservient`.
+
+    Deliberately NOT claiming which additions account for the +2: the 2026-08-06
+    list was not written down, only its count, so any decomposition would be
+    reconstruction rather than measurement. The list is recorded here precisely
+    so the next move can be attributed instead of guessed at.
     """
     roots = run_roots()
     assert roots, (
@@ -3950,3 +4068,129 @@ def matrix_cell_state(step_id) -> str:
     if waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# A COMMITTED LEDGER MUST BE A LIVE CAPTURE (vibe-ic#1475, from #1188)
+# ══════════════════════════════════════════════════════════════════════
+#: What a ledger walked over a git checkout looks like from the outside. The
+#: emitter itself sets these — it does not pretend to know write times it
+#: cannot know — so the detection is reading its own disclosure, not guessing.
+_BLIND_LEDGER_FIELDS = ("mtime_fidelity.flattened is true",
+                        "run_window.known is false")
+
+
+def _committed_write_ledgers():
+    """``(label, path, doc)`` for every write ledger THIS COMMIT carries."""
+    out = []
+    for label, rr in sorted(run_roots().items()):
+        p = rr.path / LEDGER_REL
+        if not p.is_file():
+            continue
+        try:
+            out.append((label, p, json.loads(p.read_text(encoding="utf-8"))))
+        except (OSError, ValueError) as exc:
+            # Unreadable is NOT "not blind". It is unmeasured, and it is named.
+            out.append((label, p, {"__unreadable__": str(exc)}))
+    return out
+
+
+def _blind_capture_reason(label: str, doc) -> str:
+    """Why *doc* is a checkout walk rather than a run capture. ``""`` if it is
+    a live capture; a sentence naming the fields if it is not.
+
+    Kept pure so the control below can drive it both directions without
+    planting anything in the corpus — a guard whose only falsification is a
+    manual experiment is a guard nobody re-runs.
+    """
+    if not isinstance(doc, dict):
+        return f"{label}: the ledger is {type(doc).__name__}, not an object"
+    if "__unreadable__" in doc:
+        return (f"{label}: the ledger could not be read "
+                f"({doc['__unreadable__']}) — UNMEASURED, which is not a pass")
+    fid = doc.get("mtime_fidelity") or {}
+    win = doc.get("run_window") or {}
+    if fid.get("flattened") is not True and win.get("known") is not False:
+        return ""
+    return (f"{label}: mtime_fidelity.flattened={fid.get('flattened')!r}, "
+            f"run_window.known={win.get('known')!r}, in_run_window="
+            f"{(doc.get('counts') or {}).get('in_run_window')!r} — this ledger "
+            f"was walked over a COPY, not captured during a run, so it "
+            f"attributes no write to any step. Restore the live capture; a "
+            f"ledger emitted from a checkout is strictly LESS evidence than "
+            f"none, because this dimension trusts it")
+
+
+def test_d3_no_committed_ledger_was_captured_from_a_checkout():
+    """A ledger walked over a git checkout attributes nothing — refuse it.
+
+    THE TRAP THIS CLOSES (vibe-ic#1475). When a committed ledger records a spec
+    as never written and the same commit carries the artefact,
+    :func:`ledger_staleness` reports it — and its remediation text used to read
+    "re-emit the ledger over the tree as it now is". Following that advice is
+    destructive, and it was followed three times before it was withdrawn.
+    ``step_write_ledger.py`` run against a git checkout of a published cell
+    returns
+
+        mtime_fidelity.flattened   true      (distinct_mtimes 1, share 1.0)
+        run_window.known           false     (t0_source withheld_flattened_mtimes)
+        counts.in_run_window       0
+
+    because git does not preserve mtimes, so the emitter correctly WITHHOLDS
+    every time-derived conclusion. The resulting record is not a fresher
+    account of the same run — it is a BLIND one, and committing it would
+    replace a real capture with one that can attribute no write to any step.
+
+    The message is now pinned by
+    ``test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver``.
+    This is the other half, and it is the half that BLOCKS: a message can be
+    ignored, so the assertion is on the ARTEFACTS this commit carries. It fires
+    the moment one is replaced by a checkout walk — exactly when a reviewer
+    needs telling, because that diff reads as a routine ledger refresh.
+
+    ``test_d3_the_blind_capture_predicate_fires_on_a_checkout_walk`` is the
+    bidirectional control, so this one's green is falsifiable without anyone
+    having to plant a file in the published corpus.
+    """
+    roots = run_roots()
+    assert roots, ("no run roots enumerated at all — this guard measured "
+                   "NOTHING, which is not the same as finding nothing")
+
+    ledgers = _committed_write_ledgers()
+    if not ledgers:
+        pytest.skip(f"none of the {len(roots)} enumerated run root(s) carries "
+                    f"{LEDGER_REL} — a real zero, not a failed look")
+
+    blind = [r for r in (_blind_capture_reason(lbl, doc)
+                         for lbl, _p, doc in ledgers) if r]
+    assert not blind, (
+        f"{len(blind)} of {len(ledgers)} committed write ledger(s) were "
+        f"captured from a checkout rather than during a run:\n  "
+        + "\n  ".join(blind))
+
+
+def test_d3_the_blind_capture_predicate_fires_on_a_checkout_walk():
+    """The control. A guard that cannot go red is a comment with a colour.
+
+    Both fields the emitter uses to disclose a checkout walk are driven
+    independently, because either one alone is enough to make the record blind
+    and a predicate that needed BOTH would pass on half the real cases.
+    """
+    live = {"mtime_fidelity": {"flattened": False, "distinct_mtimes": 77},
+            "run_window": {"known": True, "t0_source": "orchestrator_summary"},
+            "counts": {"in_run_window": 489}}
+    assert _blind_capture_reason("live", live) == "", \
+        "a real capture was called blind — this guard would block every landing"
+
+    flattened = json.loads(json.dumps(live))
+    flattened["mtime_fidelity"]["flattened"] = True
+    assert "flattened=True" in _blind_capture_reason("f", flattened)
+
+    withheld = json.loads(json.dumps(live))
+    withheld["run_window"]["known"] = False
+    assert "known=False" in _blind_capture_reason("w", withheld)
+
+    # UNMEASURED is not a pass: an unreadable record must be named, never
+    # quietly treated as a live capture.
+    assert _blind_capture_reason("u", {"__unreadable__": "boom"})
+    assert _blind_capture_reason("n", None)

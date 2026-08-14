@@ -54,6 +54,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 from typing import Dict, List, Tuple
 
 from _atomic_artefact import write_json  # vibe-ic#1082 (helper from PR #1094)

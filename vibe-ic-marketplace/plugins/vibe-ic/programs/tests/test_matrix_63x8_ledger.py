@@ -14,7 +14,7 @@ proves three things, and deliberately nothing else:
 
   2. The `flowref` accessors agree with the yaml about which steps declare
      what — including the two places where the circulating numbers are subtly
-     wrong (see `test_blocks_on_presence_is_62_but_non_empty_is_60`).
+     wrong (see `test_blocks_on_presence_is_not_the_same_set_as_non_empty`).
 
   3. The waiver registry cannot carry a placeholder. Every waiver needs a
      reason AND evidence, both non-empty and both substantive.
@@ -37,6 +37,7 @@ suite*, so the proof does not rot.
 """
 from __future__ import annotations
 
+import importlib
 import os
 from collections import Counter
 
@@ -65,8 +66,18 @@ CENSUS_GATE_PRESENT = 62
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
-CENSUS_BLOCKS_ON_PRESENT = 62
-CENSUS_BLOCKS_ON_NON_EMPTY = 60
+# 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
+# P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
+# P0 already declared `required_inputs: [{from: 1, ...}]`, so the ordering edge
+# its own inputs had always implied was missing, and without it a FAILED Phase 1
+# could not red the pre-flight. The tripwire fired on a LEGITIMATE flow change
+# and then stayed red on main instead of being moved, which is how a tripwire
+# stops being read. Both counts move by exactly one, and it is the same step.
+# `332b9985` also edited `flow_dependency_graph_check.py` and its test in the
+# SAME commit, which is why the roots are read out of that program below rather
+# than re-typed here: the two copies moved together once and can drift apart.
+CENSUS_BLOCKS_ON_PRESENT = 63
+CENSUS_BLOCKS_ON_NON_EMPTY = 61
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -276,21 +287,56 @@ def test_gate_presence_matches_the_yaml(raw_steps):
             assert F.gate_programs(sid) == ()
 
 
-def test_blocks_on_presence_is_62_but_non_empty_is_60(raw_steps):
+def test_blocks_on_presence_is_not_the_same_set_as_non_empty(raw_steps):
     """The two are NOT the same set, and conflating them is a real error.
 
-    `blocks_on` is DECLARED on 62 steps but declared EMPTY on D1 and A1 — the
-    flow's two genuine roots. "62 steps have blocks_on" is a presence count; a
-    test that reads it as "62 steps have upstream dependencies" would demand an
-    edge from a root and be wrong twice over.
+    `blocks_on` is DECLARED on every step and declared EMPTY on the flow's
+    genuine roots. "N steps have blocks_on" is a presence count; a test that
+    reads it as "N steps have upstream dependencies" would demand an edge from
+    a root and be wrong twice over.
+
+    The counts are TRIPWIRES (see the module header). WHICH steps are roots is
+    not — it is a fact `flow_dependency_graph_check` already owns, so it is
+    read out of that program rather than re-typed here.
+
+    Presence is additionally asserted as a SET, so a step added later without
+    `blocks_on` fails by NAME rather than as an arithmetic mismatch the reader
+    has to resolve against the yaml.
     """
     present = {F.normalize_id(s["id"]) for s in raw_steps if "blocks_on" in s}
     non_empty = {
         F.normalize_id(s["id"]) for s in raw_steps if s.get("blocks_on")
     }
+    # Presence is TOTAL as of `332b9985`, which is stronger than the count and
+    # is asserted FIRST because it is the assertion that can name what changed.
+    # A bare `62 == 63` sends the reader back to the yaml to work out which step
+    # moved; that lookup is the work this message exists to save. (from #1264)
+    all_ids = {F.normalize_id(s["id"]) for s in raw_steps}
+    assert present == all_ids, (
+        f"every step must declare `blocks_on`, even as an empty list — "
+        f"missing on {sorted(all_ids - present)}")
     assert len(present) == CENSUS_BLOCKS_ON_PRESENT
     assert len(non_empty) == CENSUS_BLOCKS_ON_NON_EMPTY
-    assert present - non_empty == {"D1", "A1"}
+
+    # ANTI-VACUITY. If these two sets ever coincide, the distinction this test
+    # exists to defend is gone and the assertion below would hold trivially.
+    assert present, "no step declares blocks_on — nothing here means anything"
+    roots = present - non_empty
+    assert roots, (
+        "presence and non-empty are the SAME set, so this test no longer "
+        "demonstrates that conflating them is an error — re-derive the flow's "
+        "roots before editing this assertion away")
+
+    # The roots are NOT re-typed here. `flow_dependency_graph_check` owns that
+    # register and fails when the yaml and the register disagree; a hand-typed
+    # copy in this file would be a second source that can drift from both.
+    # It already drifted once: vibe-ic#923 removed P0 from the root set and the
+    # hand-typed copies in test_flow_dependency_graph_check went stale in the
+    # same commit, which is why that file reads it out of the program too
+    # (see its line 25). This also means a landing that gives A1 an ordering
+    # edge moves BOTH sides together instead of reddening this cell.
+    assert roots == set(
+        importlib.import_module("flow_dependency_graph_check").DECLARED_ROOTS)
 
     assert {
         F.normalize_id(sid) for sid in F.step_ids() if F.declares_blocks_on(sid)
@@ -437,8 +483,29 @@ def test_output_entries_classify_into_the_four_kinds():
     # VACUOUS_PASS with both reports written becomes MISSING with none.
     # test_flow_declaration_does_not_silence_its_producer.py holds that
     # distinction live for both steps.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    # 2026-08-12: 134 -> 135, FILE 100 -> 101 (vibe-ic#1241-adjacent, d7 W2).
+    # The ONE new entry is D1's `phase1/generated_docs/L21_POWER_INTENT.json`.
+    # Dimension 7 was reporting it produced-by-the-flow / read-by-a-gate /
+    # declared-by-nobody and charging the finding to stepM2 — the CONSUMER —
+    # because there was no declared producer to charge it to. D1 is the
+    # producer: this flow's own name for it is "Phase 1 Doc Extraction (17
+    # skills + dialogue entry -> L1-L27)" and it declared L1-L13 only.
+    #
+    # It is a plain FILE, so GLOB (12) and ANY_OF (22) are untouched, which is
+    # what the per-kind assertions below re-check independently of this total.
+    #
+    # Recorded in the dimension-3 manifest with the run root, path and byte
+    # size it was MEASURED at (benchmark-data/ic/caravel_user_project, 531 B) —
+    #
+    # 2026-08-12 (same change): 135 -> 136, FILE 101 -> 102. Step 11's
+    # `phase2/stage2/dft/coverage.yml`, the same d7 W2 shape: written by
+    # dft_atpg_coverage_check / fault_atpg_run, read by step 11's own gate,
+    # declared by nobody. Present in 2 of the 2 roots where step 11 actually
+    # ran, and resolves at spm/v1.9.96_gf180mcuD (28797 B).
+    # declaring an artefact d3 cannot then evidence would move the finding from
+    # d7 to d3 rather than close it.
+    assert sum(seen.values()) == 136, seen
+    assert seen[F.FILE] == 102
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
@@ -607,7 +674,7 @@ def test_waiver_validator_actually_rejects_a_placeholder():
             "run of the other branch into MISSING."
         ),
         evidence=(
-            "programs/mixed_signal_top_lvs_run.py:917 — "
+            "programs/mixed_signal_top_lvs_run.py:919 — "
             "(rpt_dir / 'top_lvs.json').write_text(...)"
         ),
     )
@@ -615,7 +682,7 @@ def test_waiver_validator_actually_rejects_a_placeholder():
     # ...and the docstring says the same thing. Pinned, because the example a
     # reader copies is the one that decides how the next waiver is written, and
     # the old one pointed at `programs/rtl_dispatch.py`, which does not exist.
-    assert "programs/mixed_signal_top_lvs_run.py:917" in (W.__doc__ or ""), (
+    assert "programs/mixed_signal_top_lvs_run.py:919" in (W.__doc__ or ""), (
         "the waivers module docstring no longer carries the GOOD example this "
         "probe validates; if the cited line moved, update BOTH"
     )
@@ -931,3 +998,102 @@ def test_accessors_track_a_removed_field(tmp_path):
 
     assert F.required_outputs(victim)
     assert F.declares_required_outputs(victim)
+
+
+# ===========================================================================
+# CONTENT CITATIONS (vibe-ic#1289)
+#
+# `path:LINE` rots on every edit ABOVE the line it names, and it rots the bad
+# way: it still resolves to a line, so it still READS as evidence while
+# pointing at unrelated code. Measured on `a38902d1`,
+# `flow_compliance_check.py:2439-2441` had come to read `return result` and
+# `phase3_one_shot_runner.py:30288` an EMPTY LINE.
+#
+# The form this replaces it with is only an improvement if a DELETED construct
+# still fails — an anchor loose enough to always match is a waiver that can
+# never be re-examined, which is worse than drift because drift at least fails
+# loudly. Both halves are asserted below.
+# ===========================================================================
+def _waiver_citing(evidence: str):
+    """A throwaway waiver carrying one evidence string, nothing else."""
+    return W.Waiver(step_id="1", dim=2, reason="probe", evidence=evidence)
+
+
+def test_a_content_citation_that_resolves_once_is_clean():
+    """`passed = len(found) > 0` occurs exactly once in the cited file."""
+    problems = W.content_citation_problems(_waiver_citing(
+        "programs/flow_compliance_check.py::`passed = len(found) > 0`"))
+    assert problems == (), problems
+
+
+def test_PAIRED_a_DELETED_construct_still_fails():
+    """THE GUARD the whole form rests on.
+
+    If this ever passes, the citation has stopped being evidence: it would
+    mean an anchor naming nothing is accepted, which is exactly the "can never
+    be re-examined" failure that would make this worse than a line number.
+    """
+    problems = W.content_citation_problems(_waiver_citing(
+        "programs/flow_compliance_check.py::"
+        "`passed = len(this_construct_was_deleted) > 0`"))
+    assert len(problems) == 1, problems
+    assert "resolves to NOTHING" in problems[0], problems[0]
+    assert "re-examined" in problems[0], problems[0]
+
+
+def test_an_AMBIGUOUS_anchor_is_refused_and_says_how_many():
+    """MEASURED: `len(corners) < 2` occurs 3 times in that file.
+
+    An anchor matching in several places cannot show WHICH construct the
+    waiver rests on, so accepting it would let a vague gesture stand in for
+    evidence.
+    """
+    problems = W.content_citation_problems(_waiver_citing(
+        "programs/phase3_one_shot_runner.py::`len(corners) < 2`"))
+    assert len(problems) == 1, problems
+    assert "AMBIGUOUS" in problems[0], problems[0]
+
+
+def test_the_tighter_anchor_for_that_same_construct_IS_accepted():
+    """The other half of the pair: the rule is satisfiable, not merely strict.
+
+    Without this, "refuse ambiguous anchors" could be met by refusing
+    everything, and the form would be unusable rather than disciplined.
+    """
+    problems = W.content_citation_problems(_waiver_citing(
+        'programs/phase3_one_shot_runner.py::'
+        '`stance_path = rpt_phase3 / "single_corner_stance.json"`'))
+    assert problems == (), problems
+
+
+def test_a_pytest_node_id_is_not_read_as_a_content_citation():
+    """`tests/test_x.py::test_name` carries no quote, and several already
+    appear in this registry. Promoting one into an evidence claim would
+    invent a claim the waiver never made."""
+    problems = W.content_citation_problems(_waiver_citing(
+        "re-executed by programs/tests/test_matrix_d2_falsifiable.py"
+        "::test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file"))
+    assert problems == (), problems
+
+
+def test_the_registry_itself_has_no_broken_content_citation():
+    """The live registry, not a fixture — the converted entries must resolve."""
+    bad = {}
+    for w in W.WAIVERS:
+        problems = W.content_citation_problems(w)
+        if problems:
+            bad[f"{w.step_id}/d{w.dim}"] = problems
+    assert not bad, bad
+
+
+def test_the_content_form_is_ACTUALLY_USED_by_the_registry():
+    """NON-VACUITY. A grammar nothing writes is a grammar nothing checks.
+
+    Counts entries carrying the form, so the four tests above cannot be
+    passing over an empty population.
+    """
+    used = [f"{w.step_id}/d{w.dim}" for w in W.WAIVERS
+            if any(True for _ in W._iter_content_citations(
+                f"{w.reason or ''}\n{w.evidence or ''}"))]
+    assert len(used) >= 2, (
+        f"only {len(used)} waiver(s) use the content form: {used}")

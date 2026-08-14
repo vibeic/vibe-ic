@@ -703,15 +703,35 @@ def test_lock2_the_mutation_really_reddens_its_witness(name):
       * the mutated run FAILS (the mutation actually moved the predicate);
       * the failure text contains the entry's declared ``red_signal`` (it failed
         for the recorded reason, not because an import blew up).
+
+    The FIRST of those three is a PRECONDITION of the assertion, not part of
+    what the assertion concludes (#1432). A pair whose gate was red before the
+    edit is UNMEASURABLE: it did not show the gate lost its teeth, it showed the
+    gate cannot be measured on that step right now, and reporting it as "the
+    recorded proof no longer holds" sends an author hunting a regression that
+    does not exist. Those pairs are excluded HERE and counted, disclosed and
+    ceilinged in ``test_the_replay_actually_ran_and_is_not_starved`` below.
+
+    This is not a way for an entry to stop proving anything: every entry must
+    still produce AT LEAST ONE genuinely proved pair, so an entry whose every
+    step went unmeasurable still fails here rather than passing on an empty set.
     """
     results = {(r.mutation, r.step_id): r for r in replay_results()}
     mine = [r for (n, _), r in results.items() if n == name]
     assert mine, f"{name} produced no replay result"
     for r in mine:
+        if r.unmeasurable:
+            continue
         assert r.proved, (
             f"{name} @ step {r.step_id}: {r.verdict}.\n"
             f"The ledger says this edit reddens the cell; re-running it says "
             f"otherwise, so the recorded proof no longer holds.\n{r.detail}")
+    assert any(r.proved for r in mine), (
+        f"{name} produced {len(mine)} replay result(s) and NOT ONE of them "
+        f"proved anything — every pair was unmeasurable "
+        f"({[(r.step_id, r.baseline_rc) for r in mine]}). An entry that "
+        f"demonstrates nothing is not covered by this lock, however honest the "
+        f"reason; fix the reds under it or the entry is carrying no proof.")
 
 
 def test_the_replay_actually_ran_and_is_not_starved(record_property):
@@ -734,9 +754,10 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
         "the replay plan contains duplicate pairs, so the count overstates "
         "what was actually re-executed")
     proved = sum(1 for r in results if r.proved)
+    unmeasurable = [r for r in results if r.unmeasurable]
     record_property("matrix_mutation_replay",
                     f"mode={L.replay_mode()} pairs={len(results)} "
-                    f"proved={proved} "
+                    f"proved={proved} unmeasurable={len(unmeasurable)} "
                     f"seconds={sum(r.seconds for r in results):.1f}")
     # `as_recorded`, not `proved`. For every FLOW_YAML and PLUGIN_TREE entry the
     # two are IDENTICAL — those channels record `REDDENED` and nothing else, and
@@ -745,15 +766,182 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
     # published finding is that the gate does not move; scoring those as
     # unproved would make the honest thing to do with a measured gap be to
     # delete the record of it.
-    assert all(r.as_recorded for r in results), [
+    #
+    # UNMEASURABLE pairs are excluded from THIS assertion and bounded by their
+    # own one below (#1432) — a gate that was red before the edit has not shown
+    # it stopped catching. They are excluded, never skipped: the count is
+    # recorded as a property above and ceilinged below.
+    failures = [r for r in results if not r.as_recorded and not r.unmeasurable]
+    assert not failures, [
         f"{r.mutation}@{r.step_id}: expected {r.expected}, got {r.verdict}"
-        for r in results if not r.as_recorded]
+        for r in failures]
+    # THE UNMEASURABLE RATCHET. Without this the ledger acquires exactly the
+    # blind spot it exists to prevent: a gate that stops catching AND whose
+    # witness happens to be red would be invisible in both assertions.
+    ceiling = L.UNMEASURABLE_CEILING[L.replay_mode()]
+    assert len(unmeasurable) <= ceiling, (
+        f"{len(unmeasurable)} of {len(results)} pair(s) could not be measured "
+        f"in mode {L.replay_mode()!r}, over the ceiling of {ceiling}. Each was "
+        f"RED BEFORE its mutation was applied, so the ledger is measuring less "
+        f"of itself than it believes. Fix the reds — do NOT raise the ceiling "
+        f"to match, and do NOT re-record the entries.\n"
+        + "\n".join(f"  {r.mutation} @ step {r.step_id}: "
+                    f"baseline_rc={r.baseline_rc}" for r in unmeasurable))
     # Every dimension must be represented, or a whole dimension's entries could
     # be un-replayed while the count still looked healthy.
     dims = {r.dim for r in results}
     assert dims == set(range(1, 9)), (
         f"replay touched dimensions {sorted(dims)}; a dimension with no "
         f"re-executed witness has only structural locks on it")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# #1432 — "the witness was already red" is not "the mutation failed"
+# ══════════════════════════════════════════════════════════════════════
+# These guards are built from ReplayResult values rather than from real
+# replays ON PURPOSE. The property under test is the SCORING of a measured
+# outcome, and the audit-grade `all` mode that surfaces these pairs costs
+# minutes per parametrisation. A real already-red replay IS measured, in
+# ~2s, by test_matrix_artefact_mutation_channel.py's
+# `test_control_the_baseline_must_pass_or_the_entry_is_already_red`, which
+# pins `verdict == "ALREADY_RED"`; these guards pin what the three consumers
+# then DO with that verdict.
+def _result(**kw) -> L.ReplayResult:
+    """A ReplayResult with the uninteresting fields defaulted."""
+    base = dict(mutation="D3-UNDECLARED-ARTEFACT", dim=3, step_id="15",
+                applied=True, baseline_rc=0, mutant_rc=1, signal_seen=True,
+                detail="")
+    return L.ReplayResult(**(base | kw))
+
+
+def test_an_already_red_pair_is_UNMEASURABLE_not_a_failed_mutation():
+    """#1432: baseline_rc != 0 means COULD NOT LOOK, not FOUND A DEFECT.
+
+    The exact result the issue replayed to completion on ``24ff95307``:
+    ``baseline_rc=1``, so the witness was red before the mutation was applied.
+    Nothing was disproved; nothing could be.
+    """
+    r = _result(baseline_rc=1, mutant_rc=1, signal_seen=False)
+    assert r.verdict == L.ALREADY_RED, r.verdict
+    assert r.unmeasurable, (
+        "a pair that was RED BEFORE the edit is not scored UNMEASURABLE, so "
+        "the ledger still reads 'could not measure this gate' as 'this gate "
+        "stopped catching' — the most expensive wrong answer the instrument "
+        "the whole campaign is measured with can give")
+    # The two that must NOT move: an already-red pair proves nothing, so it may
+    # never be banked as proof either.
+    assert not r.proved, "an already-red pair was banked as proof"
+    assert not r.as_recorded, "an already-red pair was banked as reproduced"
+
+
+def test_a_gate_that_genuinely_stops_catching_is_STILL_a_failure():
+    """NEGATIVE CONTROL for the above. The teeth must survive the fix.
+
+    Baseline GREEN and mutant GREEN is the real defect this ledger exists to
+    catch — the gate no longer notices the edit. It must stay a failure, and it
+    must NOT be absorbed into the new third state.
+    """
+    r = _result(mutant_rc=0, signal_seen=False)
+    assert r.verdict == L.CANNOT_REDDEN, r.verdict
+    assert not r.unmeasurable, (
+        "a gate that went green->green was scored UNMEASURABLE; the fix for "
+        "#1432 has swallowed the defect it was supposed to leave alone")
+    assert not r.proved and not r.as_recorded
+    # And it is still in the set the starvation guard asserts is empty.
+    assert not (r.as_recorded or r.unmeasurable), (
+        "a genuinely toothless gate would now pass the grid")
+
+
+def test_a_red_for_another_reason_is_still_a_failure():
+    """A mutant that fails WITHOUT the declared signal is not unmeasurable.
+
+    It failed for some reason other than the recorded one — an import blowing
+    up looks exactly like this — and it must keep failing.
+    """
+    r = _result(mutant_rc=1, signal_seen=False)
+    assert r.verdict == "RED_FOR_ANOTHER_REASON", r.verdict
+    assert not r.unmeasurable and not r.as_recorded
+
+
+def test_NOT_REPLAYABLE_is_not_folded_into_unmeasurable():
+    """Scope guard. #1432 is about ALREADY_RED and nothing else.
+
+    A replay that never RAN is a different failure with its own handling; the
+    fix must not quietly re-score it too.
+    """
+    r = _result(baseline_rc=1, not_replayable="the corpus run is absent")
+    assert r.verdict == "NOT_REPLAYABLE", r.verdict
+    assert not r.unmeasurable, (
+        "NOT_REPLAYABLE was absorbed into UNMEASURABLE, so a replay that could "
+        "not run at all now scores as a gate that could not be measured")
+    assert not r.as_recorded
+
+
+def test_ALREADY_RED_is_not_a_recordable_expectation():
+    """PROHIBITION 2 of #1432: not a re-record.
+
+    The ledger is the record of what the gates COULD catch. If an entry could
+    DECLARE ``ALREADY_RED`` then the honest response to a measured gap would be
+    to rewrite the entry to match current behaviour, which deletes the
+    evidence. The verdict is an OUTCOME only.
+    """
+    assert L.ALREADY_RED not in L.ARTEFACT_EXPECTATIONS, (
+        "ALREADY_RED became a declarable expectation; an entry could now be "
+        "rewritten to expect its own gate's red instead of the red being fixed")
+    declared = [(m.name, m.expected) for m in L.ARTEFACT_MUTATIONS
+                if m.expected == L.ALREADY_RED]
+    assert not declared, f"entries declare ALREADY_RED: {declared}"
+    for m in L.ARTEFACT_MUTATIONS:
+        assert m.expected in L.ARTEFACT_EXPECTATIONS, (
+            f"{m.name} records {m.expected!r}, which is not a recordable "
+            f"verdict")
+
+
+def test_the_unmeasurable_ceiling_is_zero_for_witness_mode():
+    """PROHIBITION 3 of #1432: not a reason to relax ``witness`` mode.
+
+    Every witness is green on main, which is why the default mode is honest
+    today. The unmeasurable pairs are all non-witness steps reached only by
+    ``all``. A witness going red must therefore be a FAILURE, not a shrug.
+    """
+    assert set(L.UNMEASURABLE_CEILING) == set(L.REPLAY_MODES), (
+        f"a replay mode has no unmeasurable ceiling: "
+        f"{set(L.REPLAY_MODES) - set(L.UNMEASURABLE_CEILING)}")
+    assert L.UNMEASURABLE_CEILING["witness"] == 0, (
+        "the witness-mode ceiling left 0, so a witness could go red and the "
+        "grid would absorb it silently")
+    assert L.UNMEASURABLE_CEILING["all"] >= 0
+
+
+def test_the_ceiling_actually_bites_when_it_is_breached():
+    """PROHIBITION 1 of #1432: not a silent skip.
+
+    Proves the ratchet is load-bearing rather than decorative by evaluating the
+    grid's own predicate against a result set one over the ceiling. Without
+    this, "counted and disclosed" could be true while nothing enforced it.
+    """
+    ceiling = L.UNMEASURABLE_CEILING["witness"]
+    over = [_result(step_id=str(i), baseline_rc=1, mutant_rc=1,
+                    signal_seen=False) for i in range(ceiling + 1)]
+    assert all(r.unmeasurable for r in over)
+    assert not len(over) <= ceiling, (
+        "a result set one pair OVER the witness-mode ceiling satisfies the "
+        "ratchet, so the ceiling cannot fail and enforces nothing")
+    at = over[:ceiling]
+    assert len(at) <= ceiling, "the ratchet fails at exactly the ceiling"
+
+
+def test_the_unmeasurable_count_is_disclosed_not_skipped():
+    """PROHIBITION 1, the disclosure half.
+
+    The grid records ``unmeasurable=`` in its ``matrix_mutation_replay``
+    property. Pinned against the source so the count cannot be dropped from the
+    disclosure while the ratchet keeps passing.
+    """
+    src = Path(__file__).read_text(encoding="utf-8")
+    assert "unmeasurable={len(unmeasurable)}" in src, (
+        "the replay property no longer discloses the unmeasurable count; a "
+        "reader of the grid's PASS could not tell how much of it was measured")
 
 
 def test_the_canaries_a_mutation_plants_exist_nowhere_in_the_tree():

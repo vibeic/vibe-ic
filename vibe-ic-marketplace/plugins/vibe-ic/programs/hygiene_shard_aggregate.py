@@ -38,6 +38,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 from pathlib import Path
 from typing import Dict, List
 

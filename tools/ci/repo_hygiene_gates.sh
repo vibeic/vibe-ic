@@ -67,6 +67,13 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one
 # file type over. Narrow by construction — only the forms that assert THIS
 # plugin's version, so the MCP-EDA badge and the EDA image tag are untouched.
+# vibe-ic#1241 — this checker was reachable only from its own test. It validates
+# a RECORD rather than a design, and the corpus carries none yet (#1121's first
+# head-to-head has not run), so it is wired through the uncheckable channel: it
+# exits 2 and says so, rather than printing PASS over an empty population.
+run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
+    python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/benchmark-data"
+
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
 # vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool
 # inside the container keeps running as an orphan. The checker that finds those
@@ -97,6 +104,7 @@ run "container exec deadlines"  "$ROOT" python3 "$PG/container_exec_deadline_che
 # hazard is gone or the detector stopped matching the call sites, and the
 # checker says in its own words that neither is a PASS. NOT_CHECKED carries that
 # to the roll-up instead of folding "I could not look" into "I looked".
+uncheckable_until 2026-11-30 "rc 2 here is NOT a missing prerequisite: it means NO caller passes a login shell any more, i.e. either the hazard is gone or the detector stopped matching the call sites, and the checker says neither is a PASS"
 run_tolerating_uncheckable "container login-banner parses" "$ROOT" python3 "$PG/container_login_banner_parse_check.py"
 # vibe-ic#552 — a warning our EDA fork substitutes for an upstream abort must
 # still be visible to the gate that needs it. Every downgrade moves a
@@ -210,6 +218,7 @@ run "image-version pins are internally consistent" "$ROOT" python3 "$ROOT/tools/
 # it can never be the reason a landing fails. Adopting a newer image is this
 # repo's call, made deliberately with `sync_image_version.py --set X.Y.Z`, which
 # is where the #354 "the tag must actually resolve" check now lives.
+uncheckable_until 2027-02-28 "needs a REACHABLE ghcr registry: --report-upstream asks the registry what it has published, and rc 2 means it did not respond (an answer that disagrees is rc 0 by design -- this gate can never fail a landing)"
 # host-independence: EXCLUDE — resolves a tag on a remote registry, so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "upstream image currency (report-only)" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --report-upstream --require-remote
 
@@ -223,8 +232,50 @@ run_tolerating_uncheckable "upstream image currency (report-only)" "$ROOT" pytho
 # Cheap when clean: one `gh repo list`, and the per-branch comparison only runs
 # for an upstream that actually appears twice. rc 2 when it cannot ask, so an
 # offline run is NOT_CHECKED rather than a verdict.
+uncheckable_until 2027-02-28 "needs an AUTHENTICATED gh + network: it lists the org's repos live, and rc 2 means the org could not be asked (a duplicate it CAN see is rc 1)"
 # host-independence: EXCLUDE — reads live org state over the network, so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs/org_duplicate_fork_check.py vibeic
+
+# vibe-ic#1364 — a PR whose base belongs to a CLOSED-unmerged PR, or whose
+# branch merely CARRIES that PR's commits, reports `mergeable=CLEAN`, because
+# `mergeable` is computed against the PR's OWN base and not against `main`.
+# Measured 2026-08-13 over 218 open / 760 closed (485 unmerged, 87 branches
+# still live): EIGHT open PRs are affected, and the two detection passes are
+# INDEPENDENT — four are visible only to the commit-graph pass and declare
+# `base=main`; one is visible only to the declared-base pass. Two of the eight
+# are named landing blockers.
+#
+# `--repo-dir "$ROOT"` is what enables the commit-graph pass. Without it the
+# check prints `CARRIED pass NOT ESTABLISHED` and scopes its own PASS line to
+# the half it did run, rather than printing a clean bill over a question it
+# never asked.
+#
+# `--advisory`, deliberately, and NOT because the finding is soft. It is eight
+# real ones. The remedy is per-PR and belongs to each PR's author — rebase the
+# rejected parent out, or adopt it openly and have it reviewed — so no single
+# commit can clear this, and a blocking gate would leave main red on eight
+# other people's branches until they act, which is how a gate gets switched
+# off. `--advisory` lowers the exit code and nothing else: every finding is
+# still printed and the verdict line still says FAIL. There is no baseline and
+# no waiver file, so the only thing that can make this print zero is the
+# branches being fixed. It does NOT lower a REFUSAL.
+#
+# `run_tolerating_uncheckable`: it asks the GitHub API, and rc 2 — "I could not
+# look" — must never share an exit code with "I looked and it was clean".
+#
+# `"$ROOT"` + `"$PG/..."`, not `"$PLUGIN"` + `programs/...`. Both shapes are in
+# this file (46 and 25), and only the first is actually PROBED: the denominator
+# probe runs every gate from a scratch tree, so a path relative to `$PLUGIN`
+# cannot be opened from there and the gate is recorded `[NOT DRIVEN]`. Measured
+# both ways here — the relative form was reported as NOT DRIVEN and the absolute
+# form is probed — so the gate is now subject to the same denominator-disclosure
+# rule as the rest. The checker takes `--repo-dir` explicitly and passes `--repo`
+# to `gh`, so it reads nothing from its cwd and the change is behaviour-neutral.
+#
+# ONE LINE, no `\` continuation — the denominator probe and the host-independence
+# probe both parse this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
+# host-independence: EXCLUDE — reads live queue state over the network, so two invocations can differ for a reason that is not in the commit
+run_tolerating_uncheckable "PR bases reach main" "$ROOT" python3 "$PG/pr_base_reachability_check.py" --repo-dir "$ROOT" --advisory
 
 # vibe-ic#306/#316 — the audit that measures which gates can actually stop a
 # run was itself wired into nothing while exiting 1. Recorded debt does not
@@ -301,6 +352,7 @@ run "backlog items are tracked" "$ROOT" python3 "$PG/backlog_sanitize_check.py" 
 # returned rc 0 on a `sta` with 0 of 10 commands. A register describing a debt
 # that no longer exists is not conservative, it is a blind spot the exact size
 # of the bug it used to describe.
+uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: it invokes both STA engines inside it, and rc 2 means neither could be started (an engine that answers and disagrees is rc 1)"
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
@@ -411,6 +463,7 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 _per_published_cell_gates() {
   local _def="$1" _cell
   _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
+  uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no readable macro/OBS geometry, so the intersection has no population -- an intersection it CAN compute and finds is rc 1"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
   # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
@@ -419,6 +472,7 @@ _per_published_cell_gates() {
   # agent read a skill and remembered to run it. MEASURED on the published
   # cells: it parses real geometry (8290 shapes, 35 violations) — a live
   # verdict, not a shape that can only ever say "nothing to look at".
+  uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no parseable layout to judge the DRC certificate against, which is the state the gate exists to refuse to call a PASS"
   run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$(dirname "$_cell")"))" \
     "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
   # Another of the 35. Its subject is an inner FAIL that never reaches the outer
@@ -427,8 +481,23 @@ _per_published_cell_gates() {
   # stating that "I could not look" must never share an exit code with "I looked
   # and it was clean". MEASURED on the published cells: 67-68 reports examined
   # each, so this is a live verdict over a real denominator.
+  uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no step reports to examine, which the gate refuses to score as clean rather than exiting 0 on an empty population"
   run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
     "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
+  # vibe-ic#1241 — this gate was run by NOTHING but its own test, which proves
+  # the logic against a fixture the author wrote and never against an artefact.
+  # Wired here rather than into a flow step because its argument IS a published
+  # cell, so this loop is the one place the flow already hands it its subject.
+  #
+  # `run_tolerating_uncheckable` is not a softening: the gate's own documented
+  # contract is rc 2 = NO_BASELINE, "no previous run; nothing compared", and on
+  # this corpus that is EVERY cell — no design carries two cells of the same
+  # PDK, so `find_previous` has nothing to compare against. rc 2 is therefore
+  # the expected answer today and must be LOUD and non-fatal; rc 1, a genuinely
+  # new diagnostic id, still fails the suite. The day a second same-PDK cell is
+  # published the comparison path becomes live without this line changing.
+  run_tolerating_uncheckable "new tool diagnostic id ($(basename "$(dirname "$_cell")"))" \
+    "$PLUGIN" python3 programs/tool_diagnostic_id_gate.py "$_cell"
 }
 # NO `|| true` ANY MORE, and that is a repair rather than an omission: it used
 # to turn "git could not look" into an empty corpus, which is the vacuous pass
@@ -451,6 +520,20 @@ run "triage notes state a true reason"  "$ROOT" python3 "$PG/triage_note_answers
 # guard reports clean. SKIPs (rc=2) when no token store is configured — which
 # is the normal state for an outside contributor and is NOT a clean result.
 run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_scan.py"
+
+# vibe-ic#1241 — this gate existed and NOTHING but its own unit test ran it. A
+# checker exercised only by a fixture its author wrote is verified against the
+# author's MODEL of the artefacts, never against the artefacts: it can be
+# perfectly correct about a world that does not exist, while contributing a
+# green square to every count we publish.
+#
+# It sits here because it is the same population as the NDA scan above — the
+# TRACKED tree, read for what shipping it obliges us to carry.
+#
+# MEASURED on this branch before wiring, so CI does not learn about a finding
+# by turning red: 17217 tracked file(s) under benchmark-data, 525 declaring an
+# SPDX licence, 11 attribution record(s), rc=0 PASS.
+run "vendored attribution retained"     "$ROOT" python3 "$PG/vendored_attribution_retained_check.py"
 
 # vibe-ic#408/#389 — a PDK the image ships must be SELECTABLE by the name
 # `--pdk` matches, and every asset the registry DECLARES must resolve. The
@@ -485,6 +568,7 @@ run "PDK registry selectable"           "$ROOT" python3 "$PG/pdk_registry_select
 # a command consisting of the backslash alone. Both reported GATE_UNRUNNABLE
 # (`No such file or directory: '\'`), which is not a failure of this gate but
 # of the script's readability by its own readers.
+uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: --from-image reads the PDK layer tables out of it, and rc 2 means the PDKs could not be read at all"
 run_tolerating_uncheckable "PDK via patch vs layer min width" "$ROOT" python3 "$PG/pdk_via_patch_meets_layer_min_width_check.py" --from-image --advisory
 
 # vibe-ic#419 — the size guard `.gitignore` promised in a comment and nobody
@@ -567,6 +651,7 @@ run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_
 # The checker now refuses to call that state a PASS (rc 2 with the count), so
 # this line cannot go green until a contract-carrying report is committed, and
 # it goes green by itself on the first one that is.
+uncheckable_until 2026-11-30 "KNOWN DEBT, not a missing prerequisite: all committed compliance reports predate the blockers key, so every rule takes the pre-contract early return and rc 2 says so rather than reporting an unexercised guard as clean. Goes green by itself on the first contract-carrying report committed"
 run_tolerating_uncheckable "blocker list contract on committed reports" "$ROOT" \
     python3 "$PG/blocker_classification_check.py" --dir "$ROOT/benchmark-data"
 
@@ -611,6 +696,25 @@ run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_
 # never missing, only unwired. One `git ls-files` + one walk; measured
 # discriminating: injecting a throwaway program makes it rc 1, removing it rc 0.
 run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_programs_index.py" --check
+
+# vibe-ic#1120 — the four PUBLISHED dimensions (Engineering Velocity,
+# Autonomous Improvement, Adversarial Verification, Silicon Proof). Same shape
+# as the two indexes above: the page is generated, `--check` re-derives it and
+# exits 1 if it disagrees, so a figure cannot be talked upward by editing the
+# page. It re-derives at the page's own stated ANCHOR rather than at HEAD, so a
+# landing does not redden it — a freshness gate that fires on every commit is a
+# bypassed gate.
+#
+# `run_tolerating_uncheckable`, and the reason is MEASURED rather than
+# defensive: every velocity figure is history-derived, and on a SHALLOW clone
+# the generator's own first run produced `86 of 89 commits` where the remote
+# `main` carries 2007 — wrong by ~22x and entirely plausible. It now REFUSES
+# (rc 2) on a shallow clone instead of reporting the smaller number. rc 2 is
+# therefore "this clone cannot answer", which is the normal state for a
+# developer's `--depth` checkout and must be LOUD and non-fatal; CI checks out
+# complete and genuinely checks. rc 1 (a hand-edited figure) still fails.
+run_tolerating_uncheckable "engineering evidence fresh" \
+    "$ROOT" python3 "$ROOT/tools/gen_engineering_evidence.py" --check
 
 # vibe-ic#542 — a test whose own subprocess timeout is at or above the pytest
 # harness bound cannot fail as a TEST. `--timeout-method=thread` takes the
@@ -665,6 +769,16 @@ run "a zero denominator refuses" "$ROOT" python3 "$PG/gate_zero_denominator_refu
 # module in programs/ and never invokes one), so its denominator is the file
 # list rather than the set of gates a probe happened to be able to drive —
 # which is what #515's and #521's behavioural sweeps could not reach. ~4s.
+# vibe-ic batch R1 — the flow declaration and the d3 evidence manifest must move
+# TOGETHER. A path added to a step's required_outputs without re-measuring the
+# manifest reddens that step's dimension-3 cell, and when the step is a mutation
+# WITNESS (matrix_mutation_ledger declares witness="D1" for D3-UNDECLARED-ARTEFACT)
+# it also disables the proof that the mutation is still caught — LOCK 2 requires
+# the unmutated cell to PASS. BLOCKING: measured 0 uncovered on main, and 2 on
+# each of #1131/#1170, which are exactly the branches that redden D1.
+run "d3 declaration/manifest parity" "$ROOT" \
+    python3 "$PG/d3_manifest_declaration_parity_check.py" "$PLUGIN"
+
 run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_check.py" "$PLUGIN"
 
 
@@ -675,6 +789,7 @@ run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_c
 # class has produced FIVE instances, two of them inside the fixes for the
 # previous ones. Refuses (rc 2) on a dirty checkout rather than reporting the
 # uncommitted work as findings.
+uncheckable_until 2027-02-28 "needs a CLEAN checkout: it compares the working tree against a fresh worktree at the same commit, and rc 2 means tracked modifications made that comparison meaningless (a genuinely host-dependent gate is rc 1)"
 run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
 # 2026-08-04 — `gate_cli_mutation_probe` makes a gate unable to fail and then
 # restores it in a `finally`. A `finally` does not run on SIGKILL, and twice in
@@ -717,6 +832,22 @@ run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_arti
 # in 250/250 (with the `--no-index` fix that makes that assertion capable of
 # firing at all), no tracked root `_*.js` anywhere.
 run "gitignore scratch guard"           "$ROOT" python3 "$PG/gitignore_scratch_guard.py" --root "$ROOT"
+# vibe-ic#1241 — `bundled_attribution_notice_check` was authored, tested and
+# merged with NOTHING but its own unit test invoking it: a fixture the author
+# wrote proves the logic and proves nothing about what this repo ships.
+#
+# The population is THE REPOSITORY, not a per-cell loop, and that is the gate's
+# own stated scope rather than a convenience: Apache-2.0 §4(d) attaches to
+# distributing the WORK, so the subject is the whole distributed tree and the
+# root `NOTICE` that must account for it. A per-published-cell dispatcher would
+# have wired an obligation about the repository to a sample of run artefacts.
+#
+# `run`, not `run_tolerating_uncheckable`: this gate has a REFUSE path (rc=2,
+# "no SPDX-headered source found") that exists precisely so an empty scan
+# cannot read as a pass, and on this tree it does not fire — MEASURED, 513
+# SPDX-headered files under 7 holders, all named in NOTICE, rc=0. A tolerated
+# rc=2 here would re-admit the vacuous pass the refusal was written to block.
+run "bundled work is named in NOTICE"   "$ROOT" python3 "$PG/bundled_attribution_notice_check.py" "$ROOT"
 # vibe-ic#693 (from #313 §6) — a remedy that silently declines is
 # indistinguishable from a remedy that was never needed. Flags a remedy-named
 # call assigned to a variable, guarded by `if <var>:` with no else and no
@@ -835,6 +966,7 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 # covered by nothing automatic, and the gate now says so in the same document
 # that carries its verdict. NOT_CHECKED in the roll-up is the correct state and
 # is deliberately left in place.
+uncheckable_until 2026-11-30 "KNOWN GAP, recorded deliberately: no INSTALLED PDK artefacts are reachable here, so the gate has never seen one. The logic is covered by pytest over 41 fixtures; the artefacts are covered by nothing automatic, and NOT_CHECKED is the honest state"
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
   python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT"
 
@@ -961,6 +1093,36 @@ run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.
 #
 # rc=2 (a site it could not decide) BLOCKS, deliberately: this gate exists
 # against checks that go green by declining to look, and that includes itself.
+# vibe-ic#1128 — A SKIP IS GREEN, and thirteen of them are a coverage hole.
+# 107 test files gate on the EDA image being reachable. Measured on a clean
+# detached origin/main at v1.10.33, same files, two arms (arm 2 puts an
+# `exit 127` shim ahead of `docker` on PATH):
+#
+#     image reachable     19 failed, 1419 passed, 44 skipped
+#     image unreachable   24 failed, 1401 passed, 57 skipped
+#
+# 1419 -> 1401 is 18 passes lost: THIRTEEN became SKIP. The per-test messages are
+# already honest ("this half was NOT checked"); the defect is one level up, where
+# `1401 passed` is all a reader sees. And the trigger is an ANCHOR BUMP, not
+# flakiness — coverage follows the anchor, so every bump removes these
+# verifications on every host until that host pulls. With six machines landing in
+# parallel that is exactly when a false green costs most.
+#
+# WIRED `run_tolerating_uncheckable` DELIBERATELY, and the choice is the point.
+# The check exits 2 when the image is unreachable, which this wrapper records as
+# NOT_CHECKED — a state that is never folded into `passed`. That is the mechanism
+# `_gate_dispatch.sh` already gives GATES and the test tier lacks, which is #1128's
+# own diagnosis. Promoting it to `run` (blocking) is a policy call with a measured
+# blast radius: ZERO on a host carrying the anchored image, and every landing
+# refused on a host without it. One word changes it when that is wanted.
+# WHY TOLERATING: the anchored EDA image may legitimately be absent on a host
+# that has not pulled it. The hole is REPORTED as NOT_CHECKED rather than
+# blocking, until the owner rules on refusing landings from such a host.
+# (`uncheckable_until` is #1072's proposed directive and does not exist on main;
+# this comment carries the same disclosure without depending on an unlanded PR.)
+run_tolerating_uncheckable "image-gated verifications are not silently skipped" "$PLUGIN" \
+  python3 programs/image_gated_verification_check.py
+
 run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins
 
 # vibe-ic#1241 — WIRED HERE, not left to its own test. The audit

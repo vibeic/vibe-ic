@@ -53,7 +53,6 @@
     "rtl_signal_name_semantic_check",
     "rtl_unit_test_coverage_check",
     "skill_doc_section_present_check",
-    "spec_rtl_port_fidelity_check",
     "spec_self_consistency_check",
     "synth_wrapper_check",
     "top_level_outputs_in_canonical_check",

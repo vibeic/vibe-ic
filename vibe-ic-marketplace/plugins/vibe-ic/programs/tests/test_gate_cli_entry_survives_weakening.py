@@ -283,7 +283,22 @@ def test_a_SIGKILL_mid_probe_leaves_the_repository_byte_identical(tmp_path):
     # kills its child and therefore leaves one behind, and matching that stale
     # one made the test pass in 0.7s without the child ever reaching its
     # mutation window — measured, while mutation-proving this very assertion.
-    prior = set(Path("/tmp").glob("gate_cli_probe_*"))
+    # Look where the probe ACTUALLY writes, not where /tmp happens to be. The
+    # probe reserves its scratch through _crash_safe_scratch, whose root is
+    # `tempfile.gettempdir()` — i.e. it honours TMPDIR. This test hardcoded
+    # "/tmp", so under any harness that sets TMPDIR (pytest's own --basetemp
+    # wrapper, tox, CI, and every run in this repo's pinned invocation) the
+    # scratch was created somewhere this loop never looked. The failure that
+    # produced was not "not found": it was the assertion below announcing that
+    # the mutation is being applied to the REPOSITORY — the single most alarming
+    # message this file can emit, fired by an environment variable. Measured,
+    # single variable, same commit and same worktree:
+    #     TMPDIR set    -> 1 failed
+    #     TMPDIR unset  -> 1 passed
+    # Importing the probe's own root keeps the two from drifting apart again.
+    import _crash_safe_scratch as _scratch_root
+    tmp_root = _scratch_root._tmp_root()
+    prior = set(tmp_root.glob("gate_cli_probe_*"))
     child = sp.Popen(
         [sys.executable, "-c",
          "import sys;sys.path.insert(0, %r)\n"
@@ -296,7 +311,7 @@ def test_a_SIGKILL_mid_probe_leaves_the_repository_byte_identical(tmp_path):
         scratch = None
         deadline = time.time() + _PROBE_TIMEOUT_S
         while time.time() < deadline and child.poll() is None:
-            for d in set(Path("/tmp").glob("gate_cli_probe_*")) - prior:
+            for d in set(tmp_root.glob("gate_cli_probe_*")) - prior:
                 if (d / "programs" / ("hold_area_budget_check.py"
                                       + PROBE._BACKUP_SUFFIX)).exists():
                     scratch = d

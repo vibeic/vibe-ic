@@ -24,6 +24,12 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import extraction_input_capability_check as E  # noqa: E402
+# vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
+# one passed. Declared through `not_verified_tier` so the run's roll-up
+# cannot count them under `passed`; see that module's docstring.
+from not_verified_tier import skip_not_verified  # noqa: E402
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
+RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 
 _STUB_TECH = """\
@@ -51,7 +57,7 @@ end
 #: report's own `missing` list — four rounds of fitting a fixture to a checker,
 #: which measures how well I can satisfy it, not whether a real PDK passes.
 _REAL_TECH_IN_IMAGE = "/foss/pdks/sky130A/libs.tech/magic/sky130A.tech"
-_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.89"
+_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.97"
 
 
 def _real_tech(tmp_path):
@@ -72,10 +78,11 @@ def _real_tech(tmp_path):
              _REAL_TECH_IN_IMAGE],
             capture_output=True, text=True, timeout=45)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        pytest.skip(f"could not read the tech file out of the image: "
-                    f"{type(exc).__name__}")
+        skip_not_verified(f"could not read the tech file out of the "
+                          f"image: {type(exc).__name__}", PULL_REMEDY)
     if r.returncode != 0 or len(r.stdout) < 1000:
-        pytest.skip("the EDA image is not available here")
+        skip_not_verified("the EDA image is not available here",
+                          PULL_REMEDY)
     out.write_text(r.stdout)
     return out
 
