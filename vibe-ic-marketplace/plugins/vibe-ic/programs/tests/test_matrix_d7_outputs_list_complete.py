@@ -693,14 +693,100 @@ def _conditional_anchor():
     carries a conditional output, but it is red for thirteen unrelated W2
     findings, so a red observed after mutating it would prove nothing about
     the exemption. The anchor is therefore the conditional finding whose step
-    has no other finding at all — on the current flow that is step 27, and it
-    is found by measurement rather than named.
+    has no other finding at all — found by measurement rather than named.
+
+    HARDENING ONLY — the requirement is stated over what the control ASSERTS.
+    Every assertion is about ``path`` under **W1** (:func:`_w1_paths`), so the
+    condition that buys attributability is that ``path`` carries no W1 charge.
+    Demanding the whole STEP be silent under every rule is strictly more than
+    that, and the surplus is load-bearing in the wrong direction: it is what
+    let ONE unrelated finding delete the control.
+
+    That is not hypothetical. Before this PR's sibling fix, a write record
+    naming no producer was read as a producer, which manufactured a spurious
+    ``W2`` finding on step 27; the anchor search returned ``None`` and both
+    parametrisations aborted with "this control measures nothing". The cause is
+    fixed and step 27 is the live anchor again — this clause only ensures the
+    NEXT unrelated finding cannot repeat the trick. It is narrower than the old
+    form, never looser: same before/after transition, same path.
+
+    TWO PASSES, and the order is the point. The strongest anchor — a step
+    silent under EVERY rule — is still preferred, so the fix does not quietly
+    move the control off the anchor the flow actually supplies. Only when no
+    such step exists does it fall back to the W1 condition. A single pass on
+    the W1 condition alone would have silently switched this control from step
+    27 to step 23, which the paragraph above rejects on purpose: measured, the
+    mutants do still kill at 23, but "it happens to work there" is not a reason
+    to give up the anchor the author chose.
     """
     for sid in F.step_ids():
         findings = G.conditional_findings(sid)
         if findings and not G.findings_for(sid):
             return F.normalize_id(sid), findings[0].path
+    for sid in F.step_ids():
+        findings = G.conditional_findings(sid)
+        if not findings:
+            continue
+        path = findings[0].path
+        if path not in _w1_paths(sid):
+            return F.normalize_id(sid), path
     return None
+
+
+def test_the_anchor_search_survives_an_unrelated_finding_on_every_step(
+        monkeypatch):
+    """PAIRED GUARD for the fallback pass, which is otherwise DEAD CODE.
+
+    On the current flow the first pass succeeds (step 27), so the second never
+    runs and could be deleted — or be wrong — without any test noticing. This
+    reproduces the condition that killed the control: an unrelated finding on
+    EVERY step, so no step is silent under every rule.
+
+    The assertion is that a usable anchor is still returned AND that it meets
+    the property the control actually needs (no W1 charge on that path). Both
+    halves matter: returning any old step would satisfy "not None" while
+    destroying attributability.
+    """
+    real = G.findings_for
+
+    class _Unrelated:
+        rule = G.W2
+        path = "reports/phase3/UNRELATED_never_a_real_artifact.json"
+
+        def __str__(self):
+            return f"W2:{self.path}"
+
+    monkeypatch.setattr(G, "findings_for",
+                        lambda sid: list(real(sid)) + [_Unrelated()])
+
+    anchor = _conditional_anchor()
+    assert anchor is not None, (
+        "one unrelated finding on every step deleted the anchor entirely — "
+        "this is exactly the failure the fallback pass exists to prevent")
+    step, path = anchor
+    assert path not in _w1_paths(step), (
+        f"the fallback returned step {step}/{path}, which already carries a W1 "
+        f"charge; a later charge there would not be attributable to the "
+        f"mutation and the control would be measuring nothing")
+
+
+def test_the_anchor_search_prefers_the_strictly_silent_step(monkeypatch):
+    """The other half: the fallback must not STEAL the preferred anchor.
+
+    A single-pass W1-only search picks step 23 — which the docstring rejects on
+    purpose. This pins that a globally-silent step still wins when one exists,
+    so the hardening cannot silently relocate the control.
+    """
+    silent = [F.normalize_id(sid) for sid in F.step_ids()
+              if G.conditional_findings(sid) and not G.findings_for(sid)]
+    if not silent:
+        pytest.skip("no strictly-silent anchor on this flow; first pass is "
+                    "unreachable and the preference cannot be observed")
+    anchor = _conditional_anchor()
+    assert anchor is not None
+    assert anchor[0] in silent, (
+        f"a strictly-silent anchor exists {silent} but the search returned "
+        f"{anchor[0]} — the fallback overtook the preferred pass")
 
 
 @pytest.mark.parametrize(
@@ -733,9 +819,10 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
         "control measures nothing"
     )
     step, path = anchor
-    assert not G.findings_for(step), (
-        f"step {step} is already red before the mutation; the control cannot "
-        f"attribute the red to the mutation"
+    assert path not in _w1_paths(step), (
+        f"step {step} already carries a W1 charge on {path} before the "
+        f"mutation; the control cannot attribute a later charge to the "
+        f"mutation. Findings: {[str(f) for f in G.findings_for(step)]}"
     )
 
     def edit(doc):
@@ -772,7 +859,7 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
 
     # And back: the exemption returns with the flow's own optionality.
     assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
-    assert not G.findings_for(step)
+    assert path not in _w1_paths(step)
 
 
 def _no_list_but_writes_anchor():
