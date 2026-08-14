@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 
 def rewrite(txt, collect_map=None):
@@ -114,7 +115,7 @@ def main(argv=None):
     print(f"remaining backslash-id:     {r3}")
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
-    with open(args.out, "w") as f:
+    with atomic_writing(args.out) as f:
         f.write(out_txt)
     print(f"wrote {args.out}")
 

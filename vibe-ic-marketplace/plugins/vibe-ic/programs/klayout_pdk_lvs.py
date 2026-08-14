@@ -33,6 +33,7 @@ own layer numbering (the real PDK map ships in the project's bridge config, NOT 
 Requires the KLayout Python module (`pya`); exits 3 (disclosed) if absent — never fakes.
 """
 import sys, os, re, json, argparse
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 # A GENERIC example layer map (a common 180nm-style GDS numbering) so the tool is
 # runnable/testable standalone. It is NOT any specific foundry's map — supply the real
@@ -650,7 +651,7 @@ def cmd_compare(args, pya):
     }
     print("LVS_COMPARE " + json.dumps(result))
     if args.out:
-        with open(args.out, "w") as f:
+        with atomic_writing(args.out) as f:
             json.dump(result, f, indent=2)
         print("wrote", args.out)
     return 0 if ok else 4
