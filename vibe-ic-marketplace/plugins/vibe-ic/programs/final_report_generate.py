@@ -1984,8 +1984,20 @@ def _render(project: Path, run_audit: bool = True,
     if tp_ev.get("vectors_csv"):
         md.append(f"- **Vector CSV**: `{tp_ev['vectors_csv']}`")
     md.append("")
-    md.append("_Per-opcode / per-mode coverage detail belongs in_ "
-              "`reports/chip_specific_summary.md` _(this section stays chip-agnostic)._")
+    # Spell the addendum as a CITATION only when this run actually ships it.
+    # Unconditionally backticking the path made every generated final_summary.md
+    # point at a file most runs do not ship — 14 of the 38 pre-existing
+    # unresolved citations counted in #1168. The guidance is unchanged either
+    # way; only the "this artefact is in the tree" claim is dropped when it is
+    # not true.
+    if chip_addendum:
+        md.append("_Per-opcode / per-mode coverage detail belongs in_ "
+                  "`reports/chip_specific_summary.md` _(this section stays chip-agnostic)._")
+    else:
+        md.append("_Per-opcode / per-mode coverage detail belongs in the "
+                  "chip-specific addendum (reports/chip_specific_summary.md), which "
+                  "this run does not ship — author it per chip. This section stays "
+                  "chip-agnostic._")
     md.append("")
 
     md.append("## Output #4 — Analog convergence (tuning loops)")
@@ -2291,7 +2303,12 @@ def _render(project: Path, run_audit: bool = True,
                   "for IC-specific opcode coverage, tester fixture semantics, "
                   "analog tuning targets, and any chip-known issues.")
     else:
-        md.append("_No `reports/chip_specific_summary.md` present. Author it by hand "
+        # Same reason as the Output-#3 note above (#1168): this branch exists
+        # BECAUSE the file is absent, so its path must not be spelled as a
+        # citation of a shipped artefact. It stays readable as the file to
+        # author.
+        md.append("_No chip-specific addendum present; expected at "
+                  "reports/chip_specific_summary.md. Author it by hand "
                   "(or via a chip-specific Phase 1 skill) to document IC-specific "
                   "test interpretations, opcode tables, tuning-target values, etc. "
                   "This generator deliberately keeps the canonical summary "
