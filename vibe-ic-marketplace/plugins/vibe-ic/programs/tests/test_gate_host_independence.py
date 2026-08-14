@@ -711,3 +711,108 @@ def test_the_peer_detector_sees_a_real_process():
         time.sleep(0.05)
     pytest.fail("a DEAD process is still reported as a live peer, which would "
                 "disable the legacy sweep permanently")
+
+
+# --------------------------------------------------------------------------
+# three kinds share one findings list, and only ONE of them is host-dependence
+#
+# `GATE_UNRUNNABLE` is appended under a comment saying it "is NOT
+# host-dependence, and it is NOT a clean result either" — then counted into a
+# sentence asserting every finding IS host-dependence, and exited 1.
+#
+# MEASURED ON main at 162b5bde/3d13e2c5: one `policy_direction_pin_check
+# --verify-pins` TimeoutExpired printed
+#     [FAIL] 1 of 66 probed corpus gate(s) (74 declared) give a HOST-DEPENDENT
+#            verdict.
+# with ZERO host-dependent verdicts in the run. The repo's whole hygiene suite
+# was red under a sentence describing something that had not happened.
+# --------------------------------------------------------------------------
+def _sleeper(r):
+    """Commit a gate that cannot be driven inside any sane bound."""
+    (r / "sleeper.py").write_text("import time\ntime.sleep(30)\n")
+    subprocess.run(["git", "-C", str(r), "add", "sleeper.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "sleeper"], check=True)
+    return r
+
+
+def test_an_UNDRIVABLE_gate_is_NOT_reported_as_a_HOST_DEPENDENT_verdict(
+        tmp_path, capsys):
+    """The exact shape that reddened main. A gate that timed out is NOT
+    CHECKED, and `run_tolerating_uncheckable` at repo_hygiene_gates.sh:678 —
+    the call form this gate is wired through — exists precisely to carry that
+    distinction. Exiting 1 under the host-dependence sentence threw it away.
+    """
+    r = _sleeper(_repo_with(tmp_path, 'run "slow" "$ROOT" python3 sleeper.py\n'))
+    (r / "leftover.dat").write_text("x\n")   # a real stimulus: not NO_STIMULUS
+
+    rc = G.main([str(r), "--timeout", "2"])
+    err = capsys.readouterr().err
+    assert rc == 2, err
+    assert "NOT_CHECKED" in err, err
+    assert "HOST-DEPENDENT verdict" not in err, err
+    # NOT CHECKED is still not a pass, and the gate is still named.
+    assert "not a pass" in err and "slow" in err, err
+
+
+def test_a_REAL_host_dependence_still_FAILS_when_an_undrivable_gate_is_present(
+        tmp_path, capsys):
+    """THE PAIRED GUARD. Separating the kinds must not give an undrivable gate
+    the power to mask a real one — that would be buying green with coverage,
+    which is the failure this whole probe exists to prevent. A genuine
+    host-dependent verdict still exits 1, and the count is of THOSE, not of
+    the list.
+    """
+    r = _counter_repo(tmp_path, ignore_dat=True)
+    (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        'run "counter" "$ROOT" python3 counter.py\n'
+        'run "slow" "$ROOT" python3 sleeper.py\n')
+    (r / "sleeper.py").write_text("import time\ntime.sleep(30)\n")
+    subprocess.run(["git", "-C", str(r), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "both"], check=True)
+    (r / "leftover.dat").write_text("x\n")   # IGNORED => the tree stays clean
+    assert not _porcelain(r)
+
+    rc = G.main([str(r), "--timeout", "2"])
+    err = capsys.readouterr().err
+    assert rc == 1, err
+    fail = [ln for ln in err.splitlines() if ln.startswith("[FAIL]")]
+    assert len(fail) == 1, err
+    # ONE, not two: the undrivable gate is not counted as host-dependent...
+    assert fail[0].startswith("[FAIL] 1 of "), err
+    assert "HOST-DEPENDENT verdict" in fail[0], err
+    # ...but it is still disclosed, so the coverage loss is never silent.
+    assert "GATE_UNRUNNABLE" in err, err
+
+
+def test_an_INERT_exclusion_no_longer_borrows_the_HOST_DEPENDENT_sentence(
+        tmp_path, capsys):
+    """The third kind. A detached EXCLUDE directive is a real defect in the
+    script and still exits 1 — it simply stops being described as a gate
+    giving a host-dependent verdict, which it never was.
+    """
+    r = _counter_repo(tmp_path, ignore_dat=False)
+    (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        _EXCLUDE_LINE + "\n"                      # blank line detaches it
+        'run "counter" "$ROOT" python3 counter.py\n')
+    subprocess.run(["git", "-C", str(r), "commit", "-qam", "detached"],
+                   check=True)
+
+    rc = G.main([str(r), "--timeout", str(_T)])
+    err = capsys.readouterr().err
+    assert rc == 1, err
+    assert "EXCLUDE directive" in err and "exclude NOTHING" in err, err
+    assert "HOST-DEPENDENT verdict" not in err, err
+
+
+def test_the_json_lets_a_consumer_tell_the_kinds_apart(tmp_path):
+    """A consumer reading only `findings` repeats the conflation by hand. The
+    counts are additive — `verdict` is deliberately untouched.
+    """
+    r = _counter_repo(tmp_path, ignore_dat=True)
+    (r / "leftover.dat").write_text("x\n")
+    out = tmp_path / "o.json"
+    G.main([str(r), "--json", str(out), "--timeout", str(_T)])
+    d = json.loads(out.read_text())
+    assert d["findings_by_kind"]["HOST_DEPENDENT_VERDICT"] == 1, d
+    assert d["findings_by_kind"]["GATE_UNRUNNABLE"] == 0, d
+    assert d["findings_by_kind"]["INERT_EXCLUSION"] == 0, d
