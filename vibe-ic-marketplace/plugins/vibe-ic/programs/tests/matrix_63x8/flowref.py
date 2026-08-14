@@ -38,11 +38,11 @@ run ``--fix-figures``, and ``--check`` fails on drift (vibe-ic#961).
         non-empty on 61<!--figure:required_output_steps--> (absent on FS1 and P0)
     blocks_on
         present on 63<!--figure:blocks_on_declared--> steps,
-        non-empty on 61<!--figure:blocks_on_nonempty--> (declared on every step;
+        non-empty on 62<!--figure:blocks_on_nonempty--> (declared on every step;
         PRESENT-BUT-EMPTY on D1 and A1, the two genuine graph roots)
 
 The ``present`` column is a PRESENCE count. ``blocks_on`` is non-empty on only
-61<!--figure:blocks_on_nonempty--> steps. Any test that conflates the two will
+62<!--figure:blocks_on_nonempty--> steps. Any test that conflates the two will
 be wrong about D1 and A1.
 
 Top-level ``total_steps: 44`` counts the numeric steps ONLY. It is NOT
@@ -158,8 +158,8 @@ file-existence-only gate and legitimately names none.
 --------------------------------------------------------------------
 5. ``blocks_on``
 --------------------------------------------------------------------
-94<!--figure:blocks_on_edges--> edges, mixed types
-(78<!--figure:blocks_on_edges_int--> int, 16<!--figure:blocks_on_edges_str--> str),
+97<!--figure:blocks_on_edges--> edges, mixed types
+(80<!--figure:blocks_on_edges_int--> int, 17<!--figure:blocks_on_edges_str--> str),
 every target resolving to a declared step id — no dangling references at time of writing. Compare with
 :func:`normalize_id` on both sides; the real consumers stringify
 (``{str(id): [str(e) for e in blocks_on]}``).
