@@ -329,24 +329,51 @@ def test_function_exists_and_returns_stepresult():
 
 
 def test_main_calls_prelayout_signoff_before_pnr():
-    """WIRING + ORDER: main() must call step_prelayout_signoff and it must
-    appear textually before the step_pnr call (the emit must precede PnR)."""
+    """WIRING + ORDER: main() must invoke step_prelayout_signoff and it must
+    appear textually before step_pnr reaches PnR (the emit must precede PnR)."""
     tree = ast.parse(_SRC)
     main_fn = next(n for n in ast.walk(tree)
                    if isinstance(n, ast.FunctionDef) and n.name == "main")
 
-    def _first_call_line(name):
-        for node in ast.walk(main_fn):
-            if (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == name):
-                return node.lineno
-        return None
+    def _first_invocation_line(name):
+        """Earliest line in main() where `name` is CALLED or DISPATCHED.
 
-    pls = _first_call_line("step_prelayout_signoff")
-    pnr = _first_call_line("step_pnr")
-    assert pls is not None, "main() never calls step_prelayout_signoff"
-    assert pnr is not None, "main() never calls step_pnr"
+        A step reaches PnR two ways and both are genuine invocations:
+
+          direct      step_prelayout_signoff(project, ...)
+          dispatched  _spf.gate(..., step_pnr, project, ...)
+
+        `step_pnr` used to be the first form; dc0593709 routed it through the
+        pre-flight gate, which passes the function as an ARGUMENT. It is still
+        wired and PnR still runs on every invocation, but as an argument it is
+        an `ast.Name` in Load context rather than a `Call.func`, so a detector
+        matching only `Call(func=Name)` reported "main() never calls step_pnr"
+        about code that calls it. That is the detector being blind to a
+        dispatch form, not a missing call -- the same shape as the d7
+        write-detector that knew `write_text` and not `atomic_write_text`.
+
+        Scope stays at ARGUMENT POSITION rather than any Load of the name: a
+        bare mention (`if step_pnr is None:`) is not an invocation, and
+        accepting one would make this assert less than it did before.
+
+        `ast.walk` is breadth-first, so its first match is not the earliest
+        line; the minimum is taken explicitly.
+        """
+        seen = []
+        for node in ast.walk(main_fn):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id == name:
+                seen.append(node.func.lineno)          # direct call
+            for arg in list(node.args) + [k.value for k in node.keywords]:
+                if isinstance(arg, ast.Name) and arg.id == name:
+                    seen.append(arg.lineno)            # dispatched callable
+        return min(seen) if seen else None
+
+    pls = _first_invocation_line("step_prelayout_signoff")
+    pnr = _first_invocation_line("step_pnr")
+    assert pls is not None, "main() never invokes step_prelayout_signoff"
+    assert pnr is not None, "main() never invokes step_pnr"
     assert pls < pnr, (
         f"step_prelayout_signoff (line {pls}) must be called BEFORE "
         f"step_pnr (line {pnr}) — the pre-layout emit must not sit behind PnR")
