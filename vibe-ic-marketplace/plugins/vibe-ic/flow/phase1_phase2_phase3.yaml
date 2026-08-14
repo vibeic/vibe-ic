@@ -3063,6 +3063,26 @@ steps:
       #     SPEF, and extraction has a documented tool-unavailable waiver path.
     gate:
       all_of:
+        # vibe-ic#1097 S8 — "asked" and "reached" must BOTH be on disk.
+        #
+        # The period a design is ASKED for arrives through a four-tier
+        # precedence walk whose last tier is fabricated
+        # (`l8_sta_clock_period_design_owned_check`); every tier is a REQUEST.
+        # The achieved period is the only MEASUREMENT in that set. This step is
+        # where the slack that yields it exists, so this is where its absence is
+        # decidable.
+        #
+        # ADVISORY, and not out of timidity: a run whose STA produced no setup
+        # slack has nothing to record and returns rc 2 (VACUOUS_PASS) rather
+        # than a verdict. rc 1 is reserved for the one implication this gate
+        # asserts — a slack EXISTS and the achieved period does not. MEASURED at
+        # f9c13443 over the published corpus: 13 roots reached post-route STA,
+        # 2 carried `achievable_fmax.json`, and four cells ship a real headroom
+        # (caravel 17.22 ns, spm/gf180mcuD 15.83, spm/ihp-sg13g2 6.81,
+        # spm/sky130A 5.24) with no achieved period beside it. Those four go
+        # ADVISORY-red here and are repaired going forward by the runner change
+        # that emits on PASS as well as on FAIL.
+        - advisory_program_exit_zero: "achieved_period_recorded_check . --json reports/phase2/gates/achieved_period_recorded.json"
         # HOLD IS WORST AT THE FAST CORNER. `sta_corner_record_completeness_check`
         # below judges each declared corner "for the ROLE it was declared to
         # serve" — it never asks whether assigning the HOLD role to a non-fast
