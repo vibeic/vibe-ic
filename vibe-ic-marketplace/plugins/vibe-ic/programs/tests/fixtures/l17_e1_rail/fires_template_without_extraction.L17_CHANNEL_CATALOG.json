@@ -1,0 +1,20 @@
+{
+  "channels": [],
+  "extraction_status": "EXTRACTION_FOUND_NOTHING",
+  "global_signals": [],
+  "handshake_pairs": {
+    "chan_a": {
+      "ready": "chan_a_ready",
+      "valid": "chan_a_valid"
+    }
+  },
+  "layer": "L17",
+  "ordering_rules": [
+    "requests on chan_a complete in issue order"
+  ],
+  "title": "Channel catalog (synthetic test fixture)",
+  "typical_topologies": [
+    "point_to_point",
+    "shared_bus"
+  ]
+}
