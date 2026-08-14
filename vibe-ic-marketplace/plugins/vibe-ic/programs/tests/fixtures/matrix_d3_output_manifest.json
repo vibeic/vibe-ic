@@ -189,6 +189,13 @@
           "alternative": "reports/phase1/extraction_coverage_report.json",
           "path": "reports/phase1/extraction_coverage_report.json",
           "size_bytes": 4610
+        },
+        "reports/audit/phase1/expert_parse_track.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/audit/phase1/expert_parse_track.json",
+          "path": "reports/audit/phase1/expert_parse_track.json",
+          "size_bytes": 7399
         }
       }
     },
@@ -803,6 +810,13 @@
           "alternative": "reports/phase3/sta/sta_corner_record_completeness.json",
           "path": "reports/phase3/sta/sta_corner_record_completeness.json",
           "size_bytes": 3822
+        },
+        "reports/phase3/sta/post_route_signoff_corner.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/sta/post_route_signoff_corner.json",
+          "path": "reports/phase3/sta/post_route_signoff_corner.json",
+          "size_bytes": 393
         }
       }
     },
@@ -830,6 +844,13 @@
           "path": "reports/phase3/ir_drop_signoff.json",
           "size_bytes": 555,
           "note": "2026-08-12 - was PRODUCED_LIVE, producer ir_drop_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
+        },
+        "reports/phase3/dynamic_ir.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/dynamic_ir.json",
+          "path": "reports/phase3/dynamic_ir.json",
+          "size_bytes": 1887
         }
       }
     },
@@ -896,6 +917,13 @@
           "alternative": "reports/phase3/si_crosstalk.json",
           "path": "reports/phase3/si_crosstalk.json",
           "size_bytes": 860
+        },
+        "reports/phase3/si_mcf_sta.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/si_mcf_sta.json",
+          "path": "reports/phase3/si_mcf_sta.json",
+          "size_bytes": 2750
         }
       }
     },
