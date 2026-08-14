@@ -998,6 +998,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_metrics` | any | — | One per-step metrics schema, emitted by whoever computed the number. #1080. |
 | `step_output_collector` | any | — | materialize a per-STEP output subfolder view. |
 | `step_preflight` | any | — | the ORCHESTRATOR side of `required_inputs`. |
+| `step_repro_bundle` | any | — | everything one step reads, in one file, plus what it ran on. |
 | `step_required_inputs_check` | any | — | refuse to run a step that has nothing to read. |
 | `step_write_ledger` | any | — | record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED. |
 | `structured_table_extractor` | any | — | ONE general extractor for the whole TABLE tier. |
@@ -2120,6 +2121,7 @@ _(no programs in this group)_
 - `step_metrics` — One per-step metrics schema, emitted by whoever computed the number. #1080.
 - `step_output_collector` — materialize a per-STEP output subfolder view.
 - `step_preflight` — the ORCHESTRATOR side of `required_inputs`.
+- `step_repro_bundle` — everything one step reads, in one file, plus what it ran on.
 - `step_required_inputs_check` — refuse to run a step that has nothing to read.
 - `step_write_ledger` — record what a run ACTUALLY WROTE, then residual it against what the flow DECLARED.
 - `structured_table_extractor` — ONE general extractor for the whole TABLE tier.
