@@ -445,9 +445,43 @@ def test_a_gate_that_cannot_be_driven_is_its_own_state_not_a_crash(tmp_path):
     subprocess.run(["git", "-C", str(r), "commit", "-qm", "s"], check=True)
 
     res = G.audit(r, timeout=2)
-    assert res.verdict == "FAIL", res
-    assert res.findings[0]["kind"] == "GATE_UNRUNNABLE", res.findings
-    assert "TimeoutExpired" in res.findings[0]["detail"], res.findings
+    # STILL NOT A CRASH — the original property, unchanged.
+    assert res.unrunnable, res
+    assert res.unrunnable[0]["kind"] == "GATE_UNRUNNABLE", res.unrunnable
+    assert "TimeoutExpired" in res.unrunnable[0]["detail"], res.unrunnable
+
+    # AND NOT HOST-DEPENDENCE (vibe-ic#1498). This assertion pair is the fix:
+    # the docstring above has always said "a gate that cannot be driven is not
+    # host-dependence", and the verdict said FAIL with the gate sitting in
+    # `findings` — the list that produces "N of M probed gate(s) give a
+    # HOST-DEPENDENT verdict". A gate that ran on NEITHER side was never
+    # compared, so there is no disagreement to report.
+    assert res.findings == [], res.findings
+    assert res.verdict == "UNRUNNABLE", res
+
+
+def test_an_unrunnable_verdict_exits_2_not_0_and_not_1(monkeypatch, tmp_path):
+    """`I could not look` must reach the caller as NOT CHECKED.
+
+    The exit code is asserted through `main` rather than inferred from the
+    verdict string, because the dispatcher wires this gate as
+    `run_tolerating_uncheckable` — rc 2 becomes NOT_CHECKED and rc 1 becomes
+    FAIL, so the mapping IS the behaviour. Driven with a stub audit because
+    `main` has no --timeout flag to force a real gate to time out.
+    """
+    stub = G.Audit("UNRUNNABLE", [], None, 3, 3, [], None,
+                   ({"gate": "slow", "kind": "GATE_UNRUNNABLE",
+                     "detail": "could not be driven twice: TimeoutExpired"},))
+    monkeypatch.setattr(G, "audit", lambda *a, **k: stub)
+    assert G.main([str(tmp_path)]) == 2
+
+    # and the paired half: a REAL disagreement is still rc 1, so this change
+    # cannot be used to turn a host-dependent gate into "not checked".
+    real = G.Audit("FAIL", [{"gate": "g", "kind": "HOST_DEPENDENT_VERDICT",
+                             "detail": "d", "checkout": "a", "worktree": "b"}],
+                   None, 3, 3, [], None, ())
+    monkeypatch.setattr(G, "audit", lambda *a, **k: real)
+    assert G.main([str(tmp_path)]) == 1
 
 
 def test_a_gate_that_echoes_its_own_root_is_not_host_dependent(tmp_path):

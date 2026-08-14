@@ -231,6 +231,22 @@ class Audit(NamedTuple):
     #: the same class of damage as the leak it is fixing, so both the removals
     #: and the SKIPS are named.
     scratch: Optional[Dict] = None
+    #: Gates that could NOT BE DRIVEN at all — its own bucket, not `findings`
+    #: (vibe-ic#1498).
+    #:
+    #: A gate that never ran on either side was never COMPARED, so it cannot be
+    #: evidence of host-dependence. It used to be appended to `findings`, which
+    #: is what decides the verdict, so a subprocess timeout was reported and
+    #: exited as "N of M probed gate(s) give a HOST-DEPENDENT verdict" — a
+    #: sentence about a comparison that did not happen.
+    #:
+    #: MEASURED on clean `origin/main` 3d13e2c59, 8hd-3: this was the whole of
+    #: main's single hygiene FAIL. The gate underneath it
+    #: (`policy_direction_pin_check --verify-pins`) completes in 476s against
+    #: the 600s bound and passes — 21% headroom — so on a busy shared host it
+    #: times out and on a quiet one it does not. Every batch gated on the busy
+    #: host inherited a finding no batch author could act on.
+    unrunnable: Tuple[Dict, ...] = ()
 
 
 def corpus_gates(script: Path) -> List[Gate]:
@@ -520,6 +536,9 @@ def audit(repo_root: Path, timeout: int = 600,
             dirt, declared, scratch)
 
     findings: List[Dict] = []
+    #: See `Audit.unrunnable` — kept OUT of `findings` so a gate that could not
+    #: be driven cannot be counted as one that disagreed.
+    unrunnable: List[Dict] = []
     not_probed: List[Tuple[str, str]] = []
     for lineno, text in inert_exclusions(script):
         findings.append({
@@ -604,7 +623,13 @@ def audit(repo_root: Path, timeout: int = 600,
                 # A gate that cannot be driven is NOT host-dependence, and it
                 # is NOT a clean result either. It gets its own state rather
                 # than a traceback that kills the whole probe.
-                findings.append({
+                #
+                # ...and now its own LIST, which is what that sentence always
+                # meant (vibe-ic#1498). It had its own `kind` and went into
+                # `findings` anyway, and `findings` is what decides the verdict
+                # below — so "could not be driven" was printed and exited as
+                # "gives a HOST-DEPENDENT verdict".
+                unrunnable.append({
                     "gate": label, "kind": "GATE_UNRUNNABLE",
                     "detail": f"could not be driven twice: "
                               f"{type(exc).__name__}: {str(exc)[:160]}",
@@ -639,9 +664,19 @@ def audit(repo_root: Path, timeout: int = 600,
         _release_scratch(res, repo_root)
 
     probed = declared - len(not_probed)
+    # A REAL disagreement still wins. If anything genuinely gave two answers,
+    # this FAILs whether or not something else could not be driven — an
+    # unrunnable gate must never mask a host-dependent one, which is the
+    # failure mode of splitting these two lists.
     if findings:
         return Audit("FAIL", findings, dirt, declared, probed, not_probed,
-                     scratch)
+                     scratch, tuple(unrunnable))
+    # Nothing disagreed, but something was never asked. Not a pass: the probe
+    # covered fewer gates than it declares, and saying so is the whole point of
+    # the rc-2 tier this program already uses for NO_STIMULUS.
+    if unrunnable:
+        return Audit("UNRUNNABLE", findings, dirt, declared, probed,
+                     not_probed, scratch, tuple(unrunnable))
     # NO STIMULUS IS NOT A PASS (#539). Every gate agreeing across two trees
     # that carry the same bytes is arithmetic, not evidence: the leftovers this
     # probe detects a gate READING were absent from both sides, so the run had
@@ -685,7 +720,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "untracked": len(res.dirt.untracked),
                  "ignored": len(res.dirt.ignored),
                  "ignored_reported": res.dirt.ignored_reported}),
-             "findings": res.findings}, indent=2) + "\n")
+             "findings": res.findings,
+             # Its own key, never folded into `findings` — a consumer counting
+             # host-dependence must not pick up gates that never ran.
+             "unrunnable": list(res.unrunnable)}, indent=2) + "\n")
 
     # Whatever the outcome, SAY WHAT WAS NOT PROBED. A gate that left the
     # numerator without being named is how a set silently shrinks.
@@ -737,12 +775,36 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"      checkout: {f['checkout']}", file=sys.stderr)
         print(f"      worktree: {f['worktree']}", file=sys.stderr)
 
+    # NAMED WHATEVER THE VERDICT IS. A gate that could not be driven shrinks
+    # the numerator, and an unnamed shrink is how a probe quietly stops
+    # covering things (vibe-ic#1498).
+    for u in res.unrunnable:
+        print(f"  [{u['kind']}] {u['gate']}", file=sys.stderr)
+        print(f"      {u['detail']}", file=sys.stderr)
+
     stim = res.dirt.describe() if res.dirt is not None else "unknown stimulus"
     if res.findings:
         print(f"[FAIL] {len(res.findings)} of {res.probed} probed corpus "
               f"gate(s) ({res.declared} declared) give a HOST-DEPENDENT "
               f"verdict.", file=sys.stderr)
+        if res.unrunnable:
+            print(f"       (separately, {len(res.unrunnable)} gate(s) could "
+                  f"not be driven at all — they are NOT part of that count)",
+                  file=sys.stderr)
         return 1
+    if res.verdict == "UNRUNNABLE":
+        # rc 2, the same tier NO_STIMULUS uses, and for the same reason: this
+        # is "I could not look", which must never reach a reader as "I looked
+        # and it was fine". It is also not rc 1 — nothing disagreed, and a
+        # permanently red gate is a gate that gets skipped.
+        print(f"UNRUNNABLE: host-independence was NOT fully checked — "
+              f"{len(res.unrunnable)} of {res.probed} probed gate(s) "
+              f"({res.declared} declared) could not be driven on either side, "
+              f"so they were never COMPARED. The remaining "
+              f"{res.probed - len(res.unrunnable)} agreed. A gate that did not "
+              f"run is not a gate that disagreed, and it is not a pass either; "
+              f"{stim}.", file=sys.stderr)
+        return 2
     if res.verdict == "NO_STIMULUS":
         # The sentence a two-pristine-tree run has always deserved and never
         # printed.
