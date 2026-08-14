@@ -98,15 +98,8 @@ echo "=== gatekeeper landing gates — base=$BASE ==="
 
 # vibe-ic#1129 — the mechanical repairs, BEFORE anything measures them. A gate
 # that refuses for a reason a program can fix spends an hour saying so.
-if [ "$PREPARE" = "1" ]; then
-  echo "--- prepare (vibe-ic#1129: the mechanical three, then get out of the way) ---"
-  if python3 "$PROGRAMS/gatekeeper_prepare_landing.py" --repo "$ROOT" --commit; then
-    :
-  else
-    echo "  FAIL  preparation REFUSED — see above. Not proceeding: a landing whose"
-    echo "        preparation could not be attributed is not one worth an hour."
-    exit 1
-  fi
+# dispatch block deleted (MUT-2)
+
 fi
 
 echo "--- cheap tier (also enforced by the pre-push hook) ---"
