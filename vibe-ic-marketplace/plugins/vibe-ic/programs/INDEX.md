@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1103
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1103)
+- **Total programs (excluding helpers / shims):** 1104
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1104)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1094 |
+| `any` | 1095 |
 
 ## Alphabetical listing
 
@@ -310,6 +310,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `eco_loop_audit` | any | — | Audit the post-route timing repair pass's log for completeness. |
 | `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
 | `eco_trigger_decision` | any | — | the SHARED ECO auto-trigger decision. |
+| `eda_fork_sync_log_append_only_check` | any | — | a fork-sync round is a RECORD of what was measured on one day. A merge may only ADD one; it may never quietly edit or shrink one that alr... |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
 | `edp_protocol_synth` | any | v0.1.95 | VESA Embedded DisplayPort (eDP) protocol synth helper. |
@@ -1175,7 +1176,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1094 programs)
+### `any` (1095 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1457,6 +1458,7 @@ _(no programs in this group)_
 - `eco_loop_audit` — Audit the post-route timing repair pass's log for completeness.
 - `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
 - `eco_trigger_decision` — the SHARED ECO auto-trigger decision.
+- `eda_fork_sync_log_append_only_check` — a fork-sync round is a RECORD of what was measured on one day. A merge may only ADD one; it may never quietly edit or shrink one that alr...
 - `eda_log_check` — Deterministic EDA tool log/report checker.
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
 - `edp_protocol_synth` — VESA Embedded DisplayPort (eDP) protocol synth helper.  _[v0.1.95]_

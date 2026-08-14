@@ -568,6 +568,45 @@ def one_commit_gate(repo: Path, base: str, head: str = "HEAD",
     return GateResult("landing_is_one_commit_check", rc, reason)
 
 
+# --------------------------------------------------------------------------
+# eda_fork_sync_log_append_only_check — vibe-ic#1228.
+#
+# `EDA_FORK_SYNC_LOG.md` is an append-only ledger of daily fork-sync rounds.
+# Consecutive rounds report the SAME tools, so consecutive sections share long
+# byte-identical bullet lines, and a 3-way merge reads a shared line as common
+# CONTEXT belonging to both sections at once. Resolve the hunk the obvious way
+# — keep both sides, because these ARE two independent reports — and the later
+# section claims the shared line while the earlier, ALREADY-LANDED round
+# silently loses a verdict. Measured merging #1238 onto `75776dbbb`: the
+# `open_pdks` line falls outside the conflict hunk and take-both-sides deletes
+# it from the 2026-08-12 round.
+#
+# The result reads as a clean `+6/-0` append and nothing in the tree could tell
+# it from a round that genuinely had three verdicts, because until this gate
+# nothing in the tree read the ledger at all. So it belongs HERE, next to the
+# other landing-method guards, rather than in the test suite: the suite reads
+# one revision, and the property is BASE-vs-HEAD.
+#
+# BLOCKING (rc 1). rc 2 — a base that will not resolve — is a SKIP, because an
+# unreadable revision has not told us the ledger is intact, and reporting that
+# as a pass is the failure this whole family of gates exists to refuse.
+# --------------------------------------------------------------------------
+def fork_sync_log_gate(repo: Path, base: str, head: str) -> GateResult:
+    name = "eda_fork_sync_log_append_only_check"
+    prog = _PROGRAMS_DIR / "eda_fork_sync_log_append_only_check.py"
+    if not prog.is_file():
+        return GateResult(name, 2, f"checker missing at {prog}")
+    rc, out, err = _run_program(
+        prog, [str(repo), "--base", base, "--head", head], timeout=60)
+    body = (err.strip() or out.strip()).splitlines()
+    reason = body[0][:240] if body else "no output"
+    if rc == 2:
+        # Named, not silent: a decline that discloses nothing reads downstream
+        # as "nothing needed doing" (flow-change-acceptance §6).
+        return GateResult(name, -1, f"NOT CHECKED — {reason}")
+    return GateResult(name, rc, reason)
+
+
 def stale_branch_gate(repo: Path, base: str, head: str) -> GateResult:
     prog = _PROGRAMS_DIR / "gatekeeper_stale_branch_check.py"
     if not prog.is_file():
@@ -1359,6 +1398,10 @@ def review(base: str, head: str, *,
     # judges a branch BEFORE it lands; once it has landed, its FRESH verdict is
     # structurally guaranteed and content-blind. This one reads the commits.
     gates.append(collateral_revert_gate(repo, base, head))
+    # #1228 — the same question for the one file in this repo a text merge
+    # cannot resolve correctly: an append-only ledger whose consecutive entries
+    # share byte-identical lines.
+    gates.append(fork_sync_log_gate(repo, base, head))
     # #459 — the landing SHAPE, alongside the landing METHOD above.
     #
     # v1.7.65: this used to omit `head`, and the comment that stood here
