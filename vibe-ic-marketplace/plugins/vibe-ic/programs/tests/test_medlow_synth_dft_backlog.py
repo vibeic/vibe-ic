@@ -508,6 +508,13 @@ def _step11_happy_path(tmp_path: Path) -> Path:
     (dft / "tv.json").write_text('{"vectors": []}')
     (dft / "cell_model_combined.v").write_text("// combined\n")
     (dft / "transition_atpg_plan.md").write_text("# plan\n")
+    # The engine's native coverage metadata. `fault_atpg_run.py:1605` writes
+    # this path (`cov_out = "phase2/stage2/dft/coverage.yml"`) on the measured
+    # path, and this step's own gate reads faultPoints/sa0Covered/sa1Covered
+    # back out of it — so a run that DID measure leaves it, and a fixture that
+    # omits it is not the happy path it claims to be.
+    (dft / "coverage.yml").write_text(
+        "faultPoints: 100\nsa0Covered: 96\nsa1Covered: 96\n")
     (rep / "coverage.json").write_text(json.dumps(
         {"coverage_pct": 96.0, "target_pct": 95.0}))
     (rep / "bsdl_plan.json").write_text('{"verdict": "N_A"}')
