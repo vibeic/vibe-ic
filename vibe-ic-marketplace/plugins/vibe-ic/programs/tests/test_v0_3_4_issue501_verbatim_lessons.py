@@ -117,13 +117,24 @@ def test_touched_skill_compliance_tests_green():
     rr = PT.repo_root()
     if rr is None:
         pytest.skip("cache tree — compliance pin runs on the source tree")
+    import os
     import subprocess
     skill_tests = SKILL.parent / "tests"
     if not skill_tests.is_dir():
         pytest.skip("core-agent-loop/tests absent on this tree")
+    # vibe-ic#1321. The child is pointed INSIDE the shipped `skills/` tree, so
+    # importing those modules makes CPython write `__pycache__/*.pyc` beside
+    # them — into the tree this repo ships. `git status` never shows it
+    # (`__pycache__` is ignored), which is why it reads as a phantom: the
+    # `skills/` digest moves while the working tree looks clean, and
+    # `gatekeeper-land.sh:213` fails the whole landing on a moved tree.
+    #
+    # `sys.dont_write_bytecode` cannot fix this: it is PER-PROCESS, and the
+    # writer is the child. The env var is what crosses the boundary.
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     r = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", str(skill_tests)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
     assert r.returncode == 0, (
         "core-agent-loop skill tests must stay green:\n"
