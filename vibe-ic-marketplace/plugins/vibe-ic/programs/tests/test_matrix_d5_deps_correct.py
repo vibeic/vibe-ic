@@ -500,22 +500,25 @@ def external_input_declarations(step_id) -> Tuple[str, ...]:
     return tuple(sorted(out))
 
 
-#: SHRINK-ONLY. The steps whose layer-3 edge is a KNOWN, FILED, DEFERRED
-#: defect: vibe-ic#1070. Every one of them is a real unguarded dependency and
-#: the repair is one yaml list each; the owner deferred it on SEQUENCING —
-#: declaring these edges is transitive and would newly put the producer into
-#: the ancestry of 44 / 14 / 4 of the 63 steps, which on an already-red main
-#: destroys the only delta the repair agents have to read.
+#: SHRINK-ONLY, and now EMPTY — the debt is discharged, not re-baselined.
 #:
-#: This register may only SHRINK. A NEW step in this state fails immediately;
-#: these three are named, evidenced and pointed at the issue rather than
-#: silently forgiven. When #1070 lands, this set empties and
-#: `test_d5_the_deferred_register_only_shrinks` reddens if it does not.
-_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {
-    "A1": ("D1",),      # reads L1_DATASHEET.json + L5_ADI_SPEC.json
-    "25": ("24",),      # reads IR-drop's outputs: all
-    "M1": ("37",),      # reads phase3/stage4/gds/*.gds
-}
+#: This held the three steps whose layer-3 edge was a KNOWN, FILED, DEFERRED
+#: defect (vibe-ic#1070): `A1 -> D1`, `25 -> 24`, `M1 -> 37`. Each was a real
+#: unguarded dependency whose repair is one yaml list; the owner deferred them
+#: on SEQUENCING, because declaring a transitive edge newly puts the producer
+#: into the ancestry of 44 / 14 / 4 of the 63 steps, and on an already-red main
+#: that destroys the only delta the repair agents have to read.
+#:
+#: **#1070 landed in `[v1.10.40] candidate batch MEGA`**, so all three edges are
+#: now ORDERED in the declared graph and the entries no longer describe live
+#: defects. `test_d5_the_deferred_register_only_shrinks` reddened on exactly
+#: that — it names each edge and says "delete the register entry" — which is
+#: this change. Shrinking means DELETING the entry, never rewriting it to match
+#: the new reality.
+#:
+#: The register stays: a NEW step in this state must still fail immediately.
+#: It is empty because the debt was paid, not because it was forgiven.
+_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {}
 
 
 
