@@ -756,6 +756,105 @@ def test_a_range_scoped_gate_cannot_be_waived_by_a_vacuous_base_failure():
         "the boundary on what the base arm can excuse is not disclosed"
 
 
+def _arm_a1_pytest_argv():
+    """The arm A1 pytest command as the script really writes it.
+
+    Continuation lines are joined the way the shell joins them, so a flag moved
+    onto the next line is still seen. Comments are dropped first: a knob named
+    only in prose is a knob the session does not have, and this whole test group
+    exists because the two arms differed in one such knob.
+    """
+    body = "\n".join(l for l in _VERIFY.read_text(encoding="utf-8").splitlines()
+                     if not l.lstrip().startswith("#"))
+    joined, buf = [], ""
+    for raw in body.splitlines():
+        line = raw.rstrip()
+        if line.endswith("\\"):
+            buf += line[:-1] + " "
+            continue
+        joined.append(buf + line)
+        buf = ""
+    for cmd in joined:
+        if "--junitxml=$BASE_JUNIT" in cmd:
+            return cmd
+    raise AssertionError("arm A1 no longer writes a junit report at all")
+
+
+def test_both_arms_of_the_differential_run_the_same_pytest_session():
+    """vibe-ic#1417. A differential is only a differential if the two arms were
+    measured with the SAME instrument, and they were not.
+
+    Arm B goes through `gatekeeper-land.sh:run_pytest`, which declares its
+    session: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` plus `-p pytest_timeout`, the
+    one plugin the suite needs. That pin exists because autoload is measured to
+    kill this repo's session AT COLLECTION on the landing host. Arm A1 declared
+    neither and simply borrowed `--timeout=180 --timeout-method=thread` from
+    whatever the host happened to load — so BOTH settings of the ambient switch
+    could take arm A1 down while arm B ran:
+
+        same tree, same file, autoload disabled in the caller's environment
+          arm A1 as written   ERROR: unrecognized arguments: --timeout=180
+                              rc=123, NO junit report
+          arm B  as written   21 passed, junit written
+
+    A dead arm A1 is not a soft failure. The base failed set becomes empty, and
+    #1417's map is a map of reds that are pre-existing on `main` — every one of
+    them then reads as `NEW FAILURE(S) THIS BRANCH OWNS` against a branch that
+    introduced none of them. Strict, so never a false landing; but #1417's
+    finding is that merge CAPACITY is this repo's bottleneck, and a differential
+    that refuses conformant PRs on its own instrument's failure spends it.
+    """
+    a1 = _arm_a1_pytest_argv()
+    land = "\n".join(l for l in _LAND.read_text(encoding="utf-8").splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in land and "-p pytest_timeout" in land, \
+        "arm B lost its session pin; the parity below would then be vacuous"
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in a1, (
+        "arm A1 inherits plugin autoload while arm B disables it — the two arms "
+        "are not the same instrument, and the arm that autoload kills is the "
+        f"one whose silence reads as 'the base failed nothing': {a1}")
+    assert "-p pytest_timeout" in a1, (
+        "arm A1 passes --timeout flags without naming the plugin that supplies "
+        f"them; with autoload off it cannot parse its own command line: {a1}")
+    # Same bound and same method on both sides, resolved from the text rather
+    # than restated here — two hand-copies of a bound is the drift this repo has
+    # spent versions removing, and a differential across two bounds is not one.
+    for knob in ("--timeout=180", "--timeout-method=thread"):
+        assert knob in a1 and knob in land, (knob, a1)
+
+
+def test_a_base_arm_that_could_not_run_is_named_rather_than_printed_blank():
+    """vibe-ic#1417's headline defect, on the landing path.
+
+    Arm A1's status line was `tail -1` of its log. A pytest that dies before it
+    writes a summary — the `--timeout-method=thread` session kill this repo
+    documents, or the collection-time crash above — ends its log on a `rootdir:`
+    line followed by a blank one, so the arm that COULD NOT LOOK printed as an
+    empty string:
+
+        --- arm A1 (base 3d13e2c59eb0):
+
+    which is quieter than the arm that looked and found nothing. The verdict
+    then reports `0 on the base`, and #1417's whole subject is that an empty
+    result is not a zero. The junit report is the only honest witness that the
+    arm ran, so the branch is taken on its existence, and the exit status is
+    carried into the message instead of being discarded.
+    """
+    body = "\n".join(l for l in _VERIFY.read_text(encoding="utf-8").splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "A1_RC=$?" in body, \
+        "arm A1's exit status is discarded, so a dead arm cannot be reported"
+    assert 'if [ -s "$BASE_JUNIT" ]; then' in body, (
+        "arm A1's status line does not depend on whether a report was produced; "
+        "a run that died still prints as if it had measured")
+    assert "arm A1 UNMEASURED" in body, \
+        "an arm that could not look is not NAMED as unmeasured"
+    # And the message must say which way the verdict then leans. The degradation
+    # is strict, and a reader who is not told that will read the REFUSE as the
+    # branch's fault — which is precisely the misattribution #1417 is about.
+    assert "UNKNOWN, not empty" in body
+
+
 def test_the_base_gate_cache_is_keyed_by_the_base_commit():
     """Measured on this host: one repo-hygiene pass is 19 min, and the gate
     differential needs two. In a serialized merge queue the base moves once per
