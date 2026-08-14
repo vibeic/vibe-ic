@@ -167,27 +167,6 @@ REPO=""
 # than a wrong one: git takes it literally and every `rev-parse` fails.
 unset GIT_DIR GIT_WORK_TREE
 
-# THE SAME LESSON, FOR THE ARMS' PLUGIN SET (vibe-ic#1443).
-#
-# `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is in the pinned verification invocation
-# agents are told to use, and it is INHERITED by the pytest this script runs for
-# arm A1 and by both `gatekeeper-land.sh` runs. Without autoload there is no
-# `pytest-timeout`, so the arm's own `--timeout=180 --timeout-method=thread` is
-# rejected:
-#
-#     python -m pytest: error: unrecognized arguments: --timeout=180 …
-#
-# pytest exits on the usage error, writes NO junit, and arm A1 is DEAD. Measured
-# on `3d13e2c59`: the verdict then said "the base report is empty … demand
-# green" and returned LAND OK, so the landing harness has been running with a
-# dead base arm in every such session and nothing said so.
-#
-# An arm must measure what the PUSH path measures, not what the caller's shell
-# happens to allow. The caller disabled autoload for ITS OWN session; inheriting
-# that into a measurement arm makes the arm answer a different question — the
-# same defect as the wrong `GIT_DIR` above, one layer up.
-unset PYTEST_DISABLE_PLUGIN_AUTOLOAD
-
 die() { printf 'gatekeeper-verify-merge: %s\n' "$*" >&2; exit 2; }
 
 while [ $# -gt 0 ]; do
@@ -534,8 +513,33 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   if [ -s "$RUN/selection_base.txt" ]; then
     # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
     # failed set, and a truncated base makes a new failure look pre-existing.
-    ( cd "$BASE_PLUGIN" && xargs -a "$RUN/selection_base.txt" \
-        python3 -m pytest -q --timeout=180 --timeout-method=thread \
+    #
+    # ARM A1 DECLARES THE SAME SESSION ARM B DECLARES (vibe-ic#1443, and the same
+    # defect #1521 reached independently). `gatekeeper-land.sh:299` runs
+    # `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 … -p pytest_timeout` and records why: on
+    # the LANDING host, autoload pulls in 8 `pytest11` entry points and one of
+    # them — `web3`'s `pytest_ethereum` — raises at import and takes the session
+    # down AT COLLECTION. Arm A1 declared neither half and inherited whatever the
+    # caller's shell had:
+    #
+    #   caller sets PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 (the pinned verification
+    #     invocation every agent is told to use) -> no `pytest-timeout`, so this
+    #     line's own `--timeout=180` is rejected, pytest exits on the usage
+    #     error, NO junit is written and arm A1 is DEAD;
+    #   caller sets nothing, on the landing host -> autoload, and the session
+    #     dies at collection instead.
+    #
+    # BOTH settings of the ambient switch could take arm A1 down while arm B ran,
+    # and a differential across two different instruments is not a differential.
+    # UNSETTING THE VARIABLE HERE WOULD BE THE WRONG REPAIR — it fixes the first
+    # case and re-arms the second, on the one host that actually lands code, and
+    # it tests green anywhere the harmful plugin is not installed (8HD-8 has 2
+    # `pytest11` entry points, neither of them `pytest_ethereum`). Declaring the
+    # session is the repair that is right on every host.
+    ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+        xargs -a "$RUN/selection_base.txt" \
+        python3 -m pytest -q -p pytest_timeout \
+        --timeout=180 --timeout-method=thread \
         -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
         > "$RUN/base_tests.log" 2>&1
     echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
