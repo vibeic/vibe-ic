@@ -200,7 +200,7 @@ def fingerprint(keyed: Dict[str, bool],
     """
     vers = vers or {}
     payload = ";".join(
-        f"{t}={bool(keyed.get(t))}@{vers.get(t) or UNKNOWN_VERSION}"
+        f"{t}={bool(keyed.get(t))}"
         for t in sorted(KEYED_TOOLS))
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
