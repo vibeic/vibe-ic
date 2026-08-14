@@ -1070,6 +1070,29 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     # message about a record that is perfectly consistent, pointing a reader
     # away from the one thing that happened.
     wrote = by_state("WROTE_CORPUS")
+
+    # vibe-ic#584 — the three keys that make NOT_CHECKED load-bearing HERE and
+    # not only in the script's exit code. Before this, `not_checked` reached the
+    # summary STRING and nothing else: the sweep printed "3 NOT CHECKED — this
+    # is NOT a pass" and this function returned rc 0, i.e. MERGE_OK.
+    #
+    # Derived from the per-gate records when the top-level key is absent, and
+    # derived FAIL-SAFE: a record written by a script predating the exemption
+    # mechanism carries no `exempt_until` on any gate, so every NOT_CHECKED in
+    # it reads as UNEXEMPTED and refuses. The opposite default would make "hand
+    # a record in the old format" the way to buy silence for the whole
+    # mechanism.
+    wiring = [str(w) for w in (doc.get("wiring_errors") or [])]
+    unexempted = doc.get("not_checked_unexempted")
+    if unexempted is None:
+        unexempted = [str(g.get("label")) for g in gates
+                      if g.get("state") == "NOT_CHECKED"
+                      and not g.get("exempt_until")]
+    expired = doc.get("exemptions_expired")
+    if expired is None:
+        expired = [str(g.get("label")) for g in gates
+                   if g.get("exemption_expired")]
+
     ran = declared - len(deferred)
     secs = doc.get("seconds")
     where = f"{ran}/{declared} gate(s) ran"
@@ -1091,6 +1114,14 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
         return GateResult(name, 2,
                           "ERROR — the hygiene script declared 0 gates; "
                           "nothing was checked and this is NOT a pass")
+    if wiring:
+        # The set's own DECLARATION is wrong, so no count it reports means what
+        # it says. ERROR rather than FAIL: nothing was concluded about the tree.
+        return GateResult(name, 2,
+                          f"ERROR — {len(wiring)} wiring error(s) in the "
+                          f"hygiene gate declarations, so the set certifies "
+                          f"nothing: " + "; ".join(wiring[:3])
+                          + (" …" if len(wiring) > 3 else "") + f" [{where}]")
     if wrote:
         # BEFORE the FAIL branch. Every gate that ran after a corpus write read
         # a tree this run modified, so any accompanying failure may be about
@@ -1112,6 +1143,30 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
                           + ", ".join(sorted(failed)[:6])
                           + (" …" if len(failed) > 6 else "")
                           + f" [{where}]")
+    # AFTER the FAIL branch, and both are rc 1, so the ordering decides only
+    # which sentence a maintainer reads first — a gate that RAN and found
+    # something is the one to act on. Neither is lost: both are named in
+    # `where`.
+    if unexempted:
+        # The lie-shape this whole change is about: the sweep NAMED a gate it
+        # could not run and this function answered MERGE_OK over it. A gate
+        # allowed to go unchecked must have said so in advance, with a date and
+        # a reason, at the line that wires it.
+        return GateResult(name, 1,
+                          f"{len(unexempted)} gate(s) NOT CHECKED with no "
+                          f"declared exemption — the hygiene set is smaller "
+                          f"than it reports: "
+                          + ", ".join(sorted(unexempted)[:6])
+                          + (" …" if len(unexempted) > 6 else "")
+                          + f" [{where}]")
+    if expired:
+        return GateResult(name, 1,
+                          f"{len(expired)} uncheckable exemption(s) are PAST "
+                          f"their review date; re-review the gate and either "
+                          f"restate the date with a reason that is still true "
+                          f"or remove the tolerance: "
+                          + ", ".join(sorted(expired)[:6])
+                          + (" …" if len(expired) > 6 else "") + f" [{where}]")
     if script_rc != 0:
         # Red script, no failing gate named: a setup/summary inconsistency we
         # must not paper over.
