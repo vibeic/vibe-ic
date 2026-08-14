@@ -138,6 +138,7 @@ import contextlib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -497,15 +498,129 @@ def _artefact_channel_figures() -> Dict[str, Callable[[Path], int]]:
 CORPUS_FIGURES = _build_corpus_figures()
 
 
-def figure_corpus(root: Path) -> List[Path]:
-    """Every document under ``root`` that speaks about the flow substrate.
+#: Bound for the one subprocess this module runs. NOT a round number by
+#: accident: `ci_harness_timeout_ceiling_check` resolves the harness bound from
+#: `tools/gatekeeper-land.sh` — `pytest -q --timeout=180
+#: --timeout-method=thread` — and permits any ONE blocking call at most
+#: 180 // 3 = 60 s. A larger inner bound can never fire: pytest reaches 180 s
+#: first and takes the whole SESSION down, so every other file in the run loses
+#: its verdict unnamed. `git ls-files` on this tree returns in well under a
+#: second; this is a ceiling, not an expectation.
+_GIT_LS_TIMEOUT_S = 60
 
-    Membership is a property of the file's own text, so a new module that
-    quotes these figures joins the corpus by being written, not by being
-    remembered. ``__pycache__`` is excluded because a .pyc is not prose.
+
+def _has_git_dir(root: Path) -> bool:
+    """Is there a ``.git`` at ``root`` or above it?
+
+    Distinguishes "no repository here" from "repository here, pointer broken",
+    which git reports with the same words. A `.git` entry may be a directory
+    (normal clone) or a FILE (a worktree, which is what the host-independence
+    probe creates), so both count.
     """
+    for parent in [root, *root.parents]:
+        if (parent / ".git").exists():
+            return True
+    return False
+
+
+class CorpusUnreadable(RuntimeError):
+    """The tracked file list could not be obtained.
+
+    Raised rather than returning an empty list, because THOSE ARE NOT THE SAME
+    ANSWER. An empty corpus makes every freshness assertion below vacuously
+    true — nothing to re-derive, nothing stale, `[PASS]` — which is the exact
+    shape of the defect this whole census exists to find. A gate that cannot
+    see its subject must refuse, not agree.
+    """
+
+
+def tracked_corpus_files(root: Path) -> Optional[List[Path]]:
+    """Files git TRACKS under ``root``, or ``None`` if ``root`` is not in a repo.
+
+    THREE outcomes, and the difference between the last two is the whole point:
+
+    * a list        -- ``root`` is version-controlled; this is what the commit
+                       holds, and it is identical in a checkout and a worktree.
+    * ``None``      -- ``root`` is not inside a git repository at all. That is
+                       the normal case for a FIXTURE: the tests build a corpus
+                       under ``tmp_path`` and are entitled to an answer. The
+                       caller enumerates the filesystem instead, and no
+                       host-independence claim is being made about a temp dir.
+    * ``CorpusUnreadable`` -- git exists, ``root`` looks like a repo, and the
+                       listing FAILED. Never silently degraded to either of the
+                       above, because a command that could not look has not
+                       told us the answer is none.
+
+    THIS IS THE HOST-INDEPENDENCE BOUNDARY, and it is why this is not an
+    `rglob`. `gate_host_independence_check` drives every gate twice — once in
+    the working checkout, once in `git worktree add --detach HEAD` — and
+    demands the same verdict. A working checkout that has been USED carries
+    untracked leftovers; a fresh worktree never does. So a corpus enumerated
+    from the filesystem is a property of the directory, and a verdict derived
+    from it is a property of the machine.
+
+    MEASURED on 3d13e2c59, one untracked `.md` copied into the corpus root and
+    nothing else changed:
+
+        pristine        [PASS] 57 anchored figure(s) across 29 corpus file(s)
+        + 1 untracked   [PASS] 74 anchored figure(s) across 30 corpus file(s)
+
+    Both say PASS; the probe compares the verdict LINE, so that is a
+    `HOST_DEPENDENT_VERDICT` and the whole hygiene tier goes red with it.
+
+    Tracked-set membership is not a narrower question than "every file here",
+    it is the correct one: this gate answers whether the figures THE REPOSITORY
+    PUBLISHES are fresh, and an uncommitted file publishes nothing. A document
+    still joins by being written rather than by being listed — it now joins
+    when it is committed, which is also when its figures become claims anyone
+    can read.
+
+    Residual, stated rather than left for someone to rediscover: this pins the
+    file SET. A tracked file whose content differs from HEAD still reads
+    differently in the two trees. That divergence needs a dirty checkout, which
+    a landing gate does not have, and `landing_worktree_is_clean_check` already
+    owns it.
+    """
+    try:
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                           capture_output=True, timeout=_GIT_LS_TIMEOUT_S)
+    except FileNotFoundError:
+        # No git on this machine at all. Not a repo question, and not a
+        # failure to look at a repo — enumerate the filesystem and say so.
+        return None
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CorpusUnreadable(
+            f"could not list tracked files under {root}: "
+            f"{type(exc).__name__}: {exc}") from exc
+    if r.returncode != 0:
+        err = r.stderr.decode("utf-8", "replace").strip()
+        # `not a git repository` is what git says for BOTH "there is no repo
+        # here" (a tmp_path fixture — fine, answer from the filesystem) and
+        # "there is a repo here and its pointer is broken" (NOT fine — that is
+        # a failure to look, and falling back would quietly restore the
+        # host-dependence this function exists to remove). The message cannot
+        # tell them apart, so ask the filesystem which one it is.
+        if "not a git repository" in err.lower() and not _has_git_dir(root):
+            return None
+        raise CorpusUnreadable(
+            f"git ls-files exited {r.returncode} under {root}: {err[:200]}")
+    names = r.stdout.decode("utf-8", "replace").split("\0")
+    return [root / n for n in names if n]
+
+
+def figure_corpus(root: Path) -> List[Path]:
+    """Every TRACKED document under ``root`` that speaks about the flow substrate.
+
+    Membership is a property of the file's own text, so a module that quotes
+    these figures joins the corpus by being written, not by being remembered.
+    ``__pycache__`` is excluded because a .pyc is not prose; untracked files
+    are excluded because they are not in the commit whose figures this judges —
+    see `tracked_corpus_files`.
+    """
+    tracked = tracked_corpus_files(root)
+    candidates = root.rglob("*") if tracked is None else tracked
     out: List[Path] = []
-    for path in sorted(root.rglob("*")):
+    for path in sorted(candidates):
         if path.suffix not in CORPUS_SUFFIXES or not path.is_file():
             continue
         if "__pycache__" in path.parts:
