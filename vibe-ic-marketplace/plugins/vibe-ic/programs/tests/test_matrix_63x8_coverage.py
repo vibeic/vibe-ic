@@ -1151,6 +1151,65 @@ _OUTCOME_TIMEOUT_S = 60
 _OUTCOME_MAX_WAVES = 2
 
 
+#: The per-call bound for the OTHER caller, whose budget is not the harness's
+#: (vibe-ic#1382 / #1498). `tools/gen_matrix_63x8_census.py` imports this module
+#: and calls `cell_outcomes()` as a library, and runs as a standalone gate from
+#: `tools/ci/repo_hygiene_gates.sh:943`. MEASURED: `timeout` appears ZERO times
+#: in that script and ZERO times in `_gate_dispatch.sh`, so nothing bounds that
+#: gate and there is no total for the wave count above to fit inside.
+#:
+#: Why the waves alone are not enough, measured over four PAIRED rounds of the
+#: census gate, alternating so both arms saw the same fleet:
+#:
+#:     r1  main load  21.6 rc=0      waves-only load  11.2 rc=1  d7 > 60s
+#:     r2  main load  34.5 rc=0      waves-only load  35.6 rc=0
+#:     r3  main load  19.5 rc=0      waves-only load  17.8 rc=1  d2 > 60s
+#:     r4  main load 101.2 rc=1 d3   waves-only load 130.5 rc=0
+#:
+#: 2 failures in 4 against main's 1 in 4, at the two LOWEST loads observed, and
+#: a different module crossing each time. The wave scheme changes WHICH modules
+#: contend, not whether one can cross a bound sized for a different caller.
+#:
+#: Under pytest this returns the unchanged 60 s, so the `_OUTCOME_MAX_WAVES`
+#: reasoning above holds exactly as written and the 180//3 ceiling rule keeps
+#: applying. `PYTEST_CURRENT_TEST` is set by pytest for the duration of a test;
+#: absent it, this module was imported as a library by the census generator.
+#:
+#: HONEST LIMITS: no wall-clock bound is strictly host-independent -- this
+#: restores a margin the measured spread cannot cross, it does not abolish the
+#: class. And `gate_timeout_s()` is env-overridable (`VIBE_IC_GATE_TIMEOUT_S`),
+#: so two hosts configured differently get different bounds; both arms of the
+#: host-independence probe run in ONE process environment, so that cannot move
+#: the verdict this addresses.
+
+
+def _standalone_outcome_timeout_s() -> int:
+    """Per-call bound for the standalone-gate path; never below the harness one.
+
+    `_path_layout` is loaded BY PATH off ``__file__`` rather than by name:
+    this module is imported both by pytest (with ``programs/tests`` on the
+    path) and as a library by the census generator, and only one of those puts
+    ``programs`` on ``sys.path``. There is deliberately NO fallback -- a silent
+    one would return 60 and the change would read as applied while doing
+    nothing.
+    """
+    import importlib.util
+
+    pl_path = Path(__file__).resolve().parent.parent / "_path_layout.py"
+    spec = importlib.util.spec_from_file_location(
+        "_matrix_cov_path_layout", pl_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return max(_OUTCOME_TIMEOUT_S, int(mod.gate_timeout_s()))
+
+
+def _outcome_timeout_s() -> int:
+    """The per-call bound, from the budget the CALLER actually has."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return _OUTCOME_TIMEOUT_S
+    return _standalone_outcome_timeout_s()
+
+
 def _outcome_worker_count(n_paths: int) -> int:
     """Pool width that makes the WORST CASE of the loop fit the harness.
 
@@ -1222,7 +1281,10 @@ def _run_outcome_reports(
     assert paths, "no module paths given to the outcome run"
     with ThreadPoolExecutor(
             max_workers=_outcome_worker_count(len(paths))) as pool:
-        futures = [pool.submit(_run_one_module_outcome, p, cwd) for p in paths]
+        # ONE bound for the whole fan-out, from the caller's own budget.
+        timeout_s = _outcome_timeout_s()
+        futures = [pool.submit(_run_one_module_outcome, p, cwd, timeout_s)
+                   for p in paths]
         # `.result()` walked in `paths` order, never in completion order: a
         # module that fails or times out must raise the same first exception
         # whether or not a sibling happened to finish before it, or two arms of
@@ -1254,7 +1316,9 @@ def _run_outcome_reports(
 
 
 def _run_one_module_outcome(path: Path,
-                            cwd: Optional[Path]) -> Dict[str, List[Dict]]:
+                            cwd: Optional[Path],
+                            timeout_s: Optional[int] = None,
+                            ) -> Dict[str, List[Dict]]:
     """The single-module half of :func:`_run_outcome_reports`.
 
     ``--basetemp`` is REQUIRED, not tidiness, and it is what makes the
@@ -1267,6 +1331,8 @@ def _run_one_module_outcome(path: Path,
     belongs to no change and does not reproduce. Each module run gets its own
     root inside its own scratch dir, which is removed with it.
     """
+    if timeout_s is None:
+        timeout_s = _outcome_timeout_s()
     scratch = Path(tempfile.mkdtemp(prefix="matrix_cov_outcome_"))
     try:
         plugin = scratch / "matrix_cell_outcomes.py"
@@ -1285,12 +1351,12 @@ def _run_one_module_outcome(path: Path,
                  "-p", "matrix_cell_outcomes",
                  "--basetemp", str(scratch / "pytest_tmp")],
                 cwd=str(cwd or PLUGIN_ROOT), capture_output=True, text=True,
-                timeout=_OUTCOME_TIMEOUT_S, env=env,
+                timeout=timeout_s, env=env,
             )
         except subprocess.TimeoutExpired as exc:
             raise AssertionError(
                 f"the outcome run for {path.name} did not finish within "
-                f"{_OUTCOME_TIMEOUT_S}s. This bound exists so that THIS "
+                f"{timeout_s}s. This bound exists so that THIS "
                 f"assertion is what a reader gets, instead of a pytest session "
                 f"kill that takes every other file's verdict with it."
             ) from exc
