@@ -452,6 +452,20 @@ run "triage notes state a true reason"  "$ROOT" python3 "$PG/triage_note_answers
 # is the normal state for an outside contributor and is NOT a clean result.
 run "NDA scan of the TRACKED tree"      "$ROOT" python3 "$PG/nda_tracked_tree_scan.py"
 
+# vibe-ic#1241 — this gate existed and NOTHING but its own unit test ran it. A
+# checker exercised only by a fixture its author wrote is verified against the
+# author's MODEL of the artefacts, never against the artefacts: it can be
+# perfectly correct about a world that does not exist, while contributing a
+# green square to every count we publish.
+#
+# It sits here because it is the same population as the NDA scan above — the
+# TRACKED tree, read for what shipping it obliges us to carry.
+#
+# MEASURED on this branch before wiring, so CI does not learn about a finding
+# by turning red: 17217 tracked file(s) under benchmark-data, 525 declaring an
+# SPDX licence, 11 attribution record(s), rc=0 PASS.
+run "vendored attribution retained"     "$ROOT" python3 "$PG/vendored_attribution_retained_check.py"
+
 # vibe-ic#408/#389 — a PDK the image ships must be SELECTABLE by the name
 # `--pdk` matches, and every asset the registry DECLARES must resolve. The
 # name half is pure registry data and runs everywhere; the asset half needs
