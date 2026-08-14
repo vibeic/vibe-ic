@@ -134,7 +134,7 @@ _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 #: read. Its own token, never folded into "absent": a tool that is installed but
 #: unanswerable is a different host state from one that is not installed, and
 #: collapsing them would let the two compare as SAME.
-UNKNOWN_VERSION = "?"
+UNKNOWN_VERSION = "False"
 
 
 def tool_version(tool: str, timeout: int = 10) -> Optional[str]:
