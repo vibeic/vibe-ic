@@ -131,10 +131,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -527,23 +529,35 @@ def select_tests(site: Dict[str, Any], tests_dir: Path) -> List[Path]:
     return [p for _, _, p in out]
 
 
-def flip_source(src: str, site: Dict[str, Any], new_value: str) -> str:
-    """Replace exactly the literal at (arg_line, arg_col) with ``new_value``."""
+def _literal_span(src: str, arg_line: int, arg_col: int):
+    """``(lines, idx, start_body, end_body)`` for the literal at that position.
+
+    Factored out of ``flip_source`` so that the WRITE path and the
+    read-HEAD path below cannot drift into two slightly different ideas of
+    where the literal is. Raises ``ValueError`` with a reason, never guesses.
+    """
     lines = src.splitlines(keepends=True)
-    idx = site["arg_line"] - 1
+    idx = arg_line - 1
     if idx < 0 or idx >= len(lines):
         raise ValueError("argument line out of range")
     line = lines[idx]
-    col = site["arg_col"]
-    rest = line[col:]
+    rest = line[arg_col:]
     m = re.match(r"""(?P<p>[rbuRBU]{0,2})(?P<q>'''|\"\"\"|'|")""", rest)
     if not m:
         raise ValueError("no string literal at the recorded column")
     quote = m.group("q")
-    start_body = col + m.end()
+    start_body = arg_col + m.end()
     end_body = line.find(quote, start_body)
     if end_body < 0:
         raise ValueError("string literal is not closed on its own line")
+    return lines, idx, start_body, end_body
+
+
+def flip_source(src: str, site: Dict[str, Any], new_value: str) -> str:
+    """Replace exactly the literal at (arg_line, arg_col) with ``new_value``."""
+    lines, idx, start_body, end_body = _literal_span(
+        src, site["arg_line"], site["arg_col"])
+    line = lines[idx]
     if line[start_body:end_body] != site["value"]:
         raise ValueError("literal at the recorded column is not the recorded value")
     lines[idx] = line[:start_body] + new_value + line[end_body:]
@@ -563,12 +577,278 @@ def failing_files(output: str) -> List[str]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# The mutation is written into the SHIPPED SOURCE, so it must survive the
+# process dying (vibe-ic#1025 follow-up, #1029 family)
+# ---------------------------------------------------------------------------
+# `verify_pin` flips a literal in the real file and restores it in a `finally`.
+# A `finally` does not run on SIGTERM, and SIGTERM is not hypothetical here:
+# `gatekeeper_review._run_hygiene` invokes the hygiene script through
+# `subprocess.run(..., timeout=...)`, and on `TimeoutExpired` the child is
+# killed. This gate needs ~10 minutes on this corpus, so it is the gate most
+# likely to be inside its own mutation window when that happens.
+#
+# MEASURED on a clean detached origin/main worktree: a mutation is on disk 23 s
+# after start, and one SIGTERM there (child rc 143) leaves
+#
+#     M programs/atpg_untestable_fault_classify.py
+#     -        on_conflict="richer",
+#     +        on_conflict="sparser",
+#
+# in the shipped tree. Separately, a run killed at 550 s left
+# `phase3_one_shot_runner.py` with its PDK default rewritten
+# `sky130A` -> `nangate45`.
+#
+# THE REASON THIS IS WORSE THAN AN ORDINARY DIRTY FILE: the damage is
+# SELF-CONCEALING. The next run RE-DERIVES the site from whatever the source
+# now says, so it reads `nangate45` as the argued value, flips it, and reports
+# a perfectly self-consistent verdict over a corrupted tree. Two consecutive
+# runs agreed byte-for-byte on exactly that. Nothing in the output is wrong;
+# the subject is.
+#
+# Two mechanisms, because they cover different deaths:
+#   * SIGTERM/SIGINT -> handlers restore and re-raise, so the ordinary kill
+#     (and `timeout`, and Ctrl-C) leaves the tree clean;
+#   * SIGKILL / power loss -> a JOURNAL written OUTSIDE the tree BEFORE the
+#     mutation, so the NEXT run finds it, repairs the file, and SAYS SO. A
+#     journal cannot prevent the damage; what it removes is the concealment.
+_INFLIGHT: Dict[str, Any] = {}
+
+
+def journal_for(root: Path) -> Path:
+    """Journal path for `root`, outside the tree and keyed to it.
+
+    Outside, because a gate that journals INTO the tree it audits is the very
+    thing the corpus-write guard exists to catch. Keyed, so two worktrees of
+    this repo cannot repair each other's files.
+    """
+    key = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"policy_pin_inflight-{key}.json"
+
+
+def _arm(journal: Path, target: Path, original: str, mutated: str) -> None:
+    """Record the pending mutation BEFORE it reaches disk."""
+    journal.write_text(json.dumps({
+        "file": str(target), "original": original, "mutated": mutated}),
+        encoding="utf-8")
+    _INFLIGHT.update({"file": target, "original": original,
+                      "journal": journal})
+
+
+def _disarm(journal: Path) -> None:
+    _INFLIGHT.clear()
+    try:
+        journal.unlink()
+    except OSError:
+        pass
+
+
+def _restore_inflight() -> None:
+    """Put the file back. Safe to call twice; never raises."""
+    tgt, orig = _INFLIGHT.get("file"), _INFLIGHT.get("original")
+    if tgt is not None and orig is not None:
+        try:
+            Path(tgt).write_text(orig, encoding="utf-8")
+        except OSError:
+            pass
+    jrn = _INFLIGHT.get("journal")
+    if jrn is not None:
+        try:
+            Path(jrn).unlink()
+        except OSError:
+            pass
+    _INFLIGHT.clear()
+
+
+def install_signal_restore() -> None:
+    """Restore on the deaths a `finally` does not see, then die as asked."""
+    def _handler(signum, _frame):
+        _restore_inflight()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError, AttributeError):
+            # Not the main thread, or the platform lacks it. The journal below
+            # is the backstop; it is not conditional on this working.
+            pass
+
+
+def recover_journal(journal: Path) -> Tuple[int, List[str]]:
+    """Repair a file a previous run died on. Returns (rc, lines to print).
+
+    rc 0  nothing to repair, or repaired
+    rc 2  a journal exists and the file matches NEITHER what we wrote NOR what
+          we would restore — someone has edited it since. Refused rather than
+          clobbered: this function's job is to undo THIS gate's write, and it
+          cannot prove that is all it would be undoing.
+    """
+    if not journal.is_file():
+        return RC_OK, []
+    try:
+        rec = json.loads(journal.read_text(encoding="utf-8"))
+        target = Path(rec["file"])
+        original, mutated = rec["original"], rec["mutated"]
+    except (OSError, ValueError, KeyError) as exc:
+        return RC_UNDETERMINED, [
+            f"[UNDETERMINED] policy_direction_pin_check: unreadable in-flight "
+            f"journal {journal}: {exc}. A previous run died mid-mutation and "
+            f"this one cannot tell what it left behind."]
+    if not target.is_file():
+        journal.unlink()
+        return RC_OK, []
+    now = target.read_text(encoding="utf-8")
+    if now == original:
+        journal.unlink()
+        return RC_OK, []
+    if now != mutated:
+        return RC_UNDETERMINED, [
+            f"[UNDETERMINED] policy_direction_pin_check: {target} was left "
+            f"MUTATED by a previous run of this gate, and has been edited "
+            f"since. Refusing to overwrite it — restore it by hand, then "
+            f"delete {journal}."]
+    target.write_text(original, encoding="utf-8")
+    journal.unlink()
+    return RC_OK, [
+        f"[REPAIRED] policy_direction_pin_check: a previous run died inside "
+        f"its mutation window and left {target} rewritten. Restored. Left "
+        f"alone, the next sweep would have re-derived the argued value FROM "
+        f"THE MUTATION and reported a consistent verdict over a corrupt tree."]
+
+
+# --------------------------------------------------------------------------
+# THE LEFTOVER THIS GATE CANNOT REPAIR, AND MUST THEREFORE REFUSE (#1089)
+# --------------------------------------------------------------------------
+# The journal above repairs a mutation whose run died while the journal was on
+# disk. That is the crash this gate causes. It is not the only way its own
+# mutant ends up in a tree:
+#
+#   * a leftover from a run that PRE-DATES the journal — every checkout carrying
+#     one today, which is the population #1089 was filed about;
+#   * `/tmp` cleared by a reboot or a tmp reaper while the working tree survives;
+#   * the journal is keyed by `sha256(root.resolve())`, so MOVING or renaming a
+#     worktree orphans it while the leftover stays exactly where it was.
+#
+# In every one of those the file is mutated and no journal exists, and
+# `recover_journal` returns `RC_OK, []` — "nothing to repair" — which is true
+# and useless. The sweep then re-derives the argued value FROM the leftover,
+# flips *that*, watches the tests pass, and reports the site UNPINNED.
+#
+# MEASURED 2026-08-12 against the FIXED tool on `4b22e36e` + #1090, journal
+# confirmed absent, one site (`--only matrix_mutation_ledger`):
+#
+#   clean         md5 f572930b…   [PINNED]   mode='witness'   rc 0
+#   leftover      md5 28b755fe…   [UNPINNED] mode='all'       rc 1
+#
+# Note the second line reports `mode='all'` — the gate is naming the leftover as
+# the authored value. `UNPINNED` reads as "this argued direction is unprotected,
+# go write a test", and the direction is fine; the tree is dirty.
+#
+# WHY REFUSE RATHER THAN REPAIR. Without a journal this gate cannot prove the
+# difference is its own — an author editing that literal produces byte-identical
+# evidence — and `recover_journal` already draws exactly this line for the case
+# it CAN see. So the residue is converted from a false finding into a named
+# refusal, which is what `run` at `repo_hygiene_gates.sh:964` should block on.
+#
+# WHY THE SIGNATURE IS NARROW. Refusing on "the file differs from HEAD" would
+# refuse on every in-flight edit anywhere in a 2000-line module and make the
+# gate permanently red for anyone mid-change — the failure mode
+# `run_tolerating_uncheckable` exists to avoid. It refuses only when the
+# difference is AT THE ARGUED LITERAL and HEAD's value is one of the closed
+# alternatives this gate itself flips between. That is this gate's own
+# fingerprint and nothing else's.
+
+#: Sites whose HEAD copy could not be read, and why. Reported once, because
+#: "I could not look" must never reach a reader as "I looked and it matched".
+_HEAD_BLIND: List[str] = []
+
+
+def _git_show_head(repo: Path, rel: str) -> str:
+    p = subprocess.run(["git", "-C", str(repo), "show", f"HEAD:{rel}"],
+                       capture_output=True, text=True, timeout=30)
+    if p.returncode != 0:
+        raise ValueError((p.stderr or "").strip().splitlines()[-1:][0]
+                         if (p.stderr or "").strip() else "git show failed")
+    return p.stdout
+
+
+def leftover_signature(root: Path, site: Dict[str, Any]) -> Optional[str]:
+    """Why this site cannot be measured, or ``None`` to go ahead.
+
+    Returns a sentence naming both values and the remedy — never a bare bool,
+    because the whole defect is a verdict a reader cannot act on.
+    """
+    target = root / site["file"]
+    try:
+        repo = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=30)
+        if repo.returncode != 0:
+            raise ValueError("not inside a git work tree")
+        repo_root = Path(repo.stdout.strip())
+        rel = target.resolve().relative_to(repo_root.resolve()).as_posix()
+        head_src = _git_show_head(repo_root, rel)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        _HEAD_BLIND.append(f"{site['file']}: {exc}")
+        return None
+    try:
+        lines, idx, start, end = _literal_span(
+            head_src, site["arg_line"], site["arg_col"])
+        head_value = lines[idx][start:end]
+    except ValueError:
+        # The line moved, or HEAD has something else there. Then the difference
+        # is NOT a bare literal flip and this is not the shape being detected.
+        return None
+    if head_value == site["value"]:
+        return None
+    # BOTH ends must be in the closed set, and the working-tree end is the one
+    # that is easy to forget. This gate only ever writes a value FROM
+    # `alternatives`, so a literal that is not one cannot be its leftover no
+    # matter what HEAD says — that is somebody's real edit, and refusing it
+    # would be a guess. Caught by
+    # `test_an_edit_to_the_literal_outside_the_closed_set_is_not_refused`,
+    # which failed against the first version of this condition.
+    if (head_value not in site["alternatives"]
+            or site["value"] not in site["alternatives"]):
+        return None
+    return (f"this file differs from HEAD AT THIS CALL SITE and HEAD carries "
+            f"{head_value!r}, another of this parameter's alternatives "
+            f"{site['alternatives']} -- indistinguishable from a mutant this "
+            f"gate left behind when a previous run was killed. Measuring it "
+            f"would re-derive the argued value from the leftover. "
+            f"Restore with: git checkout HEAD -- {site['file']}")
+
+
 def run_pytest(paths: Sequence[Path], cwd: Path, basetemp: Path,
                extra: Sequence[str] = ()) -> Tuple[int, str]:
+    """Run the candidate tests and report EVERY file that died.
+
+    `-x` USED TO BE HERE, and it decided the verdict. It stops pytest at the
+    first failure, so `failing_files()` could only ever name ONE file -- and
+    which one depends on collection order across the candidate selection, not
+    on the call site. On a tree with unrelated red in it (which is every tree
+    this gate has ever run on during a repair) the sequence was:
+
+        mutant run stops at the first RED file, whatever it is
+        -> killed_files = [that unrelated file]
+        -> baseline of that file is red
+        -> ABSTAIN, while the test that genuinely pins the site is never reached
+
+    MEASURED on `origin/main` @ 3febf537: `matrix_mutation_ledger.py:2380`
+    reports PINNED, killed by `tests/test_matrix_mutation_ledger.py`, which
+    sorts SECOND in its three-file selection. Appending one failing test to the
+    file that sorts FIRST -- touching neither the call site nor the pinning
+    test -- flipped the gate to `0/0 (abstained 1 of 1)`.
+
+    A gate whose verdict is a function of which failure it happened to reach
+    first is not measuring the call site. Both runs are now exhaustive, and
+    the kill/baseline comparison below is per FILE.
+    """
     env = dict(os.environ)
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-           "--basetemp", str(basetemp), "-x"]
+           "--basetemp", str(basetemp)]
     cmd += [str(p) for p in paths]
     cmd += list(extra)
     proc = subprocess.run(cmd, cwd=str(cwd), env=env,
@@ -585,6 +865,14 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
     result: Dict[str, Any] = {
         "candidate_tests": [str(p.relative_to(root)) for p in candidates],
     }
+    # BEFORE the no-candidates branch, not after it. A site with no candidate
+    # tests over a leftover reports UNPINNED just as confidently, and that
+    # verdict is exactly as untrustworthy.
+    stale = leftover_signature(root, site)
+    if stale is not None:
+        result["state"] = "ABSTAIN"
+        result["why"] = stale
+        return result
     if not candidates:
         result["state"] = "UNPINNED"
         result["why"] = "no test file names this program together with the parameter or callee"
@@ -597,6 +885,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
 
     target = root / site["file"]
     original = target.read_text(encoding="utf-8")
+    journal = journal_for(root)
     killed_by: List[Dict[str, Any]] = []
     survivors: List[str] = []
     try:
@@ -607,6 +896,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
                 result["state"] = "ABSTAIN"
                 result["why"] = f"could not rewrite the literal: {exc}"
                 return result
+            _arm(journal, target, original, mutated)
             target.write_text(mutated, encoding="utf-8")
             rc, out = run_pytest(candidates, root.parent, basetemp, extra)
             if rc != 0:
@@ -617,6 +907,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
                 survivors.append(other)
     finally:
         target.write_text(original, encoding="utf-8")
+        _disarm(journal)
 
     if killed_by:
         # A RED test kills every mutant, including one nobody wrote a pin for.
@@ -633,12 +924,26 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
         result["baseline_files"] = [str(p) for p in baseline_set]
         rc0, out0 = run_pytest(baseline_set, root.parent, basetemp, extra)
         result["baseline_rc"] = rc0
-        if rc0 != 0:
+        # PER FILE, not per RUN. "Some file in the baseline is red" is not a
+        # reason to disbelieve a kill in a DIFFERENT file -- that inference is
+        # what let one unrelated red test abstain a site whose pin was intact.
+        # A kill is believed exactly when the file that died is GREEN at
+        # baseline; the gate abstains only when every file that died was
+        # already red, which is the case the baseline check was written for.
+        red_at_baseline = set(failing_files(out0))
+        killed_now = [f for k in killed_by for f in k.get("killed_files", [])]
+        believable = [f for f in dict.fromkeys(killed_now) if f not in red_at_baseline]
+        result["red_at_baseline"] = sorted(red_at_baseline)
+        result["kills_believed"] = believable
+        if not believable:
             result["state"] = "ABSTAIN"
-            result["why"] = ("candidate tests are RED before any flip, so a kill "
-                             "proves nothing about this call site")
+            result["why"] = ("every candidate test that died under the flip was "
+                             "already RED before any flip, so no kill proves "
+                             "anything about this call site")
             result["baseline_tail"] = out0.strip().splitlines()[-1:] or [""]
             return result
+        killed_by = [k for k in killed_by
+                     if any(f in believable for f in k.get("killed_files", []))]
 
     result["killed_by"] = killed_by
     result["survivors"] = survivors
@@ -728,6 +1033,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return RC_UNDETERMINED
 
     selected = [s for s in argued if (args.only or "") in s["file"]]
+
+    # BEFORE anything is measured. A leftover mutation from a previous run is
+    # not a dirty file this run can measure around: the sweep would re-derive
+    # the argued value FROM it and report a self-consistent verdict over a
+    # corrupt tree. Repair first, or refuse.
+    rc_rec, lines = recover_journal(journal_for(root))
+    for ln in lines:
+        print(ln, file=sys.stderr if rc_rec else sys.stdout)
+    if rc_rec:
+        return rc_rec
+    install_signal_restore()
+
     basetemp = Path(args.basetemp) if args.basetemp else Path(tempfile.mkdtemp(prefix="pdpc-"))
     basetemp.mkdir(parents=True, exist_ok=True)
 
@@ -748,6 +1065,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     finally:
         if not args.basetemp:
             shutil.rmtree(basetemp, ignore_errors=True)
+
+    if _HEAD_BLIND:
+        # Never folded into a pass. A site whose HEAD copy could not be read was
+        # measured WITHOUT the leftover check, so its verdict carries the risk
+        # this check exists to remove — and a reader has to be told which ones.
+        print(f"[INFO] policy_direction_pin_check: {len(_HEAD_BLIND)} site(s) "
+              f"could not be compared against HEAD, so a leftover mutant there "
+              f"would not have been noticed: "
+              + "; ".join(_HEAD_BLIND[:5]), file=sys.stderr)
 
     report["verified"] = {"pinned": len(pinned), "unpinned": len(unpinned),
                           "abstained": len(abstained), "selected": len(selected)}

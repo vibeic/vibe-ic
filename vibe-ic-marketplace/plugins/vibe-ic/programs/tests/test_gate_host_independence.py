@@ -493,26 +493,51 @@ def test_a_real_difference_still_survives_normalisation(tmp_path):
 # still registered as a worktree of the repository every agent shares. The
 # `finally` that removes them is correct and does not run on `SIGKILL`.
 
+def _scratch_added_by(root: Path, run) -> set:
+    """The `hostindep-*` directories `run` ADDS to `root`.
+
+    A difference of two globs is only a measurement of `run` when `run` is the
+    only writer of the namespace being globbed. Against the real `/tmp` it is
+    not: a peer's directory created between the two globs lands in the
+    difference and is attributed to `run`.
+    """
+    before = set(root.glob(G._SCRATCH_PREFIX + "*"))
+    run()
+    return set(root.glob(G._SCRATCH_PREFIX + "*")) - before
+
+
 def test_a_clean_run_leaves_no_scratch_behind(tmp_path):
     """The easy half, and the one a `finally` already satisfied. Kept as the
     control: without it, a reaper that removes everything unconditionally
     would pass the kill test below and destroy live peers in production.
 
-    MEASURED IN A PRIVATE ROOT, not the shared temp. This used to glob the
-    system temp, so any PEER that created a scratch while `audit` ran landed in
-    `after - before` and was reported as this run's leak. On a host with more
-    than one agent that is a coin flip, and it fired for real: it reddened two
-    tests of an unrelated PR's verification and then did not reproduce.
-    A private root makes the assertion a statement about THIS run.
+    OBSERVED IN A PRIVATE ROOT, for the reason `_legacy_leftover` gives below
+    about planting: the real `/tmp` is shared with every other agent's probe,
+    so `after - before` there counts a PEER's directory as this run's leak.
+    Measured 2026-08-13 — with a sibling process creating and removing
+    `hostindep-*` in the observed root, this test failed while the other 24
+    passed; with no peer, 25 passed. The assertion is unchanged in strength: a
+    leak by `audit` still lands in this root, which the guard below drives.
+    It fired for real before that: it reddened two tests of an unrelated
+    PR's verification and then did not reproduce, which is what a shared
+    namespace does to a difference-of-two-globs measurement.
     """
-    scratch_root = tmp_path / "tmproot"
-    scratch_root.mkdir()
+    priv = tmp_path / "tmproot"
+    priv.mkdir()
     r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
-    before = set(scratch_root.glob(G._SCRATCH_PREFIX + "*"))
-    G.audit(r, timeout=_T, tmp_root=scratch_root)
-    after = set(scratch_root.glob(G._SCRATCH_PREFIX + "*"))
-    assert after - before == set(), (
-        "a clean run left scratch behind: %s" % (after - before))
+
+    leaked = _scratch_added_by(priv, lambda: G.audit(r, timeout=_T,
+                                                     tmp_root=priv))
+    assert leaked == set(), "a clean run left scratch behind: %s" % (leaked,)
+
+    # PAIRED GUARD. An observation scoped to a root nothing writes to passes by
+    # being blind, which is the same green as a clean run. Plant one and the
+    # SAME expression must see it.
+    planted = _scratch_added_by(
+        priv, lambda: (priv / (G._SCRATCH_PREFIX + "planted")).mkdir())
+    assert len(planted) == 1, (
+        "the scoped observation cannot see a leak planted in the very root it "
+        "watches, so the assertion above proves nothing: %s" % (planted,))
 
 
 def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
@@ -686,3 +711,120 @@ def test_the_peer_detector_sees_a_real_process():
         time.sleep(0.05)
     pytest.fail("a DEAD process is still reported as a live peer, which would "
                 "disable the legacy sweep permanently")
+
+
+# --------------------------------------------------------------------------
+# A DIFFERENCE THAT DOES NOT REPRODUCE IS NOT EVIDENCE (vibe-ic#1029 class)
+#
+# Measured on `3febf537`: this probe reported
+#
+#   [HOST_DEPENDENT_VERDICT] 63x8 census freshness
+#       checkout: rc=1 AssertionError: the outcome run for
+#                 test_matrix_d7_outputs_list_complete.py did not finish within 60s
+#       worktree: rc=0 [PASS] 63x8 census fresh: 504 cells over 8 dimensions
+#
+# The two arms did not disagree about the SUBJECT. One arm ran out of wall
+# clock. `_OUTCOME_TIMEOUT_S = 60` in `test_matrix_63x8_coverage` is a bound on
+# an inner pytest, and this probe drives 66 gates twice, so the checkout arm is
+# the one under load. Whether it fires depends on the machine, which is why the
+# same tool reported 6/6 clean on one run and 5/6 on the next.
+#
+# `TimeoutExpired` raised at THIS level is already handled — it becomes
+# GATE_UNRUNNABLE. The gap is a gate that enforces its own deadline and
+# therefore RETURNS rc=1 with a message: indistinguishable, to a single
+# comparison, from a real verdict.
+#
+# The discriminator is not the text of the message — this file's own header
+# rejects deciding a tier by grepping prose. It is REPRODUCIBILITY: a gate that
+# reads local state disagrees every time; a gate that ran out of clock does not.
+# --------------------------------------------------------------------------
+
+def _flapping_repo(tmp_path: Path, marker: Path, *, name: str = "r") -> Path:
+    """A gate whose FIRST invocation misses a deadline and whose later ones do not.
+
+    The marker lives OUTSIDE the repo on purpose: a counter file inside it
+    would be a leftover of the fixture and would change what the probe is
+    being shown.
+    """
+    r = _repo_with(tmp_path, 'run "flaky" "$ROOT" python3 flaky.py\n',
+                   untracked=True, name=name)
+    (r / "flaky.py").write_text(
+        "import pathlib, sys\n"
+        f"m = pathlib.Path({str(marker)!r})\n"
+        "n = int(m.read_text()) if m.is_file() else 0\n"
+        "m.write_text(str(n + 1))\n"
+        "if n == 0:\n"
+        "    print('AssertionError: the outcome run did not finish within 60s')\n"
+        "    sys.exit(1)\n"
+        "print('PASS (1 item examined)')\n")
+    subprocess.run(["git", "-C", str(r), "add", "flaky.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "flaky"], check=True)
+    return r
+
+
+def test_a_ONE_OFF_disagreement_is_not_reported_as_host_dependence(tmp_path):
+    """THE DEFECT. A gate that misses its own deadline once is not reading
+    local state, and must not be reported as if it were."""
+    marker = tmp_path / "counter.txt"
+    r = _flapping_repo(tmp_path, marker)
+    res = G.audit(r, timeout=_T)
+
+    kinds = [f["kind"] for f in res.findings]
+    assert "HOST_DEPENDENT_VERDICT" not in kinds, (
+        "a one-off disagreement was reported as host dependence: "
+        f"{res.findings}")
+
+
+def test_a_ONE_OFF_disagreement_is_NAMED_rather_than_silently_dropped(tmp_path):
+    """...and it is not swallowed either. A gate that cannot reproduce its own
+    verdict is not usable evidence; it is a different defect, not no defect."""
+    marker = tmp_path / "counter.txt"
+    r = _flapping_repo(tmp_path, marker)
+    res = G.audit(r, timeout=_T)
+
+    kinds = [f["kind"] for f in res.findings]
+    assert "NON_DETERMINISTIC_VERDICT" in kinds, res.findings
+    assert res.verdict == "FAIL", (
+        "an unreproducible verdict must not be folded into a pass — that is "
+        "weakening the assertion to get green")
+    f = [x for x in res.findings if x["kind"] == "NON_DETERMINISTIC_VERDICT"][0]
+    assert "flaky" == f["gate"], f
+    # both observations are carried, so a reader can see WHICH way it flapped
+    assert "did not finish within 60s" in (f["checkout"] + f["worktree"]), f
+    assert "second" in json.dumps(f).lower() or "reran" in json.dumps(f).lower()
+
+
+def test_a_STABLE_disagreement_is_still_host_dependence(tmp_path):
+    """THE PAIRED GUARD. The fix must not buy its green by making the probe
+    unable to fire: a gate that really does read local state disagrees on
+    EVERY round, and must still be caught."""
+    r = _counter_repo(tmp_path, ignore_dat=True)
+    (r / "leftover.dat").write_text("x\n")          # ignored: invisible stimulus
+    res = G.audit(r, timeout=_T)
+
+    kinds = [f["kind"] for f in res.findings]
+    assert "HOST_DEPENDENT_VERDICT" in kinds, res.findings
+    assert res.verdict == "FAIL", res
+
+
+def test_the_reproduce_step_costs_nothing_when_the_arms_AGREE(tmp_path):
+    """A gate that agrees is driven exactly twice, not four times.
+
+    The probe already takes ~44 min over 66 gates; paying the re-drive on the
+    agreeing majority would be a real cost for no information.
+    """
+    marker = tmp_path / "calls.txt"
+    r = _repo_with(tmp_path, 'run "agreeable" "$ROOT" python3 agreeable.py\n',
+                   untracked=True)
+    (r / "agreeable.py").write_text(
+        "import pathlib\n"
+        f"m = pathlib.Path({str(marker)!r})\n"
+        "n = int(m.read_text()) if m.is_file() else 0\n"
+        "m.write_text(str(n + 1))\n"
+        "print('PASS (1 item examined)')\n")
+    subprocess.run(["git", "-C", str(r), "add", "agreeable.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "a"], check=True)
+
+    G.audit(r, timeout=_T)
+    assert marker.read_text() == "2", (
+        f"an agreeing gate was driven {marker.read_text()} times, not 2")

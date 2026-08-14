@@ -530,6 +530,72 @@ def test_d4_selfcheck_cli_probe_can_report_a_rejection():
     )
 
 
+def test_d4_selfcheck_a_WILDCARD_root_still_spans_namespaces():
+    """The namespace guard must not over-tighten into a second false ruler.
+
+    The guard refuses a float-match across top-level namespaces, but a pattern
+    whose ROOT is a glob is a deliberate "anywhere under the project" read and
+    must keep grounding. Measured: of 132 grounded entries across every gated
+    step, exactly ONE rests on a cross-namespace match, and it is this one.
+
+    Pinned against the REAL step-31 entry rather than against a literal pair,
+    so that if the flow stops declaring it this test says so instead of
+    quietly proving something about a string.
+    """
+    entry = "reports/phase3/erc.rpt"
+    assert entry in F.required_outputs(31), (
+        f"this test is anchored to step 31 declaring {entry!r}; it no longer "
+        f"does, so the exemption it pins is pinned to nothing — step 31 "
+        f"declares {F.required_outputs(31)}"
+    )
+    hit = P.ground(31, entry)
+    assert hit is not None, (
+        "the wildcard-root exemption regressed: step 31's own declared "
+        f"{entry!r} is no longer grounded, so the namespace guard has "
+        "over-tightened into a false negative"
+    )
+    assert P.covers("*/phase3/erc.rpt", entry), (
+        "a glob-rooted pattern must still span namespaces"
+    )
+
+
+def test_d4_selfcheck_exec_branch_can_fail_on_an_UNGROUNDED_output(monkeypatch):
+    """The EXEC branch must be able to reject a declared output nobody reads.
+
+    It could not. Injecting `reports/phase1/ZZZ_CANARY_NOBODY_CHECKS_THIS.json`
+    into D1's `required_outputs` left dimension 4 fully green, because
+    `shape_match` floats a pattern (`**` + pattern, either direction) and
+    `phase1/*.json` — read from `l_doc_cross_consistency_check` — is a
+    contiguous TAIL of `reports/phase1/<anything>.json`. `phase1/` and
+    `reports/phase1/` are two different trees.
+
+    So every green EXEC-branch cell was green on an axis the ruler could not
+    fail on, which is this campaign's own defect sited in its instrument. The
+    files-only branch caught step 1; this half caught nothing.
+
+    Driven through `_assert_artefacts_grounded` rather than through `covers`,
+    because the matcher passing is necessary and not sufficient: `ground()`
+    has three channels and any one of them re-grounding the canary would put
+    the hole straight back.
+    """
+    sid = "D1"
+    assert _exec_clauses(sid), (
+        f"this self-check is anchored to step {sid} taking the EXEC branch; it "
+        f"no longer does, so the branch it proves is not the branch it runs"
+    )
+    canary = "reports/phase1/ZZZ_CANARY_NOBODY_CHECKS_THIS.json"
+    real = list(F.required_outputs(sid))
+    assert real, f"step {sid} declares no required_outputs to extend"
+
+    monkeypatch.setattr(F, "required_outputs", lambda s: (real + [canary]) if s == sid else F.required_outputs(s))
+    P.grounding_report.cache_clear() if hasattr(P.grounding_report, "cache_clear") else None
+    with pytest.raises(BaseException) as excinfo:
+        _assert_artefacts_grounded(sid)
+    assert canary in str(excinfo.value), (
+        f"the EXEC branch failed, but not because of the canary: {excinfo.value}"
+    )
+
+
 def test_d4_selfcheck_matcher_discriminates_wrong_directory():
     """The path matcher must not call a same-basename/different-dir pair a hit.
 

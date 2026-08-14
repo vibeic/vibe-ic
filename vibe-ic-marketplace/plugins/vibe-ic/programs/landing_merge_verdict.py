@@ -85,6 +85,17 @@ EVERY WAY THE DIFFERENTIAL CAN DEGRADE, DEGRADES TOWARD STRICTER
   * a selected test file that produced no test case at all -> REFUSE: a test
     file that was chosen and then contributed nothing is the hole this repo
     hunts, not a clean sheet
+  * THE SAME QUESTION, ASKED OF THE BASE ARM (vibe-ic#1443) -> REFUSE. This was
+    the one exception to the rule above, and it ran the WRONG WAY. `silenced`
+    and `weakened` are read off what was RED (or passing) ON THE BASE, so a base
+    failure that never got measured is a base failure the branch may delete for
+    free. `base_total == 0` was the only guard and it is all-or-nothing — a base
+    arm that ran three of its five files sits between the two and was subtracted
+    as though whole. Measured on `3d13e2c59` with ONE selected file missing from
+    the base report and every other input byte-identical, a candidate that turned
+    a red test into a SKIP went from `REFUSE 1 FAILING TEST(S) WERE SILENCED` to
+    `LAND OK`. The list arm A was asked for arrives as `--base-selection`;
+    without it the check cannot fire and says so in the notes.
 
 There is no argument this program accepts that makes it more permissive than
 "demand green". That is the property that makes the relaxation safe. THE
@@ -140,6 +151,7 @@ Usage
         --expected-tree <oid> --verified-tree <oid>
         [--replayed-tree <oid>] [--github-tree <oid>]
         --land-log <path> [--base-land-log <path>] --selection <path>
+        [--base-selection <path>]
         --base-junit <path> --candidate-junit <path>
         [--verification-tier merge-tree|rebase-replay] [--git-version <v>]
         [--merge-tree-min-version <v>] [--tier-reason <text>]
@@ -189,12 +201,61 @@ _LAND_SENTINEL = "=== gatekeeper landing gates"
 _TEST_TIER = re.compile(r"^targeted tests(?:\s|\(|$)")
 _STAMPED = re.compile(r"===\s*ALL GATES PASS\s*[—-]\s*stamped\s+(\S+)")
 
+# A GATE'S LABEL IS ITS IDENTITY; A COUNT INSIDE IT IS A MEASUREMENT OF A TREE.
+#
+# The gate differential in `decide` matches the base arm's failing gates against
+# the candidate arm's BY LABEL, and the two arms measure two different trees. One
+# gate in `gatekeeper-land.sh` prints a per-tree count inside its label:
+#
+#     printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
+#
+# — a DISCOVERY count over `tools/`, deliberately not a roster, so ANY branch
+# that adds or removes a test file there renames the gate. Measured against the
+# code before this normaliser existed (vibe-ic#1431): a branch that repairs the
+# red repo-tools tier and adds one test file goes
+#
+#     base       FAIL  repo tools tests (28 file(s))
+#     candidate  PASS  repo tools tests (29 file(s))
+#
+# and the differential reported two things that never happened — a gate that
+# failed on the base and "is no longer asked here", and, with the tier red on
+# both arms, a NEW failure the branch owns. Both refuse, and the shape they
+# refuse is the one this repo asks for: a fix that arrives with a test.
+#
+# The test tier is already exempt for exactly this reason — `_TEST_TIER` above
+# matches `targeted tests (21 file(s))` and drops it from the comparison. This
+# is the same hazard in the tier that exemption does not cover, so the count is
+# stripped from the KEY the comparison uses. Labels are still printed VERBATIM in
+# every reason and note: the denominator is evidence and is never hidden.
+#
+# DELIBERATELY NARROW. `(<n> file(s))` at the end of a label is a pure per-tree
+# count and nothing else. A parenthesised `rc=`, a version, or any other suffix
+# is left alone — a normaliser that erases more than the tree-dependent part
+# starts merging gates that are genuinely different, and merging outcomes would
+# let "I could not look" be waived by "I looked". `programs/tests/
+# test_issue1431_gate_identity_is_not_a_tree_measurement.py` holds that boundary
+# in both directions and re-derives this population from the script itself.
+_LABEL_TREE_COUNT = re.compile(r"\s*\(\d+ file\(s\)\)$")
+
+
+def gate_key(label: str) -> str:
+    """The identity of a gate, with any per-tree count removed.
+
+    Compare gates with this; report them with the original label.
+    """
+    return _LABEL_TREE_COUNT.sub("", label)
+
 
 @dataclass
 class Delta:
     """The failed-set difference. Every list holds junit keys."""
 
     new_failures: List[str] = field(default_factory=list)
+    #: The SUBSET of `new_failures` whose id the base report does not contain at
+    #: all — a test the change BRINGS, failing, rather than a behaviour it broke.
+    #: Both block; `new_failures` is untouched and no verdict moves. This exists
+    #: because the two are not the same finding and were reported as one.
+    new_absent_on_base: List[str] = field(default_factory=list)
     silenced: List[str] = field(default_factory=list)
     fixed: List[str] = field(default_factory=list)
     weakened: List[str] = field(default_factory=list)
@@ -206,6 +267,9 @@ class Delta:
     def as_dict(self) -> dict:
         return {
             "new_failures": self.new_failures,
+            # MACHINE-READABLE TOO, not only in the prose: a downstream that
+            # routes on the count is the reader most likely to overstate it.
+            "new_absent_on_base": self.new_absent_on_base,
             "silenced": self.silenced,
             "fixed": self.fixed,
             "weakened": self.weakened,
@@ -360,6 +424,19 @@ def failed_set_delta(base: Dict[str, str], cand: Dict[str, str]) -> Delta:
                 d.preexisting.append(k)
             else:
                 d.new_failures.append(k)
+                # NEW-BROKEN vs NEW-BROUGHT (vibe-ic#1417). `b` is ABSENT both
+                # when the base RAN the test and it passed, and when the base
+                # never had the test at all — and only the first is a behaviour
+                # this change broke. The membership test, not the outcome, is
+                # what separates them, so it is asked of `base` directly.
+                #
+                # Only meaningful when the base actually reported. With an empty
+                # base every id is absent and the split would read as "nothing
+                # was broken, it is all new", which is the flattering direction
+                # and false. `decide` already discloses base_total == 0; this
+                # stays silent there rather than adding a second wrong sentence.
+                if base and k not in base:
+                    d.new_absent_on_base.append(k)
         elif b in RED:
             if c in SILENT:
                 # FAILED -> SKIPPED / ABSENT. Never an improvement: the failure
@@ -399,6 +476,8 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            github_tree: Optional[str], land: LandLog, delta: Delta,
            verified_sha: str, truncated: bool, dropped_files: Sequence[str],
            selection_size: int, replayed_tree: str = "",
+           base_dropped_files: Sequence[str] = (),
+           base_selection_supplied: bool = True,
            base_land: Optional[LandLog] = None,
            verification_tier: str = TIER_MERGE_TREE,
            git_version: str = "", tier_reason: str = "") -> Verdict:
@@ -510,19 +589,26 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         for label in land.blocking_failures:
             reasons.append(f"LANDING GATE FAILED — {label}")
     else:
-        was_red = set(base_land.blocking_failures)
-        now_red = set(land.blocking_failures)
-        cand_labels = set(land.passed) | now_red | set(land.skipped)
-        for label in sorted(now_red - was_red):
+        # KEYED BY `gate_key`, REPORTED BY LABEL — see the note on
+        # `_LABEL_TREE_COUNT`. The arms measure two trees, so a label carrying a
+        # per-tree count is not the same string on both sides even when it is
+        # the same gate; every message below still prints the label verbatim.
+        was_red = {gate_key(l): l for l in base_land.blocking_failures}
+        now_red = {gate_key(l): l for l in land.blocking_failures}
+        cand_skipped = {gate_key(l) for l in land.skipped}
+        cand_passed = {gate_key(l): l for l in land.passed}
+        cand_labels = set(cand_passed) | set(now_red) | cand_skipped
+        for key in sorted(set(now_red) - set(was_red)):
             reasons.append(
-                f"LANDING GATE FAILED, AND PASSED ON THE BASE — {label}")
+                f"LANDING GATE FAILED, AND PASSED ON THE BASE — {now_red[key]}")
         # A gate that stopped being asked is not a gate that started passing —
         # the same rule as `failed -> skipped` for a test.
-        for label in sorted(was_red):
-            if label in land.skipped or label not in cand_labels:
+        for key in sorted(was_red):
+            if key in cand_skipped or key not in cand_labels:
                 reasons.append(
-                    f"A FAILING GATE WAS SILENCED RATHER THAN FIXED — {label} "
-                    f"failed on the base and is no longer asked here")
+                    f"A FAILING GATE WAS SILENCED RATHER THAN FIXED — "
+                    f"{was_red[key]} failed on the base and is no longer asked "
+                    f"here")
         if any("range is empty" in l for l in base_land.skipped):
             # DISCLOSED, because it bounds what the base arm can excuse. Arm A2
             # measures the base over an EMPTY range on purpose, so the
@@ -534,11 +620,12 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             notes.append("the base arm ran over an empty range, so the "
                          "range-scoped gates were not asked there — a failure "
                          "among them on this branch is necessarily new")
-        for label in sorted(was_red & now_red):
+        for key in sorted(set(was_red) & set(now_red)):
             notes.append(f"gate fails on the base too, so it is not this "
-                         f"branch's — {label}")
-        for label in sorted((was_red - now_red) & set(land.passed)):
-            notes.append(f"gate was failing on the base and now passes — {label}")
+                         f"branch's — {now_red[key]}")
+        for key in sorted((set(was_red) - set(now_red)) & set(cand_passed)):
+            notes.append("gate was failing on the base and now passes — "
+                         f"{cand_passed[key]}")
 
     if any("assigned at merge" in l for l in land.passed):
         # A DEFERRAL IS AN ACTION ITEM, NOT A CLEAN SHEET. Measured 2026-08-12:
@@ -574,6 +661,45 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             + ", ".join(sorted(dropped_files)[:5])
             + ("…" if len(dropped_files) > 5 else ""))
 
+    # ---- THE SAME QUESTION, ASKED OF THE BASE ARM (vibe-ic#1443) ----
+    # The completeness check above was asked only of the CANDIDATE, and the base
+    # arm's only guard was `base_total == 0` — all-or-nothing, and a NOTE. A base
+    # arm that ran SOME of its files lands between the two and was subtracted as
+    # though it were whole.
+    #
+    # That direction is PERMISSIVE, which is why it is a refusal and not a note.
+    # `silenced` and `weakened` are computed from what was RED (or PASSING) ON
+    # THE BASE: a base failure that never got measured is a base failure the
+    # branch is free to delete. Measured on 3d13e2c59 with one selected file
+    # missing from the base report and every other input held identical, a
+    # candidate that turned a red test into a SKIP went from
+    #
+    #     REFUSE  1 FAILING TEST(S) WERE SILENCED RATHER THAN FIXED
+    # to
+    #     LAND OK
+    #
+    # This is #1443's own law — "a two-arm comparison must assert that both arms
+    # emitted a summary line before it subtracts anything" — applied to the arm
+    # that did not have it. The junit form is the stronger one: it answers
+    # per-FILE rather than per-run, so a base arm that died on its third file is
+    # caught as well as one that never started.
+    if base_dropped_files:
+        reasons.append(
+            f"{len(base_dropped_files)} SELECTED TEST FILE(S) PRODUCED NO TEST "
+            f"CASE ON THE BASE — the base arm did not finish, so its failed set "
+            f"is a SUBSET and a silenced failure in the missing files would not "
+            f"be visible: "
+            + ", ".join(sorted(base_dropped_files)[:5])
+            + ("…" if len(base_dropped_files) > 5 else ""))
+    elif not base_selection_supplied:
+        # DEGRADE LOUDLY. A caller that does not say what the base arm was ASKED
+        # to run leaves the check above unable to fire, and a check that cannot
+        # fire must say so rather than read as a clean sheet.
+        notes.append(
+            "no base selection was supplied (--base-selection), so the base "
+            "arm's completeness was NOT checked — a base arm that ran only "
+            "some of its files would have been subtracted as though whole")
+
     if delta.candidate_total == 0:
         return _stop(
             "THE CANDIDATE RAN NO TESTS — a clean result over an empty run is "
@@ -594,6 +720,27 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             f"{len(delta.new_failures)} NEW FAILURE(S) THIS BRANCH OWNS: "
             + ", ".join(delta.new_failures[:8])
             + ("…" if len(delta.new_failures) > 8 else ""))
+        # SPLIT THE COUNT, NEVER THE VERDICT (vibe-ic#1417). Both halves still
+        # refuse — a test you bring, failing, is yours. What changes is that a
+        # reviewer can see WHICH kind, because the two demand different work:
+        # a broken behaviour is a bug to fix, a failing new assertion is a
+        # reconciliation with whatever else is in the batch.
+        #
+        # MEASURED on a 141-PR batch composed on 3d13e2c59: 5 nodes reported as
+        # NEW, of which FOUR do not exist on main at all and ONE is a real
+        # regression. A reviewer sizing that batch off "5 NEW FAILURES" is
+        # reading a 5x overstatement, and reads it consistently — which is
+        # enough to reject every large batch forever.
+        n_brought = len(delta.new_absent_on_base)
+        if n_brought:
+            notes.append(
+                f"of those {len(delta.new_failures)}, {n_brought} do NOT exist "
+                f"on the base at all — assertions this change BRINGS, failing, "
+                f"rather than behaviour it broke; the other "
+                f"{len(delta.new_failures) - n_brought} ran on the base and "
+                f"passed. Both refuse. "
+                + ", ".join(delta.new_absent_on_base[:5])
+                + ("…" if n_brought > 5 else ""))
     if delta.silenced:
         reasons.append(
             f"{len(delta.silenced)} FAILING TEST(S) WERE SILENCED RATHER THAN "
@@ -653,6 +800,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="tree the rebase produced, cross-checked against the "
                          "merge tree")
     ap.add_argument("--selection", required=True)
+    ap.add_argument("--base-selection", default="",
+                    help="the file listing what ARM A actually asked pytest to "
+                         "run on the base — the selection filtered to files "
+                         "that exist there. Used to check the base arm FINISHED "
+                         "(vibe-ic#1443); a base arm that ran only some of its "
+                         "files hides `silenced`. Omitting it leaves the check "
+                         "unable to fire, which is disclosed in the notes")
     ap.add_argument("--base-junit", required=True)
     ap.add_argument("--candidate-junit", required=True)
     ap.add_argument("--maxfail", type=int, default=10,
@@ -711,13 +865,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   f"not parseable ({exc})", file=sys.stderr)
             return None
 
+    base_selection: List[str] = []
+    if a.base_selection:
+        try:
+            base_selection = [
+                l.strip() for l in
+                Path(a.base_selection).read_text(errors="replace").splitlines()
+                if l.strip()]
+        except OSError:
+            base_selection = []
+
     cand = _load(a.candidate_junit, "candidate")
     # An unreadable BASE report is not a refusal to answer: it makes every
     # candidate failure NEW, which is STRICTER than the differential, and
     # `decide` discloses the degradation in its notes. An unreadable CANDIDATE
     # report is the opposite — nothing was measured about what this branch
     # breaks — and `decide` returns unmeasurable for it via candidate_total == 0.
-    base = _load(a.base_junit, "base") or {}
+    base_raw = _load(a.base_junit, "base")
+    base = base_raw or {}
     delta = failed_set_delta(base, cand or {})
     dropped: List[str] = []
     truncated = False
@@ -726,12 +891,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         dropped = sorted(set(selection) - ran_files)
         truncated = (bool(dropped)
                      and junit_red_count(Path(a.candidate_junit)) >= a.maxfail)
+    # THE SAME QUESTION OF ARM A (vibe-ic#1443). The list is the base's OWN
+    # selection, never `--selection`: a file the PR ADDS is legitimately absent
+    # from the base report, and asking about it here would refuse every PR that
+    # brings a new test file. A base arm that produced NO report at all while
+    # having been asked for N files is the same defect at N — that is why the
+    # `base_raw is None` arm names all of them rather than falling through to
+    # the all-or-nothing note.
+    base_dropped: List[str] = []
+    if base_selection:
+        if base_raw is None:
+            base_dropped = sorted(base_selection)
+        else:
+            base_dropped = sorted(
+                set(base_selection)
+                - junit_files(Path(a.base_junit), base_selection))
 
     v = decide(rebase_status=a.rebase_status, expected_tree=a.expected_tree,
                verified_tree=a.verified_tree,
                github_tree=a.github_tree or None, land=land, delta=delta,
                verified_sha=a.verified_sha, truncated=truncated,
                dropped_files=dropped, selection_size=len(selection),
+               base_dropped_files=base_dropped,
+               base_selection_supplied=bool(base_selection),
                replayed_tree=a.replayed_tree, base_land=base_land,
                verification_tier=a.verification_tier,
                git_version=a.git_version, tier_reason=a.tier_reason)
@@ -781,6 +963,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "selection_size": len(selection),
             "dropped_selected_files": dropped,
             "candidate_run_truncated": truncated,
+            # ARM A's completeness, machine-readably (vibe-ic#1443).
+            # `base_selection_size == 0` means the check could not fire — a
+            # reader must be able to tell that from "it fired and found
+            # nothing", which is why the size travels with the list.
+            "base_selection_size": len(base_selection),
+            "dropped_base_selected_files": base_dropped,
             "gate_edited": a.gate_edited,
             # ---- WHAT THIS VERDICT DID NOT CHECK, MACHINE-READABLY ----
             # A disclosed weaker check beats a universal refusal ONLY if the

@@ -310,10 +310,86 @@ def _tokenise(hay: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, Set[str]]]:
             for k, v in hay.items()}
 
 
-def checker_population(programs: Path) -> List[str]:
-    """Every checker-shaped program name, deduplicated and sorted."""
-    return sorted({p.name for suf in _CHECKER_SUFFIXES
-                   for p in programs.glob(suf)})
+def flow_declared_gate_programs(flow_yaml: Path) -> Set[str]:
+    """Programs the FLOW ITSELF declares as gate clauses (vibe-ic#1130).
+
+    THE FILENAME GLOB IS STILL A NAME LIST, and #693 only made it a longer one.
+    That fix was right about its instance — `gitignore_scratch_guard.py` was a
+    gate outside `*_check/_audit` — and left the STRUCTURE untouched: a checker
+    whose name ends in none of the five suffixes is invisible to this audit, and
+    renaming one is enough to remove it from the population silently.
+
+    Widening to `programs/*.py` is not the answer either, and this file already
+    measured why: it adds 80 entries that are generators, not checkers
+    (`crc_vector_gen.py`, `a2b_protocol_synth.py`, …). Deciding by SHAPE has the
+    same problem — measured for #1130, 58 programs are verdict-shaped but
+    outside the glob, and most are emitters that exit non-zero on error.
+
+    The set that is neither a guess nor a name list is the one the FLOW states:
+    a program named in a `program_exit_zero` / `advisory_program_exit_zero` /
+    `optional_program_exit_zero` clause IS a gate, whatever it is called. Parsed
+    from the YAML STRUCTURE, never its text — vibe-ic#1012 is why: a substring
+    test counted a program named in a COMMENT as wired.
+
+    MEASURED on a38902d1: the flow declares 127 gate programs and SEVEN of them
+    fall outside the filename glob — four of those BLOCKING:
+
+        bsdl_emit                          BLOCKING   step 11
+        fmeda_fault_injection_coverage     BLOCKING   step FS1
+        phase1_expert_parse_track          BLOCKING   step D1
+        verilator_coverage_measure         BLOCKING   step 4
+        coverage_closure                   advisory   step 4
+        mixed_signal_top_lvs_run           advisory   step M1
+        route_congestion_trade_disclosure  advisory   step 21
+
+    An audit asking "does anything but its own test run this checker?" was not
+    asking it of seven programs the flow runs as gates.
+    """
+    try:
+        import yaml  # noqa: PLC0415
+        doc = yaml.safe_load(flow_yaml.read_text(errors="replace"))
+    except Exception:                                          # noqa: BLE001
+        return set()
+    found: Set[str] = set()
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for key, val in node.items():
+                if key in ("program_exit_zero", "advisory_program_exit_zero") \
+                        and isinstance(val, str) and val.split():
+                    found.add(val.split()[0] + ".py")
+                elif key == "optional_program_exit_zero" and isinstance(val, dict):
+                    cmd = str(val.get("command") or "")
+                    if cmd.split():
+                        found.add(cmd.split()[0] + ".py")
+                else:
+                    walk(val)
+        elif isinstance(node, list):
+            for val in node:
+                walk(val)
+
+    walk(doc)
+    return found
+
+
+def checker_population(programs: Path, flow_yaml: Optional[Path] = None) -> List[str]:
+    """Every checker-shaped program name, deduplicated and sorted.
+
+    The filename glob UNION the programs the flow declares as gates — see
+    `flow_declared_gate_programs`. A gate is in this population because the flow
+    runs it, not because somebody named it `*_check.py`.
+    """
+    names = {p.name for suf in _CHECKER_SUFFIXES for p in programs.glob(suf)}
+    flow = flow_yaml if flow_yaml is not None else (
+        programs.parent / "flow" / "phase1_phase2_phase3.yaml")
+    if flow.is_file():
+        # only programs that EXIST here: a clause naming a program this
+        # checkout does not ship is a different defect, and `gate_is_wired`
+        # owns it. Silently inventing a population entry would be this audit
+        # reporting on a file it never opened.
+        names |= {n for n in flow_declared_gate_programs(flow)
+                  if (programs / n).is_file()}
+    return sorted(names)
 
 
 def _named(programs: Path, *suffixes: str) -> int:
@@ -610,8 +686,23 @@ def main(argv=None) -> int:
     base = _load_baseline(bl)
     new = [c for c in now if base is None or c not in set(base)]
     paid = [c for c in (base or []) if c not in set(now)]
-    if rep["no_runner_at_all"]:
-        print(f"  no runner at all: {len(rep['no_runner_at_all'])}")
+    # EVERY POPULATION, INCLUDING THE ZEROS. vibe-ic#1130.
+    #
+    # `no runner at all` used to print only when it was non-zero. At zero the
+    # gate said nothing about it, and a count that appears only when it is
+    # non-zero cannot be told apart from a check that did not run — which is
+    # the same defect this program exists to find, one level up. The audit
+    # that reports "N checkers nothing but a fixture runs" was itself
+    # reporting one of its own populations conditionally.
+    #
+    # Printed unconditionally now, so a reader can distinguish "I looked and
+    # found none" from "this line is missing because nobody looked".
+    print(f"  population     : test-only {len(rep['test_only'])}, "
+          f"no-runner-at-all {len(rep['no_runner_at_all'])}, "
+          f"skill-only {len(so)}, baseline {0 if base is None else len(base)} "
+          f"— stated even at zero (#1130)")
+    for c in rep["no_runner_at_all"][:10]:
+        print(f"   (no runner at all) {c}")
     if paid:
         print(f"[FAIL] {len(paid)} recorded checker(s) now HAVE a real runner "
               f"— shrink the baseline so it cannot become permission:")
