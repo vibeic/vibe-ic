@@ -103,7 +103,11 @@ def test_a_baseline_entry_that_gained_a_real_gate_forces_the_baseline_to_shrink(
                           "gate": {"optional_program_exit_zero": "x"}},
                          {"id": 1, "name": "still weak",
                           "gate": {"files_exist": ["a"]}},
-                         {"id": 12, "name": "w", "gate": {"files_exist": ["a"]}},
+                         # step 12 is deliberately NOT here: `018be73dc` removed it
+                         # from BASELINE when it gained a real gate. A weak step that
+                         # is not in BASELINE is a NEW offender, and that branch
+                         # returns before the shrink branch — so leaving it in makes
+                         # this test assert the wrong message and hides the property.
                          {"id": 18, "name": "w", "gate": {"files_exist": ["a"]}},
                          {"id": 27, "name": "w", "gate": {"files_exist": ["a"]}},
                          {"id": 32, "name": "w", "gate": {"files_exist": ["a"]}},
