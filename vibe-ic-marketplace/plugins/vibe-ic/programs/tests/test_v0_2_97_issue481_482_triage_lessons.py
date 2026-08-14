@@ -21,6 +21,7 @@ ACCEPTANCE (from the issue ## 驗收):
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import triage_record_check as mod
@@ -204,7 +205,20 @@ def test_482_skill_compliance_tests_still_pass():
     assert comp_test.exists()
     spec = importlib.util.spec_from_file_location("obm_compliance_test", comp_test)
     m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+    # vibe-ic#1417: `comp_test` lives under the SHIPPED `skills/` tree, and
+    # CPython caches byte-code NEXT TO THE SOURCE — so importing it writes
+    # `skills/**/__pycache__/*.pyc`. `__pycache__` is gitignored, so `git
+    # status`, `git add -A` and suite_write_guard all call the tree clean; the
+    # only instrument that disagrees is the BYTES digest in
+    # test_tools_and_integration, and `gatekeeper-land.sh:213` fails the whole
+    # landing when the tree moves. Suppressed for THIS import and restored: a
+    # module-level flip would silence every later import in the session too.
+    _dwb = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(m)
+    finally:
+        sys.dont_write_bytecode = _dwb
     # compliance.yaml still loads and declares the skill correctly.
     reqs = m.load_requirements()
     assert reqs.get("skill") == "open-benchmark-methodology"

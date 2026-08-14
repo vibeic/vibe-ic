@@ -20,6 +20,7 @@ Acceptance (issue ## 驗收): `grep -n "verbatim" SKILL.md` must exit 0
 and the touched skill's structure/compliance tests stay green — both
 pinned here.
 """
+import os
 import re
 import sys
 from pathlib import Path
@@ -121,9 +122,15 @@ def test_touched_skill_compliance_tests_green():
     skill_tests = SKILL.parent / "tests"
     if not skill_tests.is_dir():
         pytest.skip("core-agent-loop/tests absent on this tree")
+    # vibe-ic#1417: the child COLLECTS from the shipped `skills/` tree, so it
+    # writes both `__pycache__/*.pyc` and pytest's assertion-rewrite caches
+    # there. `sys.dont_write_bytecode` is PER-INTERPRETER and never reaches a
+    # child, so the suppression has to travel in the ENVIRONMENT.
+    _env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     r = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", str(skill_tests)],
-        capture_output=True, text=True,
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         str(skill_tests)],
+        capture_output=True, text=True, env=_env,
     )
     assert r.returncode == 0, (
         "core-agent-loop skill tests must stay green:\n"
