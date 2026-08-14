@@ -1119,6 +1119,102 @@ def _reduce_outcome(reports: List[Dict]) -> str:
 #: outliving the harness and taking every other file's verdict with it.
 _OUTCOME_TIMEOUT_S = 60
 
+#: The bound for the OTHER caller, whose budget is not the pytest harness's
+#: (vibe-ic#1382 / #1498).
+#:
+#: `tools/gen_matrix_63x8_census.py` imports this module and calls
+#: `cell_outcomes()` as a library; it runs as a standalone gate from
+#: `tools/ci/repo_hygiene_gates.sh:943`. MEASURED: `timeout` appears ZERO times
+#: in that script and ZERO times in `_gate_dispatch.sh`, so nothing bounds that
+#: gate and there is no harness to outlive on that path.
+#:
+#: 60 s stopped fitting. Six runs of the slowest module (d7) at loads 13-41 on
+#: one host, same invocation: 37 45 51 54 61 68 s -- TWO of six cross 60. The
+#: comment above records that 60 was chosen as 1.7x a then-worst 35.18 s; at a
+#: worst of 68 s that margin is 0.88x, and each crossing flips the census
+#: verdict that `gate_host_independence_check` compares across two runs.
+#:
+#: DERIVED, not picked: `_path_layout.gate_timeout_s()` is the production gate
+#: budget this repo already bounds subprocesses with (`flow_compliance_check`,
+#: `matrix_mutation_ledger`), and each module gets THE WHOLE of it -- 900 s,
+#: 13x the measured worst of 68 s.
+#:
+#: NOT a per-module share. An earlier draft of this block divided the budget by
+#: the discovered module count (`900 // 8 = 112 s`) on the reasoning that the
+#: eight runs share one deadline. That premise was then MEASURED to be false --
+#: `timeout` appears zero times in `repo_hygiene_gates.sh` and zero times in
+#: `_gate_dispatch.sh`, so there is no shared deadline to divide -- and
+#: dividing made the bound TIGHTER than the budget the caller actually has,
+#: which is the defect this change exists to remove, one layer down. See the
+#: `del n_modules` comment in `_standalone_outcome_timeout_s`, which is where
+#: that decision is recorded.
+#:
+#: So `n_modules` does not narrow anything, and the prose that said it did is
+#: gone rather than softened. MEASURED on this head, so the block cannot drift
+#: from the function again without the numbers disagreeing:
+#:
+#:     gate_timeout_s()                    900
+#:     _standalone_outcome_timeout_s(1)    900
+#:     _standalone_outcome_timeout_s(8)    900
+#:     _standalone_outcome_timeout_s(16)   900
+#:     _standalone_outcome_timeout_s(64)   900
+#:     _outcome_timeout_s(8) under pytest   60   (unchanged, by design)
+#:
+#: HONEST LIMITS, stated rather than implied:
+#:   * no wall-clock bound is strictly host-independent; this restores a margin
+#:     the measured spread cannot cross, it does not abolish the class;
+#:   * `gate_timeout_s()` is env-overridable (`VIBE_IC_GATE_TIMEOUT_S`), so two
+#:     hosts with different settings get different bounds. Both arms of the
+#:     host-independence probe run in ONE process environment, so that cannot
+#:     move the verdict this fix is about.
+
+
+def _standalone_outcome_timeout_s(n_modules: int) -> int:
+    """Per-module bound for the standalone-gate path; never below the harness one.
+
+    `_path_layout` is loaded BY PATH off ``__file__`` rather than by name: this
+    module is imported both by pytest (with ``programs/tests`` on the path) and
+    as a library by the census generator, and only one of those puts
+    ``programs`` on ``sys.path``. A name import would work under one caller and
+    raise under the other -- which is the exact shape of defect this change
+    exists to remove. There is deliberately NO fallback: a failure here must
+    surface, because a silent one would return 60 and the fix would read as
+    applied while doing nothing.
+    """
+    import importlib.util
+
+    pl_path = Path(__file__).resolve().parent.parent / "_path_layout.py"
+    spec = importlib.util.spec_from_file_location(
+        "_matrix_cov_path_layout", pl_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    budget = int(mod.gate_timeout_s())
+    # NOT `budget // n_modules`: that was a constraint I invented and then
+    # MEASURED to be absent — `timeout` appears zero times in
+    # `repo_hygiene_gates.sh` and zero times in `_gate_dispatch.sh`, so the
+    # eight runs are not sharing one deadline. Dividing made the bound
+    # TIGHTER than the budget the caller actually has, which is the defect
+    # being fixed, one layer down. `flow_compliance_check` and
+    # `matrix_mutation_ledger` both bound a standalone gate's subprocess at
+    # the whole `gate_timeout_s()`; this does the same.
+    del n_modules  # kept in the signature for callers; not a divisor
+    return max(_OUTCOME_TIMEOUT_S, budget)
+
+
+def _outcome_timeout_s(n_modules: int) -> int:
+    """The bound to use, from the budget the CALLER actually has.
+
+    UNDER PYTEST the harness bound is what matters and 60 s stays exactly what
+    it was: ``PYTEST_CURRENT_TEST`` is set by pytest for the duration of a test,
+    so this returns the unchanged constant on the path that constant was chosen
+    for, and `ci_harness_timeout_ceiling_check`'s 180//3 rule keeps holding
+    there. Absent it, this module was imported as a library by the census
+    generator, which has no harness to outlive.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return _OUTCOME_TIMEOUT_S
+    return _standalone_outcome_timeout_s(n_modules)
+
 
 def _run_outcome_reports(
         paths: Tuple[Path, ...],
@@ -1145,8 +1241,12 @@ def _run_outcome_reports(
     """
     assert paths, "no module paths given to the outcome run"
     merged: Dict[str, List[Dict]] = {}
+    # ONE bound for the whole fan-out, sized from the number of modules
+    # actually discovered rather than a literal.
+    timeout_s = _outcome_timeout_s(len(paths))
     for path in paths:
-        for nodeid, reports in _run_one_module_outcome(path, cwd).items():
+        for nodeid, reports in _run_one_module_outcome(
+                path, cwd, timeout_s).items():
             assert nodeid not in merged, (
                 f"nodeid {nodeid!r} was reported by more than one module run; "
                 f"merging would drop one of them and the cell it belongs to "
@@ -1159,8 +1259,12 @@ def _run_outcome_reports(
 
 
 def _run_one_module_outcome(path: Path,
-                            cwd: Optional[Path]) -> Dict[str, List[Dict]]:
+                            cwd: Optional[Path],
+                            timeout_s: Optional[int] = None,
+                            ) -> Dict[str, List[Dict]]:
     """The single-module half of :func:`_run_outcome_reports`."""
+    if timeout_s is None:
+        timeout_s = _outcome_timeout_s(1)
     scratch = Path(tempfile.mkdtemp(prefix="matrix_cov_outcome_"))
     try:
         plugin = scratch / "matrix_cell_outcomes.py"
@@ -1178,12 +1282,12 @@ def _run_one_module_outcome(path: Path,
                  "-q", "--tb=no", "-p", "no:randomly",
                  "-p", "matrix_cell_outcomes"],
                 cwd=str(cwd or PLUGIN_ROOT), capture_output=True, text=True,
-                timeout=_OUTCOME_TIMEOUT_S, env=env,
+                timeout=timeout_s, env=env,
             )
         except subprocess.TimeoutExpired as exc:
             raise AssertionError(
                 f"the outcome run for {path.name} did not finish within "
-                f"{_OUTCOME_TIMEOUT_S}s. This bound exists so that THIS "
+                f"{timeout_s}s. This bound exists so that THIS "
                 f"assertion is what a reader gets, instead of a pytest session "
                 f"kill that takes every other file's verdict with it."
             ) from exc
