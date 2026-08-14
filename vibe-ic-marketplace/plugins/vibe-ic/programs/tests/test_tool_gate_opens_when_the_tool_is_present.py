@@ -79,14 +79,18 @@ Widening also swept in two constants that share the prefix and are NOT gates
 (a fixture string and an argv list). They are in `NOT_A_GATE` with the value
 type that disqualifies them, and guarded: a bool cannot hide there.
 
-    WHICH_GATES      86    shut under which->None, open under which->path
-    NOT_WHICH_GATES  14    corpus dir, package import, two-stage docker probe
-    NOT_A_GATE        2    not booleans; not gates at all
-                    ---
-                    102    every `_HA(VE|S)_*` definition in this directory
+    WHICH_GATES        86   shut under which->None, open under which->path
+    NOT_WHICH_GATES     9   corpus dir, package import
+    CONJUNCTION_GATES   5   which(docker) AND a live container
+    NOT_A_GATE          2   not booleans; not gates at all
+                      ---
+                      102   every `_HA(VE|S)_*` definition in this directory
 
-Nothing here shells out; `_HAVE_CONTAINER` is the one entry whose probe
-attempts a real subprocess, and it fails closed immediately.
+`CONJUNCTION_GATES` is the one group whose probe shells out. It used to sit in
+`NOT_WHICH_GATES` under the note "fails closed immediately" — true only while
+no container is running, which made this file's verdict a reading of the host.
+See the comment on `CONJUNCTION_GATES` for the measurement and the two guards
+that replaced the host-dependent assertion.
 
 A GATE'S DISCRIMINATOR NEED NOT LIVE IN THE GATED MODULE (#1386, against #1311)
 ──────────────────────────────────────────────────────────────────────────────
@@ -118,10 +122,14 @@ a tool gate; it needs a deeper probe, not a carve-out.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib
+import os
 import re
+import shlex
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -215,6 +223,29 @@ def _probe(modname: str, const: str, fake):
         for helper in _WHICH_HELPERS:
             _reload(helper)
         _reload(modname)
+
+
+@contextlib.contextmanager
+def _stub_on_path(tool: str, rc: int, out: str = ""):
+    """A `tool` early on `PATH` that exits `rc` and prints `out`.
+
+    `shutil.which` is an in-process name lookup, so patching it cannot reach a
+    gate whose second stage SHELLS OUT — the child resolves the binary through
+    `PATH` itself. Without this, a conjunction gate's second stage is whatever
+    the host happens to be running, and the test measures the host.
+    """
+    d = tempfile.mkdtemp(prefix="gatestub-")
+    p = Path(d) / tool
+    p.write_text("#!/bin/sh\n" + (f"printf '%s' {shlex.quote(out)}\n" if out else "")
+                 + f"exit {rc}\n")
+    p.chmod(0o755)
+    prev = os.environ.get("PATH", "")
+    os.environ["PATH"] = d + os.pathsep + prev
+    try:
+        yield
+    finally:
+        os.environ["PATH"] = prev
+        shutil.rmtree(d, ignore_errors=True)
 
 #: Gates whose discriminator IS `shutil.which`. Each must be shut when `which`
 #: finds nothing and open when it reports a path. Measured, not hand-listed.
@@ -315,11 +346,6 @@ NOT_WHICH_GATES = (
     ("test_general_synth", "_HAVE_DS", "corpus dir"),
     ("test_l4_systemrdl_export", "_HAVE_RDL", "package import"),
     ("test_rtllm_tier_pipeline", "_HAVE_DS", "corpus dir"),
-    ("test_v1_0_78_issue729_ppa_area_threshold", "_HAVE_CONTAINER", "docker probe"),
-    ("test_v1_0_80_issue739_ppa_unreachable_target_escape", "_HAVE_CONTAINER", "docker probe"),
-    ("test_v1_0_83_issue756_ppa_disjunctive_clauses", "_HAVE_CONTAINER", "docker probe"),
-    ("test_v1_0_85_issue768_ppa_reachability_submission_independent", "_HAVE_CONTAINER", "docker probe"),
-    ("test_v1_0_85_issue769_ppa_generic_meets_target", "_HAVE_CONTAINER", "docker probe"),
     ("test_v1_1_76_encoder_decoder", "_HAVE_DS", "corpus dir"),
     ("test_v1_1_76_waveform_ext", "_HAVE_DS", "corpus dir"),
     ("test_verilogeval_human_tier1_solvers", "_HAVE_DATASET", "corpus dir"),
@@ -328,6 +354,47 @@ NOT_WHICH_GATES = (
 )
 
 _NOT_WHICH_PAIRS = tuple((m, c) for m, c, _ in NOT_WHICH_GATES)
+
+#: Gates whose discriminator is `which` AND a second, LIVE probe — here, a
+#: `docker inspect` against a named container. THE THIRD CATEGORY, AND THE
+#: REASON IT HAD TO EXIST (#1386).
+#:
+#: These five sat in `NOT_WHICH_GATES`, whose guard asserts the value reads the
+#: SAME under both `which` fakes. For a conjunction that assertion is not a
+#: property of the gate at all — it is a property of THE HOST:
+#:
+#:     _HAVE_CONTAINER = which("docker") is not None and <container running>
+#:
+#:     container stopped   absent False == present False   -> guard passes
+#:     container running   absent False != present True    -> guard fails
+#:
+#: Measured, on one host, one commit, minutes apart: `192 passed`, then
+#: `5 failed, 187 passed` — these exact five — with nothing changed but whether
+#: a container named `vibeic-eda` happened to be up. Reproduced deterministically
+#: by putting a `docker` on PATH that answers `true`. So the earlier verdict on
+#: this branch ("this PR reddens 5 tests") was reading the host, not the branch.
+#:
+#: Moving them here is NOT a relaxation, and must not become one. The two guards
+#: below are strictly STRONGER than `absent == present`, because they hold the
+#: second stage fixed instead of hoping it is False:
+#:
+#:   * fails closed — no `which`, no gate, whatever the container is doing;
+#:   * the second stage is LOAD-BEARING — with `which` reporting a path and the
+#:     tool present but ANSWERING NO, the gate must still be shut. A gate parked
+#:     here to silence a failure is purely `which`-keyed, so it reads True there
+#:     and fails, which is exactly what `NOT_WHICH_GATES` was protecting.
+#:
+#: Both are deterministic on every host, which the assertion they replace was not.
+#: Fields: (module, constant, the tool its second stage shells out to, why).
+CONJUNCTION_GATES = (
+    ("test_v1_0_78_issue729_ppa_area_threshold", "_HAVE_CONTAINER", "docker", "which(docker) AND a live container"),
+    ("test_v1_0_80_issue739_ppa_unreachable_target_escape", "_HAVE_CONTAINER", "docker", "which(docker) AND a live container"),
+    ("test_v1_0_83_issue756_ppa_disjunctive_clauses", "_HAVE_CONTAINER", "docker", "which(docker) AND a live container"),
+    ("test_v1_0_85_issue768_ppa_reachability_submission_independent", "_HAVE_CONTAINER", "docker", "which(docker) AND a live container"),
+    ("test_v1_0_85_issue769_ppa_generic_meets_target", "_HAVE_CONTAINER", "docker", "which(docker) AND a live container"),
+)
+
+_CONJUNCTION_PAIRS = tuple((m, c) for m, c, _t, _w in CONJUNCTION_GATES)
 
 #: Constants that match the prefix but are NOT gates. Widening the key to
 #: `_HAS_` swept in two module-level constants whose names collide with the
@@ -379,6 +446,50 @@ def test_a_declared_non_which_gate_is_really_not_which_keyed(modname, const, why
         f"{modname}.{const} is declared not-which-keyed ({why}) but it CHANGED "
         f"{absent!r} -> {present!r} when shutil.which was patched. It is a "
         f"`which` gate: move it to WHICH_GATES, where both directions are proved.")
+
+
+@pytest.mark.parametrize("modname,const,tool,why", CONJUNCTION_GATES)
+def test_a_conjunction_gate_fails_closed_when_which_finds_nothing(
+        modname, const, tool, why):
+    """Half one of the guard on `CONJUNCTION_GATES`: it must fail CLOSED.
+
+    No `which`, no gate — regardless of what the live second stage would have
+    said, and regardless of what this host is running. This is the half that
+    carries the safety meaning: a gate that read True with the tool absent would
+    let a test run against a tool that is not there.
+
+    The stub answers `true`, i.e. the second stage says YES, so this cannot pass
+    by accident on a quiet host. That is the whole difference from the assertion
+    it replaces, which passed for free whenever nothing was running.
+    """
+    with _stub_on_path(tool, rc=0, out="true"):
+        assert _probe(modname, const, _ABSENT) is False, (
+            f"{modname}.{const} ({why}) read True with `shutil.which` finding "
+            f"nothing, while `{tool}` on PATH answered yes. A conjunction gate "
+            f"must fail closed on its `which` stage alone.")
+
+
+@pytest.mark.parametrize("modname,const,tool,why", CONJUNCTION_GATES)
+def test_a_conjunction_gate_second_stage_is_load_bearing(
+        modname, const, tool, why):
+    """Half two: the second stage must actually be able to SHUT the gate.
+
+    This is the anti-parking defence that `NOT_WHICH_GATES` supplied, restored
+    in a form that does not depend on the host. `which` reports a path AND the
+    tool exists on PATH — but it answers NO. A genuine conjunction gate is shut.
+    A gate parked in this list to silence a failure is keyed on `which` alone,
+    so it reads True here and fails.
+
+    `shutil.which` is an in-process lookup and cannot reach a child process, so
+    the stub has to go on `PATH`: patching one without the other is precisely
+    how the host got to decide this file's verdict.
+    """
+    with _stub_on_path(tool, rc=1):
+        assert _probe(modname, const, _PRESENT) is False, (
+            f"{modname}.{const} is registered as a conjunction gate ({why}), but "
+            f"it read True while `{tool}` was present and answering NO. Its "
+            f"second stage is not load-bearing: it is a `which` gate, and "
+            f"belongs in WHICH_GATES where both directions are proved.")
 
 
 @pytest.mark.parametrize("modname,const,why", NOT_A_GATE)
@@ -476,7 +587,7 @@ def test_every_defined_gate_is_registered():
     spelling is covered the day it appears without an edit here.
     """
     registered = (set(WHICH_GATES) | set(_NOT_WHICH_PAIRS)
-                  | set(_NOT_A_GATE_PAIRS))
+                  | set(_CONJUNCTION_PAIRS) | set(_NOT_A_GATE_PAIRS))
     found = _scan()
     assert found == registered, (
         f"defined but not registered: {sorted(found - registered)}; "
