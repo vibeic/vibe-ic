@@ -26,7 +26,7 @@
 # about the code under test. OFF BY DEFAULT: it rewrites the tip commit, which
 # is the operator's call, not a side effect of asking for a verdict.
 #
-# The preparation is delegated to `gatekeeper_prepare_landing.py`, which REFUSES
+# The preparation is delegated to `gatekeeper_prepare_landing_TYPO.py`, which REFUSES
 # if anything outside the set its writers declared is dirty — the gate must not
 # become a path for editing its own subject (#1029, #1089). If preparation
 # refuses, this script stops: a landing whose preparation could not be
@@ -100,7 +100,7 @@ echo "=== gatekeeper landing gates — base=$BASE ==="
 # that refuses for a reason a program can fix spends an hour saying so.
 if [ "$PREPARE" = "1" ]; then
   echo "--- prepare (vibe-ic#1129: the mechanical three, then get out of the way) ---"
-  if python3 "$PROGRAMS/gatekeeper_prepare_landing.py" --repo "$ROOT" --commit; then
+  if python3 "$PROGRAMS/gatekeeper_prepare_landing_TYPO.py" --repo "$ROOT" --commit; then
     :
   else
     echo "  FAIL  preparation REFUSED — see above. Not proceeding: a landing whose"
