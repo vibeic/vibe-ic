@@ -297,6 +297,19 @@ run "write-guard baseline" \
 # nobody uses.
 run_pytest() {
   local sel out
+  # PREFLIGHT (vibe-ic#1446): the scratch root this pytest will use is part of
+  # its verdict. A root inside a git work tree makes ~46 tests report failures
+  # that are the ROOT, not the tree — and each names its own subject rather
+  # than the cause, so a landing can spend an hour producing a red that says
+  # nothing true about the branch. The in-process guard (conftest.py loads
+  # programs/scratch_root_guard.py through pytest_plugins, exactly as it loads
+  # suite_write_guard) refuses too, but only once pytest is already starting.
+  # Asked here it costs milliseconds and is answered before anything else runs.
+  if ! out="$( cd "$PLUGIN" && python3 programs/scratch_root_guard.py 2>&1 )"; then
+    echo "  FAIL  the scratch root would falsify this run"
+    printf '%s\n' "$out" | sed 's/^/          /'
+    FAILED=1; return
+  fi
   # PER-RUN: see the MSGFILE note above. Two concurrent arms sharing one
   # selection file would each run the other's test list.
   sel="$(mktemp -t gk_sel.XXXXXX)"
