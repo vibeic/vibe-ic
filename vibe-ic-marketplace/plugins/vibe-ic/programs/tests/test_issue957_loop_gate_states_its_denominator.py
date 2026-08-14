@@ -236,30 +236,68 @@ _OK = 'python3 -c "print(\'PASS (1 item(s) examined)\')"'
 
 
 def test_a_loop_that_expands_over_NOTHING_is_still_reported(tmp_path):
-    """A corpus of zero declares no gate, so it cannot be counted, cannot be
-    NOT_CHECKED, and cannot fail. The gate set silently shrinks and every
-    remaining sentence stays true — which is the vacuous pass this repo removes
-    from gates one at a time, arriving through the denominator instead of
-    through a state."""
+    """A corpus of zero must leave a VERDICT behind, not just a sentence.
+
+    UPDATED by vibe-ic#1075. This test's original assertion was
+    `doc["declared"] == 1` — an empty corpus declared no gate at all — and its
+    own docstring named that as the defect rather than the requirement:
+
+        "...cannot be counted, cannot be NOT_CHECKED, and cannot fail. The gate
+         set silently shrinks and every remaining sentence stays true — WHICH IS
+         THE VACUOUS PASS THIS REPO REMOVES FROM GATES ONE AT A TIME, arriving
+         through the denominator instead of through a state."
+
+    #957 pinned that state so it was visible; #1075 removes it. An empty corpus
+    now records one synthetic gate in `NOT_CHECKED` — the tier this library
+    already defines as "the gate REFUSED — it could not look (rc 2)", which is
+    exactly the condition of a gate with nothing to look at, and which the
+    roll-up never folds into `passed`.
+
+    NOTHING BELOW WAS RELAXED. Every disclosure assertion #957 made is kept
+    verbatim; the count moves 1 -> 2 and one assertion is ADDED requiring the
+    new record to actually be NOT_CHECKED, so the empty corpus cannot go back to
+    being counted as a pass.
+    """
     out, doc = _run_fixture(tmp_path, (
         f'run "a flat gate" "$ROOT" {_OK}\n'
         f'_body() {{ run "per item ($1)" "$ROOT" {_OK}; }}\n'
         'gate_dispatch_over "an empty corpus" _body printf ""\n'))
     text = out.stdout + out.stderr
     assert out.returncode == 0, text
-    assert doc["declared"] == 1, doc
+    assert doc["declared"] == 2, (
+        "the empty corpus left no gate behind — the flat gate is the only one "
+        f"declared, which is the #957 defect #1075 removes:\n{doc}")
+    assert doc.get("not_checked", 0) >= 1, (
+        "the empty corpus was recorded, but not in the NOT_CHECKED tier, so it "
+        f"can still be read as a pass over nothing:\n{doc}")
+    assert doc["passed"] == 1, (
+        "the synthetic empty-corpus gate must NOT be counted among the passes "
+        f"— only the flat gate passed:\n{doc}")
     assert [c for c in doc.get("corpora", []) if c["items"] == 0], (
         "a loop that expanded over nothing left no trace in the record:\n"
         + json.dumps(doc, indent=1))
     assert "an empty corpus" in text and "0 item" in text, (
         "the run never said that a loop covered nothing:\n" + text)
+    # #957 looked for a line starting `repo_hygiene_gates: all `, because an
+    # empty corpus USED to leave every gate passing and the roll-up therefore
+    # said "all N passed" — the sentence #957 required to carry a qualification.
+    #
+    # Under #1075 that sentence no longer exists, and its absence is the point:
+    # the empty corpus records a NOT_CHECKED gate, so the run is no longer
+    # "all", it is "1 of 2 gate(s) passed; 1 NOT CHECKED". The REQUIREMENT is
+    # unchanged and is asserted here on the closing roll-up whatever its shape —
+    # it must name the corpus and say nothing was checked over it.
     closing = [ln for ln in out.stdout.splitlines()
-               if ln.startswith("repo_hygiene_gates: all ")]
+               if ln.startswith("repo_hygiene_gates: ")
+               and ("gate(s) passed" in ln or ln.startswith(
+                   "repo_hygiene_gates: all "))]
     assert closing, text
-    assert "NOTHING was checked" in closing[-1] and "an empty corpus" in \
-        closing[-1], (
+    assert "an empty corpus" in closing[-1] and "NOT a pass" in closing[-1], (
         "the closing sentence stands unqualified over a corpus that expanded "
         f"to nothing:\n  {closing[-1]}")
+    assert "NOT CHECKED" in closing[-1], (
+        "the closing sentence does not disclose that the empty corpus landed "
+        f"in the NOT_CHECKED tier:\n  {closing[-1]}")
 
 
 def test_a_producer_that_FAILED_is_not_reported_as_an_empty_corpus(tmp_path):
