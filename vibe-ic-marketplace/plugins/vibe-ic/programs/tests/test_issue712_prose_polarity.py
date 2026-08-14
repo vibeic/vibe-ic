@@ -567,3 +567,75 @@ def test_the_gate_is_GREEN_on_the_tree_that_ships():
         capture_output=True, text=True, timeout=55)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "[PASS]" in r.stdout
+
+
+# ── an exemption that stopped being flagged must say WHY (vibe-ic#1241) ──────
+#
+# The old text named three causes and prescribed one remedy: delete the entry.
+# Measured on vibe-ic#1111, which extracts the literal-locating regex out of
+# `policy_direction_pin_check::flip_source` into a `_literal_span` helper, all
+# three named causes are FALSE and the remedy is wrong: the argument still
+# holds, and deleting the entry does not restore the accounting because the
+# split leaves NEITHER function flagged (measured 217 -> 216). These pin the
+# four diagnoses apart so the message cannot rot back into one guess.
+
+def _exempt_tree(tmp_path, module_src, name="policy_direction_pin_check"):
+    """A tree whose only program is `name`.py, exempted under that key."""
+    root = tmp_path / "t"
+    (root / "programs").mkdir(parents=True)
+    (root / "programs" / f"{name}.py").write_text(module_src)
+    return root
+
+
+_SPLIT = '''
+import re
+def _literal_span(src, col):
+    """Searches, but returns a span — writes no declared value."""
+    m = re.match(r"(?P<q>'|\\")", src[col:])
+    if not m:
+        raise ValueError("no literal")
+    return col + m.end()
+def flip_source(src, site, new_value):
+    """Writes, but no longer searches."""
+    start = _literal_span(src, site["col"])
+    out = {}
+    out["value"] = new_value
+    return src[:start] + new_value
+'''
+
+
+def test_a_split_extractor_is_not_reported_as_gone(tmp_path, monkeypatch):
+    """The refactor case: say the search MOVED, name the helper, and refuse the
+    delete. This is the one the old single message got wrong."""
+    root = _exempt_tree(tmp_path, _SPLIT)
+    monkeypatch.setitem(G._NOT_PROSE, "policy_direction_pin_check::flip_source",
+                        "x" * (G._EXEMPT_REASON_MIN + 1))
+    problems = G.exemption_audit(G.scan(root), root)
+    assert len(problems) == 1, problems
+    msg = problems[0]
+    assert "_literal_span" in msg, msg
+    assert "search moved" in msg, msg
+    assert "Do NOT delete" in msg, msg
+
+
+def test_a_genuinely_absent_function_still_says_delete(tmp_path, monkeypatch):
+    """The teeth that already existed must survive the new wording."""
+    root = _exempt_tree(tmp_path, "def other():\n    return 1\n")
+    monkeypatch.setitem(G._NOT_PROSE, "policy_direction_pin_check::flip_source",
+                        "x" * (G._EXEMPT_REASON_MIN + 1))
+    problems = G.exemption_audit(G.scan(root), root)
+    assert len(problems) == 1, problems
+    assert "no longer defined" in problems[0], problems[0]
+    assert "Delete the entry" in problems[0], problems[0]
+
+
+def test_an_unparseable_module_is_not_reported_as_gone(tmp_path, monkeypatch):
+    """A file that could not be READ has not told us the function is absent —
+    the same rule the rest of this repo applies to an empty result."""
+    root = _exempt_tree(tmp_path, "def flip_source(:\n")
+    monkeypatch.setitem(G._NOT_PROSE, "policy_direction_pin_check::flip_source",
+                        "x" * (G._EXEMPT_REASON_MIN + 1))
+    problems = G.exemption_audit(G.scan(root), root)
+    assert len(problems) == 1, problems
+    assert "could not be parsed" in problems[0], problems[0]
+    assert "not evidence" in problems[0], problems[0]
