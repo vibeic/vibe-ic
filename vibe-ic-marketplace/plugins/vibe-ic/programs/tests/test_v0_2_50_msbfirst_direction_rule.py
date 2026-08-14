@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
 from _specrtl_common import extract_spec_contract, parse_rtl_ports, strip_comments  # noqa: E402
+from _sim_tools import NEEDS_IVERILOG  # noqa: E402
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
@@ -212,6 +213,7 @@ def _block_rules(run):
 
 
 @_needs_gate
+@NEEDS_IVERILOG
 def test_gate_blocks_msb_entry_form(tmp_path):
     ds, run = _stage(tmp_path, _MSBFIRST_SPEC, _WRONG_RTL)
     r = _run_gate(ds, run)
@@ -223,6 +225,7 @@ def test_gate_blocks_msb_entry_form(tmp_path):
 
 
 @_needs_gate
+@NEEDS_IVERILOG
 def test_gate_emits_leftshift_idiom(tmp_path):
     ds, run = _stage(tmp_path, _MSBFIRST_SPEC, _CORRECT_RTL)
     r = _run_gate(ds, run)
