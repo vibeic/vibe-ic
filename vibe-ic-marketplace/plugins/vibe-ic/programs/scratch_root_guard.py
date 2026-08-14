@@ -246,3 +246,56 @@ def pytest_configure(config):
         raise pytest.UsageError(
             "scratch_root_guard: " + _REFUSAL.format(
                 root=root, top=top, flag=_FLAG, env=_ENV_ALLOW))
+
+
+# ── the same question, PREFLIGHT, before an hour of tests answers it ────────
+
+def _main(argv=None) -> int:
+    """CLI: is the scratch root a pytest run here would use a falsifying one?
+
+    WHY THIS EXISTS BESIDE THE HOOK. The in-process hook can only refuse once
+    pytest is already starting, which in a landing is after the selection has
+    been built. Asked as a preflight, the landing learns in milliseconds that
+    its environment would falsify the run it is about to spend an hour on —
+    and `suite_write_guard`, the pytest plugin this one is modelled on, is
+    wired into `gatekeeper-land.sh` as a CLI for exactly that reason.
+
+    It also gives the check a machine runner. A checker that only its own unit
+    test executes is one `checker_execution_wiring_audit` names as an orphan:
+    "a fixture the author wrote proves the logic, never the artefacts."
+
+    rc 0  scratch root is outside any work tree, or git could not be asked
+    rc 2  scratch root is INSIDE a work tree — the disclosed-refusal
+          convention this repo uses for "I will not certify this"
+    """
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Refuse a pytest scratch root that falsifies the run "
+                    "(vibe-ic#1446).")
+    ap.add_argument("--scratch-root", default=None,
+                    help="Directory to test. Default: the platform temp root, "
+                         "which is what pytest uses when --basetemp is unset.")
+    ap.add_argument("--allow", action="store_true",
+                    help="Report but do not refuse. Still prints the verdict.")
+    a = ap.parse_args(argv)
+
+    root = Path(a.scratch_root).resolve() if a.scratch_root \
+        else Path(tempfile.gettempdir()).resolve()
+    top = enclosing_work_tree(root)
+    allowed = a.allow or os.environ.get(_ENV_ALLOW, "") not in ("", "0")
+
+    if top is None:
+        print(f"[PASS] scratch_root_guard: {root} — outside any git work tree "
+              f"(or git could not be asked); a pytest run here is measurable.")
+        return 0
+    print("[FAIL] scratch_root_guard: " + _REFUSAL.format(
+        root=root, top=top, flag=_FLAG, env=_ENV_ALLOW))
+    if allowed:
+        print("[ALLOWED] refusal waived; results from a run here are not "
+              "trustworthy and a count taken from one carries this caveat.")
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
