@@ -64,6 +64,56 @@ _RUNNER_SRC = (_PROGRAMS / "phase3_one_shot_runner.py").read_text(
     errors="replace")
 
 
+def _json_write(body: str, path_expr: str) -> int:
+    """Offset of the write of `path_expr` in `body`, in EITHER spelling.
+
+    A declared report destination can be written directly, `p.write_text(x)`,
+    or through the atomic-artefact helper, `_aa.write_text(p, x)` — the form
+    vibe-ic#1082 introduced so a crashed run cannot leave a half-written file
+    under the FINAL name that the next reader cannot tell from a complete one.
+
+    Both are the same write. Matching only the first spelling made these tests
+    fail on a tree that had become MORE correct: measured on the 28-PR batch
+    `cb7a67626`, the em.json and antenna.json writes had moved to
+    `_aa.write_text(...)` and this module reported two failures for a change
+    that fixed a real crash-safety defect.
+
+    The path expression stays anchored in both alternatives, so this is not a
+    loosening: a write of some OTHER file still does not satisfy it, and a
+    branch that writes nothing still returns -1. Whitespace around `/` is
+    tolerated because that is formatting, not meaning.
+
+    Returns -1 when absent, so callers can assert presence AND ordering.
+    """
+    # Built by splitting on `/` rather than post-processing `re.escape`'s
+    # output: whether that escapes a plain space is version-dependent (this
+    # interpreter yields `\ /\ `, others yield ` / `), and a helper that
+    # silently stops matching on a different Python is the kind of check that
+    # passes for the wrong reason.
+    anchor = r"\s*/\s*".join(re.escape(p.strip()) for p in path_expr.split("/"))
+    pat = re.compile(
+        r"\(\s*" + anchor + r"\s*\)\.write_text"      # (p).write_text(x)
+        r"|_aa\.write_text\(\s*" + anchor             # _aa.write_text(p, x)
+    )
+    m = pat.search(body)
+    return m.start() if m else -1
+
+
+def _json_write_count(body: str, path_expr: str) -> int:
+    """How many times `path_expr` is written in `body`, either spelling.
+
+    Separate from `_json_write` because the antenna emitter has TWO success
+    branches and the property is that BOTH write the pair — a count, not a
+    presence. Same anchoring, same tolerance, so the two cannot drift apart.
+    """
+    anchor = r"\s*/\s*".join(re.escape(p.strip()) for p in path_expr.split("/"))
+    pat = re.compile(
+        r"\(\s*" + anchor + r"\s*\)\.write_text"
+        r"|_aa\.write_text\(\s*" + anchor
+    )
+    return len(pat.findall(body))
+
+
 def _steps():
     import yaml  # noqa: WPS433
     doc = yaml.safe_load(_FLOW.read_text(errors="replace"))
@@ -115,9 +165,12 @@ def test_em_json_is_written_in_the_same_branch_as_em_rpt(tmp_path):
     body = src[src.index("    em_ok = False"):src.index("    return ir_ok, em_ok")]
     assert body.count("if has_em:") == 1, body[:200]
     assert "em_rpt.write_text(body)" in body
-    assert '(em_rpt.parent / "em.json").write_text' in body
-    assert body.index("em_rpt.write_text(body)") < body.index(
-        '(em_rpt.parent / "em.json").write_text')
+    j = _json_write(body, 'em_rpt.parent / "em.json"')
+    assert j >= 0, (
+        "em.json is not written in the same branch as em.rpt, so the step's "
+        "declared verdict source can be absent on a run that emitted the "
+        "report — in either spelling, direct or atomic")
+    assert body.index("em_rpt.write_text(body)") < j
     assert "em_ok = True" in body
 
 
@@ -129,7 +182,10 @@ def test_antenna_json_is_written_wherever_antenna_rpt_is():
     body = _RUNNER_SRC[start:end]
     assert body.count("antenna_rpt.write_text(") == 2, body.count(
         "antenna_rpt.write_text(")
-    assert body.count('/ "antenna.json").write_text') == 2
+    n = _json_write_count(body, 'antenna_rpt.parent / "antenna.json"')
+    assert n == 2, (
+        f"both _emit_antenna_report success branches must write antenna.json "
+        f"beside antenna.rpt; found {n} write(s) in either spelling")
 
 
 def _gate_commands(step: dict):
