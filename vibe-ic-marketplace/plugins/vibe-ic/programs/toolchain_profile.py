@@ -118,7 +118,7 @@ def probe(tools=KEYED_TOOLS) -> Dict[str, bool]:
 #: version key would be perfectly stable and perfectly uninformative — a fix
 #: that reads identically whether or not it works, which is the one shape this
 #: module exists to remove.
-_VERSION_FLAG = "-V"
+_VERSION_FLAG = "--version"
 
 #: The first dotted numeral in the tool's own banner. NUMBER ONLY, deliberately:
 #: `iverilog -V` reports `Icarus Verilog version 14.0 (devel) (s20260301-263-ge02a0bc)`
