@@ -590,15 +590,34 @@ def audit_ci(repo_root: Path, timeout: int = 120,
     # harness bound, which is what actually closes the issue; the aggregate
     # `budget` below stays as the backstop for the pathological case.
     #
-    # The shared scratch could not survive the fan-out, and should not have
-    # survived serially either: THESE GATES WRITE INTO THE TREE THEY AUDIT.
-    # `_drive_on_empty_project` already says so for the other population — "a
-    # fresh directory per gate, never a shared one: gates write into the
-    # project they audit, so a shared scratch would let gate N's report become
-    # gate N+1's input and the population would stop being empty part-way
-    # through". The CI population had exactly that defect and it was invisible
-    # because the order was fixed. One scratch per gate removes it and is what
-    # makes concurrency safe.
+    # A FRESH SCRATCH PER GATE — and NOT because these gates write today.
+    #
+    # An earlier revision of this comment justified the fresh tree by citing
+    # `_drive_on_empty_project`: "a fresh directory per gate, never a shared
+    # one: gates write into the project they audit". That is true of THAT
+    # population — `programs/*_check.py` driven with the project as cwd — and
+    # it does NOT transfer here. MEASURED on `a38902d1`, driving all 50
+    # driveable CI gates serially in declaration order against ONE shared
+    # scratch and fingerprinting the tree after every single gate so a writer
+    # would be attributed to the gate that wrote it:
+    #
+    #     declared 74, driven 50, skipped 24
+    #     entries before 42, entries after 42, WRITERS: 0
+    #
+    # So the shared tree was order-independent, and anyone who re-measures
+    # will find the same thing and have an argument for deleting this.
+    #
+    # It stays anyway, for the reason that survives the measurement: under a
+    # fan-out the cost of being wrong changes. Serially, a gate that started
+    # writing would corrupt the population in a FIXED order — reproducible,
+    # and eventually noticed. Concurrently it would corrupt it in a different
+    # order every run, which is the failure mode that gets diagnosed as
+    # flakiness and waived. One `git init` per gate buys immunity by
+    # construction: measured at 38.1s with the fresh trees against 37.0s
+    # sharing one, so the whole insurance costs ~1s of 38.
+    #
+    # `test_the_fan_out_gives_every_gate_its_own_scratch` pins it, so removing
+    # it is a decision someone has to make on purpose rather than a tidy-up.
     def _probe(decl):
         """Drive one gate in its own empty repo. Returns (kind, label, payload)."""
         label, cmd = decl.label, decl.cmd
