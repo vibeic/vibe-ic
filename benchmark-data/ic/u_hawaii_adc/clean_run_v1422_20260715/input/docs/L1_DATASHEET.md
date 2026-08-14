@@ -48,3 +48,4 @@ confidence_note: >-
 - ❌ modulator internal architecture (single-loop vs MASH, SC vs CT) — designer's choice
 - ❌ LDO topology (NMOS vs PMOS pass, error-amp type) — designer's choice
 - ❌ transistor sizes, bias scheme, layout — chosen downstream to meet the spec
+
