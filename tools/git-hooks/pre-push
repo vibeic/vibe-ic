@@ -30,6 +30,36 @@
 # stdin:   <local ref> <local sha> <remote ref> <remote sha>   (one line per ref)
 set -euo pipefail
 
+# A NON-ZERO EXIT THAT NAMES NOTHING IS INDISTINGUISHABLE FROM A NETWORK FAILURE
+# (vibe-ic#1254). Measured, single-variable control: with the fixed shared path
+# `/tmp/gk_push_commit_text.txt` made unwritable and NOTHING else changed, the
+# hook died at the `git log` redirect below with FAILED already set to 1, and
+# neither `pre-push: BLOCKED` nor the remediation block underneath it was ever
+# printed. `set -e` exits AT the failing command, so every line after it is
+# unreachable on exactly the path that needs them. The reporter lost about an
+# hour to this shape reading it as an auth or network problem.
+#
+# This is a MECHANISM, not a patch for that one line: it names ANY command that
+# aborts the hook, including the ones nobody has hit yet. The alternative --
+# hunting down each untested command -- leaves the next one silent again.
+#
+# Deliberately WITHOUT `set -E`: the trap stays out of functions, because
+# `run_gate` already captures its own rc via `|| rc=$?` and must keep doing so.
+_hook_aborted() {
+  local rc=$?
+  [ "$rc" -eq 0 ] && rc=1
+  echo "pre-push: ABORTED — the hook itself failed and could not finish." >&2
+  echo "    line:    ${1:-?}" >&2
+  echo "    command: ${2:-?}" >&2
+  echo "    rc:      $rc" >&2
+  echo "    Every gate AFTER this point did NOT run, so the push is refused" >&2
+  echo "    without a complete verdict. This is not a network or auth failure," >&2
+  echo "    and it is not a finding against your commits." >&2
+  echo "    Re-run the command above by hand; report it with these four lines." >&2
+  exit "$rc"
+}
+trap '_hook_aborted "$LINENO" "$BASH_COMMAND"' ERR
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 CHECKER="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py"
 ZERO='0000000000000000000000000000000000000000'
@@ -99,6 +129,63 @@ done
 PROGRAMS="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
 PJSON="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
 
+# SHOW THE FINDING, NOT THE LAST THREE LINES.
+#
+# `tail -3` was the wrong selector, and it failed in the one direction that
+# matters: gates print their FINDINGS first and their PASSING entries after, so
+# on a failure the last three lines are reliably a [PASS] entry, a blank, and the
+# count. Measured 2026-08-13, blocking a 57-PR batch. The hook printed:
+#
+#     pre-push: FAILED — benchmark evidence structure
+#         [PASS] …/spm/v1.9.96_gf180mcuD  (verdict=PASS_WITH_WAIVERS)
+#
+#         benchmark_evidence_structure_check: 1/2 conformant, 1 nonconformant
+#
+# Three lines, none of them the finding. The actual sentence — a file sitting at
+# the IC level where only `input/` and `v<ver>_<PDK>` cells may live — was four
+# lines above and never reached the person who had to act on it. Re-running the
+# gate by hand was the only way to learn what had failed.
+#
+# A failure report whose entire body is a PASS is precisely the lie-shape this
+# repository exists to remove, and it had been sitting in the hook that guards
+# every push. So select on WHAT THE LINE SAYS rather than on where it sits:
+# finding-shaped lines first, and the summary line always, because it carries the
+# counts. Fall back to `tail` only when nothing is finding-shaped — a gate with an
+# unrecognised output format must still print something.
+#
+# `|| _ge_hits=""` IS LOAD-BEARING, and without it the `else` below CANNOT RUN.
+# This hook is `set -euo pipefail` (line 31). `grep` exits 1 when it matches
+# nothing; `pipefail` makes that the pipeline's status even though `head`
+# succeeded; the assignment carries it; `set -e` exits. So on exactly the input
+# the fallback exists to serve — a gate whose output has no finding-shaped line
+# — the hook printed the label and DIED, instead of printing the excerpt and
+# reaching `pre-push: BLOCKED`.
+#
+# It is the common case, not a corner: three of the five gates this hook runs
+# produce an argparse usage message on rc=2 with ZERO finding-shaped lines
+# (`marketplace_version_sync_check`, `benchmark_run_manifest`,
+# `commit_msg_nda_check`) — the "could not look" path. On those, the version
+# without this guard was STRICTLY WORSE than the `tail -3` it replaces: `tail`
+# printed the real reason and let the hook continue.
+#
+# It is also the rule this file already documents directly above `run_gate`:
+# "a bare `out="$(cmd)"` assignment CARRIES the substituted command's exit
+# status — so the first failing gate terminated the whole hook right here."
+# Same trap, new call site. (vibe-ic#1209 review)
+_gate_excerpt() {
+  _ge_out="$1"
+  _ge_hits=$(printf '%s\n' "$_ge_out" |
+             grep -E '^\[(FAIL|ERROR)\]|^[[:space:]]+x |^(FAIL|ERROR)[: ]|^[[:space:]]*(FAILED|MISSING|BLOCKED)\b' |
+             head -12) || _ge_hits=""
+  if [ -n "$_ge_hits" ]; then
+    printf '%s\n' "$_ge_hits" | sed 's/^/    /'
+    # the last line of a gate is its count; without it "1 nonconformant" is lost
+    printf '%s\n' "$_ge_out" | tail -1 | sed 's/^/    /'
+  else
+    printf '%s\n' "$_ge_out" | tail -3 | sed 's/^/    /'
+  fi
+}
+
 run_gate() {                       # run_gate <label> <program> [args…]
   label="$1"; prog="$2"; shift 2
   if [ ! -f "$PROGRAMS/$prog" ]; then
@@ -160,11 +247,11 @@ run_gate() {                       # run_gate <label> <program> [args…]
   # sentence changes, and the sentence is what a reader acts on.
   if [ "$rc" = "2" ]; then
     echo "pre-push: NOT CHECKED — $label (the gate could not run)" >&2
-    printf '%s\n' "$out" | tail -3 | sed 's/^/    /' >&2
+    _gate_excerpt "$out" >&2
     FAILED=1
   elif [ "$rc" != "0" ]; then
     echo "pre-push: FAILED — $label" >&2
-    printf '%s\n' "$out" | tail -3 | sed 's/^/    /' >&2
+    _gate_excerpt "$out" >&2
     FAILED=1
   fi
 }
@@ -213,10 +300,29 @@ if [ -n "${PUSH_RANGE:-}" ]; then
   # receives a single token and exits 128, which killed the hook on EVERY
   # new-branch push before the `git prohibition guard` below could run at all.
   # The checker above survives it because it re-splits the string itself.
+  #
+  # A FIXED NAME IN A SHARED /tmp IS TWO DEFECTS, BOTH MEASURED (vibe-ic#1254):
+  #   1. it is not private — several agents push from one host, and the second
+  #      writer wins, so this gate could scan the OTHER push's commit messages
+  #      and report on commits that are not being pushed;
+  #   2. it made the failure SILENT — the redirect is untested under `set -e`
+  #      and `2>/dev/null` discarded git's own reason, so a failure here left
+  #      `error: failed to push some refs` and nothing else.
+  # `mktemp` fixes (1); testing the command and KEEPING its stderr fixes (2).
+  PUSH_TEXT="$(mktemp "${TMPDIR:-/tmp}/gk_push_commit_text.XXXXXXXX")"
   # shellcheck disable=SC2086
-  git log --format='%B' $PUSH_RANGE > /tmp/gk_push_commit_text.txt 2>/dev/null
-  run_gate "git prohibition guard" \
-           git_prohibition_guard.py /tmp/gk_push_commit_text.txt
+  if git log --format='%B' $PUSH_RANGE > "$PUSH_TEXT" 2> "$PUSH_TEXT.err"; then
+    run_gate "git prohibition guard" \
+             git_prohibition_guard.py "$PUSH_TEXT"
+  else
+    # A GATE THAT COULD NOT BE FED HAS NOT PASSED — same rule as run_gate's
+    # rc 2 branch, and it must say which range it could not read.
+    echo "pre-push: NOT CHECKED — git prohibition guard (could not read the push range)" >&2
+    echo "    range: $PUSH_RANGE" >&2
+    tail -3 "$PUSH_TEXT.err" | sed 's/^/    /' >&2
+    FAILED=1
+  fi
+  rm -f "$PUSH_TEXT" "$PUSH_TEXT.err"
 fi
 run_gate "marketplace <-> plugin version sync" marketplace_version_sync_check.py
 

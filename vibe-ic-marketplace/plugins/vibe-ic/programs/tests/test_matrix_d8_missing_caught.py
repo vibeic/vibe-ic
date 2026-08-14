@@ -1424,3 +1424,52 @@ def matrix_cell_substitution(step_id) -> Optional[str]:
         "production. See KNOWN GAP #2 and "
         "test_d8_downgrade_is_reachable_through_each_steps_own_real_gate."
     )
+
+
+def test_the_pin_is_the_MEASURED_population_not_a_SUPERSET_of_it():
+    """The pin must EQUAL the live single-entry population, not contain it.
+
+    WHY THIS EXISTS, and it is not hypothetical — v1.10.38 shipped the defect.
+    The membership assertion above lives inside ``if len(outs) < 2``, so it can
+    only fire in ONE direction:
+
+        a step that DROPS to a single entry   -> absent from the pin -> RED here
+        a step that RISES OUT of the population -> takes the else branch,
+                                                   never consults the pin, and
+                                                   its entry rots silently
+
+    MEASURED on `162b5bde4` (v1.10.38), which relocated the extraction-coverage
+    entries off step 1 and then APPENDED "1" to this tuple instead of
+    re-deriving it::
+
+        pin                     28 entries, containing BOTH "1" and "29"
+        measured population     27
+        step 29 on that commit  declares TWO required_outputs
+                                (sim_postlayout/results.log OR pass.flag,
+                                 reports/phase2/gates/post_layout_sim.json)
+        d8                      294 passed -- it could not see any of that
+
+    A one-directional ratchet accumulates stale members forever, and every
+    landing that moves a step's declaration is another chance to add one. Set
+    equality is what makes the pin a MEASUREMENT rather than a floor: a stale
+    entry reddens the moment it goes stale, and nobody has to remember to look.
+    """
+    measured, seen = set(), set()
+    for cell in _cell_params():
+        c = cell.values[0] if hasattr(cell, "values") else cell
+        key = F.normalize_id(c.step_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(F.required_outputs(c.step_id)) < 2:
+            measured.add(key)
+
+    pinned = set(SINGLE_ENTRY_STEPS_AS_MEASURED)
+    assert pinned == measured, (
+        f"the pin and the flow disagree.\n"
+        f"  pinned but NO LONGER single-entry (stale, invisible to the "
+        f"membership assert): {sorted(pinned - measured)}\n"
+        f"  single-entry but NOT pinned (the case that assert already "
+        f"catches): {sorted(measured - pinned)}\n"
+        f"  re-derive the tuple rather than adding to it — appending is how "
+        f"v1.10.38 shipped a 28-entry pin over a 27-step population.")

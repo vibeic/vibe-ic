@@ -1795,7 +1795,34 @@ def _glob_real(root: Path, pattern: str) -> List[Path]:
     get their turn. Filtering only at the end would let a link-to-nowhere in
     the first probe suppress the fallbacks and turn a findable artefact into
     a spurious MISSING.
+
+    A pattern that names the ROOT rather than something under it matches no
+    artefact, and is answered here instead of being handed to `Path.glob`,
+    which THROWS on all three of its spellings (3.12 — each compiles to no
+    selectable part):
+
+        Path.glob(".")   IndexError: tuple index out of range
+        Path.glob("")    ValueError: Unacceptable pattern
+        Path.glob("./")  AttributeError: '_TerminatingSelector' object has no
+                         attribute 'select_from'
+
+    None is hypothetical. `"."` is what `Path("seed.flag").parent` is for ANY
+    project-root-relative declaration, and `_sibling_self_skip_for_missing`
+    hands that parent straight to this function for every missing `files_exist`
+    pattern; `""` is what the analog-remap branch of `_glob_first` computes as
+    `tail` when a pattern equals its own prefix. `check_step` runs in a
+    `ThreadPoolExecutor` and `main()` re-raises via `_fut.result()`, so the
+    throw does not fail one gate — it aborts the entire audit with a traceback,
+    no report and no exit code, which is strictly worse than the MISSING it was
+    on its way to computing.
+
+    Empty rather than "the root itself": the root is not an artefact any caller
+    is looking for, and the one caller that wants it as a DIRECTORY
+    (`_sibling_self_skip_for_missing`) already holds it as `project /
+    parent_rel` — `Path(p) / "." == Path(p)` — so nothing is lost.
     """
+    if pattern.strip() in ("", ".", "./"):
+        return []
     return sorted(m for m in root.glob(pattern)
                   if _resolves_to_real_artefact(m))
 
@@ -11903,6 +11930,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # invariant here as a NON-promotable hard fail (set before the verdict and
     # the open-source-constraints promotion so it cannot be softened away).
     ordering_fail_lines: List[str] = []
+    ordering_gating_lines: List[str] = []
     try:
         import flow_step_execution_coverage_check as _cov
         _cov_graph = {
@@ -11916,10 +11944,58 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"[{v['terminal_id']}] {v['terminal']} = "
                 f"{v['terminal_status']} marked done while dependency "
                 f"[{v['signoff_id']}] {v['signoff']} = {v['signoff_status']}")
-        if ordering_fail_lines:
+        # vibe-ic#1429 — BLOCKING, and it stays BLOCKING. A violation inside
+        # the run's verdict scope still sets `forced_fail` before the verdict
+        # and before the open-source-constraints promotion, so it still cannot
+        # be softened away — the sentence above is unchanged. What changes is
+        # WHICH violations are inside the scope, and only in the one mode that
+        # narrows the scope at all.
+        #
+        # THE GUARD READS THE SAME VERDICT SCOPE EVERY OTHER BUCKET READS.
+        # `scoped` above IS that scope: it is `results` in every
+        # mode except `--phase 2 --strict-structural`, where it narrows to the
+        # `P0` umbrella plus the analog track (#634). Filtering on it is
+        # therefore a NO-OP in every other mode BY CONSTRUCTION — not a mode
+        # branch that can be got wrong, and not a second list of step ids that
+        # can drift from the one the verdict actually uses.
+        #
+        # WHAT IT FIXES. `--phase 2 --strict-structural` declares step-level
+        # FAIL/MISSING informational, and says so in THREE places: the `scoped`
+        # list above, the `structural_fail_lines` / `step_artifact_fail_lines`
+        # split ("With --strict-structural alone they are info-only"), and the
+        # report's own "Step-level gates (informational, not gating
+        # --strict-structural)" heading. This guard was the ONE place that did
+        # not, so a step-level MISSING re-entered the verdict through a side
+        # door and the report contradicted itself two lines apart. MEASURED on
+        # the fixture in `test_flow_compliance_check_gate.py::
+        # test_strict_structural_only_structural_gates` — RTL present, no
+        # L-docs, no structural FAIL:
+        #
+        #   Overall: FAIL  (strict=True)
+        #   Step-level gates (informational, not gating --strict-structural): 5
+        #   ✗ [1] Spec-to-RTL = PASS marked done while dependency
+        #         [D1] Phase 1 Doc Extraction = MISSING      <- the sole cause
+        #
+        # `D1 = MISSING` IS a step-level MISSING. Left as it was, the flag can
+        # only ever return FAIL on the input class it was built for (v0.119.53
+        # Wave 21: "a structurally clean Phase-2 project was rejected because
+        # lint/CDC/coverage/formal step artefacts were incomplete"), and
+        # `--strict-step-artifacts` already exists for the other reading.
+        #
+        # SCOPED, NOT SUPPRESSED. `ordering_fail_lines` still carries EVERY
+        # violation, so the printed block and the JSON `ordering_violations`
+        # field are unchanged in every mode; only which of them reach
+        # `forced_fail` changes, and the ones that do not are named on their
+        # own line below rather than going quiet.
+        _scoped_ids = {str(r.id) for r in scoped}
+        ordering_gating_lines = [
+            line for line, v in zip(ordering_fail_lines, _ordering_violations)
+            if str(v['signoff_id']) in _scoped_ids]
+        if ordering_gating_lines:
             forced_fail = True
     except Exception:  # nosec — additive enforcement must never crash the audit
         ordering_fail_lines = []
+        ordering_gating_lines = []
         _ordering_violations = []
 
     if not ok or forced_fail:
@@ -12121,6 +12197,20 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"before a step it depends on completed:")
         for line in ordering_fail_lines:
             print(f"  ✗ {line}")
+        # vibe-ic#1429 — DEGRADE LOUDLY. A violation this run's verdict scope
+        # does not reach is still printed above; this line says so by name, so
+        # "reported but not gating" is a statement the reader can SEE rather
+        # than a difference they have to infer from the verdict word. Emitted
+        # only when the two lists actually differ, so no existing mode's
+        # output gains a line. Counted by LENGTH, not by set difference: two
+        # violations can render the same line and a set would report one of
+        # them as missing from a list it is in.
+        _n_info = len(ordering_fail_lines) - len(ordering_gating_lines)
+        if _n_info > 0:
+            print(f"  ({_n_info} of {len(ordering_fail_lines)} "
+                  f"reported, NOT gating: the dependency named is outside "
+                  f"this run's verdict scope. Use --strict-step-artifacts to "
+                  f"gate on these too.)")
 
     if advisories:
         print("\nAdvisories:")
@@ -12263,6 +12353,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             "allow_thin_input": bool(getattr(args, "allow_thin_input", False)),
             "input_doc_count": _count_input_docs(project),
             "ordering_violations": ordering_fail_lines,
+            # vibe-ic#1429 — the SUBSET that reached `forced_fail`. The field
+            # above is unchanged (every violation, every mode); this one says
+            # which of them this run's verdict scope actually reached, so a
+            # consumer never has to re-derive the scope to know why a run with
+            # a reported violation is nonetheless green.
+            "ordering_violations_gating": ordering_gating_lines,
             # THE CLASSIFIED BLOCKER LIST, machine-readable, beside the tally.
             # `counts` says how many; this says what each one IS, with the rule
             # that decided it named in `basis` so a reader can audit the

@@ -28,6 +28,13 @@ WHAT THIS FILE REFUSES
 4. **A permissive degradation.** Every way the differential can lose
    information — empty base, no overlap, a truncated candidate run, a selected
    file that produced no test case — is asserted to go STRICTER, never softer.
+   That list was asked of the CANDIDATE arm only. The BASE arm's completeness
+   is the one that goes SOFTER (vibe-ic#1443): `silenced` and `weakened` are
+   read off what was red or passing ON THE BASE, so a base failure that never
+   got measured is a base failure the branch may delete for free. Measured on
+   `3d13e2c59`, one selected file missing from the base report turned
+   `REFUSE 1 FAILING TEST(S) WERE SILENCED` into `LAND OK` with every other
+   input byte-identical.
 5. **A verdict about the wrong tree.** `gh pr merge --squash` creates the
    forge's merge tree. A rebase that produces a different tree, or a forge that
    disagrees with the local merge, is refused before any suite is run.
@@ -280,6 +287,39 @@ def test_a_selected_file_that_produced_no_test_case_is_refused():
     assert any("NO TEST CASE" in r for r in v.reasons)
 
 
+# ============================= ARM A'S COMPLETENESS IS ALSO A REFUSAL (#1443)
+
+
+def test_a_base_arm_that_did_not_finish_is_refused_not_passed():
+    """The same question as the test above, asked of the arm that is SUBTRACTED.
+
+    #1443's law: "a two-arm comparison must assert that both arms emitted a
+    summary line before it subtracts anything." The candidate arm had that
+    check; the base arm had only `base_total == 0`, which is all-or-nothing and
+    only a NOTE. A base arm that ran three of its five files sits between the
+    two and was subtracted as though whole."""
+    v = _decide(base_dropped_files=["programs/tests/test_alpha.py"])
+    assert v.ok is False, v.notes
+    assert any("NO TEST CASE ON THE BASE" in r for r in v.reasons), v.reasons
+
+
+def test_a_complete_base_arm_is_not_flagged_as_partial():
+    """THE FALSE-POSITIVE CONTROL. The check above must fire on a partial base
+    arm and on nothing else — a gate that refuses every landing is a ban."""
+    v = _decide(base_dropped_files=())
+    assert v.ok is True, v.reasons
+    assert not any("ON THE BASE" in r for r in v.reasons), v.reasons
+
+
+def test_a_caller_that_never_says_what_arm_a_was_asked_for_is_disclosed():
+    """DEGRADE LOUDLY. A caller supplying no base selection leaves the check
+    unable to fire, and a check that cannot fire must not read as a clean sheet.
+    Not blocking: an older caller has to stay landable."""
+    v = _decide(base_selection_supplied=False)
+    assert v.ok is True, v.reasons
+    assert any("completeness was NOT checked" in n for n in v.notes), v.notes
+
+
 # ================================================= UNMEASURABLE IS NOT A PASS
 
 
@@ -345,6 +385,56 @@ def test_there_is_no_input_that_makes_the_verdict_more_permissive_than_green():
         d = V.failed_set_delta(base, {"m::t": V.FAILED})
         assert d.new_failures == ["m::t"], base_outcome
         assert _decide(delta=_delta(new_failures=d.new_failures)).ok is False
+
+
+def test_a_test_the_branch_brings_is_split_out_from_one_it_broke():
+    """vibe-ic#1417. `b in RED` is false BOTH when the base ran the test and it
+    passed AND when the base never had the test — and only the first is a
+    behaviour this change broke. Reported as one number, they are a 5x
+    overstatement on a batch.
+
+    MEASURED on a 141-PR batch composed on `3d13e2c59`: 5 nodes reported NEW,
+    of which FOUR do not exist on main at all (`grep 'def <name>'` -> main 0,
+    batch 1) and ONE — `test_d8_downgrade_is_reachable_through_each_steps_own_
+    real_gate` — passes alone on main and fails alone in the batch. One
+    regression, reported as five.
+    """
+    base = {"m::t_broke": V.PASSED, "m::t_ok": V.PASSED}
+    cand = {"m::t_broke": V.FAILED, "m::t_ok": V.PASSED,
+            "m::t_brought": V.FAILED}
+    d = V.failed_set_delta(base, cand)
+    assert sorted(d.new_failures) == ["m::t_broke", "m::t_brought"]
+    assert d.new_absent_on_base == ["m::t_brought"], (
+        "a test the branch BRINGS, failing, is not separated from one it BROKE")
+
+
+def test_splitting_the_count_moves_no_verdict():
+    """LOAD-BEARING. The split is a disclosure and must never become a waiver:
+    a failing test the branch brought is still the branch's. Asserted on the
+    VERDICT, so a future edit that routes on `new_absent_on_base` to soften the
+    refusal kills this."""
+    for brought in ([], ["m::t_brought"]):
+        v = _decide(delta=_delta(new_failures=["m::t_brought"],
+                                 new_absent_on_base=brought))
+        assert v.ok is False, brought
+        assert any("NEW FAILURE(S) THIS BRANCH OWNS" in r for r in v.reasons)
+
+
+def test_an_empty_base_does_not_report_everything_as_merely_brought():
+    """The degradation that would flatter. With no base report every id is
+    absent, so an unguarded split would announce "nothing was broken, it is all
+    new" — false, and in the permissive direction. `decide` already discloses
+    the empty base; this must add no second, wrong sentence."""
+    d = V.failed_set_delta({}, {"m::t_b": V.FAILED})
+    assert d.new_failures == ["m::t_b"]
+    assert d.new_absent_on_base == [], (
+        "an empty base made every failure look like a newly brought assertion")
+
+
+def test_the_split_is_machine_readable_not_only_prose():
+    d = V.failed_set_delta({"m::t": V.PASSED}, {"m::t": V.FAILED, "m::n": V.FAILED})
+    assert "new_absent_on_base" in d.as_dict()
+    assert d.as_dict()["new_absent_on_base"] == ["m::n"]
 
 
 # ================================================== THE DECISION TABLE, EXACTLY
@@ -452,17 +542,22 @@ def test_a_selection_failure_is_not_the_test_tier():
 # ==================================================================== THE CLI
 
 
-def _cli(tmp_path, land_text, base_cases, cand_cases, sel, extra=()):
+def _cli(tmp_path, land_text, base_cases, cand_cases, sel, extra=(),
+         base_sel=None):
     (tmp_path / "land.log").write_text(land_text)
     (tmp_path / "sel.txt").write_text("\n".join(sel) + "\n")
     bj = _junit(tmp_path, base_cases, "base.xml")
     cj = _junit(tmp_path, cand_cases, "cand.xml")
+    base_sel_arg = ()
+    if base_sel is not None:
+        (tmp_path / "sel_base.txt").write_text("\n".join(base_sel) + "\n")
+        base_sel_arg = ("--base-selection", str(tmp_path / "sel_base.txt"))
     cmd = [sys.executable, str(_PROG),
            "--base-sha", SHA, "--head-sha", SHA, "--verified-sha", SHA,
            "--rebase-status", "ok", "--expected-tree", TREE,
            "--verified-tree", TREE, "--github-tree", TREE,
            "--land-log", str(tmp_path / "land.log"),
-           "--selection", str(tmp_path / "sel.txt"),
+           "--selection", str(tmp_path / "sel.txt"), *base_sel_arg,
            "--base-junit", str(bj), "--candidate-junit", str(cj),
            "--json", str(tmp_path / "v.json"), *extra]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=_T)
@@ -481,6 +576,128 @@ def test_cli_returns_zero_and_names_the_verified_commit(tmp_path):
     assert "LAND OK" in r.stdout
     assert doc["verdict"] == "LAND_OK"
     assert doc["verified_sha"] == SHA
+
+
+_SEL2 = ["programs/tests/test_alpha.py", "programs/tests/test_beta.py"]
+# The candidate turned a base failure into a SKIP — the exact cheat the
+# differential exists to catch.
+_CASE_SILENCED_CAND = [
+    ("programs.tests.test_alpha", "t_red", "skipped", "programs/tests/test_alpha.py"),
+    ("programs.tests.test_beta", "t_ok", "passed", "programs/tests/test_beta.py"),
+]
+_CASE_BASE_WHOLE = [
+    ("programs.tests.test_alpha", "t_red", "failed", "programs/tests/test_alpha.py"),
+    ("programs.tests.test_beta", "t_ok", "passed", "programs/tests/test_beta.py"),
+]
+# The SAME base arm, stopped before `test_alpha.py` was reached.
+_CASE_BASE_PARTIAL = [
+    ("programs.tests.test_beta", "t_ok", "passed", "programs/tests/test_beta.py"),
+]
+
+
+def test_a_partial_base_arm_cannot_clear_a_silenced_failure(tmp_path):
+    """THE #1443 REPRODUCTION, END TO END, AS A PAIR.
+
+    Two runs. Same candidate report, same land logs, same selection, same trees.
+    The ONLY difference is whether arm A ran both files it was asked for.
+
+    Measured on `3d13e2c59` before this check existed:
+
+        base COMPLETE -> rc=1  REFUSE  1 FAILING TEST(S) WERE SILENCED
+        base PARTIAL  -> rc=0  LAND OK              <-- the branch lands the cheat
+
+    Both must now refuse, and the partial arm must say WHY it could not answer
+    rather than answering wrongly."""
+    whole_dir = tmp_path / "whole"
+    whole_dir.mkdir()
+    r_whole, doc_whole = _cli(whole_dir, _RED_TEST_TIER_LOG, _CASE_BASE_WHOLE,
+                              _CASE_SILENCED_CAND, _SEL2, base_sel=_SEL2)
+    assert r_whole.returncode == 1, r_whole.stdout + r_whole.stderr
+    assert doc_whole["delta"]["silenced"] == ["programs.tests.test_alpha::t_red"]
+    assert doc_whole["dropped_base_selected_files"] == []
+
+    part_dir = tmp_path / "partial"
+    part_dir.mkdir()
+    r_part, doc_part = _cli(part_dir, _RED_TEST_TIER_LOG, _CASE_BASE_PARTIAL,
+                            _CASE_SILENCED_CAND, _SEL2, base_sel=_SEL2)
+    assert r_part.returncode != 0, (
+        "a base arm that ran one of its two files still cleared a silenced "
+        "failure: " + r_part.stdout + r_part.stderr)
+    assert doc_part["verdict"] == "REFUSE"
+    assert doc_part["dropped_base_selected_files"] == \
+        ["programs/tests/test_alpha.py"]
+    assert any("ON THE BASE" in r for r in doc_part["reasons"]), doc_part["reasons"]
+    # The silencing itself is INVISIBLE to the partial arm — which is the whole
+    # point. The refusal is the only thing standing between it and a landing.
+    assert doc_part["delta"]["silenced"] == []
+
+
+def test_a_base_arm_asked_for_files_that_produced_no_report_is_refused(tmp_path):
+    """The #1378 shape — a DEAD base arm — through the same door. `--timeout-
+    method=thread` kills pytest outright, so the junit is never written at all.
+    Asked for two files and producing no report is the partial case at N."""
+    (tmp_path / "land.log").write_text(_RED_TEST_TIER_LOG)
+    (tmp_path / "sel.txt").write_text("\n".join(_SEL2) + "\n")
+    (tmp_path / "sel_base.txt").write_text("\n".join(_SEL2) + "\n")
+    cj = _junit(tmp_path, _CASE_SILENCED_CAND, "cand.xml")
+    r = subprocess.run(
+        [sys.executable, str(_PROG),
+         "--base-sha", SHA, "--head-sha", SHA, "--verified-sha", SHA,
+         "--rebase-status", "ok", "--expected-tree", TREE,
+         "--verified-tree", TREE, "--github-tree", TREE,
+         "--land-log", str(tmp_path / "land.log"),
+         "--selection", str(tmp_path / "sel.txt"),
+         "--base-selection", str(tmp_path / "sel_base.txt"),
+         "--base-junit", str(tmp_path / "never_written.xml"),
+         "--candidate-junit", str(cj),
+         "--json", str(tmp_path / "v.json")],
+        capture_output=True, text=True, timeout=_T)
+    doc = json.loads((tmp_path / "v.json").read_text())
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert doc["dropped_base_selected_files"] == sorted(_SEL2)
+    assert any("ON THE BASE" in x for x in doc["reasons"]), doc["reasons"]
+
+
+def test_a_test_file_the_pr_adds_is_not_read_as_a_partial_base_arm(tmp_path):
+    """THE SECOND FALSE-POSITIVE CONTROL, and the reason the base arm gets its
+    OWN list. `--selection` holds files the PR ADDS, which cannot exist at the
+    base; asking about them here would refuse every PR that brings a test file.
+    `--base-selection` is the selection already filtered to what exists there —
+    the same file `gatekeeper-verify-merge.sh` builds for arm A1."""
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE + [
+        ("programs.tests.test_brand_new", "t_new", "passed",
+         "programs/tests/test_brand_new.py")],
+        _SEL2 + ["programs/tests/test_brand_new.py"], base_sel=_SEL2)
+    assert doc["dropped_base_selected_files"] == [], doc["reasons"]
+    assert not any("ON THE BASE" in x for x in doc["reasons"]), doc["reasons"]
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_caller_supplying_no_base_selection_is_told_the_check_did_not_fire(
+        tmp_path):
+    """`base_selection_size == 0` and an empty dropped list are the SAME two
+    values a clean base arm produces, so the record must be readable without
+    guessing which one happened. It is a note, never a refusal: an older caller
+    stays landable."""
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["base_selection_size"] == 0
+    assert any("completeness was NOT checked" in n for n in doc["notes"]), \
+        doc["notes"]
+
+
+def test_the_verify_script_hands_the_verdict_arm_as_own_selection():
+    """The wiring, asserted on the script rather than assumed. Arm A1 runs
+    `selection_base.txt`; the verdict has to be told that is what was asked, or
+    the check above can never fire in production."""
+    body = "\n".join(l for l in _VERIFY.read_text(encoding="utf-8").splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "--base-selection" in body, \
+        "the verdict is not told what arm A was asked to run"
+    assert 'selection_base.txt' in body
+    # ...and the file must exist even when the run short-circuits, or the flag
+    # points at nothing and the disclosure is the one that fires.
+    assert body.count(': > "$RUN/selection_base.txt"') >= 1
 
 
 def test_cli_returns_one_on_a_new_failure(tmp_path):
@@ -999,6 +1216,7 @@ def test_the_fallback_still_refuses_when_the_replay_itself_conflicted():
     ({"verified_tree": OTHER_TREE}, False),
     ({"truncated": True}, False),
     ({"dropped_files": ("programs/tests/test_x.py",)}, False),
+    ({"base_dropped_files": ("programs/tests/test_x.py",)}, False),
     ({"land": V.parse_land_log(_GOOD_LOG.replace("PASS  repo hygiene gates",
                                                  "FAIL  repo hygiene gates"))},
      False),

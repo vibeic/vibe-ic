@@ -31,6 +31,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -193,21 +194,63 @@ def find_runner(container: Optional[str] = None) -> Optional[KLayoutRunner]:
     return None
 
 
+#: (root, subdir, name) triples already reported as "the override carries no
+#: such engine", so a program that resolves the same engine repeatedly says it
+#: once instead of once per call.
+_ENV_MISS_REPORTED: set = set()
+
+
+def _subdir_spellings(subdir: str) -> List[str]:
+    """`subdir` plus the same directory name under the other separator style.
+
+    The plugin names its program directories with UNDERSCORES (``metal_fill/``,
+    ``gds_antenna/``) because they sit next to importable Python; the KLayout
+    fork names the very same engines with HYPHENS (``metal-fill/``,
+    ``gds-antenna/``, and likewise ``mp-color/``, ``perc-latchup/``,
+    ``cmp-gradient/`` …). Neither convention is wrong and neither repository
+    owns the other's layout, so the override accepts both rather than forcing a
+    rename on one side. What the caller asked for is always tried first.
+    """
+    out = [subdir]
+    for alt in (subdir.replace("_", "-"), subdir.replace("-", "_")):
+        if alt not in out:
+            out.append(alt)
+    return out
+
+
 def find_engine(subdir: str, name: str) -> Optional[Path]:
     """Locate a KLayout-fork engine script.
 
     Resolution order (first hit wins):
       1. ``$VIBEIC_KLAYOUT_TOOLS/<subdir>/<name>`` — a fork checkout / a newer
-         engine baked into the container image, which OVERRIDES the vendored copy;
+         engine baked into the container image, which OVERRIDES the vendored copy.
+         ``<subdir>`` is tried in both separator spellings (see
+         :func:`_subdir_spellings`), because the fork's own directory names use
+         hyphens and every caller here passes the underscored plugin spelling;
       2. ``<programs>/<subdir>/<name>`` — the copy vendored into the plugin, so a
          clean install can reach the capability with no extra setup.
+
+    When the override IS set but carries no such engine, falling back to the
+    vendored copy is correct — doing it *silently* is not. A silent fall-through
+    is indistinguishable from the override having worked, which is precisely how
+    the spelling mismatch above survived unnoticed, so the miss is named on
+    stderr (once per root/engine) and the fallback still happens.
     """
     env = os.environ.get("VIBEIC_KLAYOUT_TOOLS")
-    cands: List[Path] = []
+    env_cands: List[Path] = []
     if env:
-        cands.append(Path(env) / subdir / name)
-    cands.append(Path(__file__).resolve().parent / subdir / name)
-    for c in cands:
+        env_cands = [Path(env) / s / name for s in _subdir_spellings(subdir)]
+    for c in env_cands:
         if c.is_file():
             return c
-    return None
+    if env_cands:
+        key = (str(env), subdir, name)
+        if key not in _ENV_MISS_REPORTED:
+            _ENV_MISS_REPORTED.add(key)
+            tried = ", ".join(str(c) for c in env_cands)
+            print(f"[klayout-engine] VIBEIC_KLAYOUT_TOOLS={env} carries no "
+                  f"{subdir}/{name} (tried: {tried}) — falling back to the "
+                  f"vendored copy; the override is NOT in effect for this engine",
+                  file=sys.stderr)
+    vendored = Path(__file__).resolve().parent / subdir / name
+    return vendored if vendored.is_file() else None

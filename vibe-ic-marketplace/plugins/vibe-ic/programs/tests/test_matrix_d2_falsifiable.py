@@ -1345,6 +1345,29 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # no generated_docs means phase1 has not run, which is not an incomplete
     # extraction. The docs must exist AND carry a placeholder.
     ("D1", "l_doc_todo_stub_count_check ."): "LDOC_TODO",
+
+    # D1 gained `phase1_coverage_report_present_check` in this change (#1219):
+    # the report moved off step 1, so D1 declares it and D1's gate reads it.
+    # A wired clause with no fixture is exactly what d2 calls `unproven`.
+    #
+    # EMPTY cannot redden it, for the same reason `LDOC_TODO` exists: with no
+    # `generated_docs/` the gate answers "SKIP - Phase 1 (doc-extraction) not
+    # attempted", which is a self-skip, not a judgement. The fixture has to make
+    # Phase 1 look ATTEMPTED while leaving the coverage report absent.
+    #
+    # RE-DERIVED 2026-08-14 against ALL 30 entries of `FIXTURES` via
+    # `FCC._check_program_exit_zero`, rather than adopted: exactly THREE redden
+    # it - LDOC_TODO, PDK_DECLARED_NOT_USED, POWER_OVER_BUDGET - each with the
+    # same content red, `") coverage report missing: .../extraction_coverage_
+    # report.md"`. The other 27 self-skip. LDOC_TODO is chosen because it is the
+    # Phase-1 fixture and is already D1's assignment for
+    # `l_doc_todo_stub_count_check`, so D1's two content reds come from one tree
+    # rather than two.
+    #
+    # Assigned here rather than registered in `UNREDDENED`: a fixture DOES break
+    # it, and an `UNREDDENED` entry whose clause reddens fails this suite by
+    # design ("the gap closed and nobody noticed").
+    ("D1", "phase1_coverage_report_present_check ."): "LDOC_TODO",
     # vibe-ic#717 wired both into step 31. Both are FAIL-SAFE gates, so an
     # EMPTY tree gives them nothing to refuse; each needs the absence of
     # positive evidence to be OBSERVABLE, which means the artefact has to

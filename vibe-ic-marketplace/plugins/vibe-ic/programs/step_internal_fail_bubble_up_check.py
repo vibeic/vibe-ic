@@ -484,6 +484,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--write-baseline", action="store_true")
     args = ap.parse_args(argv)
 
+    # A POSITIONAL BESIDE --corpus IS A CONTRADICTION, AND IT USED TO BE SILENT.
+    #
+    # `project_dir` is `nargs="?"`, so an extra path is absorbed with no error
+    # even though `--corpus` already chose the other mode. The two are mutually
+    # exclusive: one audits ONE project, the other sweeps the published corpus.
+    # Accepting both meant one of the operator's two inputs was ignored without
+    # a word.
+    #
+    # MEASURED on a38902d16, and this is the shape that makes it matter. The
+    # operator's intent is unmistakable: write the baseline to a scratch file.
+    #
+    #     $ ...check.py --corpus <empty> --write-baseline <scratch.json>
+    #     rc=0
+    #     wrote programs/step_internal_fail_bubble_up_baseline.json (findings_total=0)
+    #
+    # `--write-baseline` is `store_true`, so `<scratch.json>` landed in
+    # `project_dir` and was dropped; the write went to the DEFAULT path. The
+    # scratch file was untouched and the REAL record was zeroed — the exact
+    # destruction vibe-ic#1025 says must never happen, reached by an operator
+    # who believed they had aimed somewhere safe. The correct spelling is
+    # `--baseline <scratch.json> --write-baseline`.
+    #
+    # vibe-ic#1098 makes the ZERO-REACH write refuse, which closes the case
+    # above. It does not close this one: with a NON-empty corpus the same
+    # command still writes the default baseline and still ignores the path the
+    # operator named. That is why this is a separate refusal and not a
+    # duplicate of that fix.
+    #
+    # rc 2, not 1: this is "the request was not understood", not "the design
+    # failed" — the same tri-state the rest of this program uses.
+    if args.corpus and args.project_dir:
+        print(f"[REFUSED] both a project_dir ({args.project_dir!r}) and "
+              f"--corpus ({args.corpus!r}) were given; they are mutually "
+              f"exclusive modes. If you meant to aim the baseline write, that "
+              f"is --baseline <path> --write-baseline (--write-baseline is a "
+              f"flag and takes no path).", file=sys.stderr)
+        return 2
+
     if args.corpus:
         corpus = Path(args.corpus)
         if not corpus.is_dir():
@@ -497,6 +535,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         bl = Path(args.baseline) if args.baseline else _HERE / BASELINE_NAME
         now = rep["findings_total"]
         if args.write_baseline:
+            # vibe-ic#1025. REFUSE to record a number a sweep did not measure.
+            #
+            # This check used to live 14 lines BELOW, after the write and its
+            # `return 0`, so `--write-baseline` against a corpus this gate
+            # cannot reach rewrote the record to zero and reported success.
+            # MEASURED on 947547716, real baseline copied to a temp file:
+            #
+            #     before: findings_total=7 runs_swept=17 per_run=4
+            #     $ ... --corpus <empty> --baseline <copy> --write-baseline
+            #     rc=0   "wrote <copy> (findings_total=0)"
+            #     after:  findings_total=0 runs_swept=0  per_run=0
+            #
+            # The issue names this danger in prose — "would record a
+            # shrink-to-zero that measured nothing ... and would permanently
+            # destroy the 7 recorded findings as a reference point" — and prose
+            # was the ONLY thing preventing it. The ratchet's own doctrine is
+            # MAY ONLY SHRINK; a zero written from zero reach satisfies that
+            # rule while proving the opposite of what the rule exists to prove.
+            #
+            # No `--force`. An escape hatch here would put the same destroy one
+            # flag away and make the refusal advisory, which is the shape this
+            # gate exists to argue against. The way to write a baseline is to
+            # fix the reach first — that is what makes the number a measurement.
+            if rep["runs_with_reports"] == 0:
+                print(f"REFUSED: the sweep reached {rep['runs_swept']} published "
+                      f"run tree(s) and {rep['runs_with_reports']} with a "
+                      f"reports/ directory, so it examined NOTHING. Writing a "
+                      f"baseline from it would record findings_total={now} as a "
+                      f"measurement and destroy the recorded reference point. "
+                      f"Fix the corpus/reach first, then re-run "
+                      f"--write-baseline (vibe-ic#1025).", file=sys.stderr)
+                return 2
             bl.write_text(json.dumps(
                 {"_comment": (
                     "Unacknowledged step-internal FAIL/MISSING reports across "
@@ -530,9 +600,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"no waiver and no orchestrator record names.")
             return 1
         if now < base:
-            print(f"[PASS] {base} -> {now}; lower the baseline so the recorded "
-                  f"number stops claiming debt that is paid.")
-            return 0
+            # A PAID DEBT THAT STAYS ON THE REGISTER IS SLACK, NOT A PASS
+            # (vibe-ic#1025). This used to print the same sentence and return
+            # 0, so nothing ever forced the number down: the baseline sat at 7
+            # while the sweep measured 5, and the gate would then have called a
+            # regrowth back to 7 "no NEW". Two findings of permission, granted
+            # by a suggestion nobody was obliged to act on.
+            #
+            # This repo has already ruled on the shape one gate over.
+            # `evidence_citation_resolves_check` FAILS on "entries the baseline
+            # claims are broken but that now resolve — the debt was paid and
+            # the register must be updated, else the register slowly turns into
+            # permission". Same register, same rule.
+            #
+            # Non-zero, and it names the one action that clears it. The
+            # ratchet may only shrink, and now it must.
+            print(f"[FAIL] the recorded baseline claims {base} unacknowledged "
+                  f"step-internal FAIL(s) and the sweep measures {now}: "
+                  f"{base - now} of them are PAID and still on the register. "
+                  f"A register that keeps a paid debt is permission for the "
+                  f"number to grow back to it unnoticed. Re-record it with "
+                  f"--write-baseline; the ratchet may only shrink, and it must.")
+            return 1
         print(f"[PASS] no NEW unacknowledged step-internal FAIL ({now} recorded)")
         return 0
 

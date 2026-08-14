@@ -264,6 +264,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -684,6 +685,39 @@ class Mutation:
 REDDENS = "REDDENED"
 CANNOT_REDDEN = "STAYED_GREEN"
 ARTEFACT_EXPECTATIONS = (REDDENS, CANNOT_REDDEN)
+
+#: The verdict for a pair whose gate was ALREADY RED before the mutation was
+#: applied. It is a MEASUREMENT OUTCOME, never an expectation: it is absent from
+#: :data:`ARTEFACT_EXPECTATIONS` on purpose, because the ledger records what the
+#: gates COULD catch, and letting an entry declare this would turn a measured
+#: gap into a re-recorded one (#1432). Pinned by
+#: ``test_ALREADY_RED_is_not_a_recordable_expectation``.
+ALREADY_RED = "ALREADY_RED"
+
+#: How many pairs a replay may find UNMEASURABLE before the ledger stops
+#: believing its own denominator, per mode.
+#:
+#: A CEILING, not an equality. The count SHRINKS on its own as the underlying
+#: reds are fixed — an equality pin would go red on good news, which is the
+#: wrong direction for a number nobody edits deliberately.
+#:
+#: PROVENANCE, stated because the two numbers were established differently:
+#:
+#:   * ``witness`` = 0 is MEASURED. Every witness is green on main, which is why
+#:     the default mode is honest today. A witness going unmeasurable is a real
+#:     event and this 0 makes it a failure, not a shrug — prohibition 3 of
+#:     #1432: this must not become a reason to relax ``witness`` mode.
+#:   * ``all`` = 24 is 1 OBSERVED + 23 DERIVED. One pair
+#:     (``D3-UNDECLARED-ARTEFACT`` @ step 15, ``baseline_rc=1``) was replayed to
+#:     completion on ``24ff95307``; the other 23 were computed by intersecting
+#:     each entry's ``applies_to`` with main's measured red set, not observed
+#:     failing. A ceiling is the safe direction for a predicted number.
+#:
+#: 14 of the 24 are d7 cells that #1310+#1339 and #1377 close, 9 are the d3
+#: cells of #1349, and 1 is d4 ``[step 1]`` (#1235/#1193). When those land this
+#: number falls without anyone touching the ledger, and LOWERING it then is the
+#: maintenance this ceiling is asking for.
+UNMEASURABLE_CEILING = {"witness": 0, "all": 24}
 
 
 @dataclass(frozen=True)
@@ -1930,7 +1964,7 @@ class ReplayResult:
         if not self.applied:
             return "NO_EDIT_SITE"
         if self.baseline_rc != 0:
-            return "ALREADY_RED"
+            return ALREADY_RED
         if self.mutant_rc in (None, 0):
             return "STAYED_GREEN"
         return "RED_FOR_ANOTHER_REASON"
@@ -1944,23 +1978,127 @@ class ReplayResult:
         by the third one arriving. For an ARTEFACT_MUTATION entry recorded
         ``STAYED_GREEN`` this is the pin: the day the gate learns to notice, the
         verdict stops matching and the gate file says so by name.
+
+        Deliberately FALSE for :attr:`unmeasurable`. An already-red pair has not
+        reproduced anything, and banking it as proof is the failure
+        ``test_control_the_baseline_must_pass_or_the_entry_is_already_red``
+        exists to catch. Consumers must ask :attr:`unmeasurable` FIRST and score
+        it as its own outcome — see that property's note.
         """
         return self.verdict == self.expected
 
+    @property
+    def unmeasurable(self) -> bool:
+        """The gate COULD NOT BE MEASURED on this pair — it was already red.
 
-def _run_cell(dim: int, sid: str, cwd: Path,
-              flow_override: Optional[Path], timeout: int) -> Tuple[int, str]:
+        The third state, distinct from both REDDENED and STAYED_GREEN (#1432).
+
+        A pair with ``baseline_rc != 0`` was failing BEFORE the mutation was
+        applied. Nothing was disproved, because nothing could be: the predicate
+        the mutation was supposed to move was not standing up to begin with.
+        Scoring that as "the mutation failed to redden the cell" is *could not
+        look* recorded as *found a defect* — the same conflation this repository
+        already removed from ``_vacuous_exit`` (rc 2), ``dual_track_select``'s
+        ``UNCHECKABLE`` (#1335), ``tracked_under``'s empty set on a failed
+        ``git`` (#1360), and rc=127 read as a structural defect (#1398).
+
+        It matters most HERE because this ledger is the instrument the rest of
+        the campaign is measured with: a false "the gate stopped catching" sends
+        an author hunting a regression that does not exist.
+
+        THIS IS NOT A SKIP. Unmeasurable pairs are counted, disclosed via
+        ``record_property``, and bounded by :data:`UNMEASURABLE_CEILING`, so a
+        gate that stops catching *and* whose witness happens to be red cannot
+        hide in this state. It is also not a licence to re-record: no ledger
+        entry may DECLARE this verdict, because the ledger is the record of what
+        the gates COULD catch, not of what they currently do.
+
+        ``NOT_REPLAYABLE`` is deliberately NOT folded in here. That is a
+        different failure — the replay never ran at all — and it keeps its
+        existing handling untouched.
+        """
+        return self.verdict == ALREADY_RED
+
+
+def _cell_rc_from_report(junit: Path, proc_rc: int) -> Tuple[Optional[int], str]:
+    """``(cell rc, why-unreadable)`` from pytest's OWN report of the one cell.
+
+    ``0``/``1`` is the CELL's colour. ``None`` means the report did not carry
+    exactly one testcase, and the reason is returned rather than folded into a
+    colour — a replay that could not read its cell must be NOT_REPLAYABLE, never
+    a quiet ALREADY_RED.
+
+    A ``skipped`` testcase maps to 0, which is what the exit status already
+    said: the two locks that consume this ask whether the cell went PASS ->
+    FAIL, and a skip is not a fail. It is only ever a witness's BASELINE that
+    could be skipped, and LOCK 2's `proved` still requires the mutant arm to go
+    non-zero with the declared signal, so a skip cannot manufacture a red.
+    """
+    if not junit.is_file():
+        return None, (f"pytest wrote no report (process rc={proc_rc}) — the "
+                      f"session died before it could record the cell")
+    try:
+        cases = ET.parse(junit).getroot().iter("testcase")
+    except ET.ParseError as exc:
+        return None, f"pytest report unparseable (process rc={proc_rc}): {exc}"
+    cases = list(cases)
+    if len(cases) != 1:
+        return None, (f"pytest reported {len(cases)} testcase(s), not 1 "
+                      f"(process rc={proc_rc}) — the nodeid selected nothing, "
+                      f"or collection produced more than the cell")
+    bad = [c for c in cases[0] if c.tag in ("failure", "error")]
+    return (1 if bad else 0), ""
+
+
+def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
+              timeout: int) -> Tuple[Optional[int], str, str]:
+    """Run the one cell and return ``(cell rc, output, why-unreadable)``.
+
+    THE COLOUR COMES FROM THE REPORT, NOT FROM THE EXIT STATUS (vibe-ic#1412).
+    A pytest process exits non-zero for the cell OR for anything the SESSION
+    decided, and the two are not the same claim. The measured instance: the
+    plugin's own ``conftest.py`` loads ``suite_write_guard``, which discovers
+    its subject with ``git rev-parse --show-toplevel`` from its own file. In the
+    ``cp -al`` mirror this function is handed, that resolves to whatever
+    repository happens to enclose ``TMPDIR`` — and the mirror's own
+    ``__pycache__`` is UNTRACKED there whenever that repository's ignore rules
+    are not this one's, so the guard sets ``session.exitstatus = 1`` while the
+    cell itself reports ``1 passed``. LOCK 2 then read ``baseline rc=1`` and
+    called a green cell ALREADY_RED — on clean main, for no reason but where
+    the operator's scratch directory sat.
+
+    Both directions were broken, and the other one is worse: a mutant arm whose
+    session went red for its own reasons, with the declared ``red_signal``
+    string anywhere in the output, would have been recorded REDDENED for a
+    mutation that moved nothing.
+
+    ``PYTEST_DISABLE_PLUGIN_AUTOLOAD`` already pins what the child loads from
+    the HOST for exactly this reason; this pins what it loads from the REPO.
+    The output is still the whole stdout+stderr, because ``red_signal`` is
+    matched against it.
+    """
     env = dict(os.environ)
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     if flow_override is None:
         env.pop(FLOW_YAML_ENV, None)
     else:
         env[FLOW_YAML_ENV] = str(flow_override)
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
-         "-q", "-p", "no:randomly", "--no-header", "-rN"],
-        cwd=str(cwd), capture_output=True, text=True, timeout=timeout, env=env)
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    # OUTSIDE `cwd`: the report is this function's instrument, and an instrument
+    # that lands in the tree under measurement perturbs the next gate to look.
+    holder = Path(tempfile.mkdtemp(prefix="matmut_cellreport_"))
+    junit = holder / "cell.xml"
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
+             "-q", "-p", "no:randomly", "--no-header", "-rN",
+             "--junit-xml", str(junit)],
+            cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+            env=env)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        rc, why = _cell_rc_from_report(junit, proc.returncode)
+        return rc, out, why
+    finally:
+        shutil.rmtree(holder, ignore_errors=True)
 
 
 def replay(mut: Mutation, sid: Optional[str] = None,
@@ -2003,8 +2141,10 @@ def replay(mut: Mutation, sid: Optional[str] = None,
             mutant.write_text(
                 yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
                 encoding="utf-8")
-            base_rc, _ = _run_cell(mut.dim, sid, PLUGIN_ROOT, None, timeout)
-            mut_rc, out = _run_cell(mut.dim, sid, PLUGIN_ROOT, mutant, timeout)
+            base_rc, _, base_why = _run_cell(
+                mut.dim, sid, PLUGIN_ROOT, None, timeout)
+            mut_rc, out, mut_why = _run_cell(
+                mut.dim, sid, PLUGIN_ROOT, mutant, timeout)
             patched = "flow/phase1_phase2_phase3.yaml (substituted)"
         else:
             mirror = scratch / "mirror"
@@ -2012,24 +2152,35 @@ def replay(mut: Mutation, sid: Optional[str] = None,
                            check=True, capture_output=True)
             for pyc in mirror.rglob("__pycache__"):
                 shutil.rmtree(pyc, ignore_errors=True)
-            base_rc, _ = _run_cell(mut.dim, sid, mirror, None, timeout)
+            base_rc, _, base_why = _run_cell(mut.dim, sid, mirror, None, timeout)
             patched = apply_to_tree(mut, mirror)
             if patched is None:
                 return ReplayResult(
                     mut.name, mut.dim, sid, False, base_rc, None, False,
                     f"anchor for {mut.name} is absent or not unique in "
-                    f"{mut.params.get('file')}", time.time() - started)
+                    f"{mut.params.get('file')}", time.time() - started,
+                    "REDDENED",
+                    f"baseline arm: {base_why}" if base_why else "",
+                    mut.channel)
             for pyc in mirror.rglob("__pycache__"):
                 shutil.rmtree(pyc, ignore_errors=True)
-            mut_rc, out = _run_cell(mut.dim, sid, mirror, None, timeout)
+            mut_rc, out, mut_why = _run_cell(mut.dim, sid, mirror, None, timeout)
         seen = mut.red_signal in out
         tail = "\n".join(l for l in out.strip().splitlines() if l.strip())[-1200:]
+        # An arm whose cell could not be READ has no colour, and a colourless
+        # arm must not be scored. NOT_REPLAYABLE carries the reason; silence
+        # here is how "could not look" becomes "looked and it was red".
+        unreadable = "; ".join(
+            f"{arm} arm: {why}"
+            for arm, why in (("baseline", base_why), ("mutant", mut_why)) if why)
         return ReplayResult(
             mut.name, mut.dim, sid, True, base_rc, mut_rc, seen,
             f"patched {patched}; baseline rc={base_rc}, mutant rc={mut_rc}, "
             f"red_signal {mut.red_signal!r} "
-            f"{'present' if seen else 'ABSENT'}\n--- mutant tail ---\n{tail}",
-            time.time() - started, "REDDENED", "", mut.channel)
+            f"{'present' if seen else 'ABSENT'}"
+            f"{('; UNREADABLE — ' + unreadable) if unreadable else ''}"
+            f"\n--- mutant tail ---\n{tail}",
+            time.time() - started, "REDDENED", unreadable, mut.channel)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -2391,15 +2542,47 @@ def main(argv: Optional[List[str]] = None) -> int:
             # RECORDS `STAYED_GREEN` is reproducing a published finding when it
             # stays green, and reporting it as a failure would push an author
             # toward deleting the record instead of closing the gap.
-            mark = "ok  " if r.as_recorded else "FAIL"
+            #
+            # `unmeasurable` is asked FIRST and is NOT a failure (#1432): the
+            # gate was red before the edit, so the pair says nothing about
+            # whether the gate still has teeth. It is still PRINTED, and still
+            # counted below, because a silent skip would hand the ledger the
+            # blind spot it exists to prevent.
+            mark = "n/m " if r.unmeasurable else "ok  " if r.as_recorded \
+                else "FAIL"
             note = ("" if r.expected == "REDDENED"
                     else "  [recorded finding: the cell CANNOT redden]")
+            if r.unmeasurable:
+                note = (f"  [UNMEASURABLE: red before the edit "
+                        f"(baseline_rc={r.baseline_rc}), so this pair proves "
+                        f"nothing either way]")
             print(f"  [{mark}] {r.mutation} @ step {r.step_id}: {r.verdict} "
                   f"({r.seconds:.1f}s){note}")
-            if not r.as_recorded:
+            if not r.as_recorded and not r.unmeasurable:
                 rc = 1
                 print(f"        expected {r.expected}, got {r.verdict}")
                 print("        " + r.detail.replace("\n", "\n        "))
+
+        unmeasurable = [r for r in results if r.unmeasurable]
+        # `--replay-witnesses` builds the witness plan outright, whatever the
+        # env-configured mode is, so the mode is read off the SELECTOR that
+        # built the plan rather than from `replay_mode()`.
+        mode = "witness" if a.replay_witnesses else None
+        ceiling = UNMEASURABLE_CEILING.get(mode) if mode else None
+        print(f"  UNMEASURABLE {len(unmeasurable)} of {len(results)} pair(s)"
+              + (f", ceiling {ceiling} for mode {mode!r}"
+                 if ceiling is not None else ""))
+        # The ceiling is enforced only for a WHOLE-MODE plan. `--replay NAME`
+        # and `--replay-artefacts` are deliberate slices, and a slice's count
+        # cannot be compared against a whole-mode budget.
+        if ceiling is not None and len(unmeasurable) > ceiling:
+            rc = 1
+            print(f"  [FAIL] {len(unmeasurable)} unmeasurable pair(s) exceeds "
+                  f"the ceiling of {ceiling} for mode {mode!r}; the ledger "
+                  f"cannot measure this much of itself")
+            for r in unmeasurable:
+                print(f"        {r.mutation} @ step {r.step_id}: "
+                      f"baseline_rc={r.baseline_rc}")
 
     if a.json_out:
         Path(a.json_out).parent.mkdir(parents=True, exist_ok=True)

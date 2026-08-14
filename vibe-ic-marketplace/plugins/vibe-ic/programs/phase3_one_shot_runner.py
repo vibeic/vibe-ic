@@ -763,6 +763,60 @@ _LOG_SINK_PIPE = "| tee "
 _PIPEFAIL_PREFIX = "set -o pipefail; "
 
 
+
+def _log_surviving_artefact(outputs, *, produced_by: str,
+                            marker: str | None = None) -> None:
+    """Record artefacts AFTER the verdict that decides whether they survive.
+
+    vibe-ic#1330. `_docker_exec(..., outputs=[...])` hashes the declared paths
+    the instant the tool returns, which is correct for the ~17 call sites whose
+    artefact is meant to survive. It is wrong for a call site that may DESTROY
+    its own output on inspection: `_emit_multi_corner_sta` unlinks the per-corner
+    report when OpenSTA black-boxed a master (#437(c) — `rc == 0` plus a written
+    report is not evidence anything was timed), and the ledger was left asserting
+    a digest for a file deliberately removed three statements later. The record
+    could not be audited either way: present digest, absent artefact.
+
+    Splitting the declaration off the invocation is what lets BOTH rules hold —
+    #437(c) still destroys a falsely-clean report, and ORGANIC-443 still forbids
+    a declared output being removed later in the same function, because nothing
+    is declared until it is known to survive.
+
+    A SEPARATE record kind, deliberately. Calling `_log_invocation` a second
+    time would emit two `invocation` rows for one tool run, which is a worse
+    misstatement than the one being fixed. `record: "artefact"` is additive: a
+    consumer reading `invocation` rows sees exactly what it saw before.
+
+    Silent when nothing survived — `_hash_declared_outputs` already omits paths
+    that do not exist, so an unlinked report simply produces no row. That is the
+    honest outcome and it needs no special case.
+    """
+    sink = _PROV_SINK
+    if sink is None:
+        return
+    _outs = _hash_declared_outputs(sink, outputs)
+    if not _outs:
+        return
+    entry = {
+        "record": "artefact",
+        "produced_by": produced_by,
+        "outputs": _outs,
+        "measured": True,
+        # Same idiom as _log_invocation: `_dt` is a FUNCTION-local alias
+        # elsewhere in this file, so referencing it here would NameError.
+        "timestamp": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if marker:
+        entry["marker"] = marker
+    try:
+        with (Path(sink) / "provenance.jsonl").open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:  # noqa: BLE001 — logging must never break the run
+        pass
+
+
 def _tool_status_not_the_log_sinks(cmd: str) -> str:
     """Make the TOOL's exit status survive a `| tee` log sink.
 
@@ -8895,6 +8949,8 @@ def _v1_6_605_remap_surviving_dlatch(
 import synth_frontend as _sf
 # Staged-adder-map recipe + post-run "did it actually bind?" verification.
 import adder_map_techmap as _amt
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
@@ -11899,6 +11955,28 @@ def _producer_cache_valid_for(out_dir: Path, kind: str) -> Tuple[bool, str]:
     now = _producer_identity_now()
     cur_v, cur_r = now["plugin_version"], now["recipe_sha256"]
     rec = _read_producer_identity(out_dir, kind)
+
+    # vibe-ic#1097 S6 — `--force-step <kind>`. ORFS ships `do-2_1_floorplan`
+    # beside `2_1_floorplan` (`flow/Makefile:366-405`) so an external caller can
+    # bypass make's UP-TO-DATE judgement and execute the stage anyway; without
+    # it a close-loop repair re-runs the whole phase to re-test one step.
+    #
+    # WIRED HERE, AND ONLY HERE. This predicate is the ONE freshness authority
+    # the three cache sites consult (:38958 synth, :39053 pnr, :39189 gds) and
+    # each ANDs its answer into the reuse decision, so denying here reaches all
+    # three without touching a call site.
+    #
+    # FRESHNESS ONLY. It does NOT touch `step_preflight`'s input contract: that
+    # answers "does this step have what the flow says it reads", which is not
+    # make's question, and `test_there_is_no_switch_that_turns_a_refusal_into_
+    # a_pass` bans exactly the switch that would weaken it. Forcing means "do
+    # the work again", never "do it blind" — see `step_force`'s docstring.
+    try:
+        import step_force as _sf  # noqa: PLC0415
+        if _sf.is_forced(kind):
+            return (False, _sf.disclosure(kind))
+    except Exception:  # noqa: BLE001 — a missing helper must not break reuse
+        pass
 
     def _deny_unless_forced(msg: str) -> Tuple[bool, str]:
         if os.environ.get(_STALE_PRODUCER_ENV) == "1":
@@ -20687,7 +20765,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
             "metal_fill_eco_aware": True,
             "allowlist_doc": _SPARE_YOSYS_KEEP_ALLOWLIST_DOC,
         }
-        (out_dir / "spare_cells.json").write_text(
+        _aa.write_text(out_dir / "spare_cells.json",
             json.dumps(spare_payload, indent=2, ensure_ascii=False) + "\n")
         # Coverage readiness JSON. distribution_ok is derived from the
         # grid spread (>1 distinct grid cell occupied); tie_off_ok from
@@ -31039,15 +31117,46 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "ss/ff)."),
         }, indent=2) + "\n")
         written.append(str(mc_ocv_stance))
-        # When the sign-off STA SURFACED a real SETUP violation, ALSO emit the
-        # honest achievable-Fmax datapoint so a Category-H spec-vs-technology
-        # residual (a full CPU/crypto block at a slow OSS PDK — e.g. ibex@sky130,
-        # sha256 single-cycle round) SELF-REPORTS the frequency it actually MEETs
-        # instead of a bare FAIL. §4.05 HONESTY: this is a MEASUREMENT, never a
-        # clock relaxation — `timing_closed_multi_corner` above stays as-is and the
-        # sign-off verdict is unchanged; achievable_fmax.json travels ALONGSIDE the
-        # FAIL, `relaxation_applied` is always False.
-        if mc_ocv_ok and setup_wns is not None and setup_wns < 0:
+        # Emit the honest achievable-Fmax datapoint whenever the sign-off STA
+        # produced a setup number — on a PASS as well as on a FAIL.
+        #
+        # WHY THE `setup_wns < 0` CONDITION IS GONE (vibe-ic#1097, S8). This
+        # started as a Category-H aid: a spec-vs-technology residual (a full
+        # CPU/crypto block at a slow OSS PDK — ibex@sky130, sha256 single-cycle
+        # round) should SELF-REPORT the frequency it actually MEETs instead of a
+        # bare FAIL. That is still true, and it is not the whole use.
+        #
+        # The period a design is ASKED for reaches the SDC through a four-tier
+        # precedence walk (`l8_sta_clock_period_design_owned_check`), and every
+        # tier — down to `sdc_gen._DEFAULT_MHZ`, which is fabricated — is a
+        # number somebody REQUESTED. The achieved period is the only MEASUREMENT
+        # in that set, so it is what makes "asked" and "reached" two diffable
+        # files instead of a sentence in a log. Suppressing it on the runs that
+        # PASS kept the measurement for exactly the runs nobody needs convincing
+        # about.
+        #
+        # MEASURED on this repo's published corpus at f9c13443: 13 run roots
+        # reached post-route STA, and 2 carry `achievable_fmax.json` — the two
+        # that failed. The other 11 shipped no achieved period although the
+        # slack was on disk, and the gaps are not small:
+        #
+        #     caravel_user_project   asked 25.0 ns   reached  7.81 ns
+        #     spm/v1.10.18_sky130A   asked 10.0 ns   reached  4.76 ns
+        #     edge_llm_accel         asked 10.0 ns   reached  8.92 ns
+        #
+        # `achievable_from_slack` already handled positive slack — it reports the
+        # margin as headroom (see its own comment at the `spec_margin_ns` key) —
+        # so this is a wiring change and not a new computation.
+        #
+        # §4.05 HONESTY, unchanged and load-bearing: this is a MEASUREMENT, never
+        # a clock relaxation. `timing_closed_multi_corner` above stays as-is, the
+        # sign-off verdict is untouched, the artefact is written to its OWN path
+        # and never over the design's SDC, and `relaxation_applied` is always
+        # False. vibe-ic#1083 records ORFS's `update_ok` / `--failing` semantics
+        # — a golden that moves itself to the current run's worse value — as
+        # explicitly NOT adopted; emitting on PASS as well is the opposite of
+        # that, not a step toward it.
+        if mc_ocv_ok and setup_wns is not None:
             try:
                 from sta_achievable_fmax_report import achievable_from_slack
                 _spec_period_ns, _ = _resolve_clock_spec(project, top=top)
@@ -31056,12 +31165,21 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 (rpt_phase3 / "achievable_fmax.json").write_text(
                     json.dumps(_fmax_rep, indent=2) + "\n")
                 written.append(str(rpt_phase3 / "achievable_fmax.json"))
+                # The sentence has to be true on BOTH branches now. "setup FAIL
+                # -> achievable X" read as a repair on a run that had already
+                # MET its spec; on a PASS the same two numbers are asked-vs-
+                # reached headroom, which is a different statement about the
+                # same measurement.
+                _spec_verdict = "MET" if _fmax_rep["spec_met"] else "FAIL"
                 notes.append(
                     "achievable-Fmax reported (honest measurement, sign-off "
-                    f"verdict UNCHANGED): spec {_fmax_rep['spec_period_ns']} ns "
-                    f"({_fmax_rep['spec_fmax_mhz']} MHz) setup FAIL -> achievable "
-                    f"{_fmax_rep['achievable_period_ns']} ns "
-                    f"({_fmax_rep['achievable_fmax_mhz']} MHz) setup MET.")
+                    f"verdict UNCHANGED): asked {_fmax_rep['spec_period_ns']} ns "
+                    f"({_fmax_rep['spec_fmax_mhz']} MHz) setup {_spec_verdict} "
+                    f"-> reached {_fmax_rep['achievable_period_ns']} ns "
+                    f"({_fmax_rep['achievable_fmax_mhz']} MHz)"
+                    + (f", headroom {_fmax_rep['spec_margin_ns']} ns."
+                       if _fmax_rep["spec_met"] else
+                       ", i.e. the period at which setup would MET."))
             except Exception as _fmax_err:  # never break the flow on a report
                 notes.append(f"achievable-Fmax emit non-fatal: {_fmax_err}")
         if mc_ocv_ok and _viol:
@@ -32144,7 +32262,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                          "OCV unavailable) — honest fallback, not auto-run.")
     # Durable disclosure of the trigger decision (§4.05 audit trail).
     try:
-        (eco_out / "eco_trigger_decision.json").write_text(
+        _aa.write_text(eco_out / "eco_trigger_decision.json",
             json.dumps(_eco_decision, indent=2) + "\n")
         written.append(str(eco_out / "eco_trigger_decision.json"))
     except Exception:  # pragma: no cover — defensive
@@ -32162,7 +32280,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             _pwr_txt = power_rpt.read_text(errors="replace")
             _mode = ("vector_vcd" if "POWER_ANALYSIS_MODE: vector_vcd"
                      in _pwr_txt else "vectorless_sdc")
-            (rpt_phase3 / "power.json").write_text(json.dumps({
+            _aa.write_text(rpt_phase3 / "power.json", json.dumps({
                 "tool": "opensta",
                 "source": str(power_rpt.relative_to(project)),
                 "analysis_mode": _mode,
@@ -32257,7 +32375,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             written.append(str(routed_drc))
         # Mirror to reports/phase3/ where the gate's --json output lands
         rpt_phase3.mkdir(parents=True, exist_ok=True)
-        (rpt_phase3 / "drc_router.rpt").write_text(body)
+        _aa.write_text(rpt_phase3 / "drc_router.rpt", body)
         if str(rpt_phase3 / "drc_router.rpt") not in written:
             written.append(str(rpt_phase3 / "drc_router.rpt"))
 
@@ -33612,7 +33730,12 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"sta -no_init -exit {tcl_c} 2>&1 | tee {out_dir}/sta_{corner}.log"
         )
-        rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt])
+        # vibe-ic#1330: DECLARED AFTER THE VERDICT, not before it. This is
+        # the one call site that may destroy its own output (the `_bb`
+        # branch below), so declaring `rpt` here would record a digest for
+        # a file removed three statements later. See
+        # `_log_surviving_artefact`, called on the surviving path only.
+        rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
         _bb = _sta_blackboxed_masters(out_dir / f"sta_{corner}.log")
         if rc != 0 or not rpt.is_file():
             # #437(c): NO single-corner stand-in. The old fallback copied
@@ -33653,6 +33776,11 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                 f"netlist's technology and that every hard-macro .lib is staged.")
         else:
             any_emitted = True
+            # The corner LINKED and its report survives, so now it
+            # is an artefact this run can be held to.
+            _log_surviving_artefact(
+                [rpt], produced_by="_emit_multi_corner_sta",
+                marker=str(tcl_c))
     # The reports this call REUSED rather than produced, whenever they do not
     # carry the basis the inputs resolve to. Without this the run publishes
     # "basis=POST_ROUTE_SPEF … post-route multi-corner timing" over a directory
@@ -35583,7 +35711,7 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         # inline regex, which is the drift the module's own header warns about;
         # there is ONE implementation of the rule and this reads it.
         _psm_unconn = _cov["unconnected_instances"]
-        (ir_rpt.parent / "ir_drop.json").write_text(json.dumps({
+        _aa.write_text(ir_rpt.parent / "ir_drop.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "static_ir_drop",
             "power_nets": power_nets,
@@ -35696,7 +35824,7 @@ catch {{set_wire_rc -clock -layer {mp}5}}
             "\n# === Full PSM/EM stdout (provenance) ===\n" + log[-3000:] + "\n"
             "# end of em.rpt\n")
         em_rpt.write_text(body)
-        (em_rpt.parent / "em.json").write_text(json.dumps({
+        _aa.write_text(em_rpt.parent / "em.json", json.dumps({
             "tool": "openroad-psm",
             "mode": "electromigration",
             "power_nets": power_nets,
@@ -35828,7 +35956,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                        f"can continue, so it is NOT visible as a routing "
                        f"failure)\n" if pins_unaccessed else "")
                     + _incomplete_note)
-                (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+                _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
                     "tool": "openroad",
                     "mode": "antenna_check_in_session_post_repair",
                     "net_violations": net_viol if have_counts else None,
@@ -35911,7 +36039,7 @@ exit
         "\n# === full antenna log (last 2 KB) ===\n" + log[-2000:] + "\n"
         "# end of antenna.rpt\n")
     antenna_rpt.write_text(body)
-    (antenna_rpt.parent / "antenna.json").write_text(json.dumps({
+    _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
         "tool": "openroad",
         "mode": "antenna_check",
         "net_violations": net_viol,
@@ -36232,7 +36360,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
             if pdk is not None and container is not None:
                 _merge_si_timing_aware(project, top, pdk, container, spef,
                                        sbody, notes)
-            (si_rpt.parent / "si_crosstalk.json").write_text(
+            _aa.write_text(si_rpt.parent / "si_crosstalk.json",
                 json.dumps(sbody, indent=2) + "\n")
             # Advisory timing-window tail (only present when the upgrade ran).
             ta = sbody.get("timing_aware_advisory")
@@ -36298,7 +36426,7 @@ def _emit_si_crosstalk_report(project: Path, top: str, spef: Optional[Path],
                  "structural screen, not a full SI sign-off. The OpenRCX SPEF "
                  "path (v0.2.5) produces real coupling caps when the DEF is routed."),
     }
-    (si_rpt.parent / "si_crosstalk.json").write_text(
+    _aa.write_text(si_rpt.parent / "si_crosstalk.json",
         json.dumps(body, indent=2) + "\n")
     si_rpt.write_text(
         "# Signal-integrity / crosstalk screen — emitted by\n"
@@ -36483,7 +36611,7 @@ exit
     fill_substantiated = placed_n > 0 or (
         _util_for_substance is not None and _util_for_substance >= 95.0)
     if fill_substantiated:
-        (pnr_out / "metal_fill.done").write_text(
+        _aa.write_text(pnr_out / "metal_fill.done",
             "metal_fill_done\n"
             "# OpenROAD filler_placement (ORGANIC-20260531 Step 34).\n"
             f"# fillers placed: {placed_n}\n"
@@ -38474,7 +38602,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         summary["geometry_foundry_data_residual"] = geometry_residual
 
     # --- perc_equivalent.json ---------------------------------------------
-    (rpt3 / "perc_equivalent.json").write_text(json.dumps(summary, indent=2) + "\n")
+    _aa.write_text(rpt3 / "perc_equivalent.json", json.dumps(summary, indent=2) + "\n")
 
     # --- perc_equivalent.rpt (human-readable) -----------------------------
     def _line(c):
@@ -38505,7 +38633,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
            if summary["manual_review_pending"]
            else "# No MANUAL items pending (all N/A or automated).\n")
         + "# end of perc_equivalent.rpt\n")
-    (rpt3 / "perc_equivalent.rpt").write_text(body)
+    _aa.write_text(rpt3 / "perc_equivalent.rpt", body)
 
     # --- PERC_SIGNOFF_MEMO.md (program-generated; maintainer §6 template) -
     _emit_perc_signoff_memo(project, top, summary, categories)
@@ -38667,7 +38795,37 @@ def main() -> int:
                    help=("Design-for-ECO spare-cell density as a fraction "
                          "of placed cells (default 0.02 = 2%%; clamped to "
                          "[0, 0.2]). 0 disables spare insertion."))
+    # vibe-ic#1097 S6 — ORFS `do-<stage>` (`flow/Makefile:366-405`).
+    p.add_argument("--force-step", action="append", metavar="KIND",
+                   default=None,
+                   help=("Re-run this step even if its cached artefact looks "
+                         "current (repeatable; also comma-separated). "
+                         "Bypasses the FRESHNESS check only — the step's "
+                         "declared input contract is still enforced. "
+                         "An unrecognised KIND is refused, not ignored."))
     args = p.parse_args()
+
+    # vibe-ic#1097 S6 — validate AT THE CLI BOUNDARY and publish through the
+    # environment. The freshness predicate that consumes this sits deep in this
+    # module and is called from three sites; threading a parameter to it would
+    # mean changing the signatures `step_preflight.py:20-40` documents as
+    # un-wrappable. So the flag SETS the channel and the predicate READS it.
+    #
+    # `resolve()` RAISES on an unrecognised kind and we exit 2 rather than
+    # continuing: a run that silently forced nothing reads exactly like one
+    # that re-ran the step, which is the defect class this repo keeps removing.
+    if getattr(args, "force_step", None):
+        import step_force as _sf  # noqa: PLC0415
+        _toks = [t for chunk in args.force_step
+                 for t in str(chunk).replace(",", " ").split()]
+        try:
+            os.environ[_sf.ENV] = _sf.as_env_value(_toks)
+        except _sf.UnknownStep as exc:
+            print(f"[phase3] {exc}", file=sys.stderr)
+            return 2
+        print(f"[phase3] --force-step: {os.environ[_sf.ENV]} "
+              f"(freshness bypass only; the input contract still applies)",
+              file=sys.stderr)
 
     # The container name is threaded EXPLICITLY into every step (step_pnr,
     # step_drc, ...), but several PDK-resolution helpers read it from
