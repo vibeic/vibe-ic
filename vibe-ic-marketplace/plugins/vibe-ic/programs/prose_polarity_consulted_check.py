@@ -325,11 +325,86 @@ def exemption_audit(blind_incl_exempt: List[str], root: Path) -> List[str]:
             problems.append(f"{name}: reason is {len(reason.strip())} chars, "
                             f"under the {_EXEMPT_REASON_MIN} this set requires")
         if name not in live:
-            problems.append(
-                f"{name}: exempted, but the scan does not flag it — the "
-                f"function is gone, renamed, or now consults polarity. Delete "
-                f"the entry.")
+            problems.append(f"{name}: {_why_unflagged(name, root)}")
     return problems
+
+
+def _why_unflagged(name: str, root: Path) -> str:
+    """The REASON an exempted name stopped being flagged, and the right remedy.
+
+    The old text named three causes — gone, renamed, now consults polarity —
+    and prescribed one remedy: delete the entry. Measured on vibe-ic#1111,
+    which extracts the literal-locating regex out of
+    `policy_direction_pin_check::flip_source` into a new `_literal_span`
+    helper: all three named causes are FALSE (the function is still there,
+    under the same name, with no polarity token anywhere in the module) and the
+    prescribed remedy is wrong twice over.
+
+    Wrong first because the argument is still true — `flip_source` matches
+    Python's own string-literal grammar and still never publishes the matched
+    text as a declaration; the refactor makes it MORE true, since the match is
+    no longer even in that body. Wrong second because deleting the entry does
+    not restore the accounting: measured, the split leaves NEITHER function
+    flagged (217 -> 216 across the swap), because `_literal_span` searches but
+    returns a span rather than writing a declared value, and `flip_source`
+    writes but no longer searches. The detector wants both in ONE body, so an
+    ordinary extract-method makes a reader vanish from the register.
+
+    So the honest report is not "delete", it is "the read MOVED — say where".
+    This function looks for the same-module helper that now does the searching
+    and names it, so the remedy is re-keying rather than deletion.
+
+    Deliberately NOT widened here: teaching `scan` to follow helper calls would
+    add **1155** candidate names to a 213-entry register on this tree
+    (measured), most of them not extractors at all. That is a separate,
+    much larger decision; this function only makes the existing failure tell
+    the truth about itself.
+    """
+    module, fn = name.split("::", 1)
+    try:
+        tree = ast.parse((root / "programs" / f"{module}.py")
+                         .read_text(errors="replace"))
+    except (OSError, SyntaxError) as exc:
+        # Never report "gone" off a file we could not read.
+        return (f"exempted, and the scan does not flag it, but {module}.py "
+                f"could not be parsed to say why ({exc.__class__.__name__}). "
+                f"That is not evidence the function is gone — fix the read "
+                f"first.")
+    defs = {n.name: n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    if fn not in defs:
+        return ("exempted, but the scan does not flag it and the function is "
+                "no longer defined in this module — it was deleted or "
+                "renamed. Delete the entry, or re-key it to the new name.")
+
+    node = defs[fn]
+    al = _aliases(tree)
+    if _consults_polarity(node, al):
+        return ("exempted as NOT PROSE, but it now consults the polarity "
+                "module — the exemption says the question cannot arise, and "
+                "the code says it does. Delete the entry.")
+
+    searchers = sorted(nm for nm, d in defs.items()
+                       if nm != fn and _searches_prose(d))
+    called = {c.func.id for c in ast.walk(node)
+              if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+    moved = [nm for nm in searchers if nm in called]
+    if moved:
+        return (f"exempted, but the scan no longer flags it: the search moved "
+                f"out of this body into {', '.join(moved)} in the same module, "
+                f"so it now WRITES without SEARCHING while the helper SEARCHES "
+                f"without writing a declared value — and the detector needs "
+                f"both in one body, so NEITHER is flagged. Do NOT delete the "
+                f"entry: the argument is unchanged and deleting it drops the "
+                f"reader from the register entirely. Re-key the exemption to "
+                f"whichever of ({', '.join(moved)}) now reads the text.")
+
+    return ("exempted, but the scan no longer flags it, and the function is "
+            "still defined and does not consult polarity — so it stopped "
+            "matching the detector for some other reason (it may no longer "
+            "search, or no longer write a declared value). Establish which "
+            "before touching the entry; deleting it on this evidence would "
+            "discard an argument that may still hold.")
 
 
 def exemptions_in_scope(root: Path) -> List[str]:
