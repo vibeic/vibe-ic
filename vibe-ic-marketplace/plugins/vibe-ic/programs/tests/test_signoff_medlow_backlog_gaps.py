@@ -83,6 +83,69 @@ def _step(sid):
     raise AssertionError(f"step {sid} not in {FLOW_YAML}")
 
 
+def _gate_nodes(gate):
+    """Every gate node in a declared gate spec, whatever shape it is written in.
+
+    `all_of` / `any_of` hold nested gate lists; `any_of: true` is a MODIFIER
+    flag on a files_exist block and is not a container — the same distinction
+    `flow_compliance_check._declared_gate_commands` makes, because a walk that
+    disagreed with the code under test about the shape would audit a different
+    gate than the one the flow runs.
+
+    Exists because two tests below used to subscript ONE key
+    (`gate["program_exit_zero"]`) and read ONE step id. Both went red on main
+    the moment the flow legitimately nested or extended a gate, while the
+    properties they pin were never violated.
+    """
+    out = []
+
+    def _walk(node):
+        if isinstance(node, list):
+            for item in node:
+                _walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        out.append(node)
+        for key in ("all_of", "any_of"):
+            sub = node.get(key)
+            if isinstance(sub, (list, dict)):
+                _walk(sub)
+
+    _walk(gate)
+    return out
+
+
+def _gate_program_commands(gate):
+    """FULL command strings of every program a gate declares, in order.
+
+    `_declared_gate_commands` answers a narrower question — the program NAMES —
+    and the audit-trail rule is about the ARGUMENTS, so it needs the whole
+    string. The key list is imported from the module rather than restated, so a
+    new program-gate kind cannot be invisible here while being live there.
+    """
+    fcc = importlib.import_module("flow_compliance_check")
+    out = []
+    for node in _gate_nodes(gate):
+        for key in fcc._PROGRAM_GATE_KEYS:
+            spec = node.get(key)
+            if isinstance(spec, dict):
+                spec = spec.get("command")
+            if isinstance(spec, str) and spec.strip():
+                out.append(spec)
+    return out
+
+
+def _gate_declared_files(gate):
+    """Every path a gate predicates on via `files_exist`."""
+    out = []
+    for node in _gate_nodes(gate):
+        files = node.get("files_exist")
+        if isinstance(files, (list, tuple)):
+            out.extend(str(f) for f in files)
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────
 # 1 + 2 — foundry handoff kit completeness, and the scribe-line
 #         disclosure the gate never surfaced
@@ -769,15 +832,52 @@ def test_a_files_exist_only_step_is_not_gateless(fcc):
     list therefore fired it 0 times on the entire population it was written
     for. The summary names the gate that did not run; only a step with NO gate
     at all summarises to nothing.
+
+    DERIVED, not pinned to a step id (main-red repair). This test used to name
+    step 12 as its files-exist-only exemplar and assert, as a PRECONDITION,
+    that step 12 declares no program. The flow then gave step 12 a program gate
+    (`dft_post_optimization_scan_survival_check`), so the precondition became
+    false and the test went red on main — while the PROPERTY it exists to pin
+    was never in question. A test that hardcodes which step has a shape is a
+    second declaration of the flow, and it drifts from the flow exactly the way
+    every other duplicated list in this repo has. So the exemplar is now READ
+    from the flow: whichever steps are program-free this week are the ones
+    tested, and a step gaining a program gate moves it out of the population
+    instead of reddening the file.
     """
     assert fcc._declared_gate_summary(None) == ""
     assert fcc._declared_gate_summary({}) == ""
 
-    summary = fcc._declared_gate_summary(_step(12)["gate"])
-    assert summary, "step 12 declares a gate; the summary must describe it"
-    assert "post_dft_netlist.v" in summary, summary
-    assert fcc._declared_gate_commands(_step(12)["gate"]) == [], (
-        "precondition: step 12's gate declares no program")
+    # The population, from the flow itself: a declared gate that shells out to
+    # nothing. `_declared_gate_commands` is the module's own structural walk,
+    # so this cannot disagree with the code under test about what "declares a
+    # program" means.
+    predicate_only = [
+        st for st in _flow_steps()
+        if isinstance(st.get("gate"), dict)
+        and fcc._declared_gate_commands(st["gate"]) == []
+    ]
+    # AN EMPTY POPULATION IS NOT A PASS. If the flow ever stops declaring any
+    # predicate-only gate, this test measures nothing and must say so rather
+    # than going quietly green — that silent-vacuity mode is what made the
+    # #675-strict disclosure fire 0 of 3 times in the first place.
+    assert predicate_only, (
+        "no step in the flow declares a predicate-only gate, so this test has "
+        "no subject; the disclosure it guards can no longer be exercised and "
+        "the ADVISORY needs re-deciding, not a green tick")
+
+    for st in predicate_only:
+        gate = st["gate"]
+        summary = fcc._declared_gate_summary(gate)
+        assert summary, (
+            f"step {st.get('id')} declares a gate; the summary must describe "
+            f"it, or the disclosure names nothing")
+        # ...and it must describe THIS gate, not merely be non-empty: every
+        # file the gate predicates on is named in the summary a reader sees.
+        for decl in _gate_declared_files(gate):
+            assert decl in summary, (
+                f"step {st.get('id')}: {decl!r} is predicated on but absent "
+                f"from the summary {summary!r}")
 
 
 def test_declared_gate_summary_covers_the_predicate_kinds(fcc):
@@ -953,20 +1053,42 @@ def test_declared_outputs_are_all_required(fcc, tmp_path, sid, files, dropped):
     assert any(dropped.rsplit("/", 1)[-1] in r for r in res.reasons)
 
 
-def test_step33_gate_audit_trail_is_not_written_over_its_own_input():
-    """Step 33's gate must not point --json at reports/phase3/power.json.
+def test_step33_gate_audit_trail_is_not_written_over_its_own_input(fcc):
+    """Step 33's gate must not point --json at a path the step DECLARES.
 
-    That path is the step's declared required_output and holds the runner's
-    power summary; the checker writes a different schema, so honouring the flag
-    (which the wrapper now does) would overwrite the power data with an audit
-    of it.
+    `reports/phase3/power.json` is the step's own required_output and holds the
+    runner's power summary; the checker writes a different schema, so honouring
+    the flag (which the wrapper now does) would overwrite the power data with
+    an audit of it.
+
+    SHAPE-INDEPENDENT, and widened (main-red repair). This test used to read
+    `gate["program_exit_zero"]` — one flat key. Step 33's gate then gained a
+    second program (`power_total_vs_budget_check`) and became an `all_of`
+    list, so the subscript raised `KeyError` and the test went red on main
+    without the property ever being violated. Worse, the flat read could only
+    ever have audited the FIRST program: the second one was free to clobber the
+    declared artefact and this test would not have noticed. So it now walks the
+    gate the way `_evaluate_gate` does and holds EVERY declared program to the
+    rule, which is what the rule always meant.
     """
-    gate = _step(33)["gate"]
-    cmd = gate["program_exit_zero"]
-    assert "power_report_check" in cmd
-    assert "--json" in cmd
-    assert "reports/phase3/power.json" not in cmd
-    assert "reports/phase3/power.json" in _step(33)["required_outputs"]
+    step = _step(33)
+    commands = _gate_program_commands(step["gate"])
+    assert commands, "step 33 must declare at least one program gate"
+    assert any("power_report_check" in c for c in commands), commands
+
+    declared = [str(p) for p in (step.get("required_outputs") or [])]
+    assert "reports/phase3/power.json" in declared, declared
+
+    audited = [c for c in commands if "--json" in c]
+    assert audited, (
+        "step 33's gate writes no audit trail at all; the --json the flow "
+        "declares is what makes the gate's own verdict reviewable")
+
+    for cmd in commands:
+        for out in declared:
+            assert out not in cmd, (
+                f"step 33 gate command points at its own declared output "
+                f"{out!r}, which the checker would overwrite: {cmd!r}")
 
 
 def _all_missing_results(fcc, waived=(), failed=()):
