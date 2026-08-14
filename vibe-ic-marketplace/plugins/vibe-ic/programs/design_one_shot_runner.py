@@ -553,6 +553,32 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
         return 127, "", f"COMMAND_NOT_FOUND: {e}"
 
 
+def _compiler_was_not_found(rc: int, out: str, err: str) -> bool:
+    """Did the tool fail to EXECUTE, rather than run and reject the source?
+
+    vibe-ic#1394. The distinction is the whole difference between "could not
+    measure" and "measured and found a defect", and it has to be read off the
+    same two signals the runners above emit:
+
+      * `COMMAND_NOT_FOUND:` — written ONLY by the `except FileNotFoundError`
+        arms of `_run` / `_docker_exec_raw` (this file, two sites), so it is
+        never produced by a tool that started.
+      * rc 127 — POSIX / shell "command not found". Deliberately safe here:
+        `iverilog` exits 1 on a compile or elaboration error and reserves no
+        meaning for 127, and a container dispatch whose inner command is
+        missing returns bash's own 127.
+
+    Kept NARROW on purpose. A bare "No such file or directory" is NOT accepted
+    as a signal, because a genuine compile failure over a missing `include`
+    says exactly that — and treating that as "could not run" would convert a
+    real structural defect into a skip, which is the inverse of the bug this
+    predicate exists to fix and strictly worse than it.
+    """
+    if "COMMAND_NOT_FOUND:" in f"{out or ''}\n{err or ''}":
+        return True
+    return rc == 127
+
+
 def _docker_exec(container: str, cmd: str, timeout: int = 600, *,
                  marker=None, log_path=None) -> Tuple[int, str, str]:
     """Run a shell command inside a Docker container.
@@ -6428,9 +6454,62 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
         # the SV frontend also rejects still FAILs.
         rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
             cmd, rtl_files, tb_path, run_dir, container, top_name)
+        if rc != 0 and _compiler_was_not_found(rc, out, err):
+            # vibe-ic#1394 — THE COMPILER WAS ABSENT, which is not a defect
+            # in the DUT. `_iverilog_available(container)` above answers "is
+            # iverilog reachable SOMEWHERE"; the dispatch can still land
+            # somewhere it is not — the canonical case being a run_dir that
+            # is outside the container's bind mounts, which falls back to the
+            # HOST and finds no iverilog there. The runner already discloses
+            # that divergence (#902 sim-toolchain DIVERGED), so the
+            # information was present and only the VERDICT was wrong:
+            #
+            #   status FAIL, "real structural defect.
+            #                 iverilog rc=127 stderr=COMMAND_NOT_FOUND"
+            #
+            # A verdict that cites rc=127 as evidence of a structural defect
+            # contradicts itself in its own detail string. Route it to the
+            # same honest outcome the both-absent path below already reaches:
+            # nothing SIMULATED, so never a PASS, and never a FAIL either.
+            #
+            # MEASURED: this is why `test_phase2_class_aware_gating.py::
+            # test_generic_class_reference_tb_runs_full_stack_tb` FAILS from a
+            # /tmp checkout and PASSES from a mounted one on the same host and
+            # commit — a red inside main's quoted count that is not a defect.
+            _absent = (f"the simulator was NOT FOUND where the compile was "
+                       f"dispatched (rc={rc}) — no sim ran, so this is not "
+                       f"evidence about the DUT. Reachability, not the "
+                       f"design: a run_dir outside the container's bind "
+                       f"mounts falls back to the host. "
+                       f"stderr={(err or out)[-600:]}")
+            if results_path.is_file():
+                return StepResult(
+                    "reference_tb", "WAIVED",
+                    time.time() - t0,
+                    (f"AID reference TB SKIPPED ({track_reason}); {_absent} "
+                     f"Generic full-stack TB skeleton ({tb_path.name}) + "
+                     f"results.json present but NO sim ran (#439)."),
+                    [str(tb_path), str(results_path)],
+                    extras={"verification_track": "generic_full_stack",
+                            "aid_tb_skipped_reason": track_reason,
+                            "functional_verified": False,
+                            "fallback_skill": "testbench-author",
+                            "iverilog_available": False,
+                            "tb_frontend": tb_frontend})
+            return StepResult(
+                "reference_tb", "SKIP",
+                time.time() - t0,
+                (f"AID reference TB SKIPPED: {track_reason}. {_absent}"),
+                extras={"verification_track": "generic_full_stack",
+                        "aid_tb_skipped_reason": track_reason,
+                        "functional_verified": False,
+                        "iverilog_available": False,
+                        "tb_frontend": tb_frontend})
         if rc != 0:
             # A genuine compile/elaboration failure of the DUT is a REAL
-            # functional/structural defect — FAIL (honesty preserved).
+            # functional/structural defect — FAIL (honesty preserved). Only
+            # reached when the compiler RAN and rejected the source; the
+            # not-found case is routed above (#1394).
             return StepResult(
                 "reference_tb", "FAIL",
                 time.time() - t0,
