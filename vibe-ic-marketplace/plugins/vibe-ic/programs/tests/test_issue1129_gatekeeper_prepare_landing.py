@@ -242,3 +242,123 @@ def test_the_real_program_runs_against_this_repo_and_honours_its_boundary():
         subprocess.run(["git", "-C", str(repo_root), "checkout", "--",
                         *(G.dirty_paths(repo_root) or ["."])],
                        capture_output=True, text=True)
+
+
+# ---------------------------------------------------------------------------
+# THE WIRING — the half that decides whether any of the above is REACHABLE
+# ---------------------------------------------------------------------------
+# Everything above drives `gatekeeper_prepare_landing.py` directly. None of it
+# touches `tools/gatekeeper-land.sh`, which is the only thing that ever invokes
+# the program in production. Measured on this branch: delete `--prepare` from
+# that script, commit, and the ten tests above stay GREEN (10 passed either
+# way; script md5 ef10a54d… vs 206c60a8…). `--prepare` appeared in ZERO tests
+# across `programs/tests/`, so `PREPARE=0`, `--prepare) PREPARE=1` and the
+# `if [ "$PREPARE" = "1" ]` block were a capability the suite could not see.
+#
+# That is the #1241-row-1 shape — a program verified against its author's model
+# and never against the path that invokes it — and it is worse here than usual
+# because this code runs INSIDE the landing path, where a repair that silently
+# never ran is indistinguishable from a repair that ran and found nothing.
+#
+# WHY THESE DRIVE THE SCRIPT INSTEAD OF GREPPING IT. A test asserting the file
+# CONTAINS "--prepare" would pass on a dispatch that is present and broken —
+# the same class of defect it was written to close. So both tests below execute
+# the real script and read an observable result.
+#
+# WHY REFUSAL IS THE OBSERVABLE. A successful preparation returns to the script
+# and the ~1h gate tier begins, which no test may sit through. A REFUSAL exits
+# before the cheap tier, so it is bounded by construction — measured at 0s for
+# both arms. It is also the arm that matters: this dispatch's job is to stop a
+# landing whose preparation could not be attributed.
+#
+# AND WHY IT ASSERTS THE PROGRAM'S OWN WORDS. The script prints "preparation
+# REFUSED" whenever python3 exits non-zero — including when the program is
+# MISSING. Asserting only on the script's message would therefore accept a
+# broken dispatch. Asserting on the program's own refusal text is what proves
+# the real program ran and answered.
+_LAND_SH = PROGRAMS.parents[3] / "tools" / "gatekeeper-land.sh"
+
+
+@pytest.fixture()
+def landing_repo(tmp_path):
+    """A scratch repo carrying the REAL script and the REAL program, dirty.
+
+    Copies rather than stubs: mutate either file in this repository and these
+    tests move, which is the binding that was missing. Only
+    `gatekeeper_prepare_landing.py` is needed beside the script — its module
+    imports are stdlib, and `gatekeeper_assign_version` is loaded lazily AFTER
+    the dirty check these tests stop at.
+    """
+    assert _LAND_SH.is_file(), f"{_LAND_SH} not found — resolve the repo root"
+    r = tmp_path / "landing"
+    prog = r / "vibe-ic-marketplace/plugins/vibe-ic/programs"
+    prog.mkdir(parents=True)
+    (r / "tools").mkdir()
+    (r / "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin").mkdir(parents=True)
+    (r / "tools/gatekeeper-land.sh").write_bytes(_LAND_SH.read_bytes())
+    (prog / "gatekeeper_prepare_landing.py").write_bytes(MOD.read_bytes())
+    (r / "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json").write_text(
+        '{"version": "1.2.3"}\n', encoding="utf-8")
+    (prog / "INDEX.md").write_text("stale\n", encoding="utf-8")
+    _git(r, "init", "-q")
+    _git(r, "config", "user.email", "t@t")
+    _git(r, "config", "user.name", "t")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "base")
+    # DIRTY on purpose: preparation must refuse, fast and deterministically.
+    (prog / "INDEX.md").write_text("stale\ndirtied\n", encoding="utf-8")
+    return r
+
+
+def _land(repo: Path, *args: str):
+    # 55s, under the 60s inner-bound ceiling the 180s harness implies. Measured
+    # at 0s; the bound is insurance against a hang, not a budget.
+    return subprocess.run(["bash", "tools/gatekeeper-land.sh", *args],
+                          cwd=str(repo), capture_output=True, text=True,
+                          timeout=55)
+
+
+def test_the_prepare_flag_REACHES_the_real_program_and_its_refusal_stops_the_landing(
+        landing_repo):
+    """`--prepare` must invoke the real program and honour a REFUSAL."""
+    out = _land(landing_repo, "--prepare")
+    blob = out.stdout + out.stderr
+
+    assert "--- prepare" in blob, (
+        "`--prepare` was accepted but the preparation block never ran — the "
+        f"dispatch in gatekeeper-land.sh is not wired.\n{blob}")
+    # The PROGRAM's own words, not the script's. A missing or unimportable
+    # program also makes python3 exit non-zero and the script print its own
+    # "preparation REFUSED", so only this line distinguishes "the real program
+    # ran and refused" from "the dispatch points at nothing".
+    assert "already dirty before preparation" in blob, (
+        "the script reported a refusal, but the refusal did not come from "
+        "gatekeeper_prepare_landing — the dispatch may point at nothing.\n"
+        f"{blob}")
+    assert "preparation REFUSED" in blob, (
+        f"the program refused and the script did not act on it.\n{blob}")
+    assert out.returncode == 1, (
+        f"a refused preparation must stop the landing, got rc={out.returncode}"
+        f"\n{blob}")
+    # The whole point of #1129: do not spend the hour after a mechanical refusal.
+    assert "cheap tier" not in blob, (
+        "preparation was refused and the gate tier started anyway — the early "
+        f"exit is what makes this worth wiring.\n{blob}")
+
+
+def test_WITHOUT_the_flag_preparation_does_not_run(landing_repo):
+    """The flag must GATE the block, not merely accompany it.
+
+    Without this arm the test above would still pass on a script that ran
+    preparation unconditionally — which would silently change what every
+    existing invocation of this script does.
+    """
+    out = _land(landing_repo)
+    blob = out.stdout + out.stderr
+    assert "--- prepare" not in blob, (
+        "preparation ran without `--prepare`; the flag does not gate the "
+        f"block, so every existing invocation just changed behaviour.\n{blob}")
+    assert "already dirty before preparation" not in blob, (
+        f"gatekeeper_prepare_landing ran without `--prepare`.\n{blob}")
+    assert "cheap tier" in blob, (
+        f"without preparation the script must proceed to the gates.\n{blob}")
