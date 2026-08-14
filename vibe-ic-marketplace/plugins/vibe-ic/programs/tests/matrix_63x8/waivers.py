@@ -887,11 +887,15 @@ WAIVERS: Tuple[Waiver, ...] = (
             "verification, not a declaration change."
         ),
         evidence=(
-            "producer programs/phase3_one_shot_runner.py:29941-29964 (the "
+            "producer programs/phase3_one_shot_runner.py:30621-30644 (the "
             "`len(corners) < 2` guard around the `rpt_phase3 / "
             "'single_corner_stance.json'` write; line number re-verified "
-            "2026-08-08 after v1.9.99's CTS fix shifted earlier-file line "
-            "counts — was 29776-29796); consumer "
+            "2026-08-14 — was 29941-29964, and 29776-29796 before that. "
+            "The span is 24 lines in all three, because the block itself "
+            "has not changed; only its offset has, by +680 here. A citation "
+            "that has now rotted twice in a fortnight is an argument for "
+            "vibe-ic#1290's content-addressed form, not for a third "
+            "re-measure); consumer "
             "programs/pvt_matrix_check.py:44-45 then :105. MEASURED "
             "2026-07-28 with flow_compliance_check.check_step over the nine "
             "tracked roots holding phase2/stage2/constraints/pvt_matrix.json: "
