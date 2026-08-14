@@ -928,8 +928,14 @@ def _touch(project: Path, rel: str, body: str = "x\n") -> Path:
      "phase3/stage3/eco/eco_trigger_decision.json"),
     # Step 34 metal fill: reports/density.{json,rpt} come off the same success
     # path as filled.def, and TWO gates read them (this step's and Step 31's).
+    # 2026-08-14: the list gained reports/phase3/cmp_fill_emit.json, written by
+    # `metal_fill_emit` (metal_fill_emit.py:82), which is in this step's own
+    # gate list. Same reason as step 28's fourth entry above — the seed set has
+    # to be the step's FULL required_outputs, or the control assertion measures
+    # this list instead of the flow.
     (34, ["phase3/stage3/pnr/filled.def",
-          "reports/density.json", "reports/density.rpt"],
+          "reports/density.json", "reports/density.rpt",
+          "reports/phase3/cmp_fill_emit.json"],
      "reports/density.json"),
 ])
 def test_declared_outputs_are_all_required(fcc, tmp_path, sid, files, dropped):
