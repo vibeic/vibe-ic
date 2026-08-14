@@ -106,6 +106,64 @@ GATE_DISPATCH_CORPUS_BLIND=0
 # `declare -a ... =()` so `set -u` is safe while the lists are still empty.
 declare -a GATE_LABELS=() GATE_STATES=() GATE_SECONDS=()
 
+# --- THE SAME BRACKET, ONE DIRECTORY WIDER (vibe-ic#1029, one level up) -----
+# The corpus guard above brackets every gate with a `git status` — but only
+# over `$GATE_DISPATCH_CORPUS_REL`, i.e. `benchmark-data/`. That scope was
+# chosen because the writers found in 2026-08-04 wrote there, and the header
+# above records the measurement that landed it: "all 59 statically-declared
+# gates … benchmark-data diffed across each — zero writers."
+#
+# `benchmark-data/` is not where the gates that write live. THREE of them write
+# into the SOURCE TREE, and each was invisible to the bracket that was already
+# wrapped around it:
+#
+#   repo_hygiene_gates.sh:678  gate_host_independence_check   re-runs every gate
+#                              above it IN THE WORKING CHECKOUT (that is its
+#                              subject), so whatever any of them leaves behind
+#                              is left behind here.
+#   repo_hygiene_gates.sh:943  gen_matrix_63x8_census.py --check
+#   repo_hygiene_gates.sh:964  policy_direction_pin_check --verify-pins
+#                              flips a literal in the shipped source, runs
+#                              pytest against it, and restores it — a ~23 s
+#                              mutation window per site, measured in #1090.
+#
+# and every gate declared AFTER them then measures a tree those gates wrote.
+#
+# THE DIRECTION THIS FAILS IN. Three landing runs on 2026-08-12 reported
+# host-independence, census-freshness and argued-direction-pinned as FAILURES
+# that a clean uncontended run of the same tree did not reproduce. A false RED
+# costs a re-run and looks like diligence. The SAME mechanism produces a false
+# GREEN whenever an earlier gate's leavings happen to satisfy a later gate's
+# question, and nobody re-runs a green.
+#
+# WHY THIS AND NOT A THROWAWAY CHECKOUT PER MUTATING GATE. That fix presumes a
+# maintained list of which gates mutate, and that list has now been wrong three
+# times — it is the drift shape this file was written to remove. This bracket
+# DERIVES the list instead: a gate that writes is named at the point it wrote,
+# by the run that suffered it, whether or not anyone knew it was a writer. A
+# gate that legitimately must mutate declares itself with
+# `run_mutating_the_tree`, exactly as a genuine corpus producer declares itself
+# with `run_writing_the_corpus` — and THAT declared set, which is small and
+# visible, is the one worth isolating.
+#
+# COST, measured on this repo at 4b22e36e: 21 779 tracked files, 0.28 s per
+# snapshot, two snapshots per gate = 0.56 s. Over the ~70 gates this script
+# declares that is ~39 s against a tier that takes ~57 min — 1.2 %. A per-gate
+# `git worktree add` is 556 MB and ~40 s EACH.
+#
+#   off      no bracket, and it says so (a silent guard is the vacuous pass)
+#   report   measure and name; never changes a verdict
+#   block    a gate that leaves a tracked or untracked path behind FAILS
+GATE_TREE_GUARD="${GATE_TREE_GUARD:-report}"
+#: 1 once the tree guard has said it cannot look. Said once, like the corpus one.
+GATE_TREE_BLIND=0
+#: Per-run scratch for the two snapshots. Empty until the first gate needs it.
+GATE_TREE_SNAP=""
+#: Gates that were named by the bracket, for the roll-up. A gate can perturb the
+#: tree and still PASS its own question, so these are recorded ALONGSIDE the
+#: state rather than instead of it.
+declare -a GATE_TREE_WROTE=() GATE_TREE_REVERTED=()
+
 # --- LOOP-DRIVEN GATES SAY HOW MANY ITEMS THEY EXPANDED OVER (vibe-ic#957) --
 # Three of this repo's gates are wired once and executed once per PUBLISHED
 # CELL. `gate_discloses_denominator_check` already demands of every gate
@@ -233,10 +291,119 @@ _gate_dispatch_corpus_state() {
       "$GATE_DISPATCH_CORPUS_REL" 2>/dev/null | LC_ALL=C sort
 }
 
-# `_dispatch <tolerate_rc2> <may_write_corpus> <label> <cwd> <cmd...>` — the ONE
-# place a gate is executed and the ONE place its outcome is recorded.
+# --- the whole-tree bracket ------------------------------------------------
+# `suite_write_guard.py` is the program that already owns "did this run write
+# into the tree", already classifies tracked / untracked / ignored the way
+# `git add -A` does, and already refuses to answer 0 without having compared
+# two snapshots. `--deep` adds the one channel it did not have: a file written
+# and RESTORED, which its own docstring named as outside its subject and which
+# is precisely the shape the pin gate has.
+#
+# RESOLVED OFF THIS LIBRARY'S OWN LOCATION, not off `$ROOT`. The two differ
+# exactly where it matters: `$ROOT` is the SUBJECT — a throwaway repo under a
+# test, a scratch worktree under `gate_host_independence_check` — and a subject
+# is not required to ship the instrument that measures it. Keying on `$ROOT`
+# would make the guard silently absent for every fixture, which is the shape of
+# "the check did not run and nobody could tell" this file exists to refuse.
+_gate_tree_guard_prog() {
+  local here p
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" || return 1
+  p="$here/vibe-ic-marketplace/plugins/vibe-ic/programs/suite_write_guard.py"
+  [ -f "$p" ] || return 1
+  printf '%s\n' "$p"
+}
+
+# Snapshot BEFORE the gate. rc 1 = could not look, and the caller says so.
+_gate_tree_begin() {
+  [ "$GATE_TREE_GUARD" = "off" ] && return 1
+  local prog root
+  prog="$(_gate_tree_guard_prog)" || return 1
+  root="$(_gate_dispatch_corpus_root)"
+  if [ -z "$GATE_TREE_SNAP" ]; then
+    GATE_TREE_SNAP="$(mktemp -t gate_tree_snap.XXXXXX)" || return 1
+  fi
+  python3 "$prog" --repo "$root" --snapshot "$GATE_TREE_SNAP" --deep \
+      >/dev/null 2>&1 || return 1
+}
+
+# Compare AFTER it. Prints the guard's own report; rc 1 = a blocking-class path
+# was left behind, rc 2 = could not look.
+_gate_tree_end() {
+  local prog root
+  prog="$(_gate_tree_guard_prog)" || return 2
+  root="$(_gate_dispatch_corpus_root)"
+  python3 "$prog" --repo "$root" --compare "$GATE_TREE_SNAP" 2>&1
+}
+
+# What the bracket found, said in the log at the gate that caused it.
+#
+# Deliberately does NOT push onto GATE_STATES: perturbing the tree and failing
+# your own question are independent, a gate can do either, both or neither, and
+# collapsing them would lose which one happened. It records into its own two
+# lists and — in `block` mode — sets the run's failure flag.
+_dispatch_tree_verdict() {
+  local watched="$1" may_mutate="$2" label="$3" secs="$4"
+  [ "$GATE_TREE_GUARD" = "off" ] && return 0
+  if [ "$watched" -eq 0 ]; then
+    if [ "$GATE_TREE_BLIND" -eq 0 ]; then
+      GATE_TREE_BLIND=1
+      echo "   ^^ tree-write guard NOT ACTIVE: could not snapshot the" \
+           "worktree — a gate writing into the SOURCE TREE would go" \
+           "unreported in this run, and the gates after it would measure" \
+           "whatever it left" >&2
+    fi
+    return 0
+  fi
+  local out rc=0
+  out="$(_gate_tree_end)" || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    if [ "$GATE_TREE_BLIND" -eq 0 ]; then
+      GATE_TREE_BLIND=1
+      echo "   ^^ tree-write guard NOT CHECKED for \"$label\": $out" >&2
+    fi
+    return 0
+  fi
+  # REVERTED first: it is the half nothing else in this repo can see, and a
+  # gate that mutates and restores is a mutator even on the runs where the
+  # restore worked.
+  if printf '%s\n' "$out" | grep -q 'WRITTEN AND RESTORED'; then
+    GATE_TREE_REVERTED+=("$label")
+    echo "   ^^ MUTATED THE TREE AND PUT IT BACK: $label [${secs}s]" >&2
+    printf '%s\n' "$out" | grep -aA20 'WRITTEN AND RESTORED' \
+      | head -12 | sed 's/^/      /' >&2
+  fi
+  [ "$rc" -eq 1 ] || return 0
+  GATE_TREE_WROTE+=("$label")
+  if [ "$may_mutate" -eq 1 ]; then
+    echo "   ^^ wrote into the tree (DECLARED via run_mutating_the_tree):" \
+         "$label [${secs}s] — the gates after it do not read the tree it was" \
+         "handed" >&2
+    printf '%s\n' "$out" | grep -a '^ ' | head -10 | sed 's/^/      /' >&2
+    return 0
+  fi
+  echo "   ^^ WROTE INTO THE SOURCE TREE: $label [${secs}s]" >&2
+  printf '%s\n' "$out" | head -14 | sed 's/^/      /' >&2
+  echo "      Every gate declared after this one now measures a tree THIS" \
+       "RUN wrote. That produces a false RED when the leftovers break a" \
+       "later gate's question, and a false GREEN when they happen to satisfy" \
+       "it — and nobody re-runs a green." >&2
+  echo "      Make it read-only (preferred), send its writes to a tmp dir or" \
+       "a throwaway checkout, or declare it with \`run_mutating_the_tree\`" \
+       "if mutating the tree IS its subject." >&2
+  if [ "$GATE_TREE_GUARD" = "block" ]; then
+    GATE_DISPATCH_FAIL=1
+  else
+    echo "      (GATE_TREE_GUARD=$GATE_TREE_GUARD — reported, NOT blocking)" >&2
+  fi
+  return 0
+}
+
+# `_dispatch <tolerate_rc2> <may_write_corpus> <may_mutate_tree> <label> <cwd>
+# <cmd...>` — the ONE place a gate is executed and the ONE place its outcome is
+# recorded.
 _dispatch() {
-  local tolerate="$1" may_write="$2" label="$3" wd="$4"; shift 4
+  local tolerate="$1" may_write="$2" may_mutate="$3" label="$4" wd="$5"
+  shift 5
   GATE_LABELS+=("$label")
   GATE_ITEM_CORPUS+=("$GATE_DISPATCH_CORPUS_CUR")
   GATE_ITEM_IDX+=("$GATE_DISPATCH_CORPUS_IDX")
@@ -275,14 +442,48 @@ _dispatch() {
     return 0
   fi
   echo "── $shown"
-  local t0="$SECONDS" rc=0 before="" after="" watched=1
+  local t0="$SECONDS" rc=0 before="" after="" watched=1 tree_watched=1
   before="$(_gate_dispatch_corpus_state)" || watched=0
+  _gate_tree_begin || tree_watched=0
   # `|| rc=$?` and NOT a bare `( ... ); rc=$?` — the caller runs under `set -e`,
   # where a failing subshell aborts before the next line and the disclosure
   # below would never print.
-  ( cd "$wd" && "$@" ) || rc=$?
+  #
+  # `GATE_TREE_GUARD=off` INTO THE CHILD, deliberately. `gate_host_independence_check`
+  # re-runs this entire script — twice — and a nested bracket would both double
+  # the cost and attribute the inner run's writes to an inner gate, when the
+  # thing the outer run needs to know is that THIS gate perturbed the tree it
+  # was handed. One bracket, at the outermost layer that owns the tree.
+  #
+  # ISOLATION, when the gate DECLARED that it mutates and the run asked for it.
+  # Every argument that names the subject root is rewritten to the throwaway
+  # checkout, and so is the working directory. The substitution is mechanical
+  # and stated rather than clever: a gate is invoked as `<label> <cwd> <cmd…>`
+  # with `$ROOT`-rooted paths, so rewriting the prefix is the whole job. A gate
+  # whose paths are NOT `$ROOT`-rooted is left alone and would still write into
+  # the real tree — the bracket below then says so, which is the property that
+  # makes this safe to get wrong.
+  local iso="" root_now
+  if [ "$may_mutate" -eq 1 ] && [ "$GATE_TREE_ISOLATE" = "1" ]; then
+    root_now="$(_gate_dispatch_corpus_root)"
+    if iso="$(_gate_iso_make)"; then
+      local -a argv=(); local a
+      for a in "$@"; do argv+=("${a/#$root_now/$iso}"); done
+      set -- "${argv[@]}"
+      wd="${wd/#$root_now/$iso}"
+      echo "   ~~ isolated: running in a throwaway checkout of HEAD ($iso)"
+    else
+      iso=""
+      echo "   ^^ ISOLATION ASKED FOR AND NOT OBTAINED for \"$label\": could" \
+           "not stand up a throwaway checkout, so this gate is about to write" \
+           "into the tree every gate after it reads" >&2
+    fi
+  fi
+  ( cd "$wd" && GATE_TREE_GUARD=off "$@" ) || rc=$?
+  [ -z "$iso" ] || _gate_iso_drop "$iso"
   local secs=$(( SECONDS - t0 ))
   GATE_SECONDS+=("$secs")
+  _dispatch_tree_verdict "$tree_watched" "$may_mutate" "$label" "$secs"
   if [ "$watched" -eq 0 ]; then
     if [ "$GATE_DISPATCH_CORPUS_BLIND" -eq 0 ]; then
       GATE_DISPATCH_CORPUS_BLIND=1
@@ -324,7 +525,7 @@ _dispatch() {
 }
 
 run() {                                   # run <label> <cwd> <cmd...>
-  _dispatch 0 0 "$@"
+  _dispatch 0 0 0 "$@"
 }
 
 # Same as `run`, but rc 2 means "could not check" rather than "found a defect".
@@ -333,14 +534,83 @@ run() {                                   # run <label> <cwd> <cmd...>
 # red and then ignored. rc 1 (a real finding) still fails; rc 2 is LOUD and
 # non-fatal, and CI checks out clean so it genuinely runs there.
 run_tolerating_uncheckable() {            # <label> <cwd> <cmd...>
-  _dispatch 1 0 "$@"
+  _dispatch 1 0 0 "$@"
 }
 
 # A gate that is genuinely a PRODUCER of corpus artefacts. There are none today
 # — the wrapper exists so that wiring one is a visible, reviewable act rather
 # than a silent regression of the guard above.
 run_writing_the_corpus() {                # <label> <cwd> <cmd...>
-  _dispatch 0 1 "$@"
+  _dispatch 0 1 0 "$@"
+}
+
+# A gate whose SUBJECT is the tree it mutates — it flips something in the
+# shipped source, measures what that does, and restores it. There is exactly
+# one shape of these and it is not hypothetical: `policy_direction_pin_check
+# --verify-pins` cannot answer its question any other way, because "a test
+# mentions the value" is satisfied by a test that asserts nothing about it.
+#
+# DECLARING IT DOES NOT MAKE IT SAFE, and the wrapper name says so rather than
+# implying a blessing: the gate still perturbs the tree, the gates after it
+# still read what it left, and the log still names every path. What the
+# declaration buys is that the perturbation is a REVIEWED fact with an owner
+# instead of a surprise — and that this small, visible set is the population
+# worth giving its own checkout, rather than every gate paying for a checkout
+# because nobody knows which ones need it.
+run_mutating_the_tree() {                 # <label> <cwd> <cmd...>
+  _dispatch 0 0 1 "$@"
+}
+
+# --- ISOLATION, and what it actually costs (measured 4b22e36e) --------------
+# `GATE_TREE_ISOLATE=1` runs every `run_mutating_the_tree` gate against a
+# throwaway `git worktree` of HEAD, so it cannot leave anything in the tree the
+# other gates read.
+#
+# THE COST, because the reason to reach for a cheaper fix was an estimate
+# nobody had measured:
+#
+#     git worktree add --detach HEAD    1.8 s warm cache / ~40 s cold
+#     git worktree remove --force       0.5 s
+#     disk, transient                   556 MB (21 779 files)
+#
+# Against a tier that takes ~57 min, isolating the declared mutators is ~2 s
+# each. It is cheap because `git worktree add` writes from the object store
+# rather than copying a working tree. `cp --reflink` is not an alternative
+# here: this host is ext4, which has no CoW; and `cp -al` is actively WRONG,
+# because a gate that writes in place through a hard link corrupts the original
+# — which is the exact damage being prevented.
+#
+# SO WHY IS THIS NOT THE WHOLE FIX. Because it can only be applied to gates
+# somebody has already identified as mutators, and that list has been wrong
+# three times. The bracket above DERIVES the list from behaviour; this isolates
+# what the bracket names. In that order, and not the other way round.
+#
+# OFF BY DEFAULT. Turning it on changes what every declared mutator MEASURES —
+# a gate whose subject is the working checkout (`gate_host_independence_check`
+# compares the checkout against a fresh worktree; `neutered_gate_tree_check`
+# asks what an interrupted probe left in THIS checkout) is answering a question
+# about the tree it is handed, and handing it a different tree does not isolate
+# it, it silently changes its subject. Isolation is correct for a mutator whose
+# subject is the CONTENT at HEAD, and it must be a per-gate decision made by
+# someone who knows which of the two a gate is.
+GATE_TREE_ISOLATE="${GATE_TREE_ISOLATE:-0}"
+
+# Stand up a throwaway checkout of HEAD; print its path. rc 1 = could not.
+_gate_iso_make() {
+  local root; root="$(_gate_dispatch_corpus_root)"
+  [ -n "$root" ] || return 1
+  local d; d="$(mktemp -d -t gate_iso.XXXXXX)" || return 1
+  rmdir "$d" 2>/dev/null
+  git -C "$root" worktree add -q --detach "$d" HEAD >/dev/null 2>&1 || return 1
+  printf '%s\n' "$d"
+}
+
+_gate_iso_drop() {
+  local root d="$1"
+  root="$(_gate_dispatch_corpus_root)"
+  [ -n "$d" ] && [ -d "$d" ] || return 0
+  git -C "$root" worktree remove --force "$d" >/dev/null 2>&1 \
+    || { rm -rf "$d"; git -C "$root" worktree prune >/dev/null 2>&1; }
 }
 
 # --- the only way to wire a gate PER ITEM (vibe-ic#957) ---------------------
@@ -565,6 +835,12 @@ PY
 gate_dispatch_finish() {
   local declared=${#GATE_LABELS[@]} notchecked=0 passed=0 wrote=0 i
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
+  # The tree guard's scratch snapshot (~3 MB on this repo). Removed on BOTH
+  # exit paths below, which is every path through this function. A run killed
+  # before it gets here leaks one file into $TMPDIR — deliberately not fixed
+  # with a `trap … EXIT` here, because this library is SOURCED and would be
+  # overwriting a trap the calling gate script owns.
+  [ -z "$GATE_TREE_SNAP" ] || rm -f "$GATE_TREE_SNAP"
   local refused="" writers=""
   [ -z "$GATE_DISPATCH_SUMMARY_JSON" ] \
     || _gate_dispatch_emit "$GATE_DISPATCH_SUMMARY_JSON"
@@ -627,10 +903,49 @@ gate_dispatch_finish() {
          "tree this run modified: $writers" >&2
   fi
 
+  # THE SAME SENTENCE FOR THE SOURCE TREE, and it must be printed on the runs
+  # that otherwise say "all gates passed": a gate can perturb the tree and pass
+  # its own question, so this is invisible in every count above.
+  #
+  # It is the ORDER that makes it matter. Naming the writers alone would let a
+  # reader think the damage is theirs; the damage belongs to whatever was
+  # DECLARED AFTER them, which on 2026-08-12 was three gates reporting failures
+  # that a clean uncontended run of the same tree did not reproduce.
+  if [ "${#GATE_TREE_WROTE[@]}" -ne 0 ] || [ "${#GATE_TREE_REVERTED[@]}" -ne 0 ]
+  then
+    local nw=${#GATE_TREE_WROTE[@]} nr=${#GATE_TREE_REVERTED[@]}
+    local wl="" rl="" first=-1
+    for (( i=0; i<nw; i++ )); do wl="${wl:+$wl, }${GATE_TREE_WROTE[$i]}"; done
+    for (( i=0; i<nr; i++ )); do rl="${rl:+$rl, }${GATE_TREE_REVERTED[$i]}"; done
+    [ "$nw" -eq 0 ] || echo "repo_hygiene_gates: $nw gate(s) WROTE INTO THE" \
+         "SOURCE TREE: $wl" >&2
+    [ "$nr" -eq 0 ] || echo "repo_hygiene_gates: $nr gate(s) mutated the" \
+         "source tree and restored it — a window in which every concurrent" \
+         "reader, and every killed run, sees a tree this run made up: $rl" >&2
+    # WHICH GATES WERE DOWNSTREAM. The count is not the finding; the finding is
+    # that these ran afterwards and their verdicts are about a tree this run
+    # wrote. Named, because a reader chasing one red gate needs to know whether
+    # it is downstream of a writer without reconstructing the order by hand.
+    for (( i=0; i<declared; i++ )); do
+      local lbl="${GATE_LABELS[$i]}" j
+      for (( j=0; j<nw; j++ )); do
+        [ "$lbl" = "${GATE_TREE_WROTE[$j]}" ] && first=$i && break
+      done
+      [ "$first" -ge 0 ] && break
+    done
+    if [ "$first" -ge 0 ] && [ "$first" -lt $(( declared - 1 )) ]; then
+      echo "repo_hygiene_gates: $(( declared - first - 1 )) gate(s) were" \
+           "declared AFTER the first such writer" \
+           "(\"${GATE_LABELS[$first]}\") and measured a tree this run" \
+           "modified — a failure among them may be about the leftovers" \
+           "rather than about the commit." >&2
+    fi
+  fi
+
   if [ "$GATE_DISPATCH_FAIL" -ne 0 ]; then
     echo "repo_hygiene_gates: at least one gate FAILED" \
          "($declared declared, $notchecked NOT CHECKED, $wrote WROTE CORPUS," \
-         "${total}s)" >&2
+         "${#GATE_TREE_WROTE[@]} WROTE THE SOURCE TREE, ${total}s)" >&2
     exit 1
   fi
 
@@ -664,6 +979,20 @@ gate_dispatch_finish() {
     echo "repo_hygiene_gates: all $declared gate(s) passed, but $nempty loop" \
          "corpus/corpora expanded over 0 item(s) — NOTHING was checked over:" \
          "$empty (${total}s)"
+    exit 0
+  fi
+  # …and the same refusal for the SUBJECT rather than for the population. The
+  # gates all passed; they did not all pass over the same tree. A reader who
+  # takes "all N passed" away from a run in which gate 40 rewrote what gates
+  # 41-74 then read has been told something the run did not establish, and the
+  # only reason it reads as harmless is that this class has so far produced
+  # false REDS, which cost a re-run and look like diligence. The same mechanism
+  # produces a false GREEN, and nobody re-runs a green.
+  if [ "${#GATE_TREE_WROTE[@]}" -ne 0 ]; then
+    echo "repo_hygiene_gates: all $declared gate(s) passed, but" \
+         "${#GATE_TREE_WROTE[@]} of them WROTE INTO THE SOURCE TREE — the" \
+         "gates after them did not measure the tree this run was handed" \
+         "(${total}s)"
     exit 0
   fi
   # Only now is the unqualified sentence true. It still states its own
