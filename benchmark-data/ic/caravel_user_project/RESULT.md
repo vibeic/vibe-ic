@@ -174,3 +174,4 @@ and the whole-tree gate scan surfaces no other failing gate. All non-PASS-non-FA
 cap-gaps (FPGA board, SDF/SPICE #430, DFT/LEC #430, CDC #433c, Formal #608/#675) or
 no-analog-content SKIPs. Therefore the loop has CONVERGED: the FAIL set is entirely
 {known holds + cap-gaps}, with no remaining chip-agnostic plugin gap to capture.
+
