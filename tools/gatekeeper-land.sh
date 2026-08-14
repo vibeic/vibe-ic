@@ -198,6 +198,39 @@ else
       python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE"
 fi
 
+# The gate above asks whether the batch has a legal SHAPE. This asks what it
+# CONTAINS: does more than one member of this landing claim the same issue?
+#
+# vibe-ic#1411 — the only mechanism this repo has for noticing two changes doing
+# one job is a MERGE CONFLICT, and of the 22 issues carrying more than one open
+# PR, 16 had members sharing no file, so nothing reported them. #1080 is the
+# confirmed instance: two PRs shipped two metric schemas for one issue, each
+# with its own passing tests, and the pair was found by accident.
+#
+# `competing_pr_claim_groups.py` (#1413) computes that. Until this line it was
+# reachable from nowhere — measured on its own branch, the only references to it
+# outside itself were `INDEX.md`, which is a generated catalog and not a caller,
+# and its own test. A report nothing runs produces no report.
+#
+# THE `--rev-range` MODE, not the API mode: this script must work offline —
+# `gatekeeper-verify-merge.sh` runs it twice, for the base and for the
+# candidate, as one differential — and a report that can only ask GitHub is a
+# report the landing path cannot use.
+#
+# REPORT, not a gate, and the reason is measured rather than cautious: several
+# of those 16 are legitimate splits verified by hand (#1241 has nineteen rows,
+# #1097 names three distinct mechanisms, #1115's pair repairs different
+# channels). A bar that refuses all of them is red every day, and a bar that is
+# red every day is the one people learn to bypass. What this asserts is only
+# that nobody has looked yet.
+if [ "$GK_RANGE_N" = "0" ]; then
+  echo "  SKIP  competing claims — range is empty, so there is nothing claimed"
+else
+  report "issues claimed by more than one commit in this landing" \
+      python3 "$PROGRAMS/competing_pr_claim_groups.py" \
+          --repo-root "$ROOT" --rev-range "$RANGE"
+fi
+
 # Everything above reasons about COMMITS. A tracked file still modified in the
 # worktree means the tree they verified is not the tree the author has.
 #
