@@ -665,11 +665,14 @@ def _try_lifo(prompt: str, ins, outs, params, top) -> Optional[str]:
         # `sp[AW-1:0] - 1'b1` truncates FIRST, and on a FULL stack
         # (sp == DEPTH, e.g. 4'b1000) that leaves 3'b000 and then subtracts 1,
         # which only reaches the top entry if the subtraction wraps inside AW
-        # bits. It does not: the index evaluates wider, `0 - 1` is -1, and
-        # mem[-1] reads X. Computing `sp - 1'b1` in sp's own width gives
-        # 8 - 1 = 7 before the assignment narrows it, which is right for every
-        # sp in 1..DEPTH.
-        f"    wire [AW-1:0] top_idx = sp - 1'b1;",
+        # bits. Whether it does is NOT ours to decide: an array index is a
+        # SELF-DETERMINED expression, so its evaluation width is the simulator's
+        # call. Icarus 11 evaluates it wider, `0 - 1` is -1, and mem[-1] reads X
+        # (#1415); Icarus 13/14 wrap and read the right entry. Computing
+        # `sp - 1'b1` in an assignment whose context width spans sp's own [AW:0]
+        # gives 8 - 1 = 7 BEFORE the narrowing — one value, every simulator, and
+        # right for every sp in 1..DEPTH.
+        "    wire [AW-1:0] top_idx = sp - 1'b1;",
         f"    wire do_push = {push_n} && !{full_n};",
         f"    wire do_pop  = {pop_n} && !{empty_n};",
         f"    always @({sens}) begin",
