@@ -131,7 +131,23 @@ def test_an_exhausted_budget_is_a_NAMED_finding_not_a_quiet_shrink(tmp_path):
                       'run "slow one" "$ROOT" sleep 5\n'
                       'run "slow two" "$ROOT" sleep 5\n'
                       'run "slow three" "$ROOT" sleep 5\n')
-    res = G.audit_ci(repo, timeout=30, budget=0.001)
+    # budget=0, NOT a small positive number. `audit_ci` computes
+    # `deadline = monotonic() + budget` and each `_probe` opens with
+    # `monotonic() >= deadline`. With 0.001 that comparison is decided by how
+    # many microseconds elapse between the two lines, and these three gates are
+    # never actually launched -- `sleep 5` fails the driveability check
+    # (`argv[1]` is `5`, not an absolute path), so the loop finishes in well
+    # under a millisecond and the deadline is often still in the future.
+    #
+    # Measured on one pinned tree, same test, three identical runs:
+    #     run 1 passed   run 2 FAILED   run 3 passed
+    #
+    # A flaky paired guard is worse than an absent one: it certifies "budget
+    # exhaustion is a NAMED finding" only on the runs where it happens to fire,
+    # and its failures land on whoever is holding the batch. `monotonic()` is
+    # non-decreasing, so with budget=0 the first check is true by construction
+    # rather than by luck -- no timing assumption survives in this test.
+    res = G.audit_ci(repo, timeout=30, budget=0)
 
     assert res.truncated is True, (
         f"the budget stopped the sweep and `truncated` stayed False: {res}")
