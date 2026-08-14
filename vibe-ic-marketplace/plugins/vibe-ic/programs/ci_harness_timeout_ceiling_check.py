@@ -154,8 +154,18 @@ WORKFLOW_DIR_REL = ".github/workflows"
 #: does not assume CI is alive. Losing its only source is what surfaced the gap
 #: — it reported CANNOT DETERMINE (rc 2) rather than passing, which is the
 #: behaviour that made the omission visible instead of silent.
+#:
+#: `gatekeeper-verify-merge.sh` was missing from this tuple until vibe-ic#1417.
+#: It runs a REAL pytest harness — arm A1, the base side of the landing
+#: differential — at its own `--timeout=`, and being unlisted meant this gate
+#: could not see it. Both bounds read 180 today, so listing it changes no
+#: ceiling; what it removes is the second undeclared copy of the number, which
+#: is the drift shape #527/#530/#534 each spent a version removing. An arm
+#: whose bound nothing resolves is an arm whose reds nobody can attribute to an
+#: envelope — #1417's own conclusion about why two honest sweeps disagree.
 EXTRA_HARNESS_RELS = (
     "tools/gatekeeper-land.sh",
+    "tools/gatekeeper-verify-merge.sh",
     ".github/workflows-disabled",
 )
 
