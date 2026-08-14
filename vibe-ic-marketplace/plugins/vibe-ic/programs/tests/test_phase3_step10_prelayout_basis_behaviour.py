@@ -126,12 +126,17 @@ def _fake_opensta(calls: list, fail_corners=()):
     def _run(container, cmd, timeout=1800, *, marker=None, log_path=None,
              stall_grace_s=None, hard_ceiling_s=None, poll_s=None,
              outputs=None):
-        rpt = Path(outputs[0])
-        corner = rpt.stem[len("sta_"):]
+        # Derived from `marker`, the TCL deck, NOT from `outputs`. `outputs` is
+        # the provenance declaration; the tool never reads it, and the call site
+        # stopped passing it when the report became a conditional transient
+        # (#443). A stand-in that needed it was modelling the ledger, not
+        # OpenSTA.
+        tcl = Path(marker)
+        corner = tcl.stem[len("sta_"):]
+        rpt = tcl.parent / f"sta_{corner}.rpt"
         calls.append(corner)
         if corner in fail_corners:
             return (1, "", f"OpenSTA: {corner} run did not converge")
-        tcl = rpt.parent / f"sta_{corner}.tcl"
         m = re.search(r'puts \$_bf "STA_BASIS: ([A-Z_]+)"', tcl.read_text())
         assert m, f"runner emitted no STA_BASIS stamp for {corner}"
         _write(rpt,
