@@ -416,6 +416,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_host_independence_check` | any | — | the same commit must give the same verdict. |
 | `gate_is_wired_check` | any | — | A gate no automatic verdict consults. vibe-ic#693. |
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
+| `gate_red_since_check` | any | — | an acknowledged red must EXPIRE. vibe-ic#1025. |
 | `gate_reliability_register` | any | — | gate_reliability_register.py -- Self-calibrating per-gate reliability ledger. |
 | `gate_self_assertion_check` | any | v0.2.24 | anti-fabrication gate-hole detector. |
 | `gate_skip_routing_check` | any | — | every gate, and whether its skip REACHES the machine that reads the verdict (#528). |
@@ -1542,6 +1543,7 @@ _(no programs in this group)_
 - `gate_host_independence_check` — the same commit must give the same verdict.
 - `gate_is_wired_check` — A gate no automatic verdict consults. vibe-ic#693.
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
+- `gate_red_since_check` — an acknowledged red must EXPIRE. vibe-ic#1025.
 - `gate_reliability_register` — gate_reliability_register.py -- Self-calibrating per-gate reliability ledger.
 - `gate_self_assertion_check` — anti-fabrication gate-hole detector.  _[v0.2.24]_
 - `gate_skip_routing_check` — every gate, and whether its skip REACHES the machine that reads the verdict (#528).
