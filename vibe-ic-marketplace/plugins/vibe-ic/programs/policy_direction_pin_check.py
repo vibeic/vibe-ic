@@ -565,10 +565,33 @@ def failing_files(output: str) -> List[str]:
 
 def run_pytest(paths: Sequence[Path], cwd: Path, basetemp: Path,
                extra: Sequence[str] = ()) -> Tuple[int, str]:
+    """Run the candidate tests and report EVERY file that died.
+
+    `-x` USED TO BE HERE, and it decided the verdict. It stops pytest at the
+    first failure, so `failing_files()` could only ever name ONE file -- and
+    which one depends on collection order across the candidate selection, not
+    on the call site. On a tree with unrelated red in it (which is every tree
+    this gate has ever run on during a repair) the sequence was:
+
+        mutant run stops at the first RED file, whatever it is
+        -> killed_files = [that unrelated file]
+        -> baseline of that file is red
+        -> ABSTAIN, while the test that genuinely pins the site is never reached
+
+    MEASURED on `origin/main` @ 3febf537: `matrix_mutation_ledger.py:2380`
+    reports PINNED, killed by `tests/test_matrix_mutation_ledger.py`, which
+    sorts SECOND in its three-file selection. Appending one failing test to the
+    file that sorts FIRST -- touching neither the call site nor the pinning
+    test -- flipped the gate to `0/0 (abstained 1 of 1)`.
+
+    A gate whose verdict is a function of which failure it happened to reach
+    first is not measuring the call site. Both runs are now exhaustive, and
+    the kill/baseline comparison below is per FILE.
+    """
     env = dict(os.environ)
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-           "--basetemp", str(basetemp), "-x"]
+           "--basetemp", str(basetemp)]
     cmd += [str(p) for p in paths]
     cmd += list(extra)
     proc = subprocess.run(cmd, cwd=str(cwd), env=env,
@@ -633,12 +656,26 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
         result["baseline_files"] = [str(p) for p in baseline_set]
         rc0, out0 = run_pytest(baseline_set, root.parent, basetemp, extra)
         result["baseline_rc"] = rc0
-        if rc0 != 0:
+        # PER FILE, not per RUN. "Some file in the baseline is red" is not a
+        # reason to disbelieve a kill in a DIFFERENT file -- that inference is
+        # what let one unrelated red test abstain a site whose pin was intact.
+        # A kill is believed exactly when the file that died is GREEN at
+        # baseline; the gate abstains only when every file that died was
+        # already red, which is the case the baseline check was written for.
+        red_at_baseline = set(failing_files(out0))
+        killed_now = [f for k in killed_by for f in k.get("killed_files", [])]
+        believable = [f for f in dict.fromkeys(killed_now) if f not in red_at_baseline]
+        result["red_at_baseline"] = sorted(red_at_baseline)
+        result["kills_believed"] = believable
+        if not believable:
             result["state"] = "ABSTAIN"
-            result["why"] = ("candidate tests are RED before any flip, so a kill "
-                             "proves nothing about this call site")
+            result["why"] = ("every candidate test that died under the flip was "
+                             "already RED before any flip, so no kill proves "
+                             "anything about this call site")
             result["baseline_tail"] = out0.strip().splitlines()[-1:] or [""]
             return result
+        killed_by = [k for k in killed_by
+                     if any(f in believable for f in k.get("killed_files", []))]
 
     result["killed_by"] = killed_by
     result["survivors"] = survivors
