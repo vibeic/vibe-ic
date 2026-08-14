@@ -619,7 +619,31 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-13: 120 -> 121, and 134 -> 135 declared. Step 27 now declares
+# `reports/phase3/si_mcf_sta.json`, the MCF crosstalk-delay verdict whose
+# 70-line justification was already committed inside step 27's
+# required_outputs block -- ending "This entry is the machine-readable
+# half of that sentence" -- while the entry itself was never added.
+# Undeclared, it was a W2 finding, and because the exemption control needs
+# a step carrying a conditional finding and NO other finding, that single
+# W2 also disqualified step 27 as the control's anchor and left two
+# parametrised controls vacuous. Declaring it clears all three.
+#
+# The new entry is decided LIVE like the other 120 -- PRODUCED_BY_RUN
+# against benchmark-data/ic/spm/v1.9.96_gf180mcuD, an already-registered
+# kind="repo" root that already carries this step's other entry, with the
+# file tracked at HEAD (2750 B, confirmed by `git ls-files
+# --error-unmatch`). No new root is admitted and nothing reaches $HOME, so
+# the guarded property is intact and was checked rather than assumed.
+#
+# UNLIKE the 2026-08-11 move, this one IS an increase in independently-
+# produced evidence, and the difference was verified rather than presumed:
+# `phase3_one_shot_runner` invokes `si_mcf_sta.py run` (:31725), a producer
+# outside step 27's gate. The gate's own --json target is the DIFFERENT
+# file si_mcf_sta_check.json, which remains undeclared and conditional --
+# it is precisely the conditional finding the exemption control anchors on,
+# so declaring it too would take the control's subject away again.
+_LIVE_ENTRY_COUNT = 121
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
