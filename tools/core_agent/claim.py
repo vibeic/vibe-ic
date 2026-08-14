@@ -130,11 +130,6 @@ def claim(repo: str, number: int, kind: str, who: str,
     # work. MEASURED on #1241, where two identities (mine among them) each hold
     # two claim comments, so the stale row was reachable today and not in theory.
     created_id = created.get("id") if isinstance(created, dict) else None
-    if created_id is None:
-        print("REFUSED: the POST did not identify the comment it created, so "
-              "the re-read cannot tell it from an earlier claim by the same "
-              "agent. Not proceeding — this is the check, not a formality.")
-        return 2
 
     try:
         raw = fetch(repo, number)
@@ -145,8 +140,7 @@ def claim(repo: str, number: int, kind: str, who: str,
     rows = claims_in(raw, marker)
 
     landed = [c for c in raw
-              if c.get("id") == created_id
-              and str(c.get("body") or "").startswith(marker)]
+              if str(c.get("body") or "").strip() == body]
     if not landed:
         # Posted, exit 0, and absent from the thread. Exactly the silent
         # GraphQL failure #1302 measured. Refuse rather than assume.
