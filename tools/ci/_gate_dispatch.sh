@@ -682,6 +682,12 @@ doc = {
     # against the number that happened to run.
     "declared": len(gates),
     "ran": n("PASS") + n("FAIL") + n("NOT_CHECKED") + n("WROTE_CORPUS"),
+    # RAN IS NOT DECIDED, and the gap between the two is the whole subject of
+    # vibe-ic#1025: a NOT_CHECKED gate ran and concluded nothing about its
+    # subject, and a WROTE_CORPUS one never had its rc classified at all.
+    # Derivable from `passed` + `failed`, and recorded anyway so a consumer
+    # cannot arrive at a different number than the sentence the script printed.
+    "decided": n("PASS") + n("FAIL"),
     "passed": n("PASS"),
     "failed": n("FAIL"),
     "not_checked": n("NOT_CHECKED"),   # never folded into `passed`
@@ -727,6 +733,11 @@ PY
 
 gate_dispatch_finish() {
   local declared=${#GATE_LABELS[@]} notchecked=0 passed=0 wrote=0 i
+  # vibe-ic#1025 — COUNTED, where they were not before. Every closing sentence
+  # below could state `declared` and `notchecked`; none of them could state how
+  # many gates reached a VERDICT, or how many of those were red, because
+  # nothing here added either up.
+  local failed=0 decided=0 elsewhere=0 ran=0
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
   local refused="" writers="" expired="" nexpired=0
 
@@ -804,6 +815,10 @@ after the last gate and attaches to nothing"
   for (( i=0; i<declared; i++ )); do
     case "${GATE_STATES[$i]}" in
       PASS) passed=$(( passed + 1 )) ;;
+      FAIL) failed=$(( failed + 1 )) ;;
+      # vibe-ic#1144 — declared here, owned by another host. Not something this
+      # run declined to decide; something it was never asked to.
+      OTHER_SHARD) elsewhere=$(( elsewhere + 1 )) ;;
       NOT_CHECKED)
         notchecked=$(( notchecked + 1 ))
         refused="${refused:+$refused, }${GATE_LABELS[$i]}"
@@ -813,6 +828,12 @@ after the last gate and attaches to nothing"
         writers="${writers:+$writers, }${GATE_LABELS[$i]}" ;;
     esac
   done
+  # A gate DECIDED when it reached a verdict about its subject: PASS or FAIL.
+  # NOT_CHECKED did not — it declined to look. WROTE_CORPUS did not either: its
+  # rc is never classified, because what it did was change the tree every gate
+  # after it read. OTHER_SHARD is not this host's question at all.
+  decided=$(( passed + failed ))
+  ran=$(( declared - elsewhere ))
 
   if [ "$wrote" -ne 0 ]; then
     # Named separately from a plain FAIL and BEFORE it: a gate that modified
@@ -826,9 +847,16 @@ after the last gate and attaches to nothing"
   fi
 
   if [ "$GATE_DISPATCH_FAIL" -ne 0 ]; then
+    # vibe-ic#1025 — this is the ONE closing sentence that could not state its
+    # own denominator. It named `declared` and `notchecked` and never said how
+    # many gates actually reached a verdict or how many of those were red, so a
+    # reader could not tell one failure among 63 from forty. The other closing
+    # sentences below already state `passed` against `declared`, from which
+    # `decided` follows, and are left alone rather than padded with a number
+    # they already imply.
     echo "repo_hygiene_gates: at least one gate FAILED" \
-         "($declared declared, $notchecked NOT CHECKED, $wrote WROTE CORPUS," \
-         "${total}s)" >&2
+         "($decided of $declared decided — $passed passed, $failed failed;" \
+         "$notchecked NOT CHECKED, $wrote WROTE CORPUS, ${total}s)" >&2
     [ "$nexpired" -eq 0 ] || echo "repo_hygiene_gates: and $nexpired" \
       "uncheckable exemption(s) are PAST their review date: $expired" >&2
     exit 1
@@ -846,6 +874,54 @@ after the last gate and attaches to nothing"
          "$nexpired uncheckable exemption(s) are PAST their review date and" \
          "this is NOT a pass: $expired (${total}s)" >&2
     exit 1
+  fi
+
+  # A SWEEP THAT DECIDED NOTHING IS NOT A PASS (vibe-ic#1025).
+  #
+  # This is the rule the file already applies ONE LEVEL DOWN, arriving through
+  # a different door. `declared -eq 0` is refused with rc 2 forty lines up: a
+  # script that wired nothing cannot certify anything. A script that wired 63
+  # gates and got a verdict out of none of them is in the SAME state — nothing
+  # was concluded — and was exiting 0. MEASURED on 75776dbbb, six gates each
+  # returning rc 2 under a live exemption:
+  #
+  #     repo_hygiene_gates: 0 of 6 gate(s) passed; 6 NOT CHECKED —
+  #     this is NOT a pass over: gate1 (exempt until 2999-01-01), … (1s)
+  #     $ echo $?
+  #     0
+  #
+  # The sentence says "this is NOT a pass" and the exit code says pass, and
+  # every `-ne 0` consumer believes the exit code: `gatekeeper-land.sh` wraps
+  # this in `if out="$(…)"`, and `gatekeeper_review._hygiene_verdict` returned
+  # rc 0 — MERGE_OK — with the NOT-CHECKED count riding along in prose. #539
+  # fixed the sentence and #584 made each individual refusal buy a dated
+  # exemption; neither asked what happens when the exempted set is ALL of them.
+  #
+  # rc 2 AND NOT rc 1, deliberately: this repo's convention is 1 = found a
+  # defect, 2 = could not determine. A vacuous sweep found no defect; it
+  # produced no result. Reporting it as 1 would announce a finding that does
+  # not exist — the mirror of the lie being removed.
+  #
+  # AND NOT "any NOT_CHECKED is non-zero": the rc-0-with-refusals branch below
+  # has a measured reason (a maintainer whose tree is dirty BY CONSTRUCTION
+  # would make this script permanently red, and a permanently red gate is a
+  # gate that gets skipped — the failure mode `run_tolerating_uncheckable`
+  # exists to avoid). The line drawn here is ZERO DECIDED, which is the
+  # difference between a result with caveats and no result at all.
+  #
+  # GUARDED ON `ran`, so a shard that owns no gate is not caught by it: under
+  # `--shard i/N` with more shards than gates, `plan()` can hand a host an
+  # empty bucket, and that host was never asked the question. Proving every
+  # gate ran exactly once ACROSS shards is `hygiene_shard_aggregate`'s job and
+  # it has the records to do it; refusing here would only make a legitimately
+  # empty shard permanently red, which is the failure mode above again.
+  if [ "$ran" -ne 0 ] && [ "$decided" -eq 0 ]; then
+    echo "repo_hygiene_gates: DECIDED NOTHING — 0 of $ran gate(s) that ran" \
+         "reached a verdict ($notchecked NOT CHECKED, $declared declared)." \
+         "A sweep that concluded nothing is not a pass, for the same reason a" \
+         "sweep that wired no gate is not: NOT CHECKED over: $refused" \
+         "(${total}s)" >&2
+    exit 2
   fi
 
   # vibe-ic#539 — this line used to read `all gates passed` verbatim while
