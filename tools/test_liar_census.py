@@ -31,6 +31,9 @@ import liar_census as lc  # noqa: E402
 
 _T = 55
 
+#: See `test_the_mutation_never_writes_inside_the_checkout`.
+_MUTATION_BOUND_S = 45
+
 
 def _programs(tmp_path: Path, **gates: str) -> Path:
     """A throwaway `programs/` dir holding one real, runnable file per gate."""
@@ -476,6 +479,456 @@ def test_the_selector_probe_asks_where_the_walk_is_ROOTED(census, tmp_path, caps
         assert "LIAR        0" in out, out
 
 
+# ==========================================================================
+# SHAPES 4 & 5 -- the mutation probes.
+#
+# These two are the only probes here that cannot be answered by looking. The
+# question is not about the gate's text or about one run of it; it is "does
+# anything in this repo notice when this gate stops deciding", and the only
+# way to establish that is to stop it deciding and watch.
+#
+# So the controls below are not optional decoration. A mutation probe that
+# has never been shown to FIRE is worth less than no probe at all, because it
+# reports a confident CLEAN over every gate it silently failed to measure.
+# ==========================================================================
+
+#: A planted gate with a real verdict: rc 1 on the input it should refuse,
+#: rc 0 otherwise, and prose either way. The prose is what the two suites
+#: below differ on, and it is the whole experiment.
+_PLANTED_GATE = """
+    import sys
+    def main(argv=None):
+        args = argv if argv is not None else sys.argv[1:]
+        if args and args[0] == "bad":
+            print("[FAIL] planted: found the defect")
+            return 1
+        print("[PASS] planted: nothing to report")
+        return 0
+    if __name__ == "__main__":
+        sys.exit(main())
+    """
+
+_DRIVER_HEAD = """
+    import pathlib, subprocess, sys
+    GATE = pathlib.Path(__file__).resolve().parents[1] / "planted.py"
+    def _run(arg):
+        return subprocess.run([sys.executable, str(GATE), arg],
+                              capture_output=True, text=True)
+    """
+
+#: Observes the VERDICT in both directions. Nothing here can survive either
+#: mutation.
+_CONTROLLED = _DRIVER_HEAD + """
+    def test_it_refuses_the_bad_input():
+        assert _run("bad").returncode == 1
+    def test_it_accepts_the_good_input():
+        assert _run("good").returncode == 0
+    """
+
+#: Observes only what the gate SAYS. Every assertion here is satisfied by a
+#: gate whose exit code has been replaced by a constant, in either direction --
+#: which is the #1017 shape one layer down: the prose is measured and the
+#: number the flow acts on is not.
+_PROSE_ONLY = _DRIVER_HEAD + """
+    def test_it_says_fail_on_the_bad_input():
+        assert "[FAIL]" in _run("bad").stdout
+    def test_it_says_pass_on_the_good_input():
+        assert "[PASS]" in _run("good").stdout
+    """
+
+
+def _plant(tmp_path, gate: str = _PLANTED_GATE, **suites: str) -> Path:
+    """A `programs/` tree with one gate and the test files that name it."""
+    progs = _programs(tmp_path, planted=gate)
+    tests = progs / "tests"
+    tests.mkdir(exist_ok=True)
+    for name, body in suites.items():
+        (tests / f"test_{name}.py").write_text(textwrap.dedent(body))
+    return progs
+
+
+@pytest.fixture(autouse=True)
+def _no_mutation_bleed():
+    """Each planted tree is measured on its own.
+
+    The caches are keyed by the programs tree for this reason, and this asserts
+    the keying rather than trusting it: a cache that answered the second planted
+    gate with the first one's result would make every test after the first one
+    pass without measuring anything.
+    """
+    lc._MUTATION_CACHE.clear()
+    lc._SCRATCH_ROOTS.clear()
+    yield
+    lc._MUTATION_CACHE.clear()
+    lc._SCRATCH_ROOTS.clear()
+
+
+def test_shape4_fires_when_neutering_the_verdict_kills_nothing(census, tmp_path, capsys):
+    """THE PLANTED LIAR FOR SHAPE 4. Its suite drives the CLI, asserts on real
+    output, and never once looks at the number the flow reads."""
+    progs = _plant(tmp_path, prose=_PROSE_ONLY)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="planted")),
+                progs, "--probes", "forcedpass")
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "NO NEGATIVE CONTROL" in out, out
+    assert "always says yes" in out, out
+
+
+def test_shape5_fires_when_forcing_a_refusal_kills_nothing(census, tmp_path, capsys):
+    """THE PLANTED LIAR FOR SHAPE 5. The same suite, the other direction: nothing
+    in it pins that the gate can ever say yes."""
+    progs = _plant(tmp_path, prose=_PROSE_ONLY)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="planted")),
+                progs, "--probes", "forcedfail")
+    out = capsys.readouterr().out
+    assert "NO POSITIVE CONTROL" in out, out
+    assert "a BAN" in out, out
+    # SUSPECT, not LIAR: a gate that can only say no does not launder a PASS.
+    assert rc == 0, out
+    assert "SUSPECT     1" in out, out
+
+
+def test_both_shapes_read_clean_on_a_gate_that_has_both_controls(census, tmp_path, capsys):
+    """THE GREEN ARM. Same gate, same probes, a suite that observes the verdict.
+
+    Without this the two tests above are satisfied by a probe that always fires.
+    """
+    progs = _plant(tmp_path, control=_CONTROLLED)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="planted")),
+                progs, "--probes", "forcedpass,forcedfail")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "LIAR        0" in out, out
+    assert "SUSPECT     0" in out, out
+
+
+def test_the_mutation_replaces_the_verdict_and_keeps_every_side_effect(tmp_path):
+    """WHAT SEPARATES THIS FROM THE SHIPPED PROBE, asserted rather than claimed.
+
+    `gate_cli_mutation_probe` injects `return 0` as the entry point's FIRST
+    statement, so the gate returns before it writes its report or prints a line,
+    and every test asserting on the gate's OUTPUT dies -- including the ones
+    that never constrained the exit code. That over-reports protection.
+
+    Here the original expression is still evaluated and only its VALUE is
+    replaced, so `_PROSE_ONLY` above stays green and the finding survives. This
+    pins the difference at the source level, where it is decidable.
+    """
+    src = textwrap.dedent(_PLANTED_GATE)
+    forced, sites = lc.force_verdict(src, 0)
+    assert sites >= 2, "nothing was forced, so the probe would measure nothing"
+    gate = tmp_path / "planted.py"
+    gate.write_text(forced)
+    proc = subprocess.run([sys.executable, str(gate), "bad"],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 0, "the verdict was not forced"
+    assert "[FAIL] planted: found the defect" in proc.stdout, (
+        "the gate stopped doing its work, so this is a lobotomy rather than a "
+        "verdict mutation, and every output assertion would die for the wrong "
+        "reason: %r" % proc.stdout)
+
+
+def test_a_test_that_was_already_red_is_not_mistaken_for_protection(census, tmp_path,
+                                                                    capsys):
+    """THE BASELINE ARM, which is the other half of what this adds.
+
+    `gate_cli_mutation_probe` scores `CAUGHT if returncode != 0` over a single
+    run. Here the selection contains a module that fails before anything is
+    mutated -- the state main was measurably in while this was written, 49
+    failures across a 184-file selection -- so pytest exits non-zero on every
+    arm and an exit-code rule reports this unprotected gate as protected.
+
+    Compared as node-ID SETS, the already-red module cancels and the finding
+    stands.
+    """
+    # NAMES the program, because that is what puts a file in the selection --
+    # the same rule the shipped probe selects by. A red module the selector
+    # never reaches would prove nothing about the selector's arithmetic.
+    # NAMES the program, because that is what puts a file in the selection --
+    # the same rule the shipped probe selects by. It must also COLLECT: a
+    # module that fails to import aborts the whole pytest session, which is a
+    # different fault with a different verdict (BASELINE_DEAD), and pinning
+    # this one on it would prove nothing about the arithmetic.
+    progs = _plant(tmp_path, prose=_PROSE_ONLY,
+                   alreadyred=_DRIVER_HEAD + """
+    def test_it_is_red_for_a_reason_that_has_nothing_to_do_with_the_verdict():
+        assert GATE.is_file() and False, "red before anything was mutated"
+    """)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="planted")),
+                progs, "--probes", "forcedpass")
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "NO NEGATIVE CONTROL" in out, out
+
+
+def test_a_selection_with_nothing_green_is_declined_not_cleared(census, tmp_path,
+                                                               capsys):
+    """The fail-safe class. If nothing in the selection passes unmutated, the
+    mutation had nothing to kill, and "no test noticed" is an accusation the
+    measurement cannot support. It is DECLINED, and printed -- never folded
+    into CLEAN, which is how a coverage hole becomes a clean bill of health."""
+    progs = _plant(tmp_path, allred=_DRIVER_HEAD + """
+    def test_the_only_module_that_names_it_is_red_before_anything_is_mutated():
+        assert GATE.is_file() and False, "red before anything was mutated"
+    """)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="planted")),
+                progs, "--probes", "forcedpass")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "NOT MEASURED" in out, out
+    assert "BASELINE_DEAD" in out, out
+    assert "CLEAN       0" in out, out
+
+
+def test_a_gate_no_test_names_is_declined_not_cleared(census, tmp_path, capsys):
+    """An unprotected gate and an untested one are different facts, and this
+    probe can only establish the second. It says which."""
+    progs = _plant(tmp_path)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="planted")),
+                progs, "--probes", "forcedpass,forcedfail")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "NOT MEASURED (NO_TEST)" in out, out
+    assert "CLEAN       0" in out, out
+
+
+def test_a_program_with_no_verdict_is_declined_not_cleared(census, tmp_path, capsys):
+    """Nothing reaches the exit status, so there is no verdict to force. That is
+    a finding of a different shape and it is named rather than scored."""
+    progs = _plant(tmp_path, gate="""
+        print("[PASS] planted: I have no main and no exit")
+        """, control=_CONTROLLED)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="planted")),
+                progs, "--probes", "forcedpass")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "NOT MEASURED (NO_VERDICT)" in out, out
+
+
+def test_an_advisory_clause_is_suspect_where_a_blocking_one_is_a_liar(census, tmp_path,
+                                                                     capsys):
+    """Severity follows the FLOW's own declaration, read from the yaml. An
+    advisory clause's exit code is recorded rather than acted on, so the same
+    measurement is a weaker claim about it."""
+    progs = _plant(tmp_path, prose=_PROSE_ONLY)
+    rc = census(_flow(tmp_path, """
+        steps:
+          - id: 99
+            name: planted
+            gate:
+              all_of:
+                - advisory_program_exit_zero: "planted ."
+        """), progs, "--probes", "forcedpass")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "NO NEGATIVE CONTROL" in out, out
+    assert "SUSPECT     1" in out, out
+
+
+def test_the_mutation_never_writes_inside_the_checkout(tmp_path):
+    """Asserted on `git status` across a REAL run of the real probe, following
+    `test_the_default_run_never_touches_the_shipped_programs_tree`.
+
+    Two shipped gates were once found carrying an injected `return 0` beside a
+    `.probe-orig` sidecar, left by runs that were SIGKILLed between the write
+    and the restore. A neutered gate exits 0 and the flow reads PASS, so the
+    damage is quiet and green. This probe mutates a disposable copy for that
+    reason, and the flag that would let it do otherwise does not exist.
+    """
+    def dirt():
+        return subprocess.run(
+            ["git", "status", "--porcelain", str(lc.PLUGIN)],
+            cwd=str(lc.REPO), capture_output=True, text=True, timeout=_T).stdout
+
+    before = dirt()
+    # 45 s, not 300: the harness that now runs this file bounds the SESSION at
+    # 180 s with `--timeout-method=thread`, which takes the whole process down
+    # rather than failing the test. An inner bound at or above the harness bound
+    # can never fire — `ci_harness_timeout_ceiling_check` exists for exactly
+    # this, and it cannot see this call site because the bound is positional.
+    # A TIMEOUT here does not weaken the assertion: it is on `git status`, and a
+    # probe that gave up still must not have written into the checkout.
+    lc.mutation_run("neutered_gate_tree_check", _MUTATION_BOUND_S, lc.Budget(0))
+    assert dirt() == before, (
+        "the mutation reached the checkout:\n%s" % dirt())
+
+
+_TWO_CLAUSE_STEPS = """
+    steps:
+      - id: 98
+        name: first
+        gate:
+          all_of:
+            - program_exit_zero: "planted ."
+      - id: 99
+        name: second
+        gate:
+          all_of:
+            - program_exit_zero: "planted2 ."
+    """
+
+
+def test_a_spent_budget_is_named_as_a_DROP_never_folded_into_clean(census, tmp_path,
+                                                                   capsys):
+    """A bounded sweep that does not name its own coverage hole reads as
+    "covered everything". `--mutation-budget` is the only thing here that can
+    silently stop measuring, so the branch that stops has its own verdict and
+    its own line in the report -- and this fires it, because a decline path
+    nobody has ever exercised is indistinguishable from one that does not work.
+    """
+    progs = _plant(tmp_path, control=_CONTROLLED)
+    (progs / "planted2.py").write_text(textwrap.dedent(_PLANTED_GATE))
+    (progs / "tests" / "test_planted2.py").write_text(textwrap.dedent("""
+        import pathlib, subprocess, sys
+        GATE = pathlib.Path(__file__).resolve().parents[1] / "planted2.py"
+        def test_it_refuses_the_bad_input():
+            assert subprocess.run([sys.executable, str(GATE), "bad"]).returncode == 1
+        """))
+    rc = census(_flow(tmp_path, _TWO_CLAUSE_STEPS), progs,
+                "--probes", "forcedpass", "--mutation-budget", "0.001")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "NOT MEASURED (BUDGET_SPENT)" in out, out
+    assert "DROPPED rather than cleared" in out, out
+
+
+def test_two_gates_measured_concurrently_get_their_own_trees(census, tmp_path, capsys):
+    """`--mutation-jobs` gives each worker its own copy of the plugin.
+
+    Two workers mutating one tree would each be measuring the other's mutation.
+    Asserted on the verdicts rather than on the copies: the planted pair is one
+    controlled gate and one uncontrolled one, and if the trees were shared the
+    answers would blur into each other.
+    """
+    progs = _plant(tmp_path, control=_CONTROLLED)
+    (progs / "planted2.py").write_text(textwrap.dedent(_PLANTED_GATE))
+    (progs / "tests" / "test_planted2_prose.py").write_text(textwrap.dedent("""
+        import pathlib, subprocess, sys
+        GATE = pathlib.Path(__file__).resolve().parents[1] / "planted2.py"
+        def test_it_says_fail_on_the_bad_input():
+            out = subprocess.run([sys.executable, str(GATE), "bad"],
+                                 capture_output=True, text=True).stdout
+            assert "[FAIL]" in out
+        """))
+    rc = census(_flow(tmp_path, _TWO_CLAUSE_STEPS), progs,
+                "--probes", "forcedpass", "--mutation-jobs", "2")
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    # exactly one of the two is the finding; the controlled one stays clean
+    assert "LIAR        1" in out, out
+    assert "CLEAN       1" in out, out
+    assert "planted2" in out, out
+
+
+def test_every_decline_state_has_a_printed_explanation():
+    """A state with no entry in `_UNMEASURED` raises KeyError while FORMATTING
+    the report — after the expensive part has run, destroying a whole sweep's
+    results at the last step.
+
+    Pinned here rather than papered over with a `.get()` default, because the
+    failure this prevents is an author adding a decline reason and forgetting to
+    say what it means. A default would let that ship as an unexplained N/A,
+    which is a coverage hole that reads as a considered decision.
+    """
+    import re
+    src = (_TOOLS / "liar_census.py").read_text()
+    constructed = set(re.findall(r'MutationRun\(\s*program,\s*"([A-Z_]+)"', src))
+    constructed |= set(re.findall(r'run\.state\s*=\s*"([A-Z_]+)"', src))
+    assert "MEASURED" in constructed, (
+        "the pattern no longer finds the states this file constructs, so this "
+        "test is watching nothing: %s" % sorted(constructed))
+    unexplained = constructed - set(lc._UNMEASURED) - {"MEASURED"}
+    assert not unexplained, (
+        "these MutationRun states would raise KeyError when the report is "
+        "formatted: %s" % sorted(unexplained))
+
+
+def test_the_DEFAULT_probe_set_runs_all_of_them_together(census, tmp_path, capsys):
+    """The shipped default is all seven probes, and until this existed every
+    test drove a hand-picked subset -- so the combination a user actually runs
+    was the one combination nothing exercised.
+
+    Asserts the two mutation probes reach their verdict ALONGSIDE the five that
+    came before, because the mutation pass is pre-warmed before the per-clause
+    loop and an ordering fault there would show up only here.
+    """
+    progs = _plant(tmp_path, prose=_PROSE_ONLY)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="planted")), progs)
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "NO NEGATIVE CONTROL" in out, out          # P6 reached its verdict
+    assert "NO POSITIVE CONTROL" in out, out          # P7 reached its verdict
+    # and the run really was the seven-probe one, not a subset that happened to
+    # include the two: the header names what ran.
+    assert "probes: " + ",".join(lc.ALL_PROBES) in out, out
+    # 7 -> 10 at the #1063 merge: main added `blocks`/`depth`/`spelling` while
+    # this branch added the two mutation probes. The pin is on the DEFAULT set
+    # being the WHOLE set -- the number is derived from that, not chosen -- so
+    # it moves whenever a probe is added and is meant to.
+    assert len(lc.ALL_PROBES) == 10, lc.ALL_PROBES
+
+
+def test_an_arm_whose_session_DIES_is_declined_not_reported_as_a_finding(
+        census, tmp_path, capsys):
+    """THE FALSE ACCUSATION THIS PROBE ACTUALLY MADE, reproduced deterministically.
+
+    `--timeout-method=thread` does not fail a test when the inner bound is hit;
+    it takes the whole pytest PROCESS down. A killed session prints no `FAILED`
+    lines, so the arm's failure set comes back EMPTY -- and empty-minus-baseline
+    is an empty difference, which is exactly the shape of the finding. "No test
+    died" and "no test ran" produced identical output.
+
+    Measured for real: under an 8-worker sweep `drc_report_check`'s forced-1 arm
+    died and was reported as having no positive control; reproduced on an idle
+    machine it killed 25 tests. It was caught only by reproducing every finding
+    by hand.
+
+    Simulated here without depending on load: the planted suite kills its own
+    session with `os._exit` when it sees the forced-verdict rewrite in the gate's
+    source, so the mutant arm dies every time and the baseline arm never does.
+    """
+    progs = _plant(tmp_path, control=_CONTROLLED, killer=_DRIVER_HEAD + """
+    import os
+    def test_the_session_dies_only_when_the_gate_has_been_mutated():
+        # `(expr, 0)[1]` is the rewrite; the baseline arm is unparsed too, so
+        # this cannot fire on formatting alone.
+        if ", 0)[1]" in GATE.read_text() or ", 1)[1]" in GATE.read_text():
+            os._exit(1)
+        assert True
+    """)
+    rc = census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="planted")),
+                progs, "--probes", "forcedpass,forcedfail")
+    out = capsys.readouterr().out
+    assert "NOT MEASURED (ARM_DIED)" in out, out
+    assert "NO NEGATIVE CONTROL" not in out, (
+        "a dead session was reported as a gate with no control:\n" + out)
+    assert "NO POSITIVE CONTROL" not in out, out
+    assert rc == 0, out
+
+
+@pytest.mark.parametrize("summary,completed", [
+    ("1 passed in 0.05s", True),
+    ("1 failed, 155 passed in 30.42s", True),
+    # >= 60 s: pytest appends a human-readable duration, and a pattern anchored
+    # at `s$` matches none of these. Written that way, this guard called every
+    # arm over a minute DEAD -- 8 of the first 42 programs of a sweep, climbing.
+    ("1 passed in 62.07s (0:01:02)", True),
+    ("2 failed, 3 passed, 1 warning in 3601.10s (1:00:01)", True),
+    ("no tests ran in 0.01s", True),
+    # what a session killed by `--timeout-method=thread` actually leaves behind
+    ("..F\n+++ Timeout +++\nStack of MainThread (0x7f0):\n  File \"x.py\"", False),
+    ("", False),
+])
+def test_the_completion_pattern_knows_every_shape_of_pytest_summary(summary, completed):
+    """Which sessions count as measurements, pinned on literal pytest output.
+
+    This is the whole difference between a finding and a coverage hole, and it
+    has been wrong in BOTH directions inside one afternoon: absent, it read a
+    killed session as a gate with no control; anchored at `s$`, it read every
+    session over a minute as killed.
+    """
+    assert bool(lc._PYTEST_DONE.search(summary + "\n")) is completed, summary
 # --------------------------------------------------------------------------
 # SHAPE 7 -- "runs, produces a verdict, and is wired where it can never
 # block". The controls that matter here are the ones where the GATE IS
