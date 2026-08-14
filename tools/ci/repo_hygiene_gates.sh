@@ -1012,6 +1012,36 @@ run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.
 #
 # rc=2 (a site it could not decide) BLOCKS, deliberately: this gate exists
 # against checks that go green by declining to look, and that includes itself.
+# vibe-ic#1128 — A SKIP IS GREEN, and thirteen of them are a coverage hole.
+# 107 test files gate on the EDA image being reachable. Measured on a clean
+# detached origin/main at v1.10.33, same files, two arms (arm 2 puts an
+# `exit 127` shim ahead of `docker` on PATH):
+#
+#     image reachable     19 failed, 1419 passed, 44 skipped
+#     image unreachable   24 failed, 1401 passed, 57 skipped
+#
+# 1419 -> 1401 is 18 passes lost: THIRTEEN became SKIP. The per-test messages are
+# already honest ("this half was NOT checked"); the defect is one level up, where
+# `1401 passed` is all a reader sees. And the trigger is an ANCHOR BUMP, not
+# flakiness — coverage follows the anchor, so every bump removes these
+# verifications on every host until that host pulls. With six machines landing in
+# parallel that is exactly when a false green costs most.
+#
+# WIRED `run_tolerating_uncheckable` DELIBERATELY, and the choice is the point.
+# The check exits 2 when the image is unreachable, which this wrapper records as
+# NOT_CHECKED — a state that is never folded into `passed`. That is the mechanism
+# `_gate_dispatch.sh` already gives GATES and the test tier lacks, which is #1128's
+# own diagnosis. Promoting it to `run` (blocking) is a policy call with a measured
+# blast radius: ZERO on a host carrying the anchored image, and every landing
+# refused on a host without it. One word changes it when that is wanted.
+# WHY TOLERATING: the anchored EDA image may legitimately be absent on a host
+# that has not pulled it. The hole is REPORTED as NOT_CHECKED rather than
+# blocking, until the owner rules on refusing landings from such a host.
+# (`uncheckable_until` is #1072's proposed directive and does not exist on main;
+# this comment carries the same disclosure without depending on an unlanded PR.)
+run_tolerating_uncheckable "image-gated verifications are not silently skipped" "$PLUGIN" \
+  python3 programs/image_gated_verification_check.py
+
 run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins
 
 # vibe-ic#1241 — WIRED HERE, not left to its own test. The audit
