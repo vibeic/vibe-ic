@@ -36,6 +36,8 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+
+import _atomic_output  # noqa: E402  (#1082 same-dir temp + atomic rename)
 from typing import List, Optional, Sequence, Tuple
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
@@ -2485,8 +2487,17 @@ def main(argv: list = None) -> int:
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
 
     if args.json:
-        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(report_json)
+        # #1082 — the final filename exists ONLY IF this audit completed. This
+        # one write site is the declared-output writer behind six sign-off gates
+        # (drc / antenna / em / ir_drop / sta / lvs `_report_check`), so the
+        # invariant lands for all six here rather than six times over.
+        #
+        # `open(path,'w')` truncates at open, so the previous line left a 0-byte
+        # or partial file under the FINAL name whenever this process died
+        # mid-write — measured with a real SIGKILL: `exists=True size=12
+        # content='{"partial": '`. A downstream consumer opening that cannot tell
+        # it from a complete empty report.
+        _atomic_output.atomic_write_text(args.json, report_json)
 
     print(report_json)
     return 0 if result.passed else 1
