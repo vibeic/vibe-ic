@@ -54,8 +54,8 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 from typing import Dict, List, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 #: Seconds assumed for a gate the profile does not carry. Deliberately not 0:
 #: a new gate costing nothing would be packed onto the already-largest shard.
@@ -173,7 +173,7 @@ def main(argv=None) -> int:
     if args.json:
         # vibe-ic#1082 — see hygiene_shard_aggregate: the plan is read by the
         # shards that follow it, so a truncated plan is worse than no plan.
-        atomic_write_text(args.json, json.dumps(doc, indent=2) + "\n")
+        atomic_write_text(args.json, json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
     if args.shard is not None:
         if not 0 <= args.shard < args.shards:
