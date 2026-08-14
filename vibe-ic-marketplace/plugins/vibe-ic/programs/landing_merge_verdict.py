@@ -251,6 +251,11 @@ class Delta:
     """The failed-set difference. Every list holds junit keys."""
 
     new_failures: List[str] = field(default_factory=list)
+    #: The SUBSET of `new_failures` whose id the base report does not contain at
+    #: all — a test the change BRINGS, failing, rather than a behaviour it broke.
+    #: Both block; `new_failures` is untouched and no verdict moves. This exists
+    #: because the two are not the same finding and were reported as one.
+    new_absent_on_base: List[str] = field(default_factory=list)
     silenced: List[str] = field(default_factory=list)
     fixed: List[str] = field(default_factory=list)
     weakened: List[str] = field(default_factory=list)
@@ -262,6 +267,9 @@ class Delta:
     def as_dict(self) -> dict:
         return {
             "new_failures": self.new_failures,
+            # MACHINE-READABLE TOO, not only in the prose: a downstream that
+            # routes on the count is the reader most likely to overstate it.
+            "new_absent_on_base": self.new_absent_on_base,
             "silenced": self.silenced,
             "fixed": self.fixed,
             "weakened": self.weakened,
@@ -416,6 +424,19 @@ def failed_set_delta(base: Dict[str, str], cand: Dict[str, str]) -> Delta:
                 d.preexisting.append(k)
             else:
                 d.new_failures.append(k)
+                # NEW-BROKEN vs NEW-BROUGHT (vibe-ic#1417). `b` is ABSENT both
+                # when the base RAN the test and it passed, and when the base
+                # never had the test at all — and only the first is a behaviour
+                # this change broke. The membership test, not the outcome, is
+                # what separates them, so it is asked of `base` directly.
+                #
+                # Only meaningful when the base actually reported. With an empty
+                # base every id is absent and the split would read as "nothing
+                # was broken, it is all new", which is the flattering direction
+                # and false. `decide` already discloses base_total == 0; this
+                # stays silent there rather than adding a second wrong sentence.
+                if base and k not in base:
+                    d.new_absent_on_base.append(k)
         elif b in RED:
             if c in SILENT:
                 # FAILED -> SKIPPED / ABSENT. Never an improvement: the failure
@@ -699,6 +720,27 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             f"{len(delta.new_failures)} NEW FAILURE(S) THIS BRANCH OWNS: "
             + ", ".join(delta.new_failures[:8])
             + ("…" if len(delta.new_failures) > 8 else ""))
+        # SPLIT THE COUNT, NEVER THE VERDICT (vibe-ic#1417). Both halves still
+        # refuse — a test you bring, failing, is yours. What changes is that a
+        # reviewer can see WHICH kind, because the two demand different work:
+        # a broken behaviour is a bug to fix, a failing new assertion is a
+        # reconciliation with whatever else is in the batch.
+        #
+        # MEASURED on a 141-PR batch composed on 3d13e2c59: 5 nodes reported as
+        # NEW, of which FOUR do not exist on main at all and ONE is a real
+        # regression. A reviewer sizing that batch off "5 NEW FAILURES" is
+        # reading a 5x overstatement, and reads it consistently — which is
+        # enough to reject every large batch forever.
+        n_brought = len(delta.new_absent_on_base)
+        if n_brought:
+            notes.append(
+                f"of those {len(delta.new_failures)}, {n_brought} do NOT exist "
+                f"on the base at all — assertions this change BRINGS, failing, "
+                f"rather than behaviour it broke; the other "
+                f"{len(delta.new_failures) - n_brought} ran on the base and "
+                f"passed. Both refuse. "
+                + ", ".join(delta.new_absent_on_base[:5])
+                + ("…" if n_brought > 5 else ""))
     if delta.silenced:
         reasons.append(
             f"{len(delta.silenced)} FAILING TEST(S) WERE SILENCED RATHER THAN "
