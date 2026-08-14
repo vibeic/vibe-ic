@@ -264,6 +264,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -2019,19 +2020,85 @@ class ReplayResult:
         return self.verdict == ALREADY_RED
 
 
-def _run_cell(dim: int, sid: str, cwd: Path,
-              flow_override: Optional[Path], timeout: int) -> Tuple[int, str]:
+def _cell_rc_from_report(junit: Path, proc_rc: int) -> Tuple[Optional[int], str]:
+    """``(cell rc, why-unreadable)`` from pytest's OWN report of the one cell.
+
+    ``0``/``1`` is the CELL's colour. ``None`` means the report did not carry
+    exactly one testcase, and the reason is returned rather than folded into a
+    colour — a replay that could not read its cell must be NOT_REPLAYABLE, never
+    a quiet ALREADY_RED.
+
+    A ``skipped`` testcase maps to 0, which is what the exit status already
+    said: the two locks that consume this ask whether the cell went PASS ->
+    FAIL, and a skip is not a fail. It is only ever a witness's BASELINE that
+    could be skipped, and LOCK 2's `proved` still requires the mutant arm to go
+    non-zero with the declared signal, so a skip cannot manufacture a red.
+    """
+    if not junit.is_file():
+        return None, (f"pytest wrote no report (process rc={proc_rc}) — the "
+                      f"session died before it could record the cell")
+    try:
+        cases = ET.parse(junit).getroot().iter("testcase")
+    except ET.ParseError as exc:
+        return None, f"pytest report unparseable (process rc={proc_rc}): {exc}"
+    cases = list(cases)
+    if len(cases) != 1:
+        return None, (f"pytest reported {len(cases)} testcase(s), not 1 "
+                      f"(process rc={proc_rc}) — the nodeid selected nothing, "
+                      f"or collection produced more than the cell")
+    bad = [c for c in cases[0] if c.tag in ("failure", "error")]
+    return (1 if bad else 0), ""
+
+
+def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
+              timeout: int) -> Tuple[Optional[int], str, str]:
+    """Run the one cell and return ``(cell rc, output, why-unreadable)``.
+
+    THE COLOUR COMES FROM THE REPORT, NOT FROM THE EXIT STATUS (vibe-ic#1412).
+    A pytest process exits non-zero for the cell OR for anything the SESSION
+    decided, and the two are not the same claim. The measured instance: the
+    plugin's own ``conftest.py`` loads ``suite_write_guard``, which discovers
+    its subject with ``git rev-parse --show-toplevel`` from its own file. In the
+    ``cp -al`` mirror this function is handed, that resolves to whatever
+    repository happens to enclose ``TMPDIR`` — and the mirror's own
+    ``__pycache__`` is UNTRACKED there whenever that repository's ignore rules
+    are not this one's, so the guard sets ``session.exitstatus = 1`` while the
+    cell itself reports ``1 passed``. LOCK 2 then read ``baseline rc=1`` and
+    called a green cell ALREADY_RED — on clean main, for no reason but where
+    the operator's scratch directory sat.
+
+    Both directions were broken, and the other one is worse: a mutant arm whose
+    session went red for its own reasons, with the declared ``red_signal``
+    string anywhere in the output, would have been recorded REDDENED for a
+    mutation that moved nothing.
+
+    ``PYTEST_DISABLE_PLUGIN_AUTOLOAD`` already pins what the child loads from
+    the HOST for exactly this reason; this pins what it loads from the REPO.
+    The output is still the whole stdout+stderr, because ``red_signal`` is
+    matched against it.
+    """
     env = dict(os.environ)
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     if flow_override is None:
         env.pop(FLOW_YAML_ENV, None)
     else:
         env[FLOW_YAML_ENV] = str(flow_override)
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
-         "-q", "-p", "no:randomly", "--no-header", "-rN"],
-        cwd=str(cwd), capture_output=True, text=True, timeout=timeout, env=env)
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    # OUTSIDE `cwd`: the report is this function's instrument, and an instrument
+    # that lands in the tree under measurement perturbs the next gate to look.
+    holder = Path(tempfile.mkdtemp(prefix="matmut_cellreport_"))
+    junit = holder / "cell.xml"
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
+             "-q", "-p", "no:randomly", "--no-header", "-rN",
+             "--junit-xml", str(junit)],
+            cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+            env=env)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        rc, why = _cell_rc_from_report(junit, proc.returncode)
+        return rc, out, why
+    finally:
+        shutil.rmtree(holder, ignore_errors=True)
 
 
 def replay(mut: Mutation, sid: Optional[str] = None,
@@ -2074,8 +2141,10 @@ def replay(mut: Mutation, sid: Optional[str] = None,
             mutant.write_text(
                 yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
                 encoding="utf-8")
-            base_rc, _ = _run_cell(mut.dim, sid, PLUGIN_ROOT, None, timeout)
-            mut_rc, out = _run_cell(mut.dim, sid, PLUGIN_ROOT, mutant, timeout)
+            base_rc, _, base_why = _run_cell(
+                mut.dim, sid, PLUGIN_ROOT, None, timeout)
+            mut_rc, out, mut_why = _run_cell(
+                mut.dim, sid, PLUGIN_ROOT, mutant, timeout)
             patched = "flow/phase1_phase2_phase3.yaml (substituted)"
         else:
             mirror = scratch / "mirror"
@@ -2083,24 +2152,35 @@ def replay(mut: Mutation, sid: Optional[str] = None,
                            check=True, capture_output=True)
             for pyc in mirror.rglob("__pycache__"):
                 shutil.rmtree(pyc, ignore_errors=True)
-            base_rc, _ = _run_cell(mut.dim, sid, mirror, None, timeout)
+            base_rc, _, base_why = _run_cell(mut.dim, sid, mirror, None, timeout)
             patched = apply_to_tree(mut, mirror)
             if patched is None:
                 return ReplayResult(
                     mut.name, mut.dim, sid, False, base_rc, None, False,
                     f"anchor for {mut.name} is absent or not unique in "
-                    f"{mut.params.get('file')}", time.time() - started)
+                    f"{mut.params.get('file')}", time.time() - started,
+                    "REDDENED",
+                    f"baseline arm: {base_why}" if base_why else "",
+                    mut.channel)
             for pyc in mirror.rglob("__pycache__"):
                 shutil.rmtree(pyc, ignore_errors=True)
-            mut_rc, out = _run_cell(mut.dim, sid, mirror, None, timeout)
+            mut_rc, out, mut_why = _run_cell(mut.dim, sid, mirror, None, timeout)
         seen = mut.red_signal in out
         tail = "\n".join(l for l in out.strip().splitlines() if l.strip())[-1200:]
+        # An arm whose cell could not be READ has no colour, and a colourless
+        # arm must not be scored. NOT_REPLAYABLE carries the reason; silence
+        # here is how "could not look" becomes "looked and it was red".
+        unreadable = "; ".join(
+            f"{arm} arm: {why}"
+            for arm, why in (("baseline", base_why), ("mutant", mut_why)) if why)
         return ReplayResult(
             mut.name, mut.dim, sid, True, base_rc, mut_rc, seen,
             f"patched {patched}; baseline rc={base_rc}, mutant rc={mut_rc}, "
             f"red_signal {mut.red_signal!r} "
-            f"{'present' if seen else 'ABSENT'}\n--- mutant tail ---\n{tail}",
-            time.time() - started, "REDDENED", "", mut.channel)
+            f"{'present' if seen else 'ABSENT'}"
+            f"{('; UNREADABLE — ' + unreadable) if unreadable else ''}"
+            f"\n--- mutant tail ---\n{tail}",
+            time.time() - started, "REDDENED", unreadable, mut.channel)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
