@@ -63,12 +63,12 @@ gatekeeper-verified FAIL→PASS fixes; scoreboard in `tools/vibeic-eda/FIX_STATU
 ```bash
 export VIBEIC_DESIGNS="/path/to/your/designs"  # ← your project / designs folder (must already exist)
 [ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
-docker pull ghcr.io/vibeic/vibeic-eda:0.2.89   # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:0.2.96   # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true    # "name already in use"? drop the old container first
 docker run -d --name vibeic-eda \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.2.89 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:0.2.96 --skip sleep infinity
 docker exec vibeic-eda yosys --version         # sanity check — should print a version
 ```
 
