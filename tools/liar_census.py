@@ -26,6 +26,32 @@ lying on the other eleven.
 
 This file is that scorecard.
 
+THE PROBES, AND WHAT EACH ONE CAN SEE
+=====================================
+Five probes ask about the GATE — what it prints, what it exits, what it writes,
+what it selects. Three more ask about the WIRING, and they exist because a gate
+can be perfectly correct and still be mounted somewhere its answer is thrown
+away. No amount of looking at the gate finds that; you have to trace the CALLER.
+
+    empty_tree           passes over a tree containing nothing
+    prose_vs_exit        says it did not check, exits 0 anyway     (#1017)
+    zero_denominator     reports a zero population and passes      (#1002)
+    writes_its_subject   modifies the tree it is judging           (#1029)
+    selector_reaches_..  its input walk can reach the fixtures     (#1037)
+  ---- the wiring, not the gate ----
+    never_blocks         runs, produces a verdict, and no consumer
+                         can act on it. On a dashboard this is
+                         indistinguishable from coverage.        (SHAPE 7)
+    depth_pinned_walk    its population is a function of how many
+                         path components the caller typed          (#1025)
+    path_spelling        the same directory, spelled differently,
+                         gets a different answer                 (SHAPE 11)
+
+The last two are one family asked two ways, and the split is the finding: a
+fixed-depth walk agrees across every SPELLING of a directory and still reaches
+nothing when the caller types a different DEPTH of the same corpus. A single
+probe would have reported a confident zero over the half it could see.
+
 WHAT IT IS NOT
 ==============
 It does not decide whether a gate's RULE is correct -- that needs an expert and it is
@@ -184,6 +210,98 @@ def _declared_outputs(cl: "Clause") -> List[str]:
     contaminating its subject. Read from the step node, never from a name list.
     """
     return list(cl.step_outputs)
+
+
+@dataclass
+class FlowGraph:
+    """The flow's own ORDERING declarations, as the two consumers read them.
+
+    `probe_never_blocks` needs to answer "can anything act on a non-pass here?",
+    and that is a question about CALLERS, not about the gate. Two consumers
+    decide it, and both read this graph rather than the gate:
+
+      * `flow_compliance_check._evaluate_gate` — turns a clause's non-zero exit
+        into the step's FAIL, but only from a blocking SLOT.
+      * `flow_step_execution_coverage_check.analyze()` — "forces Overall FAIL
+        when a PASS step's transitive `blocks_on` ancestry reaches a non-PASS
+        applicable step". That is the ONLY consumer that can contradict a step
+        which passed its own gate over an input its producer never made.
+
+    Both are parsed from the YAML structure, never its text (#1012).
+    """
+    step_ids: set = field(default_factory=set)
+    #: step id -> the steps it declares it waits for
+    blocks_on: Dict[str, List[str]] = field(default_factory=dict)
+    #: step id -> the `required_inputs[].from` producers it declares it READS
+    inputs_from: Dict[str, List[str]] = field(default_factory=dict)
+
+    def ancestry(self, sid: str) -> set:
+        """Transitive `blocks_on` ancestry — the same BFS the ordering guard
+        runs (`flow_step_execution_coverage_check._ancestry`), cycle-safe."""
+        seen: set = set()
+        queue = list(self.blocks_on.get(sid, []))
+        while queue:
+            nxt = queue.pop()
+            if nxt in seen:
+                continue
+            seen.add(nxt)
+            queue.extend(self.blocks_on.get(nxt, []))
+        return seen
+
+
+def discover_flow_graph(flow_yaml: Path) -> FlowGraph:
+    """Every step's declared dependencies and declared input producers.
+
+    A step node is anything carrying an `id` together with a `name` — the same
+    shape `flow_dependency_graph_check.load_steps` and
+    `flow_step_execution_coverage_check.load_blocks_on` walk, so this census
+    reads the graph the flow's own consumers read rather than a second opinion
+    about it.
+    """
+    import yaml  # noqa: PLC0415
+
+    doc = yaml.safe_load(flow_yaml.read_text(errors="replace"))
+    g = FlowGraph()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if "id" in node and "name" in node:
+                sid = str(node["id"])
+                if not sid.startswith("stage"):
+                    g.step_ids.add(sid)
+                    g.blocks_on[sid] = [str(x) for x in (node.get("blocks_on") or [])]
+                    froms = []
+                    for entry in (node.get("required_inputs") or []):
+                        if isinstance(entry, dict) and entry.get("from") is not None:
+                            froms.append(str(entry["from"]))
+                    g.inputs_from[sid] = froms
+            for val in node.values():
+                walk(val)
+        elif isinstance(node, list):
+            for val in node:
+                walk(val)
+
+    walk(doc)
+    return g
+
+
+#: A gate program's OWN declaration of whether it is meant to block, read the
+#: way `flow_gate_enforcement_audit` reads it (#886): a declaration OPENS its
+#: line. A mention of the token inside a sentence is not one, and reading
+#: mentions as declarations is how several gates were credited with an intent
+#: they never stated. `[ \t]` and not `\s`, because `\s` crosses newlines.
+_ENFORCEMENT_DECL = re.compile(
+    r"""^[ \t]*(?:\#[ \t]*|["']{3})?ENFORCEMENT:[ \t]*(blocking|advisory)\b""",
+    re.M | re.I,
+)
+
+
+def _declared_enforcement(program: str) -> Optional[str]:
+    src = PROGRAMS / f"{program}.py"
+    if not src.is_file():
+        return None
+    hit = _ENFORCEMENT_DECL.search(src.read_text(errors="replace"))
+    return hit.group(1).lower() if hit else None
 
 
 @dataclass
@@ -515,6 +633,121 @@ def probe_writes_its_subject(cl: Clause, sandbox: Path,
         f"no other program names them, so it is an undisclosed self-report rather "
         f"than a self-certified evidence chain",
         repro)
+
+
+def probe_never_blocks(cl: Clause, graph: FlowGraph) -> ProbeResult:
+    """P6 -- it runs, it produces a verdict, and it is wired where it can never
+    block.  (SHAPE 7 of the 63x9 catalogue)
+
+    On a dashboard this is indistinguishable from coverage: the step shows a
+    gate, the gate shows a program, the program prints a verdict. Nothing that
+    verdict says can change what the flow does. THE QUESTION IS ABOUT THE
+    CALLER, NOT THE GATE -- a gate can be perfectly correct and still be wired
+    somewhere its answer is discarded, which is why no amount of looking at the
+    gate finds this.
+
+    Two consumers can act on a non-pass, and this probe asks both. They are
+    read from the flow's own structure, never from a list of step or gate
+    names, which would rot the moment either is renamed.
+
+    CONSUMER 1 -- `flow_compliance_check._evaluate_gate`, the SLOT
+    -------------------------------------------------------------
+    `advisory_program_exit_zero` ends in `return True, reasons  # advisory:
+    never blocks, always recorded`. A clause in that slot cannot fail its step,
+    ever, whatever it prints. That is not itself a lie: the slot IS the
+    disclosure, declared in the flow's own grammar where any reader can see it.
+
+    It becomes a lie when the gate's own docstring says the opposite. A program
+    that opens a line with `ENFORCEMENT: blocking` and is wired advisory has
+    stated an intent the wiring cannot honour, and a reader who trusts the
+    declaration is reading coverage that stops nothing. MEASURED on this tree:
+    ZERO clauses are in that state (34 advisory clauses -- 15 declare advisory,
+    19 declare nothing). A measured zero, with a control that fires on a planted
+    one, is a different claim from a probe that has never looked.
+
+    CONSUMER 2 -- the ORDERING GUARD, and this is where the population is
+    --------------------------------------------------------------------
+    `flow_step_execution_coverage_check.analyze()` "forces Overall FAIL when a
+    PASS step's transitive `blocks_on` ancestry reaches a non-PASS applicable
+    step". It is the only consumer that can contradict a step which passed its
+    own gate over an input whose PRODUCER failed.
+
+    So when a step declares `required_inputs: [{from: X}]` -- the flow saying,
+    in its own words, that this step READS X's output -- and X is not in the
+    step's transitive `blocks_on` ancestry, the guard is disarmed for that
+    edge. The step's gate runs, prints PASS, and a FAILED X cannot contradict
+    it. This flow has already paid for exactly that once, and says so at the
+    step it happened to:
+
+        "With `blocks_on: []` NO edge in this flow named D1 (62 blocks_on
+        lines, zero D1 references), so the ordering guard ... was structurally
+        blind to a FAILED Phase 1: Step 1 self-certified on the presence of RTL
+        files alone."
+
+    That one was repaired by declaring `blocks_on: [D1]`. This probe asks the
+    same question of all 63 steps instead of the one somebody collided with.
+
+    THE FAIL-SAFE CLASS, BY STRUCTURE
+    ---------------------------------
+    `from: external` is the flow's way of saying the input comes from outside
+    the flow -- the user's documents, the PDK, a board. No `blocks_on` edge can
+    exist to a step that does not exist, so demanding one would be a false
+    positive on every genuine entry point. Decided by asking whether the `from`
+    value is the id of a step this flow declares, which is the same test
+    `flow_dependency_graph_check` uses for a dangling reference -- not by
+    matching the word `external`, which would be a name list with one name in
+    it and would miss the next spelling of the same idea.
+    """
+    step = cl.step
+    repro = (f"python3 -c \"import yaml; d=yaml.safe_load(open('flow/"
+             f"phase1_phase2_phase3.yaml'))\" — for step {step}, compare its "
+             f"`required_inputs[].from` against its transitive `blocks_on`")
+
+    declared = _declared_enforcement(cl.program)
+    if not cl.blocking and declared == "blocking":
+        return ProbeResult(
+            "never_blocks", LIAR,
+            f"wired `advisory_program_exit_zero`, which "
+            f"flow_compliance_check._evaluate_gate answers with an "
+            f"unconditional `return True` — but the program's own docstring "
+            f"opens a line with `ENFORCEMENT: blocking`. It states an intent "
+            f"its wiring cannot honour, so its verdict is coverage that stops "
+            f"nothing", repro)
+
+    froms = graph.inputs_from.get(step, [])
+    if not froms:
+        return ProbeResult("never_blocks", CLEAN,
+                           f"step {step} declares no `required_inputs`, so it "
+                           f"claims to consume no other step's verdict", repro)
+
+    ancestry = graph.ancestry(step)
+    intra = [f for f in froms if f in graph.step_ids]
+    external = [f for f in froms if f not in graph.step_ids]
+    missing = [f for f in intra if f not in ancestry]
+
+    if missing:
+        sev = LIAR if cl.blocking else SUSPECT
+        return ProbeResult(
+            "never_blocks", sev,
+            f"step {step} declares it READS step {', '.join(missing)}'s output "
+            f"(`required_inputs.from`) but declares blocks_on="
+            f"{graph.blocks_on.get(step, [])}, whose transitive ancestry is "
+            f"{sorted(ancestry) or '{}'} — so the ordering guard in "
+            f"flow_step_execution_coverage_check cannot red this step when "
+            f"{missing[0]} FAILs, and this clause's PASS is uncontradictable "
+            f"by the very input it audits", repro)
+
+    if external and not intra:
+        return ProbeResult(
+            "never_blocks", GUARDED,
+            f"step {step}'s only declared input producer(s) {external} name no "
+            f"step this flow declares, so they are inputs from outside the "
+            f"flow — no `blocks_on` edge to them is possible and this probe "
+            f"cannot establish a lie here", repro)
+
+    return ProbeResult("never_blocks", CLEAN,
+                       f"every declared input producer {intra} is in step "
+                       f"{step}'s transitive blocks_on ancestry", repro)
 
 
 def _repo_anchored_names(tree: "ast.Module") -> set:
@@ -1351,6 +1584,302 @@ def probe_verdict_forced_fail(cl: Clause, timeout: int, budget: "Budget") -> Pro
     happened to look at.
     """
     return _mutation_probe(cl, 1, "verdict_forced_fail", timeout, budget)
+# ------------------------------------------------- SHAPE 11: path spelling
+#: A count beside a population word — the same vocabulary `_ZERO_POP` uses,
+#: but for ANY number rather than only zero. `probe_path_spelling` compares
+#: these across spellings: two runs of the same gate over the SAME directory
+#: that report different populations have made the answer a function of how
+#: the caller typed the path.
+_POP_COUNT = re.compile(
+    r"\b(\d+)\s+(run|cell|file|report|net|pin|gate|check|document|doc|entry|"
+    r"entries|segment|sample|corner|step|instance|point|library|librar|block|"
+    r"tree|module|clause)s?\b", re.I
+)
+
+
+def _bare_caller_paths(tree: "ast.Module") -> set:
+    """Names bound DIRECTLY to a path the caller typed, with nothing appended.
+
+    The distinction `probe_depth_pinned_walk` turns on. `corpus` in
+    `def _published_run_trees(corpus: Path)` is one: whatever the caller passed
+    IS the root, so a fixed-depth pattern under it is measured from the
+    caller's phrasing. `analog_dir = _pl.analog_dir(project)` is NOT one: the
+    program APPENDS a known anchor, so `phase3/analog/*/spec.json` means the
+    same thing however the project was spelled.
+
+    Conservative in the forgiving direction: any construction at all — a `/`
+    append, `.parent`, `.joinpath`, or a call other than `Path`/`str` —
+    disqualifies the name, so a constructed anchor is never accused.
+    """
+    constructed: set = set()
+    candidates: set = set()
+
+    def _is_construction(node: Any) -> bool:
+        for n in ast.walk(node):
+            if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div):
+                return True
+            if isinstance(n, ast.Attribute) and n.attr in (
+                    "parent", "parents", "joinpath", "with_name", "with_suffix"):
+                return True
+            if isinstance(n, ast.Call):
+                fn = n.func
+                name = (fn.id if isinstance(fn, ast.Name)
+                        else fn.attr if isinstance(fn, ast.Attribute) else "")
+                if name not in ("Path", "str", "resolve", "absolute", "expanduser"):
+                    return True
+        return False
+
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = fn.args
+            for a in (list(args.posonlyargs) + list(args.args)
+                      + list(args.kwonlyargs)):
+                candidates.add(a.arg)
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Assign):
+            continue
+        targets = {t.id for t in n.targets if isinstance(t, ast.Name)}
+        if _is_construction(n.value):
+            constructed |= targets
+            continue
+        leaves = {x.id for x in ast.walk(n.value) if isinstance(x, ast.Name)}
+        if leaves & {"argv", "args", "sys"} or any(
+                isinstance(x, ast.Attribute) and x.attr == "argv"
+                for x in ast.walk(n.value)):
+            candidates |= targets
+    return candidates - constructed
+
+
+def _glob_root_name(call: "ast.Call") -> Optional[str]:
+    """The name the walk is rooted at, seeing THROUGH a `Path(...)` wrapper.
+
+    `Path(base).glob(...)` is rooted at `base`, not at `Path`. Answering `Path`
+    would silently decline every wrapped root — a discount nobody could audit,
+    which is the shape this file exists to find.
+    """
+    cur: Any = call.func
+    if isinstance(cur, ast.Attribute):
+        cur = cur.value
+    while True:
+        if isinstance(cur, ast.Call) and isinstance(cur.func, ast.Name) \
+                and cur.func.id in ("Path", "str") and cur.args:
+            cur = cur.args[0]
+        elif isinstance(cur, ast.Subscript):
+            cur = cur.value
+        else:
+            break
+    return cur.id if isinstance(cur, ast.Name) else None
+
+
+def probe_depth_pinned_walk(cl: Clause) -> ProbeResult:
+    """P7 -- is its population pinned to a depth the caller has to guess?
+    (vibe-ic#1025, SHAPE 11)
+
+    STATIC. `step_internal_fail_bubble_up_check` searched
+    `corpus.glob("*/clean_run_*")`, which matches run trees exactly ONE level
+    below whatever the caller passed. Measured at the commit that repaired it,
+    on ONE tree at ONE commit asking ONE question:
+
+        --corpus benchmark-data      ->  0 tree(s),  VACUOUS_PASS, rc 2
+        --corpus benchmark-data/ic   -> 13 tree(s),  5 unacknowledged FAILs
+
+    Five real failures were never hidden. They were never looked at, because
+    the sweep's population was a function of how many path components somebody
+    typed — and it refused HONESTLY about examining nothing, which is what made
+    it survive. `rglob` makes the two invocations agree by construction rather
+    than by the caller remembering the right depth.
+
+    THE RULE IS WHERE THE PATTERN IS ANCHORED, and both halves are load-bearing:
+
+      * the pattern's FIRST component is a wildcard and is not `**` — "some
+        directory whose name I do not know, exactly one level down". A pattern
+        like `reports/*.json` is anchored: it names the directory, so its depth
+        is a fact about the layout, not about the caller.
+      * the walk is rooted at a BARE caller path — a parameter, or a name bound
+        straight from `argv`/`args` with nothing appended. This is the half
+        that decides, and it is why the probe reports what it reports.
+
+    MEASURED over all 136 clauses: 6 leading-wildcard globs exist, and ALL SIX
+    are rooted at a CONSTRUCTED anchor (`analog_dir = _pl.analog_dir(project)`,
+    `_pl.sim_dir(proj).parent / "sim_professional"`). The flow declares that
+    same one-level shape itself — `phase3/analog/*/spec.json` is a
+    `required_outputs` entry — so their depth is the layout's contract and not
+    the caller's phrasing. Scoring them would have been six false positives on
+    a rule that is really about the root.
+
+    So this probe reports ZERO on the current tree, and the test that makes
+    that believable is the one that restores the pre-#1025 source in place and
+    watches it fire.
+    """
+    src = PROGRAMS / f"{cl.program}.py"
+    repro = (f"python3 -c \"import ast;…\" over programs/{cl.program}.py — find "
+             f"every glob whose FIRST pattern component is a wildcard and ask "
+             f"whether its root is a bare caller-supplied path")
+    if not src.is_file():
+        return ProbeResult("depth_pinned_walk", NA, "program not found", repro)
+    try:
+        tree = ast.parse(src.read_text(errors="replace"))
+    except SyntaxError as exc:
+        return ProbeResult("depth_pinned_walk", SUSPECT,
+                           f"cannot parse, so cannot answer: {exc}", repro)
+
+    bare = _bare_caller_paths(tree)
+    pinned: List[str] = []
+    anchored: List[str] = []
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "glob"):
+            continue
+        if not (n.args and isinstance(n.args[0], ast.Constant)
+                and isinstance(n.args[0].value, str)):
+            continue
+        pat = n.args[0].value
+        head = pat.split("/")[0]
+        if "/" not in pat or head == "**" or not any(c in head for c in "*?["):
+            continue
+        root = _glob_root_name(n)
+        where = f"{root}.glob({pat!r}) (line {n.lineno})"
+        (pinned if root in bare else anchored).append(where)
+
+    if pinned:
+        sev = LIAR if cl.blocking else SUSPECT
+        return ProbeResult(
+            "depth_pinned_walk", sev,
+            f"{len(pinned)} fixed-depth walk(s) rooted at a BARE caller-supplied "
+            f"path, so the population is a function of how many path components "
+            f"the caller typed and a shallower or deeper spelling of the same "
+            f"corpus reaches nothing: {', '.join(pinned[:3])}", repro)
+    if anchored:
+        return ProbeResult(
+            "depth_pinned_walk", CLEAN,
+            f"{len(anchored)} fixed-depth walk(s), all rooted at an anchor the "
+            f"program CONSTRUCTS rather than at what the caller typed, so the "
+            f"depth is the layout's contract: {', '.join(anchored[:2])}", repro)
+    return ProbeResult("depth_pinned_walk", CLEAN, "no fixed-depth walk", repro)
+
+
+def _materialise(patterns: List[str], root: Path) -> int:
+    """Turn the flow's declared path patterns into real files under `root`.
+
+    `probe_path_spelling` needs a tree with a POPULATION in it: two spellings of
+    an empty directory agree trivially, and an agreement over nothing is not
+    evidence of anything. What to put there is read from the same YAML the rest
+    of the census reads — the step's own `required_outputs` — so the tree is
+    the one the FLOW says this step operates on, not one this file invented.
+    """
+    made = 0
+    for pattern in patterns:
+        for alt in str(pattern).split(" OR "):
+            rel = alt.strip().lstrip("/")
+            if not rel or rel.startswith(".."):
+                continue
+            concrete = rel.replace("**", "d").replace("*", "x").replace("?", "x")
+            if any(c in concrete for c in "[]"):
+                continue
+            target = root / concrete
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if not target.exists():
+                    target.write_text("{}\n" if target.suffix == ".json" else "\n")
+                    made += 1
+            except OSError:
+                continue
+    return made
+
+
+#: How the same directory can be spelled. Each is a real thing a caller types,
+#: and every one of them names the SAME directory as `.` when the process cwd
+#: is that directory — so any disagreement between them is a property of the
+#: gate, not of the tree.
+SPELLINGS: List[Tuple[str, str]] = [
+    ("dot_slash", "./"),
+    ("absolute", "{abs}"),
+    ("absolute_trailing_slash", "{abs}/"),
+    ("up_and_back", "../{base}"),
+    ("through_a_symlink", "../{link}"),
+]
+
+
+def probe_path_spelling(cl: Clause, sandbox: Path,
+                        variants: int = len(SPELLINGS)) -> ProbeResult:
+    """P8 -- spell the same directory differently; does the answer change?
+    (SHAPE 11)
+
+    The flow always types `.`, so `.` is the only spelling anybody has ever
+    measured. Every other caller — a runner, a corpus sweep, a human pasting an
+    absolute path, a CI job whose workspace is a symlink — types one of the
+    others, and gets whatever this probe finds.
+
+    DELIBERATELY, THE CWD NEVER MOVES. Only the ARGUMENT changes, and every
+    argument names the directory the process is already sitting in. That
+    removes the one confound that would make this probe useless: a gate writing
+    `reports/x.json` relative to cwd would otherwise appear to "change its
+    answer" when it had only changed where it put its report. With cwd pinned,
+    a disagreement can only come from how the gate resolved the path it was
+    handed.
+
+    What is compared is the VERDICT and the POPULATION: the exit code, and every
+    `<number> <population-word>` the gate printed. The gate's own echo of the
+    path it was given is normalised out first — a gate quoting its argument back
+    is not a gate that disagreed with itself.
+
+    COVERAGE IS BOUNDED AND THE BOUND IS PRINTED. This probe costs one extra
+    subprocess per spelling per clause, which is the most expensive thing in
+    this file by a wide margin. Clauses that take no project path at all are
+    scored N/A rather than silently skipped, and the summary prints how many —
+    a probe that quietly drops a third of its population reports a confident
+    number about a sweep it never ran.
+    """
+    parts = cl.cmd.split()
+    repro = (f"cd <tree> && python3 programs/{cl.program}.py . ; then the SAME "
+             f"tree as ./ , as $PWD , as $PWD/ , as ../<base> , via a symlink")
+    if "." not in parts[1:]:
+        return ProbeResult(
+            "path_spelling", NA,
+            "the clause passes no project path — nothing to spell differently",
+            repro)
+
+    def _signature(rc: int, out: str, spelling: str) -> Tuple:
+        norm = out.replace(str(sandbox.resolve()), "<P>").replace(str(sandbox), "<P>")
+        norm = norm.replace(spelling, "<P>")
+        return rc, tuple(sorted(f"{m[0]} {m[1].lower()}" for m in _POP_COUNT.findall(norm)))
+
+    base_rc, base_out = _run(cl.cmd, sandbox)
+    if base_rc in (124, 127):
+        return ProbeResult("path_spelling", NA,
+                           "baseline invocation did not run", repro)
+    base_sig = _signature(base_rc, base_out, ".")
+
+    link = sandbox.parent / f"{sandbox.name}__link"
+    try:
+        if not link.exists():
+            link.symlink_to(sandbox, target_is_directory=True)
+    except OSError:
+        pass
+
+    for name, template in SPELLINGS[:variants]:
+        spelling = template.format(abs=str(sandbox.resolve()),
+                                   base=sandbox.name, link=link.name)
+        if name == "through_a_symlink" and not link.is_symlink():
+            continue
+        cmd = " ".join(spelling if tok == "." else tok for tok in parts)
+        rc, out = _run(cmd, sandbox)
+        if rc in (124, 127):
+            continue
+        sig = _signature(rc, out, spelling)
+        if sig != base_sig:
+            sev = LIAR if cl.blocking else SUSPECT
+            what = ("exit code" if sig[0] != base_sig[0] else "population")
+            return ProbeResult(
+                "path_spelling", sev,
+                f"the SAME directory, spelled `{spelling}` instead of `.` with "
+                f"the cwd unmoved, changed the {what}: rc {base_rc}->{rc}, "
+                f"population {list(base_sig[1])[:3]}->{list(sig[1])[:3]} — the "
+                f"answer is a function of how the caller typed the path, not of "
+                f"what is in the tree ({name})", repro)
+    return ProbeResult("path_spelling", CLEAN,
+                       f"{min(variants, len(SPELLINGS))} spelling(s) of the same "
+                       f"directory, same rc and same population", repro)
 
 
 # --------------------------------------------------------------- harness
@@ -1367,10 +1896,13 @@ def seed_minimal_tree(root: Path) -> Path:
 
 
 def run_census(clauses: List[Clause], probes: List[str], timeout: int,
+               graph: Optional[FlowGraph] = None,
+               spelling_variants: int = len(SPELLINGS),
                mutation_timeout: int = 900,
                mutation_budget: float = 0,
                mutation_jobs: int = 1) -> List[ClauseReport]:
     reports: List[ClauseReport] = []
+    graph = graph or FlowGraph()
     budget = Budget(mutation_budget)
     # 136 clauses name 127 distinct programs, and the mutation probes answer per
     # PROGRAM. Doing that work up front means the per-clause loop below reads a
@@ -1407,6 +1939,18 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
                 rep.probes.append(probe_verdict_forced_pass(cl, mutation_timeout, budget))
             if "forcedfail" in probes:
                 rep.probes.append(probe_verdict_forced_fail(cl, mutation_timeout, budget))
+            if "blocks" in probes:
+                rep.probes.append(probe_never_blocks(cl, graph))
+            if "depth" in probes:
+                rep.probes.append(probe_depth_pinned_walk(cl))
+            if "spelling" in probes:
+                # a POPULATED tree, seeded from what the flow says this step
+                # writes: two spellings of an empty directory agree trivially.
+                sp = Path(tmp) / f"sp{i}"
+                shutil.copytree(skeleton, sp)
+                _materialise(cl.step_outputs, sp)
+                rep.probes.append(probe_path_spelling(cl, sp, spelling_variants))
+                shutil.rmtree(sp, ignore_errors=True)
             reports.append(rep)
             print(f"  [{i}/{len(clauses)}] step {cl.step:>4}  {cl.program[:52]:<52} {rep.worst}",
                   file=sys.stderr, flush=True)
@@ -1419,6 +1963,7 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
 #: axis somebody happened to check -- and `--probes` names the cheap subset for
 #: anyone who wants the static sweep alone.
 ALL_PROBES = ["empty", "prose", "zero", "writes", "selector",
+              "blocks", "depth", "spelling",
               "forcedpass", "forcedfail"]
 
 
@@ -1438,10 +1983,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--mutation-jobs", type=int, default=1,
                     help="gate programs to mutate concurrently, each in its own "
                          "disposable copy of the plugin (76 MB apiece)")
+    ap.add_argument("--spelling-variants", type=int, default=len(SPELLINGS),
+                    help=f"how many of the {len(SPELLINGS)} path spellings to "
+                         f"try per clause. Lowering it BOUNDS the most "
+                         f"expensive probe in this file; whatever is dropped "
+                         f"is printed in the summary, never silently")
     ap.add_argument("--json", type=Path)
     args = ap.parse_args(argv)
 
     clauses = discover_clauses(args.flow)
+    graph = discover_flow_graph(args.flow)
     if args.only:
         clauses = [c for c in clauses if any(o in c.program for o in args.only)]
 
@@ -1450,8 +2001,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     probes = [p.strip() for p in args.probes.split(",") if p.strip()]
+    variants = max(0, min(args.spelling_variants, len(SPELLINGS)))
     print(f"liar_census: {len(clauses)} clause(s) x {len(probes)} probe(s)", file=sys.stderr)
-    reports = run_census(clauses, probes, args.timeout,
+    reports = run_census(clauses, probes, args.timeout, graph=graph,
+                         spelling_variants=variants,
                          mutation_timeout=args.mutation_timeout,
                          mutation_budget=args.mutation_budget,
                          mutation_jobs=args.mutation_jobs)
@@ -1459,6 +2012,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     liars = [r for r in reports if r.worst == LIAR]
     suspects = [r for r in reports if r.worst == SUSPECT]
     guarded = [r for r in reports if r.worst == GUARDED]
+    # NOT MEASURED AT ALL — every probe that ran on this clause returned N/A.
+    # This line was arithmetic before it was a line: CLEAN used to be computed
+    # as "everything that is not LIAR/SUSPECT/GUARDED", which quietly folded
+    # the unmeasured clauses into the clean count. Running the census with a
+    # single probe that scores 10 clauses N/A printed `CLEAN 136` over 126
+    # measurements — a census reporting a population it never reached, which is
+    # the shape this file exists to find, in this file.
     blocking_liars = [r for r in liars if r.kind == "program_exit_zero"]
     # every discounted probe result, however its clause was finally scored
     discounted = sum(1 for r in reports for p in r.probes if p.verdict == GUARDED)
@@ -1480,7 +2040,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"  SUSPECT  {len(suspects):>4}")
     print(f"  GUARDED  {len(guarded):>4}   ({discounted} probe result(s) declined, listed below)")
     print(f"  CLEAN    {len(clean):>4}")
-    print(f"  UNSCORED {len(unscored):>4}   (no probe could answer — NOT a pass)")
+    # LABEL is main's `N/A`, COUNT is #1108's verdict-derived `unscored`. The
+    # two sides named one concept twice; the printed word is pinned by a test
+    # and the derivation is the stronger of the two, so each side keeps the
+    # half it got right.
+    print(f"  N/A      {len(unscored):>4}   (every probe returned N/A — NOT measured, "
+          f"and deliberately NOT counted clean)")
     print()
     for r in liars + suspects:
         tag = "BLOCKING" if r.kind == "program_exit_zero" else "advisory"
@@ -1504,17 +2069,38 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print(f"      {p.detail}")
         print()
 
+    # WHAT THIS RUN DID NOT REACH. A probe that quietly skips part of its
+    # population reports a number about a sweep it never ran, and reads as
+    # "covered everything" -- the #1054 finding about the selector probe, which
+    # returned a confident zero over a tree it had never scanned. So every
+    # unmeasured clause is counted per probe and printed, even when it is zero.
+    na = {p: sum(1 for r in reports for x in r.probes
+                 if x.probe == p and x.verdict == NA)
+          for p in sorted({x.probe for r in reports for x in r.probes})}
+    if any(na.values()) or variants < len(SPELLINGS):
+        print("-" * 78)
+        print("COVERAGE — what this run did NOT measure:")
+        for name, count in na.items():
+            if count:
+                print(f"  {name:<24} {count:>4} of {len(reports)} clause(s) "
+                      f"scored N/A (unrunnable, or the probe's question does "
+                      f"not apply to that clause's wiring)")
+        if variants < len(SPELLINGS):
+            dropped = [n for n, _ in SPELLINGS[variants:]]
+            print(f"  path_spelling            BOUNDED to {variants} of "
+                  f"{len(SPELLINGS)} spellings; NOT tried: {', '.join(dropped)}")
+
     # WHAT WAS NOT MEASURED, per probe. A bounded sweep that does not name its
     # own coverage hole reads as "covered everything" -- and the mutation probes
     # are the ones with a hole, because they are the ones with a budget.
-    unmeasured = [(r, p) for r in reports for p in r.probes
+    not_reached = [(r, p) for r in reports for p in r.probes
                   if p.verdict == NA and p.detail.startswith("NOT MEASURED")]
-    if unmeasured:
+    if not_reached:
         print("-" * 78)
-        print(f"NOT MEASURED — {len(unmeasured)} probe result(s) over "
-              f"{len({r.program for r, _ in unmeasured})} program(s). A gate this "
+        print(f"NOT MEASURED — {len(not_reached)} probe result(s) over "
+              f"{len({r.program for r, _ in not_reached})} program(s). A gate this "
               f"probe could not reach has NOT been cleared by it:")
-        for rep, p in unmeasured:
+        for rep, p in not_reached:
             print(f"  step {rep.step:>4} {rep.program} [{p.probe}]")
             print(f"      {p.detail}")
         print()
@@ -1534,9 +2120,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             {"clauses": len(reports), "probes": probes,
              "liar": len(liars), "suspect": len(suspects),
              "guarded": len(guarded), "declined_probe_results": discounted,
-             "clean": len(clean), "unscored": len(unscored),
+             "clean": len(clean), "unmeasured": len(unscored),
+             "unscored": len(unscored),
              "blocking_liar": len(blocking_liars),
-             "not_measured": len(unmeasured),
+             "not_measured": na,
+             "not_reached": len(not_reached),
+             "spelling_variants_tried": variants,
+             "spelling_variants_available": len(SPELLINGS),
              "mutation": {v.program: asdict(v)
                           for _k, v in sorted(_MUTATION_CACHE.items())},
              "reports": [asdict(r) for r in reports]}, indent=1), encoding="utf-8")

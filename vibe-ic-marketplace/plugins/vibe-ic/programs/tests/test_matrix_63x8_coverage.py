@@ -1323,19 +1323,49 @@ def test_no_cell_is_counted_enforced_while_its_predicate_is_red():
     broken = sorted((k for k, v in joined.items() if not v.agrees),
                     key=lambda k: (k[1], k[0]))
     if broken:
-        lines = []
+        #: Outcomes that mean THE PREDICATE NEVER GAVE AN ANSWER, as opposed to
+        #: giving a red one. `agrees` folds both into "contradicted" — correctly,
+        #: since neither is evidence of enforcement — but the two have different
+        #: causes and different owners, and the message must not conflate them.
+        #:
+        #: MEASURED (vibe-ic#1348): the same tree, same commit, reported 16
+        #: contradictions on a host with every repo dependency installed and 54
+        #: in a container missing `pyyaml`. The extra 38 were predicates that
+        #: could not RUN. A reader given one number cannot tell a repo defect
+        #: from a missing dependency, and "16" is not reproducible without
+        #: knowing which host produced it.
+        _UNMEASURED = ("error", "unrun", "skipped")
+        measured, unmeasured = [], []
         for sid, dim in broken:
             verdict = joined[(sid, dim)]
-            lines.append(
+            line = (
                 f"  {sid}/d{dim} ({DIMENSION_NAMES[dim]}): reported "
                 f"{verdict.state} — which claims its predicate "
                 f"{STATE_EXPECTS_OUTCOME[verdict.state]} — but the live run "
                 f"says {', '.join(verdict.outcomes) or '<never observed>'}")
+            (unmeasured if (not verdict.outcomes
+                            or all(o in _UNMEASURED for o in verdict.outcomes))
+             else measured).append(line)
+        lines = []
+        if measured:
+            lines.append(
+                f"MEASURED RED — the predicate ran and contradicted the state "
+                f"({len(measured)}). These are repo defects:")
+            lines.extend(measured)
+        if unmeasured:
+            lines.append(
+                f"NOT MEASURED — the predicate never returned a verdict "
+                f"({len(unmeasured)}). NOT evidence of enforcement either, but "
+                f"a missing dependency or a collection error is a HOST problem, "
+                f"not a repo defect. Fix the environment and re-run before "
+                f"reading these as findings:")
+            lines.extend(unmeasured)
         state_only = {s: sum(1 for v in joined.values() if v.state == s)
                       for s in VALID_STATES}
         pytest.fail(
             f"{len(broken)} of {len(joined)} cells are reported in a state "
-            f"their own live predicate contradicts:\n"
+            f"their own live predicate contradicts "
+            f"({len(measured)} measured red, {len(unmeasured)} not measured):\n"
             + "\n".join(lines)
             + f"\n\nSTATE-ONLY census (what used to be published): "
               f"{state_only}"

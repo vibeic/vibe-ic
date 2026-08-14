@@ -39,12 +39,27 @@ _POLL_PRS = (_PLUGIN_ROOT / "skills" / "gatekeeper-loop" / "programs"
 
 
 def _load():
+    """Import the shipped program WITHOUT leaving bytecode beside it.
+
+    `skills/` is the SHIPPED tree. Importing a file from it makes CPython drop
+    `__pycache__/poll_prs.cpython-3XX.pyc` next to the source, which is a new
+    file inside the tree `test_tools_and_integration.py` digests byte-for-byte
+    — and that digest is captured when THAT module is imported, so this write
+    only trips it when this file is collected later in the same session. It is
+    gitignored, so `git status`, `git add -A` and `suite_write_guard` are all
+    clean and the failure has no visible author.
+    """
     spec = importlib.util.spec_from_file_location("poll_prs", str(_POLL_PRS))
     mod = importlib.util.module_from_spec(spec)
     pdir = str(_POLL_PRS.parent)
     if pdir not in sys.path:
         sys.path.insert(0, pdir)
-    spec.loader.exec_module(mod)
+    _no_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = _no_bytecode
     return mod
 
 

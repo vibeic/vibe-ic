@@ -654,13 +654,24 @@ NA_STEPS_AS_MEASURED: Tuple[str, ...] = ("FS1", "P0")
 PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 
 #: Steps declaring FEWER THAN TWO ``required_outputs`` entries, measured
-#: 2026-07-27 (27 of 63). They cannot express "one artefact present, the rest
-#: absent", so the pooled-evidence check has no shape to build; the population
-#: is pinned so a step that gains a second entry cannot slip past it silently.
+#: 2026-07-27 (27 of 63), re-measured 2026-08-13 (28 of 63). They cannot
+#: express "one artefact present, the rest absent", so the pooled-evidence
+#: check has no shape to build; the population is pinned so a step that gains a
+#: second entry cannot slip past it silently.
+#:
+#: ``1`` ADDED 2026-08-13. Step 1 (Spec-to-RTL) declared three entries, two of
+#: which were ``reports/phase1/extraction_coverage_report.{md,json}`` — a
+#: Phase 1 extraction artefact that d4 reported its gate never measured. The
+#: declaration moved to D1 (Phase 1 Doc Extraction), which is where the
+#: published corpus says it is produced: of the 107 run roots carrying that
+#: report, 75 carry NO RTL at all and 105 carry D1's own L1_DATASHEET.json.
+#: Step 1 is therefore left declaring only its RTL glob, which is one entry —
+#: this pin moving is the intended consequence, recorded here rather than
+#: discovered later from a sweep that changed shape.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
-    "8", "FS1", "DT1", "DT2", "DT3", "12", "A1", "A2", "A3", "A4", "A5", "A7",
-    "A9", "14", "16", "17", "20", "22", "27", "29", "35", "36", "37", "M4",
-    "42", "44", "P0",
+    "1", "8", "FS1", "DT1", "DT2", "DT3", "12", "A1", "A2", "A3", "A4", "A5",
+    "A7", "A9", "14", "16", "17", "20", "22", "27", "29", "35", "36", "37",
+    "M4", "42", "44", "P0",
 )
 
 

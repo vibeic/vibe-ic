@@ -619,6 +619,12 @@ _MULT_OK = "module mult(input [7:0] a,b, output [15:0] p); assign p=a*b; endmodu
 _MULT_BAD = "module mult(input [7:0] a,b, output [15:0] p); assign p=a+b; endmodule\n"
 
 
+@pytest.mark.skipif(
+    not _HAVE_IVERILOG,
+    reason="prompt_selftest_gate_record RUNS the extracted vector. Without "
+           "iverilog+vvp it returns the honest 'prompt-selftest SKIP: "
+           "iverilog/vvp not on PATH' — a REFUSAL TO RUN, not a verdict "
+           "about the design these two assert on.")
 def test_b1_prompt_selftest_detects_wrong():
     # the helper DETECTS a FAIL (ok=False), so a caller COULD block — but the
     # gate consumes it advisory-only (see test_main_b1_prompt_selftest_advisory).
@@ -627,6 +633,12 @@ def test_b1_prompt_selftest_detects_wrong():
     assert note.startswith("prompt-selftest FAIL")
 
 
+@pytest.mark.skipif(
+    not _HAVE_IVERILOG,
+    reason="prompt_selftest_gate_record RUNS the extracted vector. Without "
+           "iverilog+vvp it returns the honest 'prompt-selftest SKIP: "
+           "iverilog/vvp not on PATH' — a REFUSAL TO RUN, not a verdict "
+           "about the design these two assert on.")
 def test_b1_prompt_selftest_pass_on_correct():
     ok, note = G.prompt_selftest_gate_record("x", _MULT_OK, _MULT_PROMPT, "mult")
     assert ok is True
