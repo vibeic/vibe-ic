@@ -41,7 +41,19 @@ if str(_HERE) not in sys.path:
 # account (`.github/workflows-disabled/README.md`), so a guard wired there
 # would never run — and a test that is always skipped is the exact defect
 # #1029 is about. Session mode costs two `git status` calls (0.20 s measured).
-pytest_plugins = ("suite_write_guard",)
+#
+# vibe-ic#1446 — `scratch_root_guard` is loaded HERE for the same reason and by
+# the same argument. A suite whose scratch root sits inside a git work tree
+# reports 46 failures that are the root, not the tree (measured on 3d13e2c59:
+# 57 passed outside a repo, 35 failed + 22 passed inside, same commit, one
+# directory apart), and every one of them names its own subject instead of the
+# cause. #1446 published five counts of main's redness — ~93, 46, 39, 145, 218
+# — and four were retracted or corrected by their own author; the largest
+# single correction was exactly this. The guard DECLARES the scratch root on
+# every run and REFUSES a run it would falsify. Riding the rootdir conftest is
+# what makes that execute rather than be remembered, and it costs one
+# `git rev-parse` per session.
+pytest_plugins = ("suite_write_guard", "scratch_root_guard")
 
 
 # ORGANIC #574 — robust waveform-artifact hygiene. Many tests run `vvp` on an
