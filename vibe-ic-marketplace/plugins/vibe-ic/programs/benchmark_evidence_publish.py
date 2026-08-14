@@ -1430,7 +1430,7 @@ def stale_write_ledger(cell: Path) -> List[str]:
     keeps being read as current.
 
     MEASURED 2026-08-13 on ``benchmark-data/ic/spm/v1.9.96_gf180mcuD``. Its
-    ledger was captured 2026-08-06T19:17:51Z over ``/home/reyerchu/spm3_run/
+    ledger was captured 2026-08-06T19:17:51Z over ``/home/<your-user>/spm3_run/
     gf180mcuD``; the run then wrote ``phase2/stage2/dft/scan_netlist.v`` at
     2026-08-07 08:39:52 (the file's own Fault header) and the publish staged the
     finished tree beside the mid-run record. The committed ledger states that
