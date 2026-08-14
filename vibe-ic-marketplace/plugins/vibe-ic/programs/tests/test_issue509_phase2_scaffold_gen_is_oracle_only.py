@@ -31,10 +31,12 @@ hardcoded file list that goes stale when a program is added or renamed.
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 from typing import Dict, Iterator, List, Set, Tuple
 
 import pytest
+import yaml
 
 from _plugin_tree import plugin_path
 
@@ -73,6 +75,31 @@ def _flow_specs() -> List[Path]:
 
 def _mentions_oracle(text: str) -> List[str]:
     return [t for t in ORACLE_TOKENS if t in text]
+
+
+def _declarative_text(path: Path) -> str:
+    """The spec's DATA, with comments excluded.
+
+    This test asks whether a flow STEP names the oracle. A `#` comment that
+    *discusses* the oracle — for instance the L6 rationale block in
+    `phase1_phase2_phase3.yaml`, which quotes ``emit_fsm_v()``'s TODO body to
+    explain why a check is advisory — is prose about the oracle, not a step
+    wiring it. Matching one is the same false-positive class as #1544, where a
+    substring resolve landed inside a COMMENT and reddened main on every host.
+
+    Parsing and re-serialising drops comments by construction, which a regex
+    could not do safely: a `#` inside a quoted scalar is data, not a comment.
+    YAML is a superset of JSON, so one loader covers both flow spec formats.
+
+    A spec that does not parse falls back to its RAW text, so the scan fails
+    CLOSED — an unreadable specification must never become a silent PASS.
+    """
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        data = yaml.safe_load(raw)
+    except Exception:
+        return raw
+    return raw if data is None else json.dumps(data, default=str)
 
 
 def _parse(path: Path) -> ast.Module:
@@ -212,7 +239,7 @@ def test_no_flow_step_names_the_scaffold_oracle():
     offenders: Dict[str, List[str]] = {}
     for s in specs:
         try:
-            text = s.read_text(encoding="utf-8", errors="replace")
+            text = _declarative_text(s)
         except OSError:
             continue
         hits = _mentions_oracle(text)
@@ -221,6 +248,47 @@ def test_no_flow_step_names_the_scaffold_oracle():
     assert not offenders, (
         f"{ORACLE_STEM} is ORACLE-ONLY (#509) and a flow specification now "
         f"names it: {offenders}. See the module docstring before landing it."
+    )
+
+
+def test_a_flow_step_that_names_the_oracle_is_still_caught(tmp_path):
+    """Paired guard for `_declarative_text`.
+
+    Excluding comments must not also excuse a real reference. Without this,
+    the fix above could be satisfied by a scan that reports nothing at all —
+    the worst outcome, since this test is the only thing keeping an
+    ORACLE-ONLY module out of the shipped flow.
+    """
+    wired = tmp_path / "wired.yaml"
+    wired.write_text(
+        "steps:\n"
+        "  - id: 7\n"
+        "    program: phase2_scaffold_gen.py\n",
+        encoding="utf-8")
+    assert _mentions_oracle(_declarative_text(wired)) == [ORACLE_STEM], (
+        "a step whose program IS the oracle must still be reported"
+    )
+
+    # the other two tokens are caught in a value, not just the module name
+    helper = tmp_path / "helper.yaml"
+    helper.write_text("steps:\n  - id: 8\n    entry: emit_fsm_v\n",
+                      encoding="utf-8")
+    assert "emit_fsm_v" in _mentions_oracle(_declarative_text(helper))
+
+    # and the case this fix exists for: prose about the oracle is not a step
+    discussed = tmp_path / "discussed.yaml"
+    discussed.write_text(
+        "# emit_fsm_v()'s body is a TODO — this comment explains WHY a check\n"
+        "# is advisory. It names the oracle without wiring it.\n"
+        "steps: []\n",
+        encoding="utf-8")
+    assert _mentions_oracle(_declarative_text(discussed)) == []
+
+    # a spec that does not parse must fail CLOSED, not silently pass
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("steps: [unclosed\n  - emit_fsm_v\n", encoding="utf-8")
+    assert "emit_fsm_v" in _mentions_oracle(_declarative_text(broken)), (
+        "an unparseable spec must fall back to raw text, never to an empty scan"
     )
 
 
