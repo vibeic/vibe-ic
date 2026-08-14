@@ -437,8 +437,22 @@ def test_output_entries_classify_into_the_four_kinds():
     # VACUOUS_PASS with both reports written becomes MISSING with none.
     # test_flow_declaration_does_not_silence_its_producer.py holds that
     # distinction live for both steps.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    #
+    # 2026-08-13: 134 -> 135, FILE 100 -> 101. The ONE new entry is step 27's
+    # `reports/phase3/si_mcf_sta.json`, the MCF crosstalk-delay report its own
+    # gate's `condition_files_exist` already reads while no entry named it.
+    # GLOB and ANY_OF are untouched.
+    #
+    # This is the step-29 case and NOT the FS1 case, which is the distinction
+    # the paragraph above says must be measured rather than assumed: step 27
+    # already declares a run-produced entry (`si_crosstalk.rpt OR
+    # si_crosstalk.json`), so the "every declared entry absent -> MISSING
+    # before the gate runs" early return is not reachable and the producer
+    # keeps running. The new path is also NOT this gate's own `--json` target
+    # (that is `si_mcf_sta_check.json`); it is written by the runner, so the
+    # declaration cannot be satisfied by the auditor's own output.
+    assert sum(seen.values()) == 135, seen
+    assert seen[F.FILE] == 101
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

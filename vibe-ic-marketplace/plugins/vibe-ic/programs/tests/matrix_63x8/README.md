@@ -147,7 +147,7 @@ Things that will bite you if you skip the docstring:
   `advisory_program_exit_zero` does **not**, `optional_program_exit_zero`
   blocks only when its `condition_files_exist` are present. Treating an
   advisory clause as enforcement is measuring something adjacent.
-* **No `program_exit_zero` form exists in `required_outputs`** — all 134<!--figure:required_output_entries-->
+* **No `program_exit_zero` form exists in `required_outputs`** — all 135<!--figure:required_output_entries-->
   entries are plain path strings. That form lives only in `gate`.
 
 ### `cells.py` — the 504<!--figure:ledger_cells-->-cell ledger
@@ -336,7 +336,7 @@ The 11 WAIVED and 11 NA cells are not enforcing anything and enter none of those
 | 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 63 | 0 | 0 | 0 |
 | 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 62 | 0 | 1 | 0 |
 | 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 1 | 0 |
-| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 52 | 6 | 4 | 1 |
+| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 53 | 5 | 4 | 1 |
 | 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 16 | 45 | 0 | 0 | 0 | 2 |
 | **total** | | **16** | **45** | **406** | **15** | **11** | **11** |
 

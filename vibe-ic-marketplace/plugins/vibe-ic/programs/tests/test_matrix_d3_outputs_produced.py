@@ -619,7 +619,23 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-13: 120 -> 121, and 134 -> 135 declared. Step 27 now declares
+# `reports/phase3/si_mcf_sta.json`, the MCF crosstalk-delay report its own
+# gate's `condition_files_exist` already reads and no entry named — d7 charged
+# it as W2 load-bearing-undeclared, and that red also removed the only
+# otherwise-clean conditional step, which is the anchor
+# `_conditional_anchor()` needs, so the two optionality controls in d7 had no
+# subject and asserted nothing.
+# The new entry is decided LIVE like the other 120 — PRODUCED_BY_RUN resolved
+# against benchmark-data/ic/spm/v1.9.96_gf180mcuD, an already-registered
+# kind="repo" root that carries the file non-empty and tracked at HEAD
+# (2750 B).
+#
+# The guarded property — "no evidence from outside the commit" — is intact and
+# was CHECKED, not assumed: the entry resolves inside the repo and nothing
+# here reaches $HOME. Eight tracked run roots carry this artefact, so the
+# declaration rests on committed bytes rather than on one lucky tree.
+_LIVE_ENTRY_COUNT = 121
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
