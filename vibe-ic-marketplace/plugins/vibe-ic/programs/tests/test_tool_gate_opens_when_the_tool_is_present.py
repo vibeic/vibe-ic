@@ -64,7 +64,7 @@ and the silent omission that produced this gap in the first place.
 CORRECTION, AND IT IS AGAINST THE FIRST VERSION OF THIS FILE
 ────────────────────────────────────────────────────────────
 The first version keyed on the `_HAVE_` prefix alone. That is ALSO one spelling,
-and it covered 59 of 100 pairs — missing 41 across nine `_HAS_*` names, found
+and it covered 59 of 102 pairs — missing 43 across nine `_HAS_*` names, found
 while verifying #1430, which adds nine skips under `_HAS_IVERILOG`:
 
     _HAS_IVERILOG   27 pairs   <- the MOST common tool gate in this directory,
@@ -79,15 +79,42 @@ Widening also swept in two constants that share the prefix and are NOT gates
 (a fixture string and an argv list). They are in `NOT_A_GATE` with the value
 type that disqualifies them, and guarded: a bool cannot hide there.
 
-    WHICH_GATES      84    shut under which->None, open under which->path
+    WHICH_GATES      86    shut under which->None, open under which->path
     NOT_WHICH_GATES  14    corpus dir, package import, two-stage docker probe
     NOT_A_GATE        2    not booleans; not gates at all
                     ---
-                    100    every `_HA(VE|S)_*` definition in this directory
+                    102    every `_HA(VE|S)_*` definition in this directory
 
-MEASURED COST, this host: 100 pairs, 200 module reloads, 0.96 s total.
 Nothing here shells out; `_HAVE_CONTAINER` is the one entry whose probe
 attempts a real subprocess, and it fails closed immediately.
+
+A GATE'S DISCRIMINATOR NEED NOT LIVE IN THE GATED MODULE (#1386, against #1311)
+──────────────────────────────────────────────────────────────────────────────
+Re-measured on `3d13e2c59`, the register drifted twice in two days, in two
+DIFFERENT ways, and only one of them was the population growing:
+
+  * two new modules gate on `_HAS_TOOLCHAIN` (`test_cvdp_gate_multifile_split`,
+    `test_v1_1_46_pr42_emit_normalizer_hardening`). The pattern key noticed
+    them the day they appeared, which is what it is for — registered above;
+  * #1311 moved the cvdp cluster's `which` calls into `_sim_tools`, so
+    `test_cvdp_gate._HAS_IVERILOG` / `_HAS_YOSYS` are DERIVED from a tuple
+    resolved once at that helper's import. Reloading only the gated module
+    re-runs `from _sim_tools import ...` against the cache, so the probe could
+    not move those two gates at all.
+
+The second is the interesting one, because the failure it produced was
+ORDER-DEPENDENT rather than constant: the first `import_module` under a fake
+also imported the helper under that fake and froze it there, so the CLOSED
+direction passed and the OPENS direction failed — and had the parametrisation
+run the other way round, the opposite two would have failed. `_probe` now
+reloads the `which`-probing helpers (discovered by scanning, not listed) before
+the gated module, and restores every one of them afterwards.
+
+Parking those two in `NOT_WHICH_GATES` would also have gone green, and that is
+exactly why it is wrong: through a cache they read INSENSITIVE to `which`, so
+`test_a_declared_non_which_gate_is_really_not_which_keyed` — the guard on the
+exclusion list — could not have caught the lie. An indirect tool gate is still
+a tool gate; it needs a deeper probe, not a carve-out.
 """
 from __future__ import annotations
 
@@ -109,7 +136,7 @@ if str(_TESTS) not in sys.path:
 #: BOTH prefixes. `_HAS_` is not a variant spelling to be tidied away —
 #: `_HAS_IVERILOG` (27 pairs) is the single most common tool-gate constant
 #: in this directory, more frequent than `_HAVE_IVERILOG`. Keying on
-#: `_HAVE_` alone covered 59 of 100 pairs and missed 41 across nine names.
+#: `_HAVE_` alone covered 59 of 102 pairs and missed 43 across nine names.
 _DEFN = re.compile(r"^(_HA(?:VE|S)_[A-Z0-9_]+)\s*=", re.M)
 
 _SELF = Path(__file__).stem
@@ -127,18 +154,67 @@ def _scan() -> set:
     return found
 
 
-def _reload_with_which(modname: str, fake):
-    """Reload `modname` with `shutil.which` replaced, then put it back."""
-    real = shutil.which
-    shutil.which = fake
-    try:
-        return importlib.reload(importlib.import_module(modname))
-    finally:
-        shutil.which = real
+def _reload(modname: str):
+    return importlib.reload(importlib.import_module(modname))
 
+
+def _which_probing_helpers() -> tuple:
+    """Non-`test_*` modules in this directory that probe `shutil.which`.
+
+    A gate's discriminator does not have to live in the gated module. #1311
+    moved the cvdp cluster's two probes into `_sim_tools`, whose `MISSING` is
+    resolved ONCE at that module's import — so `test_cvdp_gate._HAS_IVERILOG`
+    is now derived rather than probed. Reloading only the gated module re-runs
+    its `from _sim_tools import ...` and gets the same cached tuple back, so
+    the probe could not move the gate at all.
+
+    Discovered by scanning, not hand-listed: the day another helper starts
+    probing `which`, the reload reaches it without an edit here.
+    """
+    helpers = []
+    for p in sorted(_TESTS.glob("*.py")):
+        if p.stem.startswith("test_") or p.stem == "conftest":
+            continue
+        if "shutil.which" in p.read_text(encoding="utf-8", errors="replace"):
+            helpers.append(p.stem)
+    return tuple(helpers)
+
+
+#: Resolved once; asserted non-empty by
+#: `test_the_probe_reaches_a_discriminator_that_lives_in_a_HELPER_module`.
+_WHICH_HELPERS = _which_probing_helpers()
 
 _ABSENT = lambda *_a, **_k: None                       # noqa: E731
 _PRESENT = lambda name, *_a, **_k: f"/usr/bin/{name}"  # noqa: E731
+
+
+def _probe(modname: str, const: str, fake):
+    """`modname.const` as it reads when `shutil.which` behaves like `fake`.
+
+    Reloads the helpers that own an INDIRECT discriminator before the gated
+    module, so a gate derived from `_sim_tools.MISSING` moves with the fake
+    exactly as a gate that calls `which` itself does.
+
+    Then puts everything back — the patched function AND every module it
+    reloaded. A probe that walked out leaving `_sim_tools.MISSING = ()` would
+    hand the rest of the session a module that believes yosys is installed,
+    and the 38 cvdp tests it guards would run and fail against a refusal. That
+    is not hypothetical ordering-paranoia: before the restore existed, whether
+    the cvdp gates read True or False depended on which parametrised test ran
+    FIRST, because the first `import_module` under a fake also imported the
+    helper under that fake and froze it there.
+    """
+    real = shutil.which
+    shutil.which = fake
+    try:
+        for helper in _WHICH_HELPERS:
+            _reload(helper)
+        return getattr(_reload(modname), const)
+    finally:
+        shutil.which = real
+        for helper in _WHICH_HELPERS:
+            _reload(helper)
+        _reload(modname)
 
 #: Gates whose discriminator IS `shutil.which`. Each must be shut when `which`
 #: finds nothing and open when it reports a path. Measured, not hand-listed.
@@ -146,6 +222,7 @@ WHICH_GATES = (
     ("test_bcd_synth", "_HAVE_SIM"),
     ("test_cvdp_gate", "_HAS_IVERILOG"),
     ("test_cvdp_gate", "_HAS_YOSYS"),
+    ("test_cvdp_gate_multifile_split", "_HAS_TOOLCHAIN"),
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_EDA"),
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_IVERILOG"),
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_YOSYS"),
@@ -204,6 +281,7 @@ WHICH_GATES = (
     ("test_v1_0_87_issue770r2_latency_arbiter_onehot", "_HAVE_IVERILOG"),
     ("test_v1_0_93_issue784_emit_assert_discriminators", "_HAVE_TOOLS"),
     ("test_v1_1_1_issue787_latency_conformance_multibit_datapath", "_HAVE_IVERILOG"),
+    ("test_v1_1_46_pr42_emit_normalizer_hardening", "_HAS_TOOLCHAIN"),
     ("test_v1_1_60_combdly_blkseq_style_suppress", "_HAS_VERILATOR"),
     ("test_v1_1_61_lint_advisory_iverilog_scored", "_HAS_IVERILOG"),
     ("test_v1_1_61_lint_advisory_iverilog_scored", "_HAS_VERILATOR"),
@@ -268,8 +346,7 @@ _NOT_A_GATE_PAIRS = tuple((m, c) for m, c, _ in NOT_A_GATE)
 @pytest.mark.parametrize("modname,const", WHICH_GATES)
 def test_the_gate_is_CLOSED_when_the_tool_is_absent(modname, const):
     """Baseline: with `which` finding nothing, the gate must be shut."""
-    mod = _reload_with_which(modname, _ABSENT)
-    assert getattr(mod, const) is False, (
+    assert _probe(modname, const, _ABSENT) is False, (
         f"{modname}.{const} is True while shutil.which finds nothing")
 
 
@@ -281,8 +358,7 @@ def test_the_gate_OPENS_when_the_tool_is_present(modname, const):
     the guard is a no-op and the real assertions run. If this fails, the gate
     has become unconditional and the module is silenced on every host.
     """
-    mod = _reload_with_which(modname, _PRESENT)
-    assert getattr(mod, const) is True, (
+    assert _probe(modname, const, _PRESENT) is True, (
         f"{modname}.{const} is False even though shutil.which reports the tool "
         f"present — the skip is unconditional and the module is silenced")
 
@@ -297,8 +373,8 @@ def test_a_declared_non_which_gate_is_really_not_which_keyed(modname, const, why
     genuine non-which gate reads the SAME under both fakes. A tool gate parked
     here to make a failure go away does not, and fails here.
     """
-    absent = getattr(_reload_with_which(modname, _ABSENT), const)
-    present = getattr(_reload_with_which(modname, _PRESENT), const)
+    absent = _probe(modname, const, _ABSENT)
+    present = _probe(modname, const, _PRESENT)
     assert absent == present, (
         f"{modname}.{const} is declared not-which-keyed ({why}) but it CHANGED "
         f"{absent!r} -> {present!r} when shutil.which was patched. It is a "
@@ -315,8 +391,7 @@ def test_a_declared_non_gate_is_really_not_a_boolean(modname, const, why):
     The reason string carries the type that disqualifies it, and the type is
     re-derived here rather than trusted.
     """
-    mod = _reload_with_which(modname, _ABSENT)
-    value = getattr(mod, const)
+    value = _probe(modname, const, _ABSENT)
     assert not isinstance(value, bool), (
         f"{modname}.{const} is declared a non-gate ({why}) but it IS a bool "
         f"({value!r}). Booleans are gates: move it to WHICH_GATES, or to "
@@ -324,6 +399,71 @@ def test_a_declared_non_gate_is_really_not_a_boolean(modname, const, why):
     assert type(value).__name__ in why, (
         f"{modname}.{const} is recorded as `{why}` but measures as "
         f"{type(value).__name__}. The recorded type must match the tree.")
+
+
+def test_the_probe_reaches_a_discriminator_that_lives_in_a_HELPER_module():
+    """PAIRED GUARD for the helper reload itself (#1386, against #1311).
+
+    `test_cvdp_gate._HAS_YOSYS` is DERIVED from `_sim_tools.MISSING`, which is
+    resolved once at that helper's import. So the obvious probe — reload the
+    gated module under a patched `which` — re-runs a `from _sim_tools import`
+    against a cache and cannot move the gate at all.
+
+    This proves the difference in both directions on the real module, so the
+    helper reload cannot be dropped as an unexplained line: the old probe is
+    reconstructed here and required to be STUCK, and the probe this file uses
+    is required to move.
+
+    It names `test_cvdp_gate` / `_sim_tools` deliberately — that is the measured
+    instance, and if #1311's indirection is ever undone this control fails
+    loudly rather than quietly proving nothing.
+    """
+    assert _WHICH_HELPERS, (
+        "no `which`-probing helper found in this directory — every gate whose "
+        "discriminator lives one module up would be probed through a cache")
+    assert "_sim_tools" in _WHICH_HELPERS, (
+        "the helper that owns the cvdp gates' discriminator is not in the "
+        f"reload set {_WHICH_HELPERS}")
+
+    real = shutil.which
+    shutil.which = _ABSENT
+    try:                       # pin the helper cache at "nothing on PATH"
+        _reload("_sim_tools")
+        _reload("test_cvdp_gate")
+    finally:
+        shutil.which = real
+
+    # THE OLD PROBE, reconstructed: reload the gated module only, with `which`
+    # reporting the tool present. The helper cache is stale, so nothing moves.
+    shutil.which = _PRESENT
+    try:
+        stuck = getattr(_reload("test_cvdp_gate"), "_HAS_YOSYS")
+    finally:
+        shutil.which = real
+    assert stuck is False, (
+        "reloading only the gated module moved an indirect gate — this control "
+        "no longer demonstrates what the helper reload is for; re-derive it")
+
+    # THE PROBE THIS FILE USES: it reaches `_sim_tools`, so the gate moves.
+    assert _probe("test_cvdp_gate", "_HAS_YOSYS", _PRESENT) is True
+    assert _probe("test_cvdp_gate", "_HAS_YOSYS", _ABSENT) is False
+
+
+def test_the_probe_leaves_the_helpers_telling_the_truth():
+    """A probe that walks out with a faked `_sim_tools` hands the rest of the
+    session a module that believes yosys is installed — and the 38 cvdp tests
+    it guards would then run against a refusal instead of skipping.
+
+    Re-derived from `shutil.which` here rather than remembered, so this is a
+    statement about THIS host and not about a recorded expectation.
+    """
+    truth = tuple(t for t in ("iverilog", "yosys") if shutil.which(t) is None)
+    for fake in (_PRESENT, _ABSENT):
+        _probe("test_cvdp_gate", "_HAS_YOSYS", fake)
+        import _sim_tools
+        assert _sim_tools.MISSING == truth, (
+            f"after probing with {fake!r} the shared helper reports "
+            f"MISSING={_sim_tools.MISSING!r}, but this host measures {truth!r}")
 
 
 def test_every_defined_gate_is_registered():
@@ -352,7 +492,8 @@ def test_the_register_is_not_checking_an_empty_population():
     """
     found = _scan()
     assert len(found) >= 90, (
-        f"only {len(found)} `_HA(VE|S)_*` definitions found; 100 were present "
-        f"when this was written. The scan is broken, not the tree.")
+        f"only {len(found)} `_HA(VE|S)_*` definitions found; 102 were present "
+        f"when this was last re-measured. The scan is broken, not the tree.")
     assert len(WHICH_GATES) >= 75, (
-        f"only {len(WHICH_GATES)} which-keyed gates registered; 84 when written")
+        f"only {len(WHICH_GATES)} which-keyed gates registered; 86 when "
+        f"re-measured on 3d13e2c59")
