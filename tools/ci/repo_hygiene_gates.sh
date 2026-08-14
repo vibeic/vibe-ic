@@ -97,6 +97,7 @@ run "container exec deadlines"  "$ROOT" python3 "$PG/container_exec_deadline_che
 # hazard is gone or the detector stopped matching the call sites, and the
 # checker says in its own words that neither is a PASS. NOT_CHECKED carries that
 # to the roll-up instead of folding "I could not look" into "I looked".
+uncheckable_until 2026-11-30 "rc 2 here is NOT a missing prerequisite: it means NO caller passes a login shell any more, i.e. either the hazard is gone or the detector stopped matching the call sites, and the checker says neither is a PASS"
 run_tolerating_uncheckable "container login-banner parses" "$ROOT" python3 "$PG/container_login_banner_parse_check.py"
 # vibe-ic#552 — a warning our EDA fork substitutes for an upstream abort must
 # still be visible to the gate that needs it. Every downgrade moves a
@@ -210,6 +211,7 @@ run "image-version pins are internally consistent" "$ROOT" python3 "$ROOT/tools/
 # it can never be the reason a landing fails. Adopting a newer image is this
 # repo's call, made deliberately with `sync_image_version.py --set X.Y.Z`, which
 # is where the #354 "the tag must actually resolve" check now lives.
+uncheckable_until 2027-02-28 "needs a REACHABLE ghcr registry: --report-upstream asks the registry what it has published, and rc 2 means it did not respond (an answer that disagrees is rc 0 by design -- this gate can never fail a landing)"
 # host-independence: EXCLUDE — resolves a tag on a remote registry, so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "upstream image currency (report-only)" "$ROOT" python3 "$ROOT/tools/vibeic-eda/sync_image_version.py" --report-upstream --require-remote
 
@@ -223,6 +225,7 @@ run_tolerating_uncheckable "upstream image currency (report-only)" "$ROOT" pytho
 # Cheap when clean: one `gh repo list`, and the per-branch comparison only runs
 # for an upstream that actually appears twice. rc 2 when it cannot ask, so an
 # offline run is NOT_CHECKED rather than a verdict.
+uncheckable_until 2027-02-28 "needs an AUTHENTICATED gh + network: it lists the org's repos live, and rc 2 means the org could not be asked (a duplicate it CAN see is rc 1)"
 # host-independence: EXCLUDE — reads live org state over the network, so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs/org_duplicate_fork_check.py vibeic
 
@@ -301,6 +304,7 @@ run "backlog items are tracked" "$ROOT" python3 "$PG/backlog_sanitize_check.py" 
 # returned rc 0 on a `sta` with 0 of 10 commands. A register describing a debt
 # that no longer exists is not conservative, it is a blind spot the exact size
 # of the bug it used to describe.
+uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: it invokes both STA engines inside it, and rc 2 means neither could be started (an engine that answers and disagrees is rc 1)"
 # host-independence: EXCLUDE — probes a container, so a host without the image gets NOT_CHECKED rather than the same verdict
 run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_engine_parity_check.py
 
@@ -411,6 +415,7 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 _per_published_cell_gates() {
   local _def="$1" _cell
   _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
+  uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no readable macro/OBS geometry, so the intersection has no population -- an intersection it CAN compute and finds is rc 1"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
   # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
@@ -419,6 +424,7 @@ _per_published_cell_gates() {
   # agent read a skill and remembered to run it. MEASURED on the published
   # cells: it parses real geometry (8290 shapes, 35 violations) — a live
   # verdict, not a shape that can only ever say "nothing to look at".
+  uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no parseable layout to judge the DRC certificate against, which is the state the gate exists to refuse to call a PASS"
   run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$(dirname "$_cell")"))" \
     "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
   # Another of the 35. Its subject is an inner FAIL that never reaches the outer
@@ -427,6 +433,7 @@ _per_published_cell_gates() {
   # stating that "I could not look" must never share an exit code with "I looked
   # and it was clean". MEASURED on the published cells: 67-68 reports examined
   # each, so this is a live verdict over a real denominator.
+  uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no step reports to examine, which the gate refuses to score as clean rather than exiting 0 on an empty population"
   run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
     "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
 }
@@ -485,6 +492,7 @@ run "PDK registry selectable"           "$ROOT" python3 "$PG/pdk_registry_select
 # a command consisting of the backslash alone. Both reported GATE_UNRUNNABLE
 # (`No such file or directory: '\'`), which is not a failure of this gate but
 # of the script's readability by its own readers.
+uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: --from-image reads the PDK layer tables out of it, and rc 2 means the PDKs could not be read at all"
 run_tolerating_uncheckable "PDK via patch vs layer min width" "$ROOT" python3 "$PG/pdk_via_patch_meets_layer_min_width_check.py" --from-image --advisory
 
 # vibe-ic#419 — the size guard `.gitignore` promised in a comment and nobody
@@ -567,6 +575,7 @@ run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_
 # The checker now refuses to call that state a PASS (rc 2 with the count), so
 # this line cannot go green until a contract-carrying report is committed, and
 # it goes green by itself on the first one that is.
+uncheckable_until 2026-11-30 "KNOWN DEBT, not a missing prerequisite: all committed compliance reports predate the blockers key, so every rule takes the pre-contract early return and rc 2 says so rather than reporting an unexercised guard as clean. Goes green by itself on the first contract-carrying report committed"
 run_tolerating_uncheckable "blocker list contract on committed reports" "$ROOT" \
     python3 "$PG/blocker_classification_check.py" --dir "$ROOT/benchmark-data"
 
@@ -675,6 +684,7 @@ run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_c
 # class has produced FIVE instances, two of them inside the fixes for the
 # previous ones. Refuses (rc 2) on a dirty checkout rather than reporting the
 # uncommitted work as findings.
+uncheckable_until 2027-02-28 "needs a CLEAN checkout: it compares the working tree against a fresh worktree at the same commit, and rc 2 means tracked modifications made that comparison meaningless (a genuinely host-dependent gate is rc 1)"
 run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
 # 2026-08-04 — `gate_cli_mutation_probe` makes a gate unable to fail and then
 # restores it in a `finally`. A `finally` does not run on SIGKILL, and twice in
@@ -835,6 +845,7 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 # covered by nothing automatic, and the gate now says so in the same document
 # that carries its verdict. NOT_CHECKED in the roll-up is the correct state and
 # is deliberately left in place.
+uncheckable_until 2026-11-30 "KNOWN GAP, recorded deliberately: no INSTALLED PDK artefacts are reachable here, so the gate has never seen one. The logic is covered by pytest over 41 fixtures; the artefacts are covered by nothing automatic, and NOT_CHECKED is the honest state"
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
   python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT"
 
