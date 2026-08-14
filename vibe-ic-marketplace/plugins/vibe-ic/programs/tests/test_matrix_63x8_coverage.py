@@ -1220,9 +1220,12 @@ def _run_outcome_reports(
     file exists to refuse.
     """
     assert paths, "no module paths given to the outcome run"
-    with ThreadPoolExecutor(
-            max_workers=_outcome_worker_count(len(paths))) as pool:
-        futures = [pool.submit(_run_one_module_outcome, p, cwd) for p in paths]
+    _width = _outcome_worker_count(len(paths))
+    with ThreadPoolExecutor(max_workers=_width) as pool:
+        # `_width` is passed only so a timeout can DISCLOSE what it was competing
+        # with. It changes no behaviour and no bound.
+        futures = [pool.submit(_run_one_module_outcome, p, cwd, _width)
+                   for p in paths]
         # `.result()` walked in `paths` order, never in completion order: a
         # module that fails or times out must raise the same first exception
         # whether or not a sibling happened to finish before it, or two arms of
@@ -1254,7 +1257,8 @@ def _run_outcome_reports(
 
 
 def _run_one_module_outcome(path: Path,
-                            cwd: Optional[Path]) -> Dict[str, List[Dict]]:
+                            cwd: Optional[Path],
+                            width: int = 1) -> Dict[str, List[Dict]]:
     """The single-module half of :func:`_run_outcome_reports`.
 
     ``--basetemp`` is REQUIRED, not tidiness, and it is what makes the
@@ -1288,11 +1292,39 @@ def _run_one_module_outcome(path: Path,
                 timeout=_OUTCOME_TIMEOUT_S, env=env,
             )
         except subprocess.TimeoutExpired as exc:
+            # STARVED is not HUNG, and this message used to name only the module
+            # — so a reader (and a batch gate) read it as "that module is
+            # broken" and attributed it to whichever PR touched the matrix.
+            # MEASURED 2026-08-15: d7 completes this very invocation in 35.7s
+            # ALONE, 59% of the bound, and exceeds it at width 4. Nothing about
+            # the module was wrong on either run.
+            #
+            # The bound still fires and this still FAILS — a wall-clock bound is
+            # the only thing that catches a genuine hang, and softening it would
+            # re-open the session-kill this exists to prevent. What changes is
+            # that the verdict now says what it actually observed.
+            _out = exc.stdout or exc.output or b""
+            if isinstance(_out, bytes):
+                _out = _out.decode("utf-8", "replace")
+            _err = exc.stderr or b""
+            if isinstance(_err, bytes):
+                _err = _err.decode("utf-8", "replace")
+            _progressed = bool(_out.strip() or _err.strip())
+            _kind = ("STARVED — the run WAS producing output when it was killed"
+                     if _progressed else
+                     "NO OUTPUT — it produced nothing before the bound, which is "
+                     "what a genuine hang or an import-time block looks like")
             raise AssertionError(
                 f"the outcome run for {path.name} did not finish within "
-                f"{_OUTCOME_TIMEOUT_S}s. This bound exists so that THIS "
-                f"assertion is what a reader gets, instead of a pytest session "
-                f"kill that takes every other file's verdict with it."
+                f"{_OUTCOME_TIMEOUT_S}s, running {width}-way concurrent. "
+                f"{_kind}. This bound exists so that THIS assertion is what a "
+                f"reader gets, instead of a pytest session kill that takes "
+                f"every other file's verdict with it.\n"
+                f"BEFORE attributing this to a change: re-run this ONE module "
+                f"alone. The bound is wall clock, so a module that finishes "
+                f"well inside it alone can exceed it purely from being "
+                f"co-scheduled with {width - 1} sibling(s), and that failure "
+                f"belongs to no commit."
             ) from exc
         assert out.is_file(), (
             f"the outcome run for {path.name} produced no manifest "
