@@ -642,6 +642,25 @@ run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_
 # discriminating: injecting a throwaway program makes it rc 1, removing it rc 0.
 run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_programs_index.py" --check
 
+# vibe-ic#1120 — the four PUBLISHED dimensions (Engineering Velocity,
+# Autonomous Improvement, Adversarial Verification, Silicon Proof). Same shape
+# as the two indexes above: the page is generated, `--check` re-derives it and
+# exits 1 if it disagrees, so a figure cannot be talked upward by editing the
+# page. It re-derives at the page's own stated ANCHOR rather than at HEAD, so a
+# landing does not redden it — a freshness gate that fires on every commit is a
+# bypassed gate.
+#
+# `run_tolerating_uncheckable`, and the reason is MEASURED rather than
+# defensive: every velocity figure is history-derived, and on a SHALLOW clone
+# the generator's own first run produced `86 of 89 commits` where the remote
+# `main` carries 2007 — wrong by ~22x and entirely plausible. It now REFUSES
+# (rc 2) on a shallow clone instead of reporting the smaller number. rc 2 is
+# therefore "this clone cannot answer", which is the normal state for a
+# developer's `--depth` checkout and must be LOUD and non-fatal; CI checks out
+# complete and genuinely checks. rc 1 (a hand-edited figure) still fails.
+run_tolerating_uncheckable "engineering evidence fresh" \
+    "$ROOT" python3 "$ROOT/tools/gen_engineering_evidence.py" --check
+
 # vibe-ic#542 — a test whose own subprocess timeout is at or above the pytest
 # harness bound cannot fail as a TEST. `--timeout-method=thread` takes the
 # whole SESSION down instead: `--maxfail` stops applying, no per-test
