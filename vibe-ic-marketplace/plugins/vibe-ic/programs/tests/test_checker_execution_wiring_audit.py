@@ -191,6 +191,73 @@ def test_checker_referenced_by_nothing_is_reported_separately(tmp_path):
     assert rep["test_only"] == []
 
 
+#: vibe-ic#1241. `ci_harness_timeout_ceiling_check` puts the per-call ceiling at
+#: harness_bound/3 = 180/3 = 60s. A bound ABOVE it cannot fire before the
+#: harness does, and pytest's thread-method timeout then kills the SESSION
+#: rather than the test — the invocation ends with no summary line.
+#:
+#: I wrote this helper at 600s in the SAME PR that fixes a reporting defect in
+#: this very audit, which is the honest version of how this class survives.
+#: MEASURED, `--durations`: the three tests that use `_cli` are 0.05s each. The
+#: module's 31.17s belongs to `test_real_repo_runs_and_is_deterministic`, which
+#: is pre-existing and does not go through here. 30s is ~600x the measured worst
+#: case for this helper and half the ceiling.
+_CLI_S = 30
+
+
+def _cli(root: Path, *extra):
+    """Run the audit as the landing gate runs it, and return the process."""
+    return subprocess.run(
+        [sys.executable, str(PROG), "--repo-root", str(root), *extra],
+        capture_output=True, text=True, timeout=_CLI_S)
+
+
+def test_the_zero_is_STATED_not_left_silent(tmp_path):
+    """vibe-ic#1130 item 5. `no runner at all` used to print only when it was
+    non-zero, so at zero the gate said nothing about that population — and a
+    count that appears only when it is non-zero cannot be told apart from a
+    check that did not run.
+
+    That is the same defect this program exists to find, one level up: the
+    audit that reports "N checkers nothing but a fixture runs" was itself
+    reporting one of its own populations conditionally.
+    """
+    _tree(tmp_path, ci="run: python3 sample_check.py\n")
+    r = _cli(tmp_path)
+    assert _run(tmp_path)["no_runner_at_all"] == [], "fixture must be the ZERO case"
+    assert "no-runner-at-all 0" in r.stdout, r.stdout
+
+
+def test_the_population_line_states_every_count_at_once(tmp_path):
+    """All four numbers on one line, so a reader never has to infer a
+    population from the absence of a line about it."""
+    _tree(tmp_path, ci="run: python3 sample_check.py\n")
+    out = _cli(tmp_path).stdout
+    for token in ("test-only", "no-runner-at-all", "skill-only", "baseline"):
+        assert token in out, (token, out)
+
+
+def test_a_NON_zero_no_runner_population_is_still_NAMED(tmp_path):
+    """The inverse, without which the two above are satisfied by replacing the
+    names with a bare count — which would be a regression dressed as a fix.
+    A number tells you how much debt there is; only the name lets anyone pay
+    it.
+
+    ASSERTED ON THIS POPULATION'S OWN LINE, not on the name appearing anywhere
+    in stdout. The first version of this test checked `"sample_check.py" in
+    out` and SURVIVED the mutant that drops these names, because the same
+    fixture's checker is also listed under the `[FAIL]` block for a different
+    population. A bare substring over whole-process output is satisfied by any
+    line that happens to mention the token, which is how an assertion becomes
+    decoration.
+    """
+    _tree(tmp_path)
+    assert _run(tmp_path)["no_runner_at_all"] == ["sample_check.py"]
+    out = _cli(tmp_path).stdout
+    assert "no-runner-at-all 1" in out, out
+    assert "(no runner at all) sample_check.py" in out, out
+
+
 def test_baseline_refuses_to_grow(tmp_path):
     """A checker LOSING its only real runner is a regression, not a fact."""
     _tree(tmp_path)
