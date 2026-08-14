@@ -104,28 +104,196 @@ def _read(p: Path) -> str:
         return ""
 
 
-def blob_for(bp: Path, b: str, source: str) -> str:
-    """Build a benchmark's detection blob from the chosen source.
+def doc_sequence(bp: Path, b: str, source: str):
+    """The ordered document sequence ``blob_for`` concatenates, as
+    ``(head_group, tail_group)`` — both name-sorted (vibe-ic#1444).
 
-    Mirrors the runner's auto-dispatch ([14e2b/15]) ordering: input_doc FIRST,
-    then the generated/gold L-docs, so a subject-dominance head check sees the
-    source spec's title exactly as it does at dispatch time.
+    THE ORDERING MODEL, stated once so the guards can bracket it instead of
+    sampling it. The blob is the concatenation of TWO groups: the input_doc
+    source spec(s), then the generated/gold L-docs. A directory read may return
+    the members of a group in ANY order, but it can never interleave the two —
+    so the blob HEAD (what a subject-dominance ``low[:N]`` check reads) is drawn
+    from whichever group comes first and is non-empty, and the whole reachable
+    head space is enumerated by letting each member of that group LEAD.
+
+    Both groups are returned sorted, which is the layout ``blob_for`` pins: a
+    head-window predicate over an unsorted concatenation answers a question
+    about readdir order, not about the documents.
     """
-    parts = []
+    head: list[Path] = []
+    tail: list[Path] = []
     idir = bp / b / "phase1" / "input_doc"
     if source in ("input_doc", "superset") and idir.is_dir():
-        for f in sorted(idir.glob("*.txt")) + sorted(idir.glob("*.md")):
-            parts.append(_read(f))
+        head = sorted(idir.glob("*.txt")) + sorted(idir.glob("*.md"))
     docdir_name = "claude_extracted" if source == "gold" else "generated_docs"
     if source != "input_doc":
         gd = bp / b / "phase1" / docdir_name
         names = (sorted(gd.glob("*.json")) if source == "superset"
                  else [gd / n for n in ("L1_DATASHEET.json", "L2_FRS.json",
                                         "L3_CMD_PROTOCOL.json")])
-        for f in names:
-            if f.is_file():
-                parts.append(_read(f))
-    return "\n".join(parts)
+        tail = [f for f in names if f.is_file()]
+    if not head:
+        # No input_doc: the generated L-docs ARE the head group, and the blob
+        # head is whichever of them readdir happens to return first. For the
+        # benchmarks in this state the "input_doc-FIRST, so the head is the
+        # source spec's title/abstract" premise the detectors cite is ABSENT.
+        head, tail = tail, []
+    return head, tail
+
+
+def blob_for(bp: Path, b: str, source: str, lead: Path | str | None = None,
+             reverse: bool = False) -> str:
+    """Build a benchmark's detection blob from the chosen source.
+
+    Mirrors the runner's auto-dispatch ([14e2b/15]) ordering: input_doc FIRST,
+    then the generated/gold L-docs, so a subject-dominance head check sees the
+    source spec's title exactly as it does at dispatch time.
+
+    ``lead`` hoists one document of the HEAD group to the front — the single
+    degree of freedom a directory read has over the blob head (vibe-ic#1444).
+    ``reverse`` reads both groups in descending name order. Both keep the file
+    SET identical; only the byte layout moves.
+    """
+    head, tail = doc_sequence(bp, b, source)
+    if reverse:
+        head, tail = head[::-1], tail[::-1]
+    if lead is not None:
+        lead = Path(lead)
+        if lead in head:
+            head = [lead] + [f for f in head if f != lead]
+    return "\n".join(_read(f) for f in head + tail)
+
+
+# ---------------------------------------------------------------------------
+# WHICH DETECTORS CAN EVEN NOTICE THE ORDER (vibe-ic#1444)
+# ---------------------------------------------------------------------------
+# A detector that only asks "is this token anywhere in the blob" cannot tell
+# two orderings apart — the file SET is the same in every ordering, so its
+# verdict is permutation-invariant and one canonical ordering covers it.
+# A detector that asks about a POSITION — ``low[:3500]``, ``find(...) < n``,
+# ``startswith``, an anchored pattern — answers a different question per
+# ordering, and is the family that has to be bracketed exhaustively.
+#
+# This is decided by reading the detector's BYTECODE, not its prose: the
+# classification must not depend on a comment staying true. The default is
+# SENSITIVE — anything unresolvable (an opaque callable, a call into a module
+# we cannot follow) is bracketed rather than trusted.
+_POSITIONAL_OPCODES = {"BINARY_SLICE", "BUILD_SLICE", "STORE_SLICE"}
+# Position-revealing str/re members. ``search``/``finditer`` are deliberately
+# ABSENT: an UNANCHORED pattern matched over the whole blob answers the same
+# question in every ordering. An anchor smuggles the position back in, so
+# anchor marks in the code's own string constants are caught separately.
+_POSITIONAL_ATTRS = {
+    "find", "rfind", "index", "rindex", "startswith", "endswith",
+    "partition", "rpartition", "split", "rsplit", "splitlines",
+    "start", "end", "span",
+}
+_ANCHOR_MARKS = ("^", "$", "\\A", "\\Z")
+_SCAN_MAX_DEPTH = 4
+
+
+def positional_reason(fn, module=None, _depth: int = 0, _seen=None) -> str:
+    """Why ``fn``'s verdict may depend on WHERE content sits in the blob.
+
+    Returns a short reason string, or ``""`` when the function is
+    permutation-invariant as far as this scan can tell. Unresolvable =>
+    a reason (fail SENSITIVE), never a silent clean.
+    """
+    import dis
+    import types
+
+    if _seen is None:
+        _seen = set()
+    key = getattr(fn, "__qualname__", None) or repr(fn)
+    if key in _seen or _depth > _SCAN_MAX_DEPTH:
+        return ""
+    _seen.add(key)
+    code = getattr(fn, "__code__", None)
+    if code is None:
+        return "opaque callable (no bytecode to read)"
+    if module is None:
+        module = sys.modules.get(getattr(fn, "__module__", ""), None)
+    # Resolve callees through the function's OWN globals first — a detector
+    # imported into the guard under a different module object must still be
+    # followed — then fall back to the module we were handed.
+    namespace = dict(getattr(fn, "__globals__", {}) or {})
+    if module is not None:
+        for n in dir(module):
+            namespace.setdefault(n, getattr(module, n, None))
+
+    bodies = [code] + [c for c in code.co_consts
+                       if isinstance(c, types.CodeType)]
+    for body in bodies:
+        for ins in dis.get_instructions(body):
+            if ins.opname in _POSITIONAL_OPCODES:
+                return f"slices the blob ({ins.opname} in {body.co_name})"
+            if (ins.opname in ("LOAD_METHOD", "LOAD_ATTR")
+                    and ins.argval in _POSITIONAL_ATTRS):
+                return f".{ins.argval}() in {body.co_name}"
+        for const in body.co_consts:
+            if isinstance(const, str) and any(a in const
+                                              for a in _ANCHOR_MARKS):
+                return f"anchor-marked literal {const!r} in {body.co_name}"
+    # Module-level / imported callees, plus anything captured in a closure cell
+    # (a detector built by a factory is still a detector).
+    callees = [(n, namespace.get(n)) for n in code.co_names]
+    for cell in (getattr(fn, "__closure__", None) or ()):
+        try:
+            callees.append((f"<closure {code.co_name}>", cell.cell_contents))
+        except ValueError:  # pragma: no cover - empty cell
+            continue
+    for name, callee in callees:
+        if isinstance(callee, types.FunctionType):
+            sub = positional_reason(
+                callee, sys.modules.get(callee.__module__, module),
+                _depth + 1, _seen)
+            if sub:
+                return f"via {name}(): {sub}"
+    return ""
+
+
+def positional_detectors(detectors) -> dict:
+    """{stem: reason} for every detector whose verdict can move with the order."""
+    out = {}
+    for stem, fn in detectors.items():
+        reason = positional_reason(fn)
+        if reason:
+            out[stem] = reason
+    return out
+
+
+def bracket_leads(bp: Path, source: str = "superset", detectors=None):
+    """Every foreign fire reachable by SOME directory order, for the detectors
+    that can notice the order at all.
+
+    Returns ``{(detector, benchmark): [leading doc name, ...]}``. An entry means
+    the sweep's verdict on that pair is decided by which document a directory
+    read happens to return first — a lottery, not a measurement.
+    """
+    if detectors is None:
+        detectors = discover_detectors()
+    positional = positional_detectors(detectors)
+    benches = sorted(d.name for d in bp.iterdir()
+                     if d.is_dir() and (d / "phase1").is_dir())
+    reachable: dict = {}
+    for b in benches:
+        head, _tail = doc_sequence(bp, b, source)
+        if len(head) < 2:
+            continue  # one candidate => no freedom => the canonical sweep covers it
+        for f in head:
+            blob = blob_for(bp, b, source, lead=f)
+            if not blob:
+                continue
+            for stem in positional:
+                if stem == b or (stem, b) in DERIVED_SIBLING_CROSS_FIRES:
+                    continue
+                try:
+                    hit = bool(detectors[stem](blob))
+                except Exception:
+                    hit = False
+                if hit:
+                    reachable.setdefault((stem, b), []).append(f.name)
+    return positional, benches, reachable
 
 
 def run_matrix(bp: Path, source: str):
@@ -167,6 +335,10 @@ def main(argv=None) -> int:
                     default="generated")
     ap.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BP)
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument("--bracket-leads", action="store_true",
+                    help="report every foreign fire reachable by SOME directory "
+                         "order (vibe-ic#1444), instead of the single canonical "
+                         "ordering the sweep pins")
     args = ap.parse_args(argv)
 
     if not args.benchmark_dir.is_dir():
@@ -174,6 +346,28 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
     sys.path.insert(0, str(PROGRAMS_DIR))
+
+    if args.bracket_leads:
+        positional, benches, reachable = bracket_leads(
+            args.benchmark_dir, args.blob)
+        print(f"[lead-bracket] blob={args.blob}  benchmarks={len(benches)}  "
+              f"order-sensitive detectors={len(positional)}")
+        for stem, why in sorted(positional.items()):
+            print(f"    is_{stem}: {why}")
+        for (stem, b), leads in sorted(reachable.items()):
+            print(f"  [REACHABLE] is_{stem} fires on {b} when any of "
+                  f"{len(leads)} document(s) leads: {sorted(leads)}")
+        if args.json:
+            args.json.write_text(json.dumps(
+                {"blob": args.blob, "positional": positional,
+                 "reachable": {f"{s}|{b}": v
+                               for (s, b), v in reachable.items()}}, indent=2))
+        if reachable:
+            print(f"\n{len(reachable)} order-reachable foreign fire(s)")
+            return 1
+        print("\nALL_PASS")
+        return 0
+
     detectors, benches, rows, misfires, own_fires = run_matrix(
         args.benchmark_dir, args.blob)
 
