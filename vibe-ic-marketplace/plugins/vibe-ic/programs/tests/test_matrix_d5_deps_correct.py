@@ -511,11 +511,7 @@ def external_input_declarations(step_id) -> Tuple[str, ...]:
 #: these three are named, evidenced and pointed at the issue rather than
 #: silently forgiven. When #1070 lands, this set empties and
 #: `test_d5_the_deferred_register_only_shrinks` reddens if it does not.
-_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {
-    "A1": ("D1",),      # reads L1_DATASHEET.json + L5_ADI_SPEC.json
-    "25": ("24",),      # reads IR-drop's outputs: all
-    "M1": ("37",),      # reads phase3/stage4/gds/*.gds
-}
+_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {}
 
 
 
