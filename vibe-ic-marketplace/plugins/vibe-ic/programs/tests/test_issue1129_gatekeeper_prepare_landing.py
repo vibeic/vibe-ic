@@ -24,6 +24,7 @@ import pytest
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 MOD = PROGRAMS / "gatekeeper_prepare_landing.py"
+ATOMIC = PROGRAMS / "_atomic_artefact.py"
 
 
 def _load(path: Path, name: str):
@@ -285,8 +286,11 @@ def landing_repo(tmp_path):
 
     Copies rather than stubs: mutate either file in this repository and these
     tests move, which is the binding that was missing. Only
-    `gatekeeper_prepare_landing.py` is needed beside the script — its module
-    imports are stdlib, and `gatekeeper_assign_version` is loaded lazily AFTER
+    `gatekeeper_prepare_landing.py` is needed beside the script, and so is
+    `_atomic_artefact.py`: the program imports it at module level (vibe-ic#1082,
+    so a declared report cannot appear half-written), which makes the helper a
+    REAL dependency of the seed rather than an optional extra. Everything else
+    it imports is stdlib, and `gatekeeper_assign_version` is loaded lazily AFTER
     the dirty check these tests stop at.
     """
     assert _LAND_SH.is_file(), f"{_LAND_SH} not found — resolve the repo root"
@@ -297,6 +301,7 @@ def landing_repo(tmp_path):
     (r / "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin").mkdir(parents=True)
     (r / "tools/gatekeeper-land.sh").write_bytes(_LAND_SH.read_bytes())
     (prog / "gatekeeper_prepare_landing.py").write_bytes(MOD.read_bytes())
+    (prog / "_atomic_artefact.py").write_bytes(ATOMIC.read_bytes())
     (r / "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json").write_text(
         '{"version": "1.2.3"}\n', encoding="utf-8")
     (prog / "INDEX.md").write_text("stale\n", encoding="utf-8")

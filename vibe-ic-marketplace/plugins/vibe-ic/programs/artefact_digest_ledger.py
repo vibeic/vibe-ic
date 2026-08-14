@@ -61,6 +61,8 @@ import json
 import os
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 GENESIS = "vibe-ic/artefact-digest-ledger/1"
 LEDGER_NAME = "artefact_digest_ledger.jsonl"
@@ -226,7 +228,7 @@ def main(argv=None) -> int:
 
     rep = verify(run_dir, anchor)
     if args.json_out:
-        args.json_out.write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(args.json_out, json.dumps(rep, indent=2) + "\n", encoding="utf-8")
 
     if rep["verdict"] == "VACUOUS":
         print(f"[VACUOUS] artefact_digest_ledger: {rep['reason']} — this is NOT "

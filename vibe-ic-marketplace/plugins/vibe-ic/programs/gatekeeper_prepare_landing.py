@@ -74,6 +74,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Set, Tuple
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent
@@ -289,7 +291,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"    {n}")
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps(
+        atomic_write_text(args.json, json.dumps(
             {"verdict": label, "notes": notes, "declared_paths": declared},
             indent=1), encoding="utf-8")
     return rc
