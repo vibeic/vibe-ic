@@ -435,6 +435,107 @@ run_repo_tools_pytest() {
 }
 run_repo_tools_pytest
 
+# ── EVERY OTHER TREE THE SELECTOR CANNOT REACH ─────────────────────────────
+# vibe-ic#1424. `run_pytest` runs the SELECTOR'S list and the selector is rooted
+# at `programs/tests` (`_TESTS_REL`, and an explicit filter at :698), so it can
+# emit nothing else — MEASURED on 3d13e2c59 against a real base: 29 files
+# selected, 0 of them outside that tree. `run_repo_tools_pytest` above closed
+# the same hole for repo-root `tools/` and only for that. What was still left
+# with NO landing stage at all, tracked files only:
+#
+#     skills/*/tests/               67 files    222 tests
+#     mcp-eda/                      31          201
+#     tools/phase1_engine/tests/     8          121
+#     _shared/                       3          283
+#                                  ---         ----
+#                                  109 files    827 pytest nodes
+#
+# #1391 and #1420 wired two of those trees into `run_tests.sh`, which is the
+# DEVELOPER-facing full suite. Neither extended landing coverage, and the
+# natural reading of "wired into the runners" is that it does. It did not: a
+# developer running the full suite saw those failures; a landing never could.
+#
+# THE CORPUS IS A COMPLEMENT, NEVER A ROSTER — "every tracked test file MINUS
+# what a stage already runs MINUS what is DECLARED out". A list of trees would
+# go stale the first time one is added, silently and in the direction that
+# still prints PASS. `benchmark-data/`'s 121 `test_*.py` are the one declared
+# exclusion (CVDP corpus artefacts, not this repo's tests), stated in the
+# program with its reason rather than implied by a constant.
+#
+# COST, measured as this line runs it: 761 passed, 58 skipped, 5 xfailed,
+# 3 xpassed, 0 failed in 21 s. Zero INHERITED reds — not zero cost: the point
+# of adopting a tree is that its FUTURE reds block a landing.
+#
+# cwd is $ROOT, as for `run_repo_tools_pytest`, and that is where this code
+# says it lives: `tools/phase1_engine/gap_detect.py:43` resolves its defaults
+# dir as a bare repo-root-relative path. From $PLUGIN two of these tests fail —
+# vibe-ic#1390, open, a defect in that resolution and not silenced here.
+run_unselectable_pytest() {
+  local files out rc wg wrc snap list lrc
+  list="$(mktemp -t gk_unsel.XXXXXX)"
+  ( cd "$ROOT" && python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" \
+        --repo "$ROOT" > "$list" ) ; lrc=$?
+  # rc 2 is NOT DETERMINED. It is not an empty corpus, and it must not be
+  # allowed to look like one — the whole defect this stage exists for is a
+  # set of tests nobody could tell from a set that passed.
+  if [ "$lrc" -ne 0 ]; then
+    echo "  FAIL  unselectable tests: the corpus could not be enumerated"
+    echo "        (landing_unselectable_pytest_corpus.py rc=$lrc) — that is"
+    echo "        'I could not look', which is never a pass."
+    FAILED=1; rm -f "$list"; return
+  fi
+  mapfile -t files < "$list"; rm -f "$list"
+  if [ "${#files[@]}" -eq 0 ]; then
+    echo "  FAIL  unselectable tests: the complement is EMPTY — either every"
+    echo "        tree is genuinely covered (say so by declaring it) or the"
+    echo "        census broke. A gate over zero items is not a pass."
+    FAILED=1; return
+  fi
+  # As in `run_repo_tools_pytest`: the in-process `suite_write_guard` is loaded
+  # by the PLUGIN conftest, and this session's rootdir is not guaranteed to be
+  # it, so the same property is asserted from the outside via the same program
+  # rather than quietly dropped.
+  snap="$(mktemp -t gk_unsel_wg.XXXXXX)"
+  python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+      --snapshot "$snap" >/dev/null 2>&1 || {
+    echo "  FAIL  unselectable tests: could not baseline the tree — not a pass"
+    FAILED=1; rm -f "$snap"; return
+  }
+  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+        -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+        "${files[@]}" 2>&1 )"
+  rc=$?
+  wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+        --compare "$snap" 2>&1)"; wrc=$?
+  rm -f "$snap"
+  # THE COUNT IS NOT IN THE LABEL, and that is deliberate. #1431: the two arms
+  # of `gatekeeper-verify-merge.sh` subtract gate logs BY PRINTED LABEL, so a
+  # label carrying a discovery count renames its own gate whenever a branch adds
+  # a test file — and the verdict then reads a repaired gate as a silenced one.
+  # This corpus grows with every new tree, which is exactly the branch shape
+  # that would trip it, so the count is REPORTED on its own line instead.
+  printf '        unselectable corpus: %s file(s)\n' "${#files[@]}"
+  if [ "$rc" -ne 0 ]; then
+    echo "  FAIL  unselectable tests"
+    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    FAILED=1; return
+  fi
+  if [ "$wrc" -ne 0 ]; then
+    printf '  FAIL  unselectable tests wrote to the tree (write-guard rc=%s)\n' "$wrc"
+    printf '%s\n' "$wg" | tail -8 | sed 's/^/          /'
+    FAILED=1; return
+  fi
+  echo "  PASS  unselectable tests"
+}
+run_unselectable_pytest
+
+# The census that decides the stage above must itself be trustworthy: a
+# subtrahend whose stage no longer exists, or an exclusion whose reason no
+# longer describes anything, both shrink the corpus in the direction that still
+# prints PASS. rc=1 on either.
+run "unselectable-test census is not stale" \
+    python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
+
 run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh"
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 
