@@ -57,13 +57,16 @@ import phase3_one_shot_runner as P3       # noqa: E402
 CONTAINER = "vibeic-eda"
 
 
-def _container_available() -> bool:
-    try:
-        r = subprocess.run(["docker", "exec", CONTAINER, "true"],
-                           capture_output=True, timeout=30)
-        return r.returncode == 0
-    except Exception:
-        return False
+def _container_probe():
+    """Probe the container, distinguishing "not there" from "did not answer".
+
+    The previous form ran the same `docker exec` with a 30s budget and a bare
+    `except Exception: return False`, so a probe that TIMED OUT under load was
+    reported as "container not available" — a claim it never established
+    (vibe-ic#1283). Every test below then skipped, and the suite read green.
+    """
+    import eda_container_probe as ecp
+    return ecp.container_execable(CONTAINER)
 
 
 def _dexec(cmd: str, timeout: int = 180):
@@ -72,8 +75,21 @@ def _dexec(cmd: str, timeout: int = 180):
     return r.returncode, (r.stdout or "") + "\n" + (r.stderr or "")
 
 
-requires_container = pytest.mark.skipif(
-    not _container_available(), reason="vibeic-eda container not available")
+@pytest.fixture
+def eda_container():
+    """Guard, evaluated per-test at CALL time rather than at collection.
+
+    A `skipif` decorator can only skip, so it cannot route an unanswerable
+    probe differently from an absent container. As a fixture, `require` gets
+    to decide: ABSENT skips (unchanged), UNCHECKABLE is NOT CHECKED and
+    becomes a failure under VIBEIC_REQUIRE_EDA_VERIFICATION.
+    """
+    import eda_container_probe as ecp
+    ecp.require(_container_probe(), f"the {CONTAINER} container")
+
+
+# Same name, same call sites: every `@requires_container` below is unchanged.
+requires_container = pytest.mark.usefixtures("eda_container")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
