@@ -1214,8 +1214,38 @@ if _log:
                  isinstance(mode, str) and any(c in mode for c in "wax+"))
         return _real_open(file, mode, *a, **k)
 
-    io.open = _traced_open
-    builtins.open = _traced_open
+    # AN INSTANCE, NOT A BARE FUNCTION — and the difference is load-bearing.
+    #
+    # `sitecustomize` runs at interpreter startup, BEFORE `pathlib` is imported.
+    # `pathlib` then executes `class _NormalAccessor: open = io.open`, capturing
+    # whatever `io.open` is at that moment — i.e. this shim.
+    #
+    # The substitution is not type-neutral. `io.open` is a C builtin and is NOT
+    # a descriptor; a Python function IS one. As a class attribute the bare
+    # function therefore BINDS, so `self._accessor.open(self, mode, ...)`
+    # arrives as `_traced_open(accessor, path, mode, ...)`: `file` gets the
+    # accessor and `mode` gets a PosixPath, raising
+    #     TypeError: open() argument 'mode' must be str, not PosixPath
+    # on EVERY pathlib read inside a traced program.
+    #
+    # That is worse than a crash. The tracer still loads — `trace.log` carries
+    # `!\tTRACER_LOADED` — so the liveness marker says the instrument is live
+    # while the instrument destroys its own subject, and the probes then score a
+    # real zero (`0 written path(s), 0 producer->consumer edge(s)`). A probe that
+    # changes what it measures and reports the change AS the measurement is the
+    # exact shape this census exists to find.
+    #
+    # An instance of a `__call__` class is not a descriptor, so it does not bind
+    # and the arguments arrive as written. Verified on CPython 3.10.12; note
+    # `_NormalAccessor` was removed in 3.11, so a newer interpreter hides this
+    # rather than fixing it — which is why it is pinned here explicitly.
+    class _TracedOpen:
+        def __call__(self, file, mode="r", *a, **k):
+            return _traced_open(file, mode, *a, **k)
+
+    _shim = _TracedOpen()
+    io.open = _shim
+    builtins.open = _shim
 
     _real_os_open = os.open
 
