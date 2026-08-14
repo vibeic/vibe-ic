@@ -92,7 +92,18 @@ import tokenize
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-_GATE_RE = re.compile(r"_(check|lint|audit|guard)$")
+#: vibe-ic#1130 — `_gate` IS in this set, and its absence was the second
+#: route to "a checker nothing runs". `checker_execution_wiring_audit`
+#: added `*_gate.py` to its own population in #693, after
+#: `gitignore_scratch_guard.py` proved a wired-to-nothing gate could hide
+#: behind a filename; THIS regex never got the same widening, so the two
+#: instruments that both audit wiring disagreed about what a gate is.
+#: MEASURED on a38902d1: wiring-audit population 585, this one 581, and
+#: the difference is exactly the four `*_gate.py` programs —
+#: mpw_precheck_result_gate, plugin_change_pytest_gate, rtl_precheck_gate,
+#: wake_gen_silence_gate. Strict subset in one direction (0 the other
+#: way), so this is a pure widening with a bounded blast radius.
+_GATE_RE = re.compile(r"_(check|lint|audit|guard|gate)$")
 _BASELINE_NAME = "gate_is_wired_baseline.json"
 
 #: Where a reference means the gate can be REACHED without a human choosing to.
