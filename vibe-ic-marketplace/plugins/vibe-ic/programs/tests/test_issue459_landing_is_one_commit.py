@@ -178,16 +178,35 @@ def test_the_real_history_is_measured_not_assumed():
     # rather than failed — and the assertion below is untouched for any clone
     # that can actually answer, which is the only state where it means
     # anything.
-    if subprocess.run(["git", "-C", str(repo), "rev-parse",
-                       "--is-shallow-repository"], capture_output=True,
-                      text=True).stdout.strip() == "true":
-        pytest.skip(
-            "shallow clone: `examined` would measure the checkout depth, not "
-            "the project's history — run `git fetch --unshallow` to make this "
-            "test meaningful")
+    #
+    # SHALLOWNESS IS NOT THE CONDITION — DEPTH IS, and the difference is the
+    # whole of the narrowing this test was HELD for. `--is-shallow-repository`
+    # answers "was this clone truncated", not "is this clone too short to
+    # answer". A shallow clone deeper than the window answers perfectly well,
+    # and skipping there retires a live assertion on a host where it passes.
+    # Measured across three configurations:
+    #
+    #   is-shallow   commits   examined >= 100   skip on shallowness   correct?
+    #   true          96        FAILS             skips                 yes
+    #   true         668        would PASS        skips                 NO
+    #   true         129        PASSES            skips                 NO
+    #   false       2019        PASSES            runs                  yes
+    #
+    # So the probe runs AFTER the measurement and excuses only the state that
+    # is genuinely unanswerable: truncated AND short. A complete-but-small
+    # clone is still asserted against — `test_the_shallow_skip_does_NOT_disarm_
+    # the_count_on_a_real_clone` below is the paired guard for exactly that,
+    # and it keeps this narrowing from widening back out.
     findings, examined = L.find_unsquashed(repo, 200)
     if examined == 0:
         pytest.skip("no history available")
+    if examined < 100 and subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--is-shallow-repository"],
+            capture_output=True, text=True).stdout.strip() == "true":
+        pytest.skip(
+            f"shallow clone: examined={examined} is the checkout depth, not "
+            f"the project's history — run `git fetch --unshallow` to make this "
+            f"test meaningful")
     assert examined >= 100, examined
     # Recorded baseline: the shape existed 4 times in the 200 commits before
     # this landed. A regression guard can only fire on a NEW instance.
