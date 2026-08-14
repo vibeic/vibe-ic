@@ -238,7 +238,7 @@ from matrix_63x8 import cells as C, flowref as F, waivers as W
 
 The ledger's unit is a step, but dimensions 2 (falsifiability), 4
 (criteria-match) and 6 (skip discipline) each ask their question of a gate
-CLAUSE — 164<!--figure:blocking_clauses--> blocking clauses over 62<!--figure:gated_steps--> gated steps. A cell-level
+CLAUSE — 165<!--figure:blocking_clauses--> blocking clauses over 62<!--figure:gated_steps--> gated steps. A cell-level
 `xfail(strict=True)` cannot express "5 of this step's 6 clauses are proven and
 the 6th is not", so those modules carry an in-module per-clause register with
 the same both-directions anti-rot semantics (a stale entry reddens; an entry
