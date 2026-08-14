@@ -698,13 +698,27 @@ def test_control_removing_one_entry_uncovers_the_cells_it_carried(monkeypatch):
 #: zero. With a budget the same run keeps its summary line and names what it
 #: could not reach.
 #:
-#: 20 s, not a round number picked by feel: the budget is checked BETWEEN pairs
-#: and `replay_many` halves the per-cell clamp so one pair cannot overrun the
-#: deadline by a whole cell, so the only thing this has to absorb is process
-#: spawn/teardown noise on the last wave plus the dict-build and assertions that
-#: follow the replay inside the same test (sub-second). It is deliberately NOT
-#: proportional to the bound: the overrun it covers does not grow with it.
-REPLAY_BUDGET_HEADROOM = 20
+#: 10 s, and DELIBERATELY SMALL, because every second of headroom is a second in
+#: which a replay that WOULD have finished is cut off instead. That window is the
+#: whole cost of this guard: below `bound - headroom` nothing changes, above
+#: `bound` the session was dying anyway, and only in between does a green become
+#: a named red. Shrinking the headroom shrinks the only harm this can do.
+#:
+#: 10 s is what the window has to absorb, not a round number picked by feel: the
+#: budget is checked BETWEEN pairs and `replay_many` halves the per-cell clamp so
+#: one pair cannot overrun the deadline by a whole cell, so the residue is
+#: process spawn/teardown on the last wave plus the dict-build and assertions
+#: that follow the replay inside the same test (sub-second, measured). It is
+#: deliberately NOT proportional to the bound: the overrun it covers does not
+#: grow with the bound.
+#:
+#: MEASURED, and this is the number that decides whether the trade is worth it:
+#: at load 155 on 32 cores the witness plan did NOT finish, and the file reported
+#: `8 failed, 90 passed` — eight NAMED reds, each saying the replay was cut off.
+#: Without the budget the same file at load 224 reported NOTHING: the session was
+#: killed and `passed|failed|error` matched 0 lines. The guard trades a run that
+#: greps as zero failures for a run that says what it could not measure.
+REPLAY_BUDGET_HEADROOM = 10
 
 #: Set by :func:`_record_harness_bound` from the bound pytest is actually
 #: enforcing. `None` means no per-test bound is in effect — the audit lane —
