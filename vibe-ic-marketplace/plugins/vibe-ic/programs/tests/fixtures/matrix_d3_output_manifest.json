@@ -182,6 +182,13 @@
           "alternative": "reports/phase1/extraction_coverage_report.json",
           "path": "reports/phase1/extraction_coverage_report.json",
           "size_bytes": 4610
+        },
+        "phase1/generated_docs/L21_POWER_INTENT.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/generated_docs/L21_POWER_INTENT.json",
+          "path": "phase1/generated_docs/L21_POWER_INTENT.json",
+          "size_bytes": 758
         }
       }
     },
