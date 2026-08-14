@@ -2,6 +2,26 @@
 """
 phase1_coverage_report_present_check.py — gate (BACKLOG-v13 Wave 5).
 
+ENFORCEMENT: advisory
+
+  This answers ONE question: does a RUNNER spawn this gate inline, where its
+  rc could stop the step as it happens? It does not — no entry in `_RUNNERS`
+  invokes it — and `advisory` is `flow_gate_enforcement_audit`'s token for
+  that answer. #1219 wired this gate into D1's `program_exit_zero` slot, which
+  is a DIFFERENT axis: there `flow_compliance_check` fails the step on rc=1.
+
+  So this line is NOT a demotion, and must never be read as one. The
+  "non-waivable / HARD threshold" paragraph below is a claim about VERDICT
+  SEVERITY and is untouched — the gate still exits 1 on a violation. Stating
+  severity while saying nothing about the enforcement axis is exactly the #886
+  defect; two gates hit it before this one (`test_macro_obs_gate_enforcement_
+  declared.py`). In particular this line is not permission to move the clause
+  to `advisory_program_exit_zero`, where the finding is recorded and the step
+  passes anyway; the companion test pins the slot so that move fails loudly.
+
+  Making it ENFORCED is an owner's call with real blast radius — 142 of the
+  flow's 159 gates are AUDIT_ONLY — not a side effect of declaring intent.
+
 Wave 23 (v0.119.55) — extraction coverage is non-waivable. 100% is
 the HARD acceptance threshold for Phase 1 (doc-extraction). If a literal cannot be
 extracted by the auto-discovery patterns, the agent MUST add a
