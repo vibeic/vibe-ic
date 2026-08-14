@@ -57,6 +57,23 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _DEFAULT_REPO = "vibeic/vibe-ic"
+_health = None
+try:  # sibling module; loaded by path so the shim's callers work unchanged
+    import importlib.util as _ilu
+    from pathlib import Path as _P
+    _spec = _ilu.spec_from_file_location(
+        "api_health", _P(__file__).resolve().parent / "api_health.py")
+    _health = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_health)
+except Exception:  # pragma: no cover - degraded, and it SAYS so below
+    class _health:  # type: ignore
+        SECONDARY_LIMIT = "SECONDARY_LIMIT"
+        @staticmethod
+        def classify(*a, **k): return "UNCLASSIFIED (api_health.py unavailable)"
+        @staticmethod
+        def advice(*a, **k): return "Treat the response as NO EVIDENCE."
+
+
 _API_BASE = "https://api.github.com"
 
 
@@ -114,6 +131,14 @@ def _api_get(url: str, token: str) -> Tuple[int, Any]:
         return 0, {"message": f"network error: {exc!r}"}
 
 
+def _rate_limit_snapshot(token: str):
+    """The quota, or None. `rate_limit` is EXEMPT from the secondary limit, so
+    it still answers while everything else 403s — which is exactly why it is
+    worth asking, and exactly why its 'healthy' answer misleads on its own."""
+    status, payload = _api_get(f"{_API_BASE}/rate_limit", token)
+    return payload if status == 200 else None
+
+
 def _list_open_issues(repo: str, token: str) -> List[Dict[str, Any]]:
     """Return open non-PR issues, sorted by issue number (descending)."""
     out: List[Dict[str, Any]] = []
@@ -123,8 +148,17 @@ def _list_open_issues(repo: str, token: str) -> List[Dict[str, Any]]:
                f"?state=open&per_page=100&page={page}")
         status, data = _api_get(url, token)
         if status != 200 or not isinstance(data, list):
+            # vibe-ic#1319. A failed call is NOT evidence about the repository:
+            # returning [] here would report "no open issues" to an agent whose
+            # only problem is that it is blocked, and the queue would read that
+            # as "nothing to claim". Raise, and say WHICH limit it is — a
+            # secondary limit leaves the quota looking healthy, so the operator
+            # is otherwise told to keep going.
+            state = _health.classify(status, data, _rate_limit_snapshot(token))
             raise RuntimeError(
-                f"GET {url} failed: status={status} payload={data!r}")
+                f"GET {url} failed: status={status} [{state}] "
+                f"{_health.advice(state, _rate_limit_snapshot(token))} "
+                f"payload={data!r}")
         for it in data:
             if it.get("pull_request"):
                 continue  # skip PRs
