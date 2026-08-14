@@ -811,7 +811,12 @@ run "no gate is left neutered"          "$PLUGIN" python3 programs/neutered_gate
 # planted gate per probe that is the only reason a sweep reporting zero can be
 # believed. An uncadenced control is the #1019 shape one level up, and it is a
 # particularly bad one here, because what rots silently is the instrument that
-# decides whether everything else is honest. 39 tests, 11 s measured.
+# decides whether everything else is honest. 95 tests; measured twice at
+# this consolidation at 25 s and 137 s on the same tree -- the mutation
+# probes dominate and vary with machine load, so budget for the high one.
+# Every subprocess this file starts is bounded at 55 s or less, strictly under
+# the 180 s `--timeout-method=thread` session bound below, so a hang fails
+# ONE test here instead of killing the run and losing every other result.
 run "liar census controls still fire"   "$ROOT" env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
     python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
     "$ROOT/tools/test_liar_census.py"
