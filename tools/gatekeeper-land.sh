@@ -373,6 +373,81 @@ run_pytest
 # shipped tree three times (#1029). It is bracketed like the others.
 stage_bracket "targeted tests"
 
+# ── REPO-LEVEL tests (tools/) ──────────────────────────────────────────────
+# `run_pytest` above cannot reach them, and not by accident: the targeted
+# selector is PLUGIN-scoped by construction —
+#     _SOURCE_DIRS = ("programs", "benchmark");  _TESTS_REL = "programs/tests"
+# — and it is invoked with cwd=$PLUGIN, so `tools/` at the repo root is not
+# even addressable from there. No change to any file under `tools/` can select
+# a test, and no test under `tools/` can be selected by any change. Measured on
+# a38902d16: 28 files / 552 tests that gate NOTHING. They were all green, which
+# is exactly why it stayed invisible — a blind spot announces itself only when
+# something behind it breaks, and by then it has been blind for a while.
+#
+# DISCOVERY, never a roster. A hardcoded list is the recorded-register defect
+# (census / tranche baseline / skip-routing ratchet) that goes stale the moment
+# a file is added, and it would go stale silently and in the safe-looking
+# direction: fewer files still reports PASS.
+run_repo_tools_pytest() {
+  local files out rc wg wrc snap
+  mapfile -t files < <(cd "$ROOT" && find tools \
+      \( -name 'test_*.py' -o -name '*_test.py' \) -type f | sort)
+  # An empty corpus is a VACUOUS pass, not a pass. A gate that reports success
+  # over zero items is indistinguishable from one that works, and is worse.
+  if [ "${#files[@]}" -eq 0 ]; then
+    echo "  FAIL  repo tools tests: discovery matched NO files under tools/ —"
+    echo "        an empty corpus is not evidence that anything passed."
+    FAILED=1; return
+  fi
+  # The in-process `programs/suite_write_guard.py` is loaded by the PLUGIN
+  # conftest and is NOT present in this session, so the property it asserts —
+  # the suite writes nothing `git status --porcelain` would show — is asserted
+  # here from the outside rather than quietly dropped.
+  #
+  # DELEGATED to that same program via its --snapshot/--compare CLI instead of
+  # diffing `git status` by hand. A hand-rolled comparison is a SECOND
+  # definition of "wrote to the tree" that can drift from the first, and the
+  # first one already knows that `__pycache__`/`.pytest_cache`/`*.pyc` are
+  # regenerable and not a violation. (Written by hand first; the test below
+  # caught it flagging pytest's own bytecode cache as a write.)
+  snap="$(mktemp -t gk_tools_wg.XXXXXX)"
+  python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+      --snapshot "$snap" >/dev/null 2>&1 || {
+    echo "  FAIL  repo tools tests: could not baseline the tree — not a pass"
+    FAILED=1; rm -f "$snap"; return
+  }
+  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+        -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+        "${files[@]}" 2>&1 )"
+  rc=$?
+  wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+        --compare "$snap" 2>&1)"; wrc=$?
+  rm -f "$snap"
+  if [ "$rc" -ne 0 ]; then
+    printf '  FAIL  repo tools tests (%s file(s))\n' "${#files[@]}"
+    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    FAILED=1; return
+  fi
+  # rc 0 clean / 1 wrote / 2 NOT_CHECKED. 2 is NOT a pass: "I could not look"
+  # must never reach a reader as "I looked and it was fine".
+  if [ "$wrc" -ne 0 ]; then
+    printf '  FAIL  repo tools tests wrote to the tree (write-guard rc=%s)\n' "$wrc"
+    printf '%s\n' "$wg" | tail -8 | sed 's/^/          /'
+    FAILED=1; return
+  fi
+  printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
+}
+run_repo_tools_pytest
+
+# #1312 added this stage; #1096 added the per-stage bracket. The bracket
+# must follow it for the SAME reason it follows `run_pytest`: the function
+# prints its own verdict (so it cannot go through `stage`), and without a
+# bracket here anything it writes is attributed to the stage that runs
+# NEXT. It keeps its own blocking write check above -- that check FAILS the
+# landing, where this bracket only REPORTS, so the two are not duplicates
+# and removing either one loses something.
+stage_bracket "repo tools tests"
+
 stage "repo hygiene gates"    bash "$ROOT/tools/ci/repo_hygiene_gates.sh"
 stage "plugin full audit"     python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 

@@ -102,6 +102,8 @@ sys.path.insert(0, str(PROGRAMS))
 
 import _flow_verdict_tiers as _T  # noqa: E402
 import flow_compliance_check as F  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _p0_umbrella_probe_flow as _probe  # noqa: E402
 
 #: The producer's own headline. Group order is the producer's own field order.
 _HEADLINE = re.compile(
@@ -156,7 +158,7 @@ _RUN_SEQ = [0]
 
 
 def _run(tmp_path, monkeypatch, *, n_subgate_waivers=0, waived_steps=(),
-         argv=("--lenient",)):
+         argv=("--lenient",), probe_flow=True):
     """Drive the SHIPPED `main()` and hand back exactly what it published.
 
     The gate RUNNER is stubbed (the established shape in this tree — see
@@ -202,9 +204,43 @@ def _run(tmp_path, monkeypatch, *, n_subgate_waivers=0, waived_steps=(),
                         tuple(r["name"] for r in records))
 
     report = proj / "report.json"
+    # THE SAME P0 ORDERING EDGE AS #1066, third file (found by a full sweep of
+    # a38902d16, not by the matrix — it does not import this file).
+    #
+    # P0 declares blocks_on:[1] and step 1 declares blocks_on:[D1]; a tmp_path
+    # project has run neither, so the ordering rule voids P0's PASS and reds the
+    # run before this file's subject — whether a waived SUB-GATE moves the STEP
+    # denominator — can decide anything:
+    #
+    #     [P0] ... = PASS marked done while dependency [1] Spec-to-RTL = MISSING
+    #     PASS-VOIDED=1
+    #
+    # This file DETECTS that itself rather than asserting past it: four of its
+    # five failures are its own guard, "fixture drifted: the zero-waiver arm is
+    # FAIL, so the assertion below could not distinguish anything". It was
+    # right; the flow's health had swallowed the independent variable.
+    #
+    # ONLY when this run does not waive real STEPS. A blanket probe was my
+    # first attempt and it MEASURED WORSE: it fixed the five sub-gate tests and
+    # broke all five `test_a_step_level_waiver_still_removes_exactly_one_step_
+    # each` — a step-level waiver names step ids the 3-step probe flow does not
+    # carry, so the waiver matches nothing. Net zero, different names.
+    #
+    # It is a PER-TEST parameter, not derived from `waived_steps`. Deriving it
+    # was my second attempt and it measured worse again: the step-level test
+    # pairs a base arm with NO waived steps against an arm WITH them, so a
+    # per-call rule gave the two arms DIFFERENT flows and compared a 3-step
+    # denominator against a 63-step one. Both arms of a comparison must stand
+    # on the same flow, so the choice belongs to the test, not the call.
+    argv_extra = []
+    if probe_flow:
+        flow_def = proj.parent / f"{proj.name}_p0_probe_flow.yaml"
+        _probe.write_flow(flow_def)
+        _probe.write_seed(proj)
+        argv_extra = ["--flow-def", str(flow_def)]
     buf, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
-        rc = F.main([str(proj), "--json", str(report), *argv])
+        rc = F.main([str(proj), "--json", str(report), *argv_extra, *argv])
     stdout = buf.getvalue()
 
     head = None
@@ -398,8 +434,8 @@ def test_a_step_level_waiver_still_removes_exactly_one_step_each(
     against the steps the PROGRAM says it waived — not against the number this
     test wrote into the file.
     """
-    base = _run(tmp_path, monkeypatch, n_subgate_waivers=n)
-    arm = _run(tmp_path, monkeypatch, n_subgate_waivers=n,
+    base = _run(tmp_path, monkeypatch, n_subgate_waivers=n, probe_flow=False)
+    arm = _run(tmp_path, monkeypatch, n_subgate_waivers=n, probe_flow=False,
                waived_steps=(33, 34))
     waived_steps_seen = _step_status_tally(arm["report"])["WAIVED"]
     assert waived_steps_seen > 0, (
