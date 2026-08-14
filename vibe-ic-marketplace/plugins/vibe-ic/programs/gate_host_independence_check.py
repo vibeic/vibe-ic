@@ -670,7 +670,7 @@ def audit(repo_root: Path, timeout: int = 600,
             # on. Everything declared after it measured the mutation.
             #
             # MEASURED 2026-08-12, reproducing a real landing run on .120
-            # (candidate stack h1c, `/home/reyerchu/_pg_h1c`) byte for byte:
+            # (candidate stack h1c, `/home/<your-user>/_pg_h1c`) byte for byte:
             #
             #   parent caught TimeoutExpired after 75s
             #   porcelain AFTER: 1
