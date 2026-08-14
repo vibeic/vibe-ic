@@ -233,6 +233,47 @@ run_tolerating_uncheckable "upstream image currency (report-only)" "$ROOT" pytho
 # host-independence: EXCLUDE — reads live org state over the network, so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs/org_duplicate_fork_check.py vibeic
 
+# vibe-ic#1364 — a PR whose base belongs to a CLOSED-unmerged PR, or whose
+# branch merely CARRIES that PR's commits, reports `mergeable=CLEAN`, because
+# `mergeable` is computed against the PR's OWN base and not against `main`.
+# Measured 2026-08-13 over 218 open / 760 closed (485 unmerged, 87 branches
+# still live): EIGHT open PRs are affected, and the two detection passes are
+# INDEPENDENT — four are visible only to the commit-graph pass and declare
+# `base=main`; one is visible only to the declared-base pass. Two of the eight
+# are named landing blockers.
+#
+# `--repo-dir "$ROOT"` is what enables the commit-graph pass. Without it the
+# check prints `CARRIED pass NOT ESTABLISHED` and scopes its own PASS line to
+# the half it did run, rather than printing a clean bill over a question it
+# never asked.
+#
+# `--advisory`, deliberately, and NOT because the finding is soft. It is eight
+# real ones. The remedy is per-PR and belongs to each PR's author — rebase the
+# rejected parent out, or adopt it openly and have it reviewed — so no single
+# commit can clear this, and a blocking gate would leave main red on eight
+# other people's branches until they act, which is how a gate gets switched
+# off. `--advisory` lowers the exit code and nothing else: every finding is
+# still printed and the verdict line still says FAIL. There is no baseline and
+# no waiver file, so the only thing that can make this print zero is the
+# branches being fixed. It does NOT lower a REFUSAL.
+#
+# `run_tolerating_uncheckable`: it asks the GitHub API, and rc 2 — "I could not
+# look" — must never share an exit code with "I looked and it was clean".
+#
+# `"$ROOT"` + `"$PG/..."`, not `"$PLUGIN"` + `programs/...`. Both shapes are in
+# this file (46 and 25), and only the first is actually PROBED: the denominator
+# probe runs every gate from a scratch tree, so a path relative to `$PLUGIN`
+# cannot be opened from there and the gate is recorded `[NOT DRIVEN]`. Measured
+# both ways here — the relative form was reported as NOT DRIVEN and the absolute
+# form is probed — so the gate is now subject to the same denominator-disclosure
+# rule as the rest. The checker takes `--repo-dir` explicitly and passes `--repo`
+# to `gh`, so it reads nothing from its cwd and the change is behaviour-neutral.
+#
+# ONE LINE, no `\` continuation — the denominator probe and the host-independence
+# probe both parse this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
+# host-independence: EXCLUDE — reads live queue state over the network, so two invocations can differ for a reason that is not in the commit
+run_tolerating_uncheckable "PR bases reach main" "$ROOT" python3 "$PG/pr_base_reachability_check.py" --repo-dir "$ROOT" --advisory
+
 # vibe-ic#306/#316 — the audit that measures which gates can actually stop a
 # run was itself wired into nothing while exiting 1. Recorded debt does not
 # fail; anything NEW does.
