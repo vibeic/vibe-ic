@@ -77,7 +77,17 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
 CENSUS_BLOCKS_ON_PRESENT = 63
-CENSUS_BLOCKS_ON_NON_EMPTY = 61
+# 61 -> 62 on 2026-08-14: A1 (Analog Spec Extraction) gained `blocks_on: [D1]`
+# in `73dfb68dd` (#1258, consolidating the #1070 edge PRs), so the flow's roots
+# went {A1, D1} -> {D1}. MEASURED, not assumed: BOTH of A1's `required_inputs`
+# are D1 `required_outputs` --
+#     phase1/generated_docs/L1_DATASHEET.json
+#     phase1/generated_docs/L5_ADI_SPEC.json
+# -- and A1 has NO input from anywhere else, so it could never legitimately
+# have been a root. This is the P0 case above happening a second time: the
+# tripwire fired on a LEGITIMATE flow change, and the thing to do is MOVE it,
+# not leave it red on main where it stops being read.
+CENSUS_BLOCKS_ON_NON_EMPTY = 62
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -333,8 +343,12 @@ def test_blocks_on_presence_is_not_the_same_set_as_non_empty(raw_steps):
     # It already drifted once: vibe-ic#923 removed P0 from the root set and the
     # hand-typed copies in test_flow_dependency_graph_check went stale in the
     # same commit, which is why that file reads it out of the program too
-    # (see its line 25). This also means a landing that gives A1 an ordering
-    # edge moves BOTH sides together instead of reddening this cell.
+    # (see its line 25). That keeps the ROOT SET in step with the yaml, and it
+    # did: when A1 gained its edge in `73dfb68dd` the assertion just below
+    # PASSED throughout. What this paragraph used to promise -- that such a
+    # landing would not redden this cell -- was still wrong, because
+    # `CENSUS_BLOCKS_ON_NON_EMPTY` is a THIRD copy of the same fact and moves
+    # with neither. The cell went red on the count, not on the root set.
     assert roots == set(
         importlib.import_module("flow_dependency_graph_check").DECLARED_ROOTS)
 
