@@ -193,6 +193,56 @@ def _texts(plugin: Path, repo: Path, globs, repo_globs=()) -> List[Tuple[Path, s
     return out
 
 
+def repo_root(plugin: Path) -> Optional[Path]:
+    """The ancestor that carries the WIRING CORPUS, or None if there is none.
+
+    `tools/ci/` is the marker, and `.git` is only a fallback — that ORDER is
+    the fix for vibe-ic#1467 and it is not cosmetic. The walk used to read
+
+        if (repo / ".git").exists() or (repo / "tools" / "ci").is_dir():
+
+    which stops at the FIRST ancestor holding a `.git`, whether or not that
+    ancestor carries any `tools/` at all. MEASURED, on this repo's own bytes
+    with `programs/` and `tools/` hardlinked so the two arms are the same
+    files: dropping a single `.git` at the `vibe-ic-marketplace/` level moves
+
+        unwired: 59 (baseline 60)  [PASS]   ->   unwired: 110  [FAIL] 50 gates
+
+    because the walk then anchors on the marketplace directory, `tools/ci/*`,
+    `tools/*.py` and `.github/workflows/*` match nothing, and every gate wired
+    only from the repo root reads as unwired. Fifty confident accusations from
+    one marker file, over an unchanged tree.
+
+    Returning None rather than "six levels up, whatever that is" is the other
+    half: the caller must be able to tell an EMPTY corpus from a read one, and
+    `plugin.parents[5]` is a directory that exists and globs to nothing, which
+    is the shape that reads as an answer.
+    """
+    dot_git: Optional[Path] = None
+    cur = plugin
+    for _ in range(6):
+        if (cur / "tools" / "ci").is_dir():
+            return cur
+        if dot_git is None and (cur / ".git").exists():
+            dot_git = cur
+        if cur == cur.parent:                    # reached the filesystem root
+            break
+        cur = cur.parent
+    return dot_git
+
+
+def wiring_sources(plugin: Path, repo: Path) -> Tuple[int, int]:
+    """(files read under the PLUGIN, files read under the REPO root).
+
+    The denominator this gate never disclosed. Its whole verdict is a function
+    of these two numbers and nothing in the output said what they were, which
+    is why vibe-ic#1467 collected three contradictory red lists from three
+    hosts at one commit and could not settle which corpus each run had read.
+    """
+    return (len(_texts(plugin, repo, _EXECUTABLE_GLOBS)),
+            len(_texts(plugin, repo, (), _REPO_GLOBS)))
+
+
 def wiring(plugin: Path, repo: Path) -> Dict[str, Dict[str, List[str]]]:
     """{gate: {"executable": [...], "skill": [...]}} — where each is named."""
     g = gates(plugin)

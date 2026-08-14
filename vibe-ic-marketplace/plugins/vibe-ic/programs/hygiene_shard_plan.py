@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from _atomic_artefact import write_json
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
