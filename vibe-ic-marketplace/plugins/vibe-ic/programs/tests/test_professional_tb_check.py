@@ -24,7 +24,13 @@ def _report(tmp: Path, obj) -> Path:
 def test_absent_report_is_not_applicable(tmp_path):
     res = G.check(tmp_path)
     assert res["verdict"] == "NOT_APPLICABLE"
-    assert G.main([str(tmp_path)]) == 0  # exit 0 — never a false FAIL
+    # rc 2, not 0, since vibe-ic#564: rc 2 is the DISCLOSED-SKIP tier, not a
+    # failure — `flow_compliance_check` maps it to "n/a (input not present)",
+    # so this is still never a false FAIL. rc 0 said "I looked and it was
+    # fine" to every consumer that reads exit codes rather than prose, and
+    # `gate_zero_denominator_refuses_check` recorded it as the one
+    # ZERO_DENOMINATOR_EXITS_ZERO finding out of 534 programs probed.
+    assert G.main([str(tmp_path)]) == 2
 
 
 def test_functional_mismatch_fails(tmp_path):
