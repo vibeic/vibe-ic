@@ -183,12 +183,20 @@ def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
 
     # And the registry lost EXACTLY that one entry. Stated as an equality
     # because "A8 is gone" is also true of a registry somebody emptied.
+    # M1 LEFT THIS SET on 2026-08-14, and it left by review rather than by rot.
+    # `bcd444425` (vibe-ic#1159, "the mixed-signal steps were never unpublished
+    # — their condition is met nowhere") moved M1 from WAIVED to
+    # NA_DORMANT_CONDITION: a step whose condition holds nowhere is dormant, not
+    # an accepted gap, and a waiver for it was describing a gap that does not
+    # arise. The equality is kept — it is the tripwire, and reading the set back
+    # out of the registry would make it agree with itself — so the FIGURE moves
+    # and the assertion does not.
     waived = {W.flowref.normalize_id(w.step_id) for w in W.waivers_for_dim(3)}
-    assert waived == {"6", "39", "M1"}, (
-        f"dimension 3's waived set is {sorted(waived)}; after A8's removal it "
-        f"must be exactly 6, 39 and M1. A missing entry means an accepted gap "
-        f"stopped being disclosed; an extra one means a new gap arrived "
-        f"without review.")
+    assert waived == {"6", "39"}, (
+        f"dimension 3's waived set is {sorted(waived)}; after A8's removal and "
+        f"M1's move to NA_DORMANT_CONDITION (vibe-ic#1159) it must be exactly "
+        f"6 and 39. A missing entry means an accepted gap stopped being "
+        f"disclosed; an extra one means a new gap arrived without review.")
 
 
 def test_control_the_published_root_is_named_in_the_manifest_and_is_in_repo():
@@ -293,7 +301,11 @@ def test_reverse_the_other_dimension3_waiver_premises_are_still_true():
     """
     repo = _repo()
     still_absent = []
-    for sid in ("6", "39", "M1"):
+    # M1 dropped out with vibe-ic#1159 — its manifest verdict is now
+    # NA_DORMANT_CONDITION, so asserting WAIVED for it here would be asserting
+    # the state this repository just decided was wrong. 6 and 39 are unchanged
+    # and still re-checked against `git ls-tree -r HEAD`.
+    for sid in ("6", "39"):
         rec = D3.manifest()["steps"][sid]
         assert rec["verdict"] == "WAIVED", (
             f"step {sid} is waived in the registry but the manifest records "
