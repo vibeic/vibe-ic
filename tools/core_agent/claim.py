@@ -51,16 +51,44 @@ from typing import Callable, Dict, List, Optional, Tuple
 MARKERS: Dict[str, str] = {"issue": "CLAIMED:", "pr": "VERIFYING:"}
 
 
-def _gh_post(repo: str, number: int, body: str) -> None:
-    subprocess.run(
+def _gh_post(repo: str, number: int, body: str) -> Optional[Dict]:
+    """POST the claim and RETURN THE COMMENT IT CREATED.
+
+    The response was previously discarded, and that is what made the re-read
+    unable to tell "the comment I just posted" from "a comment I posted an hour
+    ago" — see the `mine` note in :func:`claim`. The id is the only thing that
+    distinguishes them, and the POST is the only place it is available.
+    """
+    out = subprocess.run(
         ["gh", "api", "-X", "POST", f"repos/{repo}/issues/{number}/comments",
          "-f", f"body={body}"],
-        check=True, capture_output=True, text=True, timeout=60)
+        check=True, capture_output=True, text=True, timeout=60).stdout
+    doc = json.loads(out or "null")
+    return doc if isinstance(doc, dict) else None
 
 
 def _gh_list(repo: str, number: int) -> List[Dict]:
+    """EVERY claim comment, not the first page of them.
+
+    `--paginate` is load-bearing and its absence failed CLOSED in the worst
+    possible place. MEASURED 2026-08-14 against the issue this program was
+    written for, `#1241`, with `gh 2.97.0`:
+
+        per_page=100 alone   ->  100 comments
+        --paginate           ->  494 comments
+
+    So four fifths of that thread were invisible, and an agent whose own claim
+    sat outside the first page was told REFUSED — or, worse, read a stale
+    `earliest` and yielded to somebody who was not first.
+
+    `--paginate` alone is correct HERE and `--slurp` is not needed: gh merges
+    JSON array pages into a single valid array (measured on 2.97.0 — 494 items,
+    `json.loads` clean). `--slurp` instead returns an array OF PAGES, which
+    would need flattening and would silently give this function a list of lists.
+    """
     out = subprocess.run(
-        ["gh", "api", f"repos/{repo}/issues/{number}/comments?per_page=100"],
+        ["gh", "api", "--paginate",
+         f"repos/{repo}/issues/{number}/comments?per_page=100"],
         check=True, capture_output=True, text=True, timeout=60).stdout
     return json.loads(out or "[]")
 
@@ -87,33 +115,57 @@ def claim(repo: str, number: int, kind: str, who: str,
     post = post or _gh_post
     fetch = fetch or _gh_list
     try:
-        post(repo, number, body)
+        created = post(repo, number, body)
     except Exception as exc:                       # noqa: BLE001
         print(f"REFUSED: the claim could not be POSTED ({exc}). Not proceeding "
               f"— an unposted claim wins every race by being invisible.")
         return 2
+
+    # WHICH comment, not whose. The liveness check below used to be
+    # `b.strip() == body`, which is a pure function of the IDENTITY and says
+    # nothing about the POST that just ran. For an agent with any history on the
+    # thread it was satisfied by its own older claim, so the one case it existed
+    # for — post() returns success and the comment is not there — returned WON.
+    # It failed OPEN, which is the expensive direction: two agents take the same
+    # work. MEASURED on #1241, where two identities (mine among them) each hold
+    # two claim comments, so the stale row was reachable today and not in theory.
+    created_id = created.get("id") if isinstance(created, dict) else None
+    if created_id is None:
+        print("REFUSED: the POST did not identify the comment it created, so "
+              "the re-read cannot tell it from an earlier claim by the same "
+              "agent. Not proceeding — this is the check, not a formality.")
+        return 2
+
     try:
-        rows = claims_in(fetch(repo, number), marker)
+        raw = fetch(repo, number)
     except Exception as exc:                       # noqa: BLE001
         print(f"REFUSED: the claim was posted but could not be RE-READ ({exc}). "
               f"Not proceeding — the re-read is the half that decides.")
         return 2
+    rows = claims_in(raw, marker)
 
-    mine = [t for t, b in rows if b.strip() == body]
-    if not mine:
+    landed = [c for c in raw
+              if c.get("id") == created_id
+              and str(c.get("body") or "").startswith(marker)]
+    if not landed:
         # Posted, exit 0, and absent from the thread. Exactly the silent
         # GraphQL failure #1302 measured. Refuse rather than assume.
-        print(f"REFUSED: posted a claim but the re-read does not contain it "
-              f"({len(rows)} claim(s) seen). Not proceeding.")
+        print(f"REFUSED: posted a claim but the re-read does not contain THAT "
+              f"comment ({len(rows)} claim(s) seen). Not proceeding.")
         return 2
+    mine_t = str(landed[0].get("created_at") or "")
 
+    # Ordering stays keyed on IDENTITY, deliberately. An agent that legitimately
+    # re-claims a thread it already holds the earliest claim on must still WIN —
+    # keying this on the new comment's timestamp would turn every restart and
+    # every retry into a YIELD to itself.
     earliest_t, earliest_b = rows[0]
-    if earliest_b.strip() == body and earliest_t == mine[0]:
-        print(f"WON {kind} #{number} as {who} at {mine[0]} "
+    if earliest_b.strip() == body:
+        print(f"WON {kind} #{number} as {who} at {mine_t} "
               f"({len(rows)} claim(s) total)")
         return 0
     print(f"YIELD {kind} #{number} — {earliest_b.strip()[len(marker):].strip()} "
-          f"claimed at {earliest_t}, mine at {mine[0]}. Take the next item.")
+          f"claimed at {earliest_t}, mine at {mine_t}. Take the next item.")
     return 1
 
 
