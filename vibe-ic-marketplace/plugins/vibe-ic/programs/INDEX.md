@@ -666,6 +666,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `nextstate_misc_synth` | any | — | deterministic SOLVER for the remaining mechanically- complete VerilogEval shapes the existing FSM / K-map family still SKIPs. |
 | `nfc_protocol_synth` | any | v0.1.84 | NFC / ISO 14443 contactless-protocol synth helper. |
 | `no_protocol_consistency_check` | any | v0.56 | v0.56 plugin gate |
+| `not_verified_tier` | any | — | NOT_VERIFIED — the test tier's equivalent of the gate tier's NOT_CHECKED. |
 | `nvlink_protocol_synth` | any | v0.1.89 | NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper. |
 | `nvm_program_supply_intent` | any | — | does a design that intends to PROGRAM an on-chip non-volatile memory have a physical path to bring the programming supply IN? |
 | `nvme_protocol_synth` | any | v0.1.84 | NVM Express (NVMe) Base storage-protocol synth helper. |
@@ -1795,6 +1796,7 @@ _(no programs in this group)_
 - `nextstate_misc_synth` — deterministic SOLVER for the remaining mechanically- complete VerilogEval shapes the existing FSM / K-map family still SKIPs.
 - `nfc_protocol_synth` — NFC / ISO 14443 contactless-protocol synth helper.  _[v0.1.84]_
 - `no_protocol_consistency_check` — v0.56 plugin gate  _[v0.56]_
+- `not_verified_tier` — NOT_VERIFIED — the test tier's equivalent of the gate tier's NOT_CHECKED.
 - `nvlink_protocol_synth` — NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper.  _[v0.1.89]_
 - `nvm_program_supply_intent` — does a design that intends to PROGRAM an on-chip non-volatile memory have a physical path to bring the programming supply IN?
 - `nvme_protocol_synth` — NVM Express (NVMe) Base storage-protocol synth helper.  _[v0.1.84]_
