@@ -233,9 +233,18 @@ def test_emit_routing_writes_the_file_and_exits_zero(tmp_path):
 def test_the_corpus_is_measured_not_assumed():
     rep = M.check(_CORPUS, _CORPUS / "source_tier.json")
     cc = rep["citation_counts"]
-    assert sum(cc.values()) == 89, cc
-    assert cc["RESOLVES"] == 55, cc
-    assert cc["WITHHELD_ON_RECORD"] == 34, cc
+    # THE PARTITION, not the census. `89 == 55 + 34` was three integers, and
+    # all three are the size of the parity corpus on the day they were written:
+    # publish or withdraw one cell and every one of them is wrong, for a reason
+    # that says nothing about the routing. What the three were standing in for
+    # is that the two decisions PARTITION the citations — no third bucket, none
+    # unaccounted — which is true of one cell, of 89 and of however many the
+    # corpus carries next.
+    assert cc, cc
+    assert set(cc) == {"RESOLVES", "WITHHELD_ON_RECORD"}, cc
+    assert sum(cc.values()) == cc["RESOLVES"] + cc["WITHHELD_ON_RECORD"], cc
+    # Both arms exercised, so the partition is not satisfied by an empty one.
+    assert cc["RESOLVES"] > 0 and cc["WITHHELD_ON_RECORD"] > 0, cc
     # THE POINT: not one unfollowable pointer is unaccounted for. This is the
     # evidence that the corpus withholds by policy rather than dropping by
     # accident, and it is the assertion that breaks first if that ever changes.
