@@ -479,6 +479,7 @@ def sweep_abandoned_scratch(repo_root: Path,
                        capture_output=True, text=True, timeout=120)
     return {"reaped": rep.reaped, "live_peers": rep.live,
             "peer_probe_pids": peers,
+            "vanished_under_the_sweep": rep.vanished,
             "kept": [{"path": p, "why": w} for p, w in rep.kept]}
 
 
@@ -511,8 +512,16 @@ def assign_shards(labels: List[str], n: int,
 
 def audit(repo_root: Path, timeout: int = 600,
           shard: Optional[Tuple[int, int]] = None,
-          weights: Optional[Dict[str, float]] = None) -> Audit:
-    scratch = sweep_abandoned_scratch(repo_root)
+          weights: Optional[Dict[str, float]] = None,
+          tmp_root: Optional[Path] = None) -> Audit:
+    """`tmp_root` overrides where the scratch lives (default: the system temp).
+
+    A caller that needs to OBSERVE what this run left behind cannot do it in
+    the shared temp: on a busy host a peer's directory appears there mid-run
+    and is indistinguishable from a leak of our own. Pointing this at a private
+    root is what makes "left nothing behind" a statement about THIS run.
+    """
+    scratch = sweep_abandoned_scratch(repo_root, tmp_root=tmp_root)
     script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
     gates = corpus_gates(script)
     declared = len(gates)
@@ -566,7 +575,9 @@ def audit(repo_root: Path, timeout: int = 600,
     # A LOCKED scratch directory, not a bare `mkdtemp`. The lock is what a later
     # run reads to decide this one is dead; the `finally` below is the tidy
     # path, and the reaper is the one that holds under `SIGKILL`.
-    res, _ = _scratch.reserve(_SCRATCH_PREFIX, remover=_unregister_worktree)
+    res, _ = _scratch.reserve(_SCRATCH_PREFIX,
+                              remover=_unregister_worktree,
+                              root=tmp_root)
     wt = res.path / "wt"
     try:
         r = subprocess.run(
