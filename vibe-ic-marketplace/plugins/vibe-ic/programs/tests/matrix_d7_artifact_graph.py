@@ -243,6 +243,17 @@ ARTIFACT_SUFFIXES: FrozenSet[str] = frozenset(
 #: ``open()`` modes that write. ``r`` alone never matches; ``r+`` does.
 _WRITE_MODE_RE = re.compile(r"[waxWAX+]")
 
+#: Atomic-write helpers whose FIRST positional argument is the destination.
+#: Matched by function name only — never by the module reached through — so
+#: that `_atomic_output.atomic_write_text(p, ...)`,
+#: `_atomic_artefact.atomic_write_text(p, ...)` and a bare imported
+#: `atomic_write_text(p, ...)` all read as the write they are. `atomic_output`
+#: is the context-manager form (`with atomic_output(p) as tmp:`); its
+#: destination is likewise the first argument, and the inner `tmp.write_text`
+#: names a TEMP path that no declared-artefact walk should follow.
+_ATOMIC_WRITERS: FrozenSet[str] = frozenset(
+    {"atomic_write_text", "atomic_write_json", "atomic_output"})
+
 #: Classification of an undeclared artefact.
 LOAD_BEARING = "LOAD_BEARING"
 EVIDENCE = "EVIDENCE"
@@ -445,8 +456,21 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
       * ``open(p, "w"|"a"|"wb"|...)`` and ``p.open("w")``
       * ``p.write_text(...)`` / ``p.write_bytes(...)``
       * ``shutil.copy/copy2/copyfile/move(src, DEST)`` — the DEST argument
+      * the ATOMIC writers, ``atomic_write_text(p, ...)``,
+        ``atomic_write_json(p, ...)`` and ``with atomic_output(p) as tmp``,
+        each of which takes its destination FIRST (vibe-ic#1265)
       * ``json.dump(obj, fh)`` is NOT a path write: ``fh`` is a handle, and
         the handle's path was already captured at its ``open()``.
+
+    The atomic writers are matched by FUNCTION NAME and never by the module
+    they are reached through. That is deliberate: the same call arrives as
+    ``_atomic_output.atomic_write_text(p, ...)``, as
+    ``_atomic_artefact.atomic_write_text(p, ...)``, or bare after a
+    ``from ... import``, and which helper module wins is an open question
+    across #1265 / #1110 / #1138 / #1210. A detector keyed on the module would
+    have to be edited again the day that is settled, and until then it would
+    silently report NO WRITE for every program converted through the other
+    name — which is exactly the failure being fixed here, one module over.
     """
     resolver = _PathResolver(tree)
     out: Set[Tuple[str, ...]] = set()
@@ -460,6 +484,9 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
         if not isinstance(n, ast.Call):
             continue
         fn = n.func
+        if isinstance(fn, ast.Name) and fn.id in _ATOMIC_WRITERS and n.args:
+            add(n.args[0])
+            continue
         if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
             for kw in n.keywords:
@@ -469,7 +496,9 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
                 add(n.args[0])
             continue
         if isinstance(fn, ast.Attribute):
-            if fn.attr in ("write_text", "write_bytes"):
+            if fn.attr in _ATOMIC_WRITERS and n.args:
+                add(n.args[0])
+            elif fn.attr in ("write_text", "write_bytes"):
                 add(fn.value)
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
@@ -692,7 +721,9 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
             continue
         fn = n.func
         target: Optional[ast.AST] = None
-        if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
+        if isinstance(fn, ast.Name) and fn.id in _ATOMIC_WRITERS and n.args:
+            target = n.args[0]
+        elif isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
             for kw in n.keywords:
                 if kw.arg == "mode":
@@ -700,7 +731,13 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
             if mode and _WRITE_MODE_RE.search(mode):
                 target = n.args[0]
         elif isinstance(fn, ast.Attribute):
-            if fn.attr in ("write_text", "write_bytes"):
+            # vibe-ic#1265. This walk is a SECOND copy of the write shapes in
+            # `_collect_written_paths`; both had to learn the atomic writers,
+            # and they share only `_ATOMIC_WRITERS` so the vocabulary cannot
+            # drift even though the traversals still can.
+            if fn.attr in _ATOMIC_WRITERS and n.args:
+                target = n.args[0]
+            elif fn.attr in ("write_text", "write_bytes"):
                 target = fn.value
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
