@@ -138,7 +138,7 @@ Things that will bite you if you skip the docstring:
 * **`required_outputs` is ALL-of across entries**, but `" OR "` *inside* one
   entry is any-of. It used to be any-of across entries and that was a real
   false-pass bug — see `programs/flow_compliance_check.py` ~line 6150.
-* **`blocks_on` is present on 63<!--figure:blocks_on_declared--> steps but non-empty on only 61<!--figure:blocks_on_nonempty-->.** D1 and A1
+* **`blocks_on` is present on 63<!--figure:blocks_on_declared--> steps but non-empty on only 62<!--figure:blocks_on_nonempty-->.** D1 and A1
   declare it *empty* because they are the flow's genuine roots. "63<!--figure:blocks_on_declared--> steps have
   blocks_on" is a presence count, not a dependency count.
 * **`total_steps: 44`** in the yaml counts the numeric steps only. It is not
