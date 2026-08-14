@@ -67,6 +67,13 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one
 # file type over. Narrow by construction — only the forms that assert THIS
 # plugin's version, so the MCP-EDA badge and the EDA image tag are untouched.
+# vibe-ic#1241 — this checker was reachable only from its own test. It validates
+# a RECORD rather than a design, and the corpus carries none yet (#1121's first
+# head-to-head has not run), so it is wired through the uncheckable channel: it
+# exits 2 and says so, rather than printing PASS over an empty population.
+run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
+    python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/benchmark-data"
+
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
 # vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool
 # inside the container keeps running as an orphan. The checker that finds those
