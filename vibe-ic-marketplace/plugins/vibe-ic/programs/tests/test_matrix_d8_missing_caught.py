@@ -1222,9 +1222,24 @@ def test_d8_cell_census_is_complete():
 #: pinned rather than derived so the SHRINKING direction still has to be
 #: explained by a human — see this constant's test.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "D1", "1", "2", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
+    "D1", "1", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
     "30", "32", "35", "38",
 )
+# 2026-08-14: GAINED step 4, lost none (16 -> 17). `fe1f0615e` (#1115/#1173)
+# stopped `professional_tb_check` recording NOT_APPLICABLE as a plain rc 0 that
+# `flow_compliance_check` reads as PASS -- "the producer emitted nothing and the
+# checker read the absence as consent" -- and made it disclose VACUOUS_PASS
+# instead. `_PASS_TIER_LABELS` counts VACUOUS_PASS, so step 4's REAL gate now
+# reaches a pass tier on the seeded fixture where before it did not.
+#
+# ATTRIBUTED BY COUNTERFACTUAL, not by reading the log: reverting ONLY
+# `programs/professional_tb_check.py` to `fe1f0615e^` and changing nothing else
+# takes step 4 back out of the sweep and this test passes. Restored after.
+#
+# This is the GROWING direction, which the assertion below explains is the
+# benign one -- more production gates can now reach the tier at which the
+# MISSING downgrade fires, not fewer. The shrinking direction still has to be
+# explained by a human, and this edit does not weaken that.
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
 # compared in flow DECLARATION order, and the dimension-5 fix moved A6's yaml
 # block from after step 39 to between A5 and A7 to remove the flow's only
