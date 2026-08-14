@@ -436,6 +436,20 @@ _per_published_cell_gates() {
   uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no step reports to examine, which the gate refuses to score as clean rather than exiting 0 on an empty population"
   run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
     "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
+  # vibe-ic#1241 — this gate was run by NOTHING but its own test, which proves
+  # the logic against a fixture the author wrote and never against an artefact.
+  # Wired here rather than into a flow step because its argument IS a published
+  # cell, so this loop is the one place the flow already hands it its subject.
+  #
+  # `run_tolerating_uncheckable` is not a softening: the gate's own documented
+  # contract is rc 2 = NO_BASELINE, "no previous run; nothing compared", and on
+  # this corpus that is EVERY cell — no design carries two cells of the same
+  # PDK, so `find_previous` has nothing to compare against. rc 2 is therefore
+  # the expected answer today and must be LOUD and non-fatal; rc 1, a genuinely
+  # new diagnostic id, still fails the suite. The day a second same-PDK cell is
+  # published the comparison path becomes live without this line changing.
+  run_tolerating_uncheckable "new tool diagnostic id ($(basename "$(dirname "$_cell")"))" \
+    "$PLUGIN" python3 programs/tool_diagnostic_id_gate.py "$_cell"
 }
 # NO `|| true` ANY MORE, and that is a repair rather than an omission: it used
 # to turn "git could not look" into an empty corpus, which is the vacuous pass
