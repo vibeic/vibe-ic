@@ -54,6 +54,18 @@ DISPATCH = ROOT / "tools" / "ci" / "_gate_dispatch.sh"
 sys.path.insert(0, str(PLUGIN / "programs"))
 import gatekeeper_review as gr  # noqa: E402
 
+#: What ONE harness invocation may spend. The suite runs under a 180 s
+#: pytest-timeout, and `ci_harness_timeout_ceiling_check` requires every inner
+#: bound to sit at or under 180 // 3 = 60 s: a bound above the ceiling promises
+#: time the harness will not give, and because the harness kills the SESSION
+#: rather than the test, a hang here takes the whole run down with NO summary
+#: line -- which greps as neither a pass nor a failure (vibe-ic#1181, #1272).
+#:
+#: MEASURED: the whole file is 14 passed in 8.8 s, so one invocation is well
+#: under a second. 30 s is ~3x the entire file and half the ceiling.
+_BOUND_S = 30
+
+
 
 def _sweep(tmp_path, body, summary=None):
     """Drive the REAL dispatcher over `body` and return (rc, output, record)."""
@@ -70,7 +82,7 @@ def _sweep(tmp_path, body, summary=None):
         f"{body}\n"
         "gate_dispatch_finish\n")
     proc = subprocess.run(["bash", str(harness)], capture_output=True,
-                          text=True, cwd=str(tmp_path), timeout=300)
+                          text=True, cwd=str(tmp_path), timeout=_BOUND_S)
     doc = json.loads(rec.read_text()) if rec.is_file() else None
     return proc.returncode, proc.stdout + proc.stderr, doc
 
