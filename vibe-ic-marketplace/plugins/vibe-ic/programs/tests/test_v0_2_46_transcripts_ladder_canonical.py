@@ -16,8 +16,6 @@ a vetted canonical sample failing the hidden golden at >=50% mismatch flags
 canonical_samples/ access is itself blindness-audited (V3).
 """
 import json
-import shutil
-import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -32,14 +30,6 @@ SKILL = PLUGIN / "skills" / "open-benchmark-methodology" / "SKILL.md"
 
 sys.path.insert(0, str(HARNESS))
 import score_iverilog_tb as sit  # noqa: E402
-
-#: The repo's existing tool gate. Without it this module raises
-#: FileNotFoundError on a host that lacks the tool, instead of disclosing a
-#: skip. The crash is not in this module — it is inside
-#: `benchmark/score_iverilog_tb.py`, which these tests invoke — so the gate
-#: names the tool the CALL CHAIN needs, not a binary this file mentions.
-_HAVE_TOOLS = bool(shutil.which("iverilog"))
-
 
 
 # ── #415: transcripts export is the orchestration default ────────────────
@@ -162,8 +152,6 @@ def _stage_canonical(tmp_path, monkeypatch, body):
 
 
 def test_canonical_disagreement_returns_evidence(tmp_path, monkeypatch):
-    if not _HAVE_TOOLS:
-        pytest.skip("iverilog not installed on this host")
     ds = _stage_dataset(tmp_path)
     # canonical inverts -> disagrees with the golden on every sample
     _stage_canonical(tmp_path, monkeypatch,
@@ -175,8 +163,6 @@ def test_canonical_disagreement_returns_evidence(tmp_path, monkeypatch):
 
 
 def test_canonical_agreement_returns_none(tmp_path, monkeypatch):
-    if not _HAVE_TOOLS:
-        pytest.skip("iverilog not installed on this host")
     ds = _stage_dataset(tmp_path)
     _stage_canonical(tmp_path, monkeypatch,
                      "module TopModule(input a, output o);\n"
@@ -193,8 +179,6 @@ def test_no_canonical_returns_none(tmp_path, monkeypatch):
 
 
 def test_score_shape_c_flags_disclosure_only(tmp_path, monkeypatch):
-    if not _HAVE_TOOLS:
-        pytest.skip("iverilog not installed on this host")
     # failing sample + disagreeing canonical -> verdict stays FAIL, flag set
     ds = _stage_dataset(tmp_path)
     _stage_canonical(tmp_path, monkeypatch,

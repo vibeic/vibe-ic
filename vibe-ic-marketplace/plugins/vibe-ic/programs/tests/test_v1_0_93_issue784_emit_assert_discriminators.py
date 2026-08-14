@@ -24,8 +24,6 @@ are asserted present in gates_atomic._BLOCKING_CONFORMANCE_RULES.
 chip-AGNOSTIC: fixtures use generic TopModule / din / dout / wave shapes only.
 """
 import json
-import shutil
-import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -34,14 +32,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
 from _specrtl_common import (extract_spec_contract, parse_rtl_ports,  # noqa: E402
                              strip_comments)
-
-#: The repo's existing tool gate. Without it this module raises
-#: FileNotFoundError on a host that lacks the tool, instead of
-#: disclosing a skip. The crash is NOT in this module — it is inside
-#: `benchmark/score_iverilog_tb.py`, which these tests invoke — so
-#: the gate names the tool the CALL CHAIN needs, not a binary this
-#: file mentions.
-_HAVE_TOOLS = bool(shutil.which("iverilog"))
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
@@ -650,8 +640,6 @@ def _block_rules(run):
 
 
 def test_gate_blocks_rotate_under_shift_spec(tmp_path):
-    if not _HAVE_TOOLS:
-        pytest.skip("iverilog not installed on this host")
     ds, run = _stage(tmp_path, _SHIFT_SPEC, _ROTATE_OR_RTL)
     r = _run_gate(ds, run)
     assert r.returncode == 1, r.stdout + r.stderr
@@ -662,8 +650,6 @@ def test_gate_blocks_rotate_under_shift_spec(tmp_path):
 
 
 def test_gate_emits_logical_shift(tmp_path):
-    if not _HAVE_TOOLS:
-        pytest.skip("iverilog not installed on this host")
     ds, run = _stage(tmp_path, _SHIFT_SPEC, _LOGICAL_SHIFT_RTL)
     r = _run_gate(ds, run)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -674,8 +660,6 @@ def test_gate_emits_logical_shift(tmp_path):
 
 
 def test_gate_blocks_dropped_hold_under_hold_spec(tmp_path):
-    if not _HAVE_TOOLS:
-        pytest.skip("iverilog not installed on this host")
     ds, run = _stage(tmp_path, _TRI_HOLD_SPEC, _NO_HOLD_RTL)
     r = _run_gate(ds, run)
     assert r.returncode == 1, r.stdout + r.stderr
@@ -686,8 +670,6 @@ def test_gate_blocks_dropped_hold_under_hold_spec(tmp_path):
 
 
 def test_gate_emits_correct_peak_hold(tmp_path):
-    if not _HAVE_TOOLS:
-        pytest.skip("iverilog not installed on this host")
     ds, run = _stage(tmp_path, _TRI_HOLD_SPEC, _PEAK_HOLD_RTL)
     r = _run_gate(ds, run)
     assert r.returncode == 0, r.stdout + r.stderr
