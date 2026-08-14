@@ -294,3 +294,23 @@ def test_the_version_probe_bound_is_under_the_harness_ceiling():
     import inspect
     sig = inspect.signature(T.tool_version)
     assert sig.parameters["timeout"].default <= 60, sig
+
+
+def test_the_version_flag_is_the_one_ALL_THREE_tools_answer():
+    """Pins the trap directly, because `--version` is the obvious choice and is
+    wrong here.
+
+    MEASURED on this host: `iverilog --version` -> rc=1,
+    `iverilog: invalid option -- '-'`. A probe using it records None for
+    iverilog on EVERY host, so the version key becomes a constant and the
+    fingerprint silently reverts to presence-only while looking like it works.
+    The `any(...)` vacuity guard above does not catch that, because yosys and
+    verilator both accept `--version`.
+    """
+    assert T._VERSION_FLAG == "-V", (
+        "`-V` is the flag all three KEYED tools answer with rc=0; iverilog "
+        "rejects `--version`")
+    if T.shutil.which("iverilog"):
+        assert T.tool_version("iverilog") is not None, (
+            "iverilog is on PATH and its version could not be read — the flag "
+            "this module uses is one iverilog does not accept")
