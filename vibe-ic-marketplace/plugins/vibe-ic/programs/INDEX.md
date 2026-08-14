@@ -302,6 +302,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `eco_loop_audit` | any | — | Audit the post-route timing repair pass's log for completeness. |
 | `eco_status_gen` | any | — | emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json). |
 | `eco_trigger_decision` | any | — | the SHARED ECO auto-trigger decision. |
+| `eda_container_probe` | any | — | A container/image probe that cannot report "absent" when it never answered. |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
 | `edp_protocol_synth` | any | v0.1.95 | VESA Embedded DisplayPort (eDP) protocol synth helper. |
@@ -1428,6 +1429,7 @@ _(no programs in this group)_
 - `eco_loop_audit` — Audit the post-route timing repair pass's log for completeness.
 - `eco_status_gen` — emit Step 30 ECO status flag (no_eco_needed.flag or eco_log.json).
 - `eco_trigger_decision` — the SHARED ECO auto-trigger decision.
+- `eda_container_probe` — A container/image probe that cannot report "absent" when it never answered.
 - `eda_log_check` — Deterministic EDA tool log/report checker.
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
 - `edp_protocol_synth` — VESA Embedded DisplayPort (eDP) protocol synth helper.  _[v0.1.95]_
