@@ -619,7 +619,25 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-14: 120 -> 124, declared unchanged at 134 (vibe-ic#1457). NOTHING was
+# declared, registered or re-pointed. Four artefacts the flow had already
+# produced and nobody had committed were COMMITTED, so four entries stopped
+# being fixture-attested and started resolving against bytes in this commit:
+#   phase3/stage3/pnr/{floorplan,placed,post_cts,post_hold}.def
+#   <- benchmark-data/ic/subservient (kind="repo", already a registered root)
+# The manifest was deliberately NOT touched. Those four records still name
+# `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`, a root this repository
+# does not carry, and they still fall through to `resolve_anywhere` exactly as
+# they did while they were red -- so the cells turned green because the
+# ARTEFACT arrived, not because the record was aimed somewhere it would resolve.
+# Re-pointing a record at a root that carries the artefact is the one repair
+# this campaign may not make (#1457), and the way to tell it was not made here
+# is that reverting the four blobs alone -- with this file byte-identical --
+# puts all four cells back to red.
+# +4 live, fixture-attested 14 -> 10. The guarded property is intact and was
+# checked rather than assumed: all four resolve inside the repository, tracked
+# at HEAD, non-empty, non-symlink, and nothing here reaches $HOME.
+_LIVE_ENTRY_COUNT = 124
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -2983,11 +3001,52 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     #         (phase2/stage2/dft/*, 351 files tracked at HEAD)
     #   29 <- benchmark-data/evaluation/phase1_parity/espi
     #         (phase3/stage3/sim_postlayout/pass.flag, 253 files tracked)
-    # The remaining ten declare artefacts NO path in this commit matches. Only
-    # a published run tree closes those, and publishing one costs >1 GB of DEFs
-    # against a 2.0 GB .git -- which is why they stay RED here rather than
-    # becoming waivers. A red cell cannot rot; a waiver can, and did.
-    "15", "17", "19", "20", "30", "32", "M1", "M2", "M3", "M4",
+    # 2026-08-14: "15", "17", "19", "20" LEFT this set (vibe-ic#1457). Not
+    # waived, not re-pointed, and no evidence manufactured -- the four DEF
+    # checkpoints they declare were COMMITTED:
+    #   15 <- benchmark-data/ic/subservient  phase3/stage3/pnr/floorplan.def
+    #   17 <- benchmark-data/ic/subservient  phase3/stage3/pnr/placed.def
+    #   19 <- benchmark-data/ic/subservient  phase3/stage3/pnr/post_cts.def
+    #   20 <- benchmark-data/ic/subservient  phase3/stage3/pnr/post_hold.def
+    # THE >1 GB ESTIMATE ABOVE IS WHY THIS SAT HERE FOR SO LONG, AND IT WAS
+    # MEASURING THE WRONG THING. It costs a published run tree to evidence a
+    # whole step set; it cost 42,046,261 B -- four blobs, largest 14,546,739 B,
+    # all under `tracked_blob_size_guard`'s 50 MB ceiling -- to evidence these
+    # four entries, because what was missing was four checkpoints of ONE run,
+    # not a run tree. `.gitignore:173` (`!benchmark-data/ic/**/*.def`) already
+    # admits exactly this path shape and the comment above it says these belong
+    # in git, so `git add` took all four with no `-f`.
+    #
+    # PROVENANCE IS THE WHOLE OF THE WORK HERE, AND THE NEAR MISS IS WHY.
+    # `benchmark-data/ic/subservient/phase3/stage3/pnr/` carries FIVE untracked
+    # .def on a maintainer checkout, at these exact paths, for this exact
+    # design -- 2.34 MB, a twentieth of the size, and every structural test
+    # passes them: same DIEAREA, COMPONENT instance-name set exactly equal to
+    # the 3780 instances of the tracked `subservient_pnr.v` (cell master
+    # included), the placed->post_cts delta exactly the 75 names in the tracked
+    # `spare_cells.json`, and `def_stage_progression_check` rates all four
+    # stages as NOT fabricated. They are still the wrong bytes: they are a
+    # LATER RE-RUN of the same design. The run's own tracked `provenance.jsonl`
+    # records a sha256 per output, and all five differ. Committing them turns
+    # `declared_outputs_findable_check` from PASS to FAIL with HASH_MISMATCH --
+    # measured, not reasoned about, by committing them and running it.
+    #
+    # So the four blobs here are the ones whose sha256 EQUALS the recorded one:
+    #   floorplan 4ec06f09…  placed 04b97111…  post_cts/post_hold 6d47399c…
+    # Structural resemblance is not provenance. The record is.
+    # (post_cts.def and post_hold.def share a hash: the hold-clean no-op #624
+    # already exempted, corroborated by the tracked post_hold_timing.rpt at
+    # worst hold slack 1e39. #624's own docstring quotes this same 6d47399c.)
+    #
+    # The remaining six declare artefacts NO path in this commit matches (30,
+    # 32) or belong to the mixed-signal set (#1159). For 32 the artefact DOES
+    # exist on this host, at clean_run_*/phase3/stage3/eco/
+    # eco_trigger_decision.json, and is deliberately NOT promoted: that tree's
+    # own committed .gitignore excludes `phase3/stage3/*` to keep it "a lean,
+    # results-only commit", so carrying it is a decision against a written
+    # policy rather than a curation the policy already permits. A red cell
+    # cannot rot; a waiver can, and did.
+    "30", "32", "M1", "M2", "M3", "M4",
 )
 
 
