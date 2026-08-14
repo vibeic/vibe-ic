@@ -1221,8 +1221,26 @@ def test_d8_cell_census_is_complete():
 #: they had dropped out on the text placeholder alone). The population is
 #: pinned rather than derived so the SHRINKING direction still has to be
 #: explained by a human — see this constant's test.
+#: ``4`` ADDED 2026-08-14, and it GREW again -- the safe direction. Measured
+#: on the seeded fixture, step 4 reads ``VACUOUS_PASS`` seeded and ``FAIL``
+#: with one declared output dropped, which is the STRONGER of the two
+#: acceptable outcomes: the gate itself noticed, rather than merely going
+#: MISSING.
+#:
+#: Attributed by counterfactual, not by reading a commit log. The population
+#: was re-measured at `afb6bce24^` (pre-#1324) and at `origin/main`:
+#:
+#:     pre-#1324   16 steps, step 4 ABSENT   -- exactly the tuple below
+#:     main        17 steps, step 4 PRESENT
+#:
+#: so #1324 (`afb6bce24`, "step 1's gate never measured two of the three
+#: outputs it declared") is what moved it. That commit moved
+#: `reports/phase1/extraction_coverage_report.{md,json}` from step 1 to D1 and
+#: DID re-measure the single-entry population in this same file (27 -> 28,
+#: adding "1", documented above). It did not re-measure THIS pin. One commit,
+#: two pinned populations in one file, one of them moved.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "D1", "1", "2", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
+    "D1", "1", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
     "30", "32", "35", "38",
 )
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
