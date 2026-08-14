@@ -208,12 +208,36 @@ def test_the_declaration_survives_dash_q(tmp_path):
     assert str(bt) in out, out
 
 
-def test_the_declaration_distinguishes_could_not_look_from_looked(tmp_path):
-    """"git could not be asked" must not be reported as a clean "outside" —
-    the distinction the rest of this repo keeps, kept here too."""
-    src = (_PROGRAMS / "scratch_root_guard.py").read_text(encoding="utf-8")
-    assert "or git could not be asked" in src, \
-        "the outside-branch wording no longer discloses the unaskable case"
+def test_an_unaskable_git_does_not_crash_and_does_not_refuse(
+        tmp_path, monkeypatch):
+    """Degrade loudly, never silently (flow-change-acceptance §6), and never
+    into a refusal.
+
+    With git unavailable the guard cannot classify the root — and a run it
+    could not classify is not one it should stop. It must also not raise: a
+    harness guard that dies on a host without git takes down every suite on
+    that host, which is a far larger failure than the one it prevents.
+
+    The wording keeps "I could not look" apart from "I looked and there is
+    nothing", which is the distinction the rest of this repo maintains.
+    """
+    amb = _repo(tmp_path / "ambient9")
+    empty = tmp_path / "no_tools"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+
+    assert G.enclosing_work_tree(amb) is None
+    assert "or git could not be asked" in G.declaration(
+        _FakeConfig(basetemp=amb))
+
+
+class _FakeConfig:
+    """pytest passes a Config; the guard reads exactly two attributes off it."""
+
+    def __init__(self, basetemp):
+        self.option = type("O", (), {
+            "basetemp": str(basetemp),
+            "allow_scratch_root_in_repo": False})()
 
 
 # ── D. the mechanism itself, pinned so nobody re-derives it ────────────────
