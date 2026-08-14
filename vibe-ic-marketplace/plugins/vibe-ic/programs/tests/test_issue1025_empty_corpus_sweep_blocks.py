@@ -166,9 +166,22 @@ def _suite(tmp_path, wrapper, rc):
     buy = ('uncheckable_until 2999-01-01 "fixture: the stub stands in for a '
            'gate that cannot look"\n'
            if wrapper in _TOLERATES_RC2 else "")
+    # vibe-ic#1025 follow-up — a SECOND gate that DECIDES, and it is the
+    # fixture that needed it, not the assertions. `gate_dispatch_finish` now
+    # refuses a run in which NO gate reached a verdict (rc 2), so a sweep whose
+    # ONLY gate is the tolerated refusal is vacuous BY CONSTRUCTION: both
+    # spellings would come back non-zero and the pair below would be comparing
+    # two vacuous sweeps instead of two wrappers. With a deciding gate present
+    # the aggregate rc is once again a fact about the WRAPPER, which is the
+    # only thing this pair was ever written to pin — and it is also the shape
+    # the real sweep has, where this gate is one of 63.
+    decides = tmp_path / "decides.sh"
+    decides.write_text("#!/usr/bin/env bash\necho 'PASS (1 item examined)'\n")
+    decides.chmod(0o755)
     harness.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
         f"source {DISPATCH}\n"
+        f'run "a gate that decided" "{tmp_path}" bash "{decides}"\n'
         f"{buy}"
         f'{wrapper} "a corpus sweep" "{tmp_path}" bash "{stub}"\n'
         "gate_dispatch_finish\n")
