@@ -610,8 +610,23 @@ def main(argv=None) -> int:
     base = _load_baseline(bl)
     new = [c for c in now if base is None or c not in set(base)]
     paid = [c for c in (base or []) if c not in set(now)]
-    if rep["no_runner_at_all"]:
-        print(f"  no runner at all: {len(rep['no_runner_at_all'])}")
+    # EVERY POPULATION, INCLUDING THE ZEROS. vibe-ic#1130.
+    #
+    # `no runner at all` used to print only when it was non-zero. At zero the
+    # gate said nothing about it, and a count that appears only when it is
+    # non-zero cannot be told apart from a check that did not run — which is
+    # the same defect this program exists to find, one level up. The audit
+    # that reports "N checkers nothing but a fixture runs" was itself
+    # reporting one of its own populations conditionally.
+    #
+    # Printed unconditionally now, so a reader can distinguish "I looked and
+    # found none" from "this line is missing because nobody looked".
+    print(f"  population     : test-only {len(rep['test_only'])}, "
+          f"no-runner-at-all {len(rep['no_runner_at_all'])}, "
+          f"skill-only {len(so)}, baseline {0 if base is None else len(base)} "
+          f"— stated even at zero (#1130)")
+    for c in rep["no_runner_at_all"][:10]:
+        print(f"   (no runner at all) {c}")
     if paid:
         print(f"[FAIL] {len(paid)} recorded checker(s) now HAVE a real runner "
               f"— shrink the baseline so it cannot become permission:")
