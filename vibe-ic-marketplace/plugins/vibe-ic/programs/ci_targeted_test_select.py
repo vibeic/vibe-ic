@@ -348,6 +348,17 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # among them. The PR that neuters the gate is precisely the PR whose
     # changed-file set cannot reach the test that guards it. ~2 s for 7 tests.
     "test_issue1025_empty_corpus_sweep_blocks.py",
+    # vibe-ic#1469 — the same reachability argument, arriving through an
+    # IMPORT. The guard asserts that no `programs/*.py` imports a private
+    # `_helper` that is not in the tree; the PR that breaks it is a PR that
+    # edits some `programs/<caller>.py`, and the selector maps that to
+    # `test_<caller>*.py`. MEASURED with the selector itself, on exactly the
+    # diff #1469 is about — one of group (d)'s seventeen wired to the
+    # prescribed `from _atomic_artefact import write_json`, a module that is
+    # on no branch of main: 17 tests selected, this guard NOT among them.
+    # The caller's own test is selected and stays GREEN, because it never
+    # reaches the code path that imports. ~10 s for 1138 programs.
+    "test_issue1469_private_helper_import_resolves.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
