@@ -497,6 +497,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         bl = Path(args.baseline) if args.baseline else _HERE / BASELINE_NAME
         now = rep["findings_total"]
         if args.write_baseline:
+            # vibe-ic#1025. REFUSE to record a number a sweep did not measure.
+            #
+            # This check used to live 14 lines BELOW, after the write and its
+            # `return 0`, so `--write-baseline` against a corpus this gate
+            # cannot reach rewrote the record to zero and reported success.
+            # MEASURED on 947547716, real baseline copied to a temp file:
+            #
+            #     before: findings_total=7 runs_swept=17 per_run=4
+            #     $ ... --corpus <empty> --baseline <copy> --write-baseline
+            #     rc=0   "wrote <copy> (findings_total=0)"
+            #     after:  findings_total=0 runs_swept=0  per_run=0
+            #
+            # The issue names this danger in prose — "would record a
+            # shrink-to-zero that measured nothing ... and would permanently
+            # destroy the 7 recorded findings as a reference point" — and prose
+            # was the ONLY thing preventing it. The ratchet's own doctrine is
+            # MAY ONLY SHRINK; a zero written from zero reach satisfies that
+            # rule while proving the opposite of what the rule exists to prove.
+            #
+            # No `--force`. An escape hatch here would put the same destroy one
+            # flag away and make the refusal advisory, which is the shape this
+            # gate exists to argue against. The way to write a baseline is to
+            # fix the reach first — that is what makes the number a measurement.
+            if rep["runs_with_reports"] == 0:
+                print(f"REFUSED: the sweep reached {rep['runs_swept']} published "
+                      f"run tree(s) and {rep['runs_with_reports']} with a "
+                      f"reports/ directory, so it examined NOTHING. Writing a "
+                      f"baseline from it would record findings_total={now} as a "
+                      f"measurement and destroy the recorded reference point. "
+                      f"Fix the corpus/reach first, then re-run "
+                      f"--write-baseline (vibe-ic#1025).", file=sys.stderr)
+                return 2
             bl.write_text(json.dumps(
                 {"_comment": (
                     "Unacknowledged step-internal FAIL/MISSING reports across "
