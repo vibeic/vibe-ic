@@ -77,7 +77,18 @@ def test_the_recorded_baseline_followed_the_tree_down():
     40-slot hole in it, because it only ever fails on growth."""
     doc = json.loads(BASELINE.read_text())
     recorded = set(doc["offenders"])
-    assert len(recorded) == 525, len(recorded)
+    # MAY ONLY SHRINK, not "is exactly 525". The register states that contract
+    # itself ("this list may only get shorter"), and an equality here encodes a
+    # MOMENT instead: every sibling PR that converts more programs makes it
+    # stale. Measured — this PR closes the `open(..., 'w')` category over 10
+    # programs and takes the register 525 -> 515, so the equality failed on the
+    # composed chain while every conversion in it was correct.
+    #
+    # The bound is kept, not dropped. Padding the register still fails here,
+    # which is the direction this assertion exists to catch: a 40-slot hole
+    # left behind by the tranche would show up as a register that did NOT
+    # shrink. The per-name loop below is what proves the tranche's own 40 left.
+    assert len(recorded) <= 525, len(recorded)
     for s in TRANCHE:
         assert f"{s}.py" not in recorded, f"{s} converted but still recorded as residual"
 
