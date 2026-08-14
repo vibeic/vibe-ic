@@ -237,6 +237,17 @@ steps:
       # so it is produced by Phase 1 doc extraction, not by Spec-to-RTL.
       - "reports/phase1/extraction_coverage_report.md"
       - "reports/phase1/extraction_coverage_report.json"
+      # L21 is READ by gate:stepM2 and written here. M2 does not produce
+      # it, so declaring it on M2 would name the wrong producer.
+      #
+      # NOTE: this step's name promises L1-L27 and the list above stops
+      # at L13. L14-L20 and L22-L27 are equally undeclared; they are not
+      # added here because no gate reads them, so they are not
+      # load-bearing by W2's definition and declaring them would make d3
+      # enforce 13 more artefacts against roots that carry only 10 of 14.
+      - "phase1/generated_docs/L21_POWER_INTENT.json"
+      # the expert-track parse record, read by gate:stepD1 itself
+      - "reports/audit/phase1/expert_parse_track.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
@@ -1529,6 +1540,11 @@ steps:
       - "phase2/stage2/dft/transition_atpg_plan.md"
       - "reports/phase2/dft/coverage.json"
       - "reports/phase2/dft/bsdl_plan.json"
+      # Fault's own coverage metadata, READ BACK by this step's gate:
+      # dft_test_coverage.py parses faultPoints / sa0Covered / sa1Covered
+      # out of it. Produced here and consumed here, declared by neither
+      # until the write ledger surfaced it (#1241 tripwire).
+      - "phase2/stage2/dft/coverage.yml"
     # NOTE on invocation: flow-orchestrate/SKILL.md directs the agent to
     # invoke `fault_atpg_run` with the design's clock name and the
     # already-synthesised netlist. FOUNDRY BAR: stuck-at must reach the
@@ -3174,6 +3190,9 @@ steps:
       # on run 2, and a verdict that depends on how many times it has been
       # evaluated is not a measurement.
       - "reports/phase3/ir_drop_signoff.json"
+      # the DYNAMIC half this step's own name promises; the three entries
+      # above cover only the static one
+      - "reports/phase3/dynamic_ir.json"
     gate:
       all_of:
         # OUTPUT-PATH COLLISION (same shape as step 25's, fixed with it in
@@ -3365,6 +3384,8 @@ steps:
       # The NOISE/GLITCH axis. Emitted by the runner's SI screen; hard-gated
       # below by the `files_exist` any_of.
       - "reports/phase3/si_crosstalk.rpt OR reports/phase3/si_crosstalk.json"
+      # the MCF crosstalk-aware STA half, likewise named in the step title
+      - "reports/phase3/si_mcf_sta.json"
       # The MCF crosstalk-DELAY verdict — and, since the tape-out SI blocking
       # condition began reading it, a CROSS-STEP fact rather than this gate's
       # private bookkeeping. `signoff_audit._classify_si` opens exactly this
@@ -4030,6 +4051,8 @@ steps:
       # accept either location, so both are accepted here too.
       - "reports/density.json OR reports/phase3/density.json"
       - "reports/density.rpt OR reports/phase3/density.rpt"
+      # the CMP fill emission record this step writes and its gate reads
+      - "reports/phase3/cmp_fill_emit.json"
     gate:
       all_of:
         - files_exist: ["phase3/stage3/pnr/filled.def", "phase3/stage3/pnr/metal_fill.done"]

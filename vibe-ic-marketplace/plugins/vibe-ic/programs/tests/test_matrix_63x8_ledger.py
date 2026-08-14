@@ -437,8 +437,32 @@ def test_output_entries_classify_into_the_four_kinds():
     # VACUOUS_PASS with both reports written becomes MISSING with none.
     # test_flow_declaration_does_not_silence_its_producer.py holds that
     # distinction live for both steps.
-    assert sum(seen.values()) == 134, seen
-    assert seen[F.FILE] == 100
+    # 2026-08-14: 134 -> 140, FILE 100 -> 106. The SIX new entries are the
+    # write-ledger promotions this branch declares, each on the step that
+    # produces it:
+    #     D1  phase1/generated_docs/L21_POWER_INTENT.json
+    #     D1  reports/audit/phase1/expert_parse_track.json
+    #     11  phase2/stage2/dft/coverage.yml
+    #     24  reports/phase3/dynamic_ir.json
+    #     27  reports/phase3/si_mcf_sta.json
+    #     34  reports/phase3/cmp_fill_emit.json
+    # GLOB 12 and ANY_OF 22 are untouched, which is what says all six are plain
+    # FILE entries and not new shapes: measured Counter is
+    # {FILE: 106, ANY_OF: 22, GLOB: 12}.
+    #
+    # NOTE for whoever lands this alongside #1463: that PR declares the FIRST
+    # of the six (L21_POWER_INTENT.json on D1) and moves the pin to 135 for it
+    # alone. The two overlap on exactly that entry, so landing both without
+    # reconciling gives 141 here, not 140 — the count is the thing that will
+    # notice, which is why it is pinned.
+    #
+    # AND WHY THIS PIN EXISTS SEPARATELY AT ALL: the same move is recorded a
+    # second time in `test_matrix_d3_outputs_produced` ("120 -> 126, and
+    # 134 -> 140 declared"). This is the second copy of that number, and on the
+    # branch this merge came from it did NOT travel with the first — which is
+    # the whole reason both are pinned rather than one.
+    assert sum(seen.values()) == 140, seen
+    assert seen[F.FILE] == 106
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

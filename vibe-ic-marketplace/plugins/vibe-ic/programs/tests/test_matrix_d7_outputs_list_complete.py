@@ -1448,7 +1448,43 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: and each promotion must be re-measured and then either DECLARED in the flow
 #: yaml or waived with evidence — not discovered later from a cell that
 #: quietly changed colour.
-RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+#: 2026-08-13 — THE TRIPWIRE ABOVE FIRED, and this is the re-measurement it
+#: asks for. Two run trees now carry `reports/write_ledger.json`:
+#:
+#:     spm/v1.10.18_sky130A   captured 2026-08-09T11:11:08Z, 399 candidate(s)
+#:     spm/v1.9.96_gf180mcuD  captured 2026-08-06T19:17:51Z, 384 candidate(s)
+#:
+#: The promotions are NOT the 783 candidates. The reader refuses any residual
+#: that does not re-verify live — 144 and 130 respectively, all absent today —
+#: because a record is a claim about the past, not evidence about today. What
+#: survived and actually changed a cell's colour is SIX paths, each written by
+#: the flow and READ BY A GATE while no step's required_outputs named it:
+#:
+#:     step 11  phase2/stage2/dft/coverage.yml                read by gate:step11
+#:     step 24  reports/phase3/dynamic_ir.json                read by gate:step24
+#:     step 27  reports/phase3/si_mcf_sta.json                read by gate:step27
+#:     step 34  reports/phase3/cmp_fill_emit.json             read by gate:step34
+#:     step D1  reports/audit/phase1/expert_parse_track.json  read by gate:stepD1
+#:     step D1  phase1/generated_docs/L21_POWER_INTENT.json   read by gate:stepM2
+#:
+#: All six are now DECLARED in the flow yaml — the first of the two exits this
+#: pin's own note offers, not the waiver — and recorded in d3's measured
+#: manifest, without which the declaration merely trades d7 red for d3 red.
+#:
+#: Five are declared on the step that WRITES them, and three of those steps say
+#: so in their own names ("IR Drop (static + dynamic)", "+ MCF crosstalk-aware
+#: STA", "Metal Fill"). L21 is the exception and the reason producer and
+#: consumer must be told apart: gate:stepM2 READS it, D1 writes it, so
+#: declaring it on M2 would have named the wrong producer and left the real gap
+#: open.
+#:
+#: The docstring's older promotion tables (12 on `_sky130A_r3_run`, 9 on
+#: `converge_1.5.44_gf180mcuD`) were measured against run trees this commit
+#: still does not carry, and remain unverified for that reason.
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():

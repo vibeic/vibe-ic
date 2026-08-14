@@ -619,7 +619,32 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-13: 120 -> 126, and 134 -> 140 declared. Same reason as the
+# 2026-07-28 move (107 -> 114): dimension 7 declared more artefacts and the
+# in-repo run trees already carry every one. Six this time, all surfaced by the
+# `RECORD_BOUND_ROOTS` tripwire in d7 firing for the first time -- two run trees
+# now carry a `reports/write_ledger.json`, which promoted six paths that a gate
+# READS and no step's required_outputs named:
+#
+#     step 11  phase2/stage2/dft/coverage.yml                   28797 B
+#     step 24  reports/phase3/dynamic_ir.json                      728 B
+#     step 27  reports/phase3/si_mcf_sta.json                     2901 B
+#     step 34  reports/phase3/cmp_fill_emit.json                  3854 B
+#     step D1  phase1/generated_docs/L21_POWER_INTENT.json         531 B
+#     step D1  reports/audit/phase1/expert_parse_track.json       7399 B
+#
+# Composition RE-MEASURED, not carried forward: 126 PRODUCED_BY_RUN + 2
+# PRODUCED_LIVE + 12 UNPROVEN-and-searched = 140 declared, of which 126 are
+# decided live and 14 fixture-attested.
+#
+# The guarded property -- "no evidence from outside the commit" -- was CHECKED,
+# not assumed, because this pin exists precisely to catch a count inflated by
+# machine-local evidence (#527). Each of the six resolves against a path
+# `git ls-files --error-unmatch` confirms is tracked at HEAD, in
+# `spm/v1.9.96_gf180mcuD`, `sha256/clean_run_v1427_20260715` and
+# `caravel_user_project` -- all kind="repo", all already registered roots, and
+# nothing here reaches $HOME.
+_LIVE_ENTRY_COUNT = 126
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
