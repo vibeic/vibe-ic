@@ -979,6 +979,36 @@ run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.
 # against checks that go green by declining to look, and that includes itself.
 run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins
 
+# vibe-ic#1241 — until this line existed, NOTHING but its own unit test ran
+# `bundled_attribution_notice_check.py`, which is the finding #1241 records for
+# it: a fixture the author wrote proves the logic and never proves the artefacts.
+#
+# SCOPE IS "$ROOT", NOT "$ROOT/benchmark-data", AND THE REASON IS STRUCTURAL —
+# NOT the holder counts, which do not support it. The two scopes report:
+#
+#     "$ROOT"                 7 holder(s) over 513 SPDX-headered file(s)   rc 0
+#     "$ROOT/benchmark-data"  6 holder(s) over 512 SPDX-headered file(s)   rc 0
+#
+# Those counts are real, and the obvious reading of them is WRONG. Measured by
+# removing each of NOTICE's 106 lines in turn and running BOTH scopes on each:
+# exactly one line changes any verdict (the Efabless Apache-2.0 entry), and the
+# narrow scope catches it too. The 7th holder is the project's OWN attribution,
+# which the checker excludes by design — so on today's tree there is no
+# third-party holder that only the wide scope protects.
+#
+# The reason to keep "$ROOT" is that scoping to the corpus bakes in an
+# assumption — that bundled third-party source only ever lands under
+# benchmark-data — which holds until someone vendors a file elsewhere, at which
+# point the gate silently stops covering it. "$ROOT" needs no such assumption.
+# (#1156 chose the corpus scope for `tool_warning_id_novelty_check` because tool
+# logs genuinely only live there; that reasoning does not carry to bundled
+# sources.)
+#
+# rc 2 is "refused — no SPDX-headered source found, so nothing was established",
+# and it BLOCKS rather than passing: an empty scan must not read as a clean one.
+run "NOTICE accounts for what is bundled" "$ROOT" \
+    python3 "$PG/bundled_attribution_notice_check.py" "$ROOT" --notice "$ROOT/NOTICE"
+
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
 gate_dispatch_finish
