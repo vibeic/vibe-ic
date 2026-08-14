@@ -626,15 +626,94 @@ def audit(repo_root: Path, timeout: int = 600,
             va = _norm(_verdict_line(a.stdout + a.stderr), repo_root, wt)
             vb = _norm(_verdict_line(b.stdout + b.stderr), repo_root, wt)
             if va != vb or a.returncode != b.returncode:
-                findings.append({
-                    "gate": label, "kind": "HOST_DEPENDENT_VERDICT",
-                    "detail": ("the same commit gives different answers in a "
-                               "working checkout and a fresh worktree, so the "
-                               "gate is reading something that is not in the "
-                               "commit — almost always untracked run leftovers"),
-                    "checkout": f"rc={a.returncode} {va[:200]}",
-                    "worktree": f"rc={b.returncode} {vb[:200]}",
-                })
+                # A DIFFERENCE MUST REPRODUCE TO BE EVIDENCE (vibe-ic#1029).
+                #
+                # Measured on `3febf537`, this probe reported:
+                #
+                #   [HOST_DEPENDENT_VERDICT] 63x8 census freshness
+                #     checkout: rc=1 AssertionError: the outcome run for
+                #               test_matrix_d7_outputs_list_complete.py did not
+                #               finish within 60s
+                #     worktree: rc=0 [PASS] 63x8 census fresh: 504 cells ...
+                #
+                # The arms did not disagree about the SUBJECT. One ran out of
+                # wall clock: `_OUTCOME_TIMEOUT_S = 60` bounds an inner pytest,
+                # and this probe drives 66 gates twice, so the checkout arm is
+                # the one under load. The same tool reported 6/6 clean on one
+                # run and 5/6 on the next — a verdict that depends on the
+                # machine's load is the very thing this probe exists to refuse,
+                # occurring in the probe itself. That is the same shape as the
+                # `_norm` fix above: a reported difference which is not one.
+                #
+                # `TimeoutExpired` raised HERE is already GATE_UNRUNNABLE. The
+                # gap is a gate that enforces its OWN deadline and therefore
+                # RETURNS rc=1 with a message — indistinguishable, to a single
+                # comparison, from a real verdict.
+                #
+                # The discriminator is NOT the text of the message; deciding a
+                # tier by grepping prose is the defect `_vacuous_exit` was
+                # written to end. It is REPRODUCIBILITY. A gate reading local
+                # state disagrees on every round, because the leftovers are
+                # still there. A gate that ran out of clock does not.
+                #
+                # Paid ONLY on the disagreeing minority: the agreeing majority
+                # is still driven exactly twice, which matters at ~44 min.
+                try:
+                    a2 = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
+                                        capture_output=True, text=True,
+                                        timeout=timeout)
+                    b2 = subprocess.run(_expand(cmd, wt), cwd=str(cb),
+                                        capture_output=True, text=True,
+                                        timeout=timeout)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    findings.append({
+                        "gate": label, "kind": "GATE_UNRUNNABLE",
+                        "detail": f"disagreed once, then could not be re-driven "
+                                  f"to confirm it: {type(exc).__name__}: "
+                                  f"{str(exc)[:160]}",
+                        "checkout": f"rc={a.returncode} {va[:200]}",
+                        "worktree": f"rc={b.returncode} {vb[:200]}"})
+                    continue
+                va2 = _norm(_verdict_line(a2.stdout + a2.stderr), repo_root, wt)
+                vb2 = _norm(_verdict_line(b2.stdout + b2.stderr), repo_root, wt)
+                round2_differs = (va2 != vb2 or a2.returncode != b2.returncode)
+                same_shape = (
+                    round2_differs
+                    and (va, vb, a.returncode, b.returncode)
+                    == (va2, vb2, a2.returncode, b2.returncode))
+                if same_shape:
+                    findings.append({
+                        "gate": label, "kind": "HOST_DEPENDENT_VERDICT",
+                        "detail": ("the same commit gives different answers in "
+                                   "a working checkout and a fresh worktree, "
+                                   "and does so on BOTH rounds, so the gate is "
+                                   "reading something that is not in the commit "
+                                   "— almost always untracked run leftovers"),
+                        "checkout": f"rc={a.returncode} {va[:200]}",
+                        "worktree": f"rc={b.returncode} {vb[:200]}",
+                    })
+                else:
+                    # NOT folded into a pass. A gate that cannot reproduce its
+                    # own verdict is not usable evidence — it is a DIFFERENT
+                    # defect from host dependence, and naming it as host
+                    # dependence sends the reader to the wrong repair.
+                    findings.append({
+                        "gate": label, "kind": "NON_DETERMINISTIC_VERDICT",
+                        "detail": ("the two arms disagreed once and did not "
+                                   "disagree the same way when reran, so the "
+                                   "difference is not a property of the commit "
+                                   "— typically an inner wall-clock bound met "
+                                   "under this probe's own load. NOT host "
+                                   "dependence, and NOT a pass: a gate whose "
+                                   "verdict is not reproducible cannot be used "
+                                   "as evidence by anything downstream"),
+                        "checkout": f"rc={a.returncode} {va[:200]}"
+                                    f"  || second run rc={a2.returncode} "
+                                    f"{va2[:120]}",
+                        "worktree": f"rc={b.returncode} {vb[:200]}"
+                                    f"  || second run rc={b2.returncode} "
+                                    f"{vb2[:120]}",
+                    })
     finally:
         _release_scratch(res, repo_root)
 
@@ -739,9 +818,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     stim = res.dirt.describe() if res.dirt is not None else "unknown stimulus"
     if res.findings:
+        # Split by KIND rather than totalling them. Reporting a gate that met
+        # an inner deadline as "HOST-DEPENDENT" sends the reader to look for
+        # untracked leftovers that are not there — the wrong repair, which is
+        # the cost this split exists to stop.
+        by_kind: dict = {}
+        for f in res.findings:
+            by_kind[f["kind"]] = by_kind.get(f["kind"], 0) + 1
+        parts = ", ".join(f"{n} {k}" for k, n in sorted(by_kind.items()))
         print(f"[FAIL] {len(res.findings)} of {res.probed} probed corpus "
-              f"gate(s) ({res.declared} declared) give a HOST-DEPENDENT "
-              f"verdict.", file=sys.stderr)
+              f"gate(s) ({res.declared} declared) did not give one reproducible "
+              f"verdict across two trees: {parts}.", file=sys.stderr)
         return 1
     if res.verdict == "NO_STIMULUS":
         # The sentence a two-pristine-tree run has always deserved and never
