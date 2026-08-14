@@ -1037,6 +1037,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `timer_freeze_after_state_check` | any | — | Static heuristic for the "counter must freeze after state transition" RTL anti-pattern. |
 | `toggle_divider_hierarchical_clock_check` | any | v0.119.30 | gate (LL-31) extending LL-27 (`fpga_clock_divider_antipattern_check`) across module boundaries. |
 | `tool_substitution_disclose` | any | — | emit the mandatory RESULT.md tool-substitution disclosure block from a fixed lookup table. |
+| `toolchain_profile` | any | — | a red-test baseline is only comparable to one measured under the SAME toolchain, so the baseline has to carry it. |
 | `top_level_outputs_in_canonical_check` | any | — | enforce that the project root contains ONLY the canonical Phase/Stage/Step folders + 3 cross-phase metadata files (v1.6.25 hygiene gate). |
 | `tpm_protocol_synth` | any | v0.1.84 | TPM 2.0 trusted-platform-module protocol synth helper. |
 | `tracked_blob_size_guard` | any | — | the size guard `.gitignore` already promised. |
@@ -2164,6 +2165,7 @@ _(no programs in this group)_
 - `timer_freeze_after_state_check` — Static heuristic for the "counter must freeze after state transition" RTL anti-pattern.
 - `toggle_divider_hierarchical_clock_check` — gate (LL-31) extending LL-27 (`fpga_clock_divider_antipattern_check`) across module boundaries.  _[v0.119.30]_
 - `tool_substitution_disclose` — emit the mandatory RESULT.md tool-substitution disclosure block from a fixed lookup table.
+- `toolchain_profile` — a red-test baseline is only comparable to one measured under the SAME toolchain, so the baseline has to carry it.
 - `top_level_outputs_in_canonical_check` — enforce that the project root contains ONLY the canonical Phase/Stage/Step folders + 3 cross-phase metadata files (v1.6.25 hygiene gate).
 - `tpm_protocol_synth` — TPM 2.0 trusted-platform-module protocol synth helper.  _[v0.1.84]_
 - `tracked_blob_size_guard` — the size guard `.gitignore` already promised.
