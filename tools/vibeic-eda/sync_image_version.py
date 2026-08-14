@@ -325,7 +325,7 @@ def check_latest_points_at_anchor(version: str,
               f"({e.__class__.__name__})")
         return 0
     if d_latest != d_anchor:
-        print(f"[FAIL] `:latest` does NOT point at the anchor version.")
+        print(f"[REPORT] DIVERGENCE: `:latest` does NOT point at the anchor version.")
         print(f"       latest  -> {d_latest}")
         print(f"       {version:<8}-> {d_anchor}")
         print(f"       Anyone pulling the tag that means 'newest' gets a "
@@ -453,7 +453,7 @@ def check_anchor_vs_reality(version: str, require_remote: bool = False) -> int:
         return 0
     pub = max(tags, key=_semver_key)
     if _semver_key(version) < _semver_key(pub) and version not in tags:
-        print(f"[FAIL] STALE ANCHOR: VERSION={version} is OLDER than the newest "
+        print(f"[REPORT] DIVERGENCE: STALE ANCHOR: VERSION={version} is OLDER than the newest "
               f"published image tag {pub} (source={src}).")
         print(f"       Internal consistency is not correctness — every pointer "
               f"equal to VERSION is *consistently wrong*.")
@@ -495,7 +495,7 @@ def check_anchor_vs_reality(version: str, require_remote: bool = False) -> int:
         print(f"       To adopt it: python3 {Path(__file__).name} --set {pub}")
         return 0
     if version not in tags:
-        print(f"[FAIL] UNRESOLVABLE PIN: VERSION={version} does not exist on the "
+        print(f"[REPORT] DIVERGENCE: UNRESOLVABLE PIN: VERSION={version} does not exist on the "
               f"registry (newest published: {pub}; source={src}).")
         print(f"       Every pointer equal to VERSION directs a clean-room "
               f"install at a tag `docker pull` cannot resolve (vibe-ic#354).")
