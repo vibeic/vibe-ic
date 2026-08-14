@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1079
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1079)
+- **Total programs (excluding helpers / shims):** 1080
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1080)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1070 |
+| `any` | 1071 |
 
 ## Alphabetical listing
 
@@ -463,6 +463,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `htol_attestation_check` | any | — | Step 43 reliability qualification (HTOL) attestation gate (v2.3). |
 | `hw_acceptance_test_passed_check` | any | v0.119.15 | final-step gate for the closed hardware debug loop (hw-debug-loop skill). |
 | `hw_vs_rtl_verdict_check` | any | v0.45 | Require N byte-identical FAILs before blaming hardware. |
+| `hygiene_finding_delta` | any | — | Which hygiene findings did this tree INTRODUCE, relative to its base? |
 | `hygiene_shard_aggregate` | any | — | combine sharded hygiene runs, denominator first. |
 | `hygiene_shard_plan` | any | — | split the hygiene gates across hosts by MEASURED time. |
 | `hyperbus_protocol_synth` | any | — | HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55). |
@@ -1151,7 +1152,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1070 programs)
+### `any` (1071 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1586,6 +1587,7 @@ _(no programs in this group)_
 - `htol_attestation_check` — Step 43 reliability qualification (HTOL) attestation gate (v2.3).
 - `hw_acceptance_test_passed_check` — final-step gate for the closed hardware debug loop (hw-debug-loop skill).  _[v0.119.15]_
 - `hw_vs_rtl_verdict_check` — Require N byte-identical FAILs before blaming hardware.  _[v0.45]_
+- `hygiene_finding_delta` — Which hygiene findings did this tree INTRODUCE, relative to its base?
 - `hygiene_shard_aggregate` — combine sharded hygiene runs, denominator first.
 - `hygiene_shard_plan` — split the hygiene gates across hosts by MEASURED time.
 - `hyperbus_protocol_synth` — HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55).
