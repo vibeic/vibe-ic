@@ -98,7 +98,7 @@ echo "=== gatekeeper landing gates — base=$BASE ==="
 
 # vibe-ic#1129 — the mechanical repairs, BEFORE anything measures them. A gate
 # that refuses for a reason a program can fix spends an hour saying so.
-if [ "$PREPARE" = "1" ]; then
+if true; then
   echo "--- prepare (vibe-ic#1129: the mechanical three, then get out of the way) ---"
   if python3 "$PROGRAMS/gatekeeper_prepare_landing.py" --repo "$ROOT" --commit; then
     :
