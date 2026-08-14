@@ -172,6 +172,8 @@ def main(argv=None) -> int:
         "unprofiled": unprofiled,
     }
     if args.json:
+        # vibe-ic#1082 — see hygiene_shard_aggregate: the plan is read by the
+        # shards that follow it, so a truncated plan is worse than no plan.
         write_json(args.json, doc, ensure_ascii=True)
 
     if args.shard is not None:

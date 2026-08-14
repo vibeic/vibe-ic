@@ -145,6 +145,11 @@ def main(argv=None) -> int:
     head = (f"{n_dec} of {n_exp} gate(s) DECIDED across {len(docs)} shard(s), "
             f"{len(undecided)} NOT CHECKED")
     if args.json:
+        # vibe-ic#1082 — the declared report destination exists ONLY IF this
+        # aggregate completed. A crashed run previously left a half-written
+        # file under the FINAL name, which the next reader cannot tell from a
+        # complete one; that is the whole point of the shard aggregate, which
+        # exists to say what the run's reach WAS.
         write_json(args.json, {
             "expected": n_exp, "decided": n_dec,
             "not_checked": sorted(undecided), "failed": sorted(set(failed)),
