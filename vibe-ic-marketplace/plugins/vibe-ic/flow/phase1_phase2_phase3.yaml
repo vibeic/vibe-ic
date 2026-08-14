@@ -263,6 +263,15 @@ steps:
         # not. A missing/unparseable report exits 1 here, because a second
         # track that can quietly not run is the same as no second track.
         - program_exit_zero: "phase1_expert_parse_track ."
+        # The CLAUSE that reads the two extraction-coverage entries moved here
+        # from step 1 (#1219). Without it, moving the declaration alone would
+        # only RELOCATE d4's "declared by no clause" finding from step 1 to D1.
+        #
+        # `phase1_coverage_report_present_check.py` shipped and was wired
+        # NOWHERE — verified on a38902d1: the program exists and
+        # `grep -c phase1_coverage_report_present_check` over this file returned
+        # 0. That is the #725 shape this flow keeps finding.
+        - program_exit_zero: "phase1_coverage_report_present_check ."
         # vibe-ic#693 — the forbidden-artefact rule from
         # `skills/analog-spec-extract/SKILL.md`: `analog/A0_skip_decision.json`
         # may not encode a top-level analog skip. Wired HERE, at the
