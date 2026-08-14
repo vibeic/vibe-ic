@@ -518,6 +518,9 @@ def test_a_clean_run_leaves_no_scratch_behind(tmp_path):
     `hostindep-*` in the observed root, this test failed while the other 24
     passed; with no peer, 25 passed. The assertion is unchanged in strength: a
     leak by `audit` still lands in this root, which the guard below drives.
+    It fired for real before that: it reddened two tests of an unrelated
+    PR's verification and then did not reproduce, which is what a shared
+    namespace does to a difference-of-two-globs measurement.
     """
     priv = tmp_path / "tmproot"
     priv.mkdir()

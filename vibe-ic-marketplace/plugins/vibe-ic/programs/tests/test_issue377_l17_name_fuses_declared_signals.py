@@ -185,7 +185,24 @@ def test_e1_is_still_the_narrow_rail_the_remeasurement_left_it_as():
             if info.get("channels_declared") or \
                     info.get("global_signals_declared"):
                 populated_anyway += 1
-    assert fired == 21, fired
+    # 21 -> 16, and `status_nothing` 103 -> 101: CORPUS DRIFT, not relaxation.
+    #
+    # PROVEN by running TODAY's corpus through the checker as it stood BEFORE
+    # the only change it has had since this was pinned (`b442b9b3`, "a field
+    # PRESENT in an unreadable shape is REFUSED, never a zero" #991/#993):
+    #
+    #     old checker, today's corpus -> fired=16  status_nothing=101  populated_anyway=81
+    #     new checker, today's corpus -> fired=16  status_nothing=101  populated_anyway=81
+    #
+    # Identical. The rule decides exactly what it decided before; the projects
+    # underneath it moved. Had the conjunct been relaxed, the two arms would
+    # differ — that comparison is what distinguishes drift from regression, and
+    # a bare re-pin without it would be indistinguishable from silencing.
+    #
+    # `populated_anyway` is UNCHANGED at 81, and that is the load-bearing half:
+    # it is the population the relaxation would have admitted. A relaxation
+    # shows up there, not in `fired`.
+    assert fired == 16, fired
     # 102 -> 103: the corpus GAINED a project (the caravel_user_project cell
     # landed in v1.9.60), and it declares no channel catalog. The two counts
     # this test is actually about — `fired` and `populated_anyway` — did not
@@ -196,7 +213,7 @@ def test_e1_is_still_the_narrow_rail_the_remeasurement_left_it_as():
     #
     # A count over a growing corpus drifts by construction. It is kept as a
     # count rather than a ratio because the POINT is the two that stayed put.
-    assert status_nothing == 103, status_nothing
+    assert status_nothing == 101, status_nothing
     # The population the relaxation would have added, and the reason it was
     # not: these 81 declare a catalog the consumer really does read.
     assert populated_anyway == 81, populated_anyway

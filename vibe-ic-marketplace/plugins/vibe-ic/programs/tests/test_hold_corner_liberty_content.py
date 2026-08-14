@@ -155,12 +155,40 @@ class TestForwardContentBeatsTheLabel:
 
     def test_F7_banner_says_FF_but_liberty_declares_slow_now_FAILS(
             self, libdir):
+        """F6 with a BANNER — and the banner is what changes the reason.
+
+        F6 above carries no competing claim, so the Liberty's content decides
+        and the corner IS measured, at a non-fast one: `HOLD_NOT_AT_FF`.
+
+        Here the same Liberty is named on a line that also asserts
+        `process=FF`. Two corner claims on one line that disagree is the
+        module's third state, not its second — see its own docstring:
+
+            measured-clean   -> PASS
+            measured-defect  -> FAIL   HOLD_NOT_AT_FF
+            NOT measured     -> FAIL   HOLD_CORNER_CONTRADICTION
+
+        This assertion said `HOLD_NOT_AT_FF` and had done since before
+        `72a72850` ("the hold banner's label is the CLAIM and its Liberty is
+        the EVIDENCE — arbitrate them, do not union them") introduced the
+        arbitration. That commit made this case FAIL, the test was updated to
+        expect the FAIL, and the REASON was left on the pre-arbitration value.
+
+        `hold_corner_measured` is asserted alongside the reason string on
+        purpose: it is the claim that actually separates the two states, and a
+        future rename of the reason code must not be able to satisfy this test
+        while the semantics move.
+        """
         lib = _lib(libdir, "corelib_ff_1p10v_m40c", "slow")
         verdict, rc, rep = mod.evaluate(_hold_tcl(lib, "FF"), base=libdir)
         assert (verdict, rc) == ("FAIL", 1), (
             "a banner asserting process=FF does not outrank the Liberty it "
             "names on the same line")
-        assert rep["reason"] == "HOLD_NOT_AT_FF"
+        assert rep["reason"] == "HOLD_CORNER_CONTRADICTION"
+        assert rep["hold_corner_measured"] is False, (
+            "a line that contradicts itself about its corner was not measured "
+            "at any corner; reporting it as measured is the union this "
+            "arbitration replaced")
 
     def test_F8_filename_says_ss_but_liberty_declares_fast_now_PASSES(
             self, libdir):
