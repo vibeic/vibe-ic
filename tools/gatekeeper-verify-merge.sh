@@ -42,7 +42,11 @@
 #      judge the shape that lands instead of an N-commit local branch that does
 #      not;
 #   5. run the targeted suite on the BASE (arm A) and `gatekeeper-land.sh` on the
-#      squash commit (arm B), each with its own junit report;
+#      squash commit (arm B), each with its own junit report — AND hand the
+#      verdict the list arm A was ASKED to run (`--base-selection`), so a base
+#      arm that did not finish is caught instead of being subtracted as though
+#      it had (vibe-ic#1443: a partial base arm hides `silenced`, which is the
+#      permissive direction);
 #   6. hand every fact to `landing_merge_verdict.py`, which owns the refusal
 #      decision, and exit non-zero on REFUSE.
 #
@@ -465,6 +469,11 @@ CAND_PLUGIN="$WT_CAND/$PLUGIN_REL"
 VERDICT_PROG="$SELF_REPO/$PLUGIN_REL/programs/landing_merge_verdict.py"
 [ -f "$VERDICT_PROG" ] || VERDICT_PROG="$CAND_PLUGIN/programs/landing_merge_verdict.py"
 : > "$RUN/selection.txt"
+# Created HERE, not only inside the `SHORT_CIRCUIT=0` branch, so the verdict is
+# always handed a file it can read. An absent file and an empty one both mean
+# "the base arm was asked for nothing", which the verdict reports as a
+# not-checked disclosure rather than as a clean base arm (vibe-ic#1443).
+: > "$RUN/selection_base.txt"
 : > "$RUN/land.log"
 CAND_JUNIT="$RUN/candidate.xml"
 BASE_JUNIT="$RUN/base.xml"
@@ -504,8 +513,33 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   if [ -s "$RUN/selection_base.txt" ]; then
     # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
     # failed set, and a truncated base makes a new failure look pre-existing.
-    ( cd "$BASE_PLUGIN" && xargs -a "$RUN/selection_base.txt" \
-        python3 -m pytest -q --timeout=180 --timeout-method=thread \
+    #
+    # ARM A1 DECLARES THE SAME SESSION ARM B DECLARES (vibe-ic#1443, and the same
+    # defect #1521 reached independently). `gatekeeper-land.sh:299` runs
+    # `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 … -p pytest_timeout` and records why: on
+    # the LANDING host, autoload pulls in 8 `pytest11` entry points and one of
+    # them — `web3`'s `pytest_ethereum` — raises at import and takes the session
+    # down AT COLLECTION. Arm A1 declared neither half and inherited whatever the
+    # caller's shell had:
+    #
+    #   caller sets PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 (the pinned verification
+    #     invocation every agent is told to use) -> no `pytest-timeout`, so this
+    #     line's own `--timeout=180` is rejected, pytest exits on the usage
+    #     error, NO junit is written and arm A1 is DEAD;
+    #   caller sets nothing, on the landing host -> autoload, and the session
+    #     dies at collection instead.
+    #
+    # BOTH settings of the ambient switch could take arm A1 down while arm B ran,
+    # and a differential across two different instruments is not a differential.
+    # UNSETTING THE VARIABLE HERE WOULD BE THE WRONG REPAIR — it fixes the first
+    # case and re-arms the second, on the one host that actually lands code, and
+    # it tests green anywhere the harmful plugin is not installed (8HD-8 has 2
+    # `pytest11` entry points, neither of them `pytest_ethereum`). Declaring the
+    # session is the repair that is right on every host.
+    ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+        xargs -a "$RUN/selection_base.txt" \
+        python3 -m pytest -q -p pytest_timeout \
+        --timeout=180 --timeout-method=thread \
         -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
         > "$RUN/base_tests.log" 2>&1
     echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
@@ -593,6 +627,7 @@ python3 "$VERDICT_PROG" \
   --expected-tree "$EXPECTED_TREE" --verified-tree "$VERIFIED_TREE" \
   --replayed-tree "$REBASED_TREE" --github-tree "$GITHUB_TREE" \
   --land-log "$RUN/land.log" --selection "$RUN/selection.txt" \
+  --base-selection "$RUN/selection_base.txt" \
   "${BASE_LAND_ARG[@]+"${BASE_LAND_ARG[@]}"}" \
   --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
   --verification-tier "$TIER" --git-version "$GIT_VERSION" \

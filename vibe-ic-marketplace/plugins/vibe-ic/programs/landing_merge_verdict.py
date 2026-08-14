@@ -85,6 +85,17 @@ EVERY WAY THE DIFFERENTIAL CAN DEGRADE, DEGRADES TOWARD STRICTER
   * a selected test file that produced no test case at all -> REFUSE: a test
     file that was chosen and then contributed nothing is the hole this repo
     hunts, not a clean sheet
+  * THE SAME QUESTION, ASKED OF THE BASE ARM (vibe-ic#1443) -> REFUSE. This was
+    the one exception to the rule above, and it ran the WRONG WAY. `silenced`
+    and `weakened` are read off what was RED (or passing) ON THE BASE, so a base
+    failure that never got measured is a base failure the branch may delete for
+    free. `base_total == 0` was the only guard and it is all-or-nothing — a base
+    arm that ran three of its five files sits between the two and was subtracted
+    as though whole. Measured on `3d13e2c59` with ONE selected file missing from
+    the base report and every other input byte-identical, a candidate that turned
+    a red test into a SKIP went from `REFUSE 1 FAILING TEST(S) WERE SILENCED` to
+    `LAND OK`. The list arm A was asked for arrives as `--base-selection`;
+    without it the check cannot fire and says so in the notes.
 
 There is no argument this program accepts that makes it more permissive than
 "demand green". That is the property that makes the relaxation safe. THE
@@ -140,6 +151,7 @@ Usage
         --expected-tree <oid> --verified-tree <oid>
         [--replayed-tree <oid>] [--github-tree <oid>]
         --land-log <path> [--base-land-log <path>] --selection <path>
+        [--base-selection <path>]
         --base-junit <path> --candidate-junit <path>
         [--verification-tier merge-tree|rebase-replay] [--git-version <v>]
         [--merge-tree-min-version <v>] [--tier-reason <text>]
@@ -443,6 +455,8 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            github_tree: Optional[str], land: LandLog, delta: Delta,
            verified_sha: str, truncated: bool, dropped_files: Sequence[str],
            selection_size: int, replayed_tree: str = "",
+           base_dropped_files: Sequence[str] = (),
+           base_selection_supplied: bool = True,
            base_land: Optional[LandLog] = None,
            verification_tier: str = TIER_MERGE_TREE,
            git_version: str = "", tier_reason: str = "") -> Verdict:
@@ -626,6 +640,45 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             + ", ".join(sorted(dropped_files)[:5])
             + ("…" if len(dropped_files) > 5 else ""))
 
+    # ---- THE SAME QUESTION, ASKED OF THE BASE ARM (vibe-ic#1443) ----
+    # The completeness check above was asked only of the CANDIDATE, and the base
+    # arm's only guard was `base_total == 0` — all-or-nothing, and a NOTE. A base
+    # arm that ran SOME of its files lands between the two and was subtracted as
+    # though it were whole.
+    #
+    # That direction is PERMISSIVE, which is why it is a refusal and not a note.
+    # `silenced` and `weakened` are computed from what was RED (or PASSING) ON
+    # THE BASE: a base failure that never got measured is a base failure the
+    # branch is free to delete. Measured on 3d13e2c59 with one selected file
+    # missing from the base report and every other input held identical, a
+    # candidate that turned a red test into a SKIP went from
+    #
+    #     REFUSE  1 FAILING TEST(S) WERE SILENCED RATHER THAN FIXED
+    # to
+    #     LAND OK
+    #
+    # This is #1443's own law — "a two-arm comparison must assert that both arms
+    # emitted a summary line before it subtracts anything" — applied to the arm
+    # that did not have it. The junit form is the stronger one: it answers
+    # per-FILE rather than per-run, so a base arm that died on its third file is
+    # caught as well as one that never started.
+    if base_dropped_files:
+        reasons.append(
+            f"{len(base_dropped_files)} SELECTED TEST FILE(S) PRODUCED NO TEST "
+            f"CASE ON THE BASE — the base arm did not finish, so its failed set "
+            f"is a SUBSET and a silenced failure in the missing files would not "
+            f"be visible: "
+            + ", ".join(sorted(base_dropped_files)[:5])
+            + ("…" if len(base_dropped_files) > 5 else ""))
+    elif not base_selection_supplied:
+        # DEGRADE LOUDLY. A caller that does not say what the base arm was ASKED
+        # to run leaves the check above unable to fire, and a check that cannot
+        # fire must say so rather than read as a clean sheet.
+        notes.append(
+            "no base selection was supplied (--base-selection), so the base "
+            "arm's completeness was NOT checked — a base arm that ran only "
+            "some of its files would have been subtracted as though whole")
+
     if delta.candidate_total == 0:
         return _stop(
             "THE CANDIDATE RAN NO TESTS — a clean result over an empty run is "
@@ -705,6 +758,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="tree the rebase produced, cross-checked against the "
                          "merge tree")
     ap.add_argument("--selection", required=True)
+    ap.add_argument("--base-selection", default="",
+                    help="the file listing what ARM A actually asked pytest to "
+                         "run on the base — the selection filtered to files "
+                         "that exist there. Used to check the base arm FINISHED "
+                         "(vibe-ic#1443); a base arm that ran only some of its "
+                         "files hides `silenced`. Omitting it leaves the check "
+                         "unable to fire, which is disclosed in the notes")
     ap.add_argument("--base-junit", required=True)
     ap.add_argument("--candidate-junit", required=True)
     ap.add_argument("--maxfail", type=int, default=10,
@@ -763,13 +823,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   f"not parseable ({exc})", file=sys.stderr)
             return None
 
+    base_selection: List[str] = []
+    if a.base_selection:
+        try:
+            base_selection = [
+                l.strip() for l in
+                Path(a.base_selection).read_text(errors="replace").splitlines()
+                if l.strip()]
+        except OSError:
+            base_selection = []
+
     cand = _load(a.candidate_junit, "candidate")
     # An unreadable BASE report is not a refusal to answer: it makes every
     # candidate failure NEW, which is STRICTER than the differential, and
     # `decide` discloses the degradation in its notes. An unreadable CANDIDATE
     # report is the opposite — nothing was measured about what this branch
     # breaks — and `decide` returns unmeasurable for it via candidate_total == 0.
-    base = _load(a.base_junit, "base") or {}
+    base_raw = _load(a.base_junit, "base")
+    base = base_raw or {}
     delta = failed_set_delta(base, cand or {})
     dropped: List[str] = []
     truncated = False
@@ -778,12 +849,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         dropped = sorted(set(selection) - ran_files)
         truncated = (bool(dropped)
                      and junit_red_count(Path(a.candidate_junit)) >= a.maxfail)
+    # THE SAME QUESTION OF ARM A (vibe-ic#1443). The list is the base's OWN
+    # selection, never `--selection`: a file the PR ADDS is legitimately absent
+    # from the base report, and asking about it here would refuse every PR that
+    # brings a new test file. A base arm that produced NO report at all while
+    # having been asked for N files is the same defect at N — that is why the
+    # `base_raw is None` arm names all of them rather than falling through to
+    # the all-or-nothing note.
+    base_dropped: List[str] = []
+    if base_selection:
+        if base_raw is None:
+            base_dropped = sorted(base_selection)
+        else:
+            base_dropped = sorted(
+                set(base_selection)
+                - junit_files(Path(a.base_junit), base_selection))
 
     v = decide(rebase_status=a.rebase_status, expected_tree=a.expected_tree,
                verified_tree=a.verified_tree,
                github_tree=a.github_tree or None, land=land, delta=delta,
                verified_sha=a.verified_sha, truncated=truncated,
                dropped_files=dropped, selection_size=len(selection),
+               base_dropped_files=base_dropped,
+               base_selection_supplied=bool(base_selection),
                replayed_tree=a.replayed_tree, base_land=base_land,
                verification_tier=a.verification_tier,
                git_version=a.git_version, tier_reason=a.tier_reason)
@@ -833,6 +921,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "selection_size": len(selection),
             "dropped_selected_files": dropped,
             "candidate_run_truncated": truncated,
+            # ARM A's completeness, machine-readably (vibe-ic#1443).
+            # `base_selection_size == 0` means the check could not fire — a
+            # reader must be able to tell that from "it fired and found
+            # nothing", which is why the size travels with the list.
+            "base_selection_size": len(base_selection),
+            "dropped_base_selected_files": base_dropped,
             "gate_edited": a.gate_edited,
             # ---- WHAT THIS VERDICT DID NOT CHECK, MACHINE-READABLY ----
             # A disclosed weaker check beats a universal refusal ONLY if the
