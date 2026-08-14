@@ -1685,7 +1685,50 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: against P0 on 2026-08-11 and REDDENED it. Raising this number without that
 #: replay would be exactly the "widen the baseline until it is green" move the
 #: gate exists to refuse.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 482)
+#:
+#: MOVED 482 -> 479 for the reclassification that landed as ``bcd444425``
+#: ("the mixed-signal steps were never unpublished", vibe-ic#1159). That change
+#: moved the cells and did NOT move this pin, so the note above repeated itself:
+#: the arithmetic sat three short and the gate fired, exactly as designed. The
+#: cure is to move the pin WITH the reclassification; this is that move, made
+#: after the fact because the two halves were split across two PRs that could
+#: not both land (vibe-ic#1227) and only one of them carried the pin.
+#:
+#: A LOWERING carries the mirror of the risk named above. Raising can smuggle in
+#: an uncovered cell; lowering can quietly drop a cell that genuinely LOST its
+#: mutation coverage out of the denominator, which reads as tidy arithmetic and
+#: hides a gate that stopped catching. So the movers are NAMED. Recomputed via
+#: ``cell_states()`` on ``bcd444425^`` and on the landed tree and DIFFED — not
+#: inferred from the totals — exactly four cells moved, all in dimension 3:
+#:
+#:     ('M2', 3)  ENFORCED -> NA      -1
+#:     ('M3', 3)  ENFORCED -> NA      -1
+#:     ('M4', 3)  ENFORCED -> NA      -1
+#:     ('M1', 3)  WAIVED   -> NA       0   <- moves no count, recorded anyway
+#:
+#: 482 - 3 = 479, and no cell anywhere went ENFORCED -> WAIVED, which is the
+#: shape a lost predicate would have taken.
+#:
+#: What makes the three admissible is that they were never legitimately
+#: ENFORCED. Their steps are dormant by the FLOW's own declaration:
+#:
+#:     - id: M2
+#:       condition:
+#:         files_exist: ["phase1/analog/analog_block_list.json"]
+#:
+#: and that path resolves in 0 of the 10 admissible run roots, so d3 was
+#: enforcing three steps the flow says are asleep. The authority is the flow,
+#: not the manifest that recorded them ENFORCED, so honouring it LOWERS the true
+#: measurement. No mutation stopped reddening: nothing was replayed against
+#: these cells and lost its teeth; they leave the ENFORCED set because they
+#: never belonged in it. ``--census --resolve`` still exits 0 and still reports
+#: every ENFORCED cell covered, at 479 as it did at 482.
+#:
+#: The pin stays exactly as falsifiable at 479. ``matrix_na_precondition`` is
+#: LIVE — plant ``phase1/analog/analog_block_list.json`` in any admissible run
+#: root and the three cells return to ENFORCED, the measurement returns to 482,
+#: and this assert reddens against the 479 below. Measured, not asserted.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 479)
 
 
 # ══════════════════════════════════════════════════════════════════════
