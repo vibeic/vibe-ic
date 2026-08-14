@@ -367,6 +367,11 @@ def test_l_rst_async_n_wrong_fails():
 # (m) TRIGGER guard: a clocked arithmetic example with an un-timed start/valid
 #     handshake -> SKIP (cannot reproduce the pulse), never a false block.
 # --------------------------------------------------------------------------
+# Needs the simulator like its fourteen siblings above (#1337). Without it the
+# API returns SKIP for the WRONG reason — "iverilog/vvp not on PATH" — so the
+# first assertion passes by accident and the second, which is the one that
+# actually tests the trigger guard, fails on a message about the toolchain.
+@_skip_no_iv
 def test_m_untimed_trigger_skips():
     prompt = "Pipelined mult. Example: 6 * 7 = 42.\n"
     rtl = ("module pm(input clk, input start, input [7:0] a, input [7:0] b,\n"

@@ -30,6 +30,7 @@ SKILL = PLUGIN / "skills" / "open-benchmark-methodology" / "SKILL.md"
 
 sys.path.insert(0, str(HARNESS))
 import score_iverilog_tb as sit  # noqa: E402
+from _sim_tools import NEEDS_IVERILOG  # noqa: E402
 
 
 # ── #415: transcripts export is the orchestration default ────────────────
@@ -151,6 +152,7 @@ def _stage_canonical(tmp_path, monkeypatch, body):
     monkeypatch.setattr(sit, "_CANONICAL_DIR", tmp_path / "canon")
 
 
+@NEEDS_IVERILOG
 def test_canonical_disagreement_returns_evidence(tmp_path, monkeypatch):
     ds = _stage_dataset(tmp_path)
     # canonical inverts -> disagrees with the golden on every sample
@@ -162,6 +164,7 @@ def test_canonical_disagreement_returns_evidence(tmp_path, monkeypatch):
     assert ev and "4/4" in ev
 
 
+@NEEDS_IVERILOG
 def test_canonical_agreement_returns_none(tmp_path, monkeypatch):
     ds = _stage_dataset(tmp_path)
     _stage_canonical(tmp_path, monkeypatch,
@@ -178,6 +181,7 @@ def test_no_canonical_returns_none(tmp_path, monkeypatch):
         "ProbX", ds, _LAYOUT, _ARGS, "somebench") is None
 
 
+@NEEDS_IVERILOG
 def test_score_shape_c_flags_disclosure_only(tmp_path, monkeypatch):
     # failing sample + disagreeing canonical -> verdict stays FAIL, flag set
     ds = _stage_dataset(tmp_path)

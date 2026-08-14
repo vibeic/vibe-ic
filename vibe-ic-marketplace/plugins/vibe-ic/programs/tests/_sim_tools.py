@@ -67,3 +67,36 @@ NEEDS_SIM = pytest.mark.skipif(
     bool(MISSING),
     reason="cvdp_gate needs iverilog AND yosys; missing on this host: "
            + ", ".join(MISSING or ("-",)))
+
+
+def needs(*tools: str):
+    """Marker for a test that cannot run without SPECIFIC binaries (#1337).
+
+    `NEEDS_SIM` above is the cvdp-gate COMPOSITE — iverilog *and* yosys —
+    because `cvdp_gate` refuses outright unless both are present. Most
+    simulator-backed tests in this corpus are not that shape: they shell out to
+    ONE tool and have no opinion about the other.
+
+    Marking those with `NEEDS_SIM` would skip them on a host that carries the
+    tool they need and lacks the one they do not. That trades live coverage for
+    a green, which is the same "a skip is green" hole this module exists to
+    refuse, reached from the other side — so the composite is not reusable as a
+    general marker and this factory exists instead of a second hand-rolled
+    `shutil.which` per file.
+
+    MEASURED, not assumed (`3d13e2c59`, a host with no EDA tools at all): all
+    33 residual failures across the nine emit/oracle files raise
+    `FileNotFoundError: 'iverilog'`. Not one of them needs yosys. Applying the
+    composite would have skipped 33 tests on every iverilog-only host — the
+    fleet's common configuration, and the one #1337 was filed from.
+    """
+    missing = tuple(t for t in tools if shutil.which(t) is None)
+    return pytest.mark.skipif(
+        bool(missing),
+        reason="needs " + ", ".join(tools)
+               + "; missing on this host: " + ", ".join(missing or ("-",)))
+
+
+#: iverilog ALONE — the emit/oracle family (#1337). These drive a testbench and
+#: never invoke the synthesizability smoke, so yosys is irrelevant to them.
+NEEDS_IVERILOG = needs("iverilog")

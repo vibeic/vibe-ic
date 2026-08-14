@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
 from _specrtl_common import extract_spec_contract, parse_rtl_ports, strip_comments  # noqa: E402
+from _sim_tools import NEEDS_IVERILOG  # noqa: E402
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
@@ -175,6 +176,7 @@ def _block_rules(run):
     return gates, {f["rule"] for f in blk.get("findings", [])}
 
 
+@NEEDS_IVERILOG
 def test_gate_auto_corrects_reset_gated_form(tmp_path):
     # v1.1.76: the registry's `behavioral_fsm` solver fires on this reset-pulse spec
     # ("assert shift_ena for 4 cycles then 0 forever") and emits the correct
@@ -196,6 +198,7 @@ def test_gate_auto_corrects_reset_gated_form(tmp_path):
     assert "reset-pulse counter" in emitted
 
 
+@NEEDS_IVERILOG
 def test_gate_emits_canonical_form(tmp_path):
     ds, run = _stage(tmp_path, _SPEC, _CANONICAL_RTL)
     r = _run_gate(ds, run)
