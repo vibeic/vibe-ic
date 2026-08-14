@@ -1222,8 +1222,8 @@ def test_d8_cell_census_is_complete():
 #: pinned rather than derived so the SHRINKING direction still has to be
 #: explained by a human — see this constant's test.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "D1", "1", "2", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
-    "30", "32", "35", "38",
+    "D1", "1", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14",
+    "28", "30", "32", "35", "38",
 )
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
 # compared in flow DECLARATION order, and the dimension-5 fix moved A6's yaml
