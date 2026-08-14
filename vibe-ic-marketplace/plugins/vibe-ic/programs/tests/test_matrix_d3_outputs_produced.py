@@ -659,7 +659,19 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # `phase2/stage2/dft/coverage.yml`, declared for the same d7 W2 reason as L21
 # above and recorded PRODUCED_BY_RUN at spm/v1.9.96_gf180mcuD (28797 B). It is
 # decided LIVE like the other 128 and adds no fixture attestation.
-_LIVE_ENTRY_COUNT = 129
+# 2026-08-14 (#1215): 129 -> 133. The write-record tripwire's four surviving
+# W2 promotions, declared in the flow yaml on the steps that PRODUCE them --
+# D1 `reports/audit/phase1/expert_parse_track.json`, 23
+# `reports/phase3/sta/post_route_signoff_corner.json`, 24
+# `reports/phase3/dynamic_ir.json`, 27 `reports/phase3/si_mcf_sta.json`. Same
+# reading as the L21 and coverage.yml moves above: four fewer entries decided
+# by nothing, not four more artefacts found. Every one is recorded
+# PRODUCED_BY_RUN at `benchmark-data/ic/spm/v1.9.96_gf180mcuD` (7399 / 393 /
+# 1887 / 2750 B), and each was checked `git ls-files`-TRACKED at HEAD in that
+# root before the record was written -- which is the per-path check this pin
+# exists to force (#527): an entry live-verified from an untracked working-tree
+# file would raise this number on one host and not another.
+_LIVE_ENTRY_COUNT = 133
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
