@@ -170,7 +170,8 @@ def main(argv=None) -> int:
         "unprofiled": unprofiled,
     }
     if args.json:
-        args.json.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        from _atomic_artefact import write_json
+        write_json(args.json, doc)
 
     if args.shard is not None:
         if not 0 <= args.shard < args.shards:
