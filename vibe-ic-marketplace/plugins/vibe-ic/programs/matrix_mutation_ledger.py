@@ -685,6 +685,39 @@ REDDENS = "REDDENED"
 CANNOT_REDDEN = "STAYED_GREEN"
 ARTEFACT_EXPECTATIONS = (REDDENS, CANNOT_REDDEN)
 
+#: The verdict for a pair whose gate was ALREADY RED before the mutation was
+#: applied. It is a MEASUREMENT OUTCOME, never an expectation: it is absent from
+#: :data:`ARTEFACT_EXPECTATIONS` on purpose, because the ledger records what the
+#: gates COULD catch, and letting an entry declare this would turn a measured
+#: gap into a re-recorded one (#1432). Pinned by
+#: ``test_ALREADY_RED_is_not_a_recordable_expectation``.
+ALREADY_RED = "ALREADY_RED"
+
+#: How many pairs a replay may find UNMEASURABLE before the ledger stops
+#: believing its own denominator, per mode.
+#:
+#: A CEILING, not an equality. The count SHRINKS on its own as the underlying
+#: reds are fixed — an equality pin would go red on good news, which is the
+#: wrong direction for a number nobody edits deliberately.
+#:
+#: PROVENANCE, stated because the two numbers were established differently:
+#:
+#:   * ``witness`` = 0 is MEASURED. Every witness is green on main, which is why
+#:     the default mode is honest today. A witness going unmeasurable is a real
+#:     event and this 0 makes it a failure, not a shrug — prohibition 3 of
+#:     #1432: this must not become a reason to relax ``witness`` mode.
+#:   * ``all`` = 24 is 1 OBSERVED + 23 DERIVED. One pair
+#:     (``D3-UNDECLARED-ARTEFACT`` @ step 15, ``baseline_rc=1``) was replayed to
+#:     completion on ``24ff95307``; the other 23 were computed by intersecting
+#:     each entry's ``applies_to`` with main's measured red set, not observed
+#:     failing. A ceiling is the safe direction for a predicted number.
+#:
+#: 14 of the 24 are d7 cells that #1310+#1339 and #1377 close, 9 are the d3
+#: cells of #1349, and 1 is d4 ``[step 1]`` (#1235/#1193). When those land this
+#: number falls without anyone touching the ledger, and LOWERING it then is the
+#: maintenance this ceiling is asking for.
+UNMEASURABLE_CEILING = {"witness": 0, "all": 24}
+
 
 @dataclass(frozen=True)
 class Edit:
@@ -1930,7 +1963,7 @@ class ReplayResult:
         if not self.applied:
             return "NO_EDIT_SITE"
         if self.baseline_rc != 0:
-            return "ALREADY_RED"
+            return ALREADY_RED
         if self.mutant_rc in (None, 0):
             return "STAYED_GREEN"
         return "RED_FOR_ANOTHER_REASON"
@@ -1944,8 +1977,46 @@ class ReplayResult:
         by the third one arriving. For an ARTEFACT_MUTATION entry recorded
         ``STAYED_GREEN`` this is the pin: the day the gate learns to notice, the
         verdict stops matching and the gate file says so by name.
+
+        Deliberately FALSE for :attr:`unmeasurable`. An already-red pair has not
+        reproduced anything, and banking it as proof is the failure
+        ``test_control_the_baseline_must_pass_or_the_entry_is_already_red``
+        exists to catch. Consumers must ask :attr:`unmeasurable` FIRST and score
+        it as its own outcome — see that property's note.
         """
         return self.verdict == self.expected
+
+    @property
+    def unmeasurable(self) -> bool:
+        """The gate COULD NOT BE MEASURED on this pair — it was already red.
+
+        The third state, distinct from both REDDENED and STAYED_GREEN (#1432).
+
+        A pair with ``baseline_rc != 0`` was failing BEFORE the mutation was
+        applied. Nothing was disproved, because nothing could be: the predicate
+        the mutation was supposed to move was not standing up to begin with.
+        Scoring that as "the mutation failed to redden the cell" is *could not
+        look* recorded as *found a defect* — the same conflation this repository
+        already removed from ``_vacuous_exit`` (rc 2), ``dual_track_select``'s
+        ``UNCHECKABLE`` (#1335), ``tracked_under``'s empty set on a failed
+        ``git`` (#1360), and rc=127 read as a structural defect (#1398).
+
+        It matters most HERE because this ledger is the instrument the rest of
+        the campaign is measured with: a false "the gate stopped catching" sends
+        an author hunting a regression that does not exist.
+
+        THIS IS NOT A SKIP. Unmeasurable pairs are counted, disclosed via
+        ``record_property``, and bounded by :data:`UNMEASURABLE_CEILING`, so a
+        gate that stops catching *and* whose witness happens to be red cannot
+        hide in this state. It is also not a licence to re-record: no ledger
+        entry may DECLARE this verdict, because the ledger is the record of what
+        the gates COULD catch, not of what they currently do.
+
+        ``NOT_REPLAYABLE`` is deliberately NOT folded in here. That is a
+        different failure — the replay never ran at all — and it keeps its
+        existing handling untouched.
+        """
+        return self.verdict == ALREADY_RED
 
 
 def _run_cell(dim: int, sid: str, cwd: Path,
@@ -2391,15 +2462,47 @@ def main(argv: Optional[List[str]] = None) -> int:
             # RECORDS `STAYED_GREEN` is reproducing a published finding when it
             # stays green, and reporting it as a failure would push an author
             # toward deleting the record instead of closing the gap.
-            mark = "ok  " if r.as_recorded else "FAIL"
+            #
+            # `unmeasurable` is asked FIRST and is NOT a failure (#1432): the
+            # gate was red before the edit, so the pair says nothing about
+            # whether the gate still has teeth. It is still PRINTED, and still
+            # counted below, because a silent skip would hand the ledger the
+            # blind spot it exists to prevent.
+            mark = "n/m " if r.unmeasurable else "ok  " if r.as_recorded \
+                else "FAIL"
             note = ("" if r.expected == "REDDENED"
                     else "  [recorded finding: the cell CANNOT redden]")
+            if r.unmeasurable:
+                note = (f"  [UNMEASURABLE: red before the edit "
+                        f"(baseline_rc={r.baseline_rc}), so this pair proves "
+                        f"nothing either way]")
             print(f"  [{mark}] {r.mutation} @ step {r.step_id}: {r.verdict} "
                   f"({r.seconds:.1f}s){note}")
-            if not r.as_recorded:
+            if not r.as_recorded and not r.unmeasurable:
                 rc = 1
                 print(f"        expected {r.expected}, got {r.verdict}")
                 print("        " + r.detail.replace("\n", "\n        "))
+
+        unmeasurable = [r for r in results if r.unmeasurable]
+        # `--replay-witnesses` builds the witness plan outright, whatever the
+        # env-configured mode is, so the mode is read off the SELECTOR that
+        # built the plan rather than from `replay_mode()`.
+        mode = "witness" if a.replay_witnesses else None
+        ceiling = UNMEASURABLE_CEILING.get(mode) if mode else None
+        print(f"  UNMEASURABLE {len(unmeasurable)} of {len(results)} pair(s)"
+              + (f", ceiling {ceiling} for mode {mode!r}"
+                 if ceiling is not None else ""))
+        # The ceiling is enforced only for a WHOLE-MODE plan. `--replay NAME`
+        # and `--replay-artefacts` are deliberate slices, and a slice's count
+        # cannot be compared against a whole-mode budget.
+        if ceiling is not None and len(unmeasurable) > ceiling:
+            rc = 1
+            print(f"  [FAIL] {len(unmeasurable)} unmeasurable pair(s) exceeds "
+                  f"the ceiling of {ceiling} for mode {mode!r}; the ledger "
+                  f"cannot measure this much of itself")
+            for r in unmeasurable:
+                print(f"        {r.mutation} @ step {r.step_id}: "
+                      f"baseline_rc={r.baseline_rc}")
 
     if a.json_out:
         Path(a.json_out).parent.mkdir(parents=True, exist_ok=True)
