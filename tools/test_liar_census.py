@@ -1485,3 +1485,343 @@ def test_an_OR_alternative_that_is_the_ONLY_satisfier_still_fires(
     out = capsys.readouterr().out
     assert rc == 1, out
     assert "ruler_blind" in out, out
+
+
+# --------------------------------------------------------------------------
+# SHAPE: the PRODUCER emitted nothing, and the checker read the absence as
+# consent (vibe-ic#1115, from the LibreLane 3.0.8 study).
+#
+# The controls that matter are the ones proving this is not a rename of
+# `empty_tree`: the fixture here is a step whose declared artefacts EXIST and
+# are zero bytes, which is precisely the state `empty_tree`'s guards DECLINE.
+# --------------------------------------------------------------------------
+
+#: A gate that exhibits the SHAPE, which needs more than "passes on an empty
+#: file": it must be able to tell that the artefact is MISSING and say so, and
+#: then fail to tell when the same artefact is present-but-hollow. A gate that
+#: is silent both ways never read the input, and the probe declines it — the
+#: first version of these two tests used such a gate and was measuring nothing.
+_READS_A_METRIC = """
+    import pathlib, sys
+    p = pathlib.Path("reports/measurement.json")
+    if not p.exists():
+        print("VACUOUS_PASS: the measurement was never produced")
+        sys.exit(0)
+    body = p.read_text()
+    if not body.strip():
+        # it EXISTS, so the producer "ran" -> nothing to check -> PASS. THE DEFECT.
+        print("[PASS] no violations found"); sys.exit(0)
+    print("[FAIL] violations"); sys.exit(1)
+    """
+
+
+_STEP_WITH_A_DECLARED_INPUT = """
+    steps:
+      - id: 99
+        name: planted
+        required_outputs: ["reports/measurement.json"]
+        gate:
+          all_of:
+            - program_exit_zero: "{prog} ."
+    """
+
+
+def test_it_fires_when_a_gate_passes_over_an_EMPTY_declared_input(census, tmp_path,
+                                                                  capsys):
+    """LibreLane's `return {}` shape: the producer ran, emitted nothing, and the
+    checker found nothing to check and passed."""
+    progs = _programs(tmp_path, reads_a_metric=_READS_A_METRIC)
+    rc = census(_flow(tmp_path, _STEP_WITH_A_DECLARED_INPUT.format(prog="reads_a_metric")),
+                progs, "--probes", "emitted")
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "producer_emitted_nothing" in out, out
+    assert "PRESENT BUT EMPTY" in out, out
+
+
+def test_a_gate_that_OBJECTS_to_an_empty_input_is_clean(census, tmp_path, capsys):
+    """The paired direction, and the issue's own rule: an absent input is
+    'not measured', and not-measured may resolve to rc 1 or rc 2 — just never 0."""
+    progs = _programs(tmp_path, refuses_empty="""
+        import pathlib, sys
+        p = pathlib.Path("reports/measurement.json")
+        if not (p.exists() and p.read_text().strip()):
+            print("INCOMPLETE: the measurement was never produced"); sys.exit(2)
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _STEP_WITH_A_DECLARED_INPUT.format(prog="refuses_empty")),
+                progs, "--probes", "emitted")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "LIAR        0" in out, out
+
+
+def test_rc0_WITH_the_consumers_disclosure_is_guarded_not_a_liar(census, tmp_path,
+                                                                 capsys):
+    """The disclosure channel is not this file's opinion: it is
+    `flow_compliance_check`'s rc-independent `VACUOUS_PASS:` sentinel, read
+    through the same predicate `prose_vs_exit` uses. A gate may exit 0 and still
+    be honest, and the flow records VACUOUS_PASS rather than PASS."""
+    progs = _programs(tmp_path, discloses="""
+        import pathlib, sys
+        p = pathlib.Path("reports/measurement.json")
+        if not (p.exists() and p.read_text().strip()):
+            print("VACUOUS_PASS: the measurement was never produced — nothing examined")
+            sys.exit(0)
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _STEP_WITH_A_DECLARED_INPUT.format(prog="discloses")),
+                progs, "--probes", "emitted")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "GUARDED" in out, out
+    # The STDOUT channel is the one that changes the verdict, and the message
+    # now says which channel it was — see `disclosure_channel` (vibe-ic#1226).
+    assert "PROMOTES the step to VACUOUS_PASS" in out, out
+
+
+def test_this_shape_is_INVISIBLE_to_the_empty_tree_probe(census, tmp_path, capsys):
+    """The load-bearing control: without it, this probe could be a rename.
+
+    The SAME planted gate, the SAME flow, run under `empty` and under `emitted`.
+    `empty_tree` DECLINES — the step declares `required_outputs`, so on an empty
+    tree it is MISSING before its gate is read, and that discount is correct.
+    `emitted` fires, because there the step RAN and only its content is missing.
+    """
+    body = _READS_A_METRIC
+    flow = _flow(tmp_path, _STEP_WITH_A_DECLARED_INPUT.format(prog="reads_a_metric"))
+
+    progs = _programs(tmp_path, reads_a_metric=body)
+    rc_empty = census(flow, progs, "--probes", "empty")
+    out_empty = capsys.readouterr().out
+
+    progs = _programs(tmp_path, reads_a_metric=body)
+    rc_emitted = census(flow, progs, "--probes", "emitted")
+    out_emitted = capsys.readouterr().out
+
+    assert rc_empty == 0, out_empty
+    assert "GUARDED" in out_empty, out_empty          # declined, correctly
+    assert rc_emitted == 1, out_emitted               # and still caught here
+    assert "producer_emitted_nothing" in out_emitted, out_emitted
+
+
+def test_a_clause_whose_step_declares_no_input_is_NA_not_clean(census, tmp_path,
+                                                               capsys):
+    """No declared input means no producer whose silence could be read as
+    consent. That is N/A — a question this probe cannot ask — and N/A must not
+    be folded into the clean count."""
+    progs = _programs(tmp_path, no_inputs="""
+        import sys
+        print("[PASS] no_inputs"); sys.exit(0)
+        """)
+    census(_flow(tmp_path, _UNGUARDED_STEP.format(prog="no_inputs")),
+           progs, "--probes", "emitted")
+    out = capsys.readouterr().out
+    assert "CLEAN       0" in out, out
+    assert "N/A         1" in out, out
+
+
+def test_an_empty_JSON_OBJECT_is_not_the_same_as_zero_bytes(tmp_path):
+    """`_materialise` writes `{}` into a `.json`; this probe writes nothing.
+
+    An empty JSON OBJECT is a producer that emitted a document — a gate that
+    reads it and says "0 findings" is answering correctly. Zero bytes is a
+    producer that emitted nothing. Seeding the wrong one would make this probe
+    accuse every gate that correctly reports an empty result set.
+    """
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir(); b.mkdir()
+    lc._materialise(["reports/m.json"], a)
+    lc._materialise_empty(["reports/m.json"], b)
+    assert (a / "reports/m.json").read_text().strip() == "{}"
+    assert (b / "reports/m.json").read_text() == ""
+
+
+def test_the_JSON_disclosure_channel_is_read_not_just_stdout(census, tmp_path,
+                                                             capsys):
+    """The consumer has TWO rc-independent channels and this probe must read
+    both — `_evaluate_gate` consults `_stdout_signals_vacuous` AND
+    `_json_report_signals_vacuous`, the second of which opens the gate's own
+    `--json` report and promotes the step when its `verdict` is
+    `NOT_APPLICABLE` / `SKIPPED` / ….
+
+    THE FIRST VERSION OF THIS PROBE READ ONLY STDOUT, and measured on the real
+    flow it accused four BLOCKING clauses that were disclosing correctly through
+    the JSON channel. That is the same mistake #1054 repaired in
+    `prose_vs_exit`, one probe later.
+
+    This gate says NOTHING on stdout that a refusal detector could see.
+    """
+    progs = _programs(tmp_path, discloses_in_json="""
+        import json, pathlib, sys
+        rep = pathlib.Path("reports/x.json")
+        rep.parent.mkdir(parents=True, exist_ok=True)
+        rep.write_text(json.dumps({"gate": "d", "verdict": "NOT_APPLICABLE",
+                                   "reason": "the producer emitted nothing"}))
+        print("[PASS] nothing to do")          # no stdout sentinel at all
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, """
+    steps:
+      - id: 99
+        name: planted
+        required_outputs: ["reports/measurement.json"]
+        gate:
+          all_of:
+            - program_exit_zero: "discloses_in_json . --json reports/x.json"
+    """), progs, "--probes", "emitted")
+    out = capsys.readouterr().out
+    # This planted gate writes its JSON and exits 0 whether the declared input
+    # is EMPTY or ABSENT — it never reads the input at all. The probe therefore
+    # DECLINES, correctly: the fixture starved it of nothing and can establish
+    # nothing about it. That is a stronger statement than the one this test made
+    # before, which credited the decline to the JSON channel.
+    assert rc == 0, out
+    assert "GUARDED" in out, out
+    assert "does not read them" in out, out
+
+
+def test_a_json_only_disclosure_is_still_a_finding(census, tmp_path, capsys):
+    """THE STATE THE TWO CONSOLIDATED PRs DISAGREED ABOUT (vibe-ic#1226).
+
+    A gate that READS its input — it objects when the path is absent — but on a
+    present-but-EMPTY input exits 0 disclosing only into its `--json` report.
+
+    `flow_compliance_check` records that as `__JSON_VACUOUS_HINT__` and, in its
+    own words, keeps it "apart from the legacy bucket ... SO IT CANNOT ALTER ANY
+    TIER"; "counted - never tiered". **The step still reports PASS.** So this is
+    not clean — it is #1115 with a paper trail — and it is not a LIAR either,
+    because the disclosure exists and a consumer that tiered it would find it.
+
+    #1157 called this GUARDED (an amnesty); #1135, reading stdout only, called
+    it a LIAR (right verdict, wrong reason — it could not tell the two apart).
+    SUSPECT is the third position, and it is what this pins.
+    """
+    progs = _programs(tmp_path, json_only="""
+        import json, pathlib, sys
+        p = pathlib.Path("reports/measurement.json")
+        if not p.exists():
+            print("ERROR: the measurement is not there")
+            sys.exit(1)                      # it DOES read the input
+        if not p.read_text().strip():
+            rep = pathlib.Path("reports/x.json")
+            rep.parent.mkdir(parents=True, exist_ok=True)
+            rep.write_text(json.dumps({"gate": "j", "verdict": "NOT_APPLICABLE",
+                                       "reason": "the producer emitted nothing"}))
+            print("[PASS] nothing to do")    # no stdout sentinel at all
+            sys.exit(0)
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, """
+    steps:
+      - id: 99
+        name: planted
+        required_outputs: ["reports/measurement.json"]
+        gate:
+          all_of:
+            - program_exit_zero: "json_only . --json reports/x.json"
+    """), progs, "--probes", "emitted")
+    out = capsys.readouterr().out
+    assert "SUSPECT" in out, (
+        "a gate that discloses ONLY into the untiered JSON channel was not "
+        f"reported as a finding — the step still records PASS\n{out}")
+    assert "never tiers it" in out or "STILL RECORDS PASS" in out, out
+
+
+def test_a_GLOB_argument_is_declined_because_the_invocation_is_not_the_flows(
+        census, tmp_path, capsys):
+    """`_argv_for` keeps the clause VERBATIM and spawns without a shell, while
+    the real consumer expands globs relative to the project. So for a clause
+    carrying `*.sv` this probe would hand the program the literal glob, watch it
+    report `0 errors` over files it never opened, and accuse it of a defect that
+    belongs to the invocation.
+
+    MEASURED: the first version of this probe did exactly that to
+    `rtl_hygiene_lint`. Declined rather than guessed at — expanding it here
+    would be measuring an invocation this file invented.
+    """
+    progs = _programs(tmp_path, lints_a_glob="""
+        import sys
+        print("rtl lint: 0 errors, 0 warnings")
+        print("WARNING: file not found:", sys.argv[1])
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, """
+    steps:
+      - id: 99
+        name: planted
+        required_outputs: ["phase2/stage1/rtl/*.sv"]
+        gate:
+          all_of:
+            - program_exit_zero: "lints_a_glob phase2/stage1/rtl/*.sv"
+    """), progs, "--probes", "emitted")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "GUARDED" in out and "GLOB argument" in out, out
+
+
+_STEP_D1_SHAPED = """
+    steps:
+      - id: 99
+        name: planted
+        required_outputs: ["docs/a.json", "docs/b.json"]
+        gate:
+          all_of:
+            - program_exit_zero: "{prog} ."
+    """
+
+
+def test_a_gate_that_does_NOT_read_the_declared_inputs_is_declined(census,
+                                                                   tmp_path, capsys):
+    """The fail-safe class, and it is a REAL gate: `analog_a0_skip_forbidden_check`
+    asserts a FORBIDDEN artefact is absent, and D1's declared outputs are not
+    the thing it reads. A step's `required_outputs` belong to the STEP — D1
+    declares 14 and carries 24 clauses — so seeding them starves some clauses of
+    everything and others of nothing.
+
+    Decided differentially, with no name list: run it again with those paths
+    ABSENT. Same silent rc 0 both ways means it never read them, so the fixture
+    established nothing.
+    """
+    progs = _programs(tmp_path, ignores_them="""
+        import pathlib, sys
+        # reads something the step does NOT declare
+        if pathlib.Path("forbidden.json").exists():
+            print("[FAIL] forbidden artefact present"); sys.exit(1)
+        print("[PASS] forbidden artefact not present"); sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _STEP_D1_SHAPED.format(prog="ignores_them")),
+                progs, "--probes", "emitted")
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "GUARDED" in out, out
+    assert "starved it of nothing" in out, out
+
+
+def test_a_gate_whose_DISCLOSURE_is_defeated_by_an_empty_file_is_a_liar(
+        census, tmp_path, capsys):
+    """The paired direction, and the exact LibreLane shape.
+
+    This gate KNOWS how to say "there is nothing here" — with the paths absent
+    it discloses on the channel the consumer reads. A ZERO-BYTE artefact defeats
+    that disclosure: it counts the files, finds no findings in them, and reports
+    a plain PASS. `return {}` in Python instead of Tcl.
+
+    Same program, same flow, same exit code — only whether the declared inputs
+    EXIST changes, and only that decides.
+    """
+    progs = _programs(tmp_path, counts_what_it_finds="""
+        import pathlib, sys
+        docs = [p for p in pathlib.Path("docs").glob("*.json")] if pathlib.Path("docs").is_dir() else []
+        if not docs:
+            print("VACUOUS_PASS: no documents to scan — nothing was examined")
+            sys.exit(0)
+        print(f"PASS: scanned={len(docs)} findings=0")
+        sys.exit(0)
+        """)
+    rc = census(_flow(tmp_path, _STEP_D1_SHAPED.format(prog="counts_what_it_finds")),
+                progs, "--probes", "emitted")
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert "defeats the gate's own disclosure" in out, out
+    assert "ABSENT this gate DISCLOSES" in out, out
