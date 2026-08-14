@@ -155,9 +155,21 @@ def _suite(tmp_path, wrapper, rc):
     stub.write_text(f"#!/usr/bin/env bash\nexit {rc}\n")
     stub.chmod(0o755)
     harness = tmp_path / f"harness_{wrapper}_{rc}.sh"
+    # vibe-ic#584 — a tolerating wrapper must BUY the tolerance with a dated,
+    # reasoned `uncheckable_until`; wired without one it is a WIRING ERROR
+    # (rc 2) rather than a NOT_CHECKED. Emitted ONLY for the tolerating
+    # spelling, so this helper still builds the two harnesses that differ in
+    # exactly the way the pair below is about. Both assertions are unchanged:
+    # `run` still reddens rc 2, the tolerating wrapper still passes it. Without
+    # the line the control would be measuring the missing exemption instead of
+    # the wrapper, which is not what it was written to pin.
+    buy = ('uncheckable_until 2999-01-01 "fixture: the stub stands in for a '
+           'gate that cannot look"\n'
+           if wrapper in _TOLERATES_RC2 else "")
     harness.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
         f"source {DISPATCH}\n"
+        f"{buy}"
         f'{wrapper} "a corpus sweep" "{tmp_path}" bash "{stub}"\n'
         "gate_dispatch_finish\n")
     return subprocess.run(["bash", str(harness)], capture_output=True,
