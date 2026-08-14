@@ -543,6 +543,14 @@ gate_dispatch_over() {
     GATE_LABELS+=("corpus \"$corpus\" is EMPTY — nothing was checked over it")
     GATE_STATES+=("NOT_CHECKED")
     GATE_SECONDS+=("0")
+    # IN LOCKSTEP, and that is the whole point: every reader below indexes these
+    # arrays by the SAME `i` out of `${#GATE_LABELS[@]}`. This synthetic row was
+    # appending six of the eight, so `GATE_EX_UNTIL[$i]` was unbound for it and
+    # `set -u` killed the run at the expiry sweep — a corpus that expands over
+    # nothing took the whole dispatcher down. It carries no exemption, so the
+    # honest value is empty, which every reader already treats as "none".
+    GATE_EX_UNTIL+=("")
+    GATE_EX_WHY+=("")
     GATE_ITEM_CORPUS+=("$corpus")
     GATE_ITEM_IDX+=("0")
     GATE_ITEM_TOTAL+=("0")
