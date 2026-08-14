@@ -14,7 +14,7 @@ proves three things, and deliberately nothing else:
 
   2. The `flowref` accessors agree with the yaml about which steps declare
      what — including the two places where the circulating numbers are subtly
-     wrong (see `test_blocks_on_presence_is_62_but_non_empty_is_60`).
+     wrong (see `test_blocks_on_presence_and_non_empty_are_different_sets`).
 
   3. The waiver registry cannot carry a placeholder. Every waiver needs a
      reason AND evidence, both non-empty and both substantive.
@@ -65,8 +65,18 @@ CENSUS_GATE_PRESENT = 62
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
-CENSUS_BLOCKS_ON_PRESENT = 62
-CENSUS_BLOCKS_ON_NON_EMPTY = 60
+# 62 -> 63 and 60 -> 61 on 2026-08-11: `P0` gained `blocks_on: [1]` in
+# 332b9985e (vibe-ic#923, "stage membership was declared twice and the copies
+# disagreed"). Before that commit P0 declared no `blocks_on` key at all — it
+# was the ONE step of 63 that did not — so it was a stage1 step whose ancestry
+# did not reach Phase 1, and a FAILED Phase 1 would not have redded it. The
+# edge is correct and stays; only the census had not been re-measured for it.
+# The change moves BOTH counts by one because the key P0 gained is non-empty,
+# and it leaves the root set alone: `present - non_empty` is still exactly
+# {D1, A1}, which the test below asserts structurally and which is the claim
+# these two numbers are a tripwire for.
+CENSUS_BLOCKS_ON_PRESENT = 63
+CENSUS_BLOCKS_ON_NON_EMPTY = 61
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -276,13 +286,20 @@ def test_gate_presence_matches_the_yaml(raw_steps):
             assert F.gate_programs(sid) == ()
 
 
-def test_blocks_on_presence_is_62_but_non_empty_is_60(raw_steps):
+def test_blocks_on_presence_and_non_empty_are_different_sets(raw_steps):
     """The two are NOT the same set, and conflating them is a real error.
 
-    `blocks_on` is DECLARED on 62 steps but declared EMPTY on D1 and A1 — the
-    flow's two genuine roots. "62 steps have blocks_on" is a presence count; a
-    test that reads it as "62 steps have upstream dependencies" would demand an
+    `blocks_on` is DECLARED on every step but declared EMPTY on D1 and A1 — the
+    flow's two genuine roots. "N steps have blocks_on" is a presence count; a
+    test that reads it as "N steps have upstream dependencies" would demand an
     edge from a root and be wrong twice over.
+
+    The counts live in the census block at the top of this file and nowhere
+    else. They used to be repeated in this test's NAME and in this docstring,
+    so when P0 gained an edge (332b9985e, vibe-ic#923) the file disagreed with
+    itself in three places at once — the exact confusion the test is about. The
+    load-bearing assertion is the structural one below: whatever the counts are,
+    the steps with an EMPTY declaration are exactly the two roots.
     """
     present = {F.normalize_id(s["id"]) for s in raw_steps if "blocks_on" in s}
     non_empty = {
