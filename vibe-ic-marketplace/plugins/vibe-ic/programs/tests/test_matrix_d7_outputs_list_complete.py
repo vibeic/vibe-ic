@@ -1448,7 +1448,126 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
 #: and each promotion must be re-measured and then either DECLARED in the flow
 #: yaml or waived with evidence — not discovered later from a cell that
 #: quietly changed colour.
-RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+#:
+#: THE DAY CAME, AND THE PIN MOVES ONLY NOW THAT THE PROMOTIONS ARE DISPOSED
+#: (#1215). ``benchmark-data/ic/spm/v1.10.18_sky130A`` was published carrying
+#: ``reports/write_ledger.json``, the test reddened, and it stayed red through
+#: four closed PRs because the dispositions were the decision — not the pin.
+#: Re-measured rather than inherited from the issue. TWO records are carried,
+#: consulted, and between them refuse 273 of their residual paths on live
+#: re-verification:
+#:
+#:     v1.10.18_sky130A   captured 2026-08-09   399 candidates, 144 refused
+#:     v1.9.96_gf180mcuD  captured 2026-08-08   394 candidates, 129 refused
+#:
+#: The A/B against a forced-empty ``observed_writes()`` over all 63 steps
+#: leaves **5** promotions on 5 steps, with **0** findings lost — the one
+#: direction this binding may never move:
+#:
+#:     step D1  reports/audit/phase1/expert_parse_track.json   DECLARED
+#:     step 23  reports/phase3/sta/post_route_signoff_corner.json  DECLARED
+#:     step 24  reports/phase3/dynamic_ir.json                 DECLARED
+#:     step 27  reports/phase3/si_mcf_sta.json                 DECLARED
+#:     step 34  reports/phase3/cmp_fill_emit.json              WAIVED
+#:
+#: Five, not the seven the issue measured against a different pair of roots:
+#: step 11's ``dft/coverage.yml`` and M2's ``L21_POWER_INTENT.json`` were
+#: declared separately before this change, and the second root was withdrawn
+#: and later re-published from the run's own later capture (#1529).
+#:
+#: The four DECLARED are named in ``flow/phase1_phase2_phase3.yaml`` on the
+#: step that PRODUCES them, each with its blast radius measured by
+#: ``flow_compliance_check.check_step`` over the manifest run roots — on a
+#: fresh copy per arm, because ``check_step`` runs the gate and the gate
+#: writes the artefact, so two arms sharing one tree is not an A/B. Each is
+#: also recorded PRODUCED_BY_RUN in ``matrix_d3_output_manifest.json``,
+#: because the yaml half alone is a HALF FIX that relocates the red into
+#: dimension 3 rather than removing it (measured: d7 6 -> 1, d3 6 -> 10).
+#: Step 34 is WAIVED instead, on the measured fact that nothing reads it: its
+#: apparent consumer is ``metal_fill_emit``'s own default-output constant,
+#: counted as a read by :func:`matrix_d7_artifact_graph._gate_consumers`.
+#:
+#: The pin therefore names a population whose every promotion has a
+#: disposition. It is BOOKKEEPING, deliberately last, and it cannot be used as
+#: evidence that the dispositions happened —
+#: :func:`test_d7_the_write_record_population_is_named_root_by_root` asserts
+#: both halves of the invariant so that a pin naming a root which contributes
+#: nothing is as loud as a population that grew quietly.
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
+
+
+class _FakeObservation:
+    """The one field :func:`pin_complaints` reads off an observation."""
+
+    def __init__(self, root: str) -> None:
+        self.root = root
+
+
+def pin_complaints(pinned, measured, observed, notes):
+    """Everything wrong with the pin, as SENTENCES. Empty means clean.
+
+    A pure predicate over the four things the pin is a claim about, taking
+    them as arguments rather than reading :mod:`matrix_d7_write_record`
+    itself, so the assertion over the SHIPPED tree and the paired guards below
+    run the exact same code. A guard exercising a private copy of this logic
+    would prove only that the copy works — the failure mode
+    ``test_flow_declares_no_output_twice`` names for the same reason.
+
+    *observed* is ``observed_writes()``: ``{path: (Observation, ...)}``, or
+    ``None`` when the reader could not answer at all.
+    """
+    out = []
+    pinned_set, measured_set = set(pinned), set(measured)
+    if measured_set != pinned_set:
+        out.append(
+            f"the set of run roots whose write record decides this dimension "
+            f"changed.\n  measured: {sorted(measured_set)}\n"
+            f"  pinned:   {sorted(pinned_set)}\n"
+            f"  per root: {list(notes)}\n"
+            f"Every promotion count in this module's docstring was measured "
+            f"against the pinned set. Re-measure them, then move the pin — a "
+            f"population that grows quietly is how a dimension stops "
+            f"describing what it measures.")
+    if not notes or not all(n and n.strip() for n in notes):
+        out.append(
+            "the reader published no reason at all; a degrade to the "
+            "pre-binding behaviour must never be silent")
+    if not pinned_set:
+        if observed:
+            out.append(
+                f"no root is bound, yet the observation index is non-empty: "
+                f"{sorted(observed)[:5]}")
+        return out
+    # THE OTHER HALF, which had never been written because the population had
+    # always been empty (#1215). Without it, moving the pin trades one
+    # unasserted state for another: `measured` is derived from
+    # `observed_writes() is not None`, and `{} is not None` is True — so a
+    # binding that went INERT (records stop being read, or every observation
+    # is refused) would still report every root as bound and this test would
+    # still pass, while the pin went on claiming that a named root decides
+    # this dimension and nothing decided it.
+    if not observed:
+        out.append(
+            f"the pin names {sorted(pinned_set)}, yet the binding observed "
+            f"NOTHING at all. A pinned population with an empty observation "
+            f"index is the pre-binding behaviour wearing the binding's "
+            f"name.\n  per root: {list(notes)}")
+        return out
+    contributing = {o.root for obs in observed.values() for o in obs}
+    if contributing != pinned_set:
+        out.append(
+            f"a pinned root must CONTRIBUTE, not merely load.\n"
+            f"  pinned:       {sorted(pinned_set)}\n"
+            f"  contributing: {sorted(contributing)}\n"
+            f"  silent:       {sorted(pinned_set - contributing)}\n"
+            f"  unpinned:     {sorted(contributing - pinned_set)}\n"
+            f"A root that loads and then promotes nothing is "
+            f"indistinguishable here from one that was never consulted, "
+            f"which is the state this pin exists to make loud.")
+    return out
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():
@@ -1458,29 +1577,68 @@ def test_d7_the_write_record_population_is_named_root_by_root():
     can see WHICH runs those are and WHY. This asserts the pinned population
     and, for every root, that the reader returns a SENTENCE — no record,
     untracked, wrong schema, withheld residual — so a degrade to the
-    pre-binding behaviour is never silent.
+    pre-binding behaviour is never silent. Since #1215 it also asserts the
+    NON-EMPTY half: a pinned root that contributes nothing is as loud as a
+    population that grew quietly.
     """
     _unbind()
+    observed = R.observed_writes()
     measured = tuple(sorted(
-        r.label for r in R.record_roots() if R.observed_writes() is not None
+        r.label for r in R.record_roots() if observed is not None
         and R._load(r)[0] is not None))
-    assert measured == tuple(sorted(RECORD_BOUND_ROOTS)), (
-        f"the set of run roots whose write record decides this dimension "
-        f"changed.\n  measured: {list(measured)}\n"
-        f"  pinned:   {list(RECORD_BOUND_ROOTS)}\n"
-        f"  per root: {list(R.binding_notes())}\n"
-        f"Every promotion count in this module's docstring was measured "
-        f"against the pinned set. Re-measure them, then move the pin — a "
-        f"population that grows quietly is how a dimension stops describing "
-        f"what it measures.")
-    notes = R.binding_notes()
-    assert notes and all(n and n.strip() for n in notes), (
-        "the reader published no reason at all; a degrade to the pre-binding "
-        "behaviour must never be silent")
-    if not RECORD_BOUND_ROOTS:
-        assert R.observed_writes() == {}, (
-            f"no root is bound, yet the observation index is non-empty: "
-            f"{sorted(R.observed_writes())[:5]}")
+    assert pin_complaints(
+        RECORD_BOUND_ROOTS, measured, observed, R.binding_notes()) == []
+
+
+def test_the_pin_FIRES_when_the_binding_goes_inert():
+    """PAIRED GUARD, and the reason the non-empty half exists at all.
+
+    The state: the records still load, so every pinned root is `measured`,
+    but the binding produces no observation whatsoever. Before #1215 this was
+    invisible — `{} is not None` is True, `measured` still equalled the pin,
+    and the test passed while nothing decided the dimension.
+    """
+    pinned = ("benchmark-data/ic/spm/v1.10.18_sky130A",)
+    complaints = pin_complaints(pinned, pinned, {}, ("consulted",))
+    assert complaints, "an inert binding must not read as a bound one"
+    assert "observed NOTHING at all" in complaints[0]
+
+
+def test_the_pin_FIRES_when_a_pinned_root_contributes_nothing():
+    """PAIRED GUARD: the pin may not name a root that promotes nothing.
+
+    Two roots load and only one is ever the source of an observation. The
+    silent one is named, so it cannot be mistaken for a root that was simply
+    quiet this time.
+    """
+    pinned = ("root/loud", "root/silent")
+    observed = {"reports/x.json": (_FakeObservation("root/loud"),)}
+    complaints = pin_complaints(pinned, pinned, observed, ("consulted",))
+    assert complaints, "a pinned root that contributes nothing must be loud"
+    assert "root/silent" in complaints[0] and "silent:" in complaints[0]
+
+
+def test_the_pin_FIRES_on_an_unpinned_root_that_contributes():
+    """PAIRED GUARD, the other direction: growth must stay loud.
+
+    The half that already existed, re-proved through the shared predicate so
+    that refactoring the assertion cannot have quietly dropped it.
+    """
+    complaints = pin_complaints(
+        (), ("benchmark-data/ic/spm/v1.10.18_sky130A",), {}, ("consulted",))
+    assert complaints, "a population that grew must not read as unchanged"
+    assert "changed" in complaints[0]
+
+
+def test_the_pin_is_SILENT_on_a_healthy_binding():
+    """The other half of every guard above: it must not fire on the good state.
+
+    Without this, all three guards could be satisfied by a predicate that
+    complains unconditionally — a check that always fires measures nothing.
+    """
+    pinned = ("root/loud",)
+    observed = {"reports/x.json": (_FakeObservation("root/loud"),)}
+    assert pin_complaints(pinned, pinned, observed, ("consulted",)) == []
 
 
 # ══════════════════════════════════════════════════════════════════════

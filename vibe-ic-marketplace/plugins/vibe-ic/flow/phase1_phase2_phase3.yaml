@@ -255,6 +255,48 @@ steps:
       # so it is produced by Phase 1 doc extraction, not by Spec-to-RTL.
       - "reports/phase1/extraction_coverage_report.md"
       - "reports/phase1/extraction_coverage_report.json"
+      # The SECOND TRACK's own report (#312), declared under #1215.
+      #
+      # WHY IT REACHED W2 AND THE AST COULD NOT SEE IT.
+      # `phase1_expert_parse_track.py:980` writes it as
+      # `_pl.report_path(project, "phase1/expert_parse_track.json")`, which the
+      # auto-router places under `reports/audit/`. That is
+      # `matrix_d7_artifact_graph.RESOLUTION_LIMITS` entry 1 verbatim — a write
+      # whose path root is a `_pl.report_path(...)` call — so no Python write
+      # POSITION names the literal and the AST oracle answered "no producer,
+      # externally supplied by design". The write ledger of
+      # `benchmark-data/ic/spm/v1.10.18_sky130A` observed the run writing it,
+      # which is what made the claim decidable rather than assumed.
+      #
+      # IT IS THIS STEP'S OWN ARTEFACT, not a cross-step attribution.
+      # `phase1_expert_parse_track` is D1's own gate clause below, and
+      # `phase1_expert_track_evidence_check._TRACK_REPORT_RELS` names exactly
+      # this path FIRST ("canonical first"). Producer step == consumer step ==
+      # D1, so declaring it charges nothing to a step that only reads it.
+      #
+      # BLAST RADIUS, measured with `flow_compliance_check.check_step` on each
+      # of the 10 manifest run roots that resolve in this repository, with and
+      # without this entry: **5 move, all VACUOUS_PASS -> MISSING**
+      # (`phase1_parity/espi`, `ic/caravel_user_project`, `ic/sha256`,
+      # `spm/v1.5.58_ihp-sg13g2`, `ic/subservient`) — the widest of #1215's
+      # four, because D1 runs on every design while the other three are
+      # phase-3 steps. All five are already FAIL overall before this change
+      # (28, 23, 48, 25 and 40 FAIL/MISSING steps across the 63), so no root
+      # the flow currently calls whole is reddened.
+      #
+      # HOW THAT NUMBER WAS GOT, because the first attempt got 0 and 0 was
+      # wrong. `check_step` RUNS the step's gate, and this step's gate WRITES
+      # this artefact — so measuring both arms against the same tree lets the
+      # control arm manufacture the evidence the treatment arm is then
+      # credited with. Each arm here is a fresh `copytree` of the run root,
+      # discarded after one `check_step`. A/B over a shared tree is not an A/B
+      # when the probe is also a producer.
+      #
+      # It RESOLVES in three admissible run roots
+      # (caravel_user_project/v1.9.43_sky130A, spm/v1.9.96_gf180mcuD,
+      # u_hawaii_adc/v1.9.86_sky130A), so declaring it closes the d7 finding
+      # without opening a d3 one.
+      - "reports/audit/phase1/expert_parse_track.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."
@@ -3029,6 +3071,38 @@ steps:
       # now reported as a SELF-CERTIFIED EVIDENCE advisory on the step line,
       # and is refused under `flow_compliance_check --strict-audit-evidence`.
       - "reports/phase3/sta/sta_corner_record_completeness.json"
+      # The post-route SIGN-OFF CORNER verdict — same shape as the entry above
+      # and declared with it under #1215.
+      #
+      # `post_route_signoff_corner_check . --json reports/phase3/sta/
+      # post_route_signoff_corner.json` is this step's own gate clause below,
+      # so the path exists only as an `--json` ARGUMENT: no Python write
+      # position names it, the AST oracle reported "no producer", and W2
+      # dropped it as externally supplied. The write ledger observed the run
+      # writing it. The step's own comment at the gate already names
+      # `post_route_signoff_corner_check` as the clause that keeps step 23 FAIL
+      # on a real violation, so this is a verdict the flow reads and did not
+      # declare.
+      #
+      # THIS ONE CHANGES NO CELL COLOUR AND IS DECLARED ANYWAY. Step 23's
+      # dimension-7 cell is already red and WAIVED, so the promotion moves that
+      # cell's finding count (13 -> 14) and not its state. Leaving it as the
+      # one undisposed promotion would have left the #1215 pin unmovable for a
+      # finding nobody would ever see — the exact "discovered later from a cell
+      # that quietly changed colour" failure the pin exists to prevent, in its
+      # other direction.
+      #
+      # BLAST RADIUS, `check_step` over the 10 manifest run roots that resolve
+      # here, with and without: **2 move, both VACUOUS_PASS -> MISSING**
+      # (`phase1_parity/espi`, `ic/caravel_user_project`). Neither is a root
+      # the flow calls whole — measured over all 63 steps BEFORE this change,
+      # espi already reports 28 FAIL/MISSING steps and caravel_user_project 23,
+      # so no Overall verdict moves. VACUOUS_PASS -> MISSING is the direction
+      # this dimension exists to produce: a step that passed while evidencing
+      # nothing now names what it did not produce. It RESOLVES in three
+      # admissible run roots (caravel_user_project/v1.9.43_sky130A,
+      # sha256/clean_run_v1427_20260715, spm/v1.9.96_gf180mcuD).
+      - "reports/phase3/sta/post_route_signoff_corner.json"
       # WITHDRAWN, NOT FORGOTTEN — the two multi-corner STANCE files
       # (`reports/phase3/multi_corner_spef_stance.json`,
       # `reports/phase3/mcorner_ocv_stance.json`) belong here on the merits:
@@ -3231,6 +3305,31 @@ steps:
       # on run 2, and a verdict that depends on how many times it has been
       # evaluated is not a measurement.
       - "reports/phase3/ir_drop_signoff.json"
+      # The VECTORED DYNAMIC IR verdict, declared under #1215. This is the one
+      # promotion of the four that BOTH adjudications of the write-record
+      # tripwire agreed on: the closed #1077 named it "a real defect" and the
+      # closed declare-camp PRs added the identical line.
+      #
+      # WHY THE AST COULD NOT SEE IT. `dynamic_ir_vectored_emit.py` writes it
+      # at :567/:591/:608/:634 as `out_json.write_text(...)`, where `out_json`
+      # is a FUNCTION PARAMETER — `matrix_d7_artifact_graph.RESOLUTION_LIMITS`
+      # entry 1 exactly. A Python program really does write it and the AST
+      # index cannot resolve the path, so W2 dropped it as "externally supplied
+      # by design", which is a claim this flow's own gate contradicts one key
+      # below: `dynamic_ir_drop_check` names the path POSITIONALLY and exits 1
+      # when it is absent, so no passing run can lack it.
+      #
+      # BLAST RADIUS, `check_step` over the 10 manifest run roots that resolve
+      # here, with and without: **3 move, all VACUOUS_PASS -> MISSING**
+      # (`phase1_parity/espi`, `ic/caravel_user_project`, `ic/subservient`).
+      # All three are already FAIL overall before this change (28, 23 and 40
+      # FAIL/MISSING steps respectively, measured across all 63 steps), so no
+      # root the flow currently calls whole is reddened. It RESOLVES in four
+      # admissible run roots (caravel_user_project/v1.9.43_sky130A,
+      # sha256/clean_run_v1427_20260715, spm/v1.5.58_ihp-sg13g2,
+      # spm/v1.9.96_gf180mcuD), so declaring it closes the d7 finding without
+      # opening a d3 one.
+      - "reports/phase3/dynamic_ir.json"
     gate:
       all_of:
         # OUTPUT-PATH COLLISION (same shape as step 25's, fixed with it in
@@ -3493,6 +3592,40 @@ steps:
       # the report a producer outside its own gate, as
       # `phase3_one_shot_runner._DECLARED_SIGNOFF_GATES` did for the four
       # STA/EM sign-off gates — not a checker change.
+      #
+      # THE ENTRY THE PARAGRAPHS ABOVE WERE WRITTEN FOR, LANDED UNDER #1215.
+      # Everything from "The MCF crosstalk-DELAY verdict" down arrived at
+      # 161851c9f (2026-07-29) — 73 lines of justification ending in "This
+      # entry is the machine-readable half of that sentence" — and the entry
+      # itself was never added. The reasoning shipped; the declaration did not,
+      # and `git log -S` over this file finds no commit that ever added and
+      # removed it. So step 27 has carried a measured, argued case for an
+      # `required_outputs` line that does not exist, which is why the write
+      # record's promotion of this path had no declaration to land against.
+      #
+      # THE COMPETING READING, AND WHY IT DOES NOT SURVIVE. The closed #1077
+      # argued WAIVE: `si_mcf_sta.json` is step 27's own
+      # `condition_files_exist` trigger below, so its absence is a state the
+      # flow declares legal two keys down. That is true of the SUB-GATE and
+      # says nothing about the step's contract — the paragraphs above measured
+      # exactly this and concluded MISSING is the honest verdict, because
+      # `signoff_audit._classify_si` reads the same path as a cross-step VETO
+      # (`SI_ABSENT`), not as an optional evidence slot. A trigger whose
+      # absence vetoes tape-out is not an optional output.
+      #
+      # BLAST RADIUS RE-MEASURED for #1215 rather than inherited: `check_step`
+      # over the 10 manifest run roots that resolve in this repository today,
+      # with and without this entry — **3 move, all PASS -> MISSING**
+      # (`phase1_parity/espi`, `ic/caravel_user_project`, `ic/subservient`).
+      # That reproduces the "THREE move PASS -> MISSING" measured above at 12
+      # roots, two of which no longer resolve. All three are already FAIL
+      # overall before this change (28, 23 and 40 FAIL/MISSING steps across the
+      # 63, measured), so no root the flow currently calls whole is reddened.
+      # It RESOLVES in four admissible run roots
+      # (caravel_user_project/v1.9.43_sky130A,
+      # sha256/clean_run_v1427_20260715, spm/v1.5.58_ihp-sg13g2,
+      # spm/v1.9.96_gf180mcuD).
+      - "reports/phase3/si_mcf_sta.json"
     gate:
       all_of:
         - files_exist: ["reports/phase3/si_crosstalk.rpt", "reports/phase3/si_crosstalk.json"]
