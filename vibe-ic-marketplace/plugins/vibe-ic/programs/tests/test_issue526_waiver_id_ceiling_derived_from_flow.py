@@ -496,18 +496,75 @@ def test_no_tracked_corpus_waiver_sits_above_the_stale_ceiling():
         f"— before #526 that project produced NO compliance report at all")
 
 
+def _tracked_corpus_waivers():
+    """The git-TRACKED `benchmark-data/**/waivers.json` set, or None when git
+    cannot answer.
+
+    This test's NAME says "tracked", and a filesystem glob is not that. Two
+    consequences, both real:
+
+    * an UNTRACKED local `waivers.json` — one a benchmark run just wrote — was
+      validated and counted, so the verdict depended on what happened to be
+      lying in the author's tree. That is the same false certificate
+      `evidence_citation_resolves_check.tracked_files()` was written to remove:
+      the question is what the REPO ships, not what this machine has.
+    * the population could only be guarded by a hand-typed floor, and that
+      floor rotted. `assert seen >= 11` went RED at 9 because the corpus
+      legitimately shrank; the number said nothing about whether the scan was
+      correct, only about when it was written.
+
+    Asking git is strictly stronger than the floor: it catches a broken glob
+    (zero or missing entries) AND untracked contamination, neither of which a
+    `>=` count can distinguish, and it cannot rot when the corpus changes size
+    for a legitimate reason.
+    """
+    r = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "benchmark-data"],
+        # 10s, not the 120s this first carried. These tests run under a 180s
+        # pytest-timeout harness, so an inner bound is a slice of THAT budget --
+        # 120s was two thirds of it for a call measured at 0.00s (the whole item
+        # is 0.23s). An over-wide inner bound is the #1241 session-killer shape:
+        # enough of them and the harness dies without emitting a verdict at all,
+        # which greps as zero failures. 10s is ~43x the measured item.
+        capture_output=True, timeout=10)
+    if r.returncode != 0:
+        return None
+    out = r.stdout.decode("utf-8", "replace")
+    return sorted(p for p in out.split("\0")
+                  if p and p.split("/")[-1] == "waivers.json")
+
+
 def test_every_tracked_corpus_waiver_file_validates_without_an_id_error():
     """The consumer-scoped half: run the REAL validator over every tracked
     waivers.json and assert none of them trips an id finding."""
-    seen = 0
-    for path in sorted(REPO_ROOT.glob("benchmark-data/**/waivers.json")):
-        seen += 1
+    tracked = _tracked_corpus_waivers()
+    if tracked is None:
+        pytest.skip("not a git checkout / git unavailable — 'tracked' is "
+                    "undecidable here, and a filesystem glob is not a "
+                    "substitute (see _tracked_corpus_waivers)")
+
+    # Non-vacuity that cannot rot: the corpus may shrink, but a scan of NOTHING
+    # has not validated anything.
+    assert tracked, ("no tracked waivers.json under benchmark-data/ — this test "
+                     "certifies the corpus and cannot do so over an empty one")
+
+    scanned = []
+    for rel in tracked:
+        path = REPO_ROOT / rel
+        assert path.is_file(), (
+            f"{rel} is tracked but absent from this checkout; the corpus scan "
+            f"must not silently skip a tracked member")
+        scanned.append(rel)
         findings, _ = wsc.validate(path.parent)
         bad = [f.rule for f in findings
                if f.rule in ("id-range", "id-missing",
                              "id-noncanonical-spelling")]
         assert bad == [], f"{path}: {bad}"
-    assert seen >= 11, f"corpus shrank to {seen} waiver files — re-measure"
+
+    assert scanned == tracked, (
+        f"scanned {len(scanned)} of {len(tracked)} tracked waiver files; every "
+        f"tracked member must be validated (missing: "
+        f"{sorted(set(tracked) - set(scanned))})")
 
 
 # ----------------------------------------------------------------------

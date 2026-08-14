@@ -5,6 +5,7 @@ step.
 """
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,41 @@ import pytest
 
 GATE = Path(__file__).resolve().parent.parent / "flow_step_can_fail_check.py"
 yaml = pytest.importorskip("yaml")
+
+
+def _gate_baseline():
+    """The checker's OWN `BASELINE`, read from the module under test.
+
+    Restating the baseline here is what rotted: the fixture below and
+    `_strong`'s docstring both listed step 12, which has since LEFT `BASELINE`
+    (it gained a criterion that can fail). A step that is not in the baseline is
+    a NEW weak step, and `main()` returns on that branch BEFORE it can reach the
+    must-shrink branch, so the test failed on the wrong message and never
+    exercised the behaviour it is named for. Reading the real dict means this
+    file cannot disagree with the checker again.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_flow_step_can_fail_check_under_test", GATE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return dict(mod.BASELINE)
+
+
+_BASELINE = _gate_baseline()
+
+
+def _weak_gate_for(reason: str):
+    """A gate whose SHAPE matches the weakness the baseline records, so the
+    fixture reproduces what the record actually describes rather than a
+    look-alike."""
+    if "optional_program_exit_zero" in reason:
+        return {"optional_program_exit_zero": "x"}
+    return {"files_exist": ["a"]}
+
+
+def _sid(key: str):
+    """Baseline keys are strings; the flow spells numeric ids as ints."""
+    return int(key) if key.isdigit() else key
 
 
 def _run(flow: Path):
@@ -31,9 +67,11 @@ def _flow(tmp: Path, steps) -> Path:
 def _strong(sid):
     """A step with a criterion that can fail.
 
-    Ids here stay clear of the real baseline (P0, 1, 12, 14, 18, 27, 32, 35):
+    Ids here must stay clear of the real baseline, whatever it currently holds:
     reusing one makes the fixture trip the baseline-must-shrink branch, which is
-    the checker working correctly and the test asking the wrong question.
+    the checker working correctly and the test asking the wrong question. The
+    guard below reads `_BASELINE` rather than restating it, so this cannot drift
+    out of step with the checker the way the old hard-coded list did.
     """
     return {"id": sid, "name": f"step {sid}",
             "gate": {"program_exit_zero": "some_check"}}
@@ -97,21 +135,41 @@ def test_a_baseline_entry_that_gained_a_real_gate_forces_the_baseline_to_shrink(
     A baseline that never shrinks stops describing anything and becomes a list of
     permissions.
     """
-    f = _flow(tmp_path, [{"id": "P0", "name": "now gated",
-                          "gate": {"program_exit_zero": "x"}},
-                         {"id": 14, "name": "still weak",
-                          "gate": {"optional_program_exit_zero": "x"}},
-                         {"id": 1, "name": "still weak",
-                          "gate": {"files_exist": ["a"]}},
-                         {"id": 12, "name": "w", "gate": {"files_exist": ["a"]}},
-                         {"id": 18, "name": "w", "gate": {"files_exist": ["a"]}},
-                         {"id": 27, "name": "w", "gate": {"files_exist": ["a"]}},
-                         {"id": 32, "name": "w", "gate": {"files_exist": ["a"]}},
-                         {"id": 35, "name": "w", "gate": {"files_exist": ["a"]}}])
-    rc, out = _run(f)
+    assert "P0" in _BASELINE, (
+        "this test needs a baseline entry to promote; the checker's baseline no "
+        f"longer contains P0 (has {sorted(_BASELINE)})")
+
+    # Every OTHER baseline entry stays weak, so `new` is empty and the run
+    # reaches the must-shrink branch instead of returning on the new-weak one.
+    steps = [{"id": "P0", "name": "now gated",
+              "gate": {"program_exit_zero": "x"}}]
+    steps += [{"id": _sid(k), "name": "still weak",
+               "gate": _weak_gate_for(v)}
+              for k, v in _BASELINE.items() if k != "P0"]
+
+    rc, out = _run(_flow(tmp_path, steps))
+    # Harness assertion: prove the fixture reached the intended branch. Without
+    # it, a single stray non-baseline id silently sends the run down the
+    # new-weak branch and the test reports the wrong thing — which is exactly
+    # how this test was red.
+    assert "gained a gate that cannot fail" not in out, (
+        f"fixture leaked a NEW weak step, so the run never reached the "
+        f"must-shrink branch: {out}")
     assert rc == 1, out
-    assert "must shrink" in out
+    assert "must shrink" in out, out
     assert "P0" in out
+
+    # NEGATIVE CONTROL: with P0 still weak nothing has been fixed, so the
+    # baseline must NOT be asked to shrink. Without this arm the assertions
+    # above would pass against a checker that demanded a shrink unconditionally.
+    steps_unfixed = [{"id": _sid(k), "name": "still weak",
+                      "gate": _weak_gate_for(v)}
+                     for k, v in _BASELINE.items()]
+    unfixed_dir = tmp_path / "unfixed"
+    unfixed_dir.mkdir()
+    rc2, out2 = _run(_flow(unfixed_dir, steps_unfixed))
+    assert rc2 == 0, out2
+    assert "must shrink" not in out2, out2
 
 
 def test_stage_containers_are_not_steps(tmp_path):
