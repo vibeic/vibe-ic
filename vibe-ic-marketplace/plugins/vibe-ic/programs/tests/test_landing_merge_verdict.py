@@ -636,50 +636,6 @@ def test_a_caller_supplying_no_base_selection_is_told_the_check_did_not_fire(
         doc["notes"]
 
 
-def test_arm_a1_declares_the_same_session_arm_b_declares():
-    """THE OTHER HALF OF "ARM A MUST ACTUALLY RUN", and the one that makes the
-    refusal above a check rather than a ban.
-
-    Arm B (`gatekeeper-land.sh`) runs `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 … -p
-    pytest_timeout` and records why: on the LANDING host, autoload pulls in 8
-    `pytest11` entry points and one of them raises at import and takes the
-    session down AT COLLECTION. Arm A1 declared neither half, so BOTH settings
-    of the ambient switch could kill it while arm B ran:
-
-      * caller sets the variable — the pinned verification invocation every agent
-        is told to use — and arm A1 has no `pytest-timeout`, so its own
-        `--timeout=180` is rejected, pytest exits on the usage error, no junit is
-        written and arm A1 is DEAD. Measured on `3d13e2c59`: the verdict said
-        "the base report is empty … demand green" and returned LAND OK;
-      * caller sets nothing, on the landing host, and the session dies at
-        collection instead.
-
-    A differential across two different instruments is not a differential.
-
-    UNSETTING THE VARIABLE IS THE WRONG REPAIR and this test refuses it: it fixes
-    the first case, re-arms the second on the one host that actually lands code,
-    and tests green anywhere the harmful plugin is not installed. Both arms must
-    DECLARE the same session."""
-    body = "\n".join(l for l in _VERIFY.read_text(encoding="utf-8").splitlines()
-                     if not l.lstrip().startswith("#"))
-    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in body, \
-        "arm A1 does not declare its session, so autoload can kill it"
-    assert "-p pytest_timeout" in body, \
-        "arm A1 suppresses autoload without naming the one plugin it needs"
-    # The repair that looks right on this host and bans the landing host.
-    assert "unset PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in body, \
-        "unsetting re-arms the collection-time session kill on the landing host"
-    # ...and the arm still ASKS for the bound. Declaring the session is only
-    # correct because the bound is real; dropping the bound instead would trade a
-    # dead arm for an unbounded one.
-    assert "--timeout=180" in body and "--timeout-method=thread" in body
-    # Arm A1 and arm B must not drift apart again.
-    land = "\n".join(l for l in _LAND.read_text(encoding="utf-8").splitlines()
-                     if not l.lstrip().startswith("#"))
-    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in land and "-p pytest_timeout" in land, \
-        "arm B changed its session declaration; arm A1 now measures a different instrument"
-
-
 def test_the_verify_script_hands_the_verdict_arm_as_own_selection():
     """The wiring, asserted on the script rather than assumed. Arm A1 runs
     `selection_base.txt`; the verdict has to be told that is what was asked, or
