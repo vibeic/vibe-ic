@@ -189,6 +189,50 @@ _LAND_SENTINEL = "=== gatekeeper landing gates"
 _TEST_TIER = re.compile(r"^targeted tests(?:\s|\(|$)")
 _STAMPED = re.compile(r"===\s*ALL GATES PASS\s*[—-]\s*stamped\s+(\S+)")
 
+# A GATE'S LABEL IS ITS IDENTITY; A COUNT INSIDE IT IS A MEASUREMENT OF A TREE.
+#
+# The gate differential in `decide` matches the base arm's failing gates against
+# the candidate arm's BY LABEL, and the two arms measure two different trees. One
+# gate in `gatekeeper-land.sh` prints a per-tree count inside its label:
+#
+#     printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
+#
+# — a DISCOVERY count over `tools/`, deliberately not a roster, so ANY branch
+# that adds or removes a test file there renames the gate. Measured against the
+# code before this normaliser existed (vibe-ic#1431): a branch that repairs the
+# red repo-tools tier and adds one test file goes
+#
+#     base       FAIL  repo tools tests (28 file(s))
+#     candidate  PASS  repo tools tests (29 file(s))
+#
+# and the differential reported two things that never happened — a gate that
+# failed on the base and "is no longer asked here", and, with the tier red on
+# both arms, a NEW failure the branch owns. Both refuse, and the shape they
+# refuse is the one this repo asks for: a fix that arrives with a test.
+#
+# The test tier is already exempt for exactly this reason — `_TEST_TIER` above
+# matches `targeted tests (21 file(s))` and drops it from the comparison. This
+# is the same hazard in the tier that exemption does not cover, so the count is
+# stripped from the KEY the comparison uses. Labels are still printed VERBATIM in
+# every reason and note: the denominator is evidence and is never hidden.
+#
+# DELIBERATELY NARROW. `(<n> file(s))` at the end of a label is a pure per-tree
+# count and nothing else. A parenthesised `rc=`, a version, or any other suffix
+# is left alone — a normaliser that erases more than the tree-dependent part
+# starts merging gates that are genuinely different, and merging outcomes would
+# let "I could not look" be waived by "I looked". `programs/tests/
+# test_issue1431_gate_identity_is_not_a_tree_measurement.py` holds that boundary
+# in both directions and re-derives this population from the script itself.
+_LABEL_TREE_COUNT = re.compile(r"\s*\(\d+ file\(s\)\)$")
+
+
+def gate_key(label: str) -> str:
+    """The identity of a gate, with any per-tree count removed.
+
+    Compare gates with this; report them with the original label.
+    """
+    return _LABEL_TREE_COUNT.sub("", label)
+
 
 @dataclass
 class Delta:
@@ -510,19 +554,26 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         for label in land.blocking_failures:
             reasons.append(f"LANDING GATE FAILED — {label}")
     else:
-        was_red = set(base_land.blocking_failures)
-        now_red = set(land.blocking_failures)
-        cand_labels = set(land.passed) | now_red | set(land.skipped)
-        for label in sorted(now_red - was_red):
+        # KEYED BY `gate_key`, REPORTED BY LABEL — see the note on
+        # `_LABEL_TREE_COUNT`. The arms measure two trees, so a label carrying a
+        # per-tree count is not the same string on both sides even when it is
+        # the same gate; every message below still prints the label verbatim.
+        was_red = {gate_key(l): l for l in base_land.blocking_failures}
+        now_red = {gate_key(l): l for l in land.blocking_failures}
+        cand_skipped = {gate_key(l) for l in land.skipped}
+        cand_passed = {gate_key(l): l for l in land.passed}
+        cand_labels = set(cand_passed) | set(now_red) | cand_skipped
+        for key in sorted(set(now_red) - set(was_red)):
             reasons.append(
-                f"LANDING GATE FAILED, AND PASSED ON THE BASE — {label}")
+                f"LANDING GATE FAILED, AND PASSED ON THE BASE — {now_red[key]}")
         # A gate that stopped being asked is not a gate that started passing —
         # the same rule as `failed -> skipped` for a test.
-        for label in sorted(was_red):
-            if label in land.skipped or label not in cand_labels:
+        for key in sorted(was_red):
+            if key in cand_skipped or key not in cand_labels:
                 reasons.append(
-                    f"A FAILING GATE WAS SILENCED RATHER THAN FIXED — {label} "
-                    f"failed on the base and is no longer asked here")
+                    f"A FAILING GATE WAS SILENCED RATHER THAN FIXED — "
+                    f"{was_red[key]} failed on the base and is no longer asked "
+                    f"here")
         if any("range is empty" in l for l in base_land.skipped):
             # DISCLOSED, because it bounds what the base arm can excuse. Arm A2
             # measures the base over an EMPTY range on purpose, so the
@@ -534,11 +585,12 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             notes.append("the base arm ran over an empty range, so the "
                          "range-scoped gates were not asked there — a failure "
                          "among them on this branch is necessarily new")
-        for label in sorted(was_red & now_red):
+        for key in sorted(set(was_red) & set(now_red)):
             notes.append(f"gate fails on the base too, so it is not this "
-                         f"branch's — {label}")
-        for label in sorted((was_red - now_red) & set(land.passed)):
-            notes.append(f"gate was failing on the base and now passes — {label}")
+                         f"branch's — {now_red[key]}")
+        for key in sorted((set(was_red) - set(now_red)) & set(cand_passed)):
+            notes.append("gate was failing on the base and now passes — "
+                         f"{cand_passed[key]}")
 
     if any("assigned at merge" in l for l in land.passed):
         # A DEFERRAL IS AN ACTION ITEM, NOT A CLEAN SHEET. Measured 2026-08-12:
