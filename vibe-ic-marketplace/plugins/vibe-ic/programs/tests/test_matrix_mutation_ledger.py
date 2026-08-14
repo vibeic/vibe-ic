@@ -75,6 +75,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
@@ -682,11 +683,88 @@ def test_control_removing_one_entry_uncovers_the_cells_it_carried(monkeypatch):
         f"{sorted(orphaned - after)} covered")
 
 
+#: Headroom left between the replay's TOTAL budget and the per-test harness
+#: bound it is running under. `REPLAY_TIMEOUT` above bounds ONE cell; nothing
+#: bounded the whole plan, so the aggregate was `len(plan)` cells deep and
+#: undeclared — and `--timeout-method=thread` does not fail the TEST when that
+#: aggregate is exceeded, it takes the whole SESSION. MEASURED on this tree,
+#: `VIBE_IC_MATRIX_MUTATION_REPLAY=all` under the pinned
+#: `--timeout=180 --timeout-method=thread`:
+#:
+#:     lines matching `passed|failed|error` in the whole output:  0
+#:
+#: Seventy-plus tests had already passed and not one of them is reported, and a
+#: script grepping that output for failures reads zero. An empty result is not a
+#: zero. With a budget the same run keeps its summary line and names what it
+#: could not reach.
+#:
+#: 20 s, not a round number picked by feel: the budget is checked BETWEEN pairs
+#: and `replay_many` halves the per-cell clamp so one pair cannot overrun the
+#: deadline by a whole cell, so the only thing this has to absorb is process
+#: spawn/teardown noise on the last wave plus the dict-build and assertions that
+#: follow the replay inside the same test (sub-second). It is deliberately NOT
+#: proportional to the bound: the overrun it covers does not grow with it.
+REPLAY_BUDGET_HEADROOM = 20
+
+#: Set by :func:`_record_harness_bound` from the bound pytest is actually
+#: enforcing. `None` means no per-test bound is in effect — the audit lane —
+#: and the replay then runs unbounded exactly as it did before.
+_HARNESS_BOUND: object = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _record_harness_bound(pytestconfig):
+    """Read the harness's own per-test bound rather than assuming 180.
+
+    Assuming it would make this file wrong the day the harness moves, and would
+    silently cut the audit lane — which sets no bound at all — down to a batch
+    lane's budget.
+    """
+    global _HARNESS_BOUND
+    _HARNESS_BOUND = pytestconfig.getoption("timeout", default=None)
+
+
+def replay_budget() -> object:
+    """Total wall seconds the replay may spend, or ``None`` for unbounded."""
+    bound = _HARNESS_BOUND
+    try:
+        bound = float(bound)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if bound <= 0:
+        return None
+    return max(1.0, bound - REPLAY_BUDGET_HEADROOM)
+
+
 @lru_cache(maxsize=1)
 def replay_results() -> Tuple[L.ReplayResult, ...]:
     """Run the current mode's replay plan once, in parallel, and cache it."""
     plan = L.replay_plan()
-    return L.replay_many(plan, jobs=8, timeout=REPLAY_TIMEOUT)
+    return L.replay_many(plan, jobs=8, timeout=REPLAY_TIMEOUT,
+                         budget=replay_budget())
+
+
+def replay_shortfall() -> List[Tuple[str, str]]:
+    """Plan pairs the replay never reached, in plan order.
+
+    Non-empty ONLY when the budget above cut the plan off. These pairs were not
+    measured, so they carry no verdict: they are reported as a shortfall, never
+    as mutations that stopped reddening.
+    """
+    ran = {(r.mutation, r.step_id) for r in replay_results()}
+    return [pair for pair in L.replay_plan() if pair not in ran]
+
+
+def _cut_off_note() -> str:
+    missing = replay_shortfall()
+    if not missing:
+        return ""
+    return (f"\n\nTHE REPLAY WAS CUT OFF, so this is a measurement that did "
+            f"not happen rather than a proof that stopped holding: "
+            f"{len(missing)} of {len(L.replay_plan())} pair(s) were never "
+            f"started under a total budget of {replay_budget()}s "
+            f"(mode {L.replay_mode()!r}, harness bound {_HARNESS_BOUND}). "
+            f"Unreached: {missing[:6]}{' ...' if len(missing) > 6 else ''}")
 
 
 @pytest.mark.parametrize("name", [m.name for m in L.MUTATIONS])
@@ -706,7 +784,7 @@ def test_lock2_the_mutation_really_reddens_its_witness(name):
     """
     results = {(r.mutation, r.step_id): r for r in replay_results()}
     mine = [r for (n, _), r in results.items() if n == name]
-    assert mine, f"{name} produced no replay result"
+    assert mine, f"{name} produced no replay result{_cut_off_note()}"
     for r in mine:
         assert r.proved, (
             f"{name} @ step {r.step_id}: {r.verdict}.\n"
@@ -729,7 +807,8 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
                 ) + len(L.ARTEFACT_MUTATIONS)
     assert len(results) == len(plan) == expected > 0, (
         f"replayed {len(results)} pair(s) for a plan of {len(plan)}; mode "
-        f"{L.replay_mode()!r} should re-execute {expected}")
+        f"{L.replay_mode()!r} should re-execute {expected}"
+        f"{_cut_off_note()}")
     assert len({(r.mutation, r.step_id) for r in results}) == len(results), (
         "the replay plan contains duplicate pairs, so the count overstates "
         "what was actually re-executed")
@@ -754,6 +833,91 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
     assert dims == set(range(1, 9)), (
         f"replay touched dimensions {sorted(dims)}; a dimension with no "
         f"re-executed witness has only structural locks on it")
+
+
+def test_a_cut_off_replay_reports_a_shortfall_and_never_a_verdict():
+    """BIDIRECTIONAL control on the total budget, driven both ways.
+
+    The budget exists because ``timeout`` bounds one cell and nothing bounded
+    the plan, so in ``all`` mode the aggregate outlives the harness and
+    ``--timeout-method=thread`` takes the SESSION — 0 lines matching
+    ``passed|failed|error`` in the whole output, which greps as zero failures.
+
+    Both arms are asserted here, because a budget that quietly swallowed pairs
+    would be a worse bug than the one it fixes:
+
+      * BOUNDED — the plan is cut off, and the pairs that were never started are
+        OMITTED. Not fabricated, not scored, not skipped. The shortfall is what
+        ``test_the_replay_actually_ran_and_is_not_starved`` reads.
+      * UNBOUNDED (``budget=None``, the audit lane and every previous caller) —
+        every pair runs. This arm is what proves the fix did not buy its green
+        by making the replay do less.
+
+    Driven against a stub rather than the real replay: what is under test is the
+    scheduling, and a real pair costs tens of seconds.
+    """
+    victim = L.MUTATIONS[0]
+    plan = tuple((victim.name, f"stub{i}") for i in range(12))
+
+    def stub(mut, sid=None, timeout=900):
+        seen.append(int(timeout))
+        time.sleep(0.2)
+        return L.ReplayResult(mut.name, mut.dim, str(sid), True, 0, 1, True, "")
+
+    seen: List[int] = []
+    original = L.replay
+    try:
+        L.replay = stub  # type: ignore[assignment]
+        cut = L.replay_many(plan, jobs=1, timeout=REPLAY_TIMEOUT, budget=0.7)
+        clamped = list(seen)
+        seen.clear()
+        full = L.replay_many(plan, jobs=1, timeout=REPLAY_TIMEOUT, budget=None)
+
+        def boom(mut, sid=None, timeout=900):
+            raise subprocess.TimeoutExpired(cmd="pytest", timeout=timeout)
+
+        L.replay = boom  # type: ignore[assignment]
+        expired = L.replay_many(plan, jobs=1, timeout=REPLAY_TIMEOUT, budget=5)
+    finally:
+        L.replay = original  # type: ignore[assignment]
+
+    assert 0 < len(cut) < len(plan), (
+        f"a 0.7 s budget over {len(plan)} pairs of 0.2 s each returned "
+        f"{len(cut)}; the budget either did not fire or ate everything")
+    assert all(r.proved for r in cut), (
+        "a pair the budget DID reach must keep its real verdict; the budget "
+        "may only decide what runs, never what a run concluded")
+    assert clamped and all(0 < t <= REPLAY_TIMEOUT for t in clamped), (
+        f"per-cell clamp went outside (0, {REPLAY_TIMEOUT}]: {clamped}")
+    assert len(full) == len(plan), (
+        f"budget=None replayed {len(full)} of {len(plan)}; the unbounded path "
+        f"is the audit lane and must be untouched")
+    assert expired == (), (
+        "a pair whose own clamp fired was NOT measured, so it may not appear "
+        "as a verdict; it belongs in the shortfall")
+
+
+def test_the_replay_budget_is_below_the_harness_bound_that_would_kill_it():
+    """The budget must be derived from the bound pytest is really enforcing.
+
+    A budget at or above the harness bound is no budget at all — the session
+    dies first and the replay never gets to stop itself. And with no bound in
+    effect (the audit lane, which is where ``all`` mode belongs) there must be
+    no budget, or this file would silently truncate the audit.
+    """
+    bound = _HARNESS_BOUND
+    budget = replay_budget()
+    if budget is None:
+        assert not bound, (
+            f"no replay budget was derived although pytest is enforcing "
+            f"{bound!r} per test; the replay can still kill the session")
+        return
+    assert budget < float(bound), (
+        f"replay budget {budget}s is not below the harness bound {bound}s, so "
+        f"the session is killed before the replay can report a shortfall")
+    assert budget == float(bound) - REPLAY_BUDGET_HEADROOM, (
+        f"budget {budget}s is not {bound}s minus the declared "
+        f"{REPLAY_BUDGET_HEADROOM}s of headroom")
 
 
 def test_the_canaries_a_mutation_plants_exist_nowhere_in_the_tree():

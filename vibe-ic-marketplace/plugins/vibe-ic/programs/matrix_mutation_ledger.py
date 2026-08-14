@@ -2241,10 +2241,56 @@ def replay_plan(mode: Optional[str] = None) -> Tuple[Tuple[str, str], ...]:
 
 
 def replay_many(plan: Sequence[Tuple[str, str]], jobs: int = 8,
-                timeout: int = 900) -> Tuple[ReplayResult, ...]:
+                timeout: int = 900,
+                budget: Optional[float] = None) -> Tuple[ReplayResult, ...]:
+    """Re-execute every pair in ``plan``, optionally under a TOTAL wall budget.
+
+    ``timeout`` bounds ONE cell. ``budget`` bounds the WHOLE plan, and it is the
+    only bound that can keep this function from outliving the pytest session
+    that called it: ``timeout`` is per-cell, so the aggregate cost of a plan is
+    ``len(plan)`` cells deep and undeclared. In ``all`` mode that is 707 pairs
+    against a harness pinned at ``--timeout=180 --timeout-method=thread``, and
+    the thread method takes the whole PROCESS — so the run dies with no summary
+    line at all and a script grepping it for failures reads zero. An empty
+    result is not a zero, and this parameter is what stops one being produced.
+
+    ``budget=None`` (the default, and what the audit lane uses) is exactly the
+    previous behaviour: no deadline, every pair runs however long it takes.
+
+    With a budget, pairs are run until the deadline and pairs that were not
+    STARTED are OMITTED from the return value — never fabricated, never scored.
+    The shortfall is therefore visible to the caller as
+    ``len(results) < len(plan)``, which is precisely what
+    ``test_the_replay_actually_ran_and_is_not_starved`` already asserts on. A
+    replay that was cut off reports itself as starved; it does not report the
+    mutations it never reached as having stopped reddening anything.
+    """
+    import time
+    if budget is None:
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            return tuple(pool.map(
+                lambda pair: replay(mutation(pair[0]), pair[1], timeout), plan))
+
+    deadline = time.monotonic() + max(0.0, float(budget))
+
+    def _bounded(pair: Tuple[str, str]) -> Optional[ReplayResult]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        # Halved because :func:`replay` runs TWO cells back to back (baseline
+        # then mutant) with this same bound on each, so an unhalved clamp lets
+        # one pair overrun the deadline by a whole cell.
+        cell = min(timeout, max(1, int(remaining // 2)))
+        try:
+            return replay(mutation(pair[0]), pair[1], cell)
+        except subprocess.TimeoutExpired:
+            # The clamp fired, so this pair was NOT measured. Omitting it keeps
+            # it out of the verdicts and inside the starvation count, which is
+            # the honest place for a measurement that did not happen.
+            return None
+
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        return tuple(pool.map(
-            lambda pair: replay(mutation(pair[0]), pair[1], timeout), plan))
+        return tuple(r for r in pool.map(_bounded, plan) if r is not None)
 
 
 # ══════════════════════════════════════════════════════════════════════
