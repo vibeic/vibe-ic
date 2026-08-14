@@ -336,17 +336,50 @@ def test_main_calls_prelayout_signoff_before_pnr():
                    if isinstance(n, ast.FunctionDef) and n.name == "main")
 
     def _first_call_line(name):
+        """Earliest line in main() where *name* is INVOKED, either spelling.
+
+        Two spellings reach a step, and this must see both or it reports a
+        wiring gap that is really a detector gap:
+
+          direct        step_prelayout_signoff(project, top, ...)
+          dispatched    _spf.gate(project, ..., step_pnr, project, top, ...)
+
+        The dispatched form hands the step function to a wrapper that calls
+        it, so the name is an ARGUMENT of a Call rather than its ``func``.
+        Keying on ``node.func.id`` alone sees only the first form; on
+        2026-08-14 that made this test assert "main() never calls step_pnr"
+        while main() dispatched it on the very next screen, which is the
+        detector-blind-to-a-second-spelling shape #1265 and #1493 both hit.
+
+        Matching an ast.Name in argument position keeps this honest rather
+        than loose: the name must still be REACHED from a call inside main(),
+        so a step merely imported, mentioned in a comment or docstring, or
+        assigned and never dispatched still does not count. A bare
+        ``in _SRC`` text search would have accepted all three.
+
+        Returns the MINIMUM matching line, not the first ``ast.walk`` hit.
+        ``walk`` is breadth-first, so its first hit is the shallowest node,
+        not the textually earliest one — and this test's whole subject is
+        textual ORDER, so the two must not be confused.
+        """
+        lines = []
         for node in ast.walk(main_fn):
-            if (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == name):
-                return node.lineno
-        return None
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id == name:
+                lines.append(node.lineno)
+                continue
+            for arg in node.args:
+                if isinstance(arg, ast.Name) and arg.id == name:
+                    lines.append(getattr(arg, "lineno", node.lineno))
+        return min(lines) if lines else None
 
     pls = _first_call_line("step_prelayout_signoff")
     pnr = _first_call_line("step_pnr")
-    assert pls is not None, "main() never calls step_prelayout_signoff"
-    assert pnr is not None, "main() never calls step_pnr"
+    assert pls is not None, (
+        "main() neither calls nor dispatches step_prelayout_signoff")
+    assert pnr is not None, (
+        "main() neither calls nor dispatches step_pnr")
     assert pls < pnr, (
         f"step_prelayout_signoff (line {pls}) must be called BEFORE "
         f"step_pnr (line {pnr}) — the pre-layout emit must not sit behind PnR")
