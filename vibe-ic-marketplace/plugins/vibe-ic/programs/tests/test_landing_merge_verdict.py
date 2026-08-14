@@ -387,6 +387,56 @@ def test_there_is_no_input_that_makes_the_verdict_more_permissive_than_green():
         assert _decide(delta=_delta(new_failures=d.new_failures)).ok is False
 
 
+def test_a_test_the_branch_brings_is_split_out_from_one_it_broke():
+    """vibe-ic#1417. `b in RED` is false BOTH when the base ran the test and it
+    passed AND when the base never had the test — and only the first is a
+    behaviour this change broke. Reported as one number, they are a 5x
+    overstatement on a batch.
+
+    MEASURED on a 141-PR batch composed on `3d13e2c59`: 5 nodes reported NEW,
+    of which FOUR do not exist on main at all (`grep 'def <name>'` -> main 0,
+    batch 1) and ONE — `test_d8_downgrade_is_reachable_through_each_steps_own_
+    real_gate` — passes alone on main and fails alone in the batch. One
+    regression, reported as five.
+    """
+    base = {"m::t_broke": V.PASSED, "m::t_ok": V.PASSED}
+    cand = {"m::t_broke": V.FAILED, "m::t_ok": V.PASSED,
+            "m::t_brought": V.FAILED}
+    d = V.failed_set_delta(base, cand)
+    assert sorted(d.new_failures) == ["m::t_broke", "m::t_brought"]
+    assert d.new_absent_on_base == ["m::t_brought"], (
+        "a test the branch BRINGS, failing, is not separated from one it BROKE")
+
+
+def test_splitting_the_count_moves_no_verdict():
+    """LOAD-BEARING. The split is a disclosure and must never become a waiver:
+    a failing test the branch brought is still the branch's. Asserted on the
+    VERDICT, so a future edit that routes on `new_absent_on_base` to soften the
+    refusal kills this."""
+    for brought in ([], ["m::t_brought"]):
+        v = _decide(delta=_delta(new_failures=["m::t_brought"],
+                                 new_absent_on_base=brought))
+        assert v.ok is False, brought
+        assert any("NEW FAILURE(S) THIS BRANCH OWNS" in r for r in v.reasons)
+
+
+def test_an_empty_base_does_not_report_everything_as_merely_brought():
+    """The degradation that would flatter. With no base report every id is
+    absent, so an unguarded split would announce "nothing was broken, it is all
+    new" — false, and in the permissive direction. `decide` already discloses
+    the empty base; this must add no second, wrong sentence."""
+    d = V.failed_set_delta({}, {"m::t_b": V.FAILED})
+    assert d.new_failures == ["m::t_b"]
+    assert d.new_absent_on_base == [], (
+        "an empty base made every failure look like a newly brought assertion")
+
+
+def test_the_split_is_machine_readable_not_only_prose():
+    d = V.failed_set_delta({"m::t": V.PASSED}, {"m::t": V.FAILED, "m::n": V.FAILED})
+    assert "new_absent_on_base" in d.as_dict()
+    assert d.as_dict()["new_absent_on_base"] == ["m::n"]
+
+
 # ================================================== THE DECISION TABLE, EXACTLY
 
 
