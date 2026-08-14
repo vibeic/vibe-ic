@@ -115,10 +115,18 @@ def _docker_image_available() -> bool:
 
 
 import pytest  # noqa: E402
+# vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
+# one passed. Declared through `not_verified_tier` so the run's roll-up
+# cannot count them under `passed`; see that module's docstring.
+from not_verified_tier import not_verified_reason  # noqa: E402
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
+RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 
-@pytest.mark.skipif(not _docker_image_available(),
-                    reason="vibeic-eda container not available")
+@pytest.mark.skipif(
+    not _docker_image_available(),
+    reason=not_verified_reason("vibeic-eda container not available",
+                               RUN_REMEDY))
 def test_sky130_fault_cut_produces_real_scan_pairs(tmp_path):
     import fault_atpg_run as far  # noqa: E402
     nl = tmp_path / "phase2" / "stage2" / "synth" / "spm_synth.v"
