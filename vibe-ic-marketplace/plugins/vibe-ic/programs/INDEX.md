@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1079
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1079)
+- **Total programs (excluding helpers / shims):** 1080
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1080)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1070 |
+| `any` | 1071 |
 
 ## Alphabetical listing
 
@@ -215,6 +215,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `corner_coverage_audit` | any | — | Audit PVT corner coverage in IC design flows. |
 | `corner_schedule_policy` | any | — | deterministic corner-schedule policy for the analog sizing loop (analog-sizing-loop rule 3). |
 | `corner_yield_vs_spec_check` | any | — | independent yield-vs-spec.json gate + worst-corner identification (analog-sizing-loop rules 2 & 4). |
+| `corpus_cardinality_pin_scan` | any | — | find assertions pinned to a CORPUS CENSUS. |
 | `counter_advanced_synth` | any | — | deterministic SOLVER for the SUBTLE counter / timer / clock family (bucket-② spec -> bucket-① RTL, blind). |
 | `counter_popcount_synth` | any | — | deterministic SOLVER for the counter / popcount / parity-reduction family (bucket-② spec -> bucket-① RTL, blind). |
 | `coverage_closure` | any | — | coverage GAP ANALYSIS over the MEASURED artefact. |
@@ -1151,7 +1152,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1070 programs)
+### `any` (1071 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1340,6 +1341,7 @@ _(no programs in this group)_
 - `corner_coverage_audit` — Audit PVT corner coverage in IC design flows.
 - `corner_schedule_policy` — deterministic corner-schedule policy for the analog sizing loop (analog-sizing-loop rule 3).
 - `corner_yield_vs_spec_check` — independent yield-vs-spec.json gate + worst-corner identification (analog-sizing-loop rules 2 & 4).
+- `corpus_cardinality_pin_scan` — find assertions pinned to a CORPUS CENSUS.
 - `counter_advanced_synth` — deterministic SOLVER for the SUBTLE counter / timer / clock family (bucket-② spec -> bucket-① RTL, blind).
 - `counter_popcount_synth` — deterministic SOLVER for the counter / popcount / parity-reduction family (bucket-② spec -> bucket-① RTL, blind).
 - `coverage_closure` — coverage GAP ANALYSIS over the MEASURED artefact.
