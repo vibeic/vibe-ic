@@ -262,9 +262,63 @@ echo "--- full tier (minutes; stamps the tree on success) ---"
 # plugin's rootdir conftest) cannot see them. That gap is exactly the stage
 # whose family this repo already caught rewriting 77 tracked files.
 WG_BASE="$(mktemp -t gk_writeguard.XXXXXX)"
-trap 'rm -f "$FP" "$WG_BASE"' EXIT
+# PER-STAGE, and `--deep`. The bracket above is taken around the WHOLE tier,
+# which answers "did the tier write" and cannot answer "which stage" — and
+# "which stage" is the only form of the answer that is actionable, because the
+# damage is not the dirty file, it is that every stage AFTER the writer
+# measured what it left.
+#
+# Measured 2026-08-12: the tier ran three stages that write, and the failure it
+# produced was reported against gates that ran LATER and were innocent. Three
+# landing runs were re-done over it.
+#
+# `--deep` because two of the writers put the tree back. A restore closes the
+# window; it does not mean the window was never open, and a stage killed inside
+# one — `gatekeeper_review._run_hygiene` kills the hygiene child on timeout —
+# leaves the mutation on disk for whatever runs next. #1090 measured that
+# window at 23 s.
+WG_STAGE="$(mktemp -t gk_stage.XXXXXX)"
+trap 'rm -f "$FP" "$WG_BASE" "$WG_STAGE"' EXIT
 run "write-guard baseline" \
     python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --snapshot "$WG_BASE"
+python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+    --snapshot "$WG_STAGE" --deep >/dev/null 2>&1 \
+  || echo "  REPORT  per-stage write bracket NOT ACTIVE — a stage writing" \
+          "into the tree would go unattributed in this run"
+
+# `stage <label> <cmd…>` — `run`, plus "and what did it do to the tree".
+#
+# REPORT, not a gate, and deliberately so on this line: the blocking assertion
+# for the tier as a whole is already made below by `--compare "$WG_BASE"`, and
+# stating the same refusal twice would fail a landing twice for one cause. What
+# was missing was never the refusal — it was the ATTRIBUTION.
+stage() {                            # stage <label> <cmd…>
+  local label="$1"; shift
+  run "$label" "$@"
+  stage_bracket "$label"
+}
+
+# The bracket alone, for a stage that is not a single `run` — `run_pytest`
+# prints its own verdict and would be reported twice if it went through `run`.
+stage_bracket() {                    # stage_bracket <label>
+  local label="$1"
+  local out rc=0
+  out="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+           --compare "$WG_STAGE" --snapshot "$WG_STAGE" 2>&1)" || rc=$?
+  case "$rc" in
+    0) [ -n "${out##*WRITTEN AND RESTORED*}" ] \
+         || printf '  REPORT  ^ "%s" MUTATED THE TREE AND PUT IT BACK\n' "$label" ;;
+    1) printf '  REPORT  ^ "%s" WROTE INTO THE TREE — every stage after it\n' \
+              "$label"
+       printf '          measures a tree this run wrote, not the tree the\n'
+       printf '          stamp will name\n' ;;
+    *) printf '  REPORT  ^ could not measure what "%s" did to the tree\n' \
+              "$label" ;;
+  esac
+  [ "$rc" -eq 0 ] && [ -n "${out##*WRITTEN AND RESTORED*}" ] && return 0
+  printf '%s\n' "$out" | grep -aE '^\s+(\?\?|~~|[ MARCD][ MARCD])\s' \
+    | head -10 | sed 's/^/          /'
+}
 
 # The TARGETED TEST RUN, carried over verbatim from the retired ci.yml:130-132.
 # Omitted from the first version of this script, which covered the governance
@@ -355,6 +409,9 @@ run_pytest() {
   rm -f "$sel"
 }
 run_pytest
+# The targeted suite is the stage this repo has caught writing into the
+# shipped tree three times (#1029). It is bracketed like the others.
+stage_bracket "targeted tests"
 
 # ── REPO-LEVEL tests (tools/) ──────────────────────────────────────────────
 # `run_pytest` above cannot reach them, and not by accident: the targeted
@@ -421,6 +478,15 @@ run_repo_tools_pytest() {
   printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
 }
 run_repo_tools_pytest
+
+# #1312 added this stage; #1096 added the per-stage bracket. The bracket
+# must follow it for the SAME reason it follows `run_pytest`: the function
+# prints its own verdict (so it cannot go through `stage`), and without a
+# bracket here anything it writes is attributed to the stage that runs
+# NEXT. It keeps its own blocking write check above -- that check FAILS the
+# landing, where this bracket only REPORTS, so the two are not duplicates
+# and removing either one loses something.
+stage_bracket "repo tools tests"
 
 # ── EVERY OTHER TREE THE SELECTOR CANNOT REACH ─────────────────────────────
 # vibe-ic#1424. `run_pytest` runs the SELECTOR'S list and the selector is rooted
@@ -632,7 +698,9 @@ run_hygiene_gates() {
   rm -f "$json"
 }
 run_hygiene_gates
-run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+
+stage_bracket "repo hygiene gates"
+stage "plugin full audit"     python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 
 # #1029 — the standing assertion, executed: everything above ran against this
 # tree, so nothing above may have CHANGED it. Names every offending path rather
