@@ -830,6 +830,14 @@
           "path": "reports/phase3/ir_drop_signoff.json",
           "size_bytes": 555,
           "note": "2026-08-12 - was PRODUCED_LIVE, producer ir_drop_report_check, base_run benchmark-data/ic/spm/v1.9.96_gf180mcuD. That record was measured 2026-07-27 against the LIVE run tree this cell was later published from, at a moment when the tree did not carry this path, so the producer could be run and watched to write it. The published cell now carries the artefact tracked at HEAD, and produce_live refuses - correctly - to call a production LIVE against a tree that already holds the target. Corrected to the status the code itself prescribes for exactly this case (produce_live: \"the artefact is TRACKED AT HEAD ... in that case the entry is not a live production at all; it should be recorded PRODUCED_BY_RUN\"). Nothing was written and nothing was published: the bytes cited are the ones the commit already carried."
+        },
+        "reports/phase3/dynamic_ir.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/dynamic_ir.json",
+          "path": "reports/phase3/dynamic_ir.json",
+          "size_bytes": 1887,
+          "note": "2026-08-13 (vibe-ic#1077 D7, rebase onto a38902d1) - step 24 began DECLARING this output because its gate already names it positionally and unconditionally. Measured against the same run root as this step's three sibling entries. Present in 4 of the 10 admissible run roots (caravel v1.9.43, sha256 clean_run_v1427, spm v1.5.58, spm v1.9.96); the manifest records ONE witness per entry, as it does for the siblings, which are themselves not present in all 10."
         }
       }
     },

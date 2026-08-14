@@ -3231,6 +3231,20 @@ steps:
       # on run 2, and a verdict that depends on how many times it has been
       # evaluated is not a measurement.
       - "reports/phase3/ir_drop_signoff.json"
+      # DIMENSION 7, 2026-08-12. This step's gate names this file POSITIONALLY
+      # and UNCONDITIONALLY (`dynamic_ir_drop_check reports/phase3/dynamic_ir.json`
+      # below), and `dynamic_ir_drop_check` returns FAIL rc 1 when the report is
+      # absent or unreadable — so no run that passes this step can lack it, yet
+      # no step declared it. The producer is `dynamic_ir_vectored_emit`, which
+      # writes through an `out_json` FUNCTION PARAMETER; that is
+      # `matrix_d7_artifact_graph.RESOLUTION_LIMITS` entry 1 verbatim, which is
+      # why the AST producer index never resolved the write and W2 could only
+      # reach it through a run's write record. MEASURED with
+      # `flow_compliance_check.check_step` over all 12 published run roots:
+      # adding this entry changes 0 verdicts (7 of 7 roots that reach this step
+      # carry the file; the rest are already MISSING/SKIPPED-CONDITION for
+      # unrelated reasons), because absence already fails the gate.
+      - "reports/phase3/dynamic_ir.json"
     gate:
       all_of:
         # OUTPUT-PATH COLLISION (same shape as step 25's, fixed with it in
