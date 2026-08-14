@@ -43,11 +43,31 @@ def _mk(tmp_path, netlist_mtime, rtl_mtime, rtl_name="top.v"):
 
 
 def _cache_guard_block() -> str:
-    """The region of main() that decides whether to reuse a cached netlist."""
+    """The region of main() that decides whether to reuse a cached netlist.
+
+    Bounded by where the DECISION ends and the plan is built, not by how synth
+    happens to be invoked. The end anchor used to be ``plan.append(step_synth(``
+    — a direct call. Synth is now scheduled through a wrapper
+    (``plan.append(_spf.gate(step_synth, ...))``), so that literal stopped
+    matching and BOTH tests using this helper went red on clean main while the
+    property they check was intact: the guard still sets ``_nl_pdk_ok = False``
+    and still consults ``_stale_rtl_vs_netlist``.
+
+    The first ``plan.append(`` after the guard is the same boundary expressed
+    in terms of what the code DOES rather than which callable it names, so a
+    future wrapper cannot silently unbound the slice.
+
+    It must stay a hard failure rather than a fallback to end-of-file: a slice
+    that quietly grew to the rest of the module would still contain every
+    string these tests look for, so they would pass while checking nothing.
+    """
     start = RUNNER_SRC.find("_nl_pdk_ok = (netlist_existing.is_file()")
     assert start != -1, "netlist cache guard not found"
-    end = RUNNER_SRC.find("plan.append(step_synth(", start)
-    assert end != -1, "step_synth fallback not found after the cache guard"
+    end = RUNNER_SRC.find("plan.append(", start)
+    assert end != -1, (
+        "no plan.append(...) after the cache guard — the guard region could "
+        "not be bounded, so these assertions would be scanning the rest of "
+        "the module rather than the guard")
     return RUNNER_SRC[start:end]
 
 
