@@ -33612,7 +33612,32 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"sta -no_init -exit {tcl_c} 2>&1 | tee {out_dir}/sta_{corner}.log"
         )
-        rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt])
+        # NO `outputs=[rpt]` HERE, and #443's own rule is why: attesting a
+        # TRANSIENT is a false accusation, worse than the honest gap it
+        # replaces. `rpt` was durable when that audit ran (c07cd9de9,
+        # 2026-07-27); the black-box branch below made it conditional
+        # (a8f002d01, 2026-08-05). On that path OpenSTA exits 0, WRITES the
+        # report, and the `elif _bb:` arm then `rpt.unlink()`s it so a
+        # 0.00-slack artefact of an unlinked design cannot be read as clean.
+        #
+        # `_log_invocation` hashes declared outputs AT EXEC TIME, whatever
+        # happens after, and this row's `exit_code` is 0 — so it is not one of
+        # the failed rows `provenance_output_hash_completeness_check` excludes
+        # as PROVENANCE_OUTPUT_UNPRODUCED. The digest of a file that is about
+        # to be deleted would therefore stand as the newest production record
+        # of that path, and the audit would report
+        # PROVENANCE_OUTPUT_FILE_MISSING against a tool that ran and a runner
+        # that did exactly the right thing. Intermittent, too: it fires only on
+        # designs whose Liberty does not cover every master, which reads as a
+        # real defect in whichever design happens to trip it.
+        #
+        # Declaring nothing is the honest answer the recorder already has a
+        # word for — "Absent when the caller declared nothing or nothing it
+        # declared was produced — empty is honest". Restoring a declaration on
+        # the DURABLE path is a real improvement and a separate change: the
+        # ledger has a removal/supersede event shape for exactly this
+        # (`_removal_list`, #493 part 3) and this runner has no writer for it.
+        rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
         _bb = _sta_blackboxed_masters(out_dir / f"sta_{corner}.log")
         if rc != 0 or not rpt.is_file():
             # #437(c): NO single-corner stand-in. The old fallback copied
