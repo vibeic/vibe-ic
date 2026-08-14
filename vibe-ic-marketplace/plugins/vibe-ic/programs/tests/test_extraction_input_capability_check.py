@@ -51,7 +51,7 @@ end
 #: report's own `missing` list — four rounds of fitting a fixture to a checker,
 #: which measures how well I can satisfy it, not whether a real PDK passes.
 _REAL_TECH_IN_IMAGE = "/foss/pdks/sky130A/libs.tech/magic/sky130A.tech"
-_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.89"
+_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.97"
 
 
 def _real_tech(tmp_path):
