@@ -87,6 +87,58 @@ but do NOT gate: `DRT-0036` alone occurs **692** times as ordinary progress
 chatter, and the issue's subject is a warning that was not there last time.
 The choice is stated here so it is a decision on the record, not an omission.
 
+THE PER-STEP METRIC — #1081's THIRD ITEM, NOW THAT #1080 HAS LANDED
+===================================================================
+#1081 asks for three things, and the first — "count tool diagnostics by message
+id per step, AS A METRIC" — carried the issue's own caveat "(depends on the
+per-step metrics schema)". That dependency is `programs/step_metrics.py`,
+landed on `main` as `4a8c4bf6b` (#1080). Until then this program COUNTED per
+step and emitted nothing, so the count existed only inside a report nobody
+collects: `step_metrics collect` over a run this gate had just censused
+answered `0 metric(s) from 0 step(s)`, rc 2.
+
+`--emit-metrics <project>` folds the census into that schema — same scan, same
+definition of what an id is, no second parser (#1080's rule 1: emitted by the
+program that computed the number, never re-derived from a log).
+
+WHY NOT ORFS'S EXACT SPELLING. ORFS writes
+`cts__flow__warnings__count:ORD-0012`. That key is NOT conformant with the
+schema #1080 landed: `step_metrics.key_defect` requires every `__`-separated
+component to be lowercase alphanumeric/underscore, and `count:ORD-0012` is one
+component containing a colon and capitals. Emitting it would fail
+`step_metrics check`. So the id becomes its own component, lowercased with the
+hyphen collapsed, and the level moves to the TAIL where `step_metrics`'s
+`DIRECTIONS` table can read it::
+
+    reports_phase3__tool__id__rsz_0104__warning_count = 12
+    reports_phase3__tool__id__odb_0227__info_count    = 3
+    reports_phase3__tool__unkeyed__diagnostic_count   = 4
+    reports_phase3__tool__denied__diagnostic_count    = 0
+    reports_phase3__tool__gated__id_count             = 2
+    reports_phase3__tool__logs__scanned_count         = 370
+
+`warning_count` and `error_count` are the two tails `DIRECTIONS` declares
+`lower`, so a run-to-run `step_metrics diff` says *worse* rather than
+*undeclared* when a count grows — and an id that was NOT THERE LAST TIME shows
+up in the diff's `added` list, which is the same fact this gate blocks on,
+reported by the metric layer instead of asserted by it. `info_count` and the
+three disclosure counts are deliberately left with no declared direction: this
+gate does not decide whether fewer INFO lines is an improvement.
+
+The id -> component mapping is checked for collisions rather than assumed
+injective (`metrics_for_step` raises); two distinct ids silently merging into
+one metric would understate a count with no visible symptom.
+
+DENIALS ARE DISCLOSED — THEY USED TO BE COUNTED AND THEN DROPPED
+================================================================
+`scan_log` returns `denied_count` (ids read out of a sentence that denies them,
+vibe-ic#1241) and the comment below promises they are "counted, never silently
+dropped". `census` did not aggregate it, so no report and no metric ever
+carried the number: it was computed once per log and discarded. It is now
+aggregated per step, surfaced in the comparison report beside
+`unkeyed_not_compared`, and emitted as a metric — because "this run emitted
+nothing" and "this extractor discarded what it read" must not read alike.
+
 THE HONEST LIMIT
 ================
 A cell with no earlier run has nothing to compare against. That exits **2**
@@ -144,8 +196,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import _prose_polarity as _polarity   # vibe-ic#1241
+import step_metrics as _metrics       # vibe-ic#1080 — the per-step schema
 
 SCHEMA = "tool_diagnostic_id_census/v1"
+
+#: The `<domain>` this program owns inside #1080's `<step>__<domain>__<name>`.
+METRIC_DOMAIN = "tool"
 
 #: Family A — the OpenROAD suite's bracketed form. The level word is captured
 #: so INFO can be censused without gating. Prefix is left open (`[A-Z][A-Z0-9]*`)
@@ -339,9 +395,14 @@ def census(cell_root: Path) -> Dict[str, Any]:
         found = scan_log(text)
         step = _step_of(log, cell_root)
         slot = steps.setdefault(
-            step, {"logs": [], "ids": {}, "unkeyed_count": 0})
+            step, {"logs": [], "ids": {}, "unkeyed_count": 0,
+                   "denied_count": 0})
         slot["logs"].append(log.relative_to(cell_root).as_posix())
         slot["unkeyed_count"] += found["unkeyed_count"]
+        # vibe-ic#1081 — `scan_log` computed this and `census` threw it away,
+        # so the promise two comments up ("counted, never silently dropped")
+        # was true of the extractor and false of everything downstream.
+        slot["denied_count"] += found["denied_count"]
         for lvl, ids in found["ids"].items():
             dst = slot["ids"].setdefault(lvl, {})
             for k, v in ids.items():
@@ -365,6 +426,104 @@ def gated_ids(cen: Dict[str, Any]) -> Dict[str, List[str]]:
 
 def total_unkeyed(cen: Dict[str, Any]) -> int:
     return sum(s.get("unkeyed_count", 0) for s in cen.get("steps", {}).values())
+
+
+def total_denied(cen: Dict[str, Any]) -> int:
+    return sum(s.get("denied_count", 0) for s in cen.get("steps", {}).values())
+
+
+# ---------------------------------------------------------------------------
+# the per-step METRIC — #1081 item 1, through #1080's schema
+# ---------------------------------------------------------------------------
+#: `RSZ-0104` -> `rsz_0104`. One component of the metric key, not a suffix
+#: glued onto `count` with a colon: see WHY NOT ORFS'S EXACT SPELLING above.
+_RE_NOT_KEY_SAFE = re.compile(r"[^a-z0-9]+")
+
+#: level -> the metric TAIL. `warning_count`/`error_count` are exactly the two
+#: tails `step_metrics.DIRECTIONS` declares `lower`, so the differ can say
+#: better/worse instead of `undeclared`. INFO gets a tail with no declared
+#: direction ON PURPOSE — this program does not rule on whether fewer progress
+#: lines is an improvement.
+_LEVEL_TAIL = {"WARNING": "warning_count", "ERROR": "error_count",
+               "INFO": "info_count"}
+
+
+def _metric_id(diagnostic_id: str) -> str:
+    return _RE_NOT_KEY_SAFE.sub("_", diagnostic_id.lower()).strip("_")
+
+
+def metrics_for_step(step: str, slot: Dict[str, Any]) -> Dict[str, Any]:
+    """The #1080-conformant metrics for ONE step of a census.
+
+    Raises on an id-component collision. Two distinct ids folding onto one key
+    would silently ADD their counts, and the resulting metric would be wrong in
+    the direction that hides a diagnostic — no exception, no log line, just a
+    number that disagrees with the census beside it.
+    """
+    step_n = _metrics.normalize_step(step)
+    out: Dict[str, Any] = {}
+    origin: Dict[str, str] = {}
+    for level, tail in _LEVEL_TAIL.items():
+        for did, count in sorted(slot.get("ids", {}).get(level, {}).items()):
+            key = _metrics.key_for(step_n, METRIC_DOMAIN, tail,
+                                   "id", _metric_id(did))
+            if key in origin and origin[key] != did:
+                raise ValueError(
+                    f"tool_diagnostic_id_gate: ids {origin[key]!r} and {did!r} "
+                    f"both normalise to metric key {key!r}; refusing to merge "
+                    f"two diagnostics into one count")
+            origin[key] = did
+            out[key] = count
+    gated = sum(len(slot.get("ids", {}).get(lvl, {})) for lvl in GATED_LEVELS)
+    out[_metrics.key_for(step_n, METRIC_DOMAIN, "id_count", "gated")] = gated
+    out[_metrics.key_for(step_n, METRIC_DOMAIN, "scanned_count", "logs")] = \
+        len(slot.get("logs", []))
+    # The two disclosures, carried as metrics rather than only as report prose,
+    # so a reader of the METRICS cannot mistake "no new id" for "no new
+    # warning" either. See the family-C note and the denial note above.
+    out[_metrics.key_for(step_n, METRIC_DOMAIN, "diagnostic_count",
+                         "unkeyed")] = int(slot.get("unkeyed_count", 0))
+    out[_metrics.key_for(step_n, METRIC_DOMAIN, "diagnostic_count",
+                         "denied")] = int(slot.get("denied_count", 0))
+    return out
+
+
+def metrics_for_census(cen: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """{normalised step: {metric key: value}} for a whole census."""
+    return {_metrics.normalize_step(step): metrics_for_step(step, slot)
+            for step, slot in sorted(cen.get("steps", {}).items())}
+
+
+def emit_metrics(cen: Dict[str, Any], project: Path) -> List[Path]:
+    """Write this census into `<project>/reports/metrics/<step>.json`.
+
+    THIS PROGRAM'S OWN KEYS ARE REPLACED, NOT MERGED INTO. `step_metrics.emit`
+    merges by design, which is right when several programs contribute to one
+    step — but wrong for a re-emit of the SAME census over the same project: an
+    id that disappeared between two runs would keep its old count from the
+    earlier emit and the metric would report a diagnostic nothing emitted. So
+    every `<step>__tool__` key is dropped first, and only ours; another
+    program's contribution to the same step file is untouched.
+    """
+    written: List[Path] = []
+    for step_n, metrics in metrics_for_census(cen).items():
+        f = Path(project) / _metrics.METRICS_REL / f"{step_n}.json"
+        if f.is_file():
+            try:
+                prior = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                prior = {}
+            if isinstance(prior, dict):
+                mine = f"{step_n}__{METRIC_DOMAIN}__"
+                kept = {k: v for k, v in prior.items()
+                        if not k.startswith(mine)}
+                if len(kept) != len(prior):
+                    f.write_text(
+                        json.dumps(kept, indent=1, sort_keys=True) + "\n",
+                        encoding="utf-8")
+        written.append(_metrics.emit(Path(project), step_n, metrics,
+                                     domain=METRIC_DOMAIN))
+    return written
 
 
 # ---------------------------------------------------------------------------
@@ -491,6 +650,18 @@ def compare(cell_dir: Path, prev_dir: Path, acceptance: Path,
                      "KLayout emit these); counted, NOT compared — a change "
                      "here is invisible to this gate"),
         },
+        # vibe-ic#1081 — the third thing a reader must be able to tell apart:
+        # ids this extractor READ and then EXCLUDED because the sentence around
+        # them denied the emission (#1241). Counted since #1241, reported since
+        # now; before this it was computed per log and dropped by `census`.
+        "denied_not_counted": {
+            "current": total_denied(cur), "previous": total_denied(old),
+            "note": ("id-shaped tokens whose sentence denies the emission "
+                     "(e.g. 'no [WARNING X-0001] were emitted'); excluded from "
+                     "the comparison ON PURPOSE, disclosed so 'emitted "
+                     "nothing' cannot be confused with 'discarded what it "
+                     "read'"),
+        },
         "census_current": cur,
     }
     # VACUITY IS NOT CLEANLINESS — caught by this program's own two-arm demo,
@@ -522,6 +693,28 @@ def _emit(report: Dict[str, Any], out: Optional[str]) -> None:
         Path(out).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 
+def _emit_metrics_cli(cen: Dict[str, Any], project: Optional[str]) -> int:
+    """`--emit-metrics`, and a failure to emit is NOT a quiet no-op.
+
+    Returns 0 when nothing was asked for or the emit succeeded, 1 when it was
+    asked for and did not happen. A run that was told to publish a metric,
+    could not, and still exited 0 would leave the next comparison reading a
+    file that silently does not exist.
+    """
+    if not project:
+        return 0
+    try:
+        paths = emit_metrics(cen, Path(project))
+    except (ValueError, OSError) as exc:
+        print(f"[FAIL] tool_diagnostic_id_gate: could not emit per-step "
+              f"metrics into {project}: {exc}")
+        return 1
+    total = sum(len(m) for m in metrics_for_census(cen).values())
+    print(f"[INFO] emitted {total} per-step metric(s) across {len(paths)} "
+          f"step file(s) under {Path(project) / _metrics.METRICS_REL}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("cell_dir", help="published cell, e.g. "
@@ -533,6 +726,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="emit this cell's census and exit 0; no comparison")
     ap.add_argument("--previous", help="compare against this cell instead of "
                                        "the auto-discovered previous run")
+    ap.add_argument("--emit-metrics", metavar="PROJECT",
+                    help="fold this run's census into PROJECT's per-step "
+                         "metrics (#1080 schema, reports/metrics/<step>.json)")
     ap.add_argument("--today", help="ISO date for expiry evaluation (testing)")
     args = ap.parse_args(argv)
 
@@ -546,7 +742,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         _emit(cen, args.json)
         print(f"[INFO] tool_diagnostic_id_gate: censused {cen['logs_scanned']} "
               f"log(s), {len(gated_ids(cen))} gated id(s) in {cell.name}")
-        return 0
+        return _emit_metrics_cli(cen, args.emit_metrics)
 
     prev = Path(args.previous) if args.previous else find_previous(cell)
     if prev is None or not prev.is_dir():
@@ -560,6 +756,13 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{cell.name} — nothing compared. A first run is not a clean "
               f"run; {len(gated_ids(cen))} gated id(s) recorded as the future "
               f"baseline.")
+        # THE METRIC IS EMITTED EVEN HERE, and that is the point of the
+        # metric. NO_BASELINE means the COMPARISON could not run; it does not
+        # mean nothing was measured. Publishing this run's per-step counts is
+        # what gives the NEXT run something to be compared against — and the
+        # rc stays 2, because a recorded baseline is still not a clean run.
+        if _emit_metrics_cli(cen, args.emit_metrics):
+            return 1
         return 2
 
     today = date.fromisoformat(args.today) if args.today else date.today()
@@ -585,6 +788,11 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{', '.join(report['new_ids_accepted'])}")
     print(f"[INFO] {u['current']} unkeyed diagnostic(s) in this run were NOT "
           f"compared (no message id to key on)")
+    d = report["denied_not_counted"]
+    print(f"[INFO] {d['current']} id-shaped token(s) were read as DENIALS and "
+          f"excluded from the comparison (not emissions)")
+    if _emit_metrics_cli(report["census_current"], args.emit_metrics):
+        return 1
     return rc
 
 
