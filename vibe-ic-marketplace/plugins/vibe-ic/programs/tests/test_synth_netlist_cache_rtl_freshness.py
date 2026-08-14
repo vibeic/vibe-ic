@@ -82,12 +82,43 @@ def test_freshness_check_compares_mtimes_against_the_rtl_dir():
         "selector step_synth itself reads)")
 
 
+def _staleness_branch() -> str:
+    """The body of `if _stale_rtl:` — the RTL-staleness consequence, alone.
+
+    Scoped by INDENTATION rather than by a trailing literal, so it cannot rot
+    the way this module's other anchor did.
+
+    Why it must be scoped at all: the guard region now contains TWO
+    `_nl_pdk_ok = False` statements — this one, and a later producer-identity
+    guard (`if _nl_pdk_ok and not _synth_prod_ok:`). A search over the whole
+    region is satisfied by either, so deleting the RTL-staleness consequence
+    outright left the test GREEN. Measured with a mutation: replacing this
+    branch's assignment did not redden the test until the search was scoped
+    here. A later, unrelated addition had quietly made this assertion unable
+    to fail for its own subject.
+    """
+    block = _cache_guard_block()
+    m = re.search(r"^(?P<ind>[ \t]*)if _stale_rtl:[ \t]*$", block, re.M)
+    assert m, ("the RTL-staleness branch is gone: nothing acts on a stale "
+               "cache, so an RTL edit is a silent no-op again")
+    ind = len(m.group("ind"))
+    body = []
+    for line in block[m.end():].lstrip("\n").splitlines():
+        if line.strip() and (len(line) - len(line.lstrip())) <= ind:
+            break                      # dedented back to the `if` — branch over
+        body.append(line)
+    assert body, "the staleness branch has an empty body"
+    return "\n".join(body)
+
+
 def test_stale_rtl_forces_resynthesis():
     """Detecting staleness must actually clear the reuse flag."""
-    block = _cache_guard_block()
-    assert re.search(r"_nl_pdk_ok = False", block), (
-        "staleness is detected but the cache is still reused: the guard must "
-        "set the reuse flag False so step_synth re-runs")
+    branch = _staleness_branch()
+    assert re.search(r"_nl_pdk_ok = False", branch), (
+        "staleness is detected but the cache is still reused: the RTL-staleness "
+        "branch must set the reuse flag False so step_synth re-runs. (Scoped to "
+        "that branch on purpose — a later producer-identity guard also clears "
+        "the flag, and an unscoped search passes on its strength alone.)")
 
 
 def test_unprovable_freshness_is_not_trusted():
