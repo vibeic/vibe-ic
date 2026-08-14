@@ -763,6 +763,60 @@ _LOG_SINK_PIPE = "| tee "
 _PIPEFAIL_PREFIX = "set -o pipefail; "
 
 
+
+def _log_surviving_artefact(outputs, *, produced_by: str,
+                            marker: str | None = None) -> None:
+    """Record artefacts AFTER the verdict that decides whether they survive.
+
+    vibe-ic#1330. `_docker_exec(..., outputs=[...])` hashes the declared paths
+    the instant the tool returns, which is correct for the ~17 call sites whose
+    artefact is meant to survive. It is wrong for a call site that may DESTROY
+    its own output on inspection: `_emit_multi_corner_sta` unlinks the per-corner
+    report when OpenSTA black-boxed a master (#437(c) — `rc == 0` plus a written
+    report is not evidence anything was timed), and the ledger was left asserting
+    a digest for a file deliberately removed three statements later. The record
+    could not be audited either way: present digest, absent artefact.
+
+    Splitting the declaration off the invocation is what lets BOTH rules hold —
+    #437(c) still destroys a falsely-clean report, and ORGANIC-443 still forbids
+    a declared output being removed later in the same function, because nothing
+    is declared until it is known to survive.
+
+    A SEPARATE record kind, deliberately. Calling `_log_invocation` a second
+    time would emit two `invocation` rows for one tool run, which is a worse
+    misstatement than the one being fixed. `record: "artefact"` is additive: a
+    consumer reading `invocation` rows sees exactly what it saw before.
+
+    Silent when nothing survived — `_hash_declared_outputs` already omits paths
+    that do not exist, so an unlinked report simply produces no row. That is the
+    honest outcome and it needs no special case.
+    """
+    sink = _PROV_SINK
+    if sink is None:
+        return
+    _outs = _hash_declared_outputs(sink, outputs)
+    if not _outs:
+        return
+    entry = {
+        "record": "artefact",
+        "produced_by": produced_by,
+        "outputs": _outs,
+        "measured": True,
+        # Same idiom as _log_invocation: `_dt` is a FUNCTION-local alias
+        # elsewhere in this file, so referencing it here would NameError.
+        "timestamp": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if marker:
+        entry["marker"] = marker
+    try:
+        with (Path(sink) / "provenance.jsonl").open("a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:  # noqa: BLE001 — logging must never break the run
+        pass
+
+
 def _tool_status_not_the_log_sinks(cmd: str) -> str:
     """Make the TOOL's exit status survive a `| tee` log sink.
 
@@ -33676,7 +33730,12 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"sta -no_init -exit {tcl_c} 2>&1 | tee {out_dir}/sta_{corner}.log"
         )
-        rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt])
+        # vibe-ic#1330: DECLARED AFTER THE VERDICT, not before it. This is
+        # the one call site that may destroy its own output (the `_bb`
+        # branch below), so declaring `rpt` here would record a digest for
+        # a file removed three statements later. See
+        # `_log_surviving_artefact`, called on the surviving path only.
+        rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
         _bb = _sta_blackboxed_masters(out_dir / f"sta_{corner}.log")
         if rc != 0 or not rpt.is_file():
             # #437(c): NO single-corner stand-in. The old fallback copied
@@ -33717,6 +33776,11 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
                 f"netlist's technology and that every hard-macro .lib is staged.")
         else:
             any_emitted = True
+            # The corner LINKED and its report survives, so now it
+            # is an artefact this run can be held to.
+            _log_surviving_artefact(
+                [rpt], produced_by="_emit_multi_corner_sta",
+                marker=str(tcl_c))
     # The reports this call REUSED rather than produced, whenever they do not
     # carry the basis the inputs resolve to. Without this the run publishes
     # "basis=POST_ROUTE_SPEF … post-route multi-corner timing" over a directory
