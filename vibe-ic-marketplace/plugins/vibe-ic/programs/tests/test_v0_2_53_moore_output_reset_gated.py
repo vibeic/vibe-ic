@@ -19,6 +19,7 @@ negated-reset conjunction → out of this structural rule's scope).
 chip-AGNOSTIC: fixtures use generic TopModule/clk/reset/shift_ena shapes only.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,29 @@ from _specrtl_common import extract_spec_contract, parse_rtl_ports, strip_commen
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
+
+import pytest  # noqa: E402
+
+#: These tests RUN `gates_atomic.py` and then read the `gates.json` it writes.
+#: `gates_atomic.run()` catches only `TimeoutExpired`, so an absent iverilog
+#: raises an uncaught FileNotFoundError that kills the driver BEFORE it writes
+#: the report -- and the test then dies either on the missing file or on an
+#: assertion about a subprocess that crashed. Neither traceback says "the tool
+#: is not installed", which is the one thing a reader needs to know.
+#:
+#: iverilog is the whole requirement here, measured rather than assumed: with
+#: `yosys` hidden these files are 23/11/13/45 passed, and with `vvp` hidden the
+#: same -- so naming both would over-declare and skip on hosts that could have
+#: run. (#1409 is the opposite error: naming one tool where two are needed.)
+#:
+#: Every other test in this file calls pure rule functions and needs no
+#: toolchain, so the marker is per-test, never module-wide.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_gate = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="runs gates_atomic.py and reads the gates.json it writes; without "
+           "iverilog the gate dies before writing any report")
+
 
 RULE = "moore-output-reset-gated"
 
@@ -175,6 +199,7 @@ def _block_rules(run):
     return gates, {f["rule"] for f in blk.get("findings", [])}
 
 
+@_needs_gate
 def test_gate_auto_corrects_reset_gated_form(tmp_path):
     # v1.1.76: the registry's `behavioral_fsm` solver fires on this reset-pulse spec
     # ("assert shift_ena for 4 cycles then 0 forever") and emits the correct
@@ -196,6 +221,7 @@ def test_gate_auto_corrects_reset_gated_form(tmp_path):
     assert "reset-pulse counter" in emitted
 
 
+@_needs_gate
 def test_gate_emits_canonical_form(tmp_path):
     ds, run = _stage(tmp_path, _SPEC, _CANONICAL_RTL)
     r = _run_gate(ds, run)
