@@ -295,11 +295,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
 
     plugin = Path(a.root).resolve() if a.root else Path(__file__).resolve().parents[1]
-    repo = plugin
-    for _ in range(6):
-        if (repo / ".git").exists() or (repo / "tools" / "ci").is_dir():
-            break
-        repo = repo.parent
+    root = repo_root(plugin)
+    repo = root if root is not None else plugin
 
     if not (plugin / "programs").is_dir():
         print(f"[CANNOT DETERMINE] gate_is_wired: no programs/ under {plugin}. "
@@ -310,6 +307,27 @@ def main(argv=None) -> int:
     if not gates(plugin):
         print("[CANNOT DETERMINE] gate_is_wired: no gate found at all. NOT a "
               "pass.", file=sys.stderr)
+        return 2
+
+    # THE DENOMINATOR, SAID OUT LOUD (vibe-ic#1467). Half of `_EXECUTABLE_GLOBS`
+    # is anchored on the REPO root, and `tools/ci/repo_hygiene_gates.sh` alone
+    # is the only wiring several gates have. Read zero files from there and the
+    # verdict is not "these gates are unwired", it is "I could not look" — and
+    # until now the two printed the same sentence, with names under it.
+    n_plugin, n_repo = wiring_sources(plugin, repo)
+    print(f"  wiring sources read: {n_plugin} under {plugin}"
+          + (f" + {n_repo} under {repo}" if root is not None
+             else "  + NO REPO ROOT FOUND"))
+    if n_repo == 0:
+        print(f"[CANNOT DETERMINE] gate_is_wired: the repo-root wiring corpus "
+              f"is EMPTY — `{'`, `'.join(_REPO_GLOBS)}` matched no file "
+              + (f"under {repo}." if root is not None else
+                 f"because no ancestor of {plugin} within 6 levels carries "
+                 f"`tools/ci/`.")
+              + f" {len(now)} gate(s) read as unwired against that corpus, and "
+                f"every gate whose only caller lives at the repo root is among "
+                f"them by construction. A failed look is not a finding. NOT a "
+                f"pass.", file=sys.stderr)
         return 2
 
     bpath = Path(a.baseline) if a.baseline else plugin / "programs" / _BASELINE_NAME
