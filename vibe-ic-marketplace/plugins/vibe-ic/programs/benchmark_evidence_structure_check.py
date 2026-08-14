@@ -67,6 +67,44 @@ WHAT THIS GATE ENFORCES (each is a named nonconformance on failure)
                     passed this rule; it is a unit the rule never got to judge.
                     See ZERO DENOMINATOR below — that distinction is the whole
                     subject of the rule, moved one level up.
+                      Under `--changed-since` it is judged as a DELTA, not
+                    absolutely. See PRE-EXISTING IS NOT ADDED below.
+
+PRE-EXISTING IS NOT ADDED (#1538)
+=================================
+`--changed-since` promises grandfathering — the module header, the CLI help and
+`_changed_ic_dirs` all say a push is answerable for what it ADDED — and the
+IC-level rule did not deliver it. `_changed_ic_dirs` used the baseline only to
+SELECT which IC directories to inspect; `check_ic_level_layout` then judged each
+selected IC ABSOLUTELY. Since the selection fires when a file INSIDE a
+pre-existing stray changes, modifying legacy run output was reported as though
+the change had created it.
+
+Measured on `75776dbbb`, a commit adding ZERO paths (one tracked file appended
+to) inside each IC that carries run output: 8 of the 9 refused, rc 1, naming
+3-20 pre-existing entries apiece. The remedy the repository itself prints —
+`test_matrix_d3_outputs_produced`'s "commit a run tree that carries it", whose
+run roots live in those very directories — was therefore refused by the hook.
+
+So under `--changed-since` the rule now judges the DELTA:
+
+  * an IC-level entry NOT present at the baseline is ADDED, and FAILS. That is
+    the regression the rule exists to stop and it is untouched.
+  * an entry already present at the baseline is CARRIED. It is named, counted
+    and disclosed on every run, and it does not veto a change that did not
+    create it.
+  * with NO readable baseline the rule falls back to its ABSOLUTE form and says
+    so. "The gate could not read the baseline" must never quietly become "every
+    entry is allowed" — that is the fail-open this repo removed from
+    `gate_host_independence_check` and from this program's own `--changed-since`
+    plumbing in #1254.
+
+The carried set is a RATCHET, not standing permission: it is read from the
+baseline COMMIT (`git ls-tree`), never from a file in the tree, so nothing that
+can be checked in is able to widen it. It shrinks as entries are migrated into a
+cell or retired, and any name not already in it fails. The full `--tree` form
+(no `--changed-since`) still reports every legacy entry, so the size of the
+divergence stays measurable while it is being worked down.
 
 ZERO DENOMINATOR: A UNIT THAT EXAMINED NOTHING IS NOT A UNIT THAT PASSED (#967)
 ==============================================================================
@@ -229,6 +267,12 @@ class FolderResult:
     # True iff the unit's denominator was ZERO. Excluded from BOTH the numerator
     # and the denominator of the roll-up, and disclosed as `[SKIP]`.
     skipped: bool = False
+    # #1538 — how many IC-level entries this unit CARRIED from the baseline and
+    # did not count against the change. None when no baseline applied (the
+    # absolute form), so a --json consumer can tell "grandfathered nothing" from
+    # "grandfathering was not in play at all". A silent waiver is the reading
+    # this program exists to prevent, so the number is printed on every run.
+    grandfathered: Optional[int] = None
     failures: List[str] = field(default_factory=list)   # "RULE: message"
     checks: Dict[str, Optional[bool]] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)     # "RULE: why it passed differently"
@@ -577,6 +621,16 @@ def _changed_ic_dirs(base: str, ic_dirs: List[Path],
     run output at the IC level is caught, and one that merely publishes beside
     pre-existing strays is not. Full `--tree` (no --changed-since) still reports
     every legacy violation.
+
+    SELECTION IS NOT A VERDICT (#1538). This function decides which IC dirs are
+    LOOKED AT; `check_ic_level_layout` decides what is held against the change,
+    and until #1538 it judged every selected IC absolutely. Because the filter
+    below fires on a file changing INSIDE a pre-existing stray, "selected" was
+    reached by 8 of the 9 ICs on a commit that added nothing — so the promise in
+    the paragraph above was made here and broken there. The baseline register
+    (`_baseline_ic_strays`) is what now keeps it, and this filter is unchanged: a
+    NEW stray always has changed files under it, so nothing it must catch
+    escapes selection.
     """
     changed, mode = _changed_file_set(base, ic_dirs[0] if ic_dirs else Path.cwd())
     if changed is None:
@@ -613,6 +667,57 @@ def _changed_evidence_roots(base: str, targets: List[Path]) -> Tuple[Optional[Li
             if any(str(c).startswith(str(t.resolve()) + os.sep) or c == t.resolve()
                    for c in changed)]
     return kept, f"changed-since {base}"
+
+
+def _baseline_ic_strays(base: str, ic_dir: Path) -> Tuple[Optional[Set[str]], str]:
+    """Names of the IC-level entries that were ALREADY strays at `base` (#1538).
+
+    Returns `(names, why)`, or `(None, why)` when the baseline could not be read
+    — the caller must then judge ABSOLUTELY and disclose, never grandfather.
+
+    The register is derived from the baseline COMMIT, by the same allowed-entry
+    rule the live walk uses, and from nothing else. That is deliberate and is the
+    difference between a ratchet and standing permission: a checked-in allowlist
+    can be appended to by the same push it would excuse, and `git ls-tree <base>`
+    cannot. An IC directory absent at `base` answers the empty set — everything
+    it now carries is ADDED, which is the correct reading for a brand-new IC.
+    """
+    ic_dir = Path(ic_dir).resolve()
+    repo = _git_toplevel(ic_dir)
+    if repo is None:
+        return None, "not a git repo"
+    repo = Path(repo).resolve()
+    try:
+        rel = ic_dir.relative_to(repo).as_posix()
+    except ValueError:
+        return None, f"{ic_dir} is outside the git repo at {repo}"
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "ls-tree", "-z", base, "--", rel + "/"],
+            capture_output=True, text=True, check=False, timeout=60)
+    except Exception as exc:
+        return None, f"git ls-tree error: {exc}"
+    if out.returncode != 0:
+        first = (out.stderr.strip().splitlines() or [""])[0]
+        return None, f"git ls-tree {base} failed: {first}"
+    strays: Set[str] = set()
+    for record in out.stdout.split("\0"):
+        if "\t" not in record:
+            continue
+        meta, path = record.split("\t", 1)
+        fields = meta.split()
+        if len(fields) < 2:
+            continue
+        kind = fields[1]                      # blob / tree / commit
+        name = path.rsplit("/", 1)[-1]
+        if not name:
+            continue
+        if kind == "tree" and name == "input":
+            continue
+        if kind == "tree" and _NAME_RE.match(name):
+            continue
+        strays.add(name)
+    return strays, f"baseline {base}"
 
 
 def ic_level_entries(ic_dir: Path,
@@ -685,9 +790,31 @@ def ic_level_strays(ic_dir: Path, include_staged: bool = False) -> List[Path]:
     return ic_level_entries(ic_dir, include_staged=include_staged)[1]
 
 
+def _name_of(entry: Path) -> str:
+    return entry.name + ("/" if entry.is_dir() else "")
+
+
+def _entries_phrase(n: int) -> str:
+    return f"{n} entr{'y' if n == 1 else 'ies'}"
+
+
 def check_ic_level_layout(ic_dir: Path,
-                          include_staged: bool = False) -> FolderResult:
-    """Validate the `ic/<IC>/` directory itself against the layout contract."""
+                          include_staged: bool = False,
+                          baseline: Optional[Set[str]] = None,
+                          baseline_why: str = "") -> FolderResult:
+    """Validate the `ic/<IC>/` directory itself against the layout contract.
+
+    `baseline` is the set of entry NAMES that were already strays at the
+    `--changed-since` base (#1538). Given one, the rule judges the DELTA: an
+    entry not in the set is ADDED and fails; one in the set is CARRIED, disclosed
+    and not counted against this change.
+
+    `baseline is None` is the ABSOLUTE form — every stray fails. That is the
+    plain `--tree` shape, and it is ALSO the fallback when a baseline was
+    expected and could not be read; pass the reason as `baseline_why` so the
+    finding says which of the two it is. A baseline the gate could not read is
+    not a baseline that grandfathers.
+    """
     res = FolderResult(path=str(ic_dir), kind="ic-root", ic=ic_dir.name)
     published, strays = ic_level_entries(ic_dir, include_staged=include_staged)
     res.examined = len(published)
@@ -705,17 +832,57 @@ def check_ic_level_layout(ic_dir: Path,
                  "that examined nothing is not a unit that passed.")
         return res
     if not strays:
+        if baseline is not None:
+            res.grandfathered = 0
         res.ok("IC_LEVEL_LAYOUT")
         return res
-    named = ", ".join(s.name + ("/" if s.is_dir() else "") for s in strays)
-    res.fail(
-        "IC_LEVEL_LAYOUT",
-        f"{len(strays)} entr{'y' if len(strays) == 1 else 'ies'} at the IC level "
-        f"{'is' if len(strays) == 1 else 'are'} neither input/ nor a "
-        f"v<ver>_<PDK> cell: {named}. Run output "
-        f"here is attributable to no plugin version and no PDK. Move it into the "
-        f"cell it belongs to, or retire it deliberately — this rule records the "
-        f"divergence, it does not decide which.")
+
+    _remedy = ("Run output here is attributable to no plugin version and no PDK. "
+               "Move it into the cell it belongs to, or retire it deliberately — "
+               "this rule records the divergence, it does not decide which.")
+
+    # ---- ABSOLUTE form: no baseline in play, or none that could be read ----
+    if baseline is None:
+        msg = (f"{_entries_phrase(len(strays))} at the IC level "
+               f"{'is' if len(strays) == 1 else 'are'} neither input/ nor a "
+               f"v<ver>_<PDK> cell: "
+               f"{', '.join(_name_of(s) for s in strays)}. {_remedy}")
+        if baseline_why:
+            # #1538 — the fallback is STATED. Silence here would read exactly
+            # like the delta form having found nothing pre-existing, which is
+            # the opposite conclusion.
+            msg += (f" (No baseline was readable — {baseline_why} — so every "
+                    f"entry at this level is judged absolutely rather than as a "
+                    f"delta. A baseline the gate could not read is not a "
+                    f"baseline that grandfathers.)")
+        res.fail("IC_LEVEL_LAYOUT", msg)
+        return res
+
+    # ---- DELTA form (#1538): what did THIS change add? -------------------
+    added = [s for s in strays if s.name not in baseline]
+    carried = [s for s in strays if s.name in baseline]
+    res.grandfathered = len(carried)
+    if carried:
+        res.notes.append(
+            f"IC_LEVEL_LAYOUT: {len(carried)} pre-existing "
+            f"entr{'y' if len(carried) == 1 else 'ies'} at this level "
+            f"{'is' if len(carried) == 1 else 'are'} carried from the baseline "
+            f"and grandfathered — recorded, NOT counted against this change: "
+            f"{', '.join(_name_of(s) for s in carried)}. This register may only "
+            f"SHRINK: it is read from the baseline commit, never from a file in "
+            f"the tree, so nothing checked in can widen it, and any entry not "
+            f"already in it fails. Run without --changed-since for the whole "
+            f"divergence.")
+    if added:
+        res.fail(
+            "IC_LEVEL_LAYOUT",
+            f"{_entries_phrase(len(added))} at the IC level "
+            f"{'was' if len(added) == 1 else 'were'} ADDED by this change and "
+            f"{'is' if len(added) == 1 else 'are'} neither input/ nor a "
+            f"v<ver>_<PDK> cell: "
+            f"{', '.join(_name_of(s) for s in added)}. {_remedy}")
+        return res
+    res.ok("IC_LEVEL_LAYOUT")
     return res
 
 
@@ -774,6 +941,14 @@ def _print_folder(res: FolderResult) -> None:
         if res.skipped:
             suffix = (f"  (IC={res.ic} IC-level layout: examined nothing — "
                       f"{_n_entries(res.examined or 0)}; NOT counted as a unit)")
+        elif res.conforms and res.grandfathered:
+            # #1538 — a PASS bought by grandfathering says so ON THE PASS LINE.
+            # "all allowed" here would be false, and it is the sentence a reader
+            # skims.
+            suffix = (f"  (IC={res.ic} IC-level layout: "
+                      f"{_n_entries(res.examined or 0)} examined, 0 added by "
+                      f"this change, {res.grandfathered} pre-existing and "
+                      f"grandfathered)")
         elif res.conforms:
             suffix = (f"  (IC={res.ic} IC-level layout: "
                       f"{_n_entries(res.examined or 0)} examined, all allowed)")
@@ -807,13 +982,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--changed-since", metavar="BASE", default=None,
                     help="only validate discovered folders with a file changed "
                          "since BASE (added/modified) — the CI diff-scoped shape; "
-                         "pre-existing folders are grandfathered")
+                         "pre-existing folders are grandfathered, and IC-level "
+                         "entries already present at BASE are judged as carried "
+                         "rather than added (#1538) — disclosed on every run, "
+                         "and an unreadable BASE falls back to absolute")
     ap.add_argument("--json", metavar="OUT", default=None,
                     help="write a machine-readable summary JSON here")
     args = ap.parse_args(argv)
 
     targets: List[Path] = [Path(p) for p in args.paths]
     ic_dirs: List[Path] = []
+    # str(ic_dir) -> (names already stray at the base, why). Empty when no
+    # --changed-since is in play, which is the ABSOLUTE form.
+    ic_baselines: Dict[str, Tuple[Optional[Set[str]], str]] = {}
     if args.tree:
         targets.extend(_discover_evidence_folders(Path(args.tree)))
         # The IC directories themselves. Only --tree walks these: a caller who
@@ -864,6 +1045,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         kept_ic, _ = _changed_ic_dirs(args.changed_since, ic_dirs,
                                       args.include_staged)
         ic_dirs = kept_ic or []
+        # #1538 — the PRE-EXISTING REGISTER, read per IC off the baseline commit.
+        # Computed here rather than inside the rule so the rule stays a pure
+        # function of (tree, register) and can be probed directly by a mutation
+        # arm, including the unreadable-baseline arm.
+        for _ic in ic_dirs:
+            ic_baselines[str(_ic)] = _baseline_ic_strays(args.changed_since, _ic)
         if not kept and not ic_dirs:
             print(f"benchmark_evidence_structure_check: no evidence folders "
                   f"changed since {args.changed_since} — nothing to enforce.")
@@ -872,7 +1059,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     results: List[FolderResult] = []
     for ic in ic_dirs:
-        results.append(check_ic_level_layout(ic, include_staged=args.include_staged))
+        _base, _why = ic_baselines.get(str(ic), (None, ""))
+        results.append(check_ic_level_layout(
+            ic, include_staged=args.include_staged,
+            baseline=_base,
+            baseline_why="" if _base is not None else _why))
     for t in targets:
         if not t.exists():
             r = FolderResult(path=str(t))
@@ -902,6 +1093,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 + "; ".join(f"{r.ic or Path(r.path).name}={_n_entries(r.examined or 0)}"
                             for r in skipped)
                 + ") — counted as neither conformant nor nonconformant")
+    # #1538 — the size of the carried register is part of the roll-up, not a
+    # detail buried in a per-unit note. A grandfathered entry is a divergence
+    # this run chose not to count against the change, and a reader must be able
+    # to see how many of those there were without reading every line.
+    grandfathered = sum(r.grandfathered or 0 for r in results)
+    if grandfathered:
+        tail += (f", {_entries_phrase(grandfathered)} at the IC level carried "
+                 f"from {args.changed_since} and grandfathered (recorded, not "
+                 f"counted against this change; run without --changed-since to "
+                 f"see the whole divergence)")
     print(f"\nbenchmark_evidence_structure_check: "
           f"{passed}/{len(examined)} conformant, {failed} nonconformant{tail}")
 
@@ -912,6 +1113,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "conformant": passed,
                  "nonconformant": failed,
                  "skipped_examined_nothing": len(skipped),
+                 "grandfathered_ic_level_entries": grandfathered,
                  "discovered": len(results),
                  "folders": [asdict(r) for r in results]},
                 indent=2),
