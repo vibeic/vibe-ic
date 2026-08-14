@@ -232,6 +232,33 @@ def _load_generator():
     return mod
 
 
+#: vibe-ic#1451 — this test's cost is the WHOLE MATRIX, paid inside one test:
+#: `census_rows()` -> `CV.enforcement_census` -> `_run_outcome_reports`, which
+#: spawns a nested pytest per dimension module. Its aggregate cannot fit the
+#: harness bound, and the arithmetic is not close:
+#:
+#:     _OUTCOME_TIMEOUT_S = 60s   x   8 dimension modules (d1..d8)  =  480s
+#:     harness bound (tools/gatekeeper-land.sh)                     =  180s
+#:
+#: MEASURED on clean main: 282.27s under a 600s bound, on a host at load 145.
+#: The issue reports 259.93s on a quieter one — so it straddles 180s depending
+#: on what else the fleet is doing, which is the worst shape for a bound: it
+#: passes for the author and kills the SESSION for the verifier.
+#:
+#: WHY NOTHING CAUGHT IT. `ci_harness_timeout_ceiling_check` reasons PER CALL —
+#: this file's own comment above says it "permits any ONE blocking call at
+#: most" — so eight sequential 60s calls each clear the ceiling while their sum
+#: cannot. The inner bounds are individually compliant and collectively
+#: impossible. That gap is the general finding; see #1451.
+#:
+#: WHY A MARKER RATHER THAN A SMALLER INNER BOUND. Cutting `_OUTCOME_TIMEOUT_S`
+#: to fit 8 runs inside 180s means 22s per dimension module, which would start
+#: converting slow-but-honest module runs into the "did not finish" assertion —
+#: trading a session kill for a false red. The honest move is for a genuinely
+#: expensive test to DECLARE the time it needs, so it either completes or fails
+#: on its own instead of taking every other file's verdict down with it.
+#: 600 = the 480s structural worst case plus headroom for the census render.
+@pytest.mark.timeout(600)
 def test_the_census_block_is_fresh():
     """Re-derive it and refuse any drift.
 
