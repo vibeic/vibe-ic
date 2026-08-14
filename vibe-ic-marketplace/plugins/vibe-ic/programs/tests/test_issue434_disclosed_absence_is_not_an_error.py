@@ -383,13 +383,26 @@ def test_MUTATION_deleting_the_disclosure_makes_the_gate_LOUDER(tmp_path):
     a dangling pointer again — which is #414's defect, not its fix."""
     cell = _real_cell(tmp_path)
     rows = _rows(cell)
+    stripped = 0
     for r in rows:
-        r.pop("outputs_pruned_at_publish", None)
+        if r.pop("outputs_pruned_at_publish", None) is not None:
+            stripped += 1
         r.pop("outputs_pruned_reason", None)
     _write_rows(cell, rows)
     verdict, findings, counts = G.audit_counted(cell)
     assert verdict == "FAIL"
-    assert _rules(findings, "ERROR").count("PROVENANCE_OUTPUT_FILE_MISSING") == 7
+    # `== 7` was the published cell's row count. THE COUNT IS DERIVED FROM THE
+    # MUTATION: every row whose marker this test just deleted must come back as
+    # a dangling pointer — one error per row stripped, no more and no fewer.
+    # That is the experiment's own arithmetic, so republishing the cell with a
+    # different number of pruned rows changes both sides together.
+    assert stripped > 0, (
+        "the real cell carries no `outputs_pruned_at_publish` marker, so this "
+        "experiment deleted nothing and proves nothing")
+    assert _rules(findings, "ERROR").count(
+        "PROVENANCE_OUTPUT_FILE_MISSING") == stripped, (
+        f"deleting {stripped} marker(s) must produce {stripped} dangling-"
+        f"pointer error(s)")
     assert counts["not_verifiable_here"] == 0
 
 
