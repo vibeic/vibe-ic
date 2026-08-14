@@ -551,7 +551,87 @@ run_unselectable_pytest
 run "unselectable-test census is not stale" \
     python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
 
-run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh"
+
+# THE HYGIENE TIER, WITH THE SUBSET RULE THE TEST TIER ALREADY HAD (#1498).
+#
+# This used to be a bare `run`, i.e. pass/fail on exit code — measured against a
+# `main` that fails it. Clean `origin/main` at 764fea6df carried two findings
+# (`:latest` not at the anchor; a HOST-DEPENDENT verdict), so every batch
+# inherited both and failed this tier regardless of its own content. Across six
+# rebuilt batches (135 PRs), every one that reached a verdict failed here. The
+# test tier had long since answered the same question the other way: the base is
+# red, so what must be empty is the DIFFERENCE, not the count.
+#
+# THE DEFAULT IS UNCHANGED. With no baseline in the environment this is exactly
+# the old gate — any non-zero exit FAILS. The subset rule applies only where a
+# real measurement of the base exists to subtract, which is the differential
+# `gatekeeper-verify-merge.sh` already runs (it produces `base_land.log` from a
+# second arm today). Nothing here is tolerated on the strength of an assumption
+# about what the base "probably" fails.
+#
+#   GATEKEEPER_HYGIENE_REPORT=<path>    write this run's --summary-json record
+#                                       there. Changes NO verdict, exactly like
+#                                       GATEKEEPER_PYTEST_JUNIT above; it exists
+#                                       so the base arm can produce a baseline
+#                                       without running the suite a third time.
+#   GATEKEEPER_HYGIENE_BASELINE=<path>  the base arm's record. Enables the rule.
+#   GATEKEEPER_HYGIENE_BASELINE_HOST=<id>  the host that record was measured on.
+#                                       REQUIRED with the above and never
+#                                       inferred — findings here are
+#                                       host-dependent (one of the base's own
+#                                       two is literally a HOST_DEPENDENT_
+#                                       VERDICT), so a baseline that does not
+#                                       say where it came from cannot be
+#                                       subtracted from anything.
+run_hygiene_gates() {
+  local out rc json vout vrc
+  json="$(mktemp -t gk_hyg.XXXXXX)"
+  out="$(bash "$ROOT/tools/ci/repo_hygiene_gates.sh" --summary-json "$json" 2>&1)"
+  rc=$?
+  # The record is the artefact a differential needs; copy it before any verdict
+  # so a FAILING run still yields one. A baseline that only exists when the base
+  # was green would be useless precisely when it is needed.
+  if [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ]; then
+    cp "$json" "$GATEKEEPER_HYGIENE_REPORT" 2>/dev/null \
+      || echo "  (could not write GATEKEEPER_HYGIENE_REPORT — no record emitted)"
+  fi
+  if [ "$rc" -eq 0 ]; then
+    printf '  PASS  repo hygiene gates\n'
+    rm -f "$json"; return
+  fi
+  # No baseline → the gate this file has always had.
+  if [ -z "${GATEKEEPER_HYGIENE_BASELINE:-}" ]; then
+    printf '  FAIL  repo hygiene gates\n'
+    printf '%s\n' "$out" \
+      | grep -aE '^[[:space:]]*(FAIL|ERROR)|\[FAIL\]|\[ERROR\]|FAILED' \
+      | head -12 | sed 's/^/          /'
+    printf '%s\n' "$out" | tail -5 | sed 's/^/          /'
+    FAILED=1; rm -f "$json"; return
+  fi
+  # A baseline was named, so the question becomes "did THIS tree introduce a
+  # finding". The delta program answers only that, and REFUSES (rc 2) rather
+  # than guessing — a refusal blocks exactly like an introduction.
+  vout="$(python3 "$PROGRAMS/hygiene_finding_delta.py" \
+            --base "${GATEKEEPER_HYGIENE_BASELINE}" --candidate "$json" \
+            --base-host "${GATEKEEPER_HYGIENE_BASELINE_HOST:-}" \
+            --candidate-host "$(uname -n)" 2>&1)"
+  vrc=$?
+  if [ "$vrc" -eq 0 ]; then
+    printf '  PASS  repo hygiene gates (subset of the base — see below)\n'
+    printf '%s\n' "$vout" | head -20 | sed 's/^/          /'
+  else
+    printf '  FAIL  repo hygiene gates (rc=%s from the base differential)\n' "$vrc"
+    printf '%s\n' "$vout" | head -20 | sed 's/^/          /'
+    # The underlying failures too: the differential names WHICH findings are
+    # new, and the suite output says what each one actually is.
+    printf '%s\n' "$out" \
+      | grep -aE '^[[:space:]]*(FAIL|ERROR)|\[FAIL\]|\[ERROR\]' \
+      | head -8 | sed 's/^/          /'
+    FAILED=1
+  fi
+  rm -f "$json"
+}
+run_hygiene_gates
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 
 # #1029 — the standing assertion, executed: everything above ran against this
