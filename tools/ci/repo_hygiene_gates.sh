@@ -275,8 +275,8 @@ run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs
 #
 # ONE LINE, no `\` continuation — the denominator probe and the host-independence
 # probe both parse this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
-# host-independence: EXCLUDE — reads live queue state over the network, so two invocations can differ for a reason that is not in the commit
 uncheckable_until 2027-02-28 "needs an AUTHENTICATED gh + network: it reads live queue state over the network, and rc 2 means the queue could not be asked at all (a base that genuinely does not reach main is rc 1)"
+# host-independence: EXCLUDE — reads live queue state over the network, so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "PR bases reach main" "$ROOT" python3 "$PG/pr_base_reachability_check.py" --repo-dir "$ROOT" --advisory
 
 # vibe-ic#306/#316 — the audit that measures which gates can actually stop a
