@@ -21,6 +21,7 @@ ACCEPTANCE (from the issue ## 驗收):
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import triage_record_check as mod
@@ -204,7 +205,35 @@ def test_482_skill_compliance_tests_still_pass():
     assert comp_test.exists()
     spec = importlib.util.spec_from_file_location("obm_compliance_test", comp_test)
     m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+    # THE SHIPPED TREE MUST NOT BE WRITTEN, AND AN IMPORT WRITES (vibe-ic#1417).
+    #
+    # `comp_test` lives under `skills/`, so importing it makes CPython drop
+    # `skills/open-benchmark-methodology/tests/__pycache__/test_compliance.
+    # cpython-*.pyc` INSIDE the shipped tree. `__pycache__/` is gitignored, so
+    # `git status skills/` stays empty, `git add -A` takes nothing and
+    # suite_write_guard skips it as regenerable — every instrument says clean.
+    #
+    # `test_tools_and_integration.test_shipped_skills_tree_is_untouched_by_this_module`
+    # is the one that can see it, because it digests BYTES rather than asking
+    # git. Reproduced on clean main `3d13e2c59`, two files in one session:
+    #
+    #     this file alone                        34 passed, 0 pyc
+    #     the digest module alone                19 passed, 0 pyc
+    #     this file + the digest module    1 FAILED, 33 passed, 1 pyc
+    #
+    # and `gatekeeper-land.sh:213` fails the WHOLE landing when the tree moves
+    # under the gates, so one cached byte-code file costs a batch its stamp.
+    #
+    # Suppressed rather than deleted afterwards, matching `test_api_health.py`
+    # and `test_matrix_63x8_census_freshness.py`: a test that writes and then
+    # removes still races any concurrent digest, and the answer to "may a test
+    # write here" is no, not "may it tidy up".
+    _prev = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(m)
+    finally:
+        sys.dont_write_bytecode = _prev
     # compliance.yaml still loads and declares the skill correctly.
     reqs = m.load_requirements()
     assert reqs.get("skill") == "open-benchmark-methodology"
