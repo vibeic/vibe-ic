@@ -572,6 +572,14 @@ def _fill_project(tmp_path: Path, density: dict) -> Path:
     rep.mkdir(parents=True)
     (rep / "density.json").write_text(json.dumps(density) + "\n")
     (rep / "density.rpt").write_text("# openroad filler_placement\n")
+    # `metal_fill_emit` is in this step's gate list and writes
+    # `reports/phase3/cmp_fill_emit.json` (metal_fill_emit.py:82). A real
+    # successful run leaves it — the committed
+    # `benchmark-data/ic/spm/v1.9.96_<pdk>/reports/phase3/` carries one — so a
+    # fixture without it is not the success this helper claims to build.
+    p3 = proj / "reports" / "phase3"
+    p3.mkdir(parents=True, exist_ok=True)
+    (p3 / "cmp_fill_emit.json").write_text('{"emitted": true}\n')
     return proj
 
 
