@@ -1136,12 +1136,29 @@ _OUTCOME_TIMEOUT_S = 60
 #:
 #: DERIVED, not picked: `_path_layout.gate_timeout_s()` is the production gate
 #: budget this repo already bounds subprocesses with (`flow_compliance_check`,
-#: `matrix_mutation_ledger`). The modules run sequentially inside ONE gate, so
-#: each gets that budget over the number of modules actually DISCOVERED --
-#: 900 // 8 = 112 s, 1.65x the measured worst, which restores the 1.7x rule the
-#: original bound was chosen by and keeps the sum inside the gate's budget.
-#: Sizing it off the discovered count rather than a literal means adding a
-#: dimension narrows each share instead of silently overrunning that budget.
+#: `matrix_mutation_ledger`), and each module gets THE WHOLE of it -- 900 s,
+#: 13x the measured worst of 68 s.
+#:
+#: NOT a per-module share. An earlier draft of this block divided the budget by
+#: the discovered module count (`900 // 8 = 112 s`) on the reasoning that the
+#: eight runs share one deadline. That premise was then MEASURED to be false --
+#: `timeout` appears zero times in `repo_hygiene_gates.sh` and zero times in
+#: `_gate_dispatch.sh`, so there is no shared deadline to divide -- and
+#: dividing made the bound TIGHTER than the budget the caller actually has,
+#: which is the defect this change exists to remove, one layer down. See the
+#: `del n_modules` comment in `_standalone_outcome_timeout_s`, which is where
+#: that decision is recorded.
+#:
+#: So `n_modules` does not narrow anything, and the prose that said it did is
+#: gone rather than softened. MEASURED on this head, so the block cannot drift
+#: from the function again without the numbers disagreeing:
+#:
+#:     gate_timeout_s()                    900
+#:     _standalone_outcome_timeout_s(1)    900
+#:     _standalone_outcome_timeout_s(8)    900
+#:     _standalone_outcome_timeout_s(16)   900
+#:     _standalone_outcome_timeout_s(64)   900
+#:     _outcome_timeout_s(8) under pytest   60   (unchanged, by design)
 #:
 #: HONEST LIMITS, stated rather than implied:
 #:   * no wall-clock bound is strictly host-independent; this restores a margin
