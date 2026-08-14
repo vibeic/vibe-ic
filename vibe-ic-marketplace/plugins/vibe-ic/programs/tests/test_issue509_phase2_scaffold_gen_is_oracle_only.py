@@ -71,8 +71,59 @@ def _flow_specs() -> List[Path]:
     return sorted(p for p in FLOW.rglob("*") if p.is_file())
 
 
+def _declaring_lines(text: str) -> str:
+    """`text` with FULL-LINE comments dropped, nothing else removed.
+
+    #509 asks whether a flow specification NAMES the oracle — i.e. whether a
+    step reaches it. Prose that merely mentions it is not a leak, and the flow
+    yaml has exactly one such mention, at line 317:
+
+        # states and zero transitions, and `emit_fsm_v()`'s body really is
+
+    Scanning the raw text made that comment indistinguishable from a step, so
+    this guard reported a false RED against a flow that names the oracle
+    nowhere. Same shape as #1449 (an order test that located a stage by
+    `index()` and matched a comment) and the inverse of #1012 (a census that
+    counted a program named in a comment as WIRED).
+
+    ONLY full-line comments are dropped, deliberately. A trailing `# ...` on a
+    content line is left in place, so a token hidden after one is still caught.
+    For an oracle-leak guard a false NEGATIVE is the dangerous direction, and
+    the conservative choice is to keep scanning anything that shares a line
+    with content.
+    """
+    return "\n".join(l for l in text.split("\n")
+                     if not l.lstrip().startswith("#"))
+
+
 def _mentions_oracle(text: str) -> List[str]:
-    return [t for t in ORACLE_TOKENS if t in text]
+    declaring = _declaring_lines(text)
+    return [t for t in ORACLE_TOKENS if t in declaring]
+
+
+def test_the_guard_reads_DECLARATIONS_not_PROSE():
+    """PAIRED GUARD: dropping comments must not make the check blind.
+
+    Two directions, because only one of them is safe to get wrong:
+
+      * a comment naming the oracle is NOT a leak -> must not fire;
+      * a CONTENT line naming it IS a leak -> must still fire, including when
+        the token sits after a trailing `#` on that line, since only FULL-line
+        comments are dropped.
+    """
+    comment_only = "steps:\n  # emit_fsm_v() is described here in prose\n  - id: 1\n"
+    assert _mentions_oracle(comment_only) == [], (
+        "a flow comment that merely mentions the oracle was read as a leak")
+
+    declares = "steps:\n  - id: 1\n    gate:\n      run: emit_fsm_v\n"
+    assert _mentions_oracle(declares), (
+        "a flow step that NAMES the oracle stopped being caught — the guard "
+        "has gone blind, which is the failure this repair must not cause")
+
+    trailing = "steps:\n  - id: 1   # calls emit_fsm_v\n"
+    assert _mentions_oracle(trailing), (
+        "a token after a trailing comment on a CONTENT line must still be "
+        "caught; only full-line comments are dropped")
 
 
 def _parse(path: Path) -> ast.Module:
