@@ -98,6 +98,12 @@ class ReapReport(NamedTuple):
     reaped: List[str]
     live: List[str]      # a peer is holding the lock: left alone, on purpose
     kept: List[Tuple[str, str]]   # (path, why it was not touched)
+    #: A candidate that DISAPPEARED between the listing and the inspection —
+    #: a peer finished and cleaned up in the window. Reported rather than
+    #: swallowed: on a shared host it is the difference between "quiet" and
+    #: "several other runs are alive right now", and a reaper that hides it
+    #: cannot be told apart from one that is not running at all.
+    vanished: List[str] = []
 
 
 def _tmp_root() -> Path:
@@ -184,52 +190,68 @@ def reap(prefix: str, remover: Optional[Callable[[Path], None]] = None,
     reaped: List[str] = []
     live: List[str] = []
     kept: List[Tuple[str, str]] = []
+    vanished: List[str] = []
     try:
         candidates = sorted(p for p in base.iterdir()
                             if p.is_dir() and p.name.startswith(prefix))
     except OSError:
-        return ReapReport([], [], [])
+        return ReapReport([], [], [], [])
     for d in candidates:
-        if exclude is not None and d.resolve() == exclude.resolve():
-            continue
-        lock = d / LOCK_NAME
-        if lock.is_file():
-            held = _is_locked(lock)
-            if held is None:
-                kept.append((str(d), "its lock sidecar could not be opened"))
-                continue
-            if held:
-                live.append(str(d))
-                continue
-        else:
-            if not reap_unlocked:
-                kept.append((str(d), "no lock sidecar, and the caller reports "
-                                     "a peer that predates the lock may be "
-                                     "alive — unattributable, so kept"))
-                continue
-            age = time.time() - d.stat().st_mtime
-            if age < legacy_max_age_s:
-                kept.append((str(d), "no lock sidecar and only %ds old — it may "
-                                     "be a peer between mkdtemp and lock"
-                                     % int(age)))
-                continue
-            if _referenced_by_a_process(d):
-                kept.append((str(d), "no lock sidecar, but a live process "
-                                     "references the path"))
-                continue
-        if remover is not None:
-            try:
-                remover(d)
-            except Exception as exc:                       # noqa: BLE001
-                kept.append((str(d), "remover raised %s: %s"
-                             % (type(exc).__name__, exc)))
-                continue
-        shutil.rmtree(d, ignore_errors=True)
-        if d.exists():
-            kept.append((str(d), "rmtree left it standing"))
-        else:
-            reaped.append(str(d))
-    return ReapReport(reaped, live, kept)
+      # THE LISTING IS A SNAPSHOT, AND PEERS ARE REMOVING THEIR OWN SCRATCH
+      # WHILE WE WALK IT. `d.stat()` below raised FileNotFoundError the moment
+      # a peer finished in that window, and the exception escaped `reserve()`
+      # into the caller — a reaper that crashes because someone else tidied up.
+      # Measured on this fleet (31 agents, one /tmp): it took down two tests of
+      # an unrelated PR's verification run, and did not reproduce on a re-run,
+      # which is exactly how it stayed invisible.
+      #
+      # A directory that is already gone needs no reaping. It is NOT `reaped`
+      # (we did not remove it), NOT `kept` (it is not there to keep), so it is
+      # reported as its own outcome.
+      try:
+          if exclude is not None and d.resolve() == exclude.resolve():
+              continue
+          lock = d / LOCK_NAME
+          if lock.is_file():
+              held = _is_locked(lock)
+              if held is None:
+                  kept.append((str(d), "its lock sidecar could not be opened"))
+                  continue
+              if held:
+                  live.append(str(d))
+                  continue
+          else:
+              if not reap_unlocked:
+                  kept.append((str(d), "no lock sidecar, and the caller reports "
+                                       "a peer that predates the lock may be "
+                                       "alive — unattributable, so kept"))
+                  continue
+              age = time.time() - d.stat().st_mtime
+              if age < legacy_max_age_s:
+                  kept.append((str(d), "no lock sidecar and only %ds old — it may "
+                                       "be a peer between mkdtemp and lock"
+                                       % int(age)))
+                  continue
+              if _referenced_by_a_process(d):
+                  kept.append((str(d), "no lock sidecar, but a live process "
+                                       "references the path"))
+                  continue
+          if remover is not None:
+              try:
+                  remover(d)
+              except Exception as exc:                       # noqa: BLE001
+                  kept.append((str(d), "remover raised %s: %s"
+                               % (type(exc).__name__, exc)))
+                  continue
+          shutil.rmtree(d, ignore_errors=True)
+          if d.exists():
+              kept.append((str(d), "rmtree left it standing"))
+          else:
+              reaped.append(str(d))
+      except FileNotFoundError:
+          vanished.append(str(d))
+          continue
+    return ReapReport(reaped, live, kept, vanished)
 
 
 def reserve(prefix: str, remover: Optional[Callable[[Path], None]] = None,
