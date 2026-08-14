@@ -197,28 +197,161 @@ def enforced_cells() -> List[Tuple[str, int]]:
 # ══════════════════════════════════════════════════════════════════════
 # The review gate on the ledger's own size
 # ══════════════════════════════════════════════════════════════════════
+def grid_findings(states: Dict[Tuple[str, int], str],
+                  step_ids: Sequence[str],
+                  pinned_grid: Tuple[int, int, int],
+                  pinned_not_enforced: Sequence[Tuple[str, int, str]],
+                  ) -> Tuple[str, ...]:
+    """Everything this grid does that the pin was not measured against.
+
+    PURE, and deliberately so. The control below drives it in BOTH directions
+    with synthetic grids, which is the only way to show that a gate whose live
+    answer is "nothing wrong" would still say no — and it plants nothing in the
+    corpus to do it. A guard whose only falsification is a manual experiment is
+    a guard nobody re-runs.
+
+    Returns one finding per cell, never a bare boolean: the count is what
+    vibe-ic#1421 records as insufficient, because ``482 -> 479`` cannot say
+    whether three enforcements were retired on purpose or three gates stopped
+    catching, and two cells trading places says nothing at all.
+    """
+    out: List[str] = []
+    measured = (len(step_ids), 8,
+                sum(1 for v in states.values() if v == "ENFORCED"))
+    if measured != tuple(pinned_grid):
+        out.append(f"the grid's shape changed: measured {measured} "
+                   f"(steps, dimensions, ENFORCED cells), pinned "
+                   f"{tuple(pinned_grid)}")
+
+    pinned = {(str(s), int(d)): str(st) for s, d, st in pinned_not_enforced}
+    live = {k: v for k, v in states.items() if v != "ENFORCED"}
+
+    for cell in sorted(set(live) - set(pinned)):
+        out.append(f"{cell[0]}/d{cell[1]} LEFT ENFORCED and is now "
+                   f"{live[cell]} — it is not in LEDGER_CELLS_NOT_ENFORCED")
+    for cell in sorted(set(pinned) - set(live)):
+        was = pinned[cell]
+        now = states.get(cell)
+        if now is None:
+            out.append(f"{cell[0]}/d{cell[1]} was pinned {was} and is no "
+                       f"longer a cell of this grid")
+        else:
+            out.append(f"{cell[0]}/d{cell[1]} was pinned {was} and is now "
+                       f"{now} — a cell GAINED enforcement")
+    for cell in sorted(set(pinned) & set(live)):
+        if pinned[cell] != live[cell]:
+            out.append(f"{cell[0]}/d{cell[1]} changed state "
+                       f"{pinned[cell]} -> {live[cell]}")
+    return tuple(out)
+
+
 def test_the_ledger_grid_matches_what_was_measured():
-    """Steps, dimensions and the ENFORCED count are recomputed, then compared.
+    """Steps, dimensions, the ENFORCED count AND the cells that are not.
 
     Everything else in this file computes from the live flow. This one place
-    compares the computed value against a number a human signed off on, for
+    compares the computed value against numbers a human signed off on, for
     exactly the reason ``GRID_AS_MEASURED`` exists in the coverage meta-test: a
     64th step would be picked up everywhere and the arithmetic would keep
     partitioning tidily, which is precisely the silent shape to refuse.
+
+    THE COUNT ALONE WAS NOT ENOUGH, and vibe-ic#1421 is the record of it. A
+    flow-yaml change reclassified three cells and moved the count from 482 to
+    479 in a commit that never touched this file — so the failure read as a
+    batch INTERACTION, and the only repair the message offered was to re-pin
+    the number, which is indistinguishable from covering up three gates that
+    stopped catching. Worse, the pin's own bisect note records ``23d96bf5``
+    swapping two cells "for a net change of zero": a real state change the
+    scalar could not see at all. The inventory names the cell in both cases.
     """
-    states = cell_states()
-    measured = (len(F.step_ids()), 8,
-                sum(1 for v in states.values() if v == "ENFORCED"))
-    assert measured == L.LEDGER_AS_MEASURED, (
-        f"the ledger's grid changed: measured {measured} "
-        f"(steps, dimensions, ENFORCED cells), pinned "
-        f"{L.LEDGER_AS_MEASURED}.\n"
+    findings = grid_findings(cell_states(), F.step_ids(),
+                             L.LEDGER_AS_MEASURED, L.LEDGER_CELLS_NOT_ENFORCED)
+    assert findings == (), (
+        "the ledger's grid no longer matches what was measured:\n  "
+        + "\n  ".join(findings) + "\n"
         f"steps now in the flow that no ledger entry was measured against: "
         f"{sorted(set(F.normalize_id(s) for s in F.step_ids()) - measured_steps())}\n"
-        f"Every ENFORCED cell needs a mutation that was RUN against it. Run "
-        f"`python3 programs/matrix_mutation_ledger.py --census --resolve`, add "
-        f"the measured entries, then update LEDGER_AS_MEASURED in the same "
-        f"change.")
+        "Every ENFORCED cell needs a mutation that was RUN against it. Run "
+        "`python3 programs/matrix_mutation_ledger.py --census --resolve`, add "
+        "the measured entries, then update LEDGER_AS_MEASURED *and* "
+        "LEDGER_CELLS_NOT_ENFORCED in the SAME change as the flow edit that "
+        "moved them — never after it. A cell moving OUT of ENFORCED must say "
+        "which cell and why; a lowered count with no named cell is the shape "
+        "this gate exists to refuse.")
+
+
+def test_the_grid_gate_names_the_cell_that_moved():
+    """The control: this gate says no, and says WHICH cell, in both directions.
+
+    Driven against :func:`grid_findings` with synthetic copies of the live
+    grid. Nothing is written and no subprocess is launched, so it costs
+    milliseconds and runs on every invocation rather than living in a comment.
+
+    The fourth case is the one that justifies the inventory existing. A cell
+    leaving ENFORCED and another entering it in the same change leaves the
+    count at exactly the pinned value, so the tuple comparison this file
+    shipped before vibe-ic#1421 is GREEN on it — asserted here directly, not
+    described — while the inventory reports both cells by name.
+    """
+    live = dict(cell_states())
+    pinned_grid = L.LEDGER_AS_MEASURED
+    pinned_cells = L.LEDGER_CELLS_NOT_ENFORCED
+
+    def shape(states):
+        """Exactly the comparison this gate made before the inventory."""
+        return (len(F.step_ids()), 8,
+                sum(1 for v in states.values() if v == "ENFORCED"))
+
+    def moved(*pairs):
+        """A COPY of the live grid with each ``(cell, state)`` applied."""
+        out = dict(live)
+        for cell, state in pairs:
+            out[cell] = state
+        return out
+
+    # 0. the live grid, unmodified. If this is not silent the cases below
+    #    prove nothing, so it is asserted here rather than assumed.
+    assert grid_findings(live, F.step_ids(), pinned_grid, pinned_cells) == ()
+
+    an_enforced = sorted(k for k, v in live.items() if v == "ENFORCED")[0]
+    a_pinned = (str(pinned_cells[0][0]), int(pinned_cells[0][1]))
+
+    # 1. a cell LOSES enforcement -> named, with the state it landed in.
+    lost = moved((an_enforced, "NA"))
+    found = grid_findings(lost, F.step_ids(), pinned_grid, pinned_cells)
+    assert any(f"{an_enforced[0]}/d{an_enforced[1]} LEFT ENFORCED" in f
+               for f in found), found
+
+    # 2. a cell GAINS enforcement -> named. The count moves the other way, so
+    #    a pin that only ever grew would miss nothing here; the point is that
+    #    the cell is named rather than left to a diff of two integers.
+    gained = moved((a_pinned, "ENFORCED"))
+    found = grid_findings(gained, F.step_ids(), pinned_grid, pinned_cells)
+    assert any(f"{a_pinned[0]}/d{a_pinned[1]} was pinned" in f
+               and "GAINED enforcement" in f for f in found), found
+
+    # 3. a non-ENFORCED cell changes KIND (a live NA becoming a registered
+    #    waiver, or the reverse). The count cannot move at all.
+    other = "WAIVED" if live[a_pinned] == "NA" else "NA"
+    switched = moved((a_pinned, other))
+    assert shape(switched) == tuple(pinned_grid)
+    found = grid_findings(switched, F.step_ids(), pinned_grid, pinned_cells)
+    assert any(f"{a_pinned[0]}/d{a_pinned[1]} changed state" in f
+               for f in found), found
+
+    # 4. THE NET-ZERO SWAP. One cell out, one cell in, count unchanged.
+    swapped = moved((an_enforced, "NA"), (a_pinned, "ENFORCED"))
+    assert shape(swapped) == tuple(pinned_grid), (
+        "the swap must leave the shape tuple identical, or this case is not "
+        "testing what it claims to")
+    found = grid_findings(swapped, F.step_ids(), pinned_grid, pinned_cells)
+    assert any(f"{an_enforced[0]}/d{an_enforced[1]} LEFT ENFORCED" in f
+               for f in found), found
+    assert any(f"{a_pinned[0]}/d{a_pinned[1]} was pinned" in f
+               for f in found), found
+    assert not any("the grid's shape changed" in f for f in found), (
+        "the shape arm must be SILENT on a net-zero swap — that silence is "
+        "the defect the inventory was added to cover, and if the shape arm "
+        "starts firing here this control stops proving anything: " + str(found))
 
 
 @lru_cache(maxsize=1)

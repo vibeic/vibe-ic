@@ -1685,7 +1685,97 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: against P0 on 2026-08-11 and REDDENED it. Raising this number without that
 #: replay would be exactly the "widen the baseline until it is green" move the
 #: gate exists to refuse.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 482)
+#:
+#: MOVED 482 -> 479 on 2026-08-14 (vibe-ic#1421). THREE cells left ENFORCED and
+#: they are NAMED in :data:`LEDGER_CELLS_NOT_ENFORCED` below — M2/d3, M3/d3 and
+#: M4/d3 — which is the whole reason that inventory now exists. `bcd444425`
+#: ("the mixed-signal steps were never unpublished", #1159) recorded those three
+#: steps as dormant: all four mixed-signal steps carry the same step-level
+#: ``condition: {files_exist: [phase1/analog/analog_block_list.json]}`` and that
+#: path occurs ZERO times in ``git ls-tree -r HEAD``, so the steps have never
+#: run here and dimension 3 answers NA rather than pretending to measure them.
+#:
+#: The drop is NOT the ledger being re-recorded to match a gate that stopped
+#: catching, and the difference is checkable rather than asserted. Dimension 3's
+#: ``matrix_na_precondition`` RE-DERIVES the dormancy live on every call from
+#: the flow yaml and the admissible run roots — publish any tree carrying the
+#: condition file and all three cells go back to ENFORCED and this pin reddens
+#: in the other direction. A cell that was silently losing its mutation would
+#: have no such live precondition to show, and lowering the count for one is the
+#: move this pin exists to refuse.
+#:
+#: THE COMMIT THAT CAUSED THE MOVE DID NOT MAKE IT, and that is the defect
+#: vibe-ic#1421 records. #1159 moved every counter it could see — the d3
+#: manifest's ``_LIVE_ENTRY_COUNT``, the 63x8 ledger's entry totals — and could
+#: not see this one, because it lives in ``programs/`` rather than the test
+#: tree and no diff connects a flow-yaml edit to it. It presented as a batch
+#: INTERACTION (no PR in the batch touches this file) when it is one PR and one
+#: number.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 479)
+
+#: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
+#: owning dimension module answers. The COMPANION to the count above, and the
+#: reason it is here rather than folded into that tuple: **a count cannot name
+#: what moved, and two cells trading places move nothing.**
+#:
+#: That is not hypothetical, and it is not only history. The bisect recorded
+#: above found ``23d96bf5`` swapping step 12 between dimensions 2 and 5 "for a
+#: net change of zero" — a real state change on two real cells that the scalar
+#: was structurally unable to report, and it went unreported. Pinned as an
+#: inventory, the same swap is two findings that name both cells.
+#:
+#: The SAME change that forced the -3 carries a live second instance. Diffing
+#: the eight modules' answers across ``6011b4886`` -> ``75776dbb`` gives FOUR
+#: moved cells, not three: M1/d3 went WAIVED -> NA when its waiver was
+#: withdrawn for the same dormancy reason. That cell was never ENFORCED on
+#: either side, so it contributes nothing to 482 -> 479 and the count cannot
+#: mention it. It is in this tuple, so a reader can see it.
+#:
+#: It also decides the question the count alone leaves open, which is the one
+#: vibe-ic#1421 is about: 482 -> 479 could be three enforcements deliberately
+#: retired or three gates that quietly stopped catching, and no reader of the
+#: number can tell. A reader of this tuple sees WHICH three and in WHAT state,
+#: so the diff that lowers it has to say what it is doing.
+#:
+#: Measured 2026-08-14 on ``75776dbb`` from the eight dimension modules'
+#: ``matrix_cell_state``, the same live source the count is summed from. 25
+#: cells: 10 WAIVED (a registered, argued waiver) and 15 NA (a precondition the
+#: module re-derives live). 504 - 25 = 479, and the gate asserts that
+#: arithmetic rather than trusting it.
+LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
+    # ── dimension 2 ───────────────────────────────────────────────────
+    ("1", 2, "WAIVED"),
+    ("35", 2, "WAIVED"),
+    ("P0", 2, "NA"),
+    # ── dimension 3 ───────────────────────────────────────────────────
+    ("6", 3, "WAIVED"),
+    ("39", 3, "WAIVED"),
+    ("40", 3, "NA"),
+    ("41", 3, "NA"),
+    ("42", 3, "NA"),
+    ("43", 3, "NA"),
+    ("44", 3, "NA"),
+    ("FS1", 3, "NA"),
+    ("M1", 3, "NA"),
+    # M2-M4/d3: ENFORCED -> NA on 2026-08-14 (#1159), the -3 above.
+    ("M2", 3, "NA"),
+    ("M3", 3, "NA"),
+    ("M4", 3, "NA"),
+    ("P0", 3, "NA"),
+    # ── dimension 5 ───────────────────────────────────────────────────
+    ("12", 5, "WAIVED"),
+    # ── dimension 6 ───────────────────────────────────────────────────
+    ("DT2", 6, "WAIVED"),
+    # ── dimension 7 ───────────────────────────────────────────────────
+    ("7", 7, "WAIVED"),
+    ("23", 7, "WAIVED"),
+    ("FS1", 7, "WAIVED"),
+    ("M1", 7, "WAIVED"),
+    ("P0", 7, "NA"),
+    # ── dimension 8 ───────────────────────────────────────────────────
+    ("FS1", 8, "NA"),
+    ("P0", 8, "NA"),
+)
 
 
 # ══════════════════════════════════════════════════════════════════════
