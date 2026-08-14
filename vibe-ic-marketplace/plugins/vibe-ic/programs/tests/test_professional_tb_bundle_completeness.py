@@ -281,7 +281,10 @@ def test_DEFECT_functional_coverage_is_measured_against_the_models_policy(
 def test_GUARD_absent_report_is_still_not_applicable(tmp_path):
     res = G.check(tmp_path)
     assert res["verdict"] == "NOT_APPLICABLE"
-    assert G.main([str(tmp_path)]) == 0
+    # rc 2 since vibe-ic#564 — the disclosed-skip tier, which does not fail a
+    # run. The GUARD's subject is unchanged: an absent report is still
+    # NOT_APPLICABLE and still never a false FAIL.
+    assert G.main([str(tmp_path)]) == 2
 
 
 def test_GUARD_functional_mismatch_still_fails_first(tmp_path):

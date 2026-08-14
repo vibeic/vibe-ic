@@ -113,9 +113,21 @@ disclosed one in the meantime.
 
 chip-AGNOSTIC: no chip / vendor / SKU literal; keys off the report and the
 producer's own declarations only.
-Contract: exit 0 = PASS / N-A, exit 1 = functional mismatch or a declared
-bundle that is incomplete where its tree IS present, exit 2 = NOT CHECKED
-(the declared bundle tree is absent from this copy of the project) or IO error.
+Contract: exit 0 = PASS, exit 1 = functional mismatch, a declared bundle that
+is incomplete where its tree IS present, or an EMPTY DECLARATION (the report is
+here and describes a bundle of nothing), exit 2 = NOT CHECKED (the declared
+bundle tree is absent from this copy of the project), NOT APPLICABLE (no report
+at all — the step did not run), or IO error.
+
+THE TWO ZEROS ARE NOT THE SAME ANSWER (vibe-ic#564). A gate that read nothing
+must say WHY it read nothing, in the exit code and not only in prose:
+
+    no report at all          the step did not run; the gate could NOT look   -> 2
+    report, `files: []`       the step ran and declared nothing; it COULD look -> 1
+
+Collapsing those two into one rc is how "I could not look" becomes
+indistinguishable from "I looked and it was fine", which is the whole subject
+of this gate's own campaign.
 """
 from __future__ import annotations
 
@@ -166,6 +178,53 @@ def _resolve_bundle_dir(project: Path, out_dir: Any) -> Optional[Path]:
     except (ValueError, OSError):
         return None
     return literal if literal.is_dir() else None
+
+
+def _empty_declaration(rec: Dict[str, Any]) -> Optional[str]:
+    """Why `_bundle_report` declined, when the decline is the producer's fault.
+
+    A zero denominator has two causes and they are DIFFERENT ANSWERS
+    (vibe-ic#564):
+
+    * the corpus is genuinely empty — no report at all, the step did not run
+      for this project. The gate could not look. That is the caller's
+      ``NOT_APPLICABLE`` branch, and it is a disclosed skip (rc 2).
+    * the SELECTION produced nothing the gate can act on — the report IS here,
+      so the step ran and the input is present, and the producer named
+      artefacts without saying where they are. The gate CAN look; what it finds
+      is a declaration it cannot follow. That is a defect asserted from a
+      present input (rc 1), not an absence.
+
+    Returns the reason when this is the second case, else ``None``.
+
+    NARROWED, AND THE NARROWING IS THE POINT. My first version also failed
+    ``files: []`` and a non-list ``files``. Both are wrong, and the repo had
+    already said so: `test_GUARD_no_declaration_means_nothing_owed[rec2]` pins
+    ``{"status": "PASS", "out_dir": "", "files": []}`` — labelled *empty
+    declaration* in the fixture itself — as a legitimate ``PASS``, because
+    `step_professional_tb_gen` SKIPs for a class with no derivable interface
+    and older reports carry no bundle. **A producer that declared nothing owes
+    nothing.** That control caught the overreach; it is not narrowed around,
+    it is obeyed.
+
+    What survives is the one shape no control covers and no reading of
+    "declared nothing" reaches: ``files`` NON-EMPTY with no ``out_dir``. The
+    producer named artefacts and gave nowhere to look for them, so the gate
+    verified none of the files it was told about and returned PASS anyway.
+    That is a declaration the gate cannot act on, not an absent declaration.
+
+    Measured over the corpus: all 8 committed `professional_tb.json` reports
+    declare 5 files WITH an `out_dir`, so no shipped run meets this — zero
+    false positives, and the assertion is forward-looking.
+    """
+    files = rec.get("files")
+    if isinstance(files, list) and files and not rec.get("out_dir"):
+        return ("the producer's report declares " + str(len(files))
+                + " bundle file(s) but no `out_dir`, so there is nowhere to "
+                "look for them. The gate verified NONE of the files it was "
+                "told about — a declaration it cannot act on is not the same "
+                "as no declaration at all.")
+    return None
 
 
 def _bundle_report(project: Path, rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -277,6 +336,12 @@ def check(project: Path) -> Dict[str, Any]:
         "status": rec.get("status"), "dut_kind": rec.get("dut_kind"),
         "ran_cocotb": rec.get("ran_cocotb"),
     }
+    if bundle is None:
+        why = _empty_declaration(rec)
+        if why is not None:
+            res["verdict"] = "EMPTY_DECLARATION"
+            res["reason"] = why
+            return res
     if bundle is not None:
         res["bundle"] = bundle
         fc = _functional_coverage(
@@ -333,17 +398,36 @@ def main(argv=None) -> int:
         # output rather than the exit code.
         print("VACUOUS_PASS: professional_tb_check — " + str(res.get("reason")))
         return 2
+    if verdict == "EMPTY_DECLARATION":
+        # THE OTHER ZERO. The report is present, so the step RAN and the input
+        # is here -- the gate could look, and what it found is a producer that
+        # declared a bundle of nothing while reporting a non-failing status.
+        # That is a defect asserted from a PRESENT input, which is why it is
+        # rc 1 and not the rc 2 disclosed-skip tier: rc 2 means "I could not
+        # look", and here the gate looked. See `_empty_declaration`.
+        print("[FAIL] professional_tb_check — " + str(res.get("reason")))
+        return 1
     if verdict == "NOT_APPLICABLE":
-        # vibe-ic#1115. The branch above already gets this right for
-        # NOT_CHECKED; NOT_APPLICABLE is the SAME case -- "no
-        # professional_tb.json (step did not run)" -- and fell through to a
-        # plain rc 0, which `flow_compliance_check` records as PASS. The
-        # producer emitted nothing and the checker read the absence as consent.
-        # rc stays 0 (an absent optional step must not fail a run); what
-        # changes is that the flow stops recording "checked, fine".
+        # vibe-ic#1115 disclosed this in prose and kept rc 0, reasoning that an
+        # absent optional step must not fail a run. The disclosure was right;
+        # the rc was the half that did not land. `gate_zero_denominator_refuses
+        # _check` measured the consequence: the P0 umbrella reads EXIT CODES,
+        # not prose, so the flow still recorded a silent pass and the gate
+        # showed up as the ONE ZERO_DENOMINATOR_EXITS_ZERO finding in 534.
+        #
+        # rc 2 does not fail a run. It is this file's own disclosed-skip
+        # convention -- the NOT_CHECKED branch above already returns it for the
+        # analogous case, and `flow_compliance_check` maps rc 2 through
+        # `_VACUOUS_HINT_PREFIX` to "n/a (input not present)". So #1115's
+        # concern is satisfied by rc 2, not by rc 0.
+        #
+        # This also makes the gate agree with every one of its peers: of the
+        # 534 programs probed, 23 state a zero population and 23 refuse, and
+        # `_ZERO_IS_A_PASS` -- the registry for a zero that is a correct pass --
+        # is deliberately EMPTY. An exemption here would have been the first.
         print("VACUOUS_PASS: professional_tb examined 0 testbench report(s) — "
               + str(res.get("reason", "the producing step left nothing to check")))
-        return 0
+        return 2
     if verdict == "PASS":
         return 0
     if verdict == "IO_ERROR":
