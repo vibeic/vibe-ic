@@ -332,7 +332,7 @@ def _published_cells():
         return []
     return sorted(c for d in BD_IC.iterdir() if d.is_dir()
                   for c in d.iterdir()
-                  if c.is_dir() and G._parse_cell_name(c.name) is not None)
+                  if c.is_dir() and G._cell_ordinal(c.name) is not None)
 
 
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
@@ -367,35 +367,142 @@ def test_the_prefix_coverage_claim_is_re_derived():
         f"put exactly '{' '.join(sorted(prefixes))}' in the docstring. A new "
         f"prefix means a tool started emitting diagnostics and the coverage "
         f"claim a reader relies on is now understated.")
-    assert "4b22e36ea" in doc, (
+    assert "94754771" in doc or "4b22e36ea" in doc, (
         "the docstring states raw file counts; they must stay attributed to the "
         "commit they were measured at, or they read as standing facts about a "
         "tree that has since moved")
 
 
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
-def test_the_published_corpus_yields_no_comparable_pair():
-    """5 of 5 cells exit NO_BASELINE on this commit — and that is DISCLOSED.
+def test_the_corpus_pair_resolves_and_the_gate_fires():
+    """THE REPLACEMENT for a test that was meant to die, and did.
 
-    THIS TEST IS MEANT TO DIE. It fails the day a second cell of the same PDK is
-    published, which is the day the gate can finally compare something and the
-    day the docstring's "today it is every cell" paragraph becomes false. A
-    disclosure that outlives its premise is exactly the rot this repo keeps
-    finding, so the premise is asserted rather than described.
+    Its predecessor asserted "5 of 5 cells exit NO_BASELINE" and said it would
+    fail the day a pair became comparable. That day came from a CODE fix rather
+    than from a publish: the resolver was reading the PDK out of the directory
+    name, so the repository's `clean_run_*` naming family was invisible and the
+    one genuinely like-for-like pair was skipped. The premise died exactly as
+    designed; this asserts what replaced it.
+
+    Backed by a COMMITTED artefact, not a fixture: `DRT-0120` is absent from
+    v1422's `reports/phase3/drc_router.rpt` and present in v1427's, and that is
+    re-derived here rather than trusted.
     """
-    cells = _published_cells()
-    assert cells, "no published cells found — the probe itself is broken"
-    comparable = [(c.name, G.find_previous(c).name)
-                  for c in cells if G.find_previous(c) is not None]
-    assert not comparable, (
-        f"a comparable cell pair now EXISTS: {comparable}. The gate can compare "
-        f"for real, so remove the 'today it is every cell' disclosure from the "
-        f"docstring, re-run the gate over that pair, and record what it finds — "
-        f"including in tool_diagnostic_id_acceptance.json, whose text says the "
-        f"comparison path is unreachable.")
-    assert "5 of 5" in G.__doc__ or f"{len(cells)} of {len(cells)}" in G.__doc__, (
-        f"{len(cells)} published cells carry no comparable pair and the docstring "
-        f"does not say so; a reader of 'is BLOCKING' would assume it blocks.")
+    prev = BD_IC / "sha256" / "clean_run_v1422_20260715"
+    cur = BD_IC / "sha256" / "clean_run_v1427_20260715"
+    for p in (prev, cur):
+        if not p.is_dir():
+            pytest.skip(f"published run absent from this checkout: {p}")
+
+    # 1. the resolver finds it, with no flag and no caller knowledge
+    found = G.find_previous(cur)
+    assert found is not None and found.name == prev.name, (
+        f"the like-for-like predecessor was not resolved: got {found}. Both runs "
+        f"record the same PDK ({G.measured_pdk(cur)} / {G.measured_pdk(prev)}) "
+        f"and both are the same naming family, so a NO_BASELINE here means the "
+        f"resolver has regressed to parsing names again.")
+
+    # 2. the difference it must find is real, checked against the bytes
+    rpt = "reports/phase3/drc_router.rpt"
+    assert "DRT-0120" not in (prev / rpt).read_text(errors="replace")
+    assert "DRT-0120" in (cur / rpt).read_text(errors="replace")
+
+    # 3. and the gate BLOCKS on it
+    shipped = PLUGIN_ROOT / "programs" / "tool_diagnostic_id_acceptance.json"
+    rc, report = G.compare(cur, prev, shipped, date(2026, 8, 12))
+    assert rc == 1, f"the gate did not block on a real new id: rc={rc} {report}"
+    assert "DRT-0120" in report["new_ids_blocking"], report["new_ids_blocking"]
+
+
+#: Two sibling runs of ONE design, same naming FAMILY (`run_seq`), neither
+#: recording a `"pdk"` field anywhere — the shape `_cell` produces writes only
+#: `reports/phase3/run.log`, so `measured_pdk` finds nothing and `_RE_CELL`
+#: does not match the name either. This is the only shape in which the refusal
+#: rule is REACHABLE: `_cell_ordinal` must already agree (same family, lower
+#: ordinal) before `pdk_key` is ever consulted.
+_UNSTATED_PREV = "clean_run_v1400_20260101"
+_UNSTATED_CUR = "clean_run_v1401_20260102"
+
+
+def test_a_run_that_states_no_pdk_is_refused_not_assumed_to_match(tmp_path):
+    """"I could not tell" must never resolve to "same".
+
+    SYNTHETIC, and that is the repair. This test used to build its own subjects
+    by calling the function under test::
+
+        unstated = [c for c in _published_cells() if G.pdk_key(c) is None]
+        if not unstated:
+            pytest.skip("every run dir now records a PDK — the hazard is gone")
+
+    A regression that stops `pdk_key` returning None — THE EXACT DEFECT THIS
+    TEST NAMES — empties that list, and the skip then states as a fact the
+    thing the regression destroyed. MEASURED on this tree: with `pdk_key`
+    falling back to a constant `"UNKNOWN"` instead of None, the module reports
+    `30 passed, 1 skipped`, exit 0, while `find_previous` pairs two runs whose
+    process is unknown. That is the 18-false-positive mistake the PDK guard
+    exists to prevent, arriving through the guard's own population.
+
+    The corpus arm was vacuous for a second, independent reason and is kept
+    below only as an observation: the one published cell that yields no key,
+    `u_hawaii_adc/clean_run_v1422_20260715`, has no same-FAMILY sibling beneath
+    it, so `_cell_ordinal` refuses it before the PDK rule is consulted. It
+    could not have exercised this path even when the list was non-empty.
+    """
+    _cell(tmp_path, _UNSTATED_PREV, _PREV_LOG)
+    cur = _cell(tmp_path, _UNSTATED_CUR, _NEW_ID_LOG)
+
+    # the precondition: neither run states a PDK, by either channel
+    assert G.pdk_key(cur) is None, G.pdk_key(cur)
+    assert G.pdk_key(tmp_path / _UNSTATED_PREV) is None
+
+    # and so the pair is REFUSED, though everything else about it matches
+    assert G.find_previous(cur) is None, (
+        f"{_UNSTATED_CUR} states no PDK and a predecessor was resolved for it "
+        f"anyway ({G.find_previous(cur)}). An unmeasurable PDK must refuse, "
+        f"not match.")
+
+    # end to end, through the shipped CLI: NO_BASELINE (rc 2), not a comparison
+    rc, out = _run(cur, _acc(tmp_path / "a.json", []))
+    assert rc == 2, f"expected NO_BASELINE, got rc={rc}: {out}"
+
+
+def test_PAIRED_GUARD_the_same_pair_STATING_a_pdk_does_compare(tmp_path):
+    """The refusal must be about the silence, not about the naming family.
+
+    Byte-identical fixture to the test above with ONE addition — each run
+    records `"pdk": "sky130A"` in its own reports — and it must now resolve,
+    compare, and BLOCK on the added `GRT-0043`. Without this twin, the refusal
+    rule above is satisfiable by never matching a `clean_run_*` pair at all,
+    which is the very defect #1092's resolver was fixed for.
+    """
+    prev = _cell(tmp_path, _UNSTATED_PREV, _PREV_LOG)
+    cur = _cell(tmp_path, _UNSTATED_CUR, _NEW_ID_LOG)
+    for c in (prev, cur):
+        (c / "reports" / "run_meta.json").write_text('{"pdk": "sky130A"}\n')
+
+    assert G.pdk_key(cur) == "sky130A"
+    assert G.find_previous(cur) == prev, G.find_previous(cur)
+
+    rc, out = _run(cur, _acc(tmp_path / "a.json", []))
+    assert rc == 1, f"expected BLOCKING, got rc={rc}: {out}"
+    assert "GRT-0043" in out
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_the_published_cells_that_state_no_pdk_are_refused_too():
+    """The corpus arm, no longer load-bearing and no longer self-selecting.
+
+    It carries NO skip: an empty list is simply a corpus that states a PDK
+    everywhere, and the obligation is already discharged synthetically above.
+    An empty result is recorded as an empty result — never as "the hazard is
+    gone".
+    """
+    unstated = [c for c in _published_cells() if G.pdk_key(c) is None]
+    for c in unstated:
+        assert G.find_previous(c) is None, (
+            f"{c.name} states no PDK and a predecessor was resolved for it "
+            f"anyway ({G.find_previous(c)}). An unmeasurable PDK must refuse, "
+            f"not match.")
 
 
 def test_the_unwired_state_is_disclosed_or_gone():
@@ -452,6 +559,85 @@ def test_a_DENIED_id_is_not_counted_as_an_emission():
     assert out["denied_count"] == 1, out
 
 
+def _pdk_cell(tmp_path, **files):
+    """A run directory holding *files*, for `measured_pdk` to read."""
+    d = tmp_path / "cell"
+    d.mkdir()
+    for name, text in files.items():
+        (d / name).write_text(text)
+    return d
+
+
+def test_a_DENIED_pdk_is_not_counted_as_a_declaration(tmp_path):
+    """BATCH IDX (c). `measured_pdk` scans RAW TEXT and takes the modal value,
+    so records that deny a value used to outvote the one real declaration and
+    the gate compared two runs on a PDK neither of them used.
+
+    Two things in the consult are load-bearing and were measured:
+    `ignore_bracketed=False`, because the prose default blanks `{...}` and a
+    JSON document is entirely inside braces — with the default this check is a
+    no-op that reads like a check; and `extra_breaks=("\n",)`, because these
+    are machine-generated records, not prose.
+    """
+    cell = _pdk_cell(
+        tmp_path,
+        **{"audit.json": '{"pdk": "sky130A", "staged": false, '
+                         '"note": "libraries were not staged"}\n'
+                         '{"pdk": "sky130A", "status": "superseded by the '
+                         'gf180 rerun"}\n',
+           "run.json": '{"pdk": "gf180mcuD"}\n'})
+    # Both sky130A records match the regex — without that this proves nothing.
+    text = (cell / "audit.json").read_text()
+    assert len(list(G._RE_PDK_FIELD.finditer(text))) == 2
+    assert G.measured_pdk(cell) == "gf180mcuD"
+
+
+def test_a_DENIAL_ON_ANOTHER_RECORD_does_not_retract_this_one(tmp_path):
+    """THE PAIRED HALF. A report full of ordinary negations must still yield
+    its PDK, or the consult trades a loud wrong answer for a silent missing
+    one — which this module's own docstring calls the worse failure, because
+    nothing goes red to say the extractor published less than it read."""
+    cell = _pdk_cell(
+        tmp_path,
+        **{"a.json": '{"pdk": "sky130A"}\n'
+                     '{"note": "no clock found for register bank"}\n'
+                     '{"drc": "no errors found"}\n'})
+    assert G.measured_pdk(cell) == "sky130A"
+
+
+def test_a_plain_declaration_is_untouched(tmp_path):
+    """The consult must not cost the ordinary case anything."""
+    cell = _pdk_cell(tmp_path, **{"a.json": '{"pdk": "sky130A"}\n'})
+    assert G.measured_pdk(cell) == "sky130A"
+
+
+def test_the_known_limit_is_pinned_rather_than_hidden(tmp_path):
+    """A denial in a SIBLING FIELD of the same record drops the value, even
+    when it denies something else entirely.
+
+    This is a FALSE NEGATIVE and it is pinned deliberately, because the two
+    shapes are structurally identical —
+
+        {"pdk": "sky130A", "status": "superseded by the gf180 rerun"}   deny
+        {"pdk": "sky130A", "drc": "no errors found"}                    keep
+
+    — and separating them needs to know what the denial is ABOUT, which no
+    scoping rule can. The direction chosen is the one `pdk_key` already argues
+    for: a dropped measurement falls back to the NAME, so this degrades to the
+    pre-existing comparison rather than to nothing, while the opposite error
+    would make the gate compare on a PDK neither run used.
+
+    MEASURED COST: 0 of the 9 `"pdk"` declarations in the tracked corpus sit in
+    a record carrying a denial, so this costs nothing today. If that number
+    moves, this test is where to come back to — change it by NARROWING the
+    scope, never by dropping the consult.
+    """
+    cell = _pdk_cell(
+        tmp_path,
+        **{"a.json": '{"pdk": "sky130A", "drc": "no errors found"}\n'})
+    assert G.measured_pdk(cell) is None
+
+
 def test_a_NEGATION_INSIDE_THE_MESSAGE_still_counts_as_an_emission():
     """THE PAIRED HALF, and the one that matters. A diagnostic line IS the
     emission; its message is ordinary English that routinely negates something
@@ -461,3 +647,114 @@ def test_a_NEGATION_INSIDE_THE_MESSAGE_still_counts_as_an_emission():
     out = G.scan_log("[WARNING RSZ-0104] no clock found for register bank\n")
     assert out["ids"] == {"WARNING": {"RSZ-0104": 1}}, out
     assert out["denied_count"] == 0, out
+
+
+# ===========================================================================
+# THE SHIPPED ACCEPTANCE RECORD'S CLAIM ABOUT THE CORPUS
+#
+# `tool_diagnostic_id_acceptance.json` carries prose about whether the gate can
+# compare anything at all. That claim went stale silently once, and the way it
+# went stale is the interesting part: the file honestly recorded "5 of 5
+# NO_BASELINE ... the comparison path is unreachable from today's corpus", and
+# that was a correct measurement OF A BROKEN RESOLVER read as a fact about the
+# POPULATION. It also promised the situation could only change when a second
+# same-PDK cell was PUBLISHED — and a code fix reached it instead.
+#
+# An unreachable-comparison disclosure reads identically whether the corpus
+# really has no pair or the resolver merely cannot see one. So the claim is
+# recomputed here rather than trusted.
+# ===========================================================================
+_ACCEPTANCE = PLUGIN_ROOT / "programs" / "tool_diagnostic_id_acceptance.json"
+
+#: The sentinel each state must carry. Kept as literals so the assertion is
+#: about the SHIPPED WORDS a reader will actually see, not about a paraphrase.
+_SAYS_UNREACHABLE = "comparison path is unreachable"
+_SAYS_REACHABLE = "THE COMPARISON PATH IS REACHABLE"
+
+
+def _acceptance_prose() -> str:
+    """The record's text as a reader reads it, with line wrapping removed.
+
+    WHITESPACE-NORMALISED ON PURPOSE. `_comment` is a JSON array of hard-wrapped
+    lines, so every sentinel below would otherwise be hostage to where the wrap
+    happens to fall — re-flowing a paragraph would silently turn an assertion
+    about the claim into an assertion about the column width. Measured while
+    writing this: `must not adjudicate his own finding` straddles a wrap and a
+    naive join missed it.
+    """
+    return " ".join(" ".join(
+        json.loads(_ACCEPTANCE.read_text())["_comment"]).split())
+
+
+def _comparable_pairs():
+    """Every (cell, predecessor) the resolver actually finds in this tree."""
+    return [(c, G.find_previous(c)) for c in _published_cells()
+            if G.find_previous(c) is not None]
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_the_acceptance_records_REACHABILITY_claim_is_measured():
+    """BOTH DIRECTIONS, so neither state is reachable by editing prose.
+
+    While a comparable pair exists the shipped record must NOT claim the
+    comparison path is unreachable, and must say it IS reachable. If the corpus
+    ever loses its last pair — a prune, a retention sweep — the disclosure has
+    to come back, because at that moment "no new diagnostic id" would again be
+    a statement about a comparison nobody performed.
+    """
+    prose = _acceptance_prose()
+    pairs = _comparable_pairs()
+    withdrawn = "That was an honest measurement of" in prose
+
+    if pairs:
+        shown = [f"{c.name} <- {p.name}" for c, p in pairs]
+        assert _SAYS_UNREACHABLE not in prose or withdrawn, (
+            f"{len(pairs)} comparable pair(s) exist ({shown}) and the shipped "
+            f"acceptance record still claims the comparison path is "
+            f"unreachable. A record that outlived its premise reads exactly "
+            f"like a true one.")
+        assert _SAYS_REACHABLE in prose, (
+            f"{len(pairs)} comparable pair(s) exist ({shown}) and the record "
+            f"does not say so. A reader deciding whether this empty list means "
+            f"'nothing to adjudicate' or 'nothing was compared' cannot tell.")
+    else:
+        assert _SAYS_UNREACHABLE in prose, (
+            "no comparable pair resolves in this tree, so the gate cannot "
+            "compare anything — and the acceptance record does not disclose "
+            "it. An empty list then reads as 'clean' when it means 'never "
+            "ran'.")
+        assert _SAYS_REACHABLE not in prose, (
+            "the record claims the comparison path is reachable and no pair "
+            "resolves.")
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_PAIRED_the_live_finding_is_NOT_adjudicated_by_its_own_author():
+    """The empty list is a POSITION, and it has to stay checkable.
+
+    The corpus pair blocks on a real id. The cheapest way to make every run
+    green is to add that id to `accepted` — which is why this asserts the
+    opposite: the shipped list stays empty while a live un-adjudicated finding
+    exists, and the record says so.
+
+    Without this half the test above is satisfiable by adjudicating the finding
+    away and then truthfully reporting a reachable-and-clean corpus.
+    """
+    pairs = _comparable_pairs()
+    if not pairs:
+        pytest.skip("no comparable pair in this tree")
+    doc = json.loads(_ACCEPTANCE.read_text())
+    blocking = set()
+    for cur, prev in pairs:
+        rc, report = G.compare(cur, prev, _ACCEPTANCE, date.today())
+        blocking |= set(report.get("new_ids_blocking") or {})
+    assert blocking, (
+        "the corpus pair resolves and nothing blocks — either the finding was "
+        "adjudicated into `accepted` or the comparison stopped finding it; "
+        "both need saying out loud rather than reading as a clean run.")
+    accepted_ids = {e.get("id") for e in doc["accepted"] if isinstance(e, dict)}
+    assert not (blocking & accepted_ids), (
+        f"{sorted(blocking & accepted_ids)} is both the live finding and its "
+        f"own exemption. The point of shipping this list empty is that the "
+        f"author must not adjudicate his own finding.")
+    assert "must not adjudicate his own finding" in _acceptance_prose()
