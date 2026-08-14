@@ -143,6 +143,14 @@ def test_no_shipped_class_declares_typical_scaffolds():
 def test_the_other_class_reference_content_survived():
     """Guard against over-removal: only the scaffolds were meant to go."""
     ref = gap_detect._load_k3_defaults()["class_reference"]
+    # Same denominator guard as above, and it is not decoration: without it an
+    # empty load reports `apb-peripheral itself must not have been deleted`,
+    # which names a deletion that never happened and sends the reader to the
+    # wrong file. An empty corpus is a load failure, not an over-removal.
+    assert len(ref) >= 30, (
+        f"class_reference did not load ({len(ref)} classes) — nothing was "
+        f"deleted; DEFAULT_DEFAULTS_DIR ({DEFAULT_DEFAULTS_DIR}) did not "
+        f"resolve from this cwd")
     for cls in _SCAFFOLDED_CLASSES:
         assert cls in ref, f"{cls} itself must not have been deleted"
         assert ref[cls].get("reference"), f"{cls} lost its `reference`"
@@ -383,3 +391,69 @@ def test_the_shipped_yaml_has_no_scaffold_block():
     assert len(data) >= 30
     assert not [k for k, v in data.items()
                 if isinstance(v, dict) and v.get("typical_scaffolds")]
+
+
+# ---------------------------------------------------------------------------
+# THE cwd DEPENDENCE, DRIVEN — not asserted from a cwd where it cannot appear
+# ---------------------------------------------------------------------------
+# `DEFAULT_DEFAULTS_DIR` was a bare relative path, so it resolved only when cwd
+# happened to be a repo root. `_load_k3_defaults` reads it as
+# `f.exists() else {}`, so a wrong cwd did not raise — it yielded an EMPTY
+# class_reference and `suggest_default` then found no default for any gap and
+# said nothing. Silent degradation.
+#
+# WHY THIS RUNS IN A CHILD PROCESS. The condition is "cwd is not a repo root",
+# and pytest has already resolved this file's package by the time any test body
+# runs — from a cwd where the defect appears, the module cannot even be
+# collected. `os.chdir` inside a test would also leak into every later test in
+# the session. A child with its own cwd is the only way to exercise the real
+# condition without either problem.
+#
+# MEASURED, and it is why this test exists rather than the assertion above it:
+# reverting `_resolve_default_defaults_dir` and keeping every test in this file
+# leaves BOTH trees at 121 passed. The `len(ref) >= 30` guard is a real
+# improvement to the failure MESSAGE, but it only fires once the load is already
+# empty, and the suite never runs from a cwd where that happens.
+_CWD_PROBE = """
+import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+os.chdir(sys.argv[2])
+from phase1_engine.gap_detect import DEFAULT_DEFAULTS_DIR
+ref = Path(DEFAULT_DEFAULTS_DIR) / "class_reference.yaml"
+print("RESOLVES" if ref.is_file() else "EMPTY")
+"""
+
+
+def test_the_defaults_dir_resolves_from_a_cwd_OUTSIDE_the_repo(tmp_path):
+    """The defect's own condition, in a child process."""
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+    pkg_parent = str(_Path(__file__).resolve().parents[2])  # dir holding phase1_engine/
+    probe = tmp_path / "probe.py"
+    probe.write_text(_CWD_PROBE)
+    # 60s is the inner ceiling a 180s harness implies; this is an import, so the
+    # bound is insurance against a hang rather than a budget.
+    out = subprocess.run([_sys.executable, str(probe), pkg_parent, str(tmp_path)],
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, f"probe failed: {out.stderr[-800:]}"
+    assert out.stdout.strip() == "RESOLVES", (
+        "DEFAULT_DEFAULTS_DIR did not resolve from a cwd outside the repo, so "
+        "`_load_k3_defaults` returns {} and `suggest_default` silently offers "
+        "nothing for every gap. This is the defect the resolver was added to "
+        f"remove.\nprobe said: {out.stdout.strip()!r}\ncwd used: {tmp_path}")
+
+
+def test_the_defaults_dir_is_ANCHORED_and_not_cwd_relative():
+    """The property in one line, so the reason survives a refactor.
+
+    A relative `DEFAULT_DEFAULTS_DIR` is the defect by construction, whatever
+    the cwd of the run that happens to observe it. Note this is NOT what the
+    `len(ref) >= 30` guards above assert: those fire only once the load is
+    already empty, and mention the relative path in their MESSAGE.
+    """
+    from pathlib import Path as _Path
+    assert _Path(DEFAULT_DEFAULTS_DIR).is_absolute(), (
+        f"DEFAULT_DEFAULTS_DIR is relative ({DEFAULT_DEFAULTS_DIR!r}), so it "
+        f"resolves only when cwd is a repo root — the cwd dependence is back")
