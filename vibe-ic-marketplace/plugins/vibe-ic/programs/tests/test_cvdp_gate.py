@@ -769,6 +769,103 @@ LATCH_COMB_JSON = _json.dumps({"code": [{"rtl/bcd.sv":
     "  end\nendmodule"}]})
 
 
+# ── host-yosys CAPABILITY probes (never a version string) ──────────────────
+# The three round-4/round-5 assertions below pin the EVIDENCE STRING the gate
+# must emit when it takes ONE SPECIFIC tolerance branch. Reaching that branch
+# needs a yosys that (a) parses SV `.*` so the HIERARCHY pass actually runs
+# and (b) raises always_comb latch inference to an `ERROR:` line. The plugin
+# PINS yosys 0.40 (benchmark/cvdp_env_preflight.py REQUIRED / Dockerfile.sim);
+# a host yosys older than the pin (the distro 0.9 has neither capability:
+# `.*` is a frontend syntax error, and latch inference is an INFO line) can
+# NEVER execute those branches, so the gate correctly reports a DIFFERENT —
+# still correct — reason string there. `shutil.which("yosys")` proves
+# PRESENCE, not CAPABILITY, so each mechanism assertion is preconditioned on
+# a real probe of the host binary while the VERDICT assertions above it stay
+# unconditional on every host.
+#
+# The probes carry their OWN literal patterns and never import cvdp_gate's
+# regexes: a probe that asked the code under test whether it can be tested
+# would fall silent exactly when that code broke. A probe that cannot get
+# yosys to run at all FAILS the test instead of skipping it (#604 applied to
+# the probe itself) — a skip must never rest on absent evidence.
+_YOSYS_CAP: dict = {}
+
+
+def _yosys_probe_blob(sv_text, top):
+    import re as _re_p
+    import subprocess as _sp
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as td:
+        p = Path(td) / "probe.sv"
+        p.write_text(sv_text)
+        r = _sp.run(["yosys", "-p",
+                     f"read_verilog -sv {p}; synth -top {top}; stat"],
+                    # 60s, NOT 300. The pytest harness runs with --timeout=180, so a
+                    # bound ABOVE the harness cap is not a longer allowance — it is a
+                    # different failure mode. A hung yosys reaches 180s first and
+                    # `--timeout-method=thread` kills the SESSION, losing every other
+                    # result in the run, instead of failing this one test with a name.
+                    # That is why `ci_harness_timeout_ceiling_check` refuses it: the
+                    # ceiling is 60 = 180 // 3.
+                    #
+                    # Measured: batch R4 (22 PRs) failed BOTH its gates on this one
+                    # line — `FAIL targeted tests +++ Timeout +++` with zero named
+                    # failures, and `[FAIL] 1 inner bound(s) above the 60s ceiling`.
+                    # The timeout named nothing because the session died; the hygiene
+                    # gate is the only one that could say why.
+                    capture_output=True, text=True, timeout=60)
+    blob = (r.stdout or "") + "\n" + (r.stderr or "")
+    assert _re_p.search(r"Yosys\s+[\d.]|Executing\s+\w+\s+pass|/----", blob), (
+        "host yosys did not RUN for the capability probe — refusing to "
+        "downgrade a mechanism assertion to a skip on no evidence:\n"
+        + blob[:400])
+    return blob
+
+
+def _host_yosys_version():
+    if "ver" not in _YOSYS_CAP:
+        import subprocess as _sp
+        r = _sp.run(["yosys", "-V"], capture_output=True, text=True,
+                    timeout=60)
+        line = ((r.stdout or "") + (r.stderr or "")).splitlines()
+        _YOSYS_CAP["ver"] = line[0].strip() if line else "unknown"
+    return _YOSYS_CAP["ver"]
+
+
+def _yosys_errors_on_always_comb_latch():
+    """Host yosys raises always_comb latch inference to an ERROR line."""
+    if "latch" not in _YOSYS_CAP:
+        import re as _re_p
+        blob = _yosys_probe_blob(
+            "module lprobe(input e, input d, output reg q);\n"
+            "  always_comb begin\n    if (e) q = d;\n  end\nendmodule\n",
+            "lprobe")
+        _YOSYS_CAP["latch"] = any(
+            _re_p.search(r"ERROR:.*[Ll]atch inferred", ln)
+            for ln in blob.splitlines())
+    return _YOSYS_CAP["latch"]
+
+
+def _yosys_hierarchy_reaches_unknown_context():
+    """Host yosys parses `.*` and reaches HIERARCHY on the unknown module."""
+    if "ctx" not in _YOSYS_CAP:
+        import re as _re_p
+        blob = _yosys_probe_blob(
+            "module cprobe(input a, output z);\n"
+            "  unknown_ctx u(.*);\nendmodule\n", "cprobe")
+        _YOSYS_CAP["ctx"] = bool(_re_p.search(r"referenced in module", blob))
+    return _YOSYS_CAP["ctx"]
+
+
+def _skip_unreachable(cap, what):
+    pytest.skip(
+        f"host yosys ({_host_yosys_version()}) {cap} — the synth-stage "
+        f"{what} under test is UNREACHABLE on this binary; the plugin pins "
+        f"yosys 0.40 (cvdp_env_preflight REQUIRED), where this assertion "
+        f"runs hard. The gate VERDICT for this record was asserted above on "
+        f"THIS host and held.")
+
+
 @pytest.mark.skipif(not (_HAS_IVERILOG and _HAS_YOSYS),
                     reason="iverilog/yosys not on this host")
 def test_round4_context_module_at_synth_hierarchy_tolerated(tmp_path):
@@ -784,6 +881,10 @@ def test_round4_context_module_at_synth_hierarchy_tolerated(tmp_path):
     rep = _json.loads((tmp_path / "rep.json").read_text())
     e = rep["records"][0]
     assert e["verdict"] == "PASS"
+    if not _yosys_hierarchy_reaches_unknown_context():
+        _skip_unreachable("cannot parse SV `.*` (frontend syntax error), so "
+                          "its frontend never reaches the HIERARCHY pass",
+                          "unknown-context-module tolerance")
     assert "context module" in e.get("synth", "")
 
 
@@ -802,6 +903,11 @@ def test_round4_latch_strictness_is_advisory_not_block(tmp_path):
     rep = _json.loads((tmp_path / "rep.json").read_text())
     e = rep["records"][0]
     assert e["verdict"] == "PASS"
+    if not _yosys_errors_on_always_comb_latch():
+        _skip_unreachable("does not raise always_comb latch inference to an "
+                          "ERROR line (it is an INFO line there, so the smoke "
+                          "simply succeeds)",
+                          "latch-strictness ADVISORY tolerance")
     assert "ADVISORY" in e.get("synth", "")
 
 
@@ -895,6 +1001,12 @@ def test_round5_review_latch_error_abort_must_not_mask_later_fatal(tmp_path):
     assert _read_jsonl(out) == []
     rep = _json.loads((tmp_path / "rep.json").read_text())
     assert rep["records"][0]["verdict"] == "BLOCKED"
+    if not _yosys_errors_on_always_comb_latch():
+        _skip_unreachable("does not raise always_comb latch inference to an "
+                          "ERROR line, so PROC_DLATCH never aborts and the "
+                          "masked PROC_DFF fatal prints on the FIRST run "
+                          "(the block above proves it was not masked)",
+                          "confirming re-run that un-masks it")
     assert "confirming re-run" in rep["records"][0].get("synth", "")
 
 
