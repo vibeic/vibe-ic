@@ -222,11 +222,24 @@ def test_the_label_is_reported_verbatim_even_though_the_key_is_stripped():
 #                   waiver — so leaving it un-normalised is the safe direction
 #                   and it is recorded here rather than left to be rediscovered.
 #
-# `repo tools tests wrote to the tree (write-guard rc=%s)` is the only member of
-# the second set: it is printed ONLY when the tools suite wrote into the tree, a
-# mismatch between the arms refuses in both directions, and refusing a landing
-# whose two arms disagree about how the tree was written is correct.
-_DECLARED_STRICT = {"repo tools tests wrote to the tree (write-guard rc=%s)"}
+# The second set holds the two write-guard verdicts, one per test stage that
+# carries its own guard. Each is printed ONLY when that stage wrote into the
+# tree, so a mismatch between the arms refuses in both directions, and refusing
+# a landing whose two arms disagree about how the tree was written is correct.
+#
+# The rc is deliberately IN the label rather than normalised away: rc=1 is "this
+# stage wrote" and rc=2 is "the guard could not look", and those are different
+# findings. `test_two_different_identities_are_never_merged` pins that, so
+# normalising here would contradict it.
+#
+# `unselectable tests …` joined the set when vibe-ic#1424 (PR #1530) added the
+# stage that prints it. It was NOT declared at the time, which left this test
+# red on clean main for the whole of v1.10.40 — a red every branch then
+# inherited. Adding a stage with a write-guard means adding its verdict here.
+_DECLARED_STRICT = {
+    "repo tools tests wrote to the tree (write-guard rc=%s)",
+    "unselectable tests wrote to the tree (write-guard rc=%s)",
+}
 
 _PRINTF_GATE = re.compile(
     r"""printf\s+'\s{2}(?:PASS|FAIL|SKIP)\s{2}(?P<label>.*?)\\n'""")
