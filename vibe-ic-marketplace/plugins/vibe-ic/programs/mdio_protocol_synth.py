@@ -111,6 +111,37 @@ def is_mdio(blob: str) -> bool:
         ("read-and-increment" in low or "read and increment" in low
          or "indirect address" in low),
     ))
+    # MII-BEARING FIELDBUS DEFERRAL (ethercat). The name-in-head rule above
+    # assumes a doc naming MDIO up front is ABOUT MDIO. An EtherCAT slave
+    # controller genuinely carries an MII management interface (MDC/MDIO) to
+    # configure its PHYs, and describes it in a PHY signal-state table early
+    # enough to land inside the 3500-char head:
+    #
+    #     "MDIO_idle": "MDC running; MDIO line idle-high (1.5 kOhm PHY pull-up)
+    #                   -- no STA driver active."       (head offset 1894)
+    #
+    # That mention is CORRECT, so the head rule cannot separate it from a real
+    # MDIO spec and `is_mdio` fired on the ethercat benchmark. Density can, and
+    # density is this family's existing idiom for exactly this — see
+    # `mipi_dsi_protocol_synth` (csi2_density vs dsi_density; `ufs` >= 20) and
+    # `ethernet_protocol_synth` (`pci express` >= 20).
+    #
+    # MEASURED across the four benchmarks that mention MDIO at all:
+    #
+    #     bench      mdio  ethercat   subject
+    #     mdio        349         1   MDIO      -> 1 < 20, no deferral
+    #     ethercat     33       479   EtherCAT  -> defers
+    #     ethernet    178         2   Ethernet  -> 2 < 20, no deferral
+    #     profinet     75         2   PROFINET  -> 2 < 20, no deferral
+    #
+    # Both conditions are load-bearing. The `>= 20` floor keeps a passing
+    # mention from deferring anything (the real MDIO spec names EtherCAT once);
+    # the `>` comparison keeps a doc that genuinely covers both from being
+    # decided by the floor alone. On the two documents that are ABOUT MDIO and
+    # Ethernet the margin is 349:1 and 178:2, so neither is near the boundary.
+    ethercat_density = low.count("ethercat")
+    if ethercat_density >= 20 and ethercat_density > low.count("mdio"):
+        return False
     # Require the two-wire pair + name token, the Clause 22 frame-field quorum,
     # and NOT-I2C-primary. The frame-field model is the eSPI-style structural
     # gate that I2C/SPI/JTAG specs do not satisfy.
