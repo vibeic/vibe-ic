@@ -183,10 +183,16 @@ def test_control_a8_gds_is_produced_and_evidenced_from_the_commit():
 
     # And the registry lost EXACTLY that one entry. Stated as an equality
     # because "A8 is gone" is also true of a registry somebody emptied.
+    # M1 REMOVED 2026-08-14. vibe-ic#1159 (`bcd444425`) unpublished the
+    # mixed-signal steps: M1's dimension-3 entry stopped being an accepted GAP
+    # and became NA_DORMANT_CONDITION -- its condition is met nowhere, so there
+    # is no gap left to disclose. That commit moved `waivers.py`, the manifest
+    # and `test_matrix_63x8_ledger.py`; it did not move this file.
     waived = {W.flowref.normalize_id(w.step_id) for w in W.waivers_for_dim(3)}
-    assert waived == {"6", "39", "M1"}, (
-        f"dimension 3's waived set is {sorted(waived)}; after A8's removal it "
-        f"must be exactly 6, 39 and M1. A missing entry means an accepted gap "
+    assert waived == {"6", "39"}, (
+        f"dimension 3's waived set is {sorted(waived)}; after A8's removal "
+        f"and #1159's unpublishing of M1 it must be exactly 6 and 39. A "
+        f"missing entry means an accepted gap "
         f"stopped being disclosed; an extra one means a new gap arrived "
         f"without review.")
 
@@ -292,8 +298,23 @@ def test_reverse_the_other_dimension3_waiver_premises_are_still_true():
     not a consequence of this one.
     """
     repo = _repo()
+    # DERIVED, not re-typed. This tuple used to read ("6", "39", "M1") and went
+    # stale the moment vibe-ic#1159 unpublished M1 -- and the stale form fails
+    # for the WRONG reason, reporting M1's manifest verdict rather than any
+    # weakened premise. Deleting "M1" by hand would restore the green and leave
+    # the next reader the identical trap, which is the "thin the registry"
+    # shortcut this test's own docstring names. Reading the registry keeps the
+    # question ("is every SURVIVING waiver still premised on a real absence?")
+    # answered about whatever actually survives.
+    survivors = sorted({W.flowref.normalize_id(w.step_id)
+                        for w in W.waivers_for_dim(3)})
+    assert survivors, (
+        "dimension 3's waiver registry is EMPTY, so this premise re-check has "
+        "nothing to re-check and would pass by iterating nothing. An empty "
+        "registry is exactly the 'thin it until the guard is green' outcome "
+        "this test exists to catch, so it is a failure here, not a pass.")
     still_absent = []
-    for sid in ("6", "39", "M1"):
+    for sid in survivors:
         rec = D3.manifest()["steps"][sid]
         assert rec["verdict"] == "WAIVED", (
             f"step {sid} is waived in the registry but the manifest records "
