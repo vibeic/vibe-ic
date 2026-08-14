@@ -619,7 +619,25 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-14: 120 -> 124, declared unchanged at 134 (vibe-ic#1457). NOTHING was
+# declared, registered or re-pointed. Four artefacts the flow had already
+# produced and nobody had committed were COMMITTED, so four entries stopped
+# being fixture-attested and started resolving against bytes in this commit:
+#   phase3/stage3/pnr/{floorplan,placed,post_cts,post_hold}.def
+#   <- benchmark-data/ic/subservient (kind="repo", already a registered root)
+# The manifest was deliberately NOT touched. Those four records still name
+# `campaign_pdk/spm/pdk_portability_ihp-sg13g2_20260721`, a root this repository
+# does not carry, and they still fall through to `resolve_anywhere` exactly as
+# they did while they were red -- so the cells turned green because the
+# ARTEFACT arrived, not because the record was aimed somewhere it would resolve.
+# Re-pointing a record at a root that carries the artefact is the one repair
+# this campaign may not make (#1457), and the way to tell it was not made here
+# is that reverting the four blobs alone -- with this file byte-identical --
+# puts all four cells back to red.
+# +4 live, fixture-attested 14 -> 10. The guarded property is intact and was
+# checked rather than assumed: all four resolve inside the repository, tracked
+# at HEAD, non-empty, non-symlink, and nothing here reaches $HOME.
+_LIVE_ENTRY_COUNT = 124
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
@@ -2983,11 +3001,45 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     #         (phase2/stage2/dft/*, 351 files tracked at HEAD)
     #   29 <- benchmark-data/evaluation/phase1_parity/espi
     #         (phase3/stage3/sim_postlayout/pass.flag, 253 files tracked)
-    # The remaining ten declare artefacts NO path in this commit matches. Only
-    # a published run tree closes those, and publishing one costs >1 GB of DEFs
-    # against a 2.0 GB .git -- which is why they stay RED here rather than
-    # becoming waivers. A red cell cannot rot; a waiver can, and did.
-    "15", "17", "19", "20", "30", "32", "M1", "M2", "M3", "M4",
+    # 2026-08-14: "15", "17", "19", "20" LEFT this set (vibe-ic#1457). Not
+    # waived, not re-pointed, and no evidence manufactured -- the four DEF
+    # checkpoints they declare were COMMITTED:
+    #   15 <- benchmark-data/ic/subservient  phase3/stage3/pnr/floorplan.def
+    #   17 <- benchmark-data/ic/subservient  phase3/stage3/pnr/placed.def
+    #   19 <- benchmark-data/ic/subservient  phase3/stage3/pnr/post_cts.def
+    #   20 <- benchmark-data/ic/subservient  phase3/stage3/pnr/post_hold.def
+    # THE >1 GB ESTIMATE ABOVE IS WHY THIS SAT HERE FOR SO LONG, AND IT WAS
+    # MEASURING THE WRONG THING. It costs a published run tree to evidence a
+    # whole step set; it cost 2,340,897 B -- four blobs, largest 615,007 B --
+    # to evidence these four entries, because what was missing was four
+    # checkpoints of one small design, not a run tree. `.gitignore:173`
+    # (`!benchmark-data/ic/**/*.def`) already admits exactly this path shape,
+    # the comment above it says these belong in git, and
+    # `tracked_blob_size_guard.py` bounds it at 50 MB per blob: the repository
+    # had already decided, in writing, that it carries these. `git add` took
+    # them with no `-f`.
+    #
+    # PROVENANCE, because "a file with the right name exists" is not evidence.
+    # The flow's OWN pnr.tcl, tracked in that same directory, writes all four
+    # (`write_def .../floorplan.def` at :51, placed :88, post_cts :445,
+    # post_hold :455). The bytes were then tied to a file this commit ALREADY
+    # carried: the COMPONENT instance-name set of post_cts/post_hold is exactly
+    # equal to the 3780 instances of the tracked `subservient_pnr.v`, cell
+    # master included; floorplan/placed carry 3705 of those same names with
+    # zero extras, and the 75-name difference is exactly the spare set listed
+    # in the tracked `spare_cells.json`. post_cts.def and post_hold.def are
+    # byte-identical, which is the hold-clean no-op #624 already exempted --
+    # the tracked post_hold_timing.rpt reports worst hold slack 1e39.
+    #
+    # The remaining six declare artefacts NO path in this commit matches (30,
+    # 32) or belong to the mixed-signal set (#1159). For 32 the artefact DOES
+    # exist on this host, at clean_run_*/phase3/stage3/eco/
+    # eco_trigger_decision.json, and is deliberately NOT promoted: that tree's
+    # own committed .gitignore excludes `phase3/stage3/*` to keep it "a lean,
+    # results-only commit", so carrying it is a decision against a written
+    # policy rather than a curation the policy already permits. A red cell
+    # cannot rot; a waiver can, and did.
+    "30", "32", "M1", "M2", "M3", "M4",
 )
 
 
