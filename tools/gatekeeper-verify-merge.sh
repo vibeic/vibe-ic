@@ -513,7 +513,6 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   if [ -s "$RUN/selection_base.txt" ]; then
     # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
     # failed set, and a truncated base makes a new failure look pre-existing.
-    #
     ( cd "$BASE_PLUGIN" && xargs -a "$RUN/selection_base.txt" \
         python3 -m pytest -q --timeout=180 --timeout-method=thread \
         -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
