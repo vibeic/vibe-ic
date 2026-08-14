@@ -112,6 +112,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import sys
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
@@ -231,6 +232,18 @@ class Audit(NamedTuple):
     #: the same class of damage as the leak it is fixing, so both the removals
     #: and the SKIPS are named.
     scratch: Optional[Dict] = None
+    #: vibe-ic#1144. `(k, n)` when this run probed only shard k of n, else
+    #: None. DEFERRED is kept SEPARATE from `not_probed` on purpose: "another
+    #: shard owns this gate" and "nobody probed this gate" are opposite
+    #: facts, and folding them together is exactly how a sharded sweep
+    #: silently reduces its own coverage while still printing a denominator.
+    shard: Optional[Tuple[int, int]] = None
+    deferred: Optional[List[str]] = None
+    #: label -> seconds, for the two invocations this probe makes per gate.
+    #: Emitted so the SPLIT can be by measured time rather than by count —
+    #: an even split by count leaves one host holding the slowest gate and
+    #: buys nothing (#1144).
+    timings: Optional[Dict[str, float]] = None
 
 
 def corpus_gates(script: Path) -> List[Gate]:
@@ -470,7 +483,36 @@ def sweep_abandoned_scratch(repo_root: Path,
             "kept": [{"path": p, "why": w} for p, w in rep.kept]}
 
 
+
+#: vibe-ic#1144. The split is by MEASURED TIME when a weight table is supplied
+#: and by a stable label hash otherwise. Never by list position: the parse order
+#: follows the script, so a naive `i % n` hands one host every slow gate that
+#: happens to be written near its neighbours, and #1144's whole point is that an
+#: even split BY COUNT buys nothing when one member dominates the wall clock.
+#:
+#: Greedy longest-processing-time-first over the weights, which is the standard
+#: 4/3-approximation for exactly this problem and is deterministic, so every
+#: host computes the SAME assignment from the same inputs without talking.
+def assign_shards(labels: List[str], n: int,
+                  weights: Optional[Dict[str, float]] = None) -> List[List[str]]:
+    """`labels` partitioned into `n` buckets, identically on every host."""
+    if n < 1:
+        raise ValueError("shard count must be >= 1")
+    buckets: List[List[str]] = [[] for _ in range(n)]
+    load = [0.0] * n
+    # Unweighted gates get 1.0 so an absent table degrades to a balanced
+    # round-robin rather than to "everything in bucket 0".
+    ordered = sorted(labels, key=lambda l: (-(weights or {}).get(l, 1.0), l))
+    for label in ordered:
+        i = load.index(min(load))
+        buckets[i].append(label)
+        load[i] += (weights or {}).get(label, 1.0)
+    return [sorted(b) for b in buckets]
+
+
 def audit(repo_root: Path, timeout: int = 600,
+          shard: Optional[Tuple[int, int]] = None,
+          weights: Optional[Dict[str, float]] = None,
           tmp_root: Optional[Path] = None) -> Audit:
     """`tmp_root` overrides where the scratch lives (default: the system temp).
 
@@ -550,6 +592,15 @@ def audit(repo_root: Path, timeout: int = 600,
 
         plugin_rel = Path("vibe-ic-marketplace") / "plugins" / "vibe-ic"
         me = Path(__file__).name
+        # Which gates are MINE this run. Computed from the full declared
+        # list so every shard agrees without coordinating, and recorded so
+        # the aggregator can prove the union is complete.
+        mine = None
+        if shard is not None:
+            k, n = shard
+            mine = set(assign_shards([g[0] for g in gates], n, weights)[k])
+        deferred: List[str] = []
+        timings: Dict[str, float] = {}
         for label, wd_tok, cmd, excluded, templated in gates:
             # NEVER probe ITSELF. The gate list is unfiltered by design, so it
             # contains this program — and running it inside the worktree runs
@@ -565,6 +616,12 @@ def audit(repo_root: Path, timeout: int = 600,
             # The skip is RECORDED, not silent. It used to be a bare `continue`
             # while the verdict line went on to say "all <declared> gate(s)" —
             # a denominator this program's whole subject is not over-claiming.
+            if mine is not None and label not in mine:
+                # NOT `not_probed`: this gate IS being probed, by another
+                # shard. Recording it as unprobed here would let a lost
+                # shard read as a declared exclusion at the aggregator.
+                deferred.append(label)
+                continue
             if me in cmd:
                 not_probed.append((label, "this probe itself — it would recurse"))
                 continue
@@ -593,6 +650,7 @@ def audit(repo_root: Path, timeout: int = 600,
                 continue
             ca = repo_root if wd_tok == "$ROOT" else repo_root / plugin_rel
             cb = wt if wd_tok == "$ROOT" else wt / plugin_rel
+            _t0 = time.monotonic()
             try:
                 a = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
                                    capture_output=True, text=True,
@@ -600,6 +658,9 @@ def audit(repo_root: Path, timeout: int = 600,
                 b = subprocess.run(_expand(cmd, wt), cwd=str(cb),
                                    capture_output=True, text=True,
                                    timeout=timeout)
+                # Recorded for EVERY gate that ran, so the next split can be by
+                # measured time. A weight table nobody measured is a guess.
+                timings[label] = round(time.monotonic() - _t0, 3)
             except (OSError, subprocess.SubprocessError) as exc:
                 # A gate that cannot be driven is NOT host-dependence, and it
                 # is NOT a clean result either. It gets its own state rather
@@ -638,10 +699,13 @@ def audit(repo_root: Path, timeout: int = 600,
     finally:
         _release_scratch(res, repo_root)
 
-    probed = declared - len(not_probed)
+    # DEFERRED gates are not probed BY THIS RUN and must not be counted as
+    # if they were. The aggregator adds the shards' numerators back up and
+    # refuses unless they reach `declared` (#1144 rule 2).
+    probed = declared - len(not_probed) - len(deferred)
     if findings:
         return Audit("FAIL", findings, dirt, declared, probed, not_probed,
-                     scratch)
+                     scratch, shard, deferred, timings)
     # NO STIMULUS IS NOT A PASS (#539). Every gate agreeing across two trees
     # that carry the same bytes is arithmetic, not evidence: the leftovers this
     # probe detects a gate READING were absent from both sides, so the run had
@@ -656,18 +720,48 @@ def audit(repo_root: Path, timeout: int = 600,
     # a NOT_CHECKED out of an unknown is the mirror of inventing a pass.
     if dirt is not None and dirt.ignored_reported and dirt.stimulus == 0:
         return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
-                     scratch)
-    return Audit("PASS", findings, dirt, declared, probed, not_probed, scratch)
+                     scratch, shard, deferred, timings)
+    return Audit("PASS", findings, dirt, declared, probed, not_probed, scratch, shard, deferred, timings)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("repo_root", nargs="?", default=None)
     ap.add_argument("--json", dest="json_out", default=None)
+    ap.add_argument("--shard", default=None, metavar="K/N",
+                    help="probe only shard K (0-based) of N (vibe-ic#1144). "
+                         "Every shard still parses the FULL gate list, so "
+                         "`gates_declared` is the same on all of them and the "
+                         "aggregator can prove the union is complete.")
+    ap.add_argument("--weights", default=None, metavar="JSON",
+                    help="label -> seconds, from a previous run's `timings`. "
+                         "Splits by MEASURED TIME instead of by count.")
     a = ap.parse_args(argv)
 
     root = Path(a.repo_root).resolve() if a.repo_root else _PLUGIN.parents[2]
-    res = audit(root)
+    shard = None
+    if a.shard:
+        try:
+            k, n = (int(x) for x in a.shard.split("/", 1))
+        except ValueError:
+            print("--shard wants K/N, e.g. 0/6", file=sys.stderr)
+            return 2
+        if not (0 <= k < n):
+            print(f"--shard {a.shard}: K must be in [0, N)", file=sys.stderr)
+            return 2
+        shard = (k, n)
+    weights = None
+    if a.weights:
+        try:
+            weights = json.loads(Path(a.weights).read_text())
+        except (OSError, ValueError) as exc:
+            # NOT a silent fall-back to an unweighted split: the caller asked
+            # for a time-based split and would otherwise get a count-based one
+            # while believing otherwise.
+            print(f"--weights {a.weights}: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 2
+    res = audit(root, shard=shard, weights=weights)
 
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(
@@ -685,7 +779,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "untracked": len(res.dirt.untracked),
                  "ignored": len(res.dirt.ignored),
                  "ignored_reported": res.dirt.ignored_reported}),
-             "findings": res.findings}, indent=2) + "\n")
+             "findings": res.findings,
+             # #1144. `shard` names who this run speaks for; `deferred` names
+             # the gates it is NOT speaking for. The aggregator refuses unless
+             # probed + not_probed + deferred reaches `gates_declared`.
+             "shard": (None if res.shard is None else
+                       {"k": res.shard[0], "n": res.shard[1]}),
+             "deferred": res.deferred or [],
+             "timings": res.timings or {}}, indent=2) + "\n")
 
     # Whatever the outcome, SAY WHAT WAS NOT PROBED. A gate that left the
     # numerator without being named is how a set silently shrinks.
