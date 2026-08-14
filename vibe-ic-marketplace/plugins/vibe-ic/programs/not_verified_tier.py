@@ -14,7 +14,7 @@ THE MESSAGES WERE ALREADY HONEST — THE DEFECT IS ONE LEVEL UP
 Every one of the eleven skip sites this module was written for already says the
 true thing at the point it happens::
 
-    image ghcr.io/vibeic/vibeic-eda:0.2.89 not present; this half was NOT checked
+    image ghcr.io/vibeic/vibeic-eda:0.2.96 not present; this half was NOT checked
     /foss/pdks/asap7/libs.tech/klayout/lvs/asap7.lyt not reachable — this half was NOT checked
 
 Nobody has to be told those are honest; they are. What is missing is a tier
