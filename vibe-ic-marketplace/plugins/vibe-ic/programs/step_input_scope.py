@@ -96,6 +96,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -499,7 +500,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     doc = {"step": args.step_id, "declared_specs": specs,
            "enforcement_enabled": enforcement_enabled()}
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(doc, indent=1) + "\n")
+        atomic_write_text(Path(args.json_out),
+                          json.dumps(doc, indent=1) + "\n")
     print(f"step {args.step_id}: {len(specs)} declared path spec(s)")
     for s in specs:
         print(f"  {s}")

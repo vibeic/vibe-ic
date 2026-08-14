@@ -144,6 +144,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 
 SCHEMA = "vibe-ic/adversarial-agent/v1"
 
@@ -647,8 +648,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         Path(args.older) if args.older else None)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(json.dumps(report, indent=2, sort_keys=True)
-                                   + "\n", encoding="utf-8")
+        atomic_write_text(Path(args.json),
+                          json.dumps(report, indent=2, sort_keys=True)
+                          + "\n", encoding="utf-8")
     c = report["counts"]
     for f in report["findings"]:
         print(f"[FORGED GREEN] {f['attack']} on {f['target']}: {f['detail']}")

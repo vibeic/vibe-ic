@@ -68,6 +68,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 
 METRICS_REL = "reports/metrics"
 RC_OK = 0
@@ -276,7 +277,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.cmd == "collect":
         merged, prov = collect(Path(args.project))
         if args.json_out:
-            Path(args.json_out).write_text(
+            atomic_write_text(
+                Path(args.json_out),
                 json.dumps({"metrics": merged, "provenance": prov},
                            indent=1, sort_keys=True) + "\n")
         print(f"collected {prov['metric_count']} metric(s) from "
@@ -313,7 +315,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     new, _ = collect(Path(args.new_project))
     rep = diff(old, new)
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(rep, indent=1) + "\n")
+        atomic_write_text(Path(args.json_out),
+                          json.dumps(rep, indent=1) + "\n")
     if not old and not new:
         print("[NOT CHECKED] neither run emitted metrics; there is nothing to "
               "compare and that is not 'no change'", file=sys.stderr)
