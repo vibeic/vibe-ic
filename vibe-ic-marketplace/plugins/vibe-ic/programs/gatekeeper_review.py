@@ -1221,6 +1221,44 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
                           f"or remove the tolerance: "
                           + ", ".join(sorted(expired)[:6])
                           + (" …" if len(expired) > 6 else "") + f" [{where}]")
+    # vibe-ic#1025 — a sweep that reached NO verdict is not a pass, and this
+    # branch is what makes that true HERE and not only in the script's exit
+    # code. Before it, an all-refusing sweep fell past every branch above to
+    # the final `GateResult(name, 0, where)` — a GREEN gate — carrying
+    # "6 NOT CHECKED (not a pass)" inside `where`, i.e. as prose beside a
+    # passing verdict. That is #584's lie shape one level up: #584 made each
+    # individual refusal buy a dated exemption, and never asked what happens
+    # when the exempted set is ALL of them.
+    #
+    # BEFORE the `script_rc != 0` branch, for the reason the `wrote` branch is
+    # before the FAIL branch: that branch's sentence is about an INCONSISTENCY
+    # between the record and the exit code, and here the record and the exit
+    # code agree perfectly — every gate ran and none of them concluded
+    # anything. Reported through it, a wholly vacuous sweep reads as "the
+    # script and its own summary disagree", pointing a reader away from the one
+    # thing that happened.
+    #
+    # Derived from `gates` — the same source `failed` / `not_checked` /
+    # `wrote` above come from — and NOT from the top-level `passed` counter. A
+    # record may legitimately carry `gates` without the roll-up counters
+    # (several of this repo's fixtures do), and reading an absent counter as 0
+    # would make an all-PASS record look like it decided nothing: the very
+    # failure this branch reports, manufactured by the branch itself.
+    #
+    # `executed` excludes LISTED and OTHER_SHARD for the same reasons the
+    # script does: a `--list` run decided nothing BY REQUEST and already says
+    # so, and a shard that owns no gate was never asked the question.
+    executed = [g for g in gates
+                if g.get("state") in ("PASS", "FAIL", "NOT_CHECKED",
+                                      "WROTE_CORPUS")]
+    decided = len(by_state("PASS")) + len(failed)
+    if executed and decided == 0:
+        return GateResult(name, 2,
+                          f"ERROR — the hygiene set DECIDED NOTHING: 0 of "
+                          f"{len(executed)} gate(s) that ran reached a "
+                          f"verdict, {len(not_checked)} NOT CHECKED. Nothing "
+                          f"was concluded about this tree, and that is not a "
+                          f"pass [{where}]")
     if script_rc != 0:
         # Red script, no failing gate named: a setup/summary inconsistency we
         # must not paper over.
