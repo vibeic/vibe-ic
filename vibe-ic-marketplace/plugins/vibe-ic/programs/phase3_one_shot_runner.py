@@ -33612,7 +33612,16 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
             f"{TOOLS_IN_CONTAINER}/bin:$PATH && "
             f"sta -no_init -exit {tcl_c} 2>&1 | tee {out_dir}/sta_{corner}.log"
         )
-        rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[rpt])
+        # NOT `outputs=[rpt]` (organic #443). `_docker_exec` hashes a
+        # declared output AT THE CALL, and the `elif _bb:` branch below
+        # deletes this report on purpose (#437(c): a corner that did not
+        # link leaves NO report rather than a falsely-clean one). The
+        # entry would therefore name a digest for a path that is gone by
+        # audit time — FILE_MISSING against a tool that ran and exited 0,
+        # and only on designs that black-box, so it reads as a real defect
+        # in whichever design trips it. `_hash_declared_outputs` omits
+        # paths that do not exist, but it runs BEFORE the unlink.
+        rc, out, err = _docker_exec(container, cmd, marker=tcl_c)
         _bb = _sta_blackboxed_masters(out_dir / f"sta_{corner}.log")
         if rc != 0 or not rpt.is_file():
             # #437(c): NO single-corner stand-in. The old fallback copied

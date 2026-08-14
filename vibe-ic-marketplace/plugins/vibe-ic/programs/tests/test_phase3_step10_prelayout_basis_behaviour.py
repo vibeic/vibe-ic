@@ -126,8 +126,26 @@ def _fake_opensta(calls: list, fail_corners=()):
     def _run(container, cmd, timeout=1800, *, marker=None, log_path=None,
              stall_grace_s=None, hard_ceiling_s=None, poll_s=None,
              outputs=None):
-        rpt = Path(outputs[0])
-        corner = rpt.stem[len("sta_"):]
+        # DERIVED FROM `cmd`, NOT FROM `outputs`. This stand-in's contract
+        # is to read what the RUNNER told the tool to do — see the docstring
+        # above, which does the same for the basis stamp by parsing the tcl.
+        # `outputs` used to be the handle here, and that made a PROVENANCE
+        # DECLARATION load-bearing for five tests that are not about
+        # provenance: the declaration could not be removed, and it had to be,
+        # because the runner deletes that report on the black-box branch
+        # (#437(c)) and a digest recorded at call time cannot survive it.
+        #
+        # `cmd` ends in `… | tee {out_dir}/sta_{corner}.log`, which is a HOST
+        # path — the only other one this call carries, since `marker` is a
+        # container path.
+        _m = re.search(r"tee\s+(?P<dir>\S+)/sta_(?P<corner>[^/\s]+)\.log", cmd)
+        assert _m, (
+            "the runner's command no longer ends in `tee <dir>/sta_<corner>.log`, "
+            "so this stand-in cannot tell which corner it is being asked to run. "
+            "That is a real change in the runner, not a reason to guess: fix the "
+            f"pattern here against the new spelling.\ncmd = {cmd!r}")
+        corner = _m.group("corner")
+        rpt = Path(_m.group("dir")) / f"sta_{corner}.rpt"
         calls.append(corner)
         if corner in fail_corners:
             return (1, "", f"OpenSTA: {corner} run did not converge")
