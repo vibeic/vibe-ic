@@ -575,3 +575,114 @@ def test_a_NEGATION_INSIDE_THE_MESSAGE_still_counts_as_an_emission():
     out = G.scan_log("[WARNING RSZ-0104] no clock found for register bank\n")
     assert out["ids"] == {"WARNING": {"RSZ-0104": 1}}, out
     assert out["denied_count"] == 0, out
+
+
+# ===========================================================================
+# THE SHIPPED ACCEPTANCE RECORD'S CLAIM ABOUT THE CORPUS
+#
+# `tool_diagnostic_id_acceptance.json` carries prose about whether the gate can
+# compare anything at all. That claim went stale silently once, and the way it
+# went stale is the interesting part: the file honestly recorded "5 of 5
+# NO_BASELINE ... the comparison path is unreachable from today's corpus", and
+# that was a correct measurement OF A BROKEN RESOLVER read as a fact about the
+# POPULATION. It also promised the situation could only change when a second
+# same-PDK cell was PUBLISHED — and a code fix reached it instead.
+#
+# An unreachable-comparison disclosure reads identically whether the corpus
+# really has no pair or the resolver merely cannot see one. So the claim is
+# recomputed here rather than trusted.
+# ===========================================================================
+_ACCEPTANCE = PLUGIN_ROOT / "programs" / "tool_diagnostic_id_acceptance.json"
+
+#: The sentinel each state must carry. Kept as literals so the assertion is
+#: about the SHIPPED WORDS a reader will actually see, not about a paraphrase.
+_SAYS_UNREACHABLE = "comparison path is unreachable"
+_SAYS_REACHABLE = "THE COMPARISON PATH IS REACHABLE"
+
+
+def _acceptance_prose() -> str:
+    """The record's text as a reader reads it, with line wrapping removed.
+
+    WHITESPACE-NORMALISED ON PURPOSE. `_comment` is a JSON array of hard-wrapped
+    lines, so every sentinel below would otherwise be hostage to where the wrap
+    happens to fall — re-flowing a paragraph would silently turn an assertion
+    about the claim into an assertion about the column width. Measured while
+    writing this: `must not adjudicate his own finding` straddles a wrap and a
+    naive join missed it.
+    """
+    return " ".join(" ".join(
+        json.loads(_ACCEPTANCE.read_text())["_comment"]).split())
+
+
+def _comparable_pairs():
+    """Every (cell, predecessor) the resolver actually finds in this tree."""
+    return [(c, G.find_previous(c)) for c in _published_cells()
+            if G.find_previous(c) is not None]
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_the_acceptance_records_REACHABILITY_claim_is_measured():
+    """BOTH DIRECTIONS, so neither state is reachable by editing prose.
+
+    While a comparable pair exists the shipped record must NOT claim the
+    comparison path is unreachable, and must say it IS reachable. If the corpus
+    ever loses its last pair — a prune, a retention sweep — the disclosure has
+    to come back, because at that moment "no new diagnostic id" would again be
+    a statement about a comparison nobody performed.
+    """
+    prose = _acceptance_prose()
+    pairs = _comparable_pairs()
+    withdrawn = "That was an honest measurement of" in prose
+
+    if pairs:
+        shown = [f"{c.name} <- {p.name}" for c, p in pairs]
+        assert _SAYS_UNREACHABLE not in prose or withdrawn, (
+            f"{len(pairs)} comparable pair(s) exist ({shown}) and the shipped "
+            f"acceptance record still claims the comparison path is "
+            f"unreachable. A record that outlived its premise reads exactly "
+            f"like a true one.")
+        assert _SAYS_REACHABLE in prose, (
+            f"{len(pairs)} comparable pair(s) exist ({shown}) and the record "
+            f"does not say so. A reader deciding whether this empty list means "
+            f"'nothing to adjudicate' or 'nothing was compared' cannot tell.")
+    else:
+        assert _SAYS_UNREACHABLE in prose, (
+            "no comparable pair resolves in this tree, so the gate cannot "
+            "compare anything — and the acceptance record does not disclose "
+            "it. An empty list then reads as 'clean' when it means 'never "
+            "ran'.")
+        assert _SAYS_REACHABLE not in prose, (
+            "the record claims the comparison path is reachable and no pair "
+            "resolves.")
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_PAIRED_the_live_finding_is_NOT_adjudicated_by_its_own_author():
+    """The empty list is a POSITION, and it has to stay checkable.
+
+    The corpus pair blocks on a real id. The cheapest way to make every run
+    green is to add that id to `accepted` — which is why this asserts the
+    opposite: the shipped list stays empty while a live un-adjudicated finding
+    exists, and the record says so.
+
+    Without this half the test above is satisfiable by adjudicating the finding
+    away and then truthfully reporting a reachable-and-clean corpus.
+    """
+    pairs = _comparable_pairs()
+    if not pairs:
+        pytest.skip("no comparable pair in this tree")
+    doc = json.loads(_ACCEPTANCE.read_text())
+    blocking = set()
+    for cur, prev in pairs:
+        rc, report = G.compare(cur, prev, _ACCEPTANCE, date.today())
+        blocking |= set(report.get("new_ids_blocking") or {})
+    assert blocking, (
+        "the corpus pair resolves and nothing blocks — either the finding was "
+        "adjudicated into `accepted` or the comparison stopped finding it; "
+        "both need saying out loud rather than reading as a clean run.")
+    accepted_ids = {e.get("id") for e in doc["accepted"] if isinstance(e, dict)}
+    assert not (blocking & accepted_ids), (
+        f"{sorted(blocking & accepted_ids)} is both the live finding and its "
+        f"own exemption. The point of shipping this list empty is that the "
+        f"author must not adjudicate his own finding.")
+    assert "must not adjudicate his own finding" in _acceptance_prose()
