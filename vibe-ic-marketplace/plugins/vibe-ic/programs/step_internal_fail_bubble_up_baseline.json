@@ -3,8 +3,14 @@
   "findings_total": 5,
   "runs_swept": 13,
   "runs_with_reports": 3,
+  "_withdrawn_comment": "Findings that left findings_total because their run left the published corpus (or stopped carrying a reports/ tree), NOT because anyone examined them (vibe-ic#1202). Recorded so a fall in findings_total can never be read as debt paid. These reports still declare FAIL. NOT part of findings_total and not a ceiling on anything — the ratchet is over the published corpus only.",
+  "_withdrawn_provenance": "Re-derived from git, not re-measured: 94c7572aa moved this file 7 -> 5 and its diff shows both sha256 runs UNCHANGED (2 and 3) while both u_hawaii_adc runs left. Zero repaired, two withdrawn. Replaying that commit's parent baseline through the fixed gate against the corpus at 75776dbbb reproduces exactly these two entries.",
   "per_run": {
     "ic/sha256/clean_run_v1422_20260715": 2,
     "ic/sha256/clean_run_v1427_20260715": 3
+  },
+  "withdrawn_unexamined": {
+    "ic/u_hawaii_adc/clean_run_v1422_20260715": 1,
+    "ic/u_hawaii_adc/clean_run_v1427_20260715": 1
   }
 }
