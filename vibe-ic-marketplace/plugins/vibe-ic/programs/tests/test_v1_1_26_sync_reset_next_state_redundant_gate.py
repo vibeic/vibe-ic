@@ -18,6 +18,7 @@ reset-state transition is clean.  Empirical false-positive surface over all
 chip-AGNOSTIC: fixtures use generic TopModule/clk/resetn/state shapes only.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
 from _specrtl_common import (extract_spec_contract, parse_rtl_ports,  # noqa: E402
                              strip_comments)
+
+import pytest  # noqa: E402
+
+#: These tests RUN `gates_atomic.py` and then read the `gates.json` it writes.
+#: Without iverilog the gate refuses to run — correctly — and writes no report,
+#: so the read dies with FileNotFoundError on a path that was never meant to
+#: exist. A gate that REFUSED and a gate that produced a bad report are not the
+#: same result, and a traceback cannot tell them apart (#1430, #1433).
+#:
+#: Marked by CALL RELATIONSHIP, not by name. The `test_gate_*` prefix happens to
+#: select the right set in these two files, but #1430 records that the same
+#: shortcut would have silenced two tests needing no toolchain. The rule is
+#: "its body reaches `_run_gate(` or `_block_rules(`", derived with `ast`.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_gate = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="runs gates_atomic.py and reads the gates.json it writes; without "
+           "iverilog the gate refuses and writes nothing")
+
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
@@ -301,6 +321,7 @@ def _block_rules(run):
     return gates, {f["rule"] for f in blk.get("findings", [])}
 
 
+@_needs_gate
 def test_gate_blocks_bug_form(tmp_path):
     ds, run = _stage(tmp_path, _SPEC, _BUG_TERNARY)
     r = _run_gate(ds, run)
@@ -311,6 +332,7 @@ def test_gate_blocks_bug_form(tmp_path):
     assert not (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_canonical_form(tmp_path):
     ds, run = _stage(tmp_path, _SPEC, _CLEAN)
     r = _run_gate(ds, run)
