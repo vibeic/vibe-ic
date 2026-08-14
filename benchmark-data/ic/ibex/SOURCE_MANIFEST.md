@@ -33,3 +33,4 @@ Total REUSED-IP: 20 ibex *.sv + 1 prim_clock_gating.v + 2 prim_assert includes =
 ## Tool substitution
 - Synth: Synopsys DC / Cadence Genus (doc-listed) → yosys (+ slang frontend per ORFS `SYNTH_HDL_FRONTEND=slang`). OSS substitute.
 - Sim: Synopsys VCS / Verilator (doc-listed) → iverilog where the runner uses it. NOTE: input docs state Ibex SV is NOT iverilog-compatible and "Yosys cannot be used directly" without the slang frontend (sv2v/yosys-slang). Tooling-gap risk captured.
+
