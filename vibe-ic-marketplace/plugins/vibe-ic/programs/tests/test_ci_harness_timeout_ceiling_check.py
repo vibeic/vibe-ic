@@ -183,6 +183,45 @@ def test_the_shipped_workflows_declare_more_than_one_bound():
     assert C.ci_harness_timeout_seconds(root) == min(b.seconds for b in bounds)
 
 
+def test_every_shipped_script_that_runs_pytest_is_a_declared_harness_source():
+    """vibe-ic#1417. A pytest invocation this gate cannot see is a bound nobody
+    resolves, and a bound nobody resolves is an envelope no red can be attributed
+    to — which is #1417's own explanation for why two honest sweeps of `main`
+    produce different red lists.
+
+    `gatekeeper-verify-merge.sh` runs arm A1, the base side of the landing
+    differential, at its own `--timeout=`. It was NOT in `EXTRA_HARNESS_RELS`,
+    so this gate resolved the ceiling from the other harnesses and never read
+    it. Both bounds are 180 today, so nothing about the ceiling changes; what
+    changes is that a future edit to arm A1's bound is now visible here instead
+    of drifting silently against arm B's.
+
+    Discovered by grep rather than asserted from memory: any tracked `tools/`
+    script that runs `pytest` with a `--timeout` must be a declared source.
+    """
+    root = C.find_repo_root()
+    if root is None:
+        pytest.skip("no harness source in reach")
+    declared = {rel for rel in C.EXTRA_HARNESS_RELS}
+    missing = []
+    for sh in sorted((Path(root) / "tools").rglob("*.sh")):
+        rel = sh.relative_to(root).as_posix()
+        if rel in declared:
+            continue
+        text = sh.read_text(errors="replace")
+        for _lineno, cmd in C._logical_lines(text):
+            if C._PYTEST_RE.search(cmd) and C._TIMEOUT_RE.search(cmd):
+                missing.append(f"{rel}: {' '.join(cmd.split())[:120]}")
+                break
+    assert not missing, (
+        "these scripts run a real pytest harness at their own bound and are not "
+        "declared sources, so this gate cannot see the number they pin: "
+        + "; ".join(missing))
+    # PAIRED: the tuple must actually reach the resolver, not merely list names.
+    names = {b.workflow for b in C.harness_bounds(root)}
+    assert "gatekeeper-verify-merge.sh" in names, sorted(names)
+
+
 # ── an unreadable bound is not a pass ────────────────────────────────────────
 
 def test_no_workflow_is_rc_2_and_says_it_is_not_a_pass(tmp_path):
