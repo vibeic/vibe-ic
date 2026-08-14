@@ -1685,7 +1685,45 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: against P0 on 2026-08-11 and REDDENED it. Raising this number without that
 #: replay would be exactly the "widen the baseline until it is green" move the
 #: gate exists to refuse.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 482)
+#:
+#: MOVED 482 -> 479 on 2026-08-15, and like the move above it is a FINDING with
+#: a named cause rather than an accommodation. NO gate lost teeth:
+#: :data:`MUTATIONS` is byte-identical across this change, every entry still
+#: reddens what it recorded, and the three cells that left the count are cells
+#: no dimension module reports as ENFORCED any more.
+#:
+#: Cause: ``bcd44442`` ("d3: the mixed-signal steps were never unpublished --
+#: their condition is met nowhere, and M4's 'output' is its input") took M2, M3
+#: and M4 from ENFORCED to NA at dimension 3. All four mixed-signal steps share
+#: ONE step-level condition, ``files_exist:
+#: [phase1/analog/analog_block_list.json]``, and that path occurs ZERO times in
+#: ``git ls-tree -r HEAD`` over the whole repository: the three cells were
+#: ENFORCED against evidence no reader of this repository can follow.
+#:
+#: MEASURED on both arms by recomputing ``cell_states()`` from the eight
+#: dimension modules -- the same computation the grid test performs:
+#:
+#:     6011b488 (bcd44442^)    482 ENFORCED   pinned 482   grid test GREEN
+#:     75776dbb (that commit
+#:               landed)       479 ENFORCED   pinned 482   grid test RED
+#:     LOST  M2/d3  M3/d3  M4/d3            GAINED  none
+#:
+#: That commit re-measured every pin INSIDE its own module -- the d3 partition
+#: (53, 3, 7) -> (50, 2, 11) and ``_LIVE_ENTRY_COUNT`` 120 -> 129 -- and left
+#: this one, because nothing in the d3 module names it. The coupling runs
+#: through ``cell_states()`` rather than through this file, which is why a
+#: change that touches ``matrix_mutation_ledger.py`` zero times moves its
+#: number, and why the drift was found by a batch gate rather than by review.
+#:
+#: The DIRECTION is what makes this the opposite move from the one the gate
+#: refuses. 481 -> 482 above had to prove COVERAGE first, because RAISING the
+#: number claims more enforcement than was replayed. 482 -> 479 claims LESS:
+#: three cells nothing reports as ENFORCED cannot be cells a mutation is
+#: required to redden, which is exactly why
+#: ``test_every_enforced_cell_carries_a_named_mutation`` stops asking for them.
+#: No assertion was weakened, no waiver widened, and no ledger entry was
+#: re-recorded to match an observed behaviour.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 479)
 
 
 # ══════════════════════════════════════════════════════════════════════
