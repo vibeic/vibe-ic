@@ -484,6 +484,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--write-baseline", action="store_true")
     args = ap.parse_args(argv)
 
+    # A POSITIONAL BESIDE --corpus IS A CONTRADICTION, AND IT USED TO BE SILENT.
+    #
+    # `project_dir` is `nargs="?"`, so an extra path is absorbed with no error
+    # even though `--corpus` already chose the other mode. The two are mutually
+    # exclusive: one audits ONE project, the other sweeps the published corpus.
+    # Accepting both meant one of the operator's two inputs was ignored without
+    # a word.
+    #
+    # MEASURED on a38902d16, and this is the shape that makes it matter. The
+    # operator's intent is unmistakable: write the baseline to a scratch file.
+    #
+    #     $ ...check.py --corpus <empty> --write-baseline <scratch.json>
+    #     rc=0
+    #     wrote programs/step_internal_fail_bubble_up_baseline.json (findings_total=0)
+    #
+    # `--write-baseline` is `store_true`, so `<scratch.json>` landed in
+    # `project_dir` and was dropped; the write went to the DEFAULT path. The
+    # scratch file was untouched and the REAL record was zeroed — the exact
+    # destruction vibe-ic#1025 says must never happen, reached by an operator
+    # who believed they had aimed somewhere safe. The correct spelling is
+    # `--baseline <scratch.json> --write-baseline`.
+    #
+    # vibe-ic#1098 makes the ZERO-REACH write refuse, which closes the case
+    # above. It does not close this one: with a NON-empty corpus the same
+    # command still writes the default baseline and still ignores the path the
+    # operator named. That is why this is a separate refusal and not a
+    # duplicate of that fix.
+    #
+    # rc 2, not 1: this is "the request was not understood", not "the design
+    # failed" — the same tri-state the rest of this program uses.
+    if args.corpus and args.project_dir:
+        print(f"[REFUSED] both a project_dir ({args.project_dir!r}) and "
+              f"--corpus ({args.corpus!r}) were given; they are mutually "
+              f"exclusive modes. If you meant to aim the baseline write, that "
+              f"is --baseline <path> --write-baseline (--write-baseline is a "
+              f"flag and takes no path).", file=sys.stderr)
+        return 2
+
     if args.corpus:
         corpus = Path(args.corpus)
         if not corpus.is_dir():
