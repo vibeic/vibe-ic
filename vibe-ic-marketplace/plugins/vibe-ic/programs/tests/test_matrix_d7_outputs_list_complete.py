@@ -2041,6 +2041,19 @@ def d(project):
 
 def e(project):
     helper_write(project / "reports" / "epsilon.json", "{}")
+
+def f(project):
+    _atomic_artefact.write_text(project / "reports" / "zeta.json", "{}")
+
+def g(project):
+    _aa.write_json(project / "reports" / "eta.json", {})
+
+def h(project):
+    (project / "reports" / "theta.json").write_text(
+        project / "reports" / "NOT_A_DESTINATION.json")
+
+def i(project):
+    _aa.publish(project / "reports" / "omega.json", "{}")
 '''
 
 
@@ -2112,6 +2125,73 @@ def test_d7_a_first_argument_is_not_a_write_on_its_own(monkeypatch):
     assert "helper_write" not in G._ATOMIC_WRITERS
 
 
+def test_d7_the_write_detector_sees_a_SHADOWING_atomic_write(monkeypatch):
+    """vibe-ic#1452 — the drop-in atomic writers must read as writes too.
+
+    #1265 taught this detector the atomic helpers whose names are NEW
+    (`atomic_write_text`), by name alone. It did not teach it the ones that
+    KEEP the name of the `Path` method they replace and move the destination
+    to the first argument — `_atomic_artefact.write_text(p, data)`, whose own
+    docstring says it is "signature-compatible on purpose" so that converting
+    a call site is "deleting `.write_text(` and calling this instead".
+
+    That shape hit the pre-existing `elif fn.attr in ("write_text",
+    "write_bytes")` branch, which reads the destination off the RECEIVER — and
+    the receiver is the module alias `_aa`, which resolves to no path at all.
+    So the write silently vanished. MEASURED on the byte-identical pre-change
+    tree: 32 such call sites across 8 programs, and 21 declared artefact paths
+    that no oracle could attribute to any producer, among them
+    `eco_trigger_decision.json` — which `phase3_one_shot_runner` writes on the
+    line above the one that appends it to `written`.
+
+    This is #1265's defect recurring through the OTHER conversion route, which
+    is exactly what that row's own comment predicted would happen if the
+    vocabulary were keyed on the wrong thing.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    for want in ("reports/zeta.json",   # module-qualified drop-in write_text
+                 "reports/eta.json"):   # module-qualified drop-in write_json
+        assert want in seen, (
+            f"{want} was written by a drop-in atomic helper and the detector "
+            f"did not see it; d7 would report this program as producing "
+            f"nothing. detected={sorted(seen)}")
+
+
+def test_d7_a_shadowing_writer_does_not_steal_the_receiver_form(monkeypatch):
+    """PAIRED GUARD: when the RECEIVER is the path, it stays the destination.
+
+    `write_text` names two different calls — the `Path` method, whose
+    destination is the receiver, and the drop-in helper, whose destination is
+    `args[0]`. Reading `args[0]` unconditionally would make every
+    `p.write_text(payload)` report a write to whatever it PASSES, which for a
+    program that writes one artefact naming another is a producer attributed
+    to the wrong path. `h()` in the fixture writes `theta.json` and passes a
+    second artefact-shaped path as CONTENT; only the first is a write.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    assert "reports/theta.json" in seen, (
+        f"the plain Path.write_text form was traded away. detected={sorted(seen)}")
+    assert "reports/NOT_A_DESTINATION.json" not in seen, (
+        "a path passed as CONTENT to Path.write_text was counted as a write — "
+        f"the receiver stopped winning. detected={sorted(seen)}")
+
+
+def test_d7_the_shadowing_rule_is_a_vocabulary_too(monkeypatch):
+    """PAIRED GUARD, direction two: not "any attribute call's first argument".
+
+    The cheap way to make the shapes above resolve is to count `args[0]` for
+    every attribute call whose receiver is not a path. That would charge a
+    program for every helper it merely HANDS a path to. `_aa.publish(...)` is
+    not in `_SHADOWING_ATOMIC_WRITERS`, so it must not be counted, and this
+    fails the moment the implementation stops consulting the set.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    assert "reports/omega.json" not in seen, (
+        "an attribute call NOT in the shadowing vocabulary had its first "
+        f"argument counted as a write. detected={sorted(seen)}")
+    assert "publish" not in G._SHADOWING_ATOMIC_WRITERS
+
+
 def test_d7_both_write_walks_share_one_atomic_vocabulary(monkeypatch):
     """The module carries TWO traversals that must agree about what a write is.
 
@@ -2124,7 +2204,16 @@ def test_d7_both_write_walks_share_one_atomic_vocabulary(monkeypatch):
     row is about.
     """
     assert isinstance(G._ATOMIC_WRITERS, frozenset) and G._ATOMIC_WRITERS
+    # vibe-ic#1452 — the drop-in writers are a SECOND vocabulary with the same
+    # obligation, and it is asserted here rather than in a test of its own so
+    # that the next set added to this module has an obvious place to be named.
+    assert (isinstance(G._SHADOWING_ATOMIC_WRITERS, frozenset)
+            and G._SHADOWING_ATOMIC_WRITERS)
     src = Path(G.__file__).read_text(encoding="utf-8")
+    assert src.count("_SHADOWING_ATOMIC_WRITERS") >= 3, (
+        "the drop-in atomic vocabulary is referenced fewer than three times "
+        "(its definition plus both walks), so one traversal is not consulting "
+        "it and can go blind on its own")
     assert src.count("_ATOMIC_WRITERS") >= 3, (
         "the atomic vocabulary is referenced fewer than three times "
         "(its definition plus both walks), so one traversal is not consulting "

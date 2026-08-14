@@ -254,6 +254,26 @@ _WRITE_MODE_RE = re.compile(r"[waxWAX+]")
 _ATOMIC_WRITERS: FrozenSet[str] = frozenset(
     {"atomic_write_text", "atomic_write_json", "atomic_output"})
 
+#: Atomic writers that KEEP the name of the ``Path`` method they replace and
+#: move the destination to the first argument, because they are drop-in
+#: substitutes for it — ``_atomic_artefact.write_text(p, data)`` is
+#: ``p.write_text(data)`` with the final name appearing only when the write is
+#: complete, and its docstring says "signature-compatible on purpose".
+#:
+#: These CANNOT be matched by name the way :data:`_ATOMIC_WRITERS` is, and the
+#: difference is the whole reason they are a separate set: ``write_text`` also
+#: names the ``Path`` METHOD, where the destination is the RECEIVER, not
+#: ``args[0]``. Counting ``args[0]`` for every ``write_text`` would charge a
+#: program with writing whatever it happens to pass as CONTENT.
+#:
+#: They are told apart STRUCTURALLY, by :func:`_shadowed_write_target`: the
+#: destination is whichever of the receiver and the first argument resolves to
+#: a path. That keeps the rule module-agnostic for the same reason the set
+#: above is — ``_aa`` / ``_atomic_artefact`` / any future alias all read the
+#: same, and none of them has to be enumerated here (vibe-ic#1452).
+_SHADOWING_ATOMIC_WRITERS: FrozenSet[str] = frozenset(
+    {"write_text", "write_bytes", "write_json"})
+
 #: Classification of an undeclared artefact.
 LOAD_BEARING = "LOAD_BEARING"
 EVIDENCE = "EVIDENCE"
@@ -449,6 +469,32 @@ class _PathResolver:
         return tuple(segs)
 
 
+def _shadowed_write_target(resolver: "_PathResolver", fn: ast.Attribute,
+                           call: ast.Call) -> Optional[ast.AST]:
+    """Destination node of a call named in :data:`_SHADOWING_ATOMIC_WRITERS`.
+
+    ``p.write_text(data)`` and ``_aa.write_text(p, data)`` are the same NAME
+    with the destination in two different places, so the position cannot be
+    read off the name. It is read off the CODE instead: whichever of the
+    receiver and the first argument resolves to a path IS the path.
+
+    Answering with the receiver first preserves the plain ``Path`` shape
+    exactly as it behaved before this existed; the first argument is consulted
+    ONLY where the receiver resolves to nothing, which is what a module alias
+    such as ``_aa`` does. So this can add writes and cannot remove one — and
+    an over-approximated write set is the direction this module already
+    declares safe (see :class:`_PathResolver`).
+
+    Returns ``None`` when neither resolves, which is a call this walk has
+    nothing to say about rather than a write to report.
+    """
+    if resolver.tail(fn.value):
+        return fn.value
+    if call.args and resolver.tail(call.args[0]):
+        return call.args[0]
+    return None
+
+
 def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
     """Tail segments of every path this module WRITES.
 
@@ -498,8 +544,10 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
         if isinstance(fn, ast.Attribute):
             if fn.attr in _ATOMIC_WRITERS and n.args:
                 add(n.args[0])
-            elif fn.attr in ("write_text", "write_bytes"):
-                add(fn.value)
+            elif fn.attr in _SHADOWING_ATOMIC_WRITERS:
+                dest = _shadowed_write_target(resolver, fn, n)
+                if dest is not None:
+                    add(dest)
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
@@ -737,8 +785,17 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
             # drift even though the traversals still can.
             if fn.attr in _ATOMIC_WRITERS and n.args:
                 target = n.args[0]
-            elif fn.attr in ("write_text", "write_bytes"):
+            elif fn.attr in _SHADOWING_ATOMIC_WRITERS:
+                # Same two destination positions as `_collect_writes`, asked
+                # the question THIS walk asks. There is no path to resolve
+                # here — the destination is an argparse value, not a literal —
+                # so the receiver is tried first, exactly as before this set
+                # existed, and the first argument only where the receiver does
+                # not name the flag. Additive: a call that already answered
+                # True still does.
                 target = fn.value
+                if not _mentions_args_attr(target, dest, aliases) and n.args:
+                    target = n.args[0]
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
