@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -761,6 +762,28 @@ def test_declared_gate_commands_names_programs_only(fcc):
     assert fcc._declared_gate_commands({"files_exist": ["x"]}) == []
 
 
+def _program_free_gated_steps(fcc):
+    """Every flow step whose gate declares predicates but NO program.
+
+    DERIVED FROM THE FLOW, never a pinned id. This test named step 12, whose
+    gate has since grown a `program_exit_zero`
+    (`dft_post_optimization_scan_survival_check`), so its own PRECONDITION went
+    false and the test went red on `main` while the property it guards was never
+    in question. A test that locates its subject by number goes red when the
+    flow moves; one that locates it by the property under test does not.
+    """
+    out = []
+    for st in _flow_steps():
+        gate = st.get("gate")
+        if not gate:
+            continue
+        if fcc._declared_gate_commands(gate):
+            continue
+        if fcc._declared_gate_summary(gate):
+            out.append(st)
+    return out
+
+
 def test_a_files_exist_only_step_is_not_gateless(fcc):
     """The distinction the ADVISORY turns on.
 
@@ -773,11 +796,28 @@ def test_a_files_exist_only_step_is_not_gateless(fcc):
     assert fcc._declared_gate_summary(None) == ""
     assert fcc._declared_gate_summary({}) == ""
 
-    summary = fcc._declared_gate_summary(_step(12)["gate"])
-    assert summary, "step 12 declares a gate; the summary must describe it"
-    assert "post_dft_netlist.v" in summary, summary
-    assert fcc._declared_gate_commands(_step(12)["gate"]) == [], (
-        "precondition: step 12's gate declares no program")
+    # AN EMPTY POPULATION IS NOT A PASS. If the flow ever stops declaring any
+    # program-free gate, this test would otherwise go green over nothing —
+    # which is the shape it exists to refuse one level up. Measured on
+    # `3d13e2c59`: exactly ONE such step remains (step 1, Spec-to-RTL), down
+    # from a population that once included step 12.
+    subjects = _program_free_gated_steps(fcc)
+    assert subjects, (
+        "no flow step declares a gate with predicates but no program, so this "
+        "test has nothing to measure — it must not report that as a pass")
+
+    for st in subjects:
+        gate = st["gate"]
+        sid = st.get("id")
+        summary = fcc._declared_gate_summary(gate)
+        assert summary, (
+            f"step {sid} declares a gate; the summary must describe it")
+        # The summary must name the PREDICATE, because naming the program is
+        # exactly what these steps cannot do.
+        assert fcc._declared_gate_commands(gate) == [], (
+            f"precondition: step {sid}'s gate declares no program")
+        assert "files_exist[" in summary or "json_field_true[" in summary, (
+            f"step {sid}'s summary describes no predicate kind: {summary}")
 
 
 def test_declared_gate_summary_covers_the_predicate_kinds(fcc):
@@ -953,20 +993,97 @@ def test_declared_outputs_are_all_required(fcc, tmp_path, sid, files, dropped):
     assert any(dropped.rsplit("/", 1)[-1] in r for r in res.reasons)
 
 
-def test_step33_gate_audit_trail_is_not_written_over_its_own_input():
+def _gate_program_clauses(fcc, gate):
+    """Every program clause a gate declares, as the FULL command string.
+
+    `fcc._declared_gate_commands` walks the same shapes but returns only the
+    first token — the program NAME — which is the right answer to its own
+    question and the wrong one here: this test is about an ARGUMENT (`--json`
+    <path>). The walk mirrors that function's structural one (all_of / any_of
+    containers; a program key holding a bare string or a `{"command": ...}`
+    dict) and reads `fcc._PROGRAM_GATE_KEYS` rather than restating the key set,
+    so a fourth program key added to the flow cannot leave this blind.
+
+    Structural, not a text scan, for the reason that function records: a program
+    name can appear inside a path argument, and a text scan would find it there.
+    """
+    out = []
+
+    def _walk(node):
+        if isinstance(node, list):
+            for item in node:
+                _walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key in ("all_of", "any_of"):
+            sub = node.get(key)
+            # `any_of: true` is a MODIFIER flag on a files_exist block, not a
+            # nested gate list — only recurse into real containers.
+            if isinstance(sub, (list, dict)):
+                _walk(sub)
+        for key in fcc._PROGRAM_GATE_KEYS:
+            spec = node.get(key)
+            if isinstance(spec, dict):
+                spec = spec.get("command")
+            if isinstance(spec, str) and spec.strip():
+                out.append(spec)
+
+    _walk(gate)
+    return out
+
+
+def test_the_clause_walk_agrees_with_the_programs_own_walk(fcc):
+    """The helper above must find the same gates the production walk finds.
+
+    Two walks over one shape drift; this pins them together over the REAL flow
+    rather than over a fixture, so a container kind added to the yaml that only
+    one of them recurses into is caught here."""
+    for st in _flow_steps():
+        gate = st.get("gate")
+        if not gate:
+            continue
+        names = fcc._declared_gate_commands(gate)
+        mine = [shlex.split(c)[0] if c.strip() else ""
+                for c in _gate_program_clauses(fcc, gate)]
+        assert sorted(set(mine)) == sorted(set(names)), (
+            f"step {st.get('id')}: clause walk {sorted(set(mine))} disagrees "
+            f"with _declared_gate_commands {sorted(set(names))}")
+
+
+def test_step33_gate_audit_trail_is_not_written_over_its_own_input(fcc):
     """Step 33's gate must not point --json at reports/phase3/power.json.
 
     That path is the step's declared required_output and holds the runner's
     power summary; the checker writes a different schema, so honouring the flag
     (which the wrapper now does) would overwrite the power data with an audit
     of it.
+
+    THE GATE'S SHAPE IS NOT PART OF THE PROPERTY. This read `gate["program_
+    exit_zero"]`, which assumes the clause sits at the top level. Step 33 now
+    declares `all_of: [power_report_check, power_total_vs_budget_check]` and the
+    test died on `KeyError: 'program_exit_zero'` — a RED that says nothing about
+    the property, on a step where the property still holds. It is now read
+    through `_declared_gate_commands`, the same accessor the production code
+    uses, so adding a clause to this gate cannot redden it again, and a SECOND
+    clause is covered rather than ignored: every command in the gate is checked,
+    not just the first one that happens to be there.
     """
-    gate = _step(33)["gate"]
-    cmd = gate["program_exit_zero"]
-    assert "power_report_check" in cmd
-    assert "--json" in cmd
-    assert "reports/phase3/power.json" not in cmd
-    assert "reports/phase3/power.json" in _step(33)["required_outputs"]
+    cmds = _gate_program_clauses(fcc, _step(33)["gate"])
+    assert cmds, "step 33 declares no program at all; the gate lost its checker"
+    # The named checker must still be there — this test is about step 33's power
+    # audit, not about whatever else the gate grows.
+    assert any("power_report_check" in c for c in cmds), cmds
+    assert any("--json" in c for c in cmds), cmds
+    # THE PROPERTY, over EVERY clause. One clause writing over the step's own
+    # declared output is the defect, whichever clause it is — and step 33 now
+    # declares TWO, so checking only the first would leave half the gate
+    # unexamined.
+    own_output = "reports/phase3/power.json"
+    for cmd in cmds:
+        assert own_output not in cmd, (
+            f"step 33's gate points --json at its own required_output: {cmd}")
+    assert own_output in _step(33)["required_outputs"]
 
 
 def _all_missing_results(fcc, waived=(), failed=()):
