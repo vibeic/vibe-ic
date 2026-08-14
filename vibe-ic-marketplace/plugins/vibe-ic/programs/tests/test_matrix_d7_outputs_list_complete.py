@@ -1707,3 +1707,120 @@ def test_self_certified_evidence_is_named_and_refusable():
         "synthesized fixture, so neither the advisory nor the strict refusal "
         "was exercised — this test measured nothing"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# vibe-ic#1265 — the write-detector and the ATOMIC writers
+# ──────────────────────────────────────────────────────────────────────
+#: The three shapes an atomic helper call actually arrives in. All three name
+#: the destination FIRST, which is what makes them invisible to a detector that
+#: only knows `p.write_text(...)` — there the path is the ATTRIBUTE VALUE, here
+#: it is `args[0]`.
+_ATOMIC_CALL_SHAPES = '''
+from pathlib import Path
+import _atomic_output
+import _atomic_artefact
+from _atomic_output import atomic_write_text
+
+def a(project):
+    _atomic_output.atomic_write_text(project / "reports" / "alpha.json", "{}")
+
+def b(project):
+    _atomic_artefact.atomic_write_text(project / "reports" / "beta.json", "{}")
+
+def c(project):
+    atomic_write_text(project / "reports" / "gamma.json", "{}")
+
+def d(project):
+    (project / "reports" / "delta.json").write_text("{}")
+
+def e(project):
+    helper_write(project / "reports" / "epsilon.json", "{}")
+'''
+
+
+def _detected(src: str) -> set:
+    import ast as _ast
+    return {"/".join(t) for t in G._collect_writes(_ast.parse(src))}
+
+
+def test_d7_the_write_detector_sees_an_atomic_write(monkeypatch):
+    """A program converted to an atomic writer must still read as a WRITE.
+
+    WHY THIS EXISTS (vibe-ic#1265). The detector recognised `open()`,
+    `p.open("w")`, `p.write_text` and `p.write_bytes` — every one of which
+    carries the path as the ATTRIBUTE VALUE. An atomic helper carries it as
+    `args[0]` instead, so the moment a program was converted the delegate walk
+    saw NO WRITE at all, and dimension 7 stopped being able to say that the
+    program produces its declared output. MEASURED on the byte-identical
+    pre-change file: all three atomic shapes below are MISSED and only
+    `delta.json` is seen.
+
+    That is not a hypothetical conversion. vibe-ic#1241's group (d) is
+    SEVENTEEN programs to be routed through exactly this call, and each one
+    would have gone silent here.
+
+    THE VOCABULARY IS MODULE-AGNOSTIC ON PURPOSE, and this test pins that
+    rather than describing it: `_atomic_output.atomic_write_text` (#1265) and
+    `_atomic_artefact.atomic_write_text` (#1110) are two open candidates for
+    the same primitive and the arbitration is not settled. A detector keyed on
+    the winning module would report NO WRITE for every program converted
+    through the other name — the same defect, one module over — so both are
+    asserted, together with the bare `from ... import` form.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    for want in ("reports/alpha.json",      # module-qualified, _atomic_output
+                 "reports/beta.json",       # module-qualified, _atomic_artefact
+                 "reports/gamma.json"):     # bare, after `from ... import`
+        assert want in seen, (
+            f"{want} was written by an atomic helper and the detector did not "
+            f"see it; d7 would report this program as producing nothing. "
+            f"detected={sorted(seen)}")
+
+
+def test_d7_the_plain_write_shapes_still_resolve(monkeypatch):
+    """PAIRED GUARD, direction one: the old shapes are not traded away.
+
+    Widening a detector by rewriting how it resolves a call is exactly where
+    the previously-working half gets dropped, so the plain attribute form is
+    asserted in the same fixture that exercises the new one.
+    """
+    assert "reports/delta.json" in _detected(_ATOMIC_CALL_SHAPES)
+
+
+def test_d7_a_first_argument_is_not_a_write_on_its_own(monkeypatch):
+    """PAIRED GUARD, direction two: the rule is a VOCABULARY, not "args[0]".
+
+    The cheap way to make the shapes above resolve is to treat the first
+    argument of every call as a destination. That would report a write for any
+    function that merely RECEIVES a path — `_load(p)`, `_check(p)`, a helper
+    that reads it — and dimension 7 would start charging steps for artefacts
+    nothing produces. `helper_write` is not in `_ATOMIC_WRITERS`, so its
+    argument must not be counted, and this test fails the moment the
+    implementation stops consulting the set.
+    """
+    seen = _detected(_ATOMIC_CALL_SHAPES)
+    assert "reports/epsilon.json" not in seen, (
+        "a call NOT in the atomic vocabulary had its first argument counted "
+        f"as a write — the rule has become 'args[0]', not a vocabulary. "
+        f"detected={sorted(seen)}")
+    assert "helper_write" not in G._ATOMIC_WRITERS
+
+
+def test_d7_both_write_walks_share_one_atomic_vocabulary(monkeypatch):
+    """The module carries TWO traversals that must agree about what a write is.
+
+    `_collect_writes` and the delegate walk inside `flag_value_is_written` are
+    separate copies of the same shapes — the second exists to answer "does the
+    program this gate names write its --json target". They are bound to ONE
+    frozen set so the vocabulary cannot drift even though the traversals can;
+    asserting the shared name is what keeps a future edit from teaching one
+    walk and silently leaving the other blind, which is the failure this whole
+    row is about.
+    """
+    assert isinstance(G._ATOMIC_WRITERS, frozenset) and G._ATOMIC_WRITERS
+    src = Path(G.__file__).read_text(encoding="utf-8")
+    assert src.count("_ATOMIC_WRITERS") >= 3, (
+        "the atomic vocabulary is referenced fewer than three times "
+        "(its definition plus both walks), so one traversal is not consulting "
+        "it and can go blind on its own")
