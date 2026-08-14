@@ -689,6 +689,27 @@ def replay_results() -> Tuple[L.ReplayResult, ...]:
     return L.replay_many(plan, jobs=8, timeout=REPLAY_TIMEOUT)
 
 
+#: How many replay pairs may be UNMEASURABLE — the witness was already red, so
+#: the mutation demonstrated nothing (vibe-ic#1432). A CEILING that MAY ONLY
+#: SHRINK, never an equality: the population falls on its own as the underlying
+#: reds land, and an equality pin would go red on good news.
+#:
+#: `witness` = 0 is MEASURED and is the honest number today: every witness is
+#: green on clean main, which is why the default mode is trustworthy. Raising
+#: this one is never the right fix — it would mean a witness went red, and a red
+#: witness hides whatever its mutation would have proved.
+#:
+#: `all` = 24 is the count #1432 reports over the 707 all-mode pairs. ONE of the
+#: 24 was replayed to completion and observed (`D3-UNDECLARED-ARTEFACT` @ step
+#: 15, `baseline_rc=1`); the other 23 are derived by intersecting `applies_to`
+#: with main's measured red set, and are a PREDICTION. A ceiling is the safe
+#: direction for a predicted number — too high only delays a future shrink,
+#: whereas too low fails loudly and gets corrected. #1432 records that 14 of
+#: them are d7 cells #1310/#1339/#1377 already fix, 9 are the d3 cells of
+#: #1349, and 1 is d4 step1 (#1235/#1193), so this should fall to 0.
+UNMEASURABLE_CEILING = {"witness": 0, "all": 24}
+
+
 @pytest.mark.parametrize("name", [m.name for m in L.MUTATIONS])
 def test_lock2_the_mutation_really_reddens_its_witness(name):
     """LOCK 2: perform the edit for real and watch the cell go PASS -> FAIL.
@@ -708,6 +729,13 @@ def test_lock2_the_mutation_really_reddens_its_witness(name):
     mine = [r for (n, _), r in results.items() if n == name]
     assert mine, f"{name} produced no replay result"
     for r in mine:
+        if r.unmeasurable:
+            # vibe-ic#1432 — this test's OWN docstring says "an already-red cell
+            # proves nothing", and it was still asserting `proved` on one. The
+            # pair is counted and ratcheted by
+            # `test_the_replay_actually_ran_and_is_not_starved`; it is not
+            # silently dropped.
+            continue
         assert r.proved, (
             f"{name} @ step {r.step_id}: {r.verdict}.\n"
             f"The ledger says this edit reddens the cell; re-running it says "
@@ -745,9 +773,34 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
     # published finding is that the gate does not move; scoring those as
     # unproved would make the honest thing to do with a measured gap be to
     # delete the record of it.
-    assert all(r.as_recorded for r in results), [
+    # vibe-ic#1432 — UNMEASURABLE pairs are held out of the grid and RATCHETED
+    # instead. They are not evidence about a gate: the witness was red before
+    # the edit, so the experiment did not run. Scoring them here reported "the
+    # mutation failed to redden its witness" about a tree state, which is how
+    # batch R1 read as a lost gate.
+    #
+    # A CEILING, not an equality, and it MAY ONLY SHRINK. The population falls
+    # on its own as the underlying reds are fixed, so an equality pin would go
+    # red on good news — the failure mode #526's `assert seen >= 11` had.
+    unmeasurable = [r for r in results if r.unmeasurable]
+    ceiling = UNMEASURABLE_CEILING[L.replay_mode()]
+    record_property("matrix_mutation_unmeasurable",
+                    f"mode={L.replay_mode()} unmeasurable={len(unmeasurable)} "
+                    f"ceiling={ceiling}")
+    assert len(unmeasurable) <= ceiling, (
+        f"{len(unmeasurable)} pair(s) could not be measured (witness already "
+        f"red), above the recorded ceiling of {ceiling}. A NEW unmeasurable "
+        f"pair means a witness went red, which hides whatever the mutation "
+        f"would have proved — fix the red, do not raise this number:\n" +
+        "\n".join(f"  {r.mutation}@{r.step_id}: baseline_rc={r.baseline_rc}"
+                   for r in unmeasurable))
+
+    measured = [r for r in results if not r.unmeasurable]
+    assert measured, (
+        "every replayed pair was unmeasurable — the grid asserts nothing")
+    assert all(r.as_recorded for r in measured), [
         f"{r.mutation}@{r.step_id}: expected {r.expected}, got {r.verdict}"
-        for r in results if not r.as_recorded]
+        for r in measured if not r.as_recorded]
     # Every dimension must be represented, or a whole dimension's entries could
     # be un-replayed while the count still looked healthy.
     dims = {r.dim for r in results}
