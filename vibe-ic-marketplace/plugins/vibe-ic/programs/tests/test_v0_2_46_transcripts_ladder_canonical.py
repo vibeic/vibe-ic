@@ -16,9 +16,12 @@ a vetted canonical sample failing the hidden golden at >=50% mismatch flags
 canonical_samples/ access is itself blindness-audited (V3).
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
@@ -30,6 +33,21 @@ SKILL = PLUGIN / "skills" / "open-benchmark-methodology" / "SKILL.md"
 
 sys.path.insert(0, str(HARNESS))
 import score_iverilog_tb as sit  # noqa: E402
+
+#: The three tests below COMPILE AND RUN Verilog — they stage a canonical
+#: module, simulate it against the golden and assert on the mismatch count
+#: ("4/4"). Without a simulator they do not fail, they ERROR at
+#: `FileNotFoundError: 'iverilog'` before reaching any assertion, which is a
+#: red that says nothing about the scorer. Roughly forty sibling suites already
+#: carry this gate (e.g. `test_902_sim_toolchain_provenance.py:54`); this file
+#: was the one that did not.
+#:
+#: SCOPED TO THE THREE, deliberately. The other eleven tests in this file need
+#: no simulator — `test_no_canonical_returns_none` returns early on an absent
+#: canonical dir — and a file-level skip would hide them on every host without
+#: iverilog, trading a loud wrong red for a silent loss of real coverage.
+_HAVE_SIM = bool(shutil.which("iverilog") and shutil.which("vvp"))
+_NO_SIM = "iverilog/vvp not installed — this test compiles and runs Verilog"
 
 
 # ── #415: transcripts export is the orchestration default ────────────────
@@ -151,6 +169,7 @@ def _stage_canonical(tmp_path, monkeypatch, body):
     monkeypatch.setattr(sit, "_CANONICAL_DIR", tmp_path / "canon")
 
 
+@pytest.mark.skipif(not _HAVE_SIM, reason=_NO_SIM)
 def test_canonical_disagreement_returns_evidence(tmp_path, monkeypatch):
     ds = _stage_dataset(tmp_path)
     # canonical inverts -> disagrees with the golden on every sample
@@ -162,6 +181,7 @@ def test_canonical_disagreement_returns_evidence(tmp_path, monkeypatch):
     assert ev and "4/4" in ev
 
 
+@pytest.mark.skipif(not _HAVE_SIM, reason=_NO_SIM)
 def test_canonical_agreement_returns_none(tmp_path, monkeypatch):
     ds = _stage_dataset(tmp_path)
     _stage_canonical(tmp_path, monkeypatch,
@@ -178,6 +198,7 @@ def test_no_canonical_returns_none(tmp_path, monkeypatch):
         "ProbX", ds, _LAYOUT, _ARGS, "somebench") is None
 
 
+@pytest.mark.skipif(not _HAVE_SIM, reason=_NO_SIM)
 def test_score_shape_c_flags_disclosure_only(tmp_path, monkeypatch):
     # failing sample + disagreeing canonical -> verdict stays FAIL, flag set
     ds = _stage_dataset(tmp_path)
