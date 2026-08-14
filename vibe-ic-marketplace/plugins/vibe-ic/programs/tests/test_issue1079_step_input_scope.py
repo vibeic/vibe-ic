@@ -230,3 +230,75 @@ def test_env_values_naming_the_oracle_are_removed(tmp_path, project):
     out, removed = sis.scrub_env(env, project, [])
     assert "GOLDEN" not in out and removed == ["GOLDEN"], (out, removed)
     assert out["RTL"] == env["RTL"], "a legitimate path was stripped"
+
+
+# ---------------------------------------------------------------------------
+# THE BYPASS — recovered from #1105, retargeted to THIS mechanism
+# ---------------------------------------------------------------------------
+# #1105 (`step_input_scope_enforce.py`, independent lineage) carried
+# `test_the_hook_sees_a_read_that_BYPASSES_the_python_open_name`. Consolidating
+# onto #1158's `step_input_scope.py` cannot port that file — it imports a module
+# this branch does not carry, and a straight copy aborts COLLECTION, which greps
+# as zero failures and reads as a clean baseline.
+#
+# The PROPERTY, though, survives the change of mechanism and was the one thing
+# genuinely lost. This module already relies on it in writing:
+#
+#   :56  "FILESYSTEM covered for PYTHON children, by an audit hook
+#         (`sys.addaudithook`, …)"
+#   :70  a stated limit — "a read through a route that is not the `open` audit
+#         event"
+#
+# A rebound `builtins.open` would be defeated by a child that never touches the
+# NAME. `sys.addaudithook` is not, because CPython raises the `open` event from
+# C under `os.open` too. Nothing on this branch drove a descriptor-level read,
+# so the difference between "we hooked a name" and "we hooked the event" was
+# unmeasured — and those two have identical behaviour on every other test here.
+def test_a_descriptor_level_read_does_not_get_past_the_hook(tmp_path, project):
+    """`os.open` never touches `builtins.open`, and must still be denied.
+
+    This is what distinguishes the audit-hook mechanism from rebinding a name:
+    every other test in this file would pass equally well against a rebound
+    `builtins.open`, and this one would not.
+    """
+    script = tmp_path / "descriptor_reader.py"
+    script.write_text(textwrap.dedent(f"""
+        import os, sys
+        root = os.environ["PROJ"]
+        try:
+            fd = os.open(os.path.join(root, {GOLDEN_REL!r}), os.O_RDONLY)
+        except PermissionError:
+            sys.exit(3)
+        os.close(fd)
+        sys.stdout.write("READ-BY-DESCRIPTOR")
+        sys.exit(0)
+    """))
+    res = _run(script, project, on=True, step="14", guard=tmp_path / "g_fd")
+    assert res.rc != 0, (
+        "a descriptor-level read of the oracle was allowed with enforcement ON "
+        "— the boundary is hooking the `open` NAME rather than the audit "
+        f"event, so any child using os.open walks past it.\nout={res.out}\n"
+        f"err={res.err}")
+    assert "READ-BY-DESCRIPTOR" not in res.out, (
+        f"the descriptor was handed out.\nout={res.out}")
+    assert res.scope.get("enforced") is True, res.scope
+
+
+def test_the_SAME_descriptor_read_is_allowed_with_enforcement_OFF(
+        tmp_path, project):
+    """The paired half. Without it the test above would also pass on a
+    mechanism that denies `os.open` unconditionally, which is not a boundary —
+    the sibling `test_a_boundary_that_denies_EVERYTHING_is_not_a_boundary`
+    makes the same point for the deny list."""
+    script = tmp_path / "descriptor_reader_off.py"
+    script.write_text(textwrap.dedent(f"""
+        import os, sys
+        root = os.environ["PROJ"]
+        fd = os.open(os.path.join(root, {GOLDEN_REL!r}), os.O_RDONLY)
+        os.close(fd)
+        sys.stdout.write("READ-BY-DESCRIPTOR")
+    """))
+    res = _run(script, project, on=False, step="14", guard=tmp_path / "g_fd_off")
+    assert res.rc == 0, res.err
+    assert "READ-BY-DESCRIPTOR" in res.out, res.out
+    assert res.scope.get("enforced") is False, res.scope
