@@ -221,11 +221,38 @@ def main(argv=None) -> int:
 
     res = scan(a.repo, a.limit, a.marker)
     if a.json:
+        # ATOMIC, and by hand (vibe-ic#1082). A direct `dest.write_text(...)`
+        # creates the final name first and fills it after, so a crash mid-write
+        # leaves a truncated report that the next reader cannot tell from a
+        # complete one — which is this program's own subject, one layer over:
+        # a half-written scan result is "I could not look" wearing the shape of
+        # an answer.
+        #
+        # NOT through `_atomic_artefact`, which is what the gate's printed
+        # remedy asks for, because that helper is not on main — and importing a
+        # private helper that is not in the tree is itself a defect
+        # (vibe-ic#1469). A new program cannot satisfy both gates through the
+        # prescribed route until the helper lands, so it does the actual atomic
+        # operation instead: write a sibling temp file, then `os.replace`, which
+        # is atomic on the same filesystem. Switch to the helper when it exists.
+        import os
+        import tempfile
         from pathlib import Path
-        Path(a.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(a.json).write_text(json.dumps(
-            {"program": "open_issue_claim_scan", **res}, indent=2) + "\n",
-            encoding="utf-8")
+        dest = Path(a.json)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(
+            {"program": "open_issue_claim_scan", **res}, indent=2) + "\n"
+        fd, tmp = tempfile.mkstemp(dir=str(dest.parent),
+                                   prefix=dest.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            os.replace(tmp, dest)
+        except BaseException:
+            # The temp file must not outlive a failed write, or the next run
+            # inherits litter beside the report it is trying to publish.
+            Path(tmp).unlink(missing_ok=True)
+            raise
 
     if "error" in res:
         print(f"[NOT SCANNED] {res['error']}. This is NOT '0 unclaimed' — a "
