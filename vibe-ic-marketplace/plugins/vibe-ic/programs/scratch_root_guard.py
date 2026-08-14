@@ -198,9 +198,8 @@ def pytest_addoption(parser):
              "tree. Disclosed in the run header; see vibe-ic#1446.")
 
 
-def pytest_report_header(config):
-    """Printed on EVERY run, passing or failing. A measurement that does not
-    state its own conditions is what #1446's five irreconcilable counts were."""
+def declaration(config) -> str:
+    """The one line every run states about the root it measured from."""
     root, top, allowed = classify(config)
     if top is None:
         return (f"scratch_root_guard: {root} — outside any git work tree "
@@ -208,6 +207,29 @@ def pytest_report_header(config):
     state = "ALLOWED BY FLAG — results from this run are not trustworthy" \
         if allowed else "REFUSED"
     return f"scratch_root_guard: {root} — INSIDE work tree {top} [{state}]"
+
+
+def pytest_report_header(config):
+    """The verbose header. Not sufficient on its own — see below."""
+    return declaration(config)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """AND at session end, because `-q` SUPPRESSES the header — and `-q` is the
+    shape the landing harness runs.
+
+    Measured, and the reason this hook exists beside the header one:
+
+        pytest -q  ... | grep -c scratch_root_guard   ->  0
+        pytest     ... | grep -c scratch_root_guard   ->  2
+
+    A guard whose subject is runs that do not state their own conditions,
+    shipped so that it did not state its own condition in the only invocation
+    shape that matters, would have been this issue's defect wearing this
+    issue's fix. `suite_write_guard` prints from `pytest_sessionfinish` for the
+    same reason and it survives `-q`; this follows it.
+    """
+    print("\n[INFO] " + declaration(session.config))
 
 
 def pytest_configure(config):
