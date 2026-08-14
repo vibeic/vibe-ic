@@ -143,6 +143,14 @@ def test_no_shipped_class_declares_typical_scaffolds():
 def test_the_other_class_reference_content_survived():
     """Guard against over-removal: only the scaffolds were meant to go."""
     ref = gap_detect._load_k3_defaults()["class_reference"]
+    # Same denominator guard as above, and it is not decoration: without it an
+    # empty load reports `apb-peripheral itself must not have been deleted`,
+    # which names a deletion that never happened and sends the reader to the
+    # wrong file. An empty corpus is a load failure, not an over-removal.
+    assert len(ref) >= 30, (
+        f"class_reference did not load ({len(ref)} classes) — nothing was "
+        f"deleted; DEFAULT_DEFAULTS_DIR ({DEFAULT_DEFAULTS_DIR}) did not "
+        f"resolve from this cwd")
     for cls in _SCAFFOLDED_CLASSES:
         assert cls in ref, f"{cls} itself must not have been deleted"
         assert ref[cls].get("reference"), f"{cls} lost its `reference`"
