@@ -65,8 +65,22 @@ CENSUS_GATE_PRESENT = 62
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
-CENSUS_BLOCKS_ON_PRESENT = 62
-CENSUS_BLOCKS_ON_NON_EMPTY = 60
+# 62 -> 63 / 60 -> 61 on 2026-08-11: step P0 gained `blocks_on: [1]` in
+# 332b9985e (#923/#929). P0 is a stage1 step that reads step 1's RTL — its
+# `required_inputs: [{from: 1}]` already declared that data edge — but it
+# declared no ordering edge at all, so a FAILED Phase 1 would not have redded
+# it. That was invisible while `stages[].steps` was a second membership
+# declaration: the roster never listed P0, so the stage1-ancestry guard never
+# examined it. Deleting the roster made the guard see it, and the edge was
+# written down to match the data edge the flow already had.
+#
+# Both counts move by exactly one and NOTHING ELSE does: the flow still has 63
+# steps, no id was added or removed since the pin, and `present - non_empty`
+# is still exactly {D1, A1} — the two genuine roots this test is about. The
+# asserted PROPERTY is unchanged; only the census of a flow that legitimately
+# gained one ordering edge moved.
+CENSUS_BLOCKS_ON_PRESENT = 63
+CENSUS_BLOCKS_ON_NON_EMPTY = 61
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -279,10 +293,15 @@ def test_gate_presence_matches_the_yaml(raw_steps):
 def test_blocks_on_presence_is_62_but_non_empty_is_60(raw_steps):
     """The two are NOT the same set, and conflating them is a real error.
 
-    `blocks_on` is DECLARED on 62 steps but declared EMPTY on D1 and A1 — the
-    flow's two genuine roots. "62 steps have blocks_on" is a presence count; a
-    test that reads it as "62 steps have upstream dependencies" would demand an
-    edge from a root and be wrong twice over.
+    `blocks_on` is DECLARED on all 63 steps but declared EMPTY on D1 and A1 —
+    the flow's two genuine roots. "63 steps have blocks_on" is a presence
+    count; a test that reads it as "63 steps have upstream dependencies" would
+    demand an edge from a root and be wrong twice over.
+
+    The set identity below (`present - non_empty == {D1, A1}`) is the part that
+    carries the meaning; the two counts are a census that moves whenever the
+    flow legitimately gains or loses an ordering edge. Both moved by one on
+    2026-08-11 — see the note beside the constants.
     """
     present = {F.normalize_id(s["id"]) for s in raw_steps if "blocks_on" in s}
     non_empty = {
