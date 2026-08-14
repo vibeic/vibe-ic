@@ -515,24 +515,40 @@ def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
     call to the sweeper must remove the directory AND drop the registration,
     or the repo keeps the entry forever (`git worktree prune` cannot clear one
     whose directory still exists).
+
+    IN A PRIVATE TMP ROOT, NEVER THE REAL `/tmp` — #1263. This test asserts
+    that THIS sweep did the reaping (`str(leaked) in rep["reaped"]`), and on
+    the real `/tmp` that claim is not the test's to make: every other agent on
+    this host sweeps the same shared `hostindep-` prefix, so a peer legitimately
+    reaping the fixture's directory first turned the assertion red with nothing
+    wrong in the code under test. Measured on a 25-agent host with one peer
+    sweeper alongside: 4 of 6 runs red, in two faces — the peer removing it
+    inside the 0.2s kill window (the `is_dir` guard above fires), and the peer
+    removing it before the sweep listed candidates (`reaped` comes back empty).
+    `_legacy_leftover` below already states this rule; this test was the one
+    place in the file that did not follow it. The seams exist for exactly this
+    — `sweep_abandoned_scratch`'s own docstring says so — and using them keeps
+    every assertion below intact rather than loosening one of them.
     """
     import os
     import signal
     import time
 
     r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
+    tmp = tmp_path / "tmproot"
+    tmp.mkdir()
     child = subprocess.Popen(
         [sys.executable, "-c",
          "import subprocess, sys, time\n"
          "sys.path.insert(0, %r)\n"
          "import _crash_safe_scratch as S\n"
-         "res, _ = S.reserve(%r)\n"
+         "res, _ = S.reserve(%r, root=%r)\n"
          "wt = res.path / 'wt'\n"
          "subprocess.run(['git','-C',%r,'worktree','add','-q','--detach',"
          "str(wt),'HEAD'], check=True)\n"
          "print(res.path, flush=True)\n"
          "time.sleep(600)\n"
-         % (str(_PROGRAMS), G._SCRATCH_PREFIX, str(r))],
+         % (str(_PROGRAMS), G._SCRATCH_PREFIX, str(tmp), str(r))],
         stdout=subprocess.PIPE, text=True, start_new_session=True)
     leaked = Path(child.stdout.readline().strip())
     assert (leaked / "wt").is_dir(), "the fixture never created the worktree"
@@ -549,7 +565,7 @@ def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
         "the kill itself removed the tree — then the leak this test is about "
         "cannot be reproduced and nothing below is being measured")
 
-    rep = G.sweep_abandoned_scratch(r)
+    rep = G.sweep_abandoned_scratch(r, tmp_root=tmp)
     assert not leaked.exists(), (
         "a killed probe's scratch survived the next run: %s" % (rep,))
     assert str(leaked) in rep["reaped"], rep

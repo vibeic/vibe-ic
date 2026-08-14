@@ -466,7 +466,12 @@ def sweep_abandoned_scratch(repo_root: Path,
                        capture_output=True, text=True, timeout=120)
     return {"reaped": rep.reaped, "live_peers": rep.live,
             "peer_probe_pids": peers,
-            "kept": [{"path": p, "why": w} for p, w in rep.kept]}
+            "kept": [{"path": p, "why": w} for p, w in rep.kept],
+            # Removed by a CONCURRENT PEER, not by this sweep. Reported apart
+            # from `reaped` because "somebody cleaned it up" and "I cleaned it
+            # up" are different facts, and only the second one says anything
+            # about whether THIS run's reaper works.
+            "vanished": rep.vanished}
 
 
 def audit(repo_root: Path, timeout: int = 600) -> Audit:
