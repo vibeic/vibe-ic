@@ -509,14 +509,38 @@ def external_input_declarations(step_id) -> Tuple[str, ...]:
 #: into the ancestry of 44 / 14 / 4 of the 63 steps, and on an already-red main
 #: that destroys the only delta the repair agents have to read.
 #:
-#: **#1070 landed in `[v1.10.40] candidate batch MEGA`**, so all three edges are
-#: now ORDERED in the declared graph and the entries no longer describe live
-#: defects. `test_d5_the_deferred_register_only_shrinks` reddened on exactly
-#: that — it names each edge and says "delete the register entry" — which is
-#: this change. Shrinking means DELETING the entry, never rewriting it to match
-#: the new reality.
+#: **#1070 landed in `73dfb68dd`** — "consolidate the four competing #1070 edge
+#: PRs into three attributable commits (#1258)" — which adds all three in one
+#: diff: `blocks_on: [D1]` (A1), `blocks_on: [22, 24]` (25) and
+#: `blocks_on: [A8, 15, 37]` (M1). So all three edges are now ORDERED in the
+#: declared graph and the entries no longer describe live defects.
+#: `test_d5_the_deferred_register_only_shrinks` reddened on exactly that — it
+#: names each edge and says "delete the register entry" — which is this change.
+#: Shrinking means DELETING the entry, never rewriting it to match the new
+#: reality.
 #:
-#: The register stays: a NEW step in this state must still fail immediately.
+#: THE COMMIT IS NAMED RATHER THAN THE BATCH, and the distinction cost a
+#: measurement to establish. The three original commits (`f5bb38811`,
+#: `f0157c9e4`, `8aaf2ab16`) are NOT ancestors of main — they were squashed —
+#: so `git log` over the flow yaml answers with whichever commit last touched
+#: the file, which is a #1159 mixed-signal change that adds no `blocks_on` for
+#: any of these three steps. Attributing to it would name a commit that did not
+#: do this. `git log -S 'blocks_on: [22, 24]' origin/main -- <yaml>` names the
+#: one that did.
+#:
+#: The register stays, and a NEW step in this state still fails immediately —
+#: but NOT through the two tests below, and that is worth writing down. Both of
+#: them iterate over this dict, so with it empty they are register HYGIENE
+#: checks with nothing to check. What catches a genuinely unguarded layer-3
+#: edge is `D5-DECLARED-INPUT-UNORDERED`, which walks EVERY step and consults
+#: this dict only as a forgiveness list — so an empty register makes that clause
+#: STRICTER, not weaker. Measured both ways rather than argued:
+#:
+#:   put a stale entry back into the empty register
+#:       -> both register-hygiene tests RED
+#:   empty register + delete step 25's `blocks_on` 24
+#:       -> D5-DECLARED-INPUT-UNORDERED fires for step 25
+#:
 #: It is empty because the debt was paid, not because it was forgiven.
 _DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {}
 
