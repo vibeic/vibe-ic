@@ -619,7 +619,27 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # post_layout_sim_check), which is recorded in the manifest entry's `note` and
 # is why the same declaration is NOT made for FS1, where it was measured to
 # stop the producer from running at all.
-_LIVE_ENTRY_COUNT = 120
+# 2026-08-13: 120 -> 121, and 134 -> 135 declared (vibe-ic#1077 D7, on the
+# rebase onto a38902d1). Step 24 now DECLARES
+# `reports/phase3/dynamic_ir.json`, which its own gate clause already names
+# positionally and unconditionally (`dynamic_ir_drop_check reports/phase3/
+# dynamic_ir.json`) and which `dynamic_ir_drop_check` fails rc 1 without — so
+# no run that passes step 24 could ever have lacked it, and no step declared
+# it. Dimension 7 is what noticed; this is dimension 3 recording that the
+# newly-declared output is in fact produced.
+#
+# This baseline MOVED, so it is stated rather than absorbed: +1 declared,
+# +1 live, +1 PRODUCED_BY_RUN. The guarded property -- "no evidence from
+# outside the commit" -- was CHECKED, not assumed: the entry resolves against
+# `benchmark-data/ic/spm/v1.9.96_gf180mcuD`, the same root this step's three
+# sibling entries already use, tracked at HEAD at 1887 B, and nothing here
+# reaches $HOME.
+#
+# What this number must NOT be read as is wider evidence: `dynamic_ir.json` is
+# present in 4 of the 10 admissible run roots, not all of them. The manifest
+# records ONE witness per entry, as it does for the siblings, which are
+# themselves not present in all 10 either. The entry's `note` says so.
+_LIVE_ENTRY_COUNT = 121
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.

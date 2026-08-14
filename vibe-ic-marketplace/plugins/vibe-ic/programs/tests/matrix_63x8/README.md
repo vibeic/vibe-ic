@@ -147,7 +147,7 @@ Things that will bite you if you skip the docstring:
   `advisory_program_exit_zero` does **not**, `optional_program_exit_zero`
   blocks only when its `condition_files_exist` are present. Treating an
   advisory clause as enforcement is measuring something adjacent.
-* **No `program_exit_zero` form exists in `required_outputs`** — all 134<!--figure:required_output_entries-->
+* **No `program_exit_zero` form exists in `required_outputs`** — all 135<!--figure:required_output_entries-->
   entries are plain path strings. That form lives only in `gate`.
 
 ### `cells.py` — the 504<!--figure:ledger_cells-->-cell ledger
@@ -314,9 +314,9 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
 
-**504 cells: 467 ENFORCED, 15 ENFORCED-CONTRADICTED, 11 WAIVED, 11 NA.**
+**504 cells: 473 ENFORCED, 9 ENFORCED-CONTRADICTED, 11 WAIVED, 11 NA.**
 
-The 15 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 467: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+The 9 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 473: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
 **What these 504 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
 
@@ -324,7 +324,7 @@ The 15 CONTRADICTED cells are configured as enforcing while their own predicate 
 
 * **16** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
 * **45** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
-* **406** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
+* **412** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
 
 The 11 WAIVED and 11 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
 
@@ -336,9 +336,9 @@ The 11 WAIVED and 11 NA cells are not enforcing anything and enter none of those
 | 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 63 | 0 | 0 | 0 |
 | 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 62 | 0 | 1 | 0 |
 | 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 1 | 0 |
-| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 52 | 6 | 4 | 1 |
+| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 58 | 0 | 4 | 1 |
 | 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 16 | 45 | 0 | 0 | 0 | 2 |
-| **total** | | **16** | **45** | **406** | **15** | **11** | **11** |
+| **total** | | **16** | **45** | **412** | **9** | **11** | **11** |
 
 Regenerate (never edit this block by hand, and never quote it without re-running):
 
