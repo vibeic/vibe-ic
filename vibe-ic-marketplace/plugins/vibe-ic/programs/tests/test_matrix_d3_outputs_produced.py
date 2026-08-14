@@ -3301,16 +3301,42 @@ def test_d3_the_unevidenced_population_is_split_by_which_gap_it_has():
     compares it to what was measured, so writing a producer for one of these
     entries (the shrinking direction, vibe-ic#983 ruling 2) and losing a
     producer for one that had one are both loud, named events.
+
+    LEAVING THE PIN HAS TWO EXITS AND THEY NEED DIFFERENT REMEDIES. An entry in
+    `set(pinned) - set(measured)` either gained a producer, or stopped being
+    UNEVIDENCED at all — and a split OF the unevidenced cannot contain something
+    that is not unevidenced. The first version of this test named only the first
+    exit, which is the defect the rest of this module exists to catch, one level
+    down: MEASURED on `main + #1153`, where six entries leave because their
+    cells stop being ENFORCED against a run root this repository does not carry,
+    ALL SIX leave by the SECOND exit and none gained a producer. An author
+    following the old sentence would have gone looking for the program that now
+    writes `reports/analog/mixed_signal/signoff.json`, found none — this
+    module's own `producer_evidence` returns empty for it, deliberately, and
+    `test_d3_the_producer_oracle_answers_both_ways` asserts that — and then
+    either invented a name to satisfy the message or abandoned a correct change.
+    So the two exits are separated here, each with the remedy that actually
+    applies to it. (Reported on #1520 by an independent reviewer; the diagnosis
+    is theirs.)
     """
     measured = tuple(sorted(
         (sid, entry) for sid, entry in unevidenced_entries()
         if not producer_evidence(entry)))
     pinned = tuple(sorted(UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER))
+    # Which of the two exits each departure took, asked of the world rather
+    # than assumed from the set arithmetic.
+    still_unevidenced = {pair for pair in unevidenced_entries()}
+    left = set(pinned) - set(measured)
+    gained_producer = sorted(p for p in left if p in still_unevidenced)
+    no_longer_unevidenced = sorted(p for p in left if p not in still_unevidenced)
     assert measured == pinned, (
         f"the UNEVIDENCED-without-a-producer population changed.\n"
-        f"  gained a producer (delete from the pin, and say which program "
-        f"now writes it): {sorted(set(pinned) - set(measured))}\n"
-        f"  lost one / newly unevidenced (a declared output whose producer "
+        f"  GAINED A PRODUCER — still unevidenced, but something now writes it. "
+        f"Delete from the pin and say which program: {gained_producer}\n"
+        f"  NO LONGER UNEVIDENCED AT ALL — the entry left the population this "
+        f"pin splits, so it cannot be in the split. Delete from the pin; "
+        f"nothing writes it and nothing needs to: {no_longer_unevidenced}\n"
+        f"  NEWLY in the no-producer class (a declared output whose producer "
         f"this commit no longer carries): {sorted(set(measured) - set(pinned))}"
     )
 
@@ -4234,3 +4260,38 @@ def matrix_cell_state(step_id) -> str:
     if waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+def test_d3_a_departure_from_the_pin_is_routed_to_the_REASON_it_left(monkeypatch):
+    """PAIRED GUARD for the split above: the two exits must not be conflated.
+
+    `set(pinned) - set(measured)` is silent about WHY an entry left, and the two
+    reasons need opposite remedies — "find the program that now writes it"
+    versus "it is not unevidenced any more, so it cannot be in a split of the
+    unevidenced". Naming only the first is what sent a reviewer of #1520 looking
+    for a producer that this module deliberately reports as absent.
+
+    Driven by planting a pair that is NOT in `unevidenced_entries()` — the exact
+    shape the #1153 composition produces for all six M2/M3/M4 entries — and
+    asserting the message routes it to the second exit and NOT the first.
+    """
+    ghost = ("M4", "reports/analog/mixed_signal/does_not_exist.json")
+    assert ghost not in set(unevidenced_entries()), (
+        "the planted pair is genuinely unevidenced, so it cannot exercise the "
+        "'left the population' exit this test is about")
+    monkeypatch.setattr(
+        sys.modules[__name__], "UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER",
+        tuple(UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER) + (ghost,))
+
+    with pytest.raises(AssertionError) as exc:
+        test_d3_the_unevidenced_population_is_split_by_which_gap_it_has()
+    msg = str(exc.value)
+
+    head, _, tail = msg.partition("NO LONGER UNEVIDENCED AT ALL")
+    assert tail, f"the second exit is not named at all:\n{msg}"
+    assert "does_not_exist.json" in tail, (
+        f"an entry that LEFT the unevidenced population was not reported under "
+        f"the exit it took:\n{msg}")
+    assert "does_not_exist.json" not in head, (
+        f"an entry that left the population was reported as having GAINED A "
+        f"PRODUCER — the conflation this guard exists to prevent:\n{msg}")
