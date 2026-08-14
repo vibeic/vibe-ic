@@ -1467,6 +1467,128 @@ class EntryVerdict:
     detail: str
 
 
+# ──────────────────────────────────────────────────────────────────────
+# DOES THIS COMMIT CARRY A PRODUCER FOR THE ENTRY? (vibe-ic#1452)
+# ──────────────────────────────────────────────────────────────────────
+#: The exact promise :func:`_unevidenced_detail` used to make about EVERY
+#: unevidenced entry, quoted so the guard below tests the sentence the reader
+#: actually gets rather than a paraphrase of it.
+_RUN_TREE_REMEDY = (
+    "Commit (or register in the manifest) a run tree that carries it and this "
+    "cell answers live again."
+)
+
+#: Dimension 7's TWO producer oracles, imported rather than re-implemented for
+#: exactly the reason ``_glob_first`` is: a second opinion about "does the flow
+#: produce this path" that could drift from the one D7 enforces is worse than
+#: no opinion at all.
+#:
+#: Both are pure functions of the COMMIT, which is the only kind this module
+#: may consult (#527): the first parses the AST of every ``programs/*.py``, the
+#: second reads run write-ledgers TRACKED AT HEAD. Neither reads the working
+#: tree, so a maintainer's untracked build product cannot name a producer that
+#: a fresh clone would not also name.
+#:
+#: Imported lazily inside :func:`producer_evidence`. ``writers_of`` builds an
+#: AST index over the whole program tree on first call — measured 14.4 s on
+#: this checkout, then cached for the session — and no cell that never reaches
+#: an UNEVIDENCED verdict should pay it.
+
+
+@dataclass(frozen=True)
+class ProducerEvidence:
+    """Which oracle, if any, names something that WRITES *entry*.
+
+    ``producers`` is the union over the entry's ``" OR "`` alternatives: an
+    any-of entry is produced if ANY alternative is, because that is how
+    :func:`resolve` resolves it.
+
+    ``limit`` is never empty and is the load-bearing half. An oracle that
+    answers "nothing" has said *I found no producer*, NOT *nothing produces
+    this*, and the difference decides which remedy is true. D7's own
+    ``RESOLUTION_LIMITS`` states the gap in writing — a write performed inside
+    a shelled-out tool script (an OpenROAD/KLayout TCL heredoc embedded as a
+    Python string) is not a Python write position and is invisible — so an
+    empty answer is reported WITH the reach of what was asked, and is never
+    rendered as a zero.
+    """
+    entry: str
+    producers: Tuple[str, ...]
+    limit: str
+
+    def __bool__(self) -> bool:
+        return bool(self.producers)
+
+
+@lru_cache(maxsize=None)
+def producer_evidence(entry: str) -> ProducerEvidence:
+    """Programs this COMMIT carries that write any alternative of *entry*."""
+    import matrix_d7_artifact_graph as _graph
+    import matrix_d7_write_record as _record
+
+    found: set = set()
+    for alt in F.split_any_of(entry):
+        found |= set(_graph.writers_of(alt))
+        found |= set(_record.observed_producers_of(alt))
+    # Called, not guarded with getattr: a rename must be a loud, named failure
+    # here rather than a silently narrower oracle reporting "no producer".
+    n_records = len(_record.record_roots())
+    return ProducerEvidence(
+        entry=entry,
+        producers=tuple(sorted(found)),
+        limit=(
+            f"asked both of dimension 7's commit-derived oracles: the AST of "
+            f"every programs/*.py, and {n_records} observation(s) from run "
+            f"write-ledgers tracked at HEAD. Neither can see a write performed "
+            f"inside a shelled-out tool script (an OpenROAD/KLayout TCL "
+            f"heredoc embedded as a Python string) — "
+            f"matrix_d7_artifact_graph.RESOLUTION_LIMITS says so in writing — "
+            f"so 'no producer found' is the reach of the question, not a proof "
+            f"that nothing writes it"
+        ),
+    )
+
+
+def _remedy_clause(entry: str) -> str:
+    """The action that actually closes an UNEVIDENCED entry.
+
+    UNTIL vibe-ic#1452 THIS WAS ONE UNCONDITIONAL SENTENCE — every unevidenced
+    entry was told to commit or register a run tree. That sentence is a claim
+    about PRODUCIBILITY, and the module never checked it. Measured on this
+    commit: of the 14 entries that reach it, **11 have no producer either
+    oracle can name**, and for those the promise is false in the one way that
+    matters — the reader does the work and the cell does not move.
+
+    It is not a hypothetical cost. vibe-ic#1452 read this sentence off steps
+    15/17/19/20/30/32/M2/M3/M4 and proposed committing the four external run
+    trees it names; a follow-up measurement then found those trees carry 821
+    tracked paths with an NDA token, so the proposed remedy was both unsafe
+    AND — for M2, M3 and M4, whose every declared entry is in the no-producer
+    class — incapable of closing the cell even if it had been safe. A run tree
+    carrying an artefact THIS COMMIT CANNOT PRODUCE is not evidence that the
+    flow produces it; admitting one would be the A8 defect this module's own
+    docstring refused in those words ("no ``.gds`` was written into a run tree
+    to turn a test green").
+
+    So the remedy is now CONDITIONAL on a named producer, and the no-producer
+    branch says which gap it is and discloses what the oracles cannot see.
+    """
+    ev = producer_evidence(entry)
+    if ev:
+        return (
+            f" A producer for this entry IS carried by this commit "
+            f"({', '.join(ev.producers)}), so the gap is evidence, not "
+            f"capability: {_RUN_TREE_REMEDY}"
+        )
+    return (
+        f" NO PRODUCER FOUND — {ev.limit}. Until one is named, committing or "
+        f"registering a run tree does NOT close this cell: it would import an "
+        f"artefact this commit cannot be shown to produce, which is the defect "
+        f"refused for step A8's .gds. The gap to close here is the PRODUCER; "
+        f"a run tree is the remedy only once one exists."
+    )
+
+
 def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
                         rejected: Dict[str, "Rejected"]) -> str:
     """The message for an entry NOTHING on this checkout can resolve.
@@ -1475,6 +1597,12 @@ def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
     none of: that the search happened and came back empty, what the manifest
     record actually is (a dated observation of a tree that is not here), and
     the ONE action that turns the cell green again.
+
+    vibe-ic#1452 — THE THIRD OF THOSE WAS NOT ALWAYS TRUE. "Commit a run tree"
+    was appended unconditionally, including to entries this commit carries no
+    producer for, where following it cannot work. The action is now chosen by
+    :func:`_remedy_clause` from the commit's own producer oracles, and the
+    reader is told which of the two gaps this entry has.
     """
     return (
         f"UNEVIDENCED: {which_root} is not carried by this repository, and "
@@ -1485,8 +1613,7 @@ def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
         f"{rec.get('size_bytes')} B measured on {_MANIFEST_MEASURED_ON} — that "
         f"is a claim about a tree on one machine on one day, not evidence that "
         f"this commit produces the artefact, and it must not be reported as "
-        f"produced. Commit (or register in the manifest) a run tree that "
-        f"carries it and this cell answers live again."
+        f"produced." + _remedy_clause(entry)
     )
 
 
@@ -3074,6 +3201,189 @@ def test_d3_unevidenced_cells_are_named_cell_by_cell():
     )
 
 
+def unevidenced_entries() -> List[Tuple[str, str]]:
+    """``[(step, entry), ...]`` for every entry that reaches UNEVIDENCED.
+
+    Derived from the same :func:`check_entry` the cells use, so the guards
+    below can never drift onto a population the verdicts do not have.
+    """
+    out: List[Tuple[str, str]] = []
+    for cell in cells_for(DIM):
+        sid = cell.step_id
+        rec = step_record(sid)
+        if rec["verdict"].startswith("NA_"):
+            continue
+        for entry, erec in rec["entries"].items():
+            if entry not in F.required_outputs(sid):
+                continue
+            v = check_entry(sid, entry, erec)
+            if v.mode == FIXTURE and not v.produced:
+                out.append((F.normalize_id(sid), entry))
+    return out
+
+
+def test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists():
+    """vibe-ic#1452 — an UNEVIDENCED cell must name the remedy that CLOSES it.
+
+    The verdict for an unevidenced entry ends in an instruction, and until
+    #1452 it was the same instruction for all of them: commit or register a run
+    tree. That is a claim about PRODUCIBILITY and nothing checked it.
+
+    WHY A WRONG REMEDY IS A REAL DEFECT AND NOT A WORDING NIT. It was acted
+    on. vibe-ic#1452 read this sentence off nine red cells, concluded "the fix
+    is repo content, not code", and proposed committing the four external run
+    trees the message names. A follow-up measurement then found that source
+    tree carries 821 tracked paths with an NDA token, so the proposed remedy
+    was unsafe — and for M2, M3 and M4, every one of whose declared entries is
+    in the no-producer class, it could not have closed the cell even if it had
+    been safe. Two agents' work went to a remedy this module promised and
+    cannot deliver.
+
+    THE PROPERTY. An unevidenced entry may be told "a run tree closes this"
+    only where this COMMIT carries something that writes it. Where no oracle
+    can name a producer, the verdict must say so instead — because importing an
+    artefact the commit cannot produce is not evidence that the flow produces
+    it, and this module refused exactly that for step A8's ``.gds``.
+
+    THE DIRECTION THIS GUARD RUNS IN. It never asserts that a no-producer entry
+    is unproducible: the oracles cannot see a write inside a container tool's
+    TCL heredoc and say so. It asserts only that the module does not PROMISE a
+    remedy it has no basis for. A newly-written producer flips an entry into
+    the promising class and this guard follows it there automatically —
+    :func:`producer_evidence` is recomputed from the commit, never pinned.
+    """
+    promised_without_a_producer = []
+    for sid, entry in unevidenced_entries():
+        rec = step_record(sid)["entries"][entry]
+        detail = check_entry(sid, entry, rec).detail
+        if _RUN_TREE_REMEDY in detail and not producer_evidence(entry):
+            promised_without_a_producer.append((sid, entry))
+    assert not promised_without_a_producer, (
+        f"{len(promised_without_a_producer)} UNEVIDENCED entr(ies) are told "
+        f"{_RUN_TREE_REMEDY!r} while this commit carries nothing that writes "
+        f"them:\n  "
+        + "\n  ".join(f"step {s}: {e}" for s, e in promised_without_a_producer)
+        + "\nCommitting a run tree that carries an artefact this commit cannot "
+          "be shown to produce is not evidence of production — it is the A8 "
+          "defect this module already refused. Say which gap it is instead."
+    )
+
+
+#: vibe-ic#1452 — the UNEVIDENCED entries for which NO oracle this commit
+#: carries can name a producer. Measured, not assumed; pinned so a move in
+#: EITHER direction is a named event rather than a quiet one.
+#:
+#: THIS IS NOT A LIST OF UNPRODUCIBLE ARTEFACTS and must not be read as one.
+#: The two oracles are the AST of ``programs/*.py`` and the run write-ledgers
+#: tracked at HEAD, and D7's ``RESOLUTION_LIMITS`` states what neither can see.
+#: The population has two visibly different halves and the difference is the
+#: whole point of splitting it:
+#:
+#:   * the four ``*.def`` entries (15/17/19/20) ARE produced — by OpenROAD,
+#:     inside the EDA container, from a TCL heredoc embedded as a Python
+#:     string, which is precisely the write position RESOLUTION_LIMITS says is
+#:     invisible here. Measured on the campaign host, four registered in-repo
+#:     run roots carry all four non-empty this minute (espi's set is the
+#:     smallest at 941840 B total). They are untracked, so #527 forbids them
+#:     deciding anything — but "the oracle cannot see the producer" and "there
+#:     is no producer" are different findings and this pin keeps them apart.
+#:   * the M2/M3/M4 entries are the other half, and for those the silence is
+#:     corroborated rather than merely unresolved: every mention of each path
+#:     in ``programs/`` is a READ (``mixed_signal_signoff_check`` documents
+#:     ``signoff.json`` as "M4's input"; ``level_shifter_required_check`` and
+#:     ``power_domain_crossing_check`` reach them through ``_first_existing``),
+#:     and no runner dispatches M1-M4 at all — ``analog_one_shot_runner``
+#:     dispatches A1..A9 and stops. So for those three cells there is no run
+#:     tree this commit could produce, which is why #1452's "commit or register
+#:     a run tree" cannot close them and why this file no longer says it can.
+UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER: Tuple[Tuple[str, str], ...] = (
+    ("15", "phase3/stage3/pnr/floorplan.def"),
+    ("17", "phase3/stage3/pnr/placed.def"),
+    ("19", "phase3/stage3/pnr/post_cts.def"),
+    ("20", "phase3/stage3/pnr/post_hold.def"),
+    ("30", "phase3/stage3/spice/correlation.json OR "
+           "reports/phase3/spice_correlation.json"),
+    ("M2", "reports/analog/mixed_signal/power_domain.json"),
+    ("M2", "reports/analog/mixed_signal/level_shifter.json"),
+    ("M2", "reports/analog/mixed_signal/isolation.json"),
+    ("M3", "phase3/mixed_signal/cosim/mixed_signal_results.json"),
+    ("M3", "reports/analog/mixed_signal/interface_si.json"),
+    ("M4", "reports/analog/mixed_signal/signoff.json"),
+)
+
+
+def test_d3_the_unevidenced_population_is_split_by_which_gap_it_has():
+    """Pin WHICH unevidenced entries have no producer, in both directions.
+
+    The guard above is satisfied by the implementation choosing its own
+    sentence, so on its own it could not tell anyone that the WORLD changed.
+    This one measures the world: it recomputes the split from the commit and
+    compares it to what was measured, so writing a producer for one of these
+    entries (the shrinking direction, vibe-ic#983 ruling 2) and losing a
+    producer for one that had one are both loud, named events.
+
+    LEAVING THE PIN HAS TWO EXITS AND THEY NEED DIFFERENT REMEDIES. An entry in
+    `set(pinned) - set(measured)` either gained a producer, or stopped being
+    UNEVIDENCED at all — and a split OF the unevidenced cannot contain something
+    that is not unevidenced. The first version of this test named only the first
+    exit, which is the defect the rest of this module exists to catch, one level
+    down: MEASURED on `main + #1153`, where six entries leave because their
+    cells stop being ENFORCED against a run root this repository does not carry,
+    ALL SIX leave by the SECOND exit and none gained a producer. An author
+    following the old sentence would have gone looking for the program that now
+    writes `reports/analog/mixed_signal/signoff.json`, found none — this
+    module's own `producer_evidence` returns empty for it, deliberately, and
+    `test_d3_the_producer_oracle_answers_both_ways` asserts that — and then
+    either invented a name to satisfy the message or abandoned a correct change.
+    So the two exits are separated here, each with the remedy that actually
+    applies to it. (Reported on #1520 by an independent reviewer; the diagnosis
+    is theirs.)
+    """
+    measured = tuple(sorted(
+        (sid, entry) for sid, entry in unevidenced_entries()
+        if not producer_evidence(entry)))
+    pinned = tuple(sorted(UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER))
+    # Which of the two exits each departure took, asked of the world rather
+    # than assumed from the set arithmetic.
+    still_unevidenced = {pair for pair in unevidenced_entries()}
+    left = set(pinned) - set(measured)
+    gained_producer = sorted(p for p in left if p in still_unevidenced)
+    no_longer_unevidenced = sorted(p for p in left if p not in still_unevidenced)
+    assert measured == pinned, (
+        f"the UNEVIDENCED-without-a-producer population changed.\n"
+        f"  GAINED A PRODUCER — still unevidenced, but something now writes it. "
+        f"Delete from the pin and say which program: {gained_producer}\n"
+        f"  NO LONGER UNEVIDENCED AT ALL — the entry left the population this "
+        f"pin splits, so it cannot be in the split. Delete from the pin; "
+        f"nothing writes it and nothing needs to: {no_longer_unevidenced}\n"
+        f"  NEWLY in the no-producer class (a declared output whose producer "
+        f"this commit no longer carries): {sorted(set(measured) - set(pinned))}"
+    )
+
+
+def test_d3_the_producer_oracle_answers_both_ways():
+    """The control: :func:`producer_evidence` must be able to say YES and NO.
+
+    A classifier that only ever returns one answer has not been shown to
+    classify anything, and this one decides which remedy a red cell is told to
+    follow. Both arms are asserted against REAL declared entries of this
+    commit, not synthetic strings, so the oracle is exercised the way the
+    verdicts exercise it.
+    """
+    yes = producer_evidence("phase3/stage3/eco/eco_trigger_decision.json")
+    assert yes and "phase3_one_shot_runner" in yes.producers, yes
+    no = producer_evidence("reports/analog/mixed_signal/signoff.json")
+    assert not no.producers, no
+    # ...and a NO must still disclose its reach, never read as a proven zero.
+    assert "not a proof" in no.limit and "RESOLUTION_LIMITS" in no.limit, no
+
+    # An any-of entry is produced when ANY alternative is, matching `resolve`.
+    either = producer_evidence(
+        "reports/analog/mixed_signal/signoff.json OR "
+        "phase3/stage3/eco/eco_trigger_decision.json")
+    assert either.producers == yes.producers, either
+
+
 def test_d3_untracked_artefacts_are_not_counted_as_produced():
     """#527 — the rule that makes the answer the same on every host.
 
@@ -3970,3 +4280,38 @@ def matrix_cell_state(step_id) -> str:
     if waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+def test_d3_a_departure_from_the_pin_is_routed_to_the_REASON_it_left(monkeypatch):
+    """PAIRED GUARD for the split above: the two exits must not be conflated.
+
+    `set(pinned) - set(measured)` is silent about WHY an entry left, and the two
+    reasons need opposite remedies — "find the program that now writes it"
+    versus "it is not unevidenced any more, so it cannot be in a split of the
+    unevidenced". Naming only the first is what sent a reviewer of #1520 looking
+    for a producer that this module deliberately reports as absent.
+
+    Driven by planting a pair that is NOT in `unevidenced_entries()` — the exact
+    shape the #1153 composition produces for all six M2/M3/M4 entries — and
+    asserting the message routes it to the second exit and NOT the first.
+    """
+    ghost = ("M4", "reports/analog/mixed_signal/does_not_exist.json")
+    assert ghost not in set(unevidenced_entries()), (
+        "the planted pair is genuinely unevidenced, so it cannot exercise the "
+        "'left the population' exit this test is about")
+    monkeypatch.setattr(
+        sys.modules[__name__], "UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER",
+        tuple(UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER) + (ghost,))
+
+    with pytest.raises(AssertionError) as exc:
+        test_d3_the_unevidenced_population_is_split_by_which_gap_it_has()
+    msg = str(exc.value)
+
+    head, _, tail = msg.partition("NO LONGER UNEVIDENCED AT ALL")
+    assert tail, f"the second exit is not named at all:\n{msg}"
+    assert "does_not_exist.json" in tail, (
+        f"an entry that LEFT the unevidenced population was not reported under "
+        f"the exit it took:\n{msg}")
+    assert "does_not_exist.json" not in head, (
+        f"an entry that left the population was reported as having GAINED A "
+        f"PRODUCER — the conflation this guard exists to prevent:\n{msg}")
