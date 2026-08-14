@@ -277,6 +277,12 @@ _EXCLUDED: Dict[str, str] = {
 # (v1.7.84+ update: +1 gate / +1 path for buffer_occupancy_flag_latency_check
 #  → 53 gates / 98 skip paths; the empty/full stale-pointer latency screen has
 #  the same "no occupancy flag present → SKIP" unrouted branch.)
+# (2026-08-13 update: +1 gate / +1 path for vendored_attribution_retained_check
+#  → 52 gates / 97 paths becomes 53 / 98. It is not a NEW defect: the branch was
+#  always there, and wiring the checker into the corpus run (#1253, closing a
+#  #1241 row) is what made it a GATE and so brought it into this population.
+#  Closing one #1241 row opened this one — the entry below says why it is listed
+#  rather than drained.)
 # #515 fixed 4 and #521 fixed 19; this is 97 more, and the reason neither
 # earlier round saw them is exactly what #528 says — a sweep whose
 # preconditions decide what it can find reports a clean zero when nothing
@@ -375,6 +381,31 @@ _UNROUTED_INVENTORY: Dict[str, int] = {
     "slave_tx_no_device_break_check": 1,
     "tb_timing_extremes_check": 1,
     "tx_phy_bit_cell_total_consumed_check": 2,
+    # vendored_attribution_retained_check (#1241 / #1253): the gate is wired
+    # into the corpus run at `tools/ci/repo_hygiene_gates.sh`, and wiring it is
+    # what makes it a gate and so subjects it to this ratchet. Its one unrouted
+    # branch is `not res["licensed"]` -> `[VACUOUS_PASS] ... this gate checked
+    # nothing` -> rc 0.
+    #
+    # LISTED RATHER THAN ROUTED, and the reason is a genuine conflict rather
+    # than reluctance. Routing means rc 2, and rc 2 has no home here:
+    #   * plain `run` makes rc 2 a FAIL, which would make the gate object to a
+    #     lawful total withdrawal of the vendored code — the one thing
+    #     `test_removing_the_code_too_is_lawful_and_stays_green` records the
+    #     owner ruling it must not do;
+    #   * `run_tolerating_uncheckable` makes rc 2 non-fatal, but
+    #     `test_the_hygiene_script_declares_it_as_a_blocking_gate` requires the
+    #     blocking form.
+    # Splitting the two does not rescue it: lawful withdrawal and a
+    # misconfigured scope are the SAME observation to this gate (both
+    # `tracked=0, licensed=0`), so nothing it can see tells them apart.
+    #
+    # The cheap escape was measured and rejected. Emitting the `VACUOUS_PASS:`
+    # sentinel while keeping `return 0` turns THIS check green, because
+    # sentinel-only counts as routed — and changes nothing real, because
+    # `tools/ci/_gate_dispatch.sh` reads rc and never the sentinel. A routing
+    # that routes nowhere is worse than a declared debt.
+    "vendored_attribution_retained_check": 1,
     "wake_gen_bus_active_reset_check": 2,
     "wake_gen_silence_gate": 4,
     "wake_pulse_emit_gated_by_first_rx_command_check": 2,

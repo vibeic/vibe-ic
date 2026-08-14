@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1094
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1094)
+- **Total programs (excluding helpers / shims):** 1095
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1095)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1085 |
+| `any` | 1086 |
 
 ## Alphabetical listing
 
@@ -1080,6 +1080,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `vector_op_rtl_gen` | any | v0.1.8 | deterministic vector-operation → RTL generator. |
 | `vector_ops_synth` | any | — | deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder. |
 | `vendor_fpga_reference_table_extraction_check` | any | v0.119.30 | gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables. |
+| `vendored_attribution_retained_check` | any | — | third-party source that SHIPS must ship with the record that names where it came from. vibe-ic#1043. |
 | `verdict_token_propagation_check` | any | — | META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C). |
 | `verilator_coverage_measure` | any | v0.53 | v0.53 plugin gate |
 | `verilator_timing_fallback_check` | any | — | golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile. |
@@ -1166,7 +1167,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1085 programs)
+### `any` (1086 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2215,6 +2216,7 @@ _(no programs in this group)_
 - `vector_op_rtl_gen` — deterministic vector-operation → RTL generator.  _[v0.1.8]_
 - `vector_ops_synth` — deterministic SOLVER for the VECTOR-MANIPULATION family (spec -> RTL): bit/byte reverse, sign/zero-extend, replicate, split, concat-reorder.
 - `vendor_fpga_reference_table_extraction_check` — gate (LL-29) that catches Category-A spec-extraction failures on vendor FPGA reference timing tables.  _[v0.119.30]_
+- `vendored_attribution_retained_check` — third-party source that SHIPS must ship with the record that names where it came from. vibe-ic#1043.
 - `verdict_token_propagation_check` — META-audit: producer -> consumer verdict-token propagation guard (ORGANIC #722, captured Bucket C).
 - `verilator_coverage_measure` — v0.53 plugin gate  _[v0.53]_
 - `verilator_timing_fallback_check` — golden-self-test-guarded Verilator fallback for testbenches iverilog cannot compile.
