@@ -422,6 +422,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_verilog_to_spice` | any | — | convert a structural (gate-level) Verilog netlist to SPICE for netgen LVS against a KLayout-extracted layout netlist. |
 | `gate_zero_denominator_refuses_check` | any | — | a gate that read NOTHING must not exit 0. |
 | `gatekeeper_assign_version` | any | — | v1.1.7 (owner directive 2026-06-17). |
+| `gatekeeper_prepare_landing` | any | — | do the three mechanical things the landing gate refuses a batch for, and refuse ONLY what a program cannot fix (vibe-ic#1129). |
 | `gatekeeper_review` | any | — | the DETERMINISTIC half of the single PR gatekeeper. |
 | `gatekeeper_stale_branch_check` | any | — | the STALE-BRANCH / phantom-revert guard. |
 | `gddr6_protocol_synth` | any | — | GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory). |
@@ -1548,6 +1549,7 @@ _(no programs in this group)_
 - `gate_verilog_to_spice` — convert a structural (gate-level) Verilog netlist to SPICE for netgen LVS against a KLayout-extracted layout netlist.
 - `gate_zero_denominator_refuses_check` — a gate that read NOTHING must not exit 0.
 - `gatekeeper_assign_version` — v1.1.7 (owner directive 2026-06-17).
+- `gatekeeper_prepare_landing` — do the three mechanical things the landing gate refuses a batch for, and refuse ONLY what a program cannot fix (vibe-ic#1129).
 - `gatekeeper_review` — the DETERMINISTIC half of the single PR gatekeeper.
 - `gatekeeper_stale_branch_check` — the STALE-BRANCH / phantom-revert guard.
 - `gddr6_protocol_synth` — GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory).
