@@ -664,10 +664,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("repo_root", nargs="?", default=None)
     ap.add_argument("--json", dest="json_out", default=None)
+    # The per-gate bound was reachable only from `audit()`, so no test could
+    # drive the CLI's undrivable-gate path without waiting out the 600s
+    # default — well past CI's 180s//3 per-call ceiling. The default is
+    # unchanged; this only makes the existing behaviour addressable.
+    ap.add_argument("--timeout", type=int, default=600,
+                    help="per-gate seconds before a gate counts as undrivable")
     a = ap.parse_args(argv)
 
     root = Path(a.repo_root).resolve() if a.repo_root else _PLUGIN.parents[2]
-    res = audit(root)
+    res = audit(root, timeout=a.timeout)
 
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(
@@ -685,6 +691,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "untracked": len(res.dirt.untracked),
                  "ignored": len(res.dirt.ignored),
                  "ignored_reported": res.dirt.ignored_reported}),
+             # ADDITIVE, and `verdict` is deliberately left alone: a consumer
+             # reading only `findings` cannot tell an undrivable gate from a
+             # host-dependent one, which is the same conflation that made the
+             # human-readable line wrong. Counting them here lets a consumer
+             # make the distinction the exit status now makes.
+             "findings_by_kind": {
+                 k: sum(1 for f in res.findings if f["kind"] == k)
+                 for k in ("HOST_DEPENDENT_VERDICT", "INERT_EXCLUSION",
+                           "GATE_UNRUNNABLE")},
              "findings": res.findings}, indent=2) + "\n")
 
     # Whatever the outcome, SAY WHAT WAS NOT PROBED. A gate that left the
@@ -738,11 +753,58 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"      worktree: {f['worktree']}", file=sys.stderr)
 
     stim = res.dirt.describe() if res.dirt is not None else "unknown stimulus"
-    if res.findings:
-        print(f"[FAIL] {len(res.findings)} of {res.probed} probed corpus "
+
+    # THREE KINDS SHARE ONE LIST AND ONLY ONE OF THEM IS HOST-DEPENDENCE.
+    # `GATE_UNRUNNABLE` is appended above under a comment that says it "is NOT
+    # host-dependence, and it is NOT a clean result either" — and was then
+    # counted into a sentence asserting that every finding IS host-dependence,
+    # and returned 1. The program contradicted its own stated intent at the
+    # only place a reader ever sees.
+    #
+    # MEASURED ON MAIN, which is why this is a defect and not a preference:
+    # at 162b5bde/3d13e2c5 a single `policy_direction_pin_check --verify-pins`
+    # TimeoutExpired made the run print
+    #     [FAIL] 1 of 66 probed corpus gate(s) (74 declared) give a
+    #            HOST-DEPENDENT verdict.
+    # while the run contained ZERO host-dependent verdicts. The whole repo's
+    # hygiene suite was red, and the sentence naming the reason described
+    # something that had not happened.
+    #
+    # The order below is the load-bearing part: a REAL host-dependent verdict
+    # is reported first and still exits 1, so an undrivable gate can never
+    # mask one.
+    dep = [f for f in res.findings if f["kind"] == "HOST_DEPENDENT_VERDICT"]
+    inert = [f for f in res.findings if f["kind"] == "INERT_EXCLUSION"]
+    dead = [f for f in res.findings if f["kind"] == "GATE_UNRUNNABLE"]
+
+    if dep:
+        print(f"[FAIL] {len(dep)} of {res.probed} probed corpus "
               f"gate(s) ({res.declared} declared) give a HOST-DEPENDENT "
               f"verdict.", file=sys.stderr)
         return 1
+    if inert:
+        # Still a FAIL: an EXCLUDE that excludes nothing is a defect in the
+        # script, present in the commit, and fixable by whoever reads this.
+        # It is simply not host-dependence, so it no longer borrows that name.
+        print(f"[FAIL] {len(inert)} EXCLUDE directive(s) in "
+              f"tools/ci/repo_hygiene_gates.sh exclude NOTHING — each is "
+              f"written somewhere other than immediately above its `run` "
+              f"line, so the script says one thing and the parser reads "
+              f"another.", file=sys.stderr)
+        return 1
+    if dead:
+        # NOT CHECKED, and NOT a pass. The wiring already expects this: the
+        # gate is invoked through `run_tolerating_uncheckable` at
+        # tools/ci/repo_hygiene_gates.sh:678, which is the call form that
+        # distinguishes "could not run" from "found a defect".
+        print(f"NOT_CHECKED: {len(dead)} of {res.probed} probed corpus "
+              f"gate(s) ({res.declared} declared) could NOT be driven twice, "
+              f"so host-independence was not decided for them: "
+              + "; ".join(f"{f['gate']} ({f['detail']})" for f in dead)
+              + ". The remaining gates agreed, but agreement over a "
+              f"population this run could not probe in full is not a pass "
+              f"over the population.", file=sys.stderr)
+        return 2
     if res.verdict == "NO_STIMULUS":
         # The sentence a two-pristine-tree run has always deserved and never
         # printed.
