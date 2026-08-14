@@ -43,12 +43,33 @@ def _mk(tmp_path, netlist_mtime, rtl_mtime, rtl_name="top.v"):
 
 
 def _cache_guard_block() -> str:
-    """The region of main() that decides whether to reuse a cached netlist."""
+    """The region of main() that decides whether to reuse a cached netlist.
+
+    The block ends at the synth fallback — the dispatch taken when the cache
+    is not reusable. That dispatch has TWO spellings and both are it:
+
+        plan.append(step_synth(project, ...))        # called directly
+        _spf.gate(..., step_synth, project, ...)     # by reference, via the
+                                                    # preflight refusal gate
+
+    Matching only the first made this module report "step_synth fallback not
+    found" on a runner that had become MORE careful: every coarse step now
+    goes through a gate that can refuse the span before it runs. Measured on
+    origin/main, step_synth / step_pnr / step_gds / step_drc / step_lvs are all
+    dispatched by reference.
+
+    NOT a loosening — the block still has to END somewhere, and a runner with
+    no synth fallback at all after the cache guard still raises.
+    """
     start = RUNNER_SRC.find("_nl_pdk_ok = (netlist_existing.is_file()")
     assert start != -1, "netlist cache guard not found"
-    end = RUNNER_SRC.find("plan.append(step_synth(", start)
-    assert end != -1, "step_synth fallback not found after the cache guard"
-    return RUNNER_SRC[start:end]
+    ends = [i for i in (RUNNER_SRC.find("plan.append(step_synth(", start),
+                        RUNNER_SRC.find("step_synth, project", start))
+            if i != -1]
+    assert ends, (
+        "step_synth fallback not found after the cache guard — neither "
+        "`plan.append(step_synth(` nor a by-reference `step_synth, project`")
+    return RUNNER_SRC[start:min(ends)]
 
 
 def test_freshness_check_compares_mtimes_against_the_rtl_dir():
