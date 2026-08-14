@@ -653,20 +653,57 @@ def test_w1_still_fires_on_an_unconditionally_produced_undeclared_output(tmp_pat
 
 
 def _conditional_anchor():
-    """``(step, path)`` of a CONDITIONAL finding on an OTHERWISE-CLEAN step.
+    """``(step, path)`` of a CONDITIONAL finding whose red is ATTRIBUTABLE.
 
-    "Otherwise clean" is what makes the control a control. Step 23 also
-    carries a conditional output, but it is red for thirteen unrelated W2
-    findings, so a red observed after mutating it would prove nothing about
-    the exemption. The anchor is therefore the conditional finding whose step
-    has no other finding at all — on the current flow that is step 27, and it
-    is found by measurement rather than named.
+    What the control needs is that a red observed after the mutation can be
+    charged to the mutation. "The step has no other finding at all" was a cheap
+    proxy for that, and it held while step 27 was clean.
+
+    IT STOPPED HOLDING (vibe-ic#1351). Step 27 acquired ONE unrelated W2
+    finding — ``reports/phase3/si_mcf_sta.json``, a different path from its
+    conditional ``reports/phase3/si_mcf_sta_check.json`` — and the proxy went
+    from "true of exactly one step" to "true of none":
+
+        step   conditional findings   other findings
+          23            1                   14
+          27            1                    1        <- was 0
+        anchor-eligible under the old proxy: NONE
+
+    So this control measured nothing and said so, correctly and loudly. But
+    the property it exists to prove was never in doubt, and it cannot come back
+    on its own: declaring `si_mcf_sta.json` is the six-PR dispute #1077 /
+    #1310 / #1316 / #1318 / #1448, so the proxy left a live control hostage to
+    an unrelated arbitration.
+
+    The proxy is therefore replaced by the property itself. The anchor's
+    CONDITIONAL PATH must not already be charged — that, and path-specific
+    assertions at both ends, is what makes the red attributable, and it is
+    strictly narrower than "no other finding at all": an unrelated finding on
+    another path can no longer decide whether this control runs.
+
+    An otherwise-clean step is still PREFERRED, so on any flow that has one
+    this returns exactly what it returned before and nothing about the control
+    changes. The fallback only fires when the old proxy would have returned
+    ``None`` and the control would have measured nothing.
+
+    Sibling precedent in this same file: ``_no_list_but_writes_anchor`` records
+    that W4's exemption "has no live subject and must be proved on a mutated
+    flow instead of asserted into the source and never exercised". Same
+    problem, and this is the same refusal to let a control quietly expire.
     """
+    fallback = None
     for sid in F.step_ids():
         findings = G.conditional_findings(sid)
-        if findings and not G.findings_for(sid):
+        if not findings:
+            continue
+        charged = {f.path for f in G.findings_for(sid)}
+        if not charged:
             return F.normalize_id(sid), findings[0].path
-    return None
+        if fallback is None:
+            usable = [f for f in findings if f.path not in charged]
+            if usable:
+                fallback = (F.normalize_id(sid), usable[0].path)
+    return fallback
 
 
 @pytest.mark.parametrize(
@@ -699,9 +736,13 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
         "control measures nothing"
     )
     step, path = anchor
-    assert not G.findings_for(step), (
-        f"step {step} is already red before the mutation; the control cannot "
-        f"attribute the red to the mutation"
+    # PATH-specific, not step-specific (#1351). What would destroy the
+    # attribution is this PATH already being charged before the edit — a
+    # finding on some OTHER path of the same step cannot be mistaken for the
+    # one asserted below, because that assertion names the path too.
+    assert path not in {f.path for f in G.findings_for(step)}, (
+        f"step {step}: {path} is already charged before the mutation; the "
+        f"control cannot attribute the red to the mutation"
     )
 
     def edit(doc):
@@ -738,7 +779,10 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
 
     # And back: the exemption returns with the flow's own optionality.
     assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
-    assert not G.findings_for(step)
+    assert path not in {f.path for f in G.findings_for(step)}, (
+        f"step {step}: the flow was restored but {path} is still charged, so "
+        f"the mutation leaked or the exemption did not come back"
+    )
 
 
 def _no_list_but_writes_anchor():
