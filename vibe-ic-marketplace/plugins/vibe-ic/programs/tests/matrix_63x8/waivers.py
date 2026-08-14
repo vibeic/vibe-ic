@@ -628,40 +628,27 @@ WAIVERS: Tuple[Waiver, ...] = (
     # was met by commit b1665ec8, and because a waiver kept alive on a
     # narrower story than the one it was written with is the rot this registry
     # exists to prevent.
-    Waiver(
-        step_id="M1",
-        dim=3,
-        reason=(
-            "NARROWED 2026-07-28. The producer is NOT missing: "
-            "mixed_signal_top_lvs_run.py writes phase3/mixed_signal/"
-            "top_merged.gds (KLayout merge), ships, and is invoked twice — "
-            "M1's own advisory gate clause and "
-            "programs/vibe_ic_one_shot_runner.py:928. "
-            "What is unreachable is an INPUT SET: the merge needs a digital "
-            "sign-off GDS and analog hardmacro GDS in the SAME project, and "
-            "no admissible run root is a mixed-signal project that got that "
-            "far, so the producer returns its documented rc=2 'inputs "
-            "missing' skip everywhere it can run. Closing this needs a "
-            "published mixed-signal run tree, not a code change."
-        ),
-        evidence=(
-            "programs/mixed_signal_top_lvs_run.py:683 targets top_merged."
-            "gds; :707-708 returns SKIP rc=2 naming the absent inputs. Asked "
-            "DIRECTLY (mixed_signal_top_lvs_run.run, tool probe stubbed) on "
-            "all 12 admissible run roots, 2026-07-28: 12/12 return 'inputs "
-            "missing'. Three lack only 'hardmacro GDS (A8)' (the spm-class "
-            "digital runs, which have a sign-off GDS and no analog blocks at "
-            "all) and the one root with hardmacro GDS lacks 'digital GDS, "
-            "gate netlist' — intersection empty. The 2026-07-27 evidence for "
-            "this waiver quoted 'Top-level GDS merge tool not shipped.' from "
-            "an ARCHIVED merge.json; that string exists nowhere in the plugin "
-            "today (programs/mixed_signal_merge_check.py:57 now reads "
-            "'Top-level "
-            "merge+LVS not runnable in this environment'), so the old reason "
-            "was stale. Re-measured live by "
-            "test_d3_m1_merge_inputs_are_absent_from_every_run_root."
-        ),
-    ),
+    # M1/d3 STOOD HERE AND IS GONE, and not because anyone accepted less.
+    # Its own reason was "no admissible run root is a mixed-signal project, so
+    # the producer returns its documented rc=2 'inputs missing' skip everywhere
+    # it can run" — which is DORMANCY described one artefact at a time. M1
+    # carries the same step-level condition as M2-M4,
+    # `phase1/analog/analog_block_list.json`, and that path occurs ZERO times
+    # in `git ls-tree -r HEAD` over the whole repository. The step has never
+    # run here, so there is no gap to accept; there is a state to record, and
+    # dimension 3 now records it as `NA_DORMANT_CONDITION`.
+    #
+    # That is STRICTLY STRONGER than the waiver it replaces. A waiver is
+    # inert: it says "known, accepted" and stays green whatever the tree does.
+    # The NA re-derives on every run and reddens in BOTH directions — publish
+    # any tree carrying the condition file, or let either declared output
+    # appear anywhere, and the cell fails. Both were injected and both fired.
+    #
+    # The waiver ALSO covered only one of M1's two entries, which is why
+    # `test_d3_waived_steps_still_produce_their_unwaived_entries` was red on
+    # `merge.json`: a per-entry waiver cannot express "this step never ran".
+    # M1's dimension-7 waiver is untouched — different dimension, different
+    # reason, and its artefact question survives dormancy.
 
     # ── dimension 5 — is blocks_on the true dependency graph? ──────────
     Waiver(
