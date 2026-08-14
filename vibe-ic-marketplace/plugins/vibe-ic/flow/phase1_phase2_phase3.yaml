@@ -228,6 +228,24 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # vibe-ic#1043-adjacent (d7 W2): PRODUCED BY THE FLOW, READ BY A GATE,
+      # DECLARED BY NOBODY. `l21_macro_supply_rail_declared_check` is one of
+      # D1's own advisory clauses and M2's gate reads it too, yet no step's
+      # `required_outputs` named it — which is exactly the shape dimension 7
+      # exists to report, and it was charging the finding to step M2 (the
+      # CONSUMER) because there was no producer to charge it to.
+      #
+      # D1 is the producer: this step's own name is "Phase 1 Doc Extraction
+      # (17 skills + dialogue entry -> L1-L27)", and it declared L1-L13 only.
+      #
+      # BLAST RADIUS, measured the same way as L8_RTL_CONSTANTS above: present
+      # in 104 of the 105 tracked roots that carry L1_DATASHEET.json, and it
+      # RESOLVES in an admissible run root
+      # (benchmark-data/ic/caravel_user_project, 531 B), so declaring it closes
+      # the d7 finding without opening a d3 one. Declaring an artefact d3
+      # cannot then evidence would move the gap between dimensions rather than
+      # close it — the failure mode M1's own d7 waiver names.
+      - "phase1/generated_docs/L21_POWER_INTENT.json"
       # MOVED HERE FROM STEP 1 (63x9 d4/step1, issue #1219). The Phase-1
       # extraction-coverage REPORT: a per-doc diagnostic of which verbatim
       # literals from `extraction_patterns.json` reached
@@ -1569,6 +1587,25 @@ steps:
       - "phase2/stage2/dft/transition_atpg_plan.md"
       - "reports/phase2/dft/coverage.json"
       - "reports/phase2/dft/bsdl_plan.json"
+      # vibe-ic#1241-adjacent (d7 W2): PRODUCED BY THE FLOW, READ BY THIS
+      # STEP'S OWN GATE, DECLARED BY NOBODY. `dft_atpg_coverage_check` and
+      # `fault_atpg_run` both write it and step 11's gate reads it, yet no
+      # step's `required_outputs` named it — so d7 had a load-bearing artefact
+      # with no declared producer.
+      #
+      # BLAST RADIUS, measured against the RIGHT population. "3 of 105 tracked
+      # roots" is the wrong reading: 102 of those never ran phase2/stage2/dft
+      # at all. Of the roots where step 11 ACTUALLY RAN — i.e. that carry its
+      # five already-declared outputs — this artefact is present in 2 of 2.
+      # The one root that reaches the stage directory without it,
+      # `edge_llm_matmul_accel`, carries NONE of step 11's five declared
+      # outputs either, so step 11 never ran there and it is not a
+      # counter-example.
+      #
+      # It RESOLVES in an admissible run root (spm/v1.9.96_gf180mcuD, 28797 B)
+      # and is recorded in the dimension-3 manifest, so declaring it closes the
+      # d7 finding without opening a d3 one.
+      - "phase2/stage2/dft/coverage.yml"
     # NOTE on invocation: flow-orchestrate/SKILL.md directs the agent to
     # invoke `fault_atpg_run` with the design's clock name and the
     # already-synthesised netlist. FOUNDRY BAR: stuck-at must reach the
@@ -1877,7 +1914,7 @@ steps:
       all_of:
         - files_exist: ["phase3/analog/*/spec.json OR phase1/analog/*/spec.json"]
         - program_exit_zero: "analog_a1_spec_extract_check . --json reports/analog/a1_spec.json"
-    blocks_on: []
+    blocks_on: [D1]
 
   - id: A2
     name: "Analog Topology Selection"
@@ -3066,6 +3103,26 @@ steps:
       #     SPEF, and extraction has a documented tool-unavailable waiver path.
     gate:
       all_of:
+        # vibe-ic#1097 S8 — "asked" and "reached" must BOTH be on disk.
+        #
+        # The period a design is ASKED for arrives through a four-tier
+        # precedence walk whose last tier is fabricated
+        # (`l8_sta_clock_period_design_owned_check`); every tier is a REQUEST.
+        # The achieved period is the only MEASUREMENT in that set. This step is
+        # where the slack that yields it exists, so this is where its absence is
+        # decidable.
+        #
+        # ADVISORY, and not out of timidity: a run whose STA produced no setup
+        # slack has nothing to record and returns rc 2 (VACUOUS_PASS) rather
+        # than a verdict. rc 1 is reserved for the one implication this gate
+        # asserts — a slack EXISTS and the achieved period does not. MEASURED at
+        # f9c13443 over the published corpus: 13 roots reached post-route STA,
+        # 2 carried `achievable_fmax.json`, and four cells ship a real headroom
+        # (caravel 17.22 ns, spm/gf180mcuD 15.83, spm/ihp-sg13g2 6.81,
+        # spm/sky130A 5.24) with no achieved period beside it. Those four go
+        # ADVISORY-red here and are repaired going forward by the runner change
+        # that emits on PASS as well as on FAIL.
+        - advisory_program_exit_zero: "achieved_period_recorded_check . --json reports/phase2/gates/achieved_period_recorded.json"
         # HOLD IS WORST AT THE FAST CORNER. `sta_corner_record_completeness_check`
         # below judges each declared corner "for the ROLE it was declared to
         # serve" — it never asks whether assigning the HOLD role to a non-fast
@@ -3314,7 +3371,7 @@ steps:
         # measured and rejected — no published run carries a tech LEF, so its
         # honest rc 3 SKIP would have failed the step on all of them.
         - program_exit_zero: "em_peak_current_authority_check . --json reports/phase3/em_current_authority.json"
-    blocks_on: [22]
+    blocks_on: [22, 24]
 
   - id: 26
     name: "🔁 Antenna check (gate-oxide protection)"
@@ -4666,7 +4723,7 @@ steps:
         # cannot PASS without a real top-level LVS PASS.
         - advisory_program_exit_zero: "mixed_signal_top_lvs_run . --json reports/analog/mixed_signal/top_lvs_run.json"
         - program_exit_zero: "mixed_signal_merge_check . --json reports/analog/mixed_signal/merge.json"
-    blocks_on: [A8, 15]
+    blocks_on: [A8, 15, 37]
     notes: |
       Merge each analog analog/hardmacro GDS into the digital top GDS at
       its assigned floorplan position. Verify no overlap, all macro

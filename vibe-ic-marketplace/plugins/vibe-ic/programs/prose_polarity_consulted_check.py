@@ -142,17 +142,6 @@ _NOT_PROSE: Dict[str, str] = {
         "would not import. Contrast the two defects this gate was built from "
         "(#706 pdk_target, #711 die_area_budget_um): both read English design "
         "documents, where denial is spellable and was spelled.",
-    "policy_direction_pin_check::flip_source":
-        "Python's own string-literal grammar, matched at a RECORDED (line, "
-        "column). The matched text is `[rbuRBU]{0,2}` followed by an opening "
-        "quote -- a production of the Python lexical grammar, in which there "
-        "is no form that DENIES the literal it has just opened: source code "
-        "cannot say 'there is NOT a string here'. And the value written back "
-        "is `new_value`, the caller's replacement -- the function REPLACES the "
-        "matched text and hands the mutated source to pytest; it never "
-        "publishes the matched text as a declaration. Consulting "
-        "`_prose_polarity` on a quote character would be an unreachable "
-        "branch.",
 }
 
 

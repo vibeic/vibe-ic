@@ -138,7 +138,7 @@ Things that will bite you if you skip the docstring:
 * **`required_outputs` is ALL-of across entries**, but `" OR "` *inside* one
   entry is any-of. It used to be any-of across entries and that was a real
   false-pass bug — see `programs/flow_compliance_check.py` ~line 6150.
-* **`blocks_on` is present on 63<!--figure:blocks_on_declared--> steps but non-empty on only 61<!--figure:blocks_on_nonempty-->.** D1 and A1
+* **`blocks_on` is present on 63<!--figure:blocks_on_declared--> steps but non-empty on only 62<!--figure:blocks_on_nonempty-->.** D1 and A1
   declare it *empty* because they are the flow's genuine roots. "63<!--figure:blocks_on_declared--> steps have
   blocks_on" is a presence count, not a dependency count.
 * **`total_steps: 44`** in the yaml counts the numeric steps only. It is not
@@ -147,7 +147,7 @@ Things that will bite you if you skip the docstring:
   `advisory_program_exit_zero` does **not**, `optional_program_exit_zero`
   blocks only when its `condition_files_exist` are present. Treating an
   advisory clause as enforcement is measuring something adjacent.
-* **No `program_exit_zero` form exists in `required_outputs`** — all 134<!--figure:required_output_entries-->
+* **No `program_exit_zero` form exists in `required_outputs`** — all 136<!--figure:required_output_entries-->
   entries are plain path strings. That form lives only in `gate`.
 
 ### `cells.py` — the 504<!--figure:ledger_cells-->-cell ledger
@@ -238,7 +238,7 @@ from matrix_63x8 import cells as C, flowref as F, waivers as W
 
 The ledger's unit is a step, but dimensions 2 (falsifiability), 4
 (criteria-match) and 6 (skip discipline) each ask their question of a gate
-CLAUSE — 165<!--figure:blocking_clauses--> blocking clauses over 62<!--figure:gated_steps--> gated steps. A cell-level
+CLAUSE — 164<!--figure:blocking_clauses--> blocking clauses over 62<!--figure:gated_steps--> gated steps. A cell-level
 `xfail(strict=True)` cannot express "5 of this step's 6 clauses are proven and
 the 6th is not", so those modules carry an in-module per-clause register with
 the same both-directions anti-rot semantics (a stale entry reddens; an entry
@@ -314,9 +314,9 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
 
-**504 cells: 466 ENFORCED, 16 ENFORCED-CONTRADICTED, 11 WAIVED, 11 NA.**
+**504 cells: 469 ENFORCED, 10 ENFORCED-CONTRADICTED, 10 WAIVED, 15 NA.**
 
-The 16 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 466: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+The 10 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 469: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
 **What these 504 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
 
@@ -324,21 +324,21 @@ The 16 CONTRADICTED cells are configured as enforcing while their own predicate 
 
 * **16** — measured against the step's OWN mechanism. This is the only figure that means what "enforcing" sounds like, and it is a floor: the two rows below are not evidence against it, they are the part nobody has evidence for.
 * **45** — measured against a SUBSTITUTED stand-in. The predicate runs and passes; what it exercises is not the mechanism the cell is named after. Each one carries a disclosure from the module that owns it.
-* **405** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
+* **408** — in dimensions that have not answered the question at all. NOT counted as clean: UNDECLARED is a state, not a synonym for "own mechanism". See `substitution.py`, "WHY UNDECLARED IS A STATE AND NOT A DEFAULT".
 
-The 11 WAIVED and 11 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
+The 10 WAIVED and 15 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
 
 | dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |
 |-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------:|---:|
 | 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 63 | 0 | 0 | 0 |
-| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 59 | 1 | 2 | 1 |
-| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 44 | 9 | 3 | 7 |
+| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 60 | 0 | 2 | 1 |
+| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 44 | 6 | 2 | 11 |
 | 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 63 | 0 | 0 | 0 |
 | 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 62 | 0 | 1 | 0 |
 | 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 1 | 0 |
-| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 52 | 6 | 4 | 1 |
+| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 54 | 4 | 4 | 1 |
 | 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 16 | 45 | 0 | 0 | 0 | 2 |
-| **total** | | **16** | **45** | **405** | **16** | **11** | **11** |
+| **total** | | **16** | **45** | **408** | **10** | **10** | **15** |
 
 Regenerate (never edit this block by hand, and never quote it without re-running):
 

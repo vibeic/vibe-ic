@@ -38,11 +38,11 @@ run ``--fix-figures``, and ``--check`` fails on drift (vibe-ic#961).
         non-empty on 61<!--figure:required_output_steps--> (absent on FS1 and P0)
     blocks_on
         present on 63<!--figure:blocks_on_declared--> steps,
-        non-empty on 61<!--figure:blocks_on_nonempty--> (declared on every step;
+        non-empty on 62<!--figure:blocks_on_nonempty--> (declared on every step;
         PRESENT-BUT-EMPTY on D1 and A1, the two genuine graph roots)
 
 The ``present`` column is a PRESENCE count. ``blocks_on`` is non-empty on only
-61<!--figure:blocks_on_nonempty--> steps. Any test that conflates the two will
+62<!--figure:blocks_on_nonempty--> steps. Any test that conflates the two will
 be wrong about D1 and A1.
 
 Top-level ``total_steps: 44`` counts the numeric steps ONLY. It is NOT
@@ -67,11 +67,11 @@ OR a sim ``*.log`` OR a ``pass.flag``; a ``drc_clean.flag`` OR a ``.lyrdb``).
 The consumer splits on the literal ``" OR "`` (spaces included) and strips each
 alternative — :func:`split_any_of` reproduces exactly that.
 
-Live entry census — 134<!--figure:required_output_entries--> entries over
+Live entry census — 136<!--figure:required_output_entries--> entries over
 61<!--figure:required_output_steps--> steps, classified by
 :func:`classify_output` (digits derived; see the anchor note in §1):
 
-    FILE          100<!--figure:required_outputs_file-->
+    FILE          102<!--figure:required_outputs_file-->
         plain relative path, no wildcard, no " OR "
     GLOB          12<!--figure:required_outputs_glob-->
         wildcard, no " OR " (e.g. ``phase1/generated_docs/L13_*.json``)
@@ -83,7 +83,7 @@ Live entry census — 134<!--figure:required_output_entries--> entries over
 
 **Contradiction with the brief, reported deliberately**: there is NO
 ``program_exit_zero: "<cmd>"`` form anywhere in ``required_outputs``. All
-134<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
+136<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
 That form exists only inside ``gate`` clauses (§3). :data:`PROGRAM_EXIT` is
 still returned by :func:`classify_output` for forward compatibility, but on the
 current yaml it never fires — a sibling that branches on it is writing dead
@@ -119,14 +119,14 @@ replaces a hand-counted table of raw ``all_of`` members: the raw table counted
 a different population from the accessor this module tells you to use, so the
 two could not be reconciled by a reader and only one of them was derived.
 
-    program_exit_zero          104<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
-    advisory_program_exit_zero 36<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
+    program_exit_zero          103<!--figure:gate_clauses_program_exit_zero-->  MANDATORY
+    advisory_program_exit_zero 37<!--figure:gate_clauses_advisory_program_exit_zero-->  NON-BLOCKING
     files_exist                32<!--figure:gate_clauses_files_exist-->
     optional_program_exit_zero 28<!--figure:gate_clauses_optional_program_exit_zero-->  conditional
     json_field_true             1<!--figure:gate_clauses_json_field_true-->
     ------------------------------
     total                     201<!--figure:gate_clauses_total-->, of which
-                              165<!--figure:blocking_clauses--> block
+                              164<!--figure:blocking_clauses--> block
 
 Three different exit-zero kinds with three different force levels:
   * ``program_exit_zero``          — blocking.
@@ -158,8 +158,8 @@ file-existence-only gate and legitimately names none.
 --------------------------------------------------------------------
 5. ``blocks_on``
 --------------------------------------------------------------------
-94<!--figure:blocks_on_edges--> edges, mixed types
-(78<!--figure:blocks_on_edges_int--> int, 16<!--figure:blocks_on_edges_str--> str),
+97<!--figure:blocks_on_edges--> edges, mixed types
+(80<!--figure:blocks_on_edges_int--> int, 17<!--figure:blocks_on_edges_str--> str),
 every target resolving to a declared step id — no dangling references at time of writing. Compare with
 :func:`normalize_id` on both sides; the real consumers stringify
 (``{str(id): [str(e) for e in blocks_on]}``).

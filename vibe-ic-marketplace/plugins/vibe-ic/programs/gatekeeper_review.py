@@ -992,7 +992,8 @@ _HYGIENE_TIMEOUT_S = 3600
 
 def repo_hygiene_gate(repo: Path,
                       script: Optional[Path] = None,
-                      timeout: int = _HYGIENE_TIMEOUT_S) -> GateResult:
+                      timeout: int = _HYGIENE_TIMEOUT_S,
+                      summary_out: Optional[Path] = None) -> GateResult:
     """Run `tools/ci/repo_hygiene_gates.sh` and report its own coverage record.
 
     `script` is a test seam in the same spirit as `override_files` — it lets a
@@ -1047,7 +1048,60 @@ def repo_hygiene_gate(repo: Path,
             return GateResult(name, 2,
                               f"ERROR — unreadable coverage record: {exc}")
 
+        # vibe-ic#1025 — hand the record on to a caller that has a second
+        # question about it. Before this, the ONLY production copy of the
+        # dispatcher's record was this temp file, destroyed on the next line,
+        # so no consumer could ask anything a single run cannot answer — which
+        # is why `a permanently red gate is a gate that gets skipped` had no
+        # machinery under it. Copied rather than relocated: the temp dir stays
+        # the owner, so a caller that passes nothing is byte-for-byte
+        # unaffected.
+        if summary_out is not None:
+            try:
+                summary_out.write_text(json.dumps(doc, indent=2,
+                                                  ensure_ascii=False) + "\n",
+                                       encoding="utf-8")
+            except OSError as exc:
+                return GateResult(name, 2,
+                                  f"ERROR — could not hand on the coverage "
+                                  f"record: {exc}")
+
     return _hygiene_verdict(doc, proc.returncode)
+
+
+def gate_red_since_gate(repo: Path, record: Path) -> GateResult:
+    """Adjudicate this run's reds against the acknowledgement ledger (#1025).
+
+    A SEPARATE gate rather than a clause folded into `repo_hygiene_gates`,
+    because the two answer different questions and a reader has to be able to
+    tell them apart: the hygiene gate says WHICH gates are red, this one says
+    which of those reds is NEW and which acknowledgement has run out of time.
+    Folding them would report an expired deadline under the headline
+    "repo_hygiene_gates FAILED", pointing the reader at the gate rather than at
+    the row that came due.
+
+    It is also deliberately NOT wired into `_gate_dispatch.sh`. The dispatcher's
+    rc is pinned by vibe-ic#1025's own guard (`run` blocks on rc 2,
+    `run_tolerating_uncheckable` does not), and a ledger that could move that rc
+    would be a ledger that can buy a green.
+    """
+    name = "gate_red_since"
+    prog = Path(__file__).resolve().parent / "gate_red_since_check.py"
+    if not prog.is_file():                      # pragma: no cover - packaging
+        return GateResult(name, -1, "skipped — checker not present")
+    if not record.is_file():
+        # The hygiene gate errored before writing a record. It has already
+        # reported that; saying "no red is overdue" over a record that does not
+        # exist would be this program committing the defect it audits for.
+        return GateResult(name, -1,
+                          "skipped — 0 gate state(s) examined: the hygiene set "
+                          "produced no record to adjudicate")
+    rc, out, err = _run_program(prog, ["--record", str(record),
+                                       "--repo", str(repo)])
+    line = (out.strip().splitlines() or [""])[-1]
+    if rc == 2:
+        return GateResult(name, -1, f"skipped — {line}")
+    return GateResult(name, rc, line or (err.strip()[:200] or "no output"))
 
 
 def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
@@ -1070,6 +1124,29 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
     # message about a record that is perfectly consistent, pointing a reader
     # away from the one thing that happened.
     wrote = by_state("WROTE_CORPUS")
+
+    # vibe-ic#584 — the three keys that make NOT_CHECKED load-bearing HERE and
+    # not only in the script's exit code. Before this, `not_checked` reached the
+    # summary STRING and nothing else: the sweep printed "3 NOT CHECKED — this
+    # is NOT a pass" and this function returned rc 0, i.e. MERGE_OK.
+    #
+    # Derived from the per-gate records when the top-level key is absent, and
+    # derived FAIL-SAFE: a record written by a script predating the exemption
+    # mechanism carries no `exempt_until` on any gate, so every NOT_CHECKED in
+    # it reads as UNEXEMPTED and refuses. The opposite default would make "hand
+    # a record in the old format" the way to buy silence for the whole
+    # mechanism.
+    wiring = [str(w) for w in (doc.get("wiring_errors") or [])]
+    unexempted = doc.get("not_checked_unexempted")
+    if unexempted is None:
+        unexempted = [str(g.get("label")) for g in gates
+                      if g.get("state") == "NOT_CHECKED"
+                      and not g.get("exempt_until")]
+    expired = doc.get("exemptions_expired")
+    if expired is None:
+        expired = [str(g.get("label")) for g in gates
+                   if g.get("exemption_expired")]
+
     ran = declared - len(deferred)
     secs = doc.get("seconds")
     where = f"{ran}/{declared} gate(s) ran"
@@ -1091,6 +1168,14 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
         return GateResult(name, 2,
                           "ERROR — the hygiene script declared 0 gates; "
                           "nothing was checked and this is NOT a pass")
+    if wiring:
+        # The set's own DECLARATION is wrong, so no count it reports means what
+        # it says. ERROR rather than FAIL: nothing was concluded about the tree.
+        return GateResult(name, 2,
+                          f"ERROR — {len(wiring)} wiring error(s) in the "
+                          f"hygiene gate declarations, so the set certifies "
+                          f"nothing: " + "; ".join(wiring[:3])
+                          + (" …" if len(wiring) > 3 else "") + f" [{where}]")
     if wrote:
         # BEFORE the FAIL branch. Every gate that ran after a corpus write read
         # a tree this run modified, so any accompanying failure may be about
@@ -1112,6 +1197,30 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
                           + ", ".join(sorted(failed)[:6])
                           + (" …" if len(failed) > 6 else "")
                           + f" [{where}]")
+    # AFTER the FAIL branch, and both are rc 1, so the ordering decides only
+    # which sentence a maintainer reads first — a gate that RAN and found
+    # something is the one to act on. Neither is lost: both are named in
+    # `where`.
+    if unexempted:
+        # The lie-shape this whole change is about: the sweep NAMED a gate it
+        # could not run and this function answered MERGE_OK over it. A gate
+        # allowed to go unchecked must have said so in advance, with a date and
+        # a reason, at the line that wires it.
+        return GateResult(name, 1,
+                          f"{len(unexempted)} gate(s) NOT CHECKED with no "
+                          f"declared exemption — the hygiene set is smaller "
+                          f"than it reports: "
+                          + ", ".join(sorted(unexempted)[:6])
+                          + (" …" if len(unexempted) > 6 else "")
+                          + f" [{where}]")
+    if expired:
+        return GateResult(name, 1,
+                          f"{len(expired)} uncheckable exemption(s) are PAST "
+                          f"their review date; re-review the gate and either "
+                          f"restate the date with a reason that is still true "
+                          f"or remove the tolerance: "
+                          + ", ".join(sorted(expired)[:6])
+                          + (" …" if len(expired) > 6 else "") + f" [{where}]")
     if script_rc != 0:
         # Red script, no failing gate named: a setup/summary inconsistency we
         # must not paper over.
@@ -1124,9 +1233,52 @@ def _hygiene_verdict(doc: dict, script_rc: int) -> GateResult:
 # --------------------------------------------------------------------------
 # subprocess runner for the file-walking gates.
 # --------------------------------------------------------------------------
-def _run_program(prog: Path, args: List[str]) -> Tuple[int, str, str]:
-    proc = subprocess.run([sys.executable, str(prog), *args],
-                          capture_output=True, text=True)
+#: What ONE driven program may spend before this gate stops waiting for it.
+#: vibe-ic#1208.
+#:
+#: MUST BE TIGHTER THAN THE HARNESS TIMEOUT ABOVE IT, and the first version of
+#: this fix was not. At 300s under the suite's `--timeout=180`, pytest's own
+#: timeout fires FIRST, and because it is thread-based it cannot interrupt a
+#: subprocess wait — so the invocation still produced no summary and the bound
+#: never got a chance to act. MEASURED: wall=181.63s, no summary, unchanged.
+#: A bound only helps if whatever is waiting on it is prepared to wait longer.
+_PROGRAM_TIMEOUT_S = 90.0
+
+
+def _run_program(prog: Path, args: List[str],
+                 timeout: float = _PROGRAM_TIMEOUT_S) -> Tuple[int, str, str]:
+    """Drive `prog` as a subprocess. Returns `(rc, stdout, stderr)`.
+
+    BOUNDED (vibe-ic#1208). This had no `timeout=` at all, and it is the one
+    chokepoint all 15 gate drivers go through — `plugin_audit_gate` puts
+    `plugin_full_audit.py` over the entire plugin root through it.
+
+    An unbounded wait here is not "a slow gate". The wait lands in
+    `subprocess.communicate` -> `selector.poll`, which pytest's
+    `--timeout-method=thread` CANNOT interrupt: the timeout fires, prints its
+    stack, and the invocation still never returns. What the operator sees is
+    not "one test timed out" but a run with NO SUMMARY LINE — which greps as
+    neither a pass nor a failure. Three of this program's own test modules
+    could not be run in a pinned selection on clean `a38902d1` because of it,
+    and this is the program that decides whether a batch may land.
+
+    A TIMEOUT RETURNS 124, NEVER 0. Every caller here treats non-zero as a
+    failing gate, so "I could not determine this" lands on the safe side of
+    the verdict. A bounded wait that returned 0 would be a worse defect than
+    the hang: it would convert "never finished" into "clean".
+    """
+    try:
+        proc = subprocess.run([sys.executable, str(prog), *args],
+                              capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        def _txt(v) -> str:
+            if v is None:
+                return ""
+            return v.decode("utf-8", "replace") if isinstance(v, bytes) else v
+        return 124, _txt(exc.stdout), (
+            f"{prog.name}: exceeded the {timeout:g}s bound and was stopped "
+            f"(#1208) — this gate is UNDETERMINED, which is reported as a "
+            f"failure because it is not a clean result\n" + _txt(exc.stderr))
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -1230,7 +1382,15 @@ def review(base: str, head: str, *,
     # #538 — LAST because it is by far the longest, so every cheap machine gate
     # has already printed by the time this starts. It is the whole CI hygiene
     # set, invoked (not re-listed) so that MERGE_OK means what it reads as.
-    gates.append(repo_hygiene_gate(repo, script=hygiene_script))
+    # #1025 — the hygiene record is adjudicated a second time, for a question
+    # one run cannot answer: is any of this red OLD, and has any of it outlived
+    # the deadline its acknowledgement set? The record is handed over rather
+    # than the set re-run.
+    with tempfile.TemporaryDirectory(prefix="gate_red_since_") as _td:
+        _record = Path(_td) / "hygiene.json"
+        gates.append(repo_hygiene_gate(repo, script=hygiene_script,
+                                       summary_out=_record))
+        gates.append(gate_red_since_gate(repo, _record))
 
     # 5. verdict.
     blocking = [f"{g.name}: {g.summary}" for g in gates if not g.green]

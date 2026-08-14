@@ -31,10 +31,12 @@
 #     source "<dir>/_gate_dispatch.sh"
 #     gate_dispatch_init "$@"          # parses --list / --summary-json PATH
 #     run                     <label> <cwd> <cmd...>
+#     uncheckable_until <YYYY-MM-DD> <why>   # REQUIRED before the next line
 #     run_tolerating_uncheckable <label> <cwd> <cmd...>
 #     gate_dispatch_finish             # writes the record, prints the roll-up,
-#                                      # and EXITS (0 clean / 1 a gate failed /
-#                                      # 2 nothing was declared)
+#                                      # and EXITS (0 clean / 1 a gate failed or
+#                                      # an exemption expired / 2 nothing was
+#                                      # declared, or the wiring is wrong)
 #
 # The two flags are ADDITIVE: with neither, behaviour is exactly what it was
 # before #538, which is how both CI workflows still call the gate script.
@@ -81,6 +83,54 @@
 # per-cell gates driven inside a throwaway worktree at HEAD, benchmark-data
 # diffed across each — zero writers. The ratchet ships with no debt, so nothing
 # has to be blessed for it to be green.
+#
+# WHY NOT_CHECKED NEEDS AN EXEMPTION (vibe-ic#584)
+# ================================================
+# Every state above is honest about the SINGLE run and said nothing about the
+# TREND. Measured on this file before this paragraph existed: the sweep printed
+# "74 declared, 3 NOT CHECKED — this is NOT a pass over: <names>" and exited 0,
+# and `gatekeeper_review._hygiene_verdict` copied those names into its summary
+# string and returned MERGE_OK. #539 fixed the SENTENCE and left the EXIT CODE
+# and the CONSUMER alone — the sweep said it had not checked, and passed as if
+# it had.
+#
+# There was also no ratchet. NOT_CHECKED is reachable ONLY through
+# `run_tolerating_uncheckable` + rc 2 — a missing binary (rc 127), an uncaught
+# exception (rc 1) and a plain `run` exiting 2 all become FAIL, which is loud,
+# and that part was sound. But `run` -> `run_tolerating_uncheckable` is a
+# ONE-WORD edit that converts a gate's every rc-2 refusal into a tolerated
+# non-verdict, and nothing objected. The count could go 0 -> 3 with the only
+# trace a log line nobody exits non-zero on, and each increment subtracted a
+# gate from a set the reader still counts as 74.
+#
+# So the tolerance has to be BOUGHT, not assumed:
+#
+#   * `run_tolerating_uncheckable` without an `uncheckable_until` immediately
+#     above it is a WIRING ERROR (rc 2). You cannot make a gate skippable by
+#     forgetting something; you have to write down a date and a reason.
+#   * An `uncheckable_until` on a plain `run` is ALSO a wiring error — it
+#     describes a state that gate cannot reach, and a reader who saw it would
+#     believe a tolerance that does not exist.
+#   * An exemption whose date has PASSED fails the sweep (rc 1) whether or not
+#     it fired. An exemption is a promise to revisit, not a permanent licence;
+#     one kept past its reason is a blind spot exactly the size of the gate it
+#     covers, and the run where it silently starts covering a real regression
+#     is the run where nobody is looking.
+#
+# WHY THE EXEMPTION LIVES AT THE GATE AND NOT IN A LIST FILE. A separate
+# registry would be a second hand-maintained list keyed by gate LABEL, which is
+# the drift shape #527, #530, #534 and #538 each spent a version removing: a
+# renamed gate silently loses its entry, a deleted gate leaves a rotting one.
+# Declared at the wiring site it cannot desynchronise, because deleting the
+# gate line deletes the exemption with it. It is enforced by the DISPATCHER
+# rather than by a static checker for the same reason the recording is here —
+# one mechanism, on the path every run takes, that a new wrapper cannot dodge.
+#
+# WHY THIS DOES NOT REINTRODUCE THE PERMANENTLY-RED SCRIPT. An EXEMPTED gate
+# that reports NOT_CHECKED still exits 0, loudly, naming the gate and the
+# exemption covering it — that is `run_tolerating_uncheckable`'s original
+# purpose and it is intact. What changed is that the set of gates allowed to do
+# so is now closed, dated and reasoned instead of open-ended.
 #
 # chip-AGNOSTIC: nothing here reasons about any IC, vendor, SKU or process.
 
@@ -144,8 +194,70 @@ declare -a GATE_ITEM_CORPUS=() GATE_ITEM_IDX=() GATE_ITEM_TOTAL=()
 declare -A GATE_DISPATCH_SITES=()
 declare -a GATE_UNDISCLOSED_LOOPS=()
 
+# --- THE UNCHECKABLE EXEMPTION REGISTER (vibe-ic#584) -----------------------
+#: Today, read ONCE per run so that a sweep spanning midnight cannot expire an
+#: exemption for gate 60 that it honoured for gate 1 — one run, one date.
+GATE_DISPATCH_TODAY=""
+#: The exemption declared by `uncheckable_until` and not yet attached to a gate.
+#: A SLOT rather than a lookup table keyed by label: adjacency is then a
+#: property of the mechanism instead of a convention a reader has to honour, so
+#: an exemption cannot drift away from the gate it excuses or outlive its
+#: deletion. It also works unchanged inside `gate_dispatch_over`, where the
+#: declaring line is executed once per item.
+GATE_PENDING_UNTIL=""
+GATE_PENDING_WHY=""
+#: Parallel to GATE_LABELS — empty for the (normal) unexempted gates.
+declare -a GATE_EX_UNTIL=() GATE_EX_WHY=() GATE_WIRING_ERRORS=()
+
+# A defect in how the script DECLARES its gates, as opposed to a defect the
+# gates found. Collected rather than fatal-on-first so one run names every
+# mis-wired gate; `gate_dispatch_finish` turns any into rc 2, because a set
+# whose own wiring is wrong has not certified the tree it was pointed at.
+_gate_wiring_error() {
+  GATE_WIRING_ERRORS+=("$1")
+  echo "gate_dispatch: WIRING ERROR — $1" >&2
+}
+
+# `uncheckable_until <YYYY-MM-DD> <why>` — buy the right for the NEXT gate to
+# report NOT_CHECKED, until a date, for a stated reason. See the header.
+uncheckable_until() {
+  local until="${1:-}" why="${2:-}"
+  if [ -n "$GATE_PENDING_UNTIL" ]; then
+    _gate_wiring_error "an exemption (until $GATE_PENDING_UNTIL) was declared \
+and never attached to a gate before 'uncheckable_until ${until}'"
+  fi
+  # ISO-8601 ONLY, so the expiry comparison can be a plain string compare: on
+  # YYYY-MM-DD, lexicographic order IS chronological order, in every locale,
+  # with no date library and no parsing that could itself fail open. A
+  # well-shaped but calendar-impossible date (2026-02-31) still orders
+  # correctly and still expires — it can hide nothing.
+  if ! [[ "$until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    _gate_wiring_error "'uncheckable_until ${until:-<empty>}': the review date \
+must be ISO-8601 YYYY-MM-DD"
+  fi
+  # An exemption with no reason is a skip button with a date printed on it: the
+  # reader it exists for cannot then tell a benign missing prerequisite from a
+  # gate that has quietly stopped working.
+  if [ -z "$why" ]; then
+    _gate_wiring_error "'uncheckable_until ${until:-<empty>}': an exemption \
+must state WHY the gate can be unable to run"
+  fi
+  GATE_PENDING_UNTIL="$until"; GATE_PENDING_WHY="$why"
+}
+
 gate_dispatch_init() {
   GATE_DISPATCH_T0="$SECONDS"
+  GATE_DISPATCH_TODAY="$(date -u +%F 2>/dev/null || true)"
+  # Fail CLOSED on the clock. An empty or malformed `today` would make every
+  # `until` compare as not-yet-due, so every exemption would be immortal and
+  # the expiry half of #584 would be silently absent — a check that stops
+  # checking without saying so, which is the class this file exists to remove.
+  # Reported through the same channel as a mis-wired gate, so it lands as rc 2
+  # (nothing was certified) rather than as a gate verdict.
+  [[ "$GATE_DISPATCH_TODAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+    || _gate_wiring_error "could not read today's date as YYYY-MM-DD (got \
+'${GATE_DISPATCH_TODAY:-<empty>}'), so no uncheckable exemption could be \
+checked for expiry"
   while [ $# -gt 0 ]; do
     case "$1" in
       --list) GATE_DISPATCH_LIST_ONLY=1; shift ;;
@@ -237,6 +349,21 @@ _gate_dispatch_corpus_state() {
 # place a gate is executed and the ONE place its outcome is recorded.
 _dispatch() {
   local tolerate="$1" may_write="$2" label="$3" wd="$4"; shift 4
+  # vibe-ic#584 — consume the pending exemption FIRST and unconditionally, so a
+  # mis-wired gate cannot leave it armed for the next one: an exemption written
+  # for gate N silently excusing gate N+1 is worse than none at all.
+  local ex_until="$GATE_PENDING_UNTIL" ex_why="$GATE_PENDING_WHY"
+  GATE_PENDING_UNTIL=""; GATE_PENDING_WHY=""
+  if [ "$tolerate" -eq 1 ] && [ -z "$ex_until" ]; then
+    _gate_wiring_error "\"$label\" is wired with run_tolerating_uncheckable, so \
+it can report NOT_CHECKED, but no 'uncheckable_until <YYYY-MM-DD> <why>' line \
+precedes it — tolerance has to be bought, not defaulted into"
+  elif [ "$tolerate" -eq 0 ] && [ -n "$ex_until" ]; then
+    _gate_wiring_error "\"$label\" carries an 'uncheckable_until $ex_until' \
+exemption but is wired with a wrapper that can never report NOT_CHECKED — the \
+exemption describes a state this gate cannot reach"
+  fi
+  GATE_EX_UNTIL+=("$ex_until"); GATE_EX_WHY+=("$ex_why")
   GATE_LABELS+=("$label")
   GATE_ITEM_CORPUS+=("$GATE_DISPATCH_CORPUS_CUR")
   GATE_ITEM_IDX+=("$GATE_DISPATCH_CORPUS_IDX")
@@ -314,7 +441,11 @@ _dispatch() {
     GATE_STATES+=("PASS")
   elif [ "$tolerate" -eq 1 ] && [ "$rc" -eq 2 ]; then
     GATE_STATES+=("NOT_CHECKED")
-    echo "   ^^ NOT CHECKED (rc 2, non-fatal): $label [${secs}s]" >&2
+    # The exemption is echoed WITH the refusal, not only in the roll-up: this is
+    # the line a reader reaches first, and "could not look" is benign only if
+    # they can see which prerequisite was missing.
+    echo "   ^^ NOT CHECKED (rc 2, non-fatal): $label [${secs}s]" \
+         "— exempt until ${ex_until:-<NONE>}: ${ex_why:-<no reason declared>}" >&2
   else
     GATE_STATES+=("FAIL")
     echo "   ^^ FAILED: $label [${secs}s]" >&2
@@ -391,6 +522,34 @@ gate_dispatch_over() {
   GATE_DISPATCH_CORPUS_CUR=""
   GATE_DISPATCH_CORPUS_IDX=0
   GATE_DISPATCH_CORPUS_TOTAL=0
+  # AN EMPTY CORPUS MUST LEAVE A GATE BEHIND (vibe-ic#1075).
+  #
+  # Until this existed, `n == 0` ran the body zero times, declared zero gates,
+  # and cost the run NOTHING: the roll-up printed "no gate in this run reports
+  # that, because none exists" and the script's exit status was unaffected. So
+  # a corpus that silently emptied — a glob that stopped matching, a corpus
+  # withdrawn from publication — read exactly like a corpus with nothing wrong
+  # in it. MEASURED: `published cells carrying a routed DEF` is 1 item on
+  # origin/main and 0 on the withdrawal branch, and at 0 the three gates it
+  # dispatches simply cease to exist with no verdict anywhere.
+  #
+  # A synthetic NOT_CHECKED gate is the honest record, and it is not a new
+  # tier: NOT_CHECKED already means "the gate REFUSED — it could not look
+  # (rc 2)", which is exactly the state of a gate with nothing to look at. It
+  # is deliberately NOT a FAIL — an empty corpus is not a broken design, and
+  # calling it one would make every host without published evidence red for a
+  # reason that is about the corpus. But it is never a silent PASS.
+  if [ "$n" -eq 0 ] && [ "$rc" -eq 0 ]; then
+    GATE_LABELS+=("corpus \"$corpus\" is EMPTY — nothing was checked over it")
+    GATE_STATES+=("NOT_CHECKED")
+    GATE_SECONDS+=("0")
+    GATE_ITEM_CORPUS+=("$corpus")
+    GATE_ITEM_IDX+=("0")
+    GATE_ITEM_TOTAL+=("0")
+    echo "   ^^ EMPTY CORPUS \"$corpus\": 0 item(s), so the gates it would" \
+         "have dispatched did not run. Recorded NOT_CHECKED so the run" \
+         "carries a verdict for it instead of no verdict at all." >&2
+  fi
   GATE_CORPUS_NAMES+=("$corpus")
   GATE_CORPUS_ITEMS+=("$n")
   GATE_CORPUS_GATES+=("$(( ${#GATE_LABELS[@]} - before ))")
@@ -449,41 +608,53 @@ _gate_dispatch_undisclosed_loops() {
 # `python3` invocation so it is not a new dependency, and argv carries the
 # labels EXACTLY — no quoting or delimiter can corrupt a record.
 _gate_dispatch_emit() {
-  local path="$1" i n total nc
+  local path="$1" i n total nc nw
   n=${#GATE_LABELS[@]}
   nc=${#GATE_CORPUS_NAMES[@]}
+  nw=${#GATE_WIRING_ERRORS[@]}
   total=$(( SECONDS - GATE_DISPATCH_T0 ))
-  # Fixed-width groups, gates first then corpora, with both counts passed
-  # ahead of them: argv carries every label and corpus name EXACTLY, and no
-  # separator token can be mistaken for one of them.
+  # Fixed-width groups, gates first then corpora then wiring errors, with every
+  # count passed ahead of them: argv carries every label, corpus name, exemption
+  # reason and diagnostic EXACTLY, and no separator token can be mistaken for
+  # one of them. `undisclosed_loops` remains the un-prefixed remainder.
   local -a fields=()
   for (( i=0; i<n; i++ )); do
     fields+=("${GATE_STATES[$i]}" "${GATE_SECONDS[$i]}"
              "${GATE_ITEM_CORPUS[$i]}" "${GATE_ITEM_IDX[$i]}"
-             "${GATE_ITEM_TOTAL[$i]}" "${GATE_LABELS[$i]}")
+             "${GATE_ITEM_TOTAL[$i]}" "${GATE_EX_UNTIL[$i]}"
+             "${GATE_EX_WHY[$i]}" "${GATE_LABELS[$i]}")
   done
   for (( i=0; i<nc; i++ )); do
     fields+=("${GATE_CORPUS_ITEMS[$i]}" "${GATE_CORPUS_GATES[$i]}"
              "${GATE_CORPUS_STATE[$i]}" "${GATE_CORPUS_NAMES[$i]}")
   done
+  # vibe-ic#1144 (shard id, via ENV) + vibe-ic#584 (`nw`, `today`, as ARGS).
+  # Two independent extensions of one protocol; both are required, because the
+  # record below carries `shard` AND `wiring_errors`/`today`.
   GATE_DISPATCH_SHARD_ID="$([ "$GATE_DISPATCH_SHARD_I" -ge 0 ] \
       && echo "$GATE_DISPATCH_SHARD_I/$GATE_DISPATCH_SHARD_N")" \
-  python3 - "$path" "$total" "$GATE_DISPATCH_LIST_ONLY" "$n" "$nc" \
+  python3 - "$path" "$total" "$GATE_DISPATCH_LIST_ONLY" "$n" "$nc" "$nw" \
+      "$GATE_DISPATCH_TODAY" \
       ${fields[@]+"${fields[@]}"} \
+      ${GATE_WIRING_ERRORS[@]+"${GATE_WIRING_ERRORS[@]}"} \
       ${GATE_UNDISCLOSED_LOOPS[@]+"${GATE_UNDISCLOSED_LOOPS[@]}"} <<'PY'
 import json, os, sys
 out, total, list_only = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "1"
 SHARD = os.environ.get("GATE_DISPATCH_SHARD_ID") or None
-ng, nc = int(sys.argv[4]), int(sys.argv[5])
-rest = sys.argv[6:]
-gf, rest = rest[:ng * 6], rest[ng * 6:]
-cf, undisclosed = rest[:nc * 4], rest[nc * 4:]
+ng, nc, nw = int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6])
+today = sys.argv[7]
+rest = sys.argv[8:]
+# 8 per gate, not 6: vibe-ic#584 appended exempt_until/exempt_reason, and the
+# loop below reads gf[i+5..7] positionally.
+gf, rest = rest[:ng * 8], rest[ng * 8:]
+cf, rest = rest[:nc * 4], rest[nc * 4:]
+wiring, undisclosed = rest[:nw], rest[nw:]
 gates = []
-for i in range(0, len(gf), 6):
+for i in range(0, len(gf), 8):
     # The three loop keys are written ONLY for a gate a loop produced, so a
     # gate wired outside one records byte-for-byte what it recorded before
     # vibe-ic#957 — the record of the other ~70 must not move either.
-    g = {"label": gf[i + 5], "state": gf[i], "seconds": int(gf[i + 1])}
+    g = {"label": gf[i + 7], "state": gf[i], "seconds": int(gf[i + 1])}
     if gf[i + 2]:
         g["corpus"] = gf[i + 2]
         g["corpus_item"] = int(gf[i + 3])
@@ -491,6 +662,14 @@ for i in range(0, len(gf), 6):
         # as per corpus: a consumer that reads one gate must not have to
         # reconstruct how many there were of it.
         g["corpus_items"] = int(gf[i + 4])
+    # vibe-ic#584. Always present, so a consumer never has to guess whether an
+    # absent key means "unexempted" or "written by an older script".
+    g["exempt_until"] = gf[i + 5] or None
+    g["exempt_reason"] = gf[i + 6] or None
+    # ISO-8601 lexicographic order is chronological order; see the note on
+    # `uncheckable_until`. An exemption expires whether or not it FIRED — it is
+    # a promise to revisit, and a promise nobody is reminded of is not one.
+    g["exemption_expired"] = bool(g["exempt_until"]) and g["exempt_until"] < today
     gates.append(g)
 corpora = [{"name": cf[i + 3], "items": int(cf[i]), "gates": int(cf[i + 1]),
             "expansion": cf[i + 2]}
@@ -506,6 +685,18 @@ doc = {
     "passed": n("PASS"),
     "failed": n("FAIL"),
     "not_checked": n("NOT_CHECKED"),   # never folded into `passed`
+    # vibe-ic#584 — the two keys that make NOT_CHECKED load-bearing. Both are
+    # LISTS, not counts: a consumer that has to refuse a landing must be able to
+    # NAME the gate, because a bare number cannot answer "was it the one I
+    # cared about".
+    "not_checked_unexempted": [g["label"] for g in gates
+                               if g["state"] == "NOT_CHECKED"
+                               and not g["exempt_until"]],
+    "exemptions_expired": [g["label"] for g in gates if g["exemption_expired"]],
+    # Defects in how the script DECLARES its gates. Non-empty means no count in
+    # this record means what it says.
+    "wiring_errors": wiring,
+    "today": today,
     # Its own bucket, never folded into `failed`: the gate may well have found
     # nothing. What it did was change the tree every later gate reads, and a
     # consumer has to be able to tell those two apart.
@@ -537,9 +728,37 @@ PY
 gate_dispatch_finish() {
   local declared=${#GATE_LABELS[@]} notchecked=0 passed=0 wrote=0 i
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
-  local refused="" writers=""
+  local refused="" writers="" expired="" nexpired=0
+
+  # vibe-ic#584 — an exemption declared after the last gate attaches to
+  # nothing. Caught rather than ignored: the author believed they had covered a
+  # gate, and the gate they meant to cover has no tolerance at all.
+  if [ -n "$GATE_PENDING_UNTIL" ]; then
+    _gate_wiring_error "an exemption (until $GATE_PENDING_UNTIL) was declared \
+after the last gate and attaches to nothing"
+  fi
+  for (( i=0; i<declared; i++ )); do
+    if [ -n "${GATE_EX_UNTIL[$i]}" ] \
+       && [[ "${GATE_EX_UNTIL[$i]}" < "$GATE_DISPATCH_TODAY" ]]; then
+      nexpired=$(( nexpired + 1 ))
+      expired="${expired:+$expired, }${GATE_LABELS[$i]} (due ${GATE_EX_UNTIL[$i]})"
+    fi
+  done
+
   [ -z "$GATE_DISPATCH_SUMMARY_JSON" ] \
     || _gate_dispatch_emit "$GATE_DISPATCH_SUMMARY_JSON"
+
+  # BEFORE the `--list` exit and before every gate verdict: a script whose own
+  # wiring is wrong has not certified anything, and this is the one class that
+  # is a pure property of the DECLARATION — so the cheap one-second `--list`
+  # run catches it too. rc 2, the same tier as "nothing was declared", for the
+  # same reason.
+  if [ "${#GATE_WIRING_ERRORS[@]}" -ne 0 ]; then
+    echo "gate_dispatch: ${#GATE_WIRING_ERRORS[@]} WIRING ERROR(s) in the gate" \
+         "declarations (listed above) — the set was not correctly declared," \
+         "so this run certifies NOTHING" >&2
+    exit 2
+  fi
 
   if [ "$GATE_DISPATCH_LIST_ONLY" -eq 1 ]; then
     # TO STDERR IN LIST MODE, with the count line that is already there:
@@ -549,6 +768,12 @@ gate_dispatch_finish() {
     # which is exactly why this must still print.
     _gate_dispatch_corpora_rollup "$declared" >&2
     _gate_dispatch_undisclosed_loops
+    # #584 — expiry is deliberately NOT enforced here. `--list` answers "what
+    # does this script declare", a question whose answer must not change with
+    # the wall clock: two other programs parse this script and reconcile their
+    # gate list against this enumeration, and a calendar-dependent rc would make
+    # those comparisons flap on a date boundary. The dated promise is collected
+    # by the run that could actually have used it. It is still RECORDED here.
     echo "gate_dispatch: $declared gate(s) declared; none run (--list)" >&2
     exit 0
   fi
@@ -581,7 +806,8 @@ gate_dispatch_finish() {
       PASS) passed=$(( passed + 1 )) ;;
       NOT_CHECKED)
         notchecked=$(( notchecked + 1 ))
-        refused="${refused:+$refused, }${GATE_LABELS[$i]}" ;;
+        refused="${refused:+$refused, }${GATE_LABELS[$i]}"
+        refused="$refused (exempt until ${GATE_EX_UNTIL[$i]})" ;;
       WROTE_CORPUS)
         wrote=$(( wrote + 1 ))
         writers="${writers:+$writers, }${GATE_LABELS[$i]}" ;;
@@ -603,6 +829,22 @@ gate_dispatch_finish() {
     echo "repo_hygiene_gates: at least one gate FAILED" \
          "($declared declared, $notchecked NOT CHECKED, $wrote WROTE CORPUS," \
          "${total}s)" >&2
+    [ "$nexpired" -eq 0 ] || echo "repo_hygiene_gates: and $nexpired" \
+      "uncheckable exemption(s) are PAST their review date: $expired" >&2
+    exit 1
+  fi
+
+  # vibe-ic#584 — a dated promise nobody is reminded of is not a promise. This
+  # fires whether or not the exemption FIRED: one covering a gate that passes
+  # today is dormant, not gone, and if it only expired when it fired then the
+  # day the prerequisite disappears is the day a years-stale exemption silently
+  # starts covering a live gate. Remedy is one line — re-review the named gate
+  # and either restate the date with a reason that is still true, or delete the
+  # exemption and the `run_tolerating_uncheckable` with it.
+  if [ "$nexpired" -ne 0 ]; then
+    echo "repo_hygiene_gates: $passed of $declared gate(s) passed, but" \
+         "$nexpired uncheckable exemption(s) are PAST their review date and" \
+         "this is NOT a pass: $expired (${total}s)" >&2
     exit 1
   fi
 
@@ -614,12 +856,23 @@ gate_dispatch_finish() {
   # ones — a bare count cannot tell a reader whether the gate they care about
   # actually ran.
   #
-  # rc stays 0 here. CI checks out clean, so NOT_CHECKED never arises there;
-  # exiting non-zero would make this script permanently red for a maintainer
-  # whose tree is dirty BY CONSTRUCTION (benchmark artefacts, build logs), and
-  # a permanently red gate is a gate that gets skipped — the failure mode
-  # `run_tolerating_uncheckable` was introduced to avoid. The honesty is
-  # carried by this line and by the machine record, not by the exit status.
+  # rc stays 0 here, and since #584 that is a BOUNDED statement rather than an
+  # open one. Every gate reaching this branch bought the tolerance with a dated,
+  # reasoned `uncheckable_until`; an unexempted one is a wiring error several
+  # branches up and never gets here, and an expired one failed one branch up.
+  # Exiting non-zero for an exemption that is doing its job would make this
+  # script permanently red for a maintainer whose tree is dirty BY
+  # CONSTRUCTION (benchmark artefacts, build logs), and a permanently red gate
+  # is a gate that gets skipped — the failure mode `run_tolerating_uncheckable`
+  # was introduced to avoid.
+  #
+  # The old comment here justified rc 0 with "CI checks out clean, so
+  # NOT_CHECKED never arises there". That premise was already false when it was
+  # written: this repo lands by DIRECT PUSH through `gatekeeper-land.sh` on a
+  # maintainer's machine, and three of the four tolerating gates refuse on a
+  # missing NETWORK or CONTAINER rather than on a dirty tree, neither of which
+  # a clean checkout supplies. The honesty cannot rest on where the script runs;
+  # it rests on the exemption being explicit, dated, and named on this line.
   if [ "$notchecked" -ne 0 ]; then
     echo "repo_hygiene_gates: $passed of $declared gate(s) passed;" \
          "$notchecked NOT CHECKED — this is NOT a pass over: $refused" \
