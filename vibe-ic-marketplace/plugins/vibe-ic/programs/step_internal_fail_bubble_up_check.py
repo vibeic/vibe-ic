@@ -415,18 +415,58 @@ def _published_run_trees(corpus: Path) -> List[Path]:
     # anything was reachable at all.
     #
     # `rglob` makes the two invocations agree by construction rather than by the
-    # caller remembering the right depth. The NAME pattern is unchanged: the
-    # population is still `clean_run_*` trees and this commit does not widen it.
-    on_disk = sorted(p for p in corpus.rglob("clean_run_*") if p.is_dir())
-    if published is None:
-        return on_disk
+    # caller remembering the right depth.
+    #
+    # THE NAME PATTERN IS GONE (vibe-ic#1015). #1025 fixed the DEPTH and said in
+    # these words that it "does not widen" the NAME; this is that widening, and
+    # it is the whole of the gap #1015 is about.
+    #
+    # A run tree was recognised by its directory being called `clean_run_*`. But
+    # a run's NAME is not what makes it published evidence — the tracked
+    # `reports/` tree under it is. Every published run this repo points at when
+    # it says a cell converged carries one, and almost none of them are called
+    # `clean_run_*`. MEASURED on 4b22e36e over `benchmark-data`:
+    #
+    #     tracked run dirs carrying reports/**/*.json : 117
+    #       matching clean_run_*  (the old population):   3
+    #       NOT matching          (invisible to it)   : 114
+    #
+    # and in PROJECT mode over all 117 — the same audit, one dir at a time:
+    #
+    #     RED (rc 1)                : 24 run dirs, 45 unacknowledged findings
+    #       inside  clean_run_*     :  2 run dirs,  5 findings   <- all the gate saw
+    #       outside clean_run_*     : 22 run dirs, 40 findings   <- ratcheted by nothing
+    #
+    # The three largest published trees — `ic/spm/v1.9.96_gf180mcuD` and
+    # `ic/spm/v1.10.18_sky130A` (164 tracked reports each) and
+    # `ic/caravel_user_project/v1.9.43_sky130A` (148) — were outside the
+    # population entirely. #1015 opened at sixteen affected runs; by this commit
+    # it is twenty-four, and every one of the eight it grew by arrived where the
+    # ratchet could not see. A ratchet whose denominator is a naming convention
+    # holds no line at all.
+    #
+    # THE POPULATION IS NOW THE ARTEFACT, NOT THE NAME: a directory that owns a
+    # tracked `reports/` tree. That is the same predicate `audit()` needs to say
+    # anything, so a tree this returns can always be judged, and a tree it skips
+    # is one there was provably nothing to read in.
     root = corpus.resolve()
-    keep = []
-    for d in on_disk:
-        rel = d.resolve().relative_to(root).as_posix()
-        if any(t.startswith(rel + "/") for t in published):
-            keep.append(d)
-    return keep
+    if published is None:
+        # Outside a repository the disk is the honest answer — same rule the
+        # docstring states, applied to the new predicate.
+        return sorted({p.parent for p in corpus.rglob("reports/**/*.json")
+                       if p.is_file() and p.parent.name != "reports"}
+                      | {p.parent for p in corpus.rglob("reports")
+                         if p.is_dir()})
+    # From the TRACKED list, so the population is what a fresh clone would see.
+    # Keyed on the path component `reports`, which is what `audit()` walks.
+    keep = set()
+    for t in published:
+        parts = t.split("/")
+        if "reports" in parts:
+            owner = "/".join(parts[:parts.index("reports")])
+            if owner:
+                keep.add(root / owner)
+    return sorted(keep)
 
 
 def check_corpus(corpus: Path) -> Dict[str, Any]:
@@ -462,6 +502,40 @@ def _load_baseline(p: Path) -> Optional[int]:
         return None
     n = d.get("findings_total")
     return n if isinstance(n, int) else None
+
+
+#: The corpus root a baseline was measured over, as the repo-relative path the
+#: caller passed. `None` for a baseline written before vibe-ic#1015.
+def _baseline_population(p: Path) -> Optional[str]:
+    if not p.is_file():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    v = d.get("corpus_population")
+    return v if isinstance(v, str) else None
+
+
+def _population_key(corpus: Path) -> str:
+    """A stable name for WHICH population a count was taken over.
+
+    The baseline is one integer, and an integer means nothing without the set
+    it counted. Measured on 4b22e36e with the #1015 predicate, the same file,
+    the same commit and the same gate answer 22 or 45 depending only on which
+    root the caller typed — so comparing a count against a baseline taken over
+    a different root is exactly the "population is a function of the caller's
+    phrasing" defect #1025 named one level down. Recorded and compared rather
+    than assumed equal.
+    """
+    c = corpus.resolve()
+    for anc in (c, *c.parents):
+        if (anc / ".git").exists():
+            try:
+                return c.relative_to(anc).as_posix() or "."
+            except ValueError:                      # noqa: PERF203
+                break
+    return c.name
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -505,10 +579,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "orchestrator record names. The wrong repair is to loosen "
                     "the matcher until the number falls (vibe-ic#693)."),
                  "findings_total": now,
+                 # vibe-ic#1015 — WHICH population this count was taken over.
+                 # Without it the integer below is comparable to anything.
+                 "corpus_population": _population_key(corpus),
                  "runs_swept": rep["runs_swept"],
                  "runs_with_reports": rep["runs_with_reports"],
                  "per_run": rep["per_run"]}, indent=2) + "\n")
-            print(f"wrote {bl} (findings_total={now})")
+            print(f"wrote {bl} (findings_total={now}, "
+                  f"population={_population_key(corpus)})")
             return 0
         base = _load_baseline(bl)
         print(f"corpus sweep: {rep['runs_swept']} published run tree(s), "
@@ -521,6 +599,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         if base is None:
             print(f"[NOT CHECKED] no baseline at {bl} — record one with "
                   f"--write-baseline before this can ratchet.")
+            return 2
+        # vibe-ic#1015 — the recorded count is only a line to hold if it was
+        # measured over THIS set. A baseline from a different root is not a
+        # smaller or larger number, it is a different question, and answering
+        # it PASS or FAIL would be a verdict over a population never examined.
+        want = _population_key(corpus)
+        have = _baseline_population(bl)
+        if have is not None and have != want:
+            print(f"[NOT CHECKED] the baseline at {bl} was measured over "
+                  f"'{have}' and this sweep covered '{want}' — a count over one "
+                  f"population is not a line to hold over another. Re-record "
+                  f"with --write-baseline --corpus <the root the gate passes>.")
             return 2
         for run, n in sorted(rep["per_run"].items()):
             print(f"   {run}: {n}")
