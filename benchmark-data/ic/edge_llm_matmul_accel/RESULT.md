@@ -101,3 +101,4 @@ The spoken intent was sufficient to seed it; the IC-Expert faithfully filled the
 the user could not state. It is a GEMM building block (not a full accelerator), the
 sky130 GDS awaits standard SRAM-macro integration, and one honest doc-vs-RTL gap was
 caught by real verification — all disclosed above rather than hidden.
+
