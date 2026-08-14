@@ -607,7 +607,7 @@ def test_waiver_validator_actually_rejects_a_placeholder():
             "run of the other branch into MISSING."
         ),
         evidence=(
-            "programs/mixed_signal_top_lvs_run.py:917 — "
+            "programs/mixed_signal_top_lvs_run.py:919 — "
             "(rpt_dir / 'top_lvs.json').write_text(...)"
         ),
     )
@@ -615,7 +615,7 @@ def test_waiver_validator_actually_rejects_a_placeholder():
     # ...and the docstring says the same thing. Pinned, because the example a
     # reader copies is the one that decides how the next waiver is written, and
     # the old one pointed at `programs/rtl_dispatch.py`, which does not exist.
-    assert "programs/mixed_signal_top_lvs_run.py:917" in (W.__doc__ or ""), (
+    assert "programs/mixed_signal_top_lvs_run.py:919" in (W.__doc__ or ""), (
         "the waivers module docstring no longer carries the GOOD example this "
         "probe validates; if the cited line moved, update BOTH"
     )
