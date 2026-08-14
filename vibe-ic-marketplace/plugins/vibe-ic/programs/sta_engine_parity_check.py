@@ -47,7 +47,7 @@ from typing import Dict, List, Tuple
 
 RC_AGREE, RC_DISAGREE, RC_CANNOT_CHECK = 0, 1, 2
 
-DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.89"
+DEFAULT_IMAGE = "ghcr.io/vibeic/vibeic-eda:0.2.95"
 
 #: Commands that exist ONLY on `vibeic/sta-timing-eco`, taken from its diff
 #: against upstream master rather than from memory. Every one must be reachable
