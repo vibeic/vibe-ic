@@ -3965,6 +3965,35 @@ def ledger_staleness(root: Path) -> Tuple[str, ...]:
     this spec" — and report every YES. That direction only; a ledger that
     records a spec as produced when the file has since been deleted makes the
     cell redder through the unchanged rules and needs no help from here.
+
+    THE REMEDY THIS MESSAGE NAMES — AND THE ONE IT USED TO (#1475)
+    --------------------------------------------------------------
+    It used to end "re-emit the ledger over the tree as it now is". That is
+    true of the probe this function is controlled on, where the probe IS the
+    tree the emitter walked, and it is MEASURED FALSE of a published cell.
+    A cell is a git checkout, so ``step_write_ledger.mtime_fidelity`` sees one
+    flattened mtime, correctly WITHHOLDS the run window and every time-derived
+    conclusion, and the "repair" replaces a detectably stale record with an
+    empty one. Measured on this repository's own published cell and reverted:
+
+        field                        published    re-emitted over the checkout
+        counts.recorded                    513                             366
+        counts.in_run_window               489                               0
+        residual.written_never_declared    384                               0
+        residual.unwitnessed_writes         50                               0
+
+    Three attempts followed the old prescription before it was withdrawn, so
+    the message says the working remedy instead: run the SAME emitter against
+    the RUN DIRECTORY, whose mtimes are the run's own, and publish the capture
+    that POSTDATES every write the cell carries. When that tree is gone there
+    is no honest repair from the checkout and the record has to be withdrawn —
+    :func:`write_ledger` already announces that degrade, so nothing goes
+    silent. Hand-editing rows out of a machine-emitted record is neither, and
+    is never the answer: it makes a detectably stale claim undetectably
+    fabricated.
+
+    ``test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver``
+    pins that, because a prescription nothing checks is how this one drifted.
     """
     led, _note = write_ledger(root)
     if led is None:
@@ -3985,8 +4014,17 @@ def ledger_staleness(root: Path) -> Tuple[str, ...]:
                     f"({finding.get('reason')}) but the commit that carries the "
                     f"ledger also carries {hit.path} ({hit.size_bytes} B, a "
                     f"regular file tracked at HEAD). The record is stale and "
-                    f"this dimension would refuse a real artefact on its word — "
-                    f"re-emit the ledger over the tree as it now is")
+                    f"this dimension would refuse a real artefact on its word "
+                    f"— re-emit with the shipped emitter AT THE RUN DIRECTORY, "
+                    f"whose mtimes are the run's, and publish the capture that "
+                    f"POSTDATES this write. Re-emitting over this checkout is "
+                    f"measured to EMPTY the record rather than correct it "
+                    f"(flattened mtimes -> the emitter withholds the run "
+                    f"window and every time-derived conclusion), and editing "
+                    f"the rows by hand makes a detectably stale claim "
+                    f"undetectably fabricated. If the run directory is gone, "
+                    f"WITHDRAW the record: this dimension then answers exactly "
+                    f"as it did before the ledger, and says so")
     return tuple(problems)
 
 
@@ -4032,8 +4070,10 @@ def test_d3_the_write_ledger_population_is_derived_from_the_commit():
             f"the pre-ledger behaviour must never be silent")
 
     # 4. Any ledger that IS committed must still be TRUE OF ITS OWN COMMIT.
-    #    Vacuous today by design — no ledger is committed, and the module
-    #    docstring records why — so `ledger_staleness` is exercised for real by
+    #    NOT vacuous: a record IS committed, and this assertion has already
+    #    caught a real one (#1475) — a mid-run capture published beside the
+    #    finished tree, denying four artefacts the same commit carried. The
+    #    guard's own bidirectional control is
     #    `test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit`.
     for label in sorted(consulted):
         stale = ledger_staleness(run_roots()[label].path)
@@ -4227,14 +4267,101 @@ def test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit():
             f"({entry!r}); the guard cannot be trusted on a root that DOES "
             f"carry a ledger: {stale}")
 
-        # And the repair, which is the same operation the derivation performs:
-        # re-emit over the tree as it now is.
+        # And the repair, which is the same operation the derivation performs.
+        # It is the RUN DIRECTORY's repair: here the probe IS the tree the
+        # emitter walked, with the mtimes of the writes above. That is exactly
+        # the distinction #1475 turned on — see `ledger_staleness`, and
+        # `test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver`.
         _emit_ledger(probe)
         commit(LEDGER_REL)
         bound, rej = resolve(probe, entry, sid)
         assert bound is not None and bound.path == entry, (
             f"re-emitting the ledger over the tree that HAS the artefact must "
             f"make it count again: {bound} {rej}")
+        assert ledger_staleness(probe) == (), (
+            f"a freshly emitted ledger must agree with its own tree: "
+            f"{ledger_staleness(probe)}")
+
+
+def test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver():
+    """A failure message may only prescribe what the shipped tool can do.
+
+    THE DEFECT THIS PINS (#1475). :func:`ledger_staleness` used to end its
+    finding with "re-emit the ledger over the tree as it now is". Read at a
+    published cell — the only place this message is ever produced on real data
+    — "the tree as it now is" is a git checkout, and ``step_write_ledger``
+    correctly refuses to derive write times from one: ``mtime_fidelity`` sees
+    the flattened mtimes, WITHHOLDS the run window, and the D5/D7 halves of the
+    record go to zero. The prescription therefore replaced a DETECTABLY stale
+    record with an EMPTY one, and it was followed and reverted before anyone
+    read the emitter's own disclosure.
+
+    A message is part of the check. This one now names the operation that
+    works — the same emitter, pointed at the RUN DIRECTORY, publishing the
+    capture that postdates the writes — and names withdrawal as the fallback
+    when that tree is gone. Both are things the shipped tool can actually do;
+    neither is a hand edit.
+
+    Driven through the real function on a real stale record, so the sentence
+    asserted here is the sentence an operator gets.
+    """
+    with _probe_run_root("d3_stale_msg_") as (probe, commit):
+        _ledger_probe_tree(probe)
+        commit("provenance.jsonl")
+        assert not (probe / _LEDGER_PROBE_ENTRY).exists()
+
+        _emit_ledger(probe)
+        commit(LEDGER_REL)
+        say = ledger_says(probe, _LEDGER_PROBE_STEP, _LEDGER_PROBE_ENTRY)
+        assert say.consulted and say.unwritten is not None, (
+            f"the emitter no longer records step {_LEDGER_PROBE_STEP}'s "
+            f"{_LEDGER_PROBE_ENTRY!r} as never written, so this control has "
+            f"no stale claim to make: {say}")
+        assert ledger_staleness(probe) == (), (
+            "the record agrees with its tree here; a message pinned against a "
+            "record that is ALREADY stale would prove nothing")
+
+        # The staleness, made real: a later commit lands the declared path.
+        landed = probe / _LEDGER_PROBE_ENTRY
+        landed.parent.mkdir(parents=True, exist_ok=True)
+        landed.write_text(json.dumps({"landed": "by a later commit"}) * 20)
+        commit(_LEDGER_PROBE_ENTRY)
+
+        stale = ledger_staleness(probe)
+        assert len(stale) == 1 and _LEDGER_PROBE_ENTRY in stale[0], (
+            f"the guard did not report the one claim the commit refutes, so "
+            f"the message below is not the message operators see: {stale}")
+        msg = stale[0]
+
+        # WHAT IT MUST SAY — the remedy, where to perform it, and the fallback.
+        for phrase, why in (
+            ("RUN DIRECTORY",
+             "the message must say WHERE to re-emit; 'somewhere' is how this "
+             "was performed against a checkout three times"),
+            ("POSTDATES",
+             "a capture taken before the write reproduces the same staleness, "
+             "so the message must say which capture to publish"),
+            ("WITHDRAW",
+             "when the run tree is gone there is no honest repair, and a "
+             "message that names none invites a hand-edited record"),
+        ):
+            assert phrase in msg, f"{why}\n  message: {msg}"
+
+        # WHAT IT MUST NOT SAY — the measured-wrong operation, in any form
+        # close enough for a reader to perform it.
+        for banned in ("over the tree as it now is",
+                       "re-emit the ledger over the tree"):
+            assert banned not in msg, (
+                f"the message prescribes {banned!r} again. Measured on this "
+                f"repository's own cell: re-emitting over the CHECKOUT takes "
+                f"counts.recorded 513 -> 366, counts.in_run_window 489 -> 0 "
+                f"and the D7 residual 384 -> 0 — it empties the record instead "
+                f"of correcting it.\n  message: {msg}")
+
+        # And the guard is still bidirectional with the new wording: a capture
+        # of THIS tree, which is the run directory here, clears it.
+        _emit_ledger(probe)
+        commit(LEDGER_REL)
         assert ledger_staleness(probe) == (), (
             f"a freshly emitted ledger must agree with its own tree: "
             f"{ledger_staleness(probe)}")
