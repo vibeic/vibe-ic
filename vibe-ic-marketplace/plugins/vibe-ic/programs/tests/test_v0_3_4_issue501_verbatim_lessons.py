@@ -117,15 +117,67 @@ def test_touched_skill_compliance_tests_green():
     rr = PT.repo_root()
     if rr is None:
         pytest.skip("cache tree — compliance pin runs on the source tree")
+    import os
     import subprocess
     skill_tests = SKILL.parent / "tests"
     if not skill_tests.is_dir():
         pytest.skip("core-agent-loop/tests absent on this tree")
+    # The child runs pytest INSIDE the SHIPPED `skills/` tree, so it collects
+    # and imports files from under it — and CPython caches the byte-code NEXT
+    # TO THE SOURCE. Measured on clean main `75776dbbb`, this one call left
+    # four files inside the tree this repository ships:
+    #
+    #   skills/core-agent-loop/programs/__pycache__/api_health.cpython-310.pyc
+    #   skills/core-agent-loop/programs/__pycache__/poll.cpython-310.pyc
+    #   skills/core-agent-loop/tests/__pycache__/
+    #       test_compliance.cpython-310-pytest-9.1.1.pyc
+    #   skills/core-agent-loop/tests/__pycache__/
+    #       test_poll_actionable_is_open.cpython-310-pytest-9.1.1.pyc
+    #
+    # Every "is the tree clean" instrument answered yes while it happened:
+    # `.pyc` is gitignored, so `git status skills/` was empty, `git add -A`
+    # took nothing, and `suite_write_guard` logged them as regenerable cache.
+    # The only detector that disagrees is the byte digest in
+    # `test_tools_and_integration.py::
+    #  test_shipped_skills_tree_is_untouched_by_this_session`, and
+    # `gatekeeper-land.sh:213` fails the WHOLE landing when that digest moves.
+    #
+    # This is a SPAWNED child, so the `sys.dont_write_bytecode` remedy that
+    # `_load_shipped_module` uses for the in-process importers cannot reach
+    # it — `dont_write_bytecode` is per-interpreter. Only the child's own
+    # environment can suppress it. `PYTHONDONTWRITEBYTECODE` covers pytest's
+    # assertion-rewrite caches too: with it set, the same run leaves zero
+    # files under `skills/` and the child still reports 5 passed, 1 skipped.
+    #
+    # `-p no:cacheprovider` is deliberately NOT added. `.pytest_cache` is
+    # placed at ROOTDIR, which `vibe-ic/pytest.ini` pins to the plugin root —
+    # measured from `cwd=/` as well, so it does not depend on the caller's
+    # directory. It never lands under `skills/`, so disabling it would be a
+    # flag added to silence a check that had nothing to say.
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    # Measured BEFORE and AFTER, and differenced, so this accuses only its own
+    # child. An absolute "no .pyc under skills/" would inherit whatever an
+    # earlier test in the session left there and point at the wrong writer —
+    # the exact failure mode that cost #1417 a bisection.
+    skills_root = SKILL.parents[1]
+    before = {str(q) for q in skills_root.rglob("*.pyc")}
     r = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", str(skill_tests)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env, timeout=60,
     )
+    leaked = sorted(str(q) for q in skills_root.rglob("*.pyc")
+                    if str(q) not in before)
     assert r.returncode == 0, (
         "core-agent-loop skill tests must stay green:\n"
         + r.stdout[-3000:] + r.stderr[-2000:]
+    )
+    assert not leaked, (
+        "this test's own child byte-compiled the SHIPPED skills/ tree: "
+        f"{leaked}. `sys.dont_write_bytecode` is per-interpreter and cannot "
+        "reach a spawned child; the child needs PYTHONDONTWRITEBYTECODE=1 in "
+        "its environment. Nothing else reports this — `.pyc` is gitignored, "
+        "so git status, `git add -A` and suite_write_guard all stay clean, "
+        "and the only other detector is the byte digest in "
+        "test_tools_and_integration.py, which gatekeeper-land.sh:213 turns "
+        "into a whole-landing failure."
     )
