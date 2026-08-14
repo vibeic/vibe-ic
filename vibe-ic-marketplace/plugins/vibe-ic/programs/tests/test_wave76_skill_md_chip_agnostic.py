@@ -95,7 +95,7 @@ def test_no_active_instruction_fixed_hits():
     )
 
 
-def test_audit_tool_runs_clean():
+def test_audit_tool_runs_clean(tmp_path):
     """Running the audit tool MUST exit 0 (== ACTIVE hits = 0).
 
     The audit tool lives at tools/ in the source tree but is NOT
@@ -104,6 +104,21 @@ def test_audit_tool_runs_clean():
     INSTRUCTION_FIXED invariants above already cover the audit's
     pass criteria, and re-running the tool against a tree that
     doesn't ship it would always fail.
+
+    ``--report`` is passed on purpose. Invoked bare, the tool defaults
+    to ``ROOT/docs/reports/wave76_skill_md_audit.json`` (see its
+    ``main()``), so this test — which is in the fixed doctrine SMOKE set
+    and therefore runs on EVERY PR — rewrote a file inside the very tree
+    it audits, every time. `git status` never showed it because
+    `docs/reports/` is ignored (.gitignore:103), so the write was real
+    and invisible at the same time; `suite_write_guard --compare` is
+    what surfaces it, as `!! docs/reports/wave76_skill_md_audit.json
+    (rewritten)`.
+
+    The redirect changes WHERE the report lands and nothing else: the
+    tool audits the same tree and returns the same code, because `out`
+    is only the write target. The exit-status assertion below is
+    unchanged and still the thing being tested.
     """
     import subprocess
     from _plugin_tree import repo_path_or_missing
@@ -113,10 +128,21 @@ def test_audit_tool_runs_clean():
             f"audit tool not present at {tool} (mirror/cache tree); "
             f"BANNER + INSTRUCTION_FIXED invariants are checked above"
         )
+    report = tmp_path / "wave76_skill_md_audit.json"
     r = subprocess.run(
-        ["python3", str(tool)], capture_output=True, text=True, timeout=30
+        ["python3", str(tool), "--report", str(report)],
+        capture_output=True, text=True, timeout=30,
     )
     assert r.returncode == 0, (
         f"audit tool exited {r.returncode}\nstdout:\n{r.stdout}\n"
         f"stderr:\n{r.stderr}"
+    )
+    # The redirect must actually be honoured. Without this, a future
+    # change that ignores `--report` would send the write back into the
+    # tree and nothing here would notice — the failure mode this test
+    # just had.
+    assert report.is_file(), (
+        f"the tool exited 0 but wrote no report to {report}; `--report` "
+        f"was not honoured, so the audit may have written into the "
+        f"repository tree instead"
     )
