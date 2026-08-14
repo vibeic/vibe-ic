@@ -67,6 +67,16 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one
 # file type over. Narrow by construction — only the forms that assert THIS
 # plugin's version, so the MCP-EDA badge and the EDA image tag are untouched.
+# vibe-ic#1116 / BATCH IDX group (a) — this checker was reachable only from its
+# own test. It verifies a RECORD (the provenance hash chain) rather than a
+# design, and `chain_prev` is introduced by the same change, so no PUBLISHED run
+# can carry one yet: MEASURED 2026-08-14, 22 tracked ledgers, 0 verifiable. It is
+# therefore wired through the uncheckable channel — it exits 2 and prints its
+# denominator, rather than a green line over 22 unverified ledgers. The day a
+# chained run is published this starts deciding with no further change.
+run_tolerating_uncheckable "provenance hash chain" "$ROOT" \
+    python3 "$PG/provenance_chain_check.py" --corpus "$ROOT/benchmark-data"
+
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
 # vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool
 # inside the container keeps running as an orphan. The checker that finds those

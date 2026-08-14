@@ -32,11 +32,27 @@ verify: (a) every required output has a matching entry, (b) the file on
 disk still hashes to the value in the log, and (c) the tool name is in
 an allow-list for that step.
 
-A cheating agent CAN write a fake entry — but they'd have to:
-  (i)  write a .jsonl entry AND
-  (ii) make the file on disk hash to the value in the entry
-That's no easier than writing a real tool output, so this raises the
-floor from "echo text to file" to "hash collision required".
+A cheating agent CAN write a fake entry. THE CLAIM THIS PARAGRAPH USED TO
+MAKE — that doing so requires a hash collision — IS FALSE, and vibe-ic#1116
+measured it. The agent does not have to make a tampered file hash to the
+recorded value; it edits the artefact and then REWRITES THE LEDGER LINE with
+the new digest. Both are writable and both live in the run root the producer
+owns, so it is two edits, not a collision:
+
+    honest       : ledger digest == file digest -> True
+    edit both    : ledger digest == file digest -> True   (re-derivation says OK)
+
+What the digest genuinely buys is detection of a file edited WITHOUT its
+ledger line — the "echo text to file" case — and that is worth having. It is
+not evidence against a producer that can write the ledger.
+
+`chain_prev` (#1116) raises that floor: every record carries the sha256 of the
+preceding record LINE, so editing one entry invalidates every entry after it.
+An attacker who rewrites the whole file can still recompute the chain — this is
+tamper-EVIDENT, not tamper-PROOF, and `provenance_chain_check` says so in its
+own output rather than implying more. The remaining gap, stated because
+overstating it is the error this paragraph is a correction of, is that the
+ledger has no anchor outside the producer's reach.
 
 Usage
 -----
@@ -244,6 +260,24 @@ def run(argv: List[str]) -> int:
         record["note"] = args.note
 
     log_path = project / "provenance.jsonl"
+    # vibe-ic#1116 — CHAIN. `chain_prev` is the sha256 of the preceding record
+    # LINE exactly as it was written, so a reader can recompute the chain from
+    # the file alone. Editing entry N without recomputing N+1..end is detected.
+    # Absent on the first record (nothing precedes it) and on every ledger
+    # written before this change; `provenance_chain_check` reports those as
+    # NOT_CHECKED rather than passing them, because "no chain" and "an intact
+    # chain" are different observations.
+    try:
+        prev_line = None
+        if log_path.is_file():
+            with log_path.open("rb") as f:
+                for raw in f:
+                    if raw.strip():
+                        prev_line = raw
+        if prev_line is not None:
+            record["chain_prev"] = _sha256_bytes(prev_line.rstrip(b"\n"))
+    except OSError:
+        pass
     try:
         with log_path.open("a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
