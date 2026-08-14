@@ -64,6 +64,42 @@ def _flow(tmp: Path, steps) -> Path:
     return f
 
 
+def _baseline_ids():
+    """The checker's OWN baseline keys, read from it rather than re-typed.
+
+    This used to be a hand-written list in prose ("P0, 1, 12, 14, 18, 27, 32,
+    35"), and a hand-written copy of a fact the gate already holds is a second
+    source of truth that drifts silently. It did: step 12 gained a real gate and
+    left `BASELINE`, the list here was never updated, and
+    `test_a_baseline_entry_that_gained_a_real_gate_forces_the_baseline_to_shrink`
+    went red on clean `main` while the behaviour it guards never changed.
+
+    MEASURED on `24ff9530`, the same fixture with and without the stale id:
+
+        with step 12      rc=1, "must shrink" absent   <- the red on main
+        without step 12   rc=1, "must shrink" present, "P0" named
+
+    With 12 in the flow but not in BASELINE the checker reports it as a NEWLY
+    weak step, and that finding is the one that prints — so the test was reading
+    a real verdict about a different defect. Deriving the ids means the next
+    baseline change moves this fixture with it instead of reddening it.
+    """
+    spec = importlib.util.spec_from_file_location("_fscf", GATE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return sorted(mod.BASELINE)
+
+
+def _baseline_reason(sid) -> str:
+    """The recorded reason for a baselined step, so the fixture can
+    reproduce the SHAPE of weakness the record names instead of assuming
+    every baselined step is weak the same way."""
+    spec = importlib.util.spec_from_file_location("_fscf", GATE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.BASELINE.get(str(sid), "")
+
+
 def _strong(sid):
     """A step with a criterion that can fail.
 
@@ -72,6 +108,9 @@ def _strong(sid):
     the checker working correctly and the test asking the wrong question. The
     guard below reads `_BASELINE` rather than restating it, so this cannot drift
     out of step with the checker the way the old hard-coded list did.
+    Ids here stay clear of the real baseline (see `_baseline_ids`): reusing one
+    makes the fixture trip the baseline-must-shrink branch, which is the checker
+    working correctly and the test asking the wrong question.
     """
     return {"id": sid, "name": f"step {sid}",
             "gate": {"program_exit_zero": "some_check"}}
@@ -155,6 +194,27 @@ def test_a_baseline_entry_that_gained_a_real_gate_forces_the_baseline_to_shrink(
     assert "gained a gate that cannot fail" not in out, (
         f"fixture leaked a NEW weak step, so the run never reached the "
         f"must-shrink branch: {out}")
+    # Every baselined step keeps the weak gate its record describes, EXCEPT P0,
+    # which gains one that can fail. The ids come from the checker's own
+    # BASELINE (see `_baseline_ids`) rather than a re-typed list, so a step that
+    # legitimately leaves the baseline cannot leave a stale id behind here — a
+    # step present in the flow but absent from BASELINE is reported as a NEWLY
+    # weak step, and that finding masks the one this test is asking about.
+    ids = _baseline_ids()
+    assert "P0" in ids, (
+        f"this test needs P0 in the checker's baseline; it holds {ids}. If P0 "
+        f"legitimately gained a gate, pick another baselined id as the exemplar "
+        f"rather than deleting the assertion")
+    steps = [{"id": "P0", "name": "now gated", "gate": {"program_exit_zero": "x"}}]
+    for sid in ids:
+        if sid == "P0":
+            continue
+        weak = ({"optional_program_exit_zero": "x"}
+                if "optional" in _baseline_reason(sid) else {"files_exist": ["a"]})
+        steps.append({"id": int(sid) if sid.isdigit() else sid,
+                      "name": "still weak", "gate": weak})
+    f = _flow(tmp_path, steps)
+    rc, out = _run(f)
     assert rc == 1, out
     assert "must shrink" in out, out
     assert "P0" in out
