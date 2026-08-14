@@ -77,6 +77,8 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 RC_OK = 0
 RC_REFUSED = 1
@@ -415,7 +417,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     rc, report = evaluate(Path(args.record))
     print(format_report(rc, report))
     if args.json:
-        Path(args.json).write_text(
+        atomic_write_text(Path(args.json), 
             json.dumps(report, indent=2, sort_keys=True) + "\n",
             encoding="utf-8")
     return rc
