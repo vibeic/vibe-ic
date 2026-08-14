@@ -107,6 +107,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `arith_variants_synth` | any | — | deterministic SOLVER for the CVDP integer adder/subtractor/multiplier VARIANTS the existing solvers miss. |
 | `arithmetic_synth` | any | — | deterministic SOLVER for the integer-ARITHMETIC family (spec -> RTL). |
 | `artefact_defect_close_check` | any | — | closing an ARTEFACT-defect issue requires the ARTEFACT to have changed, not only the checker that detects it. |
+| `artefact_digest_ledger` | any | — | a digest record the producing step cannot rewrite without being caught (vibe-ic#1116). |
 | `asap7_finfet_lvs` | any | — | device-level LVS for the ASAP7 (predictive 7nm FinFET) PDK. |
 | `assertion_covers_l3_constraints_check` | any | Wave 39 | Spec to enforce (chip-AGNOSTIC): |
 | `assertion_property_check` | any | — | Deterministic compliance check for assertion-gen. |
@@ -1236,6 +1237,7 @@ _(no programs in this group)_
 - `arith_variants_synth` — deterministic SOLVER for the CVDP integer adder/subtractor/multiplier VARIANTS the existing solvers miss.
 - `arithmetic_synth` — deterministic SOLVER for the integer-ARITHMETIC family (spec -> RTL).
 - `artefact_defect_close_check` — closing an ARTEFACT-defect issue requires the ARTEFACT to have changed, not only the checker that detects it.
+- `artefact_digest_ledger` — a digest record the producing step cannot rewrite without being caught (vibe-ic#1116).
 - `asap7_finfet_lvs` — device-level LVS for the ASAP7 (predictive 7nm FinFET) PDK.
 - `assertion_covers_l3_constraints_check` — Spec to enforce (chip-AGNOSTIC):  _[Wave 39]_
 - `assertion_property_check` — Deterministic compliance check for assertion-gen.
