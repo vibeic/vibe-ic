@@ -96,6 +96,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
@@ -1119,6 +1121,71 @@ def _reduce_outcome(reports: List[Dict]) -> str:
 #: outliving the harness and taking every other file's verdict with it.
 _OUTCOME_TIMEOUT_S = 60
 
+#: How many FULL-LENGTH ``_OUTCOME_TIMEOUT_S`` waves the outcome loop may take
+#: in the worst case. This is the second half of the same decision, and it was
+#: missing: ``_OUTCOME_TIMEOUT_S`` bounds ONE call, and
+#: ``ci_harness_timeout_ceiling_check`` says so in as many words —
+#:
+#:     "It is a NECESSARY condition and this gate says so rather than implying
+#:     more: bounding one call cannot by itself bound a test's total wall time,
+#:     because a loop can make the same call N times."
+#:
+#: A SEQUENTIAL loop over the eight dimension modules is exactly that N. Every
+#: individual bound was legal at 60 s and the loop was still permitted
+#: 8 x 60 = 480 s — 2.7x the 180 s harness — inside ONE test item, which is the
+#: defect ``_OUTCOME_TIMEOUT_S`` was introduced to remove, rebuilt one level up.
+#: MEASURED on this tree (vibe-ic#1451), that is not theoretical: the loop's
+#: real serial cost is 123.66 s and the single test item that pays it,
+#: ``test_matrix_63x8_census_freshness.py::test_the_census_block_is_fresh``,
+#: measured 173.91 s at load 7 on a 32-core host — 96.6 % of the bound, with
+#: 260 s and 276 s reported on busier hosts and 142.9 s on a quieter one. Over
+#: the bound the session does not fail, it DIES: no summary line, and every
+#: other file in the selection loses its verdict.
+#:
+#: 2 is the ceiling gate's own arithmetic, not a number picked by feel. It
+#: derives its per-call ceiling as ``harness // 3`` and states why the divisor
+#: is 3: "A ceiling of ``bound / 3`` lets a test spend TWO full-length bounded
+#: calls and keeps a third of the budget for fixture setup and for the harness
+#: to report." Two waves is that same permission read as a total:
+#: 2 x 60 = 120 s <= 180 s, with the last third left for the harness to report.
+_OUTCOME_MAX_WAVES = 2
+
+
+def _outcome_worker_count(n_paths: int) -> int:
+    """Pool width that makes the WORST CASE of the loop fit the harness.
+
+    The width is DERIVED from the count, never fixed: with ``w`` workers, no
+    worker runs more than ``ceil(n / w)`` modules, so the loop's worst-case
+    wall time is ``ceil(n / w) * _OUTCOME_TIMEOUT_S`` even when every single
+    module is killed on its own bound. Choosing ``w = ceil(n / MAX_WAVES)``
+    makes that worst case ``_OUTCOME_MAX_WAVES * _OUTCOME_TIMEOUT_S`` for ANY
+    n — so a ninth dimension module cannot quietly re-open the hole, which is
+    what a hard-coded 4 would have allowed.
+
+    The width is the aggregate bound. It is not a deadline that has to fire and
+    it cannot itself go red, so it adds no new failure mode: the per-module 60 s
+    bound is untouched and is still the thing that NAMES a hung module.
+
+    MEASURED (vibe-ic#1451, 8 modules, 32-core host, load ~7-12; wall for the
+    whole loop / slowest single module, which is what the 60 s bound has to
+    cover):
+
+        workers 1 (before)  123.66 s   d7 43.12 s
+        workers 3            61.17 s   d7 40.15 s
+        workers 4 (derived)  55.60 s   d7 44.30 s
+        workers 8            50.36 s   d7 50.36 s
+
+    Two things that measurement settles. The loop halves; and the slowest
+    module does NOT meaningfully inflate at the derived width — 44.30 s against
+    43.12 s serial, so the 60 s bound keeps the margin it was measured with.
+    Going wider buys 5 s of loop and spends 6 s of that margin (d7 at 50.36 s is
+    84 % of its bound), which is the trade this file must not make: a bound that
+    fires because of our own concurrency is a false red, and a false red on a
+    verifier's tree is indistinguishable from the regression it is looking for.
+    """
+    assert n_paths >= 1, "no module paths to size the outcome pool for"
+    return -(-n_paths // _OUTCOME_MAX_WAVES)  # ceil, without importing math
+
 
 def _run_outcome_reports(
         paths: Tuple[Path, ...],
@@ -1129,6 +1196,15 @@ def _run_outcome_reports(
     ``_OUTCOME_TIMEOUT_S``: a single run of all eight modules cannot be bounded
     at anything the harness lets fire, so the bound that guarded it was a
     decoration.
+
+    CONCURRENT, at the width ``_outcome_worker_count`` derives, and that is
+    load-bearing too: the subprocesses are independent by construction — each
+    gets its own scratch dir, its own manifest path and its own env — so the
+    only thing sequence was buying was a worst case of ``n * 60`` s inside one
+    test item. Nothing about WHAT is measured changes: the same modules, the
+    same command, the same per-module bound, the same manifests, and the merge
+    below still walks ``paths`` in order so a collision names the same pair
+    whichever module happened to finish first.
 
     Unlike :func:`collect_items` this does NOT assert ``returncode == 0``: a
     non-zero exit is the normal, expected result of a suite that is reporting
@@ -1144,9 +1220,28 @@ def _run_outcome_reports(
     file exists to refuse.
     """
     assert paths, "no module paths given to the outcome run"
+    with ThreadPoolExecutor(
+            max_workers=_outcome_worker_count(len(paths))) as pool:
+        futures = [pool.submit(_run_one_module_outcome, p, cwd) for p in paths]
+        # `.result()` walked in `paths` order, never in completion order: a
+        # module that fails or times out must raise the same first exception
+        # whether or not a sibling happened to finish before it, or two arms of
+        # a verification disagree for a reason that is not the tree. Every
+        # future is awaited — the pool's own `__exit__` joins the rest — so a
+        # second failing module is not left running past this frame.
+        per_path: Dict[Path, Dict[str, List[Dict]]] = {}
+        first: Optional[BaseException] = None
+        for path, future in zip(paths, futures):
+            try:
+                per_path[path] = future.result()
+            except BaseException as exc:
+                if first is None:
+                    first = exc
+        if first is not None:
+            raise first
     merged: Dict[str, List[Dict]] = {}
     for path in paths:
-        for nodeid, reports in _run_one_module_outcome(path, cwd).items():
+        for nodeid, reports in per_path[path].items():
             assert nodeid not in merged, (
                 f"nodeid {nodeid!r} was reported by more than one module run; "
                 f"merging would drop one of them and the cell it belongs to "
@@ -1160,7 +1255,18 @@ def _run_outcome_reports(
 
 def _run_one_module_outcome(path: Path,
                             cwd: Optional[Path]) -> Dict[str, List[Dict]]:
-    """The single-module half of :func:`_run_outcome_reports`."""
+    """The single-module half of :func:`_run_outcome_reports`.
+
+    ``--basetemp`` is REQUIRED, not tidiness, and it is what makes the
+    concurrency in :func:`_run_outcome_reports` safe. pytest's default
+    ``tmp_path`` root is a SHARED, numbered directory per user
+    (``/tmp/pytest-of-<user>/pytest-<n>``) and each session garbage-collects
+    the older numbers in it. Two sessions running at the same time therefore
+    delete each other's ``tmp_path`` mid-run, and what that looks like is a
+    wandering ``FileNotFoundError`` in whichever module lost — a red that
+    belongs to no change and does not reproduce. Each module run gets its own
+    root inside its own scratch dir, which is removed with it.
+    """
     scratch = Path(tempfile.mkdtemp(prefix="matrix_cov_outcome_"))
     try:
         plugin = scratch / "matrix_cell_outcomes.py"
@@ -1176,7 +1282,8 @@ def _run_one_module_outcome(path: Path,
             proc = subprocess.run(
                 [sys.executable, "-m", "pytest", str(path),
                  "-q", "--tb=no", "-p", "no:randomly",
-                 "-p", "matrix_cell_outcomes"],
+                 "-p", "matrix_cell_outcomes",
+                 "--basetemp", str(scratch / "pytest_tmp")],
                 cwd=str(cwd or PLUGIN_ROOT), capture_output=True, text=True,
                 timeout=_OUTCOME_TIMEOUT_S, env=env,
             )
@@ -1204,6 +1311,93 @@ def _run_one_module_outcome(path: Path,
         return rows
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+#: Seconds each synthetic module sleeps in the concurrency probe below. Small
+#: enough that the probe costs one wave of it, large enough to dominate the
+#: interpreter start it is measured against.
+_PROBE_SLEEP_S = 2
+
+_PROBE_MODULE = "import time\n\n\ndef test_probe():\n    time.sleep(%d)\n"
+
+
+def test_the_outcome_loop_cannot_outlive_the_pytest_harness(tmp_path):
+    """The LOOP's worst case — the half the ceiling gate leaves open.
+
+    ``ci_harness_timeout_ceiling_check`` bounds ONE blocking call at
+    ``harness // CEILING_DIVISOR`` and states the limit of that in its own
+    words: *"bounding one call cannot by itself bound a test's total wall time,
+    because a loop can make the same call N times."*
+    :func:`_run_outcome_reports` is that loop, over the eight dimension
+    modules, and nothing measured it. Sequentially it was allowed
+    ``8 x 60`` = 480 s inside ONE test item — 2.7x the harness — which is the
+    session-kill this file's own ``_OUTCOME_TIMEOUT_S`` exists to prevent,
+    rebuilt one level up (vibe-ic#1451).
+
+    TWO assertions, because either alone is satisfiable by something that does
+    not hold:
+
+    * the ARITHMETIC — worst case ``ceil(n / workers) * _OUTCOME_TIMEOUT_S``
+      must fit the budget the ceiling gate's divisor leaves a test after
+      reserving its reporting third. Derived from the gate's own resolver and
+      divisor, never from a hand-copy of 180, which is the drift shape that
+      gate was written to remove;
+    * the BEHAVIOUR — the loop must really run concurrently. The arithmetic is
+      a claim about the pool width; on its own it would stay green if
+      :func:`_run_outcome_reports` stopped using that width, so it is proved by
+      running the real function over synthetic modules that do nothing but
+      sleep. ``n * _PROBE_SLEEP_S`` is not a threshold chosen by feel: it is
+      the LOWER bound of any sequential run, since a sequential run must sleep
+      every module's sleep end to end. Finishing under it cannot be a
+      sequential run.
+    """
+    import ci_harness_timeout_ceiling_check as CEIL
+
+    repo_root = CEIL.find_repo_root(TESTS_DIR)
+    harness = (CEIL.ci_harness_timeout_seconds(repo_root)
+               if repo_root is not None else None)
+    assert harness is not None, (
+        f"CANNOT DETERMINE: no pytest harness bound could be read from "
+        f"{repo_root} — and that is NOT this test passing. An unreadable bound "
+        f"is a bound this test did not check against; recording it as green is "
+        f"the could-not-look-scored-as-nothing-found shape the census campaign "
+        f"exists to refuse.")
+
+    # The reporting third the gate reserves is not the test's to spend, so the
+    # budget is what is left after it: 180 - 180//3 = 120 s.
+    budget = harness - harness // CEIL.CEILING_DIVISOR
+    n = len(dimension_module_paths())
+    assert n, "no dimension modules found; the loop under test has no input"
+    workers = _outcome_worker_count(n)
+    waves = -(-n // workers)
+    worst = waves * _OUTCOME_TIMEOUT_S
+    assert worst <= budget, (
+        f"the outcome loop's worst case is {waves} wave(s) x "
+        f"{_OUTCOME_TIMEOUT_S}s = {worst}s over {n} module(s) at "
+        f"{workers} worker(s), but the pytest harness bounds a test at "
+        f"{harness}s and reserves {harness // CEIL.CEILING_DIVISOR}s of it for "
+        f"reporting, leaving {budget}s. A loop that can outlive the harness "
+        f"does not fail — it takes the SESSION down, and every other file in "
+        f"the selection loses its verdict with no summary line to show for it.")
+
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    paths = tuple(probe / f"test_probe_{i}.py" for i in range(n))
+    for path in paths:
+        path.write_text(_PROBE_MODULE % _PROBE_SLEEP_S, encoding="utf-8")
+    started = time.monotonic()
+    reports = _run_outcome_reports(paths, cwd=probe)
+    elapsed = time.monotonic() - started
+    assert len(reports) == n, (
+        f"the probe ran {n} module(s) and got {len(reports)} report(s) back; "
+        f"a loop that drops a module measures nothing about the loop")
+    sequential_floor = n * _PROBE_SLEEP_S
+    assert elapsed < sequential_floor, (
+        f"{n} module(s) sleeping {_PROBE_SLEEP_S}s each took {elapsed:.1f}s, "
+        f"which is not under the {sequential_floor}s a SEQUENTIAL run must "
+        f"spend sleeping alone. The worst case asserted above is computed from "
+        f"a pool width of {workers}; this says the loop is not using it, so "
+        f"that arithmetic is describing code that does not run.")
 
 
 @lru_cache(maxsize=1)
