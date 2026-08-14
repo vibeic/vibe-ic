@@ -496,7 +496,16 @@ run_unselectable_pytest() {
     FAILED=1; return
   fi
   if [ "$wrc" -ne 0 ]; then
-    printf '  FAIL  unselectable tests wrote to the tree (write-guard rc=%s)\n' "$wrc"
+    # THE rc IS NOT IN THE LABEL EITHER — same reason as the count above, and I
+    # missed it there first. #1516's structural guard re-derives every
+    # tree-varying label out of this file and requires each to be normalised by
+    # `gate_key` or declared strict; `… (write-guard rc=%s)` is neither, so the
+    # two arms of `gatekeeper-verify-merge.sh` would compare "rc=1" against
+    # "rc=2" as two different gates and refuse a landing for a difference nobody
+    # made. The rc is diagnostic, so it goes on the detail line with the rest of
+    # the diagnosis.
+    echo "  FAIL  unselectable tests wrote to the tree"
+    printf '        write-guard rc=%s\n' "$wrc"
     printf '%s\n' "$wg" | tail -8 | sed 's/^/          /'
     FAILED=1; return
   fi

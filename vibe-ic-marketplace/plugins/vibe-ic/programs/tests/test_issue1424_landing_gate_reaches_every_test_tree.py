@@ -222,8 +222,16 @@ def test_the_stage_label_carries_no_discovery_count(land_text):
                 if re.search(r"\b(PASS|FAIL)\b\s+unselectable", ln)]
     assert verdicts, "the stage prints no PASS/FAIL line"
     for ln in verdicts:
-        assert "${#files[@]}" not in ln and "%s file" not in ln, (
-            f"the stage's verdict label carries a discovery count: {ln.strip()}")
+        # NO INTERPOLATION AT ALL, not just no count. #1516's structural guard
+        # re-derives every tree-varying label out of this file and requires each
+        # to be normalised by `gate_key` or declared strict — and a rc, a path or
+        # a duration renames the gate exactly as a count does. The first version
+        # of this assertion banned `%s file` and `${#files[@]}` specifically, and
+        # a `(write-guard rc=%s)` label walked straight past it.
+        assert "%s" not in ln and "${" not in ln, (
+            f"the stage's verdict label interpolates a tree-varying value, so "
+            f"the two arms of gatekeeper-verify-merge.sh compare two names for "
+            f"one gate: {ln.strip()}")
 
 
 # ── the controls: the property must still be refusable ──────────────────────
