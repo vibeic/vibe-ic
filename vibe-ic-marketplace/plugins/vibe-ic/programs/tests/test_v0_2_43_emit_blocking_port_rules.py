@@ -19,6 +19,7 @@ samples of the three prior campaigns (1248 total) with ZERO false fires
 chip-AGNOSTIC: fixtures use generic TopModule/clk/d/q shapes only.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,21 @@ from _specrtl_common import extract_spec_contract, parse_rtl_ports, strip_commen
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
+
+import pytest  # noqa: E402
+
+#: These tests RUN `gates_atomic.py` and then read the `gates.json` it writes.
+#: Without iverilog the gate refuses to run — correctly — and writes no report,
+#: so the read dies with FileNotFoundError on a path that was never meant to
+#: exist. A gate that REFUSED and a gate that produced a bad report are not the
+#: same result, and a traceback cannot tell them apart. Every other test in this
+#: file calls pure rule functions and needs no toolchain.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_gate = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="runs gates_atomic.py and reads the gates.json it writes; without "
+           "iverilog the gate refuses and writes nothing")
+
 
 
 # ── unit: zero-output-ports rule in spec_conformance_check ───────────────
@@ -106,6 +122,7 @@ def _block_rules(run):
 
 # #408: zero-output module must BLOCK; restoring the output must emit.
 
+@_needs_gate
 def test_gate_blocks_vacuous_zero_output_module(tmp_path):
     ds, run = _stage(tmp_path, _TYPO_SPEC, _VACUOUS_RTL)
     r = _run_gate(ds, run)
@@ -116,6 +133,7 @@ def test_gate_blocks_vacuous_zero_output_module(tmp_path):
     assert not (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_after_output_direction_restored(tmp_path):
     # the campaign's actual close-loop fix: flip the typo'd pin to an output
     # register. port-direction-mismatch (vs the typo'd spec) is NOT in the
@@ -141,6 +159,7 @@ _FULL_PORT_RTL = ("module TopModule(input clk, input in, output out);\n"
                   "  assign out = in;\nendmodule\n")
 
 
+@_needs_gate
 def test_gate_blocks_missing_declared_port(tmp_path):
     ds, run = _stage(tmp_path, _UNUSED_PORT_SPEC, _DROPPED_PORT_RTL)
     r = _run_gate(ds, run)
@@ -151,6 +170,7 @@ def test_gate_blocks_missing_declared_port(tmp_path):
     assert not (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@_needs_gate
 def test_gate_emits_with_all_declared_ports(tmp_path):
     ds, run = _stage(tmp_path, _UNUSED_PORT_SPEC, _FULL_PORT_RTL)
     r = _run_gate(ds, run)
