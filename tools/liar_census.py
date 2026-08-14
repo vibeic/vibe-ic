@@ -60,6 +60,21 @@ that can be established without one: passing on nothing, being unable to fail, s
 one thing and exiting another. A gate that survives this census can still be wrong.
 A gate that fails it cannot be trusted even when it is right.
 
+THE PROBES, AND WHAT EACH COSTS
+===============================
+    empty       P1  does it PASS over a tree containing nothing?          static-ish
+    prose       P2  does it SAY it did not check, and exit 0 anyway?      one run
+    zero        P3  does it report a ZERO population and still pass?      one run
+    writes      P4  does RUNNING it modify the tree it is judging?        one run
+    selector    P5  can its input selection reach the suite's fixtures?   AST only
+    forcedpass  P6  neuter its verdict -- does any test die?              MUTATION
+    forcedfail  P7  force it to refuse -- does any test die?              MUTATION
+
+P6 and P7 are the only ones that cannot be answered by looking, and they are the
+only ones that cost minutes rather than seconds: three pytest sessions per
+distinct gate program, over a disposable copy of the plugin. `--probes` names a
+cheaper subset; `--mutation-budget` bounds them and PRINTS what it dropped.
+
 EXIT CODES
     0  every clause CLEAN on every probe that ran
     1  at least one LIAR
@@ -69,6 +84,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import os
 import re
@@ -76,6 +92,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -85,6 +103,9 @@ REPO = HERE.parent
 PLUGIN = REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
 PROGRAMS = PLUGIN / "programs"
 FLOW_YAML = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
+
+#: wall-clock ceiling on ONE mutation arm's pytest subprocess.
+_MUTATION_BOUND_S = 55
 
 def _plugin_on_path() -> None:
     """Put the real plugin's `programs/` on `sys.path`, ONCE.
@@ -846,6 +867,737 @@ def probe_selector_reaches_fixtures(cl: Clause) -> ProbeResult:
     return ProbeResult("selector_reaches_fixtures", CLEAN, "no unbounded walk", repro)
 
 
+# ------------------------------------------- shapes 4 & 5: the mutation probes
+#
+# The five probes above are static, or run the gate once and ask whether what
+# came back contradicts itself. Neither of the two below can be answered that
+# way. "Has this gate ever had a CONTROL" is not a property of the gate's text
+# and not a property of one run -- it is a property of the gate's TEST SUITE,
+# and the only way to establish it is to break the gate and see whether the
+# suite notices.
+#
+#   SHAPE 4  force the verdict to PASS. If nothing dies, nothing in this repo
+#            can tell this gate from a gate that always says yes. It has no
+#            NEGATIVE control, and neutering it is invisible.
+#   SHAPE 5  force the verdict to FAIL. If nothing dies either, nothing pins
+#            that it can ever say yes. It has no POSITIVE control -- which
+#            makes it a BAN rather than a check.
+#
+# THE REPO ALREADY OWNS HALF OF THIS, AND IT IS IMPORTED, NOT REIMPLEMENTED
+# ------------------------------------------------------------------------
+# `programs/gate_cli_mutation_probe.py` asks SHAPE 4's question already, for the
+# gates a commit touches. Two things it learned the expensive way are reused
+# here verbatim rather than re-derived:
+#
+#   * WHICH TESTS COUNT -- `naming_tests`, including its measured refusal to cap
+#     the selection ("capping at three excluded the very test written to protect
+#     one of these gates, and the probe called it unprotected").
+#   * WHERE THE MUTATION LIVES -- never in the checkout. Two shipped gates were
+#     once found carrying an injected `return 0` beside a `.probe-orig` sidecar,
+#     left by runs that were SIGKILLed between the write and the restore; a
+#     neutered gate exits 0, which the flow reads as PASS. `finally` does not
+#     run on SIGKILL, so the mutation moved out of the tree entirely. This
+#     census mutates a disposable copy under the same `_crash_safe_scratch`
+#     reservation and NEVER writes inside the repository.
+#
+# TWO THINGS ARE DELIBERATELY DIFFERENT, AND BOTH ARE THE CENSUS'S CONTRIBUTION
+# ----------------------------------------------------------------------------
+# 1. A BASELINE ARM. `gate_cli_mutation_probe` scores `CAUGHT if returncode != 0`
+#    against a single run. That cannot tell "this test reddened BECAUSE of the
+#    mutation" from "this test was already red", and reads the second as
+#    protection. It is not a hypothetical: main carried 49 failures across a
+#    184-file selection on the day this was written, and the scratch copy holds
+#    `programs/` alone, so every test that resolves a path through the PLUGIN
+#    root fails in the copy for reasons that have nothing to do with any gate.
+#    Here every program is run THREE times -- unmutated, forced-pass,
+#    forced-fail -- and the finding is the set difference of FAILED NODE IDS,
+#    never a count and never an exit code.
+#
+# 2. THE MUTATION CHANGES THE VERDICT AND NOTHING ELSE. The shipped probe
+#    injects `return 0` as the first statement of the entry point, so the gate
+#    returns before it writes its report or prints a line. Every test asserting
+#    on the gate's OUTPUT then dies -- including tests that never once
+#    constrained the exit code the flow actually reads. That over-reports
+#    protection, which is the direction that costs the most. The rewrite below
+#    keeps every side effect and replaces only the value that reaches the exit,
+#    by evaluating the original expression and discarding it: `return X` becomes
+#    `return (X, 0)[1]`. What survives it is a test that observed the VERDICT.
+
+#: Rewritten sources are unparsed from the AST, which normalises formatting.
+#: That normalisation is subtracted, not tolerated: the baseline arm is unparsed
+#: TOO, so all three arms differ in exactly one thing. A pristine-file baseline
+#: would attribute every test that reads a gate's own source text -- and this
+#: repo has many -- to the mutation.
+def _unparse(tree: ast.Module) -> str:
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree)
+
+
+def _entry_functions(tree: ast.Module) -> List[str]:
+    """Module-level functions the `__main__` dispatch actually calls.
+
+    From the AST, so a function named in a COMMENT is not one -- vibe-ic#1012 is
+    the whole reason this file never decides anything by text matching. Every
+    dispatch shape in this tree is covered because they are all the same shape
+    structurally: a `Call` to a module-level `def`, whether it is spelled
+    `sys.exit(main())`, `raise SystemExit(_cli())`, `main()` or
+    `sys.exit(run(sys.argv[1:]))`.
+    """
+    top = {n.name for n in tree.body
+           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    out: List[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.If):
+            continue
+        if not any(isinstance(c, ast.Compare) and isinstance(c.left, ast.Name)
+                   and c.left.id == "__name__" for c in ast.walk(node.test)):
+            continue
+        for call in ast.walk(node):
+            if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                    and call.func.id in top):
+                out.append(call.func.id)
+    return out
+
+
+def _discard_and_yield(expr: ast.expr, const: int) -> ast.expr:
+    """`(expr, const)[1]` — evaluate the original verdict, then throw it away.
+
+    The tuple is what keeps this a VERDICT mutation rather than a lobotomy. The
+    gate still walks the tree, still writes its report, still prints its own
+    prose; only the number the flow reads is replaced.
+    """
+    return ast.Subscript(
+        value=ast.Tuple(elts=[expr, ast.Constant(const)], ctx=ast.Load()),
+        slice=ast.Constant(1), ctx=ast.Load())
+
+
+class _ForceVerdict(ast.NodeTransformer):
+    """Every path by which a value reaches this process's exit status."""
+
+    def __init__(self, const: int, entries: List[str]) -> None:
+        self.const = const
+        self.entries = set(entries)
+        self.changes = 0
+        self._depth = 0
+
+    # -- the entry function's own `return`s ---------------------------------
+    def visit_FunctionDef(self, node):                      # noqa: N802
+        top = self._depth == 0 and node.name in self.entries
+        self._depth += 1
+        if top:
+            self._rewrite_returns(node)
+        self.generic_visit(node)
+        self._depth -= 1
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def _rewrite_returns(self, fn) -> None:
+        const, outer = self.const, self
+
+        class _R(ast.NodeTransformer):
+            # A nested helper's `return` is not the gate's verdict, and
+            # rewriting it would change what the gate COMPUTES rather than what
+            # it reports -- a different experiment with the same name.
+            def visit_FunctionDef(self, n):                 # noqa: N802
+                return n
+            visit_AsyncFunctionDef = visit_FunctionDef
+            visit_Lambda = visit_FunctionDef
+
+            def visit_Return(self, n):                      # noqa: N802
+                if n.value is None:
+                    outer.changes += 1
+                    return ast.Return(value=ast.Constant(const))
+                if isinstance(n.value, ast.Constant) and n.value.value == const:
+                    return n
+                outer.changes += 1
+                return ast.Return(value=_discard_and_yield(n.value, const))
+
+        fn.body = [_R().visit(s) for s in fn.body]
+        # Falling off the end returns None, which `sys.exit` reads as 0. For
+        # SHAPE 5 that is a path by which the forced FAIL would silently not
+        # happen, so it is closed. Unreachable when the body already returns.
+        if not fn.body or not isinstance(fn.body[-1], (ast.Return, ast.Raise)):
+            self.changes += 1
+            fn.body.append(ast.Return(value=ast.Constant(self.const)))
+
+    # -- and every direct exit ----------------------------------------------
+    def visit_Call(self, node):                             # noqa: N802
+        self.generic_visit(node)
+        func = node.func
+        name = (func.attr if isinstance(func, ast.Attribute)
+                else func.id if isinstance(func, ast.Name) else "")
+        if name in ("exit", "_exit"):
+            self._force_first_arg(node)
+        return node
+
+    def visit_Raise(self, node):                            # noqa: N802
+        self.generic_visit(node)
+        exc = node.exc
+        if (isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name)
+                and exc.func.id == "SystemExit"):
+            self._force_first_arg(exc)
+        elif isinstance(exc, ast.Name) and exc.id == "SystemExit":
+            self.changes += 1
+            node.exc = ast.Call(func=ast.Name(id="SystemExit", ctx=ast.Load()),
+                                args=[ast.Constant(self.const)], keywords=[])
+        return node
+
+    def _force_first_arg(self, call: ast.Call) -> None:
+        if not call.args:
+            self.changes += 1
+            call.args = [ast.Constant(self.const)]
+            return
+        first = call.args[0]
+        if isinstance(first, ast.Constant) and first.value == self.const:
+            return
+        self.changes += 1
+        call.args[0] = _discard_and_yield(first, self.const)
+
+
+def force_verdict(source: str, const: int) -> Tuple[Optional[str], int]:
+    """`(rewritten source, number of verdict sites changed)`.
+
+    `(None, 0)` when there was nothing to force, which is NOT a clean result:
+    a gate program with no expression reaching its exit status is one that
+    cannot report anything, and the caller says so rather than scoring it.
+    """
+    tree = ast.parse(source)
+    mut = _ForceVerdict(const, _entry_functions(tree))
+    mut.visit(tree)
+    if not mut.changes:
+        return None, 0
+    return _unparse(tree), mut.changes
+
+
+# --------------------------------------------------------- running the arms
+#: `FAILED <nodeid>` / `ERROR <nodeid>` from pytest's own `-rfE` short summary.
+#: Node IDs, because a COUNT cannot tell one test going green and another going
+#: red from nothing happening -- and the flow-change-acceptance doctrine says so
+#: in as many words: "compare failure name sets, not counts".
+_PYTEST_FAILED = re.compile(r"^(?:FAILED|ERROR)\s+(\S+)", re.M)
+_PYTEST_PASSED = re.compile(r"(\d+) passed")
+
+#: pytest's own closing line -- `1 failed, 155 passed in 30.42s`, or `no tests
+#: ran in 0.12s`. Its ABSENCE is the only reliable sign that the session did not
+#: finish.
+#:
+#: THIS IS THE DIFFERENCE BETWEEN A FINDING AND A FALSE ACCUSATION, and it was
+#: missing. `--timeout-method=thread` does not fail the test when the inner bound
+#: is reached: it dumps every thread's stack and takes the PROCESS down. A killed
+#: session prints no `FAILED` lines, so `arm.failed` comes back EMPTY -- and an
+#: empty failure set minus the baseline is an empty difference, which this probe
+#: read as "the mutation killed nothing", which is the finding. The accusation
+#: and "the measurement died" produced identical output.
+#:
+#: Measured: under an 8-worker sweep, `drc_report_check`'s forced-1 arm died and
+#: was reported as having no positive control. Reproducing it independently on an
+#: idle machine killed 25 tests. Caught only because every finding was reproduced
+#: by hand before it was believed -- which is why that step is not optional.
+#:
+#: THE `(0:01:02)` GROUP IS LOAD-BEARING. For a session of 60 s or more pytest
+#: appends a human-readable duration -- `1 passed in 62.07s (0:01:02)` -- so a
+#: pattern anchored at `s$` matches only runs UNDER a minute. Written that way,
+#: this guard declared every arm over 60 s dead: 8 of the first 42 programs in a
+#: sweep, climbing, all of them with durations above the minute. That direction
+#: is the safe one -- it declines rather than accuses -- but it silently destroys
+#: coverage, which is the same family of defect one step over.
+_PYTEST_DONE = re.compile(
+    r"in \d+(?:\.\d+)?s(?:\s*\(\d+:\d{2}:\d{2}\))?\s*$", re.M)
+
+
+@dataclass
+class ArmResult:
+    failed: set
+    passed: int
+    rc: int
+    #: did pytest reach its own summary line? See `_PYTEST_DONE`.
+    completed: bool = True
+
+
+def _run_selection(cwd: Path, selection: List[Path],
+                   timeout: int) -> Optional[ArmResult]:
+    """One pytest arm. `None` means it could not be measured (timeout)."""
+    # `--continue-on-collection-errors` IS LOAD-BEARING, and it was missing.
+    # pytest aborts the WHOLE session on one uncollectable module -- "Interrupted:
+    # 1 error during collection" -- so a single test file that cannot import
+    # takes every other file in the selection with it, and the arm reports zero
+    # tests run. Measured while calibrating: `step_internal_fail_bubble_up_check`
+    # came back BASELINE_DEAD over a selection of 8 files for that reason alone,
+    # and it would have done so on both arms of a gate the flow blocks on. With
+    # the flag the broken module is reported as an ERROR node ID, which appears
+    # in every arm and cancels in the difference, and the other seven files are
+    # actually measured.
+    argv = [sys.executable, "-m", "pytest", "-q", "--no-header", "--tb=no",
+            "-rfE", "-p", "no:cacheprovider", "-p", "pytest_timeout",
+            "--continue-on-collection-errors",
+            # 300 s per test, not 120. This bound exists to stop a hung test
+            # from burning the arm's whole budget -- but reaching it KILLS THE
+            # SESSION rather than the test (`--timeout-method=thread`), and a
+            # killed session is a dead arm. Under `--mutation-jobs 8` on a
+            # loaded machine, tests that finish in seconds when idle crossed
+            # 120 s and took their arm down with them; that is how
+            # `drc_report_check` was reported as having no positive control
+            # when an idle re-run of the same code killed 25 tests. The arm's
+            # own subprocess ceiling (`--mutation-timeout`, 900 s by default)
+            # is the real bound; this one only has to be generous enough not to
+            # fire on a slow machine, and `_PYTEST_DONE` catches it when it does.
+            "--timeout=300", "--timeout-method=thread"]
+    argv += [str(p) for p in selection]
+    env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
+               PYTHONDONTWRITEBYTECODE="1")
+    try:
+        proc = subprocess.run(argv, cwd=str(cwd), capture_output=True,
+                              text=True, timeout=timeout, env=env)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    out = (proc.stdout or "") + (proc.stderr or "")
+    # The LAST match, which is pytest's own summary line. A test that prints
+    # something like "3 passed" of its own would otherwise be read as the
+    # session's result, and the number this feeds decides BASELINE_DEAD -- the
+    # verdict that says "this gate could not be measured".
+    counts = _PYTEST_PASSED.findall(out)
+    return ArmResult(failed=set(_PYTEST_FAILED.findall(out)),
+                     passed=int(counts[-1]) if counts else 0,
+                     rc=proc.returncode,
+                     completed=bool(_PYTEST_DONE.search(out)))
+
+
+@dataclass
+class MutationRun:
+    """What forcing a gate's verdict did to that gate's own test suite."""
+    program: str
+    #: MEASURED, or one of the ways this probe can fail to measure. Every one of
+    #: them is a DISTINCT name on purpose: "the measurement did not finish" is
+    #: not one fact, and folding a spent budget, a dead baseline and a tree that
+    #: could not be reserved into a single word is how a coverage hole stops
+    #: being auditable.
+    state: str                    # MEASURED | NO_SOURCE | NO_VERDICT | NO_TEST
+    #                             # | BASELINE_DEAD | TIMEOUT | BUDGET_SPENT
+    #                             # | NO_SCRATCH | MUTANT_INVALID | ARM_DIED
+    tests: List[str] = field(default_factory=list)
+    sites: int = 0
+    baseline_passed: int = 0
+    baseline_failed: List[str] = field(default_factory=list)
+    #: const -> node IDs that were green at baseline and red under the forced
+    #: verdict. Empty list means NOTHING DIED.
+    killed: Dict[str, List[str]] = field(default_factory=dict)
+    #: const -> how many tests that arm actually observed passing. Recorded
+    #: because it was NOT, and its absence is what made a dead arm undiagnosable
+    #: from the report: `baseline_passed` was stored and the arms' counts were
+    #: not, so a real finding and a collapsed session looked identical in the
+    #: JSON as well as in the summary.
+    arm_passed: Dict[str, int] = field(default_factory=dict)
+    seconds: float = 0.0
+    note: str = ""
+
+
+#: One `MutationRun` per program, not per clause: 136 clauses name 127 distinct
+#: programs, and a program probed twice would pay for the same answer twice.
+#:
+#: Keyed by the PROGRAMS TREE as well as the program. `PROGRAMS` is redirectable
+#: -- that is how this file's own suite plants a gate -- and a cache that ignored
+#: which tree it measured would answer the second planted tree with the first
+#: one's result. A stale answer that looks like a measurement is the defect this
+#: file exists to find, and it would be reporting one about itself.
+_MUTATION_CACHE: Dict[Tuple[str, str], MutationRun] = {}
+_SCRATCH_ROOTS: Dict[str, Path] = {}
+
+
+def _scratch_programs_root() -> Path:
+    """A disposable copy of the PLUGIN, made once per process.
+
+    Reserved through `_crash_safe_scratch`, the module the shipped probe uses,
+    so a SIGKILL leaves a stale directory under /tmp that the NEXT run reaps --
+    and leaves the repository byte-for-byte what it was. Nothing in this file
+    writes inside the checkout, and there is no flag that makes it. (Verified
+    the ugly way while this was being written: a sweep killed mid-mutation left
+    `/tmp/liar_census_mut_xhfscg6y` and a `git status` with nothing in it.)
+
+    THE WHOLE PLUGIN, NOT `programs/` ALONE, AND THAT IS THE LOAD-BEARING PART
+    -------------------------------------------------------------------------
+    `gate_cli_mutation_probe.disposable_programs_root` copies `programs/` and
+    runs pytest from its parent. That parent holds no `pytest.ini` and no
+    plugin-root `conftest.py`, and every test that resolves a path through the
+    plugin root -- the flow yaml, the skills tree, the shipped INDEX -- fails to
+    IMPORT there. Measured on the first ten clauses of the first sweep: 6 came
+    back with a selection in which NOTHING passed, 9 test files collecting 0
+    tests. In this census that reads as BASELINE_DEAD, which is honest and
+    useless; in a probe with no baseline arm it reads as CAUGHT, because pytest
+    exits non-zero on a collection error. That is the false comfort the baseline
+    arm exists to catch, and its cause is a copy that was too small.
+
+    `programs/` is 68 MB of the plugin's 76 MB, so copying the other 8 MB costs
+    almost nothing and buys a tree the suite can actually run in.
+
+    Rooted at `PROGRAMS.parent` rather than `PLUGIN` so a planted tree under
+    test is copied whole, the same way `PROGRAMS` itself is redirectable.
+
+    Degrades LOUDLY. If the reservation cannot be made the census says so on
+    stderr and the mutation probes decline rather than quietly scoring CLEAN.
+    """
+    # PER THREAD, not per process. Two workers mutating one tree would each be
+    # measuring the other's mutation, and the result would be a number with no
+    # experiment behind it. Each worker gets its own plugin copy; at 76 MB that
+    # is the cheapest part of this probe.
+    key = f"{PROGRAMS}#{threading.get_ident()}"
+    if key not in _SCRATCH_ROOTS:
+        # SERIALIZED, and the lock is not for the dict. `_crash_safe_scratch.
+        # reserve` REAPS first and only then `mkdtemp`s and writes its lock
+        # file, so between those two steps its new directory exists carrying no
+        # lock -- and a concurrent `reserve` reaps precisely that shape, as "a
+        # directory written by a build that predates this module". Measured the
+        # first time this ran with 8 workers: `[Errno 2] ... liar_census_mut_
+        # m3rtom2i` from the copytree, because a sibling had just deleted the
+        # tree under it. Every shipped caller reserves once per process, so the
+        # window has never been reachable before; this caller closes it by never
+        # reserving twice at once rather than by changing a primitive four other
+        # programs depend on.
+        with _SCRATCH_LOCK:
+            if key not in _SCRATCH_ROOTS:
+                sys.path.insert(0, str(PLUGIN / "programs"))
+                import _crash_safe_scratch as scratch          # noqa: PLC0415
+                import atexit                                  # noqa: PLC0415
+                res, _report = scratch.reserve("liar_census_mut_")
+                plugin = res.path / "plugin"
+                shutil.copytree(PROGRAMS.parent, plugin,
+                                ignore=shutil.ignore_patterns(
+                                    "__pycache__", ".pytest_cache", ".git"))
+                atexit.register(res.release)
+                _SCRATCH_ROOTS[key] = plugin / PROGRAMS.name
+    return _SCRATCH_ROOTS[key]
+
+
+_SCRATCH_LOCK = threading.Lock()
+
+
+def _selection_for(program: str, root: Path) -> List[Path]:
+    """The test files a regression in `program` would have to get past.
+
+    IMPORTED from `gate_cli_mutation_probe`, never reimplemented, for the reason
+    `probe_prose_vs_exit` imports its predicate from `flow_compliance_check`: a
+    census carrying its own copy would drift from the guard that actually runs,
+    silently, which is the family of defect being hunted.
+
+    The imported selector matches the program name in the test's raw TEXT, so it
+    can count a file that only mentions the program in prose. That direction is
+    conservative here -- an extra file can only make something MORE likely to
+    die, so it can only turn a finding into a clean result, never the reverse.
+
+    THE COVERAGE LIMIT, STATED RATHER THAN DISCOVERED LATER
+    ------------------------------------------------------
+    The other direction is not covered and cannot be, by this selector: a test
+    that constrains this gate's verdict WITHOUT ever naming it -- an orchestrator
+    test that drives the whole flow, a generic sweep over `programs/*.py` -- is
+    not in the selection, so a gate it protects can still be reported as having
+    no control. 28 modules in this tree glob the programs directory. That is a
+    known over-accusation channel, it is why every finding here is worth
+    reproducing by hand before it is acted on, and naming it is the difference
+    between a limit and a defect.
+    """
+    sys.path.insert(0, str(PLUGIN / "programs"))
+    from gate_cli_mutation_probe import naming_tests    # noqa: PLC0415
+    tests_dir = root / "tests" if (root / "tests").is_dir() else root
+    return naming_tests(program, tests_dir)
+
+
+def mutation_run(program: str, timeout: int, budget: "Budget") -> MutationRun:
+    """Force `program`'s verdict to 0 and to 1, and see what its suite says.
+
+    Three arms over ONE selection and ONE tree: unmutated, forced-pass,
+    forced-fail. Every arm is unparsed from the AST so formatting is identical
+    across all three and the only difference is the verdict.
+    """
+    key = (str(PROGRAMS), program)
+    if key in _MUTATION_CACHE:
+        return _MUTATION_CACHE[key]
+    started = time.monotonic()
+
+    def _done(run: MutationRun) -> MutationRun:
+        elapsed = time.monotonic() - started
+        run.seconds = round(elapsed, 1)
+        # Charged on EVERY path, including the ones that give up. A budget that
+        # only counts the runs that finished cannot bound a sweep whose cost is
+        # in the runs that time out.
+        budget.spend(elapsed)
+        _MUTATION_CACHE[key] = run
+        return run
+
+    try:
+        root = _scratch_programs_root()
+    except Exception as exc:                                # pragma: no cover
+        print(f"liar_census: CANNOT RESERVE a disposable programs tree ({exc}) "
+              f"— the mutation probes are DECLINING, not passing", file=sys.stderr)
+        return _done(MutationRun(program, "NO_SCRATCH", note=str(exc)[:160]))
+
+    src = root / f"{program}.py"
+    if not src.is_file():
+        return _done(MutationRun(program, "NO_SOURCE"))
+    original = src.read_text(errors="replace")
+    fingerprint = hashlib.md5(original.encode("utf-8", "replace")).hexdigest()
+    try:
+        arms = {str(c): force_verdict(original, c) for c in (0, 1)}
+        baseline_src = _unparse(ast.parse(original))
+    except SyntaxError as exc:
+        return _done(MutationRun(program, "NO_SOURCE", note=f"unparseable: {exc}"))
+    if any(text is None for text, _n in arms.values()):
+        return _done(MutationRun(program, "NO_VERDICT"))
+    # A mutant that does not compile would fail every test in the arm, which
+    # reads as "the suite noticed" -- a CLEAN bill of health handed out for a
+    # broken experiment. Checked before it can be measured, never after.
+    for label, (text, _n) in list(arms.items()) + [("baseline", (baseline_src, 0))]:
+        try:
+            compile(text, f"<{program}:{label}>", "exec")
+        except SyntaxError as exc:
+            return _done(MutationRun(program, "MUTANT_INVALID",
+                                     note=f"the forced-{label} rewrite does not "
+                                          f"compile: {exc}"))
+
+    selection = _selection_for(program, root)
+    if not selection:
+        return _done(MutationRun(program, "NO_TEST"))
+    if not budget.affords():
+        return _done(MutationRun(program, "BUDGET_SPENT",
+                                 tests=[p.name for p in selection]))
+
+    run = MutationRun(program, "MEASURED", tests=[p.name for p in selection],
+                      sites=arms["0"][1])
+    try:
+        src.write_text(baseline_src)
+        base = _run_selection(root.parent, selection, timeout)
+        if base is None:
+            return _done(MutationRun(program, "TIMEOUT", tests=run.tests,
+                                     note=f"baseline arm exceeded {timeout}s"))
+        if not base.completed:
+            return _done(MutationRun(
+                program, "ARM_DIED", tests=run.tests,
+                note="the unmutated arm's pytest session never reached its own "
+                     "summary line, so nothing it reported is a measurement"))
+        if base.passed == 0:
+            # Nothing in the selection is green, so nothing COULD die. Scoring
+            # "no test noticed" here would be an accusation the measurement
+            # cannot support.
+            return _done(MutationRun(
+                program, "BASELINE_DEAD", tests=run.tests,
+                baseline_failed=sorted(base.failed),
+                note="no test in the selection passes even unmutated, so the "
+                     "mutation had nothing to kill"))
+        run.baseline_passed = base.passed
+        run.baseline_failed = sorted(base.failed)
+        for const, (text, _sites) in arms.items():
+            src.write_text(text)
+            arm = _run_selection(root.parent, selection, timeout)
+            if arm is None:
+                run.state = "TIMEOUT"
+                run.note = f"forced-{const} arm exceeded {timeout}s"
+                return _done(run)
+            if not arm.completed:
+                # An unfinished session reports no failures, and no failures is
+                # the FINDING. Declining is the only honest option.
+                run.state = "ARM_DIED"
+                run.note = (f"the forced-{const} arm's pytest session never "
+                            f"reached its own summary line (observed "
+                            f"{arm.passed} passing, {len(arm.failed)} failing "
+                            f"against {base.passed}/{len(base.failed)} at "
+                            f"baseline), so its empty failure set is a dead "
+                            f"measurement and not a gate without a control")
+                return _done(run)
+            run.arm_passed[const] = arm.passed
+            run.killed[const] = sorted(arm.failed - base.failed)
+    finally:
+        # Restoring is not best-effort even on a disposable tree: the NEXT
+        # program measured by this process reads these bytes as its baseline.
+        src.write_text(original)
+        after = hashlib.md5(src.read_text(errors="replace")
+                            .encode("utf-8", "replace")).hexdigest()
+        if after != fingerprint:                            # pragma: no cover
+            raise SystemExit(
+                f"FATAL: the scratch copy of {program}.py was not restored "
+                f"({fingerprint} -> {after}); every later result in this run "
+                f"would be measured against a gate nobody chose to change")
+    return _done(run)
+
+
+class Budget:
+    """A wall-clock ceiling for the mutation probes, and a record of the drop.
+
+    Mutation is the expensive probe -- three pytest sessions per gate program.
+    A sweep that runs out of time must say WHICH gates it did not reach: a
+    truncation nobody can see reads as "covered everything" when it did not.
+    """
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+        self.spent = 0.0
+        self._lock = threading.Lock()
+
+    def affords(self) -> bool:
+        with self._lock:
+            return self.seconds <= 0 or self.spent < self.seconds
+
+    def spend(self, dt: float) -> None:
+        with self._lock:
+            self.spent += dt
+
+
+#: What the mutation probes CANNOT establish, by state. Each is printed with
+#: the finding list, never folded into CLEAN.
+_UNMEASURED = {
+    "NO_SOURCE": "the clause names a program this tree does not contain",
+    "NO_VERDICT": "no expression in the module reaches its exit status, so "
+                  "there is no verdict to force — the gate cannot report "
+                  "anything, which is a finding of a different shape",
+    "NO_TEST": "no test file names this program, so there is no suite to "
+               "notice — an unprotected gate and an untested one are different "
+               "facts and this probe can only establish the second",
+    "BASELINE_DEAD": "nothing in the selection passes even unmutated",
+    "TIMEOUT": "an arm exceeded its pytest ceiling",
+    "BUDGET_SPENT": "--mutation-budget ran out before this program was reached, "
+                    "so it was DROPPED rather than cleared",
+    "NO_SCRATCH": "no disposable tree could be reserved, so nothing was mutated",
+    "ARM_DIED": "a pytest session did not reach its own summary line, so its "
+                "empty failure set is a dead measurement rather than a gate "
+                "with no control",
+    "MUTANT_INVALID": "the rewrite did not compile, so the arm would have "
+                      "reddened for a reason that is this probe's, not the gate's",
+}
+
+
+def _mutation_probe(cl: Clause, const: int, probe: str, timeout: int,
+                    budget: "Budget") -> ProbeResult:
+    run = mutation_run(cl.program, timeout, budget)
+    repro = (f"python3 -c \"import liar_census as l; "
+             f"print(l.mutation_run('{cl.program}', 600, l.Budget(0)))\"")
+    if run.state != "MEASURED":
+        return ProbeResult(probe, NA,
+                           f"NOT MEASURED ({run.state}): {_UNMEASURED[run.state]}"
+                           + (f" — {run.note}" if run.note else ""), repro)
+    killed = run.killed.get(str(const), [])
+    if killed:
+        return ProbeResult(
+            probe, CLEAN,
+            f"forcing the verdict to {const} killed {len(killed)} test(s) that "
+            f"pass unmutated, e.g. {killed[0]} ({len(run.tests)} file(s), "
+            f"{run.baseline_passed} passing at baseline)", repro)
+
+    files = ", ".join(run.tests[:4]) + (" …" if len(run.tests) > 4 else "")
+    if const == 0:
+        detail = (f"NO NEGATIVE CONTROL — the verdict was forced to PASS at "
+                  f"{run.sites} site(s) and every one of {run.baseline_passed} "
+                  f"passing test(s) in {len(run.tests)} file(s) stayed green: "
+                  f"{files}. Nothing in this repo can tell this gate from a "
+                  f"gate that always says yes.")
+        sev = LIAR if cl.blocking else SUSPECT
+    else:
+        detail = (f"NO POSITIVE CONTROL — the verdict was forced to FAIL and "
+                  f"every one of {run.baseline_passed} passing test(s) in "
+                  f"{len(run.tests)} file(s) stayed green: {files}. Nothing "
+                  f"pins that this gate can ever say yes, which makes it a BAN "
+                  f"rather than a check.")
+        # A gate that can only ever say no does not launder a PASS, so it is
+        # not the LIAR shape on its own -- but it is why the pair is reported
+        # together: when BOTH fire, the verdict is unconstrained in every
+        # direction any test could have looked.
+        sev = SUSPECT
+    return ProbeResult(probe, sev, detail, repro)
+
+
+def _selection_size(program: str) -> int:
+    """How many test files name `program`, for ORDERING only.
+
+    Deliberately cheaper and blunter than `_selection_for`: it decides the order
+    a bounded sweep works in and nothing else, so being approximate here cannot
+    make a verdict wrong -- only make a budget reach a different set of gates,
+    which the report names either way.
+    """
+    global _TEST_TEXT
+    tests = PROGRAMS / "tests"
+    if _TEST_TEXT is None:
+        _TEST_TEXT = {p: p.read_text(errors="replace")
+                      for p in sorted(tests.glob("test_*.py"))} if tests.is_dir() else {}
+    rx = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(program) + r"(?![A-Za-z0-9_])")
+    return sum(1 for text in _TEST_TEXT.values() if rx.search(text))
+
+
+_TEST_TEXT: Optional[Dict[Path, str]] = None
+
+
+def prewarm_mutation_cache(programs: List[str], jobs: int, timeout: int,
+                           budget: "Budget") -> None:
+    """Measure every distinct gate program once, `jobs` at a time.
+
+    Ordered SMALLEST-SELECTION-FIRST when a budget is set, so a sweep that runs
+    out of time has answered as many gates as it could rather than spending it
+    all on one 51-file suite. Ordering changes WHICH gates a bounded sweep
+    reaches; it never changes whether the report admits to the bound.
+
+    WHICH WAY CONCURRENCY CAN BE WRONG. Workers share a machine, and a flaky
+    failure under load lands in one arm and not another. In the FORCED arm it
+    reads as a test the mutation killed, and in the BASELINE arm it removes a
+    test that could have died -- both push the verdict toward CLEAN. So `--jobs`
+    can hide a finding and cannot manufacture one, which is the direction to be
+    wrong in for an instrument whose accusations cost a person's afternoon.
+    """
+    if budget.seconds > 0:
+        programs = sorted(programs, key=_selection_size)
+    if jobs <= 1:
+        for name in programs:
+            mutation_run(name, timeout, budget)
+        return
+    from concurrent.futures import ThreadPoolExecutor      # noqa: PLC0415
+    done = [0]
+    lock = threading.Lock()
+
+    def work(name: str) -> None:
+        run = mutation_run(name, timeout, budget)
+        with lock:
+            done[0] += 1
+            print(f"  mutation [{done[0]}/{len(programs)}] {name[:56]:<56} "
+                  f"{run.state} {run.seconds:.0f}s", file=sys.stderr, flush=True)
+
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        list(pool.map(work, programs))
+
+
+def probe_verdict_forced_pass(cl: Clause, timeout: int, budget: "Budget") -> ProbeResult:
+    """P6 (SHAPE 4) -- neuter its decision, and see whether anything dies.
+
+    WHY `guarded_on_empty` IS NOT CONSULTED HERE, WHICH IS NOT AN OVERSIGHT
+    ----------------------------------------------------------------------
+    `probe_empty_tree` discounts a clause when the flow declares `[condition]`,
+    a `[sibling]` `files_exist`, or `[required_outputs]` above it. Those three
+    are answers to ITS question -- "does rc 0 here certify a project that does
+    not exist" -- and they answer it by establishing that on an empty tree this
+    clause's exit code is never read.
+
+    They say nothing about THIS question. A `files_exist` precondition decides
+    WHEN the gate runs; it cannot make the verdict unimportant on the runs where
+    it does. A step that is skipped on an empty tree still has its gate read on
+    every populated one, and a gate nothing can tell from a gate that always
+    says yes is exactly as blind there. Carrying the discount across would have
+    forgiven 61 of the 62 gated steps on a rule that does not apply to them --
+    the shape #1051's own empty_tree probe was corrected FOR, one probe over.
+
+    The structure that IS consulted is the clause KIND, read from the same YAML:
+    a `program_exit_zero` verdict is acted on and a finding against it is a
+    LIAR; an `advisory_program_exit_zero` verdict is recorded, and the same
+    measurement is a weaker claim.
+    """
+    return _mutation_probe(cl, 0, "verdict_forced_pass", timeout, budget)
+
+
+def probe_verdict_forced_fail(cl: Clause, timeout: int, budget: "Budget") -> ProbeResult:
+    """P7 (SHAPE 5) -- make it always say NO, and see whether anything dies.
+
+    The negative control's mirror, and the reason both ship together: a suite
+    that only pins the FAILURE is satisfied by a gate that always fails, and a
+    suite that only pins the PASS is satisfied by one that always passes.
+    v1.8.29 said so in as many words while repairing seven gates -- "every new
+    test covers a return path in BOTH directions" -- and this is that sentence
+    made measurable over the whole flow rather than over the seven somebody
+    happened to look at.
+    """
+    return _mutation_probe(cl, 1, "verdict_forced_fail", timeout, budget)
 # ------------------------------------------------- SHAPE 11: path spelling
 #: A count beside a population word — the same vocabulary `_ZERO_POP` uses,
 #: but for ANY number rather than only zero. `probe_path_spelling` compares
@@ -2074,10 +2826,24 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
                spelling_variants: int = len(SPELLINGS),
                corpus: Optional[Path] = None, corpus_roots: int = 1,
                budget: int = 3, notes: Optional[List[str]] = None,
-               ) -> List[ClauseReport]:
+               mutation_timeout: int = _MUTATION_BOUND_S,
+               mutation_budget: float = 0,
+               mutation_jobs: int = 1) -> List[ClauseReport]:
     reports: List[ClauseReport] = []
     graph = graph or FlowGraph()
     notes = notes if notes is not None else []
+    # NAMED `mut_budget`, not `budget`. `budget` is already this function's
+    # corpus-mutation count (an int, main's); #1108 bound the same name to a
+    # wall-clock `Budget` object. Both survived the text merge, the second
+    # silently shadowing the first, and the ruler/cycle probes then received a
+    # Budget where they expect a count.
+    mut_budget = Budget(mutation_budget)
+    # 136 clauses name 127 distinct programs, and the mutation probes answer per
+    # PROGRAM. Doing that work up front means the per-clause loop below reads a
+    # cache, and it is what makes `--mutation-jobs` possible at all.
+    if {"forcedpass", "forcedfail"} & set(probes):
+        prewarm_mutation_cache(sorted({c.program for c in clauses}),
+                               mutation_jobs, mutation_timeout, mut_budget)
     #: which programs each step declares as gate clauses -- the structure the
     #: producer/checker discount in `probe_writes_its_subject` reads.
     by_step: Dict[str, set] = {}
@@ -2103,6 +2869,10 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
                 shutil.rmtree(sb, ignore_errors=True)
             if "selector" in probes:
                 rep.probes.append(probe_selector_reaches_fixtures(cl))
+            if "forcedpass" in probes:
+                rep.probes.append(probe_verdict_forced_pass(cl, mutation_timeout, mut_budget))
+            if "forcedfail" in probes:
+                rep.probes.append(probe_verdict_forced_fail(cl, mutation_timeout, mut_budget))
             if "blocks" in probes:
                 rep.probes.append(probe_never_blocks(cl, graph))
             if "depth" in probes:
@@ -2150,8 +2920,14 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
     return reports
 
 
+#: `forcedpass`/`forcedfail` are MUTATION probes: three pytest sessions per
+#: distinct gate program, measured at minutes each. They are in the default set
+#: on purpose -- this file's whole thesis is that a gate can be clean on the one
+#: axis somebody happened to check -- and `--probes` names the cheap subset for
+#: anyone who wants the static sweep alone.
 ALL_PROBES = ["empty", "prose", "zero", "writes", "selector",
-              "blocks", "depth", "spelling", "ruler", "cycle"]
+              "blocks", "depth", "spelling", "ruler", "cycle",
+              "forcedpass", "forcedfail"]
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -2162,6 +2938,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--only", action="append", default=[],
                     help="restrict to clauses whose program name contains this (repeatable)")
     ap.add_argument("--timeout", type=int, default=60)
+    ap.add_argument("--mutation-timeout", type=int, default=900,
+                    help="per-ARM pytest ceiling for the mutation probes")
+    ap.add_argument("--mutation-budget", type=float, default=0,
+                    help="wall-clock seconds for ALL mutation probes together; "
+                         "0 means no ceiling. What it drops is printed.")
+    ap.add_argument("--mutation-jobs", type=int, default=1,
+                    help="gate programs to mutate concurrently, each in its own "
+                         "disposable copy of the plugin (76 MB apiece)")
     ap.add_argument("--spelling-variants", type=int, default=len(SPELLINGS),
                     help=f"how many of the {len(SPELLINGS)} path spellings to "
                          f"try per clause. Lowering it BOUNDS the most "
@@ -2194,7 +2978,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     reports = run_census(clauses, probes, args.timeout, graph=graph,
                          spelling_variants=variants, corpus=args.corpus,
                          corpus_roots=args.corpus_roots,
-                         budget=args.max_mutations, notes=notes)
+                         budget=args.max_mutations, notes=notes,
+                         mutation_timeout=args.mutation_timeout,
+                         mutation_budget=args.mutation_budget,
+                         mutation_jobs=args.mutation_jobs)
 
     liars = [r for r in reports if r.worst == LIAR]
     suspects = [r for r in reports if r.worst == SUSPECT]
@@ -2206,22 +2993,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     # single probe that scores 10 clauses N/A printed `CLEAN 136` over 126
     # measurements — a census reporting a population it never reached, which is
     # the shape this file exists to find, in this file.
-    unmeasured = [r for r in reports if r.worst == NA]
     blocking_liars = [r for r in liars if r.kind == "program_exit_zero"]
     # every discounted probe result, however its clause was finally scored
     discounted = sum(1 for r in reports for p in r.probes if p.verdict == GUARDED)
-    clean = (len(reports) - len(liars) - len(suspects)
-             - len(guarded) - len(unmeasured))
 
     print()
     print("=" * 78)
     print(f"LIAR CENSUS — {len(reports)} clause(s), probes: {','.join(probes)}")
     print("=" * 78)
+    # A clause on which NO probe returned a score is UNMEASURED, and it used to
+    # land in this line's arithmetic as CLEAN: `CLEAN` was
+    # `total - liar - suspect - guarded`, so a clause whose every probe came
+    # back N/A was reported as having survived them. That is the census's own
+    # version of the defect it hunts -- a bill of health issued over an
+    # experiment that never ran -- and it only became visible once a probe
+    # existed that DECLINES often enough to notice. Counted by verdict now.
+    clean = [r for r in reports if r.worst == CLEAN]
+    unscored = [r for r in reports if r.worst == NA]
     print(f"  LIAR     {len(liars):>4}   ({len(blocking_liars)} of them BLOCKING)")
     print(f"  SUSPECT  {len(suspects):>4}")
     print(f"  GUARDED  {len(guarded):>4}   ({discounted} probe result(s) declined, listed below)")
-    print(f"  CLEAN    {clean:>4}")
-    print(f"  N/A      {len(unmeasured):>4}   (every probe returned N/A — NOT measured, "
+    print(f"  CLEAN    {len(clean):>4}")
+    # LABEL is main's `N/A`, COUNT is #1108's verdict-derived `unscored`. The
+    # two sides named one concept twice; the printed word is pinned by a test
+    # and the derivation is the stronger of the two, so each side keeps the
+    # half it got right.
+    print(f"  N/A      {len(unscored):>4}   (every probe returned N/A — NOT measured, "
           f"and deliberately NOT counted clean)")
     print()
     for r in liars + suspects:
@@ -2276,6 +3073,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"BOUNDS — {len(notes)} disclosure(s) about what this run did NOT establish:")
         for n in notes:
             print(f"  * {n}")
+    # WHAT WAS NOT MEASURED, per probe. A bounded sweep that does not name its
+    # own coverage hole reads as "covered everything" -- and the mutation probes
+    # are the ones with a hole, because they are the ones with a budget.
+    not_reached = [(r, p) for r in reports for p in r.probes
+                  if p.verdict == NA and p.detail.startswith("NOT MEASURED")]
+    if not_reached:
+        print("-" * 78)
+        print(f"NOT MEASURED — {len(not_reached)} probe result(s) over "
+              f"{len({r.program for r, _ in not_reached})} program(s). A gate this "
+              f"probe could not reach has NOT been cleared by it:")
+        for rep, p in not_reached:
+            print(f"  step {rep.step:>4} {rep.program} [{p.probe}]")
+            print(f"      {p.detail}")
+        print()
+    if _MUTATION_CACHE:
+        spent = sum(m.seconds for m in _MUTATION_CACHE.values())
+        by_state: Dict[str, int] = {}
+        for m in _MUTATION_CACHE.values():
+            by_state[m.state] = by_state.get(m.state, 0) + 1
+        print(f"mutation probes: {len(_MUTATION_CACHE)} distinct program(s), "
+              f"{spent / 60:.1f} min, " +
+              ", ".join(f"{k}={v}" for k, v in sorted(by_state.items())))
         print()
 
     if args.json:
@@ -2284,12 +3103,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             {"clauses": len(reports), "probes": probes,
              "liar": len(liars), "suspect": len(suspects),
              "guarded": len(guarded), "declined_probe_results": discounted,
-             "clean": clean, "unmeasured": len(unmeasured),
+             "clean": len(clean), "unmeasured": len(unscored),
+             "unscored": len(unscored),
              "blocking_liar": len(blocking_liars),
              "not_measured": na,
+             "not_reached": len(not_reached),
              "spelling_variants_tried": variants,
              "spelling_variants_available": len(SPELLINGS),
              "bounds": notes,
+             "mutation": {v.program: asdict(v)
+                          for _k, v in sorted(_MUTATION_CACHE.items())},
              "reports": [asdict(r) for r in reports]}, indent=1), encoding="utf-8")
 
     return 1 if liars else 0
