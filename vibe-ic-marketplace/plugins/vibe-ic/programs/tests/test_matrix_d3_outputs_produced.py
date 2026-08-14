@@ -3010,26 +3010,33 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     #   20 <- benchmark-data/ic/subservient  phase3/stage3/pnr/post_hold.def
     # THE >1 GB ESTIMATE ABOVE IS WHY THIS SAT HERE FOR SO LONG, AND IT WAS
     # MEASURING THE WRONG THING. It costs a published run tree to evidence a
-    # whole step set; it cost 2,340,897 B -- four blobs, largest 615,007 B --
-    # to evidence these four entries, because what was missing was four
-    # checkpoints of one small design, not a run tree. `.gitignore:173`
-    # (`!benchmark-data/ic/**/*.def`) already admits exactly this path shape,
-    # the comment above it says these belong in git, and
-    # `tracked_blob_size_guard.py` bounds it at 50 MB per blob: the repository
-    # had already decided, in writing, that it carries these. `git add` took
-    # them with no `-f`.
+    # whole step set; it cost 42,046,261 B -- four blobs, largest 14,546,739 B,
+    # all under `tracked_blob_size_guard`'s 50 MB ceiling -- to evidence these
+    # four entries, because what was missing was four checkpoints of ONE run,
+    # not a run tree. `.gitignore:173` (`!benchmark-data/ic/**/*.def`) already
+    # admits exactly this path shape and the comment above it says these belong
+    # in git, so `git add` took all four with no `-f`.
     #
-    # PROVENANCE, because "a file with the right name exists" is not evidence.
-    # The flow's OWN pnr.tcl, tracked in that same directory, writes all four
-    # (`write_def .../floorplan.def` at :51, placed :88, post_cts :445,
-    # post_hold :455). The bytes were then tied to a file this commit ALREADY
-    # carried: the COMPONENT instance-name set of post_cts/post_hold is exactly
-    # equal to the 3780 instances of the tracked `subservient_pnr.v`, cell
-    # master included; floorplan/placed carry 3705 of those same names with
-    # zero extras, and the 75-name difference is exactly the spare set listed
-    # in the tracked `spare_cells.json`. post_cts.def and post_hold.def are
-    # byte-identical, which is the hold-clean no-op #624 already exempted --
-    # the tracked post_hold_timing.rpt reports worst hold slack 1e39.
+    # PROVENANCE IS THE WHOLE OF THE WORK HERE, AND THE NEAR MISS IS WHY.
+    # `benchmark-data/ic/subservient/phase3/stage3/pnr/` carries FIVE untracked
+    # .def on a maintainer checkout, at these exact paths, for this exact
+    # design -- 2.34 MB, a twentieth of the size, and every structural test
+    # passes them: same DIEAREA, COMPONENT instance-name set exactly equal to
+    # the 3780 instances of the tracked `subservient_pnr.v` (cell master
+    # included), the placed->post_cts delta exactly the 75 names in the tracked
+    # `spare_cells.json`, and `def_stage_progression_check` rates all four
+    # stages as NOT fabricated. They are still the wrong bytes: they are a
+    # LATER RE-RUN of the same design. The run's own tracked `provenance.jsonl`
+    # records a sha256 per output, and all five differ. Committing them turns
+    # `declared_outputs_findable_check` from PASS to FAIL with HASH_MISMATCH --
+    # measured, not reasoned about, by committing them and running it.
+    #
+    # So the four blobs here are the ones whose sha256 EQUALS the recorded one:
+    #   floorplan 4ec06f09…  placed 04b97111…  post_cts/post_hold 6d47399c…
+    # Structural resemblance is not provenance. The record is.
+    # (post_cts.def and post_hold.def share a hash: the hold-clean no-op #624
+    # already exempted, corroborated by the tracked post_hold_timing.rpt at
+    # worst hold slack 1e39. #624's own docstring quotes this same 6d47399c.)
     #
     # The remaining six declare artefacts NO path in this commit matches (30,
     # 32) or belong to the mixed-signal set (#1159). For 32 the artefact DOES
