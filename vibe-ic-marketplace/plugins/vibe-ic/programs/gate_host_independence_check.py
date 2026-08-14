@@ -470,6 +470,73 @@ def sweep_abandoned_scratch(repo_root: Path,
             "kept": [{"path": p, "why": w} for p, w in rep.kept]}
 
 
+def _checkout_dirty_paths(repo_root: Path) -> Dict[str, str]:
+    """``{path: status}`` for everything git currently reports, or ``{}``.
+
+    No ``--ignored``: `__pycache__` and `.pytest_cache` churn on every drive and
+    are not what a killed mutator leaves. Including them would make this fire on
+    every gate in every run, and a guard that always fires is one people route
+    around.
+
+    An unreadable tree returns ``{}``, which makes `_repair_checkout` a no-op --
+    it can then only fail to repair, never repair the wrong thing.
+    """
+    try:
+        r = subprocess.run(["git", "-C", str(repo_root), "status",
+                            "--porcelain"],
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if r.returncode != 0:
+        return {}
+    out: Dict[str, str] = {}
+    for line in (r.stdout or "").splitlines():
+        if len(line) > 3:
+            out[line[3:].strip()] = line[:2]
+    return out
+
+
+def _repair_checkout(repo_root: Path, before: Dict[str, str],
+                     label: str) -> Tuple[List[str], List[str]]:
+    """Undo what THIS drive wrote. Returns ``(repaired, refused)``.
+
+    THE BOUNDARY, because an over-eager repair here would destroy a
+    maintainer's work in order to tidy up after a gate:
+
+      * a TRACKED path that was pristine before and is modified after -- the
+        difference was made by the child this loop just ran, so
+        ``git checkout -- <path>`` undoes that and provably nothing else.
+        REPAIRED.
+      * a path that was ALREADY dirty before the drive -- somebody's in-flight
+        work, possibly with the gate's write layered on top. Nothing here can
+        separate the two, so it is NAMED and left exactly as it is. REFUSED.
+      * an UNTRACKED path that appeared -- a gate writing its own report beside
+        the code is doing the thing the corpus guard's message recommends.
+        Named, never deleted: this function's licence is to undo a modification
+        it can prove it caused, not to remove files.
+    """
+    after = _checkout_dirty_paths(repo_root)
+    repaired: List[str] = []
+    refused: List[str] = []
+    for path, status in sorted(after.items()):
+        if path in before:
+            continue
+        if status.strip() == "??":
+            refused.append(f"{path} (untracked -- named, not deleted)")
+            continue
+        r = subprocess.run(
+            ["git", "-C", str(repo_root), "checkout", "--", path],
+            capture_output=True, text=True, timeout=120)
+        if r.returncode == 0 and path not in _checkout_dirty_paths(repo_root):
+            repaired.append(path)
+        else:
+            refused.append(f"{path} (restore failed)")
+    for path in sorted(before):
+        if path in after and after[path] != before[path]:
+            refused.append(f"{path} (already dirty before this drive)")
+    return repaired, refused
+
+
 def audit(repo_root: Path, timeout: int = 600,
           tmp_root: Optional[Path] = None) -> Audit:
     """`tmp_root` overrides where the scratch lives (default: the system temp).
@@ -593,6 +660,37 @@ def audit(repo_root: Path, timeout: int = 600,
                 continue
             ca = repo_root if wd_tok == "$ROOT" else repo_root / plugin_rel
             cb = wt if wd_tok == "$ROOT" else wt / plugin_rel
+            # THE KILLER CLEANS UP (vibe-ic#1029, same family).
+            #
+            # ARM A runs in THE WORKING CHECKOUT, and `subprocess.run(timeout=)`
+            # on expiry calls `Popen.kill()` -- SIGKILL. A killed process runs
+            # no `finally` and no signal handler, so a gate that was inside its
+            # own mutation window when the bound landed leaves the mutation in
+            # the tree, and this loop then filed `GATE_UNRUNNABLE` and carried
+            # on. Everything declared after it measured the mutation.
+            #
+            # MEASURED 2026-08-12, reproducing a real landing run on .120
+            # (candidate stack h1c, `/home/<your-user>/_pg_h1c`) byte for byte:
+            #
+            #   parent caught TimeoutExpired after 75s
+            #   porcelain AFTER: 1
+            #    M programs/phase3_one_shot_runner.py
+            #   -    return _detect_pdk(project, override="sky130A")
+            #   +    return _detect_pdk(project, override="nangate45")
+            #
+            # `an argued direction is pinned` needs 543 s here against the
+            # 600 s bound, and `phase3_one_shot_runner.py:8414` is the LAST
+            # site it processes in sort order -- so it is the site holding a
+            # mutation when the bound lands, which is exactly the file .120 was
+            # left carrying.
+            #
+            # WHY THE FIX IS HERE AND NOT IN THE KILLED GATE. Its `finally`
+            # already works: an exception raised mid-pin restores the file
+            # byte-identically (measured). SIGTERM is handled too, once #1090
+            # lands. SIGKILL cannot be caught by anybody -- so the only process
+            # still alive to undo the write is THIS ONE, the one that sent it.
+            before_dirty = _checkout_dirty_paths(repo_root)
+            drive_exc: Optional[BaseException] = None
             try:
                 a = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
                                    capture_output=True, text=True,
@@ -601,13 +699,36 @@ def audit(repo_root: Path, timeout: int = 600,
                                    capture_output=True, text=True,
                                    timeout=timeout)
             except (OSError, subprocess.SubprocessError) as exc:
+                drive_exc = exc
+            # ALWAYS, not only on the exception path. A gate that writes into
+            # the checkout while EXITING CLEANLY corrupts the comparison just as
+            # thoroughly, and would otherwise be invisible here.
+            repaired, refused = _repair_checkout(repo_root, before_dirty, label)
+            if repaired or refused:
+                findings.append({
+                    "gate": label, "kind": "GATE_CORRUPTED_CHECKOUT",
+                    "detail": (
+                        "this gate left the WORKING CHECKOUT modified while "
+                        "being driven"
+                        + (f" (killed: {type(drive_exc).__name__})"
+                           if drive_exc is not None
+                           else " (it exited normally)")
+                        + ". Every gate declared after it would have measured "
+                          "that. "
+                        + (f"Restored: {', '.join(repaired)}. "
+                           if repaired else "")
+                        + (f"REFUSED to touch (dirty before this run): "
+                           f"{', '.join(refused)}. " if refused else "")),
+                    "checkout": "modified", "worktree": "-"})
+            if drive_exc is not None:
                 # A gate that cannot be driven is NOT host-dependence, and it
                 # is NOT a clean result either. It gets its own state rather
                 # than a traceback that kills the whole probe.
                 findings.append({
                     "gate": label, "kind": "GATE_UNRUNNABLE",
                     "detail": f"could not be driven twice: "
-                              f"{type(exc).__name__}: {str(exc)[:160]}",
+                              f"{type(drive_exc).__name__}: "
+                              f"{str(drive_exc)[:160]}",
                     "checkout": "-", "worktree": "-"})
                 continue
             # NORMALISE THE TREE PATH OUT before comparing. A gate that echoes
