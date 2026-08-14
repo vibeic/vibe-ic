@@ -58,7 +58,7 @@ except ImportError:
 
 # Tokens forbidden in plugin source code. Match is case-INsensitive at
 # word boundaries. The canonical list lives in
-# `plugins/vibe-ic/tests/chip_deny_list.txt` so the same data feeds
+# `plugins/vibe-ic/programs/tests/chip_deny_list.txt` so the same data feeds
 # both this source-side gate and the CI deny-list test.
 #
 # Add new vendor / SKU / IC / foundry names by editing that .txt file;
