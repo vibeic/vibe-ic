@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1081
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1081)
+- **Total programs (excluding helpers / shims):** 1082
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1082)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1072 |
+| `any` | 1073 |
 
 ## Alphabetical listing
 
@@ -249,6 +249,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `cvdp_solve_pipeline` | any | — | the CVDP TIER-1→3 AUTHORING-GATE PIPELINE. |
 | `cvdp_spec_parse` | any | — | a GENERAL prose-port-block reader for the CVDP benchmark family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's m... |
 | `cxl_protocol_synth` | any | v0.1.89 | Compute Express Link (CXL) cache-coherent interconnect synth helper. |
+| `d3_manifest_declaration_parity_check` | any | — | Every declared `required_outputs` path must be covered by the d3 manifest. |
 | `dali_protocol_synth` | any | v0.1.84 | DALI-class protocol synth helper. |
 | `ddr4_protocol_synth` | any | — | DDR4 SDRAM protocol synth helper (JEDEC JESD79-4) — protocol class #58. |
 | `ddr5_protocol_synth` | any | — | DDR5 SDRAM protocol synth helper (JEDEC JESD79-5). |
@@ -1153,7 +1154,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1072 programs)
+### `any` (1073 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1375,6 +1376,7 @@ _(no programs in this group)_
 - `cvdp_solve_pipeline` — the CVDP TIER-1→3 AUTHORING-GATE PIPELINE.
 - `cvdp_spec_parse` — a GENERAL prose-port-block reader for the CVDP benchmark family (`cvdp_copilot_*` non-agentic code-generation prompts), bridging CVDP's m...
 - `cxl_protocol_synth` — Compute Express Link (CXL) cache-coherent interconnect synth helper.  _[v0.1.89]_
+- `d3_manifest_declaration_parity_check` — Every declared `required_outputs` path must be covered by the d3 manifest.
 - `dali_protocol_synth` — DALI-class protocol synth helper.  _[v0.1.84]_
 - `ddr4_protocol_synth` — DDR4 SDRAM protocol synth helper (JEDEC JESD79-4) — protocol class #58.
 - `ddr5_protocol_synth` — DDR5 SDRAM protocol synth helper (JEDEC JESD79-5).
