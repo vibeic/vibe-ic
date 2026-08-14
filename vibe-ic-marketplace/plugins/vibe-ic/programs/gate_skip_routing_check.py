@@ -312,6 +312,17 @@ _EXCLUDED: Dict[str, str] = {
 # `rc != 0 -> RED` reader, and its own tests updated. `--strict` reports the
 # residual as a FAIL for whoever does that.
 _UNROUTED_INVENTORY: Dict[str, int] = {
+    # l7_debug_access_grounding_check, l8_clock_period_actionability_check,
+    # l9_floorplan_contract_check: DRAINED (#1052). All three ended their skip
+    # path with `print("skipped: …"); return 0` — free prose, which is not a
+    # channel. They now route through `_vacuous_exit`: rc 2 AND the sentinel.
+    # Found by the #1051 carpet sweep, which reproduced from the OTHER side
+    # (behaviourally, on an empty tree) what this module had already recorded
+    # statically as three of its 97. Entries DELETED, not zeroed, per the rule
+    # below. `l_doc_todo_stub_count_check` was fixed in the same change and was
+    # never in this inventory: its exit lived behind a computed verdict string,
+    # so it enumerated as `skip_paths: 0` + unanalysable rather than as a
+    # residual entry — it now enumerates as 1 routed.
     # analog_content_detected_must_emit_l5_check: DRAINED (#833). Its one
     # unrouted branch ("no analog keywords found" -> rc 0) now routes through
     # `_vacuous_exit`. The entry is DELETED rather than zeroed, because the
@@ -339,10 +350,7 @@ _UNROUTED_INVENTORY: Dict[str, int] = {
     "half_duplex_response_window_check": 1,
     "l3_opcode_pre_wake_allowed_typed_check": 5,
     "l6_reject_rules_from_rx_event_check": 6,
-    "l7_debug_access_grounding_check": 1,
-    "l8_clock_period_actionability_check": 1,
     "l8_frame_end_gap_derivation_check": 1,
-    "l9_floorplan_contract_check": 1,
     "l9_rtl_pin_consistency_check": 3,
     "metadata_content_substance_check": 1,
     "nba_shift_register_same_cycle_read_check": 1,
