@@ -364,17 +364,52 @@ _REGISTRY_REL = f"{TESTS_REL}/{_MATRIX_PKG}/waivers.py"
 _IMPORTS_MATRIX = re.compile(rf"^[ \t]*(?:from|import)[ \t]+{_MATRIX_PKG}\b", re.M)
 
 
+#: A test file may reach the registry through a HELPER in `programs/tests/`
+#: rather than importing the package itself — `matrix_d7_artifact_graph.py`
+#: carries `from matrix_63x8 import flowref` at its own line 207, so a test that
+#: imports only that helper is a genuine consumer and the selector is right to
+#: pick it. Matching direct imports alone made this oracle NARROWER than the
+#: truth, and the first test file to consume a helper without also importing the
+#: package itself read as over-selection.
+#:
+#: ONE HOP, NOT A GRAPH WALK. The point of this oracle is that it shares no code
+#: with the selector's `ast` implementation, so the two can disagree; following
+#: the chain to its end would re-implement the selector and the disagreement
+#: would stop being possible. One hop is what the tree actually contains, and a
+#: second hop appearing should FAIL here and be widened deliberately rather than
+#: be absorbed silently.
+_HELPER_GLOB = "*.py"
+
+
+def _matrix_helper_modules() -> set[str]:
+    """Helper module names under `tests/` whose own source imports the package."""
+    out = set()
+    for hf in (PLUGIN_ROOT / TESTS_REL).glob(_HELPER_GLOB):
+        if hf.name.startswith("test_"):
+            continue
+        if _IMPORTS_MATRIX.search(hf.read_text(encoding="utf-8", errors="replace")):
+            out.add(hf.stem)
+    return out
+
+
 def _matrix_consumers_by_independent_scan() -> set[str]:
-    """Every test file whose SOURCE imports the matrix package.
+    """Every test file whose SOURCE reaches the matrix package.
 
     Independent oracle: a line-anchored regex over the import statements, not
     the selector's ast walk. Line-anchored so a mention inside a string literal
     (`"from _hostpaths import require_repo\\n"`, a real pattern in this tree)
     is not counted as an import.
+
+    Reaches = imports the package, OR imports a `tests/` helper that does.
     """
+    helpers = _matrix_helper_modules()
+    via_helper = (re.compile(r"^[ \t]*(?:from|import)[ \t]+(?:" +
+                             "|".join(sorted(map(re.escape, helpers))) + r")\b", re.M)
+                  if helpers else None)
     out = set()
     for tf in (PLUGIN_ROOT / TESTS_REL).glob("test_*.py"):
-        if _IMPORTS_MATRIX.search(tf.read_text(encoding="utf-8", errors="replace")):
+        src = tf.read_text(encoding="utf-8", errors="replace")
+        if _IMPORTS_MATRIX.search(src) or (via_helper and via_helper.search(src)):
             out.add(f"{TESTS_REL}/{tf.name}")
     return out
 
