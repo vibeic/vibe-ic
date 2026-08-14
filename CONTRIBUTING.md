@@ -100,23 +100,27 @@ The two hard gates that **must** pass before any PR is mergeable:
 python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.py \
         vibe-ic-marketplace/plugins/vibe-ic
 
-# (b) Full test suite — BOTH plugin test trees + the MCP server
+# (b) Full test suite — `run_tests.sh` IS the full suite. Bare `pytest` is NOT.
 #
-#     HARD RULE: validate with bare `pytest` from the plugin root. The plugin has TWO
-#     test trees and you MUST run both:
-#       - programs/tests/ : unit tests for the deterministic programs
-#       - tests/          : integration/regression GATES (INDEX.md freshness,
-#                           every-skill-has-compliance.yaml + test_compliance.py,
-#                           orchestrator input-branch regressions, end-to-end skill audit)
-#     pytest.ini pins `testpaths = programs/tests tests`, so bare `pytest` runs both.
-#     NEVER validate with only `pytest programs/tests/` (or only `tests/`) — that silently
-#     skips the other tree. A real on-main regression once slipped through exactly this way
-#     (an orchestrator fix verified only against programs/tests/).
-( cd vibe-ic-marketplace/plugins/vibe-ic && pytest -q )   # collects programs/tests/ + tests/
-pytest -q vibe-ic-marketplace/plugins/vibe-ic/mcp-eda/test
+#     `pytest.ini` declares ONE testpath (`programs/tests`) on purpose, and
+#     `single_testpath_guard.py` pins it there. Every other tree is discovered by
+#     `run_tests.sh` and NOWHERE else:
+#       - programs/tests/            unit tests for the deterministic programs
+#       - tools/phase1_engine/tests/ the Phase-1 gap/render engine
+#       - mcp-eda/test/              the MCP EDA server sub-project
+#       - skills/*/tests/            per-skill compliance regression
+#
+#     WHAT USED TO BE HERE was a HARD RULE saying the plugin had two trees,
+#     `programs/tests/` and `tests/`, that `testpaths` listed both, and that bare
+#     `pytest` therefore ran both. All three were false. `testpaths` has only ever
+#     listed one, and `tests/` HAS NEVER EXISTED in this repository — pytest does not
+#     fail on a path that is not there, it collects nothing. So the reader who obeyed
+#     the rule got a clean-looking ZERO from the tree they were told to be most careful
+#     about. See `pytest.ini` and vibe-ic#1391.
+( cd vibe-ic-marketplace/plugins/vibe-ic && ./run_tests.sh )
 ```
 
-> Adding a program or skill? The `tests/` gates enforce registration: every new program
+> Adding a program or skill? The `programs/tests/` gates enforce registration: every new program
 > must be in `programs/INDEX.md` (`python3 tools/gen_programs_index.py`), and every new
 > skill needs `compliance.yaml` + `tests/test_compliance.py`
 > (`_shared/bootstrap_compliance.py` + `_shared/gen_compliance_tests.py`).
