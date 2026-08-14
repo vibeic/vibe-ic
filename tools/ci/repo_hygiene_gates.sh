@@ -760,6 +760,16 @@ run "a zero denominator refuses" "$ROOT" python3 "$PG/gate_zero_denominator_refu
 # module in programs/ and never invokes one), so its denominator is the file
 # list rather than the set of gates a probe happened to be able to drive —
 # which is what #515's and #521's behavioural sweeps could not reach. ~4s.
+# vibe-ic batch R1 — the flow declaration and the d3 evidence manifest must move
+# TOGETHER. A path added to a step's required_outputs without re-measuring the
+# manifest reddens that step's dimension-3 cell, and when the step is a mutation
+# WITNESS (matrix_mutation_ledger declares witness="D1" for D3-UNDECLARED-ARTEFACT)
+# it also disables the proof that the mutation is still caught — LOCK 2 requires
+# the unmutated cell to PASS. BLOCKING: measured 0 uncovered on main, and 2 on
+# each of #1131/#1170, which are exactly the branches that redden D1.
+run "d3 declaration/manifest parity" "$ROOT" \
+    python3 "$PG/d3_manifest_declaration_parity_check.py" "$PLUGIN"
+
 run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_check.py" "$PLUGIN"
 
 
