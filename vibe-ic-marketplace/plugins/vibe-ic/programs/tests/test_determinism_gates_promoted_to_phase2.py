@@ -241,6 +241,24 @@ def test_buggy_top_still_caught_despite_sibling(tmp_path):
     assert RTL_MOORE.strip() not in joined        # top actually rewritten
 
 
+#: Guarded like every other worked-example test in this file, and it was the one
+#: omission: the six siblings carry this decorator and this one did not, while
+#: asserting a verdict only the ORACLE can produce.
+#:
+#: MEASURED with `iverilog` removed from PATH (`shutil.which` -> None; note this
+#: host ships TWO, `/usr/local/bin` and `/usr/bin`, so dropping one is not
+#: enough): the six guarded siblings SKIP and this one RUNS and fails with
+#:
+#:     assert 'PASS' == 'FAIL'
+#:     determinism gates clean over 2 RTL file(s) (clock-divider phase-form +
+#:     worked-example oracle + clock-divider waveform-ratio oracle; ALL SELF-SKIP
+#:     WHEN NOT APPLICABLE)
+#:
+#: which is the gate behaving correctly. The oracle self-skipping without its
+#: simulator is the anti-false-block rule, so `PASS` is the honest verdict there
+#: and the FAIL this test asserts is unreachable. The assertion is NOT weakened —
+#: on a host that has iverilog the test runs and demands `FAIL` exactly as before.
+@pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
 def test_unrepairable_buggy_top_still_fails_despite_sibling(tmp_path):
     # The FAIL path must survive the repair wiring: a top whose defect no
     # transform can fix still reports FAIL, with the sibling untouched.
