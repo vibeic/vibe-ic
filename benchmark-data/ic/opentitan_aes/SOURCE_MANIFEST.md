@@ -35,3 +35,4 @@ EXCLUDED from cone (not referenced by aes_wrap): ~190 other prim_*/tlul_* vendor
 | tlul_assert_multiple.sv | assertion bind module |
 | aes_sbox_dom.sv.unused-masked-scan-excluded | dataset-excluded (DOM masked S-Box); non-.sv extension, not globbed. chip_top selects LUT S-Box instead. |
 | prim_fifo_sync.sv.unused-scan-excluded | dataset-excluded; non-.sv extension, not globbed. |
+
