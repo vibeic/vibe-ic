@@ -796,6 +796,54 @@ def _emit_repro_bundle(project: Path, dec: "Decision") -> Optional[str]:
         return None
 
 
+# ── vibe-ic#1079 / #1221 — the §4.05 boundary, where every step passes ──────
+# `step_input_scope` imposes the boundary on a CHILD process. Measured on
+# `origin/main` 75776dbbb, that reaches nothing in production: no caller of
+# `_watchdog.run_supervised` passes `scope_step`, and all three that exist
+# launch a non-Python child the audit hook cannot cover. Meanwhile the read
+# §4.05 is most about never forks — `phase1_one_shot_runner` ingests documents
+# into L1-L27 in-process — so a child-only mechanism cannot see it.
+#
+# Installed HERE rather than at each runner's call sites, because `gate()` is
+# the one function every dispatch already goes through and
+# `test_every_declared_site_is_wired_at_a_real_call_site` ALREADY pins that.
+# Wiring it here inherits that guarantee instead of adding a second thing to
+# keep in step with it.
+#
+# OFF unless `VIBEIC_STEP_SCOPE` is set, and OBSERVE rather than DENY unless
+# `VIBEIC_STEP_SCOPE_INPROC=deny`. With the switch unset this costs one dict
+# lookup and changes nothing. Failure to import is NOT fatal and NOT silent: it
+# degrades to no enforcement and says so, because an enforcement that vanished
+# quietly is worth less than none.
+def _scoped_dispatch(project: Path, site: str, flow_def: Any,
+                     fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+    """Dispatch `fn` with the §4.05 input scope imposed on this process."""
+    try:
+        import step_input_scope as _sis  # noqa: PLC0415
+    except Exception as exc:             # noqa: BLE001
+        print(f"[preflight] {site}: §4.05 input-scope enforcement UNAVAILABLE "
+              f"({type(exc).__name__}: {exc}) — this dispatch is not bounded "
+              f"by it", file=sys.stderr, flush=True)
+        return fn(*args, **kwargs)
+    if not _sis.enforcement_enabled():
+        return fn(*args, **kwargs)       # the default: byte-for-byte as before
+    try:
+        cm = _sis.scoped(Path(project), step_id=site, flow_def=flow_def)
+    except Exception as exc:             # noqa: BLE001
+        print(f"[preflight] {site}: §4.05 input-scope enforcement FAILED TO "
+              f"INSTALL ({type(exc).__name__}: {exc}) — this dispatch is not "
+              f"bounded by it", file=sys.stderr, flush=True)
+        return fn(*args, **kwargs)
+    with cm as rec:
+        result = fn(*args, **kwargs)
+    for msg in (rec.get("violations") or []):
+        # OBSERVE mode's whole product. Printed, never swallowed: a boundary
+        # that recorded a crossing and told nobody has not observed anything.
+        print(f"[preflight] {site}: §4.05 OBSERVED: {msg}",
+              file=sys.stderr, flush=True)
+    return result
+
+
 def gate(project: Path, runner: str, site: str,
          refusal_factory: Callable[[str, Dict[str, Any]], Any],
          fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -845,7 +893,8 @@ def gate(project: Path, runner: str, site: str,
             dec.notes.append(str(note))
         print(f"[preflight] {site}: NOT-APPLICABLE — {not_applicable}",
               file=sys.stderr, flush=True)
-        result = fn(*args, **kwargs)
+        result = _scoped_dispatch(Path(project), site, flow_def,
+                                  fn, args, kwargs)
         record(Path(project), dec)
         return result
 
@@ -884,7 +933,7 @@ def gate(project: Path, runner: str, site: str,
         print(f"[preflight] {site}: {dec.verdict} — {dec.detail}",
               file=sys.stderr, flush=True)
 
-    result = fn(*args, **kwargs)
+    result = _scoped_dispatch(Path(project), site, flow_def, fn, args, kwargs)
 
     status = getattr(result, "status", None)
     if status is None and isinstance(result, (list, tuple)):
