@@ -78,7 +78,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -109,22 +111,97 @@ def probe(tools=KEYED_TOOLS) -> Dict[str, bool]:
     return {t: shutil.which(t) is not None for t in tools}
 
 
+#: `-V` and not `--version`, measured rather than assumed: all three KEYED
+#: tools answer `-V` with rc=0, and **iverilog rejects `--version`** —
+#: `iverilog: invalid option -- '-'`, rc=1. That matters more than it looks. A
+#: naive `--version` would record the SAME error string on every host, so the
+#: version key would be perfectly stable and perfectly uninformative — a fix
+#: that reads identically whether or not it works, which is the one shape this
+#: module exists to remove.
+_VERSION_FLAG = "-V"
+
+#: The first dotted numeral in the tool's own banner. NUMBER ONLY, deliberately:
+#: `iverilog -V` reports `Icarus Verilog version 14.0 (devel) (s20260301-263-ge02a0bc)`
+#: and `yosys -V` reports `Yosys 0.33 (git sha1 2584903a060)`. Keying on the whole
+#: banner would make two hosts running the same release but different devel
+#: builds INCOMPARABLE, and this module's own KEYED_TOOLS note warns against
+#: exactly that: "then this module would refuse comparisons that are in fact
+#: sound." The measured counterexample this closes is a MAJOR difference —
+#: iverilog 11.0 vs 14.0 — and the numeral separates those.
+_VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
+
+#: What the payload records when a tool is PRESENT and its version could not be
+#: read. Its own token, never folded into "absent": a tool that is installed but
+#: unanswerable is a different host state from one that is not installed, and
+#: collapsing them would let the two compare as SAME.
+UNKNOWN_VERSION = "?"
+
+
+def tool_version(tool: str, timeout: int = 10) -> Optional[str]:
+    """The dotted version of *tool*, or None if it cannot be read.
+
+    `timeout` is 10s — far under the 60s inner ceiling a 180s harness implies —
+    because this is a banner print, and a bound that promises time the harness
+    will not give turns one slow tool into a dead session (vibe-ic#1181).
+    """
+    if shutil.which(tool) is None:
+        return None
+    try:
+        out = subprocess.run([tool, _VERSION_FLAG], capture_output=True,
+                             text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    m = _VERSION_RE.search((out.stdout or "") + (out.stderr or ""))
+    return m.group(0) if m else None
+
+
+def versions(tools=KEYED_TOOLS) -> Dict[str, Optional[str]]:
+    """`{tool: version-or-None}` on THIS host."""
+    return {t: tool_version(t) for t in tools}
+
+
 def profile() -> Dict[str, object]:
     """The full record: keyed tools decide comparability, recorded ones inform."""
+    keyed = probe(KEYED_TOOLS)
+    vers = versions(KEYED_TOOLS)
     return {
-        "keyed": probe(KEYED_TOOLS),
+        "keyed": keyed,
+        "versions": vers,
         "recorded": probe(RECORDED_TOOLS),
-        "fingerprint": fingerprint(probe(KEYED_TOOLS)),
+        "fingerprint": fingerprint(keyed, vers),
     }
 
 
-def fingerprint(keyed: Dict[str, bool]) -> str:
-    """A short stable digest of the KEYED tools only.
+def fingerprint(keyed: Dict[str, bool],
+                vers: Optional[Dict[str, Optional[str]]] = None) -> str:
+    """A short stable digest of the KEYED tools' PRESENCE and VERSION.
 
     Sorted, so it does not depend on dict order; over `KEYED_TOOLS` only, so a
     host that happens to install `klayout` stays comparable to one that does not.
+
+    WHY VERSION AND NOT ONLY PRESENCE (vibe-ic#1353 review, measured). Presence
+    alone let two hosts carry the SAME stamp while legitimately disagreeing:
+
+        iverilog 11.0   binding an absent parameter -> WARNING, rc=0  -> 2 tests FAIL
+        iverilog 14.0   the same case              -> ERROR,   rc=2  -> the same 2 PASS
+
+    Both report `iverilog PRESENT`, so both fingerprinted identically, and a
+    subset judgement across them would have attributed a version-caused red to
+    the branch — the very substitution this module was written to stop, one
+    field narrower.
+
+    `vers=None` is NOT a compatibility shim for the old payload: it produces the
+    all-unknown payload, which hashes differently from the pre-version scheme on
+    purpose. A baseline recorded before versions were keyed must be re-measured,
+    not silently read as matching — the same rule `compare` already applies to a
+    baseline carrying no fingerprint at all.
     """
-    payload = ";".join(f"{t}={bool(keyed.get(t))}" for t in sorted(KEYED_TOOLS))
+    vers = vers or {}
+    payload = ";".join(
+        f"{t}={bool(keyed.get(t))}@{vers.get(t) or UNKNOWN_VERSION}"
+        for t in sorted(KEYED_TOOLS))
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
@@ -163,6 +240,38 @@ def compare(baseline: Optional[dict], current: Optional[dict]) -> Tuple[str, str
     detail = ", ".join(
         f"{t}: baseline={'PRESENT' if b_keyed.get(t) else 'ABSENT'} "
         f"current={'PRESENT' if c_keyed.get(t) else 'ABSENT'}" for t in moved)
+
+    # A VERSION-only difference moves the fingerprint while `moved` stays empty.
+    # Without this branch the sentence read "toolchain differs ()" — an empty
+    # parenthesis and no way to tell a version drift from a bug in this
+    # function. Naming the tool and both versions is the difference between a
+    # refusal somebody can act on and one they will work around.
+    if not moved:
+        b_v = baseline.get("versions")
+        c_v = current.get("versions")
+        if b_v is None:
+            return DIFFERENT, (
+                "the same KEYED tools are present on both sides, but the "
+                "baseline predates version-keyed fingerprints (no `versions` "
+                "key), so its stamp cannot be compared with one that includes "
+                "them. Re-measure the baseline; do not assume it matches — "
+                "iverilog 11.0 and 14.0 disagree about two tests while both "
+                "reporting PRESENT (vibe-ic#1353).")
+        b_v, c_v = b_v or {}, c_v or {}
+        vmoved = sorted(t for t in KEYED_TOOLS
+                        if (b_v.get(t) or UNKNOWN_VERSION)
+                        != (c_v.get(t) or UNKNOWN_VERSION))
+        vdetail = ", ".join(
+            f"{t}: baseline={b_v.get(t) or UNKNOWN_VERSION} "
+            f"current={c_v.get(t) or UNKNOWN_VERSION}" for t in vmoved)
+        return DIFFERENT, (
+            f"the same KEYED tools are present on both sides but their VERSIONS "
+            f"differ ({vdetail}), so a failure-set comparison would attribute "
+            f"version-caused reds to the branch. MEASURED: iverilog 11.0 treats "
+            f"binding an absent parameter as a WARNING (rc=0) and 14.0 as an "
+            f"ERROR (rc=2) — two tests change verdict, and presence alone cannot "
+            f"see it (vibe-ic#1353). Re-measure the baseline on a matching host.")
+
     return DIFFERENT, (
         f"toolchain differs ({detail}), so a failure-set comparison would "
         f"attribute host-caused reds to the branch. MEASURED on this repo: one "
