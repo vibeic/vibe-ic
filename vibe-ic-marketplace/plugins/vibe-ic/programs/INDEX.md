@@ -893,6 +893,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `scope_reply_preamble_check` | aid_class_half_duplex | Wave 58 | Wave 58 / BACKLOG-v12 P0.4 plugin gate. |
 | `scope_response_byte_decode_check` | any | — | P0.3 deterministic gate |
 | `scope_waveform_metrics` | any | — | deterministic scope-CSV metric extractor. |
+| `scratch_root_guard` | any | — | the suite's scratch root is part of its verdict, so the run states it, and refuses when it is a root that manufactures failures. |
 | `sd_cmd_extractor` | any | — | for #36 Bug 8: SD-spec CMD table picker. |
 | `sdc_constraints` | any | v0.1.49 | ORGANIC #554 (a) — shared staged-SDC ground-truth helpers. |
 | `sdc_exception_correlation_check` | any | — | Step 8 SDC EXCEPTION justification screen (v2.3, advisory). |
@@ -2018,6 +2019,7 @@ _(no programs in this group)_
 - `scope_periodic_pulse_check` — Layer-3 hardware attestation gate.  _[v0.64]_
 - `scope_response_byte_decode_check` — P0.3 deterministic gate
 - `scope_waveform_metrics` — deterministic scope-CSV metric extractor.
+- `scratch_root_guard` — the suite's scratch root is part of its verdict, so the run states it, and refuses when it is a root that manufactures failures.
 - `sd_cmd_extractor` — for #36 Bug 8: SD-spec CMD table picker.
 - `sdc_constraints` — ORGANIC #554 (a) — shared staged-SDC ground-truth helpers.  _[v0.1.49]_
 - `sdc_exception_correlation_check` — Step 8 SDC EXCEPTION justification screen (v2.3, advisory).
