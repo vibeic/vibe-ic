@@ -77,7 +77,17 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
 CENSUS_BLOCKS_ON_PRESENT = 63
-CENSUS_BLOCKS_ON_NON_EMPTY = 61
+# 61 -> 62 on 2026-08-15. The v1.10.40 batch landed the #1070 declared-input
+# edges, and one of them gives `A1` a `blocks_on` entry: the flow's empty-
+# declaration set goes from {D1, A1} to {D1}, so one more step is non-empty.
+# PRESENT is unchanged at 63 — no step gained or lost the KEY, one gained a
+# VALUE. Live measurement on this commit: present=63 non_empty=62 empty=['D1'].
+#
+# The anti-vacuity guard below still bites: `present - non_empty` is {D1}, so
+# the two sets remain different and the distinction this test defends survives.
+# Had that set emptied, moving this figure would have made the test trivially
+# true and the guard would have said so.
+CENSUS_BLOCKS_ON_NON_EMPTY = 62
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
