@@ -226,7 +226,20 @@ def test_the_label_is_reported_verbatim_even_though_the_key_is_stripped():
 # the second set: it is printed ONLY when the tools suite wrote into the tree, a
 # mismatch between the arms refuses in both directions, and refusing a landing
 # whose two arms disagree about how the tree was written is correct.
-_DECLARED_STRICT = {"repo tools tests wrote to the tree (write-guard rc=%s)"}
+_DECLARED_STRICT = {
+    "repo tools tests wrote to the tree (write-guard rc=%s)",
+    # vibe-ic#1530 adds the unselectable-corpus stage. Its write-guard failure
+    # label has the same shape and the same disposition as the one above: it is
+    # printed ONLY when that suite wrote into the tree, so a mismatch between the
+    # arms refuses in BOTH directions and never waives. Normalising it would drop
+    # a real disagreement about how the tree was written.
+    #
+    # THIS ENTRY CANNOT LAND BEFORE #1530 DOES. `test_the_strict_declaration_
+    # names_no_label_the_script_stopped_printing` asserts every declared label is
+    # one the script currently prints, so on a tree without #1530 this line makes
+    # that test fail — which is the roster staying honest, not a bug.
+    "unselectable tests wrote to the tree (write-guard rc=%s)",
+}
 
 _PRINTF_GATE = re.compile(
     r"""printf\s+'\s{2}(?:PASS|FAIL|SKIP)\s{2}(?P<label>.*?)\\n'""")
