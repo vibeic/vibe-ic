@@ -19,6 +19,7 @@ PROG_DIR = Path(__file__).resolve().parents[1]
 if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import kmap_truth_table_oracle_check as K  # noqa: E402
+from _sim_tools import NEEDS_IVERILOG  # noqa: E402
 
 PROMPT = """
 I would like you to implement a module named TopModule with the following
@@ -97,19 +98,23 @@ def _verdict(tmp_path, prompt, rtl, name="s.sv"):
     return K.check(prompt, str(r))[0]
 
 
+@NEEDS_IVERILOG
 def test_fsm_correct_passes(tmp_path):
     assert _verdict(tmp_path, PROMPT, CORRECT) == "PASS"
 
 
+@NEEDS_IVERILOG
 def test_fsm_wrong_blocks(tmp_path):
     assert _verdict(tmp_path, PROMPT, WRONG) == "BLOCK"
 
 
+@NEEDS_IVERILOG
 def test_fsm_alt_correct_not_false_blocked(tmp_path):
     # §4.05: a different correct implementation must NOT be blocked
     assert _verdict(tmp_path, PROMPT, ALT_CORRECT) == "PASS"
 
 
+@NEEDS_IVERILOG
 def test_fsm_dontcare_unused_codes_pass(tmp_path):
     # §4.05: unused state codes are don't-care; garbage there must NOT block
     assert _verdict(tmp_path, PROMPT, DONTCARE) == "PASS"

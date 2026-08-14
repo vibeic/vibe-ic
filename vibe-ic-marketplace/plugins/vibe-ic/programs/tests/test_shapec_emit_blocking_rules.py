@@ -145,6 +145,7 @@ def _run_gate(ds, run):
         capture_output=True, text=True, timeout=60)
 
 
+@NEEDS_IVERILOG
 def test_gate_blocks_mealy_under_moore_spec(tmp_path):
     ds, run = _stage(tmp_path,
         "module TopModule(input clk, input in, output out);\n"
@@ -162,6 +163,7 @@ def test_gate_blocks_mealy_under_moore_spec(tmp_path):
     assert not (run / "samples" / "ProbT_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_emits_after_fix(tmp_path):
     ds, run = _stage(tmp_path,
         "module TopModule(input clk, input in, output out);\n"
@@ -181,6 +183,7 @@ def test_gate_emits_after_fix(tmp_path):
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import rtl_hygiene_lint as rhl  # noqa: E402
+from _sim_tools import NEEDS_IVERILOG  # noqa: E402
 
 
 def test_fold_or_form_is_error_xor_and_form_are_warn():
@@ -231,6 +234,7 @@ def _run_fold_gate(ds, run):
         capture_output=True, text=True, timeout=60)
 
 
+@NEEDS_IVERILOG
 def test_gate_blocks_or_fold_when_prompt_requires_zero_boundary(tmp_path):
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL)
     r = _run_fold_gate(ds, run)
@@ -241,6 +245,7 @@ def test_gate_blocks_or_fold_when_prompt_requires_zero_boundary(tmp_path):
     assert not (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_advisory_not_block_when_boundary_dontcare(tmp_path):
     # OR 形 fire，但 prompt 宣告邊界 don't-care → advisory、照常 emit
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_DONTCARE, _FOLD_BUG_RTL)
@@ -253,6 +258,7 @@ def test_gate_advisory_not_block_when_boundary_dontcare(tmp_path):
     assert (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_emits_correct_fold_fix(tmp_path):
     # 正確寫法（兩運算元皆移位、邊界顯式擺 0）→ 不 fire、emit
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_GOOD_RTL)
@@ -285,6 +291,7 @@ def test_fold_mirrored_sliced_ident_not_matched():
     assert rhl.rule_vector_self_shift_fold(src, "t.sv") == []
 
 
+@NEEDS_IVERILOG
 def test_gate_blocks_mirrored_or_fold_when_required_zero(tmp_path):
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL_MIRRORED)
     r = _run_fold_gate(ds, run)
@@ -295,6 +302,7 @@ def test_gate_blocks_mirrored_or_fold_when_required_zero(tmp_path):
     assert not (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_emits_mirrored_and_fold(tmp_path):
     # 鏡像 AND 形 = 合法遮蔽 idiom → WARN-only、照常 emit
     rtl = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
@@ -333,6 +341,7 @@ def test_fold_xor_contiguous_ones_assertion_is_warn_not_error():
     assert len(fs) == 1 and fs[0].severity == "WARN", fs
 
 
+@NEEDS_IVERILOG
 def test_gate_emits_xor_leading_one_detector(tmp_path):
     # End-to-end: the XOR edge idiom must NOT block the structural-emit gate.
     rtl = ("module TopModule(input [3:0] vec, output [3:0] y);\n"
@@ -345,6 +354,7 @@ def test_gate_emits_xor_leading_one_detector(tmp_path):
     assert (run / "samples" / "ProbF_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_still_blocks_or_fold_negative_control(tmp_path):
     # NEGATIVE CONTROL: the OR-form real bug (Prob092) MUST still block ERROR.
     ds, run = _stage_fold(tmp_path, _FOLD_PROMPT_REQZERO, _FOLD_BUG_RTL)
