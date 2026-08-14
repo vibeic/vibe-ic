@@ -192,10 +192,16 @@ def test_WITHOUT_the_no_match_guard_that_same_input_aborts():
     guard has stopped being what keeps the fallback reachable, and the test
     above is no longer measuring anything.
     """
-    stripped = _extract_helper().replace(' || _ge_hits=""', "")
-    assert '|| _ge_hits=""' not in stripped, (
-        "the no-match guard is not in the shipped helper in the form this arm "
-        "removes — re-point this test rather than deleting it")
+    shipped = _extract_helper()
+    # PREMISE FIRST. Asserting only that the STRIPPED copy lacks the guard is
+    # vacuously true when the shipped helper never had it — the arm would then
+    # "pass" while stripping nothing and proving nothing. Ask whether the thing
+    # being removed is actually there.
+    assert '|| _ge_hits=""' in shipped, (
+        "the no-match guard is NOT in the shipped helper, so the fallback "
+        "branch is unreachable under `set -euo pipefail` and this negative arm "
+        "has nothing to remove — re-point it rather than deleting it")
+    stripped = shipped.replace(' || _ge_hits=""', "")
     rc, out = _run_strict(stripped, NO_FINDING_OUTPUT)
     assert rc != 0 and "__CONTINUED__" not in out, (
         "without the guard the helper survived, so this input no longer "
