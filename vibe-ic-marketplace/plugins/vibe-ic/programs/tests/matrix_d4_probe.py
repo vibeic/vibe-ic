@@ -592,6 +592,73 @@ def _strong(pattern: str, artefact: str) -> bool:
     return bool(literal_dirs)
 
 
+@lru_cache(maxsize=1)
+def _flow_namespaces() -> frozenset:
+    """Top-level directory names the FLOW ITSELF uses for declared artefacts.
+
+    Derived from the flow's own ``required_outputs``, never hand-typed. A list
+    of directory names written into this file would rot the moment the project
+    layout moved, and a rotting list inside a matcher is a matcher that
+    silently starts agreeing — the defect class this whole dimension exists to
+    catch, sited in the ruler.
+    """
+    out = set()
+    for sid in F.step_ids():
+        try:
+            entries = F.required_outputs(sid)
+        except Exception:                                    # pragma: no cover
+            continue
+        for entry in entries:
+            for alt in F.split_any_of(entry):
+                comps = _components(alt)
+                if comps and not F.is_glob(comps[0]):
+                    out.add(comps[0])
+    return frozenset(out)
+
+
+def _namespace_anchor_ok(pattern: str, artefact: str) -> bool:
+    """Refuse a float-match that crosses a top-level NAMESPACE boundary.
+
+    ``shape_match`` is "anchored at the right, either direction" — it prepends
+    ``**`` so a pattern may float. That is what lets a read of
+    ``phase1/*.json`` ground the artefact ``reports/phase1/ZZZ.json``: the
+    pattern's components are a contiguous tail of the artefact's. But
+    ``phase1/`` and ``reports/phase1/`` are two different trees, and a gate that
+    reads the first has not looked at the second.
+
+    MEASURED, which is why this is a guard and not a rewrite: over every gated
+    step, **132 declared entries are grounded and exactly 1** rests on a
+    cross-namespace match — ``*/phase3/erc.rpt`` covering
+    ``reports/phase3/erc.rpt``, where the pattern's root is a GLOB and
+    therefore legitimately spans namespaces. That case is exempted below, so
+    this guard removes no grounding the flow actually relies on. What it
+    removes is the ability to ground an artefact NOBODY READS, which is the
+    whole point: a canary output injected into a step's ``required_outputs``
+    used to pass dimension 4, so the EXEC branch could not fail.
+
+    This is the step-40/42 shape (``manufacturing/...`` vs
+    ``phase3/stage5_manufacturing/...``) that this module already has a
+    self-check for. That self-check's pair happens to be one the matcher
+    already got right, because ``stage5_manufacturing`` is not the same
+    COMPONENT as ``manufacturing``. The pair it missed is the one where the
+    components match exactly and only the ROOT differs.
+    """
+    pc, ac = _components(pattern), _components(artefact)
+    if not pc or not ac:
+        return True
+    if F.is_glob(pc[0]) or F.is_glob(ac[0]):
+        # a wildcard root is a deliberate "anywhere under the project" read
+        return True
+    namespaces = _flow_namespaces()
+    first_p = next((c for c in pc if c in namespaces), None)
+    first_a = next((c for c in ac if c in namespaces), None)
+    if first_p is None or first_a is None:
+        # one side names no namespace the flow declares — this guard has no
+        # opinion, and inventing one would be a second matcher nobody measured
+        return True
+    return first_p == first_a
+
+
 def covers(pattern: str, artefact: str) -> bool:
     """Does *pattern*, as read from the tree, resolve *artefact*?"""
     p, a = _normalise(pattern), _normalise(artefact)
@@ -599,7 +666,7 @@ def covers(pattern: str, artefact: str) -> bool:
         return False
     if p == a:
         return True
-    return shape_match(p, a) and _strong(p, a)
+    return shape_match(p, a) and _strong(p, a) and _namespace_anchor_ok(p, a)
 
 
 def _specificity(pattern: str, artefact: str) -> int:
