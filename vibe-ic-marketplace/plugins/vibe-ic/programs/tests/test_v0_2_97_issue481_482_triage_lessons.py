@@ -199,12 +199,25 @@ def test_482_skill_compliance_tests_still_pass():
     """The skill's own structure/compliance test module must still import +
     its core invariants hold after our SKILL.md / compliance.yaml edits."""
     import importlib.util
+    import sys
 
     comp_test = (SKILL_MD.parent / "tests" / "test_compliance.py")
     assert comp_test.exists()
     spec = importlib.util.spec_from_file_location("obm_compliance_test", comp_test)
     m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+    # Importing a file under `skills/` writes its `__pycache__/*.pyc`, which
+    # moves the digest `test_shipped_skills_tree_is_untouched_by_this_session`
+    # compares. Unlike the subprocess case in
+    # test_v0_3_4_issue501_verbatim_lessons.py, this import happens in THIS
+    # process, so a child's `-B` is irrelevant and only the in-process flag
+    # governs it. Restored in `finally` so the setting does not leak into the
+    # rest of the session. Measured: without the guard 1 file, with it 0.
+    _dwb = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(m)
+    finally:
+        sys.dont_write_bytecode = _dwb
     # compliance.yaml still loads and declares the skill correctly.
     reqs = m.load_requirements()
     assert reqs.get("skill") == "open-benchmark-methodology"

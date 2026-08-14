@@ -121,8 +121,16 @@ def test_touched_skill_compliance_tests_green():
     skill_tests = SKILL.parent / "tests"
     if not skill_tests.is_dir():
         pytest.skip("core-agent-loop/tests absent on this tree")
+    # `-B`: this runs pytest INSIDE the shipped tree, and collecting there
+    # writes `skills/core-agent-loop/**/__pycache__/*.pyc` — 4 files. That
+    # moves the digest `test_shipped_skills_tree_is_untouched_by_this_session`
+    # compares, so this test mutated the tree it was only meant to read, and
+    # `gatekeeper-land.sh:213` fails the whole landing when the tree moves
+    # under the gates. `.pyc` is gitignored, so `git status skills/` stays
+    # EMPTY throughout — which is why bisecting for a dirty worktree never
+    # found this. Measured: without `-B` 4 files, with it 0.
     r = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", str(skill_tests)],
+        [sys.executable, "-B", "-m", "pytest", "-q", str(skill_tests)],
         capture_output=True, text=True,
     )
     assert r.returncode == 0, (
