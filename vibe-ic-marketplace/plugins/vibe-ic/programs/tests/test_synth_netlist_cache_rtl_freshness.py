@@ -46,8 +46,15 @@ def _cache_guard_block() -> str:
     """The region of main() that decides whether to reuse a cached netlist."""
     start = RUNNER_SRC.find("_nl_pdk_ok = (netlist_existing.is_file()")
     assert start != -1, "netlist cache guard not found"
-    end = RUNNER_SRC.find("plan.append(step_synth(", start)
-    assert end != -1, "step_synth fallback not found after the cache guard"
+    # The synth dispatch, which ends the guard region. `step_synth` is no
+    # longer appended directly: since `dc0593709` it is handed to the
+    # pre-flight wrapper as a callable, so the old `plan.append(step_synth(`
+    # literal no longer exists and this anchor silently stopped resolving.
+    # Anchoring on the bare name instead would be WRONG — the first
+    # `step_synth` after the guard is inside a comment, which truncates the
+    # region before the helper call and makes the assertion below vacuous.
+    end = RUNNER_SRC.find("plan.append(_spf.gate(", start)
+    assert end != -1, "synth dispatch not found after the cache guard"
     return RUNNER_SRC[start:end]
 
 
