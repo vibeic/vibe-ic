@@ -189,6 +189,25 @@ def test_every_run_states_the_scratch_root_it_used(tmp_path):
     assert str(bt) in out, out
 
 
+def test_the_declaration_survives_dash_q(tmp_path):
+    """`-q` SUPPRESSES `pytest_report_header`, and `-q` is the shape the
+    landing harness runs. Measured before this test existed:
+
+        pytest -q ... | grep -c scratch_root_guard   ->  0
+
+    A guard about runs that do not state their own conditions, shipped so that
+    it stated nothing in the only invocation shape that matters, would be this
+    issue's defect wearing this issue's fix.
+    """
+    suite = _inner_suite(tmp_path / "suite7")
+    bt = tmp_path / "plain_bt7"
+
+    rc, out = _run_inner(suite, bt, "-q")
+    assert rc == 0, out
+    assert "scratch_root_guard" in out, out
+    assert str(bt) in out, out
+
+
 def test_the_declaration_distinguishes_could_not_look_from_looked(tmp_path):
     """"git could not be asked" must not be reported as a clean "outside" —
     the distinction the rest of this repo keeps, kept here too."""

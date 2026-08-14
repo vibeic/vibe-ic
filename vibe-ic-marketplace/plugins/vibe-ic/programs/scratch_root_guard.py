@@ -198,9 +198,8 @@ def pytest_addoption(parser):
              "tree. Disclosed in the run header; see vibe-ic#1446.")
 
 
-def pytest_report_header(config):
-    """Printed on EVERY run, passing or failing. A measurement that does not
-    state its own conditions is what #1446's five irreconcilable counts were."""
+def declaration(config) -> str:
+    """The one line every run states about the root it measured from."""
     root, top, allowed = classify(config)
     if top is None:
         return (f"scratch_root_guard: {root} — outside any git work tree "
@@ -210,7 +209,31 @@ def pytest_report_header(config):
     return f"scratch_root_guard: {root} — INSIDE work tree {top} [{state}]"
 
 
+def pytest_report_header(config):
+    """The verbose header. Not sufficient on its own — see below."""
+    return declaration(config)
+
+
 def pytest_configure(config):
+    """Declare FIRST, then refuse if the root is one that falsifies the run.
+
+    The declaration is printed here rather than left to `pytest_report_header`
+    because `-q` SUPPRESSES that header — and `-q` is the shape the landing
+    harness runs. Measured before this line existed:
+
+        pytest -q  ... | grep -c scratch_root_guard   ->  0
+        pytest     ... | grep -c scratch_root_guard   ->  2
+
+    A guard whose subject is runs that do not state their own conditions,
+    shipped so that it stated nothing in the only invocation shape that
+    matters, would have been this issue's defect wearing this issue's fix.
+
+    AT CONFIGURE AND NOT AT SESSION FINISH, deliberately: `gatekeeper-land.sh`
+    prints `tail -6` of a failing pytest run as the failure context, so a line
+    emitted at the END costs a line of the failure the reader needs. A run's
+    conditions belong before its results anyway.
+    """
+    print("[INFO] " + declaration(config))
     root, top, allowed = classify(config)
     if top is not None and not allowed:
         raise pytest.UsageError(
