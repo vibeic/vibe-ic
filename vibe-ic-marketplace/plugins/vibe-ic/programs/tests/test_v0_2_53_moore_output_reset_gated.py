@@ -19,6 +19,7 @@ negated-reset conjunction → out of this structural rule's scope).
 chip-AGNOSTIC: fixtures use generic TopModule/clk/reset/shift_ena shapes only.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,20 @@ from _specrtl_common import extract_spec_contract, parse_rtl_ports, strip_commen
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
+
+import pytest  # noqa: E402
+
+#: These tests RUN `gates_atomic.py` and then read the `gates.json` it writes.
+#: Without iverilog the gate refuses to run — correctly — and writes no report,
+#: so the read dies with FileNotFoundError on a path that was never meant to
+#: exist. A gate that REFUSED and a gate that produced a bad report are not the
+#: same result, and a traceback cannot tell them apart. The other nine tests in
+#: this file call pure rule functions and need no toolchain.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_gate = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="runs gates_atomic.py and reads the gates.json it writes; without "
+           "iverilog the gate refuses and writes nothing")
 
 RULE = "moore-output-reset-gated"
 
@@ -175,6 +190,7 @@ def _block_rules(run):
     return gates, {f["rule"] for f in blk.get("findings", [])}
 
 
+@_needs_gate
 def test_gate_auto_corrects_reset_gated_form(tmp_path):
     # v1.1.76: the registry's `behavioral_fsm` solver fires on this reset-pulse spec
     # ("assert shift_ena for 4 cycles then 0 forever") and emits the correct
@@ -196,6 +212,7 @@ def test_gate_auto_corrects_reset_gated_form(tmp_path):
     assert "reset-pulse counter" in emitted
 
 
+@_needs_gate
 def test_gate_emits_canonical_form(tmp_path):
     ds, run = _stage(tmp_path, _SPEC, _CANONICAL_RTL)
     r = _run_gate(ds, run)
