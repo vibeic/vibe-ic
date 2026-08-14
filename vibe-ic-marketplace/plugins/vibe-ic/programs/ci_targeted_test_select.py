@@ -687,6 +687,55 @@ def _build_tool_reference_index(
 # ---------------------------------------------------------------------------
 
 
+def _build_key_helper_index(
+    plugin_root: Path, keys: set[str],
+) -> dict[str, set[str]]:
+    """Map key -> set of plugin-rel HELPER modules that NAME it.
+
+    THE SECOND HOP, and rule 7 is incomplete without it. #1068 made an
+    unmapped path reach `_build_tool_reference_index`, which globs
+    ``test_*.py`` — so a data file is found only when a TEST names it
+    literally. MEASURED on `a38902d1`: a change to
+    ``flow/phase1_phase2_phase3.yaml`` selects 128 files and
+    ``test_matrix_d4_criteria_match.py`` is NOT among them, because that test
+    names the yaml zero times. It reaches the flow through
+    ``from matrix_63x8 import flowref``, and the path lives in
+    ``programs/tests/matrix_63x8/flowref.py`` (3 occurrences).
+
+    d4 recomputes itself from that yaml on every run, so the dimension that
+    measures flow-yaml correctness was the one a flow-yaml change did not run.
+
+    This index finds the HELPERS; the caller hands them to `_helper_consumers`
+    (rule 4), which already owns helper -> importing-test resolution. Composing
+    rather than re-deriving means this hop cannot drift from rule 4.
+
+    Same whole-token matching as `_build_tool_reference_index`, so
+    ``flow.yaml`` cannot match inside ``subflow.yaml``. Built LAZILY by its
+    only caller, which runs solely when an unmapped path is in the diff.
+    """
+    index: dict[str, set[str]] = {}
+    if not keys:
+        return index
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return index
+    pats = {k: _tool_ref_pattern(k) for k in keys}
+    for pyf in sorted(tests_dir.rglob("*.py")):
+        if pyf.name.startswith("test_"):
+            continue          # tests are rule 7's first hop, already covered
+        try:
+            text = pyf.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f"{_TESTS_REL}/{pyf.relative_to(tests_dir).as_posix()}"
+        if not _is_test_helper(rel):
+            continue
+        for k, pat in pats.items():
+            if pat.search(text):
+                index.setdefault(k, set()).add(rel)
+    return index
+
+
 def _is_test_helper(rel: str) -> bool:
     """Is ``rel`` (plugin-relative) a shared helper module under the tests dir?
 
@@ -1058,6 +1107,17 @@ def select_tests(
             key_index = _build_tool_reference_index(plugin_root, keys)
             for k in keys:
                 selected |= key_index.get(k, set())
+            # SECOND HOP. The index above globs `test_*.py`, so a data file that
+            # only a HELPER names is found by nothing — which is why a flow-yaml
+            # change still missed `test_matrix_d4_criteria_match.py` (0 mentions;
+            # it reads the flow via `matrix_63x8/flowref.py`). Resolve those
+            # helpers through rule 4, which already owns helper -> test.
+            helper_index = _build_key_helper_index(plugin_root, keys)
+            named_helpers = sorted({h for k in keys
+                                    for h in helper_index.get(k, set())})
+            if named_helpers:
+                selected |= _helper_consumers(
+                    plugin_root, named_helpers, source_stems)
 
     # Only emit tests that exist on disk (robust against a stale index entry).
     return sorted(t for t in selected if (plugin_root / t).is_file())
