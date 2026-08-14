@@ -141,6 +141,7 @@ import subprocess
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -566,6 +567,182 @@ def failing_files(output: str) -> List[str]:
     return out
 
 
+# ---------------------------------------------------------------- sharding
+# vibe-ic#1144. One landing run is 3399 s and this gate is 671 s of it. The six
+# argued sites are INDEPENDENT -- each flips one literal in one file and runs
+# that site's own candidate tests -- so they parallelise exactly, and the
+# critical path becomes the single slowest SITE rather than their sum.
+#
+# EACH SHARD MUST RUN IN ITS OWN WORKTREE. Not a style note: this gate rewrites
+# tracked source (`phase3_one_shot_runner.py` among them) and has a confirmed
+# case of failing to restore it (#1089, #1029). Two shards in one tree would
+# flip the same file underneath each other and both verdicts would be about a
+# tree the other one wrote. The tool takes `root` as an argument precisely so
+# the caller can point each shard at a different checkout; it cannot enforce
+# that from inside, so `--shard` REFUSES unless the caller acknowledges it (see
+# `--shard-worktree-ack`).
+
+def site_key(s: Dict[str, Any]) -> str:
+    """`file:line:param` — stable across runs and unambiguous.
+
+    `--only` cannot address a site: it matches a substring of the FILE, and
+    `phase3_one_shot_runner.py` carries TWO argued sites (`:4198` and `:8414`).
+    Sharding on it would put the two heaviest halves of this gate in the same
+    shard and buy nothing.
+    """
+    return f"{s['file']}:{s['line']}:{s['param']}"
+
+
+def site_cost(s: Dict[str, Any], tests_dir: Path) -> int:
+    """A cost PROXY: pytest invocations this site will need.
+
+    One run per flip plus one baseline, each over the site's candidate test
+    files -- so `(len(alternatives) - 1 + 1) * len(candidates)`.
+
+    A proxy rather than a measured table ON PURPOSE. A table of seconds keyed by
+    site name is a hand-maintained list, and this repo has watched that shape
+    rot silently three times; the proxy is recomputed from the tree every run
+    and cannot go stale. It is VALIDATED against measured wall clock rather than
+    assumed -- see `test_the_cost_proxy_ranks_sites_the_way_the_clock_does`.
+    """
+    n_alt = max(1, len(s.get("alternatives") or []))
+    return n_alt * max(1, len(select_tests(s, tests_dir)))
+
+
+def site_weight(s: Dict[str, Any], tests_dir: Path,
+                measured: Optional[Dict[str, float]] = None) -> float:
+    """MEASURED seconds when we have them, the proxy when we do not.
+
+    THE PROXY IS NOT GOOD ENOUGH ALONE, and this is measured rather than
+    suspected. Running all six sites once, one per worktree:
+
+        site                                   cost   secs
+        matrix_mutation_ledger.py:2380            6    284
+        phase3_one_shot_runner.py:8414          102    237
+        payload_bit_position_check.py:111         2     67
+        dft_test_coverage.py:180                  2     66
+        phase3_one_shot_runner.py:4198            2     66
+        atpg_untestable_fault_classify.py:331     2     65
+
+    Spearman rho 0.89 -- the proxy sorts the two heavy sites above the four
+    light ones correctly and then INVERTS THE TOP TWO, which is the only pair
+    whose order changes the critical path. `cost` counts pytest invocations;
+    what costs time is how slow those particular test FILES are, and three slow
+    files beat thirty-four fast ones.
+
+    So the weight is measured, and `--shard` says which source it used for each
+    site. An unmeasured site falls back to the proxy and is NAMED, never
+    silently assumed cheap -- a scheduler that quietly treats an unknown item as
+    zero is how one host ends up holding the long pole.
+    """
+    if measured:
+        v = measured.get(site_key(s))
+        if isinstance(v, (int, float)) and v > 0:
+            return float(v)
+    return float(site_cost(s, tests_dir))
+
+
+def plan_shards(sites: List[Dict[str, Any]], n: int, tests_dir: Path,
+                measured: Optional[Dict[str, float]] = None
+                ) -> List[List[Dict[str, Any]]]:
+    """Longest-processing-time-first bin packing over `site_cost`.
+
+    LPT, not round-robin and not an even split by COUNT: an even split by count
+    is exactly the mistake #1144 names -- it leaves one host holding the
+    heaviest item and the critical path does not move. Heaviest-first into the
+    currently-lightest shard is the standard 4/3-approximation and is
+    deterministic, so shard i is the same set on every host without any
+    coordination.
+
+    EVERY SITE LANDS IN EXACTLY ONE SHARD. That is the property `--merge`
+    depends on to state its denominator, and it is pinned by a test.
+    """
+    shards: List[List[Dict[str, Any]]] = [[] for _ in range(n)]
+    load = [0.0] * n
+    for s in sorted(sites, key=lambda x: (-site_weight(x, tests_dir, measured),
+                                          site_key(x))):
+        i = load.index(min(load))
+        shards[i].append(s)
+        load[i] += site_weight(s, tests_dir, measured)
+    return shards
+
+
+def merge_shard_reports(paths: List[Path]) -> Tuple[int, List[str]]:
+    """Aggregate shard reports into one verdict. Returns `(rc, lines)`.
+
+    THE DENOMINATOR IS THE POINT (#1144 rule 3). A shard that died, was never
+    started, or wrote an unreadable report must FAIL THE WHOLE RUN -- never
+    silently reduce coverage. So this reads each shard's own declared
+    `shard_total`/`shard_sites`, reconstructs the union, and refuses unless the
+    union is exactly the inventory every shard agreed on.
+
+    rc 0  every site verified and pinned
+    rc 1  a site is UNPINNED
+    rc 2  the run cannot state its own reach -- missing shard, unreadable
+          report, disagreeing inventories, or a site nobody covered
+    """
+    lines: List[str] = []
+    seen: Dict[str, str] = {}
+    inventories: List[Tuple[str, ...]] = []
+    unpinned: List[str] = []
+    abstained: List[str] = []
+    for p in paths:
+        try:
+            rec = json.loads(Path(p).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            lines.append(f"[UNDETERMINED] shard report unreadable: {p} ({exc})")
+            return RC_UNDETERMINED, lines
+        inv = rec.get("shard_inventory")
+        if not isinstance(inv, list) or not inv:
+            lines.append(f"[UNDETERMINED] {p} declares no shard_inventory — it "
+                         f"was not produced by `--shard`, so its reach is unknown")
+            return RC_UNDETERMINED, lines
+        inventories.append(tuple(inv))
+        for s in rec.get("sites", []):
+            if not s.get("argued") or "pin" not in s:
+                continue
+            k = site_key(s)
+            if k in seen:
+                lines.append(f"[UNDETERMINED] site {k} appears in two shards — "
+                             f"the partition is not disjoint")
+                return RC_UNDETERMINED, lines
+            st = s["pin"].get("state")
+            seen[k] = st
+            if st == "UNPINNED":
+                unpinned.append(f"{k}: {s['pin'].get('why', '')}")
+            elif st != "PINNED":
+                abstained.append(f"{k}: {s['pin'].get('why', '')}")
+    if len({tuple(sorted(i)) for i in inventories}) != 1:
+        lines.append("[UNDETERMINED] the shards disagree about how many argued "
+                     "sites exist — they were planned against different trees")
+        return RC_UNDETERMINED, lines
+    inventory = sorted(inventories[0])
+    missing = [k for k in inventory if k not in seen]
+    lines.append(f"[INFO] policy_direction_pin_check: {len(seen)} of "
+                 f"{len(inventory)} argued site(s) verified across "
+                 f"{len(paths)} shard(s); {len(abstained)} abstained")
+    if missing:
+        lines.append(f"[UNDETERMINED] {len(missing)} site(s) were covered by NO "
+                     f"shard — a run that cannot state its own reach is not a "
+                     f"result: " + ", ".join(missing))
+        return RC_UNDETERMINED, lines
+    for u in unpinned:
+        lines.append(f"  [UNPINNED] {u}")
+    for a in abstained:
+        lines.append(f"  [ABSTAIN] {a}")
+    if unpinned:
+        lines.append(f"[FAIL] policy_direction_pin_check: {len(unpinned)} argued "
+                     f"direction(s) survive being flipped")
+        return RC_UNPINNED, lines
+    if abstained:
+        lines.append(f"[UNDETERMINED] policy_direction_pin_check: "
+                     f"{len(abstained)} argued direction(s) could not be decided")
+        return RC_UNDETERMINED, lines
+    lines.append("[PASS] policy_direction_pin_check: every argued direction "
+                 "dies when flipped")
+    return RC_OK, lines
+
+
 def run_pytest(paths: Sequence[Path], cwd: Path, basetemp: Path,
                extra: Sequence[str] = ()) -> Tuple[int, str]:
     env = dict(os.environ)
@@ -831,6 +1008,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="flip each argued literal and run the candidate tests (BLOCKING)")
     ap.add_argument("--max-test-files", type=int, default=DEFAULT_MAX_TEST_FILES,
                     help="abstain rather than run more candidate test files than this")
+    # --- sharding (vibe-ic#1144) -------------------------------------------
+    ap.add_argument("--list-sites", action="store_true",
+                    help="print the argued-site inventory with each site's key "
+                         "and cost weight, then exit (no flips)")
+    ap.add_argument("--site", action="append", default=[], metavar="FILE:LINE",
+                    help="verify exactly this site (repeatable). Addresses one "
+                         "site, unlike --only which matches a whole FILE and "
+                         "so cannot separate the two sites in "
+                         "phase3_one_shot_runner.py")
+    ap.add_argument("--shard", default=None, metavar="I/N",
+                    help="verify shard I of N, time-balanced by cost weight")
+    ap.add_argument("--weights", default=None, metavar="WEIGHTS.json",
+                    help="{site_key: seconds} from a previous run, used to "
+                         "balance --shard. Without it the cost PROXY is used, "
+                         "which measurably mis-orders the two heaviest sites")
+    ap.add_argument("--shard-worktree-ack", action="store_true",
+                    help="acknowledge that THIS shard has its own worktree. "
+                         "Required by --shard: this gate rewrites tracked "
+                         "source, so two shards in one tree corrupt each other "
+                         "(#1089, #1029)")
+    ap.add_argument("--merge", nargs="+", default=None, metavar="REPORT.json",
+                    help="aggregate shard reports into one verdict, refusing "
+                         "unless every site in the inventory was covered")
     ap.add_argument("--only", default=None,
                     help="verify only sites whose file path contains this substring")
     ap.add_argument("--include-required", action="store_true",
@@ -840,6 +1040,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--pytest-arg", action="append", default=[],
                     help="extra argument forwarded to the mutation pytest runs")
     args = ap.parse_args(list(argv) if argv is not None else None)
+
+    # --merge aggregates shard reports and never touches a tree, so it runs
+    # before any of the discovery below.
+    if args.merge:
+        rc, lines = merge_shard_reports([Path(x) for x in args.merge])
+        for ln in lines:
+            print(ln, file=sys.stderr if rc else sys.stdout)
+        return rc
 
     root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent
     if not root.is_dir():
@@ -859,6 +1067,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
           f"   (+{report['literal_sites_total'] - report['literal_sites_production']} in tests)")
     print(f"[INFO]   of those, ARGUED (D3 -- prose names the road not taken): {len(argued)}")
 
+    if args.list_sites:
+        # The inventory a scheduler needs, and nothing else: no flips, no tree
+        # writes. `cost` is the proxy `plan_shards` balances on.
+        #
+        # BEFORE the inventory-only early return below, which would otherwise
+        # print the human listing and return first.
+        tests_dir = root / "tests"
+        if not tests_dir.is_dir():
+            print("[UNDETERMINED] policy_direction_pin_check: no tests/ "
+                  "directory, so no site cost can be computed", file=sys.stderr)
+            return RC_UNDETERMINED
+        inv = [{"key": site_key(x), "file": x["file"], "line": x["line"],
+                "param": x["param"], "alternatives": x["alternatives"],
+                "cost": site_cost(x, tests_dir)} for x in argued]
+        if args.json_out:
+            Path(args.json_out).write_text(
+                json.dumps({"sites": inv}, indent=1), encoding="utf-8")
+        for e in sorted(inv, key=lambda d: -d["cost"]):
+            print(f"  cost={e['cost']:>4}  {e['key']}  "
+                  f"alternatives={e['alternatives']}")
+        print(f"[INFO] policy_direction_pin_check: {len(inv)} argued site(s), "
+              f"total cost {sum(e['cost'] for e in inv)}")
+        return RC_OK
+
     if not args.verify_pins:
         for s in argued:
             print(f"  {s['file']}:{s['line']}  {s['callee']}({s['param']}={s['value']!r})"
@@ -876,7 +1108,64 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               file=sys.stderr)
         return RC_UNDETERMINED
 
-    selected = [s for s in argued if (args.only or "") in s["file"]]
+    # --shard and --site address SITES; --only addresses a FILE and is kept
+    # unchanged for callers that already use it.
+    shard_inventory = [site_key(s) for s in argued]
+    if args.shard:
+        if not args.shard_worktree_ack:
+            print("[UNDETERMINED] policy_direction_pin_check: --shard needs "
+                  "--shard-worktree-ack. This gate rewrites tracked source, so "
+                  "two shards sharing a checkout flip the same file underneath "
+                  "each other and both verdicts describe a tree the other one "
+                  "wrote (#1089, #1029). Give each shard its own worktree.",
+                  file=sys.stderr)
+            return RC_UNDETERMINED
+        try:
+            i_s, n_s = args.shard.split("/")
+            i_shard, n_shard = int(i_s), int(n_s)
+            if not (1 <= i_shard <= n_shard):
+                raise ValueError
+        except ValueError:
+            print(f"[UNDETERMINED] --shard wants I/N with 1<=I<=N, got "
+                  f"{args.shard!r}", file=sys.stderr)
+            return RC_UNDETERMINED
+        measured: Dict[str, float] = {}
+        if args.weights:
+            try:
+                measured = {str(k): float(v) for k, v in
+                            json.loads(Path(args.weights).read_text()).items()}
+            except (OSError, ValueError, TypeError) as exc:
+                print(f"[UNDETERMINED] --weights unreadable: {exc}",
+                      file=sys.stderr)
+                return RC_UNDETERMINED
+        selected = plan_shards(argued, n_shard, tests_dir, measured)[i_shard - 1]
+        # WHICH WEIGHT EACH SITE USED. A balance decision a reader cannot audit
+        # is a balance decision nobody can fix when one host runs long.
+        unmeasured = [site_key(s) for s in argued if site_key(s) not in measured]
+        print(f"[INFO] shard {i_shard}/{n_shard}: {len(selected)} of "
+              f"{len(argued)} argued site(s), weight "
+              f"{sum(site_weight(s, tests_dir, measured) for s in selected):.0f}"
+              f" of "
+              f"{sum(site_weight(s, tests_dir, measured) for s in argued):.0f}"
+              f" ({'measured' if measured else 'PROXY'})")
+        if unmeasured:
+            print(f"[INFO] {len(unmeasured)} site(s) had no measured weight and "
+                  f"fell back to the proxy: " + ", ".join(sorted(unmeasured)))
+    elif args.site:
+        want = set(args.site)
+        selected = [s for s in argued
+                    if f"{s['file']}:{s['line']}" in want or site_key(s) in want]
+        unknown = want - {f"{s['file']}:{s['line']}" for s in argued} \
+                       - {site_key(s) for s in argued}
+        if unknown:
+            # A --site nobody matched is a caller asking about a site that does
+            # not exist, and answering 0/0 PASS to that is the vacuous pass this
+            # whole program is about.
+            print(f"[UNDETERMINED] --site named {len(unknown)} site(s) this tree "
+                  f"does not have: " + ", ".join(sorted(unknown)), file=sys.stderr)
+            return RC_UNDETERMINED
+    else:
+        selected = [s for s in argued if (args.only or "") in s["file"]]
     basetemp = Path(args.basetemp) if args.basetemp else Path(tempfile.mkdtemp(prefix="pdpc-"))
     basetemp.mkdir(parents=True, exist_ok=True)
 
@@ -887,8 +1176,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     _install_restore_handlers()
     try:
         for s in selected:
+            _t0 = time.monotonic()
             verdict = verify_pin(s, root, tests_dir, args.max_test_files, basetemp,
                                  args.pytest_arg)
+            # Measured here and nowhere else, so `--weights` is fed by the same
+            # code path it balances.
+            s["pin_seconds"] = time.monotonic() - _t0
             s["pin"] = verdict
             bucket = {"PINNED": pinned, "UNPINNED": unpinned,
                       "LEAKED_MUTANT": leaked}.get(verdict["state"], abstained)
@@ -903,6 +1196,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     report["verified"] = {"pinned": len(pinned), "unpinned": len(unpinned),
                           "abstained": len(abstained), "selected": len(selected)}
+    # WHAT THIS SHARD BELIEVES THE WHOLE POPULATION IS. `--merge` compares every
+    # shard's copy and refuses if they disagree, which is how a shard planned
+    # against a different tree is caught instead of quietly shrinking the
+    # denominator.
+    report["shard_inventory"] = shard_inventory
+    # SO THE NEXT RUN CAN BALANCE ON A FACT. `--weights` consumes exactly this.
+    report["shard_seconds"] = {site_key(s): round(s.get("pin_seconds", 0.0), 1)
+                               for s in selected}
+    report["shard_selected"] = [site_key(s) for s in selected]
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(report, indent=1), encoding="utf-8")
 
