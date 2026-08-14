@@ -86,6 +86,17 @@ PLUGIN = REPO / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
 PROGRAMS = PLUGIN / "programs"
 FLOW_YAML = PLUGIN / "flow" / "phase1_phase2_phase3.yaml"
 
+def _plugin_on_path() -> None:
+    """Put the real plugin's `programs/` on `sys.path`, ONCE.
+
+    Not `PROGRAMS`: that one is redirected at a planted tree under test, and a
+    fixture must never get to decide what the census imports as authority.
+    """
+    p = str(PLUGIN / "programs")
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+
 CLEAN, SUSPECT, LIAR, NA = "CLEAN", "SUSPECT", "LIAR", "N/A"
 #: A finding the census DECLINES to score, having established structurally that
 #: the question it asked cannot be load-bearing here. Printed, never hidden: a
@@ -151,7 +162,7 @@ def _consumer_reads_the_refusal(out: str) -> bool:
         # the REAL plugin, never `PROGRAMS` — that one is redirected at a planted
         # tree under test, and importing a planted `flow_compliance_check` would
         # let a fixture decide what counts as disclosure.
-        sys.path.insert(0, str(PLUGIN / "programs"))
+        _plugin_on_path()
         from flow_compliance_check import (  # noqa: PLC0415
             _stdout_signals_vacuous, _VACUOUS_HINT_PREFIX,
         )
@@ -1132,6 +1143,778 @@ def probe_path_spelling(cl: Clause, sandbox: Path,
                        f"{min(variants, len(SPELLINGS))} spelling(s) of the same "
                        f"directory, same rc and same population", repro)
 
+# ------------------------------------------------- corpus, tracing, mutation
+# P6 and P9 cannot be answered on an empty directory or a skeleton. Both ask
+# what a gate does with a REAL artefact, so both need a populated tree and both
+# need to know which files the gate actually touched. That is one shared
+# apparatus and it is built here.
+#
+# WHY A TRACER AND NOT STATIC ANALYSIS
+# ------------------------------------
+# The flow HAS a declared producer/consumer relation and `flow_compliance_check`
+# already owns it (`_flow_command_input_atoms` / `_flow_path_atoms` /
+# `_flow_paths_meet`, the vibe-ic#776 "declared-dependency relation"). Asking P9
+# of that relation was the first thing tried, and MEASURED IT RETURNS ZERO: of
+# 136 clauses, exactly 0 program clauses name, positionally, a path their own
+# step declares producing. Only 6 clauses carry any positional path atom at all.
+#
+# That zero is not a clean bill of health, it is the wrong population — the same
+# error #1054 found in the selector probe, which "could not have found its own
+# founding defect" because the defect lived in a tree it never scanned. The
+# cycles are in what the programs ACTUALLY OPEN, which the flow never declares.
+# So the census observes it: every gate runs once with `io.open`/`os.open`
+# instrumented, and the graph is built from the syscalls, not from the YAML.
+#
+# THE TRACER'S OWN FAILURE MODE, AND THE CONTROL FOR IT
+# ----------------------------------------------------
+# `sitecustomize` is imported by `site` only if it is the FIRST one on the path.
+# A host with its own `sitecustomize` earlier on `PYTHONPATH` silently wins, the
+# log stays empty, and every trace-derived probe reports a confident CLEAN over
+# a population it never observed. So the tracer's first act is to write a
+# liveness marker, and a trace with no marker is scored `N/A` and said out loud —
+# never CLEAN. "What would this look like if it were broken?" must not have the
+# same answer as "what does it look like when it is fine".
+_TRACE_MARKER = "!\tTRACER_LOADED"
+
+_TRACER_SRC = r'''
+"""Written by liar_census into a scratch dir and put FIRST on PYTHONPATH.
+
+Records every open() of a path inside the project under test, in order, with
+its direction. Order is the load-bearing part: a gate that READS a path before
+it WRITES it consumed a PREVIOUS run's artefact; one that reads it after is
+reading back what it just produced, which is a different (and honest) thing.
+"""
+import builtins
+import io
+import os
+
+_log = os.environ.get("LIAR_TRACE")
+_root = os.path.abspath(os.environ.get("LIAR_TRACE_ROOT", "."))
+
+if _log:
+    _f = open(_log, "a", buffering=1)
+    _f.write("!\tTRACER_LOADED\n")
+
+    def _rec(path, write):
+        if isinstance(path, bytes):
+            return
+        try:
+            p = os.path.abspath(path)
+            if not (p == _root or p.startswith(_root + os.sep)):
+                return
+            _f.write(("w\t" if write else "r\t") + os.path.relpath(p, _root) + "\n")
+        except Exception:
+            return
+
+    _real_open = io.open
+
+    def _traced_open(file, mode="r", *a, **k):
+        if isinstance(file, (str, os.PathLike)):
+            _rec(os.fspath(file),
+                 isinstance(mode, str) and any(c in mode for c in "wax+"))
+        return _real_open(file, mode, *a, **k)
+
+    # AN INSTANCE, NOT A BARE FUNCTION — and the difference is load-bearing.
+    #
+    # `sitecustomize` runs at interpreter startup, BEFORE `pathlib` is imported.
+    # `pathlib` then executes `class _NormalAccessor: open = io.open`, capturing
+    # whatever `io.open` is at that moment — i.e. this shim.
+    #
+    # The substitution is not type-neutral. `io.open` is a C builtin and is NOT
+    # a descriptor; a Python function IS one. As a class attribute the bare
+    # function therefore BINDS, so `self._accessor.open(self, mode, ...)`
+    # arrives as `_traced_open(accessor, path, mode, ...)`: `file` gets the
+    # accessor and `mode` gets a PosixPath, raising
+    #     TypeError: open() argument 'mode' must be str, not PosixPath
+    # on EVERY pathlib read inside a traced program.
+    #
+    # That is worse than a crash. The tracer still loads — `trace.log` carries
+    # `!\tTRACER_LOADED` — so the liveness marker says the instrument is live
+    # while the instrument destroys its own subject, and the probes then score a
+    # real zero (`0 written path(s), 0 producer->consumer edge(s)`). A probe that
+    # changes what it measures and reports the change AS the measurement is the
+    # exact shape this census exists to find.
+    #
+    # An instance of a `__call__` class is not a descriptor, so it does not bind
+    # and the arguments arrive as written. Verified on CPython 3.10.12; note
+    # `_NormalAccessor` was removed in 3.11, so a newer interpreter hides this
+    # rather than fixing it — which is why it is pinned here explicitly.
+    class _TracedOpen:
+        def __call__(self, file, mode="r", *a, **k):
+            return _traced_open(file, mode, *a, **k)
+
+    _shim = _TracedOpen()
+    io.open = _shim
+    builtins.open = _shim
+
+    _real_os_open = os.open
+
+    def _traced_os_open(path, flags, *a, **k):
+        if isinstance(path, (str, os.PathLike)):
+            _rec(os.fspath(path),
+                 bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)))
+        return _real_os_open(path, flags, *a, **k)
+
+    os.open = _traced_os_open
+'''
+
+
+def make_tracer(where: Path) -> Path:
+    """Materialise the tracer and hand back the dir to prepend to PYTHONPATH."""
+    where.mkdir(parents=True, exist_ok=True)
+    (where / "sitecustomize.py").write_text(_TRACER_SRC, encoding="utf-8")
+    return where
+
+
+def _run_traced(cmd: str, project: Path, tracer: Path, timeout: int
+                ) -> Tuple[int, str, Optional[List[Tuple[str, str]]]]:
+    """`_run`, plus the ordered list of project-relative file accesses.
+
+    Returns `events=None` when the tracer did not load — the caller must score
+    that `N/A`, never CLEAN.
+    """
+    log = tracer / "trace.log"
+    log.write_text("", encoding="utf-8")
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+           "LIAR_TRACE": str(log), "LIAR_TRACE_ROOT": str(project.resolve()),
+           "PYTHONPATH": os.pathsep.join(
+               [str(tracer)] + ([os.environ["PYTHONPATH"]]
+                                if os.environ.get("PYTHONPATH") else []))}
+    try:
+        proc = subprocess.run(_argv_for(cmd, project), cwd=str(project),
+                              capture_output=True, text=True, timeout=timeout, env=env)
+        rc, out = proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    except subprocess.TimeoutExpired:
+        return 124, "<TIMEOUT>", None
+    except OSError as exc:
+        return 127, f"<NOT RUNNABLE: {exc}>", None
+    raw = log.read_text(errors="replace").splitlines()
+    if _TRACE_MARKER not in raw:
+        return rc, out, None
+    events = [(ln[0], ln[2:]) for ln in raw
+              if len(ln) > 2 and ln[0] in "rw" and ln[1] == "\t"]
+    return rc, out, events
+
+
+def declared_atoms(cl: Clause) -> List[str]:
+    """The path patterns the FLOW says this clause's step must deliver.
+
+    Split on the flow's own ` OR ` alternation by the same helper
+    `flow_compliance_check` uses, so the census reads these strings exactly as
+    the thing that actually resolves them does. Imported, never reimplemented —
+    #1054's rule, for #1054's reason.
+    """
+    try:
+        _plugin_on_path()
+        from flow_compliance_check import _flow_path_atoms  # noqa: PLC0415
+    except Exception:                                          # pragma: no cover
+        return [a.strip() for e in cl.step_outputs for a in str(e).split(" OR ")
+                if a.strip() and a.strip() != "."]
+    return _flow_path_atoms(cl.step_outputs)
+
+
+def declared_entries(cl: Clause) -> List[List[str]]:
+    """The step's `required_outputs`, one list of ALTERNATIVES per entry.
+
+    `declared_atoms` flattens the flow's ` OR ` notation, which is right for
+    "is this path declared" and WRONG for "is this path load-bearing". An entry
+    spelled `a.rpt OR b.json` says the step must deliver ONE of them, so taking
+    the content out of `b.json` while `a.rpt` still carries it removes nothing
+    the flow asked for.
+
+    Found by hand-adjudicating this probe's own step-9 finding, which sits on
+    exactly such an entry (`phase2/stage2/synth/area.rpt OR
+    phase2/stage2/synth/stats.json`). That finding SURVIVES — `area.rpt` does
+    not exist on the root, so `stats.json` is the entry's only satisfier — but
+    it would not have on a root that produced both, and without this the census
+    would have had no way to tell the two cases apart.
+    """
+    out: List[List[str]] = []
+    for entry in cl.step_outputs:
+        atoms = declared_atoms(Clause(step=cl.step, kind=cl.kind, cmd=cl.cmd,
+                                      program=cl.program, step_outputs=[entry]))
+        if atoms:
+            out.append(atoms)
+    return out
+
+
+def _satisfied_alternative(rel: str, cl: Clause, root: Path) -> Optional[str]:
+    """A sibling ALTERNATIVE of `rel`'s entry that still carries content."""
+    for entry in declared_entries(cl):
+        if len(entry) < 2 or not any(_glob_re(a).match(rel) for a in entry):
+            continue
+        for alt in entry:
+            if _glob_re(alt).match(rel):
+                continue
+            for hit in sorted(root.glob(alt)):
+                try:
+                    if hit.is_file() and hit.stat().st_size > 0:
+                        return str(hit.relative_to(root))
+                except OSError:
+                    continue
+    return None
+
+
+def _glob_re(pattern: str) -> "re.Pattern[str]":
+    try:
+        _plugin_on_path()
+        from flow_compliance_check import _flow_glob_re  # noqa: PLC0415
+        return _flow_glob_re(pattern)
+    except Exception:                                          # pragma: no cover
+        return re.compile(re.escape(pattern).replace(r"\*\*", ".*")
+                          .replace(r"\*", "[^/]*") + "$")
+
+
+def discover_corpus_roots(corpus: Path, clauses: List[Clause],
+                          limit: int, scanned_cap: int = 4000) -> List[Tuple[Path, int]]:
+    """Populated project roots, found by STRUCTURE — never a path list.
+
+    A directory is a candidate when one of its own children is named by the
+    first segment of a pattern the FLOW declares (`phase1/`, `reports/`, …), so
+    the shape of a run root is read out of `required_outputs` and would follow
+    the flow if the layout were renamed. Candidates are then SCORED by how many
+    declared output atoms actually resolve under them, and the best `limit` are
+    used.
+
+    vibe-ic#1025 is why the walk is unbounded in depth and the count is printed:
+    that `--corpus` sweep "reached NOTHING unless the caller typed the right
+    path depth", and refused honestly about it — which is better than this
+    census would have managed, because a corpus probe that reaches nothing
+    reports CLEAN unless somebody makes it refuse.
+    """
+    atoms = sorted({a for cl in clauses for a in declared_atoms(cl)})
+    prefixes = {a.split("/")[0] for a in atoms if "/" in a and "*" not in a.split("/")[0]}
+    if not corpus.is_dir() or not prefixes:
+        return []
+    scored: List[Tuple[Path, int]] = []
+    scanned = 0
+    stack = [corpus]
+    while stack and scanned < scanned_cap:
+        cur = stack.pop()
+        try:
+            kids = [e for e in os.scandir(cur) if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            continue
+        scanned += 1
+        names = {e.name for e in kids}
+        if names & prefixes:
+            n = sum(1 for a in atoms if next(cur.glob(a), None) is not None)
+            if n:
+                scored.append((cur, n))
+        stack.extend(Path(e.path) for e in kids)
+    scored.sort(key=lambda t: (-t[1], str(t[0])))
+    return scored[:limit]
+
+
+@dataclass
+class Traced:
+    """One clause's baseline behaviour on a pristine copy of a corpus root."""
+    rc: int
+    out: str
+    events: Optional[List[Tuple[str, str]]]
+
+    @property
+    def reads(self) -> List[str]:
+        return [p for m, p in (self.events or []) if m == "r"]
+
+    @property
+    def writes(self) -> List[str]:
+        return [p for m, p in (self.events or []) if m == "w"]
+
+    def reads_before_writing(self, path: str) -> bool:
+        """Did it consume `path` BEFORE producing it in this invocation?
+
+        The whole discriminator for P9. Reading after writing is a read-back of
+        a value this run produced; reading before is inheriting the PREVIOUS
+        run's artefact — including, when the gate is its own producer, its own
+        last verdict.
+        """
+        seq = [m for m, p in (self.events or []) if p == path]
+        return "r" in seq and (("w" not in seq) or seq.index("r") < seq.index("w"))
+
+
+@dataclass
+class CorpusCtx:
+    """Everything the populated-tree probes share for one corpus root."""
+    root: Path
+    tmp: Path
+    tracer: Path
+    timeout: int
+    budget: int
+    notes: List[str]
+    #: step id -> verdict on the UNMUTATED tree, straight from the consumer
+    base_status: Dict[str, str] = field(default_factory=dict)
+    #: (subject, mutation) -> the same map with that mutation applied. Keyed by
+    #: the mutation and not the clause: one mutation of one file is one tree,
+    #: whichever clause asked about it.
+    authority: Dict[Tuple[str, str], Optional[Dict[str, str]]] = field(default_factory=dict)
+    sib_cache: Dict[Tuple[str, str, str], Optional[str]] = field(default_factory=dict)
+    by_step: Dict[str, List[Clause]] = field(default_factory=dict)
+
+
+def _flow_step_status(project: Path, tmp: Path, timeout: int) -> Optional[Dict[str, str]]:
+    """What verdict does the FLOW record for each step over this tree?
+
+    THE CONSUMER IS THE AUTHORITY AND IT IS ASKED, NOT MODELLED. #1054's
+    finding was that scoring a refusal by its exit code alone was the probe
+    "reading a verdict off prose without asking what consumes it"; the same
+    trap is one step further along here. Emptying a declared artefact and
+    watching the GATE stay green does not establish that the FLOW stayed green:
+    `flow_compliance_check` owns tiers the gate never sees, and one of them is
+    exactly this question —
+
+        EVIDENCE_MISSING (#433): verdict artifact(s) reference evidence that
+        does not exist or is empty — a PASS nothing substantiates is not a PASS
+
+    MEASURED, and it is why this call exists: on
+    `benchmark-data/ic/spm/v1.10.18_sky130A`, emptying `reports/phase3/ir_drop.json`
+    leaves BOTH of step 24's gate clauses at rc 0, and the step still moves
+    PASS-VOIDED -> FAIL. A version of this probe that stopped at the gate scored
+    that clause LIAR. It is not one, and the census had produced its own false
+    positive on its first real root.
+    """
+    out = tmp / f"fcc_{abs(hash(str(project)))}.json"
+    try:
+        subprocess.run(
+            [sys.executable, str(PROGRAMS / "flow_compliance_check.py"), ".",
+             "--json", str(out)],
+            cwd=str(project), capture_output=True, text=True, timeout=max(timeout, 300),
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        doc = json.loads(out.read_text(errors="replace"))
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        return None
+    steps = doc.get("steps")
+    if not isinstance(steps, list):
+        return None
+    return {str(s.get("id")): str(s.get("status")) for s in steps if isinstance(s, dict)}
+
+
+#: Verdict tiers in which the flow is WAVING THE STEP THROUGH. A mutation that
+#: leaves the step in one of these, unchanged, was seen by nothing at all.
+_PASSING_TIERS = {"PASS", "PASS-STRUCTURAL", "WARN"}
+
+#: Tiers where THIS GATE'S rc is not what decides the step: it never ran
+#: (`SKIPPED-CONDITION` — #1051's `[condition]` guard, arriving from the
+#: consumer this time), a human excused it (`WAIVED`), its declared outputs did
+#: not resolve so the verdict was never read (`MISSING` — #1051's
+#: `[required_outputs]` guard, likewise), or the gate itself disclosed vacuity
+#: and the flow recorded that tier (`VACUOUS_PASS` — #1054's consumer channel).
+#: A blind ruler behind any of these certifies nothing, so the census declines.
+#:
+#: `PASS_VOIDED_BY_DEPENDENCY` is deliberately NOT here, and the distinction is
+#: the one that decides whether this probe reaches the corpus at all. A voided
+#: step is one whose gate DID return PASS and which an upstream failure then
+#: voided — the ruler was consulted and answered, so its blindness is measured;
+#: only the consequence is missing. That is the SUSPECT cap below, not a
+#: discount. Sorting it as a discount put 9 of 63 steps on the spm root out of
+#: reach for no reason the measurement supported.
+_GATE_NOT_DECIDING = {"SKIPPED-CONDITION", "WAIVED", "MISSING",
+                      "VACUOUS_PASS", "NOT-APPLICABLE", "N/A"}
+
+
+def probe_ruler_blind(cl: Clause, tr: Traced, ctx: CorpusCtx) -> ProbeResult:
+    """P6 — EMPTY an artefact the gate declares, and watch it stay green.
+
+    "The ruler cannot measure the thing it says it measures."
+
+    WHY EMPTYING AND NOT DELETING, and this is the whole design
+    ----------------------------------------------------------
+    Deleting is already caught, one layer up and by something else:
+    `flow_compliance_check` resolves `required_outputs` FIRST and ALL-of-N
+    (`_glob_first`), so a step whose declared artefact is gone is MISSING before
+    its gate verdict is ever read. That is #1051's `[required_outputs]` guard,
+    and it covers deletion completely.
+
+    MEASURED on the published root `benchmark-data/ic/spm/v1.10.18_sky130A`:
+    75 of 75 declared-output atoms that resolve there resolve to EXACTLY ONE
+    file. Deleting any one of them therefore un-resolves its pattern and the
+    presence check catches it — every time, for every atom. So "delete it and
+    see" is a question the flow already answers, and asking it again would have
+    produced 75 findings that are all somebody else's PASS.
+
+    Emptying is the question nobody asks. `_glob_first` answers about DIRECTORY
+    ENTRIES; a zero-byte file is an entry. The presence tier stays green and the
+    step's own gate is the only ruler left standing. The repo already knows this
+    seam exists — `gds_substance_check`, `chip_gds_canonical_real_file_check`,
+    and the field on `StepResult` recording "which question this step's
+    `required_outputs` verdict answers" are all it — but nothing has ever swept
+    it.
+
+    THE SUBJECT IS PER-CLAUSE AND IT IS EARNED TWICE
+    -----------------------------------------------
+    A subject is a file that is BOTH (a) matched by an atom of the step's
+    declared `required_outputs` — the flow says this step must deliver it — and
+    (b) actually OPENED FOR READING by this clause in the green baseline run.
+    Both halves are needed. (a) alone over-attributes: step D1 declares 14 L-docs
+    and carries 24 clauses, and `l7_debug_access_grounding_check` is not lying
+    when emptying `L11_OTP_CONTENT.json` does not move it. (b) alone is not the
+    flow's claim about the step. Together they are exact: this clause opened this
+    declared artefact, the artefact became empty, and the clause still says PASS.
+
+    FAIL-SAFE CLASSES, all structural, all measured rather than assumed
+    ------------------------------------------------------------------
+    * PRODUCER — the file is non-empty again after the run. The clause rewrote
+      what it was handed, so it is that artefact's producer and not its ruler.
+      (This is the P4 producer class arriving from the other direction.)
+    * MEASURED SIBLING — some other clause in the SAME step's gate turns red on
+      the same mutation. The gate is an `all_of`, so the conjunction fails there
+      and this clause's rc 0 cannot wave anything through. #1051 derived this
+      guard from DECLARED `files_exist` siblings; here it is not declared, it is
+      run, which is strictly stronger: it catches a sibling that objects on
+      substance rather than on presence.
+    * ALREADY EMPTY — a zero-byte file cannot be emptied. Skipped and counted,
+      never scored, because a mutation that changes nothing proves nothing.
+    * THE CONSUMER SAW IT — the authority (`_flow_step_status`) records a
+      different verdict for this step on the mutated tree. This is the one that
+      matters and it is the one a gate-only probe cannot have: see
+      `_flow_step_status` for the root on which it turned this census's own
+      first real finding into its own first false positive.
+    """
+    root, tmp, tracer = ctx.root, ctx.tmp, ctx.tracer
+    timeout, budget, notes = ctx.timeout, ctx.budget, ctx.notes
+    siblings = [c for c in ctx.by_step.get(cl.step, []) if c.program != cl.program]
+    sib_cache = ctx.sib_cache
+    if tr.events is None:
+        return ProbeResult("ruler_blind", NA, "no trace — the tracer did not load", "")
+    if tr.rc != 0:
+        return ProbeResult("ruler_blind", NA,
+                           f"not green on this corpus root (rc={tr.rc}); a ruler that "
+                           f"is already objecting cannot be shown blind here", "")
+    # Cheapest guard first. THE FINDING IS THAT THE VERDICT DOES NOT MOVE, not
+    # that it is green: a gate blind to its declared artefact is blind whatever
+    # tier the step happens to sit in on this particular root. What the tier
+    # decides is SEVERITY. But where the gate's rc is not what the step turns
+    # on at all — it never ran, it was waived, it was already voided upstream,
+    # or it disclosed vacuity — a blind ruler certifies nothing and the census
+    # declines instead of counting it.
+    before = ctx.base_status.get(cl.step)
+    if ctx.base_status and before in _GATE_NOT_DECIDING:
+        return ProbeResult(
+            "ruler_blind", GUARDED,
+            f"the flow records step {cl.step} as {before} on the UNMUTATED root, so "
+            f"this clause's rc is not what the step turns on and a blindness here "
+            f"certifies nothing", "")
+    atoms = declared_atoms(cl)
+    pats = [_glob_re(a) for a in atoms]
+    subjects, already_empty = [], 0
+    for rel in dict.fromkeys(tr.reads):
+        if not any(p.match(rel) for p in pats):
+            continue
+        f = root / rel
+        try:
+            if not f.is_file():
+                continue
+            if f.stat().st_size == 0:
+                already_empty += 1
+                continue
+        except OSError:
+            continue
+        subjects.append(rel)
+    if already_empty:
+        notes.append(f"{cl.program}: {already_empty} declared subject(s) already "
+                     f"zero-byte on this root — not mutable, not scored")
+    if not subjects:
+        return ProbeResult("ruler_blind", NA,
+                           "reads nothing this step declares producing, so there is "
+                           "no declared artefact to empty under it", "")
+    dropped = max(0, len(subjects) - budget)
+    if dropped:
+        notes.append(f"{cl.program}: {dropped} of {len(subjects)} declared subject(s) "
+                     f"NOT mutated (--max-mutations={budget}) — coverage is bounded, "
+                     f"not complete: {', '.join(sorted(subjects)[budget:][:3])}")
+    worst: Optional[ProbeResult] = None
+    for rel in sorted(subjects)[:budget]:
+        alt = _satisfied_alternative(rel, cl, root)
+        if alt:
+            if worst is None:
+                worst = ProbeResult(
+                    "ruler_blind", GUARDED,
+                    f"{rel} is one ALTERNATIVE of a ` OR ` required_outputs entry and "
+                    f"{alt} still carries content, so taking this file's content away "
+                    f"removes nothing the flow asked the step to deliver", "")
+            continue
+        for label, payload in _mutations(root / rel):
+            repro = (f"cp -r {root.name} /tmp/t && printf '%s' {payload!r} > /tmp/t/{rel}"
+                     f" && cd /tmp/t && python3 programs/{cl.program}.py "
+                     f"{' '.join(cl.cmd.split()[1:])}; echo rc=$?")
+            work = _fresh(root, tmp)
+            try:
+                (work / rel).write_text(payload, encoding="utf-8")
+                rc, _out, _ev = _run_traced(cl.cmd, work, tracer, timeout)
+                rewrote = ((work / rel).is_file()
+                           and (work / rel).read_text(errors="replace") != payload)
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+            if rc != 0:
+                if worst is None:
+                    worst = ProbeResult("ruler_blind", CLEAN,
+                                        f"{rel} {label} turns it rc={rc} — it measures it",
+                                        repro)
+                continue
+            if rewrote:
+                if worst is None or worst.verdict == CLEAN:
+                    worst = ProbeResult(
+                        "ruler_blind", GUARDED,
+                        f"stays rc=0 with {rel} {label}, but it REWROTE that file during "
+                        f"the run — it is that artefact's producer, not its ruler, so "
+                        f"this probe cannot establish a lie here", repro)
+                continue
+
+            key = (cl.step, rel, label)
+            if key not in sib_cache:
+                sib_cache[key] = _sibling_objects(rel, payload, root, tmp, tracer,
+                                                  timeout, siblings, notes)
+            catcher = sib_cache[key]
+            if catcher:
+                if worst is None or worst.verdict == CLEAN:
+                    worst = ProbeResult(
+                        "ruler_blind", GUARDED,
+                        f"stays rc=0 with {rel} {label}, but {catcher} — another clause "
+                        f"in step {cl.step}'s OWN all_of gate — turns red on the same "
+                        f"mutation, so the conjunction fails there and this clause "
+                        f"cannot wave it through", repro)
+                continue
+
+            # Nothing cheap objected. Only now is the ~6-second authority worth
+            # paying for, and it is cached by (SUBJECT, MUTATION) because one
+            # mutation of one file yields one tree, whichever clause asked.
+            akey = (rel, label)
+            if akey not in ctx.authority:
+                work = _fresh(root, tmp)
+                try:
+                    (work / rel).write_text(payload, encoding="utf-8")
+                    ctx.authority[akey] = _flow_step_status(work, tmp, timeout)
+                finally:
+                    shutil.rmtree(work, ignore_errors=True)
+            after = ctx.authority[akey]
+            if after is None or not ctx.base_status:
+                notes.append(f"{cl.program}/{rel} [{label}]: the consumer could not be "
+                             f"asked (flow_compliance_check produced no step map), so "
+                             f"this mutation is UNSCORED rather than scored on the gate "
+                             f"alone")
+                continue
+            # EVERY step, not just this clause's. The claim about to be made is
+            # "nothing ANYWHERE reacted", and a check scoped to one step cannot
+            # support it -- a later auditor reading this artefact across a step
+            # boundary is precisely the #1029 shape the campaign is about. The
+            # whole map is already in hand, so the wider check is free and the
+            # narrower one would have been the census overclaiming past its own
+            # measurement.
+            moved = {k: (v, after.get(k)) for k, v in ctx.base_status.items()
+                     if after.get(k) != v}
+            if moved:
+                where = cl.step if cl.step in moved else sorted(moved)[0]
+                was, now = moved[where]
+                if worst is None or worst.verdict == CLEAN:
+                    worst = ProbeResult(
+                        "ruler_blind", GUARDED,
+                        f"stays rc=0 with {rel} {label} and no sibling conjunct objects, "
+                        f"but the CONSUMER moves step {where} {was} -> {now} "
+                        f"({len(moved)} step verdict(s) changed); the flow owns tiers "
+                        f"this gate never sees (EVIDENCE_MISSING #433 reads emptiness "
+                        f"directly), so the artefact is measured — just not here", repro)
+                continue
+            blind = (f"declares {rel} and READS it, yet with that file {label} this "
+                     f"clause stays rc=0, every sibling conjunct in step {cl.step}'s "
+                     f"gate stays rc=0, and NOT ONE of the flow's "
+                     f"{len(ctx.base_status)} step verdicts moves (step {cl.step} stays "
+                     f"{before}) — the file still exists so the presence tier is "
+                     f"satisfied, and nothing anywhere in the flow reacted to the "
+                     f"artefact this step is required to deliver losing its content")
+            if before not in _PASSING_TIERS:
+                # Real blindness, unproven consequence. The step is already red
+                # for some other reason, so the flow is not waving THIS through
+                # on THIS root -- capped at SUSPECT and said, rather than
+                # promoted on a severity the measurement does not carry.
+                if worst is None or worst.verdict in (CLEAN, GUARDED):
+                    worst = ProbeResult(
+                        "ruler_blind", SUSPECT,
+                        blind + f"; capped at SUSPECT because step {cl.step} is {before} "
+                        f"here anyway, so the blindness is measured and its consequence "
+                        f"is not", repro)
+                continue
+            return ProbeResult("ruler_blind", LIAR if cl.blocking else SUSPECT,
+                               blind, repro)
+    return worst or ProbeResult("ruler_blind", CLEAN,
+                                "every declared subject it reads changes its verdict", "")
+
+
+def _fresh(root: Path, tmp: Path) -> Path:
+    """A pristine copy of the corpus root.
+
+    EVERY run gets one. Gates write into the tree they judge — `ir_drop_report_check`
+    says so in its own docstring ("evaluating step 24 was read-only ... it now
+    creates reports/phase3/ir_drop_signoff.json ... auditing a PUBLISHED
+    benchmark-data run therefore dirties the working tree") — so reusing one copy
+    across clauses would let clause N-1 seed the evidence clause N reads. That is
+    vibe-ic#1029 exactly, and an instrument that reproduces the defect it hunts is
+    not an instrument. It also means the census NEVER touches `benchmark-data/`.
+    """
+    dst = Path(tempfile.mkdtemp(prefix="corpus", dir=str(tmp))) / "proj"
+    shutil.copytree(root, dst, symlinks=True)
+    return dst
+
+
+def _mutations(path: Path) -> List[Tuple[str, str]]:
+    """Ways to take an artefact's CONTENT away without taking the artefact away.
+
+    TRUNCATION IS TOO BLUNT ON ITS OWN, and finding that out is what this
+    function is. The first version of P6 emptied the file to zero bytes and
+    nothing else. Calibrated against a real historical positive — the pre-#219
+    `transition_coverage_check`, whose fix message is "an absent or HOLLOW
+    at-speed ATPG result must never read as a pass" — the red arm came back
+    CLEAN, indistinguishable from the repaired gate:
+
+        arm      md5(transition_coverage_check.py)   emptied-to-zero-bytes
+        GREEN    ef9d0bf8c1c9419d…                   CLEAN (rc 0 -> 1)
+        RED      48bc336894a72177…                   CLEAN (rc 0 -> 1)
+
+    Both "measured" it — because zero bytes is not JSON, so BOTH versions died
+    in the parser. A mutation that makes every gate red proves nothing about
+    any of them, and a probe calibrated only against a mutation like that would
+    have shipped reporting a confident zero.
+
+    So the mutation is derived FROM THE ARTEFACT: a file that parses as JSON is
+    replaced with the EMPTY CONTAINER OF ITS OWN TOP-LEVEL TYPE, which still
+    parses, still satisfies every presence tier, and carries no measurement.
+    That is exactly the "hollow" of #219. Truncation is kept as the second
+    mutation, for artefacts that are not JSON at all.
+
+    No schema is assumed and no field name is known — the shape is read off the
+    file, so this stays chip-AGNOSTIC and does not rot when a report gains a key.
+    """
+    out: List[Tuple[str, str]] = []
+    try:
+        doc = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        doc = None
+    if isinstance(doc, dict) and doc:
+        out.append(("hollowed to {} (still valid JSON, no content)", "{}"))
+    elif isinstance(doc, list) and doc:
+        out.append(("hollowed to [] (still valid JSON, no content)", "[]"))
+    out.append(("emptied to zero bytes", ""))
+    return out
+
+
+_MAX_SIBLINGS = 16
+
+
+def _sibling_objects(rel: str, payload: str, root: Path, tmp: Path, tracer: Path,
+                     timeout: int, siblings: List[Clause],
+                     notes: List[str]) -> Optional[str]:
+    """The first conjunct in the same step's gate that turns red on this mutation.
+
+    Bounded, and the bound is DISCLOSED: with the cap hit, a `None` means "none
+    of the first N objected", not "the gate is blind" — so the cap can only ever
+    make the census claim MORE, and the note is what keeps that auditable.
+    """
+    for i, sib in enumerate(siblings):
+        if i >= _MAX_SIBLINGS:
+            notes.append(f"step {sib.step}/{rel}: only the first {_MAX_SIBLINGS} of "
+                         f"{len(siblings)} sibling conjunct(s) were run for the "
+                         f"sibling guard — a guard may have been missed, which would "
+                         f"OVERSTATE this finding")
+            break
+        work = _fresh(root, tmp)
+        try:
+            (work / rel).write_text(payload, encoding="utf-8")
+            rc, _o, _e = _run_traced(sib.cmd, work, tracer, timeout)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        if rc not in (0, 124, 127):
+            return sib.program
+    return None
+
+
+def probe_self_upstream(cl: Clause, tr: Traced, ctx: CorpusCtx,
+                        producers: Dict[str, set], cycle: Optional[List[str]],
+                        same_step: set) -> ProbeResult:
+    """P9 — is the gate its own upstream?  "It reads a report it wrote itself."
+
+    Every clause's inputs are traced to their producer, and a cycle that returns
+    to the clause is the defect: the verdict rests on an artefact the verdict
+    produced. The degenerate one-node case is the literal shape — the gate opens
+    its own report before it writes it, so what it read is its OWN LAST VERDICT.
+
+    THE DISCRIMINATOR IS ORDER, and it is the fail-safe class
+    ---------------------------------------------------------
+    A gate that writes its report and then reads it back has read a value THIS
+    run produced; nothing was inherited and nothing is circular. A gate that
+    reads first consumed the artefact a previous run left behind. Only the
+    second is a cycle, and the two are indistinguishable in any set-based view —
+    which is why the trace keeps order. `_run_traced` is what makes this
+    decidable at all; the flow's declared relation cannot see it (measured: 0).
+
+    LOAD-BEARING OR MERELY PRESENT — the causality arm
+    -------------------------------------------------
+    A cycle is not automatically a lie: the gate might open the file and ignore
+    what it finds. So the cycle is CONFIRMED by mutation rather than asserted
+    from the trace — empty the artefact it read-before-writing and re-run. A
+    verdict that moves proves the prior artefact was carrying it. A verdict that
+    does not is reported SUSPECT and said plainly, not promoted and not dropped.
+
+    A gate that CRASHES on the emptied file is scored SUSPECT too, never LIAR:
+    a traceback is a robustness defect, not evidence that the gate was laundering
+    its own output, and reading it as the latter would be the census inferring a
+    verdict from an exit code it did not understand.
+    """
+    root, tmp, tracer, timeout = ctx.root, ctx.tmp, ctx.tracer, ctx.timeout
+    if tr.events is None:
+        return ProbeResult("self_upstream", NA, "no trace — the tracer did not load", "")
+    own = [p for p in dict.fromkeys(tr.writes) if tr.reads_before_writing(p)]
+    ring = [p for p in dict.fromkeys(tr.reads)
+            if cycle and (producers.get(p, set()) & set(cycle)) - {cl.program}]
+    repro = (f"PYTHONPATH=<tracer> LIAR_TRACE=t.log python3 programs/{cl.program}.py "
+             f"{' '.join(cl.cmd.split()[1:])} — then read t.log in order")
+    if not own and not ring:
+        readbacks = [p for p in dict.fromkeys(tr.writes)
+                     if p in tr.reads and not tr.reads_before_writing(p)]
+        if readbacks:
+            return ProbeResult("self_upstream", GUARDED,
+                               f"reads {readbacks[0]} but only AFTER writing it in the "
+                               f"same invocation — a read-back of what this run produced, "
+                               f"not an artefact inherited from a previous one", repro)
+        return ProbeResult("self_upstream", CLEAN,
+                           f"{len(set(tr.reads))} input(s), none produced by itself "
+                           f"and none on a cycle back to it", repro)
+
+    rel = (own or ring)[0]
+    shape = ("reads its OWN report before writing it" if own else
+             f"is on a producer cycle {' -> '.join((cycle or [])[:4])}")
+    if own and same_step and producers.get(rel, set()) & same_step:
+        return ProbeResult("self_upstream", GUARDED,
+                           f"{shape} ({rel}), but the other producer is a clause in step "
+                           f"{cl.step}'s own gate — the flow declares them as one "
+                           f"conjunction, not evidence crossing a step boundary", repro)
+
+    work = _fresh(root, tmp)
+    try:
+        (work / rel).write_text("", encoding="utf-8") if (work / rel).is_file() else None
+        rc2, out2, _e = _run_traced(cl.cmd, work, tracer, timeout)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+    if tr.rc != 0:
+        return ProbeResult("self_upstream", SUSPECT,
+                           f"{shape} ({rel}) — but it is rc={tr.rc} on this root, so "
+                           f"nothing was laundered here; the cycle is real and the "
+                           f"laundering is unproven", repro)
+    if "Traceback (most recent call last)" in out2:
+        return ProbeResult("self_upstream", SUSPECT,
+                           f"{shape} ({rel}) and CRASHES when that artefact is emptied — "
+                           f"a robustness defect, and not evidence that its own prior "
+                           f"output was carrying the verdict", repro)
+    if rc2 == 0:
+        return ProbeResult("self_upstream", SUSPECT,
+                           f"{shape} ({rel}), but emptying that artefact does not move "
+                           f"the verdict (rc stays 0), so the cycle exists and is not "
+                           f"load-bearing on this root", repro)
+    sev = LIAR if cl.blocking else SUSPECT
+    return ProbeResult("self_upstream", sev,
+                       f"{shape} ({rel}) AND its verdict depends on it: rc 0 -> {rc2} "
+                       f"when that artefact is emptied — the gate is passing on evidence "
+                       f"it produced itself", repro)
+
 
 # --------------------------------------------------------------- harness
 def seed_minimal_tree(root: Path) -> Path:
@@ -1146,11 +1929,155 @@ def seed_minimal_tree(root: Path) -> Path:
     return root
 
 
+def _strongly_connected(graph: Dict[str, set]) -> List[List[str]]:
+    """Tarjan, iterative. Every component of size > 1 is a producer CYCLE.
+
+    Iterative on purpose: the recursive form blows the stack on a graph this
+    census builds from an arbitrary corpus, and a probe that dies on a big
+    corpus is a probe that reports nothing on exactly the runs worth sweeping.
+    """
+    index: Dict[str, int] = {}
+    low: Dict[str, int] = {}
+    stack: List[str] = []
+    on: set = set()
+    out: List[List[str]] = []
+    counter = 0
+    for start in list(graph):
+        if start in index:
+            continue
+        work: List[Tuple[str, Any]] = [(start, iter(sorted(graph.get(start, ()))))]
+        index[start] = low[start] = counter
+        counter += 1
+        stack.append(start)
+        on.add(start)
+        while work:
+            v, it = work[-1]
+            nxt = next(it, None)
+            if nxt is None:
+                work.pop()
+                if low[v] == index[v]:
+                    comp = []
+                    while True:
+                        u = stack.pop()
+                        on.discard(u)
+                        comp.append(u)
+                        if u == v:
+                            break
+                    out.append(comp)
+                if work:
+                    low[work[-1][0]] = min(low[work[-1][0]], low[v])
+                continue
+            if nxt not in index:
+                index[nxt] = low[nxt] = counter
+                counter += 1
+                stack.append(nxt)
+                on.add(nxt)
+                work.append((nxt, iter(sorted(graph.get(nxt, ())))))
+            elif nxt in on:
+                low[v] = min(low[v], index[nxt])
+    return out
+
+
+def corpus_pass(clauses: List[Clause], root: Path, tmp: Path, probes: List[str],
+                timeout: int, budget: int, notes: List[str]
+                ) -> Dict[int, List[ProbeResult]]:
+    """The populated-tree phase: one traced baseline per clause, then mutations.
+
+    The baseline pass is shared. P6 needs to know which declared artefacts a
+    clause actually opened; P9 needs the read/write ORDER and the cross-program
+    producer graph. Both come out of the same run, so the corpus is walked once.
+    """
+    tracer = make_tracer(tmp / "tracer")
+    base: Dict[int, Traced] = {}
+    dead = 0
+    for i, cl in enumerate(clauses):
+        work = _fresh(root, tmp)
+        try:
+            rc, out, ev = _run_traced(cl.cmd, work, tracer, timeout)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        base[i] = Traced(rc=rc, out=out, events=ev)
+        if ev is None and rc not in (124, 127):
+            dead += 1
+        print(f"  [corpus {i + 1}/{len(clauses)}] {cl.program[:48]:<48} rc={rc} "
+              f"r={len(base[i].reads)} w={len(base[i].writes)}",
+              file=sys.stderr, flush=True)
+    if dead:
+        print(f"liar_census: the TRACER DID NOT LOAD for {dead} clause(s) — every "
+              f"trace-derived probe is N/A for them, NOT clean. A host sitecustomize "
+              f"earlier on PYTHONPATH is the usual cause.", file=sys.stderr)
+        notes.append(f"tracer failed to load on {dead} clause(s); their P6/P9 results "
+                     f"are N/A and this run UNDERSTATES both probes")
+
+    producers: Dict[str, set] = {}
+    consumers: Dict[str, set] = {}
+    for i, cl in enumerate(clauses):
+        for p in base[i].writes:
+            producers.setdefault(p, set()).add(cl.program)
+        for p in base[i].reads:
+            consumers.setdefault(p, set()).add(cl.program)
+    graph: Dict[str, set] = {}
+    for path, ws in producers.items():
+        for a in ws:
+            for b in consumers.get(path, ()):
+                if a != b:
+                    graph.setdefault(a, set()).add(b)
+    cycles = [c for c in _strongly_connected(graph) if len(c) > 1]
+    by_prog_cycle = {p: c for c in cycles for p in c}
+    notes.append(f"producer graph on {root}: {len(producers)} written path(s), "
+                 f"{sum(len(v) for v in graph.values())} producer->consumer edge(s), "
+                 f"{len(cycles)} multi-node cycle(s)")
+
+    by_step: Dict[str, List[Clause]] = {}
+    for cl in clauses:
+        by_step.setdefault(cl.step, []).append(cl)
+    ctx = CorpusCtx(root=root, tmp=tmp, tracer=tracer, timeout=timeout,
+                    budget=budget, notes=notes, by_step=by_step)
+    if "ruler" in probes:
+        # The unmutated arm of every P6 comparison. Without it a step that was
+        # ALREADY failing would read as "the mutation changed nothing", which is
+        # the census scoring its own missing control as a finding.
+        pristine = _fresh(root, tmp)
+        try:
+            ctx.base_status = _flow_step_status(pristine, tmp, timeout) or {}
+        finally:
+            shutil.rmtree(pristine, ignore_errors=True)
+        if not ctx.base_status:
+            notes.append("the consumer (flow_compliance_check) produced no step map on "
+                         "the UNMUTATED root, so P6 has no control arm and every subject "
+                         "is UNSCORED — this run establishes nothing about P6")
+        else:
+            waved = sum(1 for v in ctx.base_status.values() if v in _PASSING_TIERS)
+            notes.append(
+                f"P6 control arm on the unmutated root: {waved} of "
+                f"{len(ctx.base_status)} step(s) in a passing tier. Only those can "
+                f"carry a LIAR; a step that is FAIL or PASS-VOIDED here is capped at "
+                f"SUSPECT (blindness measured, consequence unproven) and one that never "
+                f"ran, was waived, was MISSING or disclosed vacuity is GUARDED")
+    out: Dict[int, List[ProbeResult]] = {}
+    for i, cl in enumerate(clauses):
+        got: List[ProbeResult] = []
+        if "cycle" in probes:
+            got.append(probe_self_upstream(
+                cl, base[i], ctx, producers, by_prog_cycle.get(cl.program),
+                {c.program for c in by_step.get(cl.step, [])} - {cl.program}))
+        if "ruler" in probes:
+            got.append(probe_ruler_blind(cl, base[i], ctx))
+        out[i] = got
+        print(f"  [mutate {i + 1}/{len(clauses)}] {cl.program[:48]:<48} "
+              f"{','.join(p.verdict for p in got)}", file=sys.stderr, flush=True)
+    return out
+
+
 def run_census(clauses: List[Clause], probes: List[str], timeout: int,
                graph: Optional[FlowGraph] = None,
-               spelling_variants: int = len(SPELLINGS)) -> List[ClauseReport]:
+               spelling_variants: int = len(SPELLINGS),
+               corpus: Optional[Path] = None, corpus_roots: int = 1,
+               budget: int = 3, notes: Optional[List[str]] = None,
+               ) -> List[ClauseReport]:
     reports: List[ClauseReport] = []
     graph = graph or FlowGraph()
+    notes = notes if notes is not None else []
     #: which programs each step declares as gate clauses -- the structure the
     #: producer/checker discount in `probe_writes_its_subject` reads.
     by_step: Dict[str, set] = {}
@@ -1191,11 +2118,40 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
             reports.append(rep)
             print(f"  [{i}/{len(clauses)}] step {cl.step:>4}  {cl.program[:52]:<52} {rep.worst}",
                   file=sys.stderr, flush=True)
+
+        # P6/P9 need a POPULATED tree, so they are a second pass over a real
+        # published run root rather than over the empty dir and the skeleton.
+        if {"ruler", "cycle"} & set(probes):
+            roots = discover_corpus_roots(corpus, clauses, corpus_roots) if corpus else []
+            if not roots:
+                # A corpus probe that reached nothing must REFUSE, loudly. Left
+                # silent it prints CLEAN over a population it never opened, which
+                # is the confident zero this whole census exists to prevent.
+                where = corpus if corpus else "<none given>"
+                msg = (f"NO POPULATED CORPUS ROOT under {where} — the corpus probes "
+                       f"scored N/A for every clause and this run establishes NOTHING "
+                       f"about P6/P9")
+                print(f"liar_census: {msg}", file=sys.stderr)
+                notes.append(msg)
+                for rep in reports:
+                    for name in ("cycle", "ruler"):
+                        if name in probes:
+                            rep.probes.append(ProbeResult(
+                                {"cycle": "self_upstream", "ruler": "ruler_blind"}[name],
+                                NA, "no corpus root", ""))
+            else:
+                for root, score in roots:
+                    notes.append(f"corpus root {root} — {score} declared output atom(s) "
+                                 f"resolve under it")
+                    got = corpus_pass(clauses, root, Path(tmp), probes, timeout,
+                                      budget, notes)
+                    for i, rep in enumerate(reports):
+                        rep.probes.extend(got.get(i, []))
     return reports
 
 
 ALL_PROBES = ["empty", "prose", "zero", "writes", "selector",
-              "blocks", "depth", "spelling"]
+              "blocks", "depth", "spelling", "ruler", "cycle"]
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1211,6 +2167,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                          f"try per clause. Lowering it BOUNDS the most "
                          f"expensive probe in this file; whatever is dropped "
                          f"is printed in the summary, never silently")
+    ap.add_argument("--corpus", type=Path, default=REPO / "benchmark-data",
+                    help="tree of published run roots the ruler/cycle probes mutate "
+                         "(COPIED first, never touched in place)")
+    ap.add_argument("--corpus-roots", type=int, default=1,
+                    help="how many of the best-scoring roots to sweep")
+    ap.add_argument("--max-mutations", type=int, default=3,
+                    help="declared artefacts emptied per clause; the remainder is "
+                         "DISCLOSED in the BOUNDS section, never silently dropped")
     ap.add_argument("--json", type=Path)
     args = ap.parse_args(argv)
 
@@ -1226,8 +2190,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     probes = [p.strip() for p in args.probes.split(",") if p.strip()]
     variants = max(0, min(args.spelling_variants, len(SPELLINGS)))
     print(f"liar_census: {len(clauses)} clause(s) x {len(probes)} probe(s)", file=sys.stderr)
+    notes: List[str] = []
     reports = run_census(clauses, probes, args.timeout, graph=graph,
-                         spelling_variants=variants)
+                         spelling_variants=variants, corpus=args.corpus,
+                         corpus_roots=args.corpus_roots,
+                         budget=args.max_mutations, notes=notes)
 
     liars = [r for r in reports if r.worst == LIAR]
     suspects = [r for r in reports if r.worst == SUSPECT]
@@ -1299,6 +2266,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             dropped = [n for n, _ in SPELLINGS[variants:]]
             print(f"  path_spelling            BOUNDED to {variants} of "
                   f"{len(SPELLINGS)} spellings; NOT tried: {', '.join(dropped)}")
+
+    # WHAT THIS RUN DID NOT COVER. The mutation probes are bounded by
+    # construction -- corpus roots, artefacts per clause, siblings per guard --
+    # and a bound nobody printed reads exactly like complete coverage. Every
+    # truncation, every unmutable subject and every tracer failure lands here.
+    if notes:
+        print("-" * 78)
+        print(f"BOUNDS — {len(notes)} disclosure(s) about what this run did NOT establish:")
+        for n in notes:
+            print(f"  * {n}")
         print()
 
     if args.json:
@@ -1312,6 +2289,7 @@ def main(argv: Optional[List[str]] = None) -> int:
              "not_measured": na,
              "spelling_variants_tried": variants,
              "spelling_variants_available": len(SPELLINGS),
+             "bounds": notes,
              "reports": [asdict(r) for r in reports]}, indent=1), encoding="utf-8")
 
     return 1 if liars else 0
