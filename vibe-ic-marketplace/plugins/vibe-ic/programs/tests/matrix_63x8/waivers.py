@@ -28,7 +28,7 @@ it, or a decision reference.
     GOOD  reason:   "The artefact is emitted on only one branch of a real PDK
                      condition, so an unconditional declaration converts every
                      honest run of the other branch into MISSING."
-          evidence: "programs/mixed_signal_top_lvs_run.py:917 —
+          evidence: "programs/mixed_signal_top_lvs_run.py:919 —
                      (rpt_dir / 'top_lvs.json').write_text(...)"
 
     GOOD  reason:   "Deciding this needs a real converged project tree; the
@@ -922,10 +922,10 @@ WAIVERS: Tuple[Waiver, ...] = (
             "actually executed, then declare the artefact and record it."
         ),
         evidence=(
-            "producer programs/mixed_signal_top_lvs_run.py:917 "
+            "producer programs/mixed_signal_top_lvs_run.py:919 "
             "((rpt_dir / 'top_lvs.json').write_text(...), in the same block "
             "as the already-declared merge.json); consumer "
-            "programs/mixed_signal_merge_check.py:88-90 then :107. MEASURED "
+            "programs/mixed_signal_merge_check.py:89-91 then :108. MEASURED "
             "2026-07-28 with test_matrix_d3_outputs_produced.resolve_anywhere("
             "'reports/analog/mixed_signal/top_lvs.json') -> None over all 12 "
             "run roots, while the sibling merge.json resolves at "
