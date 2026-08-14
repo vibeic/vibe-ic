@@ -511,11 +511,23 @@ def external_input_declarations(step_id) -> Tuple[str, ...]:
 #: these three are named, evidenced and pointed at the issue rather than
 #: silently forgiven. When #1070 lands, this set empties and
 #: `test_d5_the_deferred_register_only_shrinks` reddens if it does not.
-_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {
-    "A1": ("D1",),      # reads L1_DATASHEET.json + L5_ADI_SPEC.json
-    "25": ("24",),      # reads IR-drop's outputs: all
-    "M1": ("37",),      # reads phase3/stage4/gds/*.gds
-}
+#: EMPTIED 2026-08-14 at `73dfb68dd` (vibe-ic#1070 via #1258), which is the
+#: outcome the paragraph above predicted: "When #1070 lands, this set empties
+#: and `test_d5_the_deferred_register_only_shrinks` reddens if it does not."
+#: It landed, the set was not emptied, and that test duly reddened on main.
+#: All three edges are now declared and ORDERED --
+#:     A1 -> D1   `blocks_on: []`       -> `[D1]`
+#:     25 -> 24   `blocks_on: [22]`     -> `[22, 24]`
+#:     M1 -> 37   `blocks_on: [A8, 15]` -> `[A8, 15, 37]`
+#: -- all three in that one commit, and the live measurement now charges
+#: nothing (`test_..._is_the_only_thing_holding_those_cells_green` measured
+#: `[]` against a register of three).
+#:
+#: The register stays, empty, rather than being deleted: it is the mechanism
+#: that fails a NEW step entering this state, and that duty does not end with
+#: #1070. Emptying it is the shrink this comment sanctions; removing it would
+#: be removing the ratchet.
+_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {}
 
 
 
