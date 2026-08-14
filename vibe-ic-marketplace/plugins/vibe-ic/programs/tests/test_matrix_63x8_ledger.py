@@ -14,7 +14,7 @@ proves three things, and deliberately nothing else:
 
   2. The `flowref` accessors agree with the yaml about which steps declare
      what — including the two places where the circulating numbers are subtly
-     wrong (see `test_blocks_on_presence_is_62_but_non_empty_is_60`).
+     wrong (see `test_blocks_on_presence_is_not_the_same_set_as_non_empty`).
 
   3. The waiver registry cannot carry a placeholder. Every waiver needs a
      reason AND evidence, both non-empty and both substantive.
@@ -37,6 +37,7 @@ suite*, so the proof does not rot.
 """
 from __future__ import annotations
 
+import importlib
 import os
 from collections import Counter
 
@@ -65,8 +66,18 @@ CENSUS_GATE_PRESENT = 62
 # ("a gate designates outputs on a step with no required_outputs") still fires
 # on it and it stays WAIVED there, with the wiring that would close it named.
 CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
-CENSUS_BLOCKS_ON_PRESENT = 62
-CENSUS_BLOCKS_ON_NON_EMPTY = 60
+# 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
+# P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
+# P0 already declared `required_inputs: [{from: 1, ...}]`, so the ordering edge
+# its own inputs had always implied was missing, and without it a FAILED Phase 1
+# could not red the pre-flight. The tripwire fired on a LEGITIMATE flow change
+# and then stayed red on main instead of being moved, which is how a tripwire
+# stops being read. Both counts move by exactly one, and it is the same step.
+# `332b9985` also edited `flow_dependency_graph_check.py` and its test in the
+# SAME commit, which is why the roots are read out of that program below rather
+# than re-typed here: the two copies moved together once and can drift apart.
+CENSUS_BLOCKS_ON_PRESENT = 63
+CENSUS_BLOCKS_ON_NON_EMPTY = 61
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -276,21 +287,56 @@ def test_gate_presence_matches_the_yaml(raw_steps):
             assert F.gate_programs(sid) == ()
 
 
-def test_blocks_on_presence_is_62_but_non_empty_is_60(raw_steps):
+def test_blocks_on_presence_is_not_the_same_set_as_non_empty(raw_steps):
     """The two are NOT the same set, and conflating them is a real error.
 
-    `blocks_on` is DECLARED on 62 steps but declared EMPTY on D1 and A1 — the
-    flow's two genuine roots. "62 steps have blocks_on" is a presence count; a
-    test that reads it as "62 steps have upstream dependencies" would demand an
-    edge from a root and be wrong twice over.
+    `blocks_on` is DECLARED on every step and declared EMPTY on the flow's
+    genuine roots. "N steps have blocks_on" is a presence count; a test that
+    reads it as "N steps have upstream dependencies" would demand an edge from
+    a root and be wrong twice over.
+
+    The counts are TRIPWIRES (see the module header). WHICH steps are roots is
+    not — it is a fact `flow_dependency_graph_check` already owns, so it is
+    read out of that program rather than re-typed here.
+
+    Presence is additionally asserted as a SET, so a step added later without
+    `blocks_on` fails by NAME rather than as an arithmetic mismatch the reader
+    has to resolve against the yaml.
     """
     present = {F.normalize_id(s["id"]) for s in raw_steps if "blocks_on" in s}
     non_empty = {
         F.normalize_id(s["id"]) for s in raw_steps if s.get("blocks_on")
     }
+    # Presence is TOTAL as of `332b9985`, which is stronger than the count and
+    # is asserted FIRST because it is the assertion that can name what changed.
+    # A bare `62 == 63` sends the reader back to the yaml to work out which step
+    # moved; that lookup is the work this message exists to save. (from #1264)
+    all_ids = {F.normalize_id(s["id"]) for s in raw_steps}
+    assert present == all_ids, (
+        f"every step must declare `blocks_on`, even as an empty list — "
+        f"missing on {sorted(all_ids - present)}")
     assert len(present) == CENSUS_BLOCKS_ON_PRESENT
     assert len(non_empty) == CENSUS_BLOCKS_ON_NON_EMPTY
-    assert present - non_empty == {"D1", "A1"}
+
+    # ANTI-VACUITY. If these two sets ever coincide, the distinction this test
+    # exists to defend is gone and the assertion below would hold trivially.
+    assert present, "no step declares blocks_on — nothing here means anything"
+    roots = present - non_empty
+    assert roots, (
+        "presence and non-empty are the SAME set, so this test no longer "
+        "demonstrates that conflating them is an error — re-derive the flow's "
+        "roots before editing this assertion away")
+
+    # The roots are NOT re-typed here. `flow_dependency_graph_check` owns that
+    # register and fails when the yaml and the register disagree; a hand-typed
+    # copy in this file would be a second source that can drift from both.
+    # It already drifted once: vibe-ic#923 removed P0 from the root set and the
+    # hand-typed copies in test_flow_dependency_graph_check went stale in the
+    # same commit, which is why that file reads it out of the program too
+    # (see its line 25). This also means a landing that gives A1 an ordering
+    # edge moves BOTH sides together instead of reddening this cell.
+    assert roots == set(
+        importlib.import_module("flow_dependency_graph_check").DECLARED_ROOTS)
 
     assert {
         F.normalize_id(sid) for sid in F.step_ids() if F.declares_blocks_on(sid)
