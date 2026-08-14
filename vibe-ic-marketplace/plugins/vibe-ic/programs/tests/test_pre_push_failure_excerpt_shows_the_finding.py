@@ -134,5 +134,80 @@ def test_tail_selector_would_fail_this():
     )
 
 
+# ---------------------------------------------------------------------------
+# THE FALLBACK BRANCH, UNDER THE SHELL THE HOOK ACTUALLY RUNS  (#1209 review)
+# ---------------------------------------------------------------------------
+# `_run` above builds `bash -c` WITHOUT the hook's own options, and that is why
+# nothing here saw this: the hook is `set -euo pipefail`, and under it the
+# `else` branch of `_gate_excerpt` COULD NOT RUN. `grep` exits 1 when it matches
+# nothing, `pipefail` makes that the pipeline's status even though `head`
+# succeeded, the assignment carries it, and `set -e` exits — so on exactly the
+# input the fallback exists to serve, the hook printed the label and died.
+#
+# Reachable and common: three of the five gates the hook runs emit an argparse
+# usage message on rc=2 with ZERO finding-shaped lines — the "could not look"
+# path. On those the selector was STRICTLY WORSE than the `tail -3` it replaced.
+#
+# A harness that does not reproduce the caller's shell options cannot see a
+# defect that only exists under them, so these two run the helper the way the
+# hook does.
+NO_FINDING_OUTPUT = (
+    "usage: marketplace_version_sync_check.py [-h] [--repo REPO]\n"
+    "marketplace_version_sync_check.py: error: unrecognized arguments: --bogus\n"
+)
+
+
+def _run_strict(selector_body: str, gate_output: str):
+    """(rc, stdout) with the hook's OWN shell options, and rc is not asserted.
+
+    `_run` asserts `returncode == 0`, which would turn the very failure under
+    test into a harness error rather than a measurement.
+    """
+    script = ("set -euo pipefail\n"
+              f"{selector_body}\n"
+              '_gate_excerpt "$(cat)"\n'
+              'echo "__CONTINUED__"\n')
+    p = subprocess.run(["bash", "-c", script], input=gate_output,
+                       capture_output=True, text=True, timeout=60)
+    return p.returncode, p.stdout
+
+
+def test_a_gate_with_no_finding_shaped_line_still_prints_and_does_not_abort():
+    """The fallback must RUN, and the hook must survive it."""
+    rc, out = _run_strict(_extract_helper(), NO_FINDING_OUTPUT)
+    assert "unrecognized arguments" in out, (
+        "a gate whose output has no finding-shaped line printed no excerpt — "
+        "the reader is told the push was blocked and shown nothing, which is "
+        "the exact defect this file was written to remove:\n" + out)
+    assert "__CONTINUED__" in out, (
+        "the helper aborted the shell instead of returning, so the hook never "
+        "reaches `pre-push: BLOCKED` or its remediation block:\n" + out)
+    assert rc == 0, f"the helper exited {rc} under `set -euo pipefail`:\n{out}"
+
+
+def test_WITHOUT_the_no_match_guard_that_same_input_aborts():
+    """The negative arm, in the idiom of `test_tail_selector_would_fail_this`.
+
+    Strips `|| _ge_hits=""` from the SHIPPED helper. If this ever goes green the
+    guard has stopped being what keeps the fallback reachable, and the test
+    above is no longer measuring anything.
+    """
+    stripped = _extract_helper().replace(' || _ge_hits=""', "")
+    assert '|| _ge_hits=""' not in stripped, (
+        "the no-match guard is not in the shipped helper in the form this arm "
+        "removes — re-point this test rather than deleting it")
+    rc, out = _run_strict(stripped, NO_FINDING_OUTPUT)
+    assert rc != 0 and "__CONTINUED__" not in out, (
+        "without the guard the helper survived, so this input no longer "
+        "reproduces the abort and the positive test proves nothing:\n" + out)
+
+
+def test_the_guard_does_not_change_the_case_that_already_worked():
+    """A gate that DOES print a finding must be unaffected."""
+    rc, out = _run_strict(_extract_helper(), GATE_OUTPUT)
+    assert rc == 0 and "__CONTINUED__" in out, out
+    assert FINDING in out and COUNTS in out, out
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
