@@ -496,6 +496,24 @@ def test_no_tracked_corpus_waiver_sits_above_the_stale_ceiling():
         f"— before #526 that project produced NO compliance report at all")
 
 
+#: Floor for the tracked `benchmark-data/**/waivers.json` corpus.
+#:
+#: MEASURED on origin/main 2026-08-14: **9**. It was 11, and the two that went
+#: are RETIREMENTS rather than losses — each old published run tree was replaced
+#: by a converged one that needs no waivers at all:
+#:
+#:   6ce931427  data(spm): retire v1.5.65_sky130A,   publish v1.9.94_sky130A
+#:   51517e71d  publish(benchmark-data): spm x gf180mcuD converges on v1.9.96
+#:
+#: Confirmed both successors are tracked and carry no `waivers.json`.
+#:
+#: Re-pinned to what was MEASURED, with the cause named — not lowered to
+#: whatever happens to pass. The floor exists so an UNEXPLAINED shrink fails,
+#: and an explanation that lives only in a commit message nobody reads is the
+#: same as no explanation. If this drops again, find the commit first.
+_TRACKED_WAIVER_FILES = 9
+
+
 def test_every_tracked_corpus_waiver_file_validates_without_an_id_error():
     """The consumer-scoped half: run the REAL validator over every tracked
     waivers.json and assert none of them trips an id finding."""
@@ -507,7 +525,10 @@ def test_every_tracked_corpus_waiver_file_validates_without_an_id_error():
                if f.rule in ("id-range", "id-missing",
                              "id-noncanonical-spelling")]
         assert bad == [], f"{path}: {bad}"
-    assert seen >= 11, f"corpus shrank to {seen} waiver files — re-measure"
+    assert seen >= _TRACKED_WAIVER_FILES, (
+        f"corpus shrank to {seen} waiver files (floor "
+        f"{_TRACKED_WAIVER_FILES}) — re-measure, and record WHY in "
+        f"`_TRACKED_WAIVER_FILES` before lowering it")
 
 
 # ----------------------------------------------------------------------
