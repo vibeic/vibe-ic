@@ -546,6 +546,26 @@ gate_dispatch_over() {
     GATE_ITEM_CORPUS+=("$corpus")
     GATE_ITEM_IDX+=("0")
     GATE_ITEM_TOTAL+=("0")
+    # THE EXEMPTION PAIR, WHICH THIS SITE OMITTED. Eight arrays are indexed by
+    # ONE gate index; `_dispatch` pushes all eight in lockstep, and this is the
+    # only gate in the file that does not go through it. #1075 added this site
+    # and pushed the six arrays that existed then; #584 landed separately and
+    # made the invariant eight. From that point `gate_dispatch_finish` read
+    # `GATE_EX_UNTIL[$i]` for every i < declared and this gate had no entry, so
+    # under `set -u` the sweep DIED — before writing its summary, so the record
+    # a consumer reads was not merely wrong, it did not exist:
+    #
+    #     ^^ EMPTY CORPUS "an empty corpus": 0 item(s) …
+    #     _gate_dispatch.sh: line 741: GATE_EX_UNTIL[$i]: unbound variable
+    #     $ echo $?     -> 1        summary written? NO
+    #
+    # EMPTY, not a placeholder date: this gate bought no tolerance and none was
+    # bought for it, which is exactly what an empty string records. An empty
+    # corpus is a hole somebody must either fill or exempt AT THE WIRING SITE
+    # like every other tolerated gate — inventing an exemption here would grant
+    # every future empty corpus a silent one, which is the vacuous pass #1075
+    # added this gate to refuse.
+    GATE_EX_UNTIL+=(""); GATE_EX_WHY+=("")
     echo "   ^^ EMPTY CORPUS \"$corpus\": 0 item(s), so the gates it would" \
          "have dispatched did not run. Recorded NOT_CHECKED so the run" \
          "carries a verdict for it instead of no verdict at all." >&2
@@ -807,7 +827,17 @@ after the last gate and attaches to nothing"
       NOT_CHECKED)
         notchecked=$(( notchecked + 1 ))
         refused="${refused:+$refused, }${GATE_LABELS[$i]}"
-        refused="$refused (exempt until ${GATE_EX_UNTIL[$i]})" ;;
+        # TWO ARMS, because a NOT_CHECKED gate can reach this line with no
+        # exemption at all — the synthetic empty-corpus gate buys none, and
+        # correctly so. Unguarded this printed the literal `(exempt until )`,
+        # a sentence asserting a tolerance that does not exist, in the very
+        # line #539 added so a reader could tell a bought refusal from an
+        # unbought one. An absent date has to READ as absent.
+        if [ -n "${GATE_EX_UNTIL[$i]}" ]; then
+          refused="$refused (exempt until ${GATE_EX_UNTIL[$i]})"
+        else
+          refused="$refused (NO EXEMPTION DECLARED)"
+        fi ;;
       WROTE_CORPUS)
         wrote=$(( wrote + 1 ))
         writers="${writers:+$writers, }${GATE_LABELS[$i]}" ;;
