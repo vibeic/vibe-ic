@@ -27,16 +27,53 @@ standalone-clean (foreign-primary-defer, general structural signatures only),
 so the residual partition (see the banner below) is now EMPTY: EVERY discovered
 detector is held to the STRICT no-foreign-fire assertion across all three blob
 models, with 0 foreign fires on the real corpus.
+
+THE BLOB HAS A SPECIFIED BYTE LAYOUT (vibe-ic#1444)
+---------------------------------------------------
+Until this was fixed, ``_blob_for`` joined two RAW ``glob.glob`` results. That
+call does not sort, so the blob's byte layout was whatever the filesystem
+returned — and three of the discovered detectors ask a question about
+``low[:3500]``. A head-window predicate over an unsorted concatenation answers a
+question about readdir order, not about the documents, so WHICH misfires this
+sweep caught was decided per host. Measured on the real corpus at the time of
+the fix: ``glob.glob`` output was NOT sorted here, and PR #1435's genuine
+MDIO-on-EtherCAT misfire was invisible to this sweep on this machine while
+being red on another, at the same commit.
+
+Sorting alone would only have frozen the lottery into one arbitrary draw, so
+this guard now does BOTH:
+
+  * the sweep runs over a PINNED ordering (both groups name-sorted, which makes
+    ``_blob_for`` byte-identical to the canonical program
+    ``protocol_detector_no_misfire_matrix.blob_for`` — the two had silently
+    diverged) and again REVERSED, failing if EITHER misfires; and
+  * the detectors that can actually notice the order — decided by reading their
+    BYTECODE, not their comments — are bracketed EXHAUSTIVELY: every document
+    that a directory read could put first gets to lead, and a foreign fire under
+    ANY of them fails.
+
+Measured when that arm was added: sorted and reversed each report ZERO misfires
+on this corpus, while the exhaustive bracket reaches ``is_mdio`` on ``ethercat``
+under 4 of 24 leading documents (PR #1435's bug) and on ``ethernet`` under 12 of
+24 (#1329's bug). Two canonical orderings are a coin flip; the bracket is not.
 """
 import glob
 import importlib
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
 PROGRAMS_DIR = Path(__file__).resolve().parent.parent
 from _plugin_tree import repo_path_or_missing  # noqa: E402
+# The canonical program for this matrix: it owns the ordering model and the
+# order-sensitivity classifier so the guard and the CLI cannot drift apart
+# (vibe-ic#1444 was exactly that drift — the program sorted, the guard did not).
+import protocol_detector_no_misfire_matrix as _matrix  # noqa: E402
+
+# This module, for the tests that need to rebind BP onto a tmp corpus.
+_this = sys.modules[__name__]
 # flow #486: benchmark_phase1/ is a repo-root-only private corpus absent on
 # the flattened cache; resolve defensively (non-existent path there) so the
 # synthetic-fixture fallback / skipif guards take over instead of IndexError.
@@ -65,10 +102,46 @@ def _discover_detectors():
     return found
 
 
-def _blob_for(b: str) -> str:
+def _doc_groups(b: str):
+    """(head_group, tail_group) for benchmark ``b`` — both NAME-SORTED.
+
+    vibe-ic#1444: the blob is the concatenation of two globs, and a directory
+    read may permute the members WITHIN each group but can never interleave the
+    two. So the blob HEAD — what a ``low[:3500]`` subject-dominance check reads
+    — is drawn from the first non-empty group, and sorting is what turns "the
+    layout the filesystem happened to give us" into a stated one.
+
+    The input_doc glob stays ``*`` (not ``*.txt``/``*.md``): this sweep is
+    deliberately the strictest SUPERSET blob. On the real corpus every
+    input_doc file is a ``.txt``, so the sorted result is byte-identical to
+    ``protocol_detector_no_misfire_matrix.blob_for(..., "superset")`` — pinned
+    by ``test_blob_matches_the_canonical_program_builder`` below.
+    """
+    inp = sorted(glob.glob(str(BP / b / "phase1" / "input_doc" / "*")))
+    gen = sorted(glob.glob(str(BP / b / "phase1" / "generated_docs" / "*.json")))
+    if not inp:
+        # No source spec at all: the generated L-docs ARE the head group, and
+        # the head is whichever one readdir returns first. The "input_doc-FIRST,
+        # so the head is the source spec's title/abstract" premise the
+        # head-window detectors cite does not hold for these benchmarks.
+        return gen, []
+    return inp, gen
+
+
+def _blob_for(b: str, lead: str = None, reverse: bool = False) -> str:
+    """The content-superset blob, in a SPECIFIED byte layout (vibe-ic#1444).
+
+    ``lead`` hoists one document of the head group to the front — the single
+    degree of freedom a directory read has over the blob head. ``reverse`` reads
+    both groups in descending name order. Neither changes the file SET.
+    """
+    head, tail = _doc_groups(b)
+    if reverse:
+        head, tail = head[::-1], tail[::-1]
+    if lead is not None and lead in head:
+        head = [lead] + [p for p in head if p != lead]
     parts = []
-    for p in (glob.glob(str(BP / b / "phase1" / "input_doc" / "*"))
-              + glob.glob(str(BP / b / "phase1" / "generated_docs" / "*.json"))):
+    for p in head + tail:
         try:
             parts.append(Path(p).read_text(encoding="utf-8", errors="ignore"))
         except Exception:
@@ -198,55 +271,326 @@ def _ensure_synthetic_corpus():
 _ensure_synthetic_corpus()
 
 
+def _all_blobs(reverse: bool = False):
+    """{benchmark: blob} for every benchmark that has any content.
+
+    Built in ONE pass — the pre-#1444 sweep built each blob twice (once to test
+    it was non-empty, once to keep it), and the sweep is the slowest item in
+    this file against a 180 s harness bound.
+    """
+    out = {}
+    for d in sorted(os.listdir(BP)):
+        if not (BP / d).is_dir():
+            continue
+        blob = _blob_for(d, reverse=reverse)
+        if blob:
+            out[d] = blob
+    return out
+
+
+def _present_benchmarks():
+    """Benchmarks that carry at least one document (no blob read needed)."""
+    out = []
+    for d in sorted(os.listdir(BP)):
+        if not (BP / d).is_dir():
+            continue
+        head, tail = _doc_groups(d)
+        if head or tail:
+            out.append(d)
+    return out
+
+
+def _foreign_fires(blobs, detectors=None):
+    """(detector, benchmark) pairs where a detector fires on someone else's
+    content, minus the two documented allowlists."""
+    detectors = DETECTORS if detectors is None else detectors
+    misfires = []
+    for stem, fn in detectors.items():
+        for b, blob in blobs.items():
+            if b == stem or not fn(blob):
+                continue
+            if (stem, b) in KNOWN_DERIVED_SIBLING_CROSS_FIRES:
+                # Documented derived-sibling: parent detector legitimately
+                # fires on the derived benchmark; resolved by synth ordering.
+                continue
+            if stem in NEWLY_LIFTED_ORDERING_DEPENDENT:
+                # ORGANIC-20260531 open residual: ordering-dependent
+                # detector — runner-safe via force-overwrite, not yet
+                # standalone-clean. Tracked, not asserted (see banner).
+                continue
+            misfires.append((stem, b))
+    return sorted(misfires)
+
+
+# Both canonical orderings are swept and BOTH must be clean — the fix for
+# vibe-ic#1444 is not "sort it", it is "stop letting the filesystem pick".
+CANONICAL_BLOB_ORDERINGS = ("sorted", "reversed")
+
+# ...and each ordering is split across several pytest ITEMS. This is a harness
+# constraint, not a style choice: one full 86x87 sweep measured 108 s quiet and
+# 165 s under load on the real corpus, against a CI bound of
+# ``--timeout=180 --timeout-method=thread`` — a bound that does not fail the
+# TEST, it kills the SESSION and every other file in the subset loses its
+# verdict unnamed. Three shards keep the worst item near a third of that.
+# The partition is pinned below so a sharding slip cannot silently drop a
+# detector out of the sweep.
+SWEEP_SHARDS = 3
+
+
+def _shard_detectors(shard: int):
+    return {k: DETECTORS[k] for k in sorted(DETECTORS)[shard::SWEEP_SHARDS]}
+
+
+def test_sweep_shards_partition_every_discovered_detector():
+    """The shards must cover the fleet exactly once — a sweep that quietly
+    stopped examining a third of the detectors would still print all-green."""
+    covered = []
+    for s in range(SWEEP_SHARDS):
+        covered.extend(_shard_detectors(s))
+    assert sorted(covered) == sorted(DETECTORS), (
+        "sweep shards do not partition the discovered detectors: "
+        f"{len(covered)} covered vs {len(DETECTORS)} discovered")
+    assert len(set(covered)) == len(covered), "a detector is swept twice"
+
+
 @pytest.mark.skipif(not BP.is_dir(),
                     reason="neither benchmark_phase1/ nor synthetic fixtures present")
-def test_no_detector_fires_on_a_foreign_benchmark():
+@pytest.mark.parametrize("ordering", CANONICAL_BLOB_ORDERINGS)
+@pytest.mark.parametrize("shard", range(SWEEP_SHARDS))
+def test_no_detector_fires_on_a_foreign_benchmark(shard, ordering):
     """Each auto-discovered detector must fire ONLY on its own benchmark.
 
     Content SUPERSET (input_doc + every generated L-doc) — stricter than the
     runner's actual blob — so zero foreign fires here ⇒ zero in the runner.
 
+    Swept under BOTH pinned orderings (vibe-ic#1444). Neither is the
+    filesystem's: the layout is stated, so this test's verdict is the same on
+    every host, and a misfire visible under either one fails.
+
     Runs against the real private ``benchmark_phase1/`` when present, else against
     the committed synthetic per-protocol fixture (``tests/fixtures/...``) — so the
-    fires-on-own + no-misfire-on-foreign sweep executes in the shipped tree too.
+    no-misfire-on-foreign sweep executes in the shipped tree too.
     """
-    benches = sorted(d for d in os.listdir(BP) if (BP / d).is_dir() and _blob_for(d))
-    blobs = {b: _blob_for(b) for b in benches}
-    misfires = []
-    own_fires = set()
-    for stem, fn in DETECTORS.items():
-        for b in benches:
-            if fn(blobs[b]):
-                if b == stem:
-                    own_fires.add(stem)
-                elif (stem, b) in KNOWN_DERIVED_SIBLING_CROSS_FIRES:
-                    # Documented derived-sibling: parent detector legitimately
-                    # fires on the derived benchmark; resolved by synth ordering.
-                    continue
-                elif stem in NEWLY_LIFTED_ORDERING_DEPENDENT:
-                    # ORGANIC-20260531 open residual: ordering-dependent
-                    # detector — runner-safe via force-overwrite, not yet
-                    # standalone-clean. Tracked, not asserted (see banner).
-                    continue
-                else:
-                    misfires.append((stem, b))
+    blobs = _all_blobs(reverse=(ordering == "reversed"))
+    assert blobs, "no benchmark blob could be built — the sweep would be vacuous"
+    detectors = _shard_detectors(shard)
+    assert detectors, f"shard {shard} is empty — it would pass by examining nothing"
+    misfires = _foreign_fires(blobs, detectors)
     assert not misfires, (
-        "protocol detector mis-fires (foreign benchmark) among the "
-        "standalone-clean set — a NEW regression, not an ORGANIC-20260531 "
-        f"residual: {misfires}"
+        f"protocol detector mis-fires (foreign benchmark, {ordering} blob order) "
+        "among the standalone-clean set — a NEW regression, not an "
+        f"ORGANIC-20260531 residual: {misfires}"
     )
-    # Each detector whose own benchmark dir is present must self-fire — this
-    # stays in force for EVERY discovered detector, ordering-dependent or not.
-    # Own-fire may hold under the strict superset OR the runner's actual narrow
-    # blob (L1+L2 + input_doc): an ordering-dependent detector's sibling-MUTEX
-    # can legitimately defer under the token-injected superset while still
-    # firing on the runner's real blob (e.g. ahb_apb's AXI-primary defer, cxl /
-    # nvlink's PCIe-PHY defer). Requiring own-fire under *some* real runner blob
-    # keeps the honesty check for everyone without a superset-model false fail.
-    for stem in DETECTORS:
-        if stem in blobs:
-            ok = stem in own_fires or DETECTORS[stem](_runner_blob_for(stem))
-            assert ok, f"is_{stem} failed to fire on its own benchmark"
+
+
+@pytest.mark.skipif(not BP.is_dir(),
+                    reason="neither benchmark_phase1/ nor synthetic fixtures present")
+def test_every_detector_fires_on_its_own_benchmark():
+    """Each detector whose own benchmark dir is present must self-fire — in
+    force for EVERY discovered detector, ordering-dependent or not.
+
+    Own-fire may hold under either pinned superset ordering OR the runner's
+    actual narrow blob (L1+L2 + input_doc): an ordering-dependent detector's
+    sibling-MUTEX can legitimately defer under the token-injected superset while
+    still firing on the runner's real blob (e.g. ahb_apb's AXI-primary defer,
+    cxl / nvlink's PCIe-PHY defer). Requiring own-fire under *some* real runner
+    blob keeps the honesty check for everyone without a superset-model false
+    fail. Accepting EITHER ordering is deliberate: the pre-#1444 sweep accepted
+    whichever single layout the filesystem produced, so demanding own-fire under
+    one specific layout would be a NEW tightening this fix did not measure.
+    """
+    present = set(_present_benchmarks())
+    for stem, fn in DETECTORS.items():
+        if stem not in present:
+            continue
+        ok = (fn(_blob_for(stem))
+              or fn(_blob_for(stem, reverse=True))
+              or fn(_runner_blob_for(stem)))
+        assert ok, f"is_{stem} failed to fire on its own benchmark"
+
+
+# ---------------------------------------------------------------------------
+# THE HEAD-WINDOW LOTTERY, ENUMERATED INSTEAD OF SAMPLED (vibe-ic#1444)
+# ---------------------------------------------------------------------------
+# Pinning the order stops the verdict moving between hosts, but on its own it
+# would just freeze ONE draw of the lottery. So the detectors that can notice
+# the order at all get the complete treatment: every document a directory read
+# could put first gets to lead, and a foreign fire under ANY of them counts.
+#
+# MEASURED when this was written, on the real 87-benchmark corpus: the sorted
+# and reversed sweeps above each find ZERO misfires, while this bracket reaches
+# TWO — and both are already-filed bugs that the two-ordering sweep cannot see:
+#
+#   is_mdio on ethercat   4 of 24 leading documents   (PR #1435)
+#   is_mdio on ethernet  12 of 24 leading documents   (vibe-ic#1329)
+#
+# They are enumerated here, not silenced: this arm is strictly ADDITIVE (before
+# it, the sweep caught NEITHER on this host), and any THIRD pair fails. The
+# entries come out as their issues land — they are the work list, not a waiver.
+# Keyed (detector, benchmark), same shape as the allowlists above.
+HEAD_WINDOW_LEAD_DEPENDENT_MISFIRES = {
+    ("mdio", "ethercat"),   # PR #1435 — MDIO-on-EtherCAT
+    ("mdio", "ethernet"),   # vibe-ic#1329 — MDIO-on-Ethernet
+}
+
+
+def _order_sensitive_detectors():
+    """{stem: reason} — detectors whose verdict can move with the byte layout.
+
+    Delegates to the canonical program so there is ONE classifier. It reads
+    BYTECODE and fails SENSITIVE on anything it cannot resolve, so a detector
+    is never excluded from the bracket because a comment said it was safe.
+    """
+    return _matrix.positional_detectors(DETECTORS)
+
+
+def test_order_sensitive_classifier_is_live_and_conservative():
+    """The bracket below is only worth anything if the classifier actually
+    finds the head-window family — and only safe if it errs toward including.
+
+    Both directions, on purpose-built controls: a slicing predicate, one that
+    slices via a helper, one that uses a position-revealing method, and one that
+    is opaque, must all be flagged; a pure token-membership predicate must not.
+    """
+    def _helper(low):
+        return "x" in low[:100]
+
+    def slices(blob):
+        return "x" in blob.lower()[:3500]
+
+    def slices_via_helper(blob):
+        return _helper(blob.lower())
+
+    def uses_position(blob):
+        return blob.lower().find("x") < 3500
+
+    def token_only(blob):
+        return "x" in blob.lower() and blob.lower().count("y") > 2
+
+    import sys as _s
+    _mod = _s.modules[__name__]
+    for fn in (slices, slices_via_helper, uses_position):
+        assert _matrix.positional_reason(fn, _mod), (
+            f"{fn.__name__} reads a POSITION and must be classed order-sensitive")
+    assert _matrix.positional_reason(len), (
+        "an opaque callable must fail SENSITIVE, not be silently cleared")
+    assert not _matrix.positional_reason(token_only, _mod), (
+        "a pure token-membership predicate is permutation-invariant; flagging it "
+        "would make the exhaustive bracket cost 86 detectors instead of a handful")
+
+    # ... and it must find the real family, or the bracket is vacuous.
+    found = _order_sensitive_detectors()
+    assert found, (
+        "no discovered detector was classed order-sensitive — the head-window "
+        "bracket below would pass by examining nothing")
+
+
+@pytest.mark.skipif(not BP.is_dir(),
+                    reason="neither benchmark_phase1/ nor synthetic fixtures present")
+def test_no_order_sensitive_detector_fires_under_any_reachable_leading_document():
+    """No head-window detector may fire on a foreign benchmark under ANY
+    document order a directory read could produce.
+
+    The bracket is complete for the degree of freedom that matters: the two
+    globs are always concatenated in the same GROUP order, so the only thing a
+    readdir can change about the blob head is which member of the head group
+    comes first — and every one of them is tried.
+    """
+    sensitive = _order_sensitive_detectors()
+    assert sensitive, "classifier found nothing — bracket would be vacuous"
+    reachable = {}
+    examined = 0
+    for b in _present_benchmarks():
+        head, _tail = _doc_groups(b)
+        if len(head) < 2:
+            continue  # one candidate => no freedom => the sweeps above cover it
+        for lead in head:
+            blob = _blob_for(b, lead=lead)
+            examined += 1
+            for stem in sensitive:
+                if stem == b or (stem, b) in KNOWN_DERIVED_SIBLING_CROSS_FIRES:
+                    continue
+                if DETECTORS[stem](blob):
+                    reachable.setdefault((stem, b), []).append(Path(lead).name)
+    assert examined, (
+        "no benchmark had more than one candidate leading document — the "
+        "bracket examined nothing and its PASS carries no information")
+    new = {k: v for k, v in reachable.items()
+           if k not in HEAD_WINDOW_LEAD_DEPENDENT_MISFIRES}
+    assert not new, (
+        "protocol detector mis-fires that a directory order can REACH, outside "
+        "the enumerated set — the sweep's verdict on these pairs is decided by "
+        f"which document the filesystem returns first: "
+        f"{ {k: sorted(v) for k, v in new.items()} } "
+        f"(examined {examined} leading-document layouts across "
+        f"{len(sensitive)} order-sensitive detector(s): {sorted(sensitive)})"
+    )
+
+
+def test_head_window_residual_names_real_detectors():
+    """The enumerated lead-dependent set must name real, discovered detectors —
+    so a typo cannot quietly widen it into a blanket waiver."""
+    stray = {s for s, _b in HEAD_WINDOW_LEAD_DEPENDENT_MISFIRES
+             if s not in DETECTORS}
+    assert not stray, (
+        f"residual names detectors that are not discovered (stale entries): {stray}")
+
+
+def test_blob_layout_is_independent_of_directory_iteration_order(tmp_path,
+                                                                 monkeypatch):
+    """THE REGRESSION TEST for vibe-ic#1444 itself.
+
+    ``_blob_for`` used to join two RAW ``glob.glob`` results, so its output was
+    whatever order the filesystem returned. This drives the same directory
+    through several iteration orders and requires the blob to come back
+    BYTE-IDENTICAL. It fails on the pre-fix builder (which simply echoed the
+    order it was handed) and needs no private corpus to do so.
+    """
+    b = "demo"
+    idir = tmp_path / b / "phase1" / "input_doc"
+    gdir = tmp_path / b / "phase1" / "generated_docs"
+    idir.mkdir(parents=True)
+    gdir.mkdir(parents=True)
+    for n in ("a_spec.txt", "b_spec.txt", "c_spec.txt"):
+        (idir / n).write_text(f"SOURCE {n}\n")
+    for n in ("L1_DATASHEET.json", "L2_FRS.json", "L9_INTEGRATION_SPEC.json"):
+        (gdir / n).write_text('{"doc": "%s"}\n' % n)
+
+    monkeypatch.setattr(_this, "BP", tmp_path)
+    real_glob = glob.glob
+    seen = []
+    for rotate in range(4):
+        def fake_glob(pattern, _r=rotate):
+            hits = real_glob(pattern)
+            # every readdir order is legal; rotate + reverse to sample several
+            hits = hits[_r % max(len(hits), 1):] + hits[:_r % max(len(hits), 1)]
+            return hits[::-1] if _r % 2 else hits
+        monkeypatch.setattr(glob, "glob", fake_glob)
+        seen.append(_blob_for(b))
+    assert len(set(seen)) == 1, (
+        "the blob's byte layout changed with directory iteration order — a "
+        "head-window detector run against it is answering a question about "
+        f"readdir, not about the documents. layouts seen: {len(set(seen))}")
+    assert seen[0].index("SOURCE a_spec.txt") < seen[0].index("SOURCE c_spec.txt")
+    assert seen[0].index("SOURCE c_spec.txt") < seen[0].index("L1_DATASHEET"), (
+        "input_doc must still lead the blob — the runner's auto-dispatch order")
+
+
+@pytest.mark.skipif(not _REAL_BP.is_dir(), reason="private corpus absent")
+def test_blob_matches_the_canonical_program_builder():
+    """This guard and ``protocol_detector_no_misfire_matrix`` build the SAME
+    blob — the program's docstring already claimed ``--blob superset`` "matches
+    the pytest guard" while the guard was building an unsorted one.
+
+    A benchmark that ever puts a non-``.txt``/``.md`` file in ``input_doc``
+    would break the equality; the assertion is here so that shows up as a named
+    divergence instead of two sweeps quietly measuring different things.
+    """
+    mismatched = [b for b in _present_benchmarks()
+                  if _blob_for(b) != _matrix.blob_for(BP, b, "superset")]
+    assert not mismatched, (
+        "the guard's blob and the canonical program's blob have diverged for: "
+        f"{mismatched}")
 
 
 def test_ordering_dependent_residual_is_a_subset_of_discovered():
