@@ -97,6 +97,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 
 # pytest's own default collection patterns, spelled once. Anything else here
 # would be a SECOND definition of "is a test file" that can drift from the one
@@ -323,7 +324,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     findings = audit(repo, part, plugin)
 
     if args.json:
-        Path(args.json).write_text(
+        atomic_write_text(
+            Path(args.json),
             json.dumps({"plugin": plugin, "findings": findings, **part},
                        indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
