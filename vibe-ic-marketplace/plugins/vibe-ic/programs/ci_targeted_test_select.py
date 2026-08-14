@@ -348,6 +348,14 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # among them. The PR that neuters the gate is precisely the PR whose
     # changed-file set cannot reach the test that guards it. ~2 s for 7 tests.
     "test_issue1025_empty_corpus_sweep_blocks.py",
+    # vibe-ic#1025 — same reachability argument, arriving through a JSON
+    # file. What this guard pins is partly a property of
+    # `tools/ci/gate_red_since.json`: that no acknowledgement has an
+    # unreachable deadline. That path is outside `_SOURCE_DIRS` and no test
+    # is NAMED after it, so MEASURED with the selector on exactly the
+    # one-file diff that switches the mechanism off (`max_commits:
+    # 9999999`): 16 tests selected, this guard NOT among them. ~3 s.
+    "test_gate_red_since_check.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
