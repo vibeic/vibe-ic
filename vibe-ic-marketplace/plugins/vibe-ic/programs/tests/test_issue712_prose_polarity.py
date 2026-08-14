@@ -639,7 +639,22 @@ def test_the_source_mutator_needs_NO_exemption_because_it_publishes_nothing(
         problems = G.exemption_audit(live, real)
     finally:
         G._NOT_PROSE = original
-    assert any(name in p and "does not flag it" in p for p in problems), (
+    # MATCHED ON THE DIAGNOSIS, NOT ON ONE PHRASING OF IT. This asserted the
+    # literal `"does not flag it"`, which is main's exact wording — and #1572
+    # improves that message for the refactor case, to "the scan no longer flags
+    # it: the search moved out of this body into `_literal_span` ... Do NOT
+    # delete the entry". Measured: #1602 alone 35 passed, #1572 alone 1 failed
+    # / 37 passed (main's red, inherited), BOTH TOGETHER 1 failed / 37 passed —
+    # and the one failure was THIS assertion, on a substring, while the property
+    # it exists to check was intact and BETTER reported than before.
+    #
+    # `"exempted, but the scan"` is the stem both messages share and is still
+    # specific to the LIVENESS diagnosis: it is the only branch of
+    # `exemption_audit` that opens that way, so a message about a short reason
+    # or an out-of-scope module does not satisfy it. Two tests must not disagree
+    # about behaviour because one of them pinned the other's prose.
+    assert any(name in p and "exempted, but the scan" in p
+               for p in problems), (
         "an exemption for a non-finding was accepted; the liveness half of "
         f"exemption_audit has stopped working: {problems}")
 
