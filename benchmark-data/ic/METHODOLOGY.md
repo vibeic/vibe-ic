@@ -153,9 +153,17 @@ The full convention (folder layout, exclusions, the publish/validate commands) i
   auto-N/A for an analog-only IC (mirrors Pillar 6's N/A-without-PnR); a DIGITAL
   IC with a missing coverage report still stays PENDING (no silent pass). New
   test `tests/test_benchmark_verify_analog_only.py` (analog-only N/A +
-  digital-IC-still-PENDING guard). Full report + evidence:
-  `u_hawaii_adc/{RESULT,BENCHMARK_VERIFICATION_REPORT}.md` +
-  `u_hawaii_adc/{phase3/analog,cross_check,reports}/`.
+  digital-IC-still-PENDING guard). Evidence that ships:
+  `u_hawaii_adc/{phase3/analog,reports}/`.
+  **This entry's two summary documents are NOT shipped, and neither is its
+  cross-check tree.** `95787ef8` published the cell into a versioned directory on
+  a DIFFERENT PDK and deleted `RESULT.md`, `BENCHMARK_VERIFICATION_REPORT.md` and
+  `cross_check/` from the IC level as superseded — but a different-PDK run does
+  not supersede this one, and the document that cites them was not updated. The
+  verdict above stands on the evidence that does ship; the two summaries are
+  recoverable from the object store (`95787ef8^`) and are not in the tree. Do not
+  re-point this citation at `v1.9.86_*/RESULT.md`: that is the other PDK's run
+  and would silently re-base this claim (vibe-ic#1169).
 - [benchmark-verified 2026-05-26] `spm` — **FIRST fully benchmark-verified IC**:
   `benchmark-verify` OVERALL = **PRODUCTION-READY** (all 6 pillars pass; evidence in
   `spm/BENCHMARK_VERIFICATION_REPORT.md` + `spm/reports/`). Pillar 1 Functional
