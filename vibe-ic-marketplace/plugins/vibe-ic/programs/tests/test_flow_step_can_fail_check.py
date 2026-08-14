@@ -28,12 +28,33 @@ def _flow(tmp: Path, steps) -> Path:
     return f
 
 
+def _baseline():
+    """The checker's OWN `BASELINE`, read from the module under test.
+
+    Hardcoding these ids is what broke
+    `test_a_baseline_entry_that_gained_a_real_gate_forces_the_baseline_to_shrink`:
+    `018be73dc` (v1.10.30) fixed real step 12 and correctly shrank the baseline,
+    exactly as the checker demands. The fixture kept listing 12 as weak, and a
+    weak step that is NOT baselined is a *new* offender, which the checker
+    reports first and returns 1 for — so the test went red while asserting on a
+    branch it no longer reached.
+
+    A baseline that may only shrink guarantees this recurs. Reading it is the
+    only form that cannot drift from it.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_fscf_under_test", GATE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return dict(mod.BASELINE)
+
+
 def _strong(sid):
     """A step with a criterion that can fail.
 
-    Ids here stay clear of the real baseline (P0, 1, 12, 14, 18, 27, 32, 35):
-    reusing one makes the fixture trip the baseline-must-shrink branch, which is
-    the checker working correctly and the test asking the wrong question.
+    Ids here stay clear of the checker's BASELINE (see `_baseline()`): reusing
+    one makes the fixture trip the baseline-must-shrink branch, which is the
+    checker working correctly and the test asking the wrong question.
     """
     return {"id": sid, "name": f"step {sid}",
             "gate": {"program_exit_zero": "some_check"}}
@@ -97,21 +118,25 @@ def test_a_baseline_entry_that_gained_a_real_gate_forces_the_baseline_to_shrink(
     A baseline that never shrinks stops describing anything and becomes a list of
     permissions.
     """
-    f = _flow(tmp_path, [{"id": "P0", "name": "now gated",
-                          "gate": {"program_exit_zero": "x"}},
-                         {"id": 14, "name": "still weak",
-                          "gate": {"optional_program_exit_zero": "x"}},
-                         {"id": 1, "name": "still weak",
-                          "gate": {"files_exist": ["a"]}},
-                         {"id": 12, "name": "w", "gate": {"files_exist": ["a"]}},
-                         {"id": 18, "name": "w", "gate": {"files_exist": ["a"]}},
-                         {"id": 27, "name": "w", "gate": {"files_exist": ["a"]}},
-                         {"id": 32, "name": "w", "gate": {"files_exist": ["a"]}},
-                         {"id": 35, "name": "w", "gate": {"files_exist": ["a"]}}])
+    base = _baseline()
+    healed = "P0"
+    assert healed in base, (
+        f"this test heals {healed!r}, which must be a baseline entry for the "
+        f"shrink branch to be reachable at all; baseline is {sorted(base)}")
+
+    # Every OTHER baseline entry stays weak, and nothing outside the baseline
+    # appears: an unbaselined weak step is a `new` offender, which the checker
+    # reports first and returns 1 for, so it would mask the branch under test.
+    steps = [{"id": healed, "name": "now gated",
+              "gate": {"program_exit_zero": "x"}}]
+    steps += [{"id": k, "name": "still weak", "gate": {"files_exist": ["a"]}}
+              for k in sorted(base) if k != healed]
+
+    f = _flow(tmp_path, steps)
     rc, out = _run(f)
     assert rc == 1, out
     assert "must shrink" in out
-    assert "P0" in out
+    assert healed in out
 
 
 def test_stage_containers_are_not_steps(tmp_path):
