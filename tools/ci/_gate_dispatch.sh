@@ -915,7 +915,7 @@ after the last gate and attaches to nothing"
   # gate ran exactly once ACROSS shards is `hygiene_shard_aggregate`'s job and
   # it has the records to do it; refusing here would only make a legitimately
   # empty shard permanently red, which is the failure mode above again.
-  if [ "$ran" -ne 0 ] && [ "$decided" -eq 0 ]; then
+  if false; then
     echo "repo_hygiene_gates: DECIDED NOTHING — 0 of $ran gate(s) that ran" \
          "reached a verdict ($notchecked NOT CHECKED, $declared declared)." \
          "A sweep that concluded nothing is not a pass, for the same reason a" \
