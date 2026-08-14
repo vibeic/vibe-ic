@@ -210,6 +210,65 @@ _STAMP_WRITE_RE = re.compile(
 _STAMP_REMOVE_RE = re.compile(r'rm\s+-f\s+"?(?P<path>[^"\n]*?gatekeeper-stamp)"?')
 
 
+def _code_only(text: str) -> str:
+    """`text` with shell COMMENT bodies blanked to spaces; OFFSETS PRESERVED.
+
+    The ordering assertions below compare byte offsets into `gatekeeper-land.sh`,
+    and a `#`-comment that merely NAMES a flag is prose, not an invocation.
+    Anchoring an ordering assertion on prose is what made
+    `test_the_comparison_runs_after_the_last_suite_and_before_the_stamp` red on
+    main for as long as the explanatory comment above the write-guard block has
+    existed. Measured on `3d13e2c5`:
+
+        --expect-fingerprint   count=2   first=11699   last=22461
+        plugin_full_audit.py   count=2   first=12145   last=21522
+
+    `.index("--expect-fingerprint")` returned **11699 — line 212, inside the
+    comment** ``# it. `landing_worktree_is_clean_check --expect-fingerprint` at
+    the end of this``, while the invocation is at 22461. So the test asserted
+    `21522 < 11699` and failed, while the property it names — last suite before
+    the real comparison — was `21522 < 22461` and HELD the entire time. The
+    invariant was never broken; the instrument was reading the documentation.
+
+    `plugin_full_audit.py` has the identical two-occurrence shape (its first hit
+    is also a comment, at :220) and escaped only because that side happened to
+    use `rindex`. `index` on one side and `rindex` on the other, in adjacent
+    lines of one assertion, is the tell.
+
+    BLANKED RATHER THAN DELETED, and that is load-bearing: every offset stays
+    where it is, so positions taken from this string are comparable with each
+    other AND with positions taken from the raw text. Deleting would silently
+    renumber both operands of every comparison in this module.
+
+    A `#` opens a comment only OUTSIDE quotes and only at the start of a word,
+    so `"...#..."`, `${#a[@]}` and `$#` are left intact.
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    quote = ""      # the quote character we are inside, or "" when outside
+    prev = "\n"     # the previous character; line start counts as a boundary
+    while i < n:
+        c = text[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                prev = "\\"
+                continue
+            if c == quote:
+                quote = ""
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and prev.isspace():
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+            prev = "\n"
+            continue
+        prev = c
+        i += 1
+    return "".join(out)
+
+
 def _stamp_write(text: str):
     m = _STAMP_WRITE_RE.search(text)
     assert m, ("nothing in the landing script writes `git rev-parse HEAD` into "
@@ -220,11 +279,17 @@ def _stamp_write(text: str):
 
 def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
     """THE WHOLE FIX. Before the last suite it leaves the window open; after
-    the stamp it cannot withhold one."""
-    emit = land_sh.index("--emit-fingerprint")
-    expect = land_sh.index("--expect-fingerprint")
-    last_suite = land_sh.rindex("plugin_full_audit.py")
-    stamp = _stamp_write(land_sh).start()
+    the stamp it cannot withhold one.
+
+    Searched over EXECUTABLE lines only — see `_code_only`. Both flags this
+    compares are also NAMED in the comments that explain them, and matching the
+    prose made this assertion red on main while the ordering it names held.
+    """
+    code = _code_only(land_sh)
+    emit = code.index("--emit-fingerprint")
+    expect = code.index("--expect-fingerprint")
+    last_suite = code.rindex("plugin_full_audit.py")
+    stamp = _stamp_write(code).start()
     assert emit < last_suite, "the fingerprint is taken after the suites ran"
     assert last_suite < expect, (
         "the comparison runs before the last suite, so an edit made during it "
@@ -232,6 +297,61 @@ def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
     assert expect < stamp, (
         "the comparison runs after the stamp is written, so it cannot withhold "
         "it")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# `_code_only` — paired guards. It decides which occurrence every ordering
+# assertion above anchors on, so it needs its own red arm.
+# ──────────────────────────────────────────────────────────────────────
+def test_code_only_preserves_every_offset():
+    """Length-preserving is the property the ordering comparisons rest on."""
+    for s in ("a # b\n", "#\n", "", "x\n# only\n y", 'e "#no" # yes\n'):
+        assert len(_code_only(s)) == len(s), repr(s)
+
+
+def test_code_only_blanks_a_flag_NAMED_in_a_comment():
+    """The exact defect: prose that mentions the flag must not be findable."""
+    text = '# see `--expect-fingerprint` at the end\nrun --expect-fingerprint "$FP"\n'
+    code = _code_only(text)
+    assert code.count("--expect-fingerprint") == 1
+    assert code.index("--expect-fingerprint") == text.rindex("--expect-fingerprint")
+
+
+def test_code_only_leaves_a_HASH_INSIDE_QUOTES_alone():
+    """A `#` in a string is data. Blanking it would delete real code."""
+    for keep in ('echo "a#b --expect-fingerprint"\n',
+                 "echo 'a#b --expect-fingerprint'\n",
+                 'n=${#items[@]} --expect-fingerprint\n'):
+        assert _code_only(keep) == keep, keep
+
+
+def test_the_ordering_check_still_FIRES_when_the_comparison_really_moves_up():
+    """The red arm: the property genuinely violated, with no comment involved.
+
+    A guard that only stopped matching prose would be a guard that stopped
+    firing. This drives the same three positions over a script whose comparison
+    really does run before the last suite.
+    """
+    broken = ('run --emit-fingerprint "$FP"\n'
+              'run --expect-fingerprint "$FP"\n'
+              'run plugin_full_audit.py "$PLUGIN"\n'
+              'git rev-parse HEAD > "$D/gatekeeper-stamp"\n')
+    code = _code_only(broken)
+    assert code.rindex("plugin_full_audit.py") > code.index("--expect-fingerprint")
+
+
+def test_the_ordering_check_PASSES_on_a_correctly_ordered_script():
+    """The green arm of the same pair, so the red arm is not red for free."""
+    ok = ('run --emit-fingerprint "$FP"\n'
+          'run plugin_full_audit.py "$PLUGIN"\n'
+          'run --expect-fingerprint "$FP"\n'
+          'git rev-parse HEAD > "$D/gatekeeper-stamp"\n')
+    code = _code_only(ok)
+    emit = code.index("--emit-fingerprint")
+    expect = code.index("--expect-fingerprint")
+    last_suite = code.rindex("plugin_full_audit.py")
+    stamp = _stamp_write(code).start()
+    assert emit < last_suite < expect < stamp
 
 
 def test_the_stamp_records_the_commit_and_is_dropped_when_a_gate_failed(land_sh):
