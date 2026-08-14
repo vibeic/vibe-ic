@@ -92,12 +92,44 @@ def test_freshness_check_compares_mtimes_against_the_rtl_dir():
         "selector step_synth itself reads)")
 
 
+def _stale_branch_body() -> str:
+    """The body of the guard's ``if _stale_rtl:`` branch.
+
+    Scoped to the BRANCH, not to the whole guard, and the difference is not
+    cosmetic. The guard contains a SECOND, unrelated ``_nl_pdk_ok = False`` —
+    the producer-identity key, which clears the same flag when the synth recipe
+    changed. A whole-region search for that assignment therefore matches even
+    when the staleness branch has stopped clearing the flag entirely, so the
+    test could not fail for the property it names.
+
+    Measured: deleting the ``_nl_pdk_ok = False`` under ``if _stale_rtl:`` and
+    leaving the producer-identity one in place left this file at 16 passed. The
+    silent-no-op defect this whole module exists to pin would have been live and
+    green. Scoped here, that mutation reddens.
+    """
+    block = _cache_guard_block()
+    m = re.search(r"^(?P<ind>[ \t]*)if _stale_rtl:[ \t]*$", block, re.M)
+    assert m, (
+        "the cache guard no longer has an `if _stale_rtl:` branch — staleness "
+        "is computed and then never acted on, which is the silent no-op this "
+        "module exists to prevent")
+    inner = m.group("ind") + " "
+    body = []
+    for line in block[m.end():].splitlines():
+        if line.strip() and not line.startswith(inner):
+            break          # dedented to the `if`'s level or further: branch over
+        body.append(line)
+    return "\n".join(body)
+
+
 def test_stale_rtl_forces_resynthesis():
     """Detecting staleness must actually clear the reuse flag."""
-    block = _cache_guard_block()
-    assert re.search(r"_nl_pdk_ok = False", block), (
-        "staleness is detected but the cache is still reused: the guard must "
-        "set the reuse flag False so step_synth re-runs")
+    branch = _stale_branch_body()
+    assert re.search(r"_nl_pdk_ok = False", branch), (
+        "staleness is detected but the cache is still reused: the "
+        "`if _stale_rtl:` branch must set the reuse flag False so step_synth "
+        "re-runs. Clearing it anywhere else in the guard does not count — the "
+        "producer-identity key also clears this flag, for a different reason.")
 
 
 def test_unprovable_freshness_is_not_trusted():
