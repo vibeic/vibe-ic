@@ -408,6 +408,13 @@ def test_e1_never_fires_on_a_published_cell_that_declares_a_catalog():
         populated_found_nothing.append(proj)
         if any(f.category == "TEMPLATE_WITHOUT_EXTRACTION" for f in findings):
             offenders.append(proj.name)
+    # WHY A PROPERTY AND NOT A COUNT, measured on main before this change:
+    # the pinned census drifted 21 -> 16 fired and 103 -> 101 status_nothing,
+    # and running the checker AS IT STOOD BEFORE its last change (`b442b9b3`)
+    # against today's corpus gave the SAME 16/101 — so the rule decided exactly
+    # what it decided before and the projects underneath it moved. A census pin
+    # goes red on that; the property below does not, and still fails on the
+    # thing the pin was there to catch.
     assert populated_found_nothing, (
         "no published cell reports EXTRACTION_FOUND_NOTHING over a POPULATED "
         "catalog, so this test examined nothing — re-derive the population "
