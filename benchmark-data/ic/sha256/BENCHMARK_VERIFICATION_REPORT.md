@@ -90,3 +90,4 @@ _Design-for-ECO status: **PASS** — coverage status=PASS, keep_attr_intact=True
 | P0 | Structural-RTL pre-flight (77 chip-AGNOS | applicable | PASS | 77 structural-RTL chip-agnostic checkers clean |
 
 _Total steps: 56 · applicable: 39 · PASS: 39 · unresolved: 0_
+
