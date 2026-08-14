@@ -228,6 +228,22 @@ steps:
       # (93 program files write `L13_LAB_CALIBRATION.json`; zero write
       # `L13_OTP.json`), so it was a declaration that could never be satisfied.
       - "phase1/generated_docs/L13_*.json"
+      # MOVED HERE FROM STEP 1 (63x9 d4/step1, issue #1219). The Phase-1
+      # extraction-coverage REPORT: a per-doc diagnostic of which verbatim
+      # literals from `extraction_patterns.json` reached
+      # `generated_docs/L*.json`; companion to the LL-38 gate.
+      #
+      # It is declared HERE because every writer of it is a PHASE-1 program.
+      # `test_coverage_report_producer_provenance.py` names both:
+      # `phase1_doc_one_shot_runner.py` and `phase1_coverage_report_gen.py`
+      # (write site: `phase1_coverage_report_gen.py:905-906`). Step 1 is the
+      # spec-to-RTL step; it CONSUMES L-docs and writes no coverage report, so
+      # declaring the artefact there was a mis-filed obligation, not a missing
+      # gate clause. The obligation MOVED, it was not dropped — the clause
+      # `phase1_coverage_report_present_check` below reads it.
+      #
+      # AND MEASURED ON THE PUBLISHED CORPUS, independently of the
+      # provenance argument above — the two supports do not overlap:
       # Phase 1 extraction-coverage REPORT (companion to LL-38 gate);
       # per-doc diagnostic of which verbatim literals from
       # extraction_patterns.json reached generated_docs/L*.json.
@@ -245,6 +261,15 @@ steps:
         # not. A missing/unparseable report exits 1 here, because a second
         # track that can quietly not run is the same as no second track.
         - program_exit_zero: "phase1_expert_parse_track ."
+        # The CLAUSE that reads the two extraction-coverage entries moved here
+        # from step 1 (#1219). Without it, moving the declaration alone would
+        # only RELOCATE d4's "declared by no clause" finding from step 1 to D1.
+        #
+        # `phase1_coverage_report_present_check.py` shipped and was wired
+        # NOWHERE — verified on a38902d1: the program exists and
+        # `grep -c phase1_coverage_report_present_check` over this file returned
+        # 0. That is the #725 shape this flow keeps finding.
+        - program_exit_zero: "phase1_coverage_report_present_check ."
         # vibe-ic#693 — the forbidden-artefact rule from
         # `skills/analog-spec-extract/SKILL.md`: `analog/A0_skip_decision.json`
         # may not encode a top-level analog skip. Wired HERE, at the
@@ -492,6 +517,21 @@ steps:
     skills: [spec-to-rtl]
     required_outputs:
       - "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+      # MOVED TO D1 (63x9 d4/step1, issue #1219). The Phase-1
+      # extraction-coverage report was declared HERE and read by no clause of
+      # this step's own gate. It is a Phase-1 artefact in every respect: it
+      # lives under `reports/phase1/`, both its writers are Phase-1 programs
+      # (`phase1_doc_one_shot_runner.py`, `phase1_coverage_report_gen.py`), and
+      # `phase1_coverage_report_present_check.py` judges it. D1 now declares it
+      # and its gate runs that checker.
+      #
+      # NOT fixed by extending this gate instead — and the reason is a trap
+      # worth recording. `any_of: true` is a MODIFIER on the `files_exist`
+      # block (`flow_compliance_check.py:7538, :7596`), not a per-entry
+      # property, so appending the two report paths to the list below would
+      # have made this gate pass on ANY ONE of four files — strictly WEAKER
+      # than requiring the RTL. Any future addition to that list weakens it the
+      # same way; add a nested `all_of` sub-gate instead.
     gate:
       files_exist: ["phase2/stage1/rtl/*.sv", "phase2/stage1/rtl/*.v"]
       any_of: true
