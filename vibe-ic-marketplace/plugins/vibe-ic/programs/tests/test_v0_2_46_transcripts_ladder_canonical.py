@@ -16,12 +16,41 @@ a vetted canonical sample failing the hidden golden at >=50% mismatch flags
 canonical_samples/ access is itself blindness-audited (V3).
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
+
+#: THREE tests below drive the REAL scorer, which compiles with `iverilog` and
+#: runs the result with `vvp`. Undeclared, they did not fail on their subject —
+#: they died in `subprocess` with
+#: `FileNotFoundError: [Errno 2] No such file or directory: 'iverilog'`, which
+#: names the tool only by accident of the traceback and says nothing about what
+#: coverage was lost.
+#:
+#: This is the shape `_sim_tools` documents for the cvdp cluster (vibe-ic#1128):
+#: a file that needs a simulator and guards on nothing. `NEEDS_SIM` is NOT
+#: reused here on purpose — it requires iverilog AND yosys because `cvdp_gate`
+#: refuses without both, and these three need iverilog/vvp only. Borrowing it
+#: would skip them on a yosys-less host where they can genuinely run, trading an
+#: honest result for a green, which is the same hole one step over.
+#:
+#: PER TEST, never `pytestmark`: 11 of the 14 tests in this file exercise the
+#: transcripts/blindness-audit ladder and need no simulator at all. A module
+#: mark would stop 11 honest assertions to silence 3.
+#:
+#: The reason NAMES the missing binaries, so a reader of the run learns which
+#: coverage was lost without opening this file.
+_SIM = tuple(t for t in ("iverilog", "vvp") if shutil.which(t) is None)
+NEEDS_IVERILOG = pytest.mark.skipif(
+    bool(_SIM),
+    reason="drives the real iverilog scorer; missing on this host: "
+           + ", ".join(_SIM or ("-",)))
 
 PLUGIN = Path(__file__).resolve().parent.parent.parent
 HARNESS = PLUGIN / "benchmark"
@@ -151,6 +180,7 @@ def _stage_canonical(tmp_path, monkeypatch, body):
     monkeypatch.setattr(sit, "_CANONICAL_DIR", tmp_path / "canon")
 
 
+@NEEDS_IVERILOG
 def test_canonical_disagreement_returns_evidence(tmp_path, monkeypatch):
     ds = _stage_dataset(tmp_path)
     # canonical inverts -> disagrees with the golden on every sample
@@ -162,6 +192,7 @@ def test_canonical_disagreement_returns_evidence(tmp_path, monkeypatch):
     assert ev and "4/4" in ev
 
 
+@NEEDS_IVERILOG
 def test_canonical_agreement_returns_none(tmp_path, monkeypatch):
     ds = _stage_dataset(tmp_path)
     _stage_canonical(tmp_path, monkeypatch,
@@ -178,6 +209,7 @@ def test_no_canonical_returns_none(tmp_path, monkeypatch):
         "ProbX", ds, _LAYOUT, _ARGS, "somebench") is None
 
 
+@NEEDS_IVERILOG
 def test_score_shape_c_flags_disclosure_only(tmp_path, monkeypatch):
     # failing sample + disagreeing canonical -> verdict stays FAIL, flag set
     ds = _stage_dataset(tmp_path)
