@@ -198,9 +198,15 @@ def pytest_addoption(parser):
              "tree. Disclosed in the run header; see vibe-ic#1446.")
 
 
-def declaration(config) -> str:
-    """The one line every run states about the root it measured from."""
-    root, top, allowed = classify(config)
+def declaration(config, verdict=None) -> str:
+    """The one line every run states about the root it measured from.
+
+    `verdict` lets a caller that already classified pass the answer in, so one
+    session asks git once. Recomputing would also let the declaration and the
+    refusal disagree if the tree moved between them — a small window, but this
+    guard exists because a run said something other than what it did.
+    """
+    root, top, allowed = verdict if verdict is not None else classify(config)
     if top is None:
         return (f"scratch_root_guard: {root} — outside any git work tree "
                 f"(or git could not be asked)")
@@ -233,8 +239,9 @@ def pytest_configure(config):
     emitted at the END costs a line of the failure the reader needs. A run's
     conditions belong before its results anyway.
     """
-    print("[INFO] " + declaration(config))
-    root, top, allowed = classify(config)
+    verdict = classify(config)
+    print("[INFO] " + declaration(config, verdict))
+    root, top, allowed = verdict
     if top is not None and not allowed:
         raise pytest.UsageError(
             "scratch_root_guard: " + _REFUSAL.format(
