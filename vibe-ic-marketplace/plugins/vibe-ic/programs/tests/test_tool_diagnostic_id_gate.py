@@ -414,18 +414,90 @@ def test_the_corpus_pair_resolves_and_the_gate_fires():
     assert "DRT-0120" in report["new_ids_blocking"], report["new_ids_blocking"]
 
 
-@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
-def test_a_run_that_states_no_pdk_is_refused_not_assumed_to_match():
+#: Two sibling runs of ONE design, same naming FAMILY (`run_seq`), neither
+#: recording a `"pdk"` field anywhere — the shape `_cell` produces writes only
+#: `reports/phase3/run.log`, so `measured_pdk` finds nothing and `_RE_CELL`
+#: does not match the name either. This is the only shape in which the refusal
+#: rule is REACHABLE: `_cell_ordinal` must already agree (same family, lower
+#: ordinal) before `pdk_key` is ever consulted.
+_UNSTATED_PREV = "clean_run_v1400_20260101"
+_UNSTATED_CUR = "clean_run_v1401_20260102"
+
+
+def test_a_run_that_states_no_pdk_is_refused_not_assumed_to_match(tmp_path):
     """"I could not tell" must never resolve to "same".
 
-    Two `u_hawaii_adc` run dirs record no PDK at all. Matching them on silence
-    would compare runs whose process is unknown — the 18-false-positive mistake
-    this resolver's PDK guard exists to prevent, arriving through a hole instead
-    of through the front door.
+    SYNTHETIC, and that is the repair. This test used to build its own subjects
+    by calling the function under test::
+
+        unstated = [c for c in _published_cells() if G.pdk_key(c) is None]
+        if not unstated:
+            pytest.skip("every run dir now records a PDK — the hazard is gone")
+
+    A regression that stops `pdk_key` returning None — THE EXACT DEFECT THIS
+    TEST NAMES — empties that list, and the skip then states as a fact the
+    thing the regression destroyed. MEASURED on this tree: with `pdk_key`
+    falling back to a constant `"UNKNOWN"` instead of None, the module reports
+    `30 passed, 1 skipped`, exit 0, while `find_previous` pairs two runs whose
+    process is unknown. That is the 18-false-positive mistake the PDK guard
+    exists to prevent, arriving through the guard's own population.
+
+    The corpus arm was vacuous for a second, independent reason and is kept
+    below only as an observation: the one published cell that yields no key,
+    `u_hawaii_adc/clean_run_v1422_20260715`, has no same-FAMILY sibling beneath
+    it, so `_cell_ordinal` refuses it before the PDK rule is consulted. It
+    could not have exercised this path even when the list was non-empty.
+    """
+    _cell(tmp_path, _UNSTATED_PREV, _PREV_LOG)
+    cur = _cell(tmp_path, _UNSTATED_CUR, _NEW_ID_LOG)
+
+    # the precondition: neither run states a PDK, by either channel
+    assert G.pdk_key(cur) is None, G.pdk_key(cur)
+    assert G.pdk_key(tmp_path / _UNSTATED_PREV) is None
+
+    # and so the pair is REFUSED, though everything else about it matches
+    assert G.find_previous(cur) is None, (
+        f"{_UNSTATED_CUR} states no PDK and a predecessor was resolved for it "
+        f"anyway ({G.find_previous(cur)}). An unmeasurable PDK must refuse, "
+        f"not match.")
+
+    # end to end, through the shipped CLI: NO_BASELINE (rc 2), not a comparison
+    rc, out = _run(cur, _acc(tmp_path / "a.json", []))
+    assert rc == 2, f"expected NO_BASELINE, got rc={rc}: {out}"
+
+
+def test_PAIRED_GUARD_the_same_pair_STATING_a_pdk_does_compare(tmp_path):
+    """The refusal must be about the silence, not about the naming family.
+
+    Byte-identical fixture to the test above with ONE addition — each run
+    records `"pdk": "sky130A"` in its own reports — and it must now resolve,
+    compare, and BLOCK on the added `GRT-0043`. Without this twin, the refusal
+    rule above is satisfiable by never matching a `clean_run_*` pair at all,
+    which is the very defect #1092's resolver was fixed for.
+    """
+    prev = _cell(tmp_path, _UNSTATED_PREV, _PREV_LOG)
+    cur = _cell(tmp_path, _UNSTATED_CUR, _NEW_ID_LOG)
+    for c in (prev, cur):
+        (c / "reports" / "run_meta.json").write_text('{"pdk": "sky130A"}\n')
+
+    assert G.pdk_key(cur) == "sky130A"
+    assert G.find_previous(cur) == prev, G.find_previous(cur)
+
+    rc, out = _run(cur, _acc(tmp_path / "a.json", []))
+    assert rc == 1, f"expected BLOCKING, got rc={rc}: {out}"
+    assert "GRT-0043" in out
+
+
+@pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
+def test_the_published_cells_that_state_no_pdk_are_refused_too():
+    """The corpus arm, no longer load-bearing and no longer self-selecting.
+
+    It carries NO skip: an empty list is simply a corpus that states a PDK
+    everywhere, and the obligation is already discharged synthetically above.
+    An empty result is recorded as an empty result — never as "the hazard is
+    gone".
     """
     unstated = [c for c in _published_cells() if G.pdk_key(c) is None]
-    if not unstated:
-        pytest.skip("every run dir now records a PDK — the hazard is gone")
     for c in unstated:
         assert G.find_previous(c) is None, (
             f"{c.name} states no PDK and a predecessor was resolved for it "
