@@ -788,8 +788,11 @@ run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_c
 # COST: ~3m45s, roughly tripling this script's runtime. Accepted because the
 # class has produced FIVE instances, two of them inside the fixes for the
 # previous ones. Refuses (rc 2) on a dirty checkout rather than reporting the
-# uncommitted work as findings.
-uncheckable_until 2027-02-28 "needs a CLEAN checkout: it compares the working tree against a fresh worktree at the same commit, and rc 2 means tracked modifications made that comparison meaningless (a genuinely host-dependent gate is rc 1)"
+# uncommitted work as findings, and (#1550) on a gate that could not be driven
+# at all — that produced no verdict to compare, so it is "I could not look",
+# not a defect found. A reason that under-states which states a gate can reach
+# is a tolerance the reader believes is narrower than it is, so both are named.
+uncheckable_until 2027-02-28 "needs a CLEAN checkout and gates it can actually drive: rc 2 means EITHER tracked modifications made the two-tree comparison meaningless, OR a gate produced no verdict at all (timeout / missing interpreter) so host-independence was not decided for it. A genuinely host-dependent gate is still rc 1, and is reported first so an undrivable one cannot mask it."
 run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
 # 2026-08-04 — `gate_cli_mutation_probe` makes a gate unable to fail and then
 # restores it in a `finally`. A `finally` does not run on SIGKILL, and twice in

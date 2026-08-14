@@ -828,3 +828,195 @@ def test_the_reproduce_step_costs_nothing_when_the_arms_AGREE(tmp_path):
     G.audit(r, timeout=_T)
     assert marker.read_text() == "2", (
         f"an agreeing gate was driven {marker.read_text()} times, not 2")
+
+
+# --------------------------------------------------------------------------
+# vibe-ic#1550 — A GATE THAT COULD NOT BE DRIVEN IS NOT A FINDING
+#
+# `GATE_UNRUNNABLE` is filed when the subprocess produced no verdict AT ALL,
+# and the comment at that site has always said it "is NOT host-dependence, and
+# it is NOT a clean result either". Every finding was then counted into one
+# `return 1`, and rc 1 is FAIL in `tools/ci/_gate_dispatch.sh`'s own state
+# table: "the gate ran and found something". Nothing ran and nothing was found.
+#
+# MEASURED on `75776dbb`, one repo, one gate whose interpreter does not exist:
+#
+#     [GATE_UNRUNNABLE] undrivable
+#         could not be driven twice: FileNotFoundError: [Errno 2] No such file
+#         or directory: 'no-such-interpreter-1550'
+#     [FAIL] 1 of 1 probed corpus gate(s) (1 declared) did not give one
+#            reproducible verdict across two trees: 1 GATE_UNRUNNABLE.
+#     exit status: 1
+#
+# v1.10.32 fixed the SENTENCE — it no longer names this host-dependence. The
+# TIER is the other half: this program already spends four verdicts on rc 2
+# for "I could not look", and the call site is already
+# `run_tolerating_uncheckable`. Every test in this section was run against
+# `75776dbb` and fails there.
+# --------------------------------------------------------------------------
+
+def _undrivable_repo(tmp_path: Path, extra: str = "", *, name: str = "r"):
+    """A repo whose gate CANNOT be driven: its interpreter does not exist.
+
+    `FileNotFoundError` rather than a sleep, so the whole test costs
+    milliseconds and no inner bound has to be waited out. It reaches the same
+    `except (OSError, subprocess.SubprocessError)` as the measured
+    `TimeoutExpired`; the timeout shape is proved separately below.
+    """
+    r = _repo_with(
+        tmp_path,
+        extra + 'run "undrivable" "$ROOT" no-such-interpreter-1550 x.py\n',
+        untracked=True, name=name)
+    (r / "x.py").write_text("print('PASS 0')\n")
+    (r / "counter.py").write_text(
+        "import pathlib\n"
+        "print('PASS', len(list(pathlib.Path('.').glob('*.dat'))))\n")
+    subprocess.run(["git", "-C", str(r), "add", "x.py", "counter.py"],
+                   check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "u"], check=True)
+    return r
+
+
+def test_1550_a_gate_that_could_not_be_driven_exits_NOT_CHECKED_not_FAIL(
+        tmp_path, capsys):
+    """THE DEFECT. rc 1 says a defect was found. Nothing was found, because
+    nothing ran — that is the rc-2 `_vacuous_exit` tier this program already
+    uses for NOTHING_SCANNED / STATUS_UNAVAILABLE / WORKTREE_UNAVAILABLE /
+    NO_STIMULUS."""
+    r = _undrivable_repo(tmp_path)
+    assert G.main([str(r), "--timeout", "20"]) == 2
+    err = capsys.readouterr().err
+    assert "NOT_CHECKED" in err, err
+    assert "This is not a pass." in err, "rc 2 must never read as a pass"
+    assert "undrivable" in err, "the gate that was not decided must be NAMED"
+    # and it must NOT have borrowed the name of the thing it is not
+    assert "HOST-DEPENDENT" not in err.upper(), err
+
+
+def test_1550_a_REAL_finding_still_exits_1_beside_an_undrivable_gate(
+        tmp_path, capsys):
+    """THE PAIRED GUARD, and the one way this split could weaken the check: an
+    undrivable gate must never buy a run out of rc 1. The real finding is
+    reported FIRST and still decides the exit status."""
+    r = _undrivable_repo(tmp_path,
+                         extra='run "counter" "$ROOT" python3 counter.py\n')
+    (r / "leftover.dat").write_text("x\n")     # the stimulus `counter` reads
+
+    assert G.main([str(r), "--timeout", "20"]) == 1
+    err = capsys.readouterr().err
+    assert "[FAIL]" in err and "HOST_DEPENDENT_VERDICT" in err, err
+    # ...and the FAIL does not quietly imply it covered the whole population.
+    assert "could not be driven at all" in err, (
+        "a FAIL over a population that was short by an undrivable gate must "
+        "say so — over-claiming a denominator is this program's own subject")
+
+
+def test_1550_a_disagreement_that_could_not_be_RECONFIRMED_is_still_rc_1(
+        tmp_path, capsys):
+    """The other `GATE_UNRUNNABLE` site, and it keeps the LOUD tier.
+
+    A difference was OBSERVED and merely could not be re-driven. Handing that
+    the quiet tier would let a genuinely host-dependent gate exit rc 2 by dying
+    on the second round.
+    """
+    marker = tmp_path / "n.txt"
+    r = _repo_with(tmp_path, 'run "flaky" "$ROOT" python3 flaky.py\n',
+                   untracked=True)
+    (r / "flaky.py").write_text(
+        "import pathlib, sys, time\n"
+        f"m = pathlib.Path({str(marker)!r})\n"
+        "n = int(m.read_text()) if m.is_file() else 0\n"
+        "m.write_text(str(n + 1))\n"
+        "if n == 0:\n"
+        "    print('FAIL 1 leftover'); sys.exit(1)\n"   # round 1 disagrees
+        "if n == 1:\n"
+        "    print('PASS 0 leftover'); sys.exit(0)\n"
+        "time.sleep(600)\n")                            # round 2 cannot be driven
+    subprocess.run(["git", "-C", str(r), "add", "flaky.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "f"], check=True)
+
+    assert G.main([str(r), "--timeout", "5"]) == 1
+    err = capsys.readouterr().err
+    assert "GATE_UNRUNNABLE" in err and "could not be re-driven" in err, err
+    assert "NOT_CHECKED" not in err, (
+        "an observed difference must not be downgraded to 'I could not look'")
+
+
+def test_1550_the_measured_TIMEOUT_shape_is_drivable_from_the_CLI(
+        tmp_path, capsys):
+    """The bound reached `audit()` and nothing else, so the undrivable path was
+    CLI-unreachable inside any bounded test — driving it meant waiting out the
+    600 s default. `--timeout` only makes existing behaviour addressable; the
+    default is unchanged, which this asserts too."""
+    assert G.audit.__defaults__[0] == 600
+    r = _repo_with(tmp_path, 'run "slow" "$ROOT" python3 sleeper.py\n',
+                   untracked=True)
+    (r / "sleeper.py").write_text("import time\ntime.sleep(600)\n")
+    subprocess.run(["git", "-C", str(r), "add", "sleeper.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "s"], check=True)
+
+    assert G.main([str(r), "--timeout", "5"]) == 2
+    err = capsys.readouterr().err
+    assert "NOT_CHECKED" in err and "TimeoutExpired" in err, err
+
+
+def test_1550_the_json_lets_a_consumer_make_the_SAME_split_rc_makes(tmp_path):
+    """A consumer reading only `findings` cannot tell a gate that could not be
+    driven from one that reads local state — the conflation that made the
+    printed sentence wrong before v1.10.32 and the exit status wrong until
+    now."""
+    out = tmp_path / "o.json"
+    r = _undrivable_repo(tmp_path,
+                         extra='run "counter" "$ROOT" python3 counter.py\n')
+    (r / "leftover.dat").write_text("x\n")
+
+    assert G.main([str(r), "--json", str(out), "--timeout", "20"]) == 1
+    doc = json.loads(out.read_text())
+    assert doc["findings_by_kind"] == {"HOST_DEPENDENT_VERDICT": 1,
+                                       "GATE_UNRUNNABLE": 1}, doc
+    # counted over the kinds ACTUALLY present: a fixed key list would report 0
+    # for kinds nobody looked for, and would omit any kind added later.
+    assert set(doc["findings_by_kind"]) == {f["kind"] for f in doc["findings"]}
+
+
+def test_1550_a_CLEAN_run_is_still_a_PASS(tmp_path, capsys):
+    """The split must not turn a pass into a non-verdict either. Three tiers
+    exist and a run with a stimulus and no findings still reaches rc 0."""
+    r = _counter_repo(tmp_path, ignore_dat=False)
+    (r / "stray.txt").write_text("x\n")        # stimulus no gate reads
+
+    assert G.main([str(r), "--timeout", "20"]) == 0
+    assert "[PASS]" in capsys.readouterr().err
+
+
+def _mangled(monkeypatch, **mutate):
+    """Run the real audit, then rewrite its findings before `main` tiers them."""
+    real = G.audit
+
+    def _patched(root, **kw):
+        res = real(root, **kw)
+        res.findings[:] = [mutate.get("fn", lambda f: f)(dict(f))
+                           for f in res.findings]
+        return res
+    monkeypatch.setattr(G, "audit", _patched)
+
+
+@pytest.mark.parametrize("label,fn", [
+    # a kind added later, which nobody has taught this split about
+    ("an unknown kind",
+     lambda f: {**f, "kind": "A_KIND_NOBODY_HAS_WRITTEN_YET"}),
+    # a future GATE_UNRUNNABLE site that forgets the discriminator
+    ("GATE_UNRUNNABLE with no discriminator",
+     lambda f: {k: v for k, v in f.items() if k != "observed_difference"}),
+])
+def test_1550_the_split_is_a_DENY_list_so_the_UNKNOWN_case_is_LOUD(
+        tmp_path, capsys, monkeypatch, label, fn):
+    """The direction of the default is the whole safety of this split. Anything
+    the split does not positively recognise as never-driven must land in rc 1,
+    so a kind — or a site — added later cannot inherit an excuse nobody wrote
+    for it."""
+    r = _undrivable_repo(tmp_path)
+    _mangled(monkeypatch, fn=fn)
+    assert G.main([str(r), "--timeout", "20"]) == 1, (
+        f"{label} was given the quiet tier by default")
+    capsys.readouterr()

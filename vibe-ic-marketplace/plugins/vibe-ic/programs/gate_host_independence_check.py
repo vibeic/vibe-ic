@@ -103,6 +103,45 @@ kernel releases on death however the process died, and `_crash_safe_scratch`
 reaps every sibling whose lock it can take.  A peer that is still running holds
 its lock, is skipped, and is NAMED in the output.
 
+A GATE THAT COULD NOT BE DRIVEN IS NOT A FINDING (vibe-ic#1550)
+==============================================================
+`GATE_UNRUNNABLE` is filed when the subprocess never produced a verdict at all
+— `TimeoutExpired` off this program's own per-gate bound, `FileNotFoundError`
+off a missing interpreter. The comment at that site has always said it "is NOT
+host-dependence, and it is NOT a clean result either", and every finding was
+then counted into one `return 1`. rc 1 is FAIL in the wiring's own state table
+(`tools/ci/_gate_dispatch.sh`): "the gate ran and found something". Nothing ran
+and nothing was found.
+
+MEASURED on `75776dbb`, one repo, one gate whose interpreter does not exist:
+
+    [GATE_UNRUNNABLE] undrivable
+        could not be driven twice: FileNotFoundError: [Errno 2] No such file
+        or directory: 'no-such-interpreter-1550'
+    [FAIL] 1 of 1 probed corpus gate(s) (1 declared) did not give one
+           reproducible verdict across two trees: 1 GATE_UNRUNNABLE.
+    exit status: 1        <- FAIL: "the gate ran and found something"
+
+v1.10.32 fixed the SENTENCE — it no longer calls this host-dependence, which
+was the wrong-repair half of the defect. The TIER is the other half and is the
+same mistake one level down: this program already spends four verdicts
+(`NOTHING_SCANNED`, `STATUS_UNAVAILABLE`, `WORKTREE_UNAVAILABLE`,
+`NO_STIMULUS`) on rc 2 for "I could not look", and the call site is already
+`run_tolerating_uncheckable`, the form that keeps rc 2 out of PASS. A gate that
+could not be driven is that same state, per gate.
+
+So the tiers are, in this order and for this reason:
+
+    a REAL finding present            rc 1, and it is reported FIRST, so an
+                                      undrivable gate can never mask one
+    only undrivable gates             rc 2 NOT_CHECKED, naming every one
+    nothing, and stimulus was 0       rc 2 NO_STIMULUS
+    nothing, with stimulus            rc 0 PASS
+
+The split is a DENY-list — everything that is not `GATE_UNRUNNABLE` is a real
+finding — so a kind added later lands in the loud tier by default rather than
+inheriting an excuse nobody wrote for it.
+
 chip-AGNOSTIC: it compares process output, nothing else.
 """
 from __future__ import annotations
@@ -724,8 +763,17 @@ def audit(repo_root: Path, timeout: int = 600,
                 # A gate that cannot be driven is NOT host-dependence, and it
                 # is NOT a clean result either. It gets its own state rather
                 # than a traceback that kills the whole probe.
+                #
+                # `observed_difference` is what `main` tiers on (#1550). NOT
+                # the prose of `detail`: deciding a tier by grepping a message
+                # is the defect `_vacuous_exit` was written to end, and it is
+                # the defect this file already refused once when it declined
+                # to separate a timeout from a verdict by reading the words.
+                # Here NOTHING was observed — neither arm produced a verdict —
+                # so there is no difference on record to lose.
                 findings.append({
                     "gate": label, "kind": "GATE_UNRUNNABLE",
+                    "observed_difference": False,
                     "detail": f"could not be driven twice: "
                               f"{type(drive_exc).__name__}: "
                               f"{str(drive_exc)[:160]}",
@@ -787,8 +835,15 @@ def audit(repo_root: Path, timeout: int = 600,
                                         capture_output=True, text=True,
                                         timeout=timeout)
                 except (OSError, subprocess.SubprocessError) as exc:
+                    # THE OTHER `GATE_UNRUNNABLE`, and it does NOT get the
+                    # quiet tier (#1550). A difference was OBSERVED here and
+                    # merely could not be re-confirmed — downgrading it to
+                    # NOT_CHECKED would let a genuinely host-dependent gate buy
+                    # its way out of rc 1 by dying on the second round, which
+                    # is the one way this split could weaken the check.
                     findings.append({
                         "gate": label, "kind": "GATE_UNRUNNABLE",
+                        "observed_difference": True,
                         "detail": f"disagreed once, then could not be re-driven "
                                   f"to confirm it: {type(exc).__name__}: "
                                   f"{str(exc)[:160]}",
@@ -860,14 +915,36 @@ def audit(repo_root: Path, timeout: int = 600,
     return Audit("PASS", findings, dirt, declared, probed, not_probed, scratch)
 
 
+def _by_kind(findings: List[Dict]) -> Dict[str, int]:
+    """Census over the kinds ACTUALLY present, never a fixed key list.
+
+    A hard-coded tuple of kinds is the same over-claim this file is about one
+    level down: it reports 0 for a kind that was never checked for, and it
+    silently omits a kind added later. Both make a reader confident about a
+    population nobody measured.
+    """
+    out: Dict[str, int] = {}
+    for f in findings:
+        out[f["kind"]] = out.get(f["kind"], 0) + 1
+    return out
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("repo_root", nargs="?", default=None)
     ap.add_argument("--json", dest="json_out", default=None)
+    # The per-gate bound reached `audit()` and nothing else, so the undrivable
+    # path was CLI-unreachable inside any bounded test: driving it meant
+    # waiting out the 600 s default, well past the harness's own ceiling. The
+    # default is unchanged — this only makes existing behaviour addressable,
+    # which is what lets the rc-2 tier below be proved from the outside.
+    ap.add_argument("--timeout", type=int, default=600, metavar="SECONDS",
+                    help="per-gate bound; a gate that exceeds it is undrivable "
+                         "(NOT_CHECKED), not a finding")
     a = ap.parse_args(argv)
 
     root = Path(a.repo_root).resolve() if a.repo_root else _PLUGIN.parents[2]
-    res = audit(root)
+    res = audit(root, timeout=a.timeout)
 
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(
@@ -885,6 +962,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "untracked": len(res.dirt.untracked),
                  "ignored": len(res.dirt.ignored),
                  "ignored_reported": res.dirt.ignored_reported}),
+             # ADDITIVE, and `verdict` is deliberately left alone: it is a
+             # landed contract and every consumer of it reads rc as well. But a
+             # consumer reading only `findings` cannot tell a gate that could
+             # not be driven from one that reads local state — the same
+             # conflation that made the printed sentence wrong before v1.10.32
+             # and the exit status wrong until #1550. This lets a JSON consumer
+             # make the distinction rc now makes.
+             "findings_by_kind": _by_kind(res.findings),
              "findings": res.findings}, indent=2) + "\n")
 
     # Whatever the outcome, SAY WHAT WAS NOT PROBED. A gate that left the
@@ -938,19 +1023,56 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"      worktree: {f['worktree']}", file=sys.stderr)
 
     stim = res.dirt.describe() if res.dirt is not None else "unknown stimulus"
-    if res.findings:
+
+    # ONE LIST, TWO TIERS (#1550). A gate that produced no verdict at all was
+    # counted into the same `return 1` as a gate caught reading local state.
+    # The DENY-list direction is load-bearing: anything that is not a
+    # never-driven `GATE_UNRUNNABLE` is a finding, so a kind added later is
+    # loud by default. `observed_difference` defaults to True for the same
+    # reason — a future site that forgets the key does not silently inherit the
+    # quiet tier.
+    def _never_driven(f: Dict) -> bool:
+        return (f["kind"] == "GATE_UNRUNNABLE"
+                and not f.get("observed_difference", True))
+
+    blank = [f for f in res.findings if _never_driven(f)]
+    real = [f for f in res.findings if not _never_driven(f)]
+
+    if real:
         # Split by KIND rather than totalling them. Reporting a gate that met
         # an inner deadline as "HOST-DEPENDENT" sends the reader to look for
         # untracked leftovers that are not there — the wrong repair, which is
         # the cost this split exists to stop.
-        by_kind: dict = {}
-        for f in res.findings:
-            by_kind[f["kind"]] = by_kind.get(f["kind"], 0) + 1
-        parts = ", ".join(f"{n} {k}" for k, n in sorted(by_kind.items()))
-        print(f"[FAIL] {len(res.findings)} of {res.probed} probed corpus "
+        parts = ", ".join(f"{n} {k}" for k, n in sorted(_by_kind(real).items()))
+        print(f"[FAIL] {len(real)} of {res.probed} probed corpus "
               f"gate(s) ({res.declared} declared) did not give one reproducible "
               f"verdict across two trees: {parts}.", file=sys.stderr)
+        # A REAL finding wins the exit status, and is reported FIRST, so an
+        # undrivable gate can never mask one. But the population it was found
+        # over is still short by however many could not be driven, and a FAIL
+        # that quietly implies full coverage is this program's own subject.
+        if blank:
+            print(f"       (and {len(blank)} further gate(s) could not be "
+                  f"driven at all, so host-independence was NOT decided for "
+                  f"them either: "
+                  + "; ".join(f["gate"] for f in blank) + ")", file=sys.stderr)
         return 1
+    if blank:
+        # NOT a pass, and NOT a FAIL. rc 2 is the `_vacuous_exit` tier this
+        # program already uses for NOTHING_SCANNED / STATUS_UNAVAILABLE /
+        # WORKTREE_UNAVAILABLE / NO_STIMULUS, and the call site already
+        # declares `run_tolerating_uncheckable`, which records NOT_CHECKED and
+        # refuses to fold it into PASS. This is that same state, per gate.
+        print(f"NOT_CHECKED: {len(blank)} of {res.probed} probed corpus "
+              f"gate(s) ({res.declared} declared) could NOT be driven, so they "
+              f"produced no verdict to compare and host-independence was not "
+              f"decided for them: "
+              + "; ".join(f"{f['gate']} ({f['detail']})" for f in blank)
+              + f". The other {res.probed - len(blank)} agreed, but agreement "
+              f"over a population this run could not probe in full is not a "
+              f"pass over the population. This is not a pass.",
+              file=sys.stderr)
+        return 2
     if res.verdict == "NO_STIMULUS":
         # The sentence a two-pristine-tree run has always deserved and never
         # printed.
