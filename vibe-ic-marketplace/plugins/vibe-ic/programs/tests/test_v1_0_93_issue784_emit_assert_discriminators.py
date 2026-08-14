@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
 from _specrtl_common import (extract_spec_contract, parse_rtl_ports,  # noqa: E402
                              strip_comments)
+from _sim_tools import NEEDS_IVERILOG  # noqa: E402
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
@@ -639,6 +640,7 @@ def _block_rules(run):
     return gates, {f["rule"] for f in blk.get("findings", [])}
 
 
+@NEEDS_IVERILOG
 def test_gate_blocks_rotate_under_shift_spec(tmp_path):
     ds, run = _stage(tmp_path, _SHIFT_SPEC, _ROTATE_OR_RTL)
     r = _run_gate(ds, run)
@@ -649,6 +651,7 @@ def test_gate_blocks_rotate_under_shift_spec(tmp_path):
     assert not (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_emits_logical_shift(tmp_path):
     ds, run = _stage(tmp_path, _SHIFT_SPEC, _LOGICAL_SHIFT_RTL)
     r = _run_gate(ds, run)
@@ -659,6 +662,7 @@ def test_gate_emits_logical_shift(tmp_path):
     assert (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_blocks_dropped_hold_under_hold_spec(tmp_path):
     ds, run = _stage(tmp_path, _TRI_HOLD_SPEC, _NO_HOLD_RTL)
     r = _run_gate(ds, run)
@@ -669,6 +673,7 @@ def test_gate_blocks_dropped_hold_under_hold_spec(tmp_path):
     assert not (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_emits_correct_peak_hold(tmp_path):
     ds, run = _stage(tmp_path, _TRI_HOLD_SPEC, _PEAK_HOLD_RTL)
     r = _run_gate(ds, run)

@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import spec_conformance_check as scc  # noqa: E402
 from _specrtl_common import extract_spec_contract, parse_rtl_ports, strip_comments  # noqa: E402
+from _sim_tools import NEEDS_IVERILOG  # noqa: E402
 
 HARNESS = Path(__file__).resolve().parent.parent.parent / "benchmark"
 GATES = HARNESS / "gates_atomic.py"
@@ -106,6 +107,7 @@ def _block_rules(run):
 
 # #408: zero-output module must BLOCK; restoring the output must emit.
 
+@NEEDS_IVERILOG
 def test_gate_blocks_vacuous_zero_output_module(tmp_path):
     ds, run = _stage(tmp_path, _TYPO_SPEC, _VACUOUS_RTL)
     r = _run_gate(ds, run)
@@ -116,6 +118,7 @@ def test_gate_blocks_vacuous_zero_output_module(tmp_path):
     assert not (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_emits_after_output_direction_restored(tmp_path):
     # the campaign's actual close-loop fix: flip the typo'd pin to an output
     # register. port-direction-mismatch (vs the typo'd spec) is NOT in the
@@ -141,6 +144,7 @@ _FULL_PORT_RTL = ("module TopModule(input clk, input in, output out);\n"
                   "  assign out = in;\nendmodule\n")
 
 
+@NEEDS_IVERILOG
 def test_gate_blocks_missing_declared_port(tmp_path):
     ds, run = _stage(tmp_path, _UNUSED_PORT_SPEC, _DROPPED_PORT_RTL)
     r = _run_gate(ds, run)
@@ -151,6 +155,7 @@ def test_gate_blocks_missing_declared_port(tmp_path):
     assert not (run / "samples" / "ProbP_sample01.sv").exists()
 
 
+@NEEDS_IVERILOG
 def test_gate_emits_with_all_declared_ports(tmp_path):
     ds, run = _stage(tmp_path, _UNUSED_PORT_SPEC, _FULL_PORT_RTL)
     r = _run_gate(ds, run)
