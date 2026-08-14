@@ -75,6 +75,55 @@ def _mentions_oracle(text: str) -> List[str]:
     return [t for t in ORACLE_TOKENS if t in text]
 
 
+#: Comment leaders for the line-oriented spec formats that live under `flow/`.
+#: JSON is deliberately absent — it has no comment syntax, so nothing is
+#: stripped from it and a token there is always real content.
+_COMMENT_LEADERS = {".yaml": "#", ".yml": "#", ".toml": "#", ".ini": "#",
+                    ".cfg": "#", ".sh": "#", ".txt": "#", ".md": None}
+
+
+def _spec_content(path: Path, text: str) -> str:
+    """`text` with comments removed, for formats that have them.
+
+    WHY THIS EXISTS. This module already draws the line everywhere else: test 1
+    asserts in so many words that "a comment/docstring/string that names the
+    oracle is documentation of the contract, not wiring", and test 3 is
+    AST-based precisely "so a mention in a comment, a docstring or an `import`
+    is not confused with an invocation". Only the flow-spec test matched RAW
+    TEXT, and it was the one that fired — on this line of
+    `flow/phase1_phase2_phase3.yaml`:
+
+        # states and zero transitions, and `emit_fsm_v()`'s body really is
+
+    That is prose about the contract, in a comment, which is the exact thing the
+    other two tests are written to permit. Applying the module's own rule here
+    removes a false positive without conceding anything: a step that WIRES the
+    oracle does so in a value, not in a comment, and the paired guard below
+    forces that case to stay red.
+
+    Quote-aware, because a `#` inside a quoted YAML scalar is data rather than a
+    comment leader and truncating there would hide real content from the scan.
+    """
+    leader = _COMMENT_LEADERS.get(path.suffix.lower(), None)
+    if leader is None:
+        return text
+    out: List[str] = []
+    for line in text.splitlines():
+        quote = ""
+        cut = len(line)
+        for i, ch in enumerate(line):
+            if quote:
+                if ch == quote:
+                    quote = ""
+            elif ch in "\"'":
+                quote = ch
+            elif ch == leader:
+                cut = i
+                break
+        out.append(line[:cut])
+    return "\n".join(out)
+
+
 def _parse(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8", errors="replace"))
 
@@ -210,18 +259,64 @@ def test_no_flow_step_names_the_scaffold_oracle():
         f"is empty, so a PASS would be vacuous"
     )
     offenders: Dict[str, List[str]] = {}
+    scanned = 0
     for s in specs:
         try:
             text = s.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        hits = _mentions_oracle(text)
+        content = _spec_content(s, text)
+        if content.strip():
+            scanned += 1
+        hits = _mentions_oracle(content)
         if hits:
             offenders[str(s.relative_to(FLOW))] = hits
+    # NON-VACUITY of the stripping itself. Removing comments must not remove the
+    # POPULATION: if every spec came back blank the loop above would report a
+    # clean result having examined nothing, which is the same empty-denominator
+    # pass the assertion below exists to prevent.
+    assert scanned, (
+        f"every one of the {len(specs)} flow spec(s) was empty after comment "
+        f"stripping — the scan examined no content, so a PASS would be vacuous"
+    )
     assert not offenders, (
         f"{ORACLE_STEM} is ORACLE-ONLY (#509) and a flow specification now "
         f"names it: {offenders}. See the module docstring before landing it."
     )
+
+
+def test_a_flow_step_that_really_wires_the_oracle_is_still_caught(tmp_path):
+    """PAIRED GUARD for the comment stripping above.
+
+    Ignoring comments is only legitimate while a real wiring still reddens. If
+    `_spec_content` ever over-stripped — swallowing a line, mishandling a quote —
+    the test above would go quietly green over a flow that genuinely names the
+    oracle, which is worse than the false positive it replaced.
+    """
+    wired = tmp_path / "phase_x.yaml"
+    wired.write_text(
+        "steps:\n"
+        "  - id: stepZ            # a comment naming emit_fsm_v is NOT wiring\n"
+        f"    program: {ORACLE_STEM}\n")
+    assert _mentions_oracle(_spec_content(wired, wired.read_text())), (
+        "a flow step whose `program:` value names the oracle was not caught")
+
+    # ...and the converse: the comment alone must not trip it.
+    prose = tmp_path / "phase_y.yaml"
+    prose.write_text(
+        "steps:\n"
+        "  - id: stepY\n"
+        "    # emit_fsm_v() is the conforming shape; documented, not wired\n"
+        "    program: design_one_shot_runner\n")
+    assert not _mentions_oracle(_spec_content(prose, prose.read_text())), (
+        "a comment naming the oracle was treated as wiring — the exact false "
+        "positive this stripping removes")
+
+    # a `#` inside a quoted scalar is data, not a comment leader
+    quoted = tmp_path / "phase_z.yaml"
+    quoted.write_text(f'steps:\n  - note: "see #509"\n    program: {ORACLE_STEM}\n')
+    assert _mentions_oracle(_spec_content(quoted, quoted.read_text())), (
+        "a quoted '#' truncated the line and hid a real wiring")
 
 
 # ---------------------------------------------------------------------------
