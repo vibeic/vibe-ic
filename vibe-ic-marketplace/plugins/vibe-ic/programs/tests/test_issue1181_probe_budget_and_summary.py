@@ -131,7 +131,21 @@ def test_an_exhausted_budget_is_a_NAMED_finding_not_a_quiet_shrink(tmp_path):
                       'run "slow one" "$ROOT" sleep 5\n'
                       'run "slow two" "$ROOT" sleep 5\n'
                       'run "slow three" "$ROOT" sleep 5\n')
-    res = G.audit_ci(repo, timeout=30, budget=0.001)
+    #: budget=0, NOT a small positive number, and the difference is a real bug
+    #: rather than a style preference. `_probe` checks the deadline first and
+    #: driveability second, and these fixture gates are never driveable —
+    #: `_driveable` reads argv[1] as the script, which for `sleep 5` is `5`. So
+    #: with budget=0.001 the branch taken depends on whether the pool thread
+    #: starts within that millisecond: cold it does not (deadline wins, budget,
+    #: truncated=True) and warm it does (falls through to not_driven,
+    #: truncated=False). MEASURED: 12/12 pass alone, and a deterministic FAIL
+    #: when `test_gate_discloses_denominator.py` runs first and leaves the pool
+    #: warm — bisected to that file and confirmed pairwise. Both files are in
+    #: this PR's own targeted selection, so the race was lost on every run of it.
+    #: `budget=0` puts the deadline AT the start instant, and `time.monotonic()`
+    #: is non-decreasing, so the first check cannot lose. Nothing asserted below
+    #: changed.
+    res = G.audit_ci(repo, timeout=30, budget=0)
 
     assert res.truncated is True, (
         f"the budget stopped the sweep and `truncated` stayed False: {res}")
