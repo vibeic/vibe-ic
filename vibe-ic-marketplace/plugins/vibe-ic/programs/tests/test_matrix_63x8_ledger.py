@@ -77,7 +77,14 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
 CENSUS_BLOCKS_ON_PRESENT = 63
-CENSUS_BLOCKS_ON_NON_EMPTY = 61
+# 61 -> 62 in [v1.10.40] batch MEGA: step A1 gained `blocks_on: [D1]` (the #1070
+# edge its already-declared `required_inputs: [{from: D1}]` had always implied).
+# Steps 25 and M1 gained edges in the same change but were ALREADY non-empty, so
+# the count moves by exactly one and PRESENT does not move at all — the same
+# shape as `332b9985` moved it for P0. The two landed separately: the pin came
+# from the PR that re-derived it against main's graph, the edge from the PR that
+# changed the graph, and neither carried the other's number.
+CENSUS_BLOCKS_ON_NON_EMPTY = 62
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
