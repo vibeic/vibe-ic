@@ -117,13 +117,28 @@ def test_touched_skill_compliance_tests_green():
     rr = PT.repo_root()
     if rr is None:
         pytest.skip("cache tree — compliance pin runs on the source tree")
+    import os
     import subprocess
     skill_tests = SKILL.parent / "tests"
     if not skill_tests.is_dir():
         pytest.skip("core-agent-loop/tests absent on this tree")
+    # This child runs pytest INSIDE the shipped `skills/` tree. Left alone it
+    # deposits `__pycache__/*.pyc` there — both plain imports (`poll.py`) and
+    # pytest's own assertion-rewrite caches (`*-pytest-9.1.1.pyc`) — which move
+    # the digest that `test_shipped_skills_tree_is_untouched_by_this_session`
+    # takes over every file under `skills/`. `git status` cannot see it, since
+    # `__pycache__/` and `.pytest_cache/` are ignored, so the session reads as
+    # having written nothing while the shipped tree has in fact moved.
+    #
+    # It is a SPAWNED child, so the `sys.dont_write_bytecode` remedy #1404
+    # landed for the in-process importers cannot reach it — only the child's
+    # environment can. `no:cacheprovider` covers the `.pytest_cache/` the
+    # bytecode setting does not.
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     r = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", str(skill_tests)],
-        capture_output=True, text=True,
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         str(skill_tests)],
+        capture_output=True, text=True, env=env,
     )
     assert r.returncode == 0, (
         "core-agent-loop skill tests must stay green:\n"
