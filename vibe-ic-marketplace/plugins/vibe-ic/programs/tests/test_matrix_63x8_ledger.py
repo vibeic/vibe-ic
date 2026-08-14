@@ -77,7 +77,7 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
 CENSUS_BLOCKS_ON_PRESENT = 63
-CENSUS_BLOCKS_ON_NON_EMPTY = 61
+CENSUS_BLOCKS_ON_NON_EMPTY = 62
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
@@ -653,7 +653,7 @@ def test_waiver_validator_actually_rejects_a_placeholder():
             "run of the other branch into MISSING."
         ),
         evidence=(
-            "programs/mixed_signal_top_lvs_run.py:917 — "
+            "programs/mixed_signal_top_lvs_run.py:919 — "
             "(rpt_dir / 'top_lvs.json').write_text(...)"
         ),
     )
@@ -661,7 +661,7 @@ def test_waiver_validator_actually_rejects_a_placeholder():
     # ...and the docstring says the same thing. Pinned, because the example a
     # reader copies is the one that decides how the next waiver is written, and
     # the old one pointed at `programs/rtl_dispatch.py`, which does not exist.
-    assert "programs/mixed_signal_top_lvs_run.py:917" in (W.__doc__ or ""), (
+    assert "programs/mixed_signal_top_lvs_run.py:919" in (W.__doc__ or ""), (
         "the waivers module docstring no longer carries the GOOD example this "
         "probe validates; if the cited line moved, update BOTH"
     )

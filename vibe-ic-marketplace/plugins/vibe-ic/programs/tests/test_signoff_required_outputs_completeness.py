@@ -102,6 +102,31 @@ def test_the_runner_reads_its_verdict_from_the_declared_file(path):
         f"declaration")
 
 
+# vibe-ic#1082 — a declared report may be written through `_atomic_artefact`
+# instead of `Path.write_text`, and this file asserts on the runner's SOURCE.
+# Matching only `.write_text` therefore reports "the write is gone" about a
+# write that merely moved to the durable form. Same defect the d7 detector had
+# in #1265, where the delegate walk saw no write at all.
+#
+# The PROPERTY is unchanged: the artefact is written, in this branch, after the
+# .rpt. Only the spelling is widened, and a write that is genuinely absent still
+# fails — `_json_write_pos` returns None and the assertion says so by name.
+_ATOMIC_ALIASES = ("_aa.write_text", "_aa.write_json",
+                   "atomic_write_text", "atomic_write_json")
+
+
+def _json_write_pos(body: str, expr: str):
+    """Index of the statement writing `expr`, in either spelling, else None."""
+    direct = f'({expr}).write_text'
+    if direct in body:
+        return body.index(direct)
+    for alias in _ATOMIC_ALIASES:
+        cand = f'{alias}({expr}'
+        if cand in body:
+            return body.index(cand)
+    return None
+
+
 # ===========================================================================
 # SATISFIABILITY — the pairing that makes each entry meetable
 # ===========================================================================
@@ -115,9 +140,11 @@ def test_em_json_is_written_in_the_same_branch_as_em_rpt(tmp_path):
     body = src[src.index("    em_ok = False"):src.index("    return ir_ok, em_ok")]
     assert body.count("if has_em:") == 1, body[:200]
     assert "em_rpt.write_text(body)" in body
-    assert '(em_rpt.parent / "em.json").write_text' in body
-    assert body.index("em_rpt.write_text(body)") < body.index(
-        '(em_rpt.parent / "em.json").write_text')
+    _pos = _json_write_pos(body, 'em_rpt.parent / "em.json"')
+    assert _pos is not None, (
+        "the em.json write is gone from this branch — neither Path.write_text "
+        "nor an _atomic_artefact delegate writes it (vibe-ic#1082)")
+    assert body.index("em_rpt.write_text(body)") < _pos
     assert "em_ok = True" in body
 
 
@@ -129,7 +156,15 @@ def test_antenna_json_is_written_wherever_antenna_rpt_is():
     body = _RUNNER_SRC[start:end]
     assert body.count("antenna_rpt.write_text(") == 2, body.count(
         "antenna_rpt.write_text(")
-    assert body.count('/ "antenna.json").write_text') == 2
+    # vibe-ic#1082 — count the antenna.json writes in EITHER spelling. Still
+    # exactly 2: both success branches must write it, which is the property.
+    _n = (body.count('/ "antenna.json").write_text')
+          + sum(body.count(f'{a}(antenna_rpt.parent / "antenna.json"')
+                for a in _ATOMIC_ALIASES))
+    assert _n == 2, (
+        f"{_n} antenna.json write(s) in the two success branches, expected 2 — "
+        f"a branch that writes the .rpt without the .json leaves the declared "
+        f"pair half-satisfied (vibe-ic#1082 counts both spellings)")
 
 
 def _gate_commands(step: dict):
