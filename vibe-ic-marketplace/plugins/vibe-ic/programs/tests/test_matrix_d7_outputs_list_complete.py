@@ -653,20 +653,163 @@ def test_w1_still_fires_on_an_unconditionally_produced_undeclared_output(tmp_pat
 
 
 def _conditional_anchor():
-    """``(step, path)`` of a CONDITIONAL finding on an OTHERWISE-CLEAN step.
+    """``(step, path)`` of a CONDITIONAL finding a later W1 charge is owed to.
 
     "Otherwise clean" is what makes the control a control. Step 23 also
-    carries a conditional output, but it is red for thirteen unrelated W2
-    findings, so a red observed after mutating it would prove nothing about
-    the exemption. The anchor is therefore the conditional finding whose step
-    has no other finding at all — on the current flow that is step 27, and it
-    is found by measurement rather than named.
+    carries a conditional output, but it is red for sixteen unrelated W2
+    findings, so a red observed after mutating it would prove much less about
+    the exemption than the same red on a quiet step. The anchor was therefore
+    the conditional finding whose step has no other finding AT ALL — on the
+    flow as shipped in 2026-07 that was step 27, and it was found by
+    measurement rather than named.
+
+    THAT REQUIREMENT WAS A CLIFF, and it fell off. Step 27 acquired ONE
+    unrelated ``W2`` finding — on ``reports/phase3/si_mcf_sta.json``, the
+    condition trigger of the very clause whose OUTPUT is the anchor, a
+    different path under a different rule — and the search returned ``None``.
+    Both parametrisations then aborted on their own precondition with "this
+    control measures nothing", so one unrelated red silently deleted a
+    negative control instead of degrading it.
+
+    So the requirement is split into the part that is LOAD-BEARING and the
+    part that is merely PREFERABLE, and only the first can disqualify:
+
+    * hard — ``path`` must carry no ``W1`` charge yet. Every assertion this
+      control makes is about ``path`` under W1 (:func:`_w1_paths`), so this is
+      exactly what buys attributability: a W1 charge seen after the mutation
+      cannot have been there before. A finding under another rule, or under
+      W1 on another path, can neither produce nor mask it.
+    * soft — the step should be as quiet as possible, so the CELL's red is
+      attributable too and not only the path's. This is a ranking, not a
+      filter: candidates are ordered by how many findings their step carries,
+      flow order breaking ties.
+
+    A step with no finding at all therefore still wins whenever the flow
+    supplies one — the anchor the author chose is not quietly given up — and
+    when none exists the control keeps measuring on the quietest step there
+    is instead of measuring nothing. Both halves are guarded:
+    :func:`test_the_anchor_search_takes_the_least_perturbed_candidate` and
+    :func:`test_the_anchor_search_survives_an_unrelated_finding_on_every_step`.
     """
+    candidates = []
+    for order, sid in enumerate(F.step_ids()):
+        findings = G.conditional_findings(sid)
+        if not findings:
+            continue
+        path = findings[0].path
+        if path in _w1_paths(sid):
+            continue        # a later W1 charge here would not be the mutation's
+        candidates.append(
+            (len(G.findings_for(sid)), order, F.normalize_id(sid), path)
+        )
+    if not candidates:
+        return None
+    _noise, _order, step, path = min(candidates)
+    return step, path
+
+
+def _anchor_candidates():
+    """``{step: findings-on-that-step}`` for every step the search may pick.
+
+    The guards below need the population the ranking ranges over, and they
+    must read it the same way :func:`_conditional_anchor` does or they would
+    be grading a different corpus.
+    """
+    out = {}
     for sid in F.step_ids():
         findings = G.conditional_findings(sid)
-        if findings and not G.findings_for(sid):
-            return F.normalize_id(sid), findings[0].path
-    return None
+        if not findings:
+            continue
+        if findings[0].path in _w1_paths(sid):
+            continue
+        out[F.normalize_id(sid)] = len(G.findings_for(sid))
+    return out
+
+
+def test_the_anchor_search_takes_the_least_perturbed_candidate(monkeypatch):
+    """The quietest candidate wins — including a silent one, when it exists.
+
+    The ranking is what keeps "otherwise clean" a preference instead of a
+    cliff, and a preference nobody checks is a comment. Two arms:
+
+      LIVE      whatever the flow supplies now, the chosen step must carry
+                the fewest findings of any candidate. A search that returned
+                the first candidate in flow order would pass "is not None"
+                and fail this.
+      SILENCED  make a NOISIER candidate silent and the anchor must move to
+                it. This is the arm that proves the preference is computed
+                from the measurement rather than pinned to a step id — and it
+                is the strictly-silent-step preference itself, exercised on a
+                flow that no longer supplies one naturally.
+    """
+    candidates = _anchor_candidates()
+    if len(candidates) < 2:
+        pytest.skip(
+            f"only {len(candidates)} anchor candidate(s) on this flow, so a "
+            f"preference between them cannot be observed"
+        )
+    anchor = _conditional_anchor()
+    assert anchor is not None
+    step, _path = anchor
+    assert candidates[step] == min(candidates.values()), (
+        f"the search chose step {step}, which carries {candidates[step]} "
+        f"finding(s), while a candidate with {min(candidates.values())} "
+        f"exists: {candidates}. The control would then be attributing a red "
+        f"on a noisier step than it had to."
+    )
+
+    other = max((s for s in candidates if s != step),
+                key=lambda s: (candidates[s], s))
+    real = G.findings_for
+    monkeypatch.setattr(
+        G, "findings_for",
+        lambda sid: () if F.normalize_id(sid) == other else real(sid),
+    )
+    silenced = _conditional_anchor()
+    assert silenced is not None and silenced[0] == other, (
+        f"step {other} was made silent — the strongest anchor there is, and "
+        f"the one the original search demanded — and the search returned "
+        f"{silenced} instead. The preference is not computed from the findings."
+    )
+
+
+def test_the_anchor_search_survives_an_unrelated_finding_on_every_step(
+        monkeypatch):
+    """PAIRED GUARD: the failure that deleted this control must not recur.
+
+    One ``W2`` finding on one unrelated path returned ``None`` from the old
+    search. Reproduce the general form of it — an unrelated finding on EVERY
+    step, so no step is silent under every rule — and require that a usable
+    anchor still comes back.
+
+    "Usable" is the second half and it carries the weight: returning any old
+    step would satisfy ``is not None`` while destroying the attributability
+    the anchor exists for, so the returned path is required to be free of W1
+    exactly as the control's own precondition requires.
+    """
+    real = G.findings_for
+
+    class _Unrelated:
+        rule = G.W2
+        path = "reports/phase3/UNRELATED_never_a_real_artifact.json"
+
+        def __str__(self):
+            return f"{self.rule}: {self.path}"
+
+    monkeypatch.setattr(
+        G, "findings_for", lambda sid: tuple(real(sid)) + (_Unrelated(),)
+    )
+    anchor = _conditional_anchor()
+    assert anchor is not None, (
+        "one unrelated finding on every step deleted the anchor entirely, "
+        "which is the exact failure this ranking exists to prevent"
+    )
+    step, path = anchor
+    assert path not in _w1_paths(step), (
+        f"the search returned step {step} / {path}, which already carries "
+        f"a W1 charge; a charge seen after the mutation would not be the "
+        f"mutation's and the control would be measuring nothing"
+    )
 
 
 @pytest.mark.parametrize(
@@ -689,19 +832,23 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
           blocks on such a clause exactly like a plain one, so the VOCABULARY
           alone must not buy an exemption — only a real condition does.
 
-    Both mutate the yaml, never a test. If either fails to redden the cell,
-    step 27 is green for a reason other than the one this change claims.
+    Both mutate the yaml, never a test. If either fails to redden the anchor's
+    path, that path is exempt for a reason other than the one this change
+    claims. The anchor is whatever :func:`_conditional_anchor` measures, never
+    a step named here — naming one is how this control came to depend on the
+    flow keeping step 27 quiet.
     """
     anchor = _conditional_anchor()
     assert anchor is not None, (
-        "no step is GREEN solely because of the optionality exemption, so "
-        "removing the optionality cannot be shown to redden anything and this "
-        "control measures nothing"
+        "no exempted path is free of a W1 charge, so removing the optionality "
+        "cannot be shown to redden anything and this control measures nothing"
     )
     step, path = anchor
-    assert not G.findings_for(step), (
-        f"step {step} is already red before the mutation; the control cannot "
-        f"attribute the red to the mutation"
+    assert path not in _w1_paths(step), (
+        f"step {step} already carries a W1 charge on {path} before the "
+        f"mutation, so a charge seen afterwards would not be the mutation's "
+        f"and this control could attribute nothing. Findings on the step: "
+        f"{[str(f) for f in G.findings_for(step)]}"
     )
 
     def edit(doc):
@@ -738,7 +885,7 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
 
     # And back: the exemption returns with the flow's own optionality.
     assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
-    assert not G.findings_for(step)
+    assert path not in _w1_paths(step)
 
 
 def _no_list_but_writes_anchor():
