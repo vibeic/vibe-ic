@@ -78,6 +78,7 @@ import json
 import subprocess
 import sys
 from typing import Dict, Iterable, List, Optional, Set, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 
 #: The branch every landable chain must terminate at.
 TRUNK = "main"
@@ -345,8 +346,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"   CARRIED pass NOT ESTABLISHED — {carried_refusal}")
 
     if args.json_out:
-        with open(args.json_out, "w", encoding="utf-8") as fh:
-            json.dump({
+        atomic_write_text(args.json_out, json.dumps({
                 "open": total_open,
                 "reach_trunk": len(healthy),
                 "orphans": [{"pr": o["pr"]["number"],
@@ -361,7 +361,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "base": h["pr"].get("baseRefName"),
                              "parent": h["parent"]["number"]} for h in carried],
                 "carried_not_established": carried_refusal,
-            }, fh, indent=1)
+            }, indent=1), encoding="utf-8")
 
     if unresolved:
         print(f"REFUSE — {len(unresolved)} open PR(s) have a base branch owned "

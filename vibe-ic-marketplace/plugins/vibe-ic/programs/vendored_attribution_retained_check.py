@@ -81,6 +81,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 
 #: The declaration this gate keys on. SPDX is the machine-readable form every
 #: vendored tree in this corpus already uses, which is why it is the hook: it
@@ -180,7 +181,7 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"licence, {len(res['manifest_dirs'])} attribution record(s)")
 
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(res, indent=2))
+        atomic_write_text(Path(args.json_out), json.dumps(res, indent=2))
 
     if not res["licensed"]:
         # A scope with nothing licensed proves nothing. Say so rather than

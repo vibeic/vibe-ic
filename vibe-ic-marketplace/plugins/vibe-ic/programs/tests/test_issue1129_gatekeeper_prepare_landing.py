@@ -284,10 +284,18 @@ def landing_repo(tmp_path):
     """A scratch repo carrying the REAL script and the REAL program, dirty.
 
     Copies rather than stubs: mutate either file in this repository and these
-    tests move, which is the binding that was missing. Only
-    `gatekeeper_prepare_landing.py` is needed beside the script — its module
-    imports are stdlib, and `gatekeeper_assign_version` is loaded lazily AFTER
-    the dirty check these tests stop at.
+    tests move, which is the binding that was missing. Beside the script the
+    program needs `_atomic_artefact` (it writes its `--json` report through it,
+    vibe-ic#1082) and nothing else — its other imports are stdlib, and
+    `gatekeeper_assign_version` is loaded lazily AFTER the dirty check these
+    tests stop at.
+
+    The helper is copied rather than stubbed for the same reason as the program:
+    a fixture that satisfies an import with a placeholder stops testing the
+    thing that broke. This one caught a real one — the program acquired an
+    intra-tree import and the invocation here surfaced it as a REFUSAL whose
+    reason was an ImportError, which reads exactly like a dispatch pointing at
+    nothing.
     """
     assert _LAND_SH.is_file(), f"{_LAND_SH} not found — resolve the repo root"
     r = tmp_path / "landing"
@@ -297,6 +305,8 @@ def landing_repo(tmp_path):
     (r / "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin").mkdir(parents=True)
     (r / "tools/gatekeeper-land.sh").write_bytes(_LAND_SH.read_bytes())
     (prog / "gatekeeper_prepare_landing.py").write_bytes(MOD.read_bytes())
+    (prog / "_atomic_artefact.py").write_bytes(
+        (PROGRAMS / "_atomic_artefact.py").read_bytes())
     (r / "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json").write_text(
         '{"version": "1.2.3"}\n', encoding="utf-8")
     (prog / "INDEX.md").write_text("stale\n", encoding="utf-8")
