@@ -1676,6 +1676,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ok = tag in ("PASS", "NOT_APPLICABLE", "SINGLE_CORNER_ONLY")
     banner = "PASS" if tag in ("PASS", "NOT_APPLICABLE") else tag
     print(f"[{banner}] {_PROGRAM}: {tag}")
+    if tag == "NOT_APPLICABLE":
+        # vibe-ic#1115. This gate already knew -- "no stance file, pvt_matrix or
+        # STA report declares or records any corner -- there is no timing record
+        # to judge". It said so inside a `[PASS]` banner, and the only channel
+        # `flow_compliance_check` reads on the passing path is this prefix, so
+        # the step was recorded as ordinary multi-corner sign-off over zero
+        # corners.
+        print(f"VACUOUS_PASS: {_PROGRAM} judged 0 corner(s) — "
+              + "; ".join(str(r) for r in res.get("reasons", []))[:200])
     print(render_table(res))
     for reason in res.get("reasons", []):  # type: ignore[union-attr]
         print(f"  - {reason}")
