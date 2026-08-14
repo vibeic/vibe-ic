@@ -128,12 +128,43 @@ file is not a produced artefact, and an untracked path is a property of one
 working tree. A record is a claim about the past; it is not evidence about
 today.
 
-MEASURED ON THIS COMMIT: **0 cells change.** No tracked
-``reports/write_ledger.json`` exists anywhere in the repository, so W2's
-oracle is the AST alone, exactly as before — and that is not silent: every
-dimension-7 failure message and every cell's ``record_property`` carries the
-:func:`matrix_d7_write_record.binding_notes` sentence saying so, and
-:data:`RECORD_BOUND_ROOTS` pins the empty population.
+THE RECORD MUST NAME A PRODUCER (2026-08-12). The oracle is widened from "a
+Python program writes it" to "a Python program writes it, OR a run whose record
+this commit carries was observed writing it" — and *observed writing it* is the
+load-bearing half. ``step_write_ledger`` grades each residual entry on a
+producer-confidence ladder whose top two rungs name a producer
+(``provenance_output``, ``window``) and whose lower three record that it could
+not (``ambiguous``, ``unwitnessed``, ``unattributable``). Only the top two are
+admissible here, because only they answer W2's question, and because the
+predicate this binding exists for — a write inside a shelled-out tool script —
+reaches the record BY BEING WRAPPED, which is exactly what puts it on those
+rungs. See :data:`matrix_d7_write_record.ATTRIBUTED_CONFIDENCE`;
+``test_d7_a_record_that_names_no_producer_promotes_nothing`` is the paired
+guard, both arms built from the real emitter over one probe tree that differs
+only in whether the write was wrapped.
+
+MEASURED ON THIS COMMIT: **two roots bind, and 0 cells change.**
+``benchmark-data/ic/spm/v1.9.96_gf180mcuD`` (2026-08-07) and
+``v1.10.18_sky130A`` (2026-08-09) carry a tracked ``reports/write_ledger.json``;
+between them they name 509 live residual observations, of which 35 sit on an
+attributed rung and 474 do not. No attributed observation is a W2 promotion, so
+every cell is decided as it was before the binding — and that is not silent:
+every dimension-7 failure message and every cell's ``record_property`` carries
+the :func:`matrix_d7_write_record.binding_notes` sentences, which now state the
+per-root UNATTRIBUTED refusal count as well as the live-re-verification one.
+
+WHAT THE FIRST PUBLISHED RECORDS ACTUALLY FOUND, since the prediction below was
+written before any existed. Six cells promoted, not the predicted twelve, and
+all six on unattributed rungs: one was a genuine declaration gap that stands
+without any record at all (``reports/phase3/dynamic_ir.json``, step 24 — its
+gate names the file positionally and unconditionally and FAILs rc 1 when it is
+absent, so no passing run can lack it; DECLARED in the flow yaml, measured over
+all 12 published run roots at 0 verdict changes), and five were consequences of
+the missing rung filter: a gate clause's own ``condition_files_exist`` trigger
+(step 27), a gate program's own report path that nothing reads (step 34), the
+containerised ATPG engine's native output (step 11), and two Phase-1 documents
+charged to the step that reads them rather than the step that writes them
+(D1, M2).
 
 MEASURED ON TWO REAL RUNS, which is where the number that matters comes from.
 ``$HOME/_sky130A_r3_run`` and
@@ -148,9 +179,11 @@ netlist, each recorded in its run's OWN ``provenance.jsonl`` as **openroad's
 declared output** and read by the gates of steps 21 and 30 — artefacts a rule
 was calling "externally supplied by design" while the run's log said openroad
 wrote them. The per-path table is in ``matrix_d7_write_record``'s docstring.
-None of it fires here, because none of those trees is in the commit; the day
-one is published, :data:`RECORD_BOUND_ROOTS` turns that into a named event and
-each promotion must be declared in the yaml or waived with evidence.
+None of it fires here, because neither of those trees is in the commit. Two
+OTHER trees since have been, and their promotions were a different set on a
+different rung — see the re-measurement below. :data:`RECORD_BOUND_ROOTS` did
+turn that publication into a named event; what a pin cannot do is make anyone
+look, and with no CI on ``main`` the event went unread for five days.
 
 MEASURED END TO END, with a real run's record actually committed: 4 -> 13
 steps carrying findings, 12 findings gained, **0 lost**, 0 unattributable, 0
@@ -178,6 +211,7 @@ a promotion lands on is chosen by W2's own cascade.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -659,14 +693,100 @@ def _conditional_anchor():
     carries a conditional output, but it is red for thirteen unrelated W2
     findings, so a red observed after mutating it would prove nothing about
     the exemption. The anchor is therefore the conditional finding whose step
-    has no other finding at all — on the current flow that is step 27, and it
-    is found by measurement rather than named.
+    has no other finding at all — found by measurement rather than named.
+
+    HARDENING ONLY — the requirement is stated over what the control ASSERTS.
+    Every assertion is about ``path`` under **W1** (:func:`_w1_paths`), so the
+    condition that buys attributability is that ``path`` carries no W1 charge.
+    Demanding the whole STEP be silent under every rule is strictly more than
+    that, and the surplus is load-bearing in the wrong direction: it is what
+    let ONE unrelated finding delete the control.
+
+    That is not hypothetical. Before this PR's sibling fix, a write record
+    naming no producer was read as a producer, which manufactured a spurious
+    ``W2`` finding on step 27; the anchor search returned ``None`` and both
+    parametrisations aborted with "this control measures nothing". The cause is
+    fixed and step 27 is the live anchor again — this clause only ensures the
+    NEXT unrelated finding cannot repeat the trick. It is narrower than the old
+    form, never looser: same before/after transition, same path.
+
+    TWO PASSES, and the order is the point. The strongest anchor — a step
+    silent under EVERY rule — is still preferred, so the fix does not quietly
+    move the control off the anchor the flow actually supplies. Only when no
+    such step exists does it fall back to the W1 condition. A single pass on
+    the W1 condition alone would have silently switched this control from step
+    27 to step 23, which the paragraph above rejects on purpose: measured, the
+    mutants do still kill at 23, but "it happens to work there" is not a reason
+    to give up the anchor the author chose.
     """
     for sid in F.step_ids():
         findings = G.conditional_findings(sid)
         if findings and not G.findings_for(sid):
             return F.normalize_id(sid), findings[0].path
+    for sid in F.step_ids():
+        findings = G.conditional_findings(sid)
+        if not findings:
+            continue
+        path = findings[0].path
+        if path not in _w1_paths(sid):
+            return F.normalize_id(sid), path
     return None
+
+
+def test_the_anchor_search_survives_an_unrelated_finding_on_every_step(
+        monkeypatch):
+    """PAIRED GUARD for the fallback pass, which is otherwise DEAD CODE.
+
+    On the current flow the first pass succeeds (step 27), so the second never
+    runs and could be deleted — or be wrong — without any test noticing. This
+    reproduces the condition that killed the control: an unrelated finding on
+    EVERY step, so no step is silent under every rule.
+
+    The assertion is that a usable anchor is still returned AND that it meets
+    the property the control actually needs (no W1 charge on that path). Both
+    halves matter: returning any old step would satisfy "not None" while
+    destroying attributability.
+    """
+    real = G.findings_for
+
+    class _Unrelated:
+        rule = G.W2
+        path = "reports/phase3/UNRELATED_never_a_real_artifact.json"
+
+        def __str__(self):
+            return f"W2:{self.path}"
+
+    monkeypatch.setattr(G, "findings_for",
+                        lambda sid: list(real(sid)) + [_Unrelated()])
+
+    anchor = _conditional_anchor()
+    assert anchor is not None, (
+        "one unrelated finding on every step deleted the anchor entirely — "
+        "this is exactly the failure the fallback pass exists to prevent")
+    step, path = anchor
+    assert path not in _w1_paths(step), (
+        f"the fallback returned step {step}/{path}, which already carries a W1 "
+        f"charge; a later charge there would not be attributable to the "
+        f"mutation and the control would be measuring nothing")
+
+
+def test_the_anchor_search_prefers_the_strictly_silent_step(monkeypatch):
+    """The other half: the fallback must not STEAL the preferred anchor.
+
+    A single-pass W1-only search picks step 23 — which the docstring rejects on
+    purpose. This pins that a globally-silent step still wins when one exists,
+    so the hardening cannot silently relocate the control.
+    """
+    silent = [F.normalize_id(sid) for sid in F.step_ids()
+              if G.conditional_findings(sid) and not G.findings_for(sid)]
+    if not silent:
+        pytest.skip("no strictly-silent anchor on this flow; first pass is "
+                    "unreachable and the preference cannot be observed")
+    anchor = _conditional_anchor()
+    assert anchor is not None
+    assert anchor[0] in silent, (
+        f"a strictly-silent anchor exists {silent} but the search returned "
+        f"{anchor[0]} — the fallback overtook the preferred pass")
 
 
 @pytest.mark.parametrize(
@@ -699,9 +819,10 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
         "control measures nothing"
     )
     step, path = anchor
-    assert not G.findings_for(step), (
-        f"step {step} is already red before the mutation; the control cannot "
-        f"attribute the red to the mutation"
+    assert path not in _w1_paths(step), (
+        f"step {step} already carries a W1 charge on {path} before the "
+        f"mutation; the control cannot attribute a later charge to the "
+        f"mutation. Findings: {[str(f) for f in G.findings_for(step)]}"
     )
 
     def edit(doc):
@@ -738,7 +859,7 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
 
     # And back: the exemption returns with the flow's own optionality.
     assert path in {p for p, _w, _c in G.conditional_output_targets(step)}
-    assert not G.findings_for(step)
+    assert path not in _w1_paths(step)
 
 
 def _no_list_but_writes_anchor():
@@ -1128,18 +1249,54 @@ def _w2_dropped_candidates() -> Tuple[Tuple[str, str], ...]:
     return tuple(out)
 
 
-def _plant_record(probe: Path, commit, path: str) -> Dict[str, Any]:
+def _plant_provenance(probe: Path, path: str, tool: str = "openroad") -> None:
+    """Log *path* as *tool*'s DECLARED OUTPUT, the way a wrapped run does.
+
+    Without this the probe has no ``provenance.jsonl``, every residual entry
+    grades ``unattributable``, and the record names a path while naming no
+    producer. That is the shape :data:`matrix_d7_write_record.ATTRIBUTED_CONFIDENCE`
+    now refuses — correctly, because "the run wrote something here" is not
+    "the flow produces this" — so a control that planted only the file would be
+    asserting against the rung the binding does not act on.
+
+    The predicate this whole binding exists for is a write performed inside a
+    SHELLED-OUT tool script, and such a write reaches the record BY BEING
+    WRAPPED. So the probe is wrapped: one provenance record whose ``outputs``
+    names the path, which is what puts the entry on ``provenance_output`` — the
+    top rung, and the one the module's justifying measurement was taken on.
+    """
+    digest = hashlib.sha256((probe / path).read_bytes()).hexdigest()
+    rec = {
+        "tool": tool,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "duration_s": 1.0,
+        "argv": [tool, "-exit", "-no_init"],
+        "exit_code": 0,
+        "outputs": {path: digest},
+    }
+    with (probe / "provenance.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec) + "\n")
+
+
+def _plant_record(probe: Path, commit, path: str,
+                  attributed: bool = True) -> Dict[str, Any]:
     """Write *path*, run the REAL emitter, commit both. Returns the record.
 
     The record is never hand-written. If ``step_write_ledger`` changes what it
     records, this control changes with it or it breaks — which is the point: a
     control asserting against a fixture shaped like the record stops testing
     the record.
+
+    ``attributed=False`` plants the SAME file and the SAME emitter run with no
+    provenance log, so the entry grades on an unattributed rung. That is the
+    paired guard's subject, not a degenerate case.
     """
     _start_run(probe)                     # t0, so the run window is KNOWN
     target = probe / path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("// written by a tool this plugin only shells out to\n")
+    if attributed:
+        _plant_provenance(probe, path)
     commit(path)
     res = SWL.emit(probe)
     assert res.get("ok"), res
@@ -1355,6 +1512,10 @@ def test_d7_an_uncommitted_record_may_not_decide_a_cell(monkeypatch):
             target = probe / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("// produced by a shelled-out tool\n")
+            # Wrapped, so the entry reaches an ATTRIBUTED rung — otherwise the
+            # reader refuses it for naming no producer and this control would
+            # "pass" on the wrong rule. What is under test here is TRACKEDNESS.
+            _plant_provenance(probe, path)
             commit(path)
             assert SWL.emit(probe).get("ok")          # written, NOT committed
             doc = json.loads((probe / R.RECORD_REL).read_text())
@@ -1424,6 +1585,10 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
         # REVERSE: give the same tree a t0 marker, re-emit, and it binds.
         _start_run(probe)
         (probe / "phase3" / "stage3" / "pnr" / "openroad.log").write_text("yy\n")
+        # Wrapped for the same reason as the tracking control: the subject here
+        # is the WITHHELD residual, so the reverse arm must not be refused by
+        # the unrelated rung rule.
+        _plant_provenance(probe, "phase3/stage3/pnr/openroad.log")
         commit("phase3/stage3/pnr/openroad.log")
         assert SWL.emit(probe).get("ok")
         commit(R.RECORD_REL)
@@ -1434,21 +1599,137 @@ def test_d7_a_record_whose_emitter_withheld_the_residual_is_refused(monkeypatch)
     _unbind()
 
 
-#: Run roots whose write record this dimension consults. MEASURED 2026-08-06
-#: and EMPTY: ``git ls-tree -r --name-only HEAD | grep -c write_ledger.json``
-#: is 0 — ``step_write_ledger`` landed the same day and no run tree has been
-#: re-published since — so W2's producer oracle is the AST alone and every one
-#: of the 63 cells is decided exactly as it was before the binding.
+def test_d7_a_record_that_names_no_producer_promotes_nothing(monkeypatch):
+    """THE PAIRED GUARD for :data:`matrix_d7_write_record.ATTRIBUTED_CONFIDENCE`.
+
+    W2's question is "does the flow PRODUCE this path". ``step_write_ledger``
+    answers it on two rungs — ``provenance_output`` (a wrapped invocation's own
+    record claims this exact path as its output) and ``window`` (the mtime falls
+    inside exactly one logged invocation) — and on the other three it records
+    that it COULD NOT ANSWER: ``ambiguous``, ``unwitnessed``, ``unattributable``.
+
+    Because ``Observation.producer_label`` falls back to ``producer_confidence``
+    when ``producer`` is ``None``, an entry that recorded the ABSENCE of
+    attribution used to arrive at W2 as an affirmative producer, and W2 read
+    ``run-record:unwitnessed`` as "the flow produces this". The emitter says
+    otherwise in the very artefact this reader consumes — its ``coverage_note``
+    calls ``unwitnessed`` "a true statement about this run's provenance
+    COVERAGE, not proof of a hand-written artefact".
+
+    Both arms use the SAME path, the SAME probe shape and the SAME real emitter;
+    the ONLY difference is whether the write was wrapped. So this cannot pass by
+    the record being silent, and it fails if the filter is dropped, inverted, or
+    widened to admit a rung that names nobody.
+    """
+    candidates = _w2_dropped_candidates()
+    assert candidates, "no candidate path; see the FORWARD control"
+
+    # ---- ARM A: WRAPPED -> top rung -> promotes ----------------------
+    # Discovery happens INSIDE this arm rather than in a separate pass: the
+    # emitter run that proves a candidate usable is the same one the arm needs,
+    # and a probe cycle costs a git init plus a real `step_write_ledger.emit`.
+    # This module runs inside a 60 s nested-pytest budget
+    # (`test_matrix_63x8_coverage._OUTCOME_TIMEOUT_S`) that it already spends
+    # ~62 % of, so a redundant cycle here is not free.
+    picked = None
+    for path, owner in candidates:
+        with _probe_run_root("d7_rung_attributed_") as (probe, commit):
+            doc = _plant_record(probe, commit, path, attributed=True)
+            entry = next((r for r in doc["residual"]["written_never_declared"]
+                          if r.get("rel") == path), None)
+            if entry is None:
+                continue          # the emitter's own exclusions; try the next
+            picked = (path, owner)
+            assert entry.get("producer_confidence") in R.ATTRIBUTED_CONFIDENCE, (
+                f"the wrapped arm did not reach an attributed rung "
+                f"({entry.get('producer_confidence')!r}); without it this guard "
+                f"compares two refusals and measures nothing")
+            _bind(monkeypatch, probe)
+            assert R.observed_producers_of(path), (
+                f"a path the run's provenance names as a tool's declared output "
+                f"must reach W2: {R.binding_notes()}")
+            assert any(f.path == path for f in G.findings_for(owner)), (
+                f"step {owner}'s gate reads {path!r}, no step declares it, and "
+                f"a wrapped tool's own record claims it as an output — W2 must "
+                f"promote it. Findings: "
+                f"{[str(f) for f in G.findings_for(owner)]}")
+            break
+    assert picked is not None, (
+        "the emitter reported none of the candidate paths in its residual, so "
+        "this guard cannot exercise the rung filter")
+    path, owner = picked
+
+    # ---- ARM B: UNWRAPPED -> no producer named -> promotes nothing ----
+    with _probe_run_root("d7_rung_unattributed_") as (probe, commit):
+        doc = _plant_record(probe, commit, path, attributed=False)
+        entry = next(r for r in doc["residual"]["written_never_declared"]
+                     if r.get("rel") == path)
+        assert entry.get("producer_confidence") not in R.ATTRIBUTED_CONFIDENCE, (
+            f"the unwrapped arm was attributed anyway "
+            f"({entry.get('producer_confidence')!r}); this arm's subject is "
+            f"gone and the guard would pass vacuously")
+        assert entry.get("producer") is None, entry
+
+        _bind(monkeypatch, probe)
+        assert not R.observed_producers_of(path), (
+            f"the record grades {path!r} {entry.get('producer_confidence')!r} "
+            f"— it names the path but NO producer — yet the reader handed it "
+            f"to W2 as one: {R.observed_producers_of(path)}")
+        assert not any(f.path == path for f in G.findings_for(owner)), (
+            f"W2 charged step {owner} with producing {path!r} on the strength "
+            f"of a record that explicitly could not say who wrote it. "
+            f"Findings: {[str(f) for f in G.findings_for(owner)]}")
+
+        # NEVER SILENT: the refusal is published, by name and by rung.
+        rej = R.rejections()
+        assert any(path in item for r in rej.values() for item in r.unattributed), (
+            f"the refusal is invisible — a reader cannot tell 'the record said "
+            f"nothing about this path' from 'the record named it but "
+            f"attributed it to nobody'. rejections: {rej}")
+        assert "UNATTRIBUTED" in " ".join(R.binding_notes()), R.binding_notes()
+    _unbind()
+
+
+#: Run roots whose write record this dimension consults. RE-MEASURED
+#: 2026-08-12; the population was empty when this module landed and is not
+#: empty now.
 #:
-#: The pin is what makes the first published record a LOUD, NAMED event. The
-#: per-step promotions this module's docstring tabulates (12 on
-#: ``_sky130A_r3_run``, 9 on ``converge_1.5.44_gf180mcuD``, over steps 11, 21,
-#: 23, 24, 27, 30, D1, DT2, DT3 and M2) were measured against run trees the
-#: commit does not carry. On the day one of them IS carried, this test reddens
-#: and each promotion must be re-measured and then either DECLARED in the flow
-#: yaml or waived with evidence — not discovered later from a cell that
-#: quietly changed colour.
-RECORD_BOUND_ROOTS: Tuple[str, ...] = ()
+#: The pin worked exactly as designed. Two benchmark-data publications carried a
+#: tracked ``reports/write_ledger.json`` — ``v1.9.96_gf180mcuD`` on 2026-08-07
+#: and ``v1.10.18_sky130A`` on 2026-08-09 — and this assertion turned that into
+#: a named event instead of a set of cells that quietly changed colour. What it
+#: could not do is make anyone LOOK: with no CI on ``main`` the event sat
+#: unread for five days while nine tests in this module stayed red.
+#:
+#: RE-MEASURED, and the promotions are not the twelve the docstring predicted.
+#: Six fired — steps 11, 24, 27, 34, D1, M2 — and every one came from a
+#: producer-confidence rung that names no producer; on the two rungs that DO
+#: name one the promotion count is 0. See
+#: :data:`matrix_d7_write_record.ATTRIBUTED_CONFIDENCE`. Their disposition:
+#:
+#:   step 24  ``reports/phase3/dynamic_ir.json``   REAL — now DECLARED in the
+#:            flow yaml. It holds with no record at all: the gate names the file
+#:            positionally and unconditionally and FAILs rc 1 when it is absent.
+#:   step 27  ``reports/phase3/si_mcf_sta.json``   NOT a finding — it is the
+#:            gate clause's own ``condition_files_exist`` TRIGGER, so its absence
+#:            is a state the same yaml declares legal two keys below (#537).
+#:   step 34  ``reports/phase3/cmp_fill_emit.json``  NOT a finding — it is
+#:            ``metal_fill_emit``'s own default report path, read by nothing;
+#:            it looked gate-consumed only because the path is a literal in the
+#:            gate program that WRITES it.
+#:   step 11  ``phase2/stage2/dft/coverage.yml``   NOT declarable — the
+#:            containerised ATPG engine's native output, present only when that
+#:            engine ran; ``required_outputs`` is unconditional.
+#:   D1, M2   Phase-1 documents charged to the step that READS them rather than
+#:            the step that writes them.
+#:
+#: Adding or retiring a published run tree reddens this again, which is the
+#: intent: the oracle's population is a fact about the commit and must be
+#: restated deliberately, not absorbed.
+RECORD_BOUND_ROOTS: Tuple[str, ...] = (
+    "benchmark-data/ic/spm/v1.10.18_sky130A",
+    "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+)
 
 
 def test_d7_the_write_record_population_is_named_root_by_root():
