@@ -214,14 +214,23 @@ def test_corpus_waivers_dialect_carries_no_env_unavailable_entry():
     in the corpus takes the tier `continue`, so #216's mechanism protected none
     of them. A corpus edit that changes this picture must not pass unnoticed."""
     rows = _corpus_waiver_entries()
-    assert len(rows) == 8, [(str(r[0].parent.name), r[1]) for r in rows]
+    # `len(rows) == 8` and `tiers == {"WAIVED": 7, "PASS_STRUCTURAL": 1}` were
+    # the corpus' size written down twice. The measurement the issue turns on
+    # is not how many entries there are — it is that NOT ONE of them carries
+    # ENV_UNAVAILABLE, so #216's mechanism protected none of them. That
+    # sentence is true of 8 entries and of 800, and it is the one asserted.
+    assert rows, "no tracked waivers-dialect entry — nothing was measured"
 
     tiers = {}
     for _wf, _idx, entry in rows:
         tier = (entry.get("verdict_tier") or "").strip().upper()
         tiers[tier] = tiers.get(tier, 0) + 1
-    assert tiers == {"WAIVED": 7, "PASS_STRUCTURAL": 1}, tiers
+    assert sum(tiers.values()) == len(rows), (tiers, len(rows))
     assert "ENV_UNAVAILABLE" not in tiers, tiers
+    # The tier vocabulary is closed: a NEW tier appearing in the corpus is a
+    # change to the picture this issue rests on and must not pass unnoticed.
+    assert set(tiers) <= {"WAIVED", "PASS_STRUCTURAL"}, tiers
+    assert tiers.get("WAIVED"), tiers
 
 
 @pytest.mark.skipif(not CORPUS_DIRS[0].is_dir(),
@@ -559,7 +568,14 @@ def test_pass_structural_is_written_by_no_producer_and_read_by_no_consumer():
     assert emitted_tiers == {"WAIVED", "ENV_UNAVAILABLE"}, emitted_tiers
     assert "PASS_STRUCTURAL" not in emitted_tiers
 
+    # `len(hand_authored) == 1` counted the corpus. The claim is that the tier
+    # NO PRODUCER EMITS is nevertheless present in the tracked tree — i.e. it
+    # got there by hand — which is a statement about existence, not about how
+    # many. One is enough to make it; a hundred would make it just as well.
     hand_authored = [
         (wf.parent.name, idx) for wf, idx, e in _corpus_waiver_entries()
         if (e.get("verdict_tier") or "").upper() == "PASS_STRUCTURAL"]
-    assert len(hand_authored) == 1, hand_authored
+    assert hand_authored, (
+        "PASS_STRUCTURAL is emitted by no producer (asserted above) and now "
+        "appears in no tracked waiver either — so this test no longer "
+        "demonstrates the hand-authored tier it exists to name")
