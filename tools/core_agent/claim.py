@@ -87,7 +87,7 @@ def _gh_list(repo: str, number: int) -> List[Dict]:
     would need flattening and would silently give this function a list of lists.
     """
     out = subprocess.run(
-        ["gh", "api", "--paginate",
+        ["gh", "api",
          f"repos/{repo}/issues/{number}/comments?per_page=100"],
         check=True, capture_output=True, text=True, timeout=60).stdout
     return json.loads(out or "[]")
