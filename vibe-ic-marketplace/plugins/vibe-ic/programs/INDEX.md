@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1104
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1104)
+- **Total programs (excluding helpers / shims):** 1105
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1105)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1095 |
+| `any` | 1096 |
 
 ## Alphabetical listing
 
@@ -1129,6 +1129,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `yosys_tiecell_recipe_order_check` | any | v0.1.98 | Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys synthesis recipe. |
 | `zigbee_protocol_synth` | any | v0.1.91 | Zigbee / IEEE 802.15.4 low-power wireless PAN protocol synth helper. |
 | `zz_probe_aaa` | any | — | Probe program zz_probe_aaa — repro fixture for vibe-ic#1363. Not a real gate. |
+| `zz_probe_aab` | any | — | Probe program zz_probe_aab — repro fixture for vibe-ic#1363. Not a real gate. |
 
 ## By ic_class
 
@@ -1176,7 +1177,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1095 programs)
+### `any` (1096 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2273,4 +2274,5 @@ _(no programs in this group)_
 - `yosys_tiecell_recipe_order_check` — Enforce the two v0.1.98 LOAD-BEARING ordering rules of the constant-net tie-cell pass in a Yosys synthesis recipe.  _[v0.1.98]_
 - `zigbee_protocol_synth` — Zigbee / IEEE 802.15.4 low-power wireless PAN protocol synth helper.  _[v0.1.91]_
 - `zz_probe_aaa` — Probe program zz_probe_aaa — repro fixture for vibe-ic#1363. Not a real gate.
+- `zz_probe_aab` — Probe program zz_probe_aab — repro fixture for vibe-ic#1363. Not a real gate.
 
