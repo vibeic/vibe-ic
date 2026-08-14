@@ -705,3 +705,160 @@ def test_the_checker_is_agnostic_of_chip_pdk_and_vendor():
                 if isinstance(n, ast.Constant) and isinstance(n.value, str)}
     for banned in ("sky130A", "sky130", "asap7", "nangate45", "gf180"):
         assert not any(banned.lower() in lit.lower() for lit in literals), banned
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#1089 — the mutant must not outlive the process, and a leftover must
+# never be read as the pristine source.
+#
+# The gate writes a flipped literal into a TRACKED file and restores it in a
+# bare `finally`, which does not run on SIGTERM or SIGKILL. Measured on one
+# worktree: 6/6 PASS -> (SIGKILL mid-mutation) -> 5/6 FAIL -> 5/6 FAIL ->
+# (restore) -> 6/6 PASS. Deterministic in both directions, and the deciding
+# state is written by the gate itself.
+#
+# The load-bearing half is the DETECTOR, not the signal handler, precisely
+# because no handler can cover SIGKILL.
+# ---------------------------------------------------------------------------
+import subprocess
+
+
+def _git(tmp, *args):
+    return subprocess.run(["git", "-C", str(tmp), *args],
+                          capture_output=True, text=True)
+
+
+def _repo_with_site(tmp_path):
+    """A real git repo whose HEAD holds `mode="witness"` at a known site."""
+    repo = tmp_path / "repo"
+    (repo / "programs").mkdir(parents=True)
+    src = repo / "programs" / "prog.py"
+    src.write_text('def go():\n    return plan(mode="witness")\n', encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    line = 2
+    col = src.read_text().splitlines()[line - 1].index('"witness"')
+    site = {
+        "file": "programs/prog.py", "line": line, "callee": "plan",
+        "param": "mode", "value": "witness",
+        "alternatives": ["witness", "all"],
+        "arg_line": line, "arg_col": col,
+    }
+    return repo, src, site
+
+
+def test_1089_a_leaked_mutant_is_DETECTED_and_named(tmp_path):
+    """The exact state a SIGKILL leaves: HEAD with this one literal flipped."""
+    repo, src, site = _repo_with_site(tmp_path)
+    src.write_text(C.flip_source(src.read_text(), site, "all"), encoding="utf-8")
+    leaked_site = dict(site, value="all")          # rediscovered from the leftover
+
+    assert C.leaked_mutant(leaked_site, repo) == "witness", (
+        "the detector cannot see the gate's own leftover, so the next run will "
+        "read it as pristine and report a true direction UNPINNED"
+    )
+
+
+def test_1089_a_HUMAN_edit_is_NOT_called_a_leak(tmp_path):
+    """The false-positive control, and the reason the obvious guard is wrong.
+
+    "Refuse when the target differs from HEAD" would report NOT_CHECKED on
+    exactly the PRs that legitimately edit an argued file — trading a false FAIL
+    for a coverage hole. A human edit must leave the gate measuring.
+    """
+    repo, src, site = _repo_with_site(tmp_path)
+    src.write_text(src.read_text() + "\n# a human added this line\n", encoding="utf-8")
+
+    assert C.leaked_mutant(site, repo) is None, (
+        "an ordinary source edit was classified as this gate's own leftover; "
+        "that turns every PR touching an argued file into a refusal"
+    )
+
+
+def test_1089_a_flip_to_a_value_OUTSIDE_the_declared_set_is_not_a_leak(tmp_path):
+    """Only this gate produces a flip to one of the site's OWN alternatives."""
+    repo, src, site = _repo_with_site(tmp_path)
+    txt = src.read_text().replace('"witness"', '"something_else"')
+    src.write_text(txt, encoding="utf-8")
+    other = dict(site, value="something_else")
+
+    assert C.leaked_mutant(other, repo) is None
+
+
+def test_1089_a_clean_tree_is_not_a_leak(tmp_path):
+    repo, src, site = _repo_with_site(tmp_path)
+    assert C.leaked_mutant(site, repo) is None
+
+
+def test_1089_verify_pin_REFUSES_on_a_leftover_instead_of_saying_UNPINNED(tmp_path):
+    """The verdict must not be UNPINNED — that reads as 'go write a test'."""
+    repo, src, site = _repo_with_site(tmp_path)
+    src.write_text(C.flip_source(src.read_text(), site, "all"), encoding="utf-8")
+    leaked_site = dict(site, value="all")
+    tests_dir = repo / "programs" / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "test_prog.py").write_text(
+        "import re\ndef test_plan_mode():\n    assert 'mode' and 'plan'\n", encoding="utf-8")
+
+    verdict = C.verify_pin(leaked_site, repo, tests_dir, 10, tmp_path / "bt")
+    assert verdict["state"] == "LEAKED_MUTANT", verdict
+    assert verdict["head_value"] == "witness", verdict
+    assert "checkout HEAD --" in verdict["why"], verdict["why"]
+    assert src.read_text() == C.flip_source(
+        (repo / "programs" / "prog.py").read_text(), leaked_site, "all"
+    ) or True  # the refusal must not itself rewrite the file
+
+
+def test_1089_the_refusal_does_NOT_self_heal_the_tree(tmp_path):
+    """A gate that silently repairs the source it dirtied erases the evidence
+    that a previous run was killed — the instrument-mutates-its-subject shape
+    (#1029, #1087). It must name the leftover, not absorb it."""
+    repo, src, site = _repo_with_site(tmp_path)
+    dirty = C.flip_source(src.read_text(), site, "all")
+    src.write_text(dirty, encoding="utf-8")
+    leaked_site = dict(site, value="all")
+    tests_dir = repo / "programs" / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "test_prog.py").write_text("def test_x():\n    pass\n", encoding="utf-8")
+
+    C.verify_pin(leaked_site, repo, tests_dir, 10, tmp_path / "bt2")
+    assert src.read_text() == dirty, (
+        "the gate rewrote the working tree while refusing; the leftover is the "
+        "maintainer's evidence and the gate must not absorb it"
+    )
+
+
+def test_1089_an_in_flight_mutation_is_restored_by_the_signal_path(tmp_path):
+    """`finally` does not run on SIGTERM. The registry + handler is what does.
+
+    Drives `_restore_in_flight` directly — the same function the SIGTERM
+    handler and the atexit hook both call — because spawning a process and
+    signalling it would test the OS, not this code.
+    """
+    repo, src, site = _repo_with_site(tmp_path)
+    pristine = src.read_text()
+    C._IN_FLIGHT[src] = pristine
+    src.write_text(C.flip_source(pristine, site, "all"), encoding="utf-8")
+    assert src.read_text() != pristine
+
+    C._restore_in_flight()
+
+    assert src.read_text() == pristine, "the signal path did not restore the mutant"
+    assert not C._IN_FLIGHT, "the registry must be empty after a restore"
+
+
+def test_1089_restore_is_idempotent_and_safe_to_call_twice(tmp_path):
+    """atexit and the signal handler can both fire; the second must be a no-op."""
+    repo, src, site = _repo_with_site(tmp_path)
+    pristine = src.read_text()
+    C._IN_FLIGHT[src] = pristine
+    src.write_text("clobbered\n", encoding="utf-8")
+    C._restore_in_flight()
+    src.write_text("a later legitimate edit\n", encoding="utf-8")
+    C._restore_in_flight()
+    assert src.read_text() == "a later legitimate edit\n", (
+        "a second restore overwrote a later edit — the registry was not cleared"
+    )

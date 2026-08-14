@@ -134,7 +134,10 @@ import ast
 import json
 import os
 import re
+import atexit
 import shutil
+import signal
+import subprocess
 import subprocess
 import sys
 import tempfile
@@ -577,10 +580,154 @@ def run_pytest(paths: Sequence[Path], cwd: Path, basetemp: Path,
     return proc.returncode, proc.stdout
 
 
+# ---------------------------------------------------------------------------
+# THE MUTANT MUST NOT OUTLIVE THE PROCESS  (vibe-ic#1089)
+# ---------------------------------------------------------------------------
+#
+# This gate writes a flipped literal into a TRACKED source file and restores it
+# in a bare `finally`. A `finally` does not run on SIGTERM, and it does not run
+# on SIGKILL. A maintainer's Ctrl-C, a CI step timeout, or an OOM kill therefore
+# left the mutant in the tree — and because the next run DISCOVERS its sites by
+# reading the source, it then read its own leftover as the pristine value,
+# flipped it to something the tests already tolerate, and reported the site
+# UNPINNED. Measured on one worktree: 6/6 PASS -> 5/6 FAIL -> 5/6 FAIL ->
+# (restore) -> 6/6 PASS. Deterministic in both directions, and the state that
+# decides which one you get is written by the gate itself.
+#
+# Two halves, and only the second one is load-bearing:
+#
+#   1. RESTORE ON A CATCHABLE SIGNAL. Closes SIGTERM/SIGINT and any path that
+#      unwinds through `atexit`. Cheap, uncontentious, and it does NOT close
+#      SIGKILL or a power cut — nothing can.
+#   2. REFUSE WHEN A LEFTOVER IS ALREADY THERE. This is the half that matters,
+#      precisely because (1) cannot be complete.
+_IN_FLIGHT: Dict[Path, str] = {}
+
+
+def _restore_in_flight() -> None:
+    """Put back every mutation this process still owns. Idempotent."""
+    while _IN_FLIGHT:
+        path, original = _IN_FLIGHT.popitem()
+        try:
+            path.write_text(original, encoding="utf-8")
+        except OSError:                                       # pragma: no cover
+            pass
+
+
+def _install_restore_handlers() -> None:
+    """Restore on SIGTERM/SIGINT, then die the way we were asked to.
+
+    Re-raising with the default disposition matters: swallowing the signal would
+    make this gate unkillable, which is a worse failure than the one being
+    fixed. Only installed when we own the main thread — `signal.signal` raises
+    otherwise, and a library import must not crash its host.
+    """
+    atexit.register(_restore_in_flight)
+
+    def _handler(signum, _frame):                             # pragma: no cover
+        _restore_in_flight()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError):                         # not main thread
+            pass
+
+
+def _head_text(root: Path, rel: str) -> Optional[str]:
+    """`git show HEAD:<rel>`, or None when that cannot be answered."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "show", f"HEAD:{rel}"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):              # pragma: no cover
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def leaked_mutant(site: Dict[str, Any], root: Path) -> Optional[str]:
+    """Is this file HEAD with exactly THIS site's literal flipped? -> HEAD's value.
+
+    THE DISCRIMINATION IS THE WHOLE POINT, and the obvious guard is wrong.
+    "Refuse when the target differs from HEAD" would report NOT_CHECKED on
+    exactly the PRs that legitimately edit an argued file — trading a false FAIL
+    for a coverage hole, which is the same bargain this gate exists to refuse.
+
+    So the question asked is narrower and decidable: *is the working tree byte
+    -for-byte HEAD with this one literal flipped to another of this site's own
+    declared alternatives?* Only this gate produces that state. A human edit
+    changes something else as well, or changes the literal to a value outside
+    the declared set, and in either case this returns None and the gate proceeds
+    normally.
+
+    Computed with `flip_source` — the SAME transformation the mutation applies —
+    rather than a re-implemented differ, so the detector cannot drift from the
+    thing it detects. It flips the working tree BACK to each alternative and
+    asks whether the result is HEAD.
+
+    Returns the value HEAD holds at this site, or None.
+    """
+    # This gate only ever writes a value FROM the declared set. A literal
+    # outside it cannot be our mutant, whatever else is true of the file.
+    # (`collect_sites` already filters to in-set literals, so in the live flow
+    # such a site is never discovered at all — but `leaked_mutant` is reachable
+    # on its own and must not depend on a caller's filtering for correctness.)
+    if site["value"] not in site["alternatives"]:
+        return None
+    rel = site["file"]
+    head = _head_text(root, rel)
+    if head is None:
+        return None            # untracked, or no git: not decidable, not a leak
+    current = (root / rel).read_text(encoding="utf-8")
+    if current == head:
+        return None            # this file is clean; nothing leaked here
+    for other in site["alternatives"]:
+        if other == site["value"]:
+            continue
+        try:
+            if flip_source(current, site, other) == head:
+                return other
+        except ValueError:
+            continue
+    return None
+
+
 def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
                max_test_files: int, basetemp: Path,
                extra: Sequence[str] = ()) -> Dict[str, Any]:
     """Flip the literal and see whether anything dies."""
+    # PRE-FLIGHT (vibe-ic#1089), and it runs FIRST — before the candidate-test
+    # selection — because a leftover invalidates every judgement downstream of
+    # it, including "no test names this program", which returns UNPINNED. My
+    # own test caught that ordering: with the check placed after the selection,
+    # a leak on a site with no candidate tests still reported UNPINNED.
+    #
+    # A leftover mutant from a killed run would otherwise be read as the
+    # pristine value, and this gate would report a true direction UNPINNED —
+    # a false FINDING, not an error. `UNPINNED` reads as "go write a test"
+    # when the tree is simply dirty.
+    #
+    # Deliberately NOT self-healed. A gate that silently repairs the source it
+    # dirtied is the instrument-mutates-its-subject shape (#1029, #1087) and it
+    # would erase the evidence that a previous run was killed. It refuses,
+    # names the file, and prints the exact restore — the maintainer decides.
+    head_value = leaked_mutant(site, root)
+    if head_value is not None:
+        return {
+            "candidate_tests": [],
+            "state": "LEAKED_MUTANT",
+            "head_value": head_value,
+            "why": (
+                f"this file is HEAD with THIS site's literal flipped from "
+                f"{head_value!r} to {site['value']!r} — a mutant left behind by "
+                f"a killed run of this gate, not a source change. Restore with: "
+                f"git -C <repo> checkout HEAD -- {site['file']}"
+            ),
+        }
+
     candidates = select_tests(site, tests_dir)
     result: Dict[str, Any] = {
         "candidate_tests": [str(p.relative_to(root)) for p in candidates],
@@ -599,6 +746,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
     original = target.read_text(encoding="utf-8")
     killed_by: List[Dict[str, Any]] = []
     survivors: List[str] = []
+    _IN_FLIGHT[target] = original
     try:
         for other in [a for a in site["alternatives"] if a != site["value"]]:
             try:
@@ -617,6 +765,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
                 survivors.append(other)
     finally:
         target.write_text(original, encoding="utf-8")
+        _IN_FLIGHT.pop(target, None)
 
     if killed_by:
         # A RED test kills every mutant, including one nobody wrote a pin for.
@@ -734,12 +883,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     unpinned: List[Dict[str, Any]] = []
     abstained: List[Dict[str, Any]] = []
     pinned: List[Dict[str, Any]] = []
+    leaked: List[Dict[str, Any]] = []
+    _install_restore_handlers()
     try:
         for s in selected:
             verdict = verify_pin(s, root, tests_dir, args.max_test_files, basetemp,
                                  args.pytest_arg)
             s["pin"] = verdict
-            bucket = {"PINNED": pinned, "UNPINNED": unpinned}.get(verdict["state"], abstained)
+            bucket = {"PINNED": pinned, "UNPINNED": unpinned,
+                      "LEAKED_MUTANT": leaked}.get(verdict["state"], abstained)
             bucket.append(s)
             print(f"  [{verdict['state']}] {s['file']}:{s['line']} "
                   f"{s['callee']}({s['param']}={s['value']!r})"
@@ -753,6 +905,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                           "abstained": len(abstained), "selected": len(selected)}
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(report, indent=1), encoding="utf-8")
+
+    # A leaked mutant is reported BEFORE the ratio, and it suppresses the
+    # UNPINNED verdict entirely: with our own leftover in the tree the ratio is
+    # a measurement of the leftover, not of the repository, and printing it
+    # first would invite exactly the misreading this fixes.
+    if leaked:
+        print(f"[REFUSE] policy_direction_pin_check: {len(leaked)} argued site(s) "
+              f"carry a mutant this gate left behind — the tree is dirty, the "
+              f"directions are not unpinned", file=sys.stderr)
+        for s in leaked:
+            print(f"  {s['file']}:{s['line']} {s['callee']}({s['param']}="
+                  f"{s['value']!r})  HEAD holds {s['pin']['head_value']!r}",
+                  file=sys.stderr)
+        files = sorted({s["file"] for s in leaked})
+        print(f"  restore: git -C <repo> checkout HEAD -- {' '.join(files)}",
+              file=sys.stderr)
+        return RC_UNDETERMINED
 
     denom = len(pinned) + len(unpinned)
     ratio = f"{len(pinned)}/{denom}" if denom else "0/0"
