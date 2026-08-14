@@ -3950,3 +3950,129 @@ def matrix_cell_state(step_id) -> str:
     if waiver_for(step_id) is not None:
         return "WAIVED"
     return "ENFORCED"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# A COMMITTED LEDGER MUST BE A LIVE CAPTURE (vibe-ic#1475, from #1188)
+# ══════════════════════════════════════════════════════════════════════
+#: What a ledger walked over a git checkout looks like from the outside. The
+#: emitter itself sets these — it does not pretend to know write times it
+#: cannot know — so the detection is reading its own disclosure, not guessing.
+_BLIND_LEDGER_FIELDS = ("mtime_fidelity.flattened is true",
+                        "run_window.known is false")
+
+
+def _committed_write_ledgers():
+    """``(label, path, doc)`` for every write ledger THIS COMMIT carries."""
+    out = []
+    for label, rr in sorted(run_roots().items()):
+        p = rr.path / LEDGER_REL
+        if not p.is_file():
+            continue
+        try:
+            out.append((label, p, json.loads(p.read_text(encoding="utf-8"))))
+        except (OSError, ValueError) as exc:
+            # Unreadable is NOT "not blind". It is unmeasured, and it is named.
+            out.append((label, p, {"__unreadable__": str(exc)}))
+    return out
+
+
+def _blind_capture_reason(label: str, doc) -> str:
+    """Why *doc* is a checkout walk rather than a run capture. ``""`` if it is
+    a live capture; a sentence naming the fields if it is not.
+
+    Kept pure so the control below can drive it both directions without
+    planting anything in the corpus — a guard whose only falsification is a
+    manual experiment is a guard nobody re-runs.
+    """
+    if not isinstance(doc, dict):
+        return f"{label}: the ledger is {type(doc).__name__}, not an object"
+    if "__unreadable__" in doc:
+        return (f"{label}: the ledger could not be read "
+                f"({doc['__unreadable__']}) — UNMEASURED, which is not a pass")
+    fid = doc.get("mtime_fidelity") or {}
+    win = doc.get("run_window") or {}
+    if fid.get("flattened") is not True and win.get("known") is not False:
+        return ""
+    return (f"{label}: mtime_fidelity.flattened={fid.get('flattened')!r}, "
+            f"run_window.known={win.get('known')!r}, in_run_window="
+            f"{(doc.get('counts') or {}).get('in_run_window')!r} — this ledger "
+            f"was walked over a COPY, not captured during a run, so it "
+            f"attributes no write to any step. Restore the live capture; a "
+            f"ledger emitted from a checkout is strictly LESS evidence than "
+            f"none, because this dimension trusts it")
+
+
+def test_d3_no_committed_ledger_was_captured_from_a_checkout():
+    """A ledger walked over a git checkout attributes nothing — refuse it.
+
+    THE TRAP THIS CLOSES (vibe-ic#1475). When a committed ledger records a spec
+    as never written and the same commit carries the artefact,
+    :func:`ledger_staleness` reports it — and its remediation text used to read
+    "re-emit the ledger over the tree as it now is". Following that advice is
+    destructive, and it was followed three times before it was withdrawn.
+    ``step_write_ledger.py`` run against a git checkout of a published cell
+    returns
+
+        mtime_fidelity.flattened   true      (distinct_mtimes 1, share 1.0)
+        run_window.known           false     (t0_source withheld_flattened_mtimes)
+        counts.in_run_window       0
+
+    because git does not preserve mtimes, so the emitter correctly WITHHOLDS
+    every time-derived conclusion. The resulting record is not a fresher
+    account of the same run — it is a BLIND one, and committing it would
+    replace a real capture with one that can attribute no write to any step.
+
+    The message is now pinned by
+    ``test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver``.
+    This is the other half, and it is the half that BLOCKS: a message can be
+    ignored, so the assertion is on the ARTEFACTS this commit carries. It fires
+    the moment one is replaced by a checkout walk — exactly when a reviewer
+    needs telling, because that diff reads as a routine ledger refresh.
+
+    ``test_d3_the_blind_capture_predicate_fires_on_a_checkout_walk`` is the
+    bidirectional control, so this one's green is falsifiable without anyone
+    having to plant a file in the published corpus.
+    """
+    roots = run_roots()
+    assert roots, ("no run roots enumerated at all — this guard measured "
+                   "NOTHING, which is not the same as finding nothing")
+
+    ledgers = _committed_write_ledgers()
+    if not ledgers:
+        pytest.skip(f"none of the {len(roots)} enumerated run root(s) carries "
+                    f"{LEDGER_REL} — a real zero, not a failed look")
+
+    blind = [r for r in (_blind_capture_reason(lbl, doc)
+                         for lbl, _p, doc in ledgers) if r]
+    assert not blind, (
+        f"{len(blind)} of {len(ledgers)} committed write ledger(s) were "
+        f"captured from a checkout rather than during a run:\n  "
+        + "\n  ".join(blind))
+
+
+def test_d3_the_blind_capture_predicate_fires_on_a_checkout_walk():
+    """The control. A guard that cannot go red is a comment with a colour.
+
+    Both fields the emitter uses to disclose a checkout walk are driven
+    independently, because either one alone is enough to make the record blind
+    and a predicate that needed BOTH would pass on half the real cases.
+    """
+    live = {"mtime_fidelity": {"flattened": False, "distinct_mtimes": 77},
+            "run_window": {"known": True, "t0_source": "orchestrator_summary"},
+            "counts": {"in_run_window": 489}}
+    assert _blind_capture_reason("live", live) == "", \
+        "a real capture was called blind — this guard would block every landing"
+
+    flattened = json.loads(json.dumps(live))
+    flattened["mtime_fidelity"]["flattened"] = True
+    assert "flattened=True" in _blind_capture_reason("f", flattened)
+
+    withheld = json.loads(json.dumps(live))
+    withheld["run_window"]["known"] = False
+    assert "known=False" in _blind_capture_reason("w", withheld)
+
+    # UNMEASURED is not a pass: an unreadable record must be named, never
+    # quietly treated as a live capture.
+    assert _blind_capture_reason("u", {"__unreadable__": "boom"})
+    assert _blind_capture_reason("n", None)
