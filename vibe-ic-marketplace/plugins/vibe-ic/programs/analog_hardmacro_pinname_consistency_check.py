@@ -57,6 +57,7 @@ except ImportError:  # pragma: no cover - allow standalone import
     _pl = None
 
 import _vacuous_exit as _vx
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +346,7 @@ def main(argv: List[str] = None) -> int:
 
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(out)
+        atomic_write_text(Path(args.json), out)
     else:
         print(_vx.verdict_line("analog_hardmacro_pinname_consistency_check",
                                res.passed, skipped, reason))
