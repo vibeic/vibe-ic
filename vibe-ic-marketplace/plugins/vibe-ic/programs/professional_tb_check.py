@@ -333,7 +333,18 @@ def main(argv=None) -> int:
         # output rather than the exit code.
         print("VACUOUS_PASS: professional_tb_check — " + str(res.get("reason")))
         return 2
-    if verdict in ("PASS", "NOT_APPLICABLE"):
+    if verdict == "NOT_APPLICABLE":
+        # vibe-ic#1115. The branch above already gets this right for
+        # NOT_CHECKED; NOT_APPLICABLE is the SAME case -- "no
+        # professional_tb.json (step did not run)" -- and fell through to a
+        # plain rc 0, which `flow_compliance_check` records as PASS. The
+        # producer emitted nothing and the checker read the absence as consent.
+        # rc stays 0 (an absent optional step must not fail a run); what
+        # changes is that the flow stops recording "checked, fine".
+        print("VACUOUS_PASS: professional_tb examined 0 testbench report(s) — "
+              + str(res.get("reason", "the producing step left nothing to check")))
+        return 0
+    if verdict == "PASS":
         return 0
     if verdict == "IO_ERROR":
         return 2
