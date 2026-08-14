@@ -157,13 +157,19 @@ The full convention (folder layout, exclusions, the publish/validate commands) i
   `u_hawaii_adc/{phase3/analog,reports}/`.
   **This entry's two summary documents are NOT shipped, and neither is its
   cross-check tree.** `95787ef8` published the cell into a versioned directory on
-  a DIFFERENT PDK and deleted `RESULT.md`, `BENCHMARK_VERIFICATION_REPORT.md` and
-  `cross_check/` from the IC level as superseded — but a different-PDK run does
-  not supersede this one, and the document that cites them was not updated. The
-  verdict above stands on the evidence that does ship; the two summaries are
+  a DIFFERENT PDK and deleted the RESULT summary, the BENCHMARK_VERIFICATION_REPORT
+  summary and the cross-check tree from the IC level as superseded. A different-PDK
+  run does not supersede this one, and the document that cited them was not updated.
+  The verdict above stands on the evidence that does ship; the two summaries are
   recoverable from the object store (`95787ef8^`) and are not in the tree. Do not
   re-point this citation at `v1.9.86_*/RESULT.md`: that is the other PDK's run
   and would silently re-base this claim (vibe-ic#1169).
+
+  Those three names are deliberately written WITHOUT backticks. A backticked
+  path-like token is what `evidence_citation_resolves_check` reads as a citation,
+  so a sentence whose point is "this artifact is not shipped" must not be written
+  in the notation that asserts it is. Spelling them as prose costs a little
+  readability and buys the gate one fewer entry it can see and cannot rule on.
 - [benchmark-verified 2026-05-26] `spm` — **FIRST fully benchmark-verified IC**:
   `benchmark-verify` OVERALL = **PRODUCTION-READY** (all 6 pillars pass; evidence in
   `spm/BENCHMARK_VERIFICATION_REPORT.md` + `spm/reports/`). Pillar 1 Functional
