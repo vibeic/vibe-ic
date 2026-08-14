@@ -956,6 +956,40 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 # covered by nothing automatic, and the gate now says so in the same document
 # that carries its verdict. NOT_CHECKED in the roll-up is the correct state and
 # is deliberately left in place.
+#
+# THE DISCLOSURE ABOVE WAS ITSELF WRONG IN ONE ARM (vibe-ic#1491). Repair (a) —
+# "pass --container here" — could have been applied, been entirely inert, and
+# reported itself as done: `docker_backends` turned every backend failure
+# (container down, container misnamed, docker absent, deadline expired) into an
+# empty listing, `run` read that empty listing as an unreadable PDK ROOT, and
+# the report then printed `backend_not_exercised: []`, i.e. asserted that the
+# container backend HAD run. Measured on 8HD-7 at 3d13e2c59, exit codes taken
+# from python directly rather than through a pipe:
+#
+#   no --container                    rc 2  installed_pdk_root_unreadable
+#   --container <a live one>          rc 1  134 documents, 7 claims, 2 CONTRADICTED
+#   --container <a name with no container>
+#                                     rc 2  installed_pdk_root_unreadable,
+#                                           backend_not_exercised: []
+#
+# Row 3 is the trap under row 1's own advice. The gate now PROBES the root
+# instead of inferring it from an empty list, so those four environments carry
+# four distinct reason tokens; `backend_not_exercised` is computed from what
+# actually ran; and a backend the caller NAMED but could not reach is rc 1
+# (`failure_kind: environment`) rather than a quiet rc 2 — the call `cvdp_gate`
+# made for an absent iverilog in #1345. Every run, pass or not, now prints an
+# `[ENVIRONMENT]` line naming the root, the backend and the state it read, so
+# two verdicts at the same commit can be compared at all.
+#
+# THIS LINE IS DELIBERATELY UNCHANGED. It passes no `--container`, so it keeps
+# taking the rc-2 tier for a reason that is genuinely about the host, and main
+# stays exactly as green as it was. Wiring `--container` here is now SAFE to do
+# — a wrong name announces itself instead of reading as NOT_CHECKED — but it is
+# still not RIGHT to do until someone rules on the question #1491 asks third:
+# whether a hygiene finding that `main` itself carries should block a batch.
+# Both live contradictions sit under benchmark-data/**/input/, which #904
+# forbids editing, so wiring it today turns main red on files nobody is
+# permitted to correct. That is an owner decision, not a gate decision.
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
   python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT"
 
