@@ -202,6 +202,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `comb_gate_synth` | any | — | deterministic SOLVER for the COMBINATIONAL GATE / WIRE / BOOLEAN-EXPRESSION family (spec -> RTL). |
 | `comb_state_table_synth` | any | — | deterministic SOLVER for a COMBINATIONAL state transition + output table (the Moore-FSM "combinational portion"). |
 | `commit_msg_nda_check` | any | — | NDA guard for commit MESSAGE text. |
+| `competing_pr_claim_groups` | any | — | Group open PRs by the ISSUE they claim, and name the groups that a merge conflict can never surface (vibe-ic#1411). |
 | `compose_synth` | any | — | a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine. |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
@@ -1333,6 +1334,7 @@ _(no programs in this group)_
 - `comb_gate_synth` — deterministic SOLVER for the COMBINATIONAL GATE / WIRE / BOOLEAN-EXPRESSION family (spec -> RTL).
 - `comb_state_table_synth` — deterministic SOLVER for a COMBINATIONAL state transition + output table (the Moore-FSM "combinational portion").
 - `commit_msg_nda_check` — NDA guard for commit MESSAGE text.
+- `competing_pr_claim_groups` — Group open PRs by the ISSUE they claim, and name the groups that a merge conflict can never surface (vibe-ic#1411).
 - `compose_synth` — a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine.
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
