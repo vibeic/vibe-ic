@@ -551,7 +551,46 @@ run_unselectable_pytest
 run "unselectable-test census is not stale" \
     python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
 
-run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh"
+# vibe-ic#1498 — THE TIER REPORTS ITSELF BY NAME, not as one word.
+#
+# This used to be a bare `run "repo hygiene gates" bash …`, and 74 sub-gates
+# reached the log under that one label. `landing_merge_verdict.decide` subtracts
+# the base arm's failing gate labels from the candidate's and refuses what is
+# NEW; with one label for 74 gates the subtraction has nothing to subtract, and
+# the damage runs both ways at once:
+#
+#   * an operator reading `FAIL  repo hygiene gates` on the base concludes the
+#     landing bar cannot be met by any batch — which is how #1498 was filed;
+#   * and once the tier IS red on the base, every hygiene finding a candidate
+#     introduces is waived, because the umbrella is red on both arms and the
+#     difference is empty. Measured against `decide` before this change: base
+#     red on one sub-gate, candidate red on that one plus a second of its own,
+#     `VERDICT ok = True`.
+#
+# The record already existed — `_gate_dispatch.sh --summary-json` writes one
+# entry per DECLARED gate — and nothing on this path had ever asked for it.
+#
+# WRITTEN OUTSIDE THE REPO, deliberately: `suite_write_guard` brackets this
+# whole tier (:265) and a record dropped in the tree would be attributed to the
+# gates as a write into their own subject.
+run_hygiene_tier() {
+  local rec rc
+  rec="$(mktemp -t gk_hygiene.XXXXXX.json)"
+  run "repo hygiene gates" bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
+      --summary-json "$rec"
+  # The per-gate publication is a SEPARATE failure from the tier's own verdict:
+  # the tier can be green while the record is unreadable, and a landing that
+  # cannot say which gates ran must not be stamped. rc 2 prints no lines, so
+  # against a base that published 74 every red one is missing here and the
+  # differential refuses it as silenced — fail-closed with no cooperation.
+  python3 "$ROOT/tools/ci/hygiene_land_lines.py" "$rec"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "  FAIL  repo hygiene per-gate record"
+    FAILED=1
+  fi
+  rm -f "$rec"
+}
+run_hygiene_tier
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 
 # #1029 — the standing assertion, executed: everything above ran against this

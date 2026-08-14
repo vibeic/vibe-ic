@@ -246,6 +246,39 @@ def gate_key(label: str) -> str:
     return _LABEL_TREE_COUNT.sub("", label)
 
 
+# THE HYGIENE TIER, ONE NAME PER GATE (vibe-ic#1498).
+#
+# `gatekeeper-land.sh` used to print ONE label for all 74 repo-hygiene gates, so
+# the differential below could not tell them apart. Once the tier was red on the
+# base — which it was, for six rebuilt batches over 135 PRs — the umbrella
+# appeared in `was_red` AND in `now_red`, the difference was empty, and every
+# hygiene finding a candidate introduced was excused as inherited. The tier now
+# publishes each gate under `repo hygiene gates :: <gate>` (see
+# `tools/ci/hygiene_land_lines.py`) and the rules below need no change to act on
+# them.
+#
+# A BASE ARM THAT PREDATES THAT PUBLICATION CANNOT BE COMPARED AGAINST ONE THAT
+# CARRIES IT. Arm A2 runs the BASE tree's own `gatekeeper-land.sh`, and may
+# reuse a log cached before this landed; such a log names the umbrella and no
+# sub-gate. Subtracting it from a candidate that names 74 would report every one
+# of the candidate's failing sub-gates as new, and refuse a branch for findings
+# the base carries too — the exact false refusal #1498 is about, inverted.
+#
+# So the comparison degrades to the umbrella for that one case, and SAYS SO. The
+# switch is read off the BASE arm, which no candidate can influence: a branch
+# cannot buy the leniency by editing itself. The opposite shape — a base that
+# publishes sub-gates and a candidate that stopped — is NOT covered here and is
+# not meant to be: those sub-gates then fail the existing "silenced rather than
+# fixed" clause, which is the fail-closed direction.
+_HYGIENE_SUBGATE_PREFIX = "repo hygiene gates :: "
+
+
+def _names_hygiene_subgates(log: "LandLog") -> bool:
+    """Did this arm publish the hygiene tier gate by gate?"""
+    return any(l.startswith(_HYGIENE_SUBGATE_PREFIX)
+               for l in (*log.passed, *log.failed, *log.skipped))
+
+
 @dataclass
 class Delta:
     """The failed-set difference. Every list holds junit keys."""
@@ -589,14 +622,33 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         for label in land.blocking_failures:
             reasons.append(f"LANDING GATE FAILED — {label}")
     else:
+        # See `_HYGIENE_SUBGATE_PREFIX`. Read off the BASE arm only.
+        drop_subgates = (_names_hygiene_subgates(land)
+                         and not _names_hygiene_subgates(base_land))
+        if drop_subgates:
+            disclosures.append("HYGIENE_SUBGATE_COMPARISON_UNAVAILABLE")
+            notes.append(
+                "the base arm reports the hygiene tier as one gate, so its "
+                "sub-gates cannot be subtracted and the comparison for that "
+                "tier degraded to the umbrella label — a hygiene finding this "
+                "branch introduces is NOT distinguished from one the base "
+                "carries. Re-run once the base carries "
+                "tools/ci/hygiene_land_lines.py, or clear the cached base gate "
+                "log, to get the per-gate comparison")
+
+        def _comparable(labels):
+            return [l for l in labels
+                    if not (drop_subgates
+                            and l.startswith(_HYGIENE_SUBGATE_PREFIX))]
+
         # KEYED BY `gate_key`, REPORTED BY LABEL — see the note on
         # `_LABEL_TREE_COUNT`. The arms measure two trees, so a label carrying a
         # per-tree count is not the same string on both sides even when it is
         # the same gate; every message below still prints the label verbatim.
         was_red = {gate_key(l): l for l in base_land.blocking_failures}
-        now_red = {gate_key(l): l for l in land.blocking_failures}
-        cand_skipped = {gate_key(l) for l in land.skipped}
-        cand_passed = {gate_key(l): l for l in land.passed}
+        now_red = {gate_key(l): l for l in _comparable(land.blocking_failures)}
+        cand_skipped = {gate_key(l) for l in _comparable(land.skipped)}
+        cand_passed = {gate_key(l): l for l in _comparable(land.passed)}
         cand_labels = set(cand_passed) | set(now_red) | cand_skipped
         for key in sorted(set(now_red) - set(was_red)):
             reasons.append(
