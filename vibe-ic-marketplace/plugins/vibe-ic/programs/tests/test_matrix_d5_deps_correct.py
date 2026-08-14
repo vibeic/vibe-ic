@@ -511,11 +511,18 @@ def external_input_declarations(step_id) -> Tuple[str, ...]:
 #: these three are named, evidenced and pointed at the issue rather than
 #: silently forgiven. When #1070 lands, this set empties and
 #: `test_d5_the_deferred_register_only_shrinks` reddens if it does not.
-_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {
-    "A1": ("D1",),      # reads L1_DATASHEET.json + L5_ADI_SPEC.json
-    "25": ("24",),      # reads IR-drop's outputs: all
-    "M1": ("37",),      # reads phase3/stage4/gds/*.gds
-}
+#: EMPTIED 2026-08-14, on the instruction three lines above: "When #1070 lands,
+#: this set empties". It landed — `bcd444425` and its neighbours declare all
+#: three edges, and the live measurement now reports them ORDERED:
+#:     25 -> 24   A1 -> D1   M1 -> 37
+#: `test_d5_the_deferred_register_only_shrinks` was reporting exactly that and
+#: naming the remedy per edge ("so delete the register entry"). Deleting them is
+#: the SHRINK this register was built to accept, not a relaxation: the register
+#: is what holds those three cells green, so with it empty the cells are green
+#: on the declared edges alone, which is the state #1070 was filed to reach.
+#: A NEW deferred edge still fails immediately — `measured` would be non-empty
+#: against an empty register, which is the same assertion, unweakened.
+_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {}
 
 
 
