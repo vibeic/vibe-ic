@@ -7,7 +7,7 @@ not the run that used it.
 
 ## Vendored, Apache-2.0 — SkyWater PDK standard-cell models
 
-- **File:** `v1.10.18_sky130A/phase2/stage2/dft/cell_model_combined.v`
+- **File:** `phase2/stage2/dft/cell_model_combined.v`
   (152,616 lines)
 - **Upstream:** the SkyWater Open Source PDK — `SKY130_FD_SC_HD` and
   `SKY130_EF_SC_HD` standard-cell simulation models.
