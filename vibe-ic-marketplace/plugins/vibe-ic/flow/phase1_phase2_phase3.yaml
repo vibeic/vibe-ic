@@ -1874,7 +1874,7 @@ steps:
       all_of:
         - files_exist: ["phase3/analog/*/spec.json OR phase1/analog/*/spec.json"]
         - program_exit_zero: "analog_a1_spec_extract_check . --json reports/analog/a1_spec.json"
-    blocks_on: []
+    blocks_on: [D1]
 
   - id: A2
     name: "Analog Topology Selection"
@@ -3331,7 +3331,7 @@ steps:
         # measured and rejected — no published run carries a tech LEF, so its
         # honest rc 3 SKIP would have failed the step on all of them.
         - program_exit_zero: "em_peak_current_authority_check . --json reports/phase3/em_current_authority.json"
-    blocks_on: [22]
+    blocks_on: [22, 24]
 
   - id: 26
     name: "🔁 Antenna check (gate-oxide protection)"
@@ -4683,7 +4683,7 @@ steps:
         # cannot PASS without a real top-level LVS PASS.
         - advisory_program_exit_zero: "mixed_signal_top_lvs_run . --json reports/analog/mixed_signal/top_lvs_run.json"
         - program_exit_zero: "mixed_signal_merge_check . --json reports/analog/mixed_signal/merge.json"
-    blocks_on: [A8, 15]
+    blocks_on: [A8, 15, 37]
     notes: |
       Merge each analog analog/hardmacro GDS into the digital top GDS at
       its assigned floorplan position. Verify no overlap, all macro
