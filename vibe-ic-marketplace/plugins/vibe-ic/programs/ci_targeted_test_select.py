@@ -238,6 +238,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import re
 import subprocess
 import sys
@@ -931,6 +932,133 @@ def _helper_consumers(plugin_root: Path, changed_helpers: list[str],
     return selected
 
 
+# Rule 8 — DIRECTORY CONSUMERS (vibe-ic#1387). Built LAZILY, like rules 4/6/7.
+#
+# A test (or a shared helper) that reads a source directory by GLOB depends on
+# every file in it, and says so nowhere a name-based rule can see. The measured
+# case: `matrix_d7_artifact_graph.py:524` does
+#
+#     for path in sorted(F.PROGRAMS_DIR.glob("*.py")):
+#
+# and parses the AST of every program. A change to `programs/eda_report_audit.py`
+# therefore reddens `test_matrix_d7_outputs_list_complete.py` — while `grep -c
+# eda_report_audit` over BOTH files returns 0, so rule 3 has no name to match and
+# rule 5 has no import to follow. #1265 was verified NEW 0 by the documented
+# method and the delegate test, run by hand, was 11 red against main's 10.
+#
+# This is vibe-ic#534 one level out. #534: helpers are consumed by `import`, and
+# nothing modelled it -> rule 4. Here: source DIRECTORIES are consumed by `glob`,
+# and nothing modelled it.
+#
+# DERIVED, not listed, for the reason rule 4's docstring already gives: a
+# hand-list is a second registry free to drift, and it would have been wrong on
+# arrival — the tree has 19 `*.py` glob sites across 23 files today, and the
+# number moves whenever anyone writes a corpus-walking test. So the PATTERN is
+# read out of the AST and matched against the changed path with `fnmatch`.
+#
+# `iterdir()`/`walk()` are deliberately NOT edges: they carry no pattern, so the
+# only sound reading is "every file in some unknown directory", which would
+# select all 273 directory-reading files for any change. A pattern is what makes
+# the edge specific enough to be worth having.
+_DIR_GLOB_CALLS = ("glob", "rglob")
+
+# A pattern that matches EVERYTHING names no shape, and in this tree it almost
+# never means "read the source tree": measured, 38 of the 56 files that would
+# match `programs/eda_report_audit.py` matched ONLY via `"*"`, and they are
+# `tmp_path.glob("*")` fixtures asserting what a run wrote into a temp dir. That
+# is the same objection already made against `iterdir()` above — an edge with no
+# shape is an edge to everything — so the universal patterns are excluded on the
+# same ground rather than a different one. Dropping them takes the #1265 case
+# from +53 files to +18, and `matrix_d7_artifact_graph.py` (`"*.py"`) is
+# untouched by the exclusion.
+_UNSHAPED_PATTERNS = frozenset({"*", "**", "**/*", "*/*"})
+
+
+def _glob_patterns_in(text: str) -> set[str]:
+    """Literal patterns this file passes to `.glob()` / `.rglob()`.
+
+    Fail-open like rule 4: an unparseable file contributes nothing rather than
+    raising. A non-literal pattern (an f-string, a variable) is skipped for the
+    same reason `iterdir` is — it names no shape that can be matched.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return set()
+    out: set[str] = set()
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        fn = n.func
+        if not isinstance(fn, ast.Attribute) or fn.attr not in _DIR_GLOB_CALLS:
+            continue
+        if n.args and isinstance(n.args[0], ast.Constant) \
+                and isinstance(n.args[0].value, str):
+            pat = n.args[0].value
+            if pat not in _UNSHAPED_PATTERNS:
+                out.add(pat)
+    return out
+
+
+def _build_dir_consumer_index(plugin_root: Path) -> dict[str, set[str]]:
+    """`plugin-rel test-tree file` -> the glob patterns it reads.
+
+    Cost is paid only when rule 8 actually fires. The `"glob("` text filter is a
+    sound superset — no call to `.glob(...)` can omit the literal `glob(` — and
+    it keeps the `ast` parse off the ~90% of the test tree that never globs.
+    """
+    tests_dir = plugin_root / _TESTS_REL
+    if not tests_dir.is_dir():
+        return {}
+    out: dict[str, set[str]] = {}
+    for path in sorted(tests_dir.rglob("*.py")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "glob(" not in text:
+            continue
+        pats = _glob_patterns_in(text)
+        if pats:
+            out[path.relative_to(plugin_root).as_posix()] = pats
+    return out
+
+
+def _dir_consumers(plugin_root: Path, changed_sources: list[str],
+                   source_stems: set[str]) -> set[str]:
+    """Rule 8: test-tree files whose glob pattern matches a changed source path.
+
+    A matching TEST file is selected directly. A matching HELPER is routed back
+    through rule 4, so the tests that import it come too — which is the whole
+    path from `programs/eda_report_audit.py` to
+    `test_matrix_d7_outputs_list_complete.py`: the glob edge reaches
+    `matrix_d7_artifact_graph.py`, and rule 4 carries it to the test.
+    """
+    if not changed_sources:
+        return set()
+    index = _build_dir_consumer_index(plugin_root)
+    if not index:
+        return set()
+    hit_tests: set[str] = set()
+    hit_helpers: list[str] = []
+    for rel, pats in index.items():
+        name = Path(rel).name
+        for src in changed_sources:
+            base = Path(src).name
+            if any(fnmatch.fnmatch(base, p) or fnmatch.fnmatch(src, p)
+                   for p in pats):
+                if name.startswith("test_"):
+                    if (plugin_root / rel).is_file():
+                        hit_tests.add(rel)
+                elif _is_test_helper(rel):
+                    hit_helpers.append(rel)
+                break
+    if hit_helpers:
+        hit_tests |= _helper_consumers(plugin_root, hit_helpers, source_stems)
+        hit_tests |= {h for h in hit_helpers if Path(h).name.startswith("test_")}
+    return hit_tests
+
+
 def _smoke_set(plugin_root: Path) -> set[str]:
     """The curated smoke set, filtered to basenames that actually exist."""
     out: set[str] = set()
@@ -1030,6 +1158,7 @@ def select_tests(
     changed_helpers: list[str] = []
     changed_tools: set[str] = set()
     unmapped: list[str] = []
+    changed_sources: list[str] = []          # rule 8 (vibe-ic#1387)
 
     for raw in changed_paths:
         rel = _to_plugin_rel(raw, plugin_prefix)
@@ -1058,6 +1187,9 @@ def select_tests(
         # (1) a changed top-level source module -> its owned tests.
         if rp.parent.as_posix() in _SOURCE_DIRS and not rp.name.startswith("test_"):
             selected |= index.get(rp.stem, set())
+            # (8) a source file is also read by every test that GLOBS its
+            # directory. Collected here, resolved lazily below.
+            changed_sources.append(rel)
             # (4, opt-in) every test file that NAMES the changed module.
             if mode in (MODE_REFERENCE, MODE_REFERENCE_CAPPED):
                 refs = ref_index.get(rp.stem, set())
@@ -1085,6 +1217,17 @@ def select_tests(
     # so the common case never reads the tree.
     if changed_helpers:
         selected |= _helper_consumers(plugin_root, changed_helpers, source_stems)
+
+    # (8) Built LAZILY, same as rules 4 and 6 and for the same reason: the
+    # index is read only when a source file is actually in the diff.
+    #
+    # Applies in EVERY mode and is NOT capped, on rule 4's argument: `--mode`
+    # trades coverage against cost over a population the other rules DO see,
+    # whereas a glob consumer is seen by no rule at all. Capping it would
+    # restore the hole for exactly the corpus-walking matrix tests where a
+    # silent miss is most expensive — that is the #1265 failure, verbatim.
+    if changed_sources:
+        selected |= _dir_consumers(plugin_root, changed_sources, source_stems)
 
     # (6) Built LAZILY, same as rule 4 and for the same reason.
     #
