@@ -59,6 +59,8 @@ from pathlib import Path
 
 import pytest
 
+from _hostpaths import require_repo  # noqa: E402
+
 _PLUGIN = Path(__file__).resolve().parent.parent.parent
 _PROGRAMS = _PLUGIN / "programs"
 sys.path.insert(0, str(_PROGRAMS))
@@ -229,6 +231,103 @@ def test_an_unaskable_git_does_not_crash_and_does_not_refuse(
     assert G.enclosing_work_tree(amb) is None
     assert "or git could not be asked" in G.declaration(
         _FakeConfig(basetemp=amb))
+
+
+# ── E. driven by the REAL repository, not by fixtures this change authored ──
+#
+# flow-change-acceptance §4: "A change whose tests are all fixtures authored
+# alongside it CANNOT DISTINGUISH ITSELF FROM ITS OWN ABSENCE." Everything
+# above builds its own `git init` tree, which proves the logic and nothing
+# about the tree this guard actually runs in. These two read the checked-in
+# artefacts through `_hostpaths.require_repo`.
+
+def test_the_real_repository_is_detected_as_a_work_tree():
+    """If this returns None on the real checkout the guard is inert here, and
+    every claim above is about fixtures only."""
+    root = require_repo(".")
+
+    top = G.enclosing_work_tree(root)
+    assert top is not None, (
+        "the guard cannot see the repository it ships in — it would never "
+        "fire for the operator whose TMPDIR points into their own checkout")
+    assert Path(top).exists(), top
+
+
+def test_the_landing_harness_does_not_point_its_scratch_into_the_tree():
+    """The property this guard exists to keep, asserted against the real
+    `gatekeeper-land.sh` rather than a copy of it.
+
+    The landing sets neither `--basetemp` nor `TMPDIR`, so it inherits
+    pytest's default under the platform temp root and the guard stays inert
+    there. That is measured here rather than assumed, because the day someone
+    adds an in-tree `--basetemp` to speed a run up is the day every landing
+    starts refusing — and this test names the reason instead of leaving a
+    maintainer to rediscover #1446.
+    """
+    land = require_repo("tools", "gatekeeper-land.sh")
+    text = land.read_text(encoding="utf-8", errors="replace")
+
+    offenders = [ln.strip() for ln in text.splitlines()
+                 if ("--basetemp" in ln or "TMPDIR=" in ln)
+                 and not ln.lstrip().startswith("#")]
+    assert offenders == [], (
+        "gatekeeper-land.sh now pins a scratch root; if it points inside the "
+        "checkout every landing refuses (vibe-ic#1446): " + repr(offenders))
+
+
+def test_the_landing_preflights_the_scratch_root():
+    """The CLI's machine runner, asserted against the real landing script.
+
+    `checker_execution_wiring_audit` calls a checker that only its own unit
+    test executes an orphan — "a fixture the author wrote proves the logic,
+    never the artefacts". The wiring is what makes this guard reach a real
+    landing, so deleting it must break a test rather than pass quietly.
+    """
+    land = require_repo("tools", "gatekeeper-land.sh")
+    text = land.read_text(encoding="utf-8", errors="replace")
+
+    live = [ln for ln in text.splitlines()
+            if "scratch_root_guard.py" in ln and not ln.lstrip().startswith("#")]
+    assert live, ("gatekeeper-land.sh no longer runs scratch_root_guard as a "
+                  "preflight; the landing can again spend an hour on a run its "
+                  "own environment falsifies (vibe-ic#1446)")
+
+
+# ── F. the CLI, both directions ────────────────────────────────────────────
+
+def _cli(*args):
+    r = subprocess.run([sys.executable, str(_PROGRAMS / "scratch_root_guard.py"),
+                        *args], capture_output=True, text=True,
+                       timeout=_TIMEOUT, env=_clean_env())
+    return r.returncode, r.stdout + r.stderr
+
+
+def test_cli_refuses_a_root_inside_a_work_tree(tmp_path):
+    amb = _repo(tmp_path / "cli_amb")
+
+    rc, out = _cli("--scratch-root", str(amb))
+    assert rc == 2, out          # the repo's disclosed-refusal convention
+    assert "[FAIL]" in out, out
+    assert str(amb.resolve()) in out, out
+
+
+def test_cli_passes_a_root_outside_any_work_tree(tmp_path):
+    """The paired guard: a CLI that only ever refuses is a ban, not a check."""
+    plain = tmp_path / "cli_plain"
+    plain.mkdir()
+
+    rc, out = _cli("--scratch-root", str(plain))
+    assert rc == 0, out
+    assert "[PASS]" in out, out
+
+
+def test_cli_allowance_reports_the_refusal_and_still_exits_zero(tmp_path):
+    amb = _repo(tmp_path / "cli_amb2")
+
+    rc, out = _cli("--scratch-root", str(amb), "--allow")
+    assert rc == 0, out
+    assert "[FAIL]" in out, out          # still SAYS it
+    assert "not\ntrustworthy" in out or "not trustworthy" in out, out
 
 
 class _FakeConfig:
