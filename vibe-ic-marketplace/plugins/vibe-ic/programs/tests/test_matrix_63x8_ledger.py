@@ -952,3 +952,102 @@ def test_accessors_track_a_removed_field(tmp_path):
 
     assert F.required_outputs(victim)
     assert F.declares_required_outputs(victim)
+
+
+# ===========================================================================
+# CONTENT CITATIONS (vibe-ic#1289)
+#
+# `path:LINE` rots on every edit ABOVE the line it names, and it rots the bad
+# way: it still resolves to a line, so it still READS as evidence while
+# pointing at unrelated code. Measured on `a38902d1`,
+# `flow_compliance_check.py:2439-2441` had come to read `return result` and
+# `phase3_one_shot_runner.py:30288` an EMPTY LINE.
+#
+# The form this replaces it with is only an improvement if a DELETED construct
+# still fails — an anchor loose enough to always match is a waiver that can
+# never be re-examined, which is worse than drift because drift at least fails
+# loudly. Both halves are asserted below.
+# ===========================================================================
+def _waiver_citing(evidence: str):
+    """A throwaway waiver carrying one evidence string, nothing else."""
+    return W.Waiver(step_id="1", dim=2, reason="probe", evidence=evidence)
+
+
+def test_a_content_citation_that_resolves_once_is_clean():
+    """`passed = len(found) > 0` occurs exactly once in the cited file."""
+    problems = W.content_citation_problems(_waiver_citing(
+        "programs/flow_compliance_check.py::`passed = len(found) > 0`"))
+    assert problems == (), problems
+
+
+def test_PAIRED_a_DELETED_construct_still_fails():
+    """THE GUARD the whole form rests on.
+
+    If this ever passes, the citation has stopped being evidence: it would
+    mean an anchor naming nothing is accepted, which is exactly the "can never
+    be re-examined" failure that would make this worse than a line number.
+    """
+    problems = W.content_citation_problems(_waiver_citing(
+        "programs/flow_compliance_check.py::"
+        "`passed = len(this_construct_was_deleted) > 0`"))
+    assert len(problems) == 1, problems
+    assert "resolves to NOTHING" in problems[0], problems[0]
+    assert "re-examined" in problems[0], problems[0]
+
+
+def test_an_AMBIGUOUS_anchor_is_refused_and_says_how_many():
+    """MEASURED: `len(corners) < 2` occurs 3 times in that file.
+
+    An anchor matching in several places cannot show WHICH construct the
+    waiver rests on, so accepting it would let a vague gesture stand in for
+    evidence.
+    """
+    problems = W.content_citation_problems(_waiver_citing(
+        "programs/phase3_one_shot_runner.py::`len(corners) < 2`"))
+    assert len(problems) == 1, problems
+    assert "AMBIGUOUS" in problems[0], problems[0]
+
+
+def test_the_tighter_anchor_for_that_same_construct_IS_accepted():
+    """The other half of the pair: the rule is satisfiable, not merely strict.
+
+    Without this, "refuse ambiguous anchors" could be met by refusing
+    everything, and the form would be unusable rather than disciplined.
+    """
+    problems = W.content_citation_problems(_waiver_citing(
+        'programs/phase3_one_shot_runner.py::'
+        '`stance_path = rpt_phase3 / "single_corner_stance.json"`'))
+    assert problems == (), problems
+
+
+def test_a_pytest_node_id_is_not_read_as_a_content_citation():
+    """`tests/test_x.py::test_name` carries no quote, and several already
+    appear in this registry. Promoting one into an evidence claim would
+    invent a claim the waiver never made."""
+    problems = W.content_citation_problems(_waiver_citing(
+        "re-executed by programs/tests/test_matrix_d2_falsifiable.py"
+        "::test_d2_a_files_exist_clause_is_satisfied_by_a_zero_byte_file"))
+    assert problems == (), problems
+
+
+def test_the_registry_itself_has_no_broken_content_citation():
+    """The live registry, not a fixture — the converted entries must resolve."""
+    bad = {}
+    for w in W.WAIVERS:
+        problems = W.content_citation_problems(w)
+        if problems:
+            bad[f"{w.step_id}/d{w.dim}"] = problems
+    assert not bad, bad
+
+
+def test_the_content_form_is_ACTUALLY_USED_by_the_registry():
+    """NON-VACUITY. A grammar nothing writes is a grammar nothing checks.
+
+    Counts entries carrying the form, so the four tests above cannot be
+    passing over an empty population.
+    """
+    used = [f"{w.step_id}/d{w.dim}" for w in W.WAIVERS
+            if any(True for _ in W._iter_content_citations(
+                f"{w.reason or ''}\n{w.evidence or ''}"))]
+    assert len(used) >= 2, (
+        f"only {len(used)} waiver(s) use the content form: {used}")
