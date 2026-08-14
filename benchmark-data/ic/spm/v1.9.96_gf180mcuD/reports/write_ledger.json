@@ -48,7 +48,7 @@
     "bad_lines": 0,
     "declared_output_paths": 29,
     "attributed_writes": 52,
-    "coverage_note": "provenance.jsonl logs WRAPPED TOOL INVOCATIONS only. Steps whose work is done by a plugin program or by the agent — Phase 1 doc generation is the largest — write nothing through the wrapper and therefore land as 'unwitnessed'. That is a true statement about this run's provenance COVERAGE, not proof of a hand-written artefact; triage accordingly."
+    "coverage_note": "provenance.jsonl logs WRAPPED TOOL INVOCATIONS only. Steps whose work is done by a plugin program or by the agent \u2014 Phase 1 doc generation is the largest \u2014 write nothing through the wrapper and therefore land as 'unwitnessed'. That is a true statement about this run's provenance COVERAGE, not proof of a hand-written artefact; triage accordingly."
   },
   "counts": {
     "recorded": 527,
@@ -70,7 +70,7 @@
   "steps": [
     {
       "id": "D1",
-      "name": "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)",
+      "name": "Phase 1 Doc Extraction (17 skills + dialogue entry \u2192 L1-L27)",
       "phase": "phase1",
       "stage": "stage_phase1",
       "conditional": false,
@@ -221,7 +221,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -394,7 +394,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -427,7 +427,7 @@
     },
     {
       "id": "2",
-      "name": "🔁 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)",
+      "name": "\ud83d\udd01 Lint (RTL + Quartus-unsafe patterns + RTL-bug claim schema)",
       "phase": "phase2",
       "stage": "stage1",
       "conditional": false,
@@ -470,7 +470,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -494,7 +494,7 @@
     },
     {
       "id": "3",
-      "name": "🔁 CDC / RDC check",
+      "name": "\ud83d\udd01 CDC / RDC check",
       "phase": "phase2",
       "stage": "stage1",
       "conditional": false,
@@ -540,7 +540,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -573,7 +573,7 @@
     },
     {
       "id": "4",
-      "name": "🔁 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)",
+      "name": "\ud83d\udd01 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)",
       "phase": "phase2",
       "stage": "stage1",
       "conditional": false,
@@ -637,7 +637,7 @@
       "observed_producers": [
         "yosys"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -652,7 +652,7 @@
     },
     {
       "id": "5",
-      "name": "🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)",
+      "name": "\ud83d\udd01 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)",
       "phase": "phase2",
       "stage": "stage1",
       "conditional": false,
@@ -700,7 +700,7 @@
       "observed_producers": [
         "yosys"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -729,7 +729,7 @@
       "stage": "stage1",
       "conditional": false,
       "waiver": {
-        "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
+        "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
         "review_required": true,
         "approver": "field-agent-attest (fpga-board cap-gap tier)"
       },
@@ -756,7 +756,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -771,7 +771,7 @@
           "detail": "no path on disk matches this spec",
           "step_conditional": false,
           "waiver": {
-            "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
+            "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
             "review_required": true,
             "approver": "field-agent-attest (fpga-board cap-gap tier)"
           }
@@ -789,7 +789,7 @@
           "detail": "no path on disk matches this spec",
           "step_conditional": false,
           "waiver": {
-            "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
+            "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
             "review_required": true,
             "approver": "field-agent-attest (fpga-board cap-gap tier)"
           }
@@ -838,7 +838,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -853,7 +853,7 @@
     },
     {
       "id": "8",
-      "name": "🔁 SDC validation",
+      "name": "\ud83d\udd01 SDC validation",
       "phase": "phase2",
       "stage": "stage2",
       "conditional": false,
@@ -878,7 +878,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -893,7 +893,7 @@
     },
     {
       "id": "9",
-      "name": "Synthesis (Yosys → mapped netlist)",
+      "name": "Synthesis (Yosys \u2192 mapped netlist)",
       "phase": "phase2",
       "stage": "stage2",
       "conditional": false,
@@ -929,7 +929,7 @@
       "observed_producers": [
         "yosys"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -939,12 +939,25 @@
           "rel": "phase2/stage2/synth/stats.json",
           "detail": "declared output exists but its mtime falls inside no logged tool invocation window",
           "caveat": "provenance coverage in this run is 35 invocation(s); a real tool run that was never wrapped produces this signal too"
+        },
+        {
+          "dimension": "D3",
+          "kind": "finding",
+          "rule": "declared_output_not_produced",
+          "step": "9",
+          "step_name": "Synthesis (Yosys \u2192 mapped netlist)",
+          "phase": "phase2",
+          "stage": "stage2",
+          "spec": "phase2/stage2/synth/netlist.v",
+          "reason": "absent",
+          "detail": "no path on disk matches this spec",
+          "step_conditional": false
         }
       ]
     },
     {
       "id": "10",
-      "name": "🔁 Pre-layout STA (multi-corner)",
+      "name": "\ud83d\udd01 Pre-layout STA (multi-corner)",
       "phase": "phase2",
       "stage": "stage2",
       "conditional": false,
@@ -977,7 +990,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -1068,7 +1081,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -1143,7 +1156,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -1179,7 +1192,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -1194,7 +1207,7 @@
     },
     {
       "id": "13",
-      "name": "🔁 Equivalence check (RTL ≡ post-DFT netlist)",
+      "name": "\ud83d\udd01 Equivalence check (RTL \u2261 post-DFT netlist)",
       "phase": "phase2",
       "stage": "stage2",
       "conditional": false,
@@ -1227,7 +1240,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -1261,7 +1274,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -1290,7 +1303,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -1321,7 +1334,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -1352,7 +1365,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -1383,7 +1396,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -1414,7 +1427,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -1446,7 +1459,7 @@
     },
     {
       "id": "A7",
-      "name": "🔁 Post-Layout Resimulation",
+      "name": "\ud83d\udd01 Post-Layout Resimulation",
       "phase": "analog",
       "stage": "stage_analog",
       "conditional": true,
@@ -1458,14 +1471,14 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
           "kind": "finding",
           "rule": "declared_output_not_produced",
           "step": "A7",
-          "step_name": "🔁 Post-Layout Resimulation",
+          "step_name": "\ud83d\udd01 Post-Layout Resimulation",
           "phase": "analog",
           "stage": "stage_analog",
           "spec": "phase3/analog/*/pre_vs_post.json",
@@ -1489,7 +1502,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -1547,7 +1560,7 @@
     },
     {
       "id": "A9",
-      "name": "🔁 Co-Simulation (+ HW correlation when bench data exists)",
+      "name": "\ud83d\udd01 Co-Simulation (+ HW correlation when bench data exists)",
       "phase": "analog",
       "stage": "stage_analog",
       "conditional": true,
@@ -1560,14 +1573,14 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
           "kind": "finding",
           "rule": "declared_output_not_produced",
           "step": "A9",
-          "step_name": "🔁 Co-Simulation (+ HW correlation when bench data exists)",
+          "step_name": "\ud83d\udd01 Co-Simulation (+ HW correlation when bench data exists)",
           "phase": "analog",
           "stage": "stage_analog",
           "spec": "phase3/mixed_signal/cosim/*_cosim_results.json OR phase3/mixed_signal/cosim/mixed_signal_results.json OR phase3/analog/*/hw_measurements.json",
@@ -1579,7 +1592,7 @@
     },
     {
       "id": "14",
-      "name": "🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)",
+      "name": "\ud83d\udd01 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)",
       "phase": "phase2",
       "stage": "stage2",
       "conditional": false,
@@ -1606,7 +1619,7 @@
       "observed_producers": [
         "yosys"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -1648,7 +1661,7 @@
       "observed_producers": [
         "openroad"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -1676,7 +1689,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -1708,7 +1721,7 @@
       "observed_producers": [
         "openroad"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -1747,7 +1760,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -1798,12 +1811,12 @@
       "observed_producers": [
         "openroad"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
       "id": "20",
-      "name": "🔁 Post-CTS hold fixing",
+      "name": "\ud83d\udd01 Post-CTS hold fixing",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -1829,7 +1842,7 @@
       "observed_producers": [
         "openroad"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -1879,12 +1892,12 @@
       "observed_producers": [
         "openroad"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
       "id": "22",
-      "name": "Parasitic Extraction (RC → SPEF)",
+      "name": "Parasitic Extraction (RC \u2192 SPEF)",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -1910,7 +1923,7 @@
       "observed_producers": [
         "openroad"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -1939,7 +1952,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -1978,7 +1991,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -1993,7 +2006,7 @@
     },
     {
       "id": "23",
-      "name": "🔁 Post-route STA (multi-corner multi-mode sign-off)",
+      "name": "\ud83d\udd01 Post-route STA (multi-corner multi-mode sign-off)",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -2036,7 +2049,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -2060,7 +2073,7 @@
     },
     {
       "id": "24",
-      "name": "🔁 IR Drop (static + dynamic)",
+      "name": "\ud83d\udd01 IR Drop (static + dynamic)",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -2101,7 +2114,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -2116,7 +2129,7 @@
     },
     {
       "id": "25",
-      "name": "🔁 EM check (electromigration lifetime)",
+      "name": "\ud83d\udd01 EM check (electromigration lifetime)",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -2157,7 +2170,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -2172,7 +2185,7 @@
     },
     {
       "id": "26",
-      "name": "🔁 Antenna check (gate-oxide protection)",
+      "name": "\ud83d\udd01 Antenna check (gate-oxide protection)",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -2216,7 +2229,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -2231,7 +2244,7 @@
     },
     {
       "id": "27",
-      "name": "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)",
+      "name": "\ud83d\udd01 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -2264,12 +2277,12 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
       "id": "28",
-      "name": "🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain)",
+      "name": "\ud83d\udd01 PERC / Reliability sign-off (ESD + latch-up + cross-domain)",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -2322,7 +2335,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -2350,7 +2363,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -2382,7 +2395,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -2414,7 +2427,7 @@
     },
     {
       "id": "31",
-      "name": "🔁 Physical Verification (DRC + LVS + ERC + Density)",
+      "name": "\ud83d\udd01 Physical Verification (DRC + LVS + ERC + Density)",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -2482,7 +2495,7 @@
         "klayout",
         "netgen"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -2506,7 +2519,7 @@
     },
     {
       "id": "32",
-      "name": "🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)",
+      "name": "\ud83d\udd01 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)",
       "phase": "phase3",
       "stage": "stage3",
       "conditional": false,
@@ -2537,7 +2550,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -2573,7 +2586,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -2636,7 +2649,7 @@
       "observed_producers": [
         "openroad"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -2664,7 +2677,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -2702,7 +2715,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -2742,7 +2755,7 @@
       "observed_producers": [
         "klayout"
       ],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": []
     },
     {
@@ -2810,7 +2823,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D5",
@@ -2830,7 +2843,7 @@
       "stage": "stage4",
       "conditional": false,
       "waiver": {
-        "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
+        "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
         "review_required": true,
         "approver": "field-agent-attest (fpga-board cap-gap tier)"
       },
@@ -2855,7 +2868,7 @@
         }
       ],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -2870,7 +2883,7 @@
           "detail": "no path on disk matches this spec",
           "step_conditional": false,
           "waiver": {
-            "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
+            "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
             "review_required": true,
             "approver": "field-agent-attest (fpga-board cap-gap tier)"
           }
@@ -2892,7 +2905,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -2939,7 +2952,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -2997,7 +3010,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -3041,7 +3054,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -3060,7 +3073,7 @@
     },
     {
       "id": "40",
-      "name": "Fabrication (foundry mask-set + wafer fab — external)",
+      "name": "Fabrication (foundry mask-set + wafer fab \u2014 external)",
       "phase": "manufacturing",
       "stage": "stage5_manufacturing",
       "conditional": true,
@@ -3072,14 +3085,14 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
           "kind": "finding",
           "rule": "declared_output_not_produced",
           "step": "40",
-          "step_name": "Fabrication (foundry mask-set + wafer fab — external)",
+          "step_name": "Fabrication (foundry mask-set + wafer fab \u2014 external)",
           "phase": "manufacturing",
           "stage": "stage5_manufacturing",
           "spec": "phase3/stage5_manufacturing/mask_set_received.json",
@@ -3092,7 +3105,7 @@
           "kind": "finding",
           "rule": "declared_output_not_produced",
           "step": "40",
-          "step_name": "Fabrication (foundry mask-set + wafer fab — external)",
+          "step_name": "Fabrication (foundry mask-set + wafer fab \u2014 external)",
           "phase": "manufacturing",
           "stage": "stage5_manufacturing",
           "spec": "phase3/stage5_manufacturing/wafer_lot_received.json",
@@ -3116,7 +3129,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -3160,7 +3173,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -3191,7 +3204,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -3235,7 +3248,7 @@
       "n_produced": 0,
       "produced": [],
       "observed_producers": [],
-      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared — see ATTRIBUTION HONESTY in the module doc.",
+      "producer_vocabulary_note": "declared_tools are plugin program / MCP tool names; observed_producers are EDA binary names from provenance.jsonl. No mapping between the two exists in this repo, so they are NOT compared \u2014 see ATTRIBUTION HONESTY in the module doc.",
       "findings": [
         {
           "dimension": "D3",
@@ -3268,7 +3281,7 @@
         "detail": "no path on disk matches this spec",
         "step_conditional": false,
         "waiver": {
-          "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
+          "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
           "review_required": true,
           "approver": "field-agent-attest (fpga-board cap-gap tier)"
         }
@@ -3286,7 +3299,7 @@
         "detail": "no path on disk matches this spec",
         "step_conditional": false,
         "waiver": {
-          "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
+          "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
           "review_required": true,
           "approver": "field-agent-attest (fpga-board cap-gap tier)"
         }
@@ -3387,7 +3400,7 @@
         "kind": "finding",
         "rule": "declared_output_not_produced",
         "step": "A7",
-        "step_name": "🔁 Post-Layout Resimulation",
+        "step_name": "\ud83d\udd01 Post-Layout Resimulation",
         "phase": "analog",
         "stage": "stage_analog",
         "spec": "phase3/analog/*/pre_vs_post.json",
@@ -3452,7 +3465,7 @@
         "kind": "finding",
         "rule": "declared_output_not_produced",
         "step": "A9",
-        "step_name": "🔁 Co-Simulation (+ HW correlation when bench data exists)",
+        "step_name": "\ud83d\udd01 Co-Simulation (+ HW correlation when bench data exists)",
         "phase": "analog",
         "stage": "stage_analog",
         "spec": "phase3/mixed_signal/cosim/*_cosim_results.json OR phase3/mixed_signal/cosim/mixed_signal_results.json OR phase3/analog/*/hw_measurements.json",
@@ -3512,7 +3525,7 @@
         "detail": "no path on disk matches this spec",
         "step_conditional": false,
         "waiver": {
-          "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) — no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
+          "reason": "ENV_UNAVAILABLE (fpga-board-prototype cap-gap): the runner HONESTLY self-reports a deliberate FPGA skip (reports/phase2/fpga/quartus_map_audit.json verdict=SKIP, sof_present=false) \u2014 no DE10-class board-pin contract for this IC class and/or no Quartus on host. The on-board .sof (early-prototype AND ",
           "review_required": true,
           "approver": "field-agent-attest (fpga-board cap-gap tier)"
         }
@@ -3626,7 +3639,7 @@
         "kind": "finding",
         "rule": "declared_output_not_produced",
         "step": "40",
-        "step_name": "Fabrication (foundry mask-set + wafer fab — external)",
+        "step_name": "Fabrication (foundry mask-set + wafer fab \u2014 external)",
         "phase": "manufacturing",
         "stage": "stage5_manufacturing",
         "spec": "phase3/stage5_manufacturing/mask_set_received.json",
@@ -3639,7 +3652,7 @@
         "kind": "finding",
         "rule": "declared_output_not_produced",
         "step": "40",
-        "step_name": "Fabrication (foundry mask-set + wafer fab — external)",
+        "step_name": "Fabrication (foundry mask-set + wafer fab \u2014 external)",
         "phase": "manufacturing",
         "stage": "stage5_manufacturing",
         "spec": "phase3/stage5_manufacturing/wafer_lot_received.json",
