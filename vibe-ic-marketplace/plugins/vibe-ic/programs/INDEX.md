@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1079
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1079)
+- **Total programs (excluding helpers / shims):** 1080
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1080)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1070 |
+| `any` | 1071 |
 
 ## Alphabetical listing
 
@@ -890,6 +890,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `scope_reply_preamble_check` | aid_class_half_duplex | Wave 58 | Wave 58 / BACKLOG-v12 P0.4 plugin gate. |
 | `scope_response_byte_decode_check` | any | — | P0.3 deterministic gate |
 | `scope_waveform_metrics` | any | — | deterministic scope-CSV metric extractor. |
+| `scratch_root_guard` | any | — | the suite's scratch root is part of its verdict, so the run states it, and refuses when it is a root that manufactures failures. |
 | `sd_cmd_extractor` | any | — | for #36 Bug 8: SD-spec CMD table picker. |
 | `sdc_constraints` | any | v0.1.49 | ORGANIC #554 (a) — shared staged-SDC ground-truth helpers. |
 | `sdc_exception_correlation_check` | any | — | Step 8 SDC EXCEPTION justification screen (v2.3, advisory). |
@@ -1151,7 +1152,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1070 programs)
+### `any` (1071 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2010,6 +2011,7 @@ _(no programs in this group)_
 - `scope_periodic_pulse_check` — Layer-3 hardware attestation gate.  _[v0.64]_
 - `scope_response_byte_decode_check` — P0.3 deterministic gate
 - `scope_waveform_metrics` — deterministic scope-CSV metric extractor.
+- `scratch_root_guard` — the suite's scratch root is part of its verdict, so the run states it, and refuses when it is a root that manufactures failures.
 - `sd_cmd_extractor` — for #36 Bug 8: SD-spec CMD table picker.
 - `sdc_constraints` — ORGANIC #554 (a) — shared staged-SDC ground-truth helpers.  _[v0.1.49]_
 - `sdc_exception_correlation_check` — Step 8 SDC EXCEPTION justification screen (v2.3, advisory).
