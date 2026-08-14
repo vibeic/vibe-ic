@@ -514,11 +514,47 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
     # failed set, and a truncated base makes a new failure look pre-existing.
     #
-    ( cd "$BASE_PLUGIN" && xargs -a "$RUN/selection_base.txt" \
-        python3 -m pytest -q --timeout=180 --timeout-method=thread \
+    # THE SAME INSTRUMENT ON BOTH SIDES (vibe-ic#1417). A differential is only
+    # a differential if the two arms were measured the same way. Arm B runs
+    # through `gatekeeper-land.sh:run_pytest`, which pins its session with
+    # `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and names the one plugin the suite
+    # needs, `-p pytest_timeout`. Arm A1 did neither, so the two arms differed
+    # in the one respect #1417 measured as verdict-changing — and the asymmetry
+    # was not merely cosmetic, it was fatal in one direction:
+    #
+    #   same tree, same file, autoload disabled in the caller's environment
+    #     arm A1 as written   ERROR: unrecognized arguments: --timeout=180
+    #                         rc=123, NO junit
+    #     arm B as written    21 passed, junit written
+    #
+    # Arm A1 borrowed `--timeout=180 --timeout-method=thread` from whatever the
+    # host happened to autoload. On the landing host autoload is ALSO the thing
+    # that kills a session at collection (`web3`'s `pytest_ethereum`, measured
+    # in `gatekeeper-land.sh`), so both settings of the ambient switch could
+    # take this arm down while arm B ran. Declared here instead of inherited.
+    ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+        xargs -a "$RUN/selection_base.txt" \
+        python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
         -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
         > "$RUN/base_tests.log" 2>&1
-    echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
+    A1_RC=$?
+    # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
+    # summary is a `rootdir:` line or an empty one, so the arm that COULD NOT
+    # LOOK printed indistinguishably from — and often more quietly than — the
+    # arm that looked and found nothing. The verdict then reads `0 on the base`
+    # and every pre-existing red becomes `NEW FAILURE(S) THIS BRANCH OWNS`.
+    # Strict, so never a false landing; but it refuses a conformant PR for a
+    # failure it does not own, and #1417's whole finding is that merge capacity
+    # — not authoring — is this repo's bottleneck. An unmeasured arm is NAMED.
+    if [ -s "$BASE_JUNIT" ]; then
+      echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
+    else
+      echo "--- arm A1 UNMEASURED (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and no" \
+           "junit report; the base failed set is UNKNOWN, not empty. The" \
+           "differential below degrades to 'demand green' and will blame this" \
+           "branch for reds it did not introduce. Last lines:"
+      tail -5 "$RUN/base_tests.log" | sed 's/^/      /'
+    fi
   else
     echo "--- arm A1: no selected file exists at the base — the differential will demand green"
   fi
