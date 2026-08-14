@@ -3272,11 +3272,17 @@ def test_d3_unevidenced_cells_are_named_cell_by_cell():
     )
 
 
+@lru_cache(maxsize=1)
 def unevidenced_entries() -> List[Tuple[str, str]]:
     """``[(step, entry), ...]`` for every entry that reaches UNEVIDENCED.
 
     Derived from the same :func:`check_entry` the cells use, so the guards
     below can never drift onto a population the verdicts do not have.
+
+    Cached because three guards below ask for it and each ask re-runs
+    :func:`check_entry` over every declared entry — a git-backed walk, not a
+    lookup. The cache is keyed on nothing because the answer is a function of
+    the COMMIT alone, which is the same reason the verdicts may be trusted.
     """
     out: List[Tuple[str, str]] = []
     for cell in cells_for(DIM):
