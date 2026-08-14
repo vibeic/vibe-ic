@@ -369,7 +369,6 @@ def simulate(rtl_path: str, top: str, in_specs, out_name, table):
         tbp = Path(td) / "tb.sv"
         tbp.write_text("\n".join(tb) + "\n")
         binp = Path(td) / "a.out"
-        # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
         # An ABSENT binary must reach the TOOL_ERR this module already documents
         # at the top ("2 = tool/usage error (disclosed, non-blocking — caller's
         # hard iverilog gate still applies)"). Without this, `subprocess.run`
@@ -379,6 +378,7 @@ def simulate(rtl_path: str, top: str, in_specs, out_name, table):
         # an oracle that crashed, and `check()`'s documented contract
         # (PASS|SKIP|BLOCK|TOOL_ERR) is broken by a fifth, undeclared outcome.
         try:
+            # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
             cp = subprocess.run(
                 ["iverilog", "-g2012", "-o", str(binp), str(rtl_path), str(tbp)],
                 capture_output=True, text=True,
