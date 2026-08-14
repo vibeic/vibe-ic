@@ -771,6 +771,22 @@ run "waveform artifact hygiene"         "$PLUGIN" python3 programs/waveform_arti
 # in 250/250 (with the `--no-index` fix that makes that assertion capable of
 # firing at all), no tracked root `_*.js` anywhere.
 run "gitignore scratch guard"           "$ROOT" python3 "$PG/gitignore_scratch_guard.py" --root "$ROOT"
+# vibe-ic#1241 — `bundled_attribution_notice_check` was authored, tested and
+# merged with NOTHING but its own unit test invoking it: a fixture the author
+# wrote proves the logic and proves nothing about what this repo ships.
+#
+# The population is THE REPOSITORY, not a per-cell loop, and that is the gate's
+# own stated scope rather than a convenience: Apache-2.0 §4(d) attaches to
+# distributing the WORK, so the subject is the whole distributed tree and the
+# root `NOTICE` that must account for it. A per-published-cell dispatcher would
+# have wired an obligation about the repository to a sample of run artefacts.
+#
+# `run`, not `run_tolerating_uncheckable`: this gate has a REFUSE path (rc=2,
+# "no SPDX-headered source found") that exists precisely so an empty scan
+# cannot read as a pass, and on this tree it does not fire — MEASURED, 513
+# SPDX-headered files under 7 holders, all named in NOTICE, rc=0. A tolerated
+# rc=2 here would re-admit the vacuous pass the refusal was written to block.
+run "bundled work is named in NOTICE"   "$ROOT" python3 "$PG/bundled_attribution_notice_check.py" "$ROOT"
 # vibe-ic#693 (from #313 §6) — a remedy that silently declines is
 # indistinguishable from a remedy that was never needed. Flags a remedy-named
 # call assigned to a variable, guarded by `if <var>:` with no else and no
