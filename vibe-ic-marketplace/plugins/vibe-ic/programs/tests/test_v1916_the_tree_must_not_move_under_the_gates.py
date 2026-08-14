@@ -59,6 +59,59 @@ def _load():
 M = _load()
 
 
+def _load_gate_is_wired():
+    """`gate_is_wired_check`, for its `executable_text` — see `_executable`."""
+    spec = importlib.util.spec_from_file_location(
+        "gate_is_wired_check", _PROGRAMS / "gate_is_wired_check.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["gate_is_wired_check"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_GIW = _load_gate_is_wired()
+
+
+def _executable(text: str) -> str:
+    """The landing script with everything that CANNOT invoke anything removed.
+
+    A NAME IS NOT A CALL, and this module learned it the expensive way
+    (vibe-ic#1351). Every position below used to be located by raw substring
+    over the whole file, comments included, and on `origin/main` @ `3d13e2c59`
+    that made `test_the_comparison_runs_after_the_last_suite_and_before_the_stamp`
+    fail with `assert 21522 < 11699`:
+
+                    raw offset   line   what is actually there
+        emit             10275    184   the invocation
+        last_suite       21522    386   the invocation
+        expect           11699    212   **a comment**
+        stamp            23299    416   the invocation
+
+    `tools/gatekeeper-land.sh:212` is prose —
+
+        # it. `landing_worktree_is_clean_check --expect-fingerprint` at the end …
+
+    — and the real comparison is at line 402, between the last suite (386) and
+    the stamp (416). So the ORDER this module exists to protect was intact the
+    whole time and the test was reading a sentence about it.
+
+    The comment arrived in `3febf5372`, *"the rule 'a suite run leaves the tree
+    clean' was prose"* (#1029/#1046), which lands after `22b8f918c` wrote this
+    test: a commit about prose broke a test by adding prose the test could not
+    tell from a call.
+
+    `gate_is_wired_check.executable_text` is REUSED rather than re-implemented.
+    That program says in its own docstring that it learned this rule twice —
+    once on its own docstring, once on a comment in another program — and a
+    second copy here would be a third place for it to be learned again. It is
+    the repo's one definition of "this text could run something".
+
+    Offsets from this function are in the STRIPPED coordinate space, so they are
+    only ever compared with each other.
+    """
+    return _GIW.executable_text(_LAND_SH, text)
+
+
 def _repo(tmp_path):
     """A real git repo carrying one of the SHIPPED_PATHS."""
     for cmd in (["init", "-q", "-b", "main"],
@@ -185,8 +238,10 @@ def land_sh():
 
 
 def test_the_landing_gate_takes_a_fingerprint_and_compares_it(land_sh):
-    assert "--emit-fingerprint" in land_sh
-    assert "--expect-fingerprint" in land_sh
+    """Both flags are PASSED, not merely discussed."""
+    ex = _executable(land_sh)
+    assert "--emit-fingerprint" in ex
+    assert "--expect-fingerprint" in ex
 
 
 #: WHERE the stamp is written, located by what the line DOES rather than by how
@@ -218,13 +273,18 @@ def _stamp_write(text: str):
     return m
 
 
-def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
-    """THE WHOLE FIX. Before the last suite it leaves the window open; after
-    the stamp it cannot withhold one."""
-    emit = land_sh.index("--emit-fingerprint")
-    expect = land_sh.index("--expect-fingerprint")
-    last_suite = land_sh.rindex("plugin_full_audit.py")
-    stamp = _stamp_write(land_sh).start()
+def _assert_order(text: str) -> None:
+    """THE WHOLE FIX, as a predicate so a guard can feed it a violation.
+
+    Located in EXECUTABLE text (see :func:`_executable`): a comment naming a
+    flag is not a place the flag is passed, and reading one is how this check
+    spent time asserting the opposite of the truth.
+    """
+    ex = _executable(text)
+    emit = ex.index("--emit-fingerprint")
+    expect = ex.index("--expect-fingerprint")
+    last_suite = ex.rindex("plugin_full_audit.py")
+    stamp = _stamp_write(ex).start()
     assert emit < last_suite, "the fingerprint is taken after the suites ran"
     assert last_suite < expect, (
         "the comparison runs before the last suite, so an edit made during it "
@@ -234,12 +294,81 @@ def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
         "it")
 
 
+def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
+    """THE WHOLE FIX. Before the last suite it leaves the window open; after
+    the stamp it cannot withhold one."""
+    _assert_order(land_sh)
+
+
+def _line_of(text: str, needle: str, last: bool = False) -> int:
+    """Index of the line carrying `needle` as an INVOCATION, not as prose."""
+    lines = _executable(text).splitlines()
+    hits = [i for i, ln in enumerate(lines) if needle in ln]
+    assert hits, f"{needle} is invoked nowhere in the landing script"
+    return hits[-1] if last else hits[0]
+
+
+def test_a_comment_that_merely_mentions_the_flag_does_not_decide_the_order(land_sh):
+    """PAIRED GUARD, and the exact regression this fix removes.
+
+    Adding a SENTENCE about `--expect-fingerprint` near the top of the script
+    changes nothing about when the comparison runs, so the check must not
+    notice. Before the fix this comment WAS the thing the check measured, and
+    the landing gate's own ordering invariant read as violated on a script that
+    satisfied it.
+    """
+    lines = land_sh.splitlines()
+    lines.insert(1, "# note: `--expect-fingerprint` and plugin_full_audit.py "
+                    "are discussed at the end of this file")
+    _assert_order("\n".join(lines))
+
+
+def test_the_order_check_still_fails_when_the_comparison_really_moves(land_sh):
+    """PAIRED GUARD. A check that cannot fail is worth nothing, and this one is
+    now indifferent to prose — so it is shown rejecting the real violation.
+
+    The comparison is moved to just BEFORE the last suite, which is precisely
+    the window v1.9.16 left open: the gates then run for minutes over a tree
+    nothing looks at again.
+    """
+    lines = _executable(land_sh).splitlines()
+    compare = _line_of(land_sh, "--expect-fingerprint")
+    suite = _line_of(land_sh, "plugin_full_audit.py", last=True)
+    assert suite < compare, "precondition: main has the compare after the suite"
+    moved = lines[compare]
+    del lines[compare]
+    lines.insert(suite, moved)
+    with pytest.raises(AssertionError, match="before the last suite"):
+        _assert_order("\n".join(lines))
+
+
+def test_the_order_check_still_fails_when_the_stamp_is_written_first(land_sh):
+    """PAIRED GUARD for the other edge: a stamp written before the comparison
+    cannot be withheld by it."""
+    lines = _executable(land_sh).splitlines()
+    compare = _line_of(land_sh, "--expect-fingerprint")
+    stamp_line = _executable(land_sh)[:_stamp_write(
+        _executable(land_sh)).start()].count("\n")
+    assert compare < stamp_line, "precondition: main stamps after the compare"
+    moved = lines[stamp_line]
+    del lines[stamp_line]
+    lines.insert(compare, moved)
+    with pytest.raises(AssertionError, match="after the stamp is written"):
+        _assert_order("\n".join(lines))
+
+
 def test_the_stamp_records_the_commit_and_is_dropped_when_a_gate_failed(land_sh):
-    """A stamp that survives a failure is a permanent authorisation to push."""
-    assert _stamp_write(land_sh)
-    m = _STAMP_REMOVE_RE.search(land_sh)
+    """A stamp that survives a failure is a permanent authorisation to push.
+
+    Read over EXECUTABLE text for the same reason as the order check above: a
+    comment describing the stamp is not a line that writes or removes one, and
+    the module docstring at line 10 already talks about `.git/gatekeeper-stamp`.
+    """
+    ex = _executable(land_sh)
+    assert _stamp_write(ex)
+    m = _STAMP_REMOVE_RE.search(ex)
     assert m, "a failing run leaves the previous stamp in place"
-    assert m.start() > _stamp_write(land_sh).start(), (
+    assert m.start() > _stamp_write(ex).start(), (
         "the removal is written before the success branch — read the order")
 
 
