@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1093
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1093)
+- **Total programs (excluding helpers / shims):** 1094
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1094)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1084 |
+| `any` | 1085 |
 
 ## Alphabetical listing
 
@@ -484,6 +484,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `ic_expert_db_health_audit` | any | — | periodic HEALTH audit of the IC Expert DB (beyond the ship-blocking consistency gate). |
 | `ic_expert_db_query` | any | — | GENERAL-CORE retrieval over the IC Expert DB. |
 | `iface_conformance_v2` | any | — | prompt→interface conformance gate (ORGANIC #695). |
+| `image_gated_verification_check` | any | — | a skip is green, and 13 of them are a hole (vibe-ic#1128). |
 | `infiniband_protocol_synth` | any | — | InfiniBand Architecture (IBTA) protocol synth helper. |
 | `input_doc_pdk_claim_vs_installed_pdk_check` | any | — | decide a design-input document's factual claims about the INSTALLED PDK against the installed PDK. |
 | `input_docs_coverage_check` | any | v0.50 | v0.50 plugin gate |
@@ -1165,7 +1166,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1084 programs)
+### `any` (1085 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1621,6 +1622,7 @@ _(no programs in this group)_
 - `ic_expert_db_health_audit` — periodic HEALTH audit of the IC Expert DB (beyond the ship-blocking consistency gate).
 - `ic_expert_db_query` — GENERAL-CORE retrieval over the IC Expert DB.
 - `iface_conformance_v2` — prompt→interface conformance gate (ORGANIC #695).
+- `image_gated_verification_check` — a skip is green, and 13 of them are a hole (vibe-ic#1128).
 - `infiniband_protocol_synth` — InfiniBand Architecture (IBTA) protocol synth helper.
 - `input_doc_pdk_claim_vs_installed_pdk_check` — decide a design-input document's factual claims about the INSTALLED PDK against the installed PDK.
 - `input_docs_coverage_check` — v0.50 plugin gate  _[v0.50]_
