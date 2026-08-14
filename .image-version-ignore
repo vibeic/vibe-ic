@@ -171,3 +171,10 @@ vibe-ic-marketplace/plugins/vibe-ic/programs/fault_scan_chain_insert.py
 # taking the base side dropped this entry, and the sync gate caught it — which
 # is what it is for.
 vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_pdk_registry_asset_half_reads_the_pinned_image.py
+
+# not_verified_tier.py quotes an example SKIP MESSAGE in its docstring —
+# "image ghcr.io/vibeic/vibeic-eda:X.Y.Z not present; this half was NOT checked".
+# It is prose showing what a user sees, not a pull this repo performs, so --set cannot
+# rewrite it and every anchor bump would otherwise need a hand edit (measured: 0.2.89 ->
+# 0.2.96 -> 0.2.97 in one afternoon).
+vibe-ic-marketplace/plugins/vibe-ic/programs/not_verified_tier.py
