@@ -43,6 +43,12 @@ import subprocess
 import sys
 
 import pytest
+# vibe-ic#1128 — these skips mean A VERIFICATION DID NOT HAPPEN, not that
+# one passed. Declared through `not_verified_tier` so the run's roll-up
+# cannot count them under `passed`; see that module's docstring.
+from not_verified_tier import skip_not_verified  # noqa: E402
+PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERSION)'
+RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 
@@ -91,7 +97,9 @@ def _shipped_map():
 def shipped():
     m = _shipped_map()
     if not m:
-        pytest.skip(f"{_LYT} not reachable — this half was NOT checked")
+        skip_not_verified(
+            f"{_LYT} not reachable — this half was NOT checked",
+            PULL_REMEDY)
     return m
 
 
