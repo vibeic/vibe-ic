@@ -514,8 +514,15 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
     # failed set, and a truncated base makes a new failure look pre-existing.
     #
+    # `-p pytest_timeout` EXPLICITLY, exactly as arm B does at
+    # gatekeeper-land.sh:339. Arm A previously relied on the plugin being
+    # AUTOLOADED, so a caller exporting PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 — the
+    # pinned harness's own setting — made pytest reject `--timeout` with rc=4
+    # before collecting anything. Zero tests, empty junit, and the verdict then
+    # blamed "the base arm did not finish" for what was a usage error. The two
+    # arms of one comparison must not be configured differently.
     ( cd "$BASE_PLUGIN" && xargs -a "$RUN/selection_base.txt" \
-        python3 -m pytest -q --timeout=180 --timeout-method=thread \
+        python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
         -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
         > "$RUN/base_tests.log" 2>&1
     echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
