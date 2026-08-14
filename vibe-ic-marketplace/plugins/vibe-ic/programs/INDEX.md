@@ -685,6 +685,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `onfi_protocol_synth` | any | v0.1.84 | ONFI NAND-Flash protocol synth helper. |
 | `opcode_dispatch_completeness_check` | any | Wave 13 | v0.119.45 (Wave 13) gate. |
 | `opcode_field_width_consistency_check` | any | v0.2.13 | Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13). |
+| `open_issue_claim_scan` | any | — | Which open issues carry no CLAIMED comment — with the un-readable ones NAMED. |
 | `open_organic_issue_count` | any | — | Count OPEN issues whose title carries a marker, WITHOUT the search index. |
 | `openroad_hold_repair_tcl_gen` | any | — | emit the OpenROAD `repair_timing -hold` block with the SKILL's hard guardrails baked in. |
 | `openroad_tcl_deprecation_check` | any | v0.69 | Recursively scan a plugin tree for OpenROAD TCL usages that have been removed or renamed in recent OpenROAD releases, so a skill / progra... |
@@ -1827,6 +1828,7 @@ _(no programs in this group)_
 - `onfi_protocol_synth` — ONFI NAND-Flash protocol synth helper.  _[v0.1.84]_
 - `opcode_dispatch_completeness_check` — v0.119.45 (Wave 13) gate.  _[Wave 13]_
 - `opcode_field_width_consistency_check` — Opcode field-width bound + L3<->L15 hex-consistency check (v0.2.13).  _[v0.2.13]_
+- `open_issue_claim_scan` — Which open issues carry no CLAIMED comment — with the un-readable ones NAMED.
 - `open_organic_issue_count` — Count OPEN issues whose title carries a marker, WITHOUT the search index.
 - `openroad_hold_repair_tcl_gen` — emit the OpenROAD `repair_timing -hold` block with the SKILL's hard guardrails baked in.
 - `openroad_tcl_deprecation_check` — Recursively scan a plugin tree for OpenROAD TCL usages that have been removed or renamed in recent OpenROAD releases, so a skill / progra...  _[v0.69]_
