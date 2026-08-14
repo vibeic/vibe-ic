@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1077
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1077)
+- **Total programs (excluding helpers / shims):** 1080
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1080)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1068 |
+| `any` | 1071 |
 
 ## Alphabetical listing
 
@@ -463,6 +463,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `htol_attestation_check` | any | — | Step 43 reliability qualification (HTOL) attestation gate (v2.3). |
 | `hw_acceptance_test_passed_check` | any | v0.119.15 | final-step gate for the closed hardware debug loop (hw-debug-loop skill). |
 | `hw_vs_rtl_verdict_check` | any | v0.45 | Require N byte-identical FAILs before blaming hardware. |
+| `hygiene_shard_aggregate` | any | — | combine sharded hygiene runs, denominator first. |
+| `hygiene_shard_plan` | any | — | split the hygiene gates across hosts by MEASURED time. |
 | `hyperbus_protocol_synth` | any | — | HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55). |
 | `i2c_protocol_synth` | any | v0.1.79 | I2C-class protocol synth helper. |
 | `i2s_protocol_synth` | any | v0.1.83 | I2S-class protocol synth helper. |
@@ -991,6 +993,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `stage4_compliance` | any | — | Stage 4 (Output + Validation) interim gate. |
 | `staged_rtl_closure_preflight` | any | — | ORGANIC #586. |
 | `staged_rtl_reused_ip_manifest_emit` | any | — | ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path. |
+| `step_force` | any | — | re-run ONE step without re-running the phase. vibe-ic#1097 S6. |
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `step_output_collector` | any | — | materialize a per-STEP output subfolder view. |
 | `step_preflight` | any | — | the ORCHESTRATOR side of `required_inputs`. |
@@ -1149,7 +1152,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1068 programs)
+### `any` (1071 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1584,6 +1587,8 @@ _(no programs in this group)_
 - `htol_attestation_check` — Step 43 reliability qualification (HTOL) attestation gate (v2.3).
 - `hw_acceptance_test_passed_check` — final-step gate for the closed hardware debug loop (hw-debug-loop skill).  _[v0.119.15]_
 - `hw_vs_rtl_verdict_check` — Require N byte-identical FAILs before blaming hardware.  _[v0.45]_
+- `hygiene_shard_aggregate` — combine sharded hygiene runs, denominator first.
+- `hygiene_shard_plan` — split the hygiene gates across hosts by MEASURED time.
 - `hyperbus_protocol_synth` — HyperBus (HyperRAM / HyperFlash) protocol synth helper (protocol #55).
 - `i2c_protocol_synth` — I2C-class protocol synth helper.  _[v0.1.79]_
 - `i2s_protocol_synth` — I2S-class protocol synth helper.  _[v0.1.83]_
@@ -2109,6 +2114,7 @@ _(no programs in this group)_
 - `stage4_compliance` — Stage 4 (Output + Validation) interim gate.
 - `staged_rtl_closure_preflight` — ORGANIC #586.
 - `staged_rtl_reused_ip_manifest_emit` — ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path.
+- `step_force` — re-run ONE step without re-running the phase. vibe-ic#1097 S6.
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `step_output_collector` — materialize a per-STEP output subfolder view.
 - `step_preflight` — the ORCHESTRATOR side of `required_inputs`.
