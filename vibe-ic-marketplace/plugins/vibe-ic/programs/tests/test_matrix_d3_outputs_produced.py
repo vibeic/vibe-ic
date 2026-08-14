@@ -3760,10 +3760,32 @@ def test_d3_the_ledger_binding_is_exercised_by_the_repos_own_evidence():
       Asserted directly — the unbound answer for every entry must match the
       one the real root gives.
 
-    MEASURED 2026-08-06: 8 roots x 133 entries = 1064 bound resolutions, 1064
-    answered by the ledger, 0 differences. A difference is not a bug in this
-    test — it is the ledger and the glob disagreeing about one artefact, which
-    is the finding.
+    RE-MEASURED 2026-08-13: 10 roots x 134 entries = 1340 bound resolutions,
+    1340 answered by the ledger, 0 differences. A difference is not a bug in
+    this test — it is the ledger and the glob disagreeing about one artefact,
+    which is the finding.
+
+    WAS `2026-08-06: 8 roots x 133 entries = 1064`. The shape of the result did
+    not move — every bound resolution is still answered and nothing differs —
+    but the population did, and a recorded number that describes a tree the
+    repository no longer has is the defect this file elsewhere calls out (see
+    the `RECORD_BOUND_ROOTS` note in the d7 module: "re-measure them, then move
+    the pin"). Nothing asserts these three numbers, which is exactly why they
+    were free to rot: the only thing that would have caught them is somebody
+    re-deriving them, so that is what this is.
+
+    WHAT THE POPULATION LOOKS LIKE NOW, so the next reader has the list rather
+    than the count: the corpus publishes run trees in TWO shapes and
+    `run_roots()` admits both, so three ICs each contribute a pair —
+    `ic/sha256` and `ic/sha256/clean_run_v1427_20260715`, `ic/caravel_user_project`
+    and `.../v1.9.43_sky130A`, `ic/u_hawaii_adc` and `.../v1.9.86_sky130A` —
+    alongside four singletons: `evaluation/phase1_parity/espi`,
+    `ic/spm/v1.5.58_ihp-sg13g2`, `ic/spm/v1.9.96_gf180mcuD`, `ic/subservient`.
+
+    Deliberately NOT claiming which additions account for the +2: the 2026-08-06
+    list was not written down, only its count, so any decomposition would be
+    reconstruction rather than measurement. The list is recorded here precisely
+    so the next move can be attributed instead of guessed at.
     """
     roots = run_roots()
     assert roots, (
