@@ -77,7 +77,18 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
 CENSUS_BLOCKS_ON_PRESENT = 63
-CENSUS_BLOCKS_ON_NON_EMPTY = 61
+# 61 -> 62 in the v1.10.40 landing (75776dbbb): step A1 gained
+# `blocks_on: ['D1']`, so A1 is no longer a root and the flow has one more
+# non-empty edge. PRESENT does not move — A1 already declared the key, empty.
+#
+# The landing moved the OTHER two copies of this fact by itself, exactly as the
+# note below predicts: `flow_dependency_graph_check.DECLARED_ROOTS` shrank to
+# {"D1"} and the `roots ==` assertion reads it from there, so both sides
+# travelled together. This count is the one copy that is still hand-typed, and
+# it is therefore the one that reddened. That is the tripwire working, not
+# failing — but it is worth seeing that the very first landing after the roots
+# were made self-updating fired it.
+CENSUS_BLOCKS_ON_NON_EMPTY = 62
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
