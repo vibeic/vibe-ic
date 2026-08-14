@@ -97,6 +97,7 @@ from typing import Optional
 import _path_layout as _pl
 import _vacuous_exit as _vx
 import _shape_refusal as _sr    # #991
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 
 WAIVER_KEY = "bit_level_oracle_skipped"
@@ -867,7 +868,7 @@ def main():
     result = check(project, results_path)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(json.dumps(result, indent=2))
+        atomic_write_text(Path(args.json), json.dumps(result, indent=2))
 
     # #515 — `check()` has always computed `skipped` for the
     # `command_oracle_applicable: false` N/A escape, and `main()` has never

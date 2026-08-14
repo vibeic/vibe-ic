@@ -56,6 +56,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from _atomic_artefact import write_json  # vibe-ic#1082 (helper from PR #1094)
+
 #: Seconds assumed for a gate the profile does not carry. Deliberately not 0:
 #: a new gate costing nothing would be packed onto the already-largest shard.
 #: The median measured gate is ~2s; this is the 90th percentile of the cheap
@@ -170,7 +172,7 @@ def main(argv=None) -> int:
         "unprofiled": unprofiled,
     }
     if args.json:
-        args.json.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        write_json(args.json, doc, ensure_ascii=True)
 
     if args.shard is not None:
         if not 0 <= args.shard < args.shards:
