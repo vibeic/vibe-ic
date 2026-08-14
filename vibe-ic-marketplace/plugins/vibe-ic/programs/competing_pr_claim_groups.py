@@ -53,6 +53,21 @@ same day: 196 open PRs, 194 of them MERGEABLE, and still four add/add pairs
 among them, every one reporting MERGEABLE on both sides. Two were resolved that
 afternoon (#1066 closed for #1336, #1239 closed for #1258) on exactly this
 evidence, so this is the one output here that carries a verdict.
+
+WHERE THIS RUNS, AND WHY IT HAS TWO POPULATIONS. `tools/gatekeeper-land.sh`
+invokes it at every landing through its `report` helper — ADVISORY, never
+touching that script's FAILED, because several of the invisible groups are
+legitimate splits and a bar that refuses all of them is the bar people learn to
+bypass. That script must work offline (`gatekeeper-verify-merge.sh` runs it
+twice, for the base and for the candidate, as one differential), so the landing
+uses `--rev-range A..B`, whose claimants are the COMMITS of the landing and
+whose `number` is an abbreviated SHA. Over a landing the queue-shaped regions —
+path-overlap, add/add, stacks — are not run and are NAMED as skipped.
+
+An empty population EXITS 2, never 0: `0 issues with >1 open PR` printed over a
+query that matched nothing is a clean-looking answer to a question nobody
+managed to ask. Every line of output carries the `REPORT` token because the
+landing log greps for it; see `emit`.
 """
 from __future__ import annotations
 
@@ -378,10 +393,111 @@ def fetch_open_prs() -> List[dict]:
     return nodes
 
 
+# ---------------------------------------------------------------------------
+# the LANDING adapter — the same rules over the commits of one landing
+# ---------------------------------------------------------------------------
+#: Hard ceiling for any subprocess started here. The landing harness runs
+#: pytest at `--timeout=180 --timeout-method=thread`, so an inner bound above
+#: 60s lets one hang kill the whole session instead of one test
+#: (`ci_harness_timeout_ceiling_check`).
+SUBPROCESS_TIMEOUT_S = 60
+
+#: The regions that mean nothing over a set of commits that already exist, and
+#: are therefore NOT run in `--rev-range`. Named on every run rather than
+#: silently skipped: a report that quietly covers less than its usual scope
+#: reads as a clean answer to the whole question.
+_REV_RANGE_SKIPS = (
+    "path-overlap pairs (a queue-shaped question: which UNMERGED PRs brush "
+    "the same file)",
+    "add/add pairs (git itself refuses an add/add; these commits already "
+    "applied)",
+    "stack detection (a landing has no baseRefName to read)",
+)
+
+
+def claimants_from_rev_range(repo_root: str, rev_range: str) -> List[dict]:
+    """The commits in `rev_range`, in the record shape the rules above take.
+
+    WHY THIS MODE EXISTS. `tools/gatekeeper-land.sh` is the script that runs at
+    every landing, and it must work offline — `gatekeeper-verify-merge.sh` runs
+    it twice, for the base and for the candidate, as one differential. A mode
+    that can only ask GitHub is a mode the landing path cannot use, which is
+    how a report ends up wired to nothing.
+
+    `number` is the ABBREVIATED SHA, a string. A commit has no PR number and
+    inventing one would be a fabricated identifier in a report whose entire job
+    is naming things precisely. Every rule here reads `number` for identity and
+    printing only, never as an integer.
+
+    One `git log --name-only` for the whole range rather than one `git show`
+    per commit: this runs on the landing path, where a slow check is a bypassed
+    check.
+    """
+    sep, fsep = "\x1e", "\x1f"     # cannot occur in a commit message
+    proc = subprocess.run(
+        ["git", "-C", repo_root, "log", "--no-merges", "--name-only",
+         "--format=%s%%H%s%%s%s%%b%s" % (sep, fsep, fsep, fsep), rev_range],
+        capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_S)
+    if proc.returncode != 0:
+        # rc 2, not 1: "the range could not be resolved" is a gap in the
+        # MEASUREMENT, not a finding about the landing, and the two must never
+        # render the same. Carries the REPORT token so the landing log keeps
+        # the reason rather than a bare non-zero rc — see `emit`.
+        emit("NOT CHECKED competing-PR claims: git log %s failed rc=%d: %s"
+             % (rev_range, proc.returncode, (proc.stderr or "").strip()[:300]))
+        raise SystemExit(2)
+    out: List[dict] = []
+    for chunk in proc.stdout.split(sep):
+        parts = chunk.split(fsep)
+        if len(parts) < 4 or not chunk.strip():
+            continue
+        out.append({"number": parts[0].strip()[:9],
+                    "title": parts[1].strip(),
+                    "body": parts[2],
+                    "files": [ln.strip() for ln in parts[3].splitlines()
+                              if ln.strip()]})
+    return out
+
+
+def ident(number) -> str:
+    """How a claimant is NAMED in the output.
+
+    A PR is `#1150`; a commit is its abbreviated SHA with no `#`, because
+    `#652cc8638` reads as an issue number and this is a report whose whole job
+    is naming things a reader can then go and look up.
+    """
+    return f"#{number}" if isinstance(number, int) else str(number)
+
+
+def emit(text: str = "") -> None:
+    """Print `text` with every CONTENT line carrying the ``REPORT`` token.
+
+    Load-bearing rather than decorative. `report()` in
+    `tools/gatekeeper-land.sh` — the caller this program is wired into — pipes a
+    program's output through ``grep -aE 'REPORT|VIOLATION|\\[FAIL\\]|\\[SKIP\\]'``
+    before printing it into the landing log. A finding line without the token is
+    dropped, so wiring this program without this would put its LABEL in the log
+    and none of its content: a count with nothing named under it, which is a
+    silent report wearing a loud one's clothes.
+
+    Blank lines are left bare on purpose — they are spacing for a human reading
+    stdout directly, and they carry nothing the log needs.
+    """
+    for line in text.split("\n"):
+        print("REPORT " + line if line.strip() else line)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--prs-json", help="read PRs from a file instead of the "
-                                       "API: [{number,title,body,files,added}]")
+    src = ap.add_mutually_exclusive_group()
+    src.add_argument("--prs-json", help="read PRs from a file instead of the "
+                                        "API: [{number,title,body,files,added}]")
+    src.add_argument("--rev-range", metavar="A..B",
+                     help="read the COMMITS of a landing instead of open PRs; "
+                          "needs no network, which is what lets the landing "
+                          "path run this")
+    ap.add_argument("--repo-root", default=".",
+                    help="git checkout for --rev-range (default: %(default)s)")
     ap.add_argument("--hot-floor", type=int, default=None,
                     help="ignore paths touched by more than N open PRs "
                          "(default: 5%% of the queue, min 5)")
@@ -391,44 +507,77 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.prs_json:
         prs = json.loads(open(args.prs_json).read())
+    elif args.rev_range:
+        prs = claimants_from_rev_range(args.repo_root, args.rev_range)
     else:
         prs = fetch_open_prs()
 
+    # A ZERO DENOMINATOR REFUSES. An empty population is the shape of a broken
+    # query — a filter that matched nothing, a range that resolved to nothing —
+    # and printing `0 issues with >1 open PR` over it is a clean-looking answer
+    # to a question nobody managed to ask. rc 2 is "could not look", which is
+    # not the same finding as "looked and found none".
+    if not prs:
+        emit("NOT CHECKED competing-PR claims: 0 claimant(s) to examine — "
+             "nothing was looked at, which is not the same as nothing found")
+        return 2
+
+    landing = bool(args.rev_range)
     groups = group_by_claim(prs)
     invisible = invisible_groups(prs)
     pairs = invisible_pairs(prs)
     total_pairs = sum(len(m) * (len(m) - 1) // 2 for m in groups.values())
-    print(f"open PRs                                  {len(prs)}")
-    print(f"issues with >1 open PR                    {len(groups)}")
-    print(f"  whole group cannot collide              {len(invisible)}")
-    print(f"same-issue PR PAIRS                       {total_pairs}")
-    print(f"  pairs a merge conflict cannot report    {len(pairs)}")
+    # The open-PR wording is unchanged, byte for byte. Only the landing arm
+    # says "commit", because a landing has no open PRs in it and a label that
+    # said otherwise would be the report describing a population it never read.
+    if landing:
+        emit(f"commits in this landing                   {len(prs)}")
+        emit(f"issues claimed by >1 commit               {len(groups)}")
+        emit(f"  whole group cannot collide              {len(invisible)}")
+        emit(f"same-issue COMMIT PAIRS                   {total_pairs}")
+        emit(f"  pairs a merge conflict cannot report    {len(pairs)}")
+    else:
+        emit(f"open PRs                                  {len(prs)}")
+        emit(f"issues with >1 open PR                    {len(groups)}")
+        emit(f"  whole group cannot collide              {len(invisible)}")
+        emit(f"same-issue PR PAIRS                       {total_pairs}")
+        emit(f"  pairs a merge conflict cannot report    {len(pairs)}")
     if pairs:
-        print("\ncompeting PAIRS invisible to conflict detection:")
+        emit("\ncompeting PAIRS invisible to conflict detection:")
         last = None
         for issue, a, b in pairs:
             head = f"#{issue}" if issue != last else ""
-            print(f"  {head:<8}#{a} x #{b}")
+            emit(f"  {head:<8}{ident(a)} x {ident(b)}")
             last = issue
-        print("\nNOTE: 'cannot collide' is NOT 'duplicate' — a split across "
-              "several mechanisms lands here too. This is the list nothing "
-              "else can produce, not a verdict. The PAIR is the unit: #1080's "
-              "group collides (via #1122 x #1205) while its duplicate pair "
-              "#1150 x #1205 does not, so group granularity would hide it.")
+        emit("\nNOTE: 'cannot collide' is NOT 'duplicate' — a split across "
+             "several mechanisms lands here too. This is the list nothing "
+             "else can produce, not a verdict. The PAIR is the unit: #1080's "
+             "group collides (via #1122 x #1205) while its duplicate pair "
+             "#1150 x #1205 does not, so group granularity would hide it.")
+
+    # The remaining regions ask a QUEUE-shaped question, and a landing is not a
+    # queue. Skipped rather than answered wrongly — and NAMED, because a report
+    # that quietly covers less than its usual scope reads as a clean answer to
+    # the whole question.
+    if landing:
+        emit("\nnot run over a landing (a landing is not a queue):")
+        for reason in _REV_RANGE_SKIPS:
+            emit(f"  SKIPPED {reason}")
+        return 0
 
     floor = args.hot_floor if args.hot_floor is not None \
         else default_hot_floor(len(prs))
     hot = hot_paths(prs, floor)
     overlap = path_overlap_pairs(prs, floor)
-    print(f"\nhot paths ignored (touched by >{floor} PRs)  {len(hot)}")
+    emit(f"\nhot paths ignored (touched by >{floor} PRs)  {len(hot)}")
     for p in sorted(hot):
-        print(f"      {p}")
-    print(f"PRs sharing a FILE but claiming no common issue   {len(overlap)}")
+        emit(f"      {p}")
+    emit(f"PRs sharing a FILE but claiming no common issue   {len(overlap)}")
     if overlap:
-        print(f"\nranked by overlap, top {min(args.top, len(overlap))} of "
+        emit(f"\nranked by overlap, top {min(args.top, len(overlap))} of "
               f"{len(overlap)} — the region BOTH other lists miss:")
         for a, b, jac, shared in overlap[:args.top]:
-            print(f"  #{a} x #{b}   overlap {jac:5.0%}  "
+            emit(f"  #{a} x #{b}   overlap {jac:5.0%}  "
                   f"{len(shared)} file(s): "
                   f"{', '.join(s.rsplit('/', 1)[-1] for s in shared[:3])}"
                   f"{' …' if len(shared) > 3 else ''}")
@@ -436,13 +585,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     addadd = add_add_pairs(prs)
     scored = sum(1 for p in prs if "added" in p)
     tips = {p["number"]: (p.get("headRefOid") or "?")[:9] for p in prs}
-    print(f"\npairs that CREATE the same path                   {len(addadd)}"
+    emit(f"\npairs that CREATE the same path                   {len(addadd)}"
           f"   [{scored}/{len(prs)} PRs carry changeType]")
     if addadd:
-        print("  AT MOST ONE OF EACH PAIR CAN LAND — git cannot take both "
+        emit("  AT MOST ONE OF EACH PAIR CAN LAND — git cannot take both "
               "sides of an add/add, and `mergeable` cannot see it:")
         for a, b, paths in addadd:
-            print(f"  #{a} x #{b}   {len(paths)}: "
+            emit(f"  #{a} x #{b}   {len(paths)}: "
                   f"{', '.join(p.rsplit('/', 1)[-1] for p in paths[:3])}"
                   f"{' …' if len(paths) > 3 else ''}")
             # THE TIP EACH VERDICT WAS COMPUTED FROM, so the reader can re-verify
@@ -451,10 +600,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             # finishing, and the stale ref said the PR no longer added the file at
             # all — the opposite of the truth. A pair reported here without its
             # tips cannot be checked later, because by then the tips have moved.
-            print(f"          tips: #{a}@{tips.get(a, '?')}  #{b}@{tips.get(b, '?')}"
+            emit(f"          tips: #{a}@{tips.get(a, '?')}  #{b}@{tips.get(b, '?')}"
                   f"   (verify: git ls-remote origin <branch>)")
     elif scored:
-        print("  none — every open PR creates paths no other open PR creates.")
+        emit("  none — every open PR creates paths no other open PR creates.")
 
     # Advisory by construction: this reports, it does not fail a landing.
     return 0
