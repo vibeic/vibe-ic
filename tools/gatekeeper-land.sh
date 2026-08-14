@@ -448,7 +448,35 @@ run_unselectable_pytest() {
     echo "  FAIL  unselectable tests: could not baseline the tree — not a pass"
     FAILED=1; rm -f "$snap"; return
   }
-  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+  # `PYTHONDONTWRITEBYTECODE=1` IS LOAD-BEARING HERE, and it is the one hazard
+  # this stage adds that no existing guard can catch.
+  #
+  # 67 of the 109 files are `skills/*/tests/`, and they import shipped
+  # `skills/**/programs/*.py`. The IMPORT writes the bytecode — into the SHIPPED
+  # tree. MEASURED on a fresh worktree, digesting `skills/` by relative path +
+  # size:
+  #
+  #   clean, corpus never run          214 files   0 .pyc    b7a2de20…
+  #   corpus run WITHOUT this token    283 files  69 .pyc    f6ad615c…  (+64 __pycache__ dirs)
+  #   corpus run WITH this token       214 files   0 .pyc    b7a2de20…  identical to clean
+  #
+  # NOTHING ELSE SEES IT. `.pyc` is gitignored, so `git status`, `git add -A`,
+  # `gitignore_scratch_guard --include-worktree` and this stage's OWN
+  # `suite_write_guard` bracket all report clean with the 69 present: the guard
+  # skips regenerable artefacts by design, which is correct for the guard and is
+  # not a reason to leave the writes in.
+  #
+  # The collision it would make reachable is already named in the tree.
+  # `test_tools_and_integration.py::test_shipped_skills_tree_is_untouched_by_this_session`
+  # digests `skills/` at COLLECTION and compares at the end, and its own message
+  # predicts this exact case: the writer is an import of a shipped
+  # `skills/**/programs/*.py`, "invisible to git, `git add -A` and
+  # suite_write_guard, so this digest is the only thing that sees it — which is
+  # why it presents with no obvious author". Put those 67 files and that test in
+  # ONE session and it fails. This stage would have been the author, in the
+  # landing gate, on every batch — and :213 fails the WHOLE landing when the
+  # tree moves under the gates, so the price is the batch.
+  out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
         -q -p pytest_timeout --timeout=180 --timeout-method=thread \
         "${files[@]}" 2>&1 )"
   rc=$?

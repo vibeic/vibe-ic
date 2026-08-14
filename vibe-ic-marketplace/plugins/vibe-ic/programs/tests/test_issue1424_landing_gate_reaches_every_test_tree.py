@@ -177,6 +177,36 @@ def test_the_stage_bound_matches_the_other_pytest_stages(land_text):
         f"gatekeeper-land.sh now carries more than one pytest bound: {bounds}")
 
 
+def test_the_stage_writes_no_bytecode_into_the_shipped_skills_tree(land_text):
+    """The one hazard this stage adds that NO existing guard can catch.
+
+    67 of the 109 files are `skills/*/tests/` and they import shipped
+    `skills/**/programs/*.py`; the import writes `.pyc` into the SHIPPED tree.
+    Measured on a fresh worktree, digesting `skills/` by relative path + size:
+
+        clean                       214 files   0 .pyc   b7a2de20…
+        stage without the token     283 files  69 .pyc   f6ad615c…
+        stage with the token        214 files   0 .pyc   b7a2de20…
+
+    `.pyc` is gitignored, so `git status`, `git add -A`, `gitignore_scratch_guard
+    --include-worktree` and the stage's own `suite_write_guard` bracket ALL
+    report clean with the 69 present. This assertion is therefore the only thing
+    standing between this stage and
+    `test_tools_and_integration.py::test_shipped_skills_tree_is_untouched_by_this_session`
+    — whose own message predicts exactly this writer, and which fails the whole
+    landing (`gatekeeper-land.sh:213`) the moment the two share a session.
+    """
+    body = land_text.split(f"{_STAGE}() {{", 1)
+    assert len(body) == 2, f"{_STAGE} not found"
+    body = body[1].split("\n}\n", 1)[0]
+    invocations = [ln for ln in body.splitlines() if "python3 -m pytest" in ln]
+    assert invocations, f"{_STAGE} runs no pytest at all"
+    for ln in invocations:
+        assert "PYTHONDONTWRITEBYTECODE=1" in ln, (
+            "the stage's pytest may write .pyc into the shipped skills/ tree, "
+            "and nothing else in the landing sequence can see it: " + ln.strip())
+
+
 def test_the_stage_label_carries_no_discovery_count(land_text):
     """#1431 — a gate label that varies with the tree renames its own gate.
 
