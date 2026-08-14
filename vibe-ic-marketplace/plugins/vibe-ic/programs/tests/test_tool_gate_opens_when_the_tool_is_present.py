@@ -79,7 +79,7 @@ Widening also swept in two constants that share the prefix and are NOT gates
 (a fixture string and an argv list). They are in `NOT_A_GATE` with the value
 type that disqualifies them, and guarded: a bool cannot hide there.
 
-    WHICH_GATES      86    shut under which->None, open under which->path
+    WHICH_GATES      92    shut under which->None, open under which->path
     NOT_WHICH_GATES  14    corpus dir, package import, two-stage docker probe
     NOT_A_GATE        2    not booleans; not gates at all
                     ---
@@ -226,6 +226,7 @@ WHICH_GATES = (
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_EDA"),
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_IVERILOG"),
     ("test_cvdp_gate_selfverify_wiring", "_HAVE_YOSYS"),
+    ("test_cvdp_gate_toolpath_must_not_disable_synth_smoke", "_HAS_TOOLS"),
     ("test_determinism_gates_promoted_to_phase2", "_HAS_IVERILOG"),
     ("test_dff_primitive_synth", "_HAVE_IVERILOG"),
     ("test_gate_directed_rtl_repair", "_HAS_IVERILOG"),
@@ -234,6 +235,7 @@ WHICH_GATES = (
     ("test_issue186_p2_regmap_transaction_oracle", "_HAVE_IVERILOG"),
     ("test_issue716_intended_transparent_latch_emit", "_HAS_AB"),
     ("test_issue716_intended_transparent_latch_emit", "_HAS_VERILATOR"),
+    ("test_kmap_truth_table_oracle_check", "_HAS_EDA"),
     ("test_mbist_wrapper_gen", "_HAS_IVERILOG"),
     ("test_mux_compare_synth", "_HAS_IVERILOG"),
     ("test_organic_20260722_chip_top_power_pin_connect_guard", "_HAS_IVERILOG"),
@@ -247,7 +249,10 @@ WHICH_GATES = (
     ("test_rtllm_tier_pipeline", "_HAVE_IV"),
     ("test_serial_parallel_mul_synth", "_HAVE_IVERILOG"),
     ("test_table_lut_synth", "_HAVE_SIM"),
+    ("test_v0_2_43_emit_blocking_port_rules", "_HAS_IVERILOG"),
     ("test_v0_2_46_transcripts_ladder_canonical", "_HAVE_TOOLS"),
+    ("test_v0_2_50_msbfirst_direction_rule", "_HAS_IVERILOG"),
+    ("test_v0_2_53_moore_output_reset_gated", "_HAS_IVERILOG"),
     ("test_v0_3_26_issue530_hygiene_prefixed_reset_mem_array", "_HAS_IVERILOG"),
     ("test_v0_3_27_issue533_fix_compile_neutrality", "_HAS_IVERILOG"),
     ("test_v1_0_23_issue626_cvdp_gate_defence_emit", "_HAS_IVERILOG"),
@@ -281,6 +286,7 @@ WHICH_GATES = (
     ("test_v1_0_87_issue770r2_latency_arbiter_onehot", "_HAVE_IVERILOG"),
     ("test_v1_0_93_issue784_emit_assert_discriminators", "_HAVE_TOOLS"),
     ("test_v1_1_1_issue787_latency_conformance_multibit_datapath", "_HAVE_IVERILOG"),
+    ("test_v1_1_26_sync_reset_next_state_redundant_gate", "_HAS_IVERILOG"),
     ("test_v1_1_46_pr42_emit_normalizer_hardening", "_HAS_TOOLCHAIN"),
     ("test_v1_1_60_combdly_blkseq_style_suppress", "_HAS_VERILATOR"),
     ("test_v1_1_61_lint_advisory_iverilog_scored", "_HAS_IVERILOG"),
@@ -495,5 +501,5 @@ def test_the_register_is_not_checking_an_empty_population():
         f"only {len(found)} `_HA(VE|S)_*` definitions found; 102 were present "
         f"when this was last re-measured. The scan is broken, not the tree.")
     assert len(WHICH_GATES) >= 75, (
-        f"only {len(WHICH_GATES)} which-keyed gates registered; 86 when "
-        f"re-measured on 3d13e2c59")
+        f"only {len(WHICH_GATES)} which-keyed gates registered; 92 when "
+        f"re-measured on 75776dbbb")
