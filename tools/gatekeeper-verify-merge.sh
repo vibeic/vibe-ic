@@ -167,6 +167,27 @@ REPO=""
 # than a wrong one: git takes it literally and every `rev-parse` fails.
 unset GIT_DIR GIT_WORK_TREE
 
+# THE SAME LESSON, FOR THE ARMS' PLUGIN SET (vibe-ic#1443).
+#
+# `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is in the pinned verification invocation
+# agents are told to use, and it is INHERITED by the pytest this script runs for
+# arm A1 and by both `gatekeeper-land.sh` runs. Without autoload there is no
+# `pytest-timeout`, so the arm's own `--timeout=180 --timeout-method=thread` is
+# rejected:
+#
+#     python -m pytest: error: unrecognized arguments: --timeout=180 …
+#
+# pytest exits on the usage error, writes NO junit, and arm A1 is DEAD. Measured
+# on `3d13e2c59`: the verdict then said "the base report is empty … demand
+# green" and returned LAND OK, so the landing harness has been running with a
+# dead base arm in every such session and nothing said so.
+#
+# An arm must measure what the PUSH path measures, not what the caller's shell
+# happens to allow. The caller disabled autoload for ITS OWN session; inheriting
+# that into a measurement arm makes the arm answer a different question — the
+# same defect as the wrong `GIT_DIR` above, one layer up.
+unset PYTEST_DISABLE_PLUGIN_AUTOLOAD
+
 die() { printf 'gatekeeper-verify-merge: %s\n' "$*" >&2; exit 2; }
 
 while [ $# -gt 0 ]; do

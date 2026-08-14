@@ -636,6 +636,34 @@ def test_a_caller_supplying_no_base_selection_is_told_the_check_did_not_fire(
         doc["notes"]
 
 
+def test_the_arms_do_not_inherit_the_callers_plugin_suppression():
+    """THE OTHER HALF OF "ARM A MUST ACTUALLY RUN", and the one that makes the
+    refusal above a check rather than a ban.
+
+    `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` is in the pinned verification invocation
+    agents are told to use. It is inherited by arm A1's pytest, which then has no
+    `pytest-timeout` and rejects its own `--timeout=180 --timeout-method=thread`:
+
+        python -m pytest: error: unrecognized arguments: --timeout=180 …
+
+    pytest exits on the usage error and writes no junit, so arm A1 is DEAD.
+    Measured on `3d13e2c59`, the verdict said "the base report is empty … demand
+    green" and returned LAND OK — the harness had been running with a dead base
+    arm in every such session and nothing said so.
+
+    An arm must measure what the PUSH path measures, not what the caller's shell
+    happens to allow."""
+    body = "\n".join(l for l in _VERIFY.read_text(encoding="utf-8").splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "unset PYTEST_DISABLE_PLUGIN_AUTOLOAD" in body, (
+        "arm A1 inherits the caller's plugin suppression, so its own "
+        "--timeout is rejected and it writes no junit")
+    # ...and the arms still ASK for the bound. Unsetting the variable is only
+    # correct because the bound is real; dropping the bound instead would trade a
+    # dead arm for an unbounded one.
+    assert "--timeout=180" in body and "--timeout-method=thread" in body
+
+
 def test_the_verify_script_hands_the_verdict_arm_as_own_selection():
     """The wiring, asserted on the script rather than assumed. Arm A1 runs
     `selection_base.txt`; the verdict has to be told that is what was asked, or
