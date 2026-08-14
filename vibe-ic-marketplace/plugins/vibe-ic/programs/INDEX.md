@@ -216,6 +216,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `corner_coverage_audit` | any | — | Audit PVT corner coverage in IC design flows. |
 | `corner_schedule_policy` | any | — | deterministic corner-schedule policy for the analog sizing loop (analog-sizing-loop rule 3). |
 | `corner_yield_vs_spec_check` | any | — | independent yield-vs-spec.json gate + worst-corner identification (analog-sizing-loop rules 2 & 4). |
+| `corpus_cardinality_pin_scan` | any | — | find assertions pinned to a CORPUS CENSUS. |
 | `counter_advanced_synth` | any | — | deterministic SOLVER for the SUBTLE counter / timer / clock family (bucket-② spec -> bucket-① RTL, blind). |
 | `counter_popcount_synth` | any | — | deterministic SOLVER for the counter / popcount / parity-reduction family (bucket-② spec -> bucket-① RTL, blind). |
 | `coverage_closure` | any | — | coverage GAP ANALYSIS over the MEASURED artefact. |
@@ -1342,6 +1343,7 @@ _(no programs in this group)_
 - `corner_coverage_audit` — Audit PVT corner coverage in IC design flows.
 - `corner_schedule_policy` — deterministic corner-schedule policy for the analog sizing loop (analog-sizing-loop rule 3).
 - `corner_yield_vs_spec_check` — independent yield-vs-spec.json gate + worst-corner identification (analog-sizing-loop rules 2 & 4).
+- `corpus_cardinality_pin_scan` — find assertions pinned to a CORPUS CENSUS.
 - `counter_advanced_synth` — deterministic SOLVER for the SUBTLE counter / timer / clock family (bucket-② spec -> bucket-① RTL, blind).
 - `counter_popcount_synth` — deterministic SOLVER for the counter / popcount / parity-reduction family (bucket-② spec -> bucket-① RTL, blind).
 - `coverage_closure` — coverage GAP ANALYSIS over the MEASURED artefact.
