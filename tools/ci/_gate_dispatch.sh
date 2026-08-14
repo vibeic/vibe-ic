@@ -522,6 +522,34 @@ gate_dispatch_over() {
   GATE_DISPATCH_CORPUS_CUR=""
   GATE_DISPATCH_CORPUS_IDX=0
   GATE_DISPATCH_CORPUS_TOTAL=0
+  # AN EMPTY CORPUS MUST LEAVE A GATE BEHIND (vibe-ic#1075).
+  #
+  # Until this existed, `n == 0` ran the body zero times, declared zero gates,
+  # and cost the run NOTHING: the roll-up printed "no gate in this run reports
+  # that, because none exists" and the script's exit status was unaffected. So
+  # a corpus that silently emptied — a glob that stopped matching, a corpus
+  # withdrawn from publication — read exactly like a corpus with nothing wrong
+  # in it. MEASURED: `published cells carrying a routed DEF` is 1 item on
+  # origin/main and 0 on the withdrawal branch, and at 0 the three gates it
+  # dispatches simply cease to exist with no verdict anywhere.
+  #
+  # A synthetic NOT_CHECKED gate is the honest record, and it is not a new
+  # tier: NOT_CHECKED already means "the gate REFUSED — it could not look
+  # (rc 2)", which is exactly the state of a gate with nothing to look at. It
+  # is deliberately NOT a FAIL — an empty corpus is not a broken design, and
+  # calling it one would make every host without published evidence red for a
+  # reason that is about the corpus. But it is never a silent PASS.
+  if [ "$n" -eq 0 ] && [ "$rc" -eq 0 ]; then
+    GATE_LABELS+=("corpus \"$corpus\" is EMPTY — nothing was checked over it")
+    GATE_STATES+=("NOT_CHECKED")
+    GATE_SECONDS+=("0")
+    GATE_ITEM_CORPUS+=("$corpus")
+    GATE_ITEM_IDX+=("0")
+    GATE_ITEM_TOTAL+=("0")
+    echo "   ^^ EMPTY CORPUS \"$corpus\": 0 item(s), so the gates it would" \
+         "have dispatched did not run. Recorded NOT_CHECKED so the run" \
+         "carries a verdict for it instead of no verdict at all." >&2
+  fi
   GATE_CORPUS_NAMES+=("$corpus")
   GATE_CORPUS_ITEMS+=("$n")
   GATE_CORPUS_GATES+=("$(( ${#GATE_LABELS[@]} - before ))")
