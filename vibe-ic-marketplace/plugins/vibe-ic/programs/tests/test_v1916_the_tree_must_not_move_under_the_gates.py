@@ -265,20 +265,205 @@ def _stamp_write(text: str):
     return m
 
 
+#: vibe-ic#1544 — THE SAME LESSON `_STAMP_WRITE_RE` ABOVE ALREADY HAD TO LEARN,
+#: applied to the other three landmarks: locate them by what the line DOES, not
+#: by how the file happens to spell them somewhere.
+#:
+#: The stamp landmark got a regex after a literal substring went red the moment
+#: the script changed its spelling. The other three were left as raw
+#: `str.index` / `str.rindex`, and the failure mode turned out to be worse than
+#: `ValueError: substring not found`, because it is SILENT. Measured on
+#: `3d13e2c59`:
+#:
+#:     --emit-fingerprint    @10275  line 184  CODE
+#:     --expect-fingerprint  @11699  line 212  COMMENT   <- what index() found
+#:     --expect-fingerprint  @22461  line 402  CODE      <- the invocation
+#:     plugin_full_audit.py  @12145  line 220  COMMENT
+#:     plugin_full_audit.py  @21522  line 386  CODE      <- what rindex() found
+#:
+#: `3febf5372` (#1029/#1046) added a rationale comment naming
+#: `landing_worktree_is_clean_check --expect-fingerprint`, above the invocation.
+#: From that commit on, `index()` measured the PROSE, the assertion read
+#: `21522 < 11699`, and main has been red on every host since — while the
+#: invariant it names was never actually violated (`emit 10275 < last_suite
+#: 21522 < expect 22461 < stamp` is exactly the required order).
+#:
+#: Two further reasons this is resolved by line-kind rather than patched:
+#:   * `emit < last_suite` was passing for the WRONG reason — `--emit-fingerprint`
+#:     merely happens to have one occurrence today, and a prose mention of it
+#:     above the last suite would have flipped that assertion too;
+#:   * `rindex("plugin_full_audit.py")` degrades in the SAFE-LOOKING direction —
+#:     delete the invocation and it silently falls back to the comment, so
+#:     removing the last suite would MOVE the landmark instead of failing.
+_COMMENT_LINE = re.compile(r"^[ \t]*#")
+
+
+def _code_offsets(text: str, needle: str) -> list[int]:
+    """Offsets of `needle` on lines that are not wholly a comment.
+
+    A prose mention is not an invocation. In `sh` a line whose first non-blank
+    character is `#` runs nothing, so it can never be one of these landmarks.
+    """
+    out: list[int] = []
+    for m in re.finditer(re.escape(needle), text):
+        start = text.rfind("\n", 0, m.start()) + 1
+        end = text.find("\n", m.start())
+        line = text[start:end if end != -1 else len(text)]
+        if not _COMMENT_LINE.match(line):
+            out.append(m.start())
+    return out
+
+
+def _ordering_violations(text: str) -> list[str]:
+    """Every way `text` breaks the order. Empty means the invariant holds.
+
+    Factored out of the test so the CONTROLS below can drive it with a script
+    that genuinely violates each edge — a rewritten assertion that cannot be
+    made to fail would be worse than the red it replaced.
+
+    EVERY code occurrence is judged, not the first or the last. If a second
+    comparison is ever added, "the comparison" stops being a single point and a
+    landmark that picked one of them would be choosing which half to guard.
+    """
+    bad: list[str] = []
+    emits = _code_offsets(text, "--emit-fingerprint")
+    expects = _code_offsets(text, "--expect-fingerprint")
+    suites = _code_offsets(text, "plugin_full_audit.py")
+    if not emits:
+        bad.append("no CODE line takes the fingerprint (--emit-fingerprint "
+                   "appears only in prose, or not at all)")
+    if not expects:
+        bad.append("no CODE line compares the fingerprint (--expect-fingerprint "
+                   "appears only in prose, or not at all) — the tree may move "
+                   "under the whole expensive tier and nothing would say so")
+    if not suites:
+        bad.append("no CODE line runs plugin_full_audit.py, so 'the last suite' "
+                   "is not a place in this script")
+    if not (emits and expects and suites):
+        return bad
+    last_suite = max(suites)
+    stamp = _stamp_write(text).start()
+    if not all(e < last_suite for e in emits):
+        bad.append("the fingerprint is taken after the suites ran")
+    if not all(x > last_suite for x in expects):
+        bad.append("the comparison runs before the last suite, so an edit made "
+                   "during it is still invisible — the window this exists to "
+                   "close")
+    if not all(x < stamp for x in expects):
+        bad.append("the comparison runs after the stamp is written, so it "
+                   "cannot withhold it")
+    return bad
+
+
 def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
     """THE WHOLE FIX. Before the last suite it leaves the window open; after
     the stamp it cannot withhold one."""
-    emit = land_sh.index("--emit-fingerprint")
-    expect = land_sh.index("--expect-fingerprint")
-    last_suite = land_sh.rindex("plugin_full_audit.py")
-    stamp = _stamp_write(land_sh).start()
-    assert emit < last_suite, "the fingerprint is taken after the suites ran"
-    assert last_suite < expect, (
-        "the comparison runs before the last suite, so an edit made during it "
-        "is still invisible — the window this exists to close")
-    assert expect < stamp, (
-        "the comparison runs after the stamp is written, so it cannot withhold "
-        "it")
+    assert _ordering_violations(land_sh) == []
+
+
+# ── the controls: the assertion above must still be REFUSABLE ────────────────
+#
+# A landmark resolver is exactly the kind of thing that can be "fixed" into
+# never failing. These drive `_ordering_violations` with a script that breaks
+# each edge on purpose, so a future simplification that stops refusing is
+# caught here rather than on the day the tree moves under the gates.
+
+_WELL_ORDERED = """\
+#!/usr/bin/env bash
+# `landing_worktree_is_clean_check --expect-fingerprint` at the end of this
+# tier already refuses the stamp; `plugin_full_audit.py` runs INSIDE it.
+run "write-guard baseline" python3 "$P/landing_worktree_is_clean_check.py" \\
+    --emit-fingerprint "$FP"
+run "targeted tests" pytest
+run "plugin full audit" python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+run "the tree did not move" python3 "$P/landing_worktree_is_clean_check.py" \\
+    --expect-fingerprint "$FP"
+git rev-parse HEAD > "$GITDIR/gatekeeper-stamp"
+"""
+
+
+def test_the_control_script_is_accepted():
+    """The positive control. Without it the refusals below prove only that the
+    function says no to everything."""
+    assert _ordering_violations(_WELL_ORDERED) == []
+
+
+def test_a_comparison_deleted_down_to_its_prose_mention_is_refused():
+    """vibe-ic#1544 ITSELF, as a control.
+
+    The comment naming the flag stays; only the invocation goes. This is the
+    state the old `index()` landmark reported as satisfied, and it is the state
+    in which nothing checks whether the tree moved.
+    """
+    gutted = _WELL_ORDERED.replace(
+        'run "the tree did not move" python3 "$P/landing_worktree_is_clean_check.py" \\\n'
+        '    --expect-fingerprint "$FP"\n', "")
+    assert "--expect-fingerprint" in gutted, "the prose mention must survive"
+    bad = _ordering_violations(gutted)
+    assert any("only in prose" in b for b in bad), bad
+
+
+def test_a_comparison_moved_before_the_last_suite_is_refused():
+    moved = _WELL_ORDERED.replace(
+        'run "plugin full audit" python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"\n'
+        'run "the tree did not move" python3 "$P/landing_worktree_is_clean_check.py" \\\n'
+        '    --expect-fingerprint "$FP"\n',
+        'run "the tree did not move" python3 "$P/landing_worktree_is_clean_check.py" \\\n'
+        '    --expect-fingerprint "$FP"\n'
+        'run "plugin full audit" python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"\n')
+    bad = _ordering_violations(moved)
+    assert any("before the last suite" in b for b in bad), bad
+
+
+def test_a_comparison_moved_after_the_stamp_is_refused():
+    moved = _WELL_ORDERED.replace(
+        'run "the tree did not move" python3 "$P/landing_worktree_is_clean_check.py" \\\n'
+        '    --expect-fingerprint "$FP"\n'
+        'git rev-parse HEAD > "$GITDIR/gatekeeper-stamp"\n',
+        'git rev-parse HEAD > "$GITDIR/gatekeeper-stamp"\n'
+        'run "the tree did not move" python3 "$P/landing_worktree_is_clean_check.py" \\\n'
+        '    --expect-fingerprint "$FP"\n')
+    bad = _ordering_violations(moved)
+    assert any("after the stamp" in b for b in bad), bad
+
+
+def test_a_fingerprint_taken_after_the_last_suite_is_refused():
+    moved = _WELL_ORDERED.replace(
+        'run "write-guard baseline" python3 "$P/landing_worktree_is_clean_check.py" \\\n'
+        '    --emit-fingerprint "$FP"\n'
+        'run "targeted tests" pytest\n'
+        'run "plugin full audit" python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"\n',
+        'run "targeted tests" pytest\n'
+        'run "plugin full audit" python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"\n'
+        'run "write-guard baseline" python3 "$P/landing_worktree_is_clean_check.py" \\\n'
+        '    --emit-fingerprint "$FP"\n')
+    bad = _ordering_violations(moved)
+    assert any("after the suites ran" in b for b in bad), bad
+
+
+def test_the_last_suite_landmark_does_not_fall_back_to_its_comment():
+    """`rindex` degraded in the safe-looking direction; this pins that it no
+    longer can. Delete the invocation and the script must be REFUSED, not
+    silently re-anchored on the rationale comment that also names the file."""
+    gutted = _WELL_ORDERED.replace(
+        'run "plugin full audit" python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"\n',
+        "")
+    assert "plugin_full_audit.py" in gutted, "the prose mention must survive"
+    bad = _ordering_violations(gutted)
+    assert any("not a place in this script" in b for b in bad), bad
+
+
+def test_a_comment_never_supplies_a_landmark():
+    """The mechanism, directly: prose-only occurrences contribute nothing."""
+    prose = ("# --emit-fingerprint --expect-fingerprint plugin_full_audit.py\n"
+             "\t #   indented comments count as comments too\n")
+    for needle in ("--emit-fingerprint", "--expect-fingerprint",
+                   "plugin_full_audit.py"):
+        assert _code_offsets(prose, needle) == [], needle
+    # …and a real command line still does, including one with a trailing comment.
+    code = 'python3 x.py --expect-fingerprint "$FP"   # the compare\n'
+    assert _code_offsets(code, "--expect-fingerprint") == [
+        code.index("--expect-fingerprint")]
 
 
 def test_the_stamp_records_the_commit_and_is_dropped_when_a_gate_failed(land_sh):
