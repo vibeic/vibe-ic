@@ -1720,6 +1720,7 @@ _ATOMIC_CALL_SHAPES = '''
 from pathlib import Path
 import _atomic_output
 import _atomic_artefact
+import _atomic_artefact as _aa
 from _atomic_output import atomic_write_text
 
 def a(project):

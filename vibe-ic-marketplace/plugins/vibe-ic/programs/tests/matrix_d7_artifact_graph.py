@@ -469,30 +469,54 @@ class _PathResolver:
         return tuple(segs)
 
 
-def _shadowed_write_target(resolver: "_PathResolver", fn: ast.Attribute,
-                           call: ast.Call) -> Optional[ast.AST]:
+def _module_aliases(tree: ast.AST) -> FrozenSet[str]:
+    """Names bound by an ``import`` in this module — modules, never paths.
+
+    This is the discriminator :func:`_shadowed_write_target` needs, and it is
+    structural: it asks whether the RECEIVER of the call is a module, not which
+    module it is. No helper module is enumerated, so ``_atomic_output``,
+    ``_atomic_artefact`` and any future alias all read the same — the property
+    :data:`_ATOMIC_WRITERS` is careful about, reached a different way because
+    a name that collides with a ``Path`` method cannot be matched by name.
+    """
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                out.add(a.asname or a.name.split(".")[0])
+        elif isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                out.add(a.asname or a.name)
+    return frozenset(out)
+
+
+def _shadowed_write_target(aliases: FrozenSet[str], fn: ast.Attribute,
+                           call: ast.Call) -> ast.AST:
     """Destination node of a call named in :data:`_SHADOWING_ATOMIC_WRITERS`.
 
     ``p.write_text(data)`` and ``_aa.write_text(p, data)`` are the same NAME
     with the destination in two different places, so the position cannot be
-    read off the name. It is read off the CODE instead: whichever of the
-    receiver and the first argument resolves to a path IS the path.
+    read off the name. It is read off the RECEIVER: a receiver that is an
+    imported module is the drop-in helper and its destination is ``args[0]``;
+    anything else is the ``Path`` method and its destination is the receiver.
 
-    Answering with the receiver first preserves the plain ``Path`` shape
-    exactly as it behaved before this existed; the first argument is consulted
-    ONLY where the receiver resolves to nothing, which is what a module alias
-    such as ``_aa`` does. So this can add writes and cannot remove one — and
-    an over-approximated write set is the direction this module already
-    declares safe (see :class:`_PathResolver`).
+    WHY NOT "whichever of the two resolves to a path". That was the first
+    version and it was WRONG in the delegate walk, measurably: with no literal
+    path to resolve there, a receiver that happened not to resolve handed the
+    verdict to ``args[0]``, and ``fpga_verification_audit --report`` — a
+    markdown report the program AUDITS — started reading as a report the
+    program WRITES. ``test_input_shaped_output_flags_are_still_detected_as_
+    inputs`` caught it, which is the whole reason that guard exists: it is the
+    check against measuring a flag's NAME instead of the program's behaviour.
 
-    Returns ``None`` when neither resolves, which is a call this walk has
-    nothing to say about rather than a write to report.
+    The rule here cannot do that, because it never consults the argument at all
+    unless the receiver is a module. A `Path`-shaped call behaves exactly as it
+    did before this function existed.
     """
-    if resolver.tail(fn.value):
-        return fn.value
-    if call.args and resolver.tail(call.args[0]):
+    if (isinstance(fn.value, ast.Name) and fn.value.id in aliases
+            and call.args):
         return call.args[0]
-    return None
+    return fn.value
 
 
 def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
@@ -519,6 +543,7 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
     name — which is exactly the failure being fixed here, one module over.
     """
     resolver = _PathResolver(tree)
+    _module_names = _module_aliases(tree)
     out: Set[Tuple[str, ...]] = set()
 
     def add(node: ast.AST) -> None:
@@ -545,9 +570,7 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
             if fn.attr in _ATOMIC_WRITERS and n.args:
                 add(n.args[0])
             elif fn.attr in _SHADOWING_ATOMIC_WRITERS:
-                dest = _shadowed_write_target(resolver, fn, n)
-                if dest is not None:
-                    add(dest)
+                add(_shadowed_write_target(_module_names, fn, n))
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
@@ -748,6 +771,7 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
         if verdicts and all(v is False for v in verdicts):
             return False
         return None
+    _module_names = _module_aliases(tree)
     aliases: Set[str] = set()
     for _ in range(3):
         grew = False
@@ -786,16 +810,10 @@ def flag_value_is_written(program: str, flag: str, _depth: int = 0) -> Optional[
             if fn.attr in _ATOMIC_WRITERS and n.args:
                 target = n.args[0]
             elif fn.attr in _SHADOWING_ATOMIC_WRITERS:
-                # Same two destination positions as `_collect_writes`, asked
-                # the question THIS walk asks. There is no path to resolve
-                # here — the destination is an argparse value, not a literal —
-                # so the receiver is tried first, exactly as before this set
-                # existed, and the first argument only where the receiver does
-                # not name the flag. Additive: a call that already answered
-                # True still does.
-                target = fn.value
-                if not _mentions_args_attr(target, dest, aliases) and n.args:
-                    target = n.args[0]
+                # The SAME rule `_collect_writes` applies, through the same
+                # function, so the two traversals cannot disagree about where a
+                # drop-in helper's destination is.
+                target = _shadowed_write_target(_module_names, fn, n)
             elif fn.attr == "open" and n.args:
                 mode = _const_str(n.args[0])
                 if mode and _WRITE_MODE_RE.search(mode):
