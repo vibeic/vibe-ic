@@ -35,7 +35,10 @@ Usage:
 Exit codes:
     0  PASS
     1  FAIL — at least one forbidden token in plugin source
-    2  argument or I/O error
+    2  argument or I/O error, and the two states that carry NO verdict:
+       NOTHING_SCANNED (the walk read zero files) and COULD_NOT_LOOK
+       (vibe-ic#1476 — one or more files could not be read, so they were
+       never scanned; that is not a clean bill of health for them).
 
 chip-AGNOSTIC.
 """
@@ -69,10 +72,57 @@ _DENY_PATH = (
 )
 
 
+# ---------------------------------------------------------------------------
+# vibe-ic#1476 — "could not read it" and "read it and found nothing" must never
+# be recorded the same way.
+#
+# Every read in this gate used to be a STRICT utf-8 decode. One truncated
+# multi-byte character — the byte `\xe2` with its continuation bytes cut off,
+# which is what `cut -c` on an em-dash leaves behind — made that decode raise,
+# and each caller turned the raise into either a silent `continue` or an
+# uncaught traceback:
+#
+#   * `_scan_nda` caught `UnicodeDecodeError` and skipped the file. The whole
+#     file left the scan, with no counter, no message and no exit code. A file
+#     carrying an NDA SKU **and** one bad byte was certified clean — the exact
+#     "a check that could not look reports what a check that looked and found
+#     nothing reports" shape this gate exists to prevent.
+#   * `audit`'s main loop caught only `OSError`, so the same byte in
+#     `programs/` aborted the run with a traceback BEFORE the NDA panel below
+#     it ever executed — one byte could blind the whole gate.
+#
+# The decode is now deliberately LOSSY, and that direction is safe by
+# construction: every forbidden and every NDA token is ASCII, and
+# `errors="replace"` preserves every ASCII byte verbatim while turning only
+# the undecodable ones into U+FFFD. A lossy decode can therefore only ever add
+# noise AROUND a match; it can never hide one, so it cannot buy a green.
+# (The three sibling NDA gates already read this way — `nda_tracked_tree_scan`
+# line 328, `nda_diff_scan_check` (vibe-ic#640) and `commit_msg_nda_check`.
+# This file was the last strict-decoding holdout in the family.)
+#
+# `None` is reserved for a genuine I/O failure — the bytes themselves could not
+# be obtained. That is NOT clean and NOT a violation; callers record it and the
+# gate exits 2, the same "no verdict" channel `NOTHING_SCANNED` already uses.
+# ---------------------------------------------------------------------------
+def _read_for_scan(path: Path) -> Optional[str]:
+    """Return `path`'s text for scanning, or None if its BYTES are unreadable.
+
+    Never raises `UnicodeDecodeError`: undecodable bytes become U+FFFD rather
+    than removing the file from the scan.
+    """
+    try:
+        return path.read_bytes().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
 def _load_deny_tokens(path: Path) -> Tuple[str, ...]:
     """Read one-token-per-line deny list (# comments and blanks ignored)."""
+    # vibe-ic#1476 — lossy decode: one truncated byte in the deny list used to
+    # raise here, at import time, from a module-level initialiser. The panel
+    # this list feeds must not be emptied by a byte.
     try:
-        raw = path.read_text(encoding="utf-8").splitlines()
+        raw = path.read_bytes().decode("utf-8", errors="replace").splitlines()
     except OSError:
         # Loader is best-effort — if the deny list is missing we fall
         # back to an empty tuple and the gate reports PASS, matching
@@ -200,12 +250,20 @@ def _build_token_re(extra: Optional[List[str]] = None) -> re.Pattern:
 # 201 documents; cross_layer_reference_check on 46 vs 23; and this one).
 SCAN_CENSUS: Dict[str, int] = {}
 
+# vibe-ic#1476 — the paths whose BYTES this run could not obtain, in the order
+# met. A count alone cannot be acted on; the reader needs the names. Reset by
+# `audit` alongside SCAN_CENSUS, so a stale list cannot make a healthy run
+# refuse (and, more importantly, a stale EMPTY list cannot make a blind run
+# certify).
+UNREADABLE: List[str] = []
+
 
 def audit(plugin_root: Path,
           extra_tokens: Optional[List[str]] = None
           ) -> Tuple[str, List[TokenFinding]]:
     findings: List[TokenFinding] = []
     SCAN_CENSUS.clear()
+    UNREADABLE.clear()
     if not plugin_root.is_dir():
         return "VACUOUS_PASS", []
 
@@ -226,14 +284,17 @@ def audit(plugin_root: Path,
             sum(1 for _ in d.rglob("*") if _.is_file()) if d.is_dir() else -1)
 
     scanned = 0
+    unreadable: List[str] = []
     for f in targets:
         rel = f.relative_to(plugin_root)
         rel_str = str(rel)
         if _is_allowlisted(rel_str):
             continue
-        try:
-            text = f.read_text(encoding="utf-8")
-        except OSError:
+        # vibe-ic#1476 — see `_read_for_scan`. Strict decoding used to raise
+        # out of this loop entirely; an OSError used to `continue` unrecorded.
+        text = _read_for_scan(f)
+        if text is None:
+            unreadable.append(rel_str)
             continue
         scanned += 1
         for ln_no, line in enumerate(text.splitlines(), start=1):
@@ -251,20 +312,45 @@ def audit(plugin_root: Path,
                 ))
 
     SCAN_CENSUS["files_read"] = scanned
+    SCAN_CENSUS["files_unreadable"] = len(unreadable)
+    UNREADABLE.extend(unreadable)
 
     # STRICT NDA pass — commercial foundry SKU/name/process tokens, scanned over
     # the WHOLE plugin tree (every text file, tests/ included), with NO allowlist
     # except the single encoded home. This is the strengthened grep-0 contract.
     findings.extend(_scan_nda(plugin_root))
 
-    return ("FAIL" if findings else "PASS"), findings
+    # One path can be met by BOTH walks (the source walk over
+    # programs/skills/commands, and the tree-wide NDA walk). Report it once:
+    # a doubled count would MISSTATE the exposure, and a number that overstates
+    # is no more trustworthy than one that understates.
+    UNREADABLE[:] = list(dict.fromkeys(UNREADABLE))
+    SCAN_CENSUS["unreadable_unique"] = len(UNREADABLE)
+
+    if findings:
+        return "FAIL", findings
+    # vibe-ic#1476 — a file whose BYTES could not be obtained leaves this run
+    # with no verdict over it. Reporting PASS would be the defect this issue is
+    # about, one level up: a gate that could not look, answering like a gate
+    # that looked and found nothing. Ranked BELOW FAIL, because a leak that was
+    # actually seen is the more actionable answer.
+    if UNREADABLE:
+        return "COULD_NOT_LOOK", findings
+    return "PASS", findings
 
 
 def _scan_nda(plugin_root: Path) -> List[TokenFinding]:
     """Scan the entire plugin tree for literal NDA foundry tokens. No allowlist
-    (tests/ included); only the encoded home `_commercial_pdk.py` is exempt."""
+    (tests/ included); only the encoded home `_commercial_pdk.py` is exempt.
+
+    Writes its denominator into `SCAN_CENSUS` and any unreadable path into
+    `UNREADABLE`; `audit` owns the reset of both, exactly as it already did for
+    the census.
+    """
     out: List[TokenFinding] = []
     nda_re = _build_nda_re()
+    found = 0
+    read = 0
     for f in plugin_root.rglob("*"):
         if not f.is_file() or f.suffix.lower() not in _NDA_SCAN_EXTS:
             continue
@@ -274,10 +360,19 @@ def _scan_nda(plugin_root: Path) -> List[TokenFinding]:
         rel_str = str(f.relative_to(plugin_root))
         if rel_str.replace("\\", "/") == _NDA_ENCODED_HOME:
             continue
-        try:
-            text = f.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        found += 1
+        # vibe-ic#1476 — THE instance. `except (OSError, UnicodeDecodeError):
+        # continue` dropped the entire file from the strictest gate in this
+        # repo, silently. Measured on this tree: a file carrying an NDA SKU
+        # scanned FAIL; the byte-identical file plus ONE bare 0xE2 scanned
+        # PASS. Now the bytes are decoded lossily (ASCII tokens survive
+        # intact), and only an I/O failure can remove a file — which is
+        # counted, named, and turned into exit 2 by `audit` / `main`.
+        text = _read_for_scan(f)
+        if text is None:
+            UNREADABLE.append(rel_str)
             continue
+        read += 1
         for ln_no, line in enumerate(text.splitlines(), start=1):
             for m in nda_re.finditer(line):
                 start = max(0, m.start() - 20)
@@ -289,6 +384,12 @@ def _scan_nda(plugin_root: Path) -> List[TokenFinding]:
                     context=line[start:end].strip(),
                     rule="FORBIDDEN_NDA_SKU",
                 ))
+    # The NDA panel's own denominator. It had none: a panel that walked zero
+    # files and a panel that walked the whole tree both returned `[]`, and
+    # `audit` turned both into the same PASS line.
+    SCAN_CENSUS["nda_files_found"] = found
+    SCAN_CENSUS["nda_files_read"] = read
+    SCAN_CENSUS["nda_files_unreadable"] = found - read
     return out
 
 
@@ -342,6 +443,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         "forbidden_tokens": list(_FORBIDDEN_TOKENS) + extra,
         "findings_count": len(findings),
         "scan_census": dict(SCAN_CENSUS),
+        # vibe-ic#1476 — machine-readable too, so a consumer of the JSON is not
+        # left inferring "clean" from an absent field.
+        "unreadable": list(UNREADABLE[:200]),
         "findings": [asdict(f) for f in findings[:200]],
     }
     if args.json:
@@ -363,10 +467,26 @@ def main(argv: Optional[List[str]] = None) -> int:
               "A clean result over an empty scan is not a clean result; check "
               "the plugin_root argument.", file=sys.stderr)
         return 2
+    if verdict == "COULD_NOT_LOOK":
+        # vibe-ic#1476 — NOT a PASS. These files were never scanned, so this
+        # run carries no verdict over them. Exit 2 is the same "no verdict"
+        # channel NOTHING_SCANNED above already uses, and it is deliberately
+        # not 0: "I could not read it" must never print what "I read it and
+        # found nothing" prints.
+        print(f"COULD_NOT_LOOK: {len(UNREADABLE)} file(s) under {root} could "
+              "not be read, so they were NOT scanned. This run is not a clean "
+              "bill of health for them.", file=sys.stderr)
+        for p in sorted(UNREADABLE)[:15]:
+            print(f"  {p}", file=sys.stderr)
+        if len(UNREADABLE) > 15:
+            print(f"  … and {len(UNREADABLE) - 15} more", file=sys.stderr)
+        return 2
     if verdict == "PASS":
         print(f"PASS ({_read} file(s) scanned): "
               "no forbidden chip / vendor / SKU tokens in "
-              "plugin source (programs/ skills/ commands/)")
+              "plugin source (programs/ skills/ commands/); "
+              f"NDA panel read {SCAN_CENSUS.get('nda_files_read', 0)} of "
+              f"{SCAN_CENSUS.get('nda_files_found', 0)} file(s) tree-wide")
         return 0
     print(f"FAIL: {len(findings)} forbidden-token occurrence(s):",
           file=sys.stderr)
