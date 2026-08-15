@@ -1077,6 +1077,121 @@ def test_the_unmeasurable_count_is_disclosed_not_skipped():
         "reader of the grid's PASS could not tell how much of it was measured")
 
 
+# ══════════════════════════════════════════════════════════════════════
+# #1403 — the replay's own BOUND firing is not a verdict about the gate
+# ══════════════════════════════════════════════════════════════════════
+# Reproduced on bare `origin/main`, this file's two replay-driven tests
+# selected ALONE under the real harness contract (`--timeout=180
+# --timeout-method=thread`): two `Timeout` banners, NO summary line, rc=1, the
+# stack inside `_run_cell`'s `subprocess.run`. No batch, no interaction — the
+# measurement simply did not finish.
+#
+# That red is indistinguishable, to a harness reading exit codes, from the red
+# that means "a mutation stopped reddening its witness" — which is the whole
+# subject of #1403, and which cost the fleet a standing brief pointed at a
+# regression that was not there. The distinction has to live in the OUTPUT.
+#
+# The bound below is ONE SECOND: small enough to fire on any cell, and far
+# under the 60 s ceiling (`180 // 3`) that `ci_harness_timeout_ceiling_check`
+# permits one blocking call. These tests cost ~1 s each; they do not replay
+# anything to completion and are not a second copy of LOCK 2.
+_BOUND_THAT_ALWAYS_FIRES = 1
+
+
+def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour():
+    """The bound firing must RETURN a reason, not raise.
+
+    `_cell_rc_from_report` already states the doctrine — "a replay that could
+    not read its cell must be NOT_REPLAYABLE, never a quiet ALREADY_RED" — and
+    implements it for a missing report, an unparseable report and a report with
+    the wrong number of testcases. A killed child was the one unreadable path
+    that escaped it, because `subprocess.run` raises instead of returning.
+
+    Measured 2026-08-14 on 32 cores, uncontended, at a 60 s cell bound: the
+    dimension-6 cell for step 21 blew it and `subprocess.TimeoutExpired`
+    propagated out of `replay` -> `replay_many`'s `pool.map`, killing the test
+    with a traceback and no verdict.
+    """
+    mut = L.mutation("D3-UNDECLARED-ARTEFACT")
+    rc, out, why = L._run_cell(mut.dim, mut.witness, L.PLUGIN_ROOT, None,
+                               _BOUND_THAT_ALWAYS_FIRES)
+    assert rc is None, (
+        f"a cell killed at {_BOUND_THAT_ALWAYS_FIRES}s reported rc={rc!r}. An "
+        f"arm nobody waited for has NO COLOUR; giving it one is how 'could not "
+        f"look' becomes 'looked and it was red'")
+    assert str(_BOUND_THAT_ALWAYS_FIRES) in why and "bound" in why, (
+        f"the reason does not name the bound that fired: {why!r}")
+    assert "NOT MEASURED" in why, (
+        f"the reason does not say the arm was not measured, so a reader still "
+        f"cannot tell this from a gate that stopped catching: {why!r}")
+    assert isinstance(out, str), f"partial output came back as {type(out)}"
+
+
+def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS():
+    """End to end: the pair scores NOT_REPLAYABLE, and that is a failure.
+
+    The two directions that matter, and they pull against each other:
+
+      * it must not RAISE — an exception out of `replay_many` takes LOCK 2 down
+        with no verdict at all, which is the defect;
+      * it must not PASS — a bound that fired proves nothing, and a replay that
+        could not run must never be scored as one that ran.
+    """
+    mut = L.mutation("D3-UNDECLARED-ARTEFACT")          # FLOW_YAML: no cp -al
+    r = L.replay(mut, mut.witness, _BOUND_THAT_ALWAYS_FIRES)
+    assert r.verdict == "NOT_REPLAYABLE", (
+        f"a pair whose cells were killed scored {r.verdict!r}")
+    assert not r.proved, "a replay that never ran was banked as proof"
+    assert not r.as_recorded, "a replay that never ran was banked as reproduced"
+    assert not r.unmeasurable, (
+        "a timed-out replay was folded into UNMEASURABLE, which is the claim "
+        "that the WITNESS was pre-reddened — this measurement supports no such "
+        "claim, and the unmeasurable ceiling would then absorb it")
+    assert "bound" in r.not_replayable, (
+        f"the pair does not carry the reason: {r.not_replayable!r}")
+
+
+def test_the_bound_reason_refuses_BOTH_evidence_deleting_repairs():
+    """The message routes the reader, or #1403 happens again.
+
+    #1403 was not a broken gate. It was a red whose text sent every reader to
+    the wrong repair. The two repairs that must be named and refused are the
+    same two the ALREADY_RED path refuses, for the same reason: both restore
+    green by deleting the evidence rather than by measuring anything.
+    """
+    mut = L.mutation("D3-UNDECLARED-ARTEFACT")
+    _, _, why = L._run_cell(mut.dim, mut.witness, L.PLUGIN_ROOT, None,
+                            _BOUND_THAT_ALWAYS_FIRES)
+    assert "re-record the ledger" in why, (
+        f"the reason does not refuse re-recording the ledger: {why!r}")
+    assert "re-pick the witness" in why, (
+        f"the reason does not refuse re-picking the witness: {why!r}")
+    assert "stopped catching" in why, (
+        f"the reason does not deny the lost-gate reading, which is the one a "
+        f"reader arrives with: {why!r}")
+
+
+def test_a_TIMED_OUT_arm_is_still_distinguishable_from_a_TOOTHLESS_gate():
+    """PAIRED GUARD. The fix must not blunt the finding it sits next to.
+
+    A gate that genuinely stopped catching produces baseline GREEN, mutant
+    GREEN and NO reason — it is measured, and it is the defect this ledger
+    exists to publish. It must keep its own verdict and keep failing, or #1403
+    would have been fixed by making every red say "could not measure".
+    """
+    timed_out = _result(baseline_rc=None, mutant_rc=None, signal_seen=False,
+                        not_replayable="the cell exceeded its 60s bound")
+    toothless = _result(mutant_rc=0, signal_seen=False)
+    assert timed_out.verdict == "NOT_REPLAYABLE"
+    assert toothless.verdict == L.CANNOT_REDDEN
+    assert timed_out.verdict != toothless.verdict, (
+        "a measurement that did not happen and a gate that lost its teeth now "
+        "carry the SAME verdict; the reader is back where #1403 started")
+    # And neither one may pass.
+    assert not timed_out.proved and not timed_out.as_recorded
+    assert not toothless.proved and not toothless.as_recorded
+
+
 def test_the_canaries_a_mutation_plants_exist_nowhere_in_the_tree():
     """A canary that collides with a real path would redden a cell for the wrong
     reason, and the mutation would look proven while proving nothing.
