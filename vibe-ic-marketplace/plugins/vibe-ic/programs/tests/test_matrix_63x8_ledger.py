@@ -77,7 +77,27 @@ CENSUS_REQUIRED_OUTPUTS_PRESENT = 61
 # SAME commit, which is why the roots are read out of that program below rather
 # than re-typed here: the two copies moved together once and can drift apart.
 CENSUS_BLOCKS_ON_PRESENT = 63
-CENSUS_BLOCKS_ON_NON_EMPTY = 61
+# 61 -> 62 on 2026-08-14 (`73dfb68dd`, vibe-ic#1070 via #1258): step A1
+# gained `blocks_on: [D1]`. A1 already declared TWO `required_inputs` from
+# D1 while carrying `blocks_on: []`, so the ordering edge its own inputs
+# had always implied was simply missing; declaring it is the same shape of
+# fix as P0's above, and `DECLARED_ROOTS` shrank to {"D1"} in that very
+# commit to match.
+#
+# ONLY the non-empty count moves, unlike P0. P0 had no `blocks_on` key at
+# all, so it moved presence AND non-empty together; A1 already declared the
+# key as an empty list, so presence was always 63 and is untouched here.
+#
+# This is the SECOND time this tripwire fired on a legitimate flow change
+# and then sat red on main instead of being moved -- the exact failure the
+# P0 note above describes as "how a tripwire stops being read". #1258 moved
+# nine files, including the yaml, `flow_dependency_graph_check.DECLARED_ROOTS`,
+# `flowref.py` and three new tests; this constant is the one thing it missed.
+# The comment at the `roots` assertion below predicted that "a landing that
+# gives A1 an ordering edge moves BOTH sides together instead of reddening
+# this cell". Both sides DID move together. The cell reddened anyway, because
+# this count is a THIRD copy that neither side is tied to.
+CENSUS_BLOCKS_ON_NON_EMPTY = 62
 # 60 -> 61 on 2026-08-08: step 12 gained a `program_exit_zero` exec clause
 # (dft_post_optimization_scan_survival_check), closing the files_exist-only
 # gap the matrix_63x8 dimension-2 audit named. Step 1 is still exec-free.
