@@ -31,6 +31,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,37 @@ def test_a_timeout_does_not_revert_what_an_earlier_step_wrote(repo, monkeypatch)
     assert (repo / "sub" / "index.md").read_text(encoding="utf-8").startswith("index v2"), \
         "the timeout restore reverted the earlier index step's write"
     assert set(G.dirty_paths(repo)) == {"sub/index.md"}, G.dirty_paths(repo)
+
+
+def test_a_timeout_kills_grandchildren_before_restoring(repo, monkeypatch):
+    """An orphan writer must not re-dirty the tree after the function returns."""
+    delayed = repo / "_grandchild.py"
+    delayed.write_text(
+        "import pathlib, sys, time\n"
+        "time.sleep(3)\n"
+        "pathlib.Path(sys.argv[1]).write_text('LATE\\n')\n",
+        encoding="utf-8")
+    gen = repo / "_parent_gen.py"
+    gen.write_text(
+        "import pathlib, subprocess, sys, time\n"
+        "root = pathlib.Path(sys.argv[1])\n"
+        "root.joinpath('anchor.py').write_text('EARLY\\n')\n"
+        f"subprocess.Popen([sys.executable, {str(delayed)!r}, "
+        "str(root / 'anchor.py')], stdout=subprocess.DEVNULL, "
+        "stderr=subprocess.DEVNULL)\n"
+        "time.sleep(30)\n",
+        encoding="utf-8")
+    monkeypatch.setattr(G, "GEN_CENSUS", gen)
+    monkeypatch.setattr(G, "CENSUS_TIMEOUT_S", 1)
+
+    wrote, reason = G._default_census_writer(repo)
+
+    assert wrote == [] and "did not finish" in (reason or "")
+    assert (repo / "anchor.py").read_text(encoding="utf-8") == "FIGURE = 164\n"
+    time.sleep(4)
+    assert (repo / "anchor.py").read_text(encoding="utf-8") == "FIGURE = 164\n", \
+        "a surviving grandchild wrote after the timeout restore"
+    assert G.dirty_paths(repo) == set()
 
 
 def test_a_writer_that_finishes_still_declares_normally(repo, monkeypatch):

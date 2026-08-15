@@ -129,7 +129,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -252,12 +254,33 @@ def _default_census_writer(repo: Path) -> Tuple[List[str], Optional[str]]:
     before = set(dirty_paths(repo))
     with tempfile.TemporaryDirectory() as td:
         written_json = Path(td) / "written.json"
+        proc = subprocess.Popen(
+            [sys.executable, str(GEN_CENSUS), str(repo), "--fix",
+             "--written-json", str(written_json)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            start_new_session=True)
+        timed_out = False
         try:
-            proc = subprocess.run(
-                [sys.executable, str(GEN_CENSUS), str(repo), "--fix",
-                 "--written-json", str(written_json)],
-                capture_output=True, text=True, timeout=CENSUS_TIMEOUT_S)
+            stdout, stderr = proc.communicate(timeout=CENSUS_TIMEOUT_S)
         except subprocess.TimeoutExpired:
+            timed_out = True
+            # Kill the WHOLE writer group, not only its Python parent.  The
+            # census drives nested pytest processes; restoring while one of
+            # them is still alive lets an orphan write the tracked tree again
+            # after this function has reported it clean.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = proc.communicate()
+        if timed_out:
             # THE BOUND FIRED, AND THE CHILD DOES NOT GET TO SAY WHAT IT WROTE.
             #
             # `subprocess.run` kills the child with SIGKILL on timeout, so the
@@ -295,7 +318,7 @@ def _default_census_writer(repo: Path) -> Tuple[List[str], Optional[str]]:
             return [], reason
         wrote = _read_written(written_json)
         if proc.returncode != 0:
-            tail = (proc.stdout + proc.stderr).strip().splitlines()
+            tail = (stdout + stderr).strip().splitlines()
             return wrote, (f"rc={proc.returncode}: "
                            + (tail[-1][:200] if tail else "no output"))
         return wrote, None
