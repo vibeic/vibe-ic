@@ -537,8 +537,19 @@ def test_output_entries_classify_into_the_four_kinds():
     # d3 cannot then evidence moves the finding from d7 to d3 instead of
     # closing it. The fifth promotion (step 34) is WAIVED, not declared, so it
     # adds no entry here.
-    assert sum(seen.values()) == 140, seen
-    assert seen[F.FILE] == 106
+    # 2026-08-15 (#1348): 140 -> 141, FILE 106 -> 107. The LAST write-record
+    # promotion, disposed of the same way — D1
+    # `phase1/extraction_patterns.json`, seeded by
+    # `phase1_doc_one_shot_runner` through a variable so no AST write position
+    # names it, read by D1's own `extraction_coverage_check` gate, declared by
+    # nobody. It is a plain FILE, so GLOB (12) and ANY_OF (22) are again
+    # untouched and the whole delta lands on FILE. Recorded in the dimension-3
+    # manifest at the run root and byte size it was MEASURED at
+    # (`spm/v1.9.96_gf180mcuD`, 7608 B), and it resolves in 9 of the 10
+    # admissible run roots — declaring an artefact d3 cannot then evidence
+    # would move the finding from d7 to d3 instead of closing it.
+    assert sum(seen.values()) == 141, seen
+    assert seen[F.FILE] == 107
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
