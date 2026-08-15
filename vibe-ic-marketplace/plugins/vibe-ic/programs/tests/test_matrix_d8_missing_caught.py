@@ -1230,8 +1230,40 @@ def test_d8_cell_census_is_complete():
 #: they had dropped out on the text placeholder alone). The population is
 #: pinned rather than derived so the SHRINKING direction still has to be
 #: explained by a human — see this constant's test.
+#: RE-MEASURED 2026-08-14 on v1.10.40 (75776dbbb), and it GREW again — `4`
+#: joined. Lost: none. The cause is a gate that became MORE honest, not a
+#: fixture change:
+#:
+#:   `fe1f0615e` (#1115/#1173) taught `professional_tb_check` to print
+#:   `VACUOUS_PASS` for a `NOT_APPLICABLE` verdict instead of returning a bare
+#:   rc 0 that `flow_compliance_check` recorded as PASS — in that commit's own
+#:   words, "the producer emitted nothing and the checker read the absence as
+#:   consent".
+#:
+#: Step 4's SEEDED status moved with it, measured through this module's own
+#: `_materialize` + `FCC.check_step` at both revisions:
+#:
+#:   3d13e2c59 (v1.10.39)   WAIVED         in_pass_tier=False
+#:   75776dbbb (v1.10.40)   VACUOUS_PASS   in_pass_tier=True
+#:
+#: and the WAIVED came from the same clause: v1.10.39 reported "WAIVED-DEFERRED:
+#: gate program signalled PASS_WITH_WAIVERS (#651)" plus two PARTIALLY-VACUOUS
+#: lines, all of which v1.10.40 replaces with one "vacuous: gate program
+#: signalled VACUOUS_PASS (input not applicable): professional_tb_check".
+#:
+#: NOTHING ABOUT STEP 4 ITSELF MOVED. Read through `flowref`'s accessor (not a
+#: re-walk of the yaml — the population is 63, and a hand walk keyed by `id`
+#: collects 71), step 4 is byte-identical across the two revisions: same gate
+#: (md5 cb7dc043), same `required_outputs`. `flow_compliance_check.check_step`
+#: is byte-identical too (195e2d64), as is `vacuous_testbench_check`. Only
+#: `professional_tb_check.py` changed.
+#:
+#: So this is the GROWING direction, which this constant's test names as the
+#: benign one: one more step's real gate now reaches the tier at which the
+#: MISSING downgrade fires, so one more cell's enforcement is measurable rather
+#: than substituted-gate-only.
 REAL_GATE_PASS_TIER_STEPS: Tuple[str, ...] = (
-    "D1", "1", "2", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
+    "D1", "1", "2", "4", "12", "A1", "A2", "A4", "A5", "A6", "A8", "14", "28",
     "30", "32", "35", "38",
 )
 # 2026-07-28: the SET is unchanged (lost: none, gained: none). This tuple is
