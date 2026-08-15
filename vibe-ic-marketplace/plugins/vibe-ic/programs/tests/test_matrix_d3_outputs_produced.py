@@ -1617,6 +1617,93 @@ _TWO_GAPS_REMEDY = (
 )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# CAN THE PUBLISH CONTRACT EVER CARRY THE ENTRY? (vibe-ic#1349)
+# ──────────────────────────────────────────────────────────────────────
+#: The one destination `benchmark_evidence_publish.publish` writes that is NOT
+#: in its `_COPY_SUBTREES`: the signoff GDS is staged by an explicit branch of
+#: `publish()` into `dest/phase3/stage4/gds/`, so a scope built from the
+#: subtree list alone would report the one artefact the GDS manifest is about
+#: as unpublishable. Written down here because that branch computes the path
+#: inline and exports no constant to import; it is BOUND TO OBSERVED BEHAVIOUR
+#: by `test_d3_the_publish_scope_is_what_the_publisher_actually_stages`, which
+#: runs the real program and refuses a scope that does not match what landed.
+_PUBLISH_GDS_DEST = "phase3/stage4/gds"
+
+
+def publish_scope() -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """``(destination prefixes, exact files)`` a published cell can contain.
+
+    Read from ``benchmark_evidence_publish``'s OWN constants, never re-stated,
+    for the same reason ``_audit_verdict`` and ``_CONVERGED`` already are: a
+    second opinion about what the publish contract carries could drift from the
+    contract, and this module would then tell a reader to perform a publish
+    that does not do what the message says.
+
+    A rename of either constant is an ``AttributeError`` here — loud, named,
+    at the site that depends on it — rather than a silently narrower scope
+    that reports every entry as publishable.
+    """
+    subtrees = tuple(Path(str(s)).as_posix() for s in _bep._COPY_SUBTREES)
+    return (subtrees + (_PUBLISH_GDS_DEST,),
+            tuple(_bep._COPY_FILES) + ("RESULT.md",))
+
+
+@lru_cache(maxsize=None)
+def publishable(entry: str) -> bool:
+    """Can any alternative of *entry* land inside a program-published cell?
+
+    Any-of, matching :func:`resolve`: an entry is publishable when ANY of its
+    ``" OR "`` alternatives falls inside the staged scope, because that is the
+    alternative a publish would carry and the one the entry would resolve on.
+    """
+    prefixes, files = publish_scope()
+    for alt in F.split_any_of(entry):
+        rel = alt.lstrip("./")
+        if rel in files:
+            return True
+        if any(rel == p or rel.startswith(p + "/") for p in prefixes):
+            return True
+    return False
+
+
+#: vibe-ic#1349 — the clause an UNEVIDENCED entry gets when the run-tree half of
+#: :data:`_TWO_GAPS_REMEDY` is not a thing this repository can do.
+#:
+#: WHY THIS IS THE SAME DEFECT #1452 FIXED, ONE STEP FURTHER IN. #1452 removed
+#: an UNCHECKED promise ("commit a run tree and this cell answers live again")
+#: and replaced it with two gaps, of which the first still says a run tree
+#: closes the cell. For an entry whose declared path lies outside every
+#: destination `benchmark_evidence_publish` stages, that first half is
+#: unreachable through the repository's own publish contract — and it was acted
+#: on three times: #1349, #1452 and #1457 were each filed within hours of each
+#: other, each concluding "the remedy is corpus publication", and none of them
+#: could have been performed by running the publisher.
+#:
+#: It states a STRUCTURAL fact and no count, deliberately. A number measured on
+#: one day is the shape this module refuses everywhere else; the population is
+#: pinned instead, in :data:`UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT`.
+_PUBLISH_GAP = (
+    " REMEDY CHECK (vibe-ic#1349): the run-tree half of that choice is NOT "
+    "AVAILABLE for this entry. No alternative of it lands inside the scope "
+    "`benchmark_evidence_publish` stages, so no cell that program publishes "
+    "can carry it, whether or not a run produces it — the tracked artefacts "
+    "under this prefix all come from pre-program hand-staged trees. Widening "
+    "the publish scope is the evidence-policy and repo-size call that "
+    "program's own docstring defers ('Widening it is an evidence-policy call, "
+    "not a size call, and is deliberately left alone here'); it is not a fix "
+    "to improvise from a red cell. Staged scope: "
+)
+
+
+def _publish_gap_note(entry: str) -> str:
+    """The publish-contract clause for *entry*, or "" when it is publishable."""
+    if publishable(entry):
+        return ""
+    prefixes, files = publish_scope()
+    return (_PUBLISH_GAP + f"{sorted(prefixes)} + files {sorted(files)}.")
+
+
 def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
                         rejected: Dict[str, "Rejected"]) -> str:
     """The message for an entry NOTHING on this checkout can resolve.
@@ -1630,6 +1717,15 @@ def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
     appended unconditionally, including to entries this commit carries no
     producer for, where following it cannot work. It is replaced by
     :data:`_TWO_GAPS_REMEDY`, which names both gaps and promises neither.
+
+    vibe-ic#1349 — AND THE SURVIVING HALF OF THAT REMEDY IS NOT ALWAYS
+    REACHABLE EITHER. :data:`_TWO_GAPS_REMEDY` still tells the EVIDENCE-gap
+    reader that committing a run tree closes the cell. For an entry outside
+    the scope :func:`publish_scope` derives, running the flow and publishing
+    the result cannot produce a cell that carries it, so
+    :data:`_PUBLISH_GAP` says so at the point the reader is deciding what to
+    do. Nothing about the VERDICT changes: the entry is still unevidenced and
+    the cell is still red.
     """
     return (
         f"UNEVIDENCED: {which_root} is not carried by this repository, and "
@@ -1640,7 +1736,7 @@ def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
         f"{rec.get('size_bytes')} B measured on {_MANIFEST_MEASURED_ON} — that "
         f"is a claim about a tree on one machine on one day, not evidence that "
         f"this commit produces the artefact, and it must not be reported as "
-        f"produced." + _TWO_GAPS_REMEDY
+        f"produced." + _TWO_GAPS_REMEDY + _publish_gap_note(entry)
     )
 
 
@@ -3357,6 +3453,184 @@ def test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists():
           "defect this module already refused. Name BOTH gaps instead, and "
           "leave which one applies to the measured split."
     )
+
+
+#: vibe-ic#1349 — the UNEVIDENCED entries whose declared path lies outside
+#: EVERY destination `benchmark_evidence_publish` stages, MEASURED on this
+#: commit and pinned in both directions.
+#:
+#: THIS IS NOT A LIST OF UNPUBLISHABLE ARTEFACTS IN PRINCIPLE. The four
+#: hand-staged reference trees DO carry paths under `phase3/stage3/` —
+#: `routed.def`, `no_eco_needed.flag`, `clock_tree.rpt`, `pdn.done` — which is
+#: exactly why the entries that resolve on them are green while these are not.
+#: The claim is narrower and is about the PROGRAM: since the 2026-07-25
+#: program-first publish directive, a cell is produced by
+#: `benchmark_evidence_publish`, that program stages `_COPY_SUBTREES` plus the
+#: signoff GDS, and none of these paths is inside either. So "run the flow and
+#: publish the result" — the remedy `_TWO_GAPS_REMEDY` offers and the one #1349,
+#: #1452 and #1457 each independently concluded was the fix — cannot close
+#: these cells, and no amount of running the flow changes that.
+#:
+#: A cell LEAVING this pin is the good direction and needs a stated cause: the
+#: publish scope widened (an owner call), the flow moved the declaration, or
+#: the entry stopped being unevidenced. A cell JOINING it is a NEW declared
+#: output the publish contract cannot carry, and is its own finding.
+UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
+    ("15", "phase3/stage3/pnr/floorplan.def"),
+    ("17", "phase3/stage3/pnr/placed.def"),
+    ("19", "phase3/stage3/pnr/post_cts.def"),
+    ("20", "phase3/stage3/pnr/post_hold.def"),
+    ("30", "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR "
+           "sim_spice/*.sp"),
+    ("32", "phase3/stage3/eco/eco_trigger_decision.json"),
+)
+
+
+def test_d3_the_run_tree_remedy_is_withdrawn_where_the_publisher_cannot_stage_it():
+    """vibe-ic#1349 — do not offer a publish that cannot carry the artefact.
+
+    :func:`test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists`
+    holds the module to naming BOTH gaps. This holds it to the next thing: for
+    the EVIDENCE gap the message says committing a run tree closes the cell,
+    and for an entry outside the publish contract's staged scope that is a
+    publish nobody can perform. Three issues concluded "the remedy is corpus
+    publication" off this sentence; running the publisher would not have
+    produced a cell carrying any of these six paths.
+
+    BOTH DIRECTIONS, and the second is what stops this becoming a blanket
+    clause: an entry INSIDE the scope must NOT carry it. A note appended to
+    everything says nothing about anything.
+    """
+    measured = tuple(sorted(
+        (sid, entry) for sid, entry in unevidenced_entries()
+        if not publishable(entry)))
+    assert measured == tuple(sorted(UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT)), (
+        f"the UNEVIDENCED-outside-the-publish-contract population changed.\n"
+        f"  JOINED — a declared output the publish contract cannot carry: "
+        f"{sorted(set(measured) - set(UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT))}\n"
+        f"  LEFT — say which: the publish scope widened, the flow moved the "
+        f"declaration, or the entry is no longer unevidenced: "
+        f"{sorted(set(UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT) - set(measured))}"
+    )
+
+    missing, blanket = [], []
+    for sid, entry in unevidenced_entries():
+        detail = check_entry(sid, entry, step_record(sid)["entries"][entry]).detail
+        says = "NOT AVAILABLE for this entry" in detail
+        if not publishable(entry) and not says:
+            missing.append((sid, entry))
+        if publishable(entry) and says:
+            blanket.append((sid, entry))
+    assert not missing, (
+        f"{len(missing)} UNEVIDENCED entr(ies) are still offered a run-tree "
+        f"remedy the publish contract cannot deliver:\n  "
+        + "\n  ".join(f"step {a}: {b}" for a, b in missing))
+    assert not blanket, (
+        f"{len(blanket)} PUBLISHABLE entr(ies) were told the remedy is "
+        f"unavailable:\n  "
+        + "\n  ".join(f"step {a}: {b}" for a, b in blanket)
+        + "\nA clause appended to every entry carries no information.")
+
+
+def test_d3_the_publish_scope_predicate_answers_both_ways():
+    """The control: :func:`publishable` must be able to say YES and NO.
+
+    Asserted against REAL declared entries of this commit rather than
+    synthetic strings, so the predicate is exercised the way the verdicts
+    exercise it. A classifier with one answer has not been shown to classify.
+    """
+    assert publishable("reports/phase3/spice_correlation.json")
+    assert publishable("phase3/stage4/gds/*.gds"), (
+        "the signoff GDS is staged by an explicit branch of publish(); a scope "
+        "built from _COPY_SUBTREES alone would call the one artefact the GDS "
+        "manifest is about unpublishable")
+    assert not publishable("phase3/stage3/pnr/floorplan.def")
+
+    # Any-of matches `resolve`: ONE publishable alternative is enough, because
+    # that is the alternative a published cell would carry.
+    assert publishable(
+        "phase3/stage3/spice/correlation.json OR "
+        "reports/phase3/spice_correlation.json")
+
+    # ...and the scope is READ from the publish program, not restated here.
+    prefixes, files = publish_scope()
+    assert all(Path(str(s)).as_posix() in prefixes
+               for s in _bep._COPY_SUBTREES), (prefixes, _bep._COPY_SUBTREES)
+    assert all(f in files for f in _bep._COPY_FILES), (files, _bep._COPY_FILES)
+
+
+#: The synthetic run the live binding below publishes. One artefact per scope
+#: prefix so a prefix that has silently stopped being staged is visible, plus
+#: one under `phase3/stage3/` — the prefix every entry in
+#: :data:`UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT` lives under.
+_PUBLISH_PROBE_FILES = {
+    "reports/audit/phase23_completion_audit.json": '{"verdict": "PASS"}',
+    "RESULT.md": "# RESULT\n\n## VERDICT\n\n**PASS.** synthetic probe.\n",
+    "provenance.jsonl": '{"step": "probe"}\n',
+    "phase1/generated_docs/L1.json": '{"a": 1}',
+    "phase2/stage2/synth/netlist.v": "module top(); endmodule\n",
+    "phase3/reports/drc.rpt": "clean\n",
+    "phase3/analog/probe/spec.json": "{}",
+    "reports/phase3/sta.json": "{}",
+    "phase3/stage4/gds/probe.gds": "GDSII-FAKE-STREAM-",
+    # OUT of every staged subtree — the population this guard is about.
+    "phase3/stage3/pnr/floorplan.def": "DESIGN probe ;\nEND DESIGN\n",
+}
+
+
+def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
+    """BIND :func:`publish_scope` to what the publish PROGRAM really does.
+
+    ``_PUBLISH_GDS_DEST`` is the one prefix this module writes down instead of
+    importing, because ``publish()`` computes it inline and exports no
+    constant. A written-down path is exactly the hand-copy this repository
+    keeps removing, so it is not left as a claim: the real program is run over
+    a synthetic CONVERGED run that carries one artefact per prefix, and the
+    staged cell is asked which of them arrived.
+
+    BOTH DIRECTIONS. Every in-scope artefact must be IN the cell — otherwise
+    the predicate calls something publishable that the publisher drops, and
+    the clause would be withheld from an entry that needs it. And the
+    out-of-scope artefact must NOT be in the cell — otherwise the whole
+    finding is wrong and the clause is a false statement about the contract.
+    """
+    run = tmp_path / "run"
+    for rel, text in _PUBLISH_PROBE_FILES.items():
+        p = run / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+
+    dest_root = tmp_path / "benchmark-data"
+    proc = subprocess.run(
+        [sys.executable, str(F.PROGRAMS_DIR / "benchmark_evidence_publish.py"),
+         "--run-dir", str(run), "--ic", "probeic", "--pdk", "probepdk",
+         "--plugin-version", "0.0.0", "--dest-root", str(dest_root)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"the publish probe did not stage a cell (rc={proc.returncode}); this "
+        f"guard cannot say what the contract carries from a run it refused.\n"
+        f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}")
+    cell = dest_root / "ic" / "probeic" / "v0.0.0_probepdk"
+    assert cell.is_dir(), f"no cell at {cell}: {proc.stdout[-2000:]}"
+
+    arrived = {rel: (cell / rel).is_file() for rel in _PUBLISH_PROBE_FILES}
+    wrong = {rel: got for rel, got in arrived.items()
+             if got != publishable(rel)}
+    assert not wrong, (
+        f"publish_scope() disagrees with the publisher on {len(wrong)} "
+        f"path(s) — {{path: landed_in_cell}} {wrong}. The predicate said "
+        f"{ {r: publishable(r) for r in wrong} }. Either the publish contract "
+        f"moved and the scope must be re-derived, or "
+        f"{_PUBLISH_GDS_DEST!r} is no longer where publish() puts the signoff "
+        f"GDS.\nstaged: {proc.stdout[-2000:]}")
+    # Belt and braces on the half that carries the finding: the probe DEF is
+    # the shape of all six pinned entries, and a cell that carried it would
+    # refute the pin outright.
+    assert not (cell / "phase3/stage3/pnr/floorplan.def").exists(), (
+        "the publisher staged a phase3/stage3 artefact — "
+        "UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT is measuring a contract "
+        "that no longer holds and must be re-derived")
 
 
 #: vibe-ic#1452 — the UNEVIDENCED entries for which NO oracle this commit
