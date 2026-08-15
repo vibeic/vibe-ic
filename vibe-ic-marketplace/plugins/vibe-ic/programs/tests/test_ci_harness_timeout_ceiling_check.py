@@ -12,6 +12,14 @@ Pins, in the order the gate can be wrong:
     ADVISORY and are printed rather than silently dropped;
   * a bound spelled as a module constant is resolved — that shape hid the
     single largest offender in the tree from the report that opened the issue;
+  * …and so is a bound spelled as a PARAMETER DEFAULT (vibe-ic#1277), which
+    was worse than unjudged: the call left the findings, the advisories AND
+    the readable-bound denominator, so two spellings of one 1800 s bound gave
+    `1 readable bound / FAIL` and `0 readable bounds / 0 not judged / PASS`;
+  * a call inside a test carrying `@pytest.mark.timeout(N)` is judged against
+    `N // 3`, because N is the bound pytest-timeout really applies to that
+    item — and a marker BELOW the harness bound tightens the ceiling, so it is
+    a model rather than an escape hatch;
   * FALSIFIABILITY against the real tree: inject an offender, the shipped gate
     goes rc 1 and names it; remove it, rc 0.
 
@@ -412,6 +420,221 @@ def test_a_constant_assigned_inside_a_function_is_not_resolved():
     assert findings == [] and unresolved == []
 
 
+# ── a bound spelled as a PARAMETER DEFAULT (vibe-ic#1277) ────────────────────
+
+def test_a_bound_that_arrives_as_a_parameter_default_is_resolved():
+    """The shape that killed real sessions on main: the bound is neither a
+    literal at the call site nor a module constant, so it was DROPPED."""
+    findings, unresolved, sites = _scan("""
+        import subprocess
+        def _r(cmd, timeout=1800):
+            return subprocess.run(cmd, timeout=timeout)
+    """)
+    assert [f.seconds for f in findings] == [1800], (findings, unresolved)
+    assert sites == 1, "the site must also be COUNTED, not merely judged"
+    assert findings[0].constant == "timeout"
+    assert findings[0].owner == "_r"
+    assert findings[0].constant_kind == C.VIA_PARAMETER_DEFAULT
+    assert "parameter default" in str(findings[0])
+
+
+def test_the_two_spellings_of_one_bound_produce_the_same_verdict():
+    """The falsifiable control from the report, as a pinned test.
+
+    Same 1800 s bound, two spellings. Before #1277 the second produced `0
+    readable bound(s)` AND `0 not judged` — a report that tells the reader
+    nothing was skipped. Equality here is the property; the numbers are the
+    evidence for it.
+    """
+    literal = _scan("""
+        import subprocess
+        def test_a():
+            subprocess.run(['true'], timeout=1800)
+    """)
+    param = _scan("""
+        import subprocess
+        def _r(cmd, timeout=1800):
+            return subprocess.run(cmd, timeout=timeout)
+        def test_b():
+            _r(['true'])
+    """)
+    assert [f.seconds for f in literal[0]] == [f.seconds for f in param[0]]
+    assert literal[2] == param[2] == 1
+
+
+def test_a_parameter_default_the_body_rebinds_is_not_resolved():
+    """`module_constants`'s rule, applied to the same question: a name the body
+    can reassign on a branch would have this gate reporting a number the call
+    may never receive. Not judged beats judged wrong."""
+    findings, unresolved, sites = _scan("""
+        import subprocess
+        def _r(cmd, timeout=1800):
+            timeout = min(timeout, 30)
+            return subprocess.run(cmd, timeout=timeout)
+    """)
+    assert (findings, unresolved, sites) == ([], [], 0)
+
+
+def test_a_doubles_parameter_default_that_reaches_no_launcher_is_still_safe():
+    """The class the report's grep drowned in, restated for #1277: resolving
+    defaults must NOT reintroduce it.
+
+    The signature is byte-identical to the one the gate has always ignored;
+    what decides is the body, and this body launches nothing. A default that
+    reaches no call at all is not a bound and is not even a site.
+    """
+    findings, unresolved, sites = _scan("""
+        def runner(cmd, timeout=3600):
+            return 0
+        def use():
+            return runner(['x'])
+    """)
+    assert (findings, unresolved, sites) == ([], [], 0)
+
+
+def test_a_default_forwarded_into_an_UNRESOLVABLE_callee_is_advisory():
+    """…and when the default does reach a call whose body this file cannot
+    see, the answer is the one the allowlist has always given: advisory, with
+    the file and line, rather than a guess in either direction."""
+    findings, unresolved, sites = _scan("""
+        def other(cmd, timeout=3600):
+            return mock_runner(cmd, timeout=timeout)
+    """)
+    assert findings == []
+    assert [u.seconds for u in unresolved] == [3600]
+    assert sites == 1, "still COUNTED — an exclusion needs a denominator"
+
+
+def test_the_innermost_binding_of_the_name_wins():
+    """An inner function's own parameter shadows the outer one, so the value
+    reported must be the inner one."""
+    findings, _u, _n = _scan("""
+        import subprocess
+        def outer(timeout=1800):
+            def inner(timeout=900):
+                return subprocess.run(['x'], timeout=timeout)
+            return inner
+    """)
+    assert [f.seconds for f in findings] == [900]
+    assert findings[0].owner == "inner"
+
+
+def test_a_parameter_with_no_default_stays_unresolved():
+    findings, unresolved, sites = _scan("""
+        import subprocess
+        def _r(cmd, timeout):
+            return subprocess.run(cmd, timeout=timeout)
+    """)
+    assert (findings, unresolved, sites) == ([], [], 0)
+
+
+# ── the bound that will REALLY apply to the call ─────────────────────────────
+
+def test_a_marked_item_is_judged_against_its_own_bound():
+    """`@pytest.mark.timeout(N)` IS pytest-timeout's per-item bound, so a call
+    inside such a test cannot kill the session at the harness bound. Judging it
+    against `harness // 3` reports a risk that provably cannot occur."""
+    src = """
+        import subprocess, pytest
+        @pytest.mark.timeout(600)
+        def test_slow():
+            subprocess.run(['x'], timeout=200)
+    """
+    findings, _u, sites = _scan(src)
+    assert findings == [] and sites == 1, findings
+    over = C.scan_source_report(textwrap.dedent(src).replace("timeout=200",
+                                                             "timeout=201"),
+                                "f.py", _CEIL)
+    assert [f.seconds for f in over["findings"]] == [201], (
+        "600 // 3 = 200 must still be a CEILING, not a waiver")
+
+
+def test_a_marker_below_the_harness_bound_tightens_the_ceiling():
+    """It cuts both ways, or it is an escape hatch rather than a model."""
+    findings, _u, _n = _scan("""
+        import subprocess, pytest
+        @pytest.mark.timeout(60)
+        def test_quick():
+            subprocess.run(['x'], timeout=45)
+    """)
+    assert [f.seconds for f in findings] == [45], findings
+
+
+def test_an_unmarked_test_beside_a_marked_one_keeps_the_harness_ceiling():
+    """The raised ceiling belongs to the item that declares it and to nothing
+    else — otherwise one marker would quietly re-bound a whole file."""
+    rep = C.scan_source_report(textwrap.dedent("""
+        import subprocess, pytest
+        @pytest.mark.timeout(600)
+        def test_slow():
+            subprocess.run(['x'], timeout=200)
+        def test_neighbour():
+            subprocess.run(['x'], timeout=200)
+    """), "f.py", _CEIL)
+    assert [f.line for f in rep["findings"]] == [7], rep["findings"]
+    assert [(m.test, m.seconds, m.ceiling) for m in rep["marked_items"]] == [
+        ("test_slow", 600, 200)]
+
+
+def test_a_module_level_pytestmark_bounds_every_call_in_the_file():
+    """The case a per-test decorator cannot reach: the launcher call lives in a
+    module-level helper every test in the file shares, so no decorator governs
+    it. `pytestmark` bounds every ITEM in the module, so it does."""
+    rep = C.scan_source_report(textwrap.dedent("""
+        import subprocess, pytest
+        pytestmark = pytest.mark.timeout(600)
+        def _run(args, timeout=150):
+            return subprocess.run(args, timeout=timeout)
+        def test_a():
+            return _run(['x'])
+    """), "f.py", _CEIL)
+    assert rep["findings"] == [], rep["findings"]
+    assert rep["sites"] == 1
+    assert [(m.seconds, m.ceiling) for m in rep["marked_items"]] == [(600, 200)]
+    # …and it is still a CEILING: 201 is over 600 // 3.
+    over = C.scan_source_report(textwrap.dedent("""
+        import subprocess, pytest
+        pytestmark = pytest.mark.timeout(600)
+        def _run(args, timeout=201):
+            return subprocess.run(args, timeout=timeout)
+    """), "f.py", _CEIL)
+    assert [f.seconds for f in over["findings"]] == [201]
+
+
+def test_a_pytestmark_list_is_read_and_the_smallest_timeout_wins():
+    """`pytestmark` is usually a list. A ceiling argued from the widest of
+    several declarations would be the one number here nobody could check."""
+    rep = C.scan_source_report(textwrap.dedent("""
+        import subprocess, pytest
+        pytestmark = [pytest.mark.usefixtures('x'),
+                      pytest.mark.timeout(600),
+                      pytest.mark.timeout(300)]
+        def test_a():
+            subprocess.run(['x'], timeout=150)
+    """), "f.py", _CEIL)
+    assert [(m.seconds, m.ceiling) for m in rep["marked_items"]] == [(300, 100)]
+    assert [f.seconds for f in rep["findings"]] == [150], rep["findings"]
+
+
+def test_the_marked_population_is_printed_with_its_value(tmp_path):
+    """Raising a ceiling must be a visible act, for the reason the advisory
+    list is printed: an exclusion a reader cannot see reads as a clean run."""
+    _workflow(tmp_path, "pytest --timeout=180")
+    tests = tmp_path / "t"
+    tests.mkdir()
+    (tests / "test_x.py").write_text(
+        "import subprocess, pytest\n"
+        "@pytest.mark.timeout(600)\n"
+        "def test_slow():\n"
+        "    subprocess.run(['x'], timeout=200)\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(tmp_path), "--tests-root",
+         str(tests)], capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "@pytest.mark.timeout(600)" in proc.stdout
+    assert "judged against 200s" in proc.stdout
+
+
 def test_the_ceiling_itself_is_allowed_and_one_second_over_is_not():
     at, _u, _n = _scan(f"import subprocess\n"
                        f"subprocess.run(['x'], timeout={_CEIL})\n")
@@ -464,6 +687,45 @@ def test_an_injected_offender_makes_the_shipped_program_fail(tmp_path):
     green = subprocess.run(
         [sys.executable, str(_PROG), str(root), "--tests-root", str(tmp_path)],
         capture_output=True, text=True, timeout=_T)
+    assert green.returncode == 0, green.stdout[-4000:]
+
+
+def test_an_injected_offender_SPELLED_AS_A_PARAMETER_also_fails(tmp_path):
+    """The same falsifiability, through the shipped program, for #1277's shape.
+
+    The unit tests above prove the resolver; this proves the GATE — same
+    binary, same resolver reading the same real workflows — because the defect
+    #1277 reports is not that the value was mis-parsed, it is that the whole
+    call left the report. Both arms carry the identical 900 s bound, so a
+    difference between them can only be the spelling.
+    """
+    root = C.find_repo_root()
+    if root is None:
+        pytest.skip("no .github/workflows in reach")
+
+    def _rc(body: str):
+        victim = tmp_path / "test_injected_param_offender.py"
+        victim.write_text(body, encoding="utf-8")
+        p = subprocess.run(
+            [sys.executable, str(_PROG), str(root), "--tests-root",
+             str(tmp_path)], capture_output=True, text=True, timeout=_T)
+        victim.unlink()
+        return p
+
+    red = _rc("import subprocess\n"
+              "def _r(cmd, timeout=900):\n"
+              "    return subprocess.run(cmd, timeout=timeout)\n")
+    assert red.returncode == 1, red.stdout[-4000:]
+    assert "[FAIL]" in red.stdout and "timeout=900" in red.stdout
+    assert "1 readable bound(s)" in red.stdout, (
+        "the site must enter the DENOMINATOR too — being uncounted is the "
+        f"half of #1277 that tells a reader nothing was skipped:\n{red.stdout}")
+
+    # …and the gate goes green again once the bound fits, so the red above is
+    # the bound and not the fixture.
+    green = _rc("import subprocess\n"
+                "def _r(cmd, timeout=30):\n"
+                "    return subprocess.run(cmd, timeout=timeout)\n")
     assert green.returncode == 0, green.stdout[-4000:]
 
 
