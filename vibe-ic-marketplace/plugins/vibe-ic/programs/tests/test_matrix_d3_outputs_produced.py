@@ -549,6 +549,18 @@ _IN_REPO_KINDS: Tuple[str, ...] = (_IN_REPO_KIND, _PUBLISHED_KIND)
 #: them and their entries are always decided live. Derived from the manifest's
 #: own ``kind`` field at import; written down here so the split between
 #: "in the repo" and "on the campaign host" is stated rather than implied.
+#:
+#: 2026-08-15 (vibe-ic#1266) — the LIST below is unchanged and the records that
+#: cite it are not. Five entries recorded ``PRODUCED_BY_RUN`` against three of
+#: these roots were being answered, on every host, by an admissible in-repo
+#: root instead, so their citations were provenance-shaped blanks: green cells
+#: whose only stated source was a directory nobody carries, one of them a run
+#: whose own label says it ABORTED. They are re-pointed at the roots that
+#: actually hold the bytes, and
+#: ``test_d3_no_record_cites_an_absent_run_this_commit_can_answer`` keeps the
+#: repair from being undone. The registry itself is deliberately untouched:
+#: retiring a root nothing cites is a separate change with its own pin to move,
+#: and the entries were the defect.
 _IN_REPO_RUN_ROOTS: Tuple[str, ...] = ()
 _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
     "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
@@ -1626,6 +1638,93 @@ _TWO_GAPS_REMEDY = (
 )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# CAN THE PUBLISH CONTRACT EVER CARRY THE ENTRY? (vibe-ic#1349)
+# ──────────────────────────────────────────────────────────────────────
+#: The one destination `benchmark_evidence_publish.publish` writes that is NOT
+#: in its `_COPY_SUBTREES`: the signoff GDS is staged by an explicit branch of
+#: `publish()` into `dest/phase3/stage4/gds/`, so a scope built from the
+#: subtree list alone would report the one artefact the GDS manifest is about
+#: as unpublishable. Written down here because that branch computes the path
+#: inline and exports no constant to import; it is BOUND TO OBSERVED BEHAVIOUR
+#: by `test_d3_the_publish_scope_is_what_the_publisher_actually_stages`, which
+#: runs the real program and refuses a scope that does not match what landed.
+_PUBLISH_GDS_DEST = "phase3/stage4/gds"
+
+
+def publish_scope() -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """``(destination prefixes, exact files)`` a published cell can contain.
+
+    Read from ``benchmark_evidence_publish``'s OWN constants, never re-stated,
+    for the same reason ``_audit_verdict`` and ``_CONVERGED`` already are: a
+    second opinion about what the publish contract carries could drift from the
+    contract, and this module would then tell a reader to perform a publish
+    that does not do what the message says.
+
+    A rename of either constant is an ``AttributeError`` here — loud, named,
+    at the site that depends on it — rather than a silently narrower scope
+    that reports every entry as publishable.
+    """
+    subtrees = tuple(Path(str(s)).as_posix() for s in _bep._COPY_SUBTREES)
+    return (subtrees + (_PUBLISH_GDS_DEST,),
+            tuple(_bep._COPY_FILES) + ("RESULT.md",))
+
+
+@lru_cache(maxsize=None)
+def publishable(entry: str) -> bool:
+    """Can any alternative of *entry* land inside a program-published cell?
+
+    Any-of, matching :func:`resolve`: an entry is publishable when ANY of its
+    ``" OR "`` alternatives falls inside the staged scope, because that is the
+    alternative a publish would carry and the one the entry would resolve on.
+    """
+    prefixes, files = publish_scope()
+    for alt in F.split_any_of(entry):
+        rel = alt.lstrip("./")
+        if rel in files:
+            return True
+        if any(rel == p or rel.startswith(p + "/") for p in prefixes):
+            return True
+    return False
+
+
+#: vibe-ic#1349 — the clause an UNEVIDENCED entry gets when the run-tree half of
+#: :data:`_TWO_GAPS_REMEDY` is not a thing this repository can do.
+#:
+#: WHY THIS IS THE SAME DEFECT #1452 FIXED, ONE STEP FURTHER IN. #1452 removed
+#: an UNCHECKED promise ("commit a run tree and this cell answers live again")
+#: and replaced it with two gaps, of which the first still says a run tree
+#: closes the cell. For an entry whose declared path lies outside every
+#: destination `benchmark_evidence_publish` stages, that first half is
+#: unreachable through the repository's own publish contract — and it was acted
+#: on three times: #1349, #1452 and #1457 were each filed within hours of each
+#: other, each concluding "the remedy is corpus publication", and none of them
+#: could have been performed by running the publisher.
+#:
+#: It states a STRUCTURAL fact and no count, deliberately. A number measured on
+#: one day is the shape this module refuses everywhere else; the population is
+#: pinned instead, in :data:`UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT`.
+_PUBLISH_GAP = (
+    " REMEDY CHECK (vibe-ic#1349): the run-tree half of that choice is NOT "
+    "AVAILABLE for this entry. No alternative of it lands inside the scope "
+    "`benchmark_evidence_publish` stages, so no cell that program publishes "
+    "can carry it, whether or not a run produces it — the tracked artefacts "
+    "under this prefix all come from pre-program hand-staged trees. Widening "
+    "the publish scope is the evidence-policy and repo-size call that "
+    "program's own docstring defers ('Widening it is an evidence-policy call, "
+    "not a size call, and is deliberately left alone here'); it is not a fix "
+    "to improvise from a red cell. Staged scope: "
+)
+
+
+def _publish_gap_note(entry: str) -> str:
+    """The publish-contract clause for *entry*, or "" when it is publishable."""
+    if publishable(entry):
+        return ""
+    prefixes, files = publish_scope()
+    return (_PUBLISH_GAP + f"{sorted(prefixes)} + files {sorted(files)}.")
+
+
 def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
                         rejected: Dict[str, "Rejected"]) -> str:
     """The message for an entry NOTHING on this checkout can resolve.
@@ -1639,6 +1738,15 @@ def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
     appended unconditionally, including to entries this commit carries no
     producer for, where following it cannot work. It is replaced by
     :data:`_TWO_GAPS_REMEDY`, which names both gaps and promises neither.
+
+    vibe-ic#1349 — AND THE SURVIVING HALF OF THAT REMEDY IS NOT ALWAYS
+    REACHABLE EITHER. :data:`_TWO_GAPS_REMEDY` still tells the EVIDENCE-gap
+    reader that committing a run tree closes the cell. For an entry outside
+    the scope :func:`publish_scope` derives, running the flow and publishing
+    the result cannot produce a cell that carries it, so
+    :data:`_PUBLISH_GAP` says so at the point the reader is deciding what to
+    do. Nothing about the VERDICT changes: the entry is still unevidenced and
+    the cell is still red.
     """
     return (
         f"UNEVIDENCED: {which_root} is not carried by this repository, and "
@@ -1649,7 +1757,7 @@ def _unevidenced_detail(entry: str, rec: Dict, which_root: str,
         f"{rec.get('size_bytes')} B measured on {_MANIFEST_MEASURED_ON} — that "
         f"is a claim about a tree on one machine on one day, not evidence that "
         f"this commit produces the artefact, and it must not be reported as "
-        f"produced." + _TWO_GAPS_REMEDY
+        f"produced." + _TWO_GAPS_REMEDY + _publish_gap_note(entry)
     )
 
 
@@ -2446,6 +2554,82 @@ def test_d3_fixture_attested_cells_are_named_cell_by_cell():
     )
 
 
+def test_d3_no_record_cites_an_absent_run_this_commit_can_answer():
+    """vibe-ic#1266 — a record may not name a tree nobody has when the COMMIT
+    evidences the entry.
+
+    THE HOLE THIS CLOSES. ``check_entry``'s absent-root branch does not stop at
+    the recorded root: when the recorded run is not on this checkout it asks
+    :func:`resolve_anywhere`, and a hit there returns ``produced=True``. That
+    fall-through is right — a cell must not go red because the manifest happens
+    to name the wrong tree — but it made the citation itself unfalsifiable.
+    Five entries were green that way, and the only provenance a reader of the
+    fixture had for them was a directory on one machine:
+
+      * step 11's four DFT entries cited ``AI_IC_design/4th_benchmark/ibex_e2e``
+        and ``campaign_pdk/spm/_aborted_tmpplugin_run`` — the second of those
+        naming a run whose own label says it ABORTED, i.e. the record asserted
+        production by a run that did not finish;
+      * step 29's post-layout sim entry cited
+        ``AI_IC_design/4th_benchmark/cv32e40p_e2e``.
+
+    All five were answered, on every host, by an admissible in-repo root. The
+    manifest is the only place a reader can look up WHERE an artefact came
+    from, so a citation that no checkout can follow is not a smaller version of
+    a provenance — it is a provenance-shaped blank, and #1266 is the issue
+    filed because nineteen of them accumulated unnoticed.
+
+    THE DIRECTION THIS RUNS IN, stated because a guard that could green a cell
+    would be the wrong tool here. It fires ONLY where ``resolve_anywhere``
+    already returns a hit, so it can never turn a red cell green and can never
+    manufacture evidence: it demands that a record which is *already* being
+    answered by the commit SAY SO. Entries nothing resolves — the six cells
+    #1266 leaves to the owner (15, 17, 19, 20, 30, 32) — are untouched by it,
+    which is deliberate: those citations cannot be repaired by a fact and
+    pretending otherwise is exactly the move that issue refuses.
+
+    The remedy is the one ``check_entry`` already prints in its sibling branch
+    for a root that IS present and has gone stale ("Re-point the record at
+    ..."). This makes the same repair mandatory in the case where the root is
+    absent, which is the case that was silent.
+    """
+    stale = []
+    for cell in cells_for(DIM):
+        sid = cell.step_id
+        rec = step_record(sid)
+        if rec["verdict"].startswith("NA_"):
+            continue
+        for entry, erec in rec["entries"].items():
+            if entry not in F.required_outputs(sid):
+                continue
+            label = erec.get("run") or erec.get("base_run")
+            if not label or label in run_roots():
+                continue
+            # Ledger-bound, exactly as the verdict binds it: a root whose own
+            # write ledger refuses this step is not an answer, so this guard
+            # never demands a re-point onto evidence the verdict would reject.
+            hit, _rejected = resolve_anywhere(entry, sid)
+            if hit is not None:
+                stale.append(
+                    f"step {sid} {entry!r}: recorded against {label!r}, which "
+                    f"this repository does not carry, while the admissible "
+                    f"root {hit.root!r} evidences it at {hit.path} "
+                    f"({hit.size_bytes} B)"
+                )
+    assert not stale, (
+        f"{len(stale)} manifest record(s) cite a run root no checkout carries "
+        f"while THIS COMMIT answers the entry:\n  "
+        + "\n  ".join(stale)
+        + "\nRe-point each record at the root named above and re-measure its "
+          "`path` and `size_bytes` there. The cell is green either way — that "
+          "is the point: the verdict falls through to a search, so the wrong "
+          "citation costs nothing at verdict time and stays wrong forever. "
+          "The manifest is the only record of WHERE an artefact came from, and "
+          "a citation a reader cannot follow is not evidence of anything "
+          "(vibe-ic#1266)."
+    )
+
+
 @contextlib.contextmanager
 def _probe_run_root(prefix: str):
     """A throwaway GIT REPOSITORY standing in for an in-repo run root.
@@ -3182,10 +3366,42 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     #         (phase2/stage2/dft/*, 351 files tracked at HEAD)
     #   29 <- benchmark-data/evaluation/phase1_parity/espi
     #         (phase3/stage3/sim_postlayout/pass.flag, 253 files tracked)
-    # The remaining ten declare artefacts NO path in this commit matches. Only
-    # a published run tree closes those, and publishing one costs >1 GB of DEFs
-    # against a 2.0 GB .git -- which is why they stay RED here rather than
-    # becoming waivers. A red cell cannot rot; a waiver can, and did.
+    # The remaining ten declare artefacts NO path in this commit matches. They
+    # stay RED here rather than becoming waivers. A red cell cannot rot; a
+    # waiver can, and did.
+    #
+    # 2026-08-15 (vibe-ic#1457) — THE COST OF CLOSING THEM WAS MEASURED ON THE
+    # WRONG THING. This paragraph used to end "Only a published run
+    # tree closes those, and publishing one costs >1 GB of DEFs against a
+    # 2.0 GB .git -- which is why they stay RED". #1457 read that sentence off
+    # these cells and escalated the class as "a repository-size decision, not
+    # an engineering one", where it has sat while everything about it was
+    # re-measured EXCEPT the figure holding it up.
+    #
+    # The figure is not false about run TREES. It is about run trees, and that
+    # is the wrong quantity: a cell is closed by the repository carrying the
+    # DECLARED ENTRIES, not by importing the tree they came from. The manifest
+    # already records the size of every one of those entries, so the cost never
+    # needed estimating at all. Summed from those records by
+    # :func:`unevidenced_closing_cost` and pinned at
+    # :data:`_UNEVIDENCED_CLOSING_COST_BYTES`: 386857 B. That is 378 KiB --
+    # 0.018 % of a 2.0 GB .git, and 2776x under the number that stood here. The
+    # four `.def` entries come to 384756 B between them, 83 % of the SINGLE
+    # `phase3/stage3/pnr/routed.def` that `benchmark-data/ic/spm/
+    # v1.5.58_ihp-sg13g2` -- an already-admissible run root -- carries at
+    # 462873 B. Whatever keeps this class red, it is not repository size.
+    #
+    # Nor does closing it need a manifest edit. MEASURED on this commit by
+    # committing artefacts at the seven declared paths into that same
+    # already-registered root, with this file byte-identical: all six cells
+    # answered GREEN and both population pins reddened with "newly evidenced
+    # -- delete them from the pin and say which run tree closed them". The
+    # `resolve_anywhere` fall-through in :func:`check_entry` already searches
+    # every admissible root when the recorded one is absent, so "register in
+    # the manifest" is not a step anyone has to take first. (That probe was a
+    # CONTROL and its artefacts were never pushed: what it establishes is that
+    # the mechanism answers, not that anything is produced. The cells still
+    # need a real run to write real ones.)
     #
     # 2026-08-12: "M2", "M3" and "M4" LEFT this set, and NOT by being
     # published. "Publish the run tree" was the wrong prescription for them:
@@ -3322,6 +3538,150 @@ def unevidenced_entries() -> Tuple[Tuple[str, str], ...]:
     return tuple(out)
 
 
+#: vibe-ic#1457 — what it would COST this repository, in bytes, to carry the
+#: entries the unevidenced cells declare.
+#:
+#: MEASURED, not asserted. See the 2026-08-15 note in :data:`UNEVIDENCED_CELLS`
+#: for the figure this replaces and why an unchecked round number survived long
+#: enough to be escalated as an owner decision. Pinned so that the population
+#: moving, or a recorded size moving, is a NAMED event rather than a silent
+#: change of subject.
+_UNEVIDENCED_CLOSING_COST_BYTES = 386857
+
+#: An entry the manifest records with no size. Returned instead of ``0`` so the
+#: guard can tell "nobody measured it" from "it costs nothing" — folding the
+#: first into the second is how a cost claim stops being falsifiable.
+_SIZE_NOT_RECORDED = -1
+
+
+def unevidenced_closing_cost() -> Tuple[int, Tuple[Tuple[str, str, int], ...]]:
+    """``(total_bytes, [(step, entry, recorded_bytes), ...])`` for the class.
+
+    Derived from :func:`unevidenced_entries` and the manifest's own
+    ``size_bytes``, through the same :func:`check_entry` the cells use, so this
+    can never cost a population the verdicts do not have.
+
+    THE MANIFEST IS THE RIGHT SOURCE HERE, and that is worth stating because
+    everything else in this module treats a manifest record as a claim about
+    the past rather than evidence about today. It is not being used as evidence
+    of production: the question is "how big is the artefact this step writes",
+    the record is a real observation of a real file, and no verdict below
+    depends on the answer. What the answer decides is whether a reader is
+    entitled to call this class a repository-size problem.
+    """
+    rows: List[Tuple[str, str, int]] = []
+    for sid, entry in unevidenced_entries():
+        rec = step_record(sid)["entries"][entry]
+        size = rec.get("size_bytes")
+        rows.append((sid, entry,
+                     int(size) if isinstance(size, int) and not isinstance(size, bool)
+                     else _SIZE_NOT_RECORDED))
+    total = sum(b for _, _, b in rows if b != _SIZE_NOT_RECORDED)
+    return total, tuple(rows)
+
+
+def test_d3_the_cost_of_closing_the_unevidenced_class_is_measured():
+    """vibe-ic#1457 — the stated reason this class stays red is a NUMBER.
+
+    WHY THIS IS A REAL DEFECT AND NOT BOOKKEEPING. The number was acted on.
+    ``UNEVIDENCED_CELLS`` carried ">1 GB of DEFs against a 2.0 GB .git" as the
+    reason these cells are not closed; #1457 quoted that reading back and
+    escalated the class as "a repository-size decision, not an engineering
+    one", where it has sat unresolved across several re-measurements of
+    everything EXCEPT the figure holding it up. The measured cost is 386857 B.
+    An estimate nobody can move is worse than a red cell, because the red cell
+    at least says what would move it.
+
+    THE PROPERTY. The cost of closing this class is a sum over the entries the
+    class actually has, every term of it recorded, and it equals the pinned
+    figure. Both halves are load-bearing: a total assembled out of terms that
+    were never measured would be an estimate wearing a measurement's clothes,
+    which is the exact failure this guard exists to end.
+
+    THE DIRECTION IT RUNS IN. It asserts nothing about whether the class SHOULD
+    be closed, and closing it does not need this test to pass — it needs a run
+    tree. It asserts only that the cost is a measurement, so that the next
+    person deciding is deciding on a number that came from the repository.
+    """
+    total, rows = unevidenced_closing_cost()
+
+    unmeasured = [(sid, entry) for sid, entry, b in rows
+                  if b == _SIZE_NOT_RECORDED]
+    assert not unmeasured, (
+        f"{len(unmeasured)} unevidenced entr(ies) have no recorded size, so "
+        f"the cost of closing this class cannot be summed and any figure "
+        f"quoted for it is an estimate:\n  "
+        + "\n  ".join(f"step {a}: {b}" for a, b in unmeasured)
+        + "\nMeasure the artefact on the run it came from and record "
+          "`size_bytes`, or say in the record that it was never measured — do "
+          "not let a missing measurement read as a zero."
+    )
+
+    assert total == _UNEVIDENCED_CLOSING_COST_BYTES, (
+        f"the cost of closing the unevidenced class moved: measured {total} B "
+        f"over {len(rows)} entr(ies), pinned "
+        f"{_UNEVIDENCED_CLOSING_COST_BYTES} B.\n  "
+        + "\n  ".join(f"step {s}: {e} = {b} B" for s, e, b in sorted(rows))
+        + f"\nRe-pin {total} and say what moved: an entry joined or left the "
+          f"class, or an artefact was re-measured. The figure is quoted in "
+          f"UNEVIDENCED_CELLS as the reason these cells are not closed, so it "
+          f"must not be allowed to drift away from the population it is about."
+    )
+
+
+def test_d3_the_closing_cost_guard_reddens_on_both_ways_of_being_wrong(
+        monkeypatch):
+    """PAIRED CONTROL: the guard above must be able to fail, twice over.
+
+    A cost guard that cannot redden is the same thing as the round number it
+    replaced. Both arms are driven against REAL entries of this commit, not
+    synthetic strings, so what is exercised is the path the verdicts take.
+    """
+    real_entries = unevidenced_entries()
+    assert real_entries, (
+        "there is no unevidenced entry on this commit, so neither arm below "
+        "measures anything — the control cannot be run vacuously")
+
+    # ARM 1 — the population moves. Dropping one entry must move the total and
+    # be reported as a moved cost, not absorbed.
+    dropped = real_entries[0]
+    monkeypatch.setattr(sys.modules[__name__], "unevidenced_entries",
+                        lambda: tuple(e for e in real_entries if e != dropped))
+    with pytest.raises(AssertionError) as exc:
+        test_d3_the_cost_of_closing_the_unevidenced_class_is_measured()
+    assert "the cost of closing the unevidenced class moved" in str(exc.value)
+    monkeypatch.undo()
+
+    # ARM 2 — a term goes unmeasured. It must be NAMED as unmeasured and must
+    # not be quietly summed as zero, which would leave the total looking
+    # smaller and still self-consistent.
+    real_record = step_record
+    blinded_sid, blinded_entry = dropped
+
+    def _without_size(step_id):
+        rec = real_record(step_id)
+        if F.normalize_id(step_id) != F.normalize_id(blinded_sid):
+            return rec
+        patched = dict(rec)
+        patched["entries"] = {
+            k: ({kk: vv for kk, vv in v.items() if kk != "size_bytes"}
+                if k == blinded_entry else v)
+            for k, v in rec["entries"].items()
+        }
+        return patched
+
+    monkeypatch.setattr(sys.modules[__name__], "step_record", _without_size)
+    with pytest.raises(AssertionError) as exc2:
+        test_d3_the_cost_of_closing_the_unevidenced_class_is_measured()
+    msg = str(exc2.value)
+    assert "have no recorded size" in msg, msg
+    assert blinded_entry in msg, msg
+    assert "the cost of closing the unevidenced class moved" not in msg, (
+        f"an entry with NO recorded size was reported as a changed total — "
+        f"the missing measurement was summed as zero, which is the "
+        f"conflation this arm exists to prevent:\n{msg}")
+
+
 def test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists():
     """vibe-ic#1452 — an UNEVIDENCED cell must name the remedy that CLOSES it.
 
@@ -3366,6 +3726,184 @@ def test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists():
           "defect this module already refused. Name BOTH gaps instead, and "
           "leave which one applies to the measured split."
     )
+
+
+#: vibe-ic#1349 — the UNEVIDENCED entries whose declared path lies outside
+#: EVERY destination `benchmark_evidence_publish` stages, MEASURED on this
+#: commit and pinned in both directions.
+#:
+#: THIS IS NOT A LIST OF UNPUBLISHABLE ARTEFACTS IN PRINCIPLE. The four
+#: hand-staged reference trees DO carry paths under `phase3/stage3/` —
+#: `routed.def`, `no_eco_needed.flag`, `clock_tree.rpt`, `pdn.done` — which is
+#: exactly why the entries that resolve on them are green while these are not.
+#: The claim is narrower and is about the PROGRAM: since the 2026-07-25
+#: program-first publish directive, a cell is produced by
+#: `benchmark_evidence_publish`, that program stages `_COPY_SUBTREES` plus the
+#: signoff GDS, and none of these paths is inside either. So "run the flow and
+#: publish the result" — the remedy `_TWO_GAPS_REMEDY` offers and the one #1349,
+#: #1452 and #1457 each independently concluded was the fix — cannot close
+#: these cells, and no amount of running the flow changes that.
+#:
+#: A cell LEAVING this pin is the good direction and needs a stated cause: the
+#: publish scope widened (an owner call), the flow moved the declaration, or
+#: the entry stopped being unevidenced. A cell JOINING it is a NEW declared
+#: output the publish contract cannot carry, and is its own finding.
+UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
+    ("15", "phase3/stage3/pnr/floorplan.def"),
+    ("17", "phase3/stage3/pnr/placed.def"),
+    ("19", "phase3/stage3/pnr/post_cts.def"),
+    ("20", "phase3/stage3/pnr/post_hold.def"),
+    ("30", "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR "
+           "sim_spice/*.sp"),
+    ("32", "phase3/stage3/eco/eco_trigger_decision.json"),
+)
+
+
+def test_d3_the_run_tree_remedy_is_withdrawn_where_the_publisher_cannot_stage_it():
+    """vibe-ic#1349 — do not offer a publish that cannot carry the artefact.
+
+    :func:`test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists`
+    holds the module to naming BOTH gaps. This holds it to the next thing: for
+    the EVIDENCE gap the message says committing a run tree closes the cell,
+    and for an entry outside the publish contract's staged scope that is a
+    publish nobody can perform. Three issues concluded "the remedy is corpus
+    publication" off this sentence; running the publisher would not have
+    produced a cell carrying any of these six paths.
+
+    BOTH DIRECTIONS, and the second is what stops this becoming a blanket
+    clause: an entry INSIDE the scope must NOT carry it. A note appended to
+    everything says nothing about anything.
+    """
+    measured = tuple(sorted(
+        (sid, entry) for sid, entry in unevidenced_entries()
+        if not publishable(entry)))
+    assert measured == tuple(sorted(UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT)), (
+        f"the UNEVIDENCED-outside-the-publish-contract population changed.\n"
+        f"  JOINED — a declared output the publish contract cannot carry: "
+        f"{sorted(set(measured) - set(UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT))}\n"
+        f"  LEFT — say which: the publish scope widened, the flow moved the "
+        f"declaration, or the entry is no longer unevidenced: "
+        f"{sorted(set(UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT) - set(measured))}"
+    )
+
+    missing, blanket = [], []
+    for sid, entry in unevidenced_entries():
+        detail = check_entry(sid, entry, step_record(sid)["entries"][entry]).detail
+        says = "NOT AVAILABLE for this entry" in detail
+        if not publishable(entry) and not says:
+            missing.append((sid, entry))
+        if publishable(entry) and says:
+            blanket.append((sid, entry))
+    assert not missing, (
+        f"{len(missing)} UNEVIDENCED entr(ies) are still offered a run-tree "
+        f"remedy the publish contract cannot deliver:\n  "
+        + "\n  ".join(f"step {a}: {b}" for a, b in missing))
+    assert not blanket, (
+        f"{len(blanket)} PUBLISHABLE entr(ies) were told the remedy is "
+        f"unavailable:\n  "
+        + "\n  ".join(f"step {a}: {b}" for a, b in blanket)
+        + "\nA clause appended to every entry carries no information.")
+
+
+def test_d3_the_publish_scope_predicate_answers_both_ways():
+    """The control: :func:`publishable` must be able to say YES and NO.
+
+    Asserted against REAL declared entries of this commit rather than
+    synthetic strings, so the predicate is exercised the way the verdicts
+    exercise it. A classifier with one answer has not been shown to classify.
+    """
+    assert publishable("reports/phase3/spice_correlation.json")
+    assert publishable("phase3/stage4/gds/*.gds"), (
+        "the signoff GDS is staged by an explicit branch of publish(); a scope "
+        "built from _COPY_SUBTREES alone would call the one artefact the GDS "
+        "manifest is about unpublishable")
+    assert not publishable("phase3/stage3/pnr/floorplan.def")
+
+    # Any-of matches `resolve`: ONE publishable alternative is enough, because
+    # that is the alternative a published cell would carry.
+    assert publishable(
+        "phase3/stage3/spice/correlation.json OR "
+        "reports/phase3/spice_correlation.json")
+
+    # ...and the scope is READ from the publish program, not restated here.
+    prefixes, files = publish_scope()
+    assert all(Path(str(s)).as_posix() in prefixes
+               for s in _bep._COPY_SUBTREES), (prefixes, _bep._COPY_SUBTREES)
+    assert all(f in files for f in _bep._COPY_FILES), (files, _bep._COPY_FILES)
+
+
+#: The synthetic run the live binding below publishes. One artefact per scope
+#: prefix so a prefix that has silently stopped being staged is visible, plus
+#: one under `phase3/stage3/` — the prefix every entry in
+#: :data:`UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT` lives under.
+_PUBLISH_PROBE_FILES = {
+    "reports/audit/phase23_completion_audit.json": '{"verdict": "PASS"}',
+    "RESULT.md": "# RESULT\n\n## VERDICT\n\n**PASS.** synthetic probe.\n",
+    "provenance.jsonl": '{"step": "probe"}\n',
+    "phase1/generated_docs/L1.json": '{"a": 1}',
+    "phase2/stage2/synth/netlist.v": "module top(); endmodule\n",
+    "phase3/reports/drc.rpt": "clean\n",
+    "phase3/analog/probe/spec.json": "{}",
+    "reports/phase3/sta.json": "{}",
+    "phase3/stage4/gds/probe.gds": "GDSII-FAKE-STREAM-",
+    # OUT of every staged subtree — the population this guard is about.
+    "phase3/stage3/pnr/floorplan.def": "DESIGN probe ;\nEND DESIGN\n",
+}
+
+
+def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
+    """BIND :func:`publish_scope` to what the publish PROGRAM really does.
+
+    ``_PUBLISH_GDS_DEST`` is the one prefix this module writes down instead of
+    importing, because ``publish()`` computes it inline and exports no
+    constant. A written-down path is exactly the hand-copy this repository
+    keeps removing, so it is not left as a claim: the real program is run over
+    a synthetic CONVERGED run that carries one artefact per prefix, and the
+    staged cell is asked which of them arrived.
+
+    BOTH DIRECTIONS. Every in-scope artefact must be IN the cell — otherwise
+    the predicate calls something publishable that the publisher drops, and
+    the clause would be withheld from an entry that needs it. And the
+    out-of-scope artefact must NOT be in the cell — otherwise the whole
+    finding is wrong and the clause is a false statement about the contract.
+    """
+    run = tmp_path / "run"
+    for rel, text in _PUBLISH_PROBE_FILES.items():
+        p = run / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+
+    dest_root = tmp_path / "benchmark-data"
+    proc = subprocess.run(
+        [sys.executable, str(F.PROGRAMS_DIR / "benchmark_evidence_publish.py"),
+         "--run-dir", str(run), "--ic", "probeic", "--pdk", "probepdk",
+         "--plugin-version", "0.0.0", "--dest-root", str(dest_root)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"the publish probe did not stage a cell (rc={proc.returncode}); this "
+        f"guard cannot say what the contract carries from a run it refused.\n"
+        f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}")
+    cell = dest_root / "ic" / "probeic" / "v0.0.0_probepdk"
+    assert cell.is_dir(), f"no cell at {cell}: {proc.stdout[-2000:]}"
+
+    arrived = {rel: (cell / rel).is_file() for rel in _PUBLISH_PROBE_FILES}
+    wrong = {rel: got for rel, got in arrived.items()
+             if got != publishable(rel)}
+    assert not wrong, (
+        f"publish_scope() disagrees with the publisher on {len(wrong)} "
+        f"path(s) — {{path: landed_in_cell}} {wrong}. The predicate said "
+        f"{ {r: publishable(r) for r in wrong} }. Either the publish contract "
+        f"moved and the scope must be re-derived, or "
+        f"{_PUBLISH_GDS_DEST!r} is no longer where publish() puts the signoff "
+        f"GDS.\nstaged: {proc.stdout[-2000:]}")
+    # Belt and braces on the half that carries the finding: the probe DEF is
+    # the shape of all six pinned entries, and a cell that carried it would
+    # refute the pin outright.
+    assert not (cell / "phase3/stage3/pnr/floorplan.def").exists(), (
+        "the publisher staged a phase3/stage3 artefact — "
+        "UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT is measuring a contract "
+        "that no longer holds and must be re-derived")
 
 
 #: vibe-ic#1452 — the UNEVIDENCED entries for which NO oracle this commit

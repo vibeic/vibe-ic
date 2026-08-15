@@ -420,31 +420,35 @@
       "entries": {
         "phase2/stage2/dft/scan_netlist.v": {
           "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/ibex_e2e",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "phase2/stage2/dft/scan_netlist.v",
           "path": "phase2/stage2/dft/scan_netlist.v",
-          "size_bytes": 1531464
+          "size_bytes": 81570,
+          "note": "vibe-ic#1266 — RE-POINTED. This record cited 'AI_IC_design/4th_benchmark/ibex_e2e', a kind='home' root no checkout carries, while the entry was in fact being answered by a search of the admissible roots. Re-measured live: the artefact is tracked at HEAD in this root, non-empty and non-symlink, and the run's OWN write ledger (reports/write_ledger.json captured 2026-08-08T02:48:29Z) records step 11 as having written exactly this path. That is a provenance any checkout can re-derive; the old one was a claim about one machine."
         },
         "phase2/stage2/dft/atpg_coverage.rpt": {
           "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/ibex_e2e",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "phase2/stage2/dft/atpg_coverage.rpt",
           "path": "phase2/stage2/dft/atpg_coverage.rpt",
-          "size_bytes": 643
+          "size_bytes": 421,
+          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/ibex_e2e' for the reason on scan_netlist.v above. This root's write ledger records step 11 as having written this exact path."
         },
         "phase2/stage2/dft/transition_atpg_plan.md": {
           "status": "PRODUCED_BY_RUN",
-          "run": "campaign_pdk/spm/_aborted_tmpplugin_run",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "phase2/stage2/dft/transition_atpg_plan.md",
           "path": "phase2/stage2/dft/transition_atpg_plan.md",
-          "size_bytes": 1968
+          "size_bytes": 2050,
+          "note": "vibe-ic#1266 — RE-POINTED off 'campaign_pdk/spm/_aborted_tmpplugin_run'. That citation was the worst of the five: besides naming a tree no checkout carries, the run it named ABORTED, so the record asserted production by a run that did not finish. This root's write ledger records step 11 as having written this exact path."
         },
         "reports/phase2/dft/coverage.json": {
           "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/ibex_e2e",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
           "alternative": "reports/phase2/dft/coverage.json",
           "path": "reports/phase2/dft/coverage.json",
-          "size_bytes": 675
+          "size_bytes": 3549,
+          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/ibex_e2e' for the reason on scan_netlist.v above. This root's write ledger records step 11 as having written this exact path."
         },
         "reports/phase2/dft/bsdl_plan.json": {
           "status": "PRODUCED_BY_RUN",
@@ -974,10 +978,11 @@
       "entries": {
         "phase3/stage3/sim_postlayout/results.log OR phase3/stage3/sim_postlayout/pass.flag": {
           "status": "PRODUCED_BY_RUN",
-          "run": "AI_IC_design/4th_benchmark/cv32e40p_e2e",
+          "run": "benchmark-data/evaluation/phase1_parity/espi",
           "alternative": "phase3/stage3/sim_postlayout/pass.flag",
           "path": "phase3/stage3/sim_postlayout/pass.flag",
-          "size_bytes": 194
+          "size_bytes": 341,
+          "note": "vibe-ic#1266 — RE-POINTED off 'AI_IC_design/4th_benchmark/cv32e40p_e2e', a kind='home' root no checkout carries. Re-measured live: this root carries pass.flag non-empty, non-symlink and tracked at HEAD. Weaker than step 11's four re-points and said so rather than blurred: this root carries no write ledger, so the record rests on the pre-ledger evidence rules alone and does NOT claim the run's own log attributed the write to step 29."
         },
         "reports/phase2/gates/post_layout_sim.json": {
           "status": "PRODUCED_BY_RUN",

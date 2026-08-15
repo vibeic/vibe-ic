@@ -146,7 +146,9 @@ USAGE
 
 EXIT CODES
 ----------
-    0 = PASS      1 = FAIL (new test-only checker, or baseline not shrunk)
+    0 = PASS      1 = FAIL (new test-only checker, baseline not shrunk, or a
+                            SKILL-only disclosure that claims a reason without
+                            stating one — #1270; SILENCE never blocks)
     2 = SKIP (layout not found)
 """
 from __future__ import annotations
@@ -168,8 +170,10 @@ _CHECKER_SUFFIXES = ("*_check.py", "*_audit.py", "*_guard.py", "*_lint.py",
                      "*_gate.py")
 #: The SKILL-only disclosure (#693). Not a baseline and not permission: a
 #: register of checkers whose only non-TEST runner is an agent choosing to
-#: follow a skill document, WITH the reason each one is still there. Reported,
-#: never blocking — see `skill_only_register`.
+#: follow a skill document, WITH the reason each one is still there. The COUNT
+#: is reported and never blocks — see `skill_only_register`. An ENTRY is a
+#: claim, and is held to the bar this file already sets for its other register
+#: — see `classify_disclosures` (#1270).
 _SKILL_ONLY_NAME = "checker_skill_only_reasons.json"
 # Matched as path COMPONENTS, never as substrings: `".git" in path` also
 # swallows `.github/`, which would empty the CI haystack and make this gate
@@ -485,6 +489,50 @@ def skill_only_register(path: Path) -> Dict[str, str]:
 _MIN_DECISION_REASON = 120
 
 
+def classify_disclosures(skill_only: List[str], reasons: Dict[str, str]):
+    """Split the SKILL-only checkers into `(disclosed, gestured)` — #1270.
+
+    Membership was the whole test:
+
+        named = [c for c in so if c in reasons]
+
+    so the reason was never READ. Measured on 2efa6af35: setting a recorded
+    reason to `""` left this audit BYTE-IDENTICAL to the unmutated tree — still
+    counted in "2 carry a written reason", still printed as "(skill-only,
+    reason recorded)", still `[PASS]` rc 0. An entry that says nothing is WORSE
+    than no entry, because silence does not misreport itself and a blank claim
+    does. A register checked for membership only is a comment with a schema.
+
+    THREE STATES, AND THE THIRD IS WHY THIS IS NOT THE BIGGER CHANGE:
+
+      * NO entry -> in NEITHER list, and never blocking. 28 of the 30 SKILL-only
+        checkers on 2efa6af35 are in this state; requiring a reason from them is
+        a DIFFERENT decision with a 28-row blast radius, and it is not this one.
+        SILENCE STAYS NON-BLOCKING.
+      * an entry that STATES a measurement -> `disclosed`, reported as before.
+      * an entry that GESTURES at one -> `gestured`, and that BLOCKS.
+
+    The bar is `_MIN_DECISION_REASON`, the number this same file already applies
+    to `unwired_by_decision` in `check_unwired_by_decision`. Both registers
+    answer the identical question — why is this checker not machine-wired — and
+    only one of them was enforced, so this imports a policy rather than
+    inventing one. Its blast radius was measured on 2efa6af35 BEFORE choosing
+    it: of the 2 entries the register holds (1341 and 1489 chars), entries below
+    120 chars = 0. Today's output and rc are unchanged, which is the point.
+    """
+    disclosed: List[str] = []
+    gestured: List[str] = []
+    for name in sorted(set(skill_only)):
+        if name not in reasons:
+            continue
+        reason = reasons[name]
+        if isinstance(reason, str) and len(reason.strip()) >= _MIN_DECISION_REASON:
+            disclosed.append(name)
+        else:
+            gestured.append(name)
+    return disclosed, gestured
+
+
 def check_unwired_by_decision(rep: dict, decisions: Dict[str, str],
                               known: List[str]) -> List[str]:
     """Enforce the `unwired_by_decision` block. Returns problem lines.
@@ -667,13 +715,23 @@ def main(argv=None) -> int:
 
     print(f"checker_execution_wiring_audit: {rep['checkers']} checker-shaped "
           f"program(s) of {rep['all_programs']} in programs/")
-    reasons = skill_only_register(here.parent / _SKILL_ONLY_NAME)
+    # Read from the plugin UNDER AUDIT, not from wherever this file happens to
+    # sit: `--repo-root` already redirects every other input, and a register
+    # that ignores it describes a different checkout than the verdict does. On
+    # an in-repo run the two paths are the same file.
+    reasons = skill_only_register(plugin / "programs" / _SKILL_ONLY_NAME)
     so = rep.get("skill_only") or []
-    named = [c for c in so if c in reasons]
+    disclosed, gestured = classify_disclosures(so, reasons)
     print(f"  SKILL-only (the weakest runner): {len(so)} — "
-          f"{len(named)} carry a written reason in {_SKILL_ONLY_NAME}, "
-          f"{len(so) - len(named)} do not. REPORTED, never blocking.")
-    for c in sorted(named):
+          f"{len(disclosed)} carry a written reason in {_SKILL_ONLY_NAME}, "
+          f"{len(so) - len(disclosed) - len(gestured)} do not. "
+          + ("REPORTED, never blocking."
+             if not gestured else
+             f"The COUNT is REPORTED and never blocks — but "
+             f"{len(gestured)} entr{'y' if len(gestured) == 1 else 'ies'} below "
+             f"claim{'s' if len(gestured) == 1 else ''} a reason without "
+             f"stating one, and that BLOCKS."))
+    for c in disclosed:
         print(f"   (skill-only, reason recorded) {c}")
     stale = sorted(set(reasons) - set(so))
     if stale:
@@ -714,6 +772,17 @@ def main(argv=None) -> int:
               f"artefacts:")
         for c in new:
             print(f"   {c}")
+    if gestured:
+        # NOT the same finding as "28 do not carry a reason". Those 28 are
+        # silent, and silence is honest. These CLAIM a reason and then do not
+        # state one, which is the only state that misreports itself.
+        print(f"[FAIL] {len(gestured)} SKILL-only disclosure(s) claim a reason "
+              f"and do not state one — an entry that says nothing is worse "
+              f"than no entry, because silence does not misreport itself:")
+        for c in gestured:
+            print(f"   {c}: reason must state the MEASUREMENT that decided it "
+                  f"(>= {_MIN_DECISION_REASON} chars), not gesture at one: "
+                  f"{str(reasons.get(c))[:80]!r}")
     decisions = _load_decisions(bl)
     stale = check_unwired_by_decision(rep, decisions, base or [])
     if stale:
@@ -722,7 +791,7 @@ def main(argv=None) -> int:
               f"licence, not a disclosure:")
         for line in stale:
             print(line)
-    if new or paid or stale:
+    if new or paid or stale or gestured:
         return 1
     print(f"[PASS] no NEW test-only checker ({len(now)} recorded)"
           + (f"; {len(decisions)} deliberately unwired, disclosed"

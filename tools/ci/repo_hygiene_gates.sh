@@ -627,13 +627,20 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # NON-BLOCKING BY RATCHET, not by being toothless. Measured over the 46 run
 # trees on a working checkout, `--strict` reddens 16 of them on 33 findings the
 # gate did not create; landing that blocking is an outage. The corpus mode
-# instead sweeps the PUBLISHED (git-tracked) trees — 17 here, 5 of which ship a
-# reports/ tree — and ratchets the recorded 7 findings across 4 runs
-# (sha256/clean_run_v1422_20260715, sha256/clean_run_v1427_20260715,
-# u_hawaii_adc/clean_run_v1422_20260715, u_hawaii_adc/clean_run_v1427_20260715).
-# The count may shrink freely; a NEW unacknowledged step-internal FAIL is red.
-# Published, not on-disk, on purpose: 46 vs 17 is exactly the host-dependence
-# `_published_tree` exists to remove from a baseline.
+# instead sweeps the PUBLISHED (git-tracked) run trees and ratchets the count
+# recorded in `step_internal_fail_bubble_up_baseline.json`. The count may shrink
+# freely; a NEW unacknowledged step-internal FAIL is red.
+# Published, not on-disk, on purpose: 46 vs the tracked population is exactly
+# the host-dependence `_published_tree` exists to remove from a baseline.
+#
+# A RUN TREE IS ONE THAT OWNS A TRACKED reports/ TREE, not one whose directory
+# NAME matches a convention (vibe-ic#1223). It used to be `clean_run_*`, which
+# on v1.10.42 reached 3 of the 16 published run trees under this root and
+# reported 5 of the 22 unacknowledged findings they carry. The numbers are NOT
+# repeated here: the baseline records `findings_total` and `corpus_population`,
+# and `test_the_recorded_population_is_the_one_the_ci_gate_sweeps` asserts the
+# root named on the line below is the one that record was measured over — so
+# this comment cannot drift out of agreement with the gate again.
 run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic"
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard
@@ -981,10 +988,16 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 #     CI hat, and it would make the roll-up read PASS for a gate that still has
 #     not seen one installed artefact.
 #
-# So the honest state is: the LOGIC is covered by pytest, the ARTEFACTS are
+# So the honest state WAS: the LOGIC is covered by pytest, the ARTEFACTS are
 # covered by nothing automatic, and the gate now says so in the same document
 # that carries its verdict. NOT_CHECKED in the roll-up is the correct state and
 # is deliberately left in place.
+#
+# THAT CONCLUSION IS SUPERSEDED — see the #1076 paragraph at the bottom of this
+# block. Its second premise was false: the artefacts ARE reachable, by a
+# mechanism this same file already accepted for a sibling gate, and repair (a)
+# above was rejected on a BLOCKING-vs-nothing choice that had a third option in
+# it. The rejection of the FIXTURE repair still stands unchanged.
 #
 # THE DISCLOSURE ABOVE WAS ITSELF WRONG IN ONE ARM (vibe-ic#1491). Repair (a) —
 # "pass --container here" — could have been applied, been entirely inert, and
@@ -1018,16 +1031,65 @@ run "published records not superseded" "$ROOT" python3 "$PG/published_record_sta
 # left the rc-2 tier altogether, so it can no longer hide inside the exemption.
 #
 # Wiring `--container` here is now SAFE to do — a wrong name announces itself
-# instead of reading as NOT_CHECKED — but it is still not RIGHT to do until
-# someone rules on the question #1491 asks third: whether a hygiene finding that
-# `main` itself carries should block a batch. Both live contradictions sit under
-# benchmark-data/**/input/, which #904 forbids editing, so wiring it today turns
-# main red on files nobody is permitted to correct. That is an owner decision,
-# not a gate decision, and it is the decision the review date below exists to
-# force rather than to postpone.
-uncheckable_until 2026-11-30 "KNOWN GAP, recorded deliberately: no INSTALLED PDK artefacts are reachable here, so the gate has never seen one. The logic is covered by pytest over 41 fixtures; the artefacts are covered by nothing automatic, and NOT_CHECKED is the honest state"
+# instead of reading as NOT_CHECKED. What it was NOT was sufficient: `--container`
+# needs a container SOMEBODY ELSE started, and nobody starts one here, so the
+# flag alone left the gate exactly as blind. That is why the paragraph above
+# ends in an owner decision rather than a wiring.
+#
+# IT IS WIRED NOW, AND THE OWNER DECISION IS SIDESTEPPED RATHER THAN GUESSED
+# (vibe-ic#1076). Two things changed:
+#
+#   * the checker grew `--from-image`, which starts ONE ephemeral container
+#     from the image `tools/vibeic-eda/VERSION` anchors and hands it to the
+#     already-tested `docker_backends`. This is not a second access path — it
+#     is the `--container` path with the "somebody else starts it" precondition
+#     removed. The MECHANISM was already accepted in this very file: the
+#     sibling ~450 lines above (`PDK via patch vs layer min width`) reaches the
+#     installed PDKs from CI with a flag of the same name and passes in the
+#     same run. So "the ARTEFACTS are covered by nothing automatic" was a fact
+#     about this checker's missing flag, never about the artefacts;
+#
+#   * it runs `--advisory`, which is the SAME disposition that sibling already
+#     carries, for the same reason and with the same shape: the exit code
+#     changes and NOTHING else. The verdict word stays FAIL, both
+#     contradictions stay printed in full, and the checker prints
+#     "(--advisory: returning 0. The verdict above is FAIL.)" underneath them,
+#     so a tolerated finding cannot be read as an absent one.
+#
+# WHY ADVISORY AND NOT BLOCKING, stated rather than defaulted. The two live
+# contradictions are in PUBLISHED RUN INPUT under benchmark-data/**/input/,
+# which #904 forbids editing. Blocking would turn main red on files nobody is
+# permitted to correct, and a blocking gate whose repair lives somewhere nobody
+# may go is the gate that gets switched off. Advisory does not ask the owner
+# question at all: it neither blesses those documents nor blocks on them, it
+# PUBLISHES them every run so the count cannot drift unseen. Flip to blocking
+# by deleting one word once the two documents are dispositioned.
+#
+# `--advisory` DELIBERATELY DOES NOT DOWNGRADE rc 2. rc 1 is "I looked and found
+# something"; rc 2 is "I could not look". A host that cannot start the pinned
+# image still reports NOT_CHECKED through the exemption below — which is why
+# that exemption stays, with its reason rewritten to the one that can now
+# actually occur. Laundering rc 2 into 0 would recreate #1076 through the flag
+# that fixes it.
+#
+# MEASURED on 8HD-7 at 2efa6af35, exit codes taken from python directly:
+#
+#   as wired before                    rc 2  0 documents, 0 claims (NOT_CHECKED)
+#   --from-image                       rc 1  134 documents, 7 claims,
+#                                            2 CONTRADICTED / 1 CORROBORATED /
+#                                            4 UNDECIDED
+#   --from-image --advisory            rc 0  same report, verdict still FAIL
+#   --from-image --advisory, no image  rc 2  the WARN names the image it could
+#                                            not start; still NOT_CHECKED
+#
+# The image is READ from `tools/vibeic-eda/VERSION` rather than restated in the
+# checker, and that was exercised rather than asserted: the anchor moved
+# 0.2.98 -> 0.2.99 between v1.10.42 and v1.10.43 while this change was being
+# measured, and the checker followed with no edit. The sibling carries the tag
+# as a literal and needs `sync_image_version.py` to rewrite it.
+uncheckable_until 2026-11-30 "needs the ANCHORED vibeic-eda IMAGE on the host: --from-image starts an ephemeral container from it to read the installed PDK, and rc 2 means no PDK could be read at all (a claim the installed tree contradicts is rc 1, and --advisory does not touch rc 2)"
 run_tolerating_uncheckable "input-doc claims vs installed PDK" "$ROOT" \
-  python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT"
+  python3 "$PG/input_doc_pdk_claim_vs_installed_pdk_check.py" "$ROOT" --from-image --advisory
 
 # The flow-gate dashboard publishes a per-step dimension asking "can this step
 # actually fail", and NOTHING recomputes it — the page's own generator says so in

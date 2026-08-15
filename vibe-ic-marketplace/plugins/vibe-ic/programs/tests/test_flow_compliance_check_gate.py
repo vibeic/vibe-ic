@@ -212,22 +212,84 @@ def _satisfy_p0_ancestry(project: Path) -> Path:
     scope claim is exercised against the thing it is actually about — steps 2-6,
     which stay MISSING because nothing here writes lint / CDC / sim / formal /
     FPGA artefacts.
+
+    THE SENTENCE ABOVE IS A CLAIM, AND vibe-ic#1446 CAUGHT IT BEING FALSE.
+    D1 declares 18 `required_outputs` and the gate holds ALL of them ("satisfied:
+    17/18 — the gate passed, but every declared output must be produced, not just
+    one"), so ONE artefact added to that list downgrades D1 to MISSING and this
+    helper stops closing the chain — silently, because a stale fixture does not
+    fail, it just stops testing anything. That is what happened: #1159 added
+    `L21_POWER_INTENT.json` to D1's `required_outputs` 25 seconds after this
+    helper landed, and the resulting ordering violation was then masked by the
+    #1429 guard filter that landed 2 minutes after THAT. Hence
+    `assert_p0_ancestry_closed` below — the claim is now checked at the point of
+    use rather than asserted in prose, so the next output added to D1 reddens a
+    test that NAMES the missing artefact instead of quietly hollowing this one.
     """
     gd = project / "phase1" / "generated_docs"
     gd.mkdir(parents=True, exist_ok=True)
     for name in _L_DOCS:
         (gd / f"{name}.json").write_text(
             json.dumps({"schema": name, "generated_by": "test fixture"}))
+    # NOT one of `_L_DOCS`: that tuple is the set `phase1_all_l_docs_present_
+    # check` requires, and this is not one of them — it is a D1 `required_
+    # outputs` entry (#1159), which is a different contract enforced by a
+    # different rule. Kept separate so neither comment has to lie.
+    (gd / "L21_POWER_INTENT.json").write_text(
+        json.dumps({"schema": "L21_POWER_INTENT", "generated_by": "test fixture",
+                    "supply_pins": [], "external_supplies": [], "pads": []}))
     rp = project / "reports" / "phase1"
     rp.mkdir(parents=True, exist_ok=True)
     (rp / "extraction_coverage_report.md").write_text(
         "# extraction coverage\n\n100%\n")
     (rp / "extraction_coverage_report.json").write_text(
         json.dumps({"coverage_pct": 100}))
+    # The 18th declared output. `phase1_expert_parse_track` writes this itself
+    # when it runs for real, but on this tree it signals VACUOUS_PASS and writes
+    # nothing, so a hand-staged Phase 1 has to stage it like the other 17.
+    # `phase1_expert_track_evidence_check` anticipates exactly that ("the flat
+    # path is accepted too so a hand-staged project is not mistaken for a track
+    # that never ran"). `findings: []` + a verdict is its RAN_EMPTY shape — the
+    # track ran and genuinely found nothing — which is the honest thing for a
+    # fixture with no design content to claim. Anything less parses as
+    # MALFORMED, which would swap the staleness this repairs for a new one.
+    ra = project / "reports" / "audit" / "phase1"
+    ra.mkdir(parents=True, exist_ok=True)
+    (ra / "expert_parse_track.json").write_text(json.dumps({
+        "program": "phase1_expert_parse_track.py",
+        "verdict": "PASS",
+        "findings": [],
+        "ai_subtrack": {"status": "SKIPPED-CONDITION"},
+        "generated_by": "test fixture",
+    }))
     return project
 
 
-def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]]):
+def assert_p0_ancestry_closed(out: str) -> None:
+    """Fail if `_satisfy_p0_ancestry`'s tree did not actually close the chain.
+
+    A PRECONDITION, not an assertion about the code under test. Every caller of
+    `_satisfy_p0_ancestry` is making a claim about what happens once P0's
+    ancestry is SATISFIED; on a tree where D1 is still MISSING that claim is
+    being made about the opposite input, and the test passes or fails for
+    reasons unrelated to what it is named after.
+
+    Checks the step listing rather than the ordering-violation block on purpose:
+    the violation block is what the guard consumes, so reading it here would
+    make the precondition and the assertion share a failure mode.
+    """
+    m = re.search(r"^\s*\S*\s*\[(\w[\w-]*)\s*\] Step\s+D1:", out, re.M)
+    assert m, f"precondition: step D1 must appear in the report:\n{out}"
+    assert m.group(1) != "MISSING", (
+        "precondition: `_satisfy_p0_ancestry` no longer closes P0's ancestry — "
+        "D1 is MISSING on the tree it builds, so any claim this test makes "
+        "about a SATISFIED ancestry is being made about the wrong input. "
+        "D1 gained a `required_outputs` entry the fixture does not write; the "
+        "report names it on D1's `required_outputs missing:` line:\n" + out)
+
+
+def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]],
+               *, passing: int = 0):
     """Monkey-patch _run_structural_rtl_gates to report the chosen per-gate
     exit codes directly, bypassing subprocess invocation.
 
@@ -237,10 +299,25 @@ def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]]):
     state a gate's outcome ONLY in prose and every consumer believed it; that
     is the same coupling this issue removes from production, and a stub that
     kept it would be testing a contract the shipped code no longer has.
+
+    `passing` (vibe-ic#1446) — SYNTHETIC GATES THAT ACTUALLY PASSED, for the
+    callers whose premise is "every structural gate PASSED". `_patch_run(mod,
+    {})` publishes NO record, and no record is not a pass: the umbrella's
+    empty-denominator guard (#599/#901/#947) reports INCOMPLETE, which says
+    nobody looked. The two are opposite claims and the tests here need BOTH —
+    `test_strict_structural_does_not_excuse_a_broken_p0_ancestry` is about a P0
+    that answered nothing, `test_strict_structural_only_structural_gates` is
+    about a P0 that answered PASS — so the distinction is a parameter rather
+    than a default. Deliberately mirrors `_stub_structural_gates(passing=…)` in
+    `test_issue1429_ordering_guard_is_scoped_not_disabled.py`, whose docstring
+    made this same point first; the DEFAULT stays 0 so no existing caller
+    silently changes the claim it is making.
     """
     fails = []
     skips = []
-    records = []
+    records = [mod._p0_gate_record(f"synthetic_pass_gate_{i}", "PASS", "",
+                                   {"exit_code": 0})
+               for i in range(passing)]
     for name, (code, msg) in stub_results.items():
         if code == 1:
             fails.append(f"FAIL: {name} — {msg}")
@@ -391,11 +468,23 @@ def test_strict_structural_only_structural_gates(tmp_path,
     project = _satisfy_p0_ancestry(_make_phase2_project(tmp_path, ()))
 
     mod = _import_fcc()
-    # No structural FAILs.
-    _patch_run(monkeypatch, mod, {})
+    # No structural FAILs — and, per vibe-ic#1446, that is NOT the same as no
+    # structural gates. This test's first sentence says "a project whose
+    # structural-RTL gates ALL PASS"; publishing zero records made P0
+    # INCOMPLETE (0 of 246 checkers returned a verdict), which is the OPPOSITE
+    # claim and the input the negative arm below owns. `passing=2` makes the
+    # premise true, so the scope question this test asks is asked of a P0 that
+    # actually answered.
+    _patch_run(monkeypatch, mod, {}, passing=2)
     rc = mod.main([str(project), "--phase", "2", "--strict-structural"])
     out = capsys.readouterr().out
-    # PRECONDITION, not decoration: if steps 2-6 were not MISSING this test
+    # PRECONDITION #1 (vibe-ic#1446): the fixture's own promise. Without it this
+    # test ran on a tree whose D1 was MISSING — i.e. on the BARE-ancestry input
+    # the test two functions down owns — and was green only because the guard
+    # filter it was paired with looked at the dependency instead of the step
+    # that claimed done.
+    assert_p0_ancestry_closed(out)
+    # PRECONDITION #2, not decoration: if steps 2-6 were not MISSING this test
     # would be asserting that a clean run is clean.
     for sid in (2, 3, 4, 5, 6):
         assert re.search(rf"^\s*\S*\s*\[MISSING\s*\] Step\s+{sid}:",

@@ -32,8 +32,14 @@ import pytest
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent.parent
 PROGRAMS = PLUGIN_ROOT / "programs"
 REPO_ROOT = PLUGIN_ROOT.parent.parent.parent
-CORPUS = REPO_ROOT / "benchmark-data"
 BASELINE = PROGRAMS / "step_internal_fail_bubble_up_baseline.json"
+# THE POPULATION IS READ OUT OF THE RECORD (vibe-ic#1223), not hardcoded here.
+# This said `benchmark-data` while the CI gate sweeps `benchmark-data/ic`; with
+# the population defined by the artefact rather than by a directory NAME those
+# are 117 run trees / 45 findings and 16 / 22 respectively, so a hardcoded root
+# would validate the baseline against a set the ratchet never holds.
+CORPUS = REPO_ROOT / json.loads(
+    BASELINE.read_text(encoding="utf-8"))["corpus_population"]
 
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
