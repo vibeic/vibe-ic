@@ -299,7 +299,6 @@ def test_guard_a_brand_new_ic_published_with_strays_is_fully_refused(legacy_repo
     for name in ("phase1/", "phase3/", "reports/"):
         assert name in out, f"{name!r} was not refused on the new IC\n{out}"
 
-
 def test_guard_the_full_audit_shape_still_fails_every_legacy_entry(legacy_repo):
     """No `--changed-since` = the AUDIT shape, and it is untouched.
 
