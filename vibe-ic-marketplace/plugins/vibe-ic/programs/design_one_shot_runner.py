@@ -6227,6 +6227,24 @@ def _run_oracle_tb(project: Path, top_name: str, tb_path: Path,
            str(tb_path)] + [str(p) for p in rtl_files]
     rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
         cmd, rtl_files, tb_path, run_dir, container, top_name)
+    if rc != 0 and _compiler_was_not_found(rc, out, err):
+        # vibe-ic#1394 residual — the SAME absent-compiler defect #1398 fixed
+        # at the generic full-stack site, still live here. This site is
+        # reached FIRST (the oracle TB is tried before the skeleton), so on a
+        # project that has an oracle TB the guarded site below is never
+        # consulted and the run still ends in
+        #
+        #   FAIL "per-IC oracle TB (...) failed to compile against rtl/ —
+        #         real structural defect (#439). iverilog rc=127
+        #         stderr=COMMAND_NOT_FOUND: ... 'iverilog'"
+        #
+        # MEASURED on 8HD-9 against a DUT that is `assign data_out = data_in;`
+        # with iverilog only inside the container and the tree outside its
+        # bind mounts. Returning None is this helper's OWN documented contract
+        # for "no simulator available" — the caller falls through to the
+        # skeleton path, which is what `_iverilog_available` would have caused
+        # had it known where the dispatch would land.
+        return None
     if rc != 0:
         # ORGANIC (GAP-E2E-5) — an SV construct beyond the iverilog/sv2v OSS-sim
         # SUBSET (e.g. OpenTitan's cross-package `pkg::PARAM` in a param default,
@@ -7385,6 +7403,23 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
     # frontend also rejects still FAILs.
     rc, out, err, tb_frontend = _iverilog_compile_with_sv_fallback(
         cmd, rtl_files, PROTOCOL_TB, sim_dir, container, bound_top)
+    if rc != 0 and _compiler_was_not_found(rc, out, err):
+        # vibe-ic#1394 residual — the AID track had no availability probe at
+        # all, so an absent compiler went straight to a bare
+        # FAIL "iverilog rc=127 stderr=COMMAND_NOT_FOUND", which names the
+        # DUT for a fact about where the tree sits. Nothing was compiled, so
+        # this step has no verdict on the design: SKIP and say why.
+        return StepResult(
+            "reference_tb", "SKIP",
+            time.time() - t0,
+            (f"AID reference TB NOT RUN — the simulator was NOT FOUND where "
+             f"the compile was dispatched (rc={rc}); no sim ran, so this is "
+             f"not evidence about the DUT. Reachability, not the design: a "
+             f"run_dir outside the container's bind mounts falls back to the "
+             f"host. stderr={(err or out)[-600:]}"),
+            extras={"tb_frontend": tb_frontend,
+                    "functional_verified": False,
+                    "iverilog_available": False})
     if rc != 0:
         return StepResult("reference_tb", "FAIL",
                           time.time() - t0,
