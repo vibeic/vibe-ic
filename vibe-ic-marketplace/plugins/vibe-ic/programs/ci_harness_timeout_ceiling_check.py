@@ -99,6 +99,42 @@ The excluded set is not silent. Every unresolved callee at or above the ceiling
 is COUNTED and PRINTED as advisory with its file and line, so a reader can see
 what the allowlist did not judge instead of inferring it from a clean verdict.
 
+A BOUND IS A BOUND WHATEVER ITS SPELLING (vibe-ic#1277)
+--------------------------------------------------------
+The bound is read from the call site, from a module constant, AND from the
+enclosing function's PARAMETER DEFAULT. The third was missing and it was the
+worst of the three to miss, because the shape is ordinary::
+
+    def _run(args, timeout=180):
+        return subprocess.run([...] + args, timeout=timeout)
+
+A default is not a ``Constant`` at the call site and not a module constant, so
+until #1277 that call fell through the resolver entirely — and "entirely" is
+the point. It was not moved to the advisory list where a reader could see it;
+it was DROPPED, out of the findings, out of the advisories, and out of the
+``readable bound(s) at call sites`` denominator. Two spellings of the same
+1800 s bound produced ``1 readable bound / 1 FAIL`` and ``0 readable bounds /
+0 not judged / PASS``. The second report tells a reader nothing was skipped.
+
+The function-definition default is still NOT a bound on its own — a test
+double's ``def runner(cmd, timeout=3600)`` whose body launches nothing is
+flagged by nobody, exactly as before. What is judged is the CALL the parameter
+reaches, and only when the callee allowlist above says that call can block.
+A default is refused when the function's own body rebinds the name, for the
+same reason ``module_constants`` refuses a function-local assignment.
+
+…AND JUDGED AGAINST THE BOUND THAT WILL REALLY APPLY TO IT
+------------------------------------------------------------
+``harness // 3`` is right only while ``--timeout=180`` is the bound the harness
+puts on the item. For a test carrying ``@pytest.mark.timeout(N)`` it is not:
+pytest-timeout applies N to that item, which is what the marker is for and what
+this repo already relies on. Such a call is judged against ``N // 3``. That is
+the gate's own second remedy — "move the test out of the targeted subset if it
+genuinely needs longer" — finally having a spelling the gate can read, and it
+cuts both ways: a marker BELOW the harness bound tightens the ceiling. Every
+marked item is counted and printed with its value, because raising a ceiling
+must be a visible act.
+
 THE POPULATION IS EVERY TREE A PYTEST LANE RUNS, WHICH IS TWO
 --------------------------------------------------------------
 The report named one tree. The workflows run two: the plugin's
@@ -359,11 +395,21 @@ CONTAINER_TOKEN = "docker"
 _TIMEOUT_KW = "timeout"
 
 
+#: How a bound that is not a literal at the call site was resolved. Printed,
+#: and carried into the JSON record, because the REMEDY differs: a module
+#: constant is one edit at its declaration, a parameter default is one edit in
+#: the signature that every caller inherits.
+VIA_MODULE_CONSTANT = "module constant"
+VIA_PARAMETER_DEFAULT = "parameter default"
+
+
 class Finding:
     def __init__(self, path: str, line: int, callee: str, keyword: str,
                  seconds: float, resolved_via: str,
                  constant: Optional[str] = None,
-                 constant_line: Optional[int] = None):
+                 constant_line: Optional[int] = None,
+                 constant_kind: str = VIA_MODULE_CONSTANT,
+                 owner: Optional[str] = None):
         self.path = path
         self.line = line
         self.callee = callee
@@ -374,17 +420,31 @@ class Finding:
         #: than at the call site — the remedy is then ONE edit, not N.
         self.constant = constant
         self.constant_line = constant_line
+        #: …or as the enclosing function's PARAMETER DEFAULT (vibe-ic#1277),
+        #: which is the same "one declaration, N call sites" shape reached by a
+        #: different spelling.
+        self.constant_kind = constant_kind
+        #: The function whose signature carries that default.
+        self.owner = owner
 
     def as_dict(self) -> Dict:
         return {"path": self.path, "line": self.line, "callee": self.callee,
                 "keyword": self.keyword, "seconds": self.seconds,
                 "resolved_via": self.resolved_via,
                 "constant": self.constant,
-                "constant_line": self.constant_line}
+                "constant_line": self.constant_line,
+                "constant_kind": self.constant_kind if self.constant else None,
+                "owner": self.owner}
 
     def __str__(self) -> str:
-        via = (f" [via {self.constant} = {self.seconds}, declared at line "
-               f"{self.constant_line}]") if self.constant else ""
+        via = ""
+        if self.constant and self.constant_kind == VIA_PARAMETER_DEFAULT:
+            via = (f" [via {VIA_PARAMETER_DEFAULT} {self.constant}="
+                   f"{self.seconds} of {self.owner}(), declared at line "
+                   f"{self.constant_line}]")
+        elif self.constant:
+            via = (f" [via {self.constant} = {self.seconds}, declared at line "
+                   f"{self.constant_line}]")
         return (f"{self.path}:{self.line}  "
                 f"{self.callee}({self.keyword}={self.seconds}){via}")
 
@@ -504,6 +564,133 @@ def module_constants(tree: ast.AST) -> Dict[str, Tuple[float, int]]:
     return consts
 
 
+def _numeric(node: ast.expr,
+             consts: Dict[str, Tuple[float, int]]
+             ) -> Optional[Tuple[float, int]]:
+    """`(value, declaration line)` for an expression this file can read as a
+    number: a literal, or a module constant already resolved by
+    `module_constants`. `None` for anything else."""
+    if (isinstance(node, ast.Constant) and isinstance(node.value, (int, float))
+            and not isinstance(node.value, bool)):
+        return float(node.value) if isinstance(node.value, float) \
+            else node.value, node.lineno
+    if isinstance(node, ast.Name) and node.id in consts:
+        return consts[node.id]
+    return None
+
+
+def parameter_defaults(fn: ast.AST, consts: Dict[str, Tuple[float, int]]
+                       ) -> Dict[str, Tuple[float, int]]:
+    """`name -> (value, line)` for this function's readable numeric defaults.
+
+    WHY THIS EXISTS (vibe-ic#1277). The gate resolved a literal at the call
+    site and a module constant; a bound that arrives as a FUNCTION PARAMETER
+    was neither, so it fell into the "callee not resolvable" branch and was
+    dropped — not merely unjudged, UNCOUNTED, which is the worse of the two
+    because the report then tells a reader nothing was skipped.
+
+    The shape that surfaced it is ordinary and it is in this repo::
+
+        def audit_ci(repo_root: Path, timeout: int = 120) -> CiAudit:
+            for decl in gates:                                  # a LOOP
+                subprocess.run(argv, ..., timeout=timeout)      # a PARAMETER
+
+    120 s is double the 60 s ceiling and it killed real pytest sessions on
+    main. It is the same "one declaration, N call sites" shape that
+    `module_constants` already resolves — only the spelling differs.
+
+    A default is judged as the bound because it is the value the call receives
+    when the caller says nothing, and because it is a bound the FILE declares:
+    if every caller happens to override it, the declaration is still a promise
+    the 180 s harness will not keep, and lowering it is one edit.
+    """
+    out: Dict[str, Tuple[float, int]] = {}
+    args = getattr(fn, "args", None)
+    if args is None:
+        return out
+    positional = list(args.posonlyargs) + list(args.args)
+    # `defaults` covers the LAST N positional parameters.
+    for arg, default in zip(positional[len(positional) - len(args.defaults):],
+                            args.defaults):
+        got = _numeric(default, consts)
+        if got is not None:
+            out[arg.arg] = got
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        if default is None:
+            continue
+        got = _numeric(default, consts)
+        if got is not None:
+            out[arg.arg] = got
+    return out
+
+
+def _rebound_in_scope(fn: ast.AST) -> Set[str]:
+    """Names this function's own body rebinds, so a parameter default can no
+    longer be claimed as the value the call receives.
+
+    The same rule `module_constants` states for function-local assignment: a
+    name that can be reassigned on a branch would have this gate reporting a
+    number the call may never see. NESTED function and class bodies are their
+    own scopes and are excluded here — the scope walk in `_call_scopes` visits
+    them separately, innermost first, so a nested rebinding still wins where it
+    actually applies.
+    """
+    out: Set[str] = set()
+
+    def visit(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.Lambda, ast.ClassDef)):
+                continue
+            if isinstance(child, ast.Name) and isinstance(
+                    child.ctx, (ast.Store, ast.Del)):
+                out.add(child.id)
+            elif isinstance(child, (ast.Global, ast.Nonlocal)):
+                out.update(child.names)
+            visit(child)
+
+    for stmt in getattr(fn, "body", []):
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            continue
+        if isinstance(stmt, ast.Name) and isinstance(stmt.ctx,
+                                                     (ast.Store, ast.Del)):
+            out.add(stmt.id)
+        visit(stmt)
+    return out
+
+
+def _call_scopes(tree: ast.AST) -> Dict[int, Tuple[ast.AST, ...]]:
+    """`id(Call) -> enclosing functions, outermost first`.
+
+    A decorator, an annotation and a default are evaluated in the ENCLOSING
+    scope, not in the function they decorate, so they are descended with the
+    outer chain.
+    """
+    chains: Dict[int, Tuple[ast.AST, ...]] = {}
+
+    def walk(node: ast.AST, chain: Tuple[ast.AST, ...]) -> None:
+        if isinstance(node, ast.Call):
+            chains[id(node)] = chain
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            outer: List[ast.expr] = list(node.decorator_list)
+            outer += list(node.args.defaults)
+            outer += [k for k in node.args.kw_defaults if k is not None]
+            if node.returns is not None:
+                outer.append(node.returns)
+            for o in outer:
+                walk(o, chain)
+            inner = chain + (node,)
+            for stmt in node.body:
+                walk(stmt, inner)
+            return
+        for child in ast.iter_child_nodes(node):
+            walk(child, chain)
+
+    walk(tree, ())
+    return chains
+
+
 def _forwards_a_timeout(fn: ast.AST, mods: Set[str], names: Set[str],
                         resolved: Set[str]) -> bool:
     """True when this function hands a caller-supplied timeout to a blocking
@@ -529,17 +716,17 @@ def _forwards_a_timeout(fn: ast.AST, mods: Set[str], names: Set[str],
     return False
 
 
-def _forwarding_helpers(tree: ast.AST, mods: Set[str],
-                        names: Set[str]) -> Set[str]:
+def _forwarding_helpers(tree: ast.AST, mods: Set[str], names: Set[str],
+                        funcs: Optional[List[ast.AST]] = None) -> Set[str]:
     """Names of same-file functions that pass a caller's timeout into a
     blocking call, iterated to a fixed point so a chain resolves.
 
     Derived rather than listed: a hand-written list of helper names would be a
     second registry beside the code, free to drift from it.
     """
-    funcs: List[ast.AST] = [n for n in ast.walk(tree)
-                            if isinstance(n, (ast.FunctionDef,
-                                              ast.AsyncFunctionDef))]
+    if funcs is None:
+        funcs = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
     resolved: Set[str] = set()
     for _ in range(len(funcs) + 1):
         grew = False
@@ -554,25 +741,159 @@ def _forwarding_helpers(tree: ast.AST, mods: Set[str],
     return resolved
 
 
+class MarkedItem:
+    """A test whose `@pytest.mark.timeout(N)` replaces the session bound.
+
+    Recorded and printed rather than applied silently: raising a ceiling is an
+    EXCLUSION from the default rule, and this file's standing position is that
+    an exclusion a reader cannot see is indistinguishable from a clean result.
+    """
+
+    def __init__(self, path: str, line: int, test: str, seconds: float,
+                 ceiling: int):
+        self.path = path
+        self.line = line
+        self.test = test
+        self.seconds = seconds
+        self.ceiling = ceiling
+
+    def as_dict(self) -> Dict:
+        return {"path": self.path, "line": self.line, "test": self.test,
+                "item_seconds": self.seconds, "ceiling_seconds": self.ceiling}
+
+    def __str__(self) -> str:
+        return (f"{self.path}:{self.line}  {self.test}  "
+                f"@pytest.mark.timeout({self.seconds}) -> its calls are judged "
+                f"against {self.ceiling}s")
+
+
+def item_timeout_marker(fn: ast.AST, consts: Dict[str, Tuple[float, int]]
+                        ) -> Optional[float]:
+    """Seconds from a `@pytest.mark.timeout(N)` on `fn`, or None.
+
+    WHY THE GATE MUST READ THIS. The ceiling is `harness // 3` because the
+    harness bounds every ITEM at `--timeout=180`. That is not true of an item
+    carrying this marker: pytest-timeout applies the MARKER to that test
+    instead, which is the whole reason the marker exists, and this repository
+    already relies on it — `test_matrix_63x8_census_freshness.py` carries
+    `@pytest.mark.timeout(600)` with its measurement, and
+    `test_issue1181_probe_budget_and_summary.py` PINS the mechanism (a marked
+    test under `--timeout=2 --timeout-method=thread` yields `2 passed` rather
+    than a killed session).
+
+    So `harness // 3` is a PROXY for "the bound that will apply to this call",
+    and for a marked item the proxy and the property disagree. Judging a marked
+    item against 60 s reports a session risk that provably cannot occur, and
+    the gate's own second remedy — "move the test out of the targeted subset if
+    it genuinely needs longer" — has no other spelling in this tree.
+
+    The divisor still applies: a marked item gets `N // 3`, for the same reason
+    the unmarked one does. A marker SMALLER than the harness bound therefore
+    tightens the ceiling rather than loosening it.
+    """
+    for dec in getattr(fn, "decorator_list", []):
+        if not isinstance(dec, ast.Call):
+            continue
+        dotted = _dotted(dec.func)
+        parts = dotted.split(".")
+        if len(parts) < 2 or parts[-1] != "timeout" or "mark" not in parts:
+            continue
+        val = None
+        if dec.args:
+            val = dec.args[0]
+        else:
+            for kw in dec.keywords:
+                if kw.arg in ("timeout", "seconds"):
+                    val = kw.value
+        if val is None:
+            continue
+        got = _numeric(val, consts)
+        if got is not None:
+            return got[0]
+    return None
+
+
 def scan_source(text: str, rel_path: str, ceiling: int
                 ) -> Tuple[List[Finding], List[Finding], int]:
     """(findings, unresolved_above_ceiling, bounded_call_sites) for one file.
+
+    Kept as the three-value shape every caller and test already uses; the
+    marked-item census is the fourth thing `scan_source_report` returns.
+    """
+    rep = scan_source_report(text, rel_path, ceiling)
+    return rep["findings"], rep["unresolved_above_ceiling"], rep["sites"]
+
+
+def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
+    """findings / unresolved / site count / marked items, for one file.
 
     Raises nothing: an unparseable file yields empty lists and is counted by
     the caller, because a syntax error is a different defect.
     """
     tree = ast.parse(text)
-    mods, names = _subprocess_aliases(tree)
-    forwarders = _forwarding_helpers(tree, mods, names)
     consts = module_constants(tree)
+    # ONE walk for both populations. The rest of this function is arranged so a
+    # file that declares no bound at all pays for nothing beyond it: this gate
+    # scans ~2600 files on every hygiene run, and #1277's resolution would have
+    # doubled its wall time (101 s -> 202 s, measured) if every file paid for
+    # the scope map whether or not it needed one.
+    timeout_calls: List[Tuple[ast.Call, List[Tuple[str, ast.expr]]]] = []
+    funcs: List[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            kws = _timeout_kwargs(node)
+            if kws:
+                timeout_calls.append((node, kws))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            funcs.append(node)
+
+    # The marked census is built even for a file with no bounded call, because
+    # it is a DISCLOSURE: a marked item that never appears is a raised ceiling
+    # nobody can see.
+    fn_marker: Dict[int, float] = {}
+    marked: List[MarkedItem] = []
+    for fn in funcs:
+        mk = item_timeout_marker(fn, consts)
+        if mk is not None:
+            fn_marker[id(fn)] = mk
+            marked.append(MarkedItem(rel_path, fn.lineno, fn.name, mk,
+                                     int(mk) // CEILING_DIVISOR))
+
     findings: List[Finding] = []
     unresolved: List[Finding] = []
     total = 0
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        for kw_name, val in _timeout_kwargs(node):
-            const_name = const_line = None
+    if not timeout_calls:
+        return {"findings": findings, "unresolved_above_ceiling": unresolved,
+                "sites": total, "marked_items": marked}
+
+    mods, names = _subprocess_aliases(tree)
+    # The scope map answers two questions and is built only when one is asked:
+    # which parameter default a bare name resolves to, and which marker (if
+    # any) governs a call.
+    needs_scopes = bool(fn_marker) or any(
+        isinstance(v, ast.Name) and v.id not in consts
+        for _c, kws in timeout_calls for _k, v in kws)
+    scopes = _call_scopes(tree) if needs_scopes else {}
+    fn_defaults: Dict[int, Dict[str, Tuple[float, int]]] = {}
+    fn_rebound: Dict[int, Set[str]] = {}
+    # The callee allowlist is only consulted for a bound that is ALREADY over
+    # its ceiling, and deriving it walks every function to a fixed point, so it
+    # is derived on first use rather than for every file.
+    forwarders: Optional[Set[str]] = None
+
+    for node, kws in timeout_calls:
+        chain = scopes.get(id(node), ())
+        # The bound that will really apply to THIS call: the innermost
+        # enclosing item bound, which is the session's unless a marker on a
+        # function this call sits inside replaced it.
+        call_ceiling = ceiling
+        for fn in reversed(chain):
+            if id(fn) in fn_marker:
+                call_ceiling = int(fn_marker[id(fn)]) // CEILING_DIVISOR
+                break
+        for kw_name, val in kws:
+            const_name = const_line = owner = None
+            const_kind = VIA_MODULE_CONSTANT
             if (isinstance(val, ast.Constant)
                     and isinstance(val.value, (int, float))
                     and not isinstance(val.value, bool)):
@@ -581,27 +902,70 @@ def scan_source(text: str, rel_path: str, ceiling: int
                 seconds, const_line = consts[val.id]
                 const_name = val.id
             else:
-                # A bound this file does not spell out — a parameter, an
-                # attribute, an expression. Not judged and not counted, so the
-                # denominator below stays the set of bounds actually readable.
-                continue
+                param = _resolve_parameter_default(
+                    val, chain, fn_defaults, fn_rebound, consts)
+                if param is None:
+                    # A bound this file does not spell out — an attribute, an
+                    # expression, a parameter with no readable default or one
+                    # its own body rebinds. Not judged and not counted, so the
+                    # denominator stays the set of bounds actually readable.
+                    continue
+                seconds, const_line, owner = param
+                const_name = val.id
+                const_kind = VIA_PARAMETER_DEFAULT
             total += 1
-            if seconds <= ceiling:
+            if seconds <= call_ceiling:
                 continue
+            if forwarders is None:
+                forwarders = _forwarding_helpers(tree, mods, names, funcs)
             why = _classify_callee(node.func, mods, names, forwarders)
             if why is NOT_A_BOUND:
                 continue
             rec = Finding(rel_path, val.lineno, _dotted(node.func), kw_name,
                           seconds, why or "not resolvable from this file",
-                          const_name, const_line)
+                          const_name, const_line, const_kind, owner)
             (findings if why else unresolved).append(rec)
-    return findings, unresolved, total
+    return {"findings": findings, "unresolved_above_ceiling": unresolved,
+            "sites": total, "marked_items": marked}
+
+
+def _resolve_parameter_default(val: ast.expr, chain: Tuple[ast.AST, ...],
+                               fn_defaults: Dict[int, Dict[str,
+                                                           Tuple[float, int]]],
+                               fn_rebound: Dict[int, Set[str]],
+                               consts: Dict[str, Tuple[float, int]]
+                               ) -> Optional[Tuple[float, int, str]]:
+    """`(seconds, declaration line, owning function)` when `val` is a name the
+    enclosing scopes bind to a readable numeric parameter default.
+
+    Scopes are read INNERMOST FIRST, and a scope that rebinds the name stops
+    the search rather than deferring to an outer one: at that point the value
+    reaching the call is whatever the body last assigned, which this file
+    cannot claim to know.
+
+    The two per-function facts are memoised on first use: only the scopes that
+    actually enclose a name-valued bound are ever computed.
+    """
+    if not isinstance(val, ast.Name):
+        return None
+    for fn in reversed(chain):
+        key = id(fn)
+        if key not in fn_rebound:
+            fn_rebound[key] = _rebound_in_scope(fn)
+            fn_defaults[key] = parameter_defaults(fn, consts)
+        if val.id in fn_rebound[key]:  # a local, not the parameter
+            return None
+        got = fn_defaults[key].get(val.id)
+        if got is not None:
+            return got[0], got[1], fn.name
+    return None
 
 
 def scan_tree(tests_root: Path, ceiling: int, glob: str = "*.py",
               anchor: Optional[Path] = None) -> Dict:
     findings: List[Finding] = []
     unresolved: List[Finding] = []
+    marked: List[MarkedItem] = []
     files = 0
     sites = 0
     unparseable: List[str] = []
@@ -622,15 +986,16 @@ def scan_tree(tests_root: Path, ceiling: int, glob: str = "*.py",
             unparseable.append(rel)
             continue
         try:
-            f, u, n = scan_source(text, rel, ceiling)
+            one = scan_source_report(text, rel, ceiling)
         except SyntaxError:
             unparseable.append(rel)
             continue
-        findings.extend(f)
-        unresolved.extend(u)
-        sites += n
+        findings.extend(one["findings"])
+        unresolved.extend(one["unresolved_above_ceiling"])
+        marked.extend(one["marked_items"])
+        sites += one["sites"]
     return {"files": files, "bounded_sites": sites, "findings": findings,
-            "unresolved_above_ceiling": unresolved,
+            "unresolved_above_ceiling": unresolved, "marked_items": marked,
             "unparseable": unparseable}
 
 
@@ -643,7 +1008,8 @@ def scan_roots(roots: Sequence[Tuple[Path, str, Optional[Path]]],
     scanned whole and the other only for its test files.
     """
     merged = {"files": 0, "bounded_sites": 0, "findings": [],
-              "unresolved_above_ceiling": [], "unparseable": [], "roots": []}
+              "unresolved_above_ceiling": [], "marked_items": [],
+              "unparseable": [], "roots": []}
     for root, glob, anchor in roots:
         rep = scan_tree(root, ceiling, glob, anchor)
         merged["files"] += rep["files"]
@@ -651,6 +1017,7 @@ def scan_roots(roots: Sequence[Tuple[Path, str, Optional[Path]]],
         merged["findings"].extend(rep["findings"])
         merged["unresolved_above_ceiling"].extend(
             rep["unresolved_above_ceiling"])
+        merged["marked_items"].extend(rep["marked_items"])
         merged["unparseable"].extend(rep["unparseable"])
         merged["roots"].append({"root": str(root), "glob": glob,
                                 "files": rep["files"],
@@ -789,6 +1156,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"     ... and {len(unres) - 20} more (this line is the "
               f"disclosure, not a silent truncation)")
 
+    # The OTHER exclusion, and it owes the reader the same denominator: an item
+    # whose own marker replaces the session bound is not judged against this
+    # ceiling. Printed with the value, so raising a ceiling is a visible act.
+    marked = rep["marked_items"]
+    print(f"  test(s) whose @pytest.mark.timeout replaces the {harness}s item "
+          f"bound (judged against their own marker // {CEILING_DIVISOR}): "
+          f"{len(marked)}")
+    for m in marked[:20]:
+        print(f"     marked  {m}")
+    if len(marked) > 20:
+        print(f"     ... and {len(marked) - 20} more (this line is the "
+              f"disclosure, not a silent truncation)")
+
     if args.table:
         hist: Dict[int, int] = {}
         for root, _glob, _anchor in roots:
@@ -811,6 +1191,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "bounded_sites": rep["bounded_sites"],
             "findings": [f.as_dict() for f in rep["findings"]],
             "unresolved_above_ceiling": [u.as_dict() for u in unres],
+            "marked_items": [m.as_dict() for m in rep["marked_items"]],
             "unparseable": rep["unparseable"],
             "passed": not rep["findings"],
         }, indent=2) + "\n", encoding="utf-8")
