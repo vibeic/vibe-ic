@@ -296,6 +296,14 @@ def test_the_cwd_token_is_preserved(tmp_path):
     assert all(g.cmd and not g.cmd.lstrip().startswith("#") for g in gates)
 
 
+def test_pytest_wall_clock_is_not_mistaken_for_a_different_verdict():
+    """Both arms passed the same 108 tests; 15.44s vs 16.26s is not RED."""
+    a = G._verdict_line("108 passed in 15.44s\n")
+    b = G._verdict_line("108 passed in 16.26s\n")
+    assert a == b == "108 passed in <TIME>s"
+    assert G._verdict_line("107 passed, 1 failed in 15.44s") != a
+
+
 def test_539_a_gate_that_needs_the_network_is_EXCLUDED_in_the_real_script():
     """#539. The rule, asserted over the REAL script rather than a fixture: a
     gate that requires a REMOTE cannot be inside a two-invocation determinism

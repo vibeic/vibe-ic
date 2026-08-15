@@ -510,12 +510,16 @@ def select_tests(site: Dict[str, Any], tests_dir: Path) -> List[Path]:
     site look UNPINNED. There is no selection that makes an unpinned site look
     pinned, which is the direction that matters.
 
-    Files that also name the LITERAL are returned first. That is an ordering
-    heuristic and nothing else -- it changes how fast a kill is found, never
-    whether one is found, because every selected file is run until one fails.
+    Files with the densest exact references to the module / parameter / callee
+    / literal are returned first. That is an ordering heuristic and nothing
+    else -- it changes how fast a kill is found, never whether one is found,
+    because every selected file is still available to the aggregate fallback.
+    Measured on the largest real site, the actual call-site pin has 34 exact
+    references and ranks first; alphabetical ordering put it fifteenth and
+    pushed the blocking gate beyond its 600 s supervisor deadline.
     """
     stem = Path(site["file"]).stem
-    out: List[Tuple[int, str, Path]] = []
+    out: List[Tuple[int, int, str, Path]] = []
     for p in sorted(tests_dir.glob("test_*.py")):
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
@@ -524,9 +528,16 @@ def select_tests(site: Dict[str, Any], tests_dir: Path) -> List[Path]:
         if not _names(text, stem):
             continue
         if _names(text, site["param"]) or _names(text, site["callee"]):
-            out.append((0 if _names(text, site["value"]) else 1, p.name, p))
+            relevance = 0
+            for token in dict.fromkeys((stem, site["param"], site["callee"],
+                                        site["value"])):
+                _names(text, token)  # populates the exact-boundary cache
+                relevance += len(_WORD_CACHE[token].findall(text))
+            out.append((-relevance,
+                        0 if _names(text, site["value"]) else 1,
+                        p.name, p))
     out.sort()
-    return [p for _, _, p in out]
+    return [p for _, _, _, p in out]
 
 
 def _literal_span(src: str, arg_line: int, arg_col: int):
@@ -888,6 +899,34 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
     journal = journal_for(root)
     killed_by: List[Dict[str, Any]] = []
     survivors: List[str] = []
+    baseline_files: List[str] = []
+    red_at_baseline: List[str] = []
+    kills_believed: List[str] = []
+    uncredited_kill = False
+
+    def _paths_named_by(output: str) -> List[Path]:
+        named = [root.parent / f for f in failing_files(output)]
+        return [p for p in dict.fromkeys(named) if p.exists()]
+
+    def _grade_kill(paths: Sequence[Path], output: str) -> Tuple[List[str], int, str]:
+        """Return believable failed files after restoring the authored source."""
+        named = _paths_named_by(output) or list(paths)
+        for p in named:
+            s = str(p)
+            if s not in baseline_files:
+                baseline_files.append(s)
+        rc0, out0 = run_pytest(named, root.parent, basetemp, extra)
+        reds = failing_files(out0)
+        for f in reds:
+            if f not in red_at_baseline:
+                red_at_baseline.append(f)
+        killed_now = failing_files(output)
+        believable = [f for f in killed_now if f not in set(reds)]
+        for f in believable:
+            if f not in kills_believed:
+                kills_believed.append(f)
+        return believable, rc0, out0
+
     try:
         for other in [a for a in site["alternatives"] if a != site["value"]]:
             try:
@@ -896,54 +935,91 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
                 result["state"] = "ABSTAIN"
                 result["why"] = f"could not rewrite the literal: {exc}"
                 return result
+            credible = False
+            saw_only_preexisting_red = False
+
+            # Fast path: the selection order is deliberately relevance-ranked.
+            # Run one file at a time until a GREEN-at-baseline file kills the
+            # mutant.  This is the contract ``select_tests`` has always stated,
+            # but the old implementation ignored the order and ran all 37 files
+            # in one session for every flip, pushing this blocking gate beyond
+            # its own 600 s supervisor deadline.
+            for candidate in candidates:
+                _arm(journal, target, original, mutated)
+                target.write_text(mutated, encoding="utf-8")
+                rc, out = run_pytest([candidate], root.parent, basetemp, extra)
+                if rc == 0:
+                    continue
+
+                # Baseline MUST run against the authored source, not the
+                # mutation whose failure it is grading.
+                target.write_text(original, encoding="utf-8")
+                believable, rc0, out0 = _grade_kill([candidate], out)
+                result["baseline_rc"] = rc0
+                if believable:
+                    killed_by.append({"flipped_to": other, "rc": rc,
+                                      "killed_files": failing_files(out),
+                                      "tail": out.strip().splitlines()[-1:] or [""]})
+                    credible = True
+                    break
+                saw_only_preexisting_red = True
+                uncredited_kill = True
+                result["baseline_tail"] = out0.strip().splitlines()[-1:] or [""]
+
+            if credible:
+                # One observed call-site pin proves the argued direction dies;
+                # the verdict has never required every alternative to die.
+                break
+
+            # Per-file execution cannot observe a failure that needs two test
+            # modules in one pytest process (import/order pollution is real in
+            # this repo).  Keep the original aggregate session as a fallback,
+            # so the speed path cannot weaken the gate's semantics.
             _arm(journal, target, original, mutated)
             target.write_text(mutated, encoding="utf-8")
             rc, out = run_pytest(candidates, root.parent, basetemp, extra)
-            if rc != 0:
+            if rc == 0:
+                survivors.append(other)
+                continue
+
+            target.write_text(original, encoding="utf-8")
+            believable, rc0, out0 = _grade_kill(candidates, out)
+            result["baseline_rc"] = rc0
+            if believable:
                 killed_by.append({"flipped_to": other, "rc": rc,
                                   "killed_files": failing_files(out),
                                   "tail": out.strip().splitlines()[-1:] or [""]})
-            else:
-                survivors.append(other)
+                break
+            saw_only_preexisting_red = True
+            uncredited_kill = True
+            result["baseline_tail"] = out0.strip().splitlines()[-1:] or [""]
+
+            if saw_only_preexisting_red:
+                # More alternatives cannot turn an already-red baseline into
+                # evidence. Preserve the pre-existing abstention contract.
+                break
     finally:
         target.write_text(original, encoding="utf-8")
         _disarm(journal)
 
     if killed_by:
-        # A RED test kills every mutant, including one nobody wrote a pin for.
-        # Crediting that would hand out exactly the false clean bill of health
-        # this gate exists to end, so the baseline is checked before a kill is
-        # believed -- and checked LAZILY, because a surviving mutant is already
-        # proof enough of UNPINNED and needs no baseline at all.
-        #
-        # Only the files that actually died are re-run. Baselining the whole
-        # selection would answer a question nobody asked -- whether some OTHER
-        # test is red -- and it is the dominant cost of this gate.
-        named = [root.parent / f for k in killed_by for f in k.get("killed_files", [])]
-        baseline_set = [p for p in dict.fromkeys(named) if p.exists()] or list(candidates)
-        result["baseline_files"] = [str(p) for p in baseline_set]
-        rc0, out0 = run_pytest(baseline_set, root.parent, basetemp, extra)
-        result["baseline_rc"] = rc0
-        # PER FILE, not per RUN. "Some file in the baseline is red" is not a
-        # reason to disbelieve a kill in a DIFFERENT file -- that inference is
-        # what let one unrelated red test abstain a site whose pin was intact.
-        # A kill is believed exactly when the file that died is GREEN at
-        # baseline; the gate abstains only when every file that died was
-        # already red, which is the case the baseline check was written for.
-        red_at_baseline = set(failing_files(out0))
-        killed_now = [f for k in killed_by for f in k.get("killed_files", [])]
-        believable = [f for f in dict.fromkeys(killed_now) if f not in red_at_baseline]
+        result["baseline_files"] = baseline_files
         result["red_at_baseline"] = sorted(red_at_baseline)
-        result["kills_believed"] = believable
-        if not believable:
-            result["state"] = "ABSTAIN"
+        result["kills_believed"] = kills_believed
+    elif uncredited_kill:
+        result["baseline_files"] = baseline_files
+        result["red_at_baseline"] = sorted(red_at_baseline)
+        result["kills_believed"] = []
+        result["state"] = "ABSTAIN"
+        if red_at_baseline:
             result["why"] = ("every candidate test that died under the flip was "
                              "already RED before any flip, so no kill proves "
                              "anything about this call site")
-            result["baseline_tail"] = out0.strip().splitlines()[-1:] or [""]
-            return result
-        killed_by = [k for k in killed_by
-                     if any(f in believable for f in k.get("killed_files", []))]
+        else:
+            result["why"] = ("mutant pytest exited nonzero but named no failed "
+                             "test file that was GREEN at baseline, so the "
+                             "process failure cannot prove this call site is pinned")
+        return result
 
     result["killed_by"] = killed_by
     result["survivors"] = survivors

@@ -321,9 +321,16 @@ def _norm(line: str, repo_root: Path, wt: Path) -> str:
 
 
 def _verdict_line(out: str) -> str:
-    """The last non-empty line — the verdict a caller reads."""
+    """The last non-empty line — the verdict a caller reads.
+
+    Pytest's terminal summary appends elapsed wall time.  That value is not a
+    verdict and necessarily differs between two otherwise identical runs; the
+    outcome/count prefix and process return code remain compared exactly.
+    """
     lines = [ln.rstrip() for ln in (out or "").splitlines() if ln.strip()]
-    return lines[-1] if lines else "(no output)"
+    if not lines:
+        return "(no output)"
+    return re.sub(r"\bin\s+\d+(?:\.\d+)?s\s*$", "in <TIME>s", lines[-1])
 
 
 def checkout_dirt(repo_root: Path, timeout: int = 600) -> Optional[Dirt]:

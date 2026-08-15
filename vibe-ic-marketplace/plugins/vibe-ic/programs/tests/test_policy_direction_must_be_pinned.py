@@ -545,6 +545,22 @@ def test_selection_under_reads_toward_unpinned_never_toward_pinned(tmp_path):
     assert v["state"] == "PINNED"
 
 
+def test_selection_prioritises_the_densest_call_site_evidence(tmp_path):
+    """Ordering buys runtime only; this pins the general ranking, not a name."""
+    root = _corpus(tmp_path / "rank", dict(PINNABLE, **{
+        "tests/test_sparse.py": '''
+            # user reconcile on_tie keep_wider
+        ''',
+        "tests/test_dense.py": '''
+            # user reconcile on_tie keep_wider
+            # user reconcile on_tie keep_wider
+        ''',
+    }))
+    site = C.build_report(root)["argued"][0]
+    assert [p.name for p in C.select_tests(site, root / "tests")] == [
+        "test_dense.py", "test_sparse.py"]
+
+
 def test_a_boolean_flag_is_out_of_scope_by_declaration(tmp_path):
     """The over-correction that buries the finding.
 
@@ -807,6 +823,55 @@ def test_a_kill_ONLY_in_an_already_red_file_still_abstains(tmp_path):
     out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
     assert out["state"] == "ABSTAIN", out
     assert "already RED before any flip" in out["why"], out
+
+
+def test_cross_file_only_pin_is_kept_by_the_aggregate_fallback(tmp_path):
+    """The fast per-file lane must not erase shared-session semantics."""
+    root, tests, site = _pin_fixture(tmp_path, red_first=False)
+    (tests / "test_a_unrelated.py").write_text(textwrap.dedent('''
+        import sys, pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        import site_mod
+        from callee_mod import merge_records
+        # Names the authored value so this seed sorts before the pin in both
+        # the per-file lane and the aggregate fallback: on_conflict="richer".
+        def test_seed_only():
+            site_mod._aggregate_seen = True
+            assert True
+    '''), encoding="utf-8")
+    (tests / "test_b_pins_the_site.py").write_text(textwrap.dedent('''
+        import sys, pathlib
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+        import site_mod
+        from site_mod import go
+        from callee_mod import merge_records
+        def test_pin_only_after_the_other_file_ran():
+            if getattr(site_mod, "_aggregate_seen", False):
+                assert go([]) == "richer"
+    '''), encoding="utf-8")
+    out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
+    assert out["state"] == "PINNED", out
+    assert any("test_b_pins_the_site.py" in f
+               for f in out.get("kills_believed", [])), out
+
+
+def test_nonzero_process_without_a_failed_testcase_abstains(tmp_path, monkeypatch):
+    """A session hook/process refusal is not evidence that the mutant died."""
+    root = _corpus(tmp_path / "session", dict(PINNABLE, **{
+        "tests/test_user.py": '''
+            # user reconcile on_tie keep_wider
+            def test_body_was_green():
+                assert True
+        ''',
+    }))
+    site = C.build_report(root)["argued"][0]
+    monkeypatch.setattr(
+        C, "run_pytest",
+        lambda *a, **k: (1, "all testcase bodies passed; session hook refused\n"))
+    out = C.verify_pin(site, root, root / "tests", 40, tmp_path / "bt")
+    assert out["state"] == "ABSTAIN", out
+    assert out["kills_believed"] == [], out
+    assert "process failure" in out["why"], out
 
 
 def test_the_mutant_run_is_exhaustive_and_not_stopped_at_the_first_failure(tmp_path):
