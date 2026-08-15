@@ -303,8 +303,25 @@ run_pytest() {
   local maxfail=(--maxfail="${GATEKEEPER_PYTEST_MAXFAIL:-10}")
   [ "${GATEKEEPER_PYTEST_MAXFAIL:-10}" = "0" ] && maxfail=()
   local junit=()
-  [ -n "${GATEKEEPER_PYTEST_JUNIT:-}" ] \
-    && junit=(-o junit_family=xunit1 "--junitxml=$GATEKEEPER_PYTEST_JUNIT")
+  if [ -n "${GATEKEEPER_PYTEST_JUNIT:-}" ]; then
+    junit=(-o junit_family=xunit1 "--junitxml=$GATEKEEPER_PYTEST_JUNIT")
+    # REMOVE THE TARGET FIRST, so a leftover can never be read as THIS run's record.
+    #
+    # A pytest that TIMES OUT writes no junit at all. Meanwhile
+    # programs/tests/test_landing_merge_verdict.py builds a stub gatekeeper-land.sh that
+    # honours this same variable and runs it with the inherited environment; its stub
+    # selector emits one synthetic file, so it leaves a 1-test report at this exact path.
+    #
+    # MEASURED twice today. MEGA4: the targeted-tests gate timed out, and the junit left
+    # behind was 374 bytes, tests="1", carrying `test_thing::test_value_is_one` — a
+    # fixture name, not a real test — for a session of 1368. MEGA was the same shape.
+    #
+    # The file therefore EXISTED, PARSED, and described a different run. That is worse
+    # than a missing file: absence is honest, and this is not. Removing it up front means
+    # a timed-out run leaves NO junit, which is the truthful state, and the judge's
+    # "refuse when the complete record is absent" rule then applies correctly.
+    rm -f "$GATEKEEPER_PYTEST_JUNIT" 2>/dev/null || true
+  fi
   ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" ) 2>/dev/null
   if [ ! -s "$sel" ]; then
     echo "  FAIL  targeted test selection produced no files — not a clean result"
