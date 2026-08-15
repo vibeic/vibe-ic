@@ -482,8 +482,14 @@ BASE_LAND_ARG=()
 # the hygiene tier which findings this branch INTRODUCED rather than only
 # whether its one label failed. Both arms already run `gatekeeper-land.sh`; all
 # that is added is that each writes its `--summary-json` record where the
-# verdict can read it. Left EMPTY when either arm did not produce one, which the
-# verdict discloses and treats as the coarse per-label comparison it does today.
+# verdict can read it.
+#
+# The pair is handed to the verdict only when the BASE arm produced a record;
+# without one the verdict discloses the loss and falls back to the coarse
+# per-label comparison, because the branch does not control whether arm A2 ran.
+# A missing CANDIDATE record is NOT the same event and is NOT hidden here — the
+# path is passed either way and the verdict refuses on it, since that is the
+# tree under test failing to measure itself.
 BASE_HYG="$RUN/base_hygiene.json"
 CAND_HYG="$RUN/candidate_hygiene.json"
 HYG_ARGS=()
@@ -506,6 +512,7 @@ done < <("${G[@]}" diff --name-only "$BASE_SHA" "$REBASED_SHA" -- \
             tools/gatekeeper-land.sh tools/gatekeeper-verify-merge.sh \
             tools/ci/repo_hygiene_gates.sh tools/git-hooks/pre-push \
             "$PLUGIN_REL/programs/landing_merge_verdict.py" \
+            "$PLUGIN_REL/programs/hygiene_finding_delta.py" \
             "$PLUGIN_REL/programs/ci_targeted_test_select.py" 2>/dev/null)
 
 if [ "$SHORT_CIRCUIT" = "0" ]; then
@@ -646,10 +653,20 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     echo "          it cannot report per-test outcomes and the differential will refuse."
     echo "          Rebase the branch onto a base that carries the merge-path gate."
   fi
+  if ! grep -q GATEKEEPER_HYGIENE_REPORT "$WT_CAND/tools/gatekeeper-land.sh" 2>/dev/null; then
+    echo "--- note: this tree's gatekeeper-land.sh does not honour GATEKEEPER_HYGIENE_REPORT,"
+    echo "          so it writes no hygiene record and the FINDING differential will refuse"
+    echo "          (vibe-ic#1498). Rebase onto a base that carries it."
+  fi
+  # `GATEKEEPER_HYGIENE_REPORT` is the CANDIDATE half of the pair arm A2 already
+  # writes (vibe-ic#1498). Without it the base record has nothing to be
+  # differenced against and the ~80-gate hygiene suite stays judged by its one
+  # label — which is the permissive half the program was written to close.
   ( cd "$WT_CAND" && \
       GATEKEEPER_BASE="$BASE_SHA" \
       GATEKEEPER_PYTEST_JUNIT="$CAND_JUNIT" \
       GATEKEEPER_PYTEST_MAXFAIL=0 \
+      GATEKEEPER_HYGIENE_REPORT="$CAND_HYG" \
       GATEKEEPER_VERSION_BY_GATEKEEPER="$VBG" \
       bash tools/gatekeeper-land.sh ) > "$RUN/land.log" 2>&1
   echo "--- arm B (squash ${VERIFIED_SHA:0:12}): gatekeeper-land.sh rc=$?"
@@ -661,6 +678,34 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   if [ -n "$CACHED" ] && [ ! -s "$CACHED" ] \
      && grep -q '^=== gatekeeper landing gates' "$RUN/base_land.log"; then
     cp "$RUN/base_land.log" "$CACHED"
+  fi
+  # vibe-ic#1498 — the record's half of that cache, written only when arm A2
+  # REALLY RAN here (`A2_PID` is set only on a miss) and only when it produced a
+  # record. The HOST travels with it: findings are host-dependent, and a cache
+  # directory on shared storage would otherwise hand one host's baseline to
+  # another host's candidate, which fails toward PASS whenever the foreign
+  # baseline is the redder one. Without this write the log half is cached and the
+  # record half never is, so every later cache hit degrades to the per-label
+  # comparison — in exactly the mode the merge queue runs in.
+  if [ -n "$CACHED_HYG" ] && [ -n "${A2_PID:-}" ] && [ -s "$BASE_HYG" ]; then
+    cp "$BASE_HYG" "$CACHED_HYG"
+    printf '%s\n' "$THIS_HOST" > "$CACHED_HYG_HOST"
+  fi
+  # ASKED ONLY WHEN THE BASE ARM PRODUCED A BASELINE. The two arms are
+  # asymmetric on purpose (see landing_merge_verdict's header): a missing BASE
+  # record is disclosed and degrades to the per-label comparison, because the
+  # branch does not control whether arm A2 ran; a missing CANDIDATE record
+  # REFUSES, because that is the tree under test failing to measure itself. So
+  # the candidate path is handed over unconditionally here and the verdict —
+  # not this script — decides what its absence means.
+  if [ -s "$BASE_HYG" ]; then
+    HYG_ARGS=(--base-hygiene "$BASE_HYG" --candidate-hygiene "$CAND_HYG"
+              --base-hygiene-host "$BASE_HYG_HOST"
+              --candidate-hygiene-host "$THIS_HOST")
+    echo "--- hygiene finding delta: base record on $BASE_HYG_HOST, candidate on $THIS_HOST"
+  else
+    echo "--- hygiene finding delta: NO BASE RECORD, so the ~80-gate hygiene suite is"
+    echo "                           judged by its ONE label only (disclosed in the verdict)"
   fi
   echo "--- arm A2 (base ${BASE_SHA:0:12}): $(grep -c '^  FAIL  ' "$RUN/base_land.log" || true) gate(s) already failing on the base"
   sed -n 's/^  FAIL  /      base-FAIL  /p' "$RUN/base_land.log"
@@ -680,6 +725,7 @@ python3 "$VERDICT_PROG" \
   --base-selection "$RUN/selection_base.txt" \
   "${BASE_LAND_ARG[@]+"${BASE_LAND_ARG[@]}"}" \
   --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
+  "${HYG_ARGS[@]+"${HYG_ARGS[@]}"}" \
   --verification-tier "$TIER" --git-version "$GIT_VERSION" \
   --merge-tree-min-version "$MERGE_TREE_MIN_VERSION" \
   ${TIER_REASON:+--tier-reason "$TIER_REASON"} \
