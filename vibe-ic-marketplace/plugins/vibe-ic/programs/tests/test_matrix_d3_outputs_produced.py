@@ -3173,10 +3173,42 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     #         (phase2/stage2/dft/*, 351 files tracked at HEAD)
     #   29 <- benchmark-data/evaluation/phase1_parity/espi
     #         (phase3/stage3/sim_postlayout/pass.flag, 253 files tracked)
-    # The remaining ten declare artefacts NO path in this commit matches. Only
-    # a published run tree closes those, and publishing one costs >1 GB of DEFs
-    # against a 2.0 GB .git -- which is why they stay RED here rather than
-    # becoming waivers. A red cell cannot rot; a waiver can, and did.
+    # The remaining ten declare artefacts NO path in this commit matches. They
+    # stay RED here rather than becoming waivers. A red cell cannot rot; a
+    # waiver can, and did.
+    #
+    # 2026-08-15 (vibe-ic#1457) — THE COST OF CLOSING THEM WAS MEASURED ON THE
+    # WRONG THING. This paragraph used to end "Only a published run
+    # tree closes those, and publishing one costs >1 GB of DEFs against a
+    # 2.0 GB .git -- which is why they stay RED". #1457 read that sentence off
+    # these cells and escalated the class as "a repository-size decision, not
+    # an engineering one", where it has sat while everything about it was
+    # re-measured EXCEPT the figure holding it up.
+    #
+    # The figure is not false about run TREES. It is about run trees, and that
+    # is the wrong quantity: a cell is closed by the repository carrying the
+    # DECLARED ENTRIES, not by importing the tree they came from. The manifest
+    # already records the size of every one of those entries, so the cost never
+    # needed estimating at all. Summed from those records by
+    # :func:`unevidenced_closing_cost` and pinned at
+    # :data:`_UNEVIDENCED_CLOSING_COST_BYTES`: 386857 B. That is 378 KiB --
+    # 0.018 % of a 2.0 GB .git, and 2776x under the number that stood here. The
+    # four `.def` entries come to 384756 B between them, 83 % of the SINGLE
+    # `phase3/stage3/pnr/routed.def` that `benchmark-data/ic/spm/
+    # v1.5.58_ihp-sg13g2` -- an already-admissible run root -- carries at
+    # 462873 B. Whatever keeps this class red, it is not repository size.
+    #
+    # Nor does closing it need a manifest edit. MEASURED on this commit by
+    # committing artefacts at the seven declared paths into that same
+    # already-registered root, with this file byte-identical: all six cells
+    # answered GREEN and both population pins reddened with "newly evidenced
+    # -- delete them from the pin and say which run tree closed them". The
+    # `resolve_anywhere` fall-through in :func:`check_entry` already searches
+    # every admissible root when the recorded one is absent, so "register in
+    # the manifest" is not a step anyone has to take first. (That probe was a
+    # CONTROL and its artefacts were never pushed: what it establishes is that
+    # the mechanism answers, not that anything is produced. The cells still
+    # need a real run to write real ones.)
     #
     # 2026-08-12: "M2", "M3" and "M4" LEFT this set, and NOT by being
     # published. "Publish the run tree" was the wrong prescription for them:
@@ -3311,6 +3343,150 @@ def unevidenced_entries() -> Tuple[Tuple[str, str], ...]:
     # A TUPLE, not the list built above: this answer is cached, and a cached
     # mutable would let one caller edit the population every later caller sees.
     return tuple(out)
+
+
+#: vibe-ic#1457 — what it would COST this repository, in bytes, to carry the
+#: entries the unevidenced cells declare.
+#:
+#: MEASURED, not asserted. See the 2026-08-15 note in :data:`UNEVIDENCED_CELLS`
+#: for the figure this replaces and why an unchecked round number survived long
+#: enough to be escalated as an owner decision. Pinned so that the population
+#: moving, or a recorded size moving, is a NAMED event rather than a silent
+#: change of subject.
+_UNEVIDENCED_CLOSING_COST_BYTES = 386857
+
+#: An entry the manifest records with no size. Returned instead of ``0`` so the
+#: guard can tell "nobody measured it" from "it costs nothing" — folding the
+#: first into the second is how a cost claim stops being falsifiable.
+_SIZE_NOT_RECORDED = -1
+
+
+def unevidenced_closing_cost() -> Tuple[int, Tuple[Tuple[str, str, int], ...]]:
+    """``(total_bytes, [(step, entry, recorded_bytes), ...])`` for the class.
+
+    Derived from :func:`unevidenced_entries` and the manifest's own
+    ``size_bytes``, through the same :func:`check_entry` the cells use, so this
+    can never cost a population the verdicts do not have.
+
+    THE MANIFEST IS THE RIGHT SOURCE HERE, and that is worth stating because
+    everything else in this module treats a manifest record as a claim about
+    the past rather than evidence about today. It is not being used as evidence
+    of production: the question is "how big is the artefact this step writes",
+    the record is a real observation of a real file, and no verdict below
+    depends on the answer. What the answer decides is whether a reader is
+    entitled to call this class a repository-size problem.
+    """
+    rows: List[Tuple[str, str, int]] = []
+    for sid, entry in unevidenced_entries():
+        rec = step_record(sid)["entries"][entry]
+        size = rec.get("size_bytes")
+        rows.append((sid, entry,
+                     int(size) if isinstance(size, int) and not isinstance(size, bool)
+                     else _SIZE_NOT_RECORDED))
+    total = sum(b for _, _, b in rows if b != _SIZE_NOT_RECORDED)
+    return total, tuple(rows)
+
+
+def test_d3_the_cost_of_closing_the_unevidenced_class_is_measured():
+    """vibe-ic#1457 — the stated reason this class stays red is a NUMBER.
+
+    WHY THIS IS A REAL DEFECT AND NOT BOOKKEEPING. The number was acted on.
+    ``UNEVIDENCED_CELLS`` carried ">1 GB of DEFs against a 2.0 GB .git" as the
+    reason these cells are not closed; #1457 quoted that reading back and
+    escalated the class as "a repository-size decision, not an engineering
+    one", where it has sat unresolved across several re-measurements of
+    everything EXCEPT the figure holding it up. The measured cost is 386857 B.
+    An estimate nobody can move is worse than a red cell, because the red cell
+    at least says what would move it.
+
+    THE PROPERTY. The cost of closing this class is a sum over the entries the
+    class actually has, every term of it recorded, and it equals the pinned
+    figure. Both halves are load-bearing: a total assembled out of terms that
+    were never measured would be an estimate wearing a measurement's clothes,
+    which is the exact failure this guard exists to end.
+
+    THE DIRECTION IT RUNS IN. It asserts nothing about whether the class SHOULD
+    be closed, and closing it does not need this test to pass — it needs a run
+    tree. It asserts only that the cost is a measurement, so that the next
+    person deciding is deciding on a number that came from the repository.
+    """
+    total, rows = unevidenced_closing_cost()
+
+    unmeasured = [(sid, entry) for sid, entry, b in rows
+                  if b == _SIZE_NOT_RECORDED]
+    assert not unmeasured, (
+        f"{len(unmeasured)} unevidenced entr(ies) have no recorded size, so "
+        f"the cost of closing this class cannot be summed and any figure "
+        f"quoted for it is an estimate:\n  "
+        + "\n  ".join(f"step {a}: {b}" for a, b in unmeasured)
+        + "\nMeasure the artefact on the run it came from and record "
+          "`size_bytes`, or say in the record that it was never measured — do "
+          "not let a missing measurement read as a zero."
+    )
+
+    assert total == _UNEVIDENCED_CLOSING_COST_BYTES, (
+        f"the cost of closing the unevidenced class moved: measured {total} B "
+        f"over {len(rows)} entr(ies), pinned "
+        f"{_UNEVIDENCED_CLOSING_COST_BYTES} B.\n  "
+        + "\n  ".join(f"step {s}: {e} = {b} B" for s, e, b in sorted(rows))
+        + f"\nRe-pin {total} and say what moved: an entry joined or left the "
+          f"class, or an artefact was re-measured. The figure is quoted in "
+          f"UNEVIDENCED_CELLS as the reason these cells are not closed, so it "
+          f"must not be allowed to drift away from the population it is about."
+    )
+
+
+def test_d3_the_closing_cost_guard_reddens_on_both_ways_of_being_wrong(
+        monkeypatch):
+    """PAIRED CONTROL: the guard above must be able to fail, twice over.
+
+    A cost guard that cannot redden is the same thing as the round number it
+    replaced. Both arms are driven against REAL entries of this commit, not
+    synthetic strings, so what is exercised is the path the verdicts take.
+    """
+    real_entries = unevidenced_entries()
+    assert real_entries, (
+        "there is no unevidenced entry on this commit, so neither arm below "
+        "measures anything — the control cannot be run vacuously")
+
+    # ARM 1 — the population moves. Dropping one entry must move the total and
+    # be reported as a moved cost, not absorbed.
+    dropped = real_entries[0]
+    monkeypatch.setattr(sys.modules[__name__], "unevidenced_entries",
+                        lambda: tuple(e for e in real_entries if e != dropped))
+    with pytest.raises(AssertionError) as exc:
+        test_d3_the_cost_of_closing_the_unevidenced_class_is_measured()
+    assert "the cost of closing the unevidenced class moved" in str(exc.value)
+    monkeypatch.undo()
+
+    # ARM 2 — a term goes unmeasured. It must be NAMED as unmeasured and must
+    # not be quietly summed as zero, which would leave the total looking
+    # smaller and still self-consistent.
+    real_record = step_record
+    blinded_sid, blinded_entry = dropped
+
+    def _without_size(step_id):
+        rec = real_record(step_id)
+        if F.normalize_id(step_id) != F.normalize_id(blinded_sid):
+            return rec
+        patched = dict(rec)
+        patched["entries"] = {
+            k: ({kk: vv for kk, vv in v.items() if kk != "size_bytes"}
+                if k == blinded_entry else v)
+            for k, v in rec["entries"].items()
+        }
+        return patched
+
+    monkeypatch.setattr(sys.modules[__name__], "step_record", _without_size)
+    with pytest.raises(AssertionError) as exc2:
+        test_d3_the_cost_of_closing_the_unevidenced_class_is_measured()
+    msg = str(exc2.value)
+    assert "have no recorded size" in msg, msg
+    assert blinded_entry in msg, msg
+    assert "the cost of closing the unevidenced class moved" not in msg, (
+        f"an entry with NO recorded size was reported as a changed total — "
+        f"the missing measurement was summed as zero, which is the "
+        f"conflation this arm exists to prevent:\n{msg}")
 
 
 def test_d3_the_unevidenced_remedy_is_only_promised_where_a_producer_exists():
