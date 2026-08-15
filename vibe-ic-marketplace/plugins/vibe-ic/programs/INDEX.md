@@ -444,6 +444,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gds_topcell_name_check` | any | — | Deterministic GDSII top-cell-name verifier. |
 | `gen_skill_inventory` | any | — | single source of truth for the AI-skill count. |
 | `general_synth` | any | — | GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har... |
+| `generated_artifact_conflict_resolve` | any | — | resolve the merge conflicts that carry no information, and REFUSE every conflict that does. |
 | `gf_synth` | any | — | a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family. |
 | `gh_enumerate_all` | any | — | Enumerate a GitHub collection COMPLETELY, or refuse — never a partial page. |
 | `git_prohibition_guard` | any | — | deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions). |
@@ -1592,6 +1593,7 @@ _(no programs in this group)_
 - `gds_topcell_name_check` — Deterministic GDSII top-cell-name verifier.
 - `gen_skill_inventory` — single source of truth for the AI-skill count.
 - `general_synth` — GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har...
+- `generated_artifact_conflict_resolve` — resolve the merge conflicts that carry no information, and REFUSE every conflict that does.
 - `gf_synth` — a DETERMINISTIC solver for the CVDP Galois-field / carry-less multiplication family.
 - `gh_enumerate_all` — Enumerate a GitHub collection COMPLETELY, or refuse — never a partial page.
 - `git_prohibition_guard` — deterministic guard for the core-agent loop (extracted from vibe-ic:core-agent-loop §Hard prohibitions).
