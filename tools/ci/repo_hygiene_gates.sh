@@ -21,6 +21,15 @@
 # event-shaped and stay inline in the workflow that has the context.
 set -euo pipefail
 
+# Some individual gates invoke this dispatcher to inspect the same hygiene
+# contract.  Mark the outer dispatcher so a nested invocation can run its
+# ordinary checks without recursively launching the host-independence probe.
+if [[ "${VIBE_IC_HYGIENE_ACTIVE:-0}" == "1" ]]; then
+    export VIBE_IC_SKIP_HOST_INDEPENDENCE=1
+else
+    export VIBE_IC_HYGIENE_ACTIVE=1
+fi
+
 # Resolved to an ABSOLUTE path BEFORE the `cd` below: `${BASH_SOURCE[0]}` may
 # be relative to the invoking cwd, and after `cd "$ROOT"` a relative dirname
 # would resolve somewhere else — which would silently fail to find the sourced
@@ -801,7 +810,11 @@ run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_c
 # previous ones. Refuses (rc 2) on a dirty checkout rather than reporting the
 # uncommitted work as findings.
 uncheckable_until 2027-02-28 "needs a CLEAN checkout: it compares the working tree against a fresh worktree at the same commit, and rc 2 means tracked modifications made that comparison meaningless (a genuinely host-dependent gate is rc 1)"
-run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
+if [[ "${VIBE_IC_SKIP_HOST_INDEPENDENCE:-0}" == "1" ]]; then
+    printf '%s\n' "host-independence probe skipped in nested hygiene dispatch (outer probe owns the comparison)"
+else
+    run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
+fi
 # 2026-08-04 — `gate_cli_mutation_probe` makes a gate unable to fail and then
 # restores it in a `finally`. A `finally` does not run on SIGKILL, and twice in
 # one parallel-agent session a killed run left `hold_area_budget_check.py` and

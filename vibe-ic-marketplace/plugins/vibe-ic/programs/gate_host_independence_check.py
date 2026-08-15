@@ -617,6 +617,14 @@ def audit(repo_root: Path, timeout: int = 600,
 
         plugin_rel = Path("vibe-ic-marketplace") / "plugins" / "vibe-ic"
         me = Path(__file__).name
+        # A gate may invoke the repo-wide hygiene dispatcher as part of its
+        # own check.  The dispatcher normally includes this host-independence
+        # probe, which would recursively launch another dispatcher forever.
+        # Keep that nested invocation observable while disabling only this
+        # self-referential probe in the child environment; all other gates
+        # still run in both arms exactly as before.
+        probe_env = os.environ.copy()
+        probe_env["VIBE_IC_SKIP_HOST_INDEPENDENCE"] = "1"
         for label, wd_tok, cmd, excluded, templated in gates:
             # NEVER probe ITSELF. The gate list is unfiltered by design, so it
             # contains this program — and running it inside the worktree runs
@@ -694,10 +702,10 @@ def audit(repo_root: Path, timeout: int = 600,
             try:
                 a = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
                                    capture_output=True, text=True,
-                                   timeout=timeout)
+                                   timeout=timeout, env=probe_env)
                 b = subprocess.run(_expand(cmd, wt), cwd=str(cb),
                                    capture_output=True, text=True,
-                                   timeout=timeout)
+                                   timeout=timeout, env=probe_env)
             except (OSError, subprocess.SubprocessError) as exc:
                 drive_exc = exc
             # ALWAYS, not only on the exception path. A gate that writes into
@@ -782,10 +790,10 @@ def audit(repo_root: Path, timeout: int = 600,
                 try:
                     a2 = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
                                         capture_output=True, text=True,
-                                        timeout=timeout)
+                                        timeout=timeout, env=probe_env)
                     b2 = subprocess.run(_expand(cmd, wt), cwd=str(cb),
                                         capture_output=True, text=True,
-                                        timeout=timeout)
+                                        timeout=timeout, env=probe_env)
                 except (OSError, subprocess.SubprocessError) as exc:
                     findings.append({
                         "gate": label, "kind": "GATE_UNRUNNABLE",
