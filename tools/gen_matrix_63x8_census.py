@@ -130,6 +130,31 @@ Run::
     python3 tools/gen_matrix_63x8_census.py --check-figures # anchors only (cheap)
     python3 tools/gen_matrix_63x8_census.py --fix-figures   # rewrite the anchors
     python3 tools/gen_matrix_63x8_census.py --fix          # anchors AND census block
+    python3 tools/gen_matrix_63x8_census.py --fix \
+        --written-json /tmp/w.json                         # …and DECLARE what it wrote
+
+WHERE THIS IS DERIVED, AND WHY IT IS NOT AT PUSH TIME (vibe-ic#1382)
+-------------------------------------------------------------------
+This program is run for real by two callers, and they are deliberately not the
+same caller:
+
+    tools/ci/repo_hygiene_gates.sh   `--check`  — the landing gate. JUDGES.
+    gatekeeper_prepare_landing.py    `--fix`    — the batch builder. RE-DERIVES.
+
+The re-derivation runs at LAND, not at PUSH, and that was a choice between two
+readings with measurements on both sides. Moving `--check` into `pre-push` would
+show a PR author the staleness in seconds instead of an hour — but the 57
+anchored figures live in THREE shared files (`matrix_63x8/README.md`,
+`matrix_63x8/flowref.py`, `test_matrix_d2_falsifiable.py`) and every one of them
+carries tree-wide COUNTERS. Two branches that each add a gate rewrite the same
+lines with different totals, so per-PR re-derivation converts every gate-adding
+PR into a conflict with every other one. That is not a prediction: it is what
+`programs/INDEX.md` already does, measured at 26 of 30 conflicting open PRs
+(vibe-ic#1431), and it is why `tools/resolve_generated_conflicts.sh` exists.
+
+So the figures are re-derived at the only moment they are published, which costs
+nothing per PR, and the gate still runs `--check` independently afterwards — the
+builder makes the tree consistent, it does not silence the check.
 """
 from __future__ import annotations
 
@@ -1007,8 +1032,57 @@ def main(argv: List[str]) -> int:
                          f"against (default <repo_root>/{PLUGIN_REL})")
     ap.add_argument("--figures-json",
                     help="write the full coverage report here")
+    # WHAT THIS RUN WROTE, AS DATA (vibe-ic#1382). The two write paths already
+    # SAY what they wrote — "rewrote anchored figures in 3 file(s): a, b, c"
+    # and "wrote <path>: …" — in prose, on stdout, interleaved with a coverage
+    # disclosure. A caller that has to re-derive that by parsing sentences is
+    # the "check that lies" shape this repository exists to remove, and the
+    # caller that needs it is `gatekeeper_prepare_landing.py`, whose entire
+    # safety property is that every path it leaves dirty was DECLARED by the
+    # writer that produced it (#1029/#1089). A hand-typed allow-list there
+    # would rot in the forgiving direction the moment this program gained a
+    # corpus file.
+    #
+    # Dumped in a `finally`, and that is the load-bearing part rather than a
+    # tidiness: `--fix` rewrites the anchors FIRST and only then drives the
+    # census, which is the half that blows its 60 s inner bound on a loaded
+    # host (vibe-ic#1277). A partial repair — anchors written, census block
+    # not — is the NORMAL failure here, and a declaration emitted only on the
+    # success path would leave exactly those writes unattributable.
+    ap.add_argument("--written-json",
+                    help="write the repo-relative paths this run WROTE here, "
+                         "as a JSON list. Emitted even when the run fails, so "
+                         "a partial repair is still attributable")
     args = ap.parse_args(argv)
 
+    del _WRITTEN[:]
+    try:
+        return _run(args)
+    finally:
+        if args.written_json:
+            Path(args.written_json).write_text(
+                json.dumps(sorted(set(_WRITTEN)), indent=1), encoding="utf-8")
+
+
+#: Repo-relative paths written by the CURRENT run. Reset by `main`, appended to
+#: at each write site, published by `--written-json`. Module state rather than a
+#: return value because the two write sites sit either side of the census, and
+#: the census is allowed to abort between them.
+_WRITTEN: List[str] = []
+
+
+def _record_written(subject: Path, path: Path) -> None:
+    """Record one write, repo-relative to the SUBJECT of this run."""
+    try:
+        _WRITTEN.append(str(Path(path).resolve().relative_to(subject)))
+    except ValueError:
+        # A caller pointed --out or --figures-root outside the subject. Record
+        # the absolute path rather than dropping the write: an undeclared write
+        # is the one thing the consumer of this list must never be handed.
+        _WRITTEN.append(str(Path(path).resolve()))
+
+
+def _run(args: argparse.Namespace) -> int:
     subject = (Path(args.repo_root).resolve() if args.repo_root else REPO_ROOT)
     args.out = args.out or str(subject / README_REL)
     args.figures_root = args.figures_root or str(subject / FIGURES_REL)
@@ -1031,6 +1105,14 @@ def main(argv: List[str]) -> int:
             return 2
         report = figure_report(Path(args.root).resolve(), figures_root)
         written = apply_anchor_rewrites(report)
+        # RECORDED FROM THE REPORT, NOT FROM `written`. `apply_anchor_rewrites`
+        # returns paths relative to FIGURES_ROOT; the consumer needs them
+        # relative to the repository, and re-joining two relative paths by hand
+        # at the call site is how a declared path stops naming the file that was
+        # actually written.
+        for f in report["files"]:
+            if f["rewritten"] is not None:
+                _record_written(subject, Path(f["path"]))
         for line in coverage_lines(report):
             print(line)
         print(f"rewrote anchored figures in {len(written)} file(s)"
@@ -1103,6 +1185,7 @@ def main(argv: List[str]) -> int:
         print(f"no change ({totals['cells']} cells)")
     else:
         path.write_text(updated, encoding="utf-8")
+        _record_written(subject, path)
         print(f"wrote {path}: ENFORCED own={totals['own']} "
               f"substituted={totals['substituted']} "
               f"undeclared={totals['undeclared']}; "
