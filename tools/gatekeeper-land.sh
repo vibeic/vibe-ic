@@ -359,9 +359,18 @@ run_pytest() {
   sel="$(mktemp -t gk_sel.XXXXXX)"
   local maxfail=(--maxfail="${GATEKEEPER_PYTEST_MAXFAIL:-10}")
   [ "${GATEKEEPER_PYTEST_MAXFAIL:-10}" = "0" ] && maxfail=()
-  local junit=()
+  # THE MERGED REPORT IS ALWAYS PRODUCED, even when nobody asked for it
+  # (vibe-ic#1654). The per-file driver below needs somewhere to merge to, and
+  # the run that does NOT export a junit is the same run in every other
+  # respect — measuring it differently is the asymmetry #1417 spent a version
+  # removing. A temporary target costs nothing and keeps ONE instrument.
+  local merged="${GATEKEEPER_PYTEST_JUNIT:-}"
+  local merged_tmp=""
+  if [ -z "$merged" ]; then
+    merged_tmp="$(mktemp -t gk_junit.XXXXXX)"
+    merged="$merged_tmp"
+  fi
   if [ -n "${GATEKEEPER_PYTEST_JUNIT:-}" ]; then
-    junit=(-o junit_family=xunit1 "--junitxml=$GATEKEEPER_PYTEST_JUNIT")
     # REMOVE THE TARGET FIRST, so a leftover can never be read as THIS run's record.
     #
     # A pytest that TIMES OUT writes no junit at all. Meanwhile
@@ -410,7 +419,47 @@ run_pytest() {
   # not disarm the write guard. That is the check that would have made this fix a
   # false green, so it is asserted rather than assumed — the guard's PASS/FAIL line
   # must still appear in `out`.
-  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 xargs -a "$sel" python3 -m pytest -q -p pytest_timeout "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread "${junit[@]+"${junit[@]}"}" 2>&1 )"; then
+  #
+  # ── ONE SESSION PER FILE, BECAUSE A HANG DESTROYS THE RECORD (vibe-ic#1654) ──
+  #
+  # `--timeout-method=thread` cannot interrupt a blocking `waiter.acquire()`. It
+  # dumps every thread's stack and takes the PROCESS down, and a process that
+  # dies never writes its `--junitxml`. So ONE hanging file used to cost the
+  # WHOLE run's machine-readable record — measured at the #1650 tree with a
+  # 91-file selection, where the hang was 1 file and the blast radius was the
+  # other 90, on BOTH arms:
+  #
+  #     ARM_cand_RC=123   ls: cannot access '/tmp/junit_full_cand.xml'
+  #     ARM_base_RC=143   ls: cannot access '/tmp/junit_full_base.xml'
+  #
+  # Reproduced on this tree at 1adbf3444 with three files, one of them hanging
+  # in the exact `Future.result -> Condition.wait -> waiter.acquire` shape: the
+  # green file that had ALREADY PASSED lost its record too.
+  #
+  # `programs/pytest_per_file_junit.py` runs one pytest session per selected
+  # file under a hard outer bound, merges the per-file reports into the one
+  # `--junitxml` this gate exports, and NAMES on stdout (`NORECORD  <path>`)
+  # every file whose session died without writing one. Those files stay OUT of
+  # the merged report on purpose — absence is what `landing_merge_verdict`
+  # already refuses on, and a synthetic red would be scored PRE-EXISTING when
+  # both arms hang on the same file, which is the false-clean this is about.
+  #
+  # MEASURED COST on this host: 0.86 s of per-invocation overhead (pytest start
+  # + conftest + the write guard's two snapshots, mean of 3), so ~78 s over a
+  # 91-file selection and ~13 s at the 15-file smoke floor. That is the price of
+  # the run having a record at all.
+  #
+  # THE PYTEST COMMAND IS PASSED IN VERBATIM, not built inside the driver, so
+  # `--timeout=180` stays declared HERE — `ci_harness_timeout_ceiling_check`
+  # resolves the binding harness bound from this file (EXTRA_HARNESS_RELS) and a
+  # bound moved into Python would vanish from its view.
+  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
+        --selection "$sel" --junit "$merged" \
+        --kill-after "${GATEKEEPER_PYTEST_FILE_KILL_AFTER:-900}" \
+        --aggregate-check \
+        --aggregate-kill-after "${GATEKEEPER_PYTEST_AGGREGATE_KILL_AFTER:-1800}" \
+        --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
+        -- python3 -m pytest -q -p pytest_timeout "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
     # the write guard from the session would be a false green, and it would look
@@ -423,10 +472,42 @@ run_pytest() {
     fi
   else
     printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
+    # THE FILES WITH NO RECORD, ALWAYS AND FIRST. They are the one thing a
+    # reader cannot reconstruct from the tail of a 91-file run, and `tail -6`
+    # would show whichever file happened to be last instead of the one that
+    # cost the record.
+    printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
     FAILED=1
   fi
+  # Human-facing diagnostics only. The merge verdict does NOT trust this mixed
+  # driver/subject stdout channel: pytest can print marker-looking text. It
+  # derives completeness from exact process suites in the merged JUnit.
+  if printf '%s\n' "$out" | grep -qa '^=== per-file junit summary'; then
+    printf '  REPORT  targeted test process verdicts embedded in junit\n'
+  else
+    printf '  FAIL  targeted test instrument produced no per-file summary\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^NORECORD'; then
+    printf '  FAIL  targeted per-file session produced no complete record\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^NOTRUN'; then
+    printf '  FAIL  targeted per-file session was not run\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^AGGREGATE_NORECORD'; then
+    printf '  FAIL  targeted aggregate session produced no complete record\n'
+    FAILED=1
+  elif printf '%s\n' "$out" | grep -qa '^AGGREGATE_COMPLETE'; then
+    printf '  REPORT  targeted aggregate session completed\n'
+  else
+    printf '  FAIL  targeted aggregate session produced no status\n'
+    FAILED=1
+  fi
   rm -f "$sel"
+  if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
 }
 run_pytest
 
