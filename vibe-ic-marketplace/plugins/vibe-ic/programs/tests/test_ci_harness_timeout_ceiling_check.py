@@ -576,6 +576,35 @@ def test_an_unmarked_test_beside_a_marked_one_keeps_the_harness_ceiling():
         ("test_slow", 600, 200)]
 
 
+def test_a_marker_on_a_helper_does_not_raise_the_callers_item_bound():
+    """pytest does not collect the helper, so its decorator governs nothing."""
+    rep = C.scan_source_report(textwrap.dedent("""
+        import subprocess, pytest
+        @pytest.mark.timeout(600)
+        def _run():
+            subprocess.run(['x'], timeout=200)
+        def test_calls_helper():
+            _run()
+    """), "f.py", _CEIL)
+    assert [f.seconds for f in rep["findings"]] == [200], rep
+    assert rep["marked_items"] == []
+
+
+def test_a_marker_on_a_fixture_does_not_raise_the_callers_item_bound():
+    """A fixture named like a test is still a fixture, not a collected item."""
+    rep = C.scan_source_report(textwrap.dedent("""
+        import subprocess, pytest
+        @pytest.fixture
+        @pytest.mark.timeout(600)
+        def test_environment():
+            subprocess.run(['x'], timeout=200)
+        def test_uses_environment(test_environment):
+            pass
+    """), "f.py", _CEIL)
+    assert [f.seconds for f in rep["findings"]] == [200], rep
+    assert rep["marked_items"] == []
+
+
 def test_a_module_level_pytestmark_bounds_every_call_in_the_file():
     """The case a per-test decorator cannot reach: the launcher call lives in a
     module-level helper every test in the file shares, so no decorator governs

@@ -822,6 +822,41 @@ def item_timeout_marker(fn: ast.AST, consts: Dict[str, Tuple[float, int]]
     return None
 
 
+def _is_fixture_function(fn: ast.AST) -> bool:
+    """Whether ``fn`` is declared as a pytest fixture, hence not an item."""
+    for dec in getattr(fn, "decorator_list", []):
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        dotted = _dotted(target)
+        if dotted == "fixture" or dotted.endswith(".fixture"):
+            return True
+    return False
+
+
+def pytest_item_functions(tree: ast.Module) -> Set[int]:
+    """Function nodes pytest can collect under this repository's defaults.
+
+    A timeout marker changes pytest-timeout's bound only when it belongs to a
+    collected item.  A helper (including a nested helper) and a fixture still
+    execute under the caller item's bound, even if somebody decorates the
+    function itself.  Pytest's default ``python_functions`` pattern is
+    ``test*`` and its default class pattern is ``Test*``; those are the
+    collection rules used by this repository.
+    """
+    items: Set[int] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test") and not _is_fixture_function(node):
+                items.add(id(node))
+            continue
+        if not isinstance(node, ast.ClassDef) or not node.name.startswith("Test"):
+            continue
+        for child in node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if child.name.startswith("test") and not _is_fixture_function(child):
+                    items.add(id(child))
+    return items
+
+
 def module_item_marker(tree: ast.AST, consts: Dict[str, Tuple[float, int]]
                        ) -> Optional[Tuple[float, int]]:
     """`(seconds, line)` from a module-level `pytestmark`, or None.
@@ -910,6 +945,7 @@ def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
     fn_marker: Dict[int, float] = {}
     marked: List[MarkedItem] = []
     mod_marker = module_item_marker(tree, consts)
+    collectable_items = pytest_item_functions(tree)
     file_ceiling = ceiling
     if mod_marker is not None:
         file_ceiling = int(mod_marker[0]) // CEILING_DIVISOR
@@ -917,6 +953,8 @@ def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
                                  "<pytestmark: every test in this file>",
                                  mod_marker[0], file_ceiling))
     for fn in funcs:
+        if id(fn) not in collectable_items:
+            continue
         mk = item_timeout_marker(fn, consts)
         if mk is not None:
             fn_marker[id(fn)] = mk
