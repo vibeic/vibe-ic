@@ -469,7 +469,7 @@ run_pytest() {
     FAILED=1
   fi
   rm -f "$sel"
-  [ -n "$merged_tmp" ] && rm -f "$merged_tmp"
+  if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
 }
 run_pytest
 
