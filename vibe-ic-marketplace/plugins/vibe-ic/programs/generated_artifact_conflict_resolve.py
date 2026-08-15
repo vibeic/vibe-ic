@@ -103,12 +103,14 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082 (helper from PR #1094)
 
 # The landing harness runs at --timeout=180 --timeout-method=thread; an inner
 # bound above that turns one hung regenerator into a lost SESSION.
@@ -388,9 +390,15 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if a.json_out:
         try:
-            Path(a.json_out).write_text(
-                json.dumps(v.to_dict(), indent=2) + "\n", encoding="utf-8"
-            )
+            # vibe-ic#1082 / #1462: the verdict record is the artefact a later
+            # reader opens to learn whether the merge was resolved or refused.
+            # `.write_text` creates that name before filling it, so a death
+            # mid-write leaves a truncated record under the name a
+            # `required_outputs` check reads as "this step produced its
+            # evidence". `ensure_ascii=True` keeps the payload byte-identical
+            # to the call this replaces — the conversion moves WHEN the name
+            # appears, never WHAT is written.
+            write_json(a.json_out, v.to_dict(), ensure_ascii=True)
         except OSError as e:
             print(f"[WARN] could not write {a.json_out}: {e}", file=sys.stderr)
 
