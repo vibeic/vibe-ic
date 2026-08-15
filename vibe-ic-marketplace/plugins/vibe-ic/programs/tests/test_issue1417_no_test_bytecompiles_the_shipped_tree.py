@@ -67,6 +67,62 @@ STRING — and the only literal `-B` argv elements in the tree are
 Each token is now read off the CALL: `-B` as an argv ELEMENT, the env var
 inside THAT call's `env=`. The loader check requires the module to ASSIGN
 `sys.dont_write_bytecode` rather than to mention it.
+
+THE POPULATION DEFECT (vibe-ic#1417)
+====================================
+Both corpus checks above walked `programs/tests/test_*.py` and asserted
+`not offenders`. Neither stated how many modules it read, and neither had a
+floor — so a population that collapsed to NOTHING produced an empty offender
+list and a PASS, which is indistinguishable in the output from a corpus that
+was read in full and found clean. That is the shape #1417 was filed about
+("an inability to observe folded into the value of a negative observation"),
+and this file carried three instances of it — the two corpus walks,
+`for f in sorted(_TESTS.glob("test_*.py"))`, whose denominator was never
+printed and never bounded below; and
+`test_the_shipped_tree_carries_no_committed_bytecode`, which returned PASS
+when `skills/` was not a directory at all, i.e. a check that could not look
+reporting the same value as a check that looked and found nothing.
+
+MEASURED on `2efa6af35`. This whole file, at HEAD and with this change,
+transplanted into a root holding nothing but itself
+(`/tmp/<x>/programs/tests/`) — the state a moved test tree, a renamed
+directory or a broken glob leaves behind. Same command, same empty root::
+
+    at HEAD        5 passed             0.08s
+    with this      4 failed, 2 passed   0.25s
+
+The first arm is the defect in one line: five green tests over a tree with no
+corpus in it. (Per-arm md5s of this file are in the PR that carries it; they
+cannot be quoted here without changing the file they describe.)
+
+AND THE POPULATION WAS NARROWER THAN THE SESSION IT PROTECTS
+============================================================
+The digest this guard stands in for, `test_tools_and_integration.py::
+test_shipped_skills_tree_is_untouched_by_this_module`, fails on a write by ANY
+test in the SESSION. `run_tests.sh` — which its own header calls THE full
+suite — puts five trees in one session, and `programs/tests/` is one of them.
+A writer in `mcp-eda/test/`, `tools/phase1_engine/tests/` or `skills/*/tests/`
+is exactly as fatal and exactly as invisible, and this guard never read those
+files. The corpus is now every tree `run_tests.sh` discovers.
+
+    population   programs/tests/test_*.py only          2563 modules
+                 every tier the full suite runs         2693 modules
+    reaching the spawn walk                             30 -> 93
+    reaching the loader walk                           260 -> 267
+    offenders in the 130 newly-read modules                     0
+
+Zero offenders today, so this widening changes no verdict on `2efa6af35`. It
+changes what the guard is ABLE to see, and that half is measured rather than
+argued: one unsuppressed `subprocess.run([sys.executable, "-m", "pytest",
+<path under skills/>])` appended to `mcp-eda/test/test_eda_doctor.py`, the
+victim byte-identical across both arms (md5 b60e52f706cf3e315ec1cc04c9442ab8)::
+
+    guard at HEAD     5 passed                                 <- blind
+    guard with this   1 failed, 5 passed
+                      Offenders: ['test_eda_doctor.py:150']
+
+So the widened population is load-bearing, not decoration: the old corpus
+could not see that writer at all.
 """
 from __future__ import annotations
 
@@ -103,6 +159,130 @@ _ARGV_SUPPRESSOR = "-B"
 #: Required to be ASSIGNED, not merely named: both modules that load from
 #: `skills/` today assign it, so the tightening flags neither.
 _SUPPRESSION = "dont_write_bytecode"
+
+
+# ---------------------------------------------------------------------------
+# The corpus, stated rather than assumed (vibe-ic#1417)
+# ---------------------------------------------------------------------------
+#: The trees `run_tests.sh` discovers, in its own order and by its own names.
+#: The three fixed ones are literal there; the per-skill tier is a glob there
+#: too. `tests/` is deliberately absent: `run_tests.sh` guards it with
+#: `[ -d tests ]` because it has never existed in this repository, and a name
+#: that resolves to nothing is what `pytest.ini` already carries two guards
+#: against.
+_FIXED_TIERS = (
+    ("programs/tests", ("programs", "tests")),
+    ("tools/phase1_engine/tests", ("tools", "phase1_engine", "tests")),
+    ("mcp-eda/test", ("mcp-eda", "test")),
+)
+
+#: FLOORS, not pins. Their job is to catch a population that COLLAPSED, never
+#: to track its size — a pin would redden on every PR that adds a test file,
+#: and a bar that is red every day is the one people learn to bypass (the
+#: argument `gatekeeper-land.sh` already makes for its own report tier).
+#: Measured on `2efa6af35`: 63 skill tiers, 2693 modules, 267 reaching the
+#: loader walk, 93 reaching the spawn walk. Each floor is roughly an order of
+#: magnitude below what was measured, which is far enough to be quiet under
+#: normal churn and near enough that a broken glob cannot slip under it.
+_FLOOR_SKILL_TIERS = 20
+_FLOOR_MODULES = 500
+_FLOOR_LOADER_REACH = 40
+_FLOOR_SPAWN_REACH = 10
+
+
+def _tier_roots(plugin: Path):
+    """`(label, path)` for every tree the full suite puts in ONE session.
+
+    Returned whether or not the path exists — an absent tier has to be
+    reportable, and dropping it here is precisely how a missing tree becomes a
+    silent zero.
+    """
+    roots = [(label, plugin.joinpath(*parts)) for label, parts in _FIXED_TIERS]
+    roots += [(f"skills/{d.parent.name}/tests", d)
+              for d in sorted((plugin / "skills").glob("*/tests"))
+              if d.is_dir()]
+    return roots
+
+
+def _corpus(plugin: Path):
+    """`(modules, missing_tiers, empty_tiers, skill_tier_count)`.
+
+    Every `.py` under every tier, recursively — helper modules included. The
+    old form globbed `test_*.py` in one directory, so `matrix_*.py`,
+    `_source_pin.py` and every `conftest.py` were unread, and a writer in one
+    of them takes the same landing down.
+    """
+    modules, missing, empty, skill_tiers = [], [], [], 0
+    for label, root in _tier_roots(plugin):
+        if label.startswith("skills/"):
+            skill_tiers += 1
+        if not root.is_dir():
+            missing.append(label)
+            continue
+        found = [p for p in sorted(root.rglob("*.py"))
+                 if "__pycache__" not in p.parts]
+        if not found:
+            empty.append(label)
+        modules += found
+    root_conftest = plugin / "conftest.py"
+    if root_conftest.is_file():
+        modules.append(root_conftest)
+    return sorted(set(modules)), missing, empty, skill_tiers
+
+
+def _population_refusals(plugin: Path):
+    """Every reason this guard would be reading LESS than it claims to.
+
+    Shared by the corpus checks and by their paired control, so the control
+    drives the same code path that is enforced against the tree and cannot
+    drift from it. An empty list means the guard looked; it never means the
+    guard found nothing.
+    """
+    modules, missing, empty, skill_tiers = _corpus(plugin)
+    out = []
+    if missing:
+        out.append(f"tier(s) named by run_tests.sh do not exist: {missing}")
+    if empty:
+        out.append(f"tier(s) present but containing no module: {empty}")
+    if skill_tiers < _FLOOR_SKILL_TIERS:
+        out.append(f"{skill_tiers} per-skill tier(s) found, floor is "
+                   f"{_FLOOR_SKILL_TIERS} — the `skills/*/tests` glob has "
+                   f"stopped resolving")
+    if len(modules) < _FLOOR_MODULES:
+        out.append(f"{len(modules)} module(s) in the corpus, floor is "
+                   f"{_FLOOR_MODULES}")
+    return out, modules
+
+
+def _reached(modules, kind: str):
+    """`(denominator, offenders)` for one of the two walks.
+
+    The denominator is the number of modules that got past the cheap
+    pre-filter and were actually PARSED — the only number that says how much
+    of the corpus this check had an opinion about.
+    """
+    seen, offenders = 0, []
+    for f in modules:
+        if f.name == Path(__file__).name:
+            continue
+        try:
+            text = f.read_text(errors="replace")
+        except OSError as exc:                         # pragma: no cover
+            offenders.append(f"{f.name}: UNREADABLE ({exc})")
+            continue
+        if kind == "loader":
+            if not any(n in text for n in _LOADERS):
+                continue
+            seen += 1
+            line = _unsuppressed_loader_line(text)
+        else:
+            if "subprocess" not in text or not _mentions_skills_path(text):
+                continue
+            seen += 1
+            line = _unsuppressed_spawn_line(text)
+        if line is not None:
+            offenders.append(f"{f.name}:{line}")
+    return seen, offenders
 
 
 def _assignments(tree: ast.AST) -> dict:
@@ -347,17 +527,22 @@ def test_no_test_module_exec_modules_a_shipped_path_unsuppressed():
     Named per file rather than counted: a number tells the next reader that
     something is wrong and not which file to open, and this defect already cost
     one bisection precisely because it had no obvious author.
+
+    The corpus is every tree the full suite runs, and the run states its own
+    reach before its verdict: an empty offender list over an empty corpus is
+    the failure mode #1417 is about, so the refusals are asserted FIRST.
     """
-    offenders = []
-    for f in sorted(_TESTS.glob("test_*.py")):
-        if f.name == Path(__file__).name:
-            continue
-        text = f.read_text(errors="replace")
-        if not any(n in text for n in _LOADERS):
-            continue
-        line = _unsuppressed_loader_line(text)
-        if line is not None:
-            offenders.append(f"{f.name}:{line}")
+    refusals, modules = _population_refusals(_PLUGIN)
+    assert not refusals, (
+        "this guard cannot say the tree is clean, because it could not read "
+        f"the corpus it is supposed to walk: {refusals}")
+    seen, offenders = _reached(modules, "loader")
+    print(f"[denominator] loader walk: {seen} of {len(modules)} corpus "
+          f"module(s) parsed (the rest name no loader)")
+    assert seen >= _FLOOR_LOADER_REACH, (
+        f"only {seen} module(s) reached the loader walk, floor is "
+        f"{_FLOOR_LOADER_REACH}. The pre-filter {_LOADERS} no longer matches "
+        "the corpus, so this check is passing over almost nothing.")
     assert not offenders, (
         "these test modules load a module from a path under `skills/` without "
         "suppressing byte-code, so importing it writes a `.pyc` INTO the "
@@ -388,16 +573,17 @@ def test_no_test_module_spawns_a_child_into_the_shipped_tree_unsuppressed():
     check that quietly widens its own subject is how a guard stops meaning one
     thing.
     """
-    offenders = []
-    for f in sorted(_TESTS.glob("test_*.py")):
-        if f.name == Path(__file__).name:
-            continue
-        text = f.read_text(errors="replace")
-        if "subprocess" not in text or not _mentions_skills_path(text):
-            continue
-        line = _unsuppressed_spawn_line(text)
-        if line is not None:
-            offenders.append(f"{f.name}:{line}")
+    refusals, modules = _population_refusals(_PLUGIN)
+    assert not refusals, (
+        "this guard cannot say the tree is clean, because it could not read "
+        f"the corpus it is supposed to walk: {refusals}")
+    seen, offenders = _reached(modules, "spawn")
+    print(f"[denominator] spawn walk: {seen} of {len(modules)} corpus "
+          f"module(s) parsed (the rest spawn nothing at `skills/`)")
+    assert seen >= _FLOOR_SPAWN_REACH, (
+        f"only {seen} module(s) reached the spawn walk, floor is "
+        f"{_FLOOR_SPAWN_REACH}. The pre-filter has stopped matching the "
+        "corpus, so this check is passing over almost nothing.")
     assert not offenders, (
         "these test modules SPAWN a child pointed at a path under `skills/` "
         "without suppressing byte-code in it. `sys.dont_write_bytecode` is "
@@ -413,9 +599,16 @@ def test_the_shipped_tree_carries_no_committed_bytecode():
     and every one of the checks above would pass while the shipped tree carried
     build output. Cheap, and it states the invariant the rest of this file is
     protecting rather than assuming it.
+
+    An absent `skills/` used to `return` here, i.e. report the same value as a
+    tree that was read and found clean (vibe-ic#1417). The plugin cannot ship
+    without it, so its absence is a failure of this check to look, not a clean
+    bill for a tree that is not there.
     """
-    if not _SKILLS.is_dir():                       # pragma: no cover
-        return
+    assert _SKILLS.is_dir(), (
+        f"the shipped skills/ tree is not a directory at {_SKILLS} — this "
+        "check could not look, which is not the same answer as `no byte-code "
+        "found` and must never be recorded as one.")
     stray = sorted(str(p.relative_to(_PLUGIN))
                    for p in _SKILLS.rglob("*.pyc"))
     assert not stray, (
@@ -532,3 +725,39 @@ def test_the_loader_check_requires_the_suppression_to_be_assigned():
     assert not wrong, (
         "the loader check no longer requires `sys.dont_write_bytecode` to be "
         f"ASSIGNED rather than mentioned. Wrong: {wrong}")
+
+
+def test_a_corpus_that_could_not_be_read_is_refused_and_not_reported_clean(
+        tmp_path):
+    """THE POPULATION HALF OF #1417, in the same both-arm shape as the two
+    controls above.
+
+    The two corpus checks assert `not offenders`. That sentence is true of a
+    tree that was walked and is clean, and equally true of a tree that was
+    never walked — and until this file was repaired, nothing separated them:
+    no denominator was printed and no floor was asserted, so a population that
+    collapsed to nothing passed. `_population_refusals` is the separation, and
+    this drives it over both a root that has nothing and the real plugin, for
+    the same reason `_SPAWN_CASES` asserts both arms: a control that only
+    proves the check can pass is what let the earlier defect survive review.
+
+    The empty arm is `tmp_path`, a directory with none of the tiers in it —
+    exactly what a moved test tree, a renamed directory or a broken glob
+    leaves behind.
+    """
+    empty, empty_modules = _population_refusals(tmp_path)
+    assert empty, (
+        "a plugin root containing NONE of the tiers produced no refusal, so "
+        "the corpus checks would have walked "
+        f"{len(empty_modules)} module(s) and reported the shipped tree clean. "
+        "That is the defect vibe-ic#1417 was filed about, restated inside the "
+        "guard named after it.")
+    assert any("do not exist" in r for r in empty), empty
+
+    live, live_modules = _population_refusals(_PLUGIN)
+    assert not live, (
+        "the real plugin tree is being refused, so the floors below no longer "
+        f"describe this repository: {live}")
+    print(f"[denominator] corpus: {len(live_modules)} module(s) across the "
+          f"tiers run_tests.sh discovers")
+    assert len(live_modules) >= _FLOOR_MODULES, len(live_modules)
