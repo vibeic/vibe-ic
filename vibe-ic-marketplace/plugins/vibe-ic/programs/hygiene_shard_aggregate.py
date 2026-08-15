@@ -42,6 +42,8 @@ from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 from pathlib import Path
 from typing import Dict, List
 
+from _atomic_artefact import write_json  # vibe-ic#1082 (helper from PR #1094)
+
 #: States in which a gate reached a verdict about its subject.
 DECIDED = ("PASS", "FAIL")
 #: Ran, but concluded nothing. Never folded into PASS — `_vacuous_exit`'s rule.
@@ -149,13 +151,13 @@ def main(argv=None) -> int:
         # file under the FINAL name, which the next reader cannot tell from a
         # complete one; that is the whole point of the shard aggregate, which
         # exists to say what the run's reach WAS.
-        atomic_write_text(args.json, json.dumps({
+        write_json(args.json, {
             "expected": n_exp, "decided": n_dec,
             "not_checked": sorted(undecided), "failed": sorted(set(failed)),
             "wrote_corpus": sorted(set(wrote)),
             "shards": len(docs), "critical_path_seconds": seconds,
             "problems": problems,
-        }, indent=2) + "\n")
+        }, ensure_ascii=True)
 
     for p in problems:
         print(f"  [COVERAGE] {p}")
