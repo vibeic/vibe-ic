@@ -275,6 +275,15 @@ class Clause:
     guards: List[str] = field(default_factory=list)
     #: the enclosing step's `required_outputs`: what the flow SAYS this step writes
     step_outputs: List[str] = field(default_factory=list)
+    #: how many clauses in this step's gate can DISPATCH A PROGRAM — the
+    #: denominator `flow_compliance_check.check_step` divides by when it decides
+    #: whether the COUNTED json-vacuity channel may tier the step. Only the two
+    #: slots that append `__RAN_HINT__` are in it (`program_exit_zero`,
+    #: `optional_program_exit_zero`); an advisory clause appends no RAN marker
+    #: and is deliberately not counted, exactly as the consumer does not count
+    #: it. 0 means "not established" — see `probe_producer_emitted_nothing`,
+    #: which treats that as "cannot claim unanimity" rather than as 1.
+    step_dispatchers: int = 0
 
     @property
     def blocking(self) -> bool:
@@ -534,6 +543,9 @@ def discover_clauses(flow_yaml: Path) -> List[Clause]:
                 walk(val, step, guards + keep, outputs)
 
     walk(doc, None, (), [])
+    counts = _dispatching_clause_counts(doc)
+    for cl in out:
+        cl.step_dispatchers = counts.get(cl.step, 0)
     return out
 
 
@@ -633,6 +645,53 @@ def population_report(flow_yaml: Path) -> Dict[str, Any]:
             "unswept": unswept, "non_program": non_program,
             "unrecognised": unrecognised}
 
+
+def _dispatching_clause_counts(doc: Any) -> Dict[str, int]:
+    """Per step id, how many gate clauses can DISPATCH A PROGRAM.
+
+    This is `flow_compliance_check`'s own DENOMINATOR, read from the same YAML.
+    `_evaluate_gate` appends `__RAN_HINT__` in exactly two slots —
+    `program_exit_zero` and `optional_program_exit_zero` — and `check_step`
+    compares the number of clauses that disclosed emptiness against the number
+    that ran. An `advisory_program_exit_zero` clause appends no RAN marker, so
+    it is not in the consumer's denominator and is not in this one either.
+
+    Counted SEPARATELY from `discover_clauses`'s own walk on purpose: that walk
+    collects only the clauses this census can RUN (the string form), which
+    excludes every `optional_program_exit_zero` (a mapping). Counting siblings
+    from that list would UNDERCOUNT the denominator, and undercounting it is the
+    dangerous direction — it is what would let this census hand an amnesty to a
+    clause whose step can never be unanimous.
+    """
+    counts: Dict[str, int] = {}
+
+    def count(node: Any) -> int:
+        n = 0
+        if isinstance(node, dict):
+            for key, val in node.items():
+                if key in ("program_exit_zero", "optional_program_exit_zero"):
+                    n += 1
+                else:
+                    n += count(val)
+        elif isinstance(node, list):
+            for val in node:
+                n += count(val)
+        return n
+
+    def walk(node: Any, step: Optional[str]) -> None:
+        if isinstance(node, dict):
+            here = str(node["id"]) if "id" in node else step
+            if here is not None and "gate" in node:
+                counts[here] = counts.get(here, 0) + count(node["gate"])
+            for key, val in node.items():
+                if key != "gate":
+                    walk(val, here)
+        elif isinstance(node, list):
+            for val in node:
+                walk(val, step)
+
+    walk(doc, None)
+    return counts
 
 
 # --------------------------------------------------------------- invocation
@@ -2025,6 +2084,334 @@ def _materialise(patterns: List[str], root: Path) -> int:
     return made
 
 
+def _materialise_empty(patterns: List[str], root: Path) -> int:
+    """Materialise the flow's declared paths as ZERO-BYTE files.
+
+    Deliberately NOT `_materialise`, which writes `{}` into a `.json` and a
+    newline into everything else. An empty JSON OBJECT is a producer that
+    emitted a DOCUMENT — a gate that opens it and reports "0 findings" is
+    answering its own question correctly. Zero bytes is a producer that emitted
+    NOTHING, and telling those two apart is the entire question this probe asks.
+    Seeding the wrong one would accuse every gate that correctly reports an
+    empty result set.
+
+    Existing files are TRUNCATED, not skipped: the fixture is "present but
+    hollow", and a path the skeleton already populated would otherwise leave
+    this probe measuring a tree it did not build.
+    """
+    made = 0
+    for pattern in patterns:
+        for alt in str(pattern).split(" OR "):
+            rel = alt.strip().lstrip("/")
+            if not rel or rel.startswith(".."):
+                continue
+            concrete = rel.replace("**", "d").replace("*", "x").replace("?", "x")
+            if any(c in concrete for c in "[]"):
+                continue
+            target = root / concrete
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.is_dir():
+                    continue
+                if target.exists() and target.stat().st_size == 0:
+                    continue          # already hollow; counted as materialised
+                target.write_text("")
+                made += 1
+            except OSError:
+                continue
+    return made
+
+
+def _declared_inputs(cl: Clause) -> List[str]:
+    """Every path the FLOW says this clause's step operates on.
+
+    Its own `required_outputs` plus every `files_exist` pattern the guards
+    quote — the same two sources the rest of this file reads, so the input set
+    is the flow's own statement about the step rather than this file's guess
+    about it.
+    """
+    pats = list(cl.step_outputs)
+    for g in cl.guards:
+        # the guard strings are built in `discover_clauses` and end with the
+        # pattern they quote; take it back off rather than re-walking the YAML,
+        # so the two can never disagree about what guarded this clause.
+        if "files_exist: " in g:
+            pats.append(g.split("files_exist: ", 1)[1].strip())
+        elif "resolves, e.g. " in g:
+            pats.append(g.split("resolves, e.g. ", 1)[1].strip())
+    return [p for p in pats if p]
+
+
+#: The three states a gate's "I examined nothing" can be in. THE MIDDLE ONE IS
+#: THE WHOLE POINT, and is why this is not a boolean.
+_CH_TIERED = "stdout_tiered"      # `check_step` promotes the step, on its own
+_CH_COUNTED = "json_counted"      # counted; tiers the step only if UNANIMOUS
+_CH_NONE = "none"                 # nothing any consumer reads
+
+
+def disclosure_channel(project: Path, cmd: str, out: str) -> str:
+    """WHICH channel the gate disclosed on — not merely WHETHER it did.
+
+    `flow_compliance_check` has two rc-independent vacuity channels and does
+    deliberately different things with them. A probe that folds them into one
+    boolean must be wrong in one direction or the other:
+
+      stdout — `_stdout_signals_vacuous(out)`, i.e. `VACUOUS_PASS` at LINE
+               START. `_evaluate_gate` bubbles it up and `check_step` PROMOTES
+               the step to the VACUOUS_PASS tier. One clause is enough.
+
+      json   — `_json_report_signals_vacuous(project, cmd)` opens the report the
+               clause itself named with `--json` and reads its `verdict` against
+               `_VACUOUS_JSON_VERDICTS` (`NOT_APPLICABLE`, `SKIPPED`, …). It is
+               recorded as `__JSON_VACUOUS_HINT__` and, in that file's own
+               words, is "the structured channel, COUNTED": it may tier the step
+               only when `len(all_vacuous_cmds) >= len(ran_hints)` — when EVERY
+               clause in the step that dispatched a program disclosed the same.
+               Short of unanimity the step keeps its bare PASS and the
+               disclosure surfaces as a `PARTIALLY-VACUOUS` reason, which names
+               the hole rather than closing it.
+
+    Reading only the stdout one is the mistake #1054 repaired in
+    `prose_vs_exit`: scoring a verdict off prose without asking everything that
+    consumes it. Reading them as equivalent is the opposite mistake, and it
+    hands an amnesty to exactly the gates #1115 is about.
+
+    Both predicates are IMPORTED from the consumer, never reimplemented, so this
+    census cannot keep scoring by a rule the flow has moved on from. Degrades
+    LOUDLY: if the import fails nothing is treated as disclosed, so the failure
+    shows up as noisy accusations rather than as a quiet amnesty.
+    """
+    if _consumer_reads_the_refusal(out):
+        return _CH_TIERED
+    try:
+        _plugin_on_path()
+        from flow_compliance_check import (  # noqa: PLC0415
+            _json_report_signals_vacuous,
+        )
+    except Exception as exc:                                   # pragma: no cover
+        print(f"liar_census: CANNOT IMPORT the JSON vacuity channel ({exc}) — "
+              f"this run cannot tell a counted-only disclosure from none, and "
+              f"OVERSTATES the finding count",
+              file=sys.stderr)
+        return _CH_NONE
+    try:
+        return _CH_COUNTED if _json_report_signals_vacuous(project, cmd) \
+            else _CH_NONE
+    except Exception:                                          # pragma: no cover
+        return _CH_NONE
+
+
+def probe_producer_emitted_nothing(cl: Clause, sandbox: Path) -> ProbeResult:
+    """P10 — the producer ran and emitted NOTHING. Does the gate read the
+    absence as consent?  (vibe-ic#1115)
+
+    THE SHAPE, AND WHY THE OTHER PROBES CANNOT SEE IT
+    ================================================
+    From a source-level study of LibreLane 3.0.8. `klayout.py:486-490`:
+
+        if not self.config["KLAYOUT_DRC_RUNSET"]:
+            self.warn("... This step will be skipped.")
+            return {}
+
+    Returning `{}` emits no metric. `Checker.KLayoutDRC` then finds nothing to
+    check, warns, and PASSES. The same shape holds in `KLayout.Density`,
+    `KLayout.Antenna`, `KLayout.SealRing` and `Magic.Filler`. What makes it a
+    defect rather than a design choice is that the same flow contains the
+    counter-example: `classic.py:294-302` gates `Checker.MagicDRC` on
+    `RUN_MAGIC_DRC`, so when a USER disables the producer the checker is
+    disabled with it and cannot masquerade as a pass. The path where the
+    PRODUCER skips itself has no such gating.
+
+    Every gate-only probe in this file interrogates the CHECKER — what it
+    prints, what it exits, what it writes, where it is wired. This one asks
+    about its INPUT, and the difference is not academic:
+
+      * `probe_empty_tree` asks "does rc 0 certify a project that does not
+        exist?" — and it is DECLINED for exactly the clauses this shape lives
+        in. A clause guarded by `[condition]` / `[sibling]` /
+        `[required_outputs]` has its empty-tree result discounted, correctly,
+        because on an empty tree the step never runs. That discount is what
+        hides this shape: here the step DOES run, its declared artefacts DO
+        exist, and only their CONTENT is missing.
+      * `probe_ruler_blind` (P6) empties an artefact this clause was OBSERVED
+        READING on a published corpus root. That needs a green baseline run to
+        mutate, so it can only ask about steps some real project already
+        exercised — and it declines outright when the flow records the step in
+        a tier its gate does not decide. The question here is the one before
+        that: a step nobody has run yet, whose producer emitted nothing.
+
+    So the fixture is the flow's own declaration, materialised EMPTY: every path
+    the step names exists, and every one of them is zero bytes. That is a
+    producer that ran and emitted nothing, which is the state LibreLane's
+    `return {}` leaves behind.
+
+    THE RULE, taken from the issue rather than invented here
+    -------------------------------------------------------
+    "An absent input is 'not measured', and not-measured must never render as
+    passed." So rc 0 is a lie unless the gate DISCLOSES — and what counts as a
+    disclosure is not this file's opinion either: it is the consumer's own two
+    channels, read through `disclosure_channel`, which knows that they do not
+    have the same power.
+
+        rc 1 / rc 2   the gate looked and objected, or disclosed a skip  CLEAN
+        rc 0 + stdout `VACUOUS_PASS:`   the step is PROMOTED             GUARDED
+        rc 0 + json-only disclosure     counted; tiered only if UNANIMOUS
+                                        across the step, else still PASS SUSPECT
+        rc 0 and nothing else                                            LIAR
+
+    WHAT IT DOES NOT ASK. Whether the gate's RULE is right, and whether an empty
+    file is a plausible artefact for this particular gate. A gate that FAILs on
+    an empty input is CLEAN here whatever its reason — the question is only
+    whether "nothing was produced" can come out the other side as PASS.
+    """
+    inputs = _declared_inputs(cl)
+    repro = (f"seed every path step {cl.step} declares as an EMPTY file, then "
+             f"run programs/{cl.program}.py in it; echo rc=$?")
+
+    # A GLOB IN THE COMMAND IS NOT THIS PROBE'S QUESTION. `_argv_for` keeps the
+    # clause VERBATIM and spawns without a shell, while the real consumer
+    # (`__check_program_exit_zero`: "with globs expanded relative to project")
+    # expands them first. So for a clause like
+    # `rtl_hygiene_lint phase2/stage1/rtl/*.sv …` this probe would hand the
+    # program the literal `*.sv`, watch it report `0 errors` over files it never
+    # opened, and accuse it of a defect belonging to the INVOCATION. Declined
+    # rather than guessed at: expanding it here would be measuring an invocation
+    # this file invented.
+    if any(any(c in tok for c in "*?[") for tok in cl.cmd.split()[1:]):
+        return ProbeResult(
+            "producer_emitted_nothing", GUARDED,
+            "the clause passes a GLOB argument, which the real consumer expands "
+            "and this census deliberately does not — the invocation this probe "
+            "can build is not the one the flow runs, so it cannot establish a "
+            "lie here", repro)
+
+    if not inputs:
+        return ProbeResult(
+            "producer_emitted_nothing", NA,
+            "the flow declares no input for this step, so there is no producer "
+            "whose silence could be read as consent", repro)
+
+    made = _materialise_empty(inputs, sandbox)
+    if not made:
+        return ProbeResult(
+            "producer_emitted_nothing", NA,
+            f"none of the {len(inputs)} declared pattern(s) could be "
+            f"materialised (globs this probe will not guess at)", repro)
+
+    rc, out = _run(cl.cmd, sandbox)
+    if rc in (124, 127):
+        return ProbeResult("producer_emitted_nothing", NA,
+                           "did not run in this fixture", repro)
+    if rc != 0:
+        return ProbeResult("producer_emitted_nothing", CLEAN,
+                           f"rc={rc} over {made} empty declared input(s) — it "
+                           f"did not read the silence as consent", repro)
+
+    channel = disclosure_channel(sandbox, cl.cmd, out)
+    if channel == _CH_TIERED:
+        return ProbeResult(
+            "producer_emitted_nothing", GUARDED,
+            f"passes over {made} empty declared input(s) but prints the stdout "
+            f"sentinel `flow_compliance_check._stdout_signals_vacuous` reads, "
+            f"so `check_step` PROMOTES the step to VACUOUS_PASS rather than "
+            f"PASS", repro)
+
+    # DID THE SEEDING REACH THIS GATE AT ALL?
+    #
+    # A step's declared outputs are the STEP's, not each clause's. D1 declares
+    # 14 and carries 24 gate clauses, and a clause may read a subset of them —
+    # or none. `analog_a0_skip_forbidden_check` reads `A0_skip_decision.json`,
+    # which D1 does not declare, so seeding D1's 14 outputs empty starves it of
+    # nothing and its `[PASS] forbidden … not present` is the CORRECT answer to
+    # its own question. Accusing it would be this probe inventing a starvation
+    # it never caused — the fail-safe class #1051 already had to learn for
+    # `empty_tree`.
+    #
+    # The discriminator is DIFFERENTIAL and needs no name list: run the SAME
+    # clause with those paths ABSENT. If absent and present-but-empty give the
+    # same verdict on the same channel, the gate is not reading them and this
+    # fixture establishes nothing about it. If they DIFFER, the gate read the
+    # empty artefacts and what it said about them is this probe's subject.
+    bare = sandbox.parent / f"{sandbox.name}__bare"
+    shutil.rmtree(bare, ignore_errors=True)
+    shutil.copytree(sandbox, bare)
+    try:
+        for pattern in inputs:
+            for alt in str(pattern).split(" OR "):
+                rel = alt.strip().lstrip("/")
+                concrete = rel.replace("**", "d").replace("*", "x").replace("?", "x")
+                tgt = bare / concrete
+                if tgt.is_file():
+                    tgt.unlink()
+        rc_bare, out_bare = _run(cl.cmd, bare)
+        # the JSON channel is read against the tree that run happened in
+        channel_bare = disclosure_channel(bare, cl.cmd, out_bare)
+    finally:
+        shutil.rmtree(bare, ignore_errors=True)
+
+    if rc_bare in (124, 127):
+        # A run that TIMED OUT or could not be spawned told us it was unable to
+        # look — never that the answer is "it behaves differently". Without the
+        # control arm the differential is undetermined, and scoring a LIAR off
+        # an undetermined control is the confident zero this census exists to
+        # prevent, wearing the other sign.
+        return ProbeResult(
+            "producer_emitted_nothing", NA,
+            f"the ABSENT control arm did not run (rc={rc_bare}), so the "
+            f"differential that tells 'read the empty artefacts' from 'never "
+            f"read them' could not be established", repro)
+
+    if (rc_bare, channel_bare) == (rc, channel):
+        return ProbeResult(
+            "producer_emitted_nothing", GUARDED,
+            f"the same rc ({rc}) on the same disclosure channel ({channel}) "
+            f"whether the {made} declared input(s) are EMPTY or ABSENT, so this "
+            f"clause does not read them — the fixture starved it of nothing and "
+            f"cannot establish a lie here", repro)
+
+    how = f"objects (rc={rc_bare})" if rc_bare != 0 else "DISCLOSES"
+    if channel == _CH_COUNTED:
+        # NOT SILENT, SO NOT A LIAR — and not clean either. The consumer counts
+        # this disclosure and may tier the step on it, but ONLY when every
+        # clause in the step that dispatched a program disclosed the same. Where
+        # the step has one such clause that unanimity is structural and the
+        # census must not accuse; where it has several it is a runtime
+        # coincidence, and short of it the step still records PASS.
+        # `cl.blocking` is part of the discount, not decoration: the sole
+        # dispatcher can only BE this clause if this clause is one of the two
+        # slots that dispatch. An `advisory_program_exit_zero` clause beside a
+        # single blocking one would otherwise be handed the blocking clause's
+        # unanimity, and it never had it.
+        if cl.blocking and cl.step_dispatchers == 1:
+            return ProbeResult(
+                "producer_emitted_nothing", GUARDED,
+                f"discloses only in its --json report, but it is the ONLY "
+                f"program-dispatching clause in step {cl.step}, so "
+                f"`check_step`'s unanimity test (`len(all_vacuous_cmds) >= "
+                f"len(ran_hints)`) is satisfied by construction and the step is "
+                f"tiered VACUOUS_PASS on that channel alone", repro)
+        where = (f"{cl.step_dispatchers} program-dispatching clause(s)"
+                 if cl.step_dispatchers
+                 else "an undetermined number of program-dispatching clauses")
+        return ProbeResult(
+            "producer_emitted_nothing", SUSPECT,
+            f"with its {made} declared input(s) ABSENT this gate {how}; with the "
+            f"same paths PRESENT BUT EMPTY it exits 0 and discloses ONLY in its "
+            f"--json report. flow_compliance_check counts that "
+            f"(`__JSON_VACUOUS_HINT__`) and tiers the step on it only when EVERY "
+            f"clause that ran disclosed the same — step {cl.step} has {where}, "
+            f"so short of unanimity THE STEP STILL RECORDS PASS with a "
+            f"PARTIALLY-VACUOUS note (vibe-ic#1115)", repro)
+
+    sev = LIAR if cl.blocking else SUSPECT
+    return ProbeResult(
+        "producer_emitted_nothing", sev,
+        f"with its {made} declared input(s) ABSENT this gate {how}; with the "
+        f"same paths PRESENT BUT EMPTY it exits 0 and says nothing a consumer "
+        f"reads. A producer that emitted nothing therefore renders as PASS, and "
+        f"defeats the gate's own disclosure (vibe-ic#1115)", repro)
+
+
 #: How the same directory can be spelled. Each is a real thing a caller types,
 #: and every one of them names the SAME directory as `.` when the process cwd
 #: is that directory — so any disagreement between them is a property of the
@@ -3176,6 +3563,15 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
                 _materialise(cl.step_outputs, sp)
                 rep.probes.append(probe_path_spelling(cl, sp, spelling_variants))
                 shutil.rmtree(sp, ignore_errors=True)
+            if "emitted" in probes:
+                # the step RAN and its declared artefacts EXIST — they are just
+                # zero bytes. Its own sandbox, because the fixture is the
+                # opposite of the spelling one above: present-but-hollow rather
+                # than populated.
+                em = Path(tmp) / f"em{i}"
+                shutil.copytree(skeleton, em)
+                rep.probes.append(probe_producer_emitted_nothing(cl, em))
+                shutil.rmtree(em, ignore_errors=True)
             reports.append(rep)
             print(f"  [{i}/{len(clauses)}] step {cl.step:>4}  {cl.program[:52]:<52} {rep.worst}",
                   file=sys.stderr, flush=True)
@@ -3217,8 +3613,7 @@ def run_census(clauses: List[Clause], probes: List[str], timeout: int,
 #: axis somebody happened to check -- and `--probes` names the cheap subset for
 #: anyone who wants the static sweep alone.
 ALL_PROBES = ["empty", "prose", "zero", "writes", "selector",
-              "blocks", "depth", "spelling", "ruler", "cycle",
-              "forcedpass", "forcedfail"]
+              "blocks", "depth", "spelling", "emitted", "ruler", "cycle", "forcedpass", "forcedfail"]
 
 
 def _coverage_block(pop: Dict[str, Any], scored: int, filtered: bool) -> str:
