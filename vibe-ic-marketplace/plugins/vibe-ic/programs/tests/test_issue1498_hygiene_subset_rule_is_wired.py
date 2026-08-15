@@ -183,6 +183,10 @@ def test_the_base_record_is_cached_beside_the_base_log():
         ("the HOST must travel with the cached record — findings are "
          "host-dependent and a shared cache would otherwise hand one host's "
          "baseline to another host's candidate")
+    hit = src.split('if [ -n "$CACHED" ] && [ -s "$CACHED" ]', 1)[1].split(
+        "; then", 1)[0]
+    assert "CACHED_HYG" in hit and "CACHED_HYG_HOST" in hit, \
+        "a log-only legacy cache must be a miss, or the new gate never runs"
 
 
 def test_the_land_script_still_honours_the_variable():
@@ -297,11 +301,18 @@ def test_the_delta_only_ever_adds_refusals():
 # ═════════════════════════════════ 3. WHICH ARM'S SILENCE MEANS WHICH THING
 
 
-def test_no_base_record_degrades_and_says_so():
-    """The branch does not control whether arm A2 ran — a `--base-gate-cache`
-    hit skips it entirely — so a missing baseline must not be a ban."""
+def test_no_arguments_disclose_legacy_per_label_mode():
+    """A legacy direct caller may omit the feature; the merge path never does."""
     assert V.read_hygiene_delta("", "", "", "") is None
     assert V.read_hygiene_delta("", "/nonexistent", _HOST, _HOST) is None
+
+
+def test_named_but_missing_base_record_refuses():
+    """The merge path always names both records, so absence fails closed."""
+    d = V.read_hygiene_delta("/nonexistent-base", "/nonexistent-candidate",
+                             _HOST, _HOST)
+    assert d is not None and d["status"] == "REFUSED"
+    assert "missing measurement" in d["refusal"]
 
 
 def test_a_base_record_with_no_candidate_record_refuses(tmp_path):

@@ -615,20 +615,16 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   # A CACHE HIT MUST BE THE SAME QUESTION, not a similar one. The key is the base
   # COMMIT, so a hit is by construction about the identical tree; a base that
   # moved has a different name and misses.
-  if [ -n "$CACHED" ] && [ -s "$CACHED" ]; then
+  if [ -n "$CACHED" ] && [ -s "$CACHED" ] \
+     && [ -s "$CACHED_HYG" ] && [ -s "$CACHED_HYG_HOST" ]; then
     cp "$CACHED" "$RUN/base_land.log"
     echo "--- arm A2: reused the gate log measured for base ${BASE_SHA:0:12}"
-    # The two halves are cached independently, so a cache written before this
-    # change has the log and not the record. That is a MISSING baseline, which
-    # the verdict discloses and degrades from — never a silently empty one.
-    if [ -s "$CACHED_HYG" ] && [ -s "$CACHED_HYG_HOST" ]; then
-      cp "$CACHED_HYG" "$BASE_HYG"
-      BASE_HYG_HOST="$(cat "$CACHED_HYG_HOST")"
-    else
-      echo "--- arm A2: the cache carries no hygiene record for this base, so the"
-      echo "            hygiene tier falls back to the per-LABEL comparison"
-    fi
+    cp "$CACHED_HYG" "$BASE_HYG"
+    BASE_HYG_HOST="$(cat "$CACHED_HYG_HOST")"
   else
+    if [ -n "$CACHED" ] && [ -s "$CACHED" ]; then
+      echo "--- arm A2: stale cache has a gate log but no complete hygiene baseline; rerunning"
+    fi
     ( cd "$WT_BASE" && \
         GATEKEEPER_BASE="$BASE_SHA" \
         GATEKEEPER_VERSION_BY_GATEKEEPER=1 \
@@ -691,21 +687,18 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     cp "$BASE_HYG" "$CACHED_HYG"
     printf '%s\n' "$THIS_HOST" > "$CACHED_HYG_HOST"
   fi
-  # ASKED ONLY WHEN THE BASE ARM PRODUCED A BASELINE. The two arms are
-  # asymmetric on purpose (see landing_merge_verdict's header): a missing BASE
-  # record is disclosed and degrades to the per-label comparison, because the
-  # branch does not control whether arm A2 ran; a missing CANDIDATE record
-  # REFUSES, because that is the tree under test failing to measure itself. So
-  # the candidate path is handed over unconditionally here and the verdict —
-  # not this script — decides what its absence means.
+  # ALWAYS ASK THE DIFFERENTIAL. A missing record on either arm is then a
+  # machine-readable REFUSAL from `hygiene_finding_delta`, never a silent
+  # fallback to the permissive one-label comparison. A legacy cache without
+  # the new record is treated as a miss above so arm A2 gets one chance to
+  # populate it before this fail-closed boundary fires.
+  HYG_ARGS=(--base-hygiene "$BASE_HYG" --candidate-hygiene "$CAND_HYG"
+            --base-hygiene-host "$BASE_HYG_HOST"
+            --candidate-hygiene-host "$THIS_HOST")
   if [ -s "$BASE_HYG" ]; then
-    HYG_ARGS=(--base-hygiene "$BASE_HYG" --candidate-hygiene "$CAND_HYG"
-              --base-hygiene-host "$BASE_HYG_HOST"
-              --candidate-hygiene-host "$THIS_HOST")
     echo "--- hygiene finding delta: base record on $BASE_HYG_HOST, candidate on $THIS_HOST"
   else
-    echo "--- hygiene finding delta: NO BASE RECORD, so the ~80-gate hygiene suite is"
-    echo "                           judged by its ONE label only (disclosed in the verdict)"
+    echo "--- hygiene finding delta: NO BASE RECORD; verdict will refuse as unmeasurable"
   fi
   echo "--- arm A2 (base ${BASE_SHA:0:12}): $(grep -c '^  FAIL  ' "$RUN/base_land.log" || true) gate(s) already failing on the base"
   sed -n 's/^  FAIL  /      base-FAIL  /p' "$RUN/base_land.log"
