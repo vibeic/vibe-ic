@@ -168,9 +168,34 @@ to buy rc 0 by defaulting to agreement now either contradicts (rc 1) or is
 refused, and a run whose every claim is refused is `all_claims_undecided`,
 which is rc 2 with the `VACUOUS_PASS:` sentinel — not a pass.
 
+REACHING THE ARTEFACTS FROM CI (vibe-ic#1076)
+=============================================
+Everything above describes a gate that could only ever look when somebody had
+already started a container for it. Nobody had. The wired call site passed no
+`--container`, no CI host carries a local `/foss/pdks`, and the gate therefore
+occupied a slot in the hygiene roll-up while scanning 0 documents — the state
+#1076 is about.
+
+The repair is NOT a new way to read a PDK. `--from-image` starts one ephemeral
+container from the image this repo ANCHORS and hands it to the already-tested
+`docker_backends`; it removes the requirement that somebody else start the
+container first, and nothing else. The mechanism was already accepted in the
+same hygiene script — the sibling `pdk_via_patch_meets_layer_min_width_check`
+reaches the installed PDKs from CI with a flag of the same name — so the claim
+"the artefacts are covered by nothing automatic" was a fact about this file's
+missing flag, not about the artefacts.
+
+`--advisory` changes the EXIT CODE AND NOTHING ELSE, and only for rc 1. The
+verdict word stays FAIL and every contradiction stays printed, because an
+advisory gate is honest only while the finding is still stated. It deliberately
+does NOT downgrade rc 2: that tier means "I could not look", and laundering it
+into 0 would make the roll-up count this gate as CHECKED AND CLEAN over a tree
+it never opened — #1076 reintroduced through the flag that fixes it.
+
 Usage:
     python3 input_doc_pdk_claim_vs_installed_pdk_check.py <tree>
-        [--pdks-root /foss/pdks] [--container <name>] [--json out.json|-]
+        [--pdks-root /foss/pdks] [--container <name>]
+        [--from-image [--image TAG]] [--advisory] [--json out.json|-]
 """
 from __future__ import annotations
 
@@ -179,6 +204,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -228,6 +254,44 @@ _ROOT_STATE_REASON = {
 # Measured 2026-08-14 on a live image: the whole gate answers in 3.0s over six
 # installed PDKs, so this bound is a safety net rather than a budget.
 _CONTAINER_DEADLINE_S = 40
+
+# ── the image this repo ANCHORS, READ rather than restated (vibe-ic#1076) ───
+#
+# `--from-image` decides which artefacts this gate adjudicates against, so the
+# image it opens is part of the verdict. Two ways to name it were available and
+# only one of them cannot drift:
+#
+#   * a literal `DEFAULT_IMAGE = "...:X.Y.Z"` in this file, kept in step by
+#     `tools/vibeic-eda/sync_image_version.py` REGISTERING the file. That is
+#     what the sibling does, and it works exactly as long as the registration
+#     is remembered — a second place the version can be wrong;
+#   * READING `tools/vibeic-eda/VERSION`, which is where the anchor lives. An
+#     anchor bump then applies here with no edit and no registration.
+#
+# The read climbs to the checkout root, so a PACKAGED plugin with no repo above
+# it finds no pin. That case returns None WITH A REASON rather than falling
+# back to a floating tag: `:latest` is a mutable third-party pointer, and a
+# gate whose answer a third party's push can change is not a gate (the
+# reasoning `pdk_registry_selectable_check._image_tag` records for vibe-ic#927,
+# applied to the same question here). An explicit `--image`, or the same
+# `VIBEIC_EDA_IMAGE` override that sibling honours, still wins — naming an
+# image by hand is the operator's deliberate call.
+_VERSION_PIN_REL = ("tools", "vibeic-eda", "VERSION")
+_GHCR_REPO = "ghcr.io/vibeic/vibeic-eda"
+
+# Bounds for the ephemeral-container calls `--from-image` makes. All three are
+# short because none of them may PULL: the presence probe below runs first, so
+# a cold host is answered in a second instead of spending ten minutes fetching
+# ~23 GB inside a hygiene gate. Measured on 8HD-7 with the image already
+# present: probe 0.05s, start 0.4s, whole gate 23s.
+_IMAGE_PROBE_TIMEOUT_S = 60
+_IMAGE_START_TIMEOUT_S = 120
+_IMAGE_STOP_TIMEOUT_S = 120
+
+# How long the ephemeral container is asked to stay alive. Comfortably over the
+# whole gate's measured 3.0s runtime, and short enough that a leaked container
+# from a killed run reaps itself instead of holding the host.
+_IMAGE_CONTAINER_TTL_S = 600
 
 # Document formats treated as design-input prose. A document-container format
 # list, not a PDK vocabulary; overridable on the command line.
@@ -563,6 +627,98 @@ def _strip_banner(lines: Sequence[str]) -> List[str]:
             continue
         out.append(s)
     return out
+
+
+def pinned_image(explicit: Optional[str] = None) -> Tuple[Optional[str], str]:
+    """`(image, why_not)` — the EDA image this checkout currently anchors.
+
+    Exactly one of the two is ever non-empty. `why_not` is a sentence a reader
+    can act on, because "the gate could not open an image" must never reach the
+    report as "the gate found nothing".
+    """
+    if explicit:
+        return explicit, ""
+    override = os.environ.get("VIBEIC_EDA_IMAGE")
+    if override:
+        return override, ""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        cand = parent.joinpath(*_VERSION_PIN_REL)
+        if cand.is_file():
+            try:
+                ver = cand.read_text().strip()
+            except OSError as exc:
+                return None, f"{cand} is unreadable: {exc}"
+            if not ver:
+                return None, f"{cand} is empty"
+            return f"{_GHCR_REPO}:{ver}", ""
+    pin = "/".join(_VERSION_PIN_REL)
+    return None, (f"no {pin} above {here} and no VIBEIC_EDA_IMAGE override; "
+                  f"refusing to fall back to a floating tag whose bytes a "
+                  f"third party controls")
+
+
+def start_pinned_container(explicit_image: Optional[str] = None
+                           ) -> Tuple[Optional[str], Optional[Callable[[], None]],
+                                      str]:
+    """Start one ephemeral container from the pinned image.
+
+    Returns `(container_id, stop, why_not)`; `container_id` and `why_not` are
+    mutually exclusive, and `stop` is None whenever nothing was started.
+
+    WHY A CONTAINER AND NOT A COPY-OUT. The sibling's `stage_from_image` copies
+    every tech LEF out of the image into a temp dir, which works because it
+    needs a FIXED, SMALL file set. This gate walks whatever subtree a claim
+    happens to name, so a copy-out would mean copying the PDK trees whole.
+    Reusing `docker_backends` adds no second way to read the installed tree —
+    it is the same path `--container` has always used.
+    """
+    image, why = pinned_image(explicit_image)
+    if image is None:
+        return None, None, why
+    # PRESENCE IS PROBED BEFORE ANYTHING IS STARTED, and this is not a
+    # micro-optimisation. `docker run` on an absent tag PULLS: measured here,
+    # that is ~23 GB and minutes, inside a gate whose whole job takes 23s — and
+    # a hygiene run that silently downloads a multi-gigabyte image is a gate
+    # people switch off. An absent image is a fact about the HOST, it is
+    # reported as one (rc 2, NOT_CHECKED, under the declared exemption), and
+    # pulling it stays the operator's deliberate call.
+    try:
+        probe = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+            capture_output=True, text=True, timeout=_IMAGE_PROBE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, None, f"{image}: docker unusable: {type(exc).__name__}: {exc}"
+    if probe.returncode != 0:
+        return None, None, (
+            f"{image} is not present on this host (docker image inspect "
+            f"rc={probe.returncode}); this gate does not pull it, because a "
+            f"multi-gigabyte download is the operator's call, not a gate's")
+    try:
+        r = subprocess.run(
+            ["docker", "run", "-d", "--pull", "never", "--entrypoint", "sleep",
+             image, str(_IMAGE_CONTAINER_TTL_S)],
+            capture_output=True, text=True, timeout=_IMAGE_START_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, None, f"{image}: docker unusable: {type(exc).__name__}: {exc}"
+    if r.returncode != 0:
+        return None, None, (f"{image}: docker run rc={r.returncode}: "
+                            f"{(r.stderr or '').strip()[:200]}")
+    cid = (r.stdout or "").strip()
+    if not cid:
+        return None, None, f"{image}: docker run printed no container id"
+
+    def _stop() -> None:
+        # Best effort and deliberately quiet: a leaked container is a mess, but
+        # a gate that fails because CLEANUP failed would be reporting a verdict
+        # about docker while claiming one about the design.
+        try:
+            subprocess.run(["docker", "rm", "-f", cid],
+                           capture_output=True, timeout=_IMAGE_STOP_TIMEOUT_S)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    return cid, _stop, ""
 
 
 def _docker_exec(container: str, cmd: str) -> Tuple[bool, str, str]:
@@ -1407,13 +1563,37 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="installed PDK root (default %(default)s)")
     ap.add_argument("--container", default=None,
                     help="read the installed PDK inside this container")
+    ap.add_argument("--from-image", action="store_true",
+                    help="start an ephemeral container from the EDA image "
+                         "this repo pins and read the installed PDK inside it")
+    ap.add_argument("--image", default=None,
+                    help="image for --from-image (default: the repo pin in "
+                         "tools/vibeic-eda/VERSION, or $VIBEIC_EDA_IMAGE)")
+    ap.add_argument("--advisory", action="store_true",
+                    help="return 0 on a FAIL, while still printing the verdict "
+                         "and every contradiction (rc 2 is NOT downgraded)")
     ap.add_argument("--doc-suffix", action="append", default=None,
                     help="input-document suffix (repeatable)")
     ap.add_argument("--json", default=None, help="JSON report path, or - for stdout")
     args = ap.parse_args(argv)
 
-    report = run(Path(args.tree), args.pdks_root, container=args.container,
-                 doc_suffixes=tuple(args.doc_suffix or DEFAULT_DOC_SUFFIXES))
+    container, stop_container = args.container, None
+    if args.from_image and not container:
+        container, stop_container, why = start_pinned_container(args.image)
+        if container is None:
+            # An unreachable image is NOT a clean PDK. Fall through with no
+            # container so `run` takes its own vacuous path and DISCLOSES the
+            # reason in the report, rather than this branch inventing either a
+            # pass or a failure about a tree it never opened.
+            print(f"[WARN] --from-image could not start a container: {why}",
+                  file=sys.stderr)
+    try:
+        report = run(Path(args.tree), args.pdks_root, container=container,
+                     doc_suffixes=tuple(args.doc_suffix
+                                        or DEFAULT_DOC_SUFFIXES))
+    finally:
+        if stop_container is not None:
+            stop_container()
 
     if args.json == "-":
         print(json.dumps(report, indent=2, ensure_ascii=False))
@@ -1431,7 +1611,22 @@ def main(argv: Optional[List[str]] = None) -> int:
           file=sys.stderr)
     if skipped:
         _vacuous_exit.announce_vacuous(GATE, reason)
-    return _vacuous_exit.exit_code(passed, skipped)
+    rc = _vacuous_exit.exit_code(passed, skipped)
+    # ONLY A REAL FAIL IS TOLERATED, and the asymmetry is the whole point.
+    # rc 1 is "I looked and found something"; rc 2 is "I could not look".
+    # Downgrading rc 2 would make `run_tolerating_uncheckable` read 0 and count
+    # this gate as CHECKED AND CLEAN over a tree it never opened — vibe-ic#1076
+    # reintroduced through the flag that fixes it.
+    if args.advisory and rc == 1:
+        # The SIBLING's shape (`pdk_via_patch_meets_layer_min_width_check`):
+        # advisory changes the exit code and NOTHING else. The verdict word
+        # above is still FAIL, every contradiction is still printed in full,
+        # and this line says so — so a tolerated finding cannot be misread as
+        # an absent one, which is the only way an advisory gate stays honest.
+        print(f"  (--advisory: returning 0. The verdict above is "
+              f"{report.get('verdict')}.)")
+        return 0
+    return rc
 
 
 if __name__ == "__main__":
