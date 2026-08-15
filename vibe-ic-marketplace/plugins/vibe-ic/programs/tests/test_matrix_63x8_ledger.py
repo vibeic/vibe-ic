@@ -524,8 +524,21 @@ def test_output_entries_classify_into_the_four_kinds():
     # ran, and resolves at spm/v1.9.96_gf180mcuD (28797 B).
     # declaring an artefact d3 cannot then evidence would move the finding from
     # d7 to d3 rather than close it.
-    assert sum(seen.values()) == 136, seen
-    assert seen[F.FILE] == 102
+    # 2026-08-14 (#1215): 136 -> 140, FILE 102 -> 106. The four write-record
+    # promotions disposed of by DECLARING them on the step that produces them
+    # — D1 `reports/audit/phase1/expert_parse_track.json`, 23
+    # `reports/phase3/sta/post_route_signoff_corner.json`, 24
+    # `reports/phase3/dynamic_ir.json`, 27 `reports/phase3/si_mcf_sta.json`.
+    # All four are plain FILEs, so GLOB (12) and ANY_OF (22) are untouched and
+    # the whole delta lands on FILE — which is what makes this total a real
+    # check rather than a restatement of the sum. Each is recorded in the
+    # dimension-3 manifest at the run root and byte size it was MEASURED at,
+    # for the reason the 2026-08-12 entries above give: declaring an artefact
+    # d3 cannot then evidence moves the finding from d7 to d3 instead of
+    # closing it. The fifth promotion (step 34) is WAIVED, not declared, so it
+    # adds no entry here.
+    assert sum(seen.values()) == 140, seen
+    assert seen[F.FILE] == 106
     assert seen[F.GLOB] == 12
     assert seen[F.ANY_OF] == 22
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
