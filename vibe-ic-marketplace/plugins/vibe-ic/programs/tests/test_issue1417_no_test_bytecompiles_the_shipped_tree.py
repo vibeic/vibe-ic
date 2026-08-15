@@ -110,6 +110,8 @@ files. The corpus is now every tree `run_tests.sh` discovers.
     reaching the spawn walk                             30 -> 93
     reaching the loader walk                           260 -> 267
     offenders in the 130 newly-read modules                     0
+    measured for vibe-ic#1417 on 2efa6af35 -- the pin belongs with the
+    narrowing figures it qualifies, not a paragraph later
 
 Zero offenders today, so this widening changes no verdict on `2efa6af35`. It
 changes what the guard is ABLE to see, and that half is measured rather than

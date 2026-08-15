@@ -47,6 +47,7 @@ pinned too, because it is the exact mistake that turns this fix into an outage.
 """
 from __future__ import annotations
 
+import sys
 import importlib.util
 import json
 from pathlib import Path
@@ -62,7 +63,16 @@ def _load_poll():
     would let one test's monkeypatching leak into the next."""
     spec = importlib.util.spec_from_file_location("poll_mod_1384", _POLL_PATH)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # `_POLL_PATH` is under `skills/`, i.e. the SHIPPED tree. Importing it writes a
+    # `__pycache__` beside it unless this is suppressed, and the suite's write-guard
+    # then reports the run as having modified the tree (vibe-ic#1417). Same idiom as
+    # `test_d3_manifest_declaration_parity`.
+    prev = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = prev
     return mod
 
 
