@@ -71,6 +71,7 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # a RECORD rather than a design, and the corpus carries none yet (#1121's first
 # head-to-head has not run), so it is wired through the uncheckable channel: it
 # exits 2 and says so, rather than printing PASS over an empty population.
+uncheckable_until 2026-11-30 "validates a RECORD rather than a design, and the corpus carries none yet (#1121's first head-to-head has not run), so rc 2 says the population is empty instead of printing PASS over it. Goes live by itself on the first head-to-head committed"
 run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/benchmark-data"
 
@@ -274,6 +275,7 @@ run_tolerating_uncheckable "no upstream forked twice" "$PLUGIN" python3 programs
 #
 # ONE LINE, no `\` continuation — the denominator probe and the host-independence
 # probe both parse this file with a single-line `run(?:_\w+)?\s+"label"...` regex.
+uncheckable_until 2027-02-28 "needs an AUTHENTICATED gh + network: it reads live queue state over the network, and rc 2 means the queue could not be asked at all (a base that genuinely does not reach main is rc 1)"
 # host-independence: EXCLUDE — reads live queue state over the network, so two invocations can differ for a reason that is not in the commit
 run_tolerating_uncheckable "PR bases reach main" "$ROOT" python3 "$PG/pr_base_reachability_check.py" --repo-dir "$ROOT" --advisory
 
@@ -496,6 +498,7 @@ _per_published_cell_gates() {
   # the expected answer today and must be LOUD and non-fatal; rc 1, a genuinely
   # new diagnostic id, still fails the suite. The day a second same-PDK cell is
   # published the comparison path becomes live without this line changing.
+  uncheckable_until 2027-02-28 "per published cell: the gate's own documented contract is rc 2 = NO_BASELINE, 'no previous run; nothing compared', and on this corpus that is EVERY cell — no design carries two cells of the same PDK, so find_previous has nothing to compare against. A genuinely new diagnostic id is still rc 1"
   run_tolerating_uncheckable "new tool diagnostic id ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/tool_diagnostic_id_gate.py "$_cell"
 }
@@ -713,6 +716,7 @@ run "programs index fresh"              "$ROOT" python3 "$ROOT/tools/gen_program
 # therefore "this clone cannot answer", which is the normal state for a
 # developer's `--depth` checkout and must be LOUD and non-fatal; CI checks out
 # complete and genuinely checks. rc 1 (a hand-edited figure) still fails.
+uncheckable_until 2027-02-28 "needs a COMPLETE clone: it REFUSES (rc 2) on a shallow --depth checkout rather than reporting the smaller, entirely plausible figure that state produces; CI checks out complete and genuinely checks. A hand-edited figure is still rc 1"
 run_tolerating_uncheckable "engineering evidence fresh" \
     "$ROOT" python3 "$ROOT/tools/gen_engineering_evidence.py" --check
 
@@ -1173,8 +1177,9 @@ run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.
 # WHY TOLERATING: the anchored EDA image may legitimately be absent on a host
 # that has not pulled it. The hole is REPORTED as NOT_CHECKED rather than
 # blocking, until the owner rules on refusing landings from such a host.
-# (`uncheckable_until` is #1072's proposed directive and does not exist on main;
-# this comment carries the same disclosure without depending on an unlanded PR.)
+# (#1072's `uncheckable_until` directive HAS since landed, so the disclosure this
+# comment carried in prose is now stated in the form the dispatcher can read.)
+uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: the check exits 2 when the image is unreachable, which a host that has not pulled it legitimately is. Refusing landings from such a host is a policy call with a measured blast radius — zero on a host carrying the anchored image — and one word changes it when that is wanted"
 run_tolerating_uncheckable "image-gated verifications are not silently skipped" "$PLUGIN" \
   python3 programs/image_gated_verification_check.py
 

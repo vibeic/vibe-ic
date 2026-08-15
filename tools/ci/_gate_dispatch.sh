@@ -559,6 +559,14 @@ gate_dispatch_over() {
     GATE_LABELS+=("corpus \"$corpus\" is EMPTY — nothing was checked over it")
     GATE_STATES+=("NOT_CHECKED")
     GATE_SECONDS+=("0")
+    # IN LOCKSTEP, and that is the whole point: every reader below indexes these
+    # arrays by the SAME `i` out of `${#GATE_LABELS[@]}`. This synthetic row was
+    # appending six of the eight, so `GATE_EX_UNTIL[$i]` was unbound for it and
+    # `set -u` killed the run at the expiry sweep — a corpus that expands over
+    # nothing took the whole dispatcher down. It carries no exemption, so the
+    # honest value is empty, which every reader already treats as "none".
+    GATE_EX_UNTIL+=("")
+    GATE_EX_WHY+=("")
     GATE_ITEM_CORPUS+=("$corpus")
     GATE_ITEM_IDX+=("0")
     GATE_ITEM_TOTAL+=("0")
@@ -838,7 +846,26 @@ after the last gate and attaches to nothing"
       NOT_CHECKED)
         notchecked=$(( notchecked + 1 ))
         refused="${refused:+$refused, }${GATE_LABELS[$i]}"
-        refused="$refused (exempt until ${GATE_EX_UNTIL[$i]})" ;;
+        # TWO ARMS, because a NOT_CHECKED gate can now reach this line with no
+        # exemption at all. The synthetic empty-corpus gate buys none — and
+        # correctly so, since inventing one would grant every future empty
+        # corpus a silent tolerance nobody declared at a wiring site.
+        #
+        # THIS BECAME REACHABLE ONE COMMIT AGO. Before the parent commit the
+        # sweep DIED at the expiry sweep on an unbound `GATE_EX_UNTIL[$i]`, so
+        # this line never printed for that gate. Repairing the crash published
+        # the sentence, and unguarded it read:
+        #
+        #     ... is EMPTY — nothing was checked over it (exempt until )
+        #
+        # a tolerance asserted with a BLANK DATE, in the very line #539 added
+        # so a reader could tell a bought refusal from an unbought one. An
+        # absent date has to READ as absent.
+        if [ -n "${GATE_EX_UNTIL[$i]}" ]; then
+          refused="$refused (exempt until ${GATE_EX_UNTIL[$i]})"
+        else
+          refused="$refused (NO EXEMPTION DECLARED)"
+        fi ;;
       WROTE_CORPUS)
         wrote=$(( wrote + 1 ))
         writers="${writers:+$writers, }${GATE_LABELS[$i]}" ;;
