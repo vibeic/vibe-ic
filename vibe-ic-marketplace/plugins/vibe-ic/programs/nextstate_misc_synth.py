@@ -715,11 +715,23 @@ def host_verify(prompt_text: str, ref_sv: str, test_sv: str, top: str = "TopModu
         dut.write_text(rtl)
         binp = Path(td) / "a.vvp"
         # watchdog-exempt: bounded single-file iverilog compile (elaboration/sim build); fixed budget adequate — not an open-ended EDA generator
-        cp = subprocess.run(["iverilog", "-g2012", "-o", str(binp), str(dut),
-                             ref_sv, test_sv], capture_output=True, text=True)
+        try:
+            cp = subprocess.run(["iverilog", "-g2012", "-o", str(binp), str(dut),
+                                 ref_sv, test_sv], capture_output=True, text=True)
+        except FileNotFoundError as e:
+            # #1437 — an ABSENT iverilog raises before returning, so the
+            # TOOL_ERR this function's own contract declares was unreachable and
+            # the caller got a traceback instead of one of the four verdicts.
+            return ("TOOL_ERR", f"COMMAND_NOT_FOUND: {e}")
         if cp.returncode != 0:
             return ("TOOL_ERR", cp.stderr[-600:])
-        cp = subprocess.run(["vvp", str(binp)], capture_output=True, text=True)
+        try:
+            cp = subprocess.run(["vvp", str(binp)], capture_output=True, text=True)
+        except FileNotFoundError as e:
+            # #1437 — same shape one line later: the design COMPILED but the
+            # simulator could not be RUN, which is still not a verdict about the
+            # RTL. (kmap_truth_table_oracle_check guards both arms the same way.)
+            return ("TOOL_ERR", f"COMMAND_NOT_FOUND: {e}")
         out = cp.stdout
         mm = re.search(r"Mismatches:\s*(\d+)\s+in\s+(\d+)\s+samples", out)
         if mm:
