@@ -70,7 +70,12 @@ RUN_REMEDY = "bash tools/vibeic-eda/restart-eda.sh"
 _CONTAINER_STATE, _CONTAINER_DETAIL = probe(["docker", "exec", CONTAINER, "true"])
 
 
-def _dexec(cmd: str, timeout: int = 180):
+#: 60 s, not 180: 180 IS the harness item bound, so this bound could never fire
+#: — `--timeout-method=thread` would have taken the session down first.
+#: MEASURED with the container up (37 passed in 24.54 s): 5 real `docker exec`
+#: calls through here, worst single call 0.579 s, so 60 s is ~100x the worst
+#: case. Invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277.
+def _dexec(cmd: str, timeout: int = 60):
     r = subprocess.run(["docker", "exec", CONTAINER, "bash", "-lc", cmd],
                        capture_output=True, text=True, timeout=timeout)
     return r.returncode, (r.stdout or "") + "\n" + (r.stderr or "")
