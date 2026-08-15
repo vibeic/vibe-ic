@@ -39,7 +39,12 @@ PROG = Path(__file__).resolve().parent.parent / \
 _ACK_OSS = "--allow-oss-pdk-fallback"
 
 
-def _run(args: list, timeout: int = 90) -> subprocess.CompletedProcess:
+#: 60 s, not 90: a 90 s inner bound cannot fire under the harness's own 180 s
+#: item bound with `--timeout-method=thread`, which kills the SESSION rather
+#: than the test. MEASURED over this file's 7 launches (6 passed in 103.05 s):
+#: worst single call 21.04 s, so 60 s is 2.85x the worst case.
+#: Invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277.
+def _run(args: list, timeout: int = 60) -> subprocess.CompletedProcess:
     if args and not args[0].startswith("-") and _ACK_OSS not in args:
         args = args + [_ACK_OSS]
     return subprocess.run(
