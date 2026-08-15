@@ -32,8 +32,30 @@ Exit codes
 ----------
     0   No actionable issues. Core agent exits this tick.
     1   ≥1 actionable issue. Core agent must process the listed numbers.
-    2   I/O or auth error (no PAT, network error, etc.). DOES NOT
-        count as actionable — the core agent should retry next tick.
+    2   I/O or auth error (no PAT, network error, etc.), OR a listing that
+        cannot be believed (see below). DOES NOT count as actionable — the
+        core agent should retry next tick.
+
+AN EMPTY REST LISTING IS NOT A ZERO (vibe-ic#1384)
+--------------------------------------------------
+`#1319` taught this program that a FAILED call is not evidence, and
+`_list_open_issues` raises on any non-200. That left the harder half open: a
+listing that SUCCEEDS and is empty. Measured 2026-08-15 on `vibeic/vibe-ic`,
+core quota healthy (`X-Ratelimit-Remaining: 4751`, so not throttling):
+
+    gh api -i repos/vibeic/vibe-ic/issues          HTTP 200, Content-Length: 2
+    gh api repos/vibeic/vibe-ic/issues             []
+    gh issue list --state open --limit 200         42   (GraphQL)
+    gh repo view --json issues -q .issues.totalCount  42
+
+Individual GETs work; only the REST LIST is empty. This program reads that
+list, so it printed `(no actionable issues)` and exited 0 — "core agent exits
+this tick" — with 42 issues open. rc 0 and rc 0 for two opposite worlds.
+
+So a zero from the listing now needs a SECOND SOURCE before it is believed.
+Two sources agreeing is weak evidence; two sources DISAGREEING proves one of
+them is wrong, and that is the answer worth having: the queue state is
+UNKNOWN, which is rc 2, not empty, which is rc 0.
 
 Auth
 ----

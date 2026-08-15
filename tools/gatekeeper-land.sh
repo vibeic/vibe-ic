@@ -13,18 +13,28 @@
 #
 # Usage:  tools/gatekeeper-land.sh [--cheap-only] [--prepare]
 #
-# --prepare (vibe-ic#1129) — do the three MECHANICAL things this script would
+# --prepare (vibe-ic#1129) — do the MECHANICAL things this script would
 # otherwise refuse a batch for, before the cheap tier runs, and let the gates
 # refuse only what is left:
 #
 #     version_bump_monotonic_check    the version was not bumped
 #     landing_is_one_commit          no [vX.Y.Z]-tagged commit on the tip
 #     test_programs_index_freshness  programs/INDEX.md is stale
+#     63x8 census freshness          the derived figures are stale (#1382)
 #
 # None of those is a judgement, each already has a program that owns it, and a
 # refusal for one of them costs an hour of gate wall-clock while saying nothing
 # about the code under test. OFF BY DEFAULT: it rewrites the tip commit, which
 # is the operator's call, not a side effect of asking for a verdict.
+#
+# The census line is the LAND-TIME DERIVATION POINT (vibe-ic#1382). That gate
+# blocked eleven of thirteen finished batches on 2026-08-13 and not one of those
+# was a defect in a PR it stopped — every figure was off by exactly one, one gate
+# added by one PR with the derived figures never re-derived. Re-deriving here
+# does not silence it: `repo_hygiene_gates.sh` still runs the generator's own
+# `--check` afterwards, on the tree this step produced. Alone among the steps
+# above it is BEST EFFORT — its generator can fail on a loaded host for reasons
+# no re-derivation reaches (#1277), and a fatal step would refuse every landing.
 #
 # The preparation is delegated to `gatekeeper_prepare_landing.py`, which REFUSES
 # if anything outside the set its writers declared is dirty — the gate must not

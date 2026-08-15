@@ -1711,7 +1711,33 @@ NOT_FALSIFIABLE: Tuple[NotFalsifiable, ...] = ()
 #: tree and no diff connects a flow-yaml edit to it. It presented as a batch
 #: INTERACTION (no PR in the batch touches this file) when it is one PR and one
 #: number.
-LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 479)
+#:
+#: MOVED 479 -> 478 on 2026-08-15 (vibe-ic#1421 again, and this time the gate
+#: caught it on the day it drifted). ONE cell left ENFORCED and it is NAMED in
+#: :data:`LEDGER_CELLS_NOT_ENFORCED` below — 34/d7 — which is the whole reason
+#: that inventory exists. ``9167b162`` ("flow(#1215): the write-record pin fired
+#: correctly — dispose the promotions, then move it") registered a dimension-7
+#: waiver on step 34: W2 charges ``reports/phase3/cmp_fill_emit.json`` as
+#: produced, gate-read and undeclared, and the waiver argues the READ half is an
+#: artefact of the consumer oracle mining a gate program's own default-output
+#: constant rather than a path anything in the tree reads.
+#:
+#: WHY IT REACHED main UNRECORDED, stated so it is not mistaken for the same
+#: defect twice: ``9167b162`` and ``aa9b39d5`` (the commit 19 minutes later that
+#: authored this inventory) are NEITHER an ancestor of the other. The pin was
+#: measured on a tree that did not yet carry the waiver, the waiver was written
+#: against a tree that did not yet carry the pin, and the two met for the first
+#: time on main. That is a genuine batch INTERACTION — unlike the -3 above, which
+#: only presented as one.
+#:
+#: NOT a gate that stopped catching, and the difference is checkable rather than
+#: asserted. Dimension 7's ``matrix_cell_state`` re-derives this cell's state from
+#: the live waiver registry on every call: withdraw the waiver and 34/d7 goes
+#: straight back to ENFORCED and this pin reddens in the other direction, naming
+#: the same cell. A cell whose mutation had quietly stopped reddening it would
+#: still answer ENFORCED here and would move neither this number nor that list,
+#: which is exactly why the -1 has to arrive with the cell named.
+LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 478)
 
 #: Every cell of the live 63x8 grid that is NOT ENFORCED, with the state its
 #: owning dimension module answers. The COMPANION to the count above, and the
@@ -1742,6 +1768,15 @@ LEDGER_AS_MEASURED: Tuple[int, int, int] = (63, 8, 479)
 #: cells: 10 WAIVED (a registered, argued waiver) and 15 NA (a precondition the
 #: module re-derives live). 504 - 25 = 479, and the gate asserts that
 #: arithmetic rather than trusting it.
+#:
+#: RE-MEASURED 2026-08-15 on ``2efa6af3`` (v1.10.43 main) from the same eight
+#: modules: 26 cells — 11 WAIVED and 15 NA. 504 - 26 = 478. The one added cell is
+#: 34/d7, named below with the state it landed in and argued in the note on
+#: :data:`LEDGER_AS_MEASURED` above. This is the first drift this inventory
+#: caught AFTER the fact rather than recorded alongside its own cause: the -3
+#: above was written by the same commit that added the inventory, whereas here
+#: the count alone would have read as a bare 479 -> 478 with nothing to say
+#: which of 504 cells moved, or in which direction.
 LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     # ── dimension 2 ───────────────────────────────────────────────────
     ("1", 2, "WAIVED"),
@@ -1769,6 +1804,8 @@ LEDGER_CELLS_NOT_ENFORCED: Tuple[Tuple[str, int, str], ...] = (
     # ── dimension 7 ───────────────────────────────────────────────────
     ("7", 7, "WAIVED"),
     ("23", 7, "WAIVED"),
+    # 34/d7: ENFORCED -> WAIVED on 2026-08-15 (`9167b162`, #1215), the -1 above.
+    ("34", 7, "WAIVED"),
     ("FS1", 7, "WAIVED"),
     ("M1", 7, "WAIVED"),
     ("P0", 7, "NA"),

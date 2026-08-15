@@ -51,6 +51,11 @@ _INFRA_TOKENS = ("vibeic-eda", "eda image", "/foss", "docker", "container")
 #: The one shape excluded by name; see the module docstring.
 _EXCLUDED = ("iverilog",)
 
+#: Functions in `not_verified_tier` that stamp the SENTINEL onto a reason
+#: STRING (as opposed to raising the skip). A `skipif` that calls one of these
+#: is declared.
+_DECLARERS = ("not_verified_reason", "probe_skip_reason")
+
 
 def _run_probe(tmp_path, body: str, env_extra=None):
     """Run a one-file pytest session that uses the tier, return the result."""
@@ -183,12 +188,15 @@ def _undeclared_infra_skips():
                     else getattr(fn, "id", ""))
             if name not in ("skip", "skipif"):
                 continue
-            # A `skipif` whose reason is built by `not_verified_reason(...)` IS
-            # declared — the stamp is applied inside a nested call, so the flat
-            # string walk below would otherwise re-flag a converted site.
+            # A `skipif` whose reason is built by one of the tier's reason
+            # builders IS declared — the stamp is applied inside a nested call,
+            # so the flat string walk below would otherwise re-flag a converted
+            # site. `probe_skip_reason` joined the list in vibe-ic#1283: it is
+            # `not_verified_reason` plus the PRESENT/ABSENT/UNANSWERED routing,
+            # and its output carries the same SENTINEL.
             if any(isinstance(s, ast.Call)
                    and (getattr(s.func, "id", "")
-                        or getattr(s.func, "attr", "")) == "not_verified_reason"
+                        or getattr(s.func, "attr", "")) in _DECLARERS
                    for s in ast.walk(node)):
                 continue
             reason = _skip_reason_text(node)
@@ -216,8 +224,15 @@ def _undeclared_infra_skips():
 #: may only be DELETED, never edited upward, and the total below is asserted
 #: exactly, so converting a file without removing its line is also a failure.
 #: Same shape as `gate_skip_routing_check`'s drained inventory.
+#:
+#: 2026-08-15 (vibe-ic#1283): `test_analog_a3_netlist_emit.py` and
+#: `test_v1_4_observable_capability_probes.py` were converted while their
+#: probes were made tri-state, so their entries are DELETED per the rule above.
+#: `test_v1_3_52_r6_sparse_die_welltie.py` keeps its 1 on purpose: its probe is
+#: now declared, but the site also carries a second, ORDINARY mark — "the live
+#: proof was not requested" — and annexing an opt-in N/A into this tier is the
+#: over-reach the module docstring rules out.
 RESIDUAL_UNDECLARED: dict = {
-    "test_analog_a3_netlist_emit.py": 1,
     "test_fault_atpg_run.py": 1,
     "test_formal_env_unavailable_actionable.py": 1,
     "test_gds_geometry_signoff_wiring.py": 1,
@@ -241,7 +256,6 @@ RESIDUAL_UNDECLARED: dict = {
     "test_v1_3_83_fork_iverilog_escalation.py": 1,
     "test_v1_3_85_chip_top_vl_tri_outermost.py": 4,
     "test_v1_3_88_issue119_chip_top_reemit_pull_restore.py": 2,
-    "test_v1_4_observable_capability_probes.py": 1,
 }
 
 

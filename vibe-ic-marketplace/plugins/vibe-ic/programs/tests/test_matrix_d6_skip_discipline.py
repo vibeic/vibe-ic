@@ -1066,16 +1066,96 @@ def _probe_step(step_id) -> Probe:
     return probe
 
 
-@lru_cache(maxsize=1)
+#: Probes already built this session, keyed by normalised step id. Replaces the
+#: single ``lru_cache``d whole-sweep dict so a session that can only ask about
+#: ONE step pays for one step. See ``_probe_budget`` (vibe-ic#1412).
+_PROBE_CACHE: Dict[str, Probe] = {}
+
+#: The step ids THIS session is able to ask about, or ``None`` for "any of the
+#: 63" — the conservative default, and what every whole-suite run gets. Set once
+#: by the ``_probe_budget`` fixture below, from pytest's OWN collected items.
+_PROBE_BUDGET: Optional[Tuple[str, ...]] = None
+
+
+def _build_probes(ids: Tuple[Any, ...]) -> None:
+    """Probe every id not already cached, in parallel, and cache the results."""
+    todo = [s for s in ids if F.normalize_id(s) not in _PROBE_CACHE]
+    if not todo:
+        return
+    with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+        for probe in pool.map(_probe_step, todo):
+            _PROBE_CACHE.setdefault(F.normalize_id(probe.step_id), probe)
+
+
+def _budget_from(items) -> Optional[Tuple[str, ...]]:
+    """The step ids these collected pytest items can ask about, or ``None``.
+
+    ``None`` means "any of the 63" and is returned the moment ONE selected item
+    is not a per-cell parametrisation, because such an item is assumed to sweep.
+    A plain function, not the fixture body, so the rule can be exercised against
+    constructed item lists without a nested pytest session.
+    """
+    wanted: List[str] = []
+    for item in items:
+        params = getattr(getattr(item, "callspec", None), "params", None) or {}
+        sid = getattr(params.get("cell"), "step_id", None)
+        if sid is None:
+            return None
+        wanted.append(str(sid))
+    return tuple(dict.fromkeys(wanted))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _probe_budget(request):
+    """Record which steps this session CAN ask about, before any test runs.
+
+    THE COST OF A PROBE IS 63 SUBPROCESS-HEAVY SCENARIOS PER STEP, AND UNTIL
+    vibe-ic#1412 EVERY SESSION PAID ALL 63 OF THEM (see ``probe_for``).
+
+    The measured consequence is not slowness, it is a WRONG ANSWER. The
+    mutation ledger's LOCK 2 replays each (entry, step) pair by running the ONE
+    cell nodeid as its own pytest process — twice, baseline and mutant — eight
+    pairs at a time (``matrix_mutation_ledger.replay_many(..., jobs=8)``). Each
+    of those eight concurrent cell processes was building all 63 probes, each
+    probe fanning out 8 more threads of ``flow_compliance_check`` subprocesses,
+    every one of them bounded at ``_SUBPROCESS_TIMEOUT_S``. The bound fired on a
+    box the replay was contending with ITSELF for, the uncaught
+    ``TimeoutExpired`` failed the cell, and the ledger read that failure as the
+    cell's COLOUR: ``baseline_rc=1`` -> ``ALREADY_RED`` -> "the witness was red
+    before the edit". Nothing had measured the witness at all.
+
+    So the budget is read off pytest's own collection rather than guessed. An
+    item parametrised over a ``cell`` asks about exactly that cell's step; ANY
+    other selected item is assumed to sweep, which restores the previous
+    whole-flow behaviour byte for byte. A whole-suite run therefore probes all
+    63 in one parallel pass exactly as before; the ledger's single-nodeid run
+    probes one.
+    """
+    global _PROBE_BUDGET
+    _PROBE_BUDGET = _budget_from(request.session.items)
+
+
 def _all_probes() -> Dict[str, Probe]:
-    ids = list(F.step_ids())
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        probes = list(pool.map(_probe_step, ids))
-    return {F.normalize_id(p.step_id): p for p in probes}
+    """Every step's probe. Still one parallel pass; still all 63."""
+    _build_probes(tuple(F.step_ids()))
+    return {F.normalize_id(s): _PROBE_CACHE[F.normalize_id(s)]
+            for s in F.step_ids()}
 
 
 def probe_for(step_id) -> Probe:
-    return _all_probes()[F.normalize_id(step_id)]
+    """This step's probe, building no more of the sweep than the session needs.
+
+    Falls back to probing the step ALONE if it is outside the recorded budget,
+    so a caller this fixture did not anticipate gets a correct probe rather than
+    a ``KeyError`` — slower, never wrong.
+    """
+    key = F.normalize_id(step_id)
+    if key not in _PROBE_CACHE:
+        _build_probes(tuple(F.step_ids()) if _PROBE_BUDGET is None
+                      else _PROBE_BUDGET)
+        if key not in _PROBE_CACHE:
+            _build_probes((step_id,))
+    return _PROBE_CACHE[key]
 
 
 @lru_cache(maxsize=1)

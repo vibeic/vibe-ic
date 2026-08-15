@@ -365,13 +365,54 @@ def test_growth_is_still_told_apart_from_a_paid_debt(tmp_path):
     assert "PAID and still on the register" not in r.stdout, r.stdout
 
 
-def test_the_shipped_register_agrees_with_the_shipped_corpus():
-    """The register and the tree must agree on THIS commit, not on whichever
-    day somebody last ran it by hand. Without this, #1025 recurs in silence."""
-    import subprocess
+def _shipped_population():
     prog = Path(__file__).resolve().parents[1] / "step_internal_fail_bubble_up_check.py"
     repo = prog.resolve().parents[4]
+    bl = json.loads(
+        (prog.parent / "step_internal_fail_bubble_up_baseline.json")
+        .read_text(encoding="utf-8"))
+    return prog, repo, bl["corpus_population"]
+
+
+def test_the_shipped_register_agrees_with_the_shipped_corpus():
+    """The register and the tree must agree on THIS commit, not on whichever
+    day somebody last ran it by hand. Without this, #1025 recurs in silence.
+
+    THE ROOT COMES FROM THE RECORD (vibe-ic#1223). It was hardcoded to
+    `benchmark-data` while `repo_hygiene_gates.sh` sweeps `benchmark-data/ic`;
+    once the population is the tracked `reports/` tree rather than a directory
+    NAME those two roots are different questions (117/45 vs 16/22 on this
+    commit), and the hardcoded one graded a set the ratchet does not hold.
+    `test_the_recorded_population_is_the_one_the_ci_gate_sweeps` pins that the
+    recorded root is the CI root, so this is the gate's own population.
+    """
+    import subprocess
+    prog, repo, pop = _shipped_population()
     r = subprocess.run(
-        [sys.executable, str(prog), "--corpus", str(repo / "benchmark-data")],
+        [sys.executable, str(prog), "--corpus", str(repo / pop)],
         capture_output=True, text=True, timeout=_BOUND_S, cwd=str(repo))
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_sweep_of_a_DIFFERENT_root_is_refused_not_answered():
+    """THE PAIRED GUARD for the test above (vibe-ic#1223).
+
+    Reading the root out of the record would be worthless if the gate then
+    answered PASS or FAIL for any other root anyway — the record would be
+    documentation, not a constraint. Sweeping the parent of the recorded
+    population reaches a strictly larger set (measured on 1adbf3444: 117 run
+    trees / 45 findings against a record of 16 / 22), and the only honest
+    verdict over a population the number was not measured on is NOT CHECKED.
+    rc 2, never 0 and never 1.
+    """
+    import subprocess
+    prog, repo, pop = _shipped_population()
+    other = (repo / pop).parent
+    assert other != repo / pop and other.is_dir(), other
+    r = subprocess.run(
+        [sys.executable, str(prog), "--corpus", str(other)],
+        capture_output=True, text=True, timeout=_BOUND_S, cwd=str(repo))
+    assert r.returncode == 2, (
+        f"a sweep over '{other}' answered rc={r.returncode} against a baseline "
+        f"recorded over '{pop}'\n{r.stdout}{r.stderr}")
+    assert "NOT CHECKED" in r.stdout, r.stdout
