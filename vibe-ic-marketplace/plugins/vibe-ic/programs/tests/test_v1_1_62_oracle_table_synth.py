@@ -8,14 +8,30 @@ that EXACTLY matches the parsed oracle (checked by re-running the gate on the
 emitted RTL), and that the solver SKIPs (returns None) on any non-oracle prompt
 (§4.05 no-leak: a SKIP leaves the author's sample untouched).
 """
+import shutil
 import sys
 from pathlib import Path
+
+import pytest
 
 PROG_DIR = Path(__file__).resolve().parents[1]
 if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import oracle_table_synth as S            # noqa: E402
 import kmap_truth_table_oracle_check as K  # noqa: E402
+
+#: The solver half of this file is pure text -> text and needs no toolchain. The
+#: three tests marked below hand the EMITTED rtl back to `K.check`, which decides
+#: by compiling and simulating it — so without iverilog they receive the module's
+#: documented `TOOL_ERR` and asserted `'TOOL_ERR' == 'PASS'` instead of skipping
+#: (vibe-ic#1357). Per test, never `pytestmark`: two of the five tests here read
+#: the emitted text directly and must keep running on any host.
+_HAS_IVERILOG = shutil.which("iverilog") is not None
+_needs_iverilog = pytest.mark.skipif(
+    not _HAS_IVERILOG,
+    reason="re-gates the EMITTED rtl by simulating it; without iverilog "
+           "K.check can only return TOOL_ERR, so 'the emit realizes the parsed "
+           "table' is unmeasurable on this host")
 
 TRUTH = """
 I would like you to implement a module named TopModule with the following
@@ -89,10 +105,12 @@ def _synth_then_gate(tmp_path, prompt):
     return K.check(prompt, str(f))[0]
 
 
+@_needs_iverilog
 def test_truth_table_solver_emits_correct_rtl(tmp_path):
     assert _synth_then_gate(tmp_path, TRUTH) == "PASS"
 
 
+@_needs_iverilog
 def test_fsm_next_state_solver_emits_correct_rtl(tmp_path):
     assert _synth_then_gate(tmp_path, FSM) == "PASS"
 
@@ -120,6 +138,12 @@ def test_truth_table_emitted_matches_hand_truth(tmp_path):
     assert parsed is not None
     _kind, _names, _out, table = parsed
     assert table == expect
+    # IN-BODY and not a decorator: everything above is text-only and must keep
+    # running on a host with no toolchain. Only the re-gate below needs the
+    # simulator, so only the re-gate is what a missing iverilog costs.
+    if not _HAS_IVERILOG:
+        pytest.skip("hand-truth comparison above ran; re-gating the emitted "
+                    "rtl needs iverilog, absent on this host")
     f = tmp_path / "s.sv"
     f.write_text(rtl)
     assert K.check(TRUTH, str(f))[0] == "PASS"
