@@ -805,6 +805,21 @@ run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gat
 #
 # host-independence: EXCLUDE — its subject is a fact about the CHECKOUT (what an interrupted probe left in it), which a fresh worktree by construction does not carry
 run "no gate is left neutered"          "$PLUGIN" python3 programs/neutered_gate_tree_check.py "$PLUGIN"
+# `pytest.ini` sets `testpaths = programs/tests`, and nothing in this file or in
+# any workflow named the tools tree — so `tools/test_liar_census.py` ran only
+# when a human typed its path. That file is the liar census's CALIBRATION: the
+# planted gate per probe that is the only reason a sweep reporting zero can be
+# believed. An uncadenced control is the #1019 shape one level up, and it is a
+# particularly bad one here, because what rots silently is the instrument that
+# decides whether everything else is honest. 95 tests; measured twice at
+# this consolidation at 25 s and 137 s on the same tree -- the mutation
+# probes dominate and vary with machine load, so budget for the high one.
+# Every subprocess this file starts is bounded at 55 s or less, strictly under
+# the 180 s `--timeout-method=thread` session bound below, so a hang fails
+# ONE test here instead of killing the run and losing every other result.
+run "liar census controls still fire"   "$ROOT" env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+    python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+    "$ROOT/tools/test_liar_census.py"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py
