@@ -203,6 +203,24 @@ def test_run_supervised_progressing_output_not_killed():
     assert "line 14" in res.out
 
 
+def test_run_supervised_can_ignore_chatty_output_and_watch_domain_events(
+        tmp_path):
+    """Output is still captured when a stronger caller channel excludes it."""
+    progress = tmp_path / "domain-progress"
+    progress.touch()
+    child = ("import sys,time\n"
+             "while True:\n"
+             " sys.stdout.write('noise\\n'); sys.stdout.flush()\n"
+             " time.sleep(0.02)\n")
+    res = W.run_supervised(
+        [sys.executable, "-c", child], output_progress=False,
+        domain_progress_probe=lambda: progress.stat().st_size,
+        stall_grace_s=0.4, poll_s=0.1, hard_ceiling_s=float("inf"))
+    assert res.outcome == "stalled", res.err
+    assert res.rc == W.RC_STALLED
+    assert "noise" in res.out
+
+
 def test_run_supervised_hung_is_stalled():
     res = W.run_supervised(
         [sys.executable, "-c", "import time; time.sleep(60)"],
