@@ -26,10 +26,13 @@ alarms.
 
 THE PROBE
 =========
-Run each corpus-scanning gate TWICE at the same commit — once in the working
-checkout, once in a throwaway `git worktree` (tracked files only) — and require
-the verdict line to be IDENTICAL. A difference is proof the gate is reading
-something that is not in the commit.
+Run each corpus-scanning gate at the same commit in two environments — once in
+the working checkout and once in a throwaway `git worktree` (tracked files
+only) — and require the structured process verdict to be IDENTICAL.  Inside
+`repo_hygiene_gates.sh`, the checkout arm is the argv-bound machine record the
+outer sweep has already produced, so only the fresh arm is launched here.  A
+standalone invocation still launches both arms.  A difference is proof the
+gate is reading something that is not in the commit.
 
 Proven BOTH ways before landing, which is what separates this from a guess:
 
@@ -104,6 +107,12 @@ reaps every sibling whose lock it can take.  A peer that is still running holds
 its lock, is skipped, and is NAMED in the output.
 
 chip-AGNOSTIC: it compares process output, nothing else.
+
+FLOW CLASSIFICATION: **BLOCKING**.  A reproducible host-dependent or
+non-deterministic gate returns rc 1 and the enclosing hygiene/landing flow must
+stop.  An unavailable comparison returns rc 2 as a named NOT_CHECKED state;
+only the dated ``run_tolerating_uncheckable`` declaration in the enclosing
+dispatcher may bound that refusal.  Neither state is a PASS.
 """
 from __future__ import annotations
 
@@ -142,7 +151,9 @@ if str(_HERE) not in sys.path:
 # — same label, broken command — so nothing is lost by deleting it, and a
 # second copy is exactly how the last defect stayed invisible in both files.
 from gate_discloses_denominator_check import (            # noqa: E402
-    parse_declarations)
+    HOST_INDEPENDENCE_EXCLUDE_RE, parse_declarations)
+from gate_process_attestation import (                    # noqa: E402
+    argv_sha256, load_jsonl, process_attestation)
 
 #: Scratch prefix.  UNCHANGED from the leaking version on purpose — the reaper
 #: keys on it, so the directories a pre-fix build already left behind are the
@@ -174,8 +185,7 @@ _SCRATCH_PREFIX = "hostindep-"
 #: is moved or a line is inserted, the gate is PROBED again — the failure mode
 #: is a returning flake, which is visible, not a silent exclusion. Every
 #: exclusion is NAMED in the verdict line for the same reason.
-_EXCLUDE_RE = re.compile(
-    r'^\s*#\s*host-independence:\s*EXCLUDE\b[\s—:-]*(.*?)\s*$')
+_EXCLUDE_RE = HOST_INDEPENDENCE_EXCLUDE_RE
 
 
 class Gate(NamedTuple):
@@ -260,12 +270,8 @@ def corpus_gates(script: Path) -> List[Gate]:
         # written across a `\` continuation still looks one line up from where
         # a reader of the script sees it start. The adjacency rule is the whole
         # fail-safe claim: if the directive drifts, the gate is probed again.
-        above = lines[decl.lineno - 2] if decl.lineno >= 2 else ""
-        d = _EXCLUDE_RE.match(above)
-        reason = None
-        if d:
-            reason = d.group(1).strip() or "declared at the gate, no reason given"
-        out.append(Gate(decl.label, decl.cwd_token, decl.cmd, reason,
+        out.append(Gate(decl.label, decl.cwd_token, decl.cmd,
+                        decl.host_independence_exclusion,
                         decl.runtime_expansion))
     return out
 
@@ -331,6 +337,32 @@ def _verdict_line(out: str) -> str:
     if not lines:
         return "(no output)"
     return re.sub(r"\bin\s+\d+(?:\.\d+)?s\s*$", "in <TIME>s", lines[-1])
+
+
+def _completed_attestation(label: str, proc: subprocess.CompletedProcess,
+                           argv: List[str], repo_root: Path, wt: Path) -> Dict:
+    """The structured verdict a host comparison consumes."""
+    return process_attestation(
+        label, (proc.stdout or "") + (proc.stderr or ""), proc.returncode,
+        argv, roots=(repo_root, wt))
+
+
+def _attestation_summary(rec: Dict, limit: int = 200) -> str:
+    findings = rec.get("finding_identities") or []
+    named = " | ".join(findings[:3]) if findings else rec["verdict_line"]
+    return f"rc={rec['returncode']} {named[:limit]}"
+
+
+def _load_checkout_attestations(path: Path) -> Dict[str, Dict]:
+    records: Dict[str, Dict] = {}
+    for rec in load_jsonl(path):
+        label = str(rec["label"])
+        if label in records:
+            raise ValueError(f"duplicate process attestation for {label!r}")
+        records[label] = rec
+    if not records:
+        raise ValueError("the process attestation record is empty")
+    return records
 
 
 def checkout_dirt(repo_root: Path, timeout: int = 600) -> Optional[Dirt]:
@@ -545,7 +577,8 @@ def _repair_checkout(repo_root: Path, before: Dict[str, str],
 
 
 def audit(repo_root: Path, timeout: int = 600,
-          tmp_root: Optional[Path] = None) -> Audit:
+          tmp_root: Optional[Path] = None,
+          checkout_attestations: Optional[Path] = None) -> Audit:
     """`tmp_root` overrides where the scratch lives (default: the system temp).
 
     A caller that needs to OBSERVE what this run left behind cannot do it in
@@ -561,6 +594,17 @@ def audit(repo_root: Path, timeout: int = 600,
         # This program's own denominator: reporting clean over an empty gate
         # list is the defect it exists to catch, one level up.
         return Audit("NOTHING_SCANNED", [], None, 0, 0, [], scratch)
+
+    checkout_records: Optional[Dict[str, Dict]] = None
+    if checkout_attestations is not None:
+        try:
+            checkout_records = _load_checkout_attestations(
+                Path(checkout_attestations))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return _setup(
+                "ATTESTATION_UNAVAILABLE", "ATTESTATION_UNAVAILABLE",
+                "the outer hygiene run supplied no complete machine record "
+                f"for its checkout arm: {exc}", None, declared, scratch)
 
     dirt = checkout_dirt(repo_root, timeout)
     if dirt is None:
@@ -698,13 +742,45 @@ def audit(repo_root: Path, timeout: int = 600,
             # still alive to undo the write is THIS ONE, the one that sent it.
             before_dirty = _checkout_dirty_paths(repo_root)
             drive_exc: Optional[BaseException] = None
+            argv_a = _expand(cmd, repo_root)
+            argv_b = _expand(cmd, wt)
+            rec_a: Optional[Dict] = None
+            rec_b: Optional[Dict] = None
+            if checkout_records is not None:
+                rec_a = checkout_records.get(label)
+                if rec_a is None:
+                    findings.append({
+                        "gate": label,
+                        "kind": "CHECKOUT_ATTESTATION_MISSING",
+                        "detail": ("the outer hygiene run supplied no complete "
+                                   "process record for this declared gate; the "
+                                   "fresh arm was not run because there is "
+                                   "nothing trustworthy to compare it with"),
+                        "checkout": "NORECORD", "worktree": "NOT RUN"})
+                    continue
+                expected_argv = argv_sha256(argv_a, roots=(repo_root, wt))
+                if rec_a.get("argv_sha256") != expected_argv:
+                    findings.append({
+                        "gate": label,
+                        "kind": "CHECKOUT_ATTESTATION_WRONG_COMMAND",
+                        "detail": ("the outer record belongs to different "
+                                   "argv than the gate declaration now being "
+                                   "compared; label equality is not evidence"),
+                        "checkout": str(rec_a.get("argv_sha256", "NORECORD")),
+                        "worktree": expected_argv})
+                    continue
             try:
-                a = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
+                if rec_a is None:
+                    a = subprocess.run(argv_a, cwd=str(ca),
+                                       capture_output=True, text=True,
+                                       timeout=timeout)
+                    rec_a = _completed_attestation(
+                        label, a, argv_a, repo_root, wt)
+                b = subprocess.run(argv_b, cwd=str(cb),
                                    capture_output=True, text=True,
                                    timeout=timeout)
-                b = subprocess.run(_expand(cmd, wt), cwd=str(cb),
-                                   capture_output=True, text=True,
-                                   timeout=timeout)
+                rec_b = _completed_attestation(
+                    label, b, argv_b, repo_root, wt)
             except (OSError, subprocess.SubprocessError) as exc:
                 drive_exc = exc
             # ALWAYS, not only on the exception path. A gate that writes into
@@ -751,9 +827,9 @@ def audit(repo_root: Path, timeout: int = 600,
             #
             # A REAL difference — a count, a verdict word, a finding — still
             # differs after this, so the check is not weakened.
-            va = _norm(_verdict_line(a.stdout + a.stderr), repo_root, wt)
-            vb = _norm(_verdict_line(b.stdout + b.stderr), repo_root, wt)
-            if va != vb or a.returncode != b.returncode:
+            assert rec_a is not None and rec_b is not None
+            va, vb = rec_a["verdict_line"], rec_b["verdict_line"]
+            if rec_a["semantic_sha256"] != rec_b["semantic_sha256"]:
                 # A DIFFERENCE MUST REPRODUCE TO BE EVIDENCE (vibe-ic#1029).
                 #
                 # Measured on `3febf537`, this probe reported:
@@ -786,29 +862,49 @@ def audit(repo_root: Path, timeout: int = 600,
                 #
                 # Paid ONLY on the disagreeing minority: the agreeing majority
                 # is still driven exactly twice, which matters at ~44 min.
+                retry_before = _checkout_dirty_paths(repo_root)
+                retry_exc: Optional[BaseException] = None
                 try:
-                    a2 = subprocess.run(_expand(cmd, repo_root), cwd=str(ca),
+                    a2 = subprocess.run(argv_a, cwd=str(ca),
                                         capture_output=True, text=True,
                                         timeout=timeout)
-                    b2 = subprocess.run(_expand(cmd, wt), cwd=str(cb),
+                    b2 = subprocess.run(argv_b, cwd=str(cb),
                                         capture_output=True, text=True,
                                         timeout=timeout)
                 except (OSError, subprocess.SubprocessError) as exc:
+                    retry_exc = exc
+                retry_repaired, retry_refused = _repair_checkout(
+                    repo_root, retry_before, label)
+                if retry_repaired or retry_refused:
+                    findings.append({
+                        "gate": label, "kind": "GATE_CORRUPTED_CHECKOUT",
+                        "detail": ("the confirmation drive modified the "
+                                   "working checkout. Restored: "
+                                   + (", ".join(retry_repaired) or "none")
+                                   + ". Refused: "
+                                   + (", ".join(retry_refused) or "none")),
+                        "checkout": "modified", "worktree": "-"})
+                if retry_exc is not None:
                     findings.append({
                         "gate": label, "kind": "GATE_UNRUNNABLE",
                         "detail": f"disagreed once, then could not be re-driven "
-                                  f"to confirm it: {type(exc).__name__}: "
-                                  f"{str(exc)[:160]}",
-                        "checkout": f"rc={a.returncode} {va[:200]}",
-                        "worktree": f"rc={b.returncode} {vb[:200]}"})
+                                  f"to confirm it: {type(retry_exc).__name__}: "
+                                  f"{str(retry_exc)[:160]}",
+                        "checkout": _attestation_summary(rec_a),
+                        "worktree": _attestation_summary(rec_b)})
                     continue
-                va2 = _norm(_verdict_line(a2.stdout + a2.stderr), repo_root, wt)
-                vb2 = _norm(_verdict_line(b2.stdout + b2.stderr), repo_root, wt)
-                round2_differs = (va2 != vb2 or a2.returncode != b2.returncode)
+                rec_a2 = _completed_attestation(
+                    label, a2, argv_a, repo_root, wt)
+                rec_b2 = _completed_attestation(
+                    label, b2, argv_b, repo_root, wt)
+                va2, vb2 = rec_a2["verdict_line"], rec_b2["verdict_line"]
+                round2_differs = (
+                    rec_a2["semantic_sha256"] != rec_b2["semantic_sha256"])
                 same_shape = (
                     round2_differs
-                    and (va, vb, a.returncode, b.returncode)
-                    == (va2, vb2, a2.returncode, b2.returncode))
+                    and (rec_a["semantic_sha256"], rec_b["semantic_sha256"])
+                    == (rec_a2["semantic_sha256"],
+                        rec_b2["semantic_sha256"]))
                 if same_shape:
                     findings.append({
                         "gate": label, "kind": "HOST_DEPENDENT_VERDICT",
@@ -817,8 +913,8 @@ def audit(repo_root: Path, timeout: int = 600,
                                    "and does so on BOTH rounds, so the gate is "
                                    "reading something that is not in the commit "
                                    "— almost always untracked run leftovers"),
-                        "checkout": f"rc={a.returncode} {va[:200]}",
-                        "worktree": f"rc={b.returncode} {vb[:200]}",
+                        "checkout": _attestation_summary(rec_a),
+                        "worktree": _attestation_summary(rec_b),
                     })
                 else:
                     # NOT folded into a pass. A gate that cannot reproduce its
@@ -835,12 +931,12 @@ def audit(repo_root: Path, timeout: int = 600,
                                    "dependence, and NOT a pass: a gate whose "
                                    "verdict is not reproducible cannot be used "
                                    "as evidence by anything downstream"),
-                        "checkout": f"rc={a.returncode} {va[:200]}"
-                                    f"  || second run rc={a2.returncode} "
-                                    f"{va2[:120]}",
-                        "worktree": f"rc={b.returncode} {vb[:200]}"
-                                    f"  || second run rc={b2.returncode} "
-                                    f"{vb2[:120]}",
+                        "checkout": _attestation_summary(rec_a)
+                                    + "  || second run "
+                                    + _attestation_summary(rec_a2, 120),
+                        "worktree": _attestation_summary(rec_b)
+                                    + "  || second run "
+                                    + _attestation_summary(rec_b2, 120),
                     })
     finally:
         _release_scratch(res, repo_root)
@@ -871,10 +967,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("repo_root", nargs="?", default=None)
     ap.add_argument("--json", dest="json_out", default=None)
+    ap.add_argument(
+        "--checkout-attestations", type=Path, default=None,
+        help=("JSONL process records written by the enclosing hygiene run; "
+              "when supplied, those records are Arm A and only the fresh "
+              "worktree Arm B is launched"))
     a = ap.parse_args(argv)
 
     root = Path(a.repo_root).resolve() if a.repo_root else _PLUGIN.parents[2]
-    res = audit(root)
+    res = audit(root, checkout_attestations=a.checkout_attestations)
 
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(
@@ -918,7 +1019,7 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{root}/tools/ci/repo_hygiene_gates.sh", file=sys.stderr)
         return 2
     if res.verdict in ("DIRTY_CHECKOUT", "STATUS_UNAVAILABLE",
-                       "WORKTREE_UNAVAILABLE"):
+                       "WORKTREE_UNAVAILABLE", "ATTESTATION_UNAVAILABLE"):
         head = {
             "DIRTY_CHECKOUT":
                 "DIRTY_CHECKOUT: host-independence was NOT checked — tracked "
@@ -932,6 +1033,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "WORKTREE_UNAVAILABLE: could not create a scratch git "
                 "worktree, so host-independence was NOT checked. This is not "
                 "a pass.",
+            "ATTESTATION_UNAVAILABLE":
+                "ATTESTATION_UNAVAILABLE: the outer hygiene run supplied no "
+                "complete checkout process record, so host-independence was "
+                "NOT checked. This is not a pass.",
         }[res.verdict]
         print(head, file=sys.stderr)
         for f in res.findings:

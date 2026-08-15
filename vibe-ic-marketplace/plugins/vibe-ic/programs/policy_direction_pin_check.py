@@ -626,6 +626,21 @@ def failing_files(output: str) -> List[str]:
 _INFLIGHT: Dict[str, Any] = {}
 
 
+def _journal_home() -> Path:
+    """Return the stable, owner-only directory for crash records."""
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    home = Path(tempfile.gettempdir()) / f"vibeic-policy-pin-{uid}"
+    try:
+        home.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    st = home.lstat()
+    if not home.is_dir() or (hasattr(os, "getuid") and st.st_uid != os.getuid()):
+        raise OSError(f"unsafe policy-pin journal directory: {home}")
+    os.chmod(home, 0o700)
+    return home
+
+
 def journal_for(root: Path) -> Path:
     """Journal path for `root`, outside the tree and keyed to it.
 
@@ -634,14 +649,37 @@ def journal_for(root: Path) -> Path:
     this repo cannot repair each other's files.
     """
     key = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / f"policy_pin_inflight-{key}.json"
+    return _journal_home() / f"policy_pin_inflight-{key}.json"
+
+
+def _write_private_atomic(path: Path, payload: str) -> None:
+    """Atomically publish one owner-readable journal record."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def _arm(journal: Path, target: Path, original: str, mutated: str) -> None:
     """Record the pending mutation BEFORE it reaches disk."""
-    journal.write_text(json.dumps({
-        "file": str(target), "original": original, "mutated": mutated}),
-        encoding="utf-8")
+    _write_private_atomic(journal, json.dumps({
+        "schema": 2,
+        "file": str(target),
+        "original": original,
+        "mutated_sha256": hashlib.sha256(
+            mutated.encode("utf-8")).hexdigest(),
+    }))
     _INFLIGHT.update({"file": target, "original": original,
                       "journal": journal})
 
@@ -700,7 +738,11 @@ def recover_journal(journal: Path) -> Tuple[int, List[str]]:
     try:
         rec = json.loads(journal.read_text(encoding="utf-8"))
         target = Path(rec["file"])
-        original, mutated = rec["original"], rec["mutated"]
+        original = rec["original"]
+        mutated = rec.get("mutated")       # schema 1 compatibility
+        mutated_sha256 = rec.get("mutated_sha256")
+        if mutated is None and not isinstance(mutated_sha256, str):
+            raise KeyError("mutated_sha256")
     except (OSError, ValueError, KeyError) as exc:
         return RC_UNDETERMINED, [
             f"[UNDETERMINED] policy_direction_pin_check: unreadable in-flight "
@@ -713,7 +755,9 @@ def recover_journal(journal: Path) -> Tuple[int, List[str]]:
     if now == original:
         journal.unlink()
         return RC_OK, []
-    if now != mutated:
+    wrote_mutant = (now == mutated) if mutated is not None else (
+        hashlib.sha256(now.encode("utf-8")).hexdigest() == mutated_sha256)
+    if not wrote_mutant:
         return RC_UNDETERMINED, [
             f"[UNDETERMINED] policy_direction_pin_check: {target} was left "
             f"MUTATED by a previous run of this gate, and has been edited "
@@ -726,6 +770,26 @@ def recover_journal(journal: Path) -> Tuple[int, List[str]]:
         f"its mutation window and left {target} rewritten. Restored. Left "
         f"alone, the next sweep would have re-derived the argued value FROM "
         f"THE MUTATION and reported a consistent verdict over a corrupt tree."]
+
+
+def recover_all_journals() -> Tuple[int, List[str]]:
+    """Recover every owned journal, including orphaned random worktree keys."""
+    candidates = list(_journal_home().glob("policy_pin_inflight-*.json"))
+    # v1 records lived flat in /tmp. Only this user's files are eligible.
+    for path in Path(tempfile.gettempdir()).glob("policy_pin_inflight-*.json"):
+        try:
+            if not hasattr(os, "getuid") or path.stat().st_uid == os.getuid():
+                candidates.append(path)
+        except OSError:
+            continue
+    rc = RC_OK
+    lines: List[str] = []
+    for path in sorted(set(candidates)):
+        one_rc, one_lines = recover_journal(path)
+        lines.extend(one_lines)
+        if one_rc:
+            rc = RC_UNDETERMINED
+    return rc, lines
 
 
 # --------------------------------------------------------------------------
@@ -1114,7 +1178,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # not a dirty file this run can measure around: the sweep would re-derive
     # the argued value FROM it and report a self-consistent verdict over a
     # corrupt tree. Repair first, or refuse.
-    rc_rec, lines = recover_journal(journal_for(root))
+    rc_rec, lines = recover_all_journals()
     for ln in lines:
         print(ln, file=sys.stderr if rc_rec else sys.stdout)
     if rc_rec:
