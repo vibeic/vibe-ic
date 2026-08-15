@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """pytest_per_file_junit.py — ONE pytest session per selected file, so a file
-that HANGS costs its own record and not the whole run's (vibe-ic#1654).
+that HANGS costs its own record and not the whole run's, plus a whole-selection
+semantics canary so process isolation cannot hide cross-file failures
+(vibe-ic#1654).
 
 THIS PROGRAM MEASURES. It forms no landing opinion; `landing_merge_verdict.py`
 still decides. What it changes is whether that decision has anything to read.
@@ -45,13 +47,22 @@ WHAT AN ABSENT RECORD MUST MEAN
 ===============================
 "I could not look" — never "nothing was there". So a file whose session died
 without writing a junit is deliberately kept ABSENT from the merged report and
-named on stdout as ``NORECORD``. A synthetic red `<testcase>` was considered and
-REJECTED: the merge gate compares two arms, so a red that both arms produce is
-scored PRE-EXISTING and would let a hang that fires on both sides land as
-"not this PR's" — the exact false-clean this program exists to prevent. Absence
-keeps `landing_merge_verdict.decide`'s existing refusal (``SELECTED TEST FILE(S)
-PRODUCED NO TEST CASE``) firing, and now it fires naming the ONE file instead of
-all 91.
+named on stdout as ``NORECORD``. A synthetic red `<testcase>` for NORECORD was
+considered and REJECTED: the merge gate compares two arms, so a red that both
+arms produce is scored PRE-EXISTING and would let a hang that fires on both
+sides land as "not this PR's" — the exact false-clean this program exists to
+prevent. Absence keeps `landing_merge_verdict.decide`'s existing refusal
+(``SELECTED TEST FILE(S) PRODUCED NO TEST CASE``) firing, and now it fires
+naming the ONE file instead of all 91.
+
+A different shape *does* have a complete record: every testcase is green, then
+a session-level guard such as ``suite_write_guard`` sets pytest's process status
+to 1. Junit has no native place for that verdict. The merge therefore adds a
+stable ``pytest_per_file_process::<path>::process_exit`` testcase for every
+complete session, including rc=0, and stores the exact rc as a property. This is
+not invented evidence: the process returned that measured status. Keeping the
+same key on both arms lets rc=1 -> rc=0 be a fix, while still preventing a
+green testcase XML from erasing a session-level refusal.
 
 THE OUTER BOUND IS NOT A PER-TEST BOUND
 =======================================
@@ -73,6 +84,7 @@ USAGE
 -----
     python3 pytest_per_file_junit.py --selection SEL --junit OUT
         [--kill-after SECONDS] [--stop-after-failures N] [--cwd DIR]
+        [--aggregate-check] [--aggregate-kill-after SECONDS]
         -- <the full pytest command, e.g. python3 -m pytest -q --timeout=180>
 
 The command after ``--`` is run VERBATIM with ``-o junit_family=xunit1``, a
@@ -81,11 +93,18 @@ built here so the harness bound stays declared at ONE site — the caller's line
 in `tools/gatekeeper-land.sh`, which is where `ci_harness_timeout_ceiling_check`
 reads it from.
 
+With ``--aggregate-check`` the same command is also run once over the entire
+selection. Its testcase ids are namespaced under ``pytest_aggregate`` and its
+exact process rc is recorded under a stable process key. That preserves the
+single-process order/global-state semantics of the command this driver replaced;
+an aggregate kill or missing/partial XML is ``AGGREGATE_NORECORD`` and must be
+an absolute landing refusal.
+
 EXIT CODES
 ----------
     0  every asked file produced a record and nothing was red
     1  every asked file produced a record, some test was red (ordinary failure)
-    2  AT LEAST ONE FILE PRODUCED NO RECORD — the run could not answer for it
+    2  AT LEAST ONE FILE OR THE AGGREGATE CANARY PRODUCED NO COMPLETE RECORD
     3  the question could not be put (no selection, unusable arguments)
 """
 from __future__ import annotations
@@ -110,6 +129,11 @@ RC_CANNOT_ASK = 3
 #: (178.77 s). See "THE OUTER BOUND IS NOT A PER-TEST BOUND" above: this is not
 #: the per-test timeout and must never be read as one.
 DEFAULT_KILL_AFTER = 900
+
+#: The aggregate canary preserves the cross-file/process semantics of the
+#: single pytest session this driver replaces. It has its own wall bound because
+#: its subject is the whole selection rather than one file.
+DEFAULT_AGGREGATE_KILL_AFTER = 1800
 
 #: Outcomes that count toward `--stop-after-failures`, matching what
 #: `landing_merge_verdict.RED` counts.
@@ -178,6 +202,27 @@ def _load_suites(path: Path) -> Optional[List[ET.Element]]:
     return suites or None
 
 
+def _run_bounded(cmd: Sequence[str], kill_after: int,
+                 cwd: Optional[str]) -> Tuple[Optional[int], str, bool]:
+    """Run one process group under a hard outer bound."""
+    proc = subprocess.Popen(list(cmd), cwd=cwd, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            errors="replace", start_new_session=True)
+    try:
+        out, _ = proc.communicate(timeout=kill_after)
+        return proc.returncode, out, False
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        try:
+            out, _ = proc.communicate(timeout=kill_after)
+        except subprocess.TimeoutExpired:                    # pragma: no cover
+            out = ""
+        return proc.returncode, out, True
+
+
 def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
             kill_after: int, cwd: Optional[str]) -> Tuple[Optional[int], str,
                                                           bool]:
@@ -201,26 +246,59 @@ def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
         f"--junitxml={junit_path}",
         test_file,
     ]
-    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True,
-                            errors="replace", start_new_session=True)
-    bound = kill_after
-    try:
-        out, _ = proc.communicate(timeout=bound)
-        return proc.returncode, out, False
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            proc.kill()
-        try:
-            out, _ = proc.communicate(timeout=bound)
-        except subprocess.TimeoutExpired:                    # pragma: no cover
-            out = ""
-        return proc.returncode, out, True
+    return _run_bounded(cmd, kill_after, cwd)
 
 
-def merge(results: Sequence[FileResult], out_path: Path) -> int:
+def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
+                  junit_path: Path, kill_after: int,
+                  cwd: Optional[str]) -> Tuple[Optional[int], str, bool]:
+    """Run the original whole-selection pytest shape as a semantics canary."""
+    cmd = list(pytest_argv) + [
+        "-o", "junit_family=xunit1", f"--junitxml={junit_path}",
+        *test_files,
+    ]
+    return _run_bounded(cmd, kill_after, cwd)
+
+
+def _append_process_case(root: ET.Element, *, classname: str, name: str,
+                         file_name: str, rc: int) -> None:
+    """Append one stable-key process-status testcase (present on both arms)."""
+    suite = ET.Element(
+        "testsuite",
+        {"name": name, "tests": "1", "failures": str(int(rc != 0)),
+         "errors": "0", "skipped": "0"},
+    )
+    case = ET.SubElement(
+        suite, "testcase",
+        {"classname": classname, "name": name, "file": file_name},
+    )
+    props = ET.SubElement(case, "properties")
+    ET.SubElement(props, "property", {"name": "process_rc", "value": str(rc)})
+    if rc != 0:
+        failure = ET.SubElement(
+            case, "failure",
+            {"type": "pytest.session.ExitCode",
+             "message": f"pytest session exited rc={rc}"},
+        )
+        failure.text = (
+            "The pytest process verdict is non-zero. The process_rc property "
+            "is compared exactly across the base and candidate arms."
+        )
+    root.append(suite)
+
+
+def _aggregate_copy(suite: ET.Element) -> ET.Element:
+    """Deep-copy and namespace an aggregate suite away from per-file ids."""
+    copied = ET.fromstring(ET.tostring(suite, encoding="unicode"))
+    copied.set("name", f"aggregate::{copied.get('name') or 'pytest'}")
+    for tc in copied.iter("testcase"):
+        tc.set("classname", "pytest_aggregate." + (tc.get("classname") or ""))
+    return copied
+
+
+def merge(results: Sequence[FileResult], out_path: Path,
+          aggregate_suites: Optional[Sequence[ET.Element]] = None,
+          aggregate_rc: Optional[int] = None) -> int:
     """Write ONE xunit1 report carrying every file that produced a record.
 
     A file with no record contributes NOTHING — not an empty suite, not a
@@ -240,6 +318,29 @@ def merge(results: Sequence[FileResult], out_path: Path) -> int:
             s.set("name", r.path)
             root.append(s)
             total += len(list(s.iter("testcase")))
+        # Present on BOTH arms, including rc=0. A failure-only synthetic would
+        # become ABSENT after a fix and the differential would call that
+        # SILENCED. The stable key + exact `process_rc` outcome allows rc=1 -> 0
+        # to be FIXED and rc=1 -> -9 to be a changed failure that still blocks.
+        if r.cases > 0 and r.rc is not None:
+            _append_process_case(
+                root, classname="pytest_per_file_process",
+                name=f"{r.path}::process_exit", file_name=r.path, rc=r.rc)
+            total += 1
+    if aggregate_suites is not None:
+        aggregate_cases = 0
+        for suite in aggregate_suites:
+            copied = _aggregate_copy(suite)
+            root.append(copied)
+            n = len(list(copied.iter("testcase")))
+            aggregate_cases += n
+            total += n
+        if aggregate_cases and aggregate_rc is not None:
+            _append_process_case(
+                root, classname="pytest_aggregate_process",
+                name="whole_selection::process_exit",
+                file_name="<aggregate>", rc=aggregate_rc)
+            total += 1
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(str(out_path), encoding="utf-8",
                                xml_declaration=True)
@@ -260,6 +361,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="stop launching files once this many red test cases "
                          "have been seen; 0 means never stop. The files not "
                          "launched are NAMED and stay out of the report")
+    ap.add_argument("--aggregate-check", action="store_true",
+                    help="also run the whole selection in one pytest process "
+                         "and namespace its junit into the merged report; "
+                         "preserves cross-file/order semantics")
+    ap.add_argument("--aggregate-kill-after", type=int,
+                    default=DEFAULT_AGGREGATE_KILL_AFTER,
+                    help="hard wall bound for the whole-selection semantics "
+                         f"canary (default {DEFAULT_AGGREGATE_KILL_AFTER})")
     ap.add_argument("--cwd", default=None,
                     help="run each pytest session from here")
     ap.add_argument("pytest_argv", nargs=argparse.REMAINDER,
@@ -294,6 +403,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     tmp = Path(tempfile.mkdtemp(prefix="perfile_junit_"))
     results: List[FileResult] = []
     red_total = 0
+    aggregate_suites: Optional[List[ET.Element]] = None
+    aggregate_rc: Optional[int] = None
+    aggregate_red = 0
+    aggregate_cases = 0
+    aggregate_incomplete = False
     try:
         for i, test_file in enumerate(selection, start=1):
             if a.stop_after_failures and red_total >= a.stop_after_failures:
@@ -308,6 +422,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if not out.endswith("\n"):
                 sys.stdout.write("\n")
             suites = _load_suites(per)
+            # A process killed/interrupted after starting to write XML can leave
+            # a parseable PREFIX. Parseability is not completeness; only normal
+            # pytest outcomes 0/1 may contribute a per-file record.
+            if killed or rc not in (0, 1):
+                suites = None
             cases = 0
             red = 0
             if suites is not None:
@@ -319,10 +438,43 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             results.append(FileResult(test_file, rc, killed, suites, cases,
                                       red))
             state = ("NORECORD" if suites is None
-                     else ("red" if red else "ok"))
+                     else ("red" if red or rc != 0 else "ok"))
             print(f"--- {test_file}  rc={rc}  cases={cases}  red={red}  "
                   f"{state}", flush=True)
-        total = merge(results, Path(a.junit))
+        if a.aggregate_check:
+            aggregate_path = tmp / "aggregate.xml"
+            print(f"=== [aggregate] {len(selection)} file(s) in one pytest "
+                  "process", flush=True)
+            aggregate_rc, out, aggregate_killed = run_aggregate(
+                pytest_argv, selection, aggregate_path,
+                a.aggregate_kill_after, a.cwd)
+            sys.stdout.write(out)
+            if not out.endswith("\n"):
+                sys.stdout.write("\n")
+            aggregate_suites = _load_suites(aggregate_path)
+            if aggregate_suites is not None:
+                for suite in aggregate_suites:
+                    cases, red = _count(suite)
+                    aggregate_cases += cases
+                    aggregate_red += red
+            # rc 0/1 are pytest's complete normal outcomes. Everything else is
+            # interrupted/internal/usage/no-collection and cannot certify the
+            # whole-selection semantics even if a partial XML happened to parse.
+            if (aggregate_suites is None or aggregate_cases == 0
+                    or aggregate_rc not in (0, 1)):
+                aggregate_incomplete = True
+                why = (f"KILLED at the {a.aggregate_kill_after} s outer bound"
+                       if aggregate_killed else
+                       f"session exited rc={aggregate_rc} without a complete "
+                       "parseable junit")
+                print(f"AGGREGATE_NORECORD  {why} — cross-file/order semantics "
+                      "are UNKNOWN, not clean", flush=True)
+                aggregate_suites = None
+            else:
+                print(f"AGGREGATE_COMPLETE  rc={aggregate_rc}  "
+                      f"cases={aggregate_cases}  red={aggregate_red}",
+                      flush=True)
+        total = merge(results, Path(a.junit), aggregate_suites, aggregate_rc)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -359,14 +511,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(f"  NORECORD   {len(norecord)}")
     print(f"  NOTRUN     {len(notrun)}")
     print(f"  red cases  {red_total}")
+    if a.aggregate_check:
+        print(f"  aggregate  {'INCOMPLETE' if aggregate_incomplete else 'complete'}"
+              f" rc={aggregate_rc} cases={aggregate_cases} red={aggregate_red}")
     print(f"  merged     {a.junit}  ({total} test case(s))")
 
-    if norecord:
+    if norecord or aggregate_incomplete:
         return RC_NORECORD
-    # pytest's own exit codes: 0 ok, 1 tests failed, 5 no tests collected. 2/3/4
-    # (interrupted / internal error / usage error) would have taken the single
-    # session down, so they still fail the run here.
-    if red_total or any(r.rc not in (0, 1, 5) for r in recorded):
+    # The PROCESS status is an independent verdict from the testcase XML.
+    # Session-level guards such as this repo's `suite_write_guard` legitimately
+    # set `session.exitstatus = 1` after every testcase has passed, and junit
+    # then carries zero red testcase elements.  Accepting rc=1 merely because
+    # the XML is green would erase the guard's verdict.  rc=5 is likewise not a
+    # successful per-file measurement: the selected file collected nothing.
+    # Only rc=0 is a complete green session.
+    if (red_total or any(r.rc != 0 for r in recorded)
+            or (a.aggregate_check and (aggregate_red or aggregate_rc != 0))):
         return RC_RED
     if notrun:
         return RC_RED

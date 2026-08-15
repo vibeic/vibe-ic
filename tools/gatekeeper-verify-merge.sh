@@ -564,35 +564,29 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # differential. A branch that edits the driver therefore judges itself with
     # it, which is disclosed through `--gate-edited` below.
     #
-    # AND WHICH SHAPE ARM A1 USES IS READ OFF ARM B, not assumed. A candidate
-    # whose `gatekeeper-land.sh` predates the driver runs the SINGLE SESSION in
-    # arm B; running the per-file driver here would then be the very asymmetry
-    # #1417 removed, in the opposite direction. So arm B's script is asked, and
-    # when it says "single session" this arm says it too — LOUDLY, because in
-    # that configuration one hanging file still costs both arms their record.
+    # Do NOT infer the instrument from source text. A comment containing the
+    # driver's path made the old grep say "per-file" while arm B still ran the
+    # legacy aggregate command; the mismatched base red then excused a real
+    # candidate regression. The candidate driver is the ONE instrument used
+    # for both arms. Completeness is attested by exact process suites in JUnit,
+    # not by this mixed stdout channel; absence fails closed in the verdict.
     A1_DRIVER="$CAND_PLUGIN/programs/pytest_per_file_junit.py"
-    if [ -f "$A1_DRIVER" ] \
-       && grep -q 'programs/pytest_per_file_junit.py' \
-               "$WT_CAND/tools/gatekeeper-land.sh" 2>/dev/null; then
+    if [ -f "$A1_DRIVER" ]; then
       ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
           python3 "$A1_DRIVER" \
           --selection "$RUN/selection_base.txt" --junit "$BASE_JUNIT" \
           --kill-after "${GATEKEEPER_PYTEST_FILE_KILL_AFTER:-900}" \
+          --aggregate-check \
+          --aggregate-kill-after "${GATEKEEPER_PYTEST_AGGREGATE_KILL_AFTER:-1800}" \
           -- python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
           -p no:cacheprovider ) \
           > "$RUN/base_tests.log" 2>&1
       A1_RC=$?
     else
-      echo "--- note: this tree's gatekeeper-land.sh predates the per-file junit driver"
-      echo "          (vibe-ic#1654), so BOTH arms run the single-session shape and one"
-      echo "          hanging file still costs each arm its ENTIRE record. Matching arm B"
-      echo "          is the stronger of the two errors available here."
-      ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-          xargs -a "$RUN/selection_base.txt" \
-          python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-          -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
-          > "$RUN/base_tests.log" 2>&1
-      A1_RC=$?
+      printf '%s\n' "NORECORD  <all selected files>  candidate carries no " \
+        "pytest_per_file_junit.py instrument (vibe-ic#1654)" \
+        > "$RUN/base_tests.log"
+      A1_RC=2
     fi
     # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
     # summary is a `rootdir:` line or an empty one, so the arm that COULD NOT
@@ -610,6 +604,8 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # record. Zero and a non-empty report is the only complete arm.
     A1_NORECORD="$(grep -ac '^NORECORD' "$RUN/base_tests.log" 2>/dev/null || true)"
     A1_NORECORD="${A1_NORECORD:-0}"
+    A1_AGG_NORECORD="$(grep -ac '^AGGREGATE_NORECORD' "$RUN/base_tests.log" 2>/dev/null || true)"
+    A1_AGG_NORECORD="${A1_AGG_NORECORD:-0}"
     # The driver's summary when the driver ran, and pytest's own last line when
     # the single-session fallback above ran — read from the log rather than
     # assumed, so the report describes the shape that actually executed.
@@ -619,15 +615,17 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     else
       A1_SUMMARY="$(tail -1 "$RUN/base_tests.log")"
     fi
-    if [ -s "$BASE_JUNIT" ] && [ "$A1_NORECORD" = "0" ]; then
+    if [ -s "$BASE_JUNIT" ] && [ "$A1_NORECORD" = "0" ] \
+       && [ "$A1_AGG_NORECORD" = "0" ]; then
       echo "--- arm A1 (base ${BASE_SHA:0:12}): rc=$A1_RC, $A1_SUMMARY"
     else
       echo "--- arm A1 INCOMPLETE (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and" \
-           "$A1_NORECORD selected file(s) produced NO record; for those files the" \
+           "$A1_NORECORD selected file(s) and $A1_AGG_NORECORD aggregate session(s)" \
+           "produced NO record; for those measurements the" \
            "base failed set is UNKNOWN, not empty. The differential degrades" \
            "toward 'demand green' and the verdict REFUSES rather than" \
            "subtracting a partial base. The files with no record:"
-      grep -a '^NORECORD\|^NOTRUN' "$RUN/base_tests.log" | sed 's/^/      /'
+      grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' "$RUN/base_tests.log" | sed 's/^/      /'
       tail -5 "$RUN/base_tests.log" | sed 's/^/      /'
     fi
   else

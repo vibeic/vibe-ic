@@ -46,6 +46,7 @@ import os
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -72,11 +73,21 @@ _GOOD_LOG = """=== gatekeeper landing gates — base=origin/main ===
   REPORT  untracked scratch paths in this checkout
 --- full tier (minutes; stamps the tree on success) ---
   PASS  targeted tests (21 file(s))
+  REPORT  targeted test process verdicts embedded in junit
+  REPORT  targeted aggregate session completed
   PASS  repo hygiene gates
 === ALL GATES PASS — stamped %s ===
 """ % SHA[:9]
 
 _RED_TEST_TIER_LOG = """=== gatekeeper landing gates — base=origin/main ===
+  PASS  NDA — commit messages
+  FAIL  targeted tests (21 file(s))
+  REPORT  targeted test process verdicts embedded in junit
+  REPORT  targeted aggregate session completed
+=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ===
+"""
+
+_LEGACY_RED_TEST_TIER_LOG = """=== gatekeeper landing gates — base=origin/main ===
   PASS  NDA — commit messages
   FAIL  targeted tests (21 file(s))
 === FAILURES ABOVE — stamp removed; the pre-push hook will refuse ===
@@ -135,6 +146,91 @@ def test_the_test_tier_failing_is_not_by_itself_a_refusal():
     log = V.parse_land_log(_RED_TEST_TIER_LOG)
     assert log.test_tier_failed is True
     assert log.blocking_failures == []
+
+
+def test_a_test_tier_failure_with_all_green_junit_is_refused():
+    """Session-level guards run after testcase reporting.
+
+    A legacy candidate can therefore leave complete, all-green junit while
+    pytest exits 1.  The test-tier FAIL is not explained by the failed-set and
+    must not be waived to LAND_OK.
+    """
+    log = V.parse_land_log(_LEGACY_RED_TEST_TIER_LOG)
+    d = V.failed_set_delta({"m::t": V.PASSED}, {"m::t": V.PASSED})
+
+    v = _decide(delta=d, land=log,
+                missing_process_files=("legacy.py",),
+                aggregate_process_present=False)
+
+    assert v.ok is False
+    assert any("CANDIDATE PER-FILE TEST SESSION" in reason
+               for reason in v.reasons)
+
+
+def test_a_legacy_session_failure_is_not_hidden_by_an_unrelated_base_red():
+    """Any pre-existing testcase red cannot vouch for an unrecorded rc."""
+    log = V.parse_land_log(_LEGACY_RED_TEST_TIER_LOG)
+    d = V.failed_set_delta({"old::red": V.FAILED},
+                           {"old::red": V.FAILED})
+
+    v = _decide(delta=d, land=log,
+                missing_process_files=("legacy.py",),
+                aggregate_process_present=False)
+
+    assert v.ok is False
+    assert any("CANDIDATE PER-FILE TEST SESSION" in reason
+               for reason in v.reasons)
+
+
+def test_candidate_aggregate_norecord_is_absolute_even_when_base_matches():
+    """UNKNOWN cross-file semantics cannot become a pre-existing red."""
+    text = _RED_TEST_TIER_LOG.replace(
+        "  REPORT  targeted aggregate session completed\n",
+        "  FAIL  targeted aggregate session produced no complete record\n",
+    )
+    log = V.parse_land_log(text)
+
+    v = _decide(land=log, base_land=log,
+                aggregate_process_present=False,
+                delta=_delta(preexisting=["old::red"]))
+
+    assert v.ok is False
+    assert any("AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD" in reason
+               for reason in v.reasons)
+
+
+def test_candidate_per_file_norecord_is_not_filled_by_aggregate_cases():
+    text = _RED_TEST_TIER_LOG.replace(
+        "=== FAILURES ABOVE",
+        "  FAIL  targeted per-file session produced no complete record\n"
+        "=== FAILURES ABOVE",
+    )
+    log = V.parse_land_log(text)
+
+    v = _decide(land=log, base_land=log,
+                missing_process_files=("missing.py",),
+                delta=_delta(preexisting=["pytest_aggregate.old::red"]))
+
+    assert v.ok is False
+    assert any("CANDIDATE PER-FILE TEST SESSION" in reason
+               for reason in v.reasons)
+
+
+def test_process_rc_changes_are_not_preexisting_and_a_fix_is_not_silenced():
+    key = "pytest_per_file_process::same.py::process_exit"
+    changed = V.failed_set_delta(
+        {key: V.PROCESS_RC_PREFIX + "1"},
+        {key: V.PROCESS_RC_PREFIX + "-9"},
+    )
+    fixed = V.failed_set_delta(
+        {key: V.PROCESS_RC_PREFIX + "1"},
+        {key: V.PROCESS_RC_PREFIX + "0"},
+    )
+
+    assert changed.new_failures == [key]
+    assert changed.preexisting == []
+    assert fixed.fixed == [key]
+    assert fixed.silenced == []
 
 
 def test_fixing_a_pre_existing_failure_is_reported_and_never_required():
@@ -482,6 +578,47 @@ def _junit(tmp_path, cases, name="r.xml"):
     return p
 
 
+def _attest_candidate_junit(path, cases, selection, *, aggregate=True):
+    """Add the exact process suites the real driver appends after pytest."""
+    root = ET.parse(str(path)).getroot()
+    seen = set()
+    for classname, _tname, _outcome, file_name in cases:
+        tc = ET.Element("testcase", {"classname": classname})
+        if file_name:
+            tc.set("file", file_name)
+        recovered = V._file_of(tc, selection)
+        if recovered:
+            seen.add(recovered)
+
+    for file_name in sorted(seen):
+        name = f"{file_name}::process_exit"
+        suite = ET.SubElement(root, "testsuite", {
+            "name": name, "tests": "1", "failures": "0", "errors": "0",
+            "skipped": "0",
+        })
+        tc = ET.SubElement(suite, "testcase", {
+            "classname": "pytest_per_file_process", "name": name,
+            "file": file_name,
+        })
+        props = ET.SubElement(tc, "properties")
+        ET.SubElement(props, "property", {"name": "process_rc", "value": "0"})
+
+    if aggregate:
+        name = "whole_selection::process_exit"
+        suite = ET.SubElement(root, "testsuite", {
+            "name": name, "tests": "1", "failures": "0", "errors": "0",
+            "skipped": "0",
+        })
+        tc = ET.SubElement(suite, "testcase", {
+            "classname": "pytest_aggregate_process", "name": name,
+            "file": "<aggregate>",
+        })
+        props = ET.SubElement(tc, "properties")
+        ET.SubElement(props, "property", {"name": "process_rc", "value": "0"})
+    ET.ElementTree(root).write(str(path), encoding="utf-8",
+                               xml_declaration=True)
+
+
 def test_junit_outcomes_are_read_including_xfail(tmp_path):
     p = _junit(tmp_path, [
         ("m", "a", "passed", None), ("m", "b", "failed", None),
@@ -518,11 +655,52 @@ def test_the_file_attribute_is_preferred_when_present(tmp_path):
     assert V.junit_files(p, []) == {"programs/tests/test_thing.py"}
 
 
+def test_subject_testcase_cannot_spoof_a_parent_process_suite(tmp_path):
+    """A test may rewrite its own classname/property, but not the merge suite."""
+    selected = "programs/tests/test_thing.py"
+    p = tmp_path / "spoof.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites><testsuite name="' + selected + '">'
+        '<testcase classname="pytest_per_file_process" '
+        'name="' + selected + '::process_exit" file="' + selected + '">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite><testsuite name="pytest">'
+        '<testcase classname="pytest_aggregate_process" '
+        'name="whole_selection::process_exit" file="&lt;aggregate&gt;">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '</testcase></testsuite></testsuites>')
+
+    assert V.junit_per_file_process_files(p) == set()
+    assert V.junit_has_aggregate_process(p) is False
+
+
+def test_subject_process_attributes_cannot_turn_a_failure_green(tmp_path):
+    """Only a validated parent suite may authorize ``process_rc`` semantics."""
+    p = tmp_path / "ordinary-failure.xml"
+    p.write_text(
+        '<?xml version="1.0"?><testsuites>'
+        '<testsuite name="programs/tests/test_thing.py">'
+        '<testcase classname="pytest_per_file_process" name="test_new_red" '
+        'file="programs/tests/test_thing.py">'
+        '<properties><property name="process_rc" value="0"/></properties>'
+        '<failure>real candidate regression</failure>'
+        '</testcase></testsuite></testsuites>')
+
+    got = V.read_junit(p)
+
+    assert got["pytest_per_file_process::test_new_red"] == V.FAILED
+    assert V.junit_red_count(p) == 1
+
+
 def test_report_lines_are_never_read_as_gates():
     """`gatekeeper-land.sh` prints REPORT for probes that are deliberately not
     landing bars. Counting one as a gate would make the gate a ban."""
     log = V.parse_land_log(_GOOD_LOG)
-    assert log.reported == ["untracked scratch paths in this checkout"]
+    assert log.reported == [
+        "untracked scratch paths in this checkout",
+        "targeted test process verdicts embedded in junit",
+        "targeted aggregate session completed",
+    ]
     assert log.blocking_failures == []
     assert log.stamped_sha == SHA[:9]
 
@@ -543,11 +721,13 @@ def test_a_selection_failure_is_not_the_test_tier():
 
 
 def _cli(tmp_path, land_text, base_cases, cand_cases, sel, extra=(),
-         base_sel=None):
+         base_sel=None, attest_aggregate=True):
     (tmp_path / "land.log").write_text(land_text)
     (tmp_path / "sel.txt").write_text("\n".join(sel) + "\n")
     bj = _junit(tmp_path, base_cases, "base.xml")
     cj = _junit(tmp_path, cand_cases, "cand.xml")
+    _attest_candidate_junit(cj, cand_cases, sel,
+                            aggregate=attest_aggregate)
     base_sel_arg = ()
     if base_sel is not None:
         (tmp_path / "sel_base.txt").write_text("\n".join(base_sel) + "\n")
@@ -576,6 +756,21 @@ def test_cli_returns_zero_and_names_the_verified_commit(tmp_path):
     assert "LAND OK" in r.stdout
     assert doc["verdict"] == "LAND_OK"
     assert doc["verified_sha"] == SHA
+
+
+def test_cli_ignores_spoofed_stdout_markers_without_junit_attestation(tmp_path):
+    """Subject stdout may print the same REPORT text as the driver.
+
+    The land log therefore claims completion here while the candidate XML has
+    no aggregate process suite.  The structural record, not the text, decides.
+    """
+    r, doc = _cli(tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+                  attest_aggregate=False)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["verdict"] == "REFUSE"
+    assert any("AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD" in reason
+               for reason in doc["reasons"])
 
 
 _SEL2 = ["programs/tests/test_alpha.py", "programs/tests/test_beta.py"]
@@ -928,12 +1123,17 @@ JOUT="${GATEKEEPER_PYTEST_JUNIT:-$(mktemp -t stub_junit.XXXXXX)}"
 ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}" ) > "$SEL"
 if ( cd "$PLUGIN" && python3 programs/pytest_per_file_junit.py \
        --selection "$SEL" --junit "$JOUT" --kill-after 50 \
+       --aggregate-check --aggregate-kill-after 50 \
        -- python3 -m pytest -q --maxfail=10 >/dev/null 2>&1 ); then
   echo "  PASS  targeted tests (1 file(s))"
+  echo "  REPORT  targeted test process verdicts embedded in junit"
+  echo "  REPORT  targeted aggregate session completed"
   git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
 else
   echo "  FAIL  targeted tests (1 file(s))"
+  echo "  REPORT  targeted test process verdicts embedded in junit"
+  echo "  REPORT  targeted aggregate session completed"
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
 fi
 """

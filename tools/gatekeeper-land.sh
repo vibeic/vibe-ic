@@ -456,6 +456,8 @@ run_pytest() {
   if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
         --selection "$sel" --junit "$merged" \
         --kill-after "${GATEKEEPER_PYTEST_FILE_KILL_AFTER:-900}" \
+        --aggregate-check \
+        --aggregate-kill-after "${GATEKEEPER_PYTEST_AGGREGATE_KILL_AFTER:-1800}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
         -- python3 -m pytest -q -p pytest_timeout "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
@@ -474,8 +476,34 @@ run_pytest() {
     # reader cannot reconstruct from the tail of a 91-file run, and `tail -6`
     # would show whichever file happened to be last instead of the one that
     # cost the record.
-    printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN' | sed 's/^/          /'
+    printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    FAILED=1
+  fi
+  # Human-facing diagnostics only. The merge verdict does NOT trust this mixed
+  # driver/subject stdout channel: pytest can print marker-looking text. It
+  # derives completeness from exact process suites in the merged JUnit.
+  if printf '%s\n' "$out" | grep -qa '^=== per-file junit summary'; then
+    printf '  REPORT  targeted test process verdicts embedded in junit\n'
+  else
+    printf '  FAIL  targeted test instrument produced no per-file summary\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^NORECORD'; then
+    printf '  FAIL  targeted per-file session produced no complete record\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^NOTRUN'; then
+    printf '  FAIL  targeted per-file session was not run\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^AGGREGATE_NORECORD'; then
+    printf '  FAIL  targeted aggregate session produced no complete record\n'
+    FAILED=1
+  elif printf '%s\n' "$out" | grep -qa '^AGGREGATE_COMPLETE'; then
+    printf '  REPORT  targeted aggregate session completed\n'
+  else
+    printf '  FAIL  targeted aggregate session produced no status\n'
     FAILED=1
   fi
   rm -f "$sel"

@@ -212,6 +212,62 @@ def test_the_outer_bound_catches_a_hang_pytest_timeout_cannot_see(tmp_path):
         "that merely exited without a report — they need different fixes")
 
 
+def test_aggregate_canary_preserves_cross_file_process_semantics(tmp_path):
+    """One process per file must not isolate away an order/pollution failure."""
+    corpus = _tree(tmp_path, {
+        "test_01_mutate.py": (
+            "import shared_state\n"
+            "def test_mutates_process_global():\n"
+            "    shared_state.value = 1\n"),
+        "test_02_check.py": (
+            "import shared_state\n"
+            "def test_requires_clean_process_global():\n"
+            "    assert shared_state.value == 0\n"),
+    })
+    (corpus / "shared_state.py").write_text("value = 0\n", encoding="utf-8")
+    merged = tmp_path / "merged.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check",
+        "--aggregate-kill-after", str(_KILL))
+
+    assert proc.returncode == D.RC_RED, proc.stdout + proc.stderr
+    assert "AGGREGATE_COMPLETE  rc=1" in proc.stdout, proc.stdout
+    root = ET.parse(str(merged)).getroot()
+    aggregate_failures = [tc for tc in root.iter("testcase")
+                          if (tc.get("classname") or "").startswith(
+                              "pytest_aggregate.")
+                          and list(tc.iter("failure"))]
+    assert len(aggregate_failures) == 1, ET.tostring(root)
+    assert "test_02_check" in aggregate_failures[0].get("classname")
+
+
+def test_aggregate_norecord_is_named_and_returns_unknown(tmp_path):
+    """Per-file green cannot excuse a whole-selection canary that was killed."""
+    corpus = _tree(tmp_path, {
+        "test_01_mutate.py": (
+            "import shared_state\n"
+            "def test_mutates_process_global():\n"
+            "    shared_state.value = 1\n"),
+        "test_02_hang.py": (
+            "import shared_state, time\n"
+            "def test_hangs_only_after_the_other_file():\n"
+            "    if shared_state.value:\n"
+            "        time.sleep(3600)\n"
+            "    assert shared_state.value == 0\n"),
+    })
+    (corpus / "shared_state.py").write_text("value = 0\n", encoding="utf-8")
+    merged = tmp_path / "merged.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check", "--aggregate-kill-after", "2")
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert "AGGREGATE_NORECORD" in proc.stdout, proc.stdout
+    # The per-file record survives; aggregate unknown is a separate hard bar.
+    assert _files_in(merged) == ["test_01_mutate.py", "test_02_hang.py"]
+
+
 # ── the report the merge gate has to be able to read ─────────────────────────
 
 def test_the_merged_report_is_xunit1_and_carries_the_file_attribute(tmp_path):
@@ -225,12 +281,13 @@ def test_the_merged_report_is_xunit1_and_carries_the_file_attribute(tmp_path):
     assert proc.returncode == D.RC_OK, proc.stdout
     root = ET.parse(str(merged)).getroot()
     cases = list(root.iter("testcase"))
-    assert len(cases) == 2, ET.tostring(root)
+    assert len(cases) == 4, ET.tostring(root)
     assert all(tc.get("file") for tc in cases), ET.tostring(root)
     # NAMED BY FILE. pytest calls every suite "pytest"; a merged report of N
     # identically-named blocks cannot be read back to its arms.
     assert sorted(s.get("name") for s in root.iter("testsuite")) == [
-        "test_green_after.py", "test_green_neighbour.py"]
+        "test_green_after.py", "test_green_after.py::process_exit",
+        "test_green_neighbour.py", "test_green_neighbour.py::process_exit"]
 
 
 def test_a_red_test_is_a_red_run_not_a_missing_record(tmp_path):
@@ -244,6 +301,50 @@ def test_a_red_test_is_a_red_run_not_a_missing_record(tmp_path):
     assert not [l for l in proc.stdout.splitlines()
                 if l.startswith("NORECORD")], proc.stdout
     assert _files_in(merged) == ["test_green_neighbour.py", "test_red.py"]
+    root = ET.parse(str(merged)).getroot()
+    assert len(list(root.iter("failure"))) == 2
+    process_cases = [tc for tc in root.iter("testcase")
+                     if tc.get("classname") == "pytest_per_file_process"]
+    assert len(process_cases) == 2, (
+        "the stable process key must exist on both rc=0 and rc=1 arms; a "
+        "failure-only key would become ABSENT after a fix and be called "
+        "SILENCED")
+
+
+def test_a_session_level_red_is_not_erased_by_green_testcase_xml(tmp_path):
+    """A junit report does not carry every reason pytest can exit non-zero.
+
+    `suite_write_guard` and `not_verified_tier` both set
+    ``session.exitstatus = 1`` after ordinary testcase reporting.  In that
+    shape every testcase in junit is green while the SESSION is red.  The
+    driver must preserve the process verdict instead of manufacturing a pass.
+    """
+    corpus = _tree(tmp_path, {"test_green_neighbour.py": _GREEN})
+    (corpus / "conftest.py").write_text(
+        "def pytest_sessionfinish(session, exitstatus):\n"
+        "    session.exitstatus = 1\n",
+        encoding="utf-8",
+    )
+    merged = tmp_path / "merged.xml"
+
+    proc = _run_driver(corpus, merged)
+
+    assert proc.returncode == D.RC_RED, proc.stdout + proc.stderr
+    root = ET.parse(str(merged)).getroot()
+    assert len(list(root.iter("testcase"))) == 2
+    failures = list(root.iter("failure"))
+    assert len(failures) == 1
+    assert failures[0].get("type") == "pytest.session.ExitCode"
+    session_cases = [tc for tc in root.iter("testcase")
+                     if tc.get("classname") == "pytest_per_file_process"]
+    assert len(session_cases) == 1
+    assert session_cases[0].get("file") == "test_green_neighbour.py"
+    assert session_cases[0].get("name").endswith("process_exit")
+    prop = next(p for p in session_cases[0].iter("property")
+                if p.get("name") == "process_rc")
+    assert prop.get("value") == "1"
+    assert not list(root.iter("error"))
+    assert "rc=1  cases=1  red=0  red" in proc.stdout, proc.stdout
 
 
 def test_an_empty_selection_is_refused_and_never_a_pass(tmp_path):
@@ -301,9 +402,37 @@ def test_the_merge_omits_files_that_have_no_record(tmp_path):
     results = [D.FileResult("kept.py", 0, False, [suite], 1, 0),
                D.FileResult("lost.py", None, True, None, 0, 0)]
     out = tmp_path / "m.xml"
-    assert D.merge(results, out) == 1
+    assert D.merge(results, out) == 2
     root = ET.parse(str(out)).getroot()
-    assert [s.get("name") for s in root.iter("testsuite")] == ["kept.py"]
+    assert [s.get("name") for s in root.iter("testsuite")] == [
+        "kept.py", "kept.py::process_exit"]
+
+
+def test_process_verdict_key_is_stable_and_carries_exact_rc(tmp_path):
+    """The stable key permits rc=1 -> 0 to be fixed; the property distinguishes
+    rc=1 from SIGKILL (-9) for landing_merge_verdict's exact comparison."""
+    def result(rc):
+        suite = ET.fromstring(
+            "<testsuite name='pytest' tests='1'>"
+            "<testcase classname='c' name='t' file='same.py'/>"
+            "</testsuite>")
+        return D.FileResult("same.py", rc, rc < 0, [suite], 1, 0)
+
+    base = tmp_path / "base.xml"
+    candidate = tmp_path / "candidate.xml"
+    D.merge([result(1)], base)
+    D.merge([result(-9)], candidate)
+
+    def session_state(path):
+        cases = [tc for tc in ET.parse(str(path)).iter("testcase")
+                 if tc.get("classname") == "pytest_per_file_process"]
+        assert len(cases) == 1
+        prop = next(p for p in cases[0].iter("property")
+                    if p.get("name") == "process_rc")
+        return cases[0].get("name"), prop.get("value")
+
+    assert session_state(base) == ("same.py::process_exit", "1")
+    assert session_state(candidate) == ("same.py::process_exit", "-9")
 
 
 # ── the driver is the instrument BOTH arms use ───────────────────────────────
@@ -328,6 +457,13 @@ def test_both_landing_arms_run_through_this_driver():
     assert "programs/pytest_per_file_junit.py" in verify_src, (
         "arm A1 does not run through the per-file driver; an unmeasurable base "
         "arm is the permissive direction — see vibe-ic#1443")
+    assert "--aggregate-check" in land_src.split("run_pytest()")[-1], (
+        "arm B isolates every file without the whole-selection semantics canary")
+    assert "--aggregate-check" in verify_src, (
+        "arm A1 and arm B do not share the aggregate semantics canary")
+    assert "grep -q 'programs/pytest_per_file_junit.py'" not in verify_src, (
+        "source text is not a runtime capability record; a comment containing "
+        "the driver path must not select arm A1's instrument")
     assert "xargs -a" not in land_src.split("run_pytest()")[-1].split(
         "run_repo_tools_pytest")[0], (
         "the single-session `xargs` invocation is still in run_pytest")
