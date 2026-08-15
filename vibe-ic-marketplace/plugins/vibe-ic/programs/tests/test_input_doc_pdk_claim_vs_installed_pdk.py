@@ -1184,3 +1184,135 @@ def test_no_pdk_library_name_is_hardcoded_in_the_gate():
                   "sky130", "gf180", "sg13", "asap7", "freepdk",
                   "mos_tt", "mos_ss", "mos_ff", "typical.lib"):
         assert token not in lowered, f"{token!r} hardcoded in the gate"
+
+
+# ── vibe-ic#1491: how much was READ is part of the environment ──────────────
+#
+# `files_under` caps one PDK's walk at `_MAX_PDK_FILES`. That cap is a fact
+# about the machine, and it moved verdicts: `truncated_at` was written onto the
+# record one line after the walk and read by NOTHING, so CORROBORATED — the
+# gate's only route to rc 0 — could be reached over a listing that stopped.
+#
+# Measured on origin/main with the REAL bound, one host, one claim, the same
+# two artefacts installed either way: 20000 filler files ahead of the
+# falsifying artefact gave `[PASS]` rc 0; the filler removed gave rc 2. The
+# claim is false both times.
+#
+# The bound is monkeypatched here so the tests cost nothing. It is the module
+# global the production walk reads at CALL time, so a test that moves it drives
+# the same code path a 20000-file install does.
+
+def _pdk_hiding_a_sibling_past_the_cut(root: Path, visible_filler: int) -> Path:
+    """A PDK whose SECOND library sits in a subdirectory the walk never reaches.
+
+    `os.walk` yields the top directory first, so `visible_filler` files beside
+    the first library are what the bounded walk returns; `extra/` is never
+    visited. Both libraries are installed either way — only the listing differs.
+    """
+    fam = root / "alphanode"
+    _write(fam / "AlphaCells_typical.lib", "library (t) { }\n")
+    _write(fam / "extra" / "AlphaCells_swift.lib", "library (s) { }\n")
+    for i in range(visible_filler):
+        _write(fam / f"pad{i:04d}.dat", "x")
+    return root
+
+
+_ONLY_DOC = "# constraints\n\n| Corner | alphanode ships only the typical corner lib |\n"
+
+
+def test_agreement_over_a_truncated_pdk_listing_is_withheld(tmp_path,
+                                                            monkeypatch):
+    """The defect: a FALSE exclusivity claim bought rc 0 from a stopped walk.
+
+    The tree ships two libraries. With the bound at 2 the walk returns the top
+    directory only, so the gate sees exactly one library and the claim reads as
+    true. Agreement is a universal over every artefact installed, and this
+    listing never covered that set.
+    """
+    monkeypatch.setattr(gate, "_MAX_PDK_FILES", 2)
+    pdks = _pdk_hiding_a_sibling_past_the_cut(tmp_path / "pdks", 1)
+    tree = project_with(tmp_path / "proj", _ONLY_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    (claim,) = rep["claims"]
+    assert claim["truncated_at"] == 2, claim
+    assert claim["verdict"] == "UNDECIDED", claim
+    assert "never fully listed" in claim["reason"], claim
+    # what it WOULD have said is kept, so the reader can see the withheld yes
+    assert "exactly one artefact" in claim["corroboration_withheld"], claim
+    assert rep["counts"]["corroborated"] == 0, rep["counts"]
+    # rc 2 with the sentinel, never rc 0
+    assert rep["verdict"] == "NOT_APPLICABLE", rep
+    assert gate._vacuous_exit.exit_code(True, True) == 2
+
+
+def test_the_truncated_walk_is_named_in_the_environment_line(tmp_path,
+                                                             monkeypatch):
+    """#1491's rule: a verdict states the environment it was taken in. HOW MUCH
+    was read is part of that, and it belonged beside the root and the backend
+    rather than only inside a per-claim record nothing prints."""
+    monkeypatch.setattr(gate, "_MAX_PDK_FILES", 2)
+    pdks = _pdk_hiding_a_sibling_past_the_cut(tmp_path / "pdks", 1)
+    tree = project_with(tmp_path / "proj", _ONLY_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    assert rep["population_truncated"] == ["alphanode"], rep
+    assert rep["population_truncated_at"] == 2, rep
+    assert "truncated_at_2=alphanode" in gate._environment_line(rep)
+
+
+def test_the_same_two_artefacts_listed_in_full_are_not_agreed_with_either(
+        tmp_path):
+    """PAIRED CONTROL, and the point of the whole test: the content is
+    identical to the case above. Only the bound moved. With the real bound the
+    walk reaches `extra/`, the gate sees both libraries, and it does not agree
+    — so the old rc 0 was bought by the cap and by nothing in the tree."""
+    pdks = _pdk_hiding_a_sibling_past_the_cut(tmp_path / "pdks", 1)
+    tree = project_with(tmp_path / "proj", _ONLY_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    (claim,) = rep["claims"]
+    assert "truncated_at" not in claim, claim
+    assert claim["verdict"] != "CORROBORATED", claim
+    assert rep["verdict"] != "PASS", rep
+
+
+def test_a_complete_listing_still_corroborates_a_true_claim(tmp_path):
+    """THE OTHER DIRECTION. The refusal is bound to truncation, not to
+    exclusivity: a tree that really does ship one library still buys the YES
+    branch, so this change tightens the gate without deleting its only route to
+    rc 0."""
+    pdks = tmp_path / "pdks"
+    _write(pdks / "alphanode" / "AlphaCells_typical.lib", "library (t) { }\n")
+    tree = project_with(tmp_path / "proj", _ONLY_DOC)
+
+    rep = run_gate(tree, pdks)
+
+    (claim,) = [c for c in rep["claims"] if c["verdict"] == "CORROBORATED"]
+    assert "truncated_at" not in claim, claim
+    assert rep["verdict"] == "PASS", rep
+
+
+def test_a_contradiction_still_stands_under_truncation(tmp_path, monkeypatch):
+    """The asymmetry, stated by #981 for directories and applied here to the
+    population. A denial is falsified by ONE artefact in the part that WAS
+    listed and the unread tail cannot put it back, so truncation must not
+    quieten the NO branch — only the YES branch."""
+    monkeypatch.setattr(gate, "_MAX_PDK_FILES", 2)
+    fam = tmp_path / "pdks" / "alphanode"
+    _write(fam / "AlphaCells_swift.lib", "library (s) { }\n")
+    _write(fam / "pad0000.dat", "x")
+    tree = project_with(
+        tmp_path / "proj",
+        "# constraints\n\n| Corner | alphanode ships no swift lib at all |\n")
+
+    rep = run_gate(tmp_path / "proj", tmp_path / "pdks")
+
+    (claim,) = rep["claims"]
+    assert claim["truncated_at"] == 2, claim
+    assert claim["verdict"] == "CONTRADICTED", claim
+    assert rep["verdict"] == "FAIL", rep
+    assert tree.exists()

@@ -756,9 +756,9 @@ def build_ecc_injection_tb(spec: MechanismSpec,
 #: shared by `_resolve_docker_image` and `_local_docker_image`, so the pin and
 #: the fallback order cannot drift between the two.
 _IMAGE_CANDIDATES = (
-    "ghcr.io/vibeic/vibeic-eda:0.2.99",
-    "vibeic-eda:0.2.99",
-    "vibeic/vibeic-eda:0.2.99",
+    "ghcr.io/vibeic/vibeic-eda:0.3.0",
+    "vibeic-eda:0.3.0",
+    "vibeic/vibeic-eda:0.3.0",
     "hpretl/iic-osic-tools:latest",
 )
 

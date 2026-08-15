@@ -144,7 +144,16 @@ def test_rolling_the_anchor_backwards_fails():
     """
     base = _committed_anchor()
     major, minor, patch = (int(n) for n in base.split("."))
-    older = f"{major}.{minor}.{max(patch - 5, 0)}"
+    if patch > 0:
+        older_parts = (major, minor, patch - 1)
+    elif minor > 0:
+        older_parts = (major, minor - 1, 999_999)
+    elif major > 0:
+        older_parts = (major - 1, 999_999, 999_999)
+    else:
+        pytest.skip("0.0.0 has no older non-negative semantic version")
+    assert older_parts < (major, minor, patch)
+    older = ".".join(str(n) for n in older_parts)
     rc, out = _no_regress(_load(), older)
     assert rc == 1, out
     assert "REGRESSED" in out, out

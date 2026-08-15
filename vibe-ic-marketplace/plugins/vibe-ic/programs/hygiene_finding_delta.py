@@ -139,7 +139,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from _atomic_artefact import write_json  # vibe-ic#1082 (helper from PR #1094)
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082 (helper from PR #1094)
 
 #: Gate states that ARE a finding — see the module docstring for the derivation
 #: from `gate_dispatch_finish`'s exit code.
@@ -419,10 +420,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     d = compare(a.base, a.candidate, a.base_host, a.candidate_host)
     if a.json:
-        # vibe-ic#1082/#1470: this comparison BLOCKS a landing, so a reader
-        # must never be able to open a half-written one. The final name now
-        # appears only once the whole record is on disk.
-        write_json(a.json, d)
+        # vibe-ic#1082 / #1462: this comparison IS the landing evidence — a
+        # reader opens it to learn which findings the tree introduced. Under
+        # `.write_text` a death mid-write leaves that name pointing at a
+        # truncated record, which is indistinguishable from a complete one to
+        # every consumer. `ensure_ascii=True` holds the payload byte-identical
+        # to the call this replaces.
+        write_json(a.json, d, ensure_ascii=True)
 
     if d["status"] == REFUSED:
         print("[FAIL] hygiene_finding_delta: REFUSED — this BLOCKS the landing.")

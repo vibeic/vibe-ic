@@ -109,7 +109,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
 
-from _atomic_artefact import write_json  # vibe-ic#1082 (helper from PR #1094)
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_json  # noqa: E402  vibe-ic#1082 (helper from PR #1094)
 
 # The landing harness runs at --timeout=180 --timeout-method=thread; an inner
 # bound above that turns one hung regenerator into a lost SESSION.
@@ -389,11 +390,15 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if a.json_out:
         try:
-            # vibe-ic#1082/#1470: the declared report must appear whole or not
-            # at all. `Path(...).write_text` creates the final name and fills
-            # it second, so a death mid-write leaves a truncated verdict under
-            # the name `required_outputs` reads as "this step produced it".
-            write_json(a.json_out, v.to_dict())
+            # vibe-ic#1082 / #1462: the verdict record is the artefact a later
+            # reader opens to learn whether the merge was resolved or refused.
+            # `.write_text` creates that name before filling it, so a death
+            # mid-write leaves a truncated record under the name a
+            # `required_outputs` check reads as "this step produced its
+            # evidence". `ensure_ascii=True` keeps the payload byte-identical
+            # to the call this replaces — the conversion moves WHEN the name
+            # appears, never WHAT is written.
+            write_json(a.json_out, v.to_dict(), ensure_ascii=True)
         except OSError as e:
             print(f"[WARN] could not write {a.json_out}: {e}", file=sys.stderr)
 

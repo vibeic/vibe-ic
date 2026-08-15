@@ -56,14 +56,18 @@ import phase3_one_shot_runner as P3       # noqa: E402
 
 CONTAINER = "vibeic-eda"
 
+# vibe-ic#1283 — the probe below used to be `except Exception: return False`,
+# which reports a probe that TIMED OUT as a container that is not there. That
+# is not a hypothetical here: measured on 1adbf3444 with a `docker` shim that
+# never answers, this file skipped FIVE tests with "vibeic-eda container not
+# available" on a host where `docker exec vibeic-eda true` returned 0 — the
+# container was up the whole time, and the run was green either way. `probe`
+# routes a lost race to NOT_VERIFIED/PROBE UNANSWERED instead of to a claim.
+from not_verified_tier import (PROBE_PRESENT, probe,  # noqa: E402
+                               probe_skip_reason)
 
-def _container_available() -> bool:
-    try:
-        r = subprocess.run(["docker", "exec", CONTAINER, "true"],
-                           capture_output=True, timeout=30)
-        return r.returncode == 0
-    except Exception:
-        return False
+RUN_REMEDY = "bash tools/vibeic-eda/restart-eda.sh"
+_CONTAINER_STATE, _CONTAINER_DETAIL = probe(["docker", "exec", CONTAINER, "true"])
 
 
 def _dexec(cmd: str, timeout: int = 180):
@@ -73,7 +77,9 @@ def _dexec(cmd: str, timeout: int = 180):
 
 
 requires_container = pytest.mark.skipif(
-    not _container_available(), reason="vibeic-eda container not available")
+    _CONTAINER_STATE != PROBE_PRESENT,
+    reason=probe_skip_reason(_CONTAINER_STATE, _CONTAINER_DETAIL,
+                             "vibeic-eda container not available", RUN_REMEDY))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
