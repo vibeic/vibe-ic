@@ -1301,6 +1301,25 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # forbidden artefact IS the pass, so the clause needs the artefact present
     # AND carrying the forbidden verdict.
     ("D1", "analog_a0_skip_forbidden_check ."): "A0_SKIPPED",
+    # This change moves `reports/phase1/extraction_coverage_report.{md,json}`
+    # onto D1 and wires this clause to read it. EMPTY cannot redden it, and for
+    # the SAME reason `LDOC_TODO` exists at all: with no `generated_docs/` the
+    # gate answers `SKIP — Phase 1 (doc-extraction) not attempted and no
+    # input/docs/`, which is a self-skip, not a judgement. The fixture has to
+    # make Phase 1 look ATTEMPTED while leaving the coverage report absent.
+    #
+    # MEASURED against all 12 fixtures via `FCC._check_program_exit_zero`, the
+    # same way this register's provenance line was built: three redden it —
+    # LDOC_TODO, PDK_DECLARED_NOT_USED, POWER_OVER_BUDGET — each with a content
+    # red, `") coverage report missing: …/extraction_coverage_report.md"`. The
+    # other nine self-skip. `LDOC_TODO` is chosen because it is the Phase-1
+    # fixture and is already D1's assignment for `l_doc_todo_stub_count_check`,
+    # so the step's two content reds come from one tree rather than two.
+    #
+    # It is assigned here rather than registered in `UNREDDENED`: a fixture DOES
+    # break it, and an `UNREDDENED` entry whose clause reddens fails this suite
+    # by design ("the gap closed and nobody noticed").
+    ("D1", "phase1_coverage_report_present_check ."): "LDOC_TODO",
     # D9 Phase 1 wired this into step 36 as the one BLOCKING promotion of that
     # campaign. EMPTY cannot redden it: the gate REFUSES a zero denominator
     # (rc 2, "no reports/ tree … NOT a pass"), so the unacknowledged FAIL has
