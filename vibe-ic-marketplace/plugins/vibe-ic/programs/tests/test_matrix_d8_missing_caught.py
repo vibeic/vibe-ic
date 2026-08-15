@@ -653,25 +653,39 @@ NA_STEPS_AS_MEASURED: Tuple[str, ...] = ("FS1", "P0")
 #: the decision is conscious rather than silent.
 PLATFORM_CAPABILITY_GAPS_AS_MEASURED: Dict[Any, str] = {}
 
-#: Steps declaring FEWER THAN TWO ``required_outputs`` entries, measured
-#: 2026-07-27 (27 of 63), re-measured 2026-08-13 (28 of 63). They cannot
+#: Steps declaring FEWER THAN TWO ``required_outputs`` entries. They cannot
 #: express "one artefact present, the rest absent", so the pooled-evidence
-#: check has no shape to build; the population is pinned so a step that gains a
-#: second entry cannot slip past it silently.
+#: check has no shape to build; the population is pinned so a step that DROPS
+#: to a single entry cannot slip past it silently.
 #:
-#: ``1`` ADDED 2026-08-13. Step 1 (Spec-to-RTL) declared three entries, two of
-#: which were ``reports/phase1/extraction_coverage_report.{md,json}`` — a
-#: Phase 1 extraction artefact that d4 reported its gate never measured. The
-#: declaration moved to D1 (Phase 1 Doc Extraction), which is where the
-#: published corpus says it is produced: of the 107 run roots carrying that
-#: report, 75 carry NO RTL at all and 105 carry D1's own L1_DATASHEET.json.
-#: Step 1 is therefore left declaring only its RTL glob, which is one entry —
-#: this pin moving is the intended consequence, recorded here rather than
-#: discovered later from a sweep that changed shape.
+#: RE-MEASURED 2026-08-14 against the flow on this branch — 27 of 63, and the
+#: membership moved in BOTH directions even though the count did not:
+#:
+#:   "1"  JOINS.  This branch moves `reports/phase1/extraction_coverage_report
+#:        .{json,md}` from step 1 to step D1, taking step 1 from 3 declared
+#:        outputs to 1. That is what this change is FOR, so the pin has to
+#:        record it; leaving it out is the stale-pin red this test exists to
+#:        raise, and it raised it against me.
+#:
+#:   "29" LEAVES, and it was ALREADY stale on clean `24ff95307` — measured
+#:        there independently: 26 steps are single-entry while this tuple
+#:        listed 27. Step 29 gained a second entry at some point and nothing
+#:        objected, because the assert below sits inside `if len(outs) < 2`.
+#:        A step that DROPS into this population reddens; a step that RISES
+#:        OUT of it takes the else branch, never consults the pin, and its
+#:        entry rots here indefinitely. The old comment claimed the opposite
+#:        ("a step that gains a second entry cannot slip past it silently") —
+#:        that is the one direction it cannot see. Recorded rather than
+#:        widened here: making a stale entry redden is a guard change, not a
+#:        re-measure, and it belongs in its own claim.
+#:
+#: Dropping "29" strengthens rather than relaxes the guard: were step 29 to
+#: fall back to a single entry, it is now unpinned and reddens, whereas the
+#: stale entry would have absorbed it silently.
 SINGLE_ENTRY_STEPS_AS_MEASURED: Tuple[str, ...] = (
     "1", "8", "FS1", "DT1", "DT2", "DT3", "12", "A1", "A2", "A3", "A4", "A5",
-    "A7", "A9", "14", "16", "17", "20", "22", "27", "29", "35", "36", "37",
-    "M4", "42", "44", "P0",
+    "A7", "A9", "14", "16", "17", "20", "22", "27", "35", "36", "37", "M4",
+    "42", "44", "P0",
 )
 
 
@@ -1415,3 +1429,52 @@ def matrix_cell_substitution(step_id) -> Optional[str]:
         "production. See KNOWN GAP #2 and "
         "test_d8_downgrade_is_reachable_through_each_steps_own_real_gate."
     )
+
+
+def test_the_pin_is_the_MEASURED_population_not_a_SUPERSET_of_it():
+    """The pin must EQUAL the live single-entry population, not contain it.
+
+    WHY THIS EXISTS, and it is not hypothetical — v1.10.38 shipped the defect.
+    The membership assertion above lives inside ``if len(outs) < 2``, so it can
+    only fire in ONE direction:
+
+        a step that DROPS to a single entry   -> absent from the pin -> RED here
+        a step that RISES OUT of the population -> takes the else branch,
+                                                   never consults the pin, and
+                                                   its entry rots silently
+
+    MEASURED on `162b5bde4` (v1.10.38), which relocated the extraction-coverage
+    entries off step 1 and then APPENDED "1" to this tuple instead of
+    re-deriving it::
+
+        pin                     28 entries, containing BOTH "1" and "29"
+        measured population     27
+        step 29 on that commit  declares TWO required_outputs
+                                (sim_postlayout/results.log OR pass.flag,
+                                 reports/phase2/gates/post_layout_sim.json)
+        d8                      294 passed -- it could not see any of that
+
+    A one-directional ratchet accumulates stale members forever, and every
+    landing that moves a step's declaration is another chance to add one. Set
+    equality is what makes the pin a MEASUREMENT rather than a floor: a stale
+    entry reddens the moment it goes stale, and nobody has to remember to look.
+    """
+    measured, seen = set(), set()
+    for cell in _cell_params():
+        c = cell.values[0] if hasattr(cell, "values") else cell
+        key = F.normalize_id(c.step_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(F.required_outputs(c.step_id)) < 2:
+            measured.add(key)
+
+    pinned = set(SINGLE_ENTRY_STEPS_AS_MEASURED)
+    assert pinned == measured, (
+        f"the pin and the flow disagree.\n"
+        f"  pinned but NO LONGER single-entry (stale, invisible to the "
+        f"membership assert): {sorted(pinned - measured)}\n"
+        f"  single-entry but NOT pinned (the case that assert already "
+        f"catches): {sorted(measured - pinned)}\n"
+        f"  re-derive the tuple rather than adding to it — appending is how "
+        f"v1.10.38 shipped a 28-entry pin over a 27-step population.")
