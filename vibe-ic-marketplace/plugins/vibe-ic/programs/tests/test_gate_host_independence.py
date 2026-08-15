@@ -949,3 +949,32 @@ def test_a_missing_checkout_attestation_is_a_named_refusal(tmp_path):
     assert res.verdict == "FAIL", res
     assert any(f["kind"] == "CHECKOUT_ATTESTATION_MISSING"
                for f in res.findings), res.findings
+
+
+def test_reused_and_fresh_arms_preserve_the_same_stdout_stderr_order(tmp_path):
+    """The outer ``2>&1 | tee`` stream and fresh arm are one instrument.
+
+    With piped Python output, stderr is unbuffered while stdout flushes at
+    exit.  Capturing them separately and concatenating stdout first reverses
+    the observed order and manufactures a one-round disagreement.
+    """
+    r = _repo_with(tmp_path, 'run "mixed" "$ROOT" python3 mixed.py\n',
+                   untracked=True)
+    (r / "mixed.py").write_text(
+        "import sys\n"
+        "print('[PASS] 1 item examined')\n"
+        "print('diagnostic on stderr', file=sys.stderr)\n")
+    subprocess.run(["git", "-C", str(r), "add", "mixed.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "mixed"],
+                   check=True)
+    argv = G._expand("python3 mixed.py", r)
+    proc = subprocess.run(
+        argv, cwd=r, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, check=False)
+    att = tmp_path / "outer.jsonl"
+    A.append_private_jsonl(att, A.process_attestation(
+        "mixed", proc.stdout, proc.returncode, argv, roots=(r,)))
+
+    res = G.audit(r, timeout=_T, checkout_attestations=att)
+    assert res.verdict == "PASS", res
+    assert not res.findings, res.findings

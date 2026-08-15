@@ -27,6 +27,11 @@ _FINDING_RE = re.compile(
 _PYTEST_TIME_RE = re.compile(r"\bin\s+\d+(?:\.\d+)?s\s*$")
 
 
+def _is_finding_line(line: str) -> bool:
+    """Whether a line is a verdict token in the gate-output grammar."""
+    return _FINDING_RE.match(line) is not None
+
+
 def _replace_roots(text: str, roots: Iterable[Path]) -> str:
     vals = set()
     for root in roots:
@@ -51,7 +56,7 @@ def semantic_record(output: str, returncode: int,
     lines = [normalise_line(line, roots) for line in output.splitlines()
              if line.strip()]
     verdict = lines[-1] if lines else "(no output)"
-    findings = sorted(set(line for line in lines if _FINDING_RE.match(line)))
+    findings = sorted(set(line for line in lines if _is_finding_line(line)))
     payload = {
         "returncode": int(returncode),
         "verdict_line": verdict,

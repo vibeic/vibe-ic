@@ -347,6 +347,20 @@ def _completed_attestation(label: str, proc: subprocess.CompletedProcess,
         argv, roots=(repo_root, wt))
 
 
+def _run_gate(argv: List[str], cwd: Path,
+              timeout: int) -> subprocess.CompletedProcess:
+    """Run one arm through the same combined stream as the outer dispatcher.
+
+    Separately captured stdout followed by stderr is not the order a human or
+    ``2>&1 | tee`` observes.  Python buffering makes that distinction verdict
+    bearing: stderr can arrive first while the final stdout PASS flushes at
+    exit.  Both arms therefore preserve one combined stream.
+    """
+    return subprocess.run(
+        argv, cwd=str(cwd), stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, timeout=timeout)
+
+
 def _attestation_summary(rec: Dict, limit: int = 200) -> str:
     findings = rec.get("finding_identities") or []
     named = " | ".join(findings[:3]) if findings else rec["verdict_line"]
@@ -771,14 +785,10 @@ def audit(repo_root: Path, timeout: int = 600,
                     continue
             try:
                 if rec_a is None:
-                    a = subprocess.run(argv_a, cwd=str(ca),
-                                       capture_output=True, text=True,
-                                       timeout=timeout)
+                    a = _run_gate(argv_a, ca, timeout)
                     rec_a = _completed_attestation(
                         label, a, argv_a, repo_root, wt)
-                b = subprocess.run(argv_b, cwd=str(cb),
-                                   capture_output=True, text=True,
-                                   timeout=timeout)
+                b = _run_gate(argv_b, cb, timeout)
                 rec_b = _completed_attestation(
                     label, b, argv_b, repo_root, wt)
             except (OSError, subprocess.SubprocessError) as exc:
@@ -865,12 +875,8 @@ def audit(repo_root: Path, timeout: int = 600,
                 retry_before = _checkout_dirty_paths(repo_root)
                 retry_exc: Optional[BaseException] = None
                 try:
-                    a2 = subprocess.run(argv_a, cwd=str(ca),
-                                        capture_output=True, text=True,
-                                        timeout=timeout)
-                    b2 = subprocess.run(argv_b, cwd=str(cb),
-                                        capture_output=True, text=True,
-                                        timeout=timeout)
+                    a2 = _run_gate(argv_a, ca, timeout)
+                    b2 = _run_gate(argv_b, cb, timeout)
                 except (OSError, subprocess.SubprocessError) as exc:
                     retry_exc = exc
                 retry_repaired, retry_refused = _repair_checkout(
