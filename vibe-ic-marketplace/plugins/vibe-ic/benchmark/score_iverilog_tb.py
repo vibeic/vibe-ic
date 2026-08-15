@@ -672,8 +672,16 @@ def _tb_is_non_discriminating(sample_text: str, tb: Path, design_dir: Path,
         sp = Path(td) / "zstub.v"
         sp.write_text(stub)
         binp = os.path.join(td, "zb")
-        c = subprocess.run(["iverilog", "-g2012", "-o", binp, str(sp), str(tb)],
-                           capture_output=True, text=True, timeout=60)
+        try:
+            c = subprocess.run(["iverilog", "-g2012", "-o", binp, str(sp), str(tb)],
+                               capture_output=True, text=True, timeout=60)
+        except FileNotFoundError:
+            # #1437 — an ABSENT iverilog raised before returning, so this probe
+            # crashed the scorer instead of reaching the "inconclusive" outcome
+            # its own contract declares. No compiler ran, so nothing was learned
+            # about whether the TB discriminates: None, and the design stays
+            # counted (never silently excluded from the denominator).
+            return None
         clow = (c.stdout + c.stderr).lower()
         if "sorry:" in clow or "internal error" in clow or "i don't know how to elaborate" in clow:
             built, stub_pass = _verilator_run_text(
@@ -1584,8 +1592,20 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
             pass
         pass_re = re.compile(args["pass_regex"])
         fail_re = re.compile(args["fail_regex"]) if args.get("fail_regex") else None
-        c = subprocess.run(["iverilog", "-g2012", "-o", binp, sample_c, str(tb)],
-                           capture_output=True, text=True, timeout=120)
+        try:
+            c = subprocess.run(["iverilog", "-g2012", "-o", binp, sample_c, str(tb)],
+                               capture_output=True, text=True, timeout=120)
+        except FileNotFoundError as e:
+            # #1437 — an ABSENT iverilog raised here. It must NOT fall through to
+            # the `returncode != 0` arm below: that arm returns
+            # {"verdict": "FAIL", "reason": "compile_error"}, a claim ABOUT THE
+            # CANDIDATE, and scoring a submission as FAILED on a compiler that
+            # never ran is a fabricated finding — strictly worse than the
+            # traceback, which at least announced itself. SKIP is the existing
+            # verdict for "not scoreable here"; the log names the absent tool.
+            return {"design": design, "verdict": "SKIP",
+                    "reason": "iverilog_absent",
+                    "log": f"COMMAND_NOT_FOUND: {e}"}
         # iverilog-12 prints "sorry: <feature> not supported" for SV-2012 TB
         # constructs but STILL EXITS 0 (e.g. asyn_fifo's `break;`), so a tool-gap
         # must be detected on the OUTPUT, not just the return code. ring_counter's
