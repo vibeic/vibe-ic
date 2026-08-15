@@ -107,7 +107,7 @@ def _docker_image_available() -> bool:
         return False
     try:
         r = subprocess.run(["docker", "image", "inspect",
-                            "ghcr.io/vibeic/vibeic-eda:0.2.98"],
+                            "ghcr.io/vibeic/vibeic-eda:0.2.99"],
                            capture_output=True, timeout=30)
         return r.returncode == 0
     except Exception:
