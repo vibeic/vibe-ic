@@ -43,6 +43,41 @@ Auth
     stale/public-scoped file PAT gets a 404 (GitHub masks a private repo it
     cannot see), whereas `gh` is authenticated as the maintainer and is the
     same auth the rest of the loop uses for `gh pr`/`gh issue`. chip-AGNOSTIC.
+
+Why the enumeration is GraphQL (vibe-ic#1645)
+---------------------------------------------
+    This program used to enumerate with the REST listing:
+
+        GET /repos/{repo}/issues?state=open&per_page=100&page=N
+
+    #1319 already made a FAILED call raise instead of returning `[]`. What
+    was left was the case where the call SUCCEEDS and the answer is wrong:
+    that endpoint answers HTTP 200 with an empty array for a repository
+    that has open issues. Measured 2026-08-15 on `vibeic/vibe-ic`:
+
+        gh issue list --state open --limit 200        ->  33   (GraphQL)
+        gh api 'repos/vibeic/vibe-ic/issues?state=open&per_page=100'
+                                                      ->   0   (REST)
+        gh api 'search/issues?q=repo:vibeic/vibe-ic+is:issue+is:open'
+                                                      ->   0   (index)
+        gh api repos/vibeic/vibe-ic --jq .open_issues_count
+                                                      ->   0
+        gh api repos/vibeic/vibe-ic/issues/1645 --jq .state
+                                                      -> "open"
+        gh api 'repos/vibeic/vibe-ic/pulls?state=open&per_page=100'
+                                                      ->   6   (REST is fine)
+
+    and this program, run against that repository on that day, printed
+    `total open: 0 / (no actionable issues)` and exited 0 — which the
+    skill defines as "No actionable issues. Core agent exits this tick."
+    33 open issues, every agent on the loop told the queue was empty, and
+    the output identical to a genuinely clear queue.
+
+    A 200 with `[]` cannot be refused by looking at it, so the fix is not
+    a better refusal: it is asking the source that answers correctly.
+    GraphQL is what `gh issue list` uses, and it is already the authority
+    for `open_organic_issue_count.py` (#554) and `org_open_work_poll.py`.
+    Truncation is still refused rather than paged over silently.
 """
 from __future__ import annotations
 
@@ -110,13 +145,25 @@ def _load_pat() -> Optional[str]:
     return None
 
 
-def _api_get(url: str, token: str) -> Tuple[int, Any]:
-    """Plain GET against the GitHub API. Returns (status_code, json)."""
-    req = urllib.request.Request(url, headers={
+def _api_request(url: str, token: str,
+                 payload: Optional[dict] = None) -> Tuple[int, Any]:
+    """The ONE network seam. GET when `payload` is None, else POST JSON.
+
+    Returns (status_code, json). Kept as a single function so that every
+    call this program makes — REST or GraphQL — is faked in one place by
+    the tests, and so a future caller cannot add a second, differently
+    behaved transport beside it.
+    """
+    headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "User-Agent": "vibe-ic-agent-poll/1.0",
-    })
+    }
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             body = r.read().decode("utf-8", errors="replace")
@@ -131,6 +178,11 @@ def _api_get(url: str, token: str) -> Tuple[int, Any]:
         return 0, {"message": f"network error: {exc!r}"}
 
 
+def _api_get(url: str, token: str) -> Tuple[int, Any]:
+    """Plain GET against the GitHub API. Returns (status_code, json)."""
+    return _api_request(url, token)
+
+
 def _rate_limit_snapshot(token: str):
     """The quota, or None. `rate_limit` is EXEMPT from the secondary limit, so
     it still answers while everything else 403s — which is exactly why it is
@@ -139,34 +191,109 @@ def _rate_limit_snapshot(token: str):
     return payload if status == 200 else None
 
 
+#: `repository.issues` never contains pull requests, so no PR filter is
+#: needed on this side — that is a property of the connection, not luck.
+#: 100 is GraphQL's per-page maximum.
+_OPEN_ISSUES_QUERY = """
+query($owner:String!, $name:String!, $after:String) {
+  repository(owner:$owner, name:$name) {
+    hasIssuesEnabled
+    issues(first:100, after:$after, states:OPEN,
+           orderBy:{field:CREATED_AT, direction:DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { number title url updatedAt labels(first:100){nodes{name}} }
+    }
+  }
+}
+"""
+
+#: 100 issues per page; a repository needing more pages than this is not
+#: paged over silently, it is refused. Far above any plausible backlog.
+_MAX_PAGES = 60
+
+
+def _entry_from_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    """GraphQL node -> the REST-shaped issue dict `_to_entry` speaks."""
+    labels = ((node.get("labels") or {}).get("nodes")) or []
+    return {
+        "number": node.get("number"),
+        "title": node.get("title") or "",
+        "labels": [{"name": l.get("name")} for l in labels if l],
+        "updated_at": node.get("updatedAt"),
+        "html_url": node.get("url"),
+    }
+
+
 def _list_open_issues(repo: str, token: str) -> List[Dict[str, Any]]:
-    """Return open non-PR issues, sorted by issue number (descending)."""
+    """Return open non-PR issues, sorted by issue number (descending).
+
+    Over GraphQL (vibe-ic#1645): the REST listing answers 200 with `[]`
+    for this repository while the issues are intact, and a successful
+    empty answer cannot be told apart from an empty queue by inspecting
+    it. Every way this can go wrong RAISES — none of them returns `[]`.
+    """
+    owner, _, name = repo.partition("/")
+    if not owner or not name:
+        raise RuntimeError(f"--repo must be OWNER/NAME, got {repo!r}")
     out: List[Dict[str, Any]] = []
-    page = 1
-    while True:
-        url = (f"{_API_BASE}/repos/{repo}/issues"
-               f"?state=open&per_page=100&page={page}")
-        status, data = _api_get(url, token)
-        if status != 200 or not isinstance(data, list):
+    after: Optional[str] = None
+    for _page in range(_MAX_PAGES):
+        status, body = _api_request(
+            f"{_API_BASE}/graphql", token,
+            {"query": _OPEN_ISSUES_QUERY,
+             "variables": {"owner": owner, "name": name, "after": after}})
+        if status != 200 or not isinstance(body, dict):
             # vibe-ic#1319. A failed call is NOT evidence about the repository:
             # returning [] here would report "no open issues" to an agent whose
             # only problem is that it is blocked, and the queue would read that
             # as "nothing to claim". Raise, and say WHICH limit it is — a
             # secondary limit leaves the quota looking healthy, so the operator
             # is otherwise told to keep going.
-            state = _health.classify(status, data, _rate_limit_snapshot(token))
+            state = _health.classify(status, body, _rate_limit_snapshot(token))
             raise RuntimeError(
-                f"GET {url} failed: status={status} [{state}] "
+                f"POST {_API_BASE}/graphql failed: status={status} [{state}] "
                 f"{_health.advice(state, _rate_limit_snapshot(token))} "
-                f"payload={data!r}")
-        for it in data:
-            if it.get("pull_request"):
-                continue  # skip PRs
-            out.append(it)
-        if len(data) < 100:
+                f"payload={body!r}")
+        if body.get("errors"):
+            # GraphQL reports a rejected query with HTTP 200 and an `errors`
+            # array. Reading `data` past that would turn a refusal into a
+            # count, which is the whole subject of this program's docstring.
+            raise RuntimeError(
+                f"GraphQL errors from {_API_BASE}/graphql: {body['errors']!r}")
+        repo_obj = (body.get("data") or {}).get("repository")
+        if repo_obj is None:
+            raise RuntimeError(
+                f"GraphQL returned no `repository` for {repo!r} — the repo "
+                f"could not be read, which is NOT a repo with no open issues")
+        if repo_obj.get("hasIssuesEnabled") is False:
+            # The REST listing answered 410 here and this function raised.
+            # GraphQL answers an EMPTY CONNECTION instead, so without this the
+            # transport change would quietly convert a repository with its
+            # issue tracker switched off into a repository with nothing open.
+            # Same rule as `org_open_work_poll`: that zero is a fact about the
+            # SETTINGS, not about the backlog. (The field is guaranteed present
+            # on a successful query — GraphQL rejects an unknown field, and
+            # that rejection is raised above.)
+            raise RuntimeError(
+                f"the issue TRACKER is DISABLED for {repo!r}; zero open issues "
+                f"here would be a fact about the repository settings, not "
+                f"about the queue")
+        conn = repo_obj.get("issues") or {}
+        for node in (conn.get("nodes") or []):
+            out.append(_entry_from_node(node))
+        page_info = conn.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
             break
-        page += 1
-    out.sort(key=lambda x: x.get("number", 0), reverse=True)
+        after = page_info.get("endCursor")
+        if not after:
+            raise RuntimeError(
+                "GraphQL says there is another page but gave no cursor; the "
+                "listing would be truncated, and a floor is not a count")
+    else:
+        raise RuntimeError(
+            f"open-issue listing did not finish within {_MAX_PAGES} pages; "
+            f"refusing to report a truncated queue as the whole queue")
+    out.sort(key=lambda x: x.get("number") or 0, reverse=True)
     return out
 
 
