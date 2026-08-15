@@ -68,6 +68,27 @@ WHY THIS EXISTS
         has a fixed point: `check_anchor_no_regress` compares the anchor against
         this repo's own committed history, which the other repo cannot move.
 
+    RESOLVABLE IS NOT PULLABLE (issue #1297) — the third question
+        Everything above asks about NAMES: does the pointer equal the anchor,
+        does the anchor resolve, does the floating tag mean the same bytes.
+        `0.2.92` through `0.2.99` pass every one of them and NONE of them can be
+        pulled onto a host that does not already have the image: 126 layers
+        against the daemon's layer-store ceiling of 125, so `docker pull`
+        downloads 22 GB and exits 1 with `failed to register layer: max depth
+        exceeded`. Published, resolvable, current, internally consistent — and
+        unusable, with nothing in the tree saying so.
+
+        `check_layer_depth` reads the count off the registry MANIFEST (no pull)
+        and is wired in twice, deliberately asymmetrically:
+          * `--report-upstream` REPORTS it, dated, in the printed reading and in
+            the JSON record. Never a landing verdict: the repair is a squash in
+            the `vibeic/vibeic-eda` build, so a red gate here would be one no
+            commit in this repo could turn green.
+          * `--set` BLOCKS on it, because that is this repo ADOPTING the tag —
+            the same moment, and the same reason, as #354's does-it-resolve
+            check. `--allow-over-depth` adopts anyway, loudly and on the record.
+        `--check` is untouched and still makes no registry call at all.
+
 TWO KINDS of `vibeic-eda:X.Y.Z`, treated DIFFERENTLY (verified empirically):
     * LIVE POINTER — "pull / run / build THIS image now". Lives in the install
       docs, and every fully-qualified pull uses `ghcr.io/vibeic/vibeic-eda:X.Y.Z`.
@@ -104,6 +125,39 @@ from pathlib import Path
 
 # The published image whose newest semver tag is the ground truth for the anchor.
 GHCR_REPO = "vibeic/vibeic-eda"
+
+# The deepest layer stack the Docker daemon's LAYER STORE will register — and
+# therefore the most layers an image may carry and still be `docker pull`-able
+# onto a host that does not already have it.
+#
+# MEASURED, NOT INFERRED (vibe-ic#1297). That issue reasoned "storage driver is
+# overlay2, so the ceiling is 128" from the driver's refusal message, and the
+# inference is wrong by three IN THE UNSAFE DIRECTION. Measured directly with a
+# synthetic image — `FROM scratch` plus N one-byte `COPY` layers, classic
+# builder, Docker 29.1.3 / overlay2:
+#
+#     Step 126/129 : COPY f.txt /l125
+#      ---> 8750d92102e6          <- the 125th layer REGISTERS
+#     Step 127/129 : COPY f.txt /l126
+#     max depth exceeded          <- the 126th is REFUSED
+#
+# So the limit is moby's layer-store `maxLayerDepth` (125), not overlay2's mount
+# limit (128). An image ONE layer over resolves in the registry, downloads in
+# full, and then fails at the very last step with
+#
+#     failed to register layer: max depth exceeded
+#
+# which is exactly why nothing that reads tags, digests or manifests could see
+# it coming: the image is published, resolvable, and internally consistent with
+# every pointer in this tree, and it still cannot be materialised.
+#
+# NOT AN ENV OVERRIDE, deliberately. Every other registry fact in this file has
+# a test pin because it is a value ANOTHER ORG MOVES on its own cadence. This
+# one is a property of the daemon, not of the fork, and a knob that let a caller
+# raise it would let the next bump wish the ceiling away instead of squashing
+# the image — which is the actual repair, and lives in the `vibeic/vibeic-eda`
+# build, not here.
+MAX_REGISTRABLE_LAYERS = 125
 # Test / offline / CI pin: when set to X.Y.Z it is used verbatim as "the newest
 # published tag" instead of querying the registry. Lets the RED/GREEN fixtures for
 # the stale-anchor case run with no network and keeps CI deterministic.
@@ -279,6 +333,122 @@ def _query_ghcr_digest(repo: str, tag: str, timeout: float = 6.0):
             return d
         import hashlib
         return "sha256:" + hashlib.sha256(r.read()).hexdigest()
+
+
+def _query_ghcr_layer_count(repo: str, tag: str, timeout: float = 6.0) -> int:
+    """How many layers the linux/amd64 image behind `tag` carries.
+
+    READS MANIFESTS ONLY — NO PULL. One or two small HTTP GETs answer a question
+    about a 22 GB image, which is the only reason a check like this can run at
+    the adoption moment at all.
+
+    Handles BOTH manifest shapes this repository's own registry actually serves,
+    because it serves both and both were read while writing this:
+
+      OCI INDEX        0.2.89 / 0.2.92 — a platform list whose entries include an
+                       `unknown/unknown` ATTESTATION manifest. That entry carries
+                       a handful of layers, so an implementation that took the
+                       first (or any) entry would read ~1 and report vast
+                       headroom on an image that is over the ceiling — a
+                       VACUOUS PASS in the exact direction this check exists to
+                       prevent. The platform is therefore matched explicitly and
+                       a missing linux/amd64 entry RAISES rather than defaulting.
+      IMAGE MANIFEST   0.2.98 / 0.2.99 — `layers` at the top level, no index.
+
+    Raises on any transport / parse failure — same contract as
+    `_query_ghcr_digest`, and the caller degrades to NOT CHECKED.
+    """
+    accept = ", ".join((
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    ))
+    tok_url = f"https://ghcr.io/token?scope=repository:{repo}:pull"
+    with urllib.request.urlopen(tok_url, timeout=timeout) as r:  # noqa: S310
+        token = json.load(r).get("token", "")
+
+    def _fetch(ref: str):
+        req = urllib.request.Request(
+            f"https://ghcr.io/v2/{repo}/manifests/{ref}",
+            headers={"Authorization": f"Bearer {token}", "Accept": accept},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+            return json.load(r)
+
+    man = _fetch(tag)
+    if "manifests" in man:
+        for entry in man.get("manifests", []):
+            plat = entry.get("platform") or {}
+            if plat.get("os") == "linux" and plat.get("architecture") == "amd64":
+                man = _fetch(entry["digest"])
+                break
+        else:
+            raise ValueError(
+                f"{repo}:{tag} is an index with no linux/amd64 entry — refusing "
+                f"to count layers off an attestation manifest")
+    layers = man.get("layers")
+    if not isinstance(layers, list):
+        raise ValueError(f"{repo}:{tag} manifest carries no `layers` list")
+    return len(layers)
+
+
+def check_layer_depth(tag: str, require_remote: bool = False,
+                      label: str = "anchor"):
+    """Is `tag` shallow enough for a clean host to actually REGISTER it?
+
+    vibe-ic#1297. Every instrument in this file answers a question about NAMES —
+    does the pointer equal the anchor, does the anchor resolve, does the
+    floating tag mean the same bytes. All of them passed on `0.2.92` through
+    `0.2.99`, and none of them could see that those images cannot be unpacked:
+    126 layers against a ceiling of 125, so `docker pull` downloads 22 GB and
+    then exits 1 with `failed to register layer: max depth exceeded`. A tag can
+    be published, resolvable, current, and unusable, and until this function
+    existed nothing in the tree said so.
+
+    Returns `(severity, count)`. Severity is a FINDING SEVERITY in the same
+    vocabulary `check_latest_points_at_anchor` already uses — the CALLER decides
+    whether it blocks:
+
+        0  under the ceiling, or the registry could not be reached and
+           `require_remote` is off (count may be None)
+        1  OVER the ceiling — this tag cannot be pulled onto a clean host
+        2  could not look, and the caller asked to be told (count is None)
+
+    "Could not look" is never a pass. It prints NOT CHECKED and says the count
+    was not read, because an unreachable registry has told us nothing about
+    layer depth — the same rule this file applies to every other reading.
+    """
+    try:
+        n = _query_ghcr_layer_count(GHCR_REPO, tag)
+    except Exception as e:  # noqa: BLE001
+        if require_remote:
+            print(f"[NOT CHECKED] {label} layer depth: registry unverifiable "
+                  f"({e.__class__.__name__}). This is NOT a pass — the layer "
+                  f"count of {tag} was never read, so whether a clean host can "
+                  f"register it is UNKNOWN.")
+            return 2, None
+        print(f"  {label+' layer depth':<25}: UNVERIFIED "
+              f"({e.__class__.__name__}) — count not read")
+        return 0, None
+    if n > MAX_REGISTRABLE_LAYERS:
+        print(f"[REPORT] LAYER DEPTH OVER CEILING: {GHCR_REPO}:{tag} carries "
+              f"{n} layers; the daemon registers at most "
+              f"{MAX_REGISTRABLE_LAYERS} (measured, vibe-ic#1297).")
+        print(f"       A host that does not already carry this image downloads "
+              f"it in full and then fails with `failed to register layer: max "
+              f"depth exceeded`. `docker pull` is not a step that can be "
+              f"retried into success, and no tag/digest/pointer check can see "
+              f"this — they all pass.")
+        print(f"       Fix: SQUASH the image (multi-stage build, or export/"
+              f"import flatten) in the `vibeic/vibeic-eda` build, then publish "
+              f"a tag under {MAX_REGISTRABLE_LAYERS} layers. Raising the number "
+              f"here is not a fix; the ceiling belongs to the daemon.")
+        return 1, n
+    print(f"  {label+' layer depth':<25}: OK ({n} layers, ceiling "
+          f"{MAX_REGISTRABLE_LAYERS}, headroom "
+          f"{MAX_REGISTRABLE_LAYERS - n})")
+    return 0, n
 
 
 def check_latest_points_at_anchor(version: str,
@@ -752,6 +922,13 @@ def do_report_upstream(version: str, require_remote: bool = False,
 
     anchor_rc = check_anchor_vs_reality(version, require_remote)
     latest_rc = check_latest_points_at_anchor(version, require_remote)
+    # vibe-ic#1297 — REPORTED here, never blocking here. The anchor's depth is a
+    # property of an image ANOTHER repo built, and the repair (squash) is in
+    # that repo's Dockerfile, not in this tree. Turning it into a landing
+    # verdict would hand every agent in this repo a red gate that no commit
+    # here can make green — the same unsatisfiable shape the issue warns about.
+    # What it CAN do is be visible and dated, which it was not before.
+    depth_rc, depth_n = check_layer_depth(version, require_remote)
 
     newest, src = newest_published_tag()
     record = {
@@ -764,6 +941,10 @@ def do_report_upstream(version: str, require_remote: bool = False,
                              "disagrees" if anchor_rc == 1 else "agrees"),
         "floating_vs_anchor": ("unreachable" if latest_rc == 2 else
                                "disagrees" if latest_rc == 1 else "agrees"),
+        "anchor_layers": depth_n,
+        "max_registrable_layers": MAX_REGISTRABLE_LAYERS,
+        "anchor_registrable": ("unknown" if depth_n is None else
+                               "no" if depth_rc == 1 else "yes"),
         "blocking": False,
         "why_not_blocking": (
             "both comparisons are against a registry another org mutates; a "
@@ -794,10 +975,22 @@ def do_report_upstream(version: str, require_remote: bool = False,
                   f"full; only the persisted copy is missing. This path never "
                   f"sets a verdict (vibe-ic#969).")
 
-    if anchor_rc == 2 or latest_rc == 2:
+    if anchor_rc == 2 or latest_rc == 2 or depth_rc == 2:
         print("[NOT CHECKED] upstream currency: the registry did not answer. "
               "This is NOT a pass and NOT a failure — nothing was compared.")
         return 2
+    if depth_rc == 1:
+        # Said in its own sentence, not folded into "upstream has moved".
+        # "A newer image exists" is an adoption question with a `--set` answer;
+        # "the anchor cannot be materialised" is a DEFECT IN THE IMAGE, and
+        # `--set` cannot fix it — nor can anything else in this repository.
+        print(f"[REPORT] the anchor {version} carries {depth_n} layers and "
+              f"CANNOT BE PULLED onto a host that does not already have it "
+              f"(ceiling {MAX_REGISTRABLE_LAYERS}, observed {observed_at}). "
+              f"Not a landing verdict — the repair is a squash in the "
+              f"`vibeic/vibeic-eda` build (vibe-ic#1297) — but every remedy "
+              f"line in this repo that says `docker pull` is UNSATISFIABLE "
+              f"until it lands.")
     if anchor_rc == 1 or latest_rc == 1:
         print(f"[REPORT] upstream has moved relative to the anchor "
               f"{version} (observed {observed_at}). This is INFORMATION, not a "
@@ -809,7 +1002,7 @@ def do_report_upstream(version: str, require_remote: bool = False,
     return 0
 
 
-def check_adoption_target_resolves(new: str) -> int:
+def check_adoption_target_resolves(new: str, allow_over_depth: bool = False) -> int:
     """THE ADOPTION MOMENT — where vibe-ic#354's protection now lives.
 
     #354: `0.2.29`, a tag that never existed on ghcr, stayed pinned in 13
@@ -827,6 +1020,23 @@ def check_adoption_target_resolves(new: str) -> int:
     and permitted — when the registry cannot be reached: refusing to pin
     offline would make the anchor unmaintainable on a plane, and the pointer
     drift the gate really guards is unaffected either way.
+
+    RESOLVING IS NOT THE SAME AS BEING PULLABLE (vibe-ic#1297). #354 asked "does
+    the tag exist"; `0.2.92` through `0.2.99` all answer yes, and every one of
+    them fails `docker pull` on a clean host with `failed to register layer: max
+    depth exceeded` because they carry 126 layers against a ceiling of 125.
+    That is the SAME defect #354 is about — a pin that directs every install at
+    an image nobody can obtain — reached one step further down the pull. It is
+    blocked at the same moment and for the same reason, and this is the only
+    place in the file that spends a registry round-trip to do it: `--check`
+    stays offline (vibe-ic#927).
+
+    `allow_over_depth` exists because the anchor is ALREADY over the ceiling and
+    the repair lives in another repo. Without it this function would freeze the
+    anchor until somebody else squashes the image, which is a worse failure than
+    the one it prevents. It does NOT silence the finding: the full refusal text
+    is printed either way, and the override is announced on its own line so the
+    decision is on the record rather than implied by a green run.
     """
     if is_mutable_tag(new):                      # belt-and-braces; do_set also checks
         print(f"[FAIL] refusing to anchor on '{new}': not an immutable X.Y.Z "
@@ -846,11 +1056,31 @@ def check_adoption_target_resolves(new: str) -> int:
               f"`docker pull` cannot resolve (vibe-ic#354).")
         return 1
     print(f"  adoption-target-resolves : OK ({new} is published; source={src})")
+    depth_rc, depth_n = check_layer_depth(new, label="adoption target")
+    if depth_rc == 1:
+        if allow_over_depth:
+            print(f"[OVERRIDDEN] --allow-over-depth was passed: adopting {new} "
+                  f"at {depth_n} layers ANYWAY. The finding above stands — a "
+                  f"host without this image already cached still cannot pull "
+                  f"it, and the tests that need it will report NOT VERIFIED "
+                  f"rather than pass. Recorded here so the choice is visible.")
+            return 0
+        print(f"[FAIL] UNPULLABLE ADOPTION TARGET: {new} resolves but cannot be "
+              f"registered on a clean host ({depth_n} layers > "
+              f"{MAX_REGISTRABLE_LAYERS}).")
+        print(f"       Adopting it would make every `docker pull "
+              f"ghcr.io/{GHCR_REPO}:{new}` in this tree — including the remedy "
+              f"line every NOT VERIFIED skip prints — a command that cannot "
+              f"succeed (vibe-ic#1297).")
+        print(f"       Fix: publish a squashed tag, or, if this bump is needed "
+              f"before the squash lands, re-run with --allow-over-depth to "
+              f"adopt it deliberately and on the record.")
+        return 1
     return 0
 
 
 def do_set(root: Path, vf: Path, new: str, ignore, dry: bool,
-           verify_target: bool = True) -> int:
+           verify_target: bool = True, allow_over_depth: bool = False) -> int:
     """Write the anchor and every live pointer.
 
     `verify_target` distinguishes the two things this script is asked to do,
@@ -875,7 +1105,8 @@ def do_set(root: Path, vf: Path, new: str, ignore, dry: bool,
         return 2
     # Verified BEFORE anything is written: a refused adoption must leave the
     # tree exactly as it found it, not half-rewritten to an unpullable tag.
-    if verify_target and not dry and check_adoption_target_resolves(new) != 0:
+    if verify_target and not dry and \
+            check_adoption_target_resolves(new, allow_over_depth) != 0:
         return 1
     changed = []
     for rel in INSTALL_DOC_CANDIDATES:
@@ -923,6 +1154,14 @@ def main(argv=None) -> int:
                          "CHECKED (rc 2) instead of UNVERIFIED (rc 0). ACCEPTED AND "
                          "IGNORED with --check, which makes no registry call at all "
                          "(vibe-ic#927) — kept so existing CI invocations keep working")
+    ap.add_argument("--allow-over-depth", action="store_true",
+                    dest="allow_over_depth",
+                    help="with --set: adopt a tag whose layer count is ABOVE the "
+                         f"daemon's registration ceiling ({MAX_REGISTRABLE_LAYERS}) "
+                         "anyway. The finding is still printed in full and the "
+                         "override is announced — use it when a bump is needed before "
+                         "the image squash lands (vibe-ic#1297), not to make the "
+                         "message go away")
     args = ap.parse_args(argv)
 
     script_dir = Path(__file__).resolve().parent
@@ -971,7 +1210,8 @@ def main(argv=None) -> int:
             return 2
         return rc
     if args.set:
-        return do_set(root, vf, args.set, ignore, args.dry_run)
+        return do_set(root, vf, args.set, ignore, args.dry_run,
+                      allow_over_depth=args.allow_over_depth)
     if args.bump:
         # MINTING, not adopting — see do_set's docstring. The computed version
         # does not exist on the registry yet and must not be required to.
