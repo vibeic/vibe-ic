@@ -627,13 +627,20 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # NON-BLOCKING BY RATCHET, not by being toothless. Measured over the 46 run
 # trees on a working checkout, `--strict` reddens 16 of them on 33 findings the
 # gate did not create; landing that blocking is an outage. The corpus mode
-# instead sweeps the PUBLISHED (git-tracked) trees — 17 here, 5 of which ship a
-# reports/ tree — and ratchets the recorded 7 findings across 4 runs
-# (sha256/clean_run_v1422_20260715, sha256/clean_run_v1427_20260715,
-# u_hawaii_adc/clean_run_v1422_20260715, u_hawaii_adc/clean_run_v1427_20260715).
-# The count may shrink freely; a NEW unacknowledged step-internal FAIL is red.
-# Published, not on-disk, on purpose: 46 vs 17 is exactly the host-dependence
-# `_published_tree` exists to remove from a baseline.
+# instead sweeps the PUBLISHED (git-tracked) run trees and ratchets the count
+# recorded in `step_internal_fail_bubble_up_baseline.json`. The count may shrink
+# freely; a NEW unacknowledged step-internal FAIL is red.
+# Published, not on-disk, on purpose: 46 vs the tracked population is exactly
+# the host-dependence `_published_tree` exists to remove from a baseline.
+#
+# A RUN TREE IS ONE THAT OWNS A TRACKED reports/ TREE, not one whose directory
+# NAME matches a convention (vibe-ic#1223). It used to be `clean_run_*`, which
+# on v1.10.42 reached 3 of the 16 published run trees under this root and
+# reported 5 of the 22 unacknowledged findings they carry. The numbers are NOT
+# repeated here: the baseline records `findings_total` and `corpus_population`,
+# and `test_the_recorded_population_is_the_one_the_ci_gate_sweeps` asserts the
+# root named on the line below is the one that record was measured over — so
+# this comment cannot drift out of agreement with the gate again.
 run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic"
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard

@@ -152,7 +152,7 @@ import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple  # noqa: F401
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple  # noqa: F401
 
 
 _FAIL_VERDICTS = {"FAIL", "MISSING"}
@@ -414,19 +414,89 @@ def _published_run_trees(corpus: Path) -> List[Path]:
     # returned was honest about examining nothing while giving no hint that
     # anything was reachable at all.
     #
-    # `rglob` makes the two invocations agree by construction rather than by the
-    # caller remembering the right depth. The NAME pattern is unchanged: the
-    # population is still `clean_run_*` trees and this commit does not widen it.
-    on_disk = sorted(p for p in corpus.rglob("clean_run_*") if p.is_dir())
+    # `rglob` made the two invocations agree by construction rather than by the
+    # caller remembering the right depth. That fixed the DEPTH and said in its
+    # own words that it "does not widen" the NAME.
+    #
+    # THE NAME IS THE REST OF THE SAME DEFECT (vibe-ic#1015, consolidated in
+    # vibe-ic#1223). A run tree was recognised by its directory being CALLED
+    # `clean_run_*`. A run's name is not what makes it published evidence — the
+    # tracked `reports/` tree under it is, because that is the only thing
+    # :func:`audit` can read. MEASURED on 1adbf3444 (v1.10.42):
+    #
+    #     tracked dirs owning a reports/**/*.json under benchmark-data/ic : 16
+    #       matching clean_run_*  (the population the ratchet swept) :  3
+    #       NOT matching          (invisible to it)                  : 13
+    #
+    #     findings over benchmark-data/ic   name-based:  5   artefact-based: 22
+    #
+    # The three largest published trees in the repo — two `ic/spm` version
+    # trees at 164 tracked reports each and one `ic/caravel_user_project`
+    # version tree at 148 — were outside the population entirely. A ratchet
+    # whose denominator is a naming convention holds no line over the runs that
+    # do not follow it.
+    #
+    # THE COMPETING PROPOSAL AND WHY IT LOSES (vibe-ic#1223). The other PR on
+    # this function kept the name pattern, arguing a widening would let both
+    # `ic/<design>` and `ic/<design>/<version>` be admissible and DOUBLE-COUNT
+    # the same artefacts. That objection is true of the admissibility rule IT
+    # measured (`provenance.jsonl` / `reports/orchestrator/` presence) and is
+    # MEASURABLY FALSE of this one: an owner is the directory before the FIRST
+    # `reports` component, so every tracked report file maps to exactly ONE
+    # owner, and `audit` reads only `<owner>/reports/**`, which is disjoint from
+    # any nested owner's. Verified over the whole corpus, not argued:
+    #
+    #     report files audited across 117 owners : 1926
+    #     counted by more than one owner        :    0
+    #
+    # `ic/caravel_user_project` (1 finding) and its versioned sub-tree (2) are
+    # BOTH admitted and are not the same findings — different report trees,
+    # different files, no overlap. Pinned by
+    # `test_issue1223_...::test_a_nested_run_root_does_not_double_count`.
+    #
+    # Returned as `corpus / <owner>`, NOT as a resolved absolute path: the
+    # caller keys every run by `run.relative_to(corpus)`, so a resolved return
+    # against a relative `--corpus` raises ValueError and takes the whole sweep
+    # down. Both `published_paths` and the disk walk speak the same
+    # corpus-relative dialect, so this is the one spelling that works for both.
+
+    def _owner(rel_parts: Sequence[str]) -> Optional[str]:
+        """The run root that OWNS a path, or None if the path is not in one.
+
+        Keyed on the FIRST `reports` component — the same one `audit` walks —
+        so `a/reports/x/reports/y.json` belongs to `a` and to nothing else.
+        A path whose owner would be the corpus root itself is not a run in a
+        CORPUS of runs; auditing one tree is what the positional mode is for.
+        """
+        if "reports" not in rel_parts:
+            return None
+        head = rel_parts[:list(rel_parts).index("reports")]
+        return "/".join(head) if head else None
+
     if published is None:
-        return on_disk
-    root = corpus.resolve()
-    keep = []
-    for d in on_disk:
-        rel = d.resolve().relative_to(root).as_posix()
-        if any(t.startswith(rel + "/") for t in published):
-            keep.append(d)
-    return keep
+        # Outside a repository, tracked-ness is not a question that applies and
+        # the disk is the honest answer — the same rule the docstring states,
+        # applied to the new predicate.
+        keep = set()
+        for d in corpus.rglob("reports"):
+            if not d.is_dir():
+                continue
+            owner = _owner(d.relative_to(corpus).parts)
+            if owner:
+                keep.add(corpus / owner)
+        return sorted(keep)
+    # From the TRACKED list, so the population is what a fresh clone would see.
+    # Restricted to `*.json` because that is what `audit` reads: a `reports/`
+    # tree that publishes no JSON has nothing for this gate to examine, and
+    # admitting it would inflate the denominator with runs no verdict came from.
+    keep = set()
+    for t in published:
+        if not t.endswith(".json"):
+            continue
+        owner = _owner(tuple(t.split("/")))
+        if owner:
+            keep.add(corpus / owner)
+    return sorted(keep)
 
 
 def check_corpus(corpus: Path) -> Dict[str, Any]:
@@ -486,6 +556,39 @@ def _load_baseline(p: Path) -> Optional[Dict[str, Any]]:
     for key in ("per_run", "withdrawn_unexamined"):
         d[key] = d[key] if isinstance(d.get(key), dict) else {}
     return d
+
+
+def _population_key(corpus: Path) -> str:
+    """WHICH population a count was taken over, as a repo-relative path.
+
+    THE INTEGER IS MEANINGLESS WITHOUT THE SET IT COUNTED (vibe-ic#1223). The
+    `--corpus` argument names a population, and `_published_run_trees` honours
+    it — `test_a_narrower_root_still_narrows_the_population` pins that a
+    narrower root SWEEPS LESS, deliberately. So two invocations of this gate
+    against the same commit legitimately answer different numbers. MEASURED on
+    1adbf3444 with the artefact predicate:
+
+        --corpus benchmark-data/ic    16 swept, 16 with reports/, 22 finding(s)
+        --corpus benchmark-data      117 swept, 117 with reports/, 45 finding(s)
+
+    Same file, same commit, same question — the answer depends on which root
+    the caller typed, and while the name-based population happened to make the
+    two agree (nothing outside `ic/` was called `clean_run_*`), that agreement
+    was an accident of a naming convention and nothing checked it. Comparing a
+    live count against a baseline taken over a DIFFERENT root is not a bigger
+    or smaller number, it is a different question, and answering it PASS or
+    FAIL would be a verdict over a population never examined.
+
+    Recorded in the baseline and compared, rather than assumed equal.
+    """
+    c = corpus.resolve()
+    for anc in (c, *c.parents):
+        if (anc / ".git").exists():
+            try:
+                return c.relative_to(anc).as_posix() or "."
+            except ValueError:              # noqa: PERF203
+                break
+    return c.name
 
 
 def _run_key(rel: str) -> str:
@@ -745,10 +848,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             doc = {
                 "_comment": (
                     "Unacknowledged step-internal FAIL/MISSING reports across "
-                    "the PUBLISHED (git-tracked) run trees. MAY ONLY SHRINK — "
-                    "each one is a report declaring FAIL that no waiver and no "
-                    "orchestrator record names. The wrong repair is to loosen "
-                    "the matcher until the number falls (vibe-ic#693)."),
+                    "the PUBLISHED (git-tracked) run trees — a run tree being "
+                    "any directory that owns a tracked reports/**/*.json, "
+                    "which is what the gate can read, NOT a directory whose "
+                    "name matches a convention (vibe-ic#1223). MAY ONLY SHRINK "
+                    "UNDER A FIXED POPULATION — each one is a report declaring "
+                    "FAIL that no waiver and no orchestrator record names. The "
+                    "wrong repair is to loosen the matcher until the number "
+                    "falls (vibe-ic#693). `corpus_population` is the root this "
+                    "count was taken over and is part of the record: the gate "
+                    "refuses to ratchet a count from one population against a "
+                    "sweep of another."),
                 "_withdrawn_comment": (
                     "Findings that left findings_total because their run left "
                     "the published corpus (or stopped carrying a reports/ "
@@ -758,13 +868,29 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "findings_total and not a ceiling on anything — the "
                     "ratchet is over the published corpus only."),
                 "findings_total": now,
+                # vibe-ic#1223 — WHICH population produced this count. Without
+                # it the integer below is comparable to anything.
+                "corpus_population": _population_key(corpus),
                 "runs_swept": rep["runs_swept"],
                 "runs_with_reports": rep["runs_with_reports"],
                 "per_run": rep["per_run"],
                 "withdrawn_unexamined": withdrawn,
             }
+            # A HAND-WRITTEN PROVENANCE NOTE IS PART OF THE RECORD TOO
+            # (vibe-ic#1202, same rule as the ledger above). The shipped
+            # baseline carries `_withdrawn_provenance`, which explains how its
+            # two withdrawn entries were derived; the writer does not author
+            # that key, so the command the gate TELLS the operator to run
+            # deleted it. Any `_`-prefixed key this writer does not itself
+            # produce is carried forward instead of dropped. Only `_` keys, so
+            # a stale MEASUREMENT can never survive a re-record.
+            if prev:
+                for k, v in prev.items():
+                    if k.startswith("_") and k not in doc:
+                        doc[k] = v
             bl.write_text(json.dumps(doc, indent=2) + "\n")
             print(f"wrote {bl} (findings_total={now}, "
+                  f"population={_population_key(corpus)}, "
                   f"withdrawn_unexamined={sum(withdrawn.values())})")
             return 0
         base_doc = _load_baseline(bl)
@@ -779,6 +905,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         if base is None:
             print(f"[NOT CHECKED] no baseline at {bl} — record one with "
                   f"--write-baseline before this can ratchet.")
+            return 2
+        # vibe-ic#1223 — a recorded count is only a line to hold over the set it
+        # was measured on. See :func:`_population_key`: 22 over
+        # `benchmark-data/ic` and 45 over `benchmark-data`, same commit. rc 2,
+        # the "could not determine" tier this program already uses, because
+        # neither PASS nor FAIL is an honest answer about a population that was
+        # never examined. A baseline written before this key existed carries
+        # None, which means "I do not know what it was measured over" and is
+        # left to ratchet exactly as it did — silently reinterpreting an old
+        # record as agreeing would be the assumption this guard removes.
+        want_pop = _population_key(corpus)
+        have_pop = base_doc.get("corpus_population")
+        if isinstance(have_pop, str) and have_pop != want_pop:
+            print(f"[NOT CHECKED] the baseline at {bl} was measured over "
+                  f"'{have_pop}' and this sweep covered '{want_pop}' — a count "
+                  f"over one population is not a line to hold over another. "
+                  f"Sweep the recorded population, or re-record with "
+                  f"--corpus <root> --write-baseline (vibe-ic#1223).")
             return 2
         for run, n in sorted(rep["per_run"].items()):
             print(f"   {run}: {n}")
