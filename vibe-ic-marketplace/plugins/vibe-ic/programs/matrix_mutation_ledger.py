@@ -2110,6 +2110,22 @@ class ReplayResult:
         return self.verdict == ALREADY_RED
 
 
+def _decoded(chunk) -> str:
+    """Whatever a killed child left behind, as text.
+
+    ``TimeoutExpired`` carries the output accumulated before the kill, and it
+    carries it as BYTES even when the call asked for ``text=True`` — CPython
+    builds the exception inside ``_check_timeout``, before any decoding. A
+    partial tail is still worth showing the reader, so it is decoded here with
+    ``replace`` rather than dropped for being ragged.
+    """
+    if chunk is None:
+        return ""
+    if isinstance(chunk, bytes):
+        return chunk.decode("utf-8", "replace")
+    return chunk
+
+
 def _cell_rc_from_report(junit: Path, proc_rc: int) -> Tuple[Optional[int], str]:
     """``(cell rc, why-unreadable)`` from pytest's OWN report of the one cell.
 
@@ -2178,12 +2194,45 @@ def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
     holder = Path(tempfile.mkdtemp(prefix="matmut_cellreport_"))
     junit = holder / "cell.xml"
     try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
-             "-q", "-p", "no:randomly", "--no-header", "-rN",
-             "--junit-xml", str(junit)],
-            cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
-            env=env)
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", cell_nodeid(dim, sid),
+                 "-q", "-p", "no:randomly", "--no-header", "-rN",
+                 "--junit-xml", str(junit)],
+                cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+                env=env)
+        except subprocess.TimeoutExpired as exc:
+            # THE BOUND FIRING IS A MEASUREMENT FAILURE, NOT A COLOUR
+            # (vibe-ic#1403).
+            #
+            # Every other way this cell can be unreadable already returns a
+            # REASON and lets `replay` score it NOT_REPLAYABLE — that is the
+            # doctrine `_cell_rc_from_report` is written to, in as many words:
+            # "a replay that could not read its cell must be NOT_REPLAYABLE,
+            # never a quiet ALREADY_RED". The bound firing was the ONE
+            # unreadable path that did not obey it, because `subprocess.run`
+            # raises instead of returning, and the exception escaped through
+            # `replay` -> `replay_many`'s `pool.map` to the caller.
+            #
+            # The consequence is the one this issue is about. LOCK 2 died with
+            # a `TimeoutExpired` traceback and no verdict, which reads to a
+            # harness — and to a reader in a hurry — exactly like the red that
+            # means "a gate stopped catching". It is the opposite: nothing was
+            # measured on this arm at all.
+            #
+            # rc is None, so the arm has NO COLOUR and cannot be scored. It is
+            # not folded into ALREADY_RED (which would say the witness was
+            # pre-reddened, a claim this has no evidence for) and not into
+            # STAYED_GREEN (which would say the gate lost its teeth, the
+            # expensive wrong answer). `not_replayable` makes `proved` and
+            # `as_recorded` both False, so this can never buy a pass.
+            return None, _decoded(exc.stdout) + _decoded(exc.stderr), (
+                f"the cell exceeded its {timeout}s bound and was killed, so "
+                f"pytest never recorded it — this arm was NOT MEASURED. That "
+                f"is not evidence the gate stopped catching, and it is not a "
+                f"reason to re-record the ledger or re-pick the witness. "
+                f"Re-run the pair; if it is genuinely this slow, raise the "
+                f"bound in a change that states the measurement")
         out = (proc.stdout or "") + (proc.stderr or "")
         rc, why = _cell_rc_from_report(junit, proc.returncode)
         return rc, out, why
