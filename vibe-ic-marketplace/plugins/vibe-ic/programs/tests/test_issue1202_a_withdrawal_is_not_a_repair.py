@@ -373,6 +373,53 @@ def test_the_two_corpus_spellings_do_not_fake_a_mass_withdrawal(tmp_path):
 
     _write_baseline(corpus, bl)                       # keys: ic/alpha/..., ic/beta/...
     assert "ic/alpha/clean_run_A" in json.loads(bl.read_text())["per_run"]
+    before = bl.read_bytes()
+
+    _withdraw_reports(beta)
+    r = _run("--corpus", str(corpus / "ic"), "--baseline", str(bl))  # keys: alpha/...
+    out = r.stdout + r.stderr
+
+    # THE MECHANISM CHANGED AND THE PROPERTY DID NOT (vibe-ic#1223). The two
+    # roots used to sweep the same set, because the population was every
+    # directory NAMED `clean_run_*` and nothing outside `ic/` was. Now that the
+    # population is the tracked `reports/` tree, `<root>` and `<root>/ic` are
+    # genuinely different sets — so the gate REFUSES rather than reconciling,
+    # which is a stronger form of the same guarantee: no run is called
+    # withdrawn on the strength of the caller naming a different root, and the
+    # decomposition that would have said so is never even attempted.
+    assert r.returncode == 2, f"expected NOT CHECKED, got rc={r.returncode}\n{out}"
+    assert "NOT CHECKED" in out, out
+    assert "WITHDRAWN" not in out, (
+        f"a sweep of a different root reported withdrawals against a baseline "
+        f"it did not measure\n{out}")
+    assert bl.read_bytes() == before, (
+        "a read-only sweep rewrote the register")
+
+
+def test_a_legacy_ic_prefixed_key_is_still_reconciled(tmp_path):
+    """THE OTHER HALF, and it is live in this repo (vibe-ic#1202/#1223).
+
+    Refusing across POPULATIONS must not become a refusal to read a baseline
+    whose KEYS are spelled with the old `ic/` prefix. That spelling is shipped
+    today: `withdrawn_unexamined` carries `ic/u_hawaii_adc/...` while the live
+    sweep of the recorded population emits `u_hawaii_adc/...`. Compared
+    verbatim, every such entry reads as absent and a reader would report a
+    total withdrawal of runs sitting right there with unchanged counts.
+
+    So: same population, legacy keys. `_run_key` must still reconcile them, and
+    only the run that really was withdrawn may be named.
+    """
+    corpus, bl = tmp_path / "c", tmp_path / "bl.json"
+    _mk_run(corpus, "ic/alpha/clean_run_A", 2)
+    beta = _mk_run(corpus, "ic/beta/clean_run_B", 1)
+
+    _write_baseline(corpus, bl)                       # keys: ic/alpha/..., ic/beta/...
+    doc = json.loads(bl.read_text())
+    assert "ic/alpha/clean_run_A" in doc["per_run"]
+    # The record legitimately describes THIS root; only its keys are the old
+    # spelling — exactly the shipped baseline's shape.
+    doc["corpus_population"] = (corpus / "ic").resolve().name
+    bl.write_text(json.dumps(doc, indent=2) + "\n")
 
     _withdraw_reports(beta)
     r = _run("--corpus", str(corpus / "ic"), "--baseline", str(bl))  # keys: alpha/...
@@ -382,8 +429,7 @@ def test_the_two_corpus_spellings_do_not_fake_a_mass_withdrawal(tmp_path):
         f"the run that really was withdrawn went unreported\n{out}")
     assert "WITHDRAWN alpha/clean_run_A" not in out, (
         f"a run present in BOTH spellings with an unchanged count was reported "
-        f"withdrawn, purely because the caller named a different corpus root"
-        f"\n{out}")
+        f"withdrawn, purely because its key carried the legacy prefix\n{out}")
     assert "NONE of it is repair" in out, out
     assert "1 finding(s) left" in out, (
         f"the withdrawal total is wrong; unreconciled keys would make it 3 "

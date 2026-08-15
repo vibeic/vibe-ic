@@ -47,7 +47,21 @@ BASELINE = PROGRAMS / "step_internal_fail_bubble_up_baseline.json"
 # Spelled by index and ASSERTED below, because the first version used
 # parents[2] — one short — and every predicate here then measured an
 # empty directory and failed for the wrong reason.
-CORPUS = PROGRAMS.parents[3] / "benchmark-data"
+REPO_ROOT = PROGRAMS.parents[3]
+
+# THE CORPUS COMES FROM THE RECORD, NOT FROM THIS FILE (vibe-ic#1223).
+#
+# It was hardcoded to `benchmark-data` while `tools/ci/repo_hygiene_gates.sh`
+# sweeps `benchmark-data/ic`. Under the old NAME-based population the two roots
+# happened to answer the same number — nothing outside `ic/` was called
+# `clean_run_*` — so the disagreement was invisible and nothing checked it.
+# With the population defined by the ARTEFACT they are different questions:
+# 22 findings over `benchmark-data/ic`, 45 over `benchmark-data`, same commit.
+# A test that measured one while the gate ratchets the other would be grading a
+# population the gate never looks at, which is the whole failure class #1015 is
+# about. So the baseline names its own population and this reads it back.
+CORPUS = REPO_ROOT / json.loads(
+    BASELINE.read_text(encoding="utf-8"))["corpus_population"]
 
 
 def _load():
@@ -66,7 +80,35 @@ def test_the_corpus_this_module_measures_actually_exists():
     """A path that resolves to nothing would make every predicate below fail —
     or, with a laxer assertion, PASS over an empty sweep. Pinned first."""
     assert CORPUS.is_dir(), f"corpus not found at {CORPUS}"
-    assert (CORPUS / "ic").is_dir(), f"no ic/ tree under {CORPUS}"
+    assert any(CORPUS.iterdir()), f"corpus is empty at {CORPUS}"
+
+
+def test_the_recorded_population_is_the_one_the_ci_gate_sweeps():
+    """THE AGREEMENT NOTHING CHECKED (vibe-ic#1223).
+
+    `tools/ci/repo_hygiene_gates.sh` is the only caller that runs this gate in
+    anger, and it names the corpus root on its own command line. The baseline
+    names one too. Nothing compared them: they agreed only because the old
+    NAME-based population made every root under `benchmark-data` answer the
+    same number, and that accident ended the moment the population became the
+    artefact. If they ever disagree the gate is ratcheting a line that was
+    measured somewhere else — so this reads BOTH out of the tree and asserts
+    they are the same string.
+    """
+    gates = REPO_ROOT / "tools" / "ci" / "repo_hygiene_gates.sh"
+    assert gates.is_file(), f"CI gate script not found at {gates}"
+    line = [l for l in gates.read_text(encoding="utf-8").splitlines()
+            if "step_internal_fail_bubble_up_check.py" in l and "--corpus" in l]
+    assert len(line) == 1, (
+        f"expected exactly one corpus invocation of the gate in {gates.name}, "
+        f"found {len(line)}: {line}")
+    swept = line[0].split("--corpus", 1)[1].strip().strip('"').strip()
+    swept = swept.replace("$ROOT/", "").replace("${ROOT}/", "")
+    recorded = json.loads(BASELINE.read_text(encoding="utf-8"))["corpus_population"]
+    assert swept == recorded, (
+        f"the CI gate sweeps '{swept}' and the baseline records its count over "
+        f"'{recorded}'. Those are different populations, so the ratchet would "
+        f"hold a line nobody measured — see vibe-ic#1223.")
 
 
 def _live() -> dict:
@@ -100,7 +142,8 @@ def test_the_baseline_cites_no_run_tree_that_is_gone():
     missing = []
     for run in sorted(_recorded().get("per_run", {})):
         rel = run[3:] if run.startswith("ic/") else run
-        if not ((CORPUS / "ic" / rel).is_dir() or (CORPUS / run).is_dir()):
+        if not ((CORPUS / rel).is_dir() or (CORPUS / "ic" / rel).is_dir()
+                or (CORPUS / run).is_dir()):
             missing.append(run)
     assert not missing, (
         f"the ratchet baseline cites {len(missing)} run tree(s) that are not in "
