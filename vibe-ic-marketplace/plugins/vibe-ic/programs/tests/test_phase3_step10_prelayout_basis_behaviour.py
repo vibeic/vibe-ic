@@ -126,7 +126,27 @@ def _fake_opensta(calls: list, fail_corners=()):
     def _run(container, cmd, timeout=1800, *, marker=None, log_path=None,
              stall_grace_s=None, hard_ceiling_s=None, poll_s=None,
              outputs=None):
-        rpt = Path(outputs[0])
+        # vibe-ic#1330 — THE REPORT IS NO LONGER DECLARED ON THE CALL. This one
+        # call site may DESTROY its own output (the black-box `_bb` branch), so
+        # `_emit_multi_corner_sta` now runs with `marker=` only and declares the
+        # report afterwards, on the surviving path, via `_log_surviving_artefact`.
+        # This stand-in read `outputs[0]` unconditionally and died on `None`.
+        #
+        # `marker` is the tcl the runner just wrote for THIS corner, and
+        # `_to_container_path` is patched to identity here, so it names the same
+        # directory and the same corner the report belongs to — the fake still
+        # learns the corner from the RUNNER's own artefact, never from the test.
+        # `outputs` is still honoured when a call site supplies it, because the
+        # other ~17 sites do and this fake stands in for the same function.
+        if outputs:
+            rpt = Path(outputs[0])
+        elif marker:
+            _tcl = Path(marker)
+            rpt = _tcl.with_suffix(".rpt")
+        else:                                                # pragma: no cover
+            raise AssertionError(
+                "_docker_exec called with neither `outputs` nor `marker`: this "
+                "stand-in cannot tell which corner it is being asked to run")
         corner = rpt.stem[len("sta_"):]
         calls.append(corner)
         if corner in fail_corners:
