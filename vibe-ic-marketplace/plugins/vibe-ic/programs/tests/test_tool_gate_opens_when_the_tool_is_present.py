@@ -79,11 +79,11 @@ Widening also swept in two constants that share the prefix and are NOT gates
 (a fixture string and an argv list). They are in `NOT_A_GATE` with the value
 type that disqualifies them, and guarded: a bool cannot hide there.
 
-    WHICH_GATES      86    shut under which->None, open under which->path
+    WHICH_GATES      92    shut under which->None, open under which->path
     NOT_WHICH_GATES  14    corpus dir, package import, two-stage docker probe
     NOT_A_GATE        2    not booleans; not gates at all
                     ---
-                    102    every `_HA(VE|S)_*` definition in this directory
+                    108    every `_HA(VE|S)_*` definition in this directory
 
 Nothing here shells out; `_HAVE_CONTAINER` is the one entry whose probe
 attempts a real subprocess, and it fails closed immediately.
@@ -501,8 +501,8 @@ def test_the_register_is_not_checking_an_empty_population():
     """
     found = _scan()
     assert len(found) >= 90, (
-        f"only {len(found)} `_HA(VE|S)_*` definitions found; 102 were present "
+        f"only {len(found)} `_HA(VE|S)_*` definitions found; 108 were present "
         f"when this was last re-measured. The scan is broken, not the tree.")
     assert len(WHICH_GATES) >= 75, (
-        f"only {len(WHICH_GATES)} which-keyed gates registered; 86 when "
-        f"re-measured on 3d13e2c59")
+        f"only {len(WHICH_GATES)} which-keyed gates registered; 92 when "
+        f"re-measured on ab5a23a28")
