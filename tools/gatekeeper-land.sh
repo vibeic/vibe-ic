@@ -12,6 +12,7 @@
 #            stamp. That makes the expensive tier enforced rather than optional.
 #
 # Usage:  tools/gatekeeper-land.sh [--cheap-only] [--prepare]
+#                                    [--profile fast|standard|full]
 #
 # --prepare (vibe-ic#1129) — do the MECHANICAL things this script would
 # otherwise refuse a batch for, before the cheap tier runs, and let the gates
@@ -51,13 +52,23 @@ BASE="${GATEKEEPER_BASE:-origin/main}"
 RANGE="${BASE}..HEAD"
 CHEAP_ONLY=0
 PREPARE=0
-for _arg in "$@"; do
-  case "$_arg" in
-    --cheap-only) CHEAP_ONLY=1 ;;
-    --prepare)    PREPARE=1 ;;
-    *) echo "gatekeeper-land: unknown argument '$_arg'" >&2; exit 2 ;;
+PROFILE="full"
+GK_STARTED="$SECONDS"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --cheap-only) CHEAP_ONLY=1; shift ;;
+    --prepare)    PREPARE=1; shift ;;
+    --profile)
+      PROFILE="${2:-}"
+      shift 2 ;;
+    *) echo "gatekeeper-land: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
+case "$PROFILE" in
+  fast|standard|full) ;;
+  *) echo "gatekeeper-land: --profile wants fast, standard, or full (got '$PROFILE')" >&2
+     exit 2 ;;
+esac
 
 FAILED=0
 # REPORT, not a gate. Prints what a probe found and NEVER touches FAILED.
@@ -104,7 +115,7 @@ run() {                              # run <label> <cmd…>
   fi
 }
 
-echo "=== gatekeeper landing gates — base=$BASE ==="
+echo "=== gatekeeper landing gates — base=$BASE profile=$PROFILE ==="
 
 # vibe-ic#1129 — the mechanical repairs, BEFORE anything measures them. A gate
 # that refuses for a reason a program can fix spends an hour saying so.
@@ -340,6 +351,10 @@ run "write-guard baseline" \
 # nobody uses.
 run_pytest() {
   local sel out
+  if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
+    echo "  SKIP  targeted tests — the verifier's separate base-test arm owns this measurement"
+    return
+  fi
   # PREFLIGHT (vibe-ic#1446): the scratch root this pytest will use is part of
   # its verdict. A root inside a git work tree makes 46 tests report failures
   # that are the ROOT, not the tree — and each names its own subject rather
@@ -379,7 +394,15 @@ run_pytest() {
     # "refuse when the complete record is absent" rule then applies correctly.
     rm -f "$GATEKEEPER_PYTEST_JUNIT" 2>/dev/null || true
   fi
-  ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" ) 2>/dev/null
+  if [ -n "${GATEKEEPER_SELECTION_FILE:-}" ]; then
+    if [ ! -s "$GATEKEEPER_SELECTION_FILE" ]; then
+      echo "  FAIL  targeted test selection record is absent or empty — not a clean result"
+      FAILED=1; rm -f "$sel"; return
+    fi
+    cp "$GATEKEEPER_SELECTION_FILE" "$sel"
+  else
+    ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" ) 2>/dev/null
+  fi
   if [ ! -s "$sel" ]; then
     echo "  FAIL  targeted test selection produced no files — not a clean result"
     FAILED=1; rm -f "$sel"; return
@@ -494,7 +517,11 @@ run_repo_tools_pytest() {
   fi
   printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
 }
-run_repo_tools_pytest
+if [ "$PROFILE" = "full" ]; then
+  run_repo_tools_pytest
+else
+  echo "  SKIP  repo tools tests — landing profile $PROFILE does not schedule this corpus"
+fi
 
 # ── EVERY OTHER TREE THE SELECTOR CANNOT REACH ─────────────────────────────
 # vibe-ic#1424. `run_pytest` runs the SELECTOR'S list and the selector is rooted
@@ -533,6 +560,10 @@ run_repo_tools_pytest
 # vibe-ic#1390, open, a defect in that resolution and not silenced here.
 run_unselectable_pytest() {
   local files out rc wg wrc snap list lrc
+  if [ "$PROFILE" != "full" ]; then
+    echo "  SKIP  unselectable tests — landing profile $PROFILE defers the rotation/full corpus"
+    return
+  fi
   list="$(mktemp -t gk_unsel.XXXXXX)"
   ( cd "$ROOT" && python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" \
         --repo "$ROOT" > "$list" ) ; lrc=$?
@@ -622,8 +653,12 @@ run_unselectable_pytest
 # subtrahend whose stage no longer exists, or an exclusion whose reason no
 # longer describes anything, both shrink the corpus in the direction that still
 # prints PASS. rc=1 on either.
-run "unselectable-test census is not stale" \
-    python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
+if [ "$PROFILE" = "full" ]; then
+  run "unselectable-test census is not stale" \
+      python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
+else
+  echo "  SKIP  unselectable-test census — landing profile $PROFILE"
+fi
 
 # THE HYGIENE TIER, AND THE RECORD THAT LETS IT BE DIFFERENCED (vibe-ic#1498).
 #
@@ -654,9 +689,20 @@ run "unselectable-test census is not stale" \
 GK_HYG=()
 [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
   && GK_HYG=(--summary-json "$GATEKEEPER_HYGIENE_REPORT")
+run_repo_hygiene() {
 run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
     "${GK_HYG[@]+"${GK_HYG[@]}"}"
-run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+}
+if [ "$PROFILE" = "full" ]; then
+  run_repo_hygiene
+else
+  echo "  SKIP  repo hygiene gates — landing profile $PROFILE"
+fi
+if [ "$PROFILE" != "fast" ]; then
+  run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+else
+  echo "  SKIP  plugin full audit — landing profile fast"
+fi
 
 # #1029 — the standing assertion, executed: everything above ran against this
 # tree, so nothing above may have CHANGED it. Names every offending path rather
@@ -674,7 +720,10 @@ run "worktree unchanged since the gates started" \
     python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
         --expect-fingerprint "$FP"
 
-if [ "$FAILED" -eq 0 ]; then
+GK_ELAPSED=$(( SECONDS - GK_STARTED ))
+echo "  REPORT  landing profile $PROFILE completed in ${GK_ELAPSED}s"
+
+if [ "$FAILED" -eq 0 ] && [ "$PROFILE" = "full" ]; then
   # Stamp the exact commit these suites were verified against. The hook compares
   # this to what is being pushed, so a later commit invalidates it automatically.
   #
@@ -689,7 +738,17 @@ if [ "$FAILED" -eq 0 ]; then
   git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
 else
+  # Both a failed run and a bounded-profile pass remove any stale full stamp.
+  # A short profile is evidence for the merge verifier, never authorisation for
+  # a direct push.
   rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
-  echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+  if [ "$FAILED" -eq 0 ]; then
+  # A bounded profile is an input to `gatekeeper-verify-merge.sh`'s structured
+  # verdict, not a reusable authorisation for a direct push to main.  Only the
+  # complete standalone profile writes the pre-push stamp.
+    echo "=== PROFILE $PROFILE PASS — no direct-push stamp; merge verifier owns the verdict ==="
+  else
+    echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+  fi
 fi
 exit "$FAILED"

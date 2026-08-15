@@ -61,6 +61,27 @@ The poller **never reimplements the gate** — it shells out to
 `tools/gatekeeper-land.sh` and only transports the verdict. Two gates that can
 disagree is a new lie waiting to happen.
 
+### Landing cost profiles
+
+`tools/gatekeeper-verify-merge.sh` asks the planner from the **base tree** to
+choose the smallest honest profile from the exact merge diff. The branch being
+judged cannot choose a cheaper lane. `--landing-profile` may escalate the
+planner's answer and can never downgrade it.
+
+| profile | intended case | budget | additional stages |
+|---|---|---:|---|
+| `fast` | documentation and non-executable assets only | 180 s | affected tests |
+| `standard` | localised software changes | 600 s | plugin structural audit |
+| `full` | milestones, broad diffs, gate/shared-test/IC/benchmark changes, test deletion, or a wide affected-test set | case-by-case | repo tools, unselectable trees, repo hygiene, plugin audit |
+
+Every profile still proves merge identity, runs the cheap landing policy and
+the base-vs-candidate affected-test differential, and brackets the run with
+write guards. The selected-test list is produced once by the base-owned plan,
+fed to both isolated test arms, and recorded in the verdict. A plan/profile or
+selection mismatch refuses as unmeasurable. Only a standalone `full` pass
+writes the direct-push stamp; bounded profiles are valid only inside the merge
+verifier's structured verdict.
+
 ### The verdict is three-valued
 
 A gate that could not **run** is not a gate that **failed**.

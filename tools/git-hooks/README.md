@@ -36,13 +36,14 @@ its own tool:
 
 ```bash
 tools/gatekeeper-verify-merge.sh <pr-number> --json /tmp/v.json   # MUST exit 0
-gh pr merge <pr-number> --squash
-tools/gatekeeper-verify-merge.sh --reassert /tmp/v.json           # if time passed
+tools/gatekeeper-verify-merge.sh --reassert /tmp/v.json           # immediately before merge
+gh pr merge <pr-number> --squash --match-head-commit \
+  "$(python3 -c 'import json; print(json.load(open("/tmp/v.json"))["head_sha"])')"
 ```
 
 It rebases the PR onto the current base in a throwaway worktree, proves that
-tree is the tree the merge would produce, and runs the same
-`gatekeeper-land.sh` the push path runs. What went unnoticed without it:
+tree is the tree the merge would produce, reasserts that neither base nor head
+moved, and runs the same `gatekeeper-land.sh` the push path runs. What went unnoticed without it:
 `test_matrix_d2_falsifiable.py` stayed RED on `main` across five merges.
 
 Proving the replay IS the merge tree needs `git merge-tree --write-tree`, i.e.

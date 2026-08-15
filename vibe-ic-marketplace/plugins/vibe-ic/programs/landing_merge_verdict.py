@@ -185,6 +185,8 @@ Usage
          --base-hygiene-host <name> --candidate-hygiene-host <name>]
         [--verification-tier merge-tree|rebase-replay] [--git-version <v>]
         [--merge-tree-min-version <v>] [--tier-reason <text>]
+        [--landing-profile fast|standard|full --landing-plan <path>]
+        [--allow-test-removal-reason <text>]
         [--gate-edited <path>...] [--maxfail N] [--json <out>]
 
 Exit codes
@@ -385,6 +387,13 @@ TIER_REBASE_REPLAY = "rebase-replay"
 TIERS = (TIER_MERGE_TREE, TIER_REBASE_REPLAY)
 MERGE_TREE_MIN_VERSION = "2.38"
 
+# LANDING PROFILES name how much validation was scheduled; they are independent
+# of the verification tier above, which names how the exact merge tree was
+# computed.  A short profile may omit an expensive corpus.  It may never omit
+# merge identity, affected tests, or the final write guards, and its BASE-owned
+# plan is checked below before the verdict can pass.
+LANDING_PROFILES = ("fast", "standard", "full")
+
 
 # ---------------------------------------------------------------- junit reading
 
@@ -566,6 +575,67 @@ def read_hygiene_delta(base_path: str, cand_path: str, base_host: str,
     return _H.compare(Path(base_path), Path(cand_path), base_host, cand_host)
 
 
+def read_landing_plan(path: str, profile: str, base_sha: str,
+                      verified_sha: str,
+                      selection: Optional[Sequence[str]] = None,
+                      ) -> tuple[Optional[dict], str]:
+    """Read and bind a BASE-owned plan to the exact run it authorised.
+
+    The shell chooses where the planner comes from; this program independently
+    checks the resulting record.  A stale plan, a profile mismatch, or an
+    unreadable record is not permission to guess a shorter lane.
+    """
+    if not profile:
+        # Compatibility for direct/older callers.  The production verifier
+        # always supplies both flags together.
+        return None, ""
+    if profile not in LANDING_PROFILES:
+        return None, (
+            f"UNKNOWN LANDING PROFILE {profile!r}; expected one of "
+            + ", ".join(LANDING_PROFILES))
+    if not path:
+        return None, "THE LANDING PROFILE PLAN WAS NOT SUPPLIED"
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        return None, f"THE LANDING PROFILE PLAN COULD NOT BE READ — {exc}"
+    if not isinstance(doc, dict) or doc.get("schema_version") != 1:
+        return None, "THE LANDING PROFILE PLAN HAS AN UNKNOWN SCHEMA"
+    expected = {
+        "base": base_sha,
+        "head": verified_sha,
+        "effective_profile": profile,
+    }
+    mismatches = [
+        f"{key}={doc.get(key)!r}, expected {value!r}"
+        for key, value in expected.items() if doc.get(key) != value
+    ]
+    if mismatches:
+        return None, (
+            "THE LANDING PROFILE PLAN DESCRIBES ANOTHER RUN — "
+            + "; ".join(mismatches))
+    stages = doc.get("stages")
+    if not isinstance(stages, list) or not all(
+            isinstance(stage, str) and stage for stage in stages):
+        return None, "THE LANDING PROFILE PLAN HAS NO MEASURABLE STAGE LIST"
+    deleted = doc.get("deleted_tests")
+    if not isinstance(deleted, list) or not all(isinstance(p, str) for p in deleted):
+        return None, "THE LANDING PROFILE PLAN HAS NO VALID DELETED-TEST LIST"
+    selected = doc.get("selected_tests")
+    if not isinstance(selected, list) or not all(
+            isinstance(p, str) and p for p in selected):
+        return None, "THE LANDING PROFILE PLAN HAS NO VALID SELECTED-TEST LIST"
+    if doc.get("selected_test_files") != len(selected):
+        return None, (
+            "THE LANDING PROFILE PLAN'S SELECTED-TEST COUNT DISAGREES WITH "
+            "ITS LIST")
+    if selection is not None and selected != list(selection):
+        return None, (
+            "THE TEST SELECTION DOES NOT MATCH THE BASE-OWNED PLAN — the "
+            "ordered path list handed to the verdict differs")
+    return doc, ""
+
+
 # ------------------------------------------------------------------- the gate
 #
 # EVERYTHING ABOVE MEASURES. THIS DECIDES. One function, one call site.
@@ -580,7 +650,10 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            base_land: Optional[LandLog] = None,
            hygiene: Optional[dict] = None,
            verification_tier: str = TIER_MERGE_TREE,
-           git_version: str = "", tier_reason: str = "") -> Verdict:
+           git_version: str = "", tier_reason: str = "",
+           landing_profile: str = "", landing_plan: Optional[dict] = None,
+           landing_plan_error: str = "",
+           test_removal_reason: str = "") -> Verdict:
     reasons: List[str] = []
     notes: List[str] = []
     disclosures: List[str] = []
@@ -625,6 +698,59 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
     else:
         disclosures.append("VERIFICATION_TIER_MERGE_TREE")
         disclosures.append("SQUASH_VS_REBASE_CROSS_CHECK_PERFORMED")
+
+    # ---- WHICH VALIDATION PROFILE RAN, AND WHO AUTHORISED ITS SCOPE ----
+    # `verification_tier` above and `landing_profile` here are orthogonal: the
+    # former proves the tree identity; the latter schedules validation cost.
+    # The profile never subtracts a reason.  It only explains why deliberately
+    # unscheduled gates appear as SKIP lines in both arms.
+    if landing_profile:
+        if landing_profile not in LANDING_PROFILES:
+            return _stop(
+                f"UNKNOWN LANDING PROFILE {landing_profile!r} — this verdict "
+                f"knows {', '.join(LANDING_PROFILES)} and cannot say what ran.")
+        disclosures.append(f"LANDING_PROFILE_{landing_profile.upper()}")
+        if landing_plan_error:
+            unmeasurable = True
+            reasons.append(landing_plan_error)
+            disclosures.append("LANDING_PROFILE_PLAN_INVALID")
+        elif landing_plan is None:
+            unmeasurable = True
+            reasons.append(
+                "THE LANDING PROFILE PLAN WAS NOT SUPPLIED — a short lane "
+                "without its BASE-owned risk decision is not verified")
+            disclosures.append("LANDING_PROFILE_PLAN_ABSENT")
+        else:
+            disclosures.append("LANDING_PROFILE_PLAN_VERIFIED")
+            budget = landing_plan.get("budget_seconds")
+            notes.append(
+                f"landing profile {landing_profile}: automatic "
+                f"{landing_plan.get('automatic_profile')}, requested "
+                f"{landing_plan.get('requested_profile')}; budget "
+                f"{str(budget) + 's' if budget is not None else 'case-by-case'}; "
+                f"stages: {', '.join(landing_plan.get('stages') or [])}")
+            planned_selection = landing_plan.get("selected_tests") or []
+            if len(planned_selection) != selection_size:
+                unmeasurable = True
+                reasons.append(
+                    "THE TEST SELECTION DOES NOT MATCH THE BASE-OWNED PLAN — "
+                    f"the plan names {len(planned_selection)} file(s), the "
+                    f"verdict received {selection_size}")
+                disclosures.append("LANDING_PLAN_SELECTION_MISMATCH")
+            deleted_tests = landing_plan.get("deleted_tests") or []
+            if deleted_tests and not test_removal_reason.strip():
+                reasons.append(
+                    f"{len(deleted_tests)} TEST FILE(S) WERE DELETED — coverage "
+                    "shrank, so this needs an explicit recorded "
+                    "--allow-test-removal-reason: "
+                    + ", ".join(deleted_tests[:8])
+                    + ("…" if len(deleted_tests) > 8 else ""))
+                disclosures.append("TEST_COVERAGE_SHRANK_UNAUTHORISED")
+            elif deleted_tests:
+                disclosures.append("TEST_COVERAGE_SHRANK_AUTHORISED")
+                notes.append(
+                    f"test removal explicitly authorised for "
+                    f"{len(deleted_tests)} file(s): {test_removal_reason.strip()}")
 
     # The forge's own merge is an independent second opinion computed by a git
     # new enough to have the capability. Recorded either way, because under the
@@ -698,6 +824,8 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         # per-tree count is not the same string on both sides even when it is
         # the same gate; every message below still prints the label verbatim.
         was_red = {gate_key(l): l for l in base_land.blocking_failures}
+        was_green = {gate_key(l): l for l in base_land.passed
+                     if not _TEST_TIER.match(l)}
         now_red = {gate_key(l): l for l in land.blocking_failures}
         cand_skipped = {gate_key(l) for l in land.skipped}
         cand_passed = {gate_key(l): l for l in land.passed}
@@ -713,6 +841,17 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
                     f"A FAILING GATE WAS SILENCED RATHER THAN FIXED — "
                     f"{was_red[key]} failed on the base and is no longer asked "
                     f"here")
+        # PASS -> SKIP/ABSENT is coverage shrink just as surely as FAIL ->
+        # SKIP/ABSENT is silencing.  The old comparison checked only the latter,
+        # so a branch could delete a currently-green gate and still LAND OK.
+        # Both arms run the same planned profile; deliberately unscheduled gates
+        # are SKIP on the base too and therefore never enter ``was_green``.
+        for key in sorted(was_green):
+            if key not in now_red and (key in cand_skipped or key not in cand_labels):
+                reasons.append(
+                    f"A PASSING GATE WAS REMOVED OR SKIPPED — "
+                    f"{was_green[key]} passed on the base and is no longer "
+                    f"asked here")
         if any("range is empty" in l for l in base_land.skipped):
             # DISCLOSED, because it bounds what the base arm can excuse. Arm A2
             # measures the base over an EMPTY range on purpose, so the
@@ -744,12 +883,19 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
     # worst a wrong CLEAN can do is leave the tier exactly as coarse as it was.
     hyg_status = (hygiene or {}).get("status")
     if hygiene is None:
-        disclosures.append("HYGIENE_FINDING_DELTA_NOT_SUPPLIED")
-        notes.append(
-            "no hygiene finding differential was supplied, so the ~80-gate "
-            "hygiene suite was judged by its ONE label only — a finding this "
-            "branch introduced under a label the base already fails would not "
-            "have been visible here (vibe-ic#1498)")
+        if landing_profile in ("fast", "standard"):
+            disclosures.append("HYGIENE_FINDING_DELTA_NOT_SCHEDULED_BY_PROFILE")
+            notes.append(
+                f"the BASE-owned {landing_profile} profile did not schedule "
+                "repo hygiene; both arms record that tier as SKIP, and the "
+                "profile plan records the omitted scope")
+        else:
+            disclosures.append("HYGIENE_FINDING_DELTA_NOT_SUPPLIED")
+            notes.append(
+                "no hygiene finding differential was supplied, so the ~80-gate "
+                "hygiene suite was judged by its ONE label only — a finding this "
+                "branch introduced under a label the base already fails would not "
+                "have been visible here (vibe-ic#1498)")
     elif hyg_status == HYG_REFUSED:
         # A REFUSAL BLOCKS, and it is UNMEASURABLE rather than merely refused:
         # the two records exist and cannot be differenced, which is not the same
@@ -1014,6 +1160,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--gate-edited", action="append", default=[],
                     help="a path this branch changes that is part of the gate "
                          "judging it; disclosed, never blocking")
+    subject = ap.add_mutually_exclusive_group()
+    subject.add_argument("--subject-pr", default="",
+                         help="PR number whose live head --reassert must check")
+    subject.add_argument("--subject-ref", default="",
+                         help="ref whose live head --reassert must check")
     ap.add_argument("--verification-tier", default=TIER_MERGE_TREE,
                     help="which tier computed the tree under test: "
                          f"{TIER_MERGE_TREE} (git >= {MERGE_TREE_MIN_VERSION}, "
@@ -1030,6 +1181,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--tier-reason", default="",
                     help="why this tier was selected, when it was not the "
                          "strong one")
+    ap.add_argument("--landing-profile", default="",
+                    help="validation scope selected by the BASE-owned planner: "
+                         "fast, standard, or full. Supplying this requires "
+                         "--landing-plan; unknown values fail closed")
+    ap.add_argument("--landing-plan", default="",
+                    help="JSON profile plan bound to this base and verified SHA")
+    ap.add_argument("--allow-test-removal-reason", default="",
+                    help="explicit recorded reason for a coverage-shrinking "
+                         "test-file deletion; never changes the selected profile")
+    ap.add_argument("--elapsed-seconds", type=int, default=0,
+                    help="merge verifier wall time recorded for operations")
     ap.add_argument("--json", dest="json_out", default=None)
     a = ap.parse_args(argv)
 
@@ -1109,6 +1271,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     hygiene = read_hygiene_delta(
         a.base_hygiene, a.candidate_hygiene,
         a.base_hygiene_host, a.candidate_hygiene_host)
+    landing_plan, landing_plan_error = read_landing_plan(
+        a.landing_plan, a.landing_profile, a.base_sha, a.verified_sha,
+        selection)
 
     v = decide(rebase_status=a.rebase_status, expected_tree=a.expected_tree,
                verified_tree=a.verified_tree,
@@ -1120,7 +1285,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                replayed_tree=a.replayed_tree, base_land=base_land,
                hygiene=hygiene,
                verification_tier=a.verification_tier,
-               git_version=a.git_version, tier_reason=a.tier_reason)
+               git_version=a.git_version, tier_reason=a.tier_reason,
+               landing_profile=a.landing_profile,
+               landing_plan=landing_plan,
+               landing_plan_error=landing_plan_error,
+               test_removal_reason=a.allow_test_removal_reason)
 
     if a.gate_edited:
         v.notes.append("this branch edits the gate that judges it: "
@@ -1130,7 +1299,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             else "[FAIL] landing_merge_verdict: REFUSE")
     print(f"{head} — base {a.base_sha[:12]} + head {a.head_sha[:12]} "
           f"=> verified commit {a.verified_sha[:12]} tree "
-          f"{(a.verified_tree or '?')[:12]} [tier {a.verification_tier}]")
+          f"{(a.verified_tree or '?')[:12]} [tier {a.verification_tier}] "
+          f"[landing-profile {a.landing_profile or 'legacy-full'}]")
     for r in v.reasons:
         print(f"  REFUSE  {r}")
     # PRINTED AND MACHINE-READABLE. The codes go to stdout as well as to the
@@ -1153,6 +1323,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "unmeasurable": v.unmeasurable,
             "base_sha": a.base_sha,
             "head_sha": a.head_sha,
+            "subject_pr": a.subject_pr,
+            "subject_ref": a.subject_ref,
             "verified_sha": a.verified_sha,
             "rebase_status": a.rebase_status,
             "expected_tree": a.expected_tree,
@@ -1179,6 +1351,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "base_selection_size": len(base_selection),
             "dropped_base_selected_files": base_dropped,
             "gate_edited": a.gate_edited,
+            # Scope and risk decision are separate from the merge-tree tier.
+            # The complete plan travels with the verdict so a reassertion or
+            # post-mortem never has to reconstruct why a corpus was omitted.
+            "landing_profile": a.landing_profile or "legacy-full",
+            "landing_plan": landing_plan,
+            "landing_plan_error": landing_plan_error,
+            "allow_test_removal_reason": a.allow_test_removal_reason,
+            "elapsed_seconds": a.elapsed_seconds,
             # ---- WHAT THIS VERDICT DID NOT CHECK, MACHINE-READABLY ----
             # A disclosed weaker check beats a universal refusal ONLY if the
             # weakness is legible to whatever reads the record next. These four

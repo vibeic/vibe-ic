@@ -119,11 +119,14 @@
 # USE IT BEFORE `gh pr merge`, AND LAND ONLY ON A PASS:
 #
 #     tools/gatekeeper-verify-merge.sh 1021 --json /tmp/v.json   # must exit 0
-#     gh pr merge 1021 --squash
-#     tools/gatekeeper-verify-merge.sh --reassert /tmp/v.json     # if time passed
+#     tools/gatekeeper-verify-merge.sh --reassert /tmp/v.json     # immediately before merge
+#     gh pr merge 1021 --squash --match-head-commit \
+#       "$(python3 -c 'import json; print(json.load(open("/tmp/v.json"))["head_sha"])')"
 #
-# The verdict is about a BASE. If `origin/main` moves before the merge, the
-# verdict is stale — `--reassert` says so rather than letting a stale pass land.
+# The verdict is about a BASE and a HEAD. If either moves before the merge, the
+# verdict is stale — `--reassert` says which one rather than claiming both were
+# checked. `--match-head-commit` closes the head race between that cheap check
+# and the server-side merge.
 #
 # Usage:
 #   gatekeeper-verify-merge.sh <pr-number> [options]
@@ -151,12 +154,21 @@
 #                       every verification after the first on a given base skips
 #                       one whole gate run. Measured on this host: one hygiene
 #                       pass is 19 min uncontended.
+#   --landing-profile <auto|fast|standard|full>
+#                       ask the BASE-owned planner for at least this profile.
+#                       `auto` is the default. A request can escalate the
+#                       automatic result and can never downgrade it.
+#   --allow-test-removal-reason <text>
+#                       explicit, recorded authorisation for deleting test
+#                       files. Without it a coverage-shrinking diff refuses.
 set -uo pipefail
 
 PR=""; REF=""; BASE="origin/main"; JSON_OUT=""; REASSERT=""
 NO_FETCH=0; KEEP=0; REQUIRE_VERSION_BUMP=0; BASE_GATE_CACHE=""
+REQUESTED_LANDING_PROFILE="auto"; ALLOW_TEST_REMOVAL_REASON=""
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO=""
+VERIFY_STARTED="$SECONDS"
 
 # GIT EXPORTS `GIT_DIR` WHEN A PUSH OR A HOOK ORIGINATES IN A WORKTREE, and
 # `git -C <dir>` does NOT override an explicitly-set `GIT_DIR` (vibe-ic#636 —
@@ -179,6 +191,8 @@ while [ $# -gt 0 ]; do
     --no-fetch) NO_FETCH=1; shift ;;
     --keep)     KEEP=1; shift ;;
     --base-gate-cache) BASE_GATE_CACHE="${2:?}"; shift 2 ;;
+    --landing-profile) REQUESTED_LANDING_PROFILE="${2:?}"; shift 2 ;;
+    --allow-test-removal-reason) ALLOW_TEST_REMOVAL_REASON="${2:?}"; shift 2 ;;
     --require-version-bump) REQUIRE_VERSION_BUMP=1; shift ;;
     -h|--help)  sed -n '1,149p' "${BASH_SOURCE[0]}"; exit 0 ;;
     -*)         die "unknown option $1" ;;
@@ -200,12 +214,22 @@ G=(git -C "$REPO")
 # cheap half — no worktree, no tests, just two `rev-parse`s.
 if [ -n "$REASSERT" ]; then
   [ -f "$REASSERT" ] || die "--reassert: no such file: $REASSERT"
-  read -r WAS_BASE WAS_HEAD WAS_VERDICT < <(python3 - "$REASSERT" <<'PY'
+  REASSERT_META="$(python3 - "$REASSERT" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-print(d.get("base_sha", ""), d.get("head_sha", ""), d.get("verdict", ""))
+print(d.get("base_sha", ""))
+print(d.get("head_sha", ""))
+print(d.get("verdict", ""))
+print("pr" if d.get("subject_pr") else ("ref" if d.get("subject_ref") else ""))
+print(d.get("subject_pr") or d.get("subject_ref") or "")
 PY
-  ) || die "--reassert: $REASSERT is not a verdict JSON"
+  )" || die "--reassert: $REASSERT is not a verdict JSON"
+  mapfile -t REASSERT_FIELDS <<< "$REASSERT_META"
+  WAS_BASE="${REASSERT_FIELDS[0]-}"
+  WAS_HEAD="${REASSERT_FIELDS[1]-}"
+  WAS_VERDICT="${REASSERT_FIELDS[2]-}"
+  WAS_SUBJECT_KIND="${REASSERT_FIELDS[3]-}"
+  WAS_SUBJECT="${REASSERT_FIELDS[4]-}"
   [ "$WAS_VERDICT" = "LAND_OK" ] || {
     echo "REASSERT: REFUSE — the recorded verdict is $WAS_VERDICT, not LAND_OK" >&2
     exit 1; }
@@ -217,12 +241,44 @@ PY
     echo "    re-run the full verify; a pass about an older base is not a pass" >&2
     exit 1
   fi
-  echo "REASSERT: OK — $BASE is still ${WAS_BASE:0:12}, head still ${WAS_HEAD:0:12}"
+  case "$WAS_SUBJECT_KIND" in
+    ref)
+      NOW_HEAD="$("${G[@]}" rev-parse "$WAS_SUBJECT" 2>/dev/null)" || {
+        echo "REASSERT: REFUSE — recorded ref $WAS_SUBJECT cannot be resolved" >&2
+        exit 1; }
+      ;;
+    pr)
+      if [ "$NO_FETCH" = "1" ]; then
+        echo "REASSERT: REFUSE — PR #$WAS_SUBJECT head cannot be refreshed with --no-fetch" >&2
+        exit 1
+      fi
+      NOW_HEAD="$("${G[@]}" ls-remote origin "refs/pull/$WAS_SUBJECT/head" \
+          | awk 'NR == 1 {print $1}')"
+      [ -n "$NOW_HEAD" ] || {
+        echo "REASSERT: REFUSE — PR #$WAS_SUBJECT head could not be read from origin" >&2
+        exit 1; }
+      ;;
+    *)
+      echo "REASSERT: REFUSE — the verdict records no PR/ref identity, so its head cannot be rechecked" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$NOW_HEAD" != "$WAS_HEAD" ]; then
+    echo "REASSERT: REFUSE — the head moved under the verdict" >&2
+    echo "    verified ${WAS_HEAD:0:12}   $WAS_SUBJECT_KIND $WAS_SUBJECT is now ${NOW_HEAD:0:12}" >&2
+    echo "    re-run the verify; tests about the previous head say nothing about this one" >&2
+    exit 1
+  fi
+  echo "REASSERT: OK — $BASE is still ${WAS_BASE:0:12}; $WAS_SUBJECT_KIND $WAS_SUBJECT is still ${WAS_HEAD:0:12}"
   exit 0
 fi
 
 [ -n "$PR" ] || [ -n "$REF" ] || die "give a PR number or --ref <ref>"
 [ -n "$PR" ] && [ -n "$REF" ] && die "give a PR number OR --ref, not both"
+case "$REQUESTED_LANDING_PROFILE" in
+  auto|fast|standard|full) ;;
+  *) die "--landing-profile wants auto, fast, standard, or full" ;;
+esac
 
 LAND="$REPO/tools/gatekeeper-land.sh"
 [ -x "$LAND" ] || [ -f "$LAND" ] || die "no landing script at $LAND"
@@ -230,6 +286,7 @@ LAND="$REPO/tools/gatekeeper-land.sh"
 RUN="$(mktemp -d -t gkverify.XXXXXX)"
 WT_CAND="$RUN/candidate"
 WT_BASE="$RUN/base"
+WT_BASE_TEST="$RUN/base-test"
 # PER-RUN ref names. Two verifications of two different PRs may legitimately be
 # in flight at once (the merge queue is serialized; a gatekeeper reading ahead is
 # not), and a fixed `refs/gk-verify/head` would have had each run fetching over
@@ -243,8 +300,11 @@ cleanup() {
     echo "--- kept: $RUN (worktrees included)"
     return
   fi
+  [ -n "${A1_PID:-}" ] && kill "$A1_PID" >/dev/null 2>&1
+  [ -n "${A2_PID:-}" ] && kill "$A2_PID" >/dev/null 2>&1
   "${G[@]}" worktree remove --force "$WT_CAND" >/dev/null 2>&1
   "${G[@]}" worktree remove --force "$WT_BASE" >/dev/null 2>&1
+  "${G[@]}" worktree remove --force "$WT_BASE_TEST" >/dev/null 2>&1
   "${G[@]}" update-ref -d "$HEAD_REF"  >/dev/null 2>&1
   "${G[@]}" update-ref -d "$MERGE_REF" >/dev/null 2>&1
   rm -rf "$RUN"
@@ -463,6 +523,67 @@ fi
 
 PLUGIN_REL="vibe-ic-marketplace/plugins/vibe-ic"
 CAND_PLUGIN="$WT_CAND/$PLUGIN_REL"
+# The profile policy is read from the BASE, never from the tree it classifies.
+# Bootstrap is the one exception: the PR that first adds the planner has no base
+# copy. It is forced to FULL, so the candidate can supply mechanics but cannot
+# use them to grant itself a shorter lane.
+"${G[@]}" worktree add -q --detach "$WT_BASE" "$BASE_SHA" \
+  || die "cannot create the base worktree"
+"${G[@]}" worktree add -q --detach "$WT_BASE_TEST" "$BASE_SHA" \
+  || die "cannot create the isolated base-test worktree"
+BASE_PLUGIN="$WT_BASE/$PLUGIN_REL"
+BASE_TEST_PLUGIN="$WT_BASE_TEST/$PLUGIN_REL"
+LANDING_PLAN="$RUN/landing_plan.json"
+PLAN_PROG="$BASE_PLUGIN/programs/landing_gate_plan.py"
+PLAN_REQUEST="$REQUESTED_LANDING_PROFILE"
+BASE_ACCEPTS_LANDING_PROFILE=0
+if [ ! -f "$PLAN_PROG" ]; then
+  PLAN_PROG="$SELF_REPO/$PLUGIN_REL/programs/landing_gate_plan.py"
+  PLAN_REQUEST="full"
+  echo "--- landing profile planner is not present on the base: bootstrap forces FULL"
+else
+  BASE_ACCEPTS_LANDING_PROFILE=1
+fi
+[ -f "$PLAN_PROG" ] || die "no base-owned landing profile planner at $PLAN_PROG"
+if [ "$SHORT_CIRCUIT" = "0" ]; then
+  TIMEOUT_BIN="$(command -v timeout 2>/dev/null)" \
+    || die "GNU timeout is required to enforce landing-profile budgets"
+  "$TIMEOUT_BIN" --signal=TERM --kill-after=5 60s \
+    python3 "$PLAN_PROG" --repo "$WT_CAND" --base "$BASE_SHA" \
+      --head "$VERIFIED_SHA" --request "$PLAN_REQUEST" --json "$LANDING_PLAN" \
+      || die "the landing profile could not be established"
+  mapfile -t LANDING_FIELDS < <(python3 - "$LANDING_PLAN" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+print(d["effective_profile"])
+print("" if d["budget_seconds"] is None else d["budget_seconds"])
+PY
+)
+  LANDING_PROFILE="${LANDING_FIELDS[0]}"
+  LANDING_BUDGET_SECONDS="${LANDING_FIELDS[1]-}"
+else
+  LANDING_PROFILE="full"
+  LANDING_BUDGET_SECONDS=""
+fi
+LANDING_TIMEOUT=()
+[ -n "$LANDING_BUDGET_SECONDS" ] \
+  && LANDING_TIMEOUT=("$TIMEOUT_BIN" --signal=TERM --kill-after=10 \
+                      "${LANDING_BUDGET_SECONDS}s")
+BASE_LAND_PROFILE_ARGS=()
+[ "$BASE_ACCEPTS_LANDING_PROFILE" = "1" ] \
+  && BASE_LAND_PROFILE_ARGS=(--profile "$LANDING_PROFILE")
+LANDING_PLAN_ARGS=()
+[ -s "$LANDING_PLAN" ] && LANDING_PLAN_ARGS=(--landing-plan "$LANDING_PLAN")
+TEST_REMOVAL_ARGS=()
+[ -n "$ALLOW_TEST_REMOVAL_REASON" ] \
+  && TEST_REMOVAL_ARGS=(--allow-test-removal-reason "$ALLOW_TEST_REMOVAL_REASON")
+SUBJECT_ARGS=()
+if [ -n "$PR" ]; then
+  SUBJECT_ARGS=(--subject-pr "$PR")
+else
+  SUBJECT_ARGS=(--subject-ref "$REF")
+fi
+echo "--- landing profile=$LANDING_PROFILE (requested=$REQUESTED_LANDING_PROFILE; plan=$LANDING_PLAN)"
 # THE JUDGE COMES FROM THIS REPO, NOT FROM THE SUBJECT (see the header). The
 # candidate's copy is the fallback only when this script was handed a `--repo`
 # that is not its own tree.
@@ -513,27 +634,33 @@ done < <("${G[@]}" diff --name-only "$BASE_SHA" "$REBASED_SHA" -- \
             tools/ci/repo_hygiene_gates.sh tools/git-hooks/pre-push \
             "$PLUGIN_REL/programs/landing_merge_verdict.py" \
             "$PLUGIN_REL/programs/hygiene_finding_delta.py" \
+            "$PLUGIN_REL/programs/landing_gate_plan.py" \
             "$PLUGIN_REL/programs/ci_targeted_test_select.py" 2>/dev/null)
 
 if [ "$SHORT_CIRCUIT" = "0" ]; then
   # ------------------------------------------------ 5a. the selection, ONCE
-  ( cd "$CAND_PLUGIN" && python3 programs/ci_targeted_test_select.py \
-      --base "$BASE_SHA" ) > "$RUN/selection.txt" 2>"$RUN/selection.err"
+  # It is part of the BASE-owned profile plan above. Re-running the candidate's
+  # selector here cost another full import-graph scan and, worse, let the tree
+  # under test choose which tests judge it. The exact list now travels plan ->
+  # both pytest arms -> verdict.
+  python3 - "$LANDING_PLAN" > "$RUN/selection.txt" <<'PY'
+import json, sys
+for path in json.load(open(sys.argv[1], encoding="utf-8"))["selected_tests"]:
+    print(path)
+PY
   if [ ! -s "$RUN/selection.txt" ]; then
     echo "--- the targeted selection produced no file; that is not a clean result:"
-    tail -5 "$RUN/selection.err" | sed 's/^/      /'
+    echo "      the BASE-owned landing plan contains no selected test"
   fi
 
   # ------------------------- 5b. ARM A — the same tests on the UNTOUCHED base
   # Only files that EXIST at the base: a test the PR adds cannot have an opinion
   # there, and its absence is a real outcome the verdict reads as ABSENT.
-  "${G[@]}" worktree add -q --detach "$WT_BASE" "$BASE_SHA" \
-    || die "cannot create the base worktree"
-  BASE_PLUGIN="$WT_BASE/$PLUGIN_REL"
   : > "$RUN/selection_base.txt"
   while read -r f; do
     [ -n "$f" ] && [ -f "$BASE_PLUGIN/$f" ] && printf '%s\n' "$f" >> "$RUN/selection_base.txt"
   done < "$RUN/selection.txt"
+  A1_PID=""
   if [ -s "$RUN/selection_base.txt" ]; then
     # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
     # failed set, and a truncated base makes a new failure look pre-existing.
@@ -556,37 +683,19 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # that kills a session at collection (`web3`'s `pytest_ethereum`, measured
     # in `gatekeeper-land.sh`), so both settings of the ambient switch could
     # take this arm down while arm B ran. Declared here instead of inherited.
-    ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+    # A separate worktree lets this arm run in parallel with both landing-gate
+    # arms. Sharing WT_BASE would let pytest writes become arm A2's input;
+    # running sequentially made the common path pay the selected suite twice.
+    ( cd "$BASE_TEST_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
         xargs -a "$RUN/selection_base.txt" \
+        "${LANDING_TIMEOUT[@]+"${LANDING_TIMEOUT[@]}"}" \
         python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
         -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
-        > "$RUN/base_tests.log" 2>&1
-    A1_RC=$?
-    # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
-    # summary is a `rootdir:` line or an empty one, so the arm that COULD NOT
-    # LOOK printed indistinguishably from — and often more quietly than — the
-    # arm that looked and found nothing. The verdict then reads `0 on the base`
-    # and every pre-existing red becomes `NEW FAILURE(S) THIS BRANCH OWNS`.
-    # Strict, so never a false landing; but it refuses a conformant PR for a
-    # failure it does not own, and #1417's whole finding is that merge capacity
-    # — not authoring — is this repo's bottleneck. An unmeasured arm is NAMED.
-    if [ -s "$BASE_JUNIT" ]; then
-      echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
-    else
-      echo "--- arm A1 UNMEASURED (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and no" \
-           "junit report; the base failed set is UNKNOWN, not empty. The" \
-           "differential below degrades to 'demand green' and will blame this" \
-           "branch for reds it did not introduce. Last lines:"
-      tail -5 "$RUN/base_tests.log" | sed 's/^/      /'
-    fi
+        > "$RUN/base_tests.log" 2>&1 &
+    A1_PID=$!
   else
     echo "--- arm A1: no selected file exists at the base — the differential will demand green"
   fi
-  # A MEASUREMENT'S SIDE EFFECTS MUST NOT BECOME THE NEXT MEASUREMENT'S INPUT.
-  # Arm A1 is a pytest run over the shipped tree, and at least one test in this
-  # repo's own suite has been observed writing into it; leaving that behind would
-  # make arm A2 report a dirty base worktree that arm A1 dirtied.
-  git -C "$WT_BASE" checkout -q -- . 2>/dev/null
 
   # ------------- 5c. ARM A2 — the SAME landing gates on the UNTOUCHED base
   # Two of the repo-hygiene gates are red on `main` as measured 2026-08-12, so
@@ -602,15 +711,17 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   CACHED_HYG_HOST=""
   if [ -n "$BASE_GATE_CACHE" ]; then
     mkdir -p "$BASE_GATE_CACHE"
-    CACHED="$BASE_GATE_CACHE/$BASE_SHA.land.log"
+    # A fast/standard record is deliberately a subset of full.  The profile is
+    # part of the cache identity so neither can masquerade as the other.
+    CACHED="$BASE_GATE_CACHE/$BASE_SHA.$LANDING_PROFILE.land.log"
     # vibe-ic#1498 — cached ALONGSIDE the log and keyed the same way, because a
     # hit skips arm A2 entirely and the finding differential would otherwise
     # have no base record exactly in the mode the merge queue runs in. The host
     # travels WITH the record: findings are host-dependent, and a cache
     # directory on shared storage could otherwise hand one host's baseline to
     # another's candidate.
-    CACHED_HYG="$BASE_GATE_CACHE/$BASE_SHA.hygiene.json"
-    CACHED_HYG_HOST="$BASE_GATE_CACHE/$BASE_SHA.hygiene.host"
+    CACHED_HYG="$BASE_GATE_CACHE/$BASE_SHA.$LANDING_PROFILE.hygiene.json"
+    CACHED_HYG_HOST="$BASE_GATE_CACHE/$BASE_SHA.$LANDING_PROFILE.hygiene.host"
   fi
   # A CACHE HIT MUST BE THE SAME QUESTION, not a similar one. The key is the base
   # COMMIT, so a hit is by construction about the identical tree; a base that
@@ -632,8 +743,11 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     ( cd "$WT_BASE" && \
         GATEKEEPER_BASE="$BASE_SHA" \
         GATEKEEPER_VERSION_BY_GATEKEEPER=1 \
+        GATEKEEPER_SKIP_TARGETED_TESTS=1 \
         GATEKEEPER_HYGIENE_REPORT="$BASE_HYG" \
-        bash tools/gatekeeper-land.sh ) > "$RUN/base_land.log" 2>&1 &
+        "${LANDING_TIMEOUT[@]+"${LANDING_TIMEOUT[@]}"}" \
+        bash tools/gatekeeper-land.sh \
+          "${BASE_LAND_PROFILE_ARGS[@]+"${BASE_LAND_PROFILE_ARGS[@]}"}" ) > "$RUN/base_land.log" 2>&1 &
     A2_PID=$!
   fi
 
@@ -665,12 +779,27 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   ( cd "$WT_CAND" && \
       GATEKEEPER_BASE="$BASE_SHA" \
       GATEKEEPER_PYTEST_JUNIT="$CAND_JUNIT" \
+      GATEKEEPER_SELECTION_FILE="$RUN/selection.txt" \
       GATEKEEPER_PYTEST_MAXFAIL=0 \
       GATEKEEPER_HYGIENE_REPORT="$CAND_HYG" \
       GATEKEEPER_VERSION_BY_GATEKEEPER="$VBG" \
-      bash tools/gatekeeper-land.sh ) > "$RUN/land.log" 2>&1
+      "${LANDING_TIMEOUT[@]+"${LANDING_TIMEOUT[@]}"}" \
+      bash tools/gatekeeper-land.sh --profile "$LANDING_PROFILE" ) > "$RUN/land.log" 2>&1
   echo "--- arm B (squash ${VERIFIED_SHA:0:12}): gatekeeper-land.sh rc=$?"
   sed -n 's/^  \(PASS\|FAIL\|SKIP\|REPORT\)  /      \1  /p' "$RUN/land.log"
+  if [ -n "$A1_PID" ]; then
+    wait "$A1_PID"; A1_RC=$?
+    # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
+    # summary is a `rootdir:` line or empty, so absence must be named.
+    if [ -s "$BASE_JUNIT" ]; then
+      echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
+    else
+      echo "--- arm A1 UNMEASURED (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and no" \
+           "junit report; the base failed set is UNKNOWN, not empty. The" \
+           "differential below degrades to 'demand green'. Last lines:"
+      tail -5 "$RUN/base_tests.log" | sed 's/^/      /'
+    fi
+  fi
   [ -n "${A2_PID:-}" ] && wait "$A2_PID" 2>/dev/null
   # Written only after a REAL measurement, and only if it named some gate — an
   # empty or truncated log cached would answer every later verification with
@@ -703,9 +832,11 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
               --base-hygiene-host "$BASE_HYG_HOST"
               --candidate-hygiene-host "$THIS_HOST")
     echo "--- hygiene finding delta: base record on $BASE_HYG_HOST, candidate on $THIS_HOST"
-  else
+  elif [ "$LANDING_PROFILE" = "full" ]; then
     echo "--- hygiene finding delta: NO BASE RECORD, so the ~80-gate hygiene suite is"
     echo "                           judged by its ONE label only (disclosed in the verdict)"
+  else
+    echo "--- hygiene finding delta: not scheduled by landing profile $LANDING_PROFILE"
   fi
   echo "--- arm A2 (base ${BASE_SHA:0:12}): $(grep -c '^  FAIL  ' "$RUN/base_land.log" || true) gate(s) already failing on the base"
   sed -n 's/^  FAIL  /      base-FAIL  /p' "$RUN/base_land.log"
@@ -716,6 +847,7 @@ fi
 
 # --------------------------------------------------------------- 6. the verdict
 [ -f "$VERDICT_PROG" ] || die "no verdict program at $VERDICT_PROG"
+VERIFY_ELAPSED=$(( SECONDS - VERIFY_STARTED ))
 python3 "$VERDICT_PROG" \
   --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
   --verified-sha "$VERIFIED_SHA" --rebase-status "$REBASE_STATUS" \
@@ -726,6 +858,11 @@ python3 "$VERDICT_PROG" \
   "${BASE_LAND_ARG[@]+"${BASE_LAND_ARG[@]}"}" \
   --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
   "${HYG_ARGS[@]+"${HYG_ARGS[@]}"}" \
+  --landing-profile "$LANDING_PROFILE" \
+  "${LANDING_PLAN_ARGS[@]+"${LANDING_PLAN_ARGS[@]}"}" \
+  "${TEST_REMOVAL_ARGS[@]+"${TEST_REMOVAL_ARGS[@]}"}" \
+  "${SUBJECT_ARGS[@]+"${SUBJECT_ARGS[@]}"}" \
+  --elapsed-seconds "$VERIFY_ELAPSED" \
   --verification-tier "$TIER" --git-version "$GIT_VERSION" \
   --merge-tree-min-version "$MERGE_TREE_MIN_VERSION" \
   ${TIER_REASON:+--tier-reason "$TIER_REASON"} \
@@ -736,7 +873,9 @@ RC=$?
 if [ "$RC" -eq 0 ]; then
   echo "=== LAND OK — verified the squash of ${HEAD_SHA:0:12} onto ${BASE_SHA:0:12}"
   echo "               commit ${VERIFIED_SHA:0:12} (local stand-in)  tree ${VERIFIED_TREE:0:12} (what lands)"
-  echo "               tier ${TIER}$( [ "$TIER" = "merge-tree" ] || echo "  (DEGRADED — squash-vs-rebase cross-check NOT performed)" )"
+  echo "               tree-tier ${TIER}$( [ "$TIER" = "merge-tree" ] || echo "  (DEGRADED — squash-vs-rebase cross-check NOT performed)" )"
+  echo "               landing-profile ${LANDING_PROFILE} (reassert base + head immediately before merge)"
+  echo "               elapsed ${VERIFY_ELAPSED}s"
 else
   echo "=== REFUSED (rc=$RC) — do NOT run \`gh pr merge\`; the reasons are above"
 fi

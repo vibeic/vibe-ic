@@ -814,8 +814,8 @@ def test_the_base_gate_cache_is_keyed_by_the_base_commit():
     an earlier tree's gates, and it would answer it permissively."""
     src = _VERIFY.read_text(encoding="utf-8")
     body = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
-    assert '"$BASE_GATE_CACHE/$BASE_SHA.land.log"' in body, \
-        "the cache is not keyed by the base commit"
+    assert '"$BASE_GATE_CACHE/$BASE_SHA.$LANDING_PROFILE.land.log"' in body, \
+        "the cache is not keyed by both the base commit and landing profile"
     # An empty or sentinel-less log must never be cached: it would read as
     # "the base fails nothing", which is the permissive direction.
     assert "grep -q '^=== gatekeeper landing gates'" in body
@@ -1110,6 +1110,21 @@ def test_reassert_refuses_when_the_base_moved(sandbox, tmp_path):
     moved = _reassert(sandbox, stale)
     assert moved.returncode == 1, moved.stdout + moved.stderr
     assert "the base moved" in moved.stderr
+
+
+def test_reassert_refuses_when_the_head_moved(sandbox, tmp_path):
+    """The old reassertion printed ``head still`` without reading the head.
+    Rewriting only the record reproduces a stale-head verdict without mutating
+    the shared module-scoped repository fixture."""
+    r, doc = _verify(sandbox, "innocuous_green", tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["subject_ref"] == "innocuous_green"
+    doc["head_sha"] = "0" * 40
+    stale = tmp_path / "stale_head.json"
+    stale.write_text(json.dumps(doc))
+    moved = _reassert(sandbox, stale)
+    assert moved.returncode == 1, moved.stdout + moved.stderr
+    assert "the head moved" in moved.stderr
 
 
 def test_reassert_refuses_a_record_that_was_not_a_pass(sandbox, tmp_path):
