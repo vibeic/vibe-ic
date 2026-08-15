@@ -11988,9 +11988,59 @@ def main(argv: Optional[List[str]] = None) -> int:
         # `forced_fail` changes, and the ones that do not are named on their
         # own line below rather than going quiet.
         _scoped_ids = {str(r.id) for r in scoped}
+        # vibe-ic#1446 — THE ONE CASE THE DEPENDENCY TEST CANNOT SEE: a terminal
+        # in scope that returned NO VERDICT AT ALL.
+        #
+        # #1429's rule above is right about what it measured. Its worked example
+        # is a terminal that RAN, AUDITED and PASSED, and whose PASS is then
+        # voided by an out-of-scope dependency — `PASS_VOIDED_BY_DEPENDENCY`.
+        # For that step the void is a statement about CERTIFICATION, not about
+        # measurement: the gates did look, and what they saw was clean. Calling
+        # it informational in the mode that declares step-level state
+        # informational is exactly right, and nothing here changes it.
+        #
+        # `INCOMPLETE` is the other thing entirely. It is the empty-denominator
+        # tier (#599/#901/#947) — "the input was applicable and was NOT
+        # examined". There is no measurement to hold informational, because
+        # none was taken. MEASURED on the bare Phase-2 tree under `--phase 2
+        # --strict-structural`, the mode that narrows the verdict scope to P0
+        # ALONE:
+        #
+        #   [INCOMPLETE] Step P0: Structural-RTL gates
+        #                (P0 umbrella, 0 of 246 checkers returned a verdict)
+        #   ✗ [P0] … = INCOMPLETE marked done while dependency [D1] … = MISSING
+        #   Overall: PASS   rc=0
+        #
+        # Zero of 246 checkers answered, the chain under them never ran, and the
+        # only step in scope published a green verdict about it. That is the
+        # input `test_strict_structural_does_not_excuse_a_broken_p0_ancestry`
+        # (#923/#1078) owns, and it went red when #1429 landed three minutes
+        # after it in the same batch, neither PR rebased on the other.
+        #
+        # A CONJUNCTION, AND BOTH HALVES ARE LOAD-BEARING. Neither condition
+        # gates on its own, and the repo has already settled both halves
+        # separately — this reads those decisions rather than reopening them:
+        #   * INCOMPLETE ALONE STAYS GREEN. "gates that never ran must not force
+        #     the verdict" (test_issue497_step2…::test_a_not_invocable_record_
+        #     is_never_a_failing_gate) and "INCOMPLETE is a disclosure tier, not
+        #     a failure — it must not turn a run red on its own"
+        #     (test_p0_umbrella_verdict_coverage). Those fixtures run over a
+        #     SATISFIED `blocks_on` chain, so they raise no ordering violation
+        #     and never reach this list.
+        #   * A BROKEN ANCESTRY ALONE STAYS GREEN, which is #1429 itself: the
+        #     PASS_VOIDED terminal above is not INCOMPLETE, so it is not in
+        #     `_no_verdict_ids` and does not gate.
+        # Together they say the verdict scope holds no evidence: nothing was
+        # measured, AND the inputs that would have been measured were never
+        # produced. `_no_verdict_ids` is built from `scoped`, so it is a SUBSET
+        # of `_scoped_ids` by construction and this stays a no-op in every mode
+        # that does not narrow the scope.
+        _no_verdict_ids = {str(r.id) for r in scoped
+                           if r.status == "INCOMPLETE"}
         ordering_gating_lines = [
             line for line, v in zip(ordering_fail_lines, _ordering_violations)
-            if str(v['signoff_id']) in _scoped_ids]
+            if str(v['signoff_id']) in _scoped_ids
+            or str(v['terminal_id']) in _no_verdict_ids]
         if ordering_gating_lines:
             forced_fail = True
     except Exception:  # nosec — additive enforcement must never crash the audit
