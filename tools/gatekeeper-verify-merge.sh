@@ -506,7 +506,8 @@ done < <("${G[@]}" diff --name-only "$BASE_SHA" "$REBASED_SHA" -- \
             tools/gatekeeper-land.sh tools/gatekeeper-verify-merge.sh \
             tools/ci/repo_hygiene_gates.sh tools/git-hooks/pre-push \
             "$PLUGIN_REL/programs/landing_merge_verdict.py" \
-            "$PLUGIN_REL/programs/ci_targeted_test_select.py" 2>/dev/null)
+            "$PLUGIN_REL/programs/ci_targeted_test_select.py" \
+            "$PLUGIN_REL/programs/pytest_per_file_junit.py" 2>/dev/null)
 
 if [ "$SHORT_CIRCUIT" = "0" ]; then
   # ------------------------------------------------ 5a. the selection, ONCE
@@ -549,10 +550,25 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # that kills a session at collection (`web3`'s `pytest_ethereum`, measured
     # in `gatekeeper-land.sh`), so both settings of the ambient switch could
     # take this arm down while arm B ran. Declared here instead of inherited.
+    #
+    # ONE SESSION PER FILE ON THIS ARM TOO (vibe-ic#1654), through the driver
+    # from the CANDIDATE tree. #1654 measured BOTH arms dying on one hanging
+    # file with neither writing a junit at all, and the base arm is the worse
+    # loss of the two: `silenced` and `weakened` are read off what was RED on
+    # the base, so a base failed set that could not be measured is a base
+    # failure the branch may delete for free.
+    #
+    # The driver is taken from `$CAND_PLUGIN`, never from the base worktree, for
+    # #1417's reason: arm B runs whatever `gatekeeper-land.sh` in the CANDIDATE
+    # tree runs, and two arms measured with different instruments are not a
+    # differential. A branch that edits the driver therefore judges itself with
+    # it, which is disclosed through `--gate-edited` below.
     ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-        xargs -a "$RUN/selection_base.txt" \
-        python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-        -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
+        python3 "$CAND_PLUGIN/programs/pytest_per_file_junit.py" \
+        --selection "$RUN/selection_base.txt" --junit "$BASE_JUNIT" \
+        --kill-after "${GATEKEEPER_PYTEST_FILE_KILL_AFTER:-900}" \
+        -- python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+        -p no:cacheprovider ) \
         > "$RUN/base_tests.log" 2>&1
     A1_RC=$?
     # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
@@ -563,13 +579,26 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # Strict, so never a false landing; but it refuses a conformant PR for a
     # failure it does not own, and #1417's whole finding is that merge capacity
     # — not authoring — is this repo's bottleneck. An unmeasured arm is NAMED.
-    if [ -s "$BASE_JUNIT" ]; then
-      echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
+    # `-s "$BASE_JUNIT"` IS NO LONGER THE QUESTION (vibe-ic#1654). The per-file
+    # driver always writes a merged report — that is the point of it — so file
+    # size stopped being able to tell a measured arm from an unmeasured one, and
+    # a report of 90 files with the 91st missing is neither. What is asked
+    # instead is the driver's own answer: how many selected files produced NO
+    # record. Zero and a non-empty report is the only complete arm.
+    A1_NORECORD="$(grep -ac '^NORECORD' "$RUN/base_tests.log" 2>/dev/null || true)"
+    A1_NORECORD="${A1_NORECORD:-0}"
+    if [ -s "$BASE_JUNIT" ] && [ "$A1_NORECORD" = "0" ]; then
+      echo "--- arm A1 (base ${BASE_SHA:0:12}): rc=$A1_RC," \
+           "$(sed -n 's/^  recorded *//p' "$RUN/base_tests.log" | tail -1) of" \
+           "$(sed -n 's/^  asked *//p' "$RUN/base_tests.log" | tail -1) file(s) recorded," \
+           "$(sed -n 's/^  red cases *//p' "$RUN/base_tests.log" | tail -1) red case(s)"
     else
-      echo "--- arm A1 UNMEASURED (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and no" \
-           "junit report; the base failed set is UNKNOWN, not empty. The" \
-           "differential below degrades to 'demand green' and will blame this" \
-           "branch for reds it did not introduce. Last lines:"
+      echo "--- arm A1 INCOMPLETE (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and" \
+           "$A1_NORECORD selected file(s) produced NO record; for those files the" \
+           "base failed set is UNKNOWN, not empty. The differential degrades" \
+           "toward 'demand green' and the verdict REFUSES rather than" \
+           "subtracting a partial base. The files with no record:"
+      grep -a '^NORECORD\|^NOTRUN' "$RUN/base_tests.log" | sed 's/^/      /'
       tail -5 "$RUN/base_tests.log" | sed 's/^/      /'
     fi
   else
