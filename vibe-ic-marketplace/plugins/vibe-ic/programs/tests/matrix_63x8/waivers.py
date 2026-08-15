@@ -28,8 +28,13 @@ it, or a decision reference.
     GOOD  reason:   "The artefact is emitted on only one branch of a real PDK
                      condition, so an unconditional declaration converts every
                      honest run of the other branch into MISSING."
-          evidence: "programs/mixed_signal_top_lvs_run.py:919 —
-                     (rpt_dir / 'top_lvs.json').write_text(...)"
+          evidence: "programs/mixed_signal_top_lvs_run.py::`(rpt_dir / "top_lvs.json").write_text(`"
+
+                    (a CONTENT anchor. The example a reader copies decides how
+                     the next waiver is written, and a `path:line` here rots the
+                     moment that file shifts — measured 2026-08-14, the `:917`
+                     this carried resolved on main but FAILED inside three
+                     separate batches.)
 
     GOOD  reason:   "Deciding this needs a real converged project tree; the
                      required artefact is produced only by a tool absent from CI."
@@ -1004,8 +1009,16 @@ WAIVERS: Tuple[Waiver, ...] = (
             "actually executed, then declare the artefact and record it."
         ),
         evidence=(
-            "producer programs/mixed_signal_top_lvs_run.py:919 "
-            "((rpt_dir / 'top_lvs.json').write_text(...), in the same block "
+            # vibe-ic#1289 — CONTENT anchor, not a line number. Measured
+            # 2026-08-14: this citation read `:917` and rotted in THREE separate
+            # batches (the 22-PR INDEX.md batch, the 10-PR hygiene batch, and a
+            # 64-PR extension), each time manufacturing a red that belonged to
+            # no PR in the batch, because those batches shift lines in
+            # mixed_signal_top_lvs_run.py. Re-pointing the number resets the
+            # counter; anchoring to the text removes the failure mode. The
+            # anchor resolves to exactly ONE line, which the validator requires.
+            "producer programs/mixed_signal_top_lvs_run.py::`"
+            '(rpt_dir / "top_lvs.json").write_text(' "` (in the same block "
             "as the already-declared merge.json); consumer "
             "programs/mixed_signal_merge_check.py:89-91 then :108. MEASURED "
             "2026-07-28 with test_matrix_d3_outputs_produced.resolve_anywhere("
