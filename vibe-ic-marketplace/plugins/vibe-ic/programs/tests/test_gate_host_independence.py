@@ -549,24 +549,60 @@ def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
     call to the sweeper must remove the directory AND drop the registration,
     or the repo keeps the entry forever (`git worktree prune` cannot clear one
     whose directory still exists).
+
+    PLANTED AND OBSERVED IN A PRIVATE ROOT (#1263), for the reason
+    `_legacy_leftover` below already gives: the real `/tmp` is shared with
+    every other agent's probe, and `reap` sweeps a WHOLE NAMESPACE, not one
+    path. A DEAD owner's directory is therefore reapable by anybody, so a
+    concurrent copy of this very test removes THIS copy's plant, and the two
+    assertions below stop agreeing — `leaked.exists()` is false because a peer
+    removed it, while `rep["reaped"]` is empty because the peer, not this
+    sweep, did the removing.
+
+    Measured 2026-08-15 on clean main (1adbf3444), four concurrent copies of
+    this one test, 3 of 4 failed, in the two distinct shapes the shared
+    namespace produces:
+
+        copy 2  plant fo4896uu   assert 'fo4896uu' in []   <- copy 1 took it
+        copy 3  plant hf0yimb2   assert 'hf0yimb2' in []   <- copy 1 took it
+        copy 1  plant nnx7zy2c   reaped ['fo4896uu', 'hf0yimb2'] -- it had
+                reaped the other two copies' plants, and lost its own a
+                different way: a peer's `rmtree` had already unlinked the
+                `.owner.lock`, so this sweep saw a sidecar-less directory,
+                and with peers alive (`reap_unlocked=False`) KEPT it as
+                unattributable while the peer finished deleting it
+        copy 4  passed
+
+    The assertion is unchanged in strength. In a root only this test writes to,
+    nobody else CAN reap the plant, so "the directory is gone" and "this sweep
+    reaped it" are once again the same fact — which is the fact the test claims
+    to measure. Two things are deliberately NOT changed: `peers` is left to the
+    real `peer_probes_running()`, so on a busy host this still runs with
+    `reap_unlocked=False` and proves a LOCKED directory whose owner is dead is
+    reaped even while the unattributable ones are deferred; and
+    `test_a_LIVE_peers_scratch_is_never_reaped` below keeps using the real
+    `/tmp`, because its plant is HELD — a locked directory is precisely the one
+    no peer may touch, so a shared namespace cannot alter its verdict.
     """
     import os
     import signal
     import time
 
+    priv = tmp_path / "tmproot"
+    priv.mkdir()
     r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 -c "print(1)"\n')
     child = subprocess.Popen(
         [sys.executable, "-c",
          "import subprocess, sys, time\n"
          "sys.path.insert(0, %r)\n"
          "import _crash_safe_scratch as S\n"
-         "res, _ = S.reserve(%r)\n"
+         "res, _ = S.reserve(%r, root=%r)\n"
          "wt = res.path / 'wt'\n"
          "subprocess.run(['git','-C',%r,'worktree','add','-q','--detach',"
          "str(wt),'HEAD'], check=True)\n"
          "print(res.path, flush=True)\n"
          "time.sleep(600)\n"
-         % (str(_PROGRAMS), G._SCRATCH_PREFIX, str(r))],
+         % (str(_PROGRAMS), G._SCRATCH_PREFIX, str(priv), str(r))],
         stdout=subprocess.PIPE, text=True, start_new_session=True)
     leaked = Path(child.stdout.readline().strip())
     assert (leaked / "wt").is_dir(), "the fixture never created the worktree"
@@ -583,10 +619,13 @@ def test_a_SIGKILLED_run_is_cleaned_up_by_the_NEXT_run(tmp_path):
         "the kill itself removed the tree — then the leak this test is about "
         "cannot be reproduced and nothing below is being measured")
 
-    rep = G.sweep_abandoned_scratch(r)
+    rep = G.sweep_abandoned_scratch(r, tmp_root=priv)
     assert not leaked.exists(), (
         "a killed probe's scratch survived the next run: %s" % (rep,))
-    assert str(leaked) in rep["reaped"], rep
+    assert str(leaked) in rep["reaped"], (
+        "the directory is gone but THIS sweep does not claim to have removed "
+        "it — in a private root nothing else can have, so the sweeper is not "
+        "reporting the work it did: %s" % (rep,))
     listed = subprocess.run(["git", "-C", str(r), "worktree", "list"],
                             capture_output=True, text=True, timeout=_T).stdout
     assert str(leaked) not in listed, (
