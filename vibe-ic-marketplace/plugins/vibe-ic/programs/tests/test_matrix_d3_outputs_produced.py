@@ -549,6 +549,18 @@ _IN_REPO_KINDS: Tuple[str, ...] = (_IN_REPO_KIND, _PUBLISHED_KIND)
 #: them and their entries are always decided live. Derived from the manifest's
 #: own ``kind`` field at import; written down here so the split between
 #: "in the repo" and "on the campaign host" is stated rather than implied.
+#:
+#: 2026-08-15 (vibe-ic#1266) — the LIST below is unchanged and the records that
+#: cite it are not. Five entries recorded ``PRODUCED_BY_RUN`` against three of
+#: these roots were being answered, on every host, by an admissible in-repo
+#: root instead, so their citations were provenance-shaped blanks: green cells
+#: whose only stated source was a directory nobody carries, one of them a run
+#: whose own label says it ABORTED. They are re-pointed at the roots that
+#: actually hold the bytes, and
+#: ``test_d3_no_record_cites_an_absent_run_this_commit_can_answer`` keeps the
+#: repair from being undone. The registry itself is deliberately untouched:
+#: retiring a root nothing cites is a separate change with its own pin to move,
+#: and the entries were the defect.
 _IN_REPO_RUN_ROOTS: Tuple[str, ...] = ()
 _EXTERNAL_RUN_ROOTS_AS_MEASURED: Tuple[str, ...] = (
     "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e",
@@ -2434,6 +2446,82 @@ def test_d3_fixture_attested_cells_are_named_cell_by_cell():
     )
     assert not outside, (
         f"these admissible run roots are not inside the repository: {outside}"
+    )
+
+
+def test_d3_no_record_cites_an_absent_run_this_commit_can_answer():
+    """vibe-ic#1266 — a record may not name a tree nobody has when the COMMIT
+    evidences the entry.
+
+    THE HOLE THIS CLOSES. ``check_entry``'s absent-root branch does not stop at
+    the recorded root: when the recorded run is not on this checkout it asks
+    :func:`resolve_anywhere`, and a hit there returns ``produced=True``. That
+    fall-through is right — a cell must not go red because the manifest happens
+    to name the wrong tree — but it made the citation itself unfalsifiable.
+    Five entries were green that way, and the only provenance a reader of the
+    fixture had for them was a directory on one machine:
+
+      * step 11's four DFT entries cited ``AI_IC_design/4th_benchmark/ibex_e2e``
+        and ``campaign_pdk/spm/_aborted_tmpplugin_run`` — the second of those
+        naming a run whose own label says it ABORTED, i.e. the record asserted
+        production by a run that did not finish;
+      * step 29's post-layout sim entry cited
+        ``AI_IC_design/4th_benchmark/cv32e40p_e2e``.
+
+    All five were answered, on every host, by an admissible in-repo root. The
+    manifest is the only place a reader can look up WHERE an artefact came
+    from, so a citation that no checkout can follow is not a smaller version of
+    a provenance — it is a provenance-shaped blank, and #1266 is the issue
+    filed because nineteen of them accumulated unnoticed.
+
+    THE DIRECTION THIS RUNS IN, stated because a guard that could green a cell
+    would be the wrong tool here. It fires ONLY where ``resolve_anywhere``
+    already returns a hit, so it can never turn a red cell green and can never
+    manufacture evidence: it demands that a record which is *already* being
+    answered by the commit SAY SO. Entries nothing resolves — the six cells
+    #1266 leaves to the owner (15, 17, 19, 20, 30, 32) — are untouched by it,
+    which is deliberate: those citations cannot be repaired by a fact and
+    pretending otherwise is exactly the move that issue refuses.
+
+    The remedy is the one ``check_entry`` already prints in its sibling branch
+    for a root that IS present and has gone stale ("Re-point the record at
+    ..."). This makes the same repair mandatory in the case where the root is
+    absent, which is the case that was silent.
+    """
+    stale = []
+    for cell in cells_for(DIM):
+        sid = cell.step_id
+        rec = step_record(sid)
+        if rec["verdict"].startswith("NA_"):
+            continue
+        for entry, erec in rec["entries"].items():
+            if entry not in F.required_outputs(sid):
+                continue
+            label = erec.get("run") or erec.get("base_run")
+            if not label or label in run_roots():
+                continue
+            # Ledger-bound, exactly as the verdict binds it: a root whose own
+            # write ledger refuses this step is not an answer, so this guard
+            # never demands a re-point onto evidence the verdict would reject.
+            hit, _rejected = resolve_anywhere(entry, sid)
+            if hit is not None:
+                stale.append(
+                    f"step {sid} {entry!r}: recorded against {label!r}, which "
+                    f"this repository does not carry, while the admissible "
+                    f"root {hit.root!r} evidences it at {hit.path} "
+                    f"({hit.size_bytes} B)"
+                )
+    assert not stale, (
+        f"{len(stale)} manifest record(s) cite a run root no checkout carries "
+        f"while THIS COMMIT answers the entry:\n  "
+        + "\n  ".join(stale)
+        + "\nRe-point each record at the root named above and re-measure its "
+          "`path` and `size_bytes` there. The cell is green either way — that "
+          "is the point: the verdict falls through to a search, so the wrong "
+          "citation costs nothing at verdict time and stays wrong forever. "
+          "The manifest is the only record of WHERE an artefact came from, and "
+          "a citation a reader cannot follow is not evidence of anything "
+          "(vibe-ic#1266)."
     )
 
 
