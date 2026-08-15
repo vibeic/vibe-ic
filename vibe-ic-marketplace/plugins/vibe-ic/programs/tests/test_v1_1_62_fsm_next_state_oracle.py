@@ -19,6 +19,7 @@ PROG_DIR = Path(__file__).resolve().parents[1]
 if str(PROG_DIR) not in sys.path:
     sys.path.insert(0, str(PROG_DIR))
 import kmap_truth_table_oracle_check as K  # noqa: E402
+from _sim_tools import expect_verdict  # noqa: E402
 
 PROMPT = """
 I would like you to implement a module named TopModule with the following
@@ -98,21 +99,21 @@ def _verdict(tmp_path, prompt, rtl, name="s.sv"):
 
 
 def test_fsm_correct_passes(tmp_path):
-    assert _verdict(tmp_path, PROMPT, CORRECT) == "PASS"
+    expect_verdict(_verdict(tmp_path, PROMPT, CORRECT), "PASS")
 
 
 def test_fsm_wrong_blocks(tmp_path):
-    assert _verdict(tmp_path, PROMPT, WRONG) == "BLOCK"
+    expect_verdict(_verdict(tmp_path, PROMPT, WRONG), "BLOCK")
 
 
 def test_fsm_alt_correct_not_false_blocked(tmp_path):
     # §4.05: a different correct implementation must NOT be blocked
-    assert _verdict(tmp_path, PROMPT, ALT_CORRECT) == "PASS"
+    expect_verdict(_verdict(tmp_path, PROMPT, ALT_CORRECT), "PASS")
 
 
 def test_fsm_dontcare_unused_codes_pass(tmp_path):
     # §4.05: unused state codes are don't-care; garbage there must NOT block
-    assert _verdict(tmp_path, PROMPT, DONTCARE) == "PASS"
+    expect_verdict(_verdict(tmp_path, PROMPT, DONTCARE), "PASS")
 
 
 def test_fsm_skip_without_state_encoding(tmp_path):
