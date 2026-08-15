@@ -139,6 +139,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from _atomic_artefact import write_json  # vibe-ic#1082 (helper from PR #1094)
+
 #: Gate states that ARE a finding — see the module docstring for the derivation
 #: from `gate_dispatch_finish`'s exit code.
 FINDING_STATES = ("FAIL", "WROTE_CORPUS")
@@ -417,7 +419,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     d = compare(a.base, a.candidate, a.base_host, a.candidate_host)
     if a.json:
-        a.json.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+        # vibe-ic#1082/#1470: this comparison BLOCKS a landing, so a reader
+        # must never be able to open a half-written one. The final name now
+        # appears only once the whole record is on disk.
+        write_json(a.json, d)
 
     if d["status"] == REFUSED:
         print("[FAIL] hygiene_finding_delta: REFUSED — this BLOCKS the landing.")
