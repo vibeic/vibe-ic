@@ -78,6 +78,10 @@ import json
 import subprocess
 import sys
 from typing import Dict, Iterable, List, Optional, Set, Tuple
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 #: The branch every landable chain must terminate at.
 TRUNK = "main"
@@ -345,7 +349,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"   CARRIED pass NOT ESTABLISHED — {carried_refusal}")
 
     if args.json_out:
-        with open(args.json_out, "w", encoding="utf-8") as fh:
+        with atomic_writing(args.json_out) as fh:
             json.dump({
                 "open": total_open,
                 "reach_trunk": len(healthy),

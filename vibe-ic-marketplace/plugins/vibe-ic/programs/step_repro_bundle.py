@@ -63,6 +63,8 @@ import tarfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:                          # pragma: no cover
@@ -286,7 +288,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if a.json_out:
         a.json_out.parent.mkdir(parents=True, exist_ok=True)
-        a.json_out.write_text(json.dumps(rep, indent=2, sort_keys=True) + "\n",
+        atomic_write_text(a.json_out, json.dumps(rep, indent=2, sort_keys=True) + "\n",
                               encoding="utf-8")
 
     if rep["verdict"] == "REFUSED":
