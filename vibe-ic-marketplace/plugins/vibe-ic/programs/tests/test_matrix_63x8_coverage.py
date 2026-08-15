@@ -1110,13 +1110,12 @@ def _reduce_outcome(reports: List[Dict]) -> str:
 #: fire would have killed a call that is doing real work. So the call is SPLIT
 #: instead — one process per module — and each module was measured whole:
 #:
-#:     d1  3.58s   d2  7.80s   d3 20.25s   d4 11.46s
-#:     d5  2.13s   d6  8.56s   d7 35.18s   d8  9.98s
+#:     d1  3.73s   d2  8.58s   d3 51.69s   d4 14.47s
+#:     d5  2.53s   d6 41.97s   d7 42.72s   d8 10.50s
 #:
-#: The slowest is d7 at 35.18 s, so 60 s is 1.7x the worst module and the bound
-#: can fire. The split is not free and the cost is stated rather than assumed:
-#: the eight separate runs total 98.94 s against the combined 96.45 s — +2.6 %,
-#: the price of seven extra interpreter starts. What it buys is that a
+#: The slowest is now d3 at 51.69 s alone. The 60 s bound still fires before a
+#: genuine hang can consume the verifier, but that margin is not available to
+#: spend on co-scheduling another heavy dimension. The split buys that a
 #: dimension module that HANGS is killed at 60 s and NAMED, instead of
 #: outliving the harness and taking every other file's verdict with it.
 _OUTCOME_TIMEOUT_S = 60
@@ -1142,13 +1141,21 @@ _OUTCOME_TIMEOUT_S = 60
 #: the bound the session does not fail, it DIES: no summary line, and every
 #: other file in the selection loses its verdict.
 #:
-#: 2 is the ceiling gate's own arithmetic, not a number picked by feel. It
-#: derives its per-call ceiling as ``harness // 3`` and states why the divisor
-#: is 3: "A ceiling of ``bound / 3`` lets a test spend TWO full-length bounded
-#: calls and keeps a third of the budget for fixture setup and for the harness
-#: to report." Two waves is that same permission read as a total:
-#: 2 x 60 = 120 s <= 180 s, with the last third left for the harness to report.
-_OUTCOME_MAX_WAVES = 2
+#: Three waves are required by the current measured population: d3, d6 and d7
+#: each take 42–52 s alone, and even d3+d6 at width 2 makes d3 hit the unchanged
+#: 60 s bound. A work-conserving pool lets those three overlap as earlier jobs
+#: finish; fixed wave barriers keep one heavy module in each consecutive group
+#: (d1–d3, d4–d6, d7–d8). This verifier module declares its aggregate timeout
+#: below, so 3 x 60 = 180 s cannot outlive its 600 s session budget.
+_OUTCOME_MAX_WAVES = 3
+
+#: Aggregate budget for THIS verifier module only. The repo-wide landing lane
+#: stays at 180 s and its per-call ceiling therefore stays 60 s. This module is
+#: the exceptional nested verifier that launches all eight dimension suites;
+#: the sibling census-freshness verifier already carries the same 600 s marker
+#: for the same measured work.
+_OUTCOME_TEST_TIMEOUT_S = 600
+pytestmark = pytest.mark.timeout(_OUTCOME_TEST_TIMEOUT_S)
 
 
 def _outcome_worker_count(n_paths: int) -> int:
@@ -1162,26 +1169,10 @@ def _outcome_worker_count(n_paths: int) -> int:
     n — so a ninth dimension module cannot quietly re-open the hole, which is
     what a hard-coded 4 would have allowed.
 
-    The width is the aggregate bound. It is not a deadline that has to fire and
-    it cannot itself go red, so it adds no new failure mode: the per-module 60 s
-    bound is untouched and is still the thing that NAMES a hung module.
-
-    MEASURED (vibe-ic#1451, 8 modules, 32-core host, load ~7-12; wall for the
-    whole loop / slowest single module, which is what the 60 s bound has to
-    cover):
-
-        workers 1 (before)  123.66 s   d7 43.12 s
-        workers 3            61.17 s   d7 40.15 s
-        workers 4 (derived)  55.60 s   d7 44.30 s
-        workers 8            50.36 s   d7 50.36 s
-
-    Two things that measurement settles. The loop halves; and the slowest
-    module does NOT meaningfully inflate at the derived width — 44.30 s against
-    43.12 s serial, so the 60 s bound keeps the margin it was measured with.
-    Going wider buys 5 s of loop and spends 6 s of that margin (d7 at 50.36 s is
-    84 % of its bound), which is the trade this file must not make: a bound that
-    fires because of our own concurrency is a false red, and a false red on a
-    verifier's tree is indistinguishable from the regression it is looking for.
+    The width is the aggregate bound. `_run_outcome_reports` also enforces a
+    barrier between each group of this width; without that barrier a finished
+    light job starts a later heavy job while the current heavy one is still
+    running, which is the exact starvation this sizing is meant to prevent.
     """
     assert n_paths >= 1, "no module paths to size the outcome pool for"
     return -(-n_paths // _OUTCOME_MAX_WAVES)  # ceil, without importing math
@@ -1221,27 +1212,26 @@ def _run_outcome_reports(
     """
     assert paths, "no module paths given to the outcome run"
     _width = _outcome_worker_count(len(paths))
-    with ThreadPoolExecutor(max_workers=_width) as pool:
-        # `_width` is passed only so a timeout can DISCLOSE what it was competing
-        # with. It changes no behaviour and no bound.
-        futures = [pool.submit(_run_one_module_outcome, p, cwd, _width)
-                   for p in paths]
-        # `.result()` walked in `paths` order, never in completion order: a
-        # module that fails or times out must raise the same first exception
-        # whether or not a sibling happened to finish before it, or two arms of
-        # a verification disagree for a reason that is not the tree. Every
-        # future is awaited — the pool's own `__exit__` joins the rest — so a
-        # second failing module is not left running past this frame.
-        per_path: Dict[Path, Dict[str, List[Dict]]] = {}
-        first: Optional[BaseException] = None
-        for path, future in zip(paths, futures):
-            try:
-                per_path[path] = future.result()
-            except BaseException as exc:
-                if first is None:
-                    first = exc
-        if first is not None:
-            raise first
+    per_path: Dict[Path, Dict[str, List[Dict]]] = {}
+    for start in range(0, len(paths), _width):
+        wave = paths[start:start + _width]
+        with ThreadPoolExecutor(max_workers=len(wave)) as pool:
+            # `_width` is passed only so a timeout can DISCLOSE what it was
+            # competing with. It changes no per-module bound.
+            futures = [pool.submit(_run_one_module_outcome, p, cwd, len(wave))
+                       for p in wave]
+            # Walk in declaration order, never completion order, so the same
+            # first path wins on both arms. The context joins every process in
+            # this wave before the next wave can start.
+            first: Optional[BaseException] = None
+            for path, future in zip(wave, futures):
+                try:
+                    per_path[path] = future.result()
+                except BaseException as exc:
+                    if first is None:
+                        first = exc
+            if first is not None:
+                raise first
     merged: Dict[str, List[Dict]] = {}
     for path in paths:
         for nodeid, reports in per_path[path].items():
@@ -1354,26 +1344,24 @@ _PROBE_MODULE = "import time\n\n\ndef test_probe():\n    time.sleep(%d)\n"
 
 
 def test_the_outcome_loop_cannot_outlive_the_pytest_harness(tmp_path):
-    """The LOOP's worst case — the half the ceiling gate leaves open.
+    """The LOOP's worst case fits this verifier's declared aggregate budget.
 
     ``ci_harness_timeout_ceiling_check`` bounds ONE blocking call at
     ``harness // CEILING_DIVISOR`` and states the limit of that in its own
     words: *"bounding one call cannot by itself bound a test's total wall time,
     because a loop can make the same call N times."*
     :func:`_run_outcome_reports` is that loop, over the eight dimension
-    modules, and nothing measured it. Sequentially it was allowed
-    ``8 x 60`` = 480 s inside ONE test item — 2.7x the harness — which is the
-    session-kill this file's own ``_OUTCOME_TIMEOUT_S`` exists to prevent,
-    rebuilt one level up (vibe-ic#1451).
+    modules. This module declares the exceptional aggregate budget that covers
+    the nested verifier, while every individual subprocess remains below the
+    repo-wide per-call ceiling.
 
     TWO assertions, because either alone is satisfiable by something that does
     not hold:
 
     * the ARITHMETIC — worst case ``ceil(n / workers) * _OUTCOME_TIMEOUT_S``
-      must fit the budget the ceiling gate's divisor leaves a test after
-      reserving its reporting third. Derived from the gate's own resolver and
-      divisor, never from a hand-copy of 180, which is the drift shape that
-      gate was written to remove;
+      must fit the module marker after reserving one complete ordinary harness
+      interval for fixture/reporting work. The ordinary interval is derived
+      from the gate's resolver, never hand-copied;
     * the BEHAVIOUR — the loop must really run concurrently. The arithmetic is
       a claim about the pool width; on its own it would stay green if
       :func:`_run_outcome_reports` stopped using that width, so it is proved by
@@ -1395,9 +1383,14 @@ def test_the_outcome_loop_cannot_outlive_the_pytest_harness(tmp_path):
         f"the could-not-look-scored-as-nothing-found shape the census campaign "
         f"exists to refuse.")
 
-    # The reporting third the gate reserves is not the test's to spend, so the
-    # budget is what is left after it: 180 - 180//3 = 120 s.
-    budget = harness - harness // CEIL.CEILING_DIVISOR
+    per_call_ceiling = harness // CEIL.CEILING_DIVISOR
+    assert _OUTCOME_TIMEOUT_S <= per_call_ceiling, (
+        f"one outcome process may run {_OUTCOME_TIMEOUT_S}s, above the "
+        f"ordinary landing lane's {per_call_ceiling}s per-call ceiling")
+    # Reserve one WHOLE ordinary-lane interval for collection, fixtures and a
+    # pytest summary. The nested outcome waves may spend only what remains of
+    # this module's explicit 600 s marker.
+    budget = _OUTCOME_TEST_TIMEOUT_S - harness
     n = len(dimension_module_paths())
     assert n, "no dimension modules found; the loop under test has no input"
     workers = _outcome_worker_count(n)
@@ -1406,9 +1399,10 @@ def test_the_outcome_loop_cannot_outlive_the_pytest_harness(tmp_path):
     assert worst <= budget, (
         f"the outcome loop's worst case is {waves} wave(s) x "
         f"{_OUTCOME_TIMEOUT_S}s = {worst}s over {n} module(s) at "
-        f"{workers} worker(s), but the pytest harness bounds a test at "
-        f"{harness}s and reserves {harness // CEIL.CEILING_DIVISOR}s of it for "
-        f"reporting, leaving {budget}s. A loop that can outlive the harness "
+        f"{workers} worker(s), but this verifier's marker is "
+        f"{_OUTCOME_TEST_TIMEOUT_S}s and reserves the ordinary {harness}s "
+        f"landing interval for reporting, leaving {budget}s. A loop that can "
+        f"outlive its declared marker "
         f"does not fail — it takes the SESSION down, and every other file in "
         f"the selection loses its verdict with no summary line to show for it.")
 
@@ -1430,6 +1424,39 @@ def test_the_outcome_loop_cannot_outlive_the_pytest_harness(tmp_path):
         f"spend sleeping alone. The worst case asserted above is computed from "
         f"a pool width of {workers}; this says the loop is not using it, so "
         f"that arithmetic is describing code that does not run.")
+
+
+def test_the_outcome_pool_waits_at_each_wave_boundary(monkeypatch, tmp_path):
+    """A width without a barrier is the pre-fix work-conserving queue.
+
+    When a light module finishes it starts a later heavy module while the
+    current heavy one is still live, so the three measured-heavy dimensions
+    overlap despite arithmetic that calls them separate waves. Drive the real
+    scheduler with a cheap stand-in and prove no next-wave start precedes the
+    last prior-wave finish.
+    """
+    paths = tuple(tmp_path / f"test_wave_{i}.py" for i in range(8))
+    started: Dict[Path, float] = {}
+    finished: Dict[Path, float] = {}
+
+    def fake(path, _cwd, _width):
+        started[path] = time.monotonic()
+        time.sleep(0.05)
+        finished[path] = time.monotonic()
+        return {f"{path.name}::test_probe": []}
+
+    monkeypatch.setattr(sys.modules[__name__],
+                        "_run_one_module_outcome", fake)
+    reports = _run_outcome_reports(paths, cwd=tmp_path)
+    assert len(reports) == len(paths)
+    width = _outcome_worker_count(len(paths))
+    for boundary in range(width, len(paths), width):
+        prior = paths[boundary - width:boundary]
+        following = paths[boundary:boundary + width]
+        assert min(started[p] for p in following) >= max(
+            finished[p] for p in prior), (
+                f"wave beginning at {boundary} started before the preceding "
+                f"{len(prior)} module(s) all finished")
 
 
 @lru_cache(maxsize=1)
