@@ -49,6 +49,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Set
+from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 
 HELPER_MODULE = "_atomic_artefact"
 
@@ -212,7 +213,7 @@ def main(argv: List[str] | None = None) -> int:
             from _atomic_artefact import write_json
             write_json(args.json_out, rep)
         except ImportError:                      # pragma: no cover
-            Path(args.json_out).write_text(json.dumps(rep, indent=2) + "\n")
+            atomic_write_text(Path(args.json_out), json.dumps(rep, indent=2) + "\n")
 
     if new:
         print(f"[FAIL] {len(new)} program(s) newly write a declared report "
