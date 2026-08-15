@@ -511,11 +511,35 @@ def external_input_declarations(step_id) -> Tuple[str, ...]:
 #: these three are named, evidenced and pointed at the issue rather than
 #: silently forgiven. When #1070 lands, this set empties and
 #: `test_d5_the_deferred_register_only_shrinks` reddens if it does not.
-_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {
-    "A1": ("D1",),      # reads L1_DATASHEET.json + L5_ADI_SPEC.json
-    "25": ("24",),      # reads IR-drop's outputs: all
-    "M1": ("37",),      # reads phase3/stage4/gds/*.gds
-}
+# 2026-08-14: EMPTIED. vibe-ic#1070 landed for all three edges, so the debt
+# this register recorded no longer exists and the shrink-only doctrine above
+# says the entry goes. Measured live on `ab5a23a28` — each edge is both still
+# READ and now ORDERED, which is exactly the condition
+# `test_d5_the_deferred_register_only_shrinks` was written to detect:
+#
+#     A1 -> D1 : reads_it=True  ORDERED=True    (A1 gained `blocks_on: [D1]`)
+#     25 -> 24 : reads_it=True  ORDERED=True
+#     M1 -> 37 : reads_it=True  ORDERED=True
+#
+# Emptied rather than deleted outright: a NEW step entering this state must
+# still land here and be named, evidenced and pointed at an issue rather than
+# silently forgiven.
+_DEFERRED_LAYER3_EDGES: Dict[str, Tuple[str, ...]] = {}
+
+#: The edges the register carried until #1070 paid the debt.
+#:
+#: This exists for ONE reason: with the register empty, the paired control
+#: below compares an empty measured set against an empty registered set and
+#: passes while asserting NOTHING. A control that forgives nothing and checks
+#: nothing is worse than no control, because the file still reads as though it
+#: were policing three defects. So the control now also asserts the debt STAYED
+#: paid, which is a live guard rather than a vacuous one: drop any of these
+#: three `blocks_on` declarations again and it reddens.
+_FORMERLY_DEFERRED_LAYER3_EDGES: Tuple[Tuple[str, str], ...] = (
+    ("A1", "D1"),
+    ("25", "24"),
+    ("M1", "37"),
+)
 
 
 
@@ -1357,3 +1381,14 @@ def test_d5_the_deferred_register_is_the_only_thing_holding_those_cells_green():
         f"the register and the live measurement disagree: measured "
         f"{sorted(charged)}, registered {sorted(registered)}"
     )
+
+    # ANTI-VACUITY. The comparison above is {} == {} while the register is
+    # empty, so on its own it would assert nothing. These three edges are the
+    # debt #1070 paid; requiring them to STAY ordered keeps this control live.
+    for sid, producer in _FORMERLY_DEFERRED_LAYER3_EDGES:
+        assert producer in ancestors(sid), (
+            f"{sid} -> {producer} was a deferred layer-3 edge until #1070 "
+            f"declared it, and it is unordered again (closure="
+            f"{sorted(ancestors(sid))}). The debt this register recorded has "
+            f"come back; re-open the entry rather than re-deleting this check."
+        )
