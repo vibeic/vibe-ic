@@ -913,15 +913,22 @@ _STUB_LAND = r"""#!/usr/bin/env bash
 # A minimal stand-in for gatekeeper-land.sh with the same OBSERVABLE contract:
 # the sentinel, `  PASS  ` / `  FAIL  ` lines, a junit report when asked, and a
 # stamp only when everything passed.
+#
+# ONE SESSION PER FILE (vibe-ic#1654), like the real script. Arm A1 in
+# `gatekeeper-verify-merge.sh` READS THIS FILE to decide which shape it must
+# match — a stub that ran the single session would send the end-to-end down the
+# compatibility path and leave the per-file path in arm A1 unexercised.
 set -uo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
 echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="
 echo "  PASS  a cheap gate"
-J=()
-[ -n "${GATEKEEPER_PYTEST_JUNIT:-}" ] && J=(-o junit_family=xunit1 "--junitxml=$GATEKEEPER_PYTEST_JUNIT")
-sel="$(cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}")"
-if ( cd "$PLUGIN" && python3 -m pytest -q --maxfail=10 "${J[@]+"${J[@]}"}" $sel >/dev/null 2>&1 ); then
+SEL="$(mktemp -t stub_sel.XXXXXX)"
+JOUT="${GATEKEEPER_PYTEST_JUNIT:-$(mktemp -t stub_junit.XXXXXX)}"
+( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}" ) > "$SEL"
+if ( cd "$PLUGIN" && python3 programs/pytest_per_file_junit.py \
+       --selection "$SEL" --junit "$JOUT" --kill-after 50 \
+       -- python3 -m pytest -q --maxfail=10 >/dev/null 2>&1 ); then
   echo "  PASS  targeted tests (1 file(s))"
   git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
@@ -962,6 +969,11 @@ def sandbox(tmp_path_factory):
     os.chmod(repo / "tools/gatekeeper-land.sh", 0o755)
     (plugin / "programs/ci_targeted_test_select.py").write_text(_STUB_SELECT)
     shutil.copy2(_PROG, plugin / "programs/landing_merge_verdict.py")
+    # vibe-ic#1654 — the REAL driver, not a stub of it. Both arms run it here
+    # exactly as they do on the shipped tree, so the end-to-end covers the
+    # per-file path rather than only the compatibility fallback.
+    shutil.copy2(_PROGRAMS / "pytest_per_file_junit.py",
+                 plugin / "programs/pytest_per_file_junit.py")
     (plugin / "programs/thing.py").write_text(_THING_SRC.format(v=1))
     (plugin / "programs/tests/test_thing.py").write_text(_THING_TEST)
     (plugin / "pytest.ini").write_text("[pytest]\ntestpaths = programs/tests\n")
@@ -1036,6 +1048,30 @@ def test_end_to_end_a_known_good_branch_is_allowed(sandbox, tmp_path):
     assert doc["delta"]["new_failures"] == []
     assert doc["land"]["stamped_sha"], "the landing gates never stamped"
     assert doc["base_land"] is not None, "arm A2 never ran, so the gate tier was asserted"
+
+
+def test_end_to_end_arm_a1_runs_the_same_per_file_driver_arm_b_runs(
+        sandbox, tmp_path):
+    """vibe-ic#1654 + #1417: ONE instrument, on both arms, end to end.
+
+    Arm B runs whatever the candidate's `gatekeeper-land.sh` runs; arm A1 reads
+    that script and matches it. The stub above routes through
+    `programs/pytest_per_file_junit.py`, so the compatibility fallback — which
+    exists for a candidate that predates the driver — must NOT be the branch
+    taken here. Asserted on the script's own output rather than inferred,
+    because the two paths differ only in a line nobody reads on a green run.
+    """
+    r, doc = _verify(sandbox, "innocuous_green", tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "predates the per-file junit driver" not in r.stdout, (
+        "arm A1 fell back to the single session while arm B ran one session "
+        "per file — two arms measured with different instruments are not a "
+        "differential:\n" + r.stdout)
+    assert "file(s) recorded" in r.stdout, (
+        "arm A1 did not report the driver's per-file completeness, so a base "
+        "arm short by one file would be indistinguishable from a whole "
+        "one:\n" + r.stdout)
+    assert doc["dropped_base_selected_files"] == [], r.stdout
 
 
 def test_end_to_end_what_is_gated_is_the_squash_and_not_the_branch(

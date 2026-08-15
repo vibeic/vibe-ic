@@ -563,14 +563,37 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # tree runs, and two arms measured with different instruments are not a
     # differential. A branch that edits the driver therefore judges itself with
     # it, which is disclosed through `--gate-edited` below.
-    ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-        python3 "$CAND_PLUGIN/programs/pytest_per_file_junit.py" \
-        --selection "$RUN/selection_base.txt" --junit "$BASE_JUNIT" \
-        --kill-after "${GATEKEEPER_PYTEST_FILE_KILL_AFTER:-900}" \
-        -- python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-        -p no:cacheprovider ) \
-        > "$RUN/base_tests.log" 2>&1
-    A1_RC=$?
+    #
+    # AND WHICH SHAPE ARM A1 USES IS READ OFF ARM B, not assumed. A candidate
+    # whose `gatekeeper-land.sh` predates the driver runs the SINGLE SESSION in
+    # arm B; running the per-file driver here would then be the very asymmetry
+    # #1417 removed, in the opposite direction. So arm B's script is asked, and
+    # when it says "single session" this arm says it too — LOUDLY, because in
+    # that configuration one hanging file still costs both arms their record.
+    A1_DRIVER="$CAND_PLUGIN/programs/pytest_per_file_junit.py"
+    if [ -f "$A1_DRIVER" ] \
+       && grep -q 'programs/pytest_per_file_junit.py' \
+               "$WT_CAND/tools/gatekeeper-land.sh" 2>/dev/null; then
+      ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+          python3 "$A1_DRIVER" \
+          --selection "$RUN/selection_base.txt" --junit "$BASE_JUNIT" \
+          --kill-after "${GATEKEEPER_PYTEST_FILE_KILL_AFTER:-900}" \
+          -- python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+          -p no:cacheprovider ) \
+          > "$RUN/base_tests.log" 2>&1
+      A1_RC=$?
+    else
+      echo "--- note: this tree's gatekeeper-land.sh predates the per-file junit driver"
+      echo "          (vibe-ic#1654), so BOTH arms run the single-session shape and one"
+      echo "          hanging file still costs each arm its ENTIRE record. Matching arm B"
+      echo "          is the stronger of the two errors available here."
+      ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+          xargs -a "$RUN/selection_base.txt" \
+          python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+          -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
+          > "$RUN/base_tests.log" 2>&1
+      A1_RC=$?
+    fi
     # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
     # summary is a `rootdir:` line or an empty one, so the arm that COULD NOT
     # LOOK printed indistinguishably from — and often more quietly than — the
@@ -587,11 +610,17 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # record. Zero and a non-empty report is the only complete arm.
     A1_NORECORD="$(grep -ac '^NORECORD' "$RUN/base_tests.log" 2>/dev/null || true)"
     A1_NORECORD="${A1_NORECORD:-0}"
+    # The driver's summary when the driver ran, and pytest's own last line when
+    # the single-session fallback above ran — read from the log rather than
+    # assumed, so the report describes the shape that actually executed.
+    A1_RECORDED="$(sed -n 's/^  recorded *//p' "$RUN/base_tests.log" | tail -1)"
+    if [ -n "$A1_RECORDED" ]; then
+      A1_SUMMARY="$A1_RECORDED of $(sed -n 's/^  asked *//p' "$RUN/base_tests.log" | tail -1) file(s) recorded, $(sed -n 's/^  red cases *//p' "$RUN/base_tests.log" | tail -1) red case(s)"
+    else
+      A1_SUMMARY="$(tail -1 "$RUN/base_tests.log")"
+    fi
     if [ -s "$BASE_JUNIT" ] && [ "$A1_NORECORD" = "0" ]; then
-      echo "--- arm A1 (base ${BASE_SHA:0:12}): rc=$A1_RC," \
-           "$(sed -n 's/^  recorded *//p' "$RUN/base_tests.log" | tail -1) of" \
-           "$(sed -n 's/^  asked *//p' "$RUN/base_tests.log" | tail -1) file(s) recorded," \
-           "$(sed -n 's/^  red cases *//p' "$RUN/base_tests.log" | tail -1) red case(s)"
+      echo "--- arm A1 (base ${BASE_SHA:0:12}): rc=$A1_RC, $A1_SUMMARY"
     else
       echo "--- arm A1 INCOMPLETE (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and" \
            "$A1_NORECORD selected file(s) produced NO record; for those files the" \
