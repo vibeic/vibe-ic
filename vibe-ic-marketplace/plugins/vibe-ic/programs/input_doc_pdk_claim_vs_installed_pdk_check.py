@@ -133,6 +133,32 @@ each state gets its own reason token, `backend_not_exercised` is computed from
 what actually ran, and `installed_pdk_root_state` plus the `[ENVIRONMENT]` line
 appear on EVERY run, pass or not. A verdict states where it was taken.
 
+A SECOND THING THE ENVIRONMENT MOVED, IN SILENCE: HOW MUCH WAS READ
+-------------------------------------------------------------------
+The walk of one installed PDK is bounded at `_MAX_PDK_FILES`. That bound is
+about the machine, not about the design, and it decided verdicts. Measured on
+one host, one commit, one claim, with the real bound and the SAME two artefacts
+installed either way:
+
+    PDK holds 20000 files, and the second `.lib` falls past the cut
+                        -> CORROBORATED, `[PASS]`, rc 0
+    the same PDK with the filler removed, both `.lib` files listed
+                        -> UNDECIDED, `VACUOUS_PASS`, rc 2
+
+The claim ("this PDK ships only the typical library") is FALSE both times. The
+first run agreed with it, because agreement was quantified over a listing that
+stopped, and `truncated_at` — recorded one line after the walk — was read by
+nothing: not by a verdict branch, not by `_emit_human`, not by the
+`[ENVIRONMENT]` line. rc 0 is this gate's ONLY route to a pass, so the cap
+could manufacture the one verdict that means "I looked and it was true".
+
+The asymmetry is the same one #981 settled for directories, applied to the
+population itself. A CONTRADICTION stands under truncation: one artefact in the
+part that WAS listed falsifies a denial, and the unread tail cannot rescue it.
+An AGREEMENT does not: it is a universal over every artefact installed, and a
+listing that stopped never covered that set. Agreement quantified over files
+that were never listed is not agreement.
+
 EXIT CODES / VERDICT
 ====================
 The report always carries a machine-readable top-level `verdict`, and the exit
@@ -284,7 +310,9 @@ SCOPE_WIDTH_CHARS = 30
 
 # Reading a whole PDK tree to answer one sentence is not worth an unbounded
 # walk; these bound the work and every truncation is DISCLOSED in the report
-# (a silent cap would be the same defect one layer down).
+# AND WITHHELD FROM AGREEMENT (a silent cap would be the same defect one layer
+# down, and until vibe-ic#1491 that is exactly what it was: `truncated_at` was
+# written onto the record and read by nothing).
 _MAX_PDK_FILES = 20000
 _MAX_SECTION_BYTES = 4_000_000
 
@@ -948,16 +976,63 @@ def _refuse_corroboration_over_a_barren_directory(
     return rec
 
 
+def _refuse_agreement_over_a_truncated_population(
+        rec: Dict[str, Any]) -> Dict[str, Any]:
+    """Withhold agreement that was quantified over a listing that stopped.
+
+    `files_under` caps one PDK's walk at `_MAX_PDK_FILES`, and the cap is a
+    fact about the machine's patience, not about the design. Until vibe-ic#1491
+    `truncated_at` was written onto the record one line after the walk and read
+    by NOTHING, so every route to CORROBORATED — the gate's only route to rc 0
+    — could run over a population it had not finished listing. Measured with
+    the real bound: an exclusivity claim that is FALSE against the installed
+    tree returned `[PASS]` when 20000 unrelated files pushed the falsifying
+    artefact past the cut, and UNDECIDED when the same two artefacts were
+    listed in full.
+
+    CONTRADICTED is deliberately left alone. A denial is falsified by ONE
+    artefact in the part that WAS listed, and nothing in the unread tail can
+    put that artefact back; an agreement is a universal over the whole install,
+    and a listing that stopped never covered it. That is the #981 asymmetry —
+    stated there for the directories a claim names — applied to the population
+    the claim is answered over.
+
+    Applied LAST, on the finished record, for the reason the barren-directory
+    refusal is: every route to CORROBORATED passes through here, including
+    routes added later, rather than each route having to remember. The withheld
+    reason is KEPT under `corroboration_withheld`, so a reader can see what the
+    gate would have said and why it did not say it. UNDECIDED is counted
+    nowhere, so a run whose only claim lands here is `all_claims_undecided` —
+    rc 2 with the `VACUOUS_PASS:` sentinel, never a pass.
+    """
+    bound = rec.get("truncated_at")
+    if rec.get("verdict") != "CORROBORATED" or not bound:
+        return rec
+    rec["verdict"] = "UNDECIDED"
+    rec["corroboration_withheld"] = rec.get("reason", "")
+    rec["reason"] = (
+        f"the walk of '{rec.get('subject_pdk')}' stopped at the {bound}-file "
+        "bound, so the installed artefacts were never fully listed; agreeing "
+        "with this claim would be a statement about every artefact installed, "
+        "including the ones past the cut. A contradiction found in the part "
+        "that WAS listed would still stand — agreement quantified over files "
+        "that were never listed is not agreement")
+    return rec
+
+
 def adjudicate(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
     """Settle one claim against the installed tree, or refuse to.
 
-    Two steps, deliberately separate. `_decide_against_the_tree` reads the tree
-    and answers; `_refuse_corroboration_over_a_barren_directory` then withholds
-    an agreement whose population the read did not cover. Splitting them is
-    what lets a CONTRADICTION survive a narrowing that a CORROBORATION may not.
+    Three steps, deliberately separate. `_decide_against_the_tree` reads the
+    tree and answers; `_refuse_corroboration_over_a_barren_directory` then
+    withholds an agreement whose NAMED DIRECTORIES the read did not cover; and
+    `_refuse_agreement_over_a_truncated_population` withholds one whose FILE
+    LISTING stopped at the bound. Splitting them is what lets a CONTRADICTION
+    survive a narrowing, and a cap, that a CORROBORATION may not.
     """
-    return _refuse_corroboration_over_a_barren_directory(
-        _decide_against_the_tree(claim, tree))
+    return _refuse_agreement_over_a_truncated_population(
+        _refuse_corroboration_over_a_barren_directory(
+            _decide_against_the_tree(claim, tree)))
 
 
 def _decide_against_the_tree(claim: Claim, tree: InstalledTree) -> Dict[str, Any]:
@@ -1241,6 +1316,10 @@ def run(tree_root: Path, pdks_root: str,
             "no artefact of the claimed format; agreement would be a "
             "statement about a directory that was never read, so it is "
             "withheld — a contradiction found in the others still stands",
+            "a claim whose PDK holds more files than the walk's bound; "
+            "agreement would be a statement about artefacts past the cut, so "
+            "it is withheld — a contradiction found in the listed part still "
+            "stands",
         ],
     }
 
@@ -1329,6 +1408,16 @@ def run(tree_root: Path, pdks_root: str,
 
     results = [adjudicate(c, tree) for c in claims]
     report["claims"] = results
+    # HOW MUCH WAS READ is part of the environment a verdict was taken in
+    # (vibe-ic#1491), so it is disclosed beside the root and the backend rather
+    # than only inside a per-claim record nobody prints. Named per PDK, because
+    # the bound is per PDK: one oversized install does not make the answer
+    # about the others partial.
+    truncated = sorted({r.get("subject_pdk") for r in results
+                        if r.get("truncated_at") and r.get("subject_pdk")})
+    if truncated:
+        report["population_truncated"] = truncated
+        report["population_truncated_at"] = _MAX_PDK_FILES
     counts = {
         "contradicted": sum(1 for r in results if r["verdict"] == "CONTRADICTED"),
         "corroborated": sum(1 for r in results if r["verdict"] == "CORROBORATED"),
@@ -1369,6 +1458,10 @@ def _environment_line(report: Dict[str, Any]) -> str:
     unrun = report.get("backend_not_exercised") or []
     if unrun:
         bits.append(f"not_exercised={','.join(unrun)}")
+    cut = report.get("population_truncated") or []
+    if cut:
+        bits.append(f"truncated_at_{report.get('population_truncated_at')}"
+                    f"={','.join(cut)}")
     probe = report.get("installed_pdk_root_probe")
     line = f"[ENVIRONMENT] {GATE}: {' '.join(bits)}"
     return line + (f"\n              probe: {probe}" if probe else "")
