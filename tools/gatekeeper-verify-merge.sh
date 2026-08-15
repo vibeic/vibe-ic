@@ -478,6 +478,23 @@ VERDICT_PROG="$SELF_REPO/$PLUGIN_REL/programs/landing_merge_verdict.py"
 CAND_JUNIT="$RUN/candidate.xml"
 BASE_JUNIT="$RUN/base.xml"
 BASE_LAND_ARG=()
+# vibe-ic#1498 — the two arms' hygiene RECORDS, so the gate differential can ask
+# the hygiene tier which findings this branch INTRODUCED rather than only
+# whether its one label failed. Both arms already run `gatekeeper-land.sh`; all
+# that is added is that each writes its `--summary-json` record where the
+# verdict can read it. Left EMPTY when either arm did not produce one, which the
+# verdict discloses and treats as the coarse per-label comparison it does today.
+BASE_HYG="$RUN/base_hygiene.json"
+CAND_HYG="$RUN/candidate_hygiene.json"
+HYG_ARGS=()
+# The host is REQUIRED by `hygiene_finding_delta` and never inferred: these
+# findings are host-dependent (`gate_host_independence_check` is one of the
+# gates). Both arms run HERE, so both hosts are this one — except on a
+# `--base-gate-cache` hit, where the base arm did not run at all and the host
+# is whatever measured the cached record. It is stored beside it for that
+# reason rather than assumed.
+THIS_HOST="$(uname -n)"
+BASE_HYG_HOST="$THIS_HOST"
 
 # The PR may change the very gate that judges it — this one does. Disclosed in
 # the verdict, never blocking: a PR that improves the gate must be landable, and
@@ -538,9 +555,19 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   # pre-existing red — still run.
   A2_PID=""
   CACHED=""
+  CACHED_HYG=""
+  CACHED_HYG_HOST=""
   if [ -n "$BASE_GATE_CACHE" ]; then
     mkdir -p "$BASE_GATE_CACHE"
     CACHED="$BASE_GATE_CACHE/$BASE_SHA.land.log"
+    # vibe-ic#1498 — cached ALONGSIDE the log and keyed the same way, because a
+    # hit skips arm A2 entirely and the finding differential would otherwise
+    # have no base record exactly in the mode the merge queue runs in. The host
+    # travels WITH the record: findings are host-dependent, and a cache
+    # directory on shared storage could otherwise hand one host's baseline to
+    # another's candidate.
+    CACHED_HYG="$BASE_GATE_CACHE/$BASE_SHA.hygiene.json"
+    CACHED_HYG_HOST="$BASE_GATE_CACHE/$BASE_SHA.hygiene.host"
   fi
   # A CACHE HIT MUST BE THE SAME QUESTION, not a similar one. The key is the base
   # COMMIT, so a hit is by construction about the identical tree; a base that
@@ -548,10 +575,21 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   if [ -n "$CACHED" ] && [ -s "$CACHED" ]; then
     cp "$CACHED" "$RUN/base_land.log"
     echo "--- arm A2: reused the gate log measured for base ${BASE_SHA:0:12}"
+    # The two halves are cached independently, so a cache written before this
+    # change has the log and not the record. That is a MISSING baseline, which
+    # the verdict discloses and degrades from — never a silently empty one.
+    if [ -s "$CACHED_HYG" ] && [ -s "$CACHED_HYG_HOST" ]; then
+      cp "$CACHED_HYG" "$BASE_HYG"
+      BASE_HYG_HOST="$(cat "$CACHED_HYG_HOST")"
+    else
+      echo "--- arm A2: the cache carries no hygiene record for this base, so the"
+      echo "            hygiene tier falls back to the per-LABEL comparison"
+    fi
   else
     ( cd "$WT_BASE" && \
         GATEKEEPER_BASE="$BASE_SHA" \
         GATEKEEPER_VERSION_BY_GATEKEEPER=1 \
+        GATEKEEPER_HYGIENE_REPORT="$BASE_HYG" \
         bash tools/gatekeeper-land.sh ) > "$RUN/base_land.log" 2>&1 &
     A2_PID=$!
   fi

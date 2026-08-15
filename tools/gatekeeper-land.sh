@@ -551,7 +551,37 @@ run_unselectable_pytest
 run "unselectable-test census is not stale" \
     python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
 
-run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh"
+# THE HYGIENE TIER, AND THE RECORD THAT LETS IT BE DIFFERENCED (vibe-ic#1498).
+#
+# The label below is ONE line for a suite of ~70 gates, and
+# `landing_merge_verdict` subtracts the two arms' gate logs BY LABEL. So the
+# hygiene tier is judged at a granularity of one: while the base's suite is red
+# — it has been, repeatedly, and `gate_red_since.json` exists because of it —
+# the whole label is excused on the candidate too, and a finding this branch
+# INTRODUCED under it is invisible. That is the permissive direction, and it is
+# the direction nothing catches.
+#
+# `GATEKEEPER_HYGIENE_REPORT=<path>` makes this run write the suite's own
+# `--summary-json` record there, which is what `hygiene_finding_delta.py` needs
+# to answer the finer question — "which findings does the candidate have that
+# the base does not" — instead of "is the count zero".
+#
+# IT CHANGES NO VERDICT HERE, exactly like `GATEKEEPER_PYTEST_JUNIT` above: the
+# `run` below still decides this line, and with the variable unset the command
+# is byte-for-byte the one this file has always issued. The differencing is
+# done by `landing_merge_verdict`, which is the program that already owns the
+# test tier's differential and is supplied by the VERIFIER rather than by the
+# tree under test — a branch must not be able to change what counts as a
+# refusal (see `gatekeeper-verify-merge.sh`, "WHERE EACH HALF COMES FROM").
+#
+# The record is written by `gate_dispatch_finish` BEFORE every one of its exit
+# paths, so a FAILING run still yields one. A baseline that only existed when
+# the base was green would be useless precisely when it is needed.
+GK_HYG=()
+[ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
+  && GK_HYG=(--summary-json "$GATEKEEPER_HYGIENE_REPORT")
+run "repo hygiene gates"      bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
+    "${GK_HYG[@]+"${GK_HYG[@]}"}"
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 
 # #1029 — the standing assertion, executed: everything above ran against this
