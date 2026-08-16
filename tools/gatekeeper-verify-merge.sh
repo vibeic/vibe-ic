@@ -227,6 +227,7 @@ LAND="$REPO/tools/gatekeeper-land.sh"
 
 RUN="$(mktemp -d -t gkverify.XXXXXX)"
 WT_CAND="$RUN/candidate"
+WT_CAND_TESTS="$RUN/candidate-tests"
 WT_BASE="$RUN/base"
 WT_BASE_TESTS="$RUN/base-tests"
 # PER-RUN ref names. Two verifications of two different PRs may legitimately be
@@ -256,7 +257,7 @@ cleanup() {
   # Every measured arm owns a process group.  Stop the entire group before its
   # worktree disappears; killing only the wrapper shell leaves pytest or a gate
   # subprocess running against a directory cleanup is about to remove.
-  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B_PID:-}"; do
+  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B1_PID:-}" "${B2_PID:-}"; do
     [ -n "$pid" ] || continue
     kill -TERM -- "-$pid" >/dev/null 2>&1 || true
   done
@@ -265,18 +266,18 @@ cleanup() {
   # in the arm's dedicated process group.
   for _ in {1..20}; do
     alive=0
-    for pid in "${A1_PID:-}" "${A2_PID:-}" "${B_PID:-}"; do
+    for pid in "${A1_PID:-}" "${A2_PID:-}" "${B1_PID:-}" "${B2_PID:-}"; do
       [ -n "$pid" ] || continue
       if kill -0 -- "-$pid" >/dev/null 2>&1; then alive=1; fi
     done
     [ "$alive" = "0" ] && break
     sleep 0.1
   done
-  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B_PID:-}"; do
+  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B1_PID:-}" "${B2_PID:-}"; do
     [ -n "$pid" ] || continue
     kill -KILL -- "-$pid" >/dev/null 2>&1 || true
   done
-  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B_PID:-}"; do
+  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B1_PID:-}" "${B2_PID:-}"; do
     [ -n "$pid" ] || continue
     wait "$pid" >/dev/null 2>&1 || true
   done
@@ -287,6 +288,7 @@ cleanup() {
     return
   fi
   "${G[@]}" worktree remove --force "$WT_CAND" >/dev/null 2>&1
+  "${G[@]}" worktree remove --force "$WT_CAND_TESTS" >/dev/null 2>&1
   "${G[@]}" worktree remove --force "$WT_BASE" >/dev/null 2>&1
   "${G[@]}" worktree remove --force "$WT_BASE_TESTS" >/dev/null 2>&1
   "${G[@]}" update-ref -d "$HEAD_REF"  >/dev/null 2>&1
@@ -297,7 +299,7 @@ cleanup() {
 
 signal_exit() {
   # Bash defers a trapped signal while it waits for a foreground child.  Once
-  # that child returns, EXIT immediately so the EXIT trap owns A1/A2/B teardown;
+  # that child returns, EXIT immediately so the EXIT trap owns all four arms;
   # without this explicit bridge the script continued to its normal `wait A2`
   # and an A2 that ignored TERM kept the verifier alive forever.
   local rc="$1"
@@ -535,6 +537,8 @@ VERDICT_PROG="$SELF_REPO/$PLUGIN_REL/programs/landing_merge_verdict.py"
 : > "$RUN/land.log"
 CAND_JUNIT="$RUN/candidate.xml"
 BASE_JUNIT="$RUN/base.xml"
+B2_RC=2
+B1_WORKTREE_STATUS=unknown
 BASE_LAND_ARG=()
 # The two arms' hygiene records are retained as audit artifacts.  The verdict
 # currently compares the printed gate labels; these files must not be described
@@ -592,14 +596,17 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   # there, and its absence is a real outcome the verdict reads as ABSENT.
   # A1 and A2 MUST NOT share a checkout.  Tests in this repository have been
   # observed writing into their worktree; sharing would make A2 grade A1's
-  # residue.  Separate checkouts let all three expensive arms run concurrently
+  # residue.  Separate checkouts let all four expensive arms run concurrently
   # without changing which tree or selection any arm measures.
   "${G[@]}" worktree add -q --detach "$WT_BASE_TESTS" "$BASE_SHA" \
     || die "cannot create the base-test worktree"
   "${G[@]}" worktree add -q --detach "$WT_BASE" "$BASE_SHA" \
     || die "cannot create the base-gate worktree"
+  "${G[@]}" worktree add -q --detach "$WT_CAND_TESTS" "$VERIFIED_SHA" \
+    || die "cannot create the candidate-test worktree"
   BASE_PLUGIN="$WT_BASE/$PLUGIN_REL"
   BASE_TEST_PLUGIN="$WT_BASE_TESTS/$PLUGIN_REL"
+  CAND_TEST_PLUGIN="$WT_CAND_TESTS/$PLUGIN_REL"
   : > "$RUN/selection_base.txt"
   while read -r f; do
     [ -n "$f" ] && [ -f "$BASE_TEST_PLUGIN/$f" ] && printf '%s\n' "$f" >> "$RUN/selection_base.txt"
@@ -808,10 +815,12 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     A2_PID=$!
   fi
 
-  # -------------------- 5c. ARM B — the real landing gates on the real tree
-  # `gatekeeper-land.sh` is INVOKED, not re-listed, so a gate added to it is
-  # covered here with no edit to this file. `GATEKEEPER_PYTEST_JUNIT` makes its
-  # targeted run emit a report; it changes no verdict of its own.
+  # ------------- 5c. ARMS B1/B2 — candidate tests and other gates, in parallel
+  # B1 keeps the authoritative ordered whole-selection pytest session intact;
+  # it is not sharded, so cross-file process state/order semantics stay real.
+  # B2 invokes gatekeeper-land.sh with only that already-independent tier
+  # skipped.  It may report the non-target gates, but it MUST NOT stamp the
+  # commit: only the outer composite verdict can join B1 and B2 into LAND_OK.
   #
   # `GATEKEEPER_VERSION_BY_GATEKEEPER` is the documented VERSION-LESS PR path
   # (the same deferral `pre-push` already applies off-main): the gatekeeper
@@ -819,38 +828,67 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   # conformant PR. A BACKWARDS version is still refused.
   VBG=1
   [ "$REQUIRE_VERSION_BUMP" = "1" ] && VBG=0
-  if ! grep -q GATEKEEPER_PYTEST_JUNIT "$WT_CAND/tools/gatekeeper-land.sh" 2>/dev/null; then
-    echo "--- note: this tree's gatekeeper-land.sh predates GATEKEEPER_PYTEST_JUNIT, so"
-    echo "          it cannot report per-test outcomes and the differential will refuse."
-    echo "          Rebase the branch onto a base that carries the merge-path gate."
-  fi
-  # B also owns a process group.  In particular, a PID-only SIGTERM to this
-  # verifier must interrupt `wait`, run cleanup, and terminate B's descendants;
-  # leaving B as a foreground subshell defers Bash's trap forever when a test
-  # ignores TERM.
+
   setsid bash -c '
     for lock_fd in "$7" "$8"; do
       case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
     done
     cd "$1" || exit 2
-    exec env GATEKEEPER_VERIFY_ARM=B \
+    if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ]; then
+      mkdir -p "$GATEKEEPER_CONCURRENCY_PROBE_DIR"
+      : > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/B1.started"
+    fi
+    exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 GATEKEEPER_VERIFY_ARM=B1 \
+      python3 "$4" --selection "$2" --junit "$3" \
+      --stall-after "$5" --aggregate-check --aggregate-only \
+      --aggregate-stall-after "$6" --stop-after-failures 0 \
+      -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
+      --timeout=180 --timeout-method=thread
+  ' gkverify-b1 "$CAND_TEST_PLUGIN" "$RUN/selection.txt" "$CAND_JUNIT" \
+    "$CAND_TEST_PLUGIN/programs/pytest_per_file_junit.py" \
+    "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+    "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+    "$A1_CACHE_LOCK_FD" "$A2_CACHE_LOCK_FD" \
+    > "$RUN/candidate_tests.log" 2>&1 &
+  B1_PID=$!
+
+  # B2 also owns a process group. In particular, a PID-only SIGTERM to this
+  # verifier interrupts wait, runs cleanup, and terminates every descendant.
+  setsid bash -c '
+    for lock_fd in "$6" "$7"; do
+      case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
+    done
+    cd "$1" || exit 2
+    exec env GATEKEEPER_VERIFY_ARM=B2 \
       GATEKEEPER_BASE="$2" \
-      GATEKEEPER_PYTEST_JUNIT="$3" \
-      GATEKEEPER_PYTEST_MAXFAIL=0 \
-      GATEKEEPER_FAIL_FAST_NORECORD=1 \
-      GATEKEEPER_VERSION_BY_GATEKEEPER="$4" \
-      GATEKEEPER_HYGIENE_REPORT="$5" \
-      GATEKEEPER_HYGIENE_PROGRESS="$6" \
+      GATEKEEPER_SKIP_TARGETED_TESTS=1 \
+      GATEKEEPER_NO_STAMP=1 \
+      GATEKEEPER_VERSION_BY_GATEKEEPER="$3" \
+      GATEKEEPER_HYGIENE_REPORT="$4" \
+      GATEKEEPER_HYGIENE_PROGRESS="$5" \
       bash tools/gatekeeper-land.sh
-  ' gkverify-b "$WT_CAND" "$BASE_SHA" "$CAND_JUNIT" "$VBG" \
+  ' gkverify-b2 "$WT_CAND" "$BASE_SHA" "$VBG" \
     "$CAND_HYG" "$RUN/candidate_hygiene_progress.jsonl" \
     "$A1_CACHE_LOCK_FD" "$A2_CACHE_LOCK_FD" \
     > "$RUN/land.log" 2>&1 &
-  B_PID=$!
-  wait "$B_PID"
-  B_RC=$?
-  B_PID=""
-  echo "--- arm B (squash ${VERIFIED_SHA:0:12}): gatekeeper-land.sh rc=$B_RC"
+  B2_PID=$!
+
+  wait "$B1_PID"
+  B1_RC=$?
+  B1_PID=""
+  B1_WORKTREE_STATUS=clean
+  if ! B1_STATUS="$(git -C "$WT_CAND_TESTS" status --porcelain \
+      --untracked-files=all 2>/dev/null)"; then
+    B1_WORKTREE_STATUS=unknown
+  elif [ -n "$B1_STATUS" ]; then
+    B1_WORKTREE_STATUS=dirty
+    printf '%s\n' "$B1_STATUS" > "$RUN/candidate_tests.worktree_status"
+  fi
+  wait "$B2_PID"
+  B2_RC=$?
+  B2_PID=""
+  echo "--- arm B1 (squash ${VERIFIED_SHA:0:12}): aggregate pytest rc=$B1_RC"
+  echo "--- arm B2 (squash ${VERIFIED_SHA:0:12}): non-target gates rc=$B2_RC"
   sed -n 's/^  \(PASS\|FAIL\|SKIP\|REPORT\)  /      \1  /p' "$RUN/land.log"
   if [ -n "$A1_PID" ]; then
     wait "$A1_PID"
@@ -963,6 +1001,8 @@ python3 "$VERDICT_PROG" \
   --base-selection "$RUN/selection_base.txt" \
   "${BASE_LAND_ARG[@]+"${BASE_LAND_ARG[@]}"}" \
   --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
+  --candidate-gate-rc "$B2_RC" --require-composite-gate-record \
+  --candidate-test-worktree-status "$B1_WORKTREE_STATUS" \
   --verification-tier "$TIER" --git-version "$GIT_VERSION" \
   --merge-tree-min-version "$MERGE_TREE_MIN_VERSION" \
   ${TIER_REASON:+--tier-reason "$TIER_REASON"} \

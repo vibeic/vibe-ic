@@ -171,6 +171,19 @@ def test_a_silenced_failure_is_refused_and_is_never_an_improvement():
     assert any("SILENCED" in r for r in v.reasons)
 
 
+def test_a_passing_test_weakened_to_skip_is_refused():
+    """Green base evidence must not become a stale permission to stop asking.
+
+    A cached PASS followed by a candidate SKIP is unsafe even when the live
+    base would still pass; if runtime drift made the live base red, allowing
+    PASS -> SKIP would hide the exact silenced failure the differential exists
+    to catch.
+    """
+    v = _decide(delta=_delta(weakened=["m::t_skipped_now"]))
+    assert v.ok is False
+    assert any("WEAKENED" in r for r in v.reasons)
+
+
 def test_a_rebase_conflict_is_refused():
     v = _decide(rebase_status="conflict")
     assert v.ok is False
@@ -338,6 +351,52 @@ def test_land_gates_that_did_not_report_are_not_a_pass():
     assert v.ok is False
     assert v.unmeasurable is True
     assert any("DID NOT RUN" in r for r in v.reasons)
+
+
+def test_a_partial_non_target_gate_log_is_not_a_composite_pass():
+    partial = V.parse_land_log(
+        "=== gatekeeper landing gates — base=origin/main ===\n"
+        "  PASS  one cheap gate\n")
+    v = _decide(land=partial, candidate_gate_rc=0,
+                require_composite_gate_record=True)
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("NO COMPLETE TERMINAL RECORD" in r for r in v.reasons)
+
+
+def test_a_non_target_gate_abnormal_exit_refuses_even_with_a_fake_terminal():
+    fake = V.parse_land_log(
+        "=== gatekeeper landing gates — base=origin/main ===\n"
+        "  PASS  one cheap gate\n"
+        "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ===\n")
+    v = _decide(land=fake, candidate_gate_rc=2,
+                require_composite_gate_record=True)
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("DID NOT EXIT NORMALLY" in r for r in v.reasons)
+
+
+def test_a_complete_non_target_gate_record_can_join_the_composite():
+    complete = V.parse_land_log(
+        "=== gatekeeper landing gates — base=origin/main ===\n"
+        "  PASS  one cheap gate\n"
+        "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ===\n")
+    v = _decide(land=complete, candidate_gate_rc=0,
+                require_composite_gate_record=True)
+    assert v.ok is True, v.reasons
+
+
+def test_a_candidate_test_arm_that_wrote_the_tree_is_refused():
+    v = _decide(candidate_test_worktree_status="dirty")
+    assert v.ok is False
+    assert any("TEST ARM WROTE" in r for r in v.reasons)
+
+
+def test_an_uninspectable_candidate_test_worktree_is_unmeasurable():
+    v = _decide(candidate_test_worktree_status="unknown")
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("COULD NOT BE INSPECTED" in r for r in v.reasons)
 
 
 def test_a_candidate_that_ran_no_tests_is_not_a_pass():
@@ -1038,8 +1097,9 @@ def test_the_critical_path_does_not_run_targeted_tests_inside_a2_again():
     src = _VERIFY.read_text(encoding="utf-8")
     body = "\n".join(line for line in src.splitlines()
                      if not line.lstrip().startswith("#"))
-    assert "GATEKEEPER_SKIP_TARGETED_TESTS=1" in body
-    assert "GATEKEEPER_FAIL_FAST_NORECORD=1" in body
+    assert body.count("GATEKEEPER_SKIP_TARGETED_TESTS=1") >= 2
+    assert "GATEKEEPER_NO_STAMP=1" in body
+    assert "gkverify-b1" in body and "gkverify-b2" in body
 
 
 def test_the_gate_tier_is_compared_against_the_base_not_asserted():
@@ -1087,8 +1147,8 @@ def test_the_candidate_arm_runs_without_a_maxfail_bound():
     verify = _VERIFY.read_text(encoding="utf-8")
     vbody = "\n".join(l for l in verify.splitlines()
                       if not l.lstrip().startswith("#"))
-    assert "GATEKEEPER_PYTEST_MAXFAIL=0" in vbody, \
-        "the candidate arm still truncates, so the differential cannot be computed"
+    assert "--stop-after-failures 0" in vbody, \
+        "the candidate aggregate arm still truncates, so the differential cannot be computed"
     # ...and a truncated run must remain a refusal, not a pass, for the cases the
     # bound cannot be lifted (a foreign land.sh that predates the hook).
     assert _decide(truncated=True, dropped_files=["programs/tests/test_x.py"]).ok \
@@ -1148,7 +1208,12 @@ JOUT="${GATEKEEPER_PYTEST_JUNIT:-$(mktemp -t stub_junit.XXXXXX)}"
 ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}" ) > "$SEL"
 if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
   echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
-  echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
+  if [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
+    echo "  REPORT  merge verifier owns the independent targeted-test evidence"
+    echo "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ==="
+  else
+    echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
+  fi
 elif ( cd "$PLUGIN" && python3 programs/pytest_per_file_junit.py \
        --selection "$SEL" --junit "$JOUT" --stall-after 10 \
        --aggregate-check --aggregate-only --aggregate-stall-after 10 \
@@ -1180,11 +1245,13 @@ def _require_parallel_gate_arms():
     probe = os.environ.get("GATEKEEPER_CONCURRENCY_PROBE_DIR")
     if not probe or os.environ.get("GATEKEEPER_VERIFY_ARM") != "A1":
         return
-    needed = [pathlib.Path(probe) / "A2.started", pathlib.Path(probe) / "B.started"]
+    needed = [pathlib.Path(probe) / f"{arm}.started"
+              for arm in ("A2", "B1", "B2")]
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline and not all(path.is_file() for path in needed):
         time.sleep(0.02)
-    assert all(path.is_file() for path in needed), "A1 completed before A2 and B started"
+    assert all(path.is_file() for path in needed), \
+        "A1 completed before A2, B1 and B2 started"
 
 
 def test_value_is_one():
@@ -1290,7 +1357,10 @@ def test_end_to_end_a_known_good_branch_is_allowed(sandbox, tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
     assert doc["delta"]["new_failures"] == []
-    assert doc["land"]["stamped_sha"], "the landing gates never stamped"
+    assert doc["land"]["stamped_sha"] is None, (
+        "the non-target B2 lane minted a standalone stamp before B1 joined")
+    assert any("merge verifier owns" in label
+               for label in doc["land"]["report"])
     assert doc["base_land"] is not None, "arm A2 never ran, so the gate tier was asserted"
     assert any("targeted tests" in label
                for label in doc["base_land"]["skip"]), (
@@ -1356,9 +1426,9 @@ def test_end_to_end_base_gate_cache_hits_exactly_and_misses_after_base_moves(
     assert list(cache.glob(f"{miss_doc['base_sha']}.*.manifest"))
 
 
-def test_end_to_end_a1_a2_and_b_start_in_parallel_isolated_worktrees(
+def test_end_to_end_a1_a2_b1_and_b2_start_in_parallel_isolated_worktrees(
         sandbox, tmp_path):
-    """The three expensive merge-verification arms are one critical path.
+    """All four expensive merge-verification arms share one critical path.
 
     A1's real test waits until the A2 and B landing wrappers have both started.
     The old serial implementation times out in A1 before either marker can
@@ -1373,7 +1443,8 @@ def test_end_to_end_a1_a2_and_b_start_in_parallel_isolated_worktrees(
     )
     assert r.returncode == 0, r.stdout + r.stderr
     assert doc["verdict"] == "LAND_OK"
-    assert {p.name for p in probe.iterdir()} >= {"A2.started", "B.started"}
+    assert {p.name for p in probe.iterdir()} >= {
+        "A2.started", "B1.started", "B2.started"}
     assert doc["base_land"] is not None
     assert doc["delta"]["new_failures"] == []
 
@@ -1429,7 +1500,7 @@ def test_end_to_end_the_caller_checkout_is_never_touched(sandbox, tmp_path):
 
 @pytest.mark.parametrize(
     ("hung_arm", "pid_only_term"),
-    [("A2", False), ("B", True)],
+    [("A2", False), ("B2", True)],
 )
 def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
         sandbox, tmp_path, hung_arm, pid_only_term):
@@ -1438,7 +1509,7 @@ def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
     A private clone's selected arm deliberately ignores TERM forever.  Both a
     process-group SIGINT and the common PID-only SIGTERM service-stop path must
     run bounded cleanup, escalate every dedicated group to KILL, reap it, and
-    remove all three temporary worktrees.
+    remove all four temporary worktrees.
     """
     repo = tmp_path / "interrupt-repo"
     cloned = subprocess.run(
@@ -1493,7 +1564,7 @@ fi
     else:
         os.killpg(proc.pid, signal.SIGINT)
     # Wait on the cleanup protocol, not on a wall-clock estimate of how fast a
-    # loaded host can remove three worktrees.  `_T` is only the suite's final
+    # loaded host can remove four worktrees.  `_T` is only the suite's final
     # dead-process safety ceiling; the success path is the atomic `done` event.
     cleanup_started = probe / "cleanup.started"
     cleanup_reaped = probe / "cleanup.reaped"
@@ -1781,7 +1852,10 @@ def test_end_to_end_the_fallback_allows_a_known_good_branch(sandbox, tmp_path):
     assert doc["verification_tier"] == V.TIER_REBASE_REPLAY
     assert doc["tier_degraded"] is True
     assert doc["delta"]["new_failures"] == []
-    assert doc["land"]["stamped_sha"], "the landing gates never stamped"
+    assert doc["land"]["stamped_sha"] is None, (
+        "the non-target B2 lane minted a standalone stamp before B1 joined")
+    assert any("merge verifier owns" in label
+               for label in doc["land"]["report"])
     assert doc["base_land"] is not None, "arm A2 never ran under the fallback"
     # The tree under test IS the replay — that identity is the disclosed loss.
     assert doc["expected_tree"] == doc["replayed_tree"] == doc["verified_tree"]

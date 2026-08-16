@@ -69,12 +69,13 @@ So a PR is judged on WHAT IT BREAKS:
     RED             PASSED            FIXED (reported, never required)
     not-RED         RED               NEW FAILURE            -> REFUSE
     RED             SKIPPED / ABSENT  SILENCED               -> REFUSE
-    PASSED          SKIPPED / ABSENT  WEAKENED (reported)
+    PASSED          SKIPPED / ABSENT  WEAKENED               -> REFUSE
 
-The SILENCED row is the one that has to be there. Without it the differential
-rewards exactly the cheat it is supposed to catch: delete or skip a red test and
-the failed set shrinks, so "what did this PR break" answers nothing while the
-suite quietly stops asking. **FAILED -> SKIPPED is never an improvement.**
+The SILENCED and WEAKENED rows have to be there. Without them the differential
+rewards exactly the cheat it is supposed to catch: delete or skip a test and the
+suite quietly stops asking. This is also what keeps a reusable green base record
+fail-closed if an unobserved runtime drift would make that base test red today:
+PASS -> SKIP still refuses instead of hiding the now-silenced question.
 
 EVERY WAY THE DIFFERENTIAL CAN DEGRADE, DEGRADES TOWARD STRICTER
 ================================================================
@@ -206,6 +207,8 @@ _AGGREGATE_INCOMPLETE_PREFIX = "targeted aggregate session produced no "
 _PER_FILE_INCOMPLETE_PREFIX = "targeted per-file session produced no "
 _PER_FILE_NOTRUN = "targeted per-file session was not run"
 _STAMPED = re.compile(r"===\s*ALL GATES PASS\s*[—-]\s*stamped\s+(\S+)")
+_NON_TARGET_COMPLETE = "=== ALL NON-TARGET GATES COMPLETE"
+_FAILURES_TERMINAL = "=== FAILURES ABOVE"
 
 # A GATE'S LABEL IS ITS IDENTITY; A COUNT INSIDE IT IS A MEASUREMENT OF A TREE.
 #
@@ -294,6 +297,8 @@ class LandLog:
     reported: List[str] = field(default_factory=list)
     stamped_sha: Optional[str] = None
     sentinel_seen: bool = False
+    non_target_complete: bool = False
+    failure_terminal_seen: bool = False
 
     @property
     def blocking_failures(self) -> List[str]:
@@ -330,6 +335,8 @@ class LandLog:
             "skip": self.skipped,
             "report": self.reported,
             "stamped_sha": self.stamped_sha,
+            "non_target_complete": self.non_target_complete,
+            "failure_terminal_seen": self.failure_terminal_seen,
             "blocking_failures": self.blocking_failures,
             "test_tier_failed": self.test_tier_failed,
             "process_verdicts_embedded": self.process_verdicts_embedded,
@@ -659,6 +666,10 @@ def failed_set_delta(base: Dict[str, str], cand: Dict[str, str]) -> Delta:
 def parse_land_log(text: str) -> LandLog:
     log = LandLog(sentinel_seen=_LAND_SENTINEL in text)
     for line in text.splitlines():
+        if line.startswith(_NON_TARGET_COMPLETE):
+            log.non_target_complete = True
+        if line.startswith(_FAILURES_TERMINAL):
+            log.failure_terminal_seen = True
         m = _LAND_LINE.match(line)
         if m:
             word, label = m.group(1), m.group(2)
@@ -688,7 +699,10 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            missing_process_files: Sequence[str] = (),
            aggregate_process_present: bool = True,
            base_missing_process_files: Sequence[str] = (),
-           base_aggregate_process_present: bool = True) -> Verdict:
+           base_aggregate_process_present: bool = True,
+           candidate_gate_rc: int = 0,
+           require_composite_gate_record: bool = False,
+           candidate_test_worktree_status: str = "clean") -> Verdict:
     reasons: List[str] = []
     notes: List[str] = []
     disclosures: List[str] = []
@@ -784,6 +798,30 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
         return _stop(
             "THE LANDING GATES DID NOT RUN — gatekeeper-land.sh produced no "
             "gate lines, so its silence is not a pass.")
+
+    if require_composite_gate_record:
+        if candidate_gate_rc not in (0, 1):
+            return _stop(
+                "THE NON-TARGET GATE ARM DID NOT EXIT NORMALLY — "
+                f"gatekeeper-land.sh rc={candidate_gate_rc}; a partial log is "
+                "not a completed gate record.")
+        terminal_seen = (land.non_target_complete if candidate_gate_rc == 0
+                         else land.failure_terminal_seen)
+        if not terminal_seen:
+            return _stop(
+                "THE NON-TARGET GATE ARM PRODUCED NO COMPLETE TERMINAL RECORD "
+                f"FOR rc={candidate_gate_rc} — some gate lines were printed, "
+                "but the arm did not prove that it reached its normal end.")
+
+    if candidate_test_worktree_status == "unknown":
+        return _stop(
+            "THE CANDIDATE TEST WORKTREE COULD NOT BE INSPECTED AFTER B1 — "
+            "the verifier cannot prove the parallel test arm left its subject "
+            "unchanged.")
+    if candidate_test_worktree_status != "clean":
+        reasons.append(
+            "THE CANDIDATE TEST ARM WROTE INTO ITS WORKTREE — B1 did not "
+            "measure an immutable candidate tree.")
 
     # Runtime attestations are read from the report itself — never source text
     # and never the combined driver/subject stdout.  The aggregate session is
@@ -989,10 +1027,10 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
     if delta.fixed:
         notes.append(f"{len(delta.fixed)} base failure(s) now pass")
     if delta.weakened:
-        notes.append(
-            f"{len(delta.weakened)} passing test(s) became skipped/absent — "
-            "read them: " + ", ".join(delta.weakened[:5])
-            + ("…" if len(delta.weakened) > 5 else ""))
+        reasons.append(
+            f"{len(delta.weakened)} PASSING TEST(S) WERE WEAKENED "
+            "(passed -> skipped/absent): " + ", ".join(delta.weakened[:8])
+            + ("…" if len(delta.weakened) > 8 else ""))
     notes.append(f"{selection_size} test file(s) selected; "
                  f"{delta.candidate_total} test(s) ran on the candidate, "
                  f"{delta.base_total} on the base")
@@ -1064,6 +1102,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--tier-reason", default="",
                     help="why this tier was selected, when it was not the "
                          "strong one")
+    ap.add_argument("--candidate-gate-rc", type=int, default=0,
+                    help="OS exit status of the candidate non-target gate arm")
+    ap.add_argument("--require-composite-gate-record", action="store_true",
+                    help="require the B2 rc and matching terminal sentinel; "
+                         "used when targeted evidence comes from parallel B1")
+    ap.add_argument("--candidate-test-worktree-status", default="clean",
+                    choices=("clean", "dirty", "unknown"),
+                    help="trusted post-B1 git-status result from its isolated "
+                         "candidate-test worktree")
     ap.add_argument("--json", dest="json_out", default=None)
     a = ap.parse_args(argv)
 
@@ -1164,7 +1211,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                aggregate_process_present=aggregate_process_present,
                base_missing_process_files=base_missing_process_files,
                base_aggregate_process_present=(
-                   base_aggregate_process_present))
+                   base_aggregate_process_present),
+               candidate_gate_rc=a.candidate_gate_rc,
+               require_composite_gate_record=(
+                   a.require_composite_gate_record),
+               candidate_test_worktree_status=(
+                   a.candidate_test_worktree_status))
 
     if a.gate_edited:
         v.notes.append("this branch edits the gate that judges it: "
@@ -1206,6 +1258,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "notes": v.notes,
             "replayed_tree": a.replayed_tree,
             "land": land.as_dict(),
+            "candidate_gate_rc": a.candidate_gate_rc,
+            "composite_gate_record_required": (
+                a.require_composite_gate_record),
+            "candidate_test_worktree_status": (
+                a.candidate_test_worktree_status),
             "base_land": base_land.as_dict() if base_land else None,
             "delta": delta.as_dict(),
             "selection_size": len(selection),
