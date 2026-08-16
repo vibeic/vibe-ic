@@ -88,7 +88,8 @@ USAGE
 -----
     python3 pytest_per_file_junit.py --selection SEL --junit OUT
         [--stall-after SECONDS] [--stop-after-failures N] [--cwd DIR]
-        [--aggregate-check] [--aggregate-stall-after SECONDS]
+        [--aggregate-check] [--aggregate-only]
+        [--aggregate-stall-after SECONDS]
         -- <the full pytest command, e.g. python3 -m pytest -q --timeout=180>
 
 The command after ``--`` is run VERBATIM with ``-o junit_family=xunit1``, a
@@ -104,11 +105,17 @@ single-process order/global-state semantics of the command this driver replaced;
 an aggregate stall or missing/partial XML is ``AGGREGATE_NORECORD`` and must be
 an absolute landing refusal.
 
+``--aggregate-only`` is the landing critical-path mode.  It runs that original
+whole-selection question exactly once and does not first repeat it as N isolated
+per-file sessions.  Per-file recovery remains available for an operator after an
+aggregate NORECORD, but it cannot turn that UNKNOWN into a landing pass and is
+therefore deliberately outside the success critical path.
+
 EXIT CODES
 ----------
-    0  every asked file produced a record and nothing was red
-    1  every asked file produced a record, some test was red (ordinary failure)
-    2  AT LEAST ONE FILE OR THE AGGREGATE CANARY PRODUCED NO COMPLETE RECORD
+    0  every executed session produced a complete record and nothing was red
+    1  every executed session produced a complete record, some verdict was red
+    2  AT LEAST ONE REQUIRED SESSION PRODUCED NO COMPLETE RECORD
     3  the question could not be put (no selection, unusable arguments)
 """
 from __future__ import annotations
@@ -754,6 +761,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="also run the whole selection in one pytest process "
                          "and namespace its junit into the merged report; "
                          "preserves cross-file/order semantics")
+    ap.add_argument("--aggregate-only", action="store_true",
+                    help="run only the whole-selection session; this is the "
+                         "landing critical-path mode and implies "
+                         "--aggregate-check")
     ap.add_argument("--aggregate-stall-after", type=float,
                     default=DEFAULT_AGGREGATE_STALL_AFTER,
                     help="seconds with no validated pytest lifecycle event before "
@@ -765,6 +776,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("pytest_argv", nargs=argparse.REMAINDER,
                     help="-- followed by the full pytest command")
     a = ap.parse_args(argv)
+
+    if a.aggregate_only:
+        a.aggregate_check = True
 
     if a.stall_after <= 0 or a.aggregate_stall_after <= 0:
         ap.error("stall windows must be positive")
@@ -804,40 +818,42 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     aggregate_cases = 0
     aggregate_incomplete = False
     try:
-        for i, test_file in enumerate(selection, start=1):
-            if a.stop_after_failures and red_total >= a.stop_after_failures:
-                results.append(FileResult(test_file, None, False, None, 0, 0,
-                                          skipped_by_stop=True))
-                continue
-            per = tmp / f"{i:05d}.xml"
-            print(f"=== [{i}/{len(selection)}] {test_file}", flush=True)
-            rc, out, killed = run_one(pytest_argv, test_file, per,
-                                      a.stall_after, a.cwd)
-            sys.stdout.write(out)
-            if not out.endswith("\n"):
-                sys.stdout.write("\n")
-            suites = _load_suites(per)
-            # A process killed/interrupted after starting to write XML can leave
-            # a parseable PREFIX. Parseability is not completeness; only normal
-            # pytest outcomes 0/1 may contribute a per-file record.
-            if killed or rc not in (0, 1):
-                suites = None
-            cases = 0
-            red = 0
-            if suites is not None:
-                for s in suites:
-                    c, r = _count(s)
-                    cases += c
-                    red += r
-            red_total += red
-            results.append(FileResult(
-                test_file, rc, killed, suites, cases, red,
-                norecord_reason=_norecord_reason(
-                    rc, out, killed, a.stall_after)))
-            state = ("NORECORD" if suites is None
-                     else ("red" if red or rc != 0 else "ok"))
-            print(f"--- {test_file}  rc={rc}  cases={cases}  red={red}  "
-                  f"{state}", flush=True)
+        if not a.aggregate_only:
+            for i, test_file in enumerate(selection, start=1):
+                if a.stop_after_failures and red_total >= a.stop_after_failures:
+                    results.append(FileResult(
+                        test_file, None, False, None, 0, 0,
+                        skipped_by_stop=True))
+                    continue
+                per = tmp / f"{i:05d}.xml"
+                print(f"=== [{i}/{len(selection)}] {test_file}", flush=True)
+                rc, out, killed = run_one(pytest_argv, test_file, per,
+                                          a.stall_after, a.cwd)
+                sys.stdout.write(out)
+                if not out.endswith("\n"):
+                    sys.stdout.write("\n")
+                suites = _load_suites(per)
+                # A process killed/interrupted after starting to write XML can
+                # leave a parseable PREFIX. Parseability is not completeness;
+                # only normal pytest outcomes 0/1 may contribute a record.
+                if killed or rc not in (0, 1):
+                    suites = None
+                cases = 0
+                red = 0
+                if suites is not None:
+                    for s in suites:
+                        c, r = _count(s)
+                        cases += c
+                        red += r
+                red_total += red
+                results.append(FileResult(
+                    test_file, rc, killed, suites, cases, red,
+                    norecord_reason=_norecord_reason(
+                        rc, out, killed, a.stall_after)))
+                state = ("NORECORD" if suites is None
+                         else ("red" if red or rc != 0 else "ok"))
+                print(f"--- {test_file}  rc={rc}  cases={cases}  red={red}  "
+                      f"{state}", flush=True)
         if a.aggregate_check:
             aggregate_path = tmp / "aggregate.xml"
             print(f"=== [aggregate] {len(selection)} file(s) in one pytest "
@@ -899,7 +915,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"EMPTY     {r.path}  rc={r.rc}: a report was written and it "
                   f"carries no test case")
 
-    print("=== per-file junit summary")
+    print("=== pytest junit summary")
+    print(f"  mode       {'aggregate-only' if a.aggregate_only else 'per-file'}")
     print(f"  asked      {len(selection)}")
     print(f"  recorded   {len(recorded)}")
     print(f"  NORECORD   {len(norecord)}")

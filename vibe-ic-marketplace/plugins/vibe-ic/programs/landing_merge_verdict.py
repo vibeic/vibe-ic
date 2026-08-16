@@ -448,10 +448,63 @@ def read_junit(path: Path, selection: Sequence[str] = ()) -> Dict[str, str]:
     return out
 
 
+def _aggregate_testcases(root: ET.Element):
+    """Yield only testcase evidence emitted by the aggregate session.
+
+    A NORECORD diagnostic may carry surviving per-file suites in the same XML.
+    Those suites are useful to a human but cannot complete, excuse, or otherwise
+    alter the authoritative whole-selection question.  The driver namespaces
+    aggregate suites structurally; stdout and ordinary subject suites are never
+    consulted here.
+    """
+    for suite in root.iter("testsuite"):
+        if not (suite.get("name") or "").startswith("aggregate::"):
+            continue
+        for tc in suite.iter("testcase"):
+            if (tc.get("classname") or "").startswith("pytest_aggregate."):
+                yield tc
+
+
+def read_aggregate_junit(path: Path,
+                         selection: Sequence[str] = ()) -> Dict[str, str]:
+    """Read the canonical aggregate testcase set plus its exact process rc."""
+    root = ET.parse(str(path)).getroot()
+    out: Dict[str, str] = {}
+    for tc in _aggregate_testcases(root):
+        k = _key(tc)
+        o = _testcase_outcome(tc)
+        if k in out and _is_red(out[k]):
+            continue
+        out[k] = o
+    for suite in root.iter("testsuite"):
+        if not _valid_process_case(
+                suite, classname="pytest_aggregate_process",
+                name="whole_selection::process_exit",
+                file_name="<aggregate>"):
+            continue
+        tc = list(suite.iter("testcase"))[0]
+        k = _key(tc)
+        o = _testcase_outcome(tc, process_attested=True)
+        if k not in out or not _is_red(out[k]):
+            out[k] = o
+    return out
+
+
 def junit_files(path: Path, selection: Sequence[str]) -> set:
     root = ET.parse(str(path)).getroot()
     seen = set()
     for tc in root.iter("testcase"):
+        f = _file_of(tc, selection)
+        if f:
+            seen.add(f)
+    return seen
+
+
+def junit_aggregate_files(path: Path, selection: Sequence[str]) -> set:
+    """Selected files represented by aggregate testcase evidence only."""
+    root = ET.parse(str(path)).getroot()
+    seen = set()
+    for tc in _aggregate_testcases(root):
         f = _file_of(tc, selection)
         if f:
             seen.add(f)
@@ -553,6 +606,12 @@ def junit_red_count(path: Path) -> int:
                 tc, process_attested=id(tc) in process_cases)):
             n += 1
     return n
+
+
+def junit_aggregate_red_count(path: Path) -> int:
+    """Red outcomes in the authoritative aggregate channel only."""
+    return sum(1 for outcome in read_aggregate_junit(path).values()
+               if _is_red(outcome))
 
 
 # ------------------------------------------------------------------- the delta
@@ -726,18 +785,11 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             "THE LANDING GATES DID NOT RUN — gatekeeper-land.sh produced no "
             "gate lines, so its silence is not a pass.")
 
-    # Runtime attestations, read from the report itself — never source text and
-    # never the combined driver/subject stdout. Per-file process records
-    # preserve session-finish guard verdicts; the aggregate record proves the
-    # original cross-file/order question completed. Any missing attestation is
-    # UNKNOWN and an absolute refusal, not a base-differential gate label.
-    if missing_process_files:
-        reasons.append(
-            "AT LEAST ONE CANDIDATE PER-FILE TEST SESSION PRODUCED NO COMPLETE "
-            "RECORD OR WAS NOT RUN — aggregate testcase entries cannot fill in "
-            "a missing independent record. This is an absolute refusal. "
-            f"Missing: {', '.join(missing_process_files[:5])}"
-            + ("…" if len(missing_process_files) > 5 else ""))
+    # Runtime attestations are read from the report itself — never source text
+    # and never the combined driver/subject stdout.  The aggregate session is
+    # the original, authoritative whole-selection question.  Per-file sessions
+    # are diagnostic recovery after aggregate NORECORD; requiring them on a
+    # complete aggregate would repeat the suite on every successful landing.
     if not aggregate_process_present:
         reasons.append(
             "THE CANDIDATE AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD "
@@ -749,18 +801,9 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             "THE TARGETED TEST TIER FAILED BUT THE CANDIDATE REPORT CONTAINS "
             "NO RED TESTCASE OR PROCESS VERDICT — the failure is unexplained "
             "by the machine record and cannot be treated as green.")
-    # The base is the permissive arm of a differential: anything it failed to
-    # measure can disappear from the candidate without becoming `silenced`.
-    # Therefore the same runtime attestation is mandatory on the base whenever
-    # that arm had at least one selected file. A complete candidate cannot
-    # compensate for an unknown baseline.
-    if base_selection_supplied and base_missing_process_files:
-        reasons.append(
-            "AT LEAST ONE BASE PER-FILE TEST SESSION PRODUCED NO COMPLETE "
-            "RECORD OR WAS NOT RUN — the baseline failed set is incomplete, "
-            "so the differential cannot safely subtract it. Missing: "
-            f"{', '.join(base_missing_process_files[:5])}"
-            + ("…" if len(base_missing_process_files) > 5 else ""))
+    # The base is the permissive arm of a differential, so its aggregate
+    # attestation remains independently mandatory.  A complete candidate can
+    # never compensate for an unknown baseline.
     if base_selection_supplied and not base_aggregate_process_present:
         reasons.append(
             "THE BASE AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD — "
@@ -1049,7 +1092,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not path.is_file():
             return None
         try:
-            return read_junit(path, selection)
+            return read_aggregate_junit(path, selection)
         except ET.ParseError as exc:
             print(f"[SKIP] landing_merge_verdict: the {label} report at {p} is "
                   f"not parseable ({exc})", file=sys.stderr)
@@ -1076,16 +1119,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     delta = failed_set_delta(base, cand or {})
     dropped: List[str] = []
     truncated = False
-    missing_process_files = sorted(selection)
+    missing_process_files: List[str] = []
     aggregate_process_present = False
     if cand is not None:
         candidate_path = Path(a.candidate_junit)
-        ran_files = junit_files(candidate_path, selection)
+        ran_files = junit_aggregate_files(candidate_path, selection)
         dropped = sorted(set(selection) - ran_files)
         truncated = (bool(dropped) and
-                     junit_red_count(candidate_path) >= a.maxfail)
-        process_files = junit_per_file_process_files(candidate_path)
-        missing_process_files = sorted(set(selection) - process_files)
+                     junit_aggregate_red_count(candidate_path) >= a.maxfail)
         aggregate_process_present = junit_has_aggregate_process(candidate_path)
     # THE SAME QUESTION OF ARM A (vibe-ic#1443). The list is the base's OWN
     # selection, never `--selection`: a file the PR ADDS is legitimately absent
@@ -1100,16 +1141,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if base_selection:
         if base_raw is None:
             base_dropped = sorted(base_selection)
-            base_missing_process_files = sorted(base_selection)
             base_aggregate_process_present = False
         else:
             base_path = Path(a.base_junit)
             base_dropped = sorted(
                 set(base_selection)
-                - junit_files(base_path, base_selection))
-            base_process_files = junit_per_file_process_files(base_path)
-            base_missing_process_files = sorted(
-                set(base_selection) - base_process_files)
+                - junit_aggregate_files(base_path, base_selection))
             base_aggregate_process_present = junit_has_aggregate_process(
                 base_path)
 
@@ -1180,11 +1217,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # nothing", which is why the size travels with the list.
             "base_selection_size": len(base_selection),
             "dropped_base_selected_files": base_dropped,
+            # Backward-compatible keys. Per-file sessions are diagnostic-only
+            # in aggregate evidence mode, so their absence is not missing
+            # verdict evidence and these lists are intentionally empty.
             "missing_candidate_process_files": missing_process_files,
             "candidate_aggregate_process_present": aggregate_process_present,
             "missing_base_process_files": base_missing_process_files,
             "base_aggregate_process_present": (
                 base_aggregate_process_present),
+            "test_evidence_mode": "aggregate",
             "gate_edited": a.gate_edited,
             # ---- WHAT THIS VERDICT DID NOT CHECK, MACHINE-READABLY ----
             # A disclosed weaker check beats a universal refusal ONLY if the
