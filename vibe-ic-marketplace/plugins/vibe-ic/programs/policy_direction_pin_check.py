@@ -1036,6 +1036,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
     red_at_baseline: List[str] = []
     kills_believed: List[str] = []
     uncredited_kill = False
+    baseline_process_unknown = False
 
     def _paths_named_by(output: str) -> List[Path]:
         named = [root.parent / f for f in failing_files(output)]
@@ -1044,6 +1045,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
     def _grade_kill(paths: Sequence[object], output: str,
                     exact_selection: bool = False) -> Tuple[List[str], int, str]:
         """Return believable failed files after restoring the authored source."""
+        nonlocal baseline_process_unknown
         named = _paths_named_by(output) or list(paths)
         for p in named:
             s = str(p)
@@ -1056,7 +1058,14 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
             if f not in red_at_baseline:
                 red_at_baseline.append(f)
         killed_now = failing_files(output)
-        believable = [f for f in killed_now if f not in set(reds)]
+        if rc0 != 0 and not reds:
+            # A session hook/process refusal can leave every testcase green in
+            # stdout while making the authored run nonzero.  That is UNKNOWN,
+            # not a green baseline against which a mutant kill can be credited.
+            baseline_process_unknown = True
+            believable = []
+        else:
+            believable = [f for f in killed_now if f not in set(reds)]
         for f in believable:
             if f not in kills_believed:
                 kills_believed.append(f)
@@ -1083,9 +1092,10 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
                 focused = focused_test_nodes(site, candidate)
                 selections = [([node], True) for node in focused] \
                     + [([candidate], False)]
-                if focused:
-                    result.setdefault("focused_nodes_tried", []).extend(focused)
                 for selection, exact in selections:
+                    if exact:
+                        result.setdefault("focused_nodes_tried", []).append(
+                            str(selection[0]))
                     _arm(journal, target, original, mutated)
                     target.write_text(mutated, encoding="utf-8")
                     rc, out = run_pytest(selection, root.parent, basetemp, extra)
@@ -1157,7 +1167,12 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
         result["red_at_baseline"] = sorted(red_at_baseline)
         result["kills_believed"] = []
         result["state"] = "ABSTAIN"
-        if red_at_baseline:
+        if baseline_process_unknown:
+            result["why"] = (
+                "the authored baseline process failure exited nonzero but named no "
+                "failed testcase file, so its selection was not proved green "
+                "and no mutant kill can be credited")
+        elif red_at_baseline:
             result["why"] = ("every candidate test that died under the flip was "
                              "already RED before any flip, so no kill proves "
                              "anything about this call site")

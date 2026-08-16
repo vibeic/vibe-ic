@@ -628,6 +628,12 @@ def test_a_focused_node_kill_avoids_the_same_whole_file(tmp_path,
         '    # merge_records receives on_conflict="richer" explicitly\n'
         '    assert merge_records([], on_conflict="richer") == "richer"\n\n'
         'def test_the_call_site_hands_over_on_conflict_richer():')
+    focused_body += textwrap.dedent('''
+
+        def test_later_helper_on_conflict_richer_mode():
+            # This node is discoverable but must not be reported after a kill.
+            assert merge_records([], on_conflict="richer") == "richer"
+    ''')
     pin_file.write_text(focused_body.replace(
         'assert go([]) == "richer"',
         '# merge_records receives on_conflict="richer" here\n'
@@ -649,6 +655,7 @@ def test_a_focused_node_kill_avoids_the_same_whole_file(tmp_path,
         + "::test_the_call_site_hands_over_on_conflict_richer"
     assert out["state"] == "PINNED", out
     assert pin_calls == [[helper], [pin], [pin]], calls
+    assert out["focused_nodes_tried"] == [helper, pin]
     assert [str(pin_file)] not in calls
 
 
@@ -963,6 +970,27 @@ def test_nonzero_process_without_a_failed_testcase_abstains(tmp_path, monkeypatc
     assert out["state"] == "ABSTAIN", out
     assert out["kills_believed"] == [], out
     assert "process failure" in out["why"], out
+
+
+def test_nonzero_authored_baseline_without_a_failed_testcase_cannot_pin(
+        tmp_path, monkeypatch):
+    """A testcase-red mutant is not evidence when baseline was unmeasured."""
+    root, tests, site = _pin_fixture(tmp_path, red_first=False)
+
+    def session_refusal_at_baseline(paths, *_args, **_kwargs):
+        authored = 'on_conflict="richer"' in (
+            root / "site_mod.py").read_text(encoding="utf-8")
+        if authored:
+            return 1, "all testcase bodies passed; session hook refused\n"
+        selected = str(paths[0]).split("::", 1)[0]
+        rel = Path(selected).resolve().relative_to(root.parent.resolve())
+        return 1, f"FAILED {rel}::test_mutant - AssertionError\n"
+
+    monkeypatch.setattr(C, "run_pytest", session_refusal_at_baseline)
+    out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
+    assert out["state"] == "ABSTAIN", out
+    assert out["kills_believed"] == [], out
+    assert "baseline process failure" in out["why"], out
 
 
 def test_the_mutant_run_is_exhaustive_and_not_stopped_at_the_first_failure(tmp_path):
