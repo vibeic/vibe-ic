@@ -196,6 +196,13 @@ from typing import Dict, List, Optional, Set, Tuple
 # --------------------------------------------------------------------------
 
 # `v<major>.<minor>.<patch>_<PDK>` — version FIRST, then a non-empty PDK tag.
+#: Where the published corpus is, now that it is not in this repository.
+#:
+#: Spelled the same way `programs/tests/_published_corpus.py` spells it, on purpose:
+#: one name for one thing. A gate and a test suite that disagree about where the
+#: corpus lives will disagree about whether it was checked.
+CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+
 _NAME_RE = re.compile(r"^v\d+\.\d+\.\d+_.+$")
 
 # Folder-name prefixes that are known-wrong and get a specific message.
@@ -948,7 +955,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="evidence folder(s) v<ver>_<PDK> to validate")
     ap.add_argument("--tree", metavar="ROOT", default=None,
                     help="discover + validate every published cell under ROOT "
-                         "(e.g. benchmark-data or benchmark-data/ic)")
+                         "(e.g. benchmark-data or benchmark-data/ic). If "
+                         f"${CORPUS_ENV} is set it OVERRIDES this, because the "
+                         "published corpus now lives in its own repository.")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the corpus. "
+                         "Turns 'no corpus discoverable anywhere' from UNDETERMINED "
+                         "into NO_CORPUS (rc=0). It does NOT excuse a corpus pointer "
+                         f"that is set and broken: ${CORPUS_ENV} pointing at "
+                         "something unreadable is UNDETERMINED with or without this.")
     ap.add_argument("--include-staged", action="store_true",
                     help="also treat git-staged (not-yet-committed) files as "
                          "committed for the NO_RAW_GEOMETRY scan")
@@ -961,6 +976,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", metavar="OUT", default=None,
                     help="write a machine-readable summary JSON here")
     args = ap.parse_args(argv)
+
+    # THE POINTER WINS OVER THE PATH. Both shipped call sites pass the literal
+    # `--tree benchmark-data`, a relative path that no longer exists in this repo.
+    # Rewriting both call sites instead would leave every OTHER caller — agents,
+    # local runs, the benchmark-agent skill — still pointed at a directory that is
+    # gone, and each would have to learn the new location separately.
+    #
+    # The override is announced, because a gate that silently scans a different
+    # tree than the one named on its command line is how `--tree ../../../
+    # benchmark-data` came to report "13/28 conformant" over 9 IC dirs while an
+    # absolute path over the same tree found 8 failing and 93 entries (2026-08-11,
+    # recorded above). Whatever this gate scanned, it says so.
+    _env_tree = os.environ.get(CORPUS_ENV)
+    if _env_tree and args.tree:
+        print(f"note: {CORPUS_ENV} overrides --tree {args.tree} -> {_env_tree}",
+              file=sys.stderr)
+        args.tree = _env_tree
+    elif _env_tree and not args.tree and not args.paths:
+        print(f"note: scanning {CORPUS_ENV} -> {_env_tree}", file=sys.stderr)
+        args.tree = _env_tree
 
     targets: List[Path] = [Path(p) for p in args.paths]
     ic_dirs: List[Path] = []
@@ -982,6 +1017,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         # determination ("I looked, there is nothing"), and collapsing it into
         # this branch would be the same error in the other direction.
         if args.tree and not Path(args.tree).is_dir():
+            # THREE OUTCOMES, AND COLLAPSING ANY TWO OF THEM IS THE DEFECT.
+            #
+            #  pointer SET and broken      -> UNDETERMINED. Somebody said where the
+            #                                 corpus is and was wrong. Never excused.
+            #  nothing set, none local,
+            #    caller says it may live
+            #    elsewhere                 -> NO_CORPUS (rc=0). Nothing to scan, and
+            #                                 nothing is claimed to have been scanned.
+            #  nothing set, none local,
+            #    nobody said that          -> UNDETERMINED. Unchanged: an absent tree
+            #                                 in a repo meant to carry one is exactly
+            #                                 what this branch was written for.
+            env_tree = os.environ.get(CORPUS_ENV)
+            if env_tree:
+                print(f"UNDETERMINED: {CORPUS_ENV}={env_tree} is set and did not "
+                      f"resolve to a readable corpus, so this gate discovered "
+                      f"nothing and scanned nothing. A pointer that is set and "
+                      f"wrong is a broken configuration, not an absent corpus.",
+                      file=sys.stderr)
+                return 2
+            if args.corpus_may_be_absent:
+                print(f"NO_CORPUS: nothing at {args.tree} and {CORPUS_ENV} is "
+                      f"unset. The published corpus lives in its own repository and "
+                      f"this repo is not required to carry it. NOTHING WAS SCANNED "
+                      f"and nothing is claimed — point {CORPUS_ENV} at a clone to "
+                      f"make this gate check something.", file=sys.stderr)
+                return 0
             print(f"UNDETERMINED: --tree {args.tree} is not a directory, so this "
                   f"gate discovered nothing and scanned nothing. A check that "
                   f"could not look has not passed.", file=sys.stderr)
