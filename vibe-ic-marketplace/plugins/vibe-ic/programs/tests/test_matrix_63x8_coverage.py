@@ -1157,8 +1157,16 @@ _OUTCOME_MAX_WAVES = 3
 _OUTCOME_TEST_TIMEOUT_S = 600
 pytestmark = pytest.mark.timeout(_OUTCOME_TEST_TIMEOUT_S)
 
+# Optional cap used only by the outer repo-hygiene resource scheduler.  Two
+# census arms already provide A/B concurrency; letting each arm also open the
+# default three-way pool produced six simultaneous I/O-heavy pytest sessions
+# and made both hit the unchanged 60-second per-module starvation bound.  The
+# cap changes scheduling only: paths, manifests, merge order and verdict rules
+# are identical.
+_OUTCOME_WORKER_CAP_ENV = "VIBEIC_MATRIX_OUTCOME_WORKERS"
 
-def _outcome_worker_count(n_paths: int) -> int:
+
+def _outcome_worker_count(n_paths: int, cap: Optional[int] = None) -> int:
     """Pool width that makes the WORST CASE of the loop fit the harness.
 
     The width is DERIVED from the count, never fixed: with ``w`` workers, no
@@ -1175,7 +1183,36 @@ def _outcome_worker_count(n_paths: int) -> int:
     running, which is the exact starvation this sizing is meant to prevent.
     """
     assert n_paths >= 1, "no module paths to size the outcome pool for"
-    return -(-n_paths // _OUTCOME_MAX_WAVES)  # ceil, without importing math
+    derived = -(-n_paths // _OUTCOME_MAX_WAVES)  # ceil, without importing math
+    if cap is None:
+        return derived
+    assert 1 <= cap <= n_paths, (
+        f"{_OUTCOME_WORKER_CAP_ENV} must be within 1..{n_paths}, got {cap}")
+    return min(derived, cap)
+
+
+def _outcome_worker_cap() -> Optional[int]:
+    raw = os.environ.get(_OUTCOME_WORKER_CAP_ENV)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise AssertionError(
+            f"{_OUTCOME_WORKER_CAP_ENV} must be an integer, got {raw!r}") from exc
+
+
+def test_outcome_worker_cap_reduces_nested_width_without_changing_default(
+        monkeypatch):
+    assert _outcome_worker_count(8) == 3
+    monkeypatch.setenv(_OUTCOME_WORKER_CAP_ENV, "1")
+    assert _outcome_worker_count(8, _outcome_worker_cap()) == 1
+    monkeypatch.setenv(_OUTCOME_WORKER_CAP_ENV, "0")
+    with pytest.raises(AssertionError, match="within 1..8"):
+        _outcome_worker_count(8, _outcome_worker_cap())
+    monkeypatch.setenv(_OUTCOME_WORKER_CAP_ENV, "not-an-int")
+    with pytest.raises(AssertionError, match="must be an integer"):
+        _outcome_worker_cap()
 
 
 def _run_outcome_reports(
@@ -1211,7 +1248,7 @@ def _run_outcome_reports(
     file exists to refuse.
     """
     assert paths, "no module paths given to the outcome run"
-    _width = _outcome_worker_count(len(paths))
+    _width = _outcome_worker_count(len(paths), _outcome_worker_cap())
     per_path: Dict[Path, Dict[str, List[Dict]]] = {}
     for start in range(0, len(paths), _width):
         wave = paths[start:start + _width]

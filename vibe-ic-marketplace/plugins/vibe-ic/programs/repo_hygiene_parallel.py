@@ -340,6 +340,7 @@ def main(argv=None) -> int:
                 env = os.environ.copy()
                 env["GATE_DISPATCH_ATTESTATION_FILE"] = str(attest)
                 env["VIBEIC_POLICY_COHORT_LOCKED"] = "1"
+                env["VIBEIC_MATRIX_OUTCOME_WORKERS"] = "1"
                 arm_script = arm_root / "tools" / "ci" / "repo_hygiene_gates.sh"
                 argv_i = ["bash", str(arm_script), "--shard",
                           f"{sensitive_i}/{total_shards}", "--shard-labels",
