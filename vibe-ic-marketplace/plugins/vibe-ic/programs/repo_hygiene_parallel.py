@@ -31,10 +31,11 @@ from policy_direction_pin_check import acquire_run_lock, recover_all_journals
 
 HOST_LABEL = "gates are host-independent"
 # This gate already runs three pytest children concurrently and enforces a
-# 60-second starvation bound.  Co-scheduling it with two 6-way mutation farms
-# made BOTH A/B arms time out while actively producing output.  It is a second
-# resource wave, not a serial dependency: A/B still run together after the CPU
-# heavy mutation wave drains.
+# 60-second starvation bound.  Co-scheduling it with either the mutation farms
+# or its opposite A/B arm made BOTH copies time out; the exact d6 subprocess
+# completes in 43s alone.  It is therefore a resource-isolated A-then-B wave,
+# not a logical dependency.  Every ordinary gate and both policy farms remain
+# pipelined across A/B.
 LOAD_SENSITIVE_LABELS = ("63x8 census freshness",)
 DEFAULT_JOBS = 8
 DEFAULT_WORKER_TIMEOUT = 1800
@@ -196,7 +197,8 @@ def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, An
         "gates": gates,
         "process_attestations": attestations,
         "parallel": {"workers": len(docs) - 1,
-                     "phases": ["independent-gates", "host-independence"],
+                     "phases": ["pipelined-a-b", "load-sensitive-wave",
+                                "host-attestation-compare"],
                      "complete": not problems},
     }
 
@@ -210,6 +212,13 @@ def _summary_rc(doc: Dict[str, Any]) -> int:
     if not int(doc.get("decided") or 0):
         return 2
     return 0
+
+
+def _completion_message(doc: Dict[str, Any], elapsed: int) -> str:
+    prefix = "PASS" if _summary_rc(doc) == 0 else "FAIL"
+    return (f"[{prefix}] parallel hygiene DAG completed {doc['decided']} of "
+            f"{doc['declared']} gate verdict(s) in {elapsed}s; "
+            f"failed={doc['failed']}")
 
 
 def main(argv=None) -> int:
@@ -326,8 +335,10 @@ def main(argv=None) -> int:
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs * 2) as pool:
             results = list(pool.map(run_worker, workers))
 
-        # Resource wave 2.  Both trees remain concurrent, but this gate no
-        # longer competes with the two nested policy mutation farms.
+        # Resource wave 2.  The census owns its machine while each arm runs.
+        # A/B concurrency here reproducibly pushes a 43s-alone subprocess past
+        # its honest 60s hang bound, so sequence the two outer arms while
+        # retaining the census' measured three-way internal parallelism.
         if sensitive:
             sensitive_i = jobs
             labels_path = tmp / "labels-sensitive.txt"
@@ -340,7 +351,6 @@ def main(argv=None) -> int:
                 env = os.environ.copy()
                 env["GATE_DISPATCH_ATTESTATION_FILE"] = str(attest)
                 env["VIBEIC_POLICY_COHORT_LOCKED"] = "1"
-                env["VIBEIC_MATRIX_OUTCOME_WORKERS"] = "1"
                 arm_script = arm_root / "tools" / "ci" / "repo_hygiene_gates.sh"
                 argv_i = ["bash", str(arm_script), "--shard",
                           f"{sensitive_i}/{total_shards}", "--shard-labels",
@@ -348,8 +358,8 @@ def main(argv=None) -> int:
                 sensitive_workers.append(
                     (arm, sensitive_i, sensitive, arm_root, summary, attest,
                      argv_i, env))
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                results.extend(pool.map(run_worker, sensitive_workers))
+            for row in sensitive_workers:
+                results.append(run_worker(row))
 
         docs: List[Tuple[Path, Dict[str, Any]]] = []
         a_attestations: List[Dict[str, Any]] = []
@@ -460,8 +470,7 @@ def main(argv=None) -> int:
             print(f"[ERROR] parallel hygiene incomplete after {elapsed}s; "
                   "coverage loss is not a result", file=sys.stderr)
             return 2
-        print(f"[PASS] parallel hygiene DAG completed {final['decided']} of "
-              f"{final['declared']} gate verdict(s) in {elapsed}s")
+        print(_completion_message(final, elapsed))
         return rc
 
 

@@ -59,6 +59,19 @@ def test_complete_dag_preserves_full_dispatch_summary():
     assert doc["other_shard"] == 0
     assert doc["parallel"]["complete"] is True
     assert P._summary_rc(doc) == 0
+    assert P._completion_message(doc, 12).startswith("[PASS]")
+
+
+def test_complete_coverage_with_a_red_gate_is_reported_as_fail():
+    reference, a, b, attest = fixture()
+    a["gates"][0] = gate("ordinary", "FAIL")
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+    assert problems == []
+    assert P._summary_rc(doc) == 1
+    assert P._completion_message(doc, 12).startswith("[FAIL]")
+    assert "failed=1" in P._completion_message(doc, 12)
 
 
 def test_missing_shard_gate_is_named_and_refused():
