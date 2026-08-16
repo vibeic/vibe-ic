@@ -131,6 +131,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import concurrent.futures
+import fcntl
 import hashlib
 import json
 import os
@@ -143,6 +145,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import _crash_safe_scratch as _scratch
+
 RC_OK = 0
 RC_UNPINNED = 1
 RC_UNDETERMINED = 2
@@ -154,6 +158,15 @@ RC_UNDETERMINED = 2
 # largest selection here is 32); a cap that abstained on the one site the sweep
 # found would be a gate that goes green by declining to look.
 DEFAULT_MAX_TEST_FILES = 40
+
+# Five files currently contain the argued sites.  The default deliberately
+# leaves one core per worker plus ample headroom for pytest's own subprocesses;
+# callers can lower it on smaller hosts.  Parallel verification is opt-in so
+# fixture users and old CI keep the byte-for-byte serial path.
+DEFAULT_JOBS = 6
+_PARALLEL_SCRATCH_PREFIX = "pdpc-par-"
+_RUN_LOCK_FD: Optional[int] = None
+_COHORT_ENV = "VIBEIC_POLICY_COHORT_LOCKED"
 
 
 # ---------------------------------------------------------------------------
@@ -510,12 +523,16 @@ def select_tests(site: Dict[str, Any], tests_dir: Path) -> List[Path]:
     site look UNPINNED. There is no selection that makes an unpinned site look
     pinned, which is the direction that matters.
 
-    Files that also name the LITERAL are returned first. That is an ordering
-    heuristic and nothing else -- it changes how fast a kill is found, never
-    whether one is found, because every selected file is run until one fails.
+    Files with the densest exact references to the module / parameter / callee
+    / literal are returned first. That is an ordering heuristic and nothing
+    else -- it changes how fast a kill is found, never whether one is found,
+    because every selected file is still available to the aggregate fallback.
+    Measured on the largest real site, the actual call-site pin has 34 exact
+    references and ranks first; alphabetical ordering put it fifteenth and
+    pushed the blocking gate beyond its 600 s supervisor deadline.
     """
     stem = Path(site["file"]).stem
-    out: List[Tuple[int, str, Path]] = []
+    out: List[Tuple[int, int, str, Path]] = []
     for p in sorted(tests_dir.glob("test_*.py")):
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
@@ -524,9 +541,51 @@ def select_tests(site: Dict[str, Any], tests_dir: Path) -> List[Path]:
         if not _names(text, stem):
             continue
         if _names(text, site["param"]) or _names(text, site["callee"]):
-            out.append((0 if _names(text, site["value"]) else 1, p.name, p))
+            relevance = 0
+            for token in dict.fromkeys((stem, site["param"], site["callee"],
+                                        site["value"])):
+                _names(text, token)  # populates the exact-boundary cache
+                relevance += len(_WORD_CACHE[token].findall(text))
+            out.append((-relevance,
+                        0 if _names(text, site["value"]) else 1,
+                        p.name, p))
     out.sort()
-    return [p for _, _, p in out]
+    return [p for _, _, _, p in out]
+
+
+def focused_test_nodes(site: Dict[str, Any], candidate: Path) -> List[str]:
+    """Exact pytest nodes that name both the decision and authored value.
+
+    This is only a fast path.  Returning too little cannot make a site green:
+    :func:`verify_pin` still runs the whole candidate file, then the original
+    aggregate candidate session, unless one of these exact nodes produces a
+    GREEN-at-baseline kill.  Syntax we cannot parse therefore returns no focus
+    instead of guessing.
+    """
+    try:
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(text, filename=str(candidate))
+    except (OSError, SyntaxError, ValueError):
+        return []
+
+    def relevant(node: ast.AST) -> bool:
+        segment = ast.get_source_segment(text, node) or ""
+        names_decision = (_names(segment, str(site["param"]))
+                          or _names(segment, str(site["callee"])))
+        return names_decision and _names(segment, str(site["value"]))
+
+    nodes: List[str] = []
+    funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
+    for top in tree.body:
+        if isinstance(top, funcs) and top.name.startswith("test_"):
+            if relevant(top):
+                nodes.append(f"{candidate}::{top.name}")
+        elif isinstance(top, ast.ClassDef) and top.name.startswith("Test"):
+            for child in top.body:
+                if isinstance(child, funcs) and child.name.startswith("test_") \
+                        and relevant(child):
+                    nodes.append(f"{candidate}::{top.name}::{child.name}")
+    return nodes
 
 
 def _literal_span(src: str, arg_line: int, arg_col: int):
@@ -615,6 +674,40 @@ def failing_files(output: str) -> List[str]:
 _INFLIGHT: Dict[str, Any] = {}
 
 
+def _journal_home() -> Path:
+    """Return the stable, owner-only directory for crash records."""
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    home = Path(tempfile.gettempdir()) / f"vibeic-policy-pin-{uid}"
+    try:
+        home.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    st = home.lstat()
+    if not home.is_dir() or (hasattr(os, "getuid") and st.st_uid != os.getuid()):
+        raise OSError(f"unsafe policy-pin journal directory: {home}")
+    os.chmod(home, 0o700)
+    return home
+
+
+def acquire_run_lock() -> None:
+    """Serialize top-level recovery while allowing its isolated children.
+
+    ``recover_all_journals`` is intentionally broad so a later run repairs a
+    killed random worktree.  Without this lock, one live run mistakes another
+    live worker's armed journal for an orphan and rewrites the file beneath its
+    pytest process.  The parent holds the lock for the process lifetime;
+    ``--isolated-worker`` children recover only their own keyed journal and do
+    not acquire it.
+    """
+    global _RUN_LOCK_FD
+    if _RUN_LOCK_FD is not None:
+        return
+    path = _journal_home() / "policy_pin_run.lock"
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    _RUN_LOCK_FD = fd
+
+
 def journal_for(root: Path) -> Path:
     """Journal path for `root`, outside the tree and keyed to it.
 
@@ -623,14 +716,37 @@ def journal_for(root: Path) -> Path:
     this repo cannot repair each other's files.
     """
     key = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / f"policy_pin_inflight-{key}.json"
+    return _journal_home() / f"policy_pin_inflight-{key}.json"
+
+
+def _write_private_atomic(path: Path, payload: str) -> None:
+    """Atomically publish one owner-readable journal record."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def _arm(journal: Path, target: Path, original: str, mutated: str) -> None:
     """Record the pending mutation BEFORE it reaches disk."""
-    journal.write_text(json.dumps({
-        "file": str(target), "original": original, "mutated": mutated}),
-        encoding="utf-8")
+    _write_private_atomic(journal, json.dumps({
+        "schema": 2,
+        "file": str(target),
+        "original": original,
+        "mutated_sha256": hashlib.sha256(
+            mutated.encode("utf-8")).hexdigest(),
+    }))
     _INFLIGHT.update({"file": target, "original": original,
                       "journal": journal})
 
@@ -689,7 +805,11 @@ def recover_journal(journal: Path) -> Tuple[int, List[str]]:
     try:
         rec = json.loads(journal.read_text(encoding="utf-8"))
         target = Path(rec["file"])
-        original, mutated = rec["original"], rec["mutated"]
+        original = rec["original"]
+        mutated = rec.get("mutated")       # schema 1 compatibility
+        mutated_sha256 = rec.get("mutated_sha256")
+        if mutated is None and not isinstance(mutated_sha256, str):
+            raise KeyError("mutated_sha256")
     except (OSError, ValueError, KeyError) as exc:
         return RC_UNDETERMINED, [
             f"[UNDETERMINED] policy_direction_pin_check: unreadable in-flight "
@@ -702,7 +822,9 @@ def recover_journal(journal: Path) -> Tuple[int, List[str]]:
     if now == original:
         journal.unlink()
         return RC_OK, []
-    if now != mutated:
+    wrote_mutant = (now == mutated) if mutated is not None else (
+        hashlib.sha256(now.encode("utf-8")).hexdigest() == mutated_sha256)
+    if not wrote_mutant:
         return RC_UNDETERMINED, [
             f"[UNDETERMINED] policy_direction_pin_check: {target} was left "
             f"MUTATED by a previous run of this gate, and has been edited "
@@ -715,6 +837,28 @@ def recover_journal(journal: Path) -> Tuple[int, List[str]]:
         f"its mutation window and left {target} rewritten. Restored. Left "
         f"alone, the next sweep would have re-derived the argued value FROM "
         f"THE MUTATION and reported a consistent verdict over a corrupt tree."]
+
+
+def recover_all_journals() -> Tuple[int, List[str]]:
+    """Recover every owned journal, including orphaned random worktree keys."""
+    candidates = list(_journal_home().glob("policy_pin_inflight-*.json"))
+    # v1 records lived flat in /tmp. Only this user's files are eligible.
+    for path in Path(tempfile.gettempdir()).glob("policy_pin_inflight-*.json"):
+        try:
+            if not hasattr(os, "getuid") or path.stat().st_uid == os.getuid():
+                candidates.append(path)
+        except OSError:
+            continue
+    rc = RC_OK
+    lines: List[str] = []
+    for path in sorted(set(candidates)):
+        one_rc, one_lines = recover_journal(path)
+        lines.extend(one_lines)
+        # Both outcomes are represented in the aggregate state: 0 keeps the
+        # prior result, RC_UNDETERMINED raises it.  There is no remedy offered
+        # on one branch and silently declined on the other.
+        rc = max(rc, one_rc)
+    return rc, lines
 
 
 # --------------------------------------------------------------------------
@@ -820,7 +964,7 @@ def leftover_signature(root: Path, site: Dict[str, Any]) -> Optional[str]:
             f"Restore with: git checkout HEAD -- {site['file']}")
 
 
-def run_pytest(paths: Sequence[Path], cwd: Path, basetemp: Path,
+def run_pytest(paths: Sequence[object], cwd: Path, basetemp: Path,
                extra: Sequence[str] = ()) -> Tuple[int, str]:
     """Run the candidate tests and report EVERY file that died.
 
@@ -888,6 +1032,45 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
     journal = journal_for(root)
     killed_by: List[Dict[str, Any]] = []
     survivors: List[str] = []
+    baseline_files: List[str] = []
+    red_at_baseline: List[str] = []
+    kills_believed: List[str] = []
+    uncredited_kill = False
+    baseline_process_unknown = False
+
+    def _paths_named_by(output: str) -> List[Path]:
+        named = [root.parent / f for f in failing_files(output)]
+        return [p for p in dict.fromkeys(named) if p.exists()]
+
+    def _grade_kill(paths: Sequence[object], output: str,
+                    exact_selection: bool = False) -> Tuple[List[str], int, str]:
+        """Return believable failed files after restoring the authored source."""
+        nonlocal baseline_process_unknown
+        named = _paths_named_by(output) or list(paths)
+        for p in named:
+            s = str(p)
+            if s not in baseline_files:
+                baseline_files.append(s)
+        baseline_selection = list(paths) if exact_selection else named
+        rc0, out0 = run_pytest(baseline_selection, root.parent, basetemp, extra)
+        reds = failing_files(out0)
+        for f in reds:
+            if f not in red_at_baseline:
+                red_at_baseline.append(f)
+        killed_now = failing_files(output)
+        if rc0 != 0 and not reds:
+            # A session hook/process refusal can leave every testcase green in
+            # stdout while making the authored run nonzero.  That is UNKNOWN,
+            # not a green baseline against which a mutant kill can be credited.
+            baseline_process_unknown = True
+            believable = []
+        else:
+            believable = [f for f in killed_now if f not in set(reds)]
+        for f in believable:
+            if f not in kills_believed:
+                kills_believed.append(f)
+        return believable, rc0, out0
+
     try:
         for other in [a for a in site["alternatives"] if a != site["value"]]:
             try:
@@ -896,54 +1079,108 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
                 result["state"] = "ABSTAIN"
                 result["why"] = f"could not rewrite the literal: {exc}"
                 return result
+            credible = False
+            saw_only_preexisting_red = False
+
+            # Fast path: the selection order is deliberately relevance-ranked.
+            # Run one file at a time until a GREEN-at-baseline file kills the
+            # mutant.  This is the contract ``select_tests`` has always stated,
+            # but the old implementation ignored the order and ran all 37 files
+            # in one session for every flip, pushing this blocking gate beyond
+            # its own 600 s supervisor deadline.
+            for candidate in candidates:
+                focused = focused_test_nodes(site, candidate)
+                selections = [([node], True) for node in focused] \
+                    + [([candidate], False)]
+                for selection, exact in selections:
+                    if exact:
+                        result.setdefault("focused_nodes_tried", []).append(
+                            str(selection[0]))
+                    _arm(journal, target, original, mutated)
+                    target.write_text(mutated, encoding="utf-8")
+                    rc, out = run_pytest(selection, root.parent, basetemp, extra)
+                    if rc == 0 or (exact and rc == 5):
+                        continue
+
+                    # Baseline MUST run the SAME exact selection against the
+                    # authored source, not grade a focused mutant against a
+                    # different whole-file process.
+                    target.write_text(original, encoding="utf-8")
+                    believable, rc0, out0 = _grade_kill(
+                        selection, out, exact_selection=exact)
+                    result["baseline_rc"] = rc0
+                    if believable:
+                        killed_by.append({"flipped_to": other, "rc": rc,
+                                          "killed_files": failing_files(out),
+                                          "tail": out.strip().splitlines()[-1:] or [""]})
+                        credible = True
+                        break
+                    saw_only_preexisting_red = True
+                    uncredited_kill = True
+                    result["baseline_tail"] = \
+                        out0.strip().splitlines()[-1:] or [""]
+                if credible:
+                    break
+
+            if credible:
+                # One observed call-site pin proves the argued direction dies;
+                # the verdict has never required every alternative to die.
+                break
+
+            # Per-file execution cannot observe a failure that needs two test
+            # modules in one pytest process (import/order pollution is real in
+            # this repo).  Keep the original aggregate session as a fallback,
+            # so the speed path cannot weaken the gate's semantics.
             _arm(journal, target, original, mutated)
             target.write_text(mutated, encoding="utf-8")
             rc, out = run_pytest(candidates, root.parent, basetemp, extra)
-            if rc != 0:
+            if rc == 0:
+                survivors.append(other)
+                continue
+
+            target.write_text(original, encoding="utf-8")
+            believable, rc0, out0 = _grade_kill(candidates, out)
+            result["baseline_rc"] = rc0
+            if believable:
                 killed_by.append({"flipped_to": other, "rc": rc,
                                   "killed_files": failing_files(out),
                                   "tail": out.strip().splitlines()[-1:] or [""]})
-            else:
-                survivors.append(other)
+                break
+            saw_only_preexisting_red = True
+            uncredited_kill = True
+            result["baseline_tail"] = out0.strip().splitlines()[-1:] or [""]
+
+            if saw_only_preexisting_red:
+                # More alternatives cannot turn an already-red baseline into
+                # evidence. Preserve the pre-existing abstention contract.
+                break
     finally:
         target.write_text(original, encoding="utf-8")
         _disarm(journal)
 
     if killed_by:
-        # A RED test kills every mutant, including one nobody wrote a pin for.
-        # Crediting that would hand out exactly the false clean bill of health
-        # this gate exists to end, so the baseline is checked before a kill is
-        # believed -- and checked LAZILY, because a surviving mutant is already
-        # proof enough of UNPINNED and needs no baseline at all.
-        #
-        # Only the files that actually died are re-run. Baselining the whole
-        # selection would answer a question nobody asked -- whether some OTHER
-        # test is red -- and it is the dominant cost of this gate.
-        named = [root.parent / f for k in killed_by for f in k.get("killed_files", [])]
-        baseline_set = [p for p in dict.fromkeys(named) if p.exists()] or list(candidates)
-        result["baseline_files"] = [str(p) for p in baseline_set]
-        rc0, out0 = run_pytest(baseline_set, root.parent, basetemp, extra)
-        result["baseline_rc"] = rc0
-        # PER FILE, not per RUN. "Some file in the baseline is red" is not a
-        # reason to disbelieve a kill in a DIFFERENT file -- that inference is
-        # what let one unrelated red test abstain a site whose pin was intact.
-        # A kill is believed exactly when the file that died is GREEN at
-        # baseline; the gate abstains only when every file that died was
-        # already red, which is the case the baseline check was written for.
-        red_at_baseline = set(failing_files(out0))
-        killed_now = [f for k in killed_by for f in k.get("killed_files", [])]
-        believable = [f for f in dict.fromkeys(killed_now) if f not in red_at_baseline]
+        result["baseline_files"] = baseline_files
         result["red_at_baseline"] = sorted(red_at_baseline)
-        result["kills_believed"] = believable
-        if not believable:
-            result["state"] = "ABSTAIN"
+        result["kills_believed"] = kills_believed
+    elif uncredited_kill:
+        result["baseline_files"] = baseline_files
+        result["red_at_baseline"] = sorted(red_at_baseline)
+        result["kills_believed"] = []
+        result["state"] = "ABSTAIN"
+        if baseline_process_unknown:
+            result["why"] = (
+                "the authored baseline process failure exited nonzero but named no "
+                "failed testcase file, so its selection was not proved green "
+                "and no mutant kill can be credited")
+        elif red_at_baseline:
             result["why"] = ("every candidate test that died under the flip was "
                              "already RED before any flip, so no kill proves "
                              "anything about this call site")
-            result["baseline_tail"] = out0.strip().splitlines()[-1:] or [""]
-            return result
-        killed_by = [k for k in killed_by
-                     if any(f in believable for f in k.get("killed_files", []))]
+        else:
+            result["why"] = ("mutant pytest exited nonzero but named no failed "
+                             "test file that was GREEN at baseline, so the "
+                             "process failure cannot prove this call site is pinned")
+        return result
 
     result["killed_by"] = killed_by
     result["survivors"] = survivors
@@ -976,6 +1213,200 @@ def build_report(root: Path, require_default: bool = True) -> Dict[str, Any]:
     }
 
 
+def _site_key(site: Dict[str, Any]) -> Tuple[Any, ...]:
+    return (site.get("file"), site.get("line"), site.get("callee"),
+            site.get("param"), site.get("value"))
+
+
+def _unregister_parallel_worktree(scratch: Path) -> None:
+    wt = scratch / "wt"
+    if not wt.exists():
+        return
+    subprocess.run(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
+                   capture_output=True, text=True, timeout=120)
+    subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
+                    str(wt)], capture_output=True, text=True, timeout=120)
+
+
+def _release_parallel_worktree(res: Any, repo: Path) -> None:
+    _unregister_parallel_worktree(res.path)
+    res.release()
+    subprocess.run(["git", "-C", str(repo), "worktree", "prune"],
+                   capture_output=True, text=True, timeout=120)
+
+
+def verify_pins_parallel(
+        root: Path, selected: List[Dict[str, Any]], jobs: int,
+        max_test_files: int, pytest_args: List[str], include_required: bool,
+        ) -> Tuple[Optional[List[Dict[str, Any]]], List[str]]:
+    """Verify file-disjoint mutation groups in isolated git worktrees.
+
+    Returns the selected sites with child ``pin`` records attached, or ``None``
+    plus explicit refusal reasons.  The caller never infers success from child
+    return codes: every planned site must be present exactly once in parseable
+    JSON and its return code must agree with the recorded states.
+    """
+    if jobs < 1:
+        return None, [f"--jobs must be >= 1, got {jobs}"]
+    by_unit = {(str(site["file"]), int(site["line"])): site
+               for site in selected}
+    units = sorted(by_unit)
+    if len(by_unit) != len(selected):
+        return None, ["two argued sites share one file+line identity"]
+    if not units:
+        return [], []
+
+    top = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True)
+    if top.returncode != 0:
+        return None, ["parallel mutation verification needs a git work tree; "
+                      "use --jobs 1 for a standalone fixture"]
+    repo = Path(top.stdout.strip()).resolve()
+    try:
+        root_rel = root.resolve().relative_to(repo)
+        script_rel = Path(__file__).resolve().relative_to(repo)
+    except ValueError:
+        return None, ["program root and verifier are not inside the same git "
+                      "work tree"]
+    dirty = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+        capture_output=True, text=True)
+    if dirty.returncode != 0 or dirty.stdout.strip():
+        return None, ["parallel mutation verification needs a clean tracked "
+                      "checkout because isolated workers are created from HEAD"]
+    if os.environ.get(_COHORT_ENV) == "1":
+        rc_rec, recovery_lines = recover_journal(journal_for(root))
+    else:
+        rc_rec, recovery_lines = recover_all_journals()
+    for recovery_line in recovery_lines:
+        print(recovery_line, file=sys.stderr if rc_rec else sys.stdout)
+    if rc_rec:
+        return None, ["an abandoned mutation journal could not be recovered "
+                      "before parallel workers launched"]
+
+    jobs = min(jobs, len(units))
+    # Every lane owns an isolated worktree, so even two sites in one source
+    # file are independent.  The exact file+line identity is the unit; this
+    # removes the last false serial edge without ever overlapping mutations in
+    # the same filesystem.
+    buckets: List[List[Tuple[str, int]]] = [[] for _ in range(jobs)]
+    loads = [0] * jobs
+    for unit in units:
+        i = min(range(jobs), key=lambda x: (loads[x], x))
+        buckets[i].append(unit)
+        loads[i] += 1
+
+    def worker(index: int, assigned: List[Tuple[str, int]]):
+        res, _ = _scratch.reserve(
+            _PARALLEL_SCRATCH_PREFIX, remover=_unregister_parallel_worktree)
+        wt = res.path / "wt"
+        rows = []
+        try:
+            add = subprocess.run(
+                ["git", "-C", str(repo), "worktree", "add", "-q", "--detach",
+                 str(wt), "HEAD"], capture_output=True, text=True, timeout=180)
+            if add.returncode != 0:
+                return index, rows, ["could not create isolated worktree: "
+                                     + (add.stderr or add.stdout).strip()[:240]]
+            for name, line in assigned:
+                token = f"{name}:{line}"
+                out_json = res.path / (hashlib.sha256(token.encode()).hexdigest()
+                                       + ".json")
+                basetemp = res.path / ("pytest-" + hashlib.sha256(
+                    token.encode()).hexdigest()[:12])
+                argv = [sys.executable, str(wt / script_rel), str(wt / root_rel),
+                        "--verify-pins", "--only-file", name,
+                        "--only-line", str(line),
+                        "--isolated-worker",
+                        "--max-test-files", str(max_test_files),
+                        "--basetemp", str(basetemp), "--json", str(out_json)]
+                if include_required:
+                    argv.append("--include-required")
+                for extra in pytest_args:
+                    argv += ["--pytest-arg", extra]
+                proc = subprocess.run(argv, capture_output=True, text=True)
+                child_doc = None
+                record_error = None
+                if not out_json.is_file():
+                    record_error = "no JSON record"
+                else:
+                    try:
+                        child_doc = json.loads(out_json.read_text(encoding="utf-8"))
+                    except (OSError, ValueError) as exc:
+                        record_error = f"unreadable JSON: {exc}"
+                rows.append((name, line, proc.returncode, child_doc,
+                             proc.stdout, proc.stderr, record_error))
+            return index, rows, []
+        except (OSError, subprocess.SubprocessError) as exc:
+            return index, rows, [f"worker exception: {type(exc).__name__}: {exc}"]
+        finally:
+            _release_parallel_worktree(res, repo)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [pool.submit(worker, i, bucket)
+                   for i, bucket in enumerate(buckets)]
+        worker_results = [future.result() for future in futures]
+
+    problems: List[str] = []
+    verified: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for index, rows, worker_problems in sorted(worker_results):
+        problems.extend(f"worker {index}: {p}" for p in worker_problems)
+        for name, line, rc, child, stdout, stderr, record_error in rows:
+            # Keep diagnostic output deterministic even though execution was
+            # concurrent; interleaved mutation logs are not auditable.
+            for output_line in (stdout or "").splitlines():
+                print(f"  [worker {index}:{name}:{line}] {output_line}")
+            for output_line in (stderr or "").splitlines():
+                print(f"  [worker {index}:{name}:{line}] {output_line}",
+                      file=sys.stderr)
+            if record_error is not None:
+                problems.append(
+                    f"worker {index}:{name}:{line} exited {rc}: {record_error}")
+                continue
+            assert isinstance(child, dict)
+            child_sites = [s for s in child.get("argued") or []
+                           if s.get("file") == name
+                           and int(s.get("line") or -1) == line and "pin" in s]
+            expected_keys = {_site_key(by_unit[(name, line)])}
+            actual_keys = {_site_key(s) for s in child_sites}
+            if actual_keys != expected_keys:
+                problems.append(
+                    f"worker {index}:{name}:{line} covered {len(actual_keys)} site(s), "
+                    f"expected {len(expected_keys)}")
+                continue
+            states = [str(s["pin"].get("state")) for s in child_sites]
+            expected_rc = (RC_UNPINNED if "UNPINNED" in states else
+                           RC_UNDETERMINED if any(s != "PINNED" for s in states)
+                           else RC_OK)
+            if rc != expected_rc:
+                problems.append(
+                    f"worker {index}:{name}:{line} JSON implies rc {expected_rc}, "
+                    f"process exited {rc}")
+                continue
+            for site in child_sites:
+                key = _site_key(site)
+                if key in verified:
+                    problems.append(f"site reported twice: {key}")
+                verified[key] = site["pin"]
+
+    planned = {_site_key(s) for s in selected}
+    missing = sorted(planned - set(verified), key=str)
+    extra = sorted(set(verified) - planned, key=str)
+    if missing:
+        problems.append(f"{len(missing)} planned site(s) returned no verdict")
+    if extra:
+        problems.append(f"{len(extra)} unplanned site(s) returned a verdict")
+    if problems:
+        return None, problems
+    merged = []
+    for site in selected:
+        copy = dict(site)
+        copy["pin"] = verified[_site_key(site)]
+        merged.append(copy)
+    return merged, []
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="policy_direction_pin_check.py",
@@ -989,6 +1420,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="abstain rather than run more candidate test files than this")
     ap.add_argument("--only", default=None,
                     help="verify only sites whose file path contains this substring")
+    ap.add_argument("--only-file", default=None,
+                    help=argparse.SUPPRESS)
+    ap.add_argument("--only-line", type=int, default=None,
+                    help=argparse.SUPPRESS)
+    ap.add_argument("--isolated-worker", action="store_true",
+                    help=argparse.SUPPRESS)
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="isolated mutation workers (default: serial compatibility)")
     ap.add_argument("--include-required", action="store_true",
                     help="drop D1 and widen the population to required parameters "
                          "(inspection only -- see the module docstring)")
@@ -997,11 +1436,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="extra argument forwarded to the mutation pytest runs")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
+    # Candidate tests include this gate's own CLI tests.  An isolated worker is
+    # already covered by its parent's run lock; propagate that fact so a nested
+    # fixture invocation does not block forever trying to re-acquire the lock
+    # held by its own grandparent.
+    if args.isolated_worker:
+        os.environ[_COHORT_ENV] = "1"
+
     root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent
     if not root.is_dir():
         print(f"[UNDETERMINED] policy_direction_pin_check: {root} is not a directory",
               file=sys.stderr)
         return RC_UNDETERMINED
+
+    if (args.verify_pins and not args.isolated_worker
+            and os.environ.get(_COHORT_ENV) != "1"):
+        try:
+            acquire_run_lock()
+        except OSError as exc:
+            print(f"[UNDETERMINED] policy_direction_pin_check: could not lock "
+                  f"mutation recovery: {exc}", file=sys.stderr)
+            return RC_UNDETERMINED
 
     report = build_report(root, require_default=not args.include_required)
     argued = report["argued"]
@@ -1032,13 +1487,73 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               file=sys.stderr)
         return RC_UNDETERMINED
 
-    selected = [s for s in argued if (args.only or "") in s["file"]]
+    if args.only_file is not None:
+        selected = [s for s in argued if s["file"] == args.only_file
+                    and (args.only_line is None
+                         or int(s["line"]) == args.only_line)]
+    else:
+        selected = [s for s in argued if (args.only or "") in s["file"]]
+
+    if args.jobs > 1:
+        merged, parallel_problems = verify_pins_parallel(
+            root, selected, args.jobs, args.max_test_files, args.pytest_arg,
+            args.include_required)
+        if parallel_problems:
+            print("[UNDETERMINED] policy_direction_pin_check: parallel "
+                  "verification did not return a complete exact-site record",
+                  file=sys.stderr)
+            for problem in parallel_problems:
+                print(f"  {problem}", file=sys.stderr)
+            return RC_UNDETERMINED
+        assert merged is not None
+        by_key = {_site_key(site): site["pin"] for site in merged}
+        for site in argued:
+            pin = by_key.get(_site_key(site))
+            if pin is not None:
+                site["pin"] = pin
+        pinned = [site for site in merged if site["pin"]["state"] == "PINNED"]
+        unpinned = [site for site in merged
+                    if site["pin"]["state"] == "UNPINNED"]
+        abstained = [site for site in merged
+                     if site["pin"]["state"] not in ("PINNED", "UNPINNED")]
+        for site in merged:
+            verdict = site["pin"]
+            print(f"  [{verdict['state']}] {site['file']}:{site['line']} "
+                  f"{site['callee']}({site['param']}={site['value']!r})"
+                  f"  tests={len(verdict['candidate_tests'])}"
+                  + (f"  -- {verdict.get('why')}" if verdict.get("why") else ""))
+        report["verified"] = {
+            "pinned": len(pinned), "unpinned": len(unpinned),
+            "abstained": len(abstained), "selected": len(selected),
+            "jobs": min(args.jobs, len(selected))}
+        if args.json_out:
+            Path(args.json_out).write_text(json.dumps(report, indent=1),
+                                           encoding="utf-8")
+        denom = len(pinned) + len(unpinned)
+        ratio = f"{len(pinned)}/{denom}" if denom else "0/0"
+        print(f"[INFO] pinned at their call site: {ratio}"
+              f"   (abstained {len(abstained)} of {len(selected)} argued sites)")
+        if unpinned:
+            print(f"[FAIL] policy_direction_pin_check: {len(unpinned)} argued "
+                  "direction(s) survive being flipped")
+            return RC_UNPINNED
+        if abstained:
+            print(f"[UNDETERMINED] policy_direction_pin_check: "
+                  f"{len(abstained)} argued direction(s) could not be decided",
+                  file=sys.stderr)
+            return RC_UNDETERMINED
+        print("[PASS] policy_direction_pin_check: every argued direction dies "
+              "when flipped")
+        return RC_OK
 
     # BEFORE anything is measured. A leftover mutation from a previous run is
     # not a dirty file this run can measure around: the sweep would re-derive
     # the argued value FROM it and report a self-consistent verdict over a
     # corrupt tree. Repair first, or refuse.
-    rc_rec, lines = recover_journal(journal_for(root))
+    if args.isolated_worker or os.environ.get(_COHORT_ENV) == "1":
+        rc_rec, lines = recover_journal(journal_for(root))
+    else:
+        rc_rec, lines = recover_all_journals()
     for ln in lines:
         print(ln, file=sys.stderr if rc_rec else sys.stdout)
     if rc_rec:
