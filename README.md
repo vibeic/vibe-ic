@@ -35,7 +35,7 @@ checkers (no fabrication, no hallucinated PASS).
 │       ├── ip-catalog/           open-source IP catalog (manifests)
 │       └── benchmark/            benchmark harness + registry
 ├── IP/                         open-core git submodules (serv · ibex · sha256 · opentitan)
-├── benchmark-data/             the benchmark corpus (~385 MB tracked) — see "The benchmark corpus" below
+├── benchmark-data/             design INPUT only (542 files) — results moved to vibeic/benchmark-data
 │   ├── ic/                      9 canonical benchmark ICs driven doc → RTL → GDS
 │   └── evaluation/              7 open-benchmark / parity evaluation sets
 ├── benchmark_external/         external-benchmark harness notes (CVDP legal-input definition)
@@ -230,20 +230,26 @@ so it is not carried forward.
 
 ## The benchmark corpus — `benchmark-data/`
 
-Every number above is backed by files in this repo. `benchmark-data/` is ~385 MB
-of tracked content (sizes below are tracked blob totals — what a clone brings
-down), split two ways by **what the data is for**:
+Every number above is backed by published files. **The results live in a separate
+repository — [vibeic/benchmark-data](https://github.com/vibeic/benchmark-data)** —
+because they were 78% of this repo's files and 85% of its bytes, and every clone,
+every hygiene sweep and every landing gate paid for carrying them.
 
-| Sub-tree | Tracked size | What it holds |
-|---|---|---|
-| [`ic/`](benchmark-data/ic) | 234 MB | the 9 canonical benchmark ICs, driven end-to-end (documents → RTL → GDS) |
-| [`evaluation/`](benchmark-data/evaluation) | 151 MB | 7 evaluation sets — open-benchmark runs + the Phase-1 parity sweep |
+| Where | What it holds |
+|---|---|
+| [vibeic/benchmark-data](https://github.com/vibeic/benchmark-data) `ic/` | the canonical benchmark ICs, driven end-to-end (documents → RTL → GDS) |
+| [vibeic/benchmark-data](https://github.com/vibeic/benchmark-data) `evaluation/` | open-benchmark runs — VerilogEval, RTLLM, CVDP — plus the Phase-1 parity sweep |
+| `benchmark-data/**/input/` **here** | the 542 design-input files. They are INPUT, not output: the flow reads them directly, so they stay with the flow rather than with the results. |
 
-A local working tree grows far larger than this (re-run outputs, `clean_run_*/`
-and other generated directories are gitignored, not committed). The upstream
-CVDP problem sets are **not** vendored here — `benchmark-data/datasets/` is
-gitignored as "not ours to redistribute"; fetch them from NVIDIA's
-`cvdp-benchmark-dataset` at the version each `RESULT.md` pins.
+The results repository is a **snapshot without history** — its commit SHAs do not
+correspond to anything here. To read how a result came to be, use this repo's history
+for the same path; the files were removed, not the record of them.
+
+A local working tree still grows far larger than either (re-run outputs, `clean_run_*/`
+and other generated directories are gitignored, not committed). The upstream CVDP
+problem sets are **not** vendored — `benchmark-data/datasets/` is gitignored as "not
+ours to redistribute"; fetch them from NVIDIA's `cvdp-benchmark-dataset` at the version
+each `RESULT.md` pins.
 
 Two audiences, two entry points. If you are **checking a published claim**, read
 the `RESULT.md` / `BENCHMARK_VERIFICATION_REPORT.md` at the top of the relevant
