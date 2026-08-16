@@ -1,9 +1,0 @@
-{
-  "verdict": "SKIP",
-  "reason": "no substantiating reference-TB evidence — refusing a verdict-only PASS (#433): reference_tb step verdict=WAIVED; transcripts found=0",
-  "design_identity": {
-    "design": "edge_llm_accel",
-    "ic_name": "edge_llm_accel",
-    "top": "edge_llm_accel"
-  }
-}
