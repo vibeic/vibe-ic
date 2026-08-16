@@ -238,7 +238,7 @@ def _default_index_writer(repo: Path) -> List[str]:
 
 
 def _default_census_writer(repo: Path,
-                           timeout_s: float = CENSUS_TIMEOUT_S,
+                           timeout_s: Optional[float] = None,
                            ) -> Tuple[List[str], Optional[str]]:
     """Re-derive the 63x8 census. Returns ``(paths written, reason it failed)``.
 
@@ -266,6 +266,21 @@ def _default_census_writer(repo: Path,
     both facts have to reach the caller. Dropping either one loses a write that
     then cannot be attributed, or hides a failure behind files that did change.
     """
+    # READ AT CALL TIME, NOT AS A DEFAULT ARGUMENT.
+    #
+    # `timeout_s: float = CENSUS_TIMEOUT_S` binds the constant ONCE, when the
+    # module is imported. Three tests in
+    # `test_issue1382_census_timeout_keeps_its_promise.py` make the bound fire by
+    # monkeypatching `CENSUS_TIMEOUT_S` to a small value; against a default
+    # argument that patch has no effect at all, the real 600 s bound applies, the
+    # timeout never fires, and all three go red. v1.10.48 shipped exactly that.
+    #
+    # A bound nobody can override in a test is a bound whose failure path is
+    # unreachable — which is the same "cannot be made to fail" defect the bound
+    # itself was added to prevent, one level up.
+    if timeout_s is None:
+        timeout_s = CENSUS_TIMEOUT_S
+
     if not GEN_CENSUS.is_file():
         return [], f"{GEN_CENSUS} is missing"
     # What was already dirty BEFORE the census, so a timeout can undo exactly what

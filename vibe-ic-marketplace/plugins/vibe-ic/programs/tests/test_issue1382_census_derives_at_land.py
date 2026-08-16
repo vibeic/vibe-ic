@@ -140,10 +140,46 @@ def test_the_real_default_writer_is_wired_in_and_is_the_census_generator():
     default was unplugged, which is how a fix stops reaching the code that runs.
     """
     assert G.GEN_CENSUS.name == "gen_matrix_63x8_census.py", G.GEN_CENSUS
-    src = MOD.read_text(encoding="utf-8")
-    assert "census_writer or _default_census_writer" in src, (
-        "prepare() no longer falls back to the real census writer, so a "
-        "landing prepared by the shell script re-derives nothing")
+
+    # ASSERTED BY BEHAVIOUR, NOT BY SPELLING.
+    #
+    # This was `assert "census_writer or _default_census_writer" in src`. That
+    # pinned one EXPRESSION, and v1.10.48 replaced it with an if/elif/else so a
+    # census timeout could be passed to the default writer only — behaviour
+    # identical, spelling different, test red. A source-text assertion cannot tell
+    # a refactor from an unplugging, which is the one thing it exists to tell.
+    #
+    # So: call prepare() with NO census_writer and prove the real default ran, by
+    # observing the only thing the real one does that no stand-in would — it
+    # launches GEN_CENSUS as a subprocess.
+    # Record EVERY launch, not just the first: the writer legitimately shells out
+    # to `git` before the census (it snapshots what was already dirty), so a spy
+    # that captures one Popen captures the wrong one.
+    launches = []
+    real_popen = G.subprocess.Popen
+
+    def spy(cmd, *a, **kw):
+        launches.append(list(cmd))
+        if any(str(G.GEN_CENSUS) in str(x) for x in cmd):
+            # It reached the census. That is the whole question — do not actually
+            # run it; this test must not cost the census's own two-to-four minutes.
+            raise RuntimeError("census reached")
+        return real_popen(cmd, *a, **kw)
+
+    G.subprocess.Popen = spy
+    try:
+        G._default_census_writer(G.REPO)
+    except Exception:
+        pass
+    finally:
+        G.subprocess.Popen = real_popen
+
+    assert launches, (
+        "the default census writer launched no subprocess at all, so a landing "
+        "prepared by the shell script re-derives nothing")
+    assert any(any(str(G.GEN_CENSUS) in str(x) for x in argv) for argv in launches), (
+        f"the default writer ran {len(launches)} subprocess(es) and none of them "
+        f"was the census generator: {launches}")
 
 
 def test_the_default_writer_asks_the_generator_to_DECLARE_its_writes():
@@ -325,8 +361,33 @@ def test_the_bound_on_the_census_subprocess_can_actually_fire():
         f"CENSUS_TIMEOUT_S={G.CENSUS_TIMEOUT_S} — a bound longer than the whole "
         f"landing gate is a bound that cannot fire")
     src = MOD.read_text(encoding="utf-8")
-    assert "timeout=CENSUS_TIMEOUT_S" in src, (
-        "the constant is declared but not passed to the subprocess")
+
+    # ASSERTED BY BEHAVIOUR, NOT BY SPELLING.
+    #
+    # This was `assert "timeout=CENSUS_TIMEOUT_S" in src`. v1.10.48 renamed the
+    # argument to `timeout_s` (defaulting to CENSUS_TIMEOUT_S) so the bound could
+    # differ between the two callers, whose wall clocks are an order of magnitude
+    # apart. The constant still reaches the subprocess; only its spelling at the
+    # call site changed, and the old assertion could not tell those apart.
+    #
+    # The property is "a bound reaches the subprocess AND CAN FIRE", so fire it:
+    # a 1-second bound must return promptly with a named reason and zero declared
+    # paths, rather than hanging or claiming a re-derivation it did not do.
+    import time as _t
+    t0 = _t.time()
+    wrote, why = G._default_census_writer(G.REPO, 1.0)
+    dt = _t.time() - t0
+    assert dt < 60, (
+        f"a 1s bound took {dt:.0f}s to return — the bound is declared and not "
+        f"actually applied to the subprocess")
+    assert why and "did not finish" in why, (
+        f"the bound fired but said nothing usable: {why!r}. A refusal that cannot "
+        f"name itself sends the next reader to the wrong place")
+    assert wrote == [], (
+        f"the bound fired and the writer still declared {wrote} — a killed child's "
+        f"`finally` never runs, so anything declared here is a claim about work "
+        f"that was not finished")
+
     assert "subprocess.TimeoutExpired" in src, (
         "a bound with no handler takes the preparation down instead of "
         "reporting NOT RE-DERIVED")
