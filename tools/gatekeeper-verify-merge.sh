@@ -230,6 +230,7 @@ LAND="$REPO/tools/gatekeeper-land.sh"
 RUN="$(mktemp -d -t gkverify.XXXXXX)"
 WT_CAND="$RUN/candidate"
 WT_BASE="$RUN/base"
+WT_BASE_TESTS="$RUN/base-tests"
 # PER-RUN ref names. Two verifications of two different PRs may legitimately be
 # in flight at once (the merge queue is serialized; a gatekeeper reading ahead is
 # not), and a fixed `refs/gk-verify/head` would have had each run fetching over
@@ -239,12 +240,40 @@ HEAD_REF="refs/gk-verify/$RUN_ID/head"
 MERGE_REF="refs/gk-verify/$RUN_ID/merge"
 
 cleanup() {
+  # Every measured arm owns a process group.  Stop the entire group before its
+  # worktree disappears; killing only the wrapper shell leaves pytest or a gate
+  # subprocess running against a directory cleanup is about to remove.
+  for pid in "${A1_PID:-}" "${A2_PID:-}"; do
+    [ -n "$pid" ] || continue
+    kill -TERM -- "-$pid" >/dev/null 2>&1 || true
+  done
+  # TERM is cooperative.  Bound that cooperation so a broken test cannot turn
+  # Ctrl-C into another unbounded wait, then remove every remaining descendant
+  # in the arm's dedicated process group.
+  for _ in {1..20}; do
+    alive=0
+    for pid in "${A1_PID:-}" "${A2_PID:-}"; do
+      [ -n "$pid" ] || continue
+      if kill -0 -- "-$pid" >/dev/null 2>&1; then alive=1; fi
+    done
+    [ "$alive" = "0" ] && break
+    sleep 0.1
+  done
+  for pid in "${A1_PID:-}" "${A2_PID:-}"; do
+    [ -n "$pid" ] || continue
+    kill -KILL -- "-$pid" >/dev/null 2>&1 || true
+  done
+  for pid in "${A1_PID:-}" "${A2_PID:-}"; do
+    [ -n "$pid" ] || continue
+    wait "$pid" >/dev/null 2>&1 || true
+  done
   if [ "$KEEP" = "1" ]; then
     echo "--- kept: $RUN (worktrees included)"
     return
   fi
   "${G[@]}" worktree remove --force "$WT_CAND" >/dev/null 2>&1
   "${G[@]}" worktree remove --force "$WT_BASE" >/dev/null 2>&1
+  "${G[@]}" worktree remove --force "$WT_BASE_TESTS" >/dev/null 2>&1
   "${G[@]}" update-ref -d "$HEAD_REF"  >/dev/null 2>&1
   "${G[@]}" update-ref -d "$MERGE_REF" >/dev/null 2>&1
   rm -rf "$RUN"
@@ -520,13 +549,22 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   # ------------------------- 5b. ARM A — the same tests on the UNTOUCHED base
   # Only files that EXIST at the base: a test the PR adds cannot have an opinion
   # there, and its absence is a real outcome the verdict reads as ABSENT.
+  # A1 and A2 MUST NOT share a checkout.  Tests in this repository have been
+  # observed writing into their worktree; sharing would make A2 grade A1's
+  # residue.  Separate checkouts let all three expensive arms run concurrently
+  # without changing which tree or selection any arm measures.
+  "${G[@]}" worktree add -q --detach "$WT_BASE_TESTS" "$BASE_SHA" \
+    || die "cannot create the base-test worktree"
   "${G[@]}" worktree add -q --detach "$WT_BASE" "$BASE_SHA" \
-    || die "cannot create the base worktree"
+    || die "cannot create the base-gate worktree"
   BASE_PLUGIN="$WT_BASE/$PLUGIN_REL"
+  BASE_TEST_PLUGIN="$WT_BASE_TESTS/$PLUGIN_REL"
   : > "$RUN/selection_base.txt"
   while read -r f; do
-    [ -n "$f" ] && [ -f "$BASE_PLUGIN/$f" ] && printf '%s\n' "$f" >> "$RUN/selection_base.txt"
+    [ -n "$f" ] && [ -f "$BASE_TEST_PLUGIN/$f" ] && printf '%s\n' "$f" >> "$RUN/selection_base.txt"
   done < "$RUN/selection.txt"
+  A1_PID=""
+  A1_RC=0
   if [ -s "$RUN/selection_base.txt" ]; then
     # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
     # failed set, and a truncated base makes a new failure look pre-existing.
@@ -549,37 +587,19 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # that kills a session at collection (`web3`'s `pytest_ethereum`, measured
     # in `gatekeeper-land.sh`), so both settings of the ambient switch could
     # take this arm down while arm B ran. Declared here instead of inherited.
-    ( cd "$BASE_PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-        xargs -a "$RUN/selection_base.txt" \
-        python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-        -p no:cacheprovider -o junit_family=xunit1 "--junitxml=$BASE_JUNIT" ) \
-        > "$RUN/base_tests.log" 2>&1
-    A1_RC=$?
-    # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
-    # summary is a `rootdir:` line or an empty one, so the arm that COULD NOT
-    # LOOK printed indistinguishably from — and often more quietly than — the
-    # arm that looked and found nothing. The verdict then reads `0 on the base`
-    # and every pre-existing red becomes `NEW FAILURE(S) THIS BRANCH OWNS`.
-    # Strict, so never a false landing; but it refuses a conformant PR for a
-    # failure it does not own, and #1417's whole finding is that merge capacity
-    # — not authoring — is this repo's bottleneck. An unmeasured arm is NAMED.
-    if [ -s "$BASE_JUNIT" ]; then
-      echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
-    else
-      echo "--- arm A1 UNMEASURED (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and no" \
-           "junit report; the base failed set is UNKNOWN, not empty. The" \
-           "differential below degrades to 'demand green' and will blame this" \
-           "branch for reds it did not introduce. Last lines:"
-      tail -5 "$RUN/base_tests.log" | sed 's/^/      /'
-    fi
-  else
-    echo "--- arm A1: no selected file exists at the base — the differential will demand green"
+    # A1, A2 and B are the critical path, so start A1 now and join it only after
+    # B finishes.  `setsid` gives cleanup a process group it can stop as a unit;
+    # the pytest child must not survive an interrupted verifier.
+    setsid bash -c '
+      cd "$1" || exit 2
+      exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 GATEKEEPER_VERIFY_ARM=A1 \
+        xargs -a "$2" python3 -m pytest -q -p pytest_timeout \
+        --timeout=180 --timeout-method=thread -p no:cacheprovider \
+        -o junit_family=xunit1 "--junitxml=$3"
+    ' gkverify-a1 "$BASE_TEST_PLUGIN" "$RUN/selection_base.txt" "$BASE_JUNIT" \
+      > "$RUN/base_tests.log" 2>&1 &
+    A1_PID=$!
   fi
-  # A MEASUREMENT'S SIDE EFFECTS MUST NOT BECOME THE NEXT MEASUREMENT'S INPUT.
-  # Arm A1 is a pytest run over the shipped tree, and at least one test in this
-  # repo's own suite has been observed writing into it; leaving that behind would
-  # make arm A2 report a dirty base worktree that arm A1 dirtied.
-  git -C "$WT_BASE" checkout -q -- . 2>/dev/null
 
   # ------------- 5c. ARM A2 — the SAME landing gates on the UNTOUCHED base
   # Two of the repo-hygiene gates are red on `main` as measured 2026-08-12, so
@@ -622,12 +642,14 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       echo "            hygiene tier falls back to the per-LABEL comparison"
     fi
   else
-    ( cd "$WT_BASE" && \
-        GATEKEEPER_BASE="$BASE_SHA" \
+    setsid bash -c '
+      cd "$1" || exit 2
+      exec env GATEKEEPER_VERIFY_ARM=A2 GATEKEEPER_BASE="$2" \
         GATEKEEPER_VERSION_BY_GATEKEEPER=1 \
-        GATEKEEPER_HYGIENE_REPORT="$BASE_HYG" \
-        GATEKEEPER_HYGIENE_PROGRESS="$RUN/base_hygiene_progress.jsonl" \
-        bash tools/gatekeeper-land.sh ) > "$RUN/base_land.log" 2>&1 &
+        GATEKEEPER_HYGIENE_REPORT="$3" GATEKEEPER_HYGIENE_PROGRESS="$4" \
+        bash tools/gatekeeper-land.sh
+    ' gkverify-a2 "$WT_BASE" "$BASE_SHA" "$BASE_HYG" \
+      "$RUN/base_hygiene_progress.jsonl" > "$RUN/base_land.log" 2>&1 &
     A2_PID=$!
   fi
 
@@ -648,6 +670,7 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     echo "          Rebase the branch onto a base that carries the merge-path gate."
   fi
   ( cd "$WT_CAND" && \
+      GATEKEEPER_VERIFY_ARM=B \
       GATEKEEPER_BASE="$BASE_SHA" \
       GATEKEEPER_PYTEST_JUNIT="$CAND_JUNIT" \
       GATEKEEPER_PYTEST_MAXFAIL=0 \
@@ -657,7 +680,34 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       bash tools/gatekeeper-land.sh ) > "$RUN/land.log" 2>&1
   echo "--- arm B (squash ${VERIFIED_SHA:0:12}): gatekeeper-land.sh rc=$?"
   sed -n 's/^  \(PASS\|FAIL\|SKIP\|REPORT\)  /      \1  /p' "$RUN/land.log"
-  [ -n "${A2_PID:-}" ] && wait "$A2_PID" 2>/dev/null
+  if [ -n "$A1_PID" ]; then
+    wait "$A1_PID"
+    A1_RC=$?
+    A1_PID=""
+    # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
+    # summary is a `rootdir:` line or an empty one, so the arm that COULD NOT
+    # LOOK printed indistinguishably from — and often more quietly than — the
+    # arm that looked and found nothing. The verdict then reads `0 on the base`
+    # and every pre-existing red becomes `NEW FAILURE(S) THIS BRANCH OWNS`.
+    # Strict, so never a false landing; but it refuses a conformant PR for a
+    # failure it does not own, and #1417's whole finding is that merge capacity
+    # — not authoring — is this repo's bottleneck. An unmeasured arm is NAMED.
+    if [ -s "$BASE_JUNIT" ]; then
+      echo "--- arm A1 (base ${BASE_SHA:0:12}): $(tail -1 "$RUN/base_tests.log")"
+    else
+      echo "--- arm A1 UNMEASURED (base ${BASE_SHA:0:12}): pytest rc=$A1_RC and no" \
+           "junit report; the base failed set is UNKNOWN, not empty. The" \
+           "differential below degrades to 'demand green' and will blame this" \
+           "branch for reds it did not introduce. Last lines:"
+      tail -5 "$RUN/base_tests.log" | sed 's/^/      /'
+    fi
+  else
+    echo "--- arm A1: no selected file exists at the base — the differential will demand green"
+  fi
+  if [ -n "${A2_PID:-}" ]; then
+    wait "$A2_PID" 2>/dev/null
+    A2_PID=""
+  fi
   # Written only after a REAL measurement, and only if it named some gate — an
   # empty or truncated log cached would answer every later verification with
   # "the base fails nothing", which is the permissive direction.
