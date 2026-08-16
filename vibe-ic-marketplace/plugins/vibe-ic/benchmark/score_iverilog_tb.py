@@ -1800,6 +1800,34 @@ def _canonical_disagrees_with_golden(prob: str, dataset: Path, layout: dict,
                 f"{mism}/{tot} samples")
 
 
+def _semantic_prompt_oracle_evidence(prob: str, dataset: Path,
+                                     layout: dict) -> Optional[str]:
+    """Return prompt-vs-golden contradiction evidence for a Shape-C problem.
+
+    This scorer adapter deliberately owns no semantic rules.  It routes the
+    prompt and golden reference through the general, fail-closed semantic floor
+    program used by the benchmark tier pipelines.  Unsupported or ambiguous
+    prompt classes return ``None``; scorer operation must never depend on this
+    advisory audit being available.
+    """
+    prompt_suffix = layout.get("prompt_suffix")
+    ref_suffix = layout.get("ref_suffix")
+    if not prompt_suffix or not ref_suffix:
+        return None
+    prompt = dataset / f"{prob}{prompt_suffix}"
+    ref = dataset / f"{prob}{ref_suffix}"
+    if not (prompt.is_file() and ref.is_file()):
+        return None
+    try:
+        from semantic_spec_floor_check import semantic_floor_evidence
+        return semantic_floor_evidence(
+            prompt.read_text(errors="replace"),
+            ref.read_text(errors="replace"),
+        )
+    except Exception:
+        return None
+
+
 def _score_shape_c(prob: str, samples: Path, dataset: Path,
                    layout: dict, args: dict) -> dict:
     """Shape-C scorer wrapper: run the core scorer, then on a FAIL annotate
@@ -1813,14 +1841,28 @@ def _score_shape_c(prob: str, samples: Path, dataset: Path,
         if gref is False:
             res["dataset_defect"] = True
             res["dataset_defect_reason"] = "golden_ref_fails_own_tb"
-        elif args.get("_bench"):
-            # second audit class (disclosure-only; see helper docstring)
-            ev = _canonical_disagrees_with_golden(prob, dataset, layout,
-                                                  args, args["_bench"])
+        elif str(res.get("reason", "")).startswith("functional_mismatch"):
+            # Semantic prompt↔oracle contradiction (disclosure-only).  This is
+            # stronger and more general than a curated canonical sample: it
+            # cites an independently extracted prompt truth and uses the shared
+            # semantic-floor program.  Raw verdict/pass@1 remain unchanged.
+            ev = _semantic_prompt_oracle_evidence(prob, dataset, layout)
             if ev:
                 res["dataset_defect_suspected"] = True
-                res["dataset_defect_reason"] = "suspected_defective_golden"
+                res["dataset_defect_reason"] = \
+                    "semantic_prompt_oracle_contradiction"
+                res["semantic_floor_evidence"] = ev
                 res["canonical_evidence"] = ev
+            elif args.get("_bench"):
+                # Curated canonical disagreement remains the fallback for
+                # semantic classes the general floor program cannot extract.
+                ev = _canonical_disagrees_with_golden(
+                    prob, dataset, layout, args, args["_bench"])
+                if ev:
+                    res["dataset_defect_suspected"] = True
+                    res["dataset_defect_reason"] = \
+                        "suspected_defective_golden"
+                    res["canonical_evidence"] = ev
     return res
 
 
@@ -2076,6 +2118,7 @@ def main():
         "suspected_defective_golden_count": n_dsus,
         "suspected_defective_golden_problems": [
             {"problem": r[ident].split('/')[-1],
+             "reason": r.get("dataset_defect_reason", ""),
              "evidence": r.get("canonical_evidence", "")} for r in dsus],
         "pass_at_1_excluding_suspected_defects_pct": round(
             100.0 * npass / n_eff_unsuspected, 2) if n_eff_unsuspected else 0.0,
@@ -2115,10 +2158,10 @@ def main():
         print(f"  pass@1 excluding dataset defects = {npass}/{n_eff_satisfiable} = "
               f"{summary['pass_at_1_excluding_dataset_defects_pct']}%")
     if n_dsus:
-        print(f"  ⓘ {n_dsus} SUSPECTED defective golden(s) — the vetted canonical "
-              f"sample fails the hidden golden at a high mismatch rate "
-              f"(disclosure-only; counted in pass@1): " +
-              ", ".join(f"{d['problem']} ({d['evidence']})"
+        print(f"  ⓘ {n_dsus} SUSPECTED benchmark-oracle defect(s) — independent "
+              f"prompt semantics or a vetted canonical sample contradicts the "
+              f"golden (disclosure-only; counted in pass@1): " +
+              ", ".join(f"{d['problem']} [{d['reason']}] ({d['evidence']})"
                         for d in summary['suspected_defective_golden_problems']))
         print(f"  advisory pass@1 excluding suspected defects = "
               f"{npass}/{n_eff_unsuspected} = "
