@@ -77,6 +77,68 @@ def test_real_dispatch_writes_owner_only_records_into_its_summary(tmp_path):
     assert records[1]["finding_identities"] == ["[FAIL] named-red"]
 
 
+def test_real_dispatch_mirrors_each_complete_record_to_live_progress(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "benchmark-data").mkdir(parents=True)
+    script = tmp_path / "gates.sh"
+    attested = tmp_path / "shard.jsonl"
+    progress = tmp_path / "live.jsonl"
+    summary = tmp_path / "summary.json"
+    script.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        f"ROOT={str(repo)!r}\n"
+        f"GATE_DISPATCH_ATTESTATION_FILE={str(attested)!r}\n"
+        f"GATE_DISPATCH_PROGRESS_FILE={str(progress)!r}\n"
+        f"GATE_DISPATCH_ATTESTATION_HELPER={str(HELPER)!r}\n"
+        "export ROOT GATE_DISPATCH_ATTESTATION_FILE "
+        "GATE_DISPATCH_PROGRESS_FILE GATE_DISPATCH_ATTESTATION_HELPER\n"
+        f". {str(DISPATCH)!r}\n"
+        "gate_dispatch_init \"$@\"\n"
+        "run 'observable gate' \"$ROOT\" python3 -c "
+        "\"print('[PASS] observed')\"\n"
+        "gate_dispatch_finish\n")
+
+    proc = subprocess.run(
+        ["bash", str(script), "--summary-json", str(summary)],
+        capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert A.load_jsonl(progress) == A.load_jsonl(attested)
+    assert stat.S_IMODE(progress.stat().st_mode) == 0o600
+
+
+def test_a_live_progress_mirror_that_cannot_be_written_refuses(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "benchmark-data").mkdir(parents=True)
+    script = tmp_path / "gates.sh"
+    attested = tmp_path / "shard.jsonl"
+    progress_directory = tmp_path / "not-a-jsonl"
+    progress_directory.mkdir()
+    summary = tmp_path / "summary.json"
+    script.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        f"ROOT={str(repo)!r}\n"
+        f"GATE_DISPATCH_ATTESTATION_FILE={str(attested)!r}\n"
+        f"GATE_DISPATCH_PROGRESS_FILE={str(progress_directory)!r}\n"
+        f"GATE_DISPATCH_ATTESTATION_HELPER={str(HELPER)!r}\n"
+        "export ROOT GATE_DISPATCH_ATTESTATION_FILE "
+        "GATE_DISPATCH_PROGRESS_FILE GATE_DISPATCH_ATTESTATION_HELPER\n"
+        f". {str(DISPATCH)!r}\n"
+        "gate_dispatch_init \"$@\"\n"
+        "run 'green but unobservable' \"$ROOT\" python3 -c "
+        "\"print('[PASS] observed')\"\n"
+        "gate_dispatch_finish\n")
+
+    proc = subprocess.run(
+        ["bash", str(script), "--summary-json", str(summary)],
+        capture_output=True, text=True)
+    output = proc.stdout + proc.stderr
+    assert proc.returncode == 2, output
+    assert "PROCESS PROGRESS MIRROR FAILED" in output
+    doc = json.loads(summary.read_text())
+    assert any("machine attestation" in item
+               for item in doc["wiring_errors"])
+
+
 def test_requested_attestation_with_missing_helper_refuses_the_run(tmp_path):
     repo = tmp_path / "repo"
     (repo / "benchmark-data").mkdir(parents=True)

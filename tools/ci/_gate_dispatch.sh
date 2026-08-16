@@ -158,6 +158,11 @@ GATE_DISPATCH_LIST_ONLY=0
 # without the helper retain the historical execution path byte-for-byte.
 GATE_DISPATCH_ATTESTATION_FILE="${GATE_DISPATCH_ATTESTATION_FILE:-}"
 GATE_DISPATCH_ATTESTATION_HELPER="${GATE_DISPATCH_ATTESTATION_HELPER:-}"
+# Optional live, owner-facing mirror.  The attestation file above may be a
+# per-shard scratch record that is merged only at the end; this second channel
+# receives the same complete records as soon as each owned gate finishes, so a
+# supervisor waits on measured progress instead of a guessed whole-run timeout.
+GATE_DISPATCH_PROGRESS_FILE="${GATE_DISPATCH_PROGRESS_FILE:-}"
 GATE_DISPATCH_ATTESTATION_FAILED=0
 #: `--shard I/N` (vibe-ic#1144). -1 = not sharded, run everything.
 GATE_DISPATCH_SHARD_I=-1
@@ -455,6 +460,16 @@ exemption describes a state this gate cannot reach"
         echo "   ^^ PROCESS ATTESTATION FAILED: $label — the gate ran, but its" \
              "machine verdict record was not written; host comparison will" \
              "refuse rather than reconstruct it from prose" >&2
+      elif [ -n "$GATE_DISPATCH_PROGRESS_FILE" ] \
+           && [ "$GATE_DISPATCH_PROGRESS_FILE" != "$GATE_DISPATCH_ATTESTATION_FILE" ] \
+           && ! python3 "$GATE_DISPATCH_ATTESTATION_HELPER" \
+          --label "$label" --returncode "$rc" --output-log "$capture" \
+          --append-jsonl "$GATE_DISPATCH_PROGRESS_FILE" \
+          --root "${ROOT:-$wd}" --root "$wd" -- "$@"; then
+        GATE_DISPATCH_ATTESTATION_FAILED=1
+        echo "   ^^ PROCESS PROGRESS MIRROR FAILED: $label — the gate ran, but" \
+             "its live completion event was not preserved; this run cannot" \
+             "claim observable progress" >&2
       fi
       rm -f -- "$capture"
     else

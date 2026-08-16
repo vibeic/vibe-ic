@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import signal
 import sys
+import time
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parents[1]
@@ -105,6 +108,76 @@ def test_missing_process_attestation_cannot_become_green():
     assert any(P.HOST_LABEL in problem and "attestation" in problem
                for problem in problems)
     assert P._summary_rc(doc) == 2
+
+
+def test_worker_waits_for_completion_while_progress_events_keep_advancing(
+        tmp_path, monkeypatch):
+    """A slow run is not killed for exceeding an estimated runtime.
+
+    It emits no stdout; only the owner progress file advances.  The total run
+    intentionally lasts several stall windows, proving each measured event
+    resets supervision until the process exits naturally.
+    """
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
+    progress = tmp_path / "live.jsonl"
+    child = (
+        "import pathlib,sys,time\n"
+        "p=pathlib.Path(sys.argv[1])\n"
+        "for i in range(8):\n"
+        " p.open('a').write(str(i)+'\\n')\n"
+        " time.sleep(0.12)\n"
+    )
+    started = time.monotonic()
+    rc, out, problem = P._run(
+        [sys.executable, "-c", child, str(progress)], tmp_path,
+        os.environ.copy(), progress_path=progress, stall_grace_s=0.3)
+    assert time.monotonic() - started > 0.8
+    assert (rc, problem) == (0, None), (rc, out, problem)
+    assert progress.read_text().splitlines()[-1] == "7"
+
+
+def test_worker_classifies_silent_idle_process_as_stalled_not_timed_out(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
+    rc, out, problem = P._run(
+        [sys.executable, "-c", "import time; time.sleep(30)"], tmp_path,
+        os.environ.copy(), stall_grace_s=0.3)
+    assert rc == P._wd.RC_STALLED
+    assert "WATCHDOG_STALLED" in out
+    assert problem and "outcome=stalled" in problem
+
+
+def test_stall_kills_a_term_ignoring_descendant_not_only_its_wrapper(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
+    grandchild = (
+        "import os,signal,time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "print('GRANDCHILD='+str(os.getpid()), flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    parent = (
+        "import subprocess,sys,time\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
+        "time.sleep(30)\n"
+    )
+    rc, out, problem = P._run(
+        [sys.executable, "-c", parent], tmp_path, os.environ.copy(),
+        stall_grace_s=0.3)
+    assert rc == P._wd.RC_STALLED and problem, (rc, out, problem)
+    line = next(line for line in out.splitlines()
+                if line.startswith("GRANDCHILD="))
+    child_pid = int(line.split("=", 1)[1])
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    else:
+        os.kill(child_pid, signal.SIGKILL)
+        raise AssertionError(f"TERM-ignoring descendant {child_pid} survived")
 
 
 def _attest(path: Path, output: str = "[PASS] same"):

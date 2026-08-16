@@ -16,6 +16,7 @@ import atexit
 import concurrent.futures
 import json
 import os
+import signal
 import stat
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 import _crash_safe_scratch as _scratch
+import _watchdog as _wd
 from _atomic_artefact import write_json, write_text
 from hygiene_shard_plan import load_profile, plan
 from policy_direction_pin_check import acquire_run_lock, recover_all_journals
@@ -38,7 +40,8 @@ HOST_LABEL = "gates are host-independent"
 # pipelined across A/B.
 LOAD_SENSITIVE_LABELS = ("63x8 census freshness",)
 DEFAULT_JOBS = 8
-DEFAULT_WORKER_TIMEOUT = 1800
+DEFAULT_STALL_GRACE_S = 300
+DEFAULT_POLL_S = 5
 _FRESH_PREFIX = "hygiene-fresh-"
 
 
@@ -47,16 +50,16 @@ def _unregister_fresh(scratch: Path) -> None:
     if not wt.exists():
         return
     subprocess.run(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
-                   capture_output=True, text=True, timeout=120)
+                   capture_output=True, text=True)
     subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
-                    str(wt)], capture_output=True, text=True, timeout=120)
+                    str(wt)], capture_output=True, text=True)
 
 
 def _release_fresh(res: Any, repo: Path) -> None:
     _unregister_fresh(res.path)
     res.release()
     subprocess.run(["git", "-C", str(repo), "worktree", "prune"],
-                   capture_output=True, text=True, timeout=120)
+                   capture_output=True, text=True)
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -86,20 +89,51 @@ def _write_jsonl(path: Path, rows: Sequence[Dict[str, Any]]) -> None:
     path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
 
-def _run(argv: List[str], cwd: Path, env: Dict[str, str], timeout: int):
-    try:
-        proc = subprocess.run(argv, cwd=str(cwd), env=env,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True,
-                              timeout=timeout)
-        return proc.returncode, proc.stdout or "", None
-    except subprocess.TimeoutExpired as exc:
-        body = (exc.stdout or "")
-        if isinstance(body, bytes):
-            body = body.decode("utf-8", "replace")
-        return -9, body, f"did not finish within {timeout}s"
-    except OSError as exc:
-        return -1, "", f"could not launch: {exc}"
+def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
+         progress_path: Path | None = None,
+         stall_grace_s: int = DEFAULT_STALL_GRACE_S):
+    """Run until natural completion while supervising FORWARD PROGRESS.
+
+    There is deliberately no whole-run timeout.  Output growth or a completed
+    gate attestation resets the stall clock, so a slow but progressing shard is
+    allowed to finish however long it needs.  Only a process that is both
+    silent and making no recorded progress for ``stall_grace_s`` is killed.
+    """
+    def _popen(command, **kwargs):
+        # One process group per shard lets a genuine stall kill the complete
+        # descendant tree rather than only its wrapper shell.
+        kwargs.pop("stderr", None)
+        return subprocess.Popen(
+            command, cwd=str(cwd), start_new_session=True,
+            stderr=subprocess.STDOUT, **kwargs)
+
+    def _kill_group(proc, _reason):
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+        # The wrapper may have exited on TERM while a descendant ignored it.
+        # Address the process GROUP even after wait() returned naturally.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    result = _wd.run_supervised(
+        argv, env=env, log_path=progress_path,
+        stall_grace_s=stall_grace_s, poll_s=DEFAULT_POLL_S,
+        hard_ceiling_s=float("inf"), popen_factory=_popen,
+        kill=_kill_group)
+    body = (result.out or "") + (result.err or "")
+    problem = None
+    if result.outcome != "natural":
+        problem = (f"progress watchdog outcome={result.outcome}, "
+                   f"rc={result.rc}; the shard did not complete naturally")
+    return result.rc, body, problem
 
 
 def _validate_declarations(reference: Dict[str, Any], doc: Dict[str, Any],
@@ -225,14 +259,17 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--summary-json", type=Path, required=True)
     ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS)
-    ap.add_argument("--worker-timeout", type=int, default=DEFAULT_WORKER_TIMEOUT)
+    ap.add_argument("--stall-grace", type=int, default=DEFAULT_STALL_GRACE_S,
+                    help="seconds with neither output nor a completed gate "
+                         "record before a shard is classified STALLED; this "
+                         "is not a whole-run runtime limit")
     args = ap.parse_args(argv)
 
     root = Path(__file__).resolve().parents[4]
     script = root / "tools" / "ci" / "repo_hygiene_gates.sh"
     profile_path = Path(__file__).resolve().parent / "hygiene_gate_profile.json"
-    if args.jobs < 1 or args.worker_timeout < 1:
-        print("[ERROR] jobs and worker-timeout must be positive", file=sys.stderr)
+    if args.jobs < 1 or args.stall_grace < 1:
+        print("[ERROR] jobs and stall-grace must be positive", file=sys.stderr)
         return 2
     started = time.monotonic()
     problems: List[str] = []
@@ -244,7 +281,7 @@ def main(argv=None) -> int:
         list_env.pop("GATE_DISPATCH_ATTESTATION_FILE", None)
         list_rc, list_out, list_err = _run(
             ["bash", str(script), "--list", "--summary-json", str(list_json)],
-            root, list_env, 120)
+            root, list_env, stall_grace_s=args.stall_grace)
         if list_err or list_rc != 0 or not list_json.is_file():
             print("[ERROR] could not establish the hygiene denominator: "
                   + (list_err or list_out[-300:]), file=sys.stderr)
@@ -300,7 +337,7 @@ def main(argv=None) -> int:
         add = subprocess.run(
             ["git", "-C", str(root), "worktree", "add", "-q", "--detach",
              str(fresh_root), "HEAD"], capture_output=True, text=True,
-            timeout=180)
+        )
         if add.returncode != 0:
             fresh_res.release()
             print("[ERROR] could not create the pipelined fresh tree: "
@@ -310,6 +347,17 @@ def main(argv=None) -> int:
         atexit.register(cleanup)
 
         total_shards = jobs + (1 if sensitive else 0) + 1
+        requested_progress = os.environ.get("GATE_DISPATCH_ATTESTATION_FILE")
+        if requested_progress:
+            progress_path = Path(requested_progress).resolve()
+            progress_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                progress_path.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            progress_path = None
+
         workers = []
         for i, bucket in enumerate(buckets):
             labels_path = tmp / f"labels-{i}.txt"
@@ -319,6 +367,10 @@ def main(argv=None) -> int:
                 attest = tmp / f"attest-{arm}-{i}.jsonl"
                 env = os.environ.copy()
                 env["GATE_DISPATCH_ATTESTATION_FILE"] = str(attest)
+                if arm == "A" and progress_path is not None:
+                    env["GATE_DISPATCH_PROGRESS_FILE"] = str(progress_path)
+                else:
+                    env.pop("GATE_DISPATCH_PROGRESS_FILE", None)
                 env["VIBEIC_POLICY_COHORT_LOCKED"] = "1"
                 arm_script = arm_root / "tools" / "ci" / "repo_hygiene_gates.sh"
                 argv_i = ["bash", str(arm_script), "--shard",
@@ -329,7 +381,9 @@ def main(argv=None) -> int:
 
         def run_worker(row):
             arm, i, bucket, arm_root, summary, attest, argv_i, env = row
-            rc, out, err = _run(argv_i, arm_root, env, args.worker_timeout)
+            rc, out, err = _run(
+                argv_i, arm_root, env, progress_path=attest,
+                stall_grace_s=args.stall_grace)
             return arm, i, bucket, summary, attest, rc, out, err
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs * 2) as pool:
@@ -350,6 +404,10 @@ def main(argv=None) -> int:
                 attest = tmp / f"attest-{arm}-sensitive.jsonl"
                 env = os.environ.copy()
                 env["GATE_DISPATCH_ATTESTATION_FILE"] = str(attest)
+                if arm == "A" and progress_path is not None:
+                    env["GATE_DISPATCH_PROGRESS_FILE"] = str(progress_path)
+                else:
+                    env.pop("GATE_DISPATCH_PROGRESS_FILE", None)
                 env["VIBEIC_POLICY_COHORT_LOCKED"] = "1"
                 arm_script = arm_root / "tools" / "ci" / "repo_hygiene_gates.sh"
                 argv_i = ["bash", str(arm_script), "--shard",
@@ -414,7 +472,7 @@ def main(argv=None) -> int:
         if set(b_by_label) - set(phase_a_labels):
             problems.append("Arm B produced unplanned attestations")
 
-        requested_attest = os.environ.get("GATE_DISPATCH_ATTESTATION_FILE")
+        requested_attest = requested_progress
         merged_attest = (Path(requested_attest).resolve() if requested_attest
                          else tmp / "merged-attest.jsonl")
         fresh_attest = tmp / "fresh-attest.jsonl"
@@ -434,8 +492,9 @@ def main(argv=None) -> int:
             host_argv = ["bash", str(script), "--shard",
                          f"{host_i}/{total_shards}", "--shard-labels",
                          str(host_labels), "--summary-json", str(host_summary)]
-            hrc, hout, herr = _run(host_argv, root, host_env,
-                                   args.worker_timeout)
+            hrc, hout, herr = _run(
+                host_argv, root, host_env, progress_path=merged_attest,
+                stall_grace_s=args.stall_grace)
             print(f"=== hygiene dependent shard {host_i}/{total_shards}: "
                   f"1 gate, rc={hrc} ===")
             if hout:
