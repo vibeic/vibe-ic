@@ -13,6 +13,18 @@ import rtl_hygiene_lint as lint
 
 REAL_FIXTURES = Path(__file__).parent / "fixtures" / "real_benchmark"
 BLOCKING = (REAL_FIXTURES / "delay_driven_output_oscillator.v").read_text()
+TASK_NEAR_MISS = """
+module task_source(output reg y, output reg unrelated_wave);
+  initial y = 0;
+  initial begin
+    forever #5 unrelated_wave = ~unrelated_wave;
+  end
+  task toggle_y;
+    #5 y = ~y;
+  endtask
+  initial unrelated_wave = 0;
+endmodule
+"""
 
 
 def _hits(text: str, path: str = "oscillator.v"):
@@ -83,9 +95,26 @@ endmodule
     # An extra functional writer makes intent ambiguous.
     "module m(output reg y); initial begin y=0; forever #5 y=~y; end "
     "initial #2 y=1; endmodule\n",
+    # A preceding, completed initial/forever block must not lend its process
+    # context to a delayed assignment in a later task body.
+    TASK_NEAR_MISS,
+    # A forever elsewhere in the same initial block does not dominate y.
+    "module m(output reg y, output reg z); initial y=0; initial begin "
+    "if (1'b0) forever #5 z=~z; #5 y=~y; end initial z=0; endmodule\n",
+    # A syntactically bare always that waits on an event before the toggle is
+    # event-driven, not the delay-only oscillator class this fixer owns.
+    "module m(output reg y, output reg z); initial y=0; initial z=0; "
+    "always begin #1; @(posedge z); #5 y=~y; end endmodule\n",
 ])
 def test_no_leak_near_miss_patterns_are_untouched(text):
     assert _hits(text) == []
+
+
+def test_fix_does_not_rewrite_task_body_after_unrelated_oscillator(tmp_path):
+    rtl = tmp_path / "task_source.v"
+    rtl.write_text(TASK_NEAR_MISS)
+    assert lint.autofix_delayed_blocking_clock_toggle(rtl) == (0, [])
+    assert rtl.read_text() == TASK_NEAR_MISS
 
 
 def test_testbench_module_is_never_rewritten():
