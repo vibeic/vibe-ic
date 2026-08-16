@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 
 
@@ -17,6 +18,8 @@ _PATH_ENV = "VIBEIC_PYTEST_PROGRESS_FILE"
 _NONCE_ENV = "VIBEIC_PYTEST_PROGRESS_NONCE"
 _SCHEMA = 1
 _seq = 0
+_current_nodeid = None
+_emit_lock = threading.Lock()
 
 
 def _emit(event: str, **fields) -> None:
@@ -25,28 +28,29 @@ def _emit(event: str, **fields) -> None:
     nonce = os.environ.get(_NONCE_ENV)
     if not path or not nonce:
         return
-    _seq += 1
-    record = {
-        "schema": _SCHEMA,
-        "nonce": nonce,
-        "pid": os.getpid(),
-        "seq": _seq,
-        "event": event,
-        "monotonic_ns": time.monotonic_ns(),
-        **fields,
-    }
-    payload = (json.dumps(record, sort_keys=True, separators=(",", ":"))
-               + "\n").encode("utf-8")
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with _emit_lock:
+        _seq += 1
+        record = {
+            "schema": _SCHEMA,
+            "nonce": nonce,
+            "pid": os.getpid(),
+            "seq": _seq,
+            "event": event,
+            "monotonic_ns": time.monotonic_ns(),
+            **fields,
+        }
+        payload = (json.dumps(record, sort_keys=True, separators=(",", ":"))
+                   + "\n").encode("utf-8")
         try:
-            os.write(fd, payload)
-        finally:
-            os.close(fd)
-    except OSError:
-        # The parent treats a missing/stalled/malformed channel as NORECORD.
-        # Raising here could prevent pytest teardown from preserving JUnit.
-        pass
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, payload)
+            finally:
+                os.close(fd)
+        except OSError:
+            # The parent treats a missing/stalled/malformed channel as NORECORD.
+            # Raising here could prevent pytest teardown from preserving JUnit.
+            pass
 
 
 def pytest_sessionstart(session) -> None:
@@ -69,8 +73,28 @@ def pytest_collection_finish(session) -> None:
     _emit("collection_finish", selected_items=len(session.items))
 
 
+def pytest_runtest_logstart(nodeid, location) -> None:
+    global _current_nodeid
+    _current_nodeid = str(nodeid)
+
+
+def domain_progress(scope: str, completed: int, total: int) -> None:
+    """Record finite, monotonic progress inside one long pytest item.
+
+    This is deliberately an explicit checkpoint, not a heartbeat.  The parent
+    validates a fixed total and exact ``+1`` transitions, so output, CPU use or
+    an accidental duplicate cannot keep a stuck item alive indefinitely.
+    """
+    if _current_nodeid is None:
+        return
+    _emit("domain_progress", nodeid=_current_nodeid, scope=str(scope),
+          completed=int(completed), total=int(total))
+
+
 def pytest_runtest_logfinish(nodeid, location) -> None:
+    global _current_nodeid
     _emit("test_finish", nodeid=str(nodeid))
+    _current_nodeid = None
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:
