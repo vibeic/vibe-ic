@@ -225,8 +225,14 @@ def _designs_root_undecided(detail: str = "") -> dict:
     }
 
 
-def _container_mount_sources(container: str) -> "List[Path]":
-    """Host-side sources of the container's bind mounts. [] if unknowable."""
+def _container_mounts(container: str) -> "List[tuple[Path, str]]":
+    """Return resolved ``(host source, container destination)`` bind mounts.
+
+    The destination is load-bearing.  A host root discovered from ``Source``
+    cannot safely be rewritten to the historical ``/foss/designs`` default:
+    users may mount the same tree at any container path.  Keep the pair intact
+    so path translation follows the container's actual namespace.
+    """
     try:
         out = subprocess.check_output(["docker", "inspect", container],
                                       text=True, stderr=subprocess.DEVNULL,
@@ -236,15 +242,21 @@ def _container_mount_sources(container: str) -> "List[Path]":
         return []
     if not data:
         return []
-    srcs = []
+    mounts = []
     for m in (data[0].get("Mounts") or []):
         s = m.get("Source")
-        if s:
+        d = m.get("Destination")
+        if s and d:
             try:
-                srcs.append(Path(s).resolve())
+                mounts.append((Path(s).resolve(), str(d)))
             except OSError:
                 pass
-    return srcs
+    return mounts
+
+
+def _container_mount_sources(container: str) -> "List[Path]":
+    """Host-side sources of the container's bind mounts. [] if unknowable."""
+    return [src for src, _dst in _container_mounts(container)]
 
 
 def _host_designs_root(design_dir: "Optional[Path]" = None) -> Optional[Path]:
@@ -290,7 +302,43 @@ def _to_container(p: str, design_dir: "Optional[Path]" = None) -> str:
     root = _host_designs_root(design_dir)
     if root is None:
         return p
-    return p.replace(str(root), _CONT_DESIGNS_ROOT)
+    try:
+        host_path = Path(p).resolve()
+    except OSError:
+        host_path = Path(p)
+
+    # An explicitly configured destination remains authoritative for CI and
+    # power users who intentionally decouple scoring from docker inspection.
+    explicit_dst = os.environ.get("VIBEIC_DESIGNS_CONT_ROOT")
+    if explicit_dst:
+        try:
+            rel = host_path.relative_to(root)
+        except ValueError:
+            return p
+        return explicit_dst.rstrip("/") + ("/" + rel.as_posix() if rel.parts else "")
+
+    # Normal zero-config path: translate through the exact Source/Destination
+    # pair reported by docker.  Nested mounts are legal, so the longest source
+    # prefix wins (the same rule the kernel applies to the visible namespace).
+    matches = []
+    for src, dst in _container_mounts(_IV13_CONTAINER):
+        try:
+            rel = host_path.relative_to(src)
+        except ValueError:
+            continue
+        matches.append((len(src.parts), dst, rel))
+    if matches:
+        _depth, dst, rel = max(matches, key=lambda item: item[0])
+        return dst.rstrip("/") + ("/" + rel.as_posix() if rel.parts else "")
+
+    # Docker may be absent/down during a unit check.  Preserve the documented
+    # offline fallback, but use a true prefix-relative join rather than global
+    # string replacement (which could rewrite a coincidental substring).
+    try:
+        rel = host_path.relative_to(root)
+    except ValueError:
+        return p
+    return _CONT_DESIGNS_ROOT.rstrip("/") + ("/" + rel.as_posix() if rel.parts else "")
 
 
 # CALL-scoped, not LINE-scoped (adversarial-verify finding on v1.3.83): the
@@ -591,6 +639,66 @@ def _iverilog_toolgap_signature(text: str) -> bool:
             or "i don't know how to elaborate" in low)
 
 
+def _tb_side_verilog_dialect_error(log: str, tb: Path, sources) -> bool:
+    """Whether a failed SV-mode compile is narrowly retryable as Verilog-2005.
+
+    Some legacy benchmark testbenches are ``.v`` files written for Verilog but
+    contain an identifier that became reserved in SystemVerilog (for example an
+    instance named ``checker``).  Compiling those files with ``-g2012`` changes
+    the language they were authored in and can reject both the candidate and the
+    untouched golden.  A retry is safe only when every source is ``.v`` and the
+    syntax diagnostic is attributed to the benchmark-owned testbench itself.
+
+    Candidate-attributed syntax errors and any real SystemVerilog source remain
+    failures; this must never become a general "try an older parser" escape.
+    """
+    if not sources or any(Path(s).suffix.lower() != ".v" for s in sources):
+        return False
+    low = (log or "").lower()
+    if "syntax error" not in low:
+        return False
+    diagnostic_paths = []
+    for line in (log or "").splitlines():
+        m = re.match(r"^(.+?\.(?:v|sv|vh)):\d+(?::\d+)?:", line.strip(), re.I)
+        if m:
+            diagnostic_paths.append(m.group(1))
+    if not diagnostic_paths:
+        return False
+    try:
+        tb_resolved = tb.resolve()
+        return all(Path(p).resolve() == tb_resolved for p in diagnostic_paths)
+    except OSError:
+        return all(Path(p).name == tb.name for p in diagnostic_paths)
+
+
+def _compile_with_tb_dialect(sources, tb: Path, binp: str,
+                             top: "Optional[str]" = None):
+    """Compile in SV-2012, with one narrow benchmark-TB Verilog-2005 retry.
+
+    Returns ``(CompletedProcess, dialect)``.  This helper decides compilation
+    only; callers still run the official simulation and require its pass marker,
+    so a successful fallback compile cannot turn functional garbage into PASS.
+    """
+    sources = [str(s) for s in sources]
+
+    def _cmd(dialect: str):
+        cmd = ["iverilog", f"-{dialect}"]
+        if top:
+            cmd += ["-s", top]
+        return cmd + ["-o", binp] + sources
+
+    c = subprocess.run(_cmd("g2012"), capture_output=True, text=True, timeout=120)
+    if c.returncode == 0 or not _tb_side_verilog_dialect_error(
+            c.stdout + c.stderr, tb, sources):
+        return c, "g2012"
+    try:
+        Path(binp).unlink()
+    except OSError:
+        pass
+    return (subprocess.run(_cmd("g2005"), capture_output=True, text=True,
+                           timeout=120), "g2005")
+
+
 def _build_zero_stub(sample_text: str) -> Optional[str]:
     """From an ANSI-header module, synthesize a trivially-WRONG stub with the same
     name + ports but every output driven to constant 0 (reg stripped so `assign`
@@ -873,8 +981,7 @@ def _golden_ref_fails_own_tb_runtime(design: str, dataset: Path,
             return None
         srcs = aliased_srcs + [str(tb)]
         try:
-            c = subprocess.run(["iverilog", "-g2012", "-o", binp] + srcs,
-                               capture_output=True, text=True, timeout=120)
+            c, _dialect = _compile_with_tb_dialect(srcs, tb, binp)
         except subprocess.TimeoutExpired:
             return None
         if c.returncode != 0 or not os.path.exists(binp):
@@ -980,8 +1087,7 @@ def _golden_ref_compiles_with_tb_shape_b(design: str, dataset: Path, layout: dic
             return (None, golden_ports)
         srcs = aliased_srcs + [str(tb)]
         try:
-            c = subprocess.run(["iverilog", "-g2012", "-o", binp] + srcs,
-                               capture_output=True, text=True, timeout=120)
+            c, _dialect = _compile_with_tb_dialect(srcs, tb, binp)
         except (subprocess.TimeoutExpired, OSError):
             return (None, golden_ports)
         return (c.returncode == 0 and os.path.exists(binp), golden_ports)
@@ -1593,8 +1699,8 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
         pass_re = re.compile(args["pass_regex"])
         fail_re = re.compile(args["fail_regex"]) if args.get("fail_regex") else None
         try:
-            c = subprocess.run(["iverilog", "-g2012", "-o", binp, sample_c, str(tb)],
-                               capture_output=True, text=True, timeout=120)
+            c, dialect = _compile_with_tb_dialect(
+                [sample_c, str(tb)], tb, binp)
         except FileNotFoundError as e:
             # #1437 — an ABSENT iverilog raised here. It must NOT fall through to
             # the `returncode != 0` arm below: that arm returns
@@ -1647,7 +1753,7 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
             if rescued is not None:
                 return rescued
             return {"design": design, "verdict": "FAIL", "reason": "compile_error",
-                    "log": c.stderr[-400:]}
+                    "log": c.stderr[-400:], "tool": f"iverilog-{dialect}"}
         try:
             # cwd=design dir so the TB's relative-path $readmemh works (skill §3)
             r = _bounded_vvp(binp, timeout=120, cwd=str(dataset / design) if args.get("cwd_design_dir", True) else _VVP_SCRATCH_CWD)
@@ -1660,10 +1766,13 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
             if fail_re and fail_re.search(out):
                 m = re.search(r"(\d+)\s*/\s*\d+\s*failures", out)
                 return {"design": design, "verdict": "FAIL",
-                        "reason": f"functional_mismatch ({m.group(0) if m else 'test failed'})"}
-            return {"design": design, "verdict": "PASS"}
+                        "reason": f"functional_mismatch ({m.group(0) if m else 'test failed'})",
+                        "tool": f"iverilog-{dialect}"}
+            return {"design": design, "verdict": "PASS",
+                    "tool": f"iverilog-{dialect}"}
         return {"design": design, "verdict": "FAIL",
-                "reason": "no_pass_marker" + (" (some Test failed)" if fail_re and fail_re.search(out) else "")}
+                "reason": "no_pass_marker" + (" (some Test failed)" if fail_re and fail_re.search(out) else ""),
+                "tool": f"iverilog-{dialect}"}
 
 
 def _golden_ref_self_compiles(prob: str, dataset: Path, layout: dict):

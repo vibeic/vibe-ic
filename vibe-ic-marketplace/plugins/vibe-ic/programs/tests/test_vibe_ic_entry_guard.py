@@ -136,6 +136,29 @@ def test_pass_shape_c_phase1_proj_layout():
         assert rc == 0, err
 
 
+# ---- POSITIVE: Shape-B per-design layouts -------------------------------
+
+def test_pass_shape_b_orchestrator_report():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        rep = td / "work" / "design_a" / "reports" / "orchestrator"
+        rep.mkdir(parents=True)
+        (rep / "vibe_ic_one_shot.json").write_text(
+            json.dumps({"verdict": "PASS", "project": str(rep.parents[2]),
+                        "phases": {}}))
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 0, err
+
+
+def test_pass_shape_b_phase1_layer_doc():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _shape_c(td, "work/design_a/phase1/generated_docs",
+                 "L1_DATASHEET.json")
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 0, err
+
+
 # ---- NEGATIVE no-leak (§ 4.05): boundary-outside, must STILL be caught ----
 
 def test_noleak_bare_work_dir_still_caught():
@@ -196,6 +219,55 @@ def test_noleak_directory_named_like_layer_doc_still_caught():
         td = Path(td)
         (td / "work" / "Prob001_zero" / "out" / "generated_docs" /
          "L1_DATASHEET.json").mkdir(parents=True)
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+def test_noleak_shape_b_empty_work_design_still_caught():
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        (td / "work" / "design_a").mkdir(parents=True)
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+@pytest.mark.parametrize("name", ["Lfoo.json", "L1.json", "notes.json"])
+def test_noleak_shape_b_fake_layer_names_still_caught(name):
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _shape_c(td, "work/design_a/phase1/generated_docs", name)
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+@pytest.mark.parametrize("rel", [
+    "work/design_a/reports/orchestrator/summary.json",
+    "work/design_a/reports/vibe_ic_one_shot.json",
+    "work/design_a/orchestrator/vibe_ic_one_shot.json",
+])
+def test_noleak_shape_b_arbitrary_json_at_similar_depth_is_rejected(rel):
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        p = td / rel
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps({"verdict": "PASS"}))
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+@pytest.mark.parametrize("body", [
+    "",
+    "not json",
+    json.dumps({"verdict": "PASS"}),
+    json.dumps({"verdict": "PASS", "project": "/tmp/p"}),
+])
+def test_noleak_shape_b_fake_exact_report_is_rejected(body):
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        p = (td / "work" / "design_a" / "reports" / "orchestrator" /
+             "vibe_ic_one_shot.json")
+        p.parent.mkdir(parents=True)
+        p.write_text(body)
         rc, out, err = run([str(td), "--strict"])
         assert rc == 1
 
