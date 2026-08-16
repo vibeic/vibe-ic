@@ -131,6 +131,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -143,6 +144,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import _crash_safe_scratch as _scratch
+
 RC_OK = 0
 RC_UNPINNED = 1
 RC_UNDETERMINED = 2
@@ -154,6 +157,13 @@ RC_UNDETERMINED = 2
 # largest selection here is 32); a cap that abstained on the one site the sweep
 # found would be a gate that goes green by declining to look.
 DEFAULT_MAX_TEST_FILES = 40
+
+# Five files currently contain the argued sites.  The default deliberately
+# leaves one core per worker plus ample headroom for pytest's own subprocesses;
+# callers can lower it on smaller hosts.  Parallel verification is opt-in so
+# fixture users and old CI keep the byte-for-byte serial path.
+DEFAULT_JOBS = 5
+_PARALLEL_SCRATCH_PREFIX = "pdpc-par-"
 
 
 # ---------------------------------------------------------------------------
@@ -1118,6 +1128,179 @@ def build_report(root: Path, require_default: bool = True) -> Dict[str, Any]:
     }
 
 
+def _site_key(site: Dict[str, Any]) -> Tuple[Any, ...]:
+    return (site.get("file"), site.get("line"), site.get("callee"),
+            site.get("param"), site.get("value"))
+
+
+def _unregister_parallel_worktree(scratch: Path) -> None:
+    wt = scratch / "wt"
+    if not wt.exists():
+        return
+    subprocess.run(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
+                   capture_output=True, text=True, timeout=120)
+    subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
+                    str(wt)], capture_output=True, text=True, timeout=120)
+
+
+def _release_parallel_worktree(res: Any, repo: Path) -> None:
+    _unregister_parallel_worktree(res.path)
+    res.release()
+    subprocess.run(["git", "-C", str(repo), "worktree", "prune"],
+                   capture_output=True, text=True, timeout=120)
+
+
+def verify_pins_parallel(
+        root: Path, selected: List[Dict[str, Any]], jobs: int,
+        max_test_files: int, pytest_args: List[str], include_required: bool,
+        ) -> Tuple[Optional[List[Dict[str, Any]]], List[str]]:
+    """Verify file-disjoint mutation groups in isolated git worktrees.
+
+    Returns the selected sites with child ``pin`` records attached, or ``None``
+    plus explicit refusal reasons.  The caller never infers success from child
+    return codes: every planned site must be present exactly once in parseable
+    JSON and its return code must agree with the recorded states.
+    """
+    if jobs < 1:
+        return None, [f"--jobs must be >= 1, got {jobs}"]
+    by_file: Dict[str, List[Dict[str, Any]]] = {}
+    for site in selected:
+        by_file.setdefault(str(site["file"]), []).append(site)
+    files = sorted(by_file)
+    if not files:
+        return [], []
+
+    top = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True)
+    if top.returncode != 0:
+        return None, ["parallel mutation verification needs a git work tree; "
+                      "use --jobs 1 for a standalone fixture"]
+    repo = Path(top.stdout.strip()).resolve()
+    try:
+        root_rel = root.resolve().relative_to(repo)
+        script_rel = Path(__file__).resolve().relative_to(repo)
+    except ValueError:
+        return None, ["program root and verifier are not inside the same git "
+                      "work tree"]
+    dirty = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+        capture_output=True, text=True)
+    if dirty.returncode != 0 or dirty.stdout.strip():
+        return None, ["parallel mutation verification needs a clean tracked "
+                      "checkout because isolated workers are created from HEAD"]
+
+    jobs = min(jobs, len(files))
+    # One file is one mutation lane: two sites in the same source file must
+    # never overlap.  Greedy by site count is deterministic and keeps the only
+    # known two-site file from sharing a worker with another file.
+    buckets: List[List[str]] = [[] for _ in range(jobs)]
+    loads = [0] * jobs
+    for name in sorted(files, key=lambda n: (-len(by_file[n]), n)):
+        i = min(range(jobs), key=lambda x: (loads[x], x))
+        buckets[i].append(name)
+        loads[i] += len(by_file[name])
+
+    def worker(index: int, names: List[str]):
+        res, _ = _scratch.reserve(
+            _PARALLEL_SCRATCH_PREFIX, remover=_unregister_parallel_worktree)
+        wt = res.path / "wt"
+        rows = []
+        try:
+            add = subprocess.run(
+                ["git", "-C", str(repo), "worktree", "add", "-q", "--detach",
+                 str(wt), "HEAD"], capture_output=True, text=True, timeout=180)
+            if add.returncode != 0:
+                return index, rows, ["could not create isolated worktree: "
+                                     + (add.stderr or add.stdout).strip()[:240]]
+            for name in names:
+                out_json = res.path / (hashlib.sha256(name.encode()).hexdigest()
+                                       + ".json")
+                basetemp = res.path / ("pytest-" + hashlib.sha256(
+                    name.encode()).hexdigest()[:12])
+                argv = [sys.executable, str(wt / script_rel), str(wt / root_rel),
+                        "--verify-pins", "--only-file", name,
+                        "--max-test-files", str(max_test_files),
+                        "--basetemp", str(basetemp), "--json", str(out_json)]
+                if include_required:
+                    argv.append("--include-required")
+                for extra in pytest_args:
+                    argv += ["--pytest-arg", extra]
+                proc = subprocess.run(argv, capture_output=True, text=True)
+                rows.append((name, proc.returncode, out_json,
+                             proc.stdout, proc.stderr))
+            return index, rows, []
+        except (OSError, subprocess.SubprocessError) as exc:
+            return index, rows, [f"worker exception: {type(exc).__name__}: {exc}"]
+        finally:
+            _release_parallel_worktree(res, repo)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [pool.submit(worker, i, bucket)
+                   for i, bucket in enumerate(buckets)]
+        worker_results = [future.result() for future in futures]
+
+    problems: List[str] = []
+    verified: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for index, rows, worker_problems in sorted(worker_results):
+        problems.extend(f"worker {index}: {p}" for p in worker_problems)
+        for name, rc, out_json, stdout, stderr in rows:
+            # Keep diagnostic output deterministic even though execution was
+            # concurrent; interleaved mutation logs are not auditable.
+            for line in (stdout or "").splitlines():
+                print(f"  [worker {index}:{name}] {line}")
+            for line in (stderr or "").splitlines():
+                print(f"  [worker {index}:{name}] {line}", file=sys.stderr)
+            if not out_json.is_file():
+                problems.append(
+                    f"worker {index}:{name} exited {rc} without a JSON record")
+                continue
+            try:
+                child = json.loads(out_json.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                problems.append(f"worker {index}:{name} unreadable JSON: {exc}")
+                continue
+            child_sites = [s for s in child.get("argued") or []
+                           if s.get("file") == name and "pin" in s]
+            expected_keys = {_site_key(s) for s in by_file[name]}
+            actual_keys = {_site_key(s) for s in child_sites}
+            if actual_keys != expected_keys:
+                problems.append(
+                    f"worker {index}:{name} covered {len(actual_keys)} site(s), "
+                    f"expected {len(expected_keys)}")
+                continue
+            states = [str(s["pin"].get("state")) for s in child_sites]
+            expected_rc = (RC_UNPINNED if "UNPINNED" in states else
+                           RC_UNDETERMINED if any(s != "PINNED" for s in states)
+                           else RC_OK)
+            if rc != expected_rc:
+                problems.append(
+                    f"worker {index}:{name} JSON implies rc {expected_rc}, "
+                    f"process exited {rc}")
+                continue
+            for site in child_sites:
+                key = _site_key(site)
+                if key in verified:
+                    problems.append(f"site reported twice: {key}")
+                verified[key] = site["pin"]
+
+    planned = {_site_key(s) for s in selected}
+    missing = sorted(planned - set(verified), key=str)
+    extra = sorted(set(verified) - planned, key=str)
+    if missing:
+        problems.append(f"{len(missing)} planned site(s) returned no verdict")
+    if extra:
+        problems.append(f"{len(extra)} unplanned site(s) returned a verdict")
+    if problems:
+        return None, problems
+    merged = []
+    for site in selected:
+        copy = dict(site)
+        copy["pin"] = verified[_site_key(site)]
+        merged.append(copy)
+    return merged, []
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="policy_direction_pin_check.py",
@@ -1131,6 +1314,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="abstain rather than run more candidate test files than this")
     ap.add_argument("--only", default=None,
                     help="verify only sites whose file path contains this substring")
+    ap.add_argument("--only-file", default=None,
+                    help=argparse.SUPPRESS)
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="isolated mutation workers (default: serial compatibility)")
     ap.add_argument("--include-required", action="store_true",
                     help="drop D1 and widen the population to required parameters "
                          "(inspection only -- see the module docstring)")
@@ -1174,7 +1361,62 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               file=sys.stderr)
         return RC_UNDETERMINED
 
-    selected = [s for s in argued if (args.only or "") in s["file"]]
+    if args.only_file is not None:
+        selected = [s for s in argued if s["file"] == args.only_file]
+    else:
+        selected = [s for s in argued if (args.only or "") in s["file"]]
+
+    if args.jobs > 1:
+        merged, parallel_problems = verify_pins_parallel(
+            root, selected, args.jobs, args.max_test_files, args.pytest_arg,
+            args.include_required)
+        if parallel_problems:
+            print("[UNDETERMINED] policy_direction_pin_check: parallel "
+                  "verification did not return a complete exact-site record",
+                  file=sys.stderr)
+            for problem in parallel_problems:
+                print(f"  {problem}", file=sys.stderr)
+            return RC_UNDETERMINED
+        assert merged is not None
+        by_key = {_site_key(site): site["pin"] for site in merged}
+        for site in argued:
+            pin = by_key.get(_site_key(site))
+            if pin is not None:
+                site["pin"] = pin
+        pinned = [site for site in merged if site["pin"]["state"] == "PINNED"]
+        unpinned = [site for site in merged
+                    if site["pin"]["state"] == "UNPINNED"]
+        abstained = [site for site in merged
+                     if site["pin"]["state"] not in ("PINNED", "UNPINNED")]
+        for site in merged:
+            verdict = site["pin"]
+            print(f"  [{verdict['state']}] {site['file']}:{site['line']} "
+                  f"{site['callee']}({site['param']}={site['value']!r})"
+                  f"  tests={len(verdict['candidate_tests'])}"
+                  + (f"  -- {verdict.get('why')}" if verdict.get("why") else ""))
+        report["verified"] = {
+            "pinned": len(pinned), "unpinned": len(unpinned),
+            "abstained": len(abstained), "selected": len(selected),
+            "jobs": min(args.jobs, len({s['file'] for s in selected}))}
+        if args.json_out:
+            Path(args.json_out).write_text(json.dumps(report, indent=1),
+                                           encoding="utf-8")
+        denom = len(pinned) + len(unpinned)
+        ratio = f"{len(pinned)}/{denom}" if denom else "0/0"
+        print(f"[INFO] pinned at their call site: {ratio}"
+              f"   (abstained {len(abstained)} of {len(selected)} argued sites)")
+        if unpinned:
+            print(f"[FAIL] policy_direction_pin_check: {len(unpinned)} argued "
+                  "direction(s) survive being flipped")
+            return RC_UNPINNED
+        if abstained:
+            print(f"[UNDETERMINED] policy_direction_pin_check: "
+                  f"{len(abstained)} argued direction(s) could not be decided",
+                  file=sys.stderr)
+            return RC_UNDETERMINED
+        print("[PASS] policy_direction_pin_check: every argued direction dies "
+              "when flipped")
+        return RC_OK
 
     # BEFORE anything is measured. A leftover mutation from a previous run is
     # not a dirty file this run can measure around: the sweep would re-derive

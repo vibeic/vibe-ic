@@ -1253,7 +1253,7 @@ uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: 
 run_tolerating_uncheckable "image-gated verifications are not silently skipped" "$PLUGIN" \
   python3 programs/image_gated_verification_check.py
 
-run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins
+run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins --jobs 5
 
 # vibe-ic#1241 — WIRED HERE, not left to its own test. The audit
 # (`checker_execution_wiring_audit`) named this checker as one that nothing but
@@ -1282,7 +1282,8 @@ run "declared reports are written atomically" "$PLUGIN" python3 programs/atomic_
 uncheckable_until 2027-02-28 "needs a CLEAN checkout and a complete machine record from this enclosing hygiene run: rc 2 means tracked modifications or missing attestation made the comparison meaningless (a genuinely host-dependent gate is rc 1)"
 run_tolerating_uncheckable "gates are host-independent" "$ROOT" \
   python3 "$PG/gate_host_independence_check.py" "$ROOT" \
-  --checkout-attestations "$GATE_DISPATCH_ATTESTATION_FILE"
+  --checkout-attestations "$GATE_DISPATCH_ATTESTATION_FILE" \
+  --jobs 8
 
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.

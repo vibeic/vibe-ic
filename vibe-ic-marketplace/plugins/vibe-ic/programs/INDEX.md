@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1107
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1107)
+- **Total programs (excluding helpers / shims):** 1108
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1108)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1098 |
+| `any` | 1099 |
 
 ## Alphabetical listing
 
@@ -857,6 +857,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `regression_issue_intake_check` | any | — | Issue-#5 lesson-learned enforcement: before a debug agent attempts a |
 | `regression_report_aggregate` | any | — | Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 1 + Output format. |
 | `regression_severity_classify` | any | — | Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 3. |
+| `repo_hygiene_parallel` | any | — | Run repo hygiene as a fail-closed local parallel DAG. |
 | `report_belongs_to_project_check` | any | — | a runner report must be ABOUT the project it sits in. |
 | `reported_figure_artifact_backing_check` | any | — | the ARTIFACT-BACKING gate. |
 | `reports_subfolder_taxonomy_check` | any | — | enforce that `<project>/reports/` contains ONLY the 6 phase-aligned subfolders + 2 top-level summary markdown files (v1.6.25 hygiene gate). |
@@ -1179,7 +1180,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1098 programs)
+### `any` (1099 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2007,6 +2008,7 @@ _(no programs in this group)_
 - `regression_issue_intake_check` — Issue-#5 lesson-learned enforcement: before a debug agent attempts a
 - `regression_report_aggregate` — Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 1 + Output format.
 - `regression_severity_classify` — Pattern-B extraction from `skills/regression-manage/SKILL.md` Workflow step 3.
+- `repo_hygiene_parallel` — Run repo hygiene as a fail-closed local parallel DAG.
 - `report_belongs_to_project_check` — a runner report must be ABOUT the project it sits in.
 - `reported_figure_artifact_backing_check` — the ARTIFACT-BACKING gate.
 - `reports_subfolder_taxonomy_check` — enforce that `<project>/reports/` contains ONLY the 6 phase-aligned subfolders + 2 top-level summary markdown files (v1.6.25 hygiene gate).

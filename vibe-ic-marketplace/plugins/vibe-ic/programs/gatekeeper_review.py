@@ -983,6 +983,8 @@ def run_deliverable_gate(repo: Path, files: List[str]) -> GateResult:
 # convention applied one level up.
 # --------------------------------------------------------------------------
 _HYGIENE_SCRIPT_REL = "tools/ci/repo_hygiene_gates.sh"
+_HYGIENE_PARALLEL_REL = (
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/repo_hygiene_parallel.py")
 
 #: Generous ceiling, not a target. Measured on this repo the full set is
 #: minutes, dominated by one gate that runs every other gate twice. A run that
@@ -1005,7 +1007,14 @@ def repo_hygiene_gate(repo: Path,
     that it cannot be forgotten.
     """
     name = "repo_hygiene_gates"
-    path = Path(script) if script is not None else (repo / _HYGIENE_SCRIPT_REL)
+    if script is not None:
+        path = Path(script)
+        command = ["bash", str(path)]
+    else:
+        parallel = repo / _HYGIENE_PARALLEL_REL
+        path = parallel if parallel.is_file() else (repo / _HYGIENE_SCRIPT_REL)
+        command = ([sys.executable, str(path)] if path == parallel
+                   else ["bash", str(path)])
     if not path.is_file():
         # An honest SKIP that states its denominator: this tree wires no
         # hygiene set, so 0 gates were consulted. Never dressed up as a pass
@@ -1035,7 +1044,7 @@ def repo_hygiene_gate(repo: Path,
             # what class (c) is protecting against; the set happens to be all
             # `python3` gates today, but the exemption does not rest on it.
             proc = subprocess.run(
-                ["bash", str(path), "--summary-json", str(summary_path)],
+                [*command, "--summary-json", str(summary_path)],
                 cwd=str(repo), capture_output=True, text=True, timeout=timeout,
                 env=env)
         except subprocess.TimeoutExpired:
