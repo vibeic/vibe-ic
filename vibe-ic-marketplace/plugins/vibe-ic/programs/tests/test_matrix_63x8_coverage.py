@@ -1543,11 +1543,30 @@ def _join_axes(
         observed = tuple(outcomes.get(key, ()))
         want = STATE_EXPECTS_OUTCOME[state]
         agrees = bool(observed) and all(o == want for o in observed)
+        # A CELL THAT WAS NEVER ASKED DID NOT DISAGREE.
+        #
+        # `-CONTRADICTED` means the cell RAN and the live outcome refuted the
+        # configured claim — a finding about the tree. A cell whose every observed
+        # outcome is `skipped` produced no such finding: its check declined to run,
+        # naming a resource it could not reach (an absent tool, an absent published
+        # corpus). Filing that as a contradiction reports a defect where there is
+        # only an inability to look, which is the exact conflation this file's
+        # two-axis design exists to remove one level down.
+        #
+        # It is NOT folded into agreement either. A skipped cell has not been
+        # enforced, and calling it ENFORCED would be the erasure #888 closed.
+        skipped = bool(observed) and all(o == "skipped" for o in observed)
+        if agrees:
+            label = state
+        elif skipped:
+            label = f"{state}-SKIPPED"
+        else:
+            label = f"{state}-CONTRADICTED"
         joined[key] = CellVerdict(
             state=state,
             outcomes=observed,
             agrees=agrees,
-            label=state if agrees else f"{state}-CONTRADICTED",
+            label=label,
         )
     return joined
 

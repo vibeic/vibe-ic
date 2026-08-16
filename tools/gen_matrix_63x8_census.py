@@ -769,6 +769,15 @@ def apply_anchor_rewrites(report: Dict) -> List[str]:
     return written
 
 
+#: EVERY bucket a cell can land in. `render` sums exactly these and refuses when
+#: they do not reach the cell count, naming what was counted — so a label added to
+#: `_join_axes` without a column here fails LOUDLY and by name, instead of silently
+#: shrinking the headline.
+_LABEL_KEYS = ("enforced", "contradicted", "waived", "na",
+               "waived_contradicted", "na_contradicted",
+               "enforced_skipped", "waived_skipped", "na_skipped")
+
+
 def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
     """``([per-dimension row], totals)`` recomputed from the live suite."""
     CV, SUB, DIMENSIONS, NAMES, QUESTIONS = _load()
@@ -815,12 +824,38 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
             "contradicted": per.count("ENFORCED-CONTRADICTED"),
             "waived": per.count("WAIVED"),
             "na": per.count("NA"),
+            # The labels `_join_axes` can emit that this table had no column for.
+            # They were counted NOWHERE, so any non-zero one fell straight out of
+            # the partition and aborted the generator with a bare subtraction.
+            "waived_contradicted": per.count("WAIVED-CONTRADICTED"),
+            "na_contradicted": per.count("NA-CONTRADICTED"),
+            "enforced_skipped": per.count("ENFORCED-SKIPPED"),
+            "waived_skipped": per.count("WAIVED-SKIPPED"),
+            "na_skipped": per.count("NA-SKIPPED"),
         })
     totals = {k: sum(r[k] for r in rows)
-              for k in ("own", "substituted", "undeclared",
-                        "enforced", "contradicted", "waived", "na")}
+              for k in ("own", "substituted", "undeclared") + _LABEL_KEYS}
     totals["cells"] = len(states)
     return rows, totals
+
+
+def _extra_labels(totals: Dict[str, int]) -> str:
+    """The buckets beyond the historical four, named in the headline when non-zero.
+
+    A cell counted in the partition but absent from the sentence is the #898 defect
+    in its quieter form: the arithmetic reconciles and the reader still cannot see
+    what it reconciled over. SKIPPED is the one that matters — it says the check
+    exists and could not run, which is neither enforcement nor a contradiction.
+    """
+    parts = []
+    for key, word in (("waived_contradicted", "WAIVED-CONTRADICTED"),
+                      ("na_contradicted", "NA-CONTRADICTED"),
+                      ("enforced_skipped", "ENFORCED-SKIPPED"),
+                      ("waived_skipped", "WAIVED-SKIPPED"),
+                      ("na_skipped", "NA-SKIPPED")):
+        if totals.get(key):
+            parts.append(f"{totals[key]} {word}")
+    return (", " + ", ".join(parts)) if parts else ""
 
 
 def render(rows: List[Dict], totals: Dict[str, int]) -> str:
@@ -830,11 +865,27 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
     # the contradicted cells out of a line that reads like a partition, so the
     # numbers silently failed to add to the total — the same erasure by omission
     # the split below exists to prevent, one line higher.
-    _sum = (totals['enforced'] + totals['contradicted']
-            + totals['waived'] + totals['na'])
+    #
+    # #898 FIXED THE SYMPTOM AND LEFT THE SHAPE. It enumerated FOUR buckets by
+    # hand, and `_join_axes` can emit more than four labels: every state has a
+    # `-CONTRADICTED` form, and now a `-SKIPPED` one. So this reconciled only while
+    # `WAIVED-CONTRADICTED` and `NA-CONTRADICTED` both happened to be zero — the
+    # partition held by luck, not by construction, and the first non-zero one would
+    # abort the generator with a subtraction the reader cannot act on. Measured:
+    # marking a handful of corpus-dependent cells as skipped gave `501 != 504`, and
+    # the three missing cells were nowhere in the message.
+    #
+    # Sum what the census ACTUALLY produced, and name what does not fit.
+    _sum = sum(v for k, v in totals.items() if k in _LABEL_KEYS)
     if _sum != totals['cells']:
+        _named = ", ".join(f"{k}={totals[k]}" for k in sorted(_LABEL_KEYS)
+                           if totals.get(k))
         raise SystemExit(
-            f"census does not partition: {_sum} != {totals['cells']}")
+            f"census does not partition: {_sum} != {totals['cells']} — the "
+            f"buckets that were counted are [{_named}], so "
+            f"{totals['cells'] - _sum} cell(s) carry a label this generator does "
+            f"not count. A cell with no bucket is a cell the headline silently "
+            f"drops; add its label to _LABEL_KEYS rather than adjusting a total.")
     # The guard the headline needed and did not have. The check above proves the
     # four STATE figures partition the 504; it says nothing about whether the
     # three columns underneath add up to the ENFORCED figure they are presented
@@ -850,7 +901,8 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
     out.append(
         f"**{totals['cells']} cells: {totals['enforced']} ENFORCED, "
         f"{totals['contradicted']} ENFORCED-CONTRADICTED, "
-        f"{totals['waived']} WAIVED, {totals['na']} NA.**")
+        f"{totals['waived']} WAIVED, {totals['na']} NA"
+        + _extra_labels(totals) + ".**")
     out.append("")
     out.append(
         f"The {totals['contradicted']} CONTRADICTED cells are configured as "
