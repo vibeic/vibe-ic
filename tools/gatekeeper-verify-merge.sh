@@ -633,12 +633,29 @@ B2_RC=2
 B1_WORKTREE_STATUS=unknown
 A1_WORKTREE_STATUS=unknown
 BASE_LAND_ARG=()
-# The two arms' hygiene records are retained as audit artifacts.  The verdict
-# currently compares the printed gate labels; these files must not be described
-# as a finding-level decision input until that wiring actually exists.
+# vibe-ic#1498 — the two arms' hygiene RECORDS, so the gate differential can ask
+# the hygiene tier which findings this branch INTRODUCED rather than only
+# whether its one label failed. Both arms already run `gatekeeper-land.sh`; all
+# that is added is that each writes its `--summary-json` record where the
+# verdict can read it.
+#
+# The pair is handed to the verdict once the BASE arm produced a record; without
+# one the verdict discloses the loss and falls back to the coarse per-label
+# comparison, because the branch does not control whether arm A2 ran. A missing
+# CANDIDATE record is NOT the same event and is NOT hidden here — that path is
+# passed either way and the verdict refuses on it, since that is the tree under
+# test failing to measure itself.
 BASE_HYG="$RUN/base_hygiene.json"
 CAND_HYG="$RUN/candidate_hygiene.json"
+HYG_ARGS=()
+# The host is REQUIRED by `hygiene_finding_delta` and never inferred: these
+# findings are host-dependent (`gate_host_independence_check` is one of the
+# gates). Both arms run HERE, so both hosts are this one — except on a
+# `--base-gate-cache` hit, where the base arm did not run at all and the host
+# is whatever measured the cached record. It is stored beside it for that
+# reason rather than assumed.
 THIS_HOST="$(uname -n)"
+BASE_HYG_HOST="$THIS_HOST"
 
 # The PR may change the very gate that judges it — this one does. Disclosed in
 # the verdict, never blocking: a PR that improves the gate must be landable, and
@@ -650,6 +667,7 @@ done < <("${G[@]}" diff --name-only "$BASE_SHA" "$REBASED_SHA" -- \
             tools/gatekeeper-land.sh tools/gatekeeper-verify-merge.sh \
             tools/ci/repo_hygiene_gates.sh tools/git-hooks/pre-push \
             "$PLUGIN_REL/programs/landing_merge_verdict.py" \
+            "$PLUGIN_REL/programs/hygiene_finding_delta.py" \
             "$PLUGIN_REL/programs/ci_targeted_test_select.py" \
             "$PLUGIN_REL/programs/pytest_per_file_junit.py" 2>/dev/null)
 
@@ -835,6 +853,7 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   CACHED=""
   CACHED_MANIFEST=""
   CACHED_HYG=""
+  CACHED_HYG_HOST=""
   if [ -n "$BASE_GATE_CACHE" ]; then
     mkdir -p "$BASE_GATE_CACHE"
     # A base commit alone is not the whole question: gate results also depend on
@@ -862,6 +881,11 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     CACHED="$CACHE_PREFIX.land.log"
     CACHED_MANIFEST="$CACHE_PREFIX.manifest"
     CACHED_HYG="$CACHE_PREFIX.hygiene.json"
+    # The HOST travels with the record, not only inside the manifest: findings
+    # are host-dependent and a cache directory on shared storage would otherwise
+    # hand one host's baseline to another host's candidate, which fails toward
+    # PASS whenever the foreign baseline is the redder one (vibe-ic#1498).
+    CACHED_HYG_HOST="$CACHE_PREFIX.hygiene.host"
     command -v flock >/dev/null 2>&1 || die \
       "--base-gate-cache requires flock for atomic cache coordination"
     exec {A2_CACHE_LOCK_FD}> "$CACHE_PREFIX.lock"
@@ -875,9 +899,21 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   # The manifest is published LAST and names every identity again.  A stray log,
   # interrupted writer, old schema, different host/runtime, or missing terminal
   # sentinel is a MISS, never a permissive baseline.
-  if [ "$A2_CACHE_OWNER" = "1" ] \
-     && [ -n "$CACHED" ] && [ -s "$CACHED" ] \
+  #
+  # A HIT SKIPS ARM A2 ENTIRELY, so an entry that carries the gate log and NOT
+  # the hygiene record would degrade every queued landing to the coarse
+  # per-label comparison — in exactly the mode the merge queue runs in. The
+  # entry therefore DECLARES which halves it has: `hygiene=present` must be
+  # backed by the record AND the host it was measured on, and only a writer
+  # whose `gatekeeper-land.sh` produced no record at all may say `absent`. An
+  # entry that declares neither predates the record and is a MISS, which gives
+  # arm A2 one chance to populate it (vibe-ic#1498).
+  if [ -n "$CACHED" ] && [ -s "$CACHED" ] \
+     && [ "$A2_CACHE_OWNER" = "1" ] \
      && [ -s "$CACHED_MANIFEST" ] \
+     && { grep -qx "hygiene=absent" "$CACHED_MANIFEST" \
+          || { [ -s "$CACHED_HYG" ] && [ -s "$CACHED_HYG_HOST" ] \
+               && grep -qx "hygiene=present" "$CACHED_MANIFEST"; }; } \
      && grep -qx "schema=3-green-only" "$CACHED_MANIFEST" \
      && grep -qx "base_sha=$BASE_SHA" "$CACHED_MANIFEST" \
      && grep -qx "host=$THIS_HOST" "$CACHED_MANIFEST" \
@@ -889,19 +925,32 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     case "$A2_RC" in 0|1|2) ;; *) A2_RC=2 ;; esac
     A2_FROM_CACHE=1
     echo "--- arm A2: reused the gate log measured for base ${BASE_SHA:0:12}"
-    if [ -s "$CACHED_HYG" ]; then
+    if [ -s "$CACHED_HYG" ] && [ -s "$CACHED_HYG_HOST" ]; then
       cp "$CACHED_HYG" "$BASE_HYG"
+      BASE_HYG_HOST="$(cat "$CACHED_HYG_HOST")"
+    else
+      echo "--- arm A2: the cached baseline declares no hygiene record, so the"
+      echo "            hygiene tier falls back to the per-LABEL comparison"
     fi
   else
+    if [ -n "$CACHED" ] && [ -s "$CACHED" ] && [ "$A2_CACHE_OWNER" = "1" ]; then
+      echo "--- arm A2: the cached baseline is not complete for this question; rerunning"
+    fi
     setsid bash -c '
       for lock_fd in "$5" "$6"; do
         case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
       done
       cd "$1" || exit 2
+      # The VALUES still arrive positionally — this body is single-quoted, so
+      # the parent expands nothing in it — but they are NAMED before use, so
+      # the record each arm writes is legible at its use site (vibe-ic#1498).
+      BASE_HYG="$3"
+      BASE_HYG_PROGRESS="$4"
       exec env GATEKEEPER_VERIFY_ARM=A2 GATEKEEPER_BASE="$2" \
         GATEKEEPER_VERSION_BY_GATEKEEPER=1 \
         GATEKEEPER_SKIP_TARGETED_TESTS=1 \
-        GATEKEEPER_HYGIENE_REPORT="$3" GATEKEEPER_HYGIENE_PROGRESS="$4" \
+        GATEKEEPER_HYGIENE_REPORT="$BASE_HYG" \
+        GATEKEEPER_HYGIENE_PROGRESS="$BASE_HYG_PROGRESS" \
         bash tools/gatekeeper-land.sh
     ' gkverify-a2 "$WT_BASE" "$BASE_SHA" "$BASE_HYG" \
       "$RUN/base_hygiene_progress.jsonl" \
@@ -955,13 +1004,20 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
     done
     cd "$1" || exit 2
+    # `GATEKEEPER_HYGIENE_REPORT` is the CANDIDATE half of the pair arm A2
+    # writes (vibe-ic#1498); without it the base record has nothing to be
+    # differenced against and the ~80-gate hygiene suite stays judged by its one
+    # label. Named from the positional the parent passed, for the same reason
+    # as arm A2 above.
+    CAND_HYG="$4"
+    CAND_HYG_PROGRESS="$5"
     exec env GATEKEEPER_VERIFY_ARM=B2 \
       GATEKEEPER_BASE="$2" \
       GATEKEEPER_SKIP_TARGETED_TESTS=1 \
       GATEKEEPER_NO_STAMP=1 \
       GATEKEEPER_VERSION_BY_GATEKEEPER="$3" \
-      GATEKEEPER_HYGIENE_REPORT="$4" \
-      GATEKEEPER_HYGIENE_PROGRESS="$5" \
+      GATEKEEPER_HYGIENE_REPORT="$CAND_HYG" \
+      GATEKEEPER_HYGIENE_PROGRESS="$CAND_HYG_PROGRESS" \
       bash tools/gatekeeper-land.sh
   ' gkverify-b2 "$WT_CAND" "$BASE_SHA" "$VBG" \
     "$CAND_HYG" "$RUN/candidate_hygiene_progress.jsonl" \
@@ -1064,6 +1120,10 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
      && ! grep -q '^  FAIL  ' "$RUN/base_land.log"; then
     CACHE_TMP="$CACHE_PREFIX.tmp.$$"
     cp "$RUN/base_land.log" "$CACHE_TMP.land.log"
+    # vibe-ic#1498 — the RECORD's half of the same entry, written only when arm
+    # A2 really ran here and produced one. Without it the log half is cached and
+    # the record half never is, so every later cache hit degrades to the
+    # per-label comparison.
     if [ -s "$BASE_HYG" ]; then
       cp "$BASE_HYG" "$CACHE_TMP.hygiene.json"
     fi
@@ -1073,10 +1133,24 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       printf 'host=%s\n' "$THIS_HOST"
       printf 'fingerprint=%s\n' "$CACHE_FINGERPRINT"
       printf 'rc=%s\n' "$A2_RC"
+      # vibe-ic#1498 — WHICH HALVES THIS ENTRY HAS, declared rather than
+      # inferred from what happens to be on disk. `absent` is only written by a
+      # base arm whose `gatekeeper-land.sh` produced no record at all; it is not
+      # a way for a writer that had one to publish without it.
+      if [ -s "$BASE_HYG" ]; then printf 'hygiene=present\n'
+      else printf 'hygiene=absent\n'; fi
     } > "$CACHE_TMP.manifest"
     mv "$CACHE_TMP.land.log" "$CACHED"
     if [ -s "$CACHE_TMP.hygiene.json" ]; then
       mv "$CACHE_TMP.hygiene.json" "$CACHED_HYG"
+      # The HOST travels with the record. Written after it and before the
+      # manifest, which is the entry's only completeness marker.
+      printf '%s\n' "$THIS_HOST" > "$CACHED_HYG_HOST"
+    else
+      # An entry without a record is INCOMPLETE, and must not be completed by a
+      # leftover from an earlier writer: the hit above would then serve a record
+      # that no longer belongs to this log.
+      rm -f "$CACHED_HYG" "$CACHED_HYG_HOST"
     fi
     mv "$CACHE_TMP.manifest" "$CACHED_MANIFEST"
   fi
@@ -1084,6 +1158,27 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     flock -u "$A2_CACHE_LOCK_FD"
     exec {A2_CACHE_LOCK_FD}>&-
     A2_CACHE_LOCK_FD=""
+  fi
+  # ASKED ONLY WHEN THE BASE ARM PRODUCED A BASELINE. The two arms are
+  # asymmetric on purpose (see landing_merge_verdict's header): a missing BASE
+  # record is disclosed and degrades to the per-label comparison, because the
+  # branch does not control whether arm A2 ran; a missing CANDIDATE record
+  # REFUSES, because that is the tree under test failing to measure itself. So
+  # the candidate path is handed over unconditionally here and the verdict —
+  # not this script — decides what its absence means.
+  if [ -s "$BASE_HYG" ]; then
+    HYG_ARGS=(--base-hygiene "$BASE_HYG" --candidate-hygiene "$CAND_HYG"
+              --base-hygiene-host "$BASE_HYG_HOST"
+              --candidate-hygiene-host "$THIS_HOST")
+    echo "--- hygiene finding delta: base record on $BASE_HYG_HOST, candidate on $THIS_HOST"
+  else
+    echo "--- hygiene finding delta: NO BASE RECORD, so the ~80-gate hygiene suite is"
+    echo "                           judged by its ONE label only (disclosed in the verdict)"
+  fi
+  if ! grep -q GATEKEEPER_HYGIENE_REPORT "$WT_CAND/tools/gatekeeper-land.sh" 2>/dev/null; then
+    echo "--- note: this tree's gatekeeper-land.sh does not honour GATEKEEPER_HYGIENE_REPORT,"
+    echo "          so it writes no hygiene record and the FINDING differential will refuse"
+    echo "          (vibe-ic#1498). Rebase onto a base that carries it."
   fi
   echo "--- arm A2 (base ${BASE_SHA:0:12}): $(grep -c '^  FAIL  ' "$RUN/base_land.log" || true) gate(s) already failing on the base"
   sed -n 's/^  FAIL  /      base-FAIL  /p' "$RUN/base_land.log"
@@ -1103,6 +1198,7 @@ python3 "$VERDICT_PROG" \
   --base-selection "$RUN/selection_base.txt" \
   "${BASE_LAND_ARG[@]+"${BASE_LAND_ARG[@]}"}" \
   --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
+  "${HYG_ARGS[@]+"${HYG_ARGS[@]}"}" \
   --candidate-gate-rc "$B2_RC" --require-composite-gate-record \
   --candidate-test-worktree-status "$B1_WORKTREE_STATUS" \
   --base-test-worktree-status "$A1_WORKTREE_STATUS" \
