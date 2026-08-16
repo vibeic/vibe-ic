@@ -778,7 +778,14 @@ run "worktree unchanged since the gates started" \
     python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
         --expect-fingerprint "$FP"
 
-if [ "$FAILED" -eq 0 ]; then
+if [ "$FAILED" -eq 0 ] && [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
+  # Merge verification runs the authoritative aggregate test session in its
+  # own parallel arm.  This lane therefore proves ONLY the non-target gates and
+  # must never mint a standalone push stamp before that evidence is joined.
+  rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  echo "  REPORT  merge verifier owns the independent targeted-test evidence"
+  echo "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ==="
+elif [ "$FAILED" -eq 0 ]; then
   # Stamp the exact commit these suites were verified against. The hook compares
   # this to what is being pushed, so a later commit invalidates it automatically.
   #
