@@ -191,6 +191,37 @@ def _image_id(ref: str):
     return (p.stdout or "").strip() or None if p.returncode == 0 else None
 
 
+def _pdk_masking_mounts(container: str):
+    """Mount destinations that can replace bytes under ``/foss/pdks``.
+
+    Image identity alone is insufficient: Docker applies mounts after the
+    image rootfs, so a container created from the pinned image can still show
+    arbitrary host bytes at the exact paths this gate is meant to certify.
+    ``None`` means the mount table could not be established and is treated
+    fail-closed by :func:`_decide_target`; an empty list is the only state that
+    authorises the container fast path.
+    """
+    try:
+        p = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .Mounts}}", container],
+            capture_output=True, text=True, timeout=30)
+        if p.returncode != 0:
+            return None
+        mounts = json.loads((p.stdout or "").strip() or "[]")
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return None
+    if not isinstance(mounts, list):
+        return None
+    masked = []
+    for rec in mounts:
+        if not isinstance(rec, dict):
+            return None
+        dst = str(rec.get("Destination") or "").rstrip("/") or "/"
+        if dst in ("/foss", "/foss/pdks") or dst.startswith("/foss/pdks/"):
+            masked.append(dst)
+    return sorted(set(masked))
+
+
 # Resolution is decided ONCE. It used to be recomputed inside every
 # `_resolves` call — 33 `docker exec` probes for 33 declared assets — and it
 # now costs a `docker inspect` too, so memoise it. The memo is keyed by
@@ -261,15 +292,30 @@ def _decide_target(container: str):
             ref, cid = got
             want_id = _image_id(img)
             if ref == img or cid == img or (want_id and want_id == cid):
-                why["source"] = f"container {container!r} (image {ref})"
-                return ("exec", container), why
-            why["container_rejected"] = {
-                "container": container, "image_ref": ref,
-                "image_id": cid[:19], "pinned_image": img,
-                "why": "the container is not running the pinned image, so "
-                       "anything found inside it is a fact about that image, "
-                       "not about the one this repo pins",
-            }
+                masking = _pdk_masking_mounts(container)
+                if masking == []:
+                    why["source"] = f"container {container!r} (image {ref})"
+                    return ("exec", container), why
+                why["container_rejected"] = {
+                    "container": container, "image_ref": ref,
+                    "image_id": cid[:19], "pinned_image": img,
+                    "masking_mounts": masking,
+                    "why": (
+                        "the container runs the pinned image but its mount "
+                        "table could not be proved free of overrides under "
+                        "/foss/pdks" if masking is None else
+                        "the container runs the pinned image but mount(s) "
+                        "replace bytes under /foss/pdks, so findings inside "
+                        "it describe host state rather than the pinned image"),
+                }
+            else:
+                why["container_rejected"] = {
+                    "container": container, "image_ref": ref,
+                    "image_id": cid[:19], "pinned_image": img,
+                    "why": "the container is not running the pinned image, so "
+                           "anything found inside it is a fact about that image, "
+                           "not about the one this repo pins",
+                }
     if _image_id(img) is not None:
         why["source"] = f"pinned image {img}"
         return ("run", img), why
@@ -479,7 +525,7 @@ def main(argv=None) -> int:
     rej = rep.get("container_rejected")
     if rej:
         print(f"  container {rej['container']!r} NOT used: it runs "
-              f"{rej['image_ref']} ({rej['image_id']}), not the pinned "
+              f"{rej['image_ref']} ({rej['image_id']}); pinned image is "
               f"{rej['pinned_image']} — {rej['why']}")
     if rep["asset_check"] == "ran":
         print(f"  asset resolution : {rep['assets_checked']} declared path(s) "

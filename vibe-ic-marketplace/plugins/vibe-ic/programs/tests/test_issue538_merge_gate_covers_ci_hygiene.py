@@ -682,14 +682,15 @@ def test_a_missing_hygiene_script_says_it_consulted_zero_gates(tmp_path):
     assert "0 gate(s) consulted" in res.summary, res.summary
 
 
-def test_a_run_that_never_finished_is_an_ERROR_not_a_pass(tmp_path):
+def test_a_run_with_no_forward_progress_is_an_ERROR_not_a_pass(tmp_path):
     root = tmp_path / "r"
     root.mkdir()
     _probe(root, "p_slow", "import time; time.sleep(60)\n")
     script = _fixture_script(
         root, f'run "slow" "$ROOT" python3 "{root}/p_slow.py"\n')
-    res = GR.repo_hygiene_gate(root, script=script, timeout=2)
-    assert res.rc == 2 and "did not finish" in res.summary, res.summary
+    res = GR.repo_hygiene_gate(root, script=script, stall_grace=1)
+    assert res.rc == 2 and "progress watchdog" in res.summary, res.summary
+    assert "nothing was concluded" in res.summary
 
 
 # ==========================================================================
