@@ -40,8 +40,9 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import nextstate_misc_synth as M  # noqa: E402
+import loop_watchdog_compliance_check as WGC  # noqa: E402
 import spec_artifact_registry as R  # noqa: E402
-from _hostpaths import corpus_path  # noqa: E402
+from _hostpaths import corpus_path, repo_path  # noqa: E402
 
 _DS = corpus_path("_extbench/verilog-eval/dataset_spec-to-rtl")
 _HAS_IVERILOG = shutil.which("iverilog") is not None and shutil.which("vvp") is not None
@@ -534,6 +535,38 @@ def test_zero_lsb_same_shape_still_fires():
         "signal y[2] and y[4]", "signal y[0] and y[2]").replace(
         "output Y2,", "output Y0,").replace("output Y4", "output Y2")
     assert M.synth(zero_based) is not None
+
+
+def test_host_verify_routes_iverilog_through_progress_watchdog(
+        monkeypatch, tmp_path):
+    """The compile is BLOCKING work and cannot bypass process supervision."""
+    calls = []
+
+    def _absent(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return M._watchdog.SupervisedResult(
+            127, "", "COMMAND_NOT_FOUND: iverilog", "launch_error")
+
+    monkeypatch.setattr(M._watchdog, "run_supervised", _absent)
+    ref = tmp_path / "ref.sv"
+    test = tmp_path / "test.sv"
+    ref.write_text("module RefModule; endmodule\n")
+    test.write_text("module tb; endmodule\n")
+
+    verdict, detail = M.host_verify(PROB070, str(ref), str(test))
+
+    assert verdict == "TOOL_ERR"
+    assert "COMMAND_NOT_FOUND" in detail
+    assert len(calls) == 1
+    assert calls[0][0][0] == "iverilog"
+
+
+def test_real_program_corpus_has_no_unguarded_long_process():
+    """The deterministic compliance gate must clear the shipped source tree."""
+    programs = repo_path("vibe-ic-marketplace/plugins/vibe-ic/programs")
+    offenders = WGC.scan_programs(programs)
+    assert len(offenders) == 0, [
+        (o.file, o.line, o.kind, o.detail) for o in offenders]
 
 
 if __name__ == "__main__":

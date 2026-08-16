@@ -35,6 +35,7 @@ So the guard has two halves, for two different deaths:
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import textwrap
@@ -176,6 +177,44 @@ def test_a_normal_run_leaves_no_journal_behind(tmp_path):
     pdpc._disarm(journal)
     assert not journal.exists()
     assert pdpc._INFLIGHT == {}
+
+
+def test_the_journal_is_private_and_does_not_duplicate_the_mutated_source(
+        tmp_path):
+    """Crash recovery needs the original bytes and a mutant digest, not two
+    complete source files readable under the caller's ordinary umask."""
+    target = tmp_path / "victim.py"
+    target.write_text(ORIGINAL)
+    journal = tmp_path / "journal.json"
+    pdpc._arm(journal, target, ORIGINAL, MUTATED)
+    try:
+        mode = stat.S_IMODE(journal.stat().st_mode)
+        record = json.loads(journal.read_text())
+        assert mode == 0o600, oct(mode)
+        assert record["original"] == ORIGINAL
+        assert "mutated" not in record
+        assert len(record["mutated_sha256"]) == 64
+    finally:
+        pdpc._disarm(journal)
+
+
+def test_a_deleted_random_worktree_does_not_orphan_its_journal(
+        tmp_path, monkeypatch):
+    """Recovery scans the stable owner directory, not only today's root key."""
+    monkeypatch.setattr(pdpc.tempfile, "tempdir", str(tmp_path))
+    root = tmp_path / "random-worktree" / "programs"
+    root.mkdir(parents=True)
+    target = root / "victim.py"
+    target.write_text(ORIGINAL)
+    journal = pdpc.journal_for(root)
+    pdpc._arm(journal, target, ORIGINAL, MUTATED)
+    target.unlink()                       # parent already deleted the scratch
+
+    rc, lines = pdpc.recover_all_journals()
+    assert rc == 0, lines
+    assert not journal.exists(), (
+        "a root-keyed journal survived after its random scratch target was "
+        "deleted; no later run can reconstruct that key")
 
 
 # ---------------------------------------------------------------------------
