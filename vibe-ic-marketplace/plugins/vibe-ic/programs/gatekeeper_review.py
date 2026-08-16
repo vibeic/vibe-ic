@@ -1017,13 +1017,6 @@ def repo_hygiene_gate(repo: Path,
     with tempfile.TemporaryDirectory(prefix="hygiene_summary_") as td:
         summary_path = Path(td) / "summary.json"
         try:
-            # watchdog-exempt: bounded shell-runner — the call carries an
-            # explicit wall-clock timeout and the TimeoutExpired path below
-            # reports ERROR, never a pass, so work that escapes into the
-            # script cannot outlive this budget nor be mistaken for a clean
-            # result. That bound holds whatever the script launches, which is
-            # what class (c) is protecting against; the set happens to be all
-            # `python3` gates today, but the exemption does not rest on it.
             env = None
             if progress_out is not None:
                 progress = Path(progress_out).resolve()
@@ -1034,6 +1027,13 @@ def repo_hygiene_gate(repo: Path,
                     pass
                 env = os.environ.copy()
                 env["GATE_DISPATCH_ATTESTATION_FILE"] = str(progress)
+            # watchdog-exempt: bounded shell-runner — the call carries an
+            # explicit wall-clock timeout and the TimeoutExpired path below
+            # reports ERROR, never a pass, so work that escapes into the
+            # script cannot outlive this budget nor be mistaken for a clean
+            # result. That bound holds whatever the script launches, which is
+            # what class (c) is protecting against; the set happens to be all
+            # `python3` gates today, but the exemption does not rest on it.
             proc = subprocess.run(
                 ["bash", str(path), "--summary-json", str(summary_path)],
                 cwd=str(repo), capture_output=True, text=True, timeout=timeout,
