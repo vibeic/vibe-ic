@@ -30,6 +30,12 @@ from hygiene_shard_plan import load_profile, plan
 from policy_direction_pin_check import acquire_run_lock, recover_all_journals
 
 HOST_LABEL = "gates are host-independent"
+# This gate already runs three pytest children concurrently and enforces a
+# 60-second starvation bound.  Co-scheduling it with two 6-way mutation farms
+# made BOTH A/B arms time out while actively producing output.  It is a second
+# resource wave, not a serial dependency: A/B still run together after the CPU
+# heavy mutation wave drains.
+LOAD_SENSITIVE_LABELS = ("63x8 census freshness",)
 DEFAULT_JOBS = 8
 DEFAULT_WORKER_TIMEOUT = 1800
 _FRESH_PREFIX = "hygiene-fresh-"
@@ -245,10 +251,14 @@ def main(argv=None) -> int:
                   f"got {labels.count(HOST_LABEL)}", file=sys.stderr)
             return 2
         phase_a_labels = [label for label in labels if label != HOST_LABEL]
+        sensitive = [label for label in LOAD_SENSITIVE_LABELS
+                     if label in phase_a_labels]
+        primary_labels = [label for label in phase_a_labels
+                          if label not in set(sensitive)]
         try:
             profile = load_profile(profile_path)
-            jobs = min(args.jobs, len(phase_a_labels))
-            buckets, unprofiled = plan(phase_a_labels, profile, jobs)
+            jobs = min(args.jobs, len(primary_labels))
+            buckets, unprofiled = plan(primary_labels, profile, jobs)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"[ERROR] cannot construct measured shard plan: {exc}",
                   file=sys.stderr)
@@ -290,7 +300,7 @@ def main(argv=None) -> int:
         cleanup = lambda: _release_fresh(fresh_res, root)
         atexit.register(cleanup)
 
-        total_shards = jobs + 1
+        total_shards = jobs + (1 if sensitive else 0) + 1
         workers = []
         for i, bucket in enumerate(buckets):
             labels_path = tmp / f"labels-{i}.txt"
@@ -315,6 +325,30 @@ def main(argv=None) -> int:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs * 2) as pool:
             results = list(pool.map(run_worker, workers))
+
+        # Resource wave 2.  Both trees remain concurrent, but this gate no
+        # longer competes with the two nested policy mutation farms.
+        if sensitive:
+            sensitive_i = jobs
+            labels_path = tmp / "labels-sensitive.txt"
+            labels_path.write_text("\n".join(sensitive) + "\n",
+                                   encoding="utf-8")
+            sensitive_workers = []
+            for arm, arm_root in (("A", root), ("B", fresh_root)):
+                summary = tmp / f"summary-{arm}-sensitive.json"
+                attest = tmp / f"attest-{arm}-sensitive.jsonl"
+                env = os.environ.copy()
+                env["GATE_DISPATCH_ATTESTATION_FILE"] = str(attest)
+                env["VIBEIC_POLICY_COHORT_LOCKED"] = "1"
+                arm_script = arm_root / "tools" / "ci" / "repo_hygiene_gates.sh"
+                argv_i = ["bash", str(arm_script), "--shard",
+                          f"{sensitive_i}/{total_shards}", "--shard-labels",
+                          str(labels_path), "--summary-json", str(summary)]
+                sensitive_workers.append(
+                    (arm, sensitive_i, sensitive, arm_root, summary, attest,
+                     argv_i, env))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                results.extend(pool.map(run_worker, sensitive_workers))
 
         docs: List[Tuple[Path, Dict[str, Any]]] = []
         a_attestations: List[Dict[str, Any]] = []
@@ -385,12 +419,13 @@ def main(argv=None) -> int:
             host_env["GATE_DISPATCH_ATTESTATION_FILE"] = str(merged_attest)
             host_env["VIBEIC_HOST_FRESH_ATTESTATIONS"] = str(fresh_attest)
             host_env["VIBEIC_POLICY_COHORT_LOCKED"] = "1"
+            host_i = jobs + (1 if sensitive else 0)
             host_argv = ["bash", str(script), "--shard",
-                         f"{jobs}/{total_shards}", "--shard-labels",
+                         f"{host_i}/{total_shards}", "--shard-labels",
                          str(host_labels), "--summary-json", str(host_summary)]
             hrc, hout, herr = _run(host_argv, root, host_env,
                                    args.worker_timeout)
-            print(f"=== hygiene dependent shard {jobs}/{total_shards}: "
+            print(f"=== hygiene dependent shard {host_i}/{total_shards}: "
                   f"1 gate, rc={hrc} ===")
             if hout:
                 print(hout, end="" if hout.endswith("\n") else "\n")
