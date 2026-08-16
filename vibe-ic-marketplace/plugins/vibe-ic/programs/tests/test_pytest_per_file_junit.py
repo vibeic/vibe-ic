@@ -432,6 +432,66 @@ def test_aggregate_canary_preserves_cross_file_process_semantics(tmp_path):
     assert "test_02_check" in aggregate_failures[0].get("classname")
 
 
+def test_complete_aggregate_only_does_not_launch_per_file_sessions(
+        tmp_path, monkeypatch):
+    """The healthy landing path asks the whole-selection question once."""
+    corpus = _tree(tmp_path, {
+        "test_first.py": _GREEN,
+        "test_second.py": _GREEN_AFTER,
+    })
+    sessions = tmp_path / "sessions.txt"
+    monkeypatch.setenv("VIBEIC_SESSION_COUNTER", str(sessions))
+    (corpus / "conftest.py").write_text(
+        "import os\n"
+        "def pytest_sessionstart(session):\n"
+        "    with open(os.environ['VIBEIC_SESSION_COUNTER'], 'a') as f:\n"
+        "        f.write('session\\n')\n",
+        encoding="utf-8",
+    )
+    merged = tmp_path / "aggregate-only.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check", "--aggregate-only",
+        "--aggregate-stall-after", str(_STALL))
+
+    assert proc.returncode == D.RC_OK, proc.stdout + proc.stderr
+    assert sessions.read_text().splitlines() == ["session"]
+    assert "AGGREGATE_COMPLETE  rc=0" in proc.stdout
+    assert "=== [1/" not in proc.stdout
+    root = ET.parse(str(merged)).getroot()
+    assert not [tc for tc in root.iter("testcase")
+                if tc.get("classname") == "pytest_per_file_process"]
+    assert len([tc for tc in root.iter("testcase")
+                if tc.get("classname") == "pytest_aggregate_process"]) == 1
+
+
+def test_aggregate_only_norecord_refuses_without_running_diagnostic_fallback(
+        tmp_path):
+    """UNKNOWN stops the critical path; diagnostics never convert it to green."""
+    corpus = _tree(tmp_path, {
+        "test_01_mutate.py": (
+            "import shared_state\n"
+            "def test_mutates_process_global():\n"
+            "    shared_state.value = 1\n"),
+        "test_02_hang.py": (
+            "import shared_state, time\n"
+            "def test_hangs_only_after_the_other_file():\n"
+            "    if shared_state.value:\n"
+            "        time.sleep(3600)\n"),
+    })
+    (corpus / "shared_state.py").write_text("value = 0\n", encoding="utf-8")
+    merged = tmp_path / "aggregate-norecord.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check", "--aggregate-only",
+        "--aggregate-stall-after", "1")
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert "AGGREGATE_NORECORD" in proc.stdout
+    assert "=== [1/" not in proc.stdout
+    assert not list(ET.parse(str(merged)).iter("testcase"))
+
+
 def test_aggregate_norecord_is_named_and_returns_unknown(tmp_path):
     """Per-file green cannot excuse a whole-selection canary that was killed."""
     corpus = _tree(tmp_path, {
@@ -698,6 +758,12 @@ def test_both_landing_arms_run_through_this_driver():
         "arm B isolates every file without the whole-selection semantics canary")
     assert "--aggregate-check" in verify_src, (
         "arm A1 and arm B do not share the aggregate semantics canary")
+    assert "--aggregate-only" in land_src.split("run_pytest()")[-1], (
+        "arm B still repeats every selected file before the aggregate session")
+    assert "--aggregate-only" in verify_src, (
+        "arm A1 still repeats every selected file before the aggregate session")
+    assert "-p no:cacheprovider" in land_src.split("run_pytest()")[-1], (
+        "arm B loads cacheprovider while A1 explicitly disables it")
     assert "grep -q 'programs/pytest_per_file_junit.py'" not in verify_src, (
         "source text is not a runtime capability record; a comment containing "
         "the driver path must not select arm A1's instrument")

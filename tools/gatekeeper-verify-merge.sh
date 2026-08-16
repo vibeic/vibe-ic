@@ -143,14 +143,12 @@
 #                       A BACKWARDS version is refused either way.
 #   --keep              keep the run directory and the worktrees for inspection
 #   --base-gate-cache <dir>
-#                       reuse arm A2's gate log for a base already measured.
-#                       CONTENT-ADDRESSED by the base commit: the file is named
-#                       after the base SHA, so the same tree yields the same
-#                       gates and a cache hit cannot be stale. In a serialized
-#                       merge queue the base only moves once per landing, so
-#                       every verification after the first on a given base skips
-#                       one whole gate run. Measured on this host: one hygiene
-#                       pass is 19 min uncontended.
+#                       reuse only NON-PERMISSIVE GREEN A1/A2 evidence, bound to
+#                       base, selection, candidate instrument, host/runtime and
+#                       execution contract. Red baseline evidence is always
+#                       remeasured in this run and can never become a stale
+#                       exemption. Busy/unsupported locks are cache misses, not
+#                       critical-path waits. Every bundle is terminal-validated.
 set -uo pipefail
 
 PR=""; REF=""; BASE="origin/main"; JSON_OUT=""; REASSERT=""
@@ -258,7 +256,7 @@ cleanup() {
   # Every measured arm owns a process group.  Stop the entire group before its
   # worktree disappears; killing only the wrapper shell leaves pytest or a gate
   # subprocess running against a directory cleanup is about to remove.
-  for pid in "${A1_PID:-}" "${A2_PID:-}"; do
+  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B_PID:-}"; do
     [ -n "$pid" ] || continue
     kill -TERM -- "-$pid" >/dev/null 2>&1 || true
   done
@@ -267,18 +265,18 @@ cleanup() {
   # in the arm's dedicated process group.
   for _ in {1..20}; do
     alive=0
-    for pid in "${A1_PID:-}" "${A2_PID:-}"; do
+    for pid in "${A1_PID:-}" "${A2_PID:-}" "${B_PID:-}"; do
       [ -n "$pid" ] || continue
       if kill -0 -- "-$pid" >/dev/null 2>&1; then alive=1; fi
     done
     [ "$alive" = "0" ] && break
     sleep 0.1
   done
-  for pid in "${A1_PID:-}" "${A2_PID:-}"; do
+  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B_PID:-}"; do
     [ -n "$pid" ] || continue
     kill -KILL -- "-$pid" >/dev/null 2>&1 || true
   done
-  for pid in "${A1_PID:-}" "${A2_PID:-}"; do
+  for pid in "${A1_PID:-}" "${A2_PID:-}" "${B_PID:-}"; do
     [ -n "$pid" ] || continue
     wait "$pid" >/dev/null 2>&1 || true
   done
@@ -299,7 +297,7 @@ cleanup() {
 
 signal_exit() {
   # Bash defers a trapped signal while it waits for a foreground child.  Once
-  # that child returns, EXIT immediately so the EXIT trap owns A1/A2 teardown;
+  # that child returns, EXIT immediately so the EXIT trap owns A1/A2/B teardown;
   # without this explicit bridge the script continued to its normal `wait A2`
   # and an A2 that ignored TERM kept the verifier alive forever.
   local rc="$1"
@@ -538,23 +536,12 @@ VERDICT_PROG="$SELF_REPO/$PLUGIN_REL/programs/landing_merge_verdict.py"
 CAND_JUNIT="$RUN/candidate.xml"
 BASE_JUNIT="$RUN/base.xml"
 BASE_LAND_ARG=()
-# vibe-ic#1498 — the two arms' hygiene RECORDS, so the gate differential can ask
-# the hygiene tier which findings this branch INTRODUCED rather than only
-# whether its one label failed. Both arms already run `gatekeeper-land.sh`; all
-# that is added is that each writes its `--summary-json` record where the
-# verdict can read it. Left EMPTY when either arm did not produce one, which the
-# verdict discloses and treats as the coarse per-label comparison it does today.
+# The two arms' hygiene records are retained as audit artifacts.  The verdict
+# currently compares the printed gate labels; these files must not be described
+# as a finding-level decision input until that wiring actually exists.
 BASE_HYG="$RUN/base_hygiene.json"
 CAND_HYG="$RUN/candidate_hygiene.json"
-HYG_ARGS=()
-# The host is REQUIRED by `hygiene_finding_delta` and never inferred: these
-# findings are host-dependent (`gate_host_independence_check` is one of the
-# gates). Both arms run HERE, so both hosts are this one — except on a
-# `--base-gate-cache` hit, where the base arm did not run at all and the host
-# is whatever measured the cached record. It is stored beside it for that
-# reason rather than assumed.
 THIS_HOST="$(uname -n)"
-BASE_HYG_HOST="$THIS_HOST"
 
 # The PR may change the very gate that judges it — this one does. Disclosed in
 # the verdict, never blocking: a PR that improves the gate must be landable, and
@@ -568,6 +555,28 @@ done < <("${G[@]}" diff --name-only "$BASE_SHA" "$REBASED_SHA" -- \
             "$PLUGIN_REL/programs/landing_merge_verdict.py" \
             "$PLUGIN_REL/programs/ci_targeted_test_select.py" \
             "$PLUGIN_REL/programs/pytest_per_file_junit.py" 2>/dev/null)
+
+aggregate_cache_valid() {
+  python3 - "$VERDICT_PROG" "$1" "$2" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+spec = importlib.util.spec_from_file_location("_gk_verdict", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+selection = [line.strip() for line in pathlib.Path(sys.argv[3]).read_text().splitlines()
+             if line.strip()]
+report = pathlib.Path(sys.argv[2])
+if not selection or not module.junit_has_aggregate_process(report):
+    raise SystemExit(1)
+if module.junit_aggregate_files(report, selection) != set(selection):
+    raise SystemExit(1)
+if module.junit_aggregate_red_count(report) != 0:
+    raise SystemExit(1)
+PY
+}
 
 if [ "$SHORT_CIRCUIT" = "0" ]; then
   # ------------------------------------------------ 5a. the selection, ONCE
@@ -597,7 +606,15 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   done < "$RUN/selection.txt"
   A1_PID=""
   A1_RC=0
+  A1_ASKED=0
+  A1_FROM_CACHE=0
+  A1_CACHED_XML=""
+  A1_CACHED_LOG=""
+  A1_CACHED_MANIFEST=""
+  A1_CACHE_LOCK_FD=""
+  A1_CACHE_OWNER=0
   if [ -s "$RUN/selection_base.txt" ]; then
+    A1_ASKED=1
     # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
     # failed set, and a truncated base makes a new failure look pre-existing.
     #
@@ -620,25 +637,84 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # in `gatekeeper-land.sh`), so both settings of the ambient switch could
     # take this arm down while arm B ran. Declared here instead of inherited.
     # A1, A2 and B are the critical path, so start A1 now and join it only after
-    # B finishes. Both test arms use the candidate's exact per-file + aggregate
-    # instrument; source-text guessing cannot select a mismatched runner.
+    # B finishes. Both test arms use the candidate's exact aggregate-only
+    # instrument; source-text guessing cannot select a mismatched runner. The
+    # successful path therefore asks each tree's whole-selection question once,
+    # instead of N per-file processes followed by the same aggregate again.
     A1_DRIVER="$CAND_PLUGIN/programs/pytest_per_file_junit.py"
-    setsid bash -c '
-      cd "$1" || exit 2
-      if [ ! -f "$4" ]; then
-        printf "%s\n" "NORECORD  <all selected files>  candidate carries no pytest_per_file_junit.py instrument (vibe-ic#1654)"
-        exit 2
+    if [ -n "$BASE_GATE_CACHE" ]; then
+      mkdir -p "$BASE_GATE_CACHE"
+      A1_FINGERPRINT="$({
+        printf '%s\n' 'gatekeeper-base-test-cache-schema=2-green-only' \
+          "base=$BASE_SHA" "host=$THIS_HOST" \
+          "boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)" \
+          "path=${PATH:-}" "tmpdir=${TMPDIR:-/tmp}" \
+          "stall=${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+          'contract=aggregate-only;pytest-timeout=180;cacheprovider=off;autoload=off'
+        env -0 | LC_ALL=C sort -z | sha256sum | awk '{print $1}'
+        sha256sum "$RUN/selection_base.txt" "$A1_DRIVER" \
+          "$CAND_PLUGIN/programs/_watchdog.py" \
+          "$CAND_PLUGIN/programs/_pytest_progress_plugin.py" 2>/dev/null \
+          | awk '{print $1}' || true
+        python3 -VV 2>&1 || true
+      } | sha256sum | awk '{print $1}')"
+      A1_CACHE_PREFIX="$BASE_GATE_CACHE/$BASE_SHA.$A1_FINGERPRINT.base-tests"
+      A1_CACHED_XML="$A1_CACHE_PREFIX.xml"
+      A1_CACHED_LOG="$A1_CACHE_PREFIX.log"
+      A1_CACHED_MANIFEST="$A1_CACHE_PREFIX.manifest"
+      command -v flock >/dev/null 2>&1 || die \
+        "--base-gate-cache requires flock for atomic cache coordination"
+      exec {A1_CACHE_LOCK_FD}> "$A1_CACHE_PREFIX.lock"
+      # Cache coordination must never serialize different candidate arms.  An
+      # exact owner may publish/reuse; a busy or unsupported lock is a safe MISS
+      # and this run measures its own baseline without writing the bundle.
+      if flock -n "$A1_CACHE_LOCK_FD"; then
+        A1_CACHE_OWNER=1
+      else
+        exec {A1_CACHE_LOCK_FD}>&-
+        A1_CACHE_LOCK_FD=""
       fi
-      exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 GATEKEEPER_VERIFY_ARM=A1 \
-        python3 "$4" --selection "$2" --junit "$3" \
-        --stall-after "$5" --aggregate-check --aggregate-stall-after "$6" \
-        -- python3 -m pytest -q -p pytest_timeout \
-        --timeout=180 --timeout-method=thread -p no:cacheprovider
-    ' gkverify-a1 "$BASE_TEST_PLUGIN" "$RUN/selection_base.txt" "$BASE_JUNIT" \
-      "$A1_DRIVER" "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
-      "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
-      > "$RUN/base_tests.log" 2>&1 &
-    A1_PID=$!
+    fi
+    if [ "$A1_CACHE_OWNER" = "1" ] \
+       && [ -s "$A1_CACHED_XML" ] && [ -s "$A1_CACHED_LOG" ] \
+       && [ -s "$A1_CACHED_MANIFEST" ] \
+       && grep -qx 'schema=2-green-only' "$A1_CACHED_MANIFEST" \
+       && grep -qx "base_sha=$BASE_SHA" "$A1_CACHED_MANIFEST" \
+       && grep -qx "host=$THIS_HOST" "$A1_CACHED_MANIFEST" \
+       && grep -qx "fingerprint=$A1_FINGERPRINT" "$A1_CACHED_MANIFEST" \
+       && grep -q '^AGGREGATE_COMPLETE' "$A1_CACHED_LOG" \
+       && aggregate_cache_valid "$A1_CACHED_XML" "$RUN/selection_base.txt"; then
+      cp "$A1_CACHED_XML" "$BASE_JUNIT"
+      cp "$A1_CACHED_LOG" "$RUN/base_tests.log"
+      A1_RC="$(sed -n 's/^rc=//p' "$A1_CACHED_MANIFEST" | tail -1)"
+      case "$A1_RC" in 0|1) A1_FROM_CACHE=1 ;; *) A1_FROM_CACHE=0 ;; esac
+      if [ "$A1_FROM_CACHE" = "1" ]; then
+        echo "--- arm A1: reused aggregate test evidence for base ${BASE_SHA:0:12}"
+      fi
+    fi
+    if [ "$A1_FROM_CACHE" = "0" ]; then
+      setsid bash -c '
+        for lock_fd in "$7" "$8"; do
+          case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
+        done
+        cd "$1" || exit 2
+        if [ ! -f "$4" ]; then
+          printf "%s\n" "NORECORD  <all selected files>  candidate carries no pytest_per_file_junit.py instrument (vibe-ic#1654)"
+          exit 2
+        fi
+        exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 GATEKEEPER_VERIFY_ARM=A1 \
+          python3 "$4" --selection "$2" --junit "$3" \
+          --stall-after "$5" --aggregate-check --aggregate-only \
+          --aggregate-stall-after "$6" \
+          -- python3 -m pytest -q -p pytest_timeout \
+          --timeout=180 --timeout-method=thread -p no:cacheprovider
+      ' gkverify-a1 "$BASE_TEST_PLUGIN" "$RUN/selection_base.txt" "$BASE_JUNIT" \
+        "$A1_DRIVER" "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+        "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+        "$A1_CACHE_LOCK_FD" "${A2_CACHE_LOCK_FD:-}" \
+        > "$RUN/base_tests.log" 2>&1 &
+      A1_PID=$!
+    fi
   fi
 
   # ------------- 5c. ARM A2 — the SAME landing gates on the UNTOUCHED base
@@ -650,46 +726,85 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   # the PR's, never pre-existing) and the WHOLE-TREE gates — the ones that can be
   # pre-existing red — still run.
   A2_PID=""
+  A2_RC=0
+  A2_FROM_CACHE=0
+  A2_CACHE_LOCK_FD=""
+  A2_CACHE_OWNER=0
   CACHED=""
+  CACHED_MANIFEST=""
   CACHED_HYG=""
-  CACHED_HYG_HOST=""
   if [ -n "$BASE_GATE_CACHE" ]; then
     mkdir -p "$BASE_GATE_CACHE"
-    CACHED="$BASE_GATE_CACHE/$BASE_SHA.land.log"
-    # vibe-ic#1498 — cached ALONGSIDE the log and keyed the same way, because a
-    # hit skips arm A2 entirely and the finding differential would otherwise
-    # have no base record exactly in the mode the merge queue runs in. The host
-    # travels WITH the record: findings are host-dependent, and a cache
-    # directory on shared storage could otherwise hand one host's baseline to
-    # another's candidate.
-    CACHED_HYG="$BASE_GATE_CACHE/$BASE_SHA.hygiene.json"
-    CACHED_HYG_HOST="$BASE_GATE_CACHE/$BASE_SHA.hygiene.host"
-  fi
-  # A CACHE HIT MUST BE THE SAME QUESTION, not a similar one. The key is the base
-  # COMMIT, so a hit is by construction about the identical tree; a base that
-  # moved has a different name and misses.
-  if [ -n "$CACHED" ] && [ -s "$CACHED" ]; then
-    cp "$CACHED" "$RUN/base_land.log"
-    echo "--- arm A2: reused the gate log measured for base ${BASE_SHA:0:12}"
-    # The two halves are cached independently, so a cache written before this
-    # change has the log and not the record. That is a MISSING baseline, which
-    # the verdict discloses and degrades from — never a silently empty one.
-    if [ -s "$CACHED_HYG" ] && [ -s "$CACHED_HYG_HOST" ]; then
-      cp "$CACHED_HYG" "$BASE_HYG"
-      BASE_HYG_HOST="$(cat "$CACHED_HYG_HOST")"
+    # A base commit alone is not the whole question: gate results also depend on
+    # the host runtime and on the exact gate contract.  Bind the reusable record
+    # to the cheaply observable identities as a first filter.  More importantly,
+    # only a green record is reusable: it grants no failure exemption, so an
+    # unobserved tool/image drift can make the current candidate refuse but can
+    # never make a current candidate failure look pre-existing.
+    CACHE_FINGERPRINT="$({
+      printf '%s\n' 'gatekeeper-base-cache-schema=3-green-only' \
+        "base=$BASE_SHA" "host=$THIS_HOST" \
+        "boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)" \
+        "path=${PATH:-}" "tmpdir=${TMPDIR:-/tmp}" \
+        'contract=GATEKEEPER_SKIP_TARGETED_TESTS=1;GATEKEEPER_VERSION_BY_GATEKEEPER=1'
+      env -0 | LC_ALL=C sort -z | sha256sum | awk '{print $1}'
+      python3 -VV 2>&1 || true
+      git --version 2>&1 || true
+      bash --version 2>&1 | head -1 || true
+      sha256sum "$WT_BASE/tools/gatekeeper-land.sh" \
+        "$WT_BASE/tools/ci/repo_hygiene_gates.sh" \
+        "$WT_BASE/$PLUGIN_REL/programs/plugin_full_audit.py" 2>/dev/null \
+        | awk '{print $1}' || true
+    } | sha256sum | awk '{print $1}')"
+    CACHE_PREFIX="$BASE_GATE_CACHE/$BASE_SHA.$CACHE_FINGERPRINT"
+    CACHED="$CACHE_PREFIX.land.log"
+    CACHED_MANIFEST="$CACHE_PREFIX.manifest"
+    CACHED_HYG="$CACHE_PREFIX.hygiene.json"
+    command -v flock >/dev/null 2>&1 || die \
+      "--base-gate-cache requires flock for atomic cache coordination"
+    exec {A2_CACHE_LOCK_FD}> "$CACHE_PREFIX.lock"
+    if flock -n "$A2_CACHE_LOCK_FD"; then
+      A2_CACHE_OWNER=1
     else
-      echo "--- arm A2: the cache carries no hygiene record for this base, so the"
-      echo "            hygiene tier falls back to the per-LABEL comparison"
+      exec {A2_CACHE_LOCK_FD}>&-
+      A2_CACHE_LOCK_FD=""
+    fi
+  fi
+  # The manifest is published LAST and names every identity again.  A stray log,
+  # interrupted writer, old schema, different host/runtime, or missing terminal
+  # sentinel is a MISS, never a permissive baseline.
+  if [ "$A2_CACHE_OWNER" = "1" ] \
+     && [ -n "$CACHED" ] && [ -s "$CACHED" ] \
+     && [ -s "$CACHED_MANIFEST" ] \
+     && grep -qx "schema=3-green-only" "$CACHED_MANIFEST" \
+     && grep -qx "base_sha=$BASE_SHA" "$CACHED_MANIFEST" \
+     && grep -qx "host=$THIS_HOST" "$CACHED_MANIFEST" \
+     && grep -qx "fingerprint=$CACHE_FINGERPRINT" "$CACHED_MANIFEST" \
+     && grep -q '^=== ALL GATES PASS' "$CACHED" \
+     && ! grep -q '^  FAIL  ' "$CACHED"; then
+    cp "$CACHED" "$RUN/base_land.log"
+    A2_RC="$(sed -n 's/^rc=//p' "$CACHED_MANIFEST" | tail -1)"
+    case "$A2_RC" in 0|1|2) ;; *) A2_RC=2 ;; esac
+    A2_FROM_CACHE=1
+    echo "--- arm A2: reused the gate log measured for base ${BASE_SHA:0:12}"
+    if [ -s "$CACHED_HYG" ]; then
+      cp "$CACHED_HYG" "$BASE_HYG"
     fi
   else
     setsid bash -c '
+      for lock_fd in "$5" "$6"; do
+        case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
+      done
       cd "$1" || exit 2
       exec env GATEKEEPER_VERIFY_ARM=A2 GATEKEEPER_BASE="$2" \
         GATEKEEPER_VERSION_BY_GATEKEEPER=1 \
+        GATEKEEPER_SKIP_TARGETED_TESTS=1 \
         GATEKEEPER_HYGIENE_REPORT="$3" GATEKEEPER_HYGIENE_PROGRESS="$4" \
         bash tools/gatekeeper-land.sh
     ' gkverify-a2 "$WT_BASE" "$BASE_SHA" "$BASE_HYG" \
-      "$RUN/base_hygiene_progress.jsonl" > "$RUN/base_land.log" 2>&1 &
+      "$RUN/base_hygiene_progress.jsonl" \
+      "$A1_CACHE_LOCK_FD" "$A2_CACHE_LOCK_FD" \
+      > "$RUN/base_land.log" 2>&1 &
     A2_PID=$!
   fi
 
@@ -709,21 +824,40 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     echo "          it cannot report per-test outcomes and the differential will refuse."
     echo "          Rebase the branch onto a base that carries the merge-path gate."
   fi
-  ( cd "$WT_CAND" && \
-      GATEKEEPER_VERIFY_ARM=B \
-      GATEKEEPER_BASE="$BASE_SHA" \
-      GATEKEEPER_PYTEST_JUNIT="$CAND_JUNIT" \
+  # B also owns a process group.  In particular, a PID-only SIGTERM to this
+  # verifier must interrupt `wait`, run cleanup, and terminate B's descendants;
+  # leaving B as a foreground subshell defers Bash's trap forever when a test
+  # ignores TERM.
+  setsid bash -c '
+    for lock_fd in "$7" "$8"; do
+      case "$lock_fd" in ""|*[!0-9]*) ;; *) eval "exec ${lock_fd}>&-" ;; esac
+    done
+    cd "$1" || exit 2
+    exec env GATEKEEPER_VERIFY_ARM=B \
+      GATEKEEPER_BASE="$2" \
+      GATEKEEPER_PYTEST_JUNIT="$3" \
       GATEKEEPER_PYTEST_MAXFAIL=0 \
-      GATEKEEPER_VERSION_BY_GATEKEEPER="$VBG" \
-      GATEKEEPER_HYGIENE_REPORT="$CAND_HYG" \
-      GATEKEEPER_HYGIENE_PROGRESS="$RUN/candidate_hygiene_progress.jsonl" \
-      bash tools/gatekeeper-land.sh ) > "$RUN/land.log" 2>&1
-  echo "--- arm B (squash ${VERIFIED_SHA:0:12}): gatekeeper-land.sh rc=$?"
+      GATEKEEPER_FAIL_FAST_NORECORD=1 \
+      GATEKEEPER_VERSION_BY_GATEKEEPER="$4" \
+      GATEKEEPER_HYGIENE_REPORT="$5" \
+      GATEKEEPER_HYGIENE_PROGRESS="$6" \
+      bash tools/gatekeeper-land.sh
+  ' gkverify-b "$WT_CAND" "$BASE_SHA" "$CAND_JUNIT" "$VBG" \
+    "$CAND_HYG" "$RUN/candidate_hygiene_progress.jsonl" \
+    "$A1_CACHE_LOCK_FD" "$A2_CACHE_LOCK_FD" \
+    > "$RUN/land.log" 2>&1 &
+  B_PID=$!
+  wait "$B_PID"
+  B_RC=$?
+  B_PID=""
+  echo "--- arm B (squash ${VERIFIED_SHA:0:12}): gatekeeper-land.sh rc=$B_RC"
   sed -n 's/^  \(PASS\|FAIL\|SKIP\|REPORT\)  /      \1  /p' "$RUN/land.log"
   if [ -n "$A1_PID" ]; then
     wait "$A1_PID"
     A1_RC=$?
     A1_PID=""
+  fi
+  if [ "$A1_ASKED" = "1" ]; then
     # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
     # summary is a `rootdir:` line or an empty one, so the arm that COULD NOT
     # LOOK printed indistinguishably from — and often more quietly than — the
@@ -736,15 +870,29 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     A1_NORECORD="${A1_NORECORD:-0}"
     A1_AGG_NORECORD="$(grep -ac '^AGGREGATE_NORECORD' "$RUN/base_tests.log" 2>/dev/null || true)"
     A1_AGG_NORECORD="${A1_AGG_NORECORD:-0}"
-    A1_RECORDED="$(sed -n 's/^  recorded *//p' "$RUN/base_tests.log" | tail -1)"
-    if [ -n "$A1_RECORDED" ]; then
-      A1_SUMMARY="$A1_RECORDED of $(sed -n 's/^  asked *//p' "$RUN/base_tests.log" | tail -1) file(s) recorded, $(sed -n 's/^  red cases *//p' "$RUN/base_tests.log" | tail -1) red case(s)"
-    else
-      A1_SUMMARY="$(tail -1 "$RUN/base_tests.log")"
-    fi
+    A1_SUMMARY="$(sed -n 's/^  aggregate *//p' "$RUN/base_tests.log" | tail -1)"
+    [ -n "$A1_SUMMARY" ] || A1_SUMMARY="$(tail -1 "$RUN/base_tests.log")"
     if [ -s "$BASE_JUNIT" ] && [ "$A1_NORECORD" = "0" ] \
        && [ "$A1_AGG_NORECORD" = "0" ]; then
       echo "--- arm A1 (base ${BASE_SHA:0:12}): rc=$A1_RC, $A1_SUMMARY"
+      if [ "$A1_FROM_CACHE" = "0" ] && [ "$A1_CACHE_OWNER" = "1" ] \
+         && [ -n "$A1_CACHED_XML" ] && [ "$A1_RC" = "0" ] \
+         && grep -q '^AGGREGATE_COMPLETE' "$RUN/base_tests.log" \
+         && aggregate_cache_valid "$BASE_JUNIT" "$RUN/selection_base.txt"; then
+        A1_CACHE_TMP="$A1_CACHE_PREFIX.tmp.$$"
+        cp "$BASE_JUNIT" "$A1_CACHE_TMP.xml"
+        cp "$RUN/base_tests.log" "$A1_CACHE_TMP.log"
+        {
+          printf 'schema=2-green-only\n'
+          printf 'base_sha=%s\n' "$BASE_SHA"
+          printf 'host=%s\n' "$THIS_HOST"
+          printf 'fingerprint=%s\n' "$A1_FINGERPRINT"
+          printf 'rc=%s\n' "$A1_RC"
+        } > "$A1_CACHE_TMP.manifest"
+        mv "$A1_CACHE_TMP.xml" "$A1_CACHED_XML"
+        mv "$A1_CACHE_TMP.log" "$A1_CACHED_LOG"
+        mv "$A1_CACHE_TMP.manifest" "$A1_CACHED_MANIFEST"
+      fi
     else
       echo "--- arm A1 INCOMPLETE (base ${BASE_SHA:0:12}): pytest rc=$A1_RC;" \
            "$A1_NORECORD selected file(s) and $A1_AGG_NORECORD aggregate" \
@@ -756,16 +904,46 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   else
     echo "--- arm A1: no selected file exists at the base — the differential will demand green"
   fi
+  if [ -n "$A1_CACHE_LOCK_FD" ]; then
+    flock -u "$A1_CACHE_LOCK_FD"
+    exec {A1_CACHE_LOCK_FD}>&-
+    A1_CACHE_LOCK_FD=""
+  fi
   if [ -n "${A2_PID:-}" ]; then
     wait "$A2_PID" 2>/dev/null
+    A2_RC=$?
     A2_PID=""
   fi
-  # Written only after a REAL measurement, and only if it named some gate — an
-  # empty or truncated log cached would answer every later verification with
-  # "the base fails nothing", which is the permissive direction.
-  if [ -n "$CACHED" ] && [ ! -s "$CACHED" ] \
-     && grep -q '^=== gatekeeper landing gates' "$RUN/base_land.log"; then
-    cp "$RUN/base_land.log" "$CACHED"
+  # Publish a cache entry only after a REAL, normally-terminated measurement.
+  # The log moves first and the manifest last, so a concurrent reader can see
+  # either the old complete bundle or a MISS, never a half-written baseline.
+  if [ "$A2_CACHE_OWNER" = "1" ] && [ -n "$CACHED" ] \
+     && [ "$A2_FROM_CACHE" = "0" ] && [ "$A2_RC" = "0" ] \
+     && grep -q '^=== gatekeeper landing gates' "$RUN/base_land.log" \
+     && grep -q '^=== ALL GATES PASS' "$RUN/base_land.log" \
+     && ! grep -q '^  FAIL  ' "$RUN/base_land.log"; then
+    CACHE_TMP="$CACHE_PREFIX.tmp.$$"
+    cp "$RUN/base_land.log" "$CACHE_TMP.land.log"
+    if [ -s "$BASE_HYG" ]; then
+      cp "$BASE_HYG" "$CACHE_TMP.hygiene.json"
+    fi
+    {
+      printf 'schema=3-green-only\n'
+      printf 'base_sha=%s\n' "$BASE_SHA"
+      printf 'host=%s\n' "$THIS_HOST"
+      printf 'fingerprint=%s\n' "$CACHE_FINGERPRINT"
+      printf 'rc=%s\n' "$A2_RC"
+    } > "$CACHE_TMP.manifest"
+    mv "$CACHE_TMP.land.log" "$CACHED"
+    if [ -s "$CACHE_TMP.hygiene.json" ]; then
+      mv "$CACHE_TMP.hygiene.json" "$CACHED_HYG"
+    fi
+    mv "$CACHE_TMP.manifest" "$CACHED_MANIFEST"
+  fi
+  if [ -n "$A2_CACHE_LOCK_FD" ]; then
+    flock -u "$A2_CACHE_LOCK_FD"
+    exec {A2_CACHE_LOCK_FD}>&-
+    A2_CACHE_LOCK_FD=""
   fi
   echo "--- arm A2 (base ${BASE_SHA:0:12}): $(grep -c '^  FAIL  ' "$RUN/base_land.log" || true) gate(s) already failing on the base"
   sed -n 's/^  FAIL  /      base-FAIL  /p' "$RUN/base_land.log"
