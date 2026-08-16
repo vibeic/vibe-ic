@@ -219,6 +219,32 @@ def test_the_tag_pattern_matches_the_consumers(tmp_path):
                bool(c._VERSION_RE.search(subject)), subject
 
 
+# THE FIXED HARNESS CLOCK CANNOT GOVERN THIS ITEM, AND MUST NOT PRETEND TO.
+#
+# This test drives the REAL census. Measured on this fleet (vibe-ic#1382) that
+# generator takes 102 s, ~250 s and 255 s. The harness runs at `--timeout=180`
+# (`tools/gatekeeper-land.sh:197`), so NO value both fits under the cap and lets a
+# 250 s census finish. The 180 s clock therefore always wins — and because
+# `--timeout-method=thread` cannot unwind a stuck thread, pytest aborts the WHOLE
+# SESSION instead of failing this one item.
+#
+# Measured on `ee849c19e`, full suite, that harness line: died at 27%, no
+# `short test summary`, ZERO `FAILED` lines. `grep -c '^FAILED'` returns 0, so an
+# aborted run reads exactly like a clean one, and every module behind this one lost
+# its verdict too.
+#
+# So this item opts out of the fixed clock and is governed by the bound that CAN
+# fire: `_default_census_writer`'s `CENSUS_TIMEOUT_S` (600 s), which kills the whole
+# writer process group, restores what it wrote, and returns a NAMED reason that the
+# assertions below surface as an ordinary failure. Verified in both directions —
+# `_default_census_writer(repo, 1.0)` returns in 1.1 s with
+# `"the generator did not finish within 1.0s"` and zero declared paths.
+#
+# This is the same opt-out `test_matrix_63x8_coverage.py` already makes, for the same
+# reason: killing a healthy item because a wall-clock estimate was crossed is a false
+# differential. Removing the mark without also removing the real census would restore
+# the session abort.
+@pytest.mark.timeout(0)
 def test_the_real_program_runs_against_this_repo_and_honours_its_boundary():
     """Driven against the REAL tree with the REAL writers, because a fixture
     that only ever exercises stand-ins would not notice the day a writer starts
