@@ -5940,12 +5940,110 @@ def autofix_output_reg_redeclared(path: Path) -> Tuple[int, List[str]]:
     return len(hits), names
 
 
+# ---------------------------------------------------------------------------
+# Rule 34 — simulation oscillator delayed blocking self-toggle
+# ---------------------------------------------------------------------------
+# A no-input clock/oscillator model commonly toggles an output on an exact delay:
+#
+#     initial begin clk = 0; forever #5 clk = ~clk; end
+#
+# A testbench sampling at the SAME timestamp races the blocking write in the
+# active region.  ``clk <= ~clk`` schedules the transition in the NBA region,
+# preserving the intended half-period waveform while making sampling order
+# deterministic.  This is NOT a blanket blocking→NBA rewrite: the detector is
+# confined to an unsynthesizable no-input module, an output that self-toggles
+# after ``#delay`` inside ``initial/forever`` or a bare ``always``, and exactly
+# one separate literal initialization.  Ordinary combinational and edge-clocked
+# synthesizable assignments cannot match.
+_DELAYED_BLOCKING_SELF_TOGGLE_RE = re.compile(
+    r'#\s*(?:\([^;]*?\)|(?:\d+(?:\.\d+)?|[A-Za-z_]\w*))\s*'
+    r'(?P<name>[A-Za-z_]\w*)\s*(?P<op>(?<![<>=!])=(?!=))\s*'
+    r'~\s*(?P=name)\s*;', re.S)
+
+
+def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]:
+    """Return conservative delayed self-toggle sites with raw-text offsets."""
+    if _is_testbench(raw, path):
+        return []
+    scan = strip_comments(raw)
+    sites: List[Dict] = []
+    for _module_name, lo, hi in _module_regions(scan):
+        region = scan[lo:hi]
+        structural = _blank_string_literals(region)
+        # This rule models a source/oscillator, not a DUT clocked by an input.
+        if re.search(r'\binput\b', structural):
+            continue
+        for m in _DELAYED_BLOCKING_SELF_TOGGLE_RE.finditer(structural):
+            name = m.group('name')
+            # The toggled signal must be a module output (ANSI or body style).
+            if not re.search(r'\boutput\b[^;)]*\b' + re.escape(name) + r'\b',
+                             structural, re.S):
+                continue
+
+            before = structural[:m.start()]
+            procs = list(re.finditer(r'\b(initial|always)\b', before))
+            if not procs:
+                continue
+            proc = procs[-1]
+            proc_kind = proc.group(1)
+            proc_prefix = before[proc.end():]
+            if proc_kind == 'initial' and not re.search(r'\bforever\b', proc_prefix):
+                continue
+            if proc_kind == 'always' and re.search(r'@', proc_prefix):
+                continue  # not a bare delay-driven oscillator
+
+            writes = list(re.finditer(
+                r'\b' + re.escape(name) +
+                r'\b\s*(?:<=|(?<![<>=!])=(?!=))', structural))
+            if len(writes) != 2:
+                continue
+            # The only other write must be a literal initialization before the
+            # toggle.  Extra functional/reset writes make the rewrite ambiguous.
+            literal_inits = list(re.finditer(
+                r'\b' + re.escape(name) +
+                r"\b\s*=\s*(?:\d+'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ_]+|\d+)\s*;",
+                structural))
+            if len(literal_inits) != 1 or literal_inits[0].start() >= m.start():
+                continue
+            sites.append({
+                'name': name,
+                'op_start': lo + m.start('op'),
+                'op_end': lo + m.end('op'),
+                'line': scan.count('\n', 0, lo + m.start('op')) + 1,
+            })
+    return sites
+
+
+def rule_delayed_blocking_clock_toggle(src: str, path: str) -> List[Finding]:
+    return [Finding(
+        path, int(site['line']), 'WARN',
+        'delayed-blocking-clock-toggle', str(site['name']),
+        "delay-driven no-input oscillator uses a blocking self-toggle; a "
+        "testbench sampling at the same timestamp races the active-region "
+        "write. Use `<=` for the delayed toggle (rtl_hygiene_lint --fix).")
+        for site in _delayed_blocking_clock_toggle_sites(src, path)]
+
+
+def autofix_delayed_blocking_clock_toggle(path: Path) -> Tuple[int, List[str]]:
+    """Change only proven delay-oscillator self-toggle operators from = to <=."""
+    raw = path.read_text(errors='replace')
+    sites = _delayed_blocking_clock_toggle_sites(raw, str(path))
+    if not sites:
+        return 0, []
+    for site in sorted(sites, key=lambda item: int(item['op_start']), reverse=True):
+        start, end = int(site['op_start']), int(site['op_end'])
+        raw = raw[:start] + '<=' + raw[end:]
+    path.write_text(raw)
+    return len(sites), [str(site['name']) for site in sites]
+
+
 def lint_file(path: Path) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
     results = []
     results += rule_input_port_reg(src, str(path))
     results += rule_output_port_reg_redeclared(src, str(path))
+    results += rule_delayed_blocking_clock_toggle(src, str(path))
     results += rule_undriven_and_unread(src, str(path))
     results += rule_case_coverage(src, str(path))
     results += rule_if_no_else_latch(src, str(path))
@@ -6242,7 +6340,10 @@ def main():
                          'enforcing the power-up determinism lesson; and (b) the '
                          'unguarded-sim-only-assert finding (fence immediate `assert` '
                          'statements in `// synthesis translate_off … translate_on` so '
-                         'they stop false-failing the synth gate). Regardless of caller/prompt.')
+                         'they stop false-failing the synth gate); and (c) a narrowly '
+                         'proven delay-driven no-input oscillator blocking self-toggle '
+                         '(rewrite `=` to `<=` to remove active-region sampling races). '
+                         'Regardless of caller/prompt.')
     ap.add_argument('--strict', action='store_true',
                     help='ORGANIC #770 — sole-emit hard-block mode. Identical '
                          'gating to the default (an ADVISORY prose-heuristic '
@@ -6284,6 +6385,7 @@ def main():
         inreg_total = 0
         sens_total = 0
         outreg_total = 0
+        clock_toggle_total = 0
         for f in args.files:
             p = Path(f)
             if not p.exists():
@@ -6324,9 +6426,15 @@ def main():
             s, slabels = autofix_incomplete_sensitivity(p)
             if s:
                 print(f"{f}: rewrote incomplete sensitivity list(s) to @(*): {slabels}")
-            if _iv and pre_ok and (ir or orr or n or g or w or s) and not _compiles(p):
+            # Delay-driven no-input oscillator: NBA preserves the half-period
+            # waveform and removes same-timestamp active-region sampling races.
+            ct, ctlabels = autofix_delayed_blocking_clock_toggle(p)
+            if ct:
+                print(f"{f}: rewrote delayed oscillator self-toggle(s) to NBA: "
+                      f"{ctlabels}")
+            if _iv and pre_ok and (ir or orr or n or g or w or s or ct) and not _compiles(p):
                 p.write_text(pre_text)
-                ir = orr = n = g = w = s = 0
+                ir = orr = n = g = w = s = ct = 0
                 print(f"WARN fix-reverted-noncompiling: {f} compiled before "
                       f"--fix but not after; ALL fixes reverted (#533 "
                       f"compile-neutrality net — file a backlog with this "
@@ -6337,12 +6445,14 @@ def main():
             inreg_total += ir
             sens_total += s
             outreg_total += orr
+            clock_toggle_total += ct
         print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s), "
               f"fenced {guarded_total} sim-only assertion construct(s), "
               f"inserted {cast_total} value-identical width cast(s), "
               f"removed illegal `reg` from {inreg_total} input/inout port(s), "
               f"promoted {outreg_total} duplicate-declared output port(s) to `output reg`, "
-              f"rewrote {sens_total} incomplete sensitivity list(s) to @(*)")
+              f"rewrote {sens_total} incomplete sensitivity list(s) to @(*), "
+              f"rewrote {clock_toggle_total} delayed oscillator self-toggle(s) to NBA")
         return 0
 
     sev_order = {'ERROR': 2, 'WARN': 1, 'INFO': 0}

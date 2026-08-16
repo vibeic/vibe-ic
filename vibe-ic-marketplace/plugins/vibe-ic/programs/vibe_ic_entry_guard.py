@@ -22,6 +22,8 @@ the Vibe-IC runner:
   - reports/orchestrator/vibe_ic_one_shot.json   (full orchestrator report)
   - reports/phase1_one_shot.json                 (phase1 standalone runner)
   - phase1/generated_docs/L1_DATASHEET.json      (phase1 engine output)
+  - work/<design>/reports/orchestrator/vibe_ic_one_shot.json (Shape-B run)
+  - work/<design>/phase1/generated_docs/L*.json  (Shape-B fact graph)
 
 A run dir that lacks all of these is rejected unless the caller explicitly
 passes --allow-direct-agent (which still emits a mandatory disclosure).
@@ -71,8 +73,18 @@ _EVIDENCE_FILES = [
 # `work/` tree, an empty `generated_docs/`, or hand-dropped non-layer JSON does
 # NOT satisfy it, so direct-agent authoring is still caught.
 _EVIDENCE_GLOBS = [
+    # Shape-B: one canonical project per benchmark design.
+    "work/*/phase1/generated_docs/L*.json",
+    # Shape-C: one atomic phase1 project per problem.
     "work/*/out/generated_docs/L*.json",
     "work/*/phase1_proj/phase1/generated_docs/L*.json",
+]
+
+# Shape-B's full orchestrator evidence is a fixed filename, not a layer doc.
+# Keep it separate from the L-doc regex so an arbitrary JSON file at a similar
+# depth cannot satisfy the guard.
+_EVIDENCE_REPORT_GLOBS = [
+    "work/*/reports/orchestrator/vibe_ic_one_shot.json",
 ]
 
 # A layer doc is L<digits>_<NAME>.json — pinned so a stray `Lfoo.json` or a
@@ -87,6 +99,23 @@ class EntryGuardFinding:
     detail: str
 
 
+def _is_orchestrator_report(path: Path) -> bool:
+    """Require the minimal canonical one-shot report structure.
+
+    The exact filename/depth prevents similar-path leakage; checking the report
+    envelope prevents an empty file or hand-dropped ``{"verdict": "PASS"}``
+    from standing in for evidence that the orchestrator actually ran.
+    """
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (isinstance(data, dict)
+            and isinstance(data.get("project"), str) and bool(data["project"])
+            and isinstance(data.get("verdict"), str) and bool(data["verdict"])
+            and isinstance(data.get("phases"), (dict, list)))
+
+
 def _has_evidence(project: Path) -> Tuple[bool, List[EntryGuardFinding]]:
     """Return (has_evidence, findings)."""
     findings: List[EntryGuardFinding] = []
@@ -97,7 +126,11 @@ def _has_evidence(project: Path) -> Tuple[bool, List[EntryGuardFinding]]:
             found.append(str(p))
     if found:
         return True, findings
-    # Shape-C per-problem phase1 evidence (§ 7.5 rule 3).  Narrow by design:
+    for pattern in _EVIDENCE_REPORT_GLOBS:
+        if any(p.is_file() and _is_orchestrator_report(p)
+               for p in project.glob(pattern)):
+            return True, findings
+    # Per-design/per-problem phase1 evidence (§ 7.5 rule 3). Narrow by design:
     # the matched path must be a real rendered layer doc, not merely a file
     # sitting at the right depth.
     for pattern in _EVIDENCE_GLOBS:
@@ -105,7 +138,8 @@ def _has_evidence(project: Path) -> Tuple[bool, List[EntryGuardFinding]]:
             if p.is_file() and _LAYER_DOC_RE.match(p.name):
                 return True, findings
     # None found — build a human finding.
-    checked = ", ".join(_EVIDENCE_FILES + _EVIDENCE_GLOBS)
+    checked = ", ".join(
+        _EVIDENCE_FILES + _EVIDENCE_REPORT_GLOBS + _EVIDENCE_GLOBS)
     findings.append(EntryGuardFinding(
         rule="MISSING_VIBE_IC_ENTRY_EVIDENCE",
         path=str(project),
