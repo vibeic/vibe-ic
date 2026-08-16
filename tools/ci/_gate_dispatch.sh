@@ -238,6 +238,87 @@ GATE_PENDING_WHY=""
 #: Parallel to GATE_LABELS — empty for the (normal) unexempted gates.
 declare -a GATE_EX_UNTIL=() GATE_EX_WHY=() GATE_WIRING_ERRORS=()
 
+# --- CONCURRENCY (#P4) ------------------------------------------------------
+# MEASURED on this tree at v1.10.53, 32 cores: the landing gate is 1305 s and
+# `repo_hygiene_gates.sh` is 1082 s of it. 84 gates self-report 912 s and the
+# wall was ~= that sum, so they ran one after another. There is no dominant
+# gate to optimise — the slowest is 150 s and the tail averages ~11 s — so the
+# only lever that reaches the whole 1082 s is running them at the same time.
+#
+# WHY A KNOB WITH A MEASURED DEFAULT, AND NOT `nproc`. Measured earlier on this
+# same 32-core host: raising `gate_host_independence_check --jobs` from 8 to 28
+# made that gate SLOWER, 213 s -> 227 s. The cores were waiting on DISK, not on
+# CPU, and every one of these gates walks the same tree. So the default is a
+# number that was timed here (see the sweep recorded with this change), not a
+# number derived from the machine, and `GATEKEEPER_HYGIENE_JOBS` moves it.
+#
+# WHAT MUST NOT CHANGE, and it is the whole acceptance test: the set of
+# (label -> state) pairs. Faster and different is a failure. Three properties
+# buy that:
+#
+#   * DECLARATION STAYS SEQUENTIAL. Everything above — the exemption slot, the
+#     scope slot, the wiring errors, the site counter, the label order — runs on
+#     the main shell in declaration order exactly as before. Only the gate's
+#     PROCESS moves. So the record is indexed identically and a gate's verdict
+#     lands in its own slot by construction rather than by matching a label.
+#
+#   * OUTPUT IS BUFFERED AND REPLAYED IN DECLARATION ORDER, stdout to stdout and
+#     stderr to stderr. Interleaved output from 8 gates is not merely unreadable:
+#     a finding printed under the wrong label sends the next reader to the wrong
+#     file, which is worse than no output. A gate is emitted whole, under its own
+#     `── label`, and only once every gate declared before it has been emitted.
+#
+#   * A GATE THAT NEEDS THE WHOLE RUN RUNS ALONE. `gate_serial` (below) drains
+#     the pool first. `gates are host-independent` READS the machine record every
+#     other gate wrote and drives a `git worktree`; queued with the rest it would
+#     find an incomplete record and report NOT CHECKED — faster, and wrong.
+#
+# EVERY GATE'S CHILD PROCESS GETS `GATEKEEPER_HYGIENE_JOBS=1`, in both modes.
+# `gate_host_independence_check` re-runs THIS SCRIPT, eight times, in a scratch
+# worktree. Without this, the knob would be inherited and the nested runs would
+# multiply it — 8 x N processes for a reason nobody chose. Exactly one level of
+# this script is parallel: the outermost.
+GATE_DISPATCH_JOBS=1
+#: Scratch for one run's per-gate buffers. Removed by `gate_dispatch_finish`.
+GATE_POOL_DIR=""
+#: Queued gate indices in DECLARATION order — the replay order, and the reason
+#: completion order can never reach a reader.
+declare -a GATE_POOL_IDX=()
+#: How far along GATE_POOL_IDX the replay has already got.
+GATE_POOL_FLUSHED=0
+#: Workers whose result file never appeared. Their gates are NOT_CHECKED (never
+#: PASS) and the run refuses — see `gate_dispatch_finish`.
+GATE_DISPATCH_WORKERS_LOST=0
+GATE_POOL_LOST_LABELS=""
+#: Set by `gate_serial`; consumed by the next `_dispatch` the same way the
+#: exemption and the scope are, so it can never stay armed for the gate after.
+GATE_PENDING_SERIAL=0
+
+# `gate_serial <why>` — the NEXT gate runs ALONE: every queued gate is drained
+# and replayed first, and nothing new starts until it is done.
+#
+# NOT a performance hint. It is the declaration that a gate's subject is the
+# STATE OF THE RUN ITSELF rather than the tree — the machine record the other
+# gates wrote, the git worktree list, the checkout's dirtiness — any of which
+# another gate running at the same time changes underneath it. A gate like that
+# queued with the rest does not fail; it reports NOT CHECKED, which is the
+# quietest possible way for concurrency to remove a gate from the set.
+#
+# Declared at the wiring site, above the gate, for the same reason
+# `uncheckable_until` is: a registry keyed by label drifts when the gate is
+# renamed, and deleting the gate must delete this with it.
+gate_serial() {
+  if [ "$GATE_PENDING_SERIAL" -ne 0 ]; then
+    _gate_wiring_error "a 'gate_serial' was declared and never attached to a \
+gate before 'gate_serial $*'"
+  fi
+  if [ "$#" -eq 0 ] || [ -z "${1:-}" ]; then
+    _gate_wiring_error "'gate_serial' must state WHY the gate cannot share the \
+run with another one"
+  fi
+  GATE_PENDING_SERIAL=1
+}
+
 # A defect in how the script DECLARES its gates, as opposed to a defect the
 # gates found. Collected rather than fatal-on-first so one run names every
 # mis-wired gate; `gate_dispatch_finish` turns any into rc 2, because a set
@@ -331,6 +412,39 @@ _gate_scope_hit() {                        # <scope-prefixes> -> 0 = run, 1 = sk
 
 gate_dispatch_init() {
   GATE_DISPATCH_T0="$SECONDS"
+  # #P4 — 8 BY MEASUREMENT, not by `nproc`. Two reps of this exact gate set (80
+  # declared) on a 32-core host, sequential arm 412 s:
+  #
+  #       jobs      4      8     12     16     24     32
+  #       rep 1   112s    68s    58s    54s    53s    55s
+  #       rep 2   115s    77s    58s    54s    56s    52s
+  #
+  # 4 -> 8 is the last large step (-44 s, -39%). 8 -> 12 buys 14 s more, and
+  # everything past 12 is flat inside the noise: 24 and 32 straddle 53 s in both
+  # directions, which is the same shape as the earlier measurement where
+  # `gate_host_independence_check --jobs` 8 -> 28 made that gate SLOWER
+  # (213 s -> 227 s) because the cores were waiting on DISK. Every gate here
+  # walks the same tree, so that ceiling is the one being hit.
+  #
+  # 8 AND NOT 12, deliberately. The 14 s is real and it is 3% of the landing
+  # gate; against it, 8 leaves three quarters of a 32-core host for the
+  # parallelism the GATES themselves already use (`--jobs 6`, `--jobs 8`, a
+  # pytest session), it is the one concurrency number in this repo that was
+  # measured before (that same host-independence gate), and the fleet is not all
+  # 32-core. A host with headroom sets `GATEKEEPER_HYGIENE_JOBS=12` and the
+  # table above says what it will get. 1 restores the exact pre-#P4 execution
+  # path, gate for gate and byte for byte.
+  GATE_DISPATCH_JOBS="${GATEKEEPER_HYGIENE_JOBS:-8}"
+  # A malformed knob is REFUSED, not rounded to 1. Silently falling back to
+  # sequential would make a run that a caller asked to parallelise take twenty
+  # minutes for no stated reason; silently falling back to `nproc` would be the
+  # measured-slower default this file exists to avoid.
+  if ! [[ "$GATE_DISPATCH_JOBS" =~ ^[0-9]+$ ]] || [ "$GATE_DISPATCH_JOBS" -lt 1 ]
+  then
+    _gate_wiring_error "GATEKEEPER_HYGIENE_JOBS='${GATEKEEPER_HYGIENE_JOBS}' is \
+not a positive integer; refusing to guess how much of this run to parallelise"
+    GATE_DISPATCH_JOBS=1
+  fi
   GATE_DISPATCH_TODAY="$(date -u +%F 2>/dev/null || true)"
   # Fail CLOSED on the clock. An empty or malformed `today` would make every
   # `until` compare as not-yet-due, so every exemption would be immortal and
@@ -425,8 +539,22 @@ _gate_dispatch_corpus_state() {
   local root; root="$(_gate_dispatch_corpus_root)"
   [ -n "$root" ] || return 1
   [ -d "$root/$GATE_DISPATCH_CORPUS_REL" ] || return 1
-  git -C "$root" status --porcelain --ignored=traditional -- \
-      "$GATE_DISPATCH_CORPUS_REL" 2>/dev/null | LC_ALL=C sort
+  # `GIT_OPTIONAL_LOCKS=0` ONLY WHEN THERE ARE PEERS (#P4). `git status`
+  # opportunistically REFRESHES and rewrites the index, which takes
+  # `.git/index.lock`; eight of these at once contend for it, and a snapshot
+  # that failed to take is an EMPTY snapshot — which this guard would compare
+  # against the next empty one and call clean. The flag tells git to do the read
+  # and skip the write, so the porcelain output is identical and the lock is
+  # never taken. Left OFF at jobs=1 so the sequential path is byte-for-byte and
+  # syscall-for-syscall what it has always been.
+  if [ "${GATE_DISPATCH_JOBS:-1}" -gt 1 ]; then
+    GIT_OPTIONAL_LOCKS=0 git -C "$root" status --porcelain \
+        --ignored=traditional -- "$GATE_DISPATCH_CORPUS_REL" 2>/dev/null \
+      | LC_ALL=C sort
+  else
+    git -C "$root" status --porcelain --ignored=traditional -- \
+        "$GATE_DISPATCH_CORPUS_REL" 2>/dev/null | LC_ALL=C sort
+  fi
 }
 
 # `_dispatch <tolerate_rc2> <may_write_corpus> <label> <cwd> <cmd...>` — the ONE
@@ -443,6 +571,11 @@ _dispatch() {
   # armed to silence gate N+1.
   local scope="${GATE_PENDING_SCOPE:-}"
   GATE_PENDING_SCOPE=""
+  # #P4, same rule again and for the same reason: a `gate_serial` written for
+  # gate N must never still be armed at gate N+1. Consumed unconditionally,
+  # before any branch can return.
+  local serial="${GATE_PENDING_SERIAL:-0}"
+  GATE_PENDING_SERIAL=0
   if [ "$tolerate" -eq 1 ] && [ -z "$ex_until" ]; then
     _gate_wiring_error "\"$label\" is wired with run_tolerating_uncheckable, so \
 it can report NOT_CHECKED, but no 'uncheckable_until <YYYY-MM-DD> <why>' line \
@@ -497,8 +630,21 @@ exemption describes a state this gate cannot reach"
   # inherit it.
   if [ -n "$scope" ] && ! _gate_scope_hit "$scope"; then
     GATE_STATES+=("OUT_OF_SCOPE"); GATE_SECONDS+=("0")
-    printf '  SKIP  %s  — reads [%s]; this change touches none of it\n' \
-      "$shown" "$scope"
+    # #P4 — THE SKIP LINE IS BUFFERED TOO, when there is a pool. It is decided
+    # instantly, at declaration time, while the gates declared BEFORE it are
+    # still running; printed straight out it would appear above output it comes
+    # after, and a reader scanning for the gate a finding belongs to would be
+    # reading a log whose order is not the declaration order the roll-up uses.
+    # Found by reading this path, not by a failing run: `GATEKEEPER_CHANGED_PATHS`
+    # is unset outside a landing, so no test that does not set it can reach here.
+    if [ "$GATE_DISPATCH_JOBS" -gt 1 ]; then
+      _gate_pool_precomputed "$(( ${#GATE_LABELS[@]} - 1 ))" \
+        "$(printf '  SKIP  %s  — reads [%s]; this change touches none of it\n' \
+             "$shown" "$scope")"
+    else
+      printf '  SKIP  %s  — reads [%s]; this change touches none of it\n' \
+        "$shown" "$scope"
+    fi
     return 0
   fi
   # vibe-ic#1144 — declared here, executed on another host. Its OWN state: not
@@ -511,6 +657,52 @@ exemption describes a state this gate cannot reach"
     GATE_STATES+=("OTHER_SHARD"); GATE_SECONDS+=("0")
     return 0
   fi
+  # #P4 — from here down the gate is EXECUTED, and that is the only part that
+  # may move off the main shell. Everything above is DECLARATION and stays
+  # exactly where it was, in exactly its old order.
+  if [ "$GATE_DISPATCH_JOBS" -le 1 ] || [ "$serial" -eq 1 ] \
+     || [ "$may_write" -eq 1 ]; then
+    # `may_write` joins `serial` deliberately: a declared corpus PRODUCER is by
+    # definition the one gate whose writes every other gate's read would race.
+    # There are none today; the rule ships with the wrapper so that wiring one
+    # cannot silently make the corpus guard meaningless for the rest of the run.
+    [ "$GATE_DISPATCH_JOBS" -le 1 ] || _gate_pool_drain
+    _gate_execute "$tolerate" "$may_write" "$label" "$shown" \
+                  "$ex_until" "$ex_why" "$wd" "$@"
+    GATE_STATES+=("$_GX_STATE"); GATE_SECONDS+=("$_GX_SECS")
+    case "$_GX_STATE" in FAIL|WROTE_CORPUS) GATE_DISPATCH_FAIL=1 ;; esac
+    return 0
+  fi
+  # The slot is claimed NOW, at declaration time, and filled in by
+  # `_gate_pool_collect` when the worker's verdict comes back. Appending on
+  # completion instead would order the record by whichever gate finished first —
+  # the exact unattributability this is here to prevent.
+  GATE_STATES+=("QUEUED"); GATE_SECONDS+=("0")
+  _gate_pool_submit "$(( ${#GATE_LABELS[@]} - 1 ))" \
+                    "$tolerate" "$may_write" "$label" "$shown" \
+                    "$ex_until" "$ex_why" "$wd" "$@"
+  return 0
+}
+
+# `_gate_execute <tolerate> <may_write> <label> <shown> <until> <why> <cwd>
+#                <cmd...>`
+#
+# Runs ONE gate and classifies it. Sets `_GX_STATE` and `_GX_SECS`; prints the
+# gate's own output on stdout and the dispatcher's diagnostics on stderr, on
+# whatever streams the caller gave it.
+#
+# THE ONE EXECUTION PATH, called by the inline arm and by the worker alike. Two
+# copies — one "fast" and one "safe" — is how a concurrent run comes to classify
+# an rc differently from a sequential one while both look correct in review.
+#
+# ALWAYS RETURNS 0. Its caller may be a worker running under `set -e`, where a
+# non-zero return would kill the worker BEFORE it wrote its result file, and a
+# missing result file is read (correctly) as a killed worker. A gate that merely
+# FAILED must never present as a lost one.
+_gate_execute() {
+  local tolerate="$1" may_write="$2" label="$3" shown="$4"
+  local ex_until="$5" ex_why="$6" wd="$7"; shift 7
+  _GX_STATE=""; _GX_SECS=0
   echo "── $shown"
   local t0="$SECONDS" rc=0 before="" after="" watched=1 capture=""
   before="$(_gate_dispatch_corpus_state)" || watched=0
@@ -524,7 +716,8 @@ exemption describes a state this gate cannot reach"
       # One combined stream is intentional: it is the process evidence a human
       # sees in the landing log, and tee keeps that stream live while the helper
       # derives the machine record from the exact same bytes.
-      if ( cd "$wd" && "$@" ) 2>&1 | tee "$capture"; then
+      if ( cd "$wd" && export GATEKEEPER_HYGIENE_JOBS=1 && "$@" ) 2>&1 \
+           | tee "$capture"; then
         _pipe_rc=("${PIPESTATUS[@]}")
       else
         _pipe_rc=("${PIPESTATUS[@]}")
@@ -556,17 +749,17 @@ exemption describes a state this gate cannot reach"
       fi
       rm -f -- "$capture"
     else
-      ( cd "$wd" && "$@" ) || rc=$?
+      ( cd "$wd" && export GATEKEEPER_HYGIENE_JOBS=1 && "$@" ) || rc=$?
       GATE_DISPATCH_ATTESTATION_FAILED=1
       echo "   ^^ PROCESS ATTESTATION FAILED: $label — helper missing at" \
            "${GATE_DISPATCH_ATTESTATION_HELPER:-<unset>}; this run cannot" \
            "certify a tree from console prose" >&2
     fi
   else
-    ( cd "$wd" && "$@" ) || rc=$?
+    ( cd "$wd" && export GATEKEEPER_HYGIENE_JOBS=1 && "$@" ) || rc=$?
   fi
   local secs=$(( SECONDS - t0 ))
-  GATE_SECONDS+=("$secs")
+  _GX_SECS="$secs"
   if [ "$watched" -eq 0 ]; then
     if [ "$GATE_DISPATCH_CORPUS_BLIND" -eq 0 ]; then
       GATE_DISPATCH_CORPUS_BLIND=1
@@ -578,8 +771,7 @@ exemption describes a state this gate cannot reach"
   elif [ "$may_write" -eq 0 ]; then
     after="$(_gate_dispatch_corpus_state)" || after="$before"
     if [ "$before" != "$after" ]; then
-      GATE_STATES+=("WROTE_CORPUS")
-      GATE_DISPATCH_FAIL=1
+      _GX_STATE="WROTE_CORPUS"
       echo "   ^^ WROTE INTO THE CORPUS: $label [${secs}s]" >&2
       echo "      This gate changed $GATE_DISPATCH_CORPUS_REL/ while" \
            "auditing it. Every later gate then reads a tree this run" \
@@ -595,19 +787,225 @@ exemption describes a state this gate cannot reach"
     fi
   fi
   if [ "$rc" -eq 0 ]; then
-    GATE_STATES+=("PASS")
+    _GX_STATE="PASS"
   elif [ "$tolerate" -eq 1 ] && [ "$rc" -eq 2 ]; then
-    GATE_STATES+=("NOT_CHECKED")
+    _GX_STATE="NOT_CHECKED"
     # The exemption is echoed WITH the refusal, not only in the roll-up: this is
     # the line a reader reaches first, and "could not look" is benign only if
     # they can see which prerequisite was missing.
     echo "   ^^ NOT CHECKED (rc 2, non-fatal): $label [${secs}s]" \
          "— exempt until ${ex_until:-<NONE>}: ${ex_why:-<no reason declared>}" >&2
   else
-    GATE_STATES+=("FAIL")
+    _GX_STATE="FAIL"
     echo "   ^^ FAILED: $label [${secs}s]" >&2
-    GATE_DISPATCH_FAIL=1
   fi
+  return 0
+}
+
+# --- the worker pool (#P4) --------------------------------------------------
+# One background subshell per queued gate, bounded by `GATE_DISPATCH_JOBS`.
+# Deliberately NOT a set of long-lived workers reading a shared queue: a gate is
+# an argv, and a long-lived worker would need that argv marshalled through a
+# pipe and unmarshalled — a quoting surface, on the path every gate takes, for
+# no measured gain over `fork` on a run whose gates average eleven seconds.
+_gate_pool_ensure() {
+  [ -z "$GATE_POOL_DIR" ] || return 0
+  GATE_POOL_DIR="$(mktemp -d -t gate-pool.XXXXXX)"
+  # REAP FIRST, and this is not tidiness. `gate_dispatch_finish` removes this
+  # directory on every path it controls, but it does not control two: a SIGKILL,
+  # and a caller that sources this library and never calls `finish` at all —
+  # which is exactly what a test fixture does. MEASURED while building this:
+  # six abandoned pools in /tmp from one afternoon of running the scope harness.
+  # Six directories of three small files is not the damage; the damage is that
+  # this repo has already paid hours for scratch a killed run left behind, and a
+  # mechanism that accumulates is the one that is eventually holding something
+  # that matters.
+  #
+  # `-mmin +1440` — a DAY. No hygiene run lives anywhere near that (the longest
+  # measured is seven minutes), so this can never take a live peer's pool on a
+  # host where several land at once. `-maxdepth 1` so it removes pools and never
+  # walks into one.
+  find "$(dirname "$GATE_POOL_DIR")" -maxdepth 1 -type d -name 'gate-pool.*' \
+       -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || true
+  # BLINDNESS IS DECIDED ONCE, HERE, and inherited by every worker. It is a
+  # property of the TREE (is there a `benchmark-data/` under a git repo), not of
+  # a gate, so asking per worker would print the same paragraph once per gate —
+  # and the note exists to be READ, which a hundred copies of it are not.
+  if ! _gate_dispatch_corpus_state >/dev/null 2>&1; then
+    if [ "$GATE_DISPATCH_CORPUS_BLIND" -eq 0 ]; then
+      GATE_DISPATCH_CORPUS_BLIND=1
+      echo "   ^^ corpus-write guard NOT ACTIVE: no" \
+           "$GATE_DISPATCH_CORPUS_REL/ under a git repo reachable from" \
+           "$(dirname "${BASH_SOURCE[0]}") — a gate writing into the corpus" \
+           "would go unreported in this run" >&2
+    fi
+  fi
+}
+
+_gate_pool_worker() {   # <idx> <tolerate> <may_write> <label> <shown> <until>
+                        # <why> <cwd> <cmd...>
+  local idx="$1"; shift
+  local d="$GATE_POOL_DIR/$idx"
+  # A PRIVATE attestation file per gate, concatenated back in DECLARATION order
+  # by `_gate_pool_collect`. Eight processes appending JSON lines to one file
+  # would interleave a record sooner or later, and the consumer of that file
+  # (`gate_host_independence_check`) refuses a malformed one — so the failure
+  # would be a NOT CHECKED for the whole comparison, at random, under load.
+  # The PROGRESS mirror is deliberately left pointing at the shared file: it is
+  # advisory and its entire purpose is to be observable WHILE the run is going.
+  [ -z "$GATE_DISPATCH_ATTESTATION_FILE" ] \
+    || GATE_DISPATCH_ATTESTATION_FILE="$d.attest"
+  _GX_STATE=""; _GX_SECS=0
+  _gate_execute "$@" > "$d.out" 2> "$d.err"
+  # WRITTEN LAST, AND RENAMED INTO PLACE. The result file is the worker's proof
+  # of life: `_gate_pool_collect` reads its absence as "this worker died" and
+  # records NOT_CHECKED. A partial write would be read as a verdict, so it is
+  # never partially visible under its final name.
+  printf '%s\n%s\n%s\n' "$_GX_STATE" "$_GX_SECS" \
+    "$GATE_DISPATCH_ATTESTATION_FAILED" > "$d.res.part"
+  mv -f "$d.res.part" "$d.res"
+}
+
+# `_gate_pool_precomputed <idx> <stdout-text>` — a gate whose verdict needed no
+# process (today: OUT_OF_SCOPE). It takes a place in the replay queue so its line
+# appears exactly where its declaration is, and its STATE is already in the
+# record: the marker `-` tells `_gate_pool_collect` to replay the text and leave
+# `GATE_STATES[$idx]` alone. It is a distinct marker rather than the state name
+# because the only thing `collect` must never do is accept, as a verdict, a value
+# a live worker could not have written.
+_gate_pool_precomputed() {
+  _gate_pool_ensure
+  local idx="$1" d="$GATE_POOL_DIR/$1"
+  printf '%s\n' "$2" > "$d.out"
+  : > "$d.err"
+  printf -- '-\n0\n0\n' > "$d.res"
+  GATE_POOL_IDX+=("$idx")
+}
+
+#: A DECLARATION-TIME NOTE that belongs where it was written. `gate_dispatch_over`
+#: says two things — the producer failed, the corpus was empty — at the moment it
+#: expands, which is while earlier gates are still running. MEASURED: without
+#: this, the EMPTY CORPUS paragraph landed three gates early in the JOBS=8 log,
+#: above diagnostics from gates declared before it. It names its corpus so it was
+#: never unattributable, but a reader who trusts log order for everything else
+#: should not have to know which lines are the exception.
+#:
+#: Keyed by a NAME rather than a gate index because it is not a gate: it takes a
+#: place in the replay queue and touches no slot in the record.
+GATE_POOL_NOTE_SEQ=0
+_gate_pool_note() {                       # <stderr-text>
+  _gate_pool_ensure
+  GATE_POOL_NOTE_SEQ=$(( GATE_POOL_NOTE_SEQ + 1 ))
+  local key="note.$GATE_POOL_NOTE_SEQ" d="$GATE_POOL_DIR/note.$GATE_POOL_NOTE_SEQ"
+  : > "$d.out"
+  printf '%s\n' "$1" > "$d.err"
+  printf -- '-\n0\n0\n' > "$d.res"
+  GATE_POOL_IDX+=("$key")
+}
+
+#: Say it now, or queue it — whichever puts it where it was written.
+_gate_dispatch_say_err() {
+  if [ "${GATE_DISPATCH_JOBS:-1}" -gt 1 ]; then
+    _gate_pool_note "$1"
+  else
+    printf '%s\n' "$1" >&2
+  fi
+}
+
+_gate_pool_submit() {   # <idx> <tolerate> <may_write> <label> <shown> <until>
+                        # <why> <cwd> <cmd...>
+  _gate_pool_ensure
+  # Bounded by COUNTING this shell's live children rather than by a token FIFO:
+  # `jobs -rp` is the same fact the kernel has, and a FIFO adds a file whose
+  # loss would deadlock the run.
+  local live
+  while :; do
+    live="$(jobs -rp | grep -c . || true)"
+    [ "$live" -ge "$GATE_DISPATCH_JOBS" ] || break
+    wait -n 2>/dev/null || true
+    # Replay whatever PREFIX has completed while we were blocked, so a human
+    # watching the log sees measured progress instead of ten silent minutes.
+    _gate_pool_flush_prefix
+  done
+  GATE_POOL_IDX+=("$1")
+  _gate_pool_worker "$@" &
+}
+
+#: Emit every queued gate whose turn has come AND which has finished, stopping
+#: at the first one that has not. Declaration order, never completion order.
+_gate_pool_flush_prefix() {
+  local n=${#GATE_POOL_IDX[@]} idx
+  while [ "$GATE_POOL_FLUSHED" -lt "$n" ]; do
+    idx="${GATE_POOL_IDX[$GATE_POOL_FLUSHED]}"
+    [ -f "$GATE_POOL_DIR/$idx.res" ] || return 0
+    _gate_pool_collect "$idx"
+    GATE_POOL_FLUSHED=$(( GATE_POOL_FLUSHED + 1 ))
+  done
+  return 0
+}
+
+#: Replay ONE finished gate and fold its verdict into the record.
+_gate_pool_collect() {
+  local idx="$1" d="$GATE_POOL_DIR/$1" st="" secs="" attf=""
+  if [ -f "$d.res" ]; then
+    { IFS= read -r st || true
+      IFS= read -r secs || true
+      IFS= read -r attf || true; } < "$d.res"
+  fi
+  # The gate's own two streams, kept apart. `gatekeeper-land.sh` captures
+  # STDOUT and reads it; folding a gate's stderr into it would change what that
+  # caller sees, and folding stdout into stderr would hide it from them.
+  [ ! -f "$d.out" ] || cat -- "$d.out"
+  [ ! -f "$d.err" ] || cat -- "$d.err" >&2
+  # AN UNRECOGNISED STATE IS A LOST WORKER, not a pass. This covers the killed
+  # worker (no file), the worker killed mid-write (empty or truncated file) and
+  # any future state name this branch has not been taught — all three are "no
+  # verdict arrived", and the one thing none of them may become is PASS.
+  case "$st" in
+    # `-` is the no-process row placed by `_gate_pool_precomputed`: its state was
+    # recorded at declaration time and there was never a worker to lose.
+    -) return 0 ;;
+    PASS|FAIL|NOT_CHECKED|WROTE_CORPUS) ;;
+    *) st="" ;;
+  esac
+  if [ -z "$st" ]; then
+    GATE_STATES[$idx]="NOT_CHECKED"
+    GATE_SECONDS[$idx]="0"
+    GATE_DISPATCH_WORKERS_LOST=$(( GATE_DISPATCH_WORKERS_LOST + 1 ))
+    GATE_POOL_LOST_LABELS="${GATE_POOL_LOST_LABELS:+$GATE_POOL_LOST_LABELS, }\
+${GATE_LABELS[$idx]}"
+    echo "   ^^ WORKER LOST: ${GATE_LABELS[$idx]} — the process assigned this" \
+         "gate never reported a verdict (killed, out of memory, or the host" \
+         "went away). Recorded NOT CHECKED. It is NOT a pass, and this run" \
+         "will refuse rather than certify a tree it did not finish looking" \
+         "at." >&2
+    return 0
+  fi
+  GATE_STATES[$idx]="$st"
+  [[ "$secs" =~ ^[0-9]+$ ]] || secs=0
+  GATE_SECONDS[$idx]="$secs"
+  case "$st" in FAIL|WROTE_CORPUS) GATE_DISPATCH_FAIL=1 ;; esac
+  [ "${attf:-0}" = "0" ] || GATE_DISPATCH_ATTESTATION_FAILED=1
+  if [ -n "$GATE_DISPATCH_ATTESTATION_FILE" ] && [ -s "$d.attest" ]; then
+    cat -- "$d.attest" >> "$GATE_DISPATCH_ATTESTATION_FILE"
+  fi
+  return 0
+}
+
+#: Wait for every queued gate and replay all of them, in declaration order.
+#: Called by `gate_serial` (before the gate that must run alone) and by
+#: `gate_dispatch_finish`.
+_gate_pool_drain() {
+  [ -n "$GATE_POOL_DIR" ] || return 0
+  wait 2>/dev/null || true
+  local n=${#GATE_POOL_IDX[@]}
+  # Deliberately NOT `_gate_pool_flush_prefix`: that one stops at the first
+  # unfinished gate, which after `wait` can only be a LOST one — and stopping
+  # there would silently drop every gate behind it from the roll-up.
+  while [ "$GATE_POOL_FLUSHED" -lt "$n" ]; do
+    _gate_pool_collect "${GATE_POOL_IDX[$GATE_POOL_FLUSHED]}"
+    GATE_POOL_FLUSHED=$(( GATE_POOL_FLUSHED + 1 ))
+  done
   return 0
 }
 
@@ -663,10 +1061,9 @@ gate_dispatch_over() {
   done <<<"$out"
   local n=${#items[@]} before=${#GATE_LABELS[@]}
   if [ "$rc" -ne 0 ]; then
-    echo "   ^^ CORPUS PRODUCER FAILED (rc $rc) for \"$corpus\": the $n" \
-         "item(s) below are what it managed to print and NOT the corpus —" \
-         "read every verdict from this loop as covering an unknown fraction" \
-         "of it" >&2
+    _gate_dispatch_say_err "   ^^ CORPUS PRODUCER FAILED (rc $rc) for \
+\"$corpus\": the $n item(s) below are what it managed to print and NOT the \
+corpus — read every verdict from this loop as covering an unknown fraction of it"
   fi
   GATE_DISPATCH_CORPUS_CUR="$corpus"
   GATE_DISPATCH_CORPUS_TOTAL="$n"
@@ -711,9 +1108,9 @@ gate_dispatch_over() {
     GATE_ITEM_CORPUS+=("$corpus")
     GATE_ITEM_IDX+=("0")
     GATE_ITEM_TOTAL+=("0")
-    echo "   ^^ EMPTY CORPUS \"$corpus\": 0 item(s), so the gates it would" \
-         "have dispatched did not run. Recorded NOT_CHECKED so the run" \
-         "carries a verdict for it instead of no verdict at all." >&2
+    _gate_dispatch_say_err "   ^^ EMPTY CORPUS \"$corpus\": 0 item(s), so \
+the gates it would have dispatched did not run. Recorded NOT_CHECKED so the run \
+carries a verdict for it instead of no verdict at all."
   fi
   GATE_CORPUS_NAMES+=("$corpus")
   GATE_CORPUS_ITEMS+=("$n")
@@ -910,6 +1307,12 @@ PY
 }
 
 gate_dispatch_finish() {
+  # #P4 — FIRST, before anything counts anything. Every queued gate is waited
+  # for and replayed in declaration order, so from this line down the record is
+  # exactly the record a sequential run would have built, and every sentence
+  # below reads the same arrays it always did.
+  _gate_pool_drain
+  [ -z "$GATE_POOL_DIR" ] || rm -rf -- "$GATE_POOL_DIR"
   local declared=${#GATE_LABELS[@]} notchecked=0 passed=0 wrote=0 i
   # vibe-ic#1025 — COUNTED, where they were not before. Every closing sentence
   # below could state `declared` and `notchecked`; none of them could state how
@@ -951,6 +1354,26 @@ after the last gate and attaches to nothing"
     echo "gate_dispatch: ${#GATE_WIRING_ERRORS[@]} WIRING ERROR(s) in the gate" \
          "declarations (listed above) — the set was not correctly declared," \
          "so this run certifies NOTHING" >&2
+    exit 2
+  fi
+
+  # A KILLED RUN MUST NOT LOOK GREEN (#P4).
+  #
+  # A lost worker's gate is already recorded NOT_CHECKED rather than PASS, which
+  # is the first half. The second half is the EXIT CODE, and without this branch
+  # it would be ZERO: an unexempted NOT_CHECKED does not set `GATE_DISPATCH_FAIL`,
+  # so a run whose workers were killed would print "N NOT CHECKED — this is NOT a
+  # pass" and exit 0, and every `-ne 0` consumer believes the exit code. That is
+  # vibe-ic#1025 exactly, arriving through a new door.
+  #
+  # rc 2 AND NOT rc 1, by this repo's convention: 1 = a gate found a defect,
+  # 2 = nothing could be determined. A killed worker found nothing; it never got
+  # to look. Placed with the wiring errors because it is the same tier of claim —
+  # this run did not certify the tree it was pointed at.
+  if [ "$GATE_DISPATCH_WORKERS_LOST" -ne 0 ]; then
+    echo "gate_dispatch: $GATE_DISPATCH_WORKERS_LOST gate worker(s) never" \
+         "reported a verdict, so this run certifies NOTHING. NOT CHECKED:" \
+         "$GATE_POOL_LOST_LABELS" >&2
     exit 2
   fi
 

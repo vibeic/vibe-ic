@@ -19,10 +19,21 @@ ok()   { PASS=$((PASS+1)); printf '  ok    %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  FAIL  %s\n     %s\n' "$1" "${2:-}"; }
 
 # One dispatcher run in a subshell, so state cannot leak between cases.
+#
+# PINNED TO JOBS=1 (#P4), and the reason is not that scope and concurrency
+# interact — they do not. Scope is decided at DECLARATION time, on the main
+# shell, before any gate is queued, so its answer is the same at any job count.
+# What differs is DELIVERY: with a pool, the SKIP line is buffered so it appears
+# in declaration order, and it is `gate_dispatch_finish` that flushes it — which
+# these cases deliberately never call, because they read the dispatcher's arrays
+# directly rather than running a whole script. Pinning is therefore honest about
+# what this file tests. That the SKIP still prints, in order, WITH a pool is
+# asserted in `test_gate_concurrency.sh`, which drives complete scripts.
 drive() {                       # drive <changed-paths-file|""> <body> -> stdout
   local changed="$1" body="$2"
   ( set +u
     export GATEKEEPER_CHANGED_PATHS="$changed"
+    export GATEKEEPER_HYGIENE_JOBS=1
     . "$HERE/_gate_dispatch.sh" >/dev/null 2>&1
     gate_dispatch_init >/dev/null 2>&1
     eval "$body"

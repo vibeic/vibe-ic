@@ -638,7 +638,23 @@ run "artefact-defect close discipline" "$ROOT" python3 "$PG/artefact_defect_clos
 #        `gen_programs_index.py` sits in tools/ yet reads the marketplace,
 #        so "where it is" is the wrong question and this scope answers
 #        "what it reads".
-gate_scope benchmark-data/ic/
+# NO gate_scope HERE, DELIBERATELY, AND THE MEASUREMENT IS WHY.
+#
+# This gate carried `gate_scope benchmark-data/ic/` from v1.10.53 until it was
+# withdrawn. The scope was WRONG in the one direction that matters: it excludes
+# the checker's own body and its own ratchet register.
+#
+#   cross_layer_reference_check.py reads programs/cross_layer_reference_baseline.json
+#   -- its debt register, whose header says a findings count may SHRINK freely and
+#   any INCREASE fails CI. Under that scope, a commit that only widens the register
+#   touches nothing in benchmark-data/ic/, so the one gate guarding it does not run.
+#
+# The general rule this is an instance of: a scope that excludes the gate's own
+# executable body makes the gate unable to fail on a change to ITSELF, and
+# "edit the checker instead of the artefact" is precisely the change most likely
+# to be an attempt to silence it. Measured across the 48 scopes proposed in the
+# same sweep: 13 of them had this shape, and 5 of those 13 guard something that
+# is RED on this tree today.
 run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_reference_check.py" --corpus "$ROOT/benchmark-data/ic"
 
 # vibe-ic#693 — `flow_compliance_check` classifies a project from each step's
@@ -669,7 +685,23 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 #        `gen_programs_index.py` sits in tools/ yet reads the marketplace,
 #        so "where it is" is the wrong question and this scope answers
 #        "what it reads".
-gate_scope benchmark-data/ic/
+# NO gate_scope HERE, DELIBERATELY, AND THE MEASUREMENT IS WHY.
+#
+# This gate carried `gate_scope benchmark-data/ic/` from v1.10.53 until it was
+# withdrawn. The scope was WRONG in the one direction that matters: it excludes
+# the checker's own body and its own ratchet register.
+#
+#   cross_layer_reference_check.py reads programs/cross_layer_reference_baseline.json
+#   -- its debt register, whose header says a findings count may SHRINK freely and
+#   any INCREASE fails CI. Under that scope, a commit that only widens the register
+#   touches nothing in benchmark-data/ic/, so the one gate guarding it does not run.
+#
+# The general rule this is an instance of: a scope that excludes the gate's own
+# executable body makes the gate unable to fail on a change to ITSELF, and
+# "edit the checker instead of the artefact" is precisely the change most likely
+# to be an attempt to silence it. Measured across the 48 scopes proposed in the
+# same sweep: 13 of them had this shape, and 5 of those 13 guard something that
+# is RED on this tree today.
 run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic"
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard
