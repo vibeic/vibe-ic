@@ -100,6 +100,7 @@ def _recorded() -> dict:
     return json.loads(BASELINE.read_text(encoding="utf-8"))
 
 
+@needs_corpus
 def test_the_corpus_this_module_measures_actually_exists():
     """A path that resolves to nothing would make every predicate below fail —
     or, with a laxer assertion, PASS over an empty sweep. Pinned first."""
