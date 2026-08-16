@@ -25,9 +25,17 @@ WHAT THIS IS NOT
 ================
 It is NOT a way to make a red test green. Where the corpus IS present — a clone of
 benchmark-data placed at `VIBE_IC_BENCHMARK_DATA`, or a checkout that still carries
-cells — every one of these tests runs exactly as before and can still fail. The skip
-is reachable only when there is genuinely nothing to read, and
-`test_the_skip_is_not_reachable_when_the_corpus_is_present` pins that.
+cells — every one of these tests runs exactly as before and can still fail.
+
+THE FIRST VERSION OF THIS DOCSTRING WAS ITSELF A LYING CHECK. It claimed a test named
+`test_the_skip_is_not_reachable_when_the_corpus_is_present` pinned that property. No
+such test existed — the sentence was the entire guarantee. An adversarial review
+grepped for the name, found it only here, and then demonstrated the hole it was
+covering: `VIBE_IC_BENCHMARK_DATA=<empty dir>` gave `29 passed, 2 skipped`, a green
+run with every corpus check switched off.
+
+The guarantees now live in `test_published_corpus_helper.py`, which is a file that
+exists, and a broken pointer raises instead of skipping — see `corpus_root`.
 """
 from __future__ import annotations
 
@@ -44,17 +52,47 @@ _PLUGIN = Path(__file__).resolve().parents[1]
 _REPO = _PLUGIN.parents[2]
 
 
-def corpus_root() -> Optional[Path]:
-    """The directory holding published cells, or None if there is none to read.
+class CorpusPointerBroken(RuntimeError):
+    """`VIBE_IC_BENCHMARK_DATA` was set and there is nothing readable there."""
 
-    Order matters: an explicit environment pointer wins, because a caller who
-    supplied one is asking for THAT corpus and a silent fallback to an in-repo
-    remnant would answer about a different tree than they named.
+
+def corpus_root() -> Optional[Path]:
+    """The directory holding published cells, or None if none was ever offered.
+
+    TWO ABSENCES THAT ARE NOT THE SAME FACT
+    =======================================
+    Nobody set the pointer and the repo has no cells
+        -> None. Honest: no corpus was offered, so a check over it skips.
+
+    Somebody SET the pointer and it holds no cells
+        -> raise. They named a corpus. The name is wrong, or the clone failed, or
+           the CI step that was meant to fetch it did nothing. Returning None here
+           renders "your path is broken" as "there is no corpus", and every corpus
+           check goes green-by-skip.
+
+    That second path was REAL, not hypothetical:
+
+        VIBE_IC_BENCHMARK_DATA=<empty dir> pytest ... -> 29 passed, 2 skipped
+
+    A mistyped path, a failed clone, or a no-op fetch step turned the whole set
+    green. An adversarial review found it, and it found it because this module's
+    docstring claimed a test pinned the property while no such test existed. Both
+    are fixed: the pointer now refuses, and the test is written below the module
+    it guards (`test_published_corpus_helper.py`).
     """
     env = os.environ.get(CORPUS_ENV)
     if env:
         p = Path(env)
-        return p if _has_cells(p) else None
+        if _has_cells(p):
+            return p
+        raise CorpusPointerBroken(
+            f"{CORPUS_ENV}={env!r} names a corpus with no published cell under "
+            f"ic/<design>/v<version>_<PDK>/ "
+            f"({'the path does not exist' if not p.exists() else 'the path exists but is empty of cells'}). "
+            f"This is NOT the same as having no corpus: you said where it is. "
+            f"Unset {CORPUS_ENV} to run these checks as skipped, or point it at a "
+            f"clone of vibeic/benchmark-data."
+        )
     here = _REPO / "benchmark-data"
     return here if _has_cells(here) else None
 
