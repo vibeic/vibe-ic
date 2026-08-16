@@ -28,12 +28,41 @@ def run(args, cwd=None):
     return cp.returncode, cp.stdout, cp.stderr
 
 
+def _valid_orchestrator_report(project: Path):
+    return {"phase": "vibe-ic", "project": str(project), "verdict": "PASS",
+            "phases": []}
+
+
+def _valid_phase1_report(project: Path):
+    return {"phase": 1, "project": str(project), "verdict": "PASS",
+            "mode": "docs", "delegated_to": "phase1_doc_one_shot_runner",
+            "delegated_rc": 0}
+
+
+def _valid_layer_doc(content=None):
+    doc = {
+        "doc_id": "L1",
+        "fields": {"ic_name": "TopModule"},
+        "_generator": {
+            "plugin": "vibe-ic",
+            "plugin_version": "1.10.48",
+            "l_doc_taxonomy_digest": "0123456789ab",
+            "l_doc_taxonomy_docs": 28,
+            "emitter": "phase1_engine.render",
+        },
+    }
+    if content:
+        doc.update(content)
+    return doc
+
+
 def test_pass_with_orchestrator_report():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         rep = td / "reports" / "orchestrator"
         rep.mkdir(parents=True)
-        (rep / "vibe_ic_one_shot.json").write_text(json.dumps({"verdict": "PASS"}))
+        (rep / "vibe_ic_one_shot.json").write_text(
+            json.dumps(_valid_orchestrator_report(td)))
         rc, out, err = run([str(td), "--strict"])
         assert rc == 0
         assert "PASS" in out
@@ -44,7 +73,8 @@ def test_pass_with_phase1_report():
         td = Path(td)
         rep = td / "reports"
         rep.mkdir()
-        (rep / "phase1_one_shot.json").write_text(json.dumps({"verdict": "PASS"}))
+        (rep / "phase1_one_shot.json").write_text(
+            json.dumps(_valid_phase1_report(td)))
         rc, out, err = run([str(td), "--strict"])
         assert rc == 0
 
@@ -54,7 +84,7 @@ def test_pass_with_l1_datasheet():
         td = Path(td)
         gd = td / "phase1" / "generated_docs"
         gd.mkdir(parents=True)
-        (gd / "L1_DATASHEET.json").write_text(json.dumps({"ic_name": "x"}))
+        (gd / "L1_DATASHEET.json").write_text(json.dumps(_valid_layer_doc()))
         rc, out, err = run([str(td), "--strict"])
         assert rc == 0
 
@@ -110,10 +140,11 @@ def test_json_report():
 # and MUST still be caught.
 # ---------------------------------------------------------------------------
 
-def _shape_c(td: Path, rel: str, name: str, body: str = '{"ic_name":"TopModule"}'):
+def _shape_c(td: Path, rel: str, name: str, body: str | None = None):
     p = td / rel
     p.mkdir(parents=True, exist_ok=True)
-    (p / name).write_text(body)
+    (p / name).write_text(body if body is not None
+                          else json.dumps(_valid_layer_doc()))
 
 
 # ---- POSITIVE: both layouts gates_atomic.py itself accepts ----
@@ -131,7 +162,8 @@ def test_pass_shape_c_phase1_proj_layout():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         _shape_c(td, "work/Prob153_gshare/phase1_proj/phase1/generated_docs",
-                 "L9_INTEGRATION_SPEC.json", '{"top_module":"TopModule"}')
+                 "L9_INTEGRATION_SPEC.json",
+                 json.dumps(_valid_layer_doc({"top_module": "TopModule"})))
         rc, out, err = run([str(td), "--strict"])
         assert rc == 0, err
 
@@ -266,6 +298,59 @@ def test_noleak_shape_b_fake_exact_report_is_rejected(body):
         td = Path(td)
         p = (td / "work" / "design_a" / "reports" / "orchestrator" /
              "vibe_ic_one_shot.json")
+        p.parent.mkdir(parents=True)
+        p.write_text(body)
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+@pytest.mark.parametrize("rel", [
+    "phase1/generated_docs",
+    "work/design_a/phase1/generated_docs",
+    "work/Prob001_zero/out/generated_docs",
+    "work/Prob001_zero/phase1_proj/phase1/generated_docs",
+])
+@pytest.mark.parametrize("body", [
+    "",
+    "not json",
+    "{}",
+    json.dumps({
+        "_generator": {
+            "plugin": "vibe-ic",
+            "plugin_version": "1.10.48",
+            "l_doc_taxonomy_digest": "0123456789ab",
+            "l_doc_taxonomy_docs": 28,
+            "emitter": "phase1_engine.render",
+        }
+    }),
+    json.dumps({
+        "doc_id": "L1",
+        "_generator": {
+            "plugin": "not-vibe-ic",
+            "plugin_version": "1.10.48",
+            "l_doc_taxonomy_digest": "0123456789ab",
+            "l_doc_taxonomy_docs": 28,
+            "emitter": "phase1_engine.render",
+        }
+    }),
+])
+def test_noleak_layer_doc_requires_substantive_generator_evidence(rel, body):
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        _shape_c(td, rel, "L1_DATASHEET.json", body)
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1
+
+
+@pytest.mark.parametrize(("rel", "body"), [
+    ("reports/orchestrator/vibe_ic_one_shot.json",
+     json.dumps({"verdict": "PASS"})),
+    ("reports/phase1_one_shot.json", json.dumps({"verdict": "PASS"})),
+])
+def test_noleak_root_report_requires_canonical_envelope(rel, body):
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        p = td / rel
         p.parent.mkdir(parents=True)
         p.write_text(body)
         rc, out, err = run([str(td), "--strict"])

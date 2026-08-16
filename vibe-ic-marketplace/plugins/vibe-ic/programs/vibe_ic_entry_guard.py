@@ -90,6 +90,8 @@ _EVIDENCE_REPORT_GLOBS = [
 # A layer doc is L<digits>_<NAME>.json — pinned so a stray `Lfoo.json` or a
 # `L1_DATASHEET.json.bak` cannot stand in for real phase1 output.
 _LAYER_DOC_RE = re.compile(r"^L\d+_[A-Za-z0-9_]+\.json$")
+_PLUGIN_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$")
+_TAXONOMY_DIGEST_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
 @dataclass
@@ -99,6 +101,15 @@ class EntryGuardFinding:
     detail: str
 
 
+def _read_json_object(path: Path) -> dict | None:
+    """Read one evidence file as a JSON object, or fail closed."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _is_orchestrator_report(path: Path) -> bool:
     """Require the minimal canonical one-shot report structure.
 
@@ -106,26 +117,74 @@ def _is_orchestrator_report(path: Path) -> bool:
     envelope prevents an empty file or hand-dropped ``{"verdict": "PASS"}``
     from standing in for evidence that the orchestrator actually ran.
     """
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return False
-    return (isinstance(data, dict)
+    data = _read_json_object(path)
+    return (data is not None
             and isinstance(data.get("project"), str) and bool(data["project"])
             and isinstance(data.get("verdict"), str) and bool(data["verdict"])
             and isinstance(data.get("phases"), (dict, list)))
 
 
+def _is_phase1_report(path: Path) -> bool:
+    """Require the canonical standalone Phase-1 report envelope."""
+    data = _read_json_object(path)
+    return (data is not None
+            and data.get("phase") in (1, "phase1")
+            and isinstance(data.get("project"), str) and bool(data["project"])
+            and isinstance(data.get("verdict"), str) and bool(data["verdict"])
+            and isinstance(data.get("mode"), str) and bool(data["mode"])
+            and isinstance(data.get("delegated_to"), str)
+            and bool(data["delegated_to"])
+            and isinstance(data.get("delegated_rc"), int)
+            and not isinstance(data["delegated_rc"], bool))
+
+
+def _is_layer_doc(path: Path) -> bool:
+    """Require a substantive L-document carrying the shared writer stamp.
+
+    Filename shape alone is not runner evidence: an empty or hand-dropped
+    ``L1_FAKE.json`` previously satisfied the entry guard.  Every current
+    Phase-1 writer routes through ``l_doc_generator_stamp.dump``; its
+    deterministic ``_generator`` envelope is therefore the common structural
+    proof available across the heterogeneous L1-L28 document schemas.
+    """
+    if not _LAYER_DOC_RE.match(path.name):
+        return False
+    data = _read_json_object(path)
+    if data is None:
+        return False
+    stamp = data.get("_generator")
+    if not isinstance(stamp, dict):
+        return False
+    if stamp.get("plugin") != "vibe-ic":
+        return False
+    version = stamp.get("plugin_version")
+    digest = stamp.get("l_doc_taxonomy_digest")
+    docs = stamp.get("l_doc_taxonomy_docs")
+    emitter = stamp.get("emitter")
+    if not (isinstance(version, str) and _PLUGIN_VERSION_RE.fullmatch(version)):
+        return False
+    if not (isinstance(digest, str) and _TAXONOMY_DIGEST_RE.fullmatch(digest)):
+        return False
+    if not (isinstance(docs, int) and not isinstance(docs, bool) and docs > 0):
+        return False
+    if not (isinstance(emitter, str) and bool(emitter.strip())):
+        return False
+    bookkeeping = {"_generator", "_comment", "source_documents", "provenance"}
+    return any(key not in bookkeeping for key in data)
+
+
 def _has_evidence(project: Path) -> Tuple[bool, List[EntryGuardFinding]]:
     """Return (has_evidence, findings)."""
     findings: List[EntryGuardFinding] = []
-    found = []
+    validators = {
+        "reports/orchestrator/vibe_ic_one_shot.json": _is_orchestrator_report,
+        "reports/phase1_one_shot.json": _is_phase1_report,
+        "phase1/generated_docs/L1_DATASHEET.json": _is_layer_doc,
+    }
     for rel in _EVIDENCE_FILES:
         p = project / rel
-        if p.is_file():
-            found.append(str(p))
-    if found:
-        return True, findings
+        if p.is_file() and validators[rel](p):
+            return True, findings
     for pattern in _EVIDENCE_REPORT_GLOBS:
         if any(p.is_file() and _is_orchestrator_report(p)
                for p in project.glob(pattern)):
@@ -135,7 +194,7 @@ def _has_evidence(project: Path) -> Tuple[bool, List[EntryGuardFinding]]:
     # sitting at the right depth.
     for pattern in _EVIDENCE_GLOBS:
         for p in project.glob(pattern):
-            if p.is_file() and _LAYER_DOC_RE.match(p.name):
+            if p.is_file() and _is_layer_doc(p):
                 return True, findings
     # None found — build a human finding.
     checked = ", ".join(
