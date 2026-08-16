@@ -16,7 +16,9 @@ foundry, SKU, node or part number appears anywhere in this file.
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
+import json
 import subprocess
 import sys
 import textwrap
@@ -40,6 +42,34 @@ def _load(name: str, path: Path):
 
 
 C = _load("_pdpc_under_test", CHECK)
+
+
+def test_isolated_worker_never_recovers_a_live_peer_journal(tmp_path):
+    """Parallel children may inspect only their keyed crash record.
+
+    ``recover_all_journals`` is correct for the locked parent and destructive
+    for a child: it would restore another worker's live mutant underneath that
+    worker's pytest process.  This is the exact race the parallel mode must not
+    reintroduce.
+    """
+    own = tmp_path / "own" / "programs"
+    peer = tmp_path / "peer" / "programs"
+    (own / "tests").mkdir(parents=True)
+    peer.mkdir(parents=True)
+    target = peer / "subject.py"
+    target.write_text("mutant\n", encoding="utf-8")
+    journal = C.journal_for(peer)
+    C._write_private_atomic(journal, json.dumps({
+        "schema": 2, "file": str(target), "original": "original\n",
+        "mutated_sha256": hashlib.sha256(b"mutant\n").hexdigest(),
+    }))
+    try:
+        rc = C.main([str(own), "--verify-pins", "--isolated-worker"])
+        assert rc == 0
+        assert target.read_text(encoding="utf-8") == "mutant\n"
+        assert journal.is_file(), "the child consumed a live peer's journal"
+    finally:
+        journal.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

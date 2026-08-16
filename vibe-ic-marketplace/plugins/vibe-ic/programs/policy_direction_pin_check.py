@@ -132,6 +132,7 @@ from __future__ import annotations
 import argparse
 import ast
 import concurrent.futures
+import fcntl
 import hashlib
 import json
 import os
@@ -162,8 +163,9 @@ DEFAULT_MAX_TEST_FILES = 40
 # leaves one core per worker plus ample headroom for pytest's own subprocesses;
 # callers can lower it on smaller hosts.  Parallel verification is opt-in so
 # fixture users and old CI keep the byte-for-byte serial path.
-DEFAULT_JOBS = 5
+DEFAULT_JOBS = 6
 _PARALLEL_SCRATCH_PREFIX = "pdpc-par-"
+_RUN_LOCK_FD: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -649,6 +651,25 @@ def _journal_home() -> Path:
         raise OSError(f"unsafe policy-pin journal directory: {home}")
     os.chmod(home, 0o700)
     return home
+
+
+def acquire_run_lock() -> None:
+    """Serialize top-level recovery while allowing its isolated children.
+
+    ``recover_all_journals`` is intentionally broad so a later run repairs a
+    killed random worktree.  Without this lock, one live run mistakes another
+    live worker's armed journal for an orphan and rewrites the file beneath its
+    pytest process.  The parent holds the lock for the process lifetime;
+    ``--isolated-worker`` children recover only their own keyed journal and do
+    not acquire it.
+    """
+    global _RUN_LOCK_FD
+    if _RUN_LOCK_FD is not None:
+        return
+    path = _journal_home() / "policy_pin_run.lock"
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    _RUN_LOCK_FD = fd
 
 
 def journal_for(root: Path) -> Path:
@@ -1163,11 +1184,12 @@ def verify_pins_parallel(
     """
     if jobs < 1:
         return None, [f"--jobs must be >= 1, got {jobs}"]
-    by_file: Dict[str, List[Dict[str, Any]]] = {}
-    for site in selected:
-        by_file.setdefault(str(site["file"]), []).append(site)
-    files = sorted(by_file)
-    if not files:
+    by_unit = {(str(site["file"]), int(site["line"])): site
+               for site in selected}
+    units = sorted(by_unit)
+    if len(by_unit) != len(selected):
+        return None, ["two argued sites share one file+line identity"]
+    if not units:
         return [], []
 
     top = subprocess.run(
@@ -1189,19 +1211,26 @@ def verify_pins_parallel(
     if dirty.returncode != 0 or dirty.stdout.strip():
         return None, ["parallel mutation verification needs a clean tracked "
                       "checkout because isolated workers are created from HEAD"]
+    rc_rec, recovery_lines = recover_all_journals()
+    for recovery_line in recovery_lines:
+        print(recovery_line, file=sys.stderr if rc_rec else sys.stdout)
+    if rc_rec:
+        return None, ["an abandoned mutation journal could not be recovered "
+                      "before parallel workers launched"]
 
-    jobs = min(jobs, len(files))
-    # One file is one mutation lane: two sites in the same source file must
-    # never overlap.  Greedy by site count is deterministic and keeps the only
-    # known two-site file from sharing a worker with another file.
-    buckets: List[List[str]] = [[] for _ in range(jobs)]
+    jobs = min(jobs, len(units))
+    # Every lane owns an isolated worktree, so even two sites in one source
+    # file are independent.  The exact file+line identity is the unit; this
+    # removes the last false serial edge without ever overlapping mutations in
+    # the same filesystem.
+    buckets: List[List[Tuple[str, int]]] = [[] for _ in range(jobs)]
     loads = [0] * jobs
-    for name in sorted(files, key=lambda n: (-len(by_file[n]), n)):
+    for unit in units:
         i = min(range(jobs), key=lambda x: (loads[x], x))
-        buckets[i].append(name)
-        loads[i] += len(by_file[name])
+        buckets[i].append(unit)
+        loads[i] += 1
 
-    def worker(index: int, names: List[str]):
+    def worker(index: int, assigned: List[Tuple[str, int]]):
         res, _ = _scratch.reserve(
             _PARALLEL_SCRATCH_PREFIX, remover=_unregister_parallel_worktree)
         wt = res.path / "wt"
@@ -1213,13 +1242,16 @@ def verify_pins_parallel(
             if add.returncode != 0:
                 return index, rows, ["could not create isolated worktree: "
                                      + (add.stderr or add.stdout).strip()[:240]]
-            for name in names:
-                out_json = res.path / (hashlib.sha256(name.encode()).hexdigest()
+            for name, line in assigned:
+                token = f"{name}:{line}"
+                out_json = res.path / (hashlib.sha256(token.encode()).hexdigest()
                                        + ".json")
                 basetemp = res.path / ("pytest-" + hashlib.sha256(
-                    name.encode()).hexdigest()[:12])
+                    token.encode()).hexdigest()[:12])
                 argv = [sys.executable, str(wt / script_rel), str(wt / root_rel),
                         "--verify-pins", "--only-file", name,
+                        "--only-line", str(line),
+                        "--isolated-worker",
                         "--max-test-files", str(max_test_files),
                         "--basetemp", str(basetemp), "--json", str(out_json)]
                 if include_required:
@@ -1227,8 +1259,17 @@ def verify_pins_parallel(
                 for extra in pytest_args:
                     argv += ["--pytest-arg", extra]
                 proc = subprocess.run(argv, capture_output=True, text=True)
-                rows.append((name, proc.returncode, out_json,
-                             proc.stdout, proc.stderr))
+                child_doc = None
+                record_error = None
+                if not out_json.is_file():
+                    record_error = "no JSON record"
+                else:
+                    try:
+                        child_doc = json.loads(out_json.read_text(encoding="utf-8"))
+                    except (OSError, ValueError) as exc:
+                        record_error = f"unreadable JSON: {exc}"
+                rows.append((name, line, proc.returncode, child_doc,
+                             proc.stdout, proc.stderr, record_error))
             return index, rows, []
         except (OSError, subprocess.SubprocessError) as exc:
             return index, rows, [f"worker exception: {type(exc).__name__}: {exc}"]
@@ -1244,29 +1285,27 @@ def verify_pins_parallel(
     verified: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     for index, rows, worker_problems in sorted(worker_results):
         problems.extend(f"worker {index}: {p}" for p in worker_problems)
-        for name, rc, out_json, stdout, stderr in rows:
+        for name, line, rc, child, stdout, stderr, record_error in rows:
             # Keep diagnostic output deterministic even though execution was
             # concurrent; interleaved mutation logs are not auditable.
-            for line in (stdout or "").splitlines():
-                print(f"  [worker {index}:{name}] {line}")
-            for line in (stderr or "").splitlines():
-                print(f"  [worker {index}:{name}] {line}", file=sys.stderr)
-            if not out_json.is_file():
+            for output_line in (stdout or "").splitlines():
+                print(f"  [worker {index}:{name}:{line}] {output_line}")
+            for output_line in (stderr or "").splitlines():
+                print(f"  [worker {index}:{name}:{line}] {output_line}",
+                      file=sys.stderr)
+            if record_error is not None:
                 problems.append(
-                    f"worker {index}:{name} exited {rc} without a JSON record")
+                    f"worker {index}:{name}:{line} exited {rc}: {record_error}")
                 continue
-            try:
-                child = json.loads(out_json.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:
-                problems.append(f"worker {index}:{name} unreadable JSON: {exc}")
-                continue
+            assert isinstance(child, dict)
             child_sites = [s for s in child.get("argued") or []
-                           if s.get("file") == name and "pin" in s]
-            expected_keys = {_site_key(s) for s in by_file[name]}
+                           if s.get("file") == name
+                           and int(s.get("line") or -1) == line and "pin" in s]
+            expected_keys = {_site_key(by_unit[(name, line)])}
             actual_keys = {_site_key(s) for s in child_sites}
             if actual_keys != expected_keys:
                 problems.append(
-                    f"worker {index}:{name} covered {len(actual_keys)} site(s), "
+                    f"worker {index}:{name}:{line} covered {len(actual_keys)} site(s), "
                     f"expected {len(expected_keys)}")
                 continue
             states = [str(s["pin"].get("state")) for s in child_sites]
@@ -1275,7 +1314,7 @@ def verify_pins_parallel(
                            else RC_OK)
             if rc != expected_rc:
                 problems.append(
-                    f"worker {index}:{name} JSON implies rc {expected_rc}, "
+                    f"worker {index}:{name}:{line} JSON implies rc {expected_rc}, "
                     f"process exited {rc}")
                 continue
             for site in child_sites:
@@ -1316,6 +1355,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="verify only sites whose file path contains this substring")
     ap.add_argument("--only-file", default=None,
                     help=argparse.SUPPRESS)
+    ap.add_argument("--only-line", type=int, default=None,
+                    help=argparse.SUPPRESS)
+    ap.add_argument("--isolated-worker", action="store_true",
+                    help=argparse.SUPPRESS)
     ap.add_argument("--jobs", type=int, default=1,
                     help="isolated mutation workers (default: serial compatibility)")
     ap.add_argument("--include-required", action="store_true",
@@ -1331,6 +1374,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"[UNDETERMINED] policy_direction_pin_check: {root} is not a directory",
               file=sys.stderr)
         return RC_UNDETERMINED
+
+    if args.verify_pins and not args.isolated_worker:
+        try:
+            acquire_run_lock()
+        except OSError as exc:
+            print(f"[UNDETERMINED] policy_direction_pin_check: could not lock "
+                  f"mutation recovery: {exc}", file=sys.stderr)
+            return RC_UNDETERMINED
 
     report = build_report(root, require_default=not args.include_required)
     argued = report["argued"]
@@ -1362,7 +1413,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return RC_UNDETERMINED
 
     if args.only_file is not None:
-        selected = [s for s in argued if s["file"] == args.only_file]
+        selected = [s for s in argued if s["file"] == args.only_file
+                    and (args.only_line is None
+                         or int(s["line"]) == args.only_line)]
     else:
         selected = [s for s in argued if (args.only or "") in s["file"]]
 
@@ -1397,7 +1450,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         report["verified"] = {
             "pinned": len(pinned), "unpinned": len(unpinned),
             "abstained": len(abstained), "selected": len(selected),
-            "jobs": min(args.jobs, len({s['file'] for s in selected}))}
+            "jobs": min(args.jobs, len(selected))}
         if args.json_out:
             Path(args.json_out).write_text(json.dumps(report, indent=1),
                                            encoding="utf-8")
@@ -1422,7 +1475,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # not a dirty file this run can measure around: the sweep would re-derive
     # the argued value FROM it and report a self-consistent verdict over a
     # corrupt tree. Repair first, or refuse.
-    rc_rec, lines = recover_all_journals()
+    if args.isolated_worker:
+        rc_rec, lines = recover_journal(journal_for(root))
+    else:
+        rc_rec, lines = recover_all_journals()
     for ln in lines:
         print(ln, file=sys.stderr if rc_rec else sys.stdout)
     if rc_rec:
