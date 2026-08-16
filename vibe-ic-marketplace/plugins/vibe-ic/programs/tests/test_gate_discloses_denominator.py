@@ -113,6 +113,34 @@ def test_a_missing_ci_script_is_NOT_a_pass(tmp_path):
     assert verdict == "NOTHING_SCANNED"
 
 
+def test_a_host_excluded_gate_is_not_indirectly_launched_by_the_meta_sweep(
+        tmp_path):
+    """An adjacent host-independence exclusion is transitive.
+
+    The host probe drives this meta-gate.  If the meta-gate then launches the
+    excluded network subject, the supposedly hermetic two-tree comparison has
+    reached the network through one level of indirection.
+    """
+    root = tmp_path / "repo"
+    (root / "tools" / "ci").mkdir(parents=True)
+    marker = tmp_path / "remote-was-launched"
+    (root / "remote.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('x')\n"
+        "print('[PASS] remote response: 1 item')\n")
+    (root / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
+        "# host-independence: EXCLUDE — reaches a remote service whose answer "
+        "can move independently of this commit\n"
+        'run "remote report" "$ROOT" python3 "$ROOT/remote.py"\n')
+
+    res = G.audit_ci(root, timeout=10, budget=20,
+                     skip_host_excluded=True)
+    assert not marker.exists(), (
+        "the denominator meta-sweep launched a gate explicitly excluded from "
+        "host-independence")
+    assert any(label == "remote report" and "EXCLUDED" in why
+               for label, why in res.not_driven), res.not_driven
+
+
 def test_the_gate_list_is_PARSED_from_the_ci_script_not_duplicated():
     """A second hand-maintained list would drift, and a gate added to CI would
     silently escape this check."""
