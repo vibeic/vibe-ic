@@ -626,6 +626,7 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
         GATEKEEPER_BASE="$BASE_SHA" \
         GATEKEEPER_VERSION_BY_GATEKEEPER=1 \
         GATEKEEPER_HYGIENE_REPORT="$BASE_HYG" \
+        GATEKEEPER_HYGIENE_PROGRESS="$RUN/base_hygiene_progress.jsonl" \
         bash tools/gatekeeper-land.sh ) > "$RUN/base_land.log" 2>&1 &
     A2_PID=$!
   fi
@@ -651,6 +652,8 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       GATEKEEPER_PYTEST_JUNIT="$CAND_JUNIT" \
       GATEKEEPER_PYTEST_MAXFAIL=0 \
       GATEKEEPER_VERSION_BY_GATEKEEPER="$VBG" \
+      GATEKEEPER_HYGIENE_REPORT="$CAND_HYG" \
+      GATEKEEPER_HYGIENE_PROGRESS="$RUN/candidate_hygiene_progress.jsonl" \
       bash tools/gatekeeper-land.sh ) > "$RUN/land.log" 2>&1
   echo "--- arm B (squash ${VERIFIED_SHA:0:12}): gatekeeper-land.sh rc=$?"
   sed -n 's/^  \(PASS\|FAIL\|SKIP\|REPORT\)  /      \1  /p' "$RUN/land.log"
