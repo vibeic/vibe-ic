@@ -877,12 +877,22 @@ def _lock2_params():
     A replay proves nothing unless the witness cell it re-runs can reach a
     verdict. Dimension 3's cell test is answered out of the published corpus —
     ``test_matrix_d3_outputs_produced`` skips naming the corpus where there is
-    none — so a dimension-3 entry replayed here would watch a SKIP before the
-    edit and a SKIP after it and conclude the recorded proof no longer holds.
-    That is a statement about the corpus, not about the ledger, so those entries
-    skip for the corpus's own reason instead. Every other entry's witness is
-    answered from the flow yaml and the plugin tree, both of which are here, and
-    is left exactly as it was.
+    none — so a dimension-3 entry replayed here watches a SKIP before the edit
+    and a SKIP after it. That is a statement about the corpus, not about the
+    ledger, so those entries skip for the corpus's own reason instead. Every
+    other entry's witness is answered from the flow yaml and the plugin tree,
+    both of which are here, and is left exactly as it was.
+
+    THIS MARK IS NOT WHAT KEEPS THE VERDICT HONEST, and reading it as such is
+    what vibe-ic#1421 cost. Until ``_cell_rc_from_report`` learned that a
+    skipped cell has no colour, the pair underneath this mark was being SCORED
+    ``STAYED_GREEN`` — "the recorded proof no longer holds" — and the mark only
+    hid that verdict from this one assertion. ``replay_plan`` is not
+    marker-gated: the pair still runs, still lands in ``replay_results()``, and
+    is still read by the CLI, by the starvation guard, and by anyone who prints
+    the plan. The scoring is fixed at the source now; this mark does the one job
+    its name claims, which is to keep an assertion about the LEDGER from
+    reporting a fact about the CHECKOUT.
     """
     out = []
     for m in L.MUTATIONS:
@@ -1169,14 +1179,53 @@ def test_the_unmeasurable_count_is_disclosed_not_skipped():
 # subject of #1403, and which cost the fleet a standing brief pointed at a
 # regression that was not there. The distinction has to live in the OUTPUT.
 #
-# The bound below is ONE SECOND: small enough to fire on any cell, and far
-# under the 60 s ceiling (`180 // 3`) that `ci_harness_timeout_ceiling_check`
-# permits one blocking call. These tests cost ~1 s each; they do not replay
-# anything to completion and are not a second copy of LOCK 2.
+# The bound below is ONE SECOND: far under the 60 s ceiling (`180 // 3`) that
+# `ci_harness_timeout_ceiling_check` permits one blocking call. These tests cost
+# ~1 s each; they do not replay anything to completion and are not a second copy
+# of LOCK 2.
 _BOUND_THAT_ALWAYS_FIRES = 1
 
+#: THE SUBJECT THESE THREE TESTS KILL, and it is no longer a real matrix cell.
+#:
+#: They used to point `_run_cell` at `D3-UNDECLARED-ARTEFACT`'s witness on the
+#: argument that one second was "small enough to fire on any cell". That stopped
+#: being true when dimension 3's cell learned to SKIP where the published corpus
+#: is not in the checkout: the child now returns before the bound can fire, so
+#: the kill this file exists to measure never happens. Measured on `ee849c19e`,
+#: five consecutive runs of that exact call at a 60 s bound:
+#:
+#:     rc=0  `1 skipped in 0.65s`   child 0.89 s
+#:     rc=0  `1 skipped in 0.62s`   child 0.84 s
+#:     rc=0  `1 skipped in 0.60s`   child 0.81 s
+#:     rc=0  `1 skipped in 0.60s`   child 0.81 s
+#:     rc=0  `1 skipped in 0.62s`   child 0.83 s
+#:
+#: 0.81 s < 1 s, so all three tests were RED on an idle host and green only on a
+#: host slow enough to push pytest's own start-up past the bound — a control
+#: whose verdict is a property of the machine. A probe that sleeps for thirty
+#: seconds cannot finish inside a one-second bound on any host, which makes the
+#: kill a property of THIS FILE. Nothing about the claim under test — that a
+#: killed child returns a reason instead of raising, and is never given a
+#: colour — was ever about which cell was killed.
+_A_CELL_THAT_CANNOT_FINISH = ("import time\n\n\n"
+                              "def test_probe():\n"
+                              "    time.sleep(30)\n")
 
-def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour():
+
+@pytest.fixture()
+def unkillable_cell(tmp_path, monkeypatch):
+    """Point `cell_nodeid` at a probe that cannot answer inside the bound."""
+    root = tmp_path / "slow"
+    root.mkdir(parents=True)
+    (root / "test_probe.py").write_text(_A_CELL_THAT_CANNOT_FINISH,
+                                        encoding="utf-8")
+    (root / "conftest.py").write_text("", encoding="utf-8")
+    nodeid = f"{root / 'test_probe.py'}::test_probe"
+    monkeypatch.setattr(L, "cell_nodeid", lambda dim, sid: nodeid)
+    return root
+
+
+def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour(unkillable_cell):
     """The bound firing must RETURN a reason, not raise.
 
     `_cell_rc_from_report` already states the doctrine — "a replay that could
@@ -1190,8 +1239,7 @@ def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour():
     propagated out of `replay` -> `replay_many`'s `pool.map`, killing the test
     with a traceback and no verdict.
     """
-    mut = L.mutation("D3-UNDECLARED-ARTEFACT")
-    rc, out, why = L._run_cell(mut.dim, mut.witness, L.PLUGIN_ROOT, None,
+    rc, out, why = L._run_cell(3, "D1", unkillable_cell, None,
                                _BOUND_THAT_ALWAYS_FIRES)
     assert rc is None, (
         f"a cell killed at {_BOUND_THAT_ALWAYS_FIRES}s reported rc={rc!r}. An "
@@ -1205,7 +1253,8 @@ def test_a_cell_that_blows_its_bound_is_UNREADABLE_not_a_colour():
     assert isinstance(out, str), f"partial output came back as {type(out)}"
 
 
-def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS():
+def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS(
+        unkillable_cell):
     """End to end: the pair scores NOT_REPLAYABLE, and that is a failure.
 
     The two directions that matter, and they pull against each other:
@@ -1214,6 +1263,11 @@ def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS():
         with no verdict at all, which is the defect;
       * it must not PASS — a bound that fired proves nothing, and a replay that
         could not run must never be scored as one that ran.
+
+    The ENTRY is still a real one — `replay` performs its real edit on a real
+    copy of the flow and checks the real blast radius — and only the CELL the
+    two arms run is the probe that cannot answer in time. FLOW_YAML, so no
+    `cp -al` mirror is built for a pair that is going to be killed anyway.
     """
     mut = L.mutation("D3-UNDECLARED-ARTEFACT")          # FLOW_YAML: no cp -al
     r = L.replay(mut, mut.witness, _BOUND_THAT_ALWAYS_FIRES)
@@ -1229,7 +1283,8 @@ def test_a_replay_whose_bound_fires_is_NOT_REPLAYABLE_and_still_FAILS():
         f"the pair does not carry the reason: {r.not_replayable!r}")
 
 
-def test_the_bound_reason_refuses_BOTH_evidence_deleting_repairs():
+def test_the_bound_reason_refuses_BOTH_evidence_deleting_repairs(
+        unkillable_cell):
     """The message routes the reader, or #1403 happens again.
 
     #1403 was not a broken gate. It was a red whose text sent every reader to
@@ -1237,8 +1292,7 @@ def test_the_bound_reason_refuses_BOTH_evidence_deleting_repairs():
     same two the ALREADY_RED path refuses, for the same reason: both restore
     green by deleting the evidence rather than by measuring anything.
     """
-    mut = L.mutation("D3-UNDECLARED-ARTEFACT")
-    _, _, why = L._run_cell(mut.dim, mut.witness, L.PLUGIN_ROOT, None,
+    _, _, why = L._run_cell(3, "D1", unkillable_cell, None,
                             _BOUND_THAT_ALWAYS_FIRES)
     assert "re-record the ledger" in why, (
         f"the reason does not refuse re-recording the ledger: {why!r}")
