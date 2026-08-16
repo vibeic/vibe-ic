@@ -633,6 +633,12 @@ run "artefact-defect close discipline" "$ROOT" python3 "$PG/artefact_defect_clos
 # repo cannot grow a NEW instance of the class silently. The recorded breaks
 # are real and their repair is open (layer-contract-doctrine §6); a count may
 # shrink freely, any increase is red.
+# SCOPE: its own --corpus argument names benchmark-data/ic and nothing else.
+#        Read from the command line below, not from where the program lives:
+#        `gen_programs_index.py` sits in tools/ yet reads the marketplace,
+#        so "where it is" is the wrong question and this scope answers
+#        "what it reads".
+gate_scope benchmark-data/ic/
 run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_reference_check.py" --corpus "$ROOT/benchmark-data/ic"
 
 # vibe-ic#693 — `flow_compliance_check` classifies a project from each step's
@@ -658,6 +664,12 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # and `test_the_recorded_population_is_the_one_the_ci_gate_sweeps` asserts the
 # root named on the line below is the one that record was measured over — so
 # this comment cannot drift out of agreement with the gate again.
+# SCOPE: its own --corpus argument names benchmark-data/ic and nothing else.
+#        Read from the command line below, not from where the program lives:
+#        `gen_programs_index.py` sits in tools/ yet reads the marketplace,
+#        so "where it is" is the wrong question and this scope answers
+#        "what it reads".
+gate_scope benchmark-data/ic/
 run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic"
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard

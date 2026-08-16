@@ -232,6 +232,8 @@ GATE_DISPATCH_TODAY=""
 #: deletion. It also works unchanged inside `gate_dispatch_over`, where the
 #: declaring line is executed once per item.
 GATE_PENDING_UNTIL=""
+GATE_PENDING_SCOPE=""
+GATE_SCOPES=()
 GATE_PENDING_WHY=""
 #: Parallel to GATE_LABELS — empty for the (normal) unexempted gates.
 declare -a GATE_EX_UNTIL=() GATE_EX_WHY=() GATE_WIRING_ERRORS=()
@@ -270,6 +272,61 @@ must be ISO-8601 YYYY-MM-DD"
 must state WHY the gate can be unable to run"
   fi
   GATE_PENDING_UNTIL="$until"; GATE_PENDING_WHY="$why"
+}
+
+# `gate_scope <path> [<path>…]` — declare the paths the NEXT gate reads (#P3).
+#
+# WHY A GATE MAY BE SKIPPED AT ALL. Measured over 45 recent PRs: 56% touch only
+# `vibe-ic-marketplace/`, yet every landing ran all 80 gates over the whole tree.
+# Running `tools/`-only checks for a PR that never touched `tools/` is time paid
+# for an answer nobody could act on.
+#
+# THREE PROPERTIES, and they are the whole safety of this feature:
+#
+#   1. NARROWING IS OPT-IN. A gate with no `gate_scope` line ALWAYS runs. Silence
+#      means "I do not know what this reads", and the only safe reading of that is
+#      to run it. Nothing is skipped by default, ever.
+#
+#   2. AN UNKNOWN CHANGE SET RUNS EVERYTHING. If `GATEKEEPER_CHANGED_PATHS` is
+#      unset or names a file that does not exist, scope is not consulted. "I could
+#      not find out what changed" must never render as "nothing relevant changed" —
+#      that is the empty-result-is-not-a-zero rule, and it is the failure this
+#      feature would otherwise introduce.
+#
+#   3. A SKIP IS RECORDED AND PRINTED, never absent. It becomes state
+#      `OUT_OF_SCOPE` in the summary record with the declared scope attached, and
+#      it prints a SKIP line. A gate that vanishes from the roll-up would let a
+#      shrinking denominator read as a clean sheet.
+#
+# The scope is matched as a PATH PREFIX against each changed path, so
+# `gate_scope tools/` covers `tools/ci/x.sh`. Give the narrowest true prefix; a
+# scope that is too narrow silently stops guarding, which is why the pairing test
+# asserts a real change inside each declared scope still runs its gate.
+gate_scope() {
+  if [ -n "${GATE_PENDING_SCOPE:-}" ]; then
+    _gate_wiring_error "a scope ($GATE_PENDING_SCOPE) was declared and never \
+attached to a gate before 'gate_scope $*'"
+  fi
+  if [ "$#" -eq 0 ]; then
+    _gate_wiring_error "'gate_scope' with no path: a scope that names nothing \
+cannot be intersected, and an empty scope would skip the gate on every change"
+  fi
+  GATE_PENDING_SCOPE="$*"
+}
+
+#: Did anything in `$1` (space-separated prefixes) change? Answers "unknown" as
+#: YES, so the caller runs the gate.
+_gate_scope_hit() {                        # <scope-prefixes> -> 0 = run, 1 = skip
+  local scope="$1" f p
+  [ -n "${GATEKEEPER_CHANGED_PATHS:-}" ] || return 0     # unknown -> run
+  [ -s "${GATEKEEPER_CHANGED_PATHS:-/nonexistent}" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    for p in $scope; do
+      case "$f" in "$p"*) return 0 ;; esac
+    done
+  done < "$GATEKEEPER_CHANGED_PATHS"
+  return 1
 }
 
 gate_dispatch_init() {
@@ -381,6 +438,11 @@ _dispatch() {
   # for gate N silently excusing gate N+1 is worse than none at all.
   local ex_until="$GATE_PENDING_UNTIL" ex_why="$GATE_PENDING_WHY"
   GATE_PENDING_UNTIL=""; GATE_PENDING_WHY=""
+  # Same rule as the exemption above and for the same reason (#584): consume the
+  # pending scope UNCONDITIONALLY, so a scope written for gate N can never be left
+  # armed to silence gate N+1.
+  local scope="${GATE_PENDING_SCOPE:-}"
+  GATE_PENDING_SCOPE=""
   if [ "$tolerate" -eq 1 ] && [ -z "$ex_until" ]; then
     _gate_wiring_error "\"$label\" is wired with run_tolerating_uncheckable, so \
 it can report NOT_CHECKED, but no 'uncheckable_until <YYYY-MM-DD> <why>' line \
@@ -392,6 +454,10 @@ exemption describes a state this gate cannot reach"
   fi
   GATE_EX_UNTIL+=("$ex_until"); GATE_EX_WHY+=("$ex_why")
   GATE_LABELS+=("$label")
+  #: One append per gate, at the SAME point as the label, because the record is
+  #: read by index: a scope appended on only some code paths would attribute one
+  #: gate's scope to another gate's verdict.
+  GATE_SCOPES+=("$scope")
   GATE_ITEM_CORPUS+=("$GATE_DISPATCH_CORPUS_CUR")
   GATE_ITEM_IDX+=("$GATE_DISPATCH_CORPUS_IDX")
   GATE_ITEM_TOTAL+=("$GATE_DISPATCH_CORPUS_TOTAL")
@@ -416,6 +482,23 @@ exemption describes a state this gate cannot reach"
   if [ "$GATE_DISPATCH_LIST_ONLY" -eq 1 ]; then
     GATE_STATES+=("LISTED"); GATE_SECONDS+=("0")
     echo "$shown"
+    return 0
+  fi
+  # #P3 — the gate declared what it reads, and this change touched none of it.
+  #
+  # ITS OWN STATE, deliberately not folded into any existing one. It is not a PASS
+  # (nothing ran and nothing was examined), not NOT_CHECKED (the gate is perfectly
+  # able to run — it simply has nothing here to say), and not LISTED (this is a
+  # real run). Folding it into PASS is exactly the shape this repo keeps paying
+  # for: a shrinking denominator reading as a clean sheet.
+  #
+  # It PRINTS, so the roll-up a human reads shows what was not asked, and the
+  # scope goes into the record so the next reader can check the claim rather than
+  # inherit it.
+  if [ -n "$scope" ] && ! _gate_scope_hit "$scope"; then
+    GATE_STATES+=("OUT_OF_SCOPE"); GATE_SECONDS+=("0")
+    printf '  SKIP  %s  — reads [%s]; this change touches none of it\n' \
+      "$shown" "$scope"
     return 0
   fi
   # vibe-ic#1144 — declared here, executed on another host. Its OWN state: not
