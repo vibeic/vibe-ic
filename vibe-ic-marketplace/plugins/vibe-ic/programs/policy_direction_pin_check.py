@@ -1081,7 +1081,7 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
             # its own 600 s supervisor deadline.
             for candidate in candidates:
                 focused = focused_test_nodes(site, candidate)
-                selections = ([(focused, True)] if focused else []) \
+                selections = [([node], True) for node in focused] \
                     + [([candidate], False)]
                 if focused:
                     result.setdefault("focused_nodes_tried", []).extend(focused)

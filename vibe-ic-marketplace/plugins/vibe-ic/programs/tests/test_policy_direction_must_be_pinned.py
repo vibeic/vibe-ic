@@ -622,7 +622,13 @@ def test_a_focused_node_kill_avoids_the_same_whole_file(tmp_path,
                                                         monkeypatch):
     root, tests, site = _pin_fixture(tmp_path, red_first=False)
     pin_file = tests / "test_b_pins_the_site.py"
-    pin_file.write_text(pin_file.read_text(encoding="utf-8").replace(
+    focused_body = pin_file.read_text(encoding="utf-8").replace(
+        'def test_the_call_site_hands_over_on_conflict_richer():',
+        'def test_helper_accepts_the_other_on_conflict_richer_mode():\n'
+        '    # merge_records receives on_conflict="richer" explicitly\n'
+        '    assert merge_records([], on_conflict="richer") == "richer"\n\n'
+        'def test_the_call_site_hands_over_on_conflict_richer():')
+    pin_file.write_text(focused_body.replace(
         'assert go([]) == "richer"',
         '# merge_records receives on_conflict="richer" here\n'
         '    assert go([]) == "richer"'), encoding="utf-8")
@@ -637,10 +643,12 @@ def test_a_focused_node_kill_avoids_the_same_whole_file(tmp_path,
     out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
     pin_calls = [call for call in calls
                  if any(str(pin_file) in item for item in call)]
-    expected = str(pin_file) \
+    helper = str(pin_file) \
+        + "::test_helper_accepts_the_other_on_conflict_richer_mode"
+    pin = str(pin_file) \
         + "::test_the_call_site_hands_over_on_conflict_richer"
     assert out["state"] == "PINNED", out
-    assert pin_calls == [[expected], [expected]], calls
+    assert pin_calls == [[helper], [pin], [pin]], calls
     assert [str(pin_file)] not in calls
 
 
