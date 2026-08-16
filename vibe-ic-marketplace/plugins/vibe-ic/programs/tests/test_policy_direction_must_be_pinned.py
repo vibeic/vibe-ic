@@ -598,6 +598,52 @@ def test_selection_prioritises_the_densest_call_site_evidence(tmp_path):
         "test_dense.py", "test_sparse.py"]
 
 
+def test_focused_nodes_require_both_the_decision_and_authored_value(tmp_path):
+    candidate = tmp_path / "test_focus.py"
+    candidate.write_text(textwrap.dedent('''
+        def test_exact_pin():
+            assert merge_records([], on_conflict="richer") == "richer"
+
+        def test_names_only_the_helper():
+            assert merge_records([])
+
+        class TestNested:
+            def test_nested_pin(self):
+                assert on_conflict == "richer"
+    '''), encoding="utf-8")
+    site = {"callee": "merge_records", "param": "on_conflict",
+            "value": "richer"}
+    assert [node.rsplit("::", 2)[-1]
+            for node in C.focused_test_nodes(site, candidate)] == [
+                "test_exact_pin", "test_nested_pin"]
+
+
+def test_a_focused_node_kill_avoids_the_same_whole_file(tmp_path,
+                                                        monkeypatch):
+    root, tests, site = _pin_fixture(tmp_path, red_first=False)
+    pin_file = tests / "test_b_pins_the_site.py"
+    pin_file.write_text(pin_file.read_text(encoding="utf-8").replace(
+        'assert go([]) == "richer"',
+        '# merge_records receives on_conflict="richer" here\n'
+        '    assert go([]) == "richer"'), encoding="utf-8")
+    real = C.run_pytest
+    calls = []
+
+    def traced(paths, *args, **kwargs):
+        calls.append([str(path) for path in paths])
+        return real(paths, *args, **kwargs)
+
+    monkeypatch.setattr(C, "run_pytest", traced)
+    out = C.verify_pin(site, root, tests, 40, tmp_path / "bt")
+    pin_calls = [call for call in calls
+                 if any(str(pin_file) in item for item in call)]
+    expected = str(pin_file) \
+        + "::test_the_call_site_hands_over_on_conflict_richer"
+    assert out["state"] == "PINNED", out
+    assert pin_calls == [[expected], [expected]], calls
+    assert [str(pin_file)] not in calls
+
+
 def test_a_boolean_flag_is_out_of_scope_by_declaration(tmp_path):
     """The over-correction that buries the finding.
 

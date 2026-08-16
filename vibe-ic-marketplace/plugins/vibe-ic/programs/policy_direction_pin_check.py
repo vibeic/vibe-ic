@@ -553,6 +553,41 @@ def select_tests(site: Dict[str, Any], tests_dir: Path) -> List[Path]:
     return [p for _, _, _, p in out]
 
 
+def focused_test_nodes(site: Dict[str, Any], candidate: Path) -> List[str]:
+    """Exact pytest nodes that name both the decision and authored value.
+
+    This is only a fast path.  Returning too little cannot make a site green:
+    :func:`verify_pin` still runs the whole candidate file, then the original
+    aggregate candidate session, unless one of these exact nodes produces a
+    GREEN-at-baseline kill.  Syntax we cannot parse therefore returns no focus
+    instead of guessing.
+    """
+    try:
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(text, filename=str(candidate))
+    except (OSError, SyntaxError, ValueError):
+        return []
+
+    def relevant(node: ast.AST) -> bool:
+        segment = ast.get_source_segment(text, node) or ""
+        names_decision = (_names(segment, str(site["param"]))
+                          or _names(segment, str(site["callee"])))
+        return names_decision and _names(segment, str(site["value"]))
+
+    nodes: List[str] = []
+    funcs = (ast.FunctionDef, ast.AsyncFunctionDef)
+    for top in tree.body:
+        if isinstance(top, funcs) and top.name.startswith("test_"):
+            if relevant(top):
+                nodes.append(f"{candidate}::{top.name}")
+        elif isinstance(top, ast.ClassDef) and top.name.startswith("Test"):
+            for child in top.body:
+                if isinstance(child, funcs) and child.name.startswith("test_") \
+                        and relevant(child):
+                    nodes.append(f"{candidate}::{top.name}::{child.name}")
+    return nodes
+
+
 def _literal_span(src: str, arg_line: int, arg_col: int):
     """``(lines, idx, start_body, end_body)`` for the literal at that position.
 
@@ -929,7 +964,7 @@ def leftover_signature(root: Path, site: Dict[str, Any]) -> Optional[str]:
             f"Restore with: git checkout HEAD -- {site['file']}")
 
 
-def run_pytest(paths: Sequence[Path], cwd: Path, basetemp: Path,
+def run_pytest(paths: Sequence[object], cwd: Path, basetemp: Path,
                extra: Sequence[str] = ()) -> Tuple[int, str]:
     """Run the candidate tests and report EVERY file that died.
 
@@ -1006,14 +1041,16 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
         named = [root.parent / f for f in failing_files(output)]
         return [p for p in dict.fromkeys(named) if p.exists()]
 
-    def _grade_kill(paths: Sequence[Path], output: str) -> Tuple[List[str], int, str]:
+    def _grade_kill(paths: Sequence[object], output: str,
+                    exact_selection: bool = False) -> Tuple[List[str], int, str]:
         """Return believable failed files after restoring the authored source."""
         named = _paths_named_by(output) or list(paths)
         for p in named:
             s = str(p)
             if s not in baseline_files:
                 baseline_files.append(s)
-        rc0, out0 = run_pytest(named, root.parent, basetemp, extra)
+        baseline_selection = list(paths) if exact_selection else named
+        rc0, out0 = run_pytest(baseline_selection, root.parent, basetemp, extra)
         reds = failing_files(out0)
         for f in reds:
             if f not in red_at_baseline:
@@ -1043,26 +1080,37 @@ def verify_pin(site: Dict[str, Any], root: Path, tests_dir: Path,
             # in one session for every flip, pushing this blocking gate beyond
             # its own 600 s supervisor deadline.
             for candidate in candidates:
-                _arm(journal, target, original, mutated)
-                target.write_text(mutated, encoding="utf-8")
-                rc, out = run_pytest([candidate], root.parent, basetemp, extra)
-                if rc == 0:
-                    continue
+                focused = focused_test_nodes(site, candidate)
+                selections = ([(focused, True)] if focused else []) \
+                    + [([candidate], False)]
+                if focused:
+                    result.setdefault("focused_nodes_tried", []).extend(focused)
+                for selection, exact in selections:
+                    _arm(journal, target, original, mutated)
+                    target.write_text(mutated, encoding="utf-8")
+                    rc, out = run_pytest(selection, root.parent, basetemp, extra)
+                    if rc == 0 or (exact and rc == 5):
+                        continue
 
-                # Baseline MUST run against the authored source, not the
-                # mutation whose failure it is grading.
-                target.write_text(original, encoding="utf-8")
-                believable, rc0, out0 = _grade_kill([candidate], out)
-                result["baseline_rc"] = rc0
-                if believable:
-                    killed_by.append({"flipped_to": other, "rc": rc,
-                                      "killed_files": failing_files(out),
-                                      "tail": out.strip().splitlines()[-1:] or [""]})
-                    credible = True
+                    # Baseline MUST run the SAME exact selection against the
+                    # authored source, not grade a focused mutant against a
+                    # different whole-file process.
+                    target.write_text(original, encoding="utf-8")
+                    believable, rc0, out0 = _grade_kill(
+                        selection, out, exact_selection=exact)
+                    result["baseline_rc"] = rc0
+                    if believable:
+                        killed_by.append({"flipped_to": other, "rc": rc,
+                                          "killed_files": failing_files(out),
+                                          "tail": out.strip().splitlines()[-1:] or [""]})
+                        credible = True
+                        break
+                    saw_only_preexisting_red = True
+                    uncredited_kill = True
+                    result["baseline_tail"] = \
+                        out0.strip().splitlines()[-1:] or [""]
+                if credible:
                     break
-                saw_only_preexisting_red = True
-                uncredited_kill = True
-                result["baseline_tail"] = out0.strip().splitlines()[-1:] or [""]
 
             if credible:
                 # One observed call-site pin proves the argued direction dies;
