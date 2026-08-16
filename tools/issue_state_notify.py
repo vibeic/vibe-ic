@@ -14,6 +14,12 @@ Event kinds:
 
 Cron fire reads stdout; non-empty event list → emit PushNotification.
 
+Exit codes:
+  0  looked, and these are the events (possibly none)
+  2  could NOT look — no token, or the listing came back empty while the
+     repository declares items in it. stdout carries `error` and no `events`
+     key, so a reader cannot mistake it for a quiet fire.
+
 Why a separate snapshot file rather than diff-from-comments:
   * comments don't transition state (closing an issue can be
     button-only, no comment) — must read `state` directly
@@ -28,11 +34,15 @@ import re
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 REPO = "reyerchu/AI_IC_design"
 STATE_PATH = Path.home() / ".config" / "vibe-ic-issue-state.json"
 TOKEN_PATH = Path.home() / ".config" / "github" / "token"
+
+
+class CannotLook(RuntimeError):
+    """The listing did not fail and did not answer. See `_fetch_recent`."""
 
 
 def _gh(path: str, token: str) -> Any:
@@ -47,6 +57,113 @@ def _gh(path: str, token: str) -> Any:
         return json.load(r)
 
 
+#: The witness for an empty listing. GraphQL on purpose — a DIFFERENT backend
+#: from the REST collection this file enumerates with, and on 2026-08-16 it was
+#: the half that still answered correctly.
+#:
+#: It counts BOTH issues and pull requests because that is exactly what
+#: `GET /repos/{o}/{r}/issues` enumerates: PRs come back on that endpoint too,
+#: and `_fetch_recent` drops them only AFTER the listing has arrived. Witnessing
+#: the raw listing against an issues-only count would raise a false alarm on
+#: every tick whose most-recent closed items happen to all be PRs. `closed` on
+#: the REST side spans both CLOSED and MERGED pull requests.
+#:
+#: The obvious REST alternative, `GET /repos/{o}/{r}` -> `open_issues_count`,
+#: is not usable: it is served by the same stale index as the listing and
+#: reported 0 alongside it in every measurement.
+_WITNESS_QUERY = (
+    "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){"
+    "openIssues:issues(states:OPEN){totalCount}"
+    "closedIssues:issues(states:CLOSED){totalCount}"
+    "openPrs:pullRequests(states:OPEN){totalCount}"
+    "closedPrs:pullRequests(states:CLOSED){totalCount}"
+    "mergedPrs:pullRequests(states:MERGED){totalCount}}}"
+)
+
+
+def _declared_counts(token: str) -> Optional[dict[str, int]]:
+    """The repository's OWN count of what each listing enumerates, or None.
+
+    None is NOT zero. A witness that could not be reached has said nothing,
+    and folding it to 0 would manufacture the agreement it exists to test.
+    """
+    owner, _, name = REPO.partition("/")
+    if not owner or not name:
+        return None
+    body = json.dumps({
+        "query": _WITNESS_QUERY,
+        "variables": {"owner": owner, "name": name},
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.github.com/graphql", data=body, method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            payload = json.load(r)
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or payload.get("errors"):
+        return None
+    try:
+        repo = payload["data"]["repository"]
+        return {k: int(repo[k]["totalCount"]) for k in (
+            "openIssues", "closedIssues", "openPrs", "closedPrs", "mergedPrs")}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _witness_empty_listing(state: str, token: str) -> None:
+    """Raise `CannotLook` if an empty listing contradicts the repository.
+
+    A listing that returns HTTP 200 and `[]` is the one failure this file could
+    not refuse: `_fetch_recent` returned nothing, `main` emitted
+    `{"events": [], "fetched": 0}` and exited 0, and the cron read that as
+    "nothing changed". MEASURED 2026-08-16 against `reyerchu/AI_IC_design`,
+    core quota healthy (`X-Ratelimit-Remaining: 4994`, so not throttling):
+
+        GET /repos/reyerchu/AI_IC_design/issues?state=closed&per_page=20  []
+        GraphQL repository.issues(states:CLOSED).totalCount              808
+
+    Asked ONLY when the listing came back empty. That is where a false zero
+    does its damage, and it keeps the cost at one extra call on the ticks that
+    would otherwise report nothing anyway.
+
+    Both directions matter. Refusing every empty listing would block a
+    genuinely quiet repository on every fire, and a check that blocks real work
+    is a check somebody switches off — so an empty listing the repository
+    AGREES is empty stays a legitimate zero and the tick proceeds.
+    """
+    declared = _declared_counts(token)
+    if declared is None:
+        # Unreadable witness. Not grounds to halt: the listing itself
+        # succeeded. Said out loud so the zero is never mistaken for a
+        # corroborated one.
+        print(f"[UNWITNESSED] {REPO} {state} listing was empty and the "
+              f"witness could not be reached; this zero is uncorroborated.",
+              file=sys.stderr)
+        return
+    if state == "open":
+        total = declared["openIssues"] + declared["openPrs"]
+        detail = (f"{declared['openIssues']} open issue(s) + "
+                  f"{declared['openPrs']} open PR(s)")
+    else:
+        total = (declared["closedIssues"] + declared["closedPrs"]
+                 + declared["mergedPrs"])
+        detail = (f"{declared['closedIssues']} closed issue(s) + "
+                  f"{declared['closedPrs'] + declared['mergedPrs']} "
+                  f"closed/merged PR(s)")
+    if total > 0:
+        raise CannotLook(
+            f"{REPO}: the REST {state} listing returned 0 items but the "
+            f"repository declares {total} ({detail}). One of these is wrong, "
+            f"so the issue state is UNKNOWN this fire, not unchanged.")
+
+
 def _fetch_recent(token: str) -> list[dict]:
     open_issues = _gh(
         f"/repos/{REPO}/issues?state=open&per_page=50", token)
@@ -55,6 +172,13 @@ def _fetch_recent(token: str) -> list[dict]:
         "&sort=updated&direction=desc",
         token,
     )
+    # Witness the RAW listings, before the pull-request filter below: an
+    # all-PR page is a legitimate empty result for this program, not a
+    # symptom, and only the raw page can be compared against a raw count.
+    if not open_issues:
+        _witness_empty_listing("open", token)
+    if not closed:
+        _witness_empty_listing("closed", token)
     seen = set()
     out: list[dict] = []
     for d in (*open_issues, *closed):
@@ -205,7 +329,20 @@ def main() -> int:
         return 2
     token = TOKEN_PATH.read_text().strip()
 
-    issues = _fetch_recent(token)
+    try:
+        issues = _fetch_recent(token)
+    except CannotLook as exc:
+        # Deliberately NO "events" key, matching the no_github_token shape
+        # above. A cron that reads `out["events"]` must raise here rather than
+        # quietly find an empty list — "could not look" and "nothing changed"
+        # have to stay different answers on stdout as well as in the rc.
+        # The snapshot is left untouched: it is the only record of the last
+        # state we could actually see.
+        print(json.dumps({"error": "listing_contradicts_repository",
+                          "detail": str(exc)}))
+        print(str(exc), file=sys.stderr)
+        return 2
+
     snapshot = _load_snapshot()
     new_snapshot: dict[str, dict] = {}
     all_events: list[dict] = []
