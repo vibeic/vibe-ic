@@ -196,6 +196,14 @@
           "alternative": "reports/audit/phase1/expert_parse_track.json",
           "path": "reports/audit/phase1/expert_parse_track.json",
           "size_bytes": 7399
+        },
+        "phase1/extraction_patterns.json": {
+          "status": "PRODUCED_BY_RUN",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "phase1/extraction_patterns.json",
+          "path": "phase1/extraction_patterns.json",
+          "size_bytes": 7608,
+          "note": "added with the vibe-ic#1348 declaration of this entry in D1's required_outputs; measured 2026-08-15, not on the 2026-07-27 sweep the rest of this file records. It resolves live in 9 of the 10 admissible run roots, so no verdict here rests on the recorded size."
         }
       }
     },

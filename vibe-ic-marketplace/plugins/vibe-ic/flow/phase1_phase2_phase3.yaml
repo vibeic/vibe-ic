@@ -313,6 +313,57 @@ steps:
       # u_hawaii_adc/v1.9.86_sky130A), so declaring it closes the d7 finding
       # without opening a d3 one.
       - "reports/audit/phase1/expert_parse_track.json"
+      # The extraction-pattern CATALOGUE this step's own gate reads (#1348).
+      #
+      # WHY IT REACHED W2 AND THE AST COULD NOT SEE IT — the same shape as the
+      # entry above, one resolution limit further out. `phase1_doc_one_shot_
+      # runner.py` binds `canonical = _pl.phase1_extraction_patterns_file(
+      # project)` and then hands the VARIABLE to
+      # `_seed_canonical_from_backfilled_subset(project, auto, canonical)`, so
+      # no Python write POSITION in `programs/` names the literal path and the
+      # AST oracle answered "no producer, externally supplied by design". The
+      # write ledger of `benchmark-data/ic/spm/v1.10.18_sky130A` observed a run
+      # writing it, which is what made the claim decidable rather than assumed.
+      #
+      # IT IS THIS STEP'S OWN ARTEFACT, not a cross-step attribution.
+      # `extraction_coverage_check` is D1's own LL-38 gate and it LOADS this
+      # file as the denominator of the coverage it reports
+      # (`_load_explicit_patterns` -> `_pl.phase1_extraction_patterns_file`).
+      # Producer step == consumer step == D1, so declaring it charges nothing
+      # to a step that only reads it.
+      #
+      # THE FLOW ALREADY REQUIRED IT SOMEWHERE THE YAML DID NOT SAY SO.
+      # `flow_compliance_check`'s completion audit already lists
+      # `extraction_patterns.json` under `missing_required_artifacts` when it
+      # is absent — pinned, in both directions, by
+      # `test_flow_compliance_check.py::test_missing_required_hint_resolves_
+      # phase1_layout` and `::test_missing_required_hint_flags_genuinely_
+      # absent`. Declaring it here makes the yaml state an obligation the
+      # checker was already enforcing; it does not create a new one.
+      #
+      # UNCONDITIONALLY PRODUCED — MEASURED, not assumed, because
+      # `required_outputs` is unconditional and a conditional artefact must not
+      # enter it. Of the 105 project trees in this repository that carry D1's
+      # own `phase1/generated_docs/L1_DATASHEET.json`, **105** carry
+      # `phase1/extraction_patterns.json`. 105 of 105, and the population
+      # includes the four prompt-driven CVDP runs, which stage no `input/docs`
+      # of their own and are the shape most likely to skip the seeder.
+      #
+      # BLAST RADIUS, measured with `flow_compliance_check.check_step` on each
+      # of the 10 manifest run roots that resolve in this repository, with and
+      # without this entry: **0 move.** Nine of the ten already carry the
+      # artefact, so it cannot make them MISSING; the tenth
+      # (`benchmark-data/ic/u_hawaii_adc`, a container directory) is already
+      # MISSING in the control arm on other entries. Each arm is a fresh
+      # `copytree` of the run root, discarded after ONE `check_step`, for the
+      # reason stated above the previous entry: `check_step` RUNS the gate and
+      # this step's gate WRITES, so A/B over a shared tree is not an A/B when
+      # the probe is also a producer.
+      #
+      # It RESOLVES in nine admissible run roots, tracked at HEAD, non-empty
+      # and not symlinked, so declaring it closes the d7 finding without
+      # opening a d3 one.
+      - "phase1/extraction_patterns.json"
     gate:
       all_of:
         - program_exit_zero: "phase1_all_l_docs_present_check ."

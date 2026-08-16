@@ -706,7 +706,16 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # root before the record was written -- which is the per-path check this pin
 # exists to force (#527): an entry live-verified from an untracked working-tree
 # file would raise this number on one host and not another.
-_LIVE_ENTRY_COUNT = 133
+# 2026-08-15 (#1348): 133 -> 134. D1 `phase1/extraction_patterns.json`, the
+# LAST surviving W2 promotion, declared in the flow yaml on the step that
+# PRODUCES it. Same reading as the L21, coverage.yml and #1215 moves above: one
+# fewer entry decided by nothing, not one more artefact found. It is recorded
+# PRODUCED_BY_RUN at `benchmark-data/ic/spm/v1.9.96_gf180mcuD` (7608 B), and it
+# was checked `git ls-files`-TRACKED at HEAD, non-empty and not a symlink in
+# NINE of the ten admissible run roots before the record was written -- the
+# per-path check this pin exists to force (#527). Its verdict is therefore LIVE
+# and it adds no fixture attestation: fixture stays at 7, as it was.
+_LIVE_ENTRY_COUNT = 134
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
