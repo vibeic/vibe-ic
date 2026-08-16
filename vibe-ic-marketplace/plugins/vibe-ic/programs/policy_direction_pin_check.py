@@ -787,8 +787,10 @@ def recover_all_journals() -> Tuple[int, List[str]]:
     for path in sorted(set(candidates)):
         one_rc, one_lines = recover_journal(path)
         lines.extend(one_lines)
-        if one_rc:
-            rc = RC_UNDETERMINED
+        # Both outcomes are represented in the aggregate state: 0 keeps the
+        # prior result, RC_UNDETERMINED raises it.  There is no remedy offered
+        # on one branch and silently declined on the other.
+        rc = max(rc, one_rc)
     return rc, lines
 
 
