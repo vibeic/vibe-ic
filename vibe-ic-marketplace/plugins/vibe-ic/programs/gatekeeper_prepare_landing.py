@@ -129,7 +129,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -247,22 +249,76 @@ def _default_census_writer(repo: Path) -> Tuple[List[str], Optional[str]]:
     """
     if not GEN_CENSUS.is_file():
         return [], f"{GEN_CENSUS} is missing"
+    # What was already dirty BEFORE the census, so a timeout can undo exactly what
+    # the census wrote and nothing the earlier index step wrote.
+    before = set(dirty_paths(repo))
     with tempfile.TemporaryDirectory() as td:
         written_json = Path(td) / "written.json"
+        proc = subprocess.Popen(
+            [sys.executable, str(GEN_CENSUS), str(repo), "--fix",
+             "--written-json", str(written_json)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            start_new_session=True)
+        timed_out = False
         try:
-            proc = subprocess.run(
-                [sys.executable, str(GEN_CENSUS), str(repo), "--fix",
-                 "--written-json", str(written_json)],
-                capture_output=True, text=True, timeout=CENSUS_TIMEOUT_S)
+            stdout, stderr = proc.communicate(timeout=CENSUS_TIMEOUT_S)
         except subprocess.TimeoutExpired:
-            # The bound FIRED. That is a statement about this host, not about
-            # the tree, and it must not be reported as either a repair or a
-            # finding. Anything written before it fired is still declared.
-            return _read_written(written_json), (
-                f"the generator did not finish within {CENSUS_TIMEOUT_S}s")
+            timed_out = True
+            # Kill the WHOLE writer group, not only its Python parent.  The
+            # census drives nested pytest processes; restoring while one of
+            # them is still alive lets an orphan write the tracked tree again
+            # after this function has reported it clean.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = proc.communicate()
+        if timed_out:
+            # THE BOUND FIRED, AND THE CHILD DOES NOT GET TO SAY WHAT IT WROTE.
+            #
+            # `subprocess.run` kills the child with SIGKILL on timeout, so the
+            # generator's own `finally: write --written-json` NEVER RUNS. This
+            # branch used to return `_read_written(written_json)` on the belief
+            # that "anything written before it fired is still declared" — that
+            # file does not exist, so the declaration came back EMPTY while the
+            # census had already rewritten anchored figures. The boundary check
+            # below then sees an undeclared dirty path and REFUSES, and
+            # `gatekeeper-land.sh` exits 1 on a refusal — so a slow host turns a
+            # best-effort convenience into a landing that cannot start.
+            #
+            # Measured: a child whose `finally` writes the declaration, timed out
+            # by `subprocess.run`, leaves `written.json` ABSENT.
+            #
+            # The module docstring promises a census that cannot run "leaves the
+            # landing exactly where it stood before this step existed". Honour
+            # that literally: restore exactly the paths that became dirty during
+            # the census, declare nothing, and report the timeout as a reason.
+            # Restoring is safe precisely because `before` was captured above —
+            # the earlier index write is untouched.
+            undone, failed = [], []
+            for rel in sorted(set(dirty_paths(repo)) - before):
+                rc, _out = _git(repo, "checkout", "--", rel)
+                (undone if rc == 0 else failed).append(rel)
+            reason = f"the generator did not finish within {CENSUS_TIMEOUT_S}s"
+            if undone:
+                reason += f"; reverted {len(undone)} partial write(s)"
+            if failed:
+                # Could not restore: say so and DECLARE them, so the boundary
+                # judges a real state instead of refusing on a path nobody owns.
+                reason += (f"; COULD NOT revert {len(failed)}: "
+                           + ", ".join(failed[:4]))
+                return failed, reason
+            return [], reason
         wrote = _read_written(written_json)
         if proc.returncode != 0:
-            tail = (proc.stdout + proc.stderr).strip().splitlines()
+            tail = (stdout + stderr).strip().splitlines()
             return wrote, (f"rc={proc.returncode}: "
                            + (tail[-1][:200] if tail else "no output"))
         return wrote, None
