@@ -505,6 +505,7 @@ import _plugin_tree
 # #527 removed every $HOME search, env override and machine-path manifest from
 # this dimension precisely so a cell's colour could not become a property of the
 # host, and re-introducing one to make cells green again would undo that.
+import _published_corpus as _pc  # noqa: E402
 from _published_corpus import SKIP_REASON, corpus_root, needs_corpus  # noqa: E402
 
 # The flow's OWN glob resolver. Imported, never re-implemented: it carries two
@@ -864,9 +865,52 @@ _ADMISSIBILITY = {
 }
 
 
+#: The directory every manifest ``rel`` for an in-repo run root is written
+#: under. It is also the name of the repository the published cells moved to
+#: (``vibeic/benchmark-data``), which is what makes the rewrite below a plain
+#: prefix swap rather than a lookup table.
+_CORPUS_DIR = "benchmark-data"
+
+
+def _offered_corpus() -> Optional[Path]:
+    """A corpus a caller EXPLICITLY offered that is not this repo's own tree.
+
+    ``corpus_root()`` answers two different questions with one path: "does this
+    checkout still carry cells" (``<repo>/benchmark-data``) and "did the
+    operator point ``VIBE_IC_BENCHMARK_DATA`` at a clone". Only the second is
+    new information for discovery — the first is already reached by the
+    in-repo candidate — so it is separated here rather than yielded twice.
+
+    It raises rather than returning ``None`` on a broken pointer, because
+    ``corpus_root()`` does; a named-but-unreadable corpus is a wrong path, not
+    an absent one (``_published_corpus.CorpusPointerBroken``).
+    """
+    corpus = corpus_root()
+    if corpus is None:
+        return None
+    repo = _plugin_tree.repo_root()
+    if repo is not None and corpus.resolve() == (repo / _CORPUS_DIR).resolve():
+        return None
+    return corpus
+
+
+def _corpus_candidate(rel: str, corpus: Path) -> Optional[Path]:
+    """Where manifest *rel* lands inside an external corpus clone, if anywhere.
+
+    Every in-repo run root is recorded ``benchmark-data/<something>``, and the
+    split moved exactly that subtree out to its own repository root. So the
+    corpus path is *rel* with the one prefix removed, and a *rel* that does not
+    carry the prefix has no corpus form at all rather than a guessed one.
+    """
+    prefix = _CORPUS_DIR + "/"
+    if not rel.startswith(prefix):
+        return None
+    return corpus / rel[len(prefix):]
+
+
 @lru_cache(maxsize=1)
 def run_roots() -> Dict[str, RunRoot]:
-    """Every IN-REPO manifest run root that resolves HERE, keyed by label.
+    """Every manifest run root READABLE HERE, keyed by label.
 
     #527: run roots recorded with any other ``kind`` name a directory on one
     particular machine. They are not searched for — not under ``$HOME``, not
@@ -879,19 +923,98 @@ def run_roots() -> Dict[str, RunRoot]:
     :func:`_is_flow_run`, ``published`` -> :func:`_is_published_cell`). Neither
     weakens the other: a ``repo`` root still has to carry a runner marker, and
     a ``published`` root still has to carry a converged verdict.
+
+    THE PUBLISHED CELLS LEFT THIS REPOSITORY, AND THE POINTER DID NOT REACH
+    HERE (vibe-ic#1703)
+    ======================================================================
+    Every one of those roots is recorded ``benchmark-data/<...>``, and that
+    subtree moved to ``vibeic/benchmark-data``. ``_published_corpus`` already
+    established the seam for that — set ``VIBE_IC_BENCHMARK_DATA`` to a clone
+    and the corpus checks run — and the skip in the cell predicate quotes it
+    verbatim: *"Point VIBE_IC_BENCHMARK_DATA at a clone to run this check
+    against them."*
+
+    This function never read it, so the pointer switched the skip OFF without
+    switching discovery ON. Measured on ``origin/main`` at ``ee849c19e`` with
+    ``VIBE_IC_BENCHMARK_DATA`` set to a clone of ``vibeic/benchmark-data``::
+
+        50 failed, 11 passed, 2 xfailed in 3.63s
+
+    and every one of the 50 read ``[0 admissible run roots searched: []]``
+    while the cells sat unread on disk. That is not a stricter answer, it is a
+    confident wrong one: "N required_outputs are NOT produced" asserted by a
+    function that opened no file. The documented remedy was worse than the
+    skip it replaced.
+
+    So an EXPLICITLY OFFERED corpus is now a second place a manifest root may
+    resolve, and #527 still holds in the direction it was written for:
+
+    * it is never SEARCHED for — the operator names it, exactly as
+      ``_published_corpus`` requires, and an unset pointer changes nothing;
+    * trackedness is still decided by ``git ls-tree -r HEAD`` in the tree that
+      holds the root (:func:`tracked_under`), so it is the CORPUS COMMIT that
+      answers, ``git clean -xdf`` still cannot move a verdict, and two clones
+      of one corpus commit still agree;
+    * a corpus that cannot answer that question is REFUSED rather than read as
+      "nothing is tracked" — see :func:`_refuse_an_unanswerable_corpus`.
+
+    What it does NOT restore is a single answer for all hosts: two different
+    corpus commits may legitimately differ. That is a property of the split,
+    not of this function, and the honest rendering of it is that the verdict
+    now names the corpus it read.
     """
     out: Dict[str, RunRoot] = {}
     repo = _plugin_tree.repo_root()
-    if repo is None:
+    corpus = _offered_corpus()
+    if corpus is not None:
+        _refuse_an_unanswerable_corpus(corpus)
+    if repo is None and corpus is None:
         return out
     for label, meta in manifest()["run_roots"].items():
         admits = _ADMISSIBILITY.get(meta["kind"])
         if admits is None:
             continue
-        cand = repo / meta["rel"]
-        if cand.is_dir() and admits(cand):
-            out[label] = RunRoot(label=label, kind=meta["kind"], path=cand)
+        candidates = []
+        if repo is not None:
+            candidates.append(repo / meta["rel"])
+        if corpus is not None:
+            cand = _corpus_candidate(meta["rel"], corpus)
+            if cand is not None:
+                candidates.append(cand)
+        for cand in candidates:
+            if cand.is_dir() and admits(cand):
+                out[label] = RunRoot(label=label, kind=meta["kind"], path=cand)
+                break
     return out
+
+
+def _refuse_an_unanswerable_corpus(corpus: Path) -> None:
+    """An offered corpus must be able to say what its own commit carries.
+
+    :func:`tracked_under` returns the EMPTY SET for a tree that is not a git
+    work tree, and every caller reads that as "not tracked at HEAD — a local
+    build product, not evidence". Inside this repository that is the right
+    answer, because the only way to be here and not be a checkout is to be a
+    flattened install cache that genuinely carries no commits.
+
+    An offered corpus can be neither: an unpacked release tarball, a `cp -r` of
+    somebody's clone, a docker COPY of the cells. Every artefact in it is real
+    and published, and reading the whole tree as untracked would report all of
+    them NOT PRODUCED — the same confident wrong answer #1348 measured from the
+    other direction, arriving through the door this change opens. So it is
+    refused here, at the seam, with the reason named.
+    """
+    if _claims_to_be_a_checkout(corpus):
+        return
+    raise AssertionError(
+        f"{_pc.CORPUS_ENV}={str(corpus)!r} is not a git checkout, so this "
+        f"module cannot ask which of its files the corpus COMMIT carries. "
+        f"Every artefact under it would read as 'not tracked at HEAD — a local "
+        f"build product, not evidence' and every cell would report its declared "
+        f"outputs NOT PRODUCED, which is a confident wrong answer, not a strict "
+        f"one (#527, #1348). Point {_pc.CORPUS_ENV} at a clone of "
+        f"vibeic/benchmark-data rather than at an unpacked copy of one."
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -2105,33 +2228,218 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
 
 @needs_corpus
 def test_d3_run_root_discovery_is_live():
-    """Discovery must actually find the in-repo evidence trees.
+    """Discovery must actually find the evidence trees it is offered.
 
-    Both branches assert. On the flattened install cache there is no monorepo
-    ancestor at all, so the manifest's repo-kind roots are legitimately
-    unreachable and this asserts that IS the cause — rather than skipping and
-    letting a discovery bug read as an environment.
+    Both branches assert. Where there is no tree to look in at all — the
+    flattened install cache has no monorepo ancestor, and no corpus was
+    pointed at — the manifest's repo-kind roots are legitimately unreachable
+    and this asserts that IS the cause, rather than skipping and letting a
+    discovery bug read as an environment.
+
+    vibe-ic#1703 — THE FAILURE MESSAGE HAD TO MOVE WITH THE SEARCH. It named
+    one tree, ``under {repo}``, and offered one pair of causes ("the checkout
+    is partial or a run tree was deleted"). Once :func:`run_roots` also reads
+    an operator-named corpus, both were wrong in the case that matters most:
+    the published cells left this repository, so the tree to go and look at is
+    the corpus, and the likeliest cause is neither of the two offered — it is
+    that the corpus does not publish that root. A red test that sends the
+    reader to the wrong directory costs more than it saves, so the message now
+    names every tree it searched.
     """
-    repo = _plugin_tree.repo_root()
+    sources = [(p, why) for p, why in (
+        (_plugin_tree.repo_root(), "this repository"),
+        (_offered_corpus(), f"the corpus named by {_pc.CORPUS_ENV}"),
+    ) if p is not None]
     repo_labels = [
         label for label, meta in manifest()["run_roots"].items()
         if meta["kind"] == "repo"
     ]
     resolved = run_roots()
-    if repo is None:
+    if not sources:
         assert not any(label in resolved for label in repo_labels), (
-            "no monorepo ancestor was found, yet repo-kind run roots resolved — "
-            "the two-tree detection in _plugin_tree.repo_root() disagrees with "
-            "what is on disk"
+            "no monorepo ancestor was found and no corpus was pointed at, yet "
+            "repo-kind run roots resolved — the two-tree detection in "
+            "_plugin_tree.repo_root() disagrees with what is on disk"
         )
         return
+    searched = ", ".join(f"{why} ({path})" for path, why in sources)
     unresolved = [label for label in repo_labels if label not in resolved]
     assert not unresolved, (
-        f"these in-repo run roots are recorded as evidence but do not resolve "
-        f"under {repo}: {unresolved} — either the checkout is partial or a run "
-        f"tree was deleted while this dimension still cites it"
+        f"these run roots are recorded as evidence but resolve in none of the "
+        f"trees searched — {searched}: {unresolved}. Three causes produce this "
+        f"and they are not the same repair: the checkout is partial; a run "
+        f"tree was deleted while this dimension still cites it; or the "
+        f"published corpus does not carry that root, in which case the "
+        f"manifest cites a run that is no longer published and the record — "
+        f"not the corpus — is what has to move (vibe-ic#1703)."
     )
     assert resolved, "no admissible run root resolved at all"
+
+
+#: The manifest labels the corpus-routing probe below drives, one per
+#: admissibility kind, so the new path is exercised against BOTH proofs of
+#: provenance rather than against whichever one happens to be first in the
+#: manifest. Written down here rather than picked at runtime: a probe that
+#: chooses its own subject can quietly stop covering a kind.
+_CORPUS_ROUTE_PROBES: Tuple[Tuple[str, str], ...] = (
+    ("benchmark-data/ic/spm/v1.5.58_ihp-sg13g2", _IN_REPO_KIND),
+    ("benchmark-data/ic/u_hawaii_adc/v1.9.86_sky130A", _PUBLISHED_KIND),
+)
+
+
+def _seed_corpus_root(corpus: Path, rel: str, kind: str) -> Path:
+    """Make *rel* (a manifest ``benchmark-data/...`` path) admissible in *corpus*.
+
+    Seeds the minimum each kind's own predicate demands and nothing else, so a
+    probe cannot pass by having built something richer than the rule requires.
+    """
+    root = _corpus_candidate(rel, corpus)
+    assert root is not None, f"{rel!r} has no corpus form; the probe is wrong"
+    root.mkdir(parents=True, exist_ok=True)
+    if kind == _IN_REPO_KIND:
+        (root / _RUNNER_MARKERS[0]).write_text("{}\n", encoding="utf-8")
+    elif kind == _PUBLISHED_KIND:
+        audit = root / "reports" / "audit"
+        audit.mkdir(parents=True, exist_ok=True)
+        (audit / "phase23_completion_audit.json").write_text(
+            json.dumps({"verdict": _bep._CONVERGED[0]}), encoding="utf-8")
+    else:  # pragma: no cover - a kind nobody taught this probe about
+        raise AssertionError(f"unknown admissibility kind {kind!r}")
+    return root
+
+
+def test_d3_an_offered_corpus_is_where_the_published_run_roots_are_found(
+        monkeypatch):
+    """vibe-ic#1703 — the pointer the skip message names must actually route.
+
+    The published cells moved to ``vibeic/benchmark-data``. The cell predicate
+    skips when they are absent and its reason tells the reader exactly what to
+    do about it — *"Point VIBE_IC_BENCHMARK_DATA at a clone to run this check
+    against them"* — but :func:`run_roots` did not read that pointer, so doing
+    what the message said switched the SKIP off without switching DISCOVERY on.
+
+    Measured on ``origin/main`` at ``ee849c19e``, with the pointer set to a
+    clone of ``vibeic/benchmark-data``::
+
+        $ VIBE_IC_BENCHMARK_DATA=<clone> pytest -q \\
+              test_matrix_d3_outputs_produced.py::test_d3_required_outputs_are_produced
+        50 failed, 11 passed, 2 xfailed in 3.63s
+
+    every one of them reading ``[0 admissible run roots searched: []]`` — 50
+    cells asserting "N required_outputs are NOT produced" from a function that
+    had opened no file, while the artefacts sat on disk one directory away.
+    That is not strictness, it is fabrication, and it is strictly worse than
+    the skip it replaced.
+
+    THIS TEST IS THE CONTROL FOR ALL THREE WAYS OF BEING WRONG, because the
+    green half alone would be satisfied by a function that returns every
+    manifest label unconditionally:
+
+    ROUTES     the root is seeded in the corpus -> it resolves, at the corpus
+               path, for BOTH admissibility kinds.
+    READS      the same root with its own proof of provenance REMOVED -> it
+               does not resolve. Discovery still measures the directory; the
+               pointer is where to look, never permission to assume.
+    IS OPT-IN  with the pointer unset, nothing resolves that did not resolve
+               before. The corpus is named, never searched for (#527).
+    """
+    declared = manifest()["run_roots"]
+    wrong = [(rel, kind) for rel, kind in _CORPUS_ROUTE_PROBES
+             if declared.get(rel, {}).get("kind") != kind]
+    assert not wrong, (
+        f"the probe drives manifest labels that are gone or have changed kind: "
+        f"{wrong}. Re-point _CORPUS_ROUTE_PROBES at one label per "
+        f"admissibility kind rather than deleting the coverage")
+    assert {kind for _rel, kind in _CORPUS_ROUTE_PROBES} == set(_ADMISSIBILITY), (
+        "a new admissibility kind exists and the corpus route is not probed "
+        "for it; every kind must be shown to route, or the untested one "
+        "silently stops resolving through the pointer")
+
+    run_roots.cache_clear()
+    try:
+        baseline = set(run_roots())
+        with _probe_run_root("d3-corpus-route-") as (corpus, commit):
+            # `_has_cells` looks for a published cell, not merely a directory.
+            # Both probe labels ARE `ic/<design>/v<version>_<PDK>` cells, so
+            # seeding them is what makes this a corpus at all.
+            seeded = {rel: _seed_corpus_root(corpus, rel, kind)
+                      for rel, kind in _CORPUS_ROUTE_PROBES}
+            commit(".")
+
+            # IS OPT-IN — the corpus exists on disk and nothing has been said
+            # about it. Discovery must not have found it.
+            run_roots.cache_clear()
+            assert set(run_roots()) == baseline, (
+                "a corpus nobody pointed at changed discovery; it must be "
+                "named, never searched for (#527)")
+
+            monkeypatch.setenv(_pc.CORPUS_ENV, str(corpus))
+
+            # ROUTES
+            run_roots.cache_clear()
+            resolved = run_roots()
+            for rel, kind in _CORPUS_ROUTE_PROBES:
+                assert rel in resolved, (
+                    f"{_pc.CORPUS_ENV} was set to a corpus carrying {rel!r} "
+                    f"({kind} kind) and discovery still did not find it — the "
+                    f"pointer switches the skip off without switching "
+                    f"discovery on, which is the #1703 defect")
+                assert resolved[rel].path == seeded[rel], (
+                    f"{rel!r} resolved to {resolved[rel].path}, not to the "
+                    f"corpus copy at {seeded[rel]}")
+
+            # READS — same pointer, same labels, provenance removed.
+            for rel, kind in _CORPUS_ROUTE_PROBES:
+                if kind == _IN_REPO_KIND:
+                    (seeded[rel] / _RUNNER_MARKERS[0]).unlink()
+                else:
+                    (seeded[rel] / "reports" / "audit"
+                     / "phase23_completion_audit.json").unlink()
+            commit(".")
+            run_roots.cache_clear()
+            still = run_roots()
+            leaked = [rel for rel, _kind in _CORPUS_ROUTE_PROBES
+                      if rel in still]
+            assert not leaked, (
+                f"these corpus roots resolved with their own proof of "
+                f"provenance deleted: {leaked}. The pointer says WHERE to "
+                f"look; the admissibility rule still has to be satisfied "
+                f"there, or a corpus is a way around the rule instead of a "
+                f"place to apply it")
+    finally:
+        run_roots.cache_clear()
+
+
+def test_d3_a_corpus_that_cannot_name_its_own_commit_is_refused(monkeypatch):
+    """An offered corpus that is not a checkout must REFUSE, not read empty.
+
+    :func:`tracked_under` returns the empty set for a tree it cannot ask git
+    about, and every caller reads that as "not tracked at HEAD — a local build
+    product, not evidence". Inside this repository that is correct. For an
+    offered corpus it is not: an unpacked tarball, a ``cp -r`` of a clone or a
+    docker ``COPY`` of the cells holds published artefacts that ARE tracked
+    somewhere, and reading the whole tree as untracked would report every one
+    of them NOT PRODUCED.
+
+    That is the same confident wrong answer #1348 measured from the other
+    direction — 16 contradictions became 54 when git could not answer inside a
+    container — so the door this change opens is closed on it at the seam.
+    """
+    run_roots.cache_clear()
+    try:
+        with tempfile.TemporaryDirectory(prefix="d3-corpus-nogit-") as td:
+            corpus = Path(td) / "corpus"
+            for rel, kind in _CORPUS_ROUTE_PROBES:
+                _seed_corpus_root(corpus, rel, kind)
+            assert not _claims_to_be_a_checkout(corpus), (
+                f"{td} is inside a git work tree, so this probe cannot show "
+                f"what a non-checkout corpus does")
+            monkeypatch.setenv(_pc.CORPUS_ENV, str(corpus))
+            run_roots.cache_clear()
+            with pytest.raises(AssertionError, match=_pc.CORPUS_ENV):
+                run_roots()
+    finally:
+        run_roots.cache_clear()
 
 
 def test_d3_every_admissible_run_root_is_a_real_flow_run():
@@ -2580,13 +2888,29 @@ def test_d3_fixture_attested_cells_are_named_cell_by_cell():
         f"a tree the commit does not carry makes this dimension's answer "
         f"depend on the machine (#527)."
     )
+    # ...and no root may resolve anywhere except the two trees a reader can
+    # NAME: this repository, or the corpus the operator explicitly pointed at.
+    #
+    # vibe-ic#1703 — the second alternative is new and it is the whole of what
+    # changed. It is not a re-opening of the $HOME search #527 removed, and the
+    # difference is the one that mattered there: an operator-named corpus is
+    # DECLARED (``VIBE_IC_BENCHMARK_DATA``, refused when it names nothing —
+    # ``_published_corpus.corpus_root``), whereas the trees #527 removed were
+    # DISCOVERED, so a cell's colour turned on what happened to be lying around
+    # on the machine. Nothing is searched for here, and with the pointer unset
+    # this assertion is exactly what it was.
+    permitted = [p for p in (_plugin_tree.repo_root(), _offered_corpus())
+                 if p is not None]
     outside = sorted(
         f"{label} -> {rr.path}" for label, rr in resolved.items()
-        if _plugin_tree.repo_root() is not None
-        and _plugin_tree.repo_root().resolve() not in rr.path.resolve().parents
+        if permitted
+        and not any(base.resolve() in rr.path.resolve().parents
+                    for base in permitted)
     )
     assert not outside, (
-        f"these admissible run roots are not inside the repository: {outside}"
+        f"these admissible run roots are in neither the repository nor the "
+        f"corpus named by {_pc.CORPUS_ENV}: {outside}. Permitted trees: "
+        f"{[str(p) for p in permitted]}"
     )
 
 
@@ -3472,6 +3796,38 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
     # anywhere and the NA branch's own probe reddens.
     # 2026-08-12: "M1" left with M2-M4 and for the same reason — it is dormant,
     # not unpublished. It was the last mixed-signal cell here.
+    #
+    # 2026-08-17 (vibe-ic#1703) — THE SIX BELOW ARE THE SIX THE SPLIT WAS SAID
+    # TO HAVE TAKEN OUT OF SIGHT, AND THE PIN NEVER MOVED. #1703 asked for the
+    # census's 7 ENFORCED-CONTRADICTED cells to be enumerated by id "as they
+    # stood on the last commit that had the data — 772c31dcb — so they are
+    # recorded before the record scrolls away". Measured there, on a worktree
+    # of that commit, with the suite's own command:
+    #
+    #   $ pytest -q programs/tests/test_matrix_d3_outputs_produced.py -rA
+    #     FAILED ...test_d3_required_outputs_are_produced[step15]
+    #     FAILED ...[step17]  FAILED ...[step19]  FAILED ...[step20]
+    #     FAILED ...[step30]  FAILED ...[step32]
+    #     6 failed, 101 passed, 2 xfailed in 54.70s
+    #
+    #   $ pytest -q programs/tests/test_matrix_d7_outputs_list_complete.py
+    #     FAILED ...test_d7_required_outputs_list_is_complete[stepD1]
+    #     1 failed, 92 passed, 5 xfailed in 68.73s
+    #
+    # 6 + 1 = the 7. The d3 six are EXACTLY this tuple — the enumeration the
+    # issue asked to be written down was already written down, here, and
+    # survived the move unedited. The seventh is not a d3 cell at all: it is
+    # dimension 7's D1, `phase1/extraction_patterns.json` produced by the flow
+    # and read by a gate while no step's required_outputs names it, and it does
+    # not reproduce on this commit with or without a corpus.
+    #
+    # What DID change is whether anything could still ask. Six cells stopped
+    # being contradicted and started being SKIPPED, which is honest, and the
+    # remedy the skip names — point `VIBE_IC_BENCHMARK_DATA` at a clone — did
+    # not work, because `run_roots` never read it. It does now, and with the
+    # published corpus offered these six are red again, live, from this
+    # repository. So they need no second copy of this suite in benchmark-data:
+    # what they needed was the pointer to reach here.
     "15", "17", "19", "20", "30", "32",
 )
 
