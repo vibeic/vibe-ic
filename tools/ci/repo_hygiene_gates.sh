@@ -31,6 +31,23 @@ PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
 PG="$PLUGIN/programs"
 cd "$ROOT"
 
+# One machine record per completed gate.  When the caller supplies a path it
+# remains available as a progress/attestation channel; otherwise this run owns
+# a private temporary file and embeds its records into --summary-json before
+# removing it.
+_GATE_ATTESTATION_OWNED=0
+if [ -z "${GATE_DISPATCH_ATTESTATION_FILE:-}" ]; then
+  GATE_DISPATCH_ATTESTATION_FILE="$(mktemp -t repo-hygiene-attest.XXXXXX)"
+  _GATE_ATTESTATION_OWNED=1
+fi
+GATE_DISPATCH_ATTESTATION_HELPER="$PG/gate_process_attestation.py"
+export GATE_DISPATCH_ATTESTATION_FILE GATE_DISPATCH_ATTESTATION_HELPER
+_gate_attestation_cleanup() {
+  [ "$_GATE_ATTESTATION_OWNED" -eq 0 ] \
+    || rm -f -- "$GATE_DISPATCH_ATTESTATION_FILE"
+}
+trap _gate_attestation_cleanup EXIT
+
 # --- WHAT RAN, REPORTED FROM HERE (vibe-ic#538) -----------------------------
 # `gatekeeper_review` — the gate a maintainer runs before every push, whose
 # MERGE_OK reads as "this will land green" — carried its own list of FIVE of
@@ -750,7 +767,7 @@ run "inner timeouts fit the harness"    "$ROOT" python3 "$PG/ci_harness_timeout_
 # A PASS must say how much it looked at (vibe-ic#447). Runs every gate above
 # against a scratch EMPTY tree and requires that a PASS there DISCLOSE it
 # examined nothing. Placed LAST so it probes the full list; ~40s.
-run "gates disclose their denominator" "$ROOT" python3 "$PG/gate_discloses_denominator_check.py" "$ROOT"
+run "gates disclose their denominator" "$ROOT" python3 "$PG/gate_discloses_denominator_check.py" "$ROOT" --skip-host-excluded
 
 # The THIRD member of the disclosure family, one level up from the two above.
 # Those ask what a gate's OUTPUT said about how much it looked at. This one asks
@@ -793,15 +810,6 @@ run "d3 declaration/manifest parity" "$ROOT" \
 run "gate skips reach the vacuous tier" "$ROOT" python3 "$PG/gate_skip_routing_check.py" "$PLUGIN"
 
 
-# The other half of #447: a gate that reads the WRONG POPULATION and reports
-# confidently about it. Runs every gate above twice at the same commit —
-# working checkout vs a throwaway worktree — and requires the same verdict.
-# COST: ~3m45s, roughly tripling this script's runtime. Accepted because the
-# class has produced FIVE instances, two of them inside the fixes for the
-# previous ones. Refuses (rc 2) on a dirty checkout rather than reporting the
-# uncommitted work as findings.
-uncheckable_until 2027-02-28 "needs a CLEAN checkout: it compares the working tree against a fresh worktree at the same commit, and rc 2 means tracked modifications made that comparison meaningless (a genuinely host-dependent gate is rc 1)"
-run_tolerating_uncheckable "gates are host-independent" "$ROOT" python3 "$PG/gate_host_independence_check.py" "$ROOT"
 # 2026-08-04 — `gate_cli_mutation_probe` makes a gate unable to fail and then
 # restores it in a `finally`. A `finally` does not run on SIGKILL, and twice in
 # one parallel-agent session a killed run left `hold_area_budget_check.py` and
@@ -1245,7 +1253,7 @@ uncheckable_until 2027-02-28 "needs the vibeic-eda CONTAINER IMAGE on the host: 
 run_tolerating_uncheckable "image-gated verifications are not silently skipped" "$PLUGIN" \
   python3 programs/image_gated_verification_check.py
 
-run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins
+run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_pin_check.py programs --verify-pins --jobs 6
 
 # vibe-ic#1241 — WIRED HERE, not left to its own test. The audit
 # (`checker_execution_wiring_audit`) named this checker as one that nothing but
@@ -1263,6 +1271,19 @@ run "an argued direction is pinned" "$PLUGIN" python3 programs/policy_direction_
 #   baseline 565); rc=0 "[PASS] no new non-atomic declared-report write."
 # The 565 are a recorded residual, not a waiver — the gate fails on a NEW one.
 run "declared reports are written atomically" "$PLUGIN" python3 programs/atomic_artifact_write_check.py programs
+
+# The other half of #447: compare the checkout records every gate above has
+# ALREADY produced with one fresh-worktree run.  This is deliberately LAST.
+# The old placement launched Arm A again inside this gate, so every ordinary
+# hygiene gate ran three times (outer + A + B), and a disagreement ran five.
+# Reusing the exact argv-bound structured record makes the common path two
+# executions without weakening the two-tree assertion. Missing/malformed
+# records are rc 2 NOT CHECKED, never reconstructed from console prose.
+uncheckable_until 2027-02-28 "needs a CLEAN checkout and a complete machine record from this enclosing hygiene run: rc 2 means tracked modifications or missing attestation made the comparison meaningless (a genuinely host-dependent gate is rc 1)"
+run_tolerating_uncheckable "gates are host-independent" "$ROOT" \
+  python3 "$PG/gate_host_independence_check.py" "$ROOT" \
+  --checkout-attestations "$GATE_DISPATCH_ATTESTATION_FILE" \
+  --jobs 8
 
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
