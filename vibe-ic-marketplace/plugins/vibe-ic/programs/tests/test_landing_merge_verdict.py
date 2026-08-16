@@ -1585,7 +1585,7 @@ def test_end_to_end_base_gate_cache_hits_exactly_and_misses_after_base_moves(
     assert list(cache.glob(f"{miss_doc['base_sha']}.*.manifest"))
 
 
-def test_end_to_end_a1_a2_b1_and_b2_start_in_parallel_isolated_worktrees(
+def test_end_to_end_a1_a2_and_b_start_in_parallel_isolated_worktrees(
         sandbox, tmp_path):
     """All four expensive merge-verification arms share one critical path.
 
@@ -1657,11 +1657,7 @@ def test_end_to_end_the_caller_checkout_is_never_touched(sandbox, tmp_path):
     assert _git(sandbox, "worktree", "list").stdout.count("\n") == 1
 
 
-@pytest.mark.parametrize(
-    ("hung_arm", "pid_only_term"),
-    [("A2", False), ("B2", True)],
-)
-def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
+def _assert_interruption_cleans_every_parallel_arm(
         sandbox, tmp_path, hung_arm, pid_only_term):
     """Parallel speed must not trade an interrupt for leaked gate processes.
 
@@ -1753,6 +1749,20 @@ fi
     assert _git(repo, "worktree", "list").stdout.count("\n") == 1
     with pytest.raises(ProcessLookupError):
         os.kill(arm_pid, 0)
+
+
+def test_interruption_kills_a_term_ignoring_parallel_arm_and_removes_worktrees(
+        sandbox, tmp_path):
+    """Keep the original A2/SIGINT nodeid stable across the differential."""
+    _assert_interruption_cleans_every_parallel_arm(
+        sandbox, tmp_path, "A2", False)
+
+
+def test_pid_only_term_kills_a_term_ignoring_b2_and_removes_worktrees(
+        sandbox, tmp_path):
+    """The service-stop path also owns the newly independent B2 group."""
+    _assert_interruption_cleans_every_parallel_arm(
+        sandbox, tmp_path, "B2", True)
 
 
 def _reassert(sandbox, path):

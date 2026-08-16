@@ -27,6 +27,7 @@ Pinned here in the order the driver can be wrong:
 forward-progress supervision and has no whole-run wall-clock estimate.
 """
 import hashlib
+import json
 import os
 import signal
 import subprocess
@@ -279,6 +280,54 @@ def test_silent_pytest_boundaries_keep_a_long_session_alive(
     suites = D._load_suites(merged)
     assert suites is not None
     assert sum(D._count(s)[0] for s in suites) == 6
+
+
+def test_finite_domain_checkpoints_keep_one_long_test_item_alive(
+        tmp_path, monkeypatch):
+    """A bounded batch can expose real completed work inside one test item."""
+    body = (
+        "import time\n"
+        "from _pytest_progress_plugin import domain_progress\n\n"
+        "def test_one_long_batch():\n"
+        "    for completed in range(1, 7):\n"
+        "        time.sleep(0.2)\n"
+        "        domain_progress('bounded-batch', completed, 6)\n"
+    )
+    corpus = _tree(tmp_path, {"test_domain_progress.py": body})
+    merged = tmp_path / "merged.xml"
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.05)
+    started = time.monotonic()
+    rc, out, incomplete = D.run_one(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"],
+        "test_domain_progress.py", merged, 0.35, str(corpus))
+    elapsed = time.monotonic() - started
+    assert elapsed > 0.9, elapsed
+    assert rc == 0 and not incomplete, out
+    suites = D._load_suites(merged)
+    assert suites is not None
+    assert sum(D._count(s)[0] for s in suites) == 1
+
+
+def test_nested_validated_progress_is_relayed_to_the_outer_session(
+        tmp_path, monkeypatch):
+    """An inner healthy session may outlive the outer stall window."""
+    target = (_PROGRAMS / "tests" / "test_matrix_63x8_coverage.py")
+    node = (str(target)
+            + "::test_nested_outcome_run_outlives_old_fixed_bound_with_semantic_progress")
+    merged = tmp_path / "outer.xml"
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.05)
+    started = time.monotonic()
+    rc, out, incomplete = D.run_one(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"],
+        node, merged, 2.5, str(_PROGRAMS.parent))
+    elapsed = time.monotonic() - started
+    assert elapsed > 4.5, elapsed
+    assert rc == 0 and not incomplete, out
+    suites = D._load_suites(merged)
+    assert suites is not None
+    assert sum(D._count(s)[0] for s in suites) == 1
 
 
 def test_pytest_deselection_is_a_complete_selected_subset(tmp_path):
@@ -789,6 +838,45 @@ def test_partial_progress_line_waits_but_is_never_progress(tmp_path):
     finally:
         probe.close()
     assert not ok and "truncated final event" in reason
+
+
+@pytest.mark.parametrize("bad", [
+    {"completed": 1, "total": 3},  # duplicate
+    {"completed": 3, "total": 3},  # gap
+    {"completed": 2, "total": 4},  # total drift
+])
+def test_invalid_domain_progress_freezes_the_semantic_score(tmp_path, bad):
+    sidecar = tmp_path / "progress.jsonl"
+    nonce = "nonce"
+    pid = os.getpid()
+    records = [
+        ("session_start", {}),
+        ("item_collected", {"nodeid": "test_batch.py::test_batch"}),
+        ("collection_finish", {"selected_items": 1}),
+        ("domain_progress", {
+            "nodeid": "test_batch.py::test_batch", "scope": "batch",
+            "completed": 1, "total": 3}),
+        ("domain_progress", {
+            "nodeid": "test_batch.py::test_batch", "scope": "batch", **bad}),
+        ("domain_progress", {
+            "nodeid": "test_batch.py::test_batch", "scope": "batch",
+            "completed": 2, "total": 3}),
+    ]
+    with sidecar.open("w", encoding="utf-8") as fh:
+        for seq, (event, fields) in enumerate(records, start=1):
+            fh.write(json.dumps({
+                "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
+                "event": event, "monotonic_ns": seq, **fields,
+            }) + "\n")
+    probe = D._SemanticProgressProbe(sidecar, nonce, lambda: pid)
+    try:
+        score = probe.sample()
+        again = probe.sample()
+        ok, reason = probe.complete()
+    finally:
+        probe.close()
+    assert score == again == 4
+    assert not ok and "domain_progress" in reason
 
 
 def test_the_merge_omits_files_that_have_no_record(tmp_path):

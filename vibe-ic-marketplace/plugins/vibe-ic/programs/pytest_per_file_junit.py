@@ -168,6 +168,8 @@ _PROGRESS_SCHEMA = 1
 _MAX_PROGRESS_BYTES = 64 * 1024 * 1024
 _MAX_PROGRESS_EVENTS = 1_000_000
 _MAX_PROGRESS_LINE = 64 * 1024
+_MAX_DOMAIN_PROGRESS_TOTAL = 10_000
+_MAX_DOMAIN_PROGRESS_SCOPES = 64
 
 _PR_SET_CHILD_SUBREAPER = 36
 _ACTIVE_JOB: Optional[Tuple[int, Set[Tuple[int, int]]]] = None
@@ -211,6 +213,7 @@ class _SemanticProgressProbe:
         "collect_report": {"nodeid", "outcome"},
         "item_collected": {"nodeid"},
         "collection_finish": {"selected_items"},
+        "domain_progress": {"nodeid", "scope", "completed", "total"},
         "test_finish": {"nodeid"},
         "session_finish": {"exitstatus"},
     }
@@ -234,6 +237,7 @@ class _SemanticProgressProbe:
         self.items: Set[str] = set()
         self.finished: Set[str] = set()
         self.declared_items: Optional[int] = None
+        self.domain_progress: Dict[Tuple[str, str], Tuple[int, int]] = {}
 
     def close(self) -> None:
         self.file.close()
@@ -296,6 +300,34 @@ class _SemanticProgressProbe:
                 return
             self.declared_items = count
             self.stage = "running"
+        elif event == "domain_progress":
+            nodeid = record.get("nodeid")
+            scope = record.get("scope")
+            completed = record.get("completed")
+            total = record.get("total")
+            key = (nodeid, scope)
+            previous = self.domain_progress.get(key)
+            if (self.stage != "running" or nodeid not in self.items
+                    or nodeid in self.finished or not isinstance(scope, str)
+                    or not scope or len(scope) > 160
+                    or not isinstance(completed, int)
+                    or not isinstance(total, int)
+                    or total < 1 or total > _MAX_DOMAIN_PROGRESS_TOTAL
+                    or completed < 1 or completed > total):
+                self._fail("invalid/out-of-order domain_progress")
+                return
+            if (previous is None
+                    and len(self.domain_progress)
+                    >= _MAX_DOMAIN_PROGRESS_SCOPES):
+                self._fail("domain progress scope resource limit exceeded")
+                return
+            if ((previous is None and completed != 1)
+                    or (previous is not None
+                        and (total != previous[1]
+                             or completed != previous[0] + 1))):
+                self._fail("non-monotonic domain_progress")
+                return
+            self.domain_progress[key] = (completed, total)
         elif event == "test_finish":
             nodeid = record.get("nodeid")
             if (self.stage != "running" or nodeid not in self.items
@@ -611,7 +643,9 @@ def _norecord_reason(rc: Optional[int], out: str, incomplete: bool,
 
 def _run_progress_supervised(
         cmd: Sequence[str], stall_after: float,
-        cwd: Optional[str]) -> Tuple[Optional[int], str, bool]:
+        cwd: Optional[str], *,
+        progress_relay_path: Optional[Path] = None,
+        ) -> Tuple[Optional[int], str, bool]:
     """Run until natural completion; stop only after semantic events stall."""
     global _ACTIVE_JOB
     if not _enable_subreaper():
@@ -660,10 +694,31 @@ def _run_progress_supervised(
     child_env["PYTHONPATH"] = (
         str(_PROGRAMS_DIR) if not old_pythonpath else
         str(_PROGRAMS_DIR) + os.pathsep + old_pythonpath)
+    relayed_score = 0
+
+    def _progress_sample() -> int:
+        nonlocal relayed_score
+        score = probe.sample()
+        if progress_relay_path is not None and score > relayed_score:
+            try:
+                fd = os.open(
+                    progress_relay_path,
+                    os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    os.write(fd, f"{score}\n".encode("ascii"))
+                finally:
+                    os.close(fd)
+                relayed_score = score
+            except OSError:
+                # Relay is optional liveness composition, never verdict
+                # evidence.  Its owner will stall/refuse if it cannot read it;
+                # do not corrupt this session's own complete JUnit/OS record.
+                pass
+        return score
     try:
         result = _wd.run_supervised(
             list(cmd), output_progress=False,
-            domain_progress_probe=probe.sample,
+            domain_progress_probe=_progress_sample,
             stall_grace_s=stall_after, poll_s=DEFAULT_POLL_S,
             hard_ceiling_s=float("inf"), kill=_kill,
             popen_factory=_popen, env=child_env)
@@ -713,8 +768,9 @@ def _run_progress_supervised(
 
 
 def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
-            stall_after: float, cwd: Optional[str]) -> Tuple[Optional[int], str,
-                                                             bool]:
+            stall_after: float, cwd: Optional[str], *,
+            progress_relay_path: Optional[Path] = None,
+            ) -> Tuple[Optional[int], str, bool]:
     """One pytest session for one file, supervised by forward progress."""
     cmd = list(pytest_argv) + [
         "-p", _PROGRESS_PLUGIN,
@@ -727,19 +783,23 @@ def run_one(pytest_argv: Sequence[str], test_file: str, junit_path: Path,
         f"--junitxml={junit_path}",
         test_file,
     ]
-    return _run_progress_supervised(cmd, stall_after, cwd)
+    return _run_progress_supervised(
+        cmd, stall_after, cwd, progress_relay_path=progress_relay_path)
 
 
 def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
                   junit_path: Path, stall_after: float,
-                  cwd: Optional[str]) -> Tuple[Optional[int], str, bool]:
+                  cwd: Optional[str], *,
+                  progress_relay_path: Optional[Path] = None,
+                  ) -> Tuple[Optional[int], str, bool]:
     """Run the original whole-selection pytest shape as a semantics canary."""
     cmd = list(pytest_argv) + [
         "-p", _PROGRESS_PLUGIN,
         "-o", "junit_family=xunit1", f"--junitxml={junit_path}",
         *test_files,
     ]
-    return _run_progress_supervised(cmd, stall_after, cwd)
+    return _run_progress_supervised(
+        cmd, stall_after, cwd, progress_relay_path=progress_relay_path)
 
 
 def _append_process_case(root: ET.Element, *, classname: str, name: str,
@@ -859,6 +919,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "not a runtime bound")
     ap.add_argument("--cwd", default=None,
                     help="run each pytest session from here")
+    ap.add_argument("--progress-relay", default=None,
+                    help="optional append-only semantic score relay for a "
+                         "supervising parent; liveness only, never verdict "
+                         "evidence")
     ap.add_argument("pytest_argv", nargs=argparse.REMAINDER,
                     help="-- followed by the full pytest command")
     a = ap.parse_args(argv)
@@ -914,7 +978,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 per = tmp / f"{i:05d}.xml"
                 print(f"=== [{i}/{len(selection)}] {test_file}", flush=True)
                 rc, out, killed = run_one(pytest_argv, test_file, per,
-                                          a.stall_after, a.cwd)
+                                          a.stall_after, a.cwd,
+                                          progress_relay_path=(
+                                              Path(a.progress_relay)
+                                              if a.progress_relay else None))
                 sys.stdout.write(out)
                 if not out.endswith("\n"):
                     sys.stdout.write("\n")
@@ -946,7 +1013,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   "process", flush=True)
             aggregate_rc, out, aggregate_killed = run_aggregate(
                 pytest_argv, selection, aggregate_path,
-                a.aggregate_stall_after, a.cwd)
+                a.aggregate_stall_after, a.cwd,
+                progress_relay_path=(Path(a.progress_relay)
+                                     if a.progress_relay else None))
             sys.stdout.write(out)
             if not out.endswith("\n"):
                 sys.stdout.write("\n")
