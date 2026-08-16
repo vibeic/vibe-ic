@@ -191,39 +191,37 @@ public source tree.
 ## Benchmark results
 
 Vibe-IC is continuously hardened against open IC-design benchmarks. The
-number we publish measures **what the deterministic runner chain can do**
-(program-first — `vibe_ic_one_shot_runner.py` → phase1/2/3 + plugin programs
-+ MCP-EDA), not what a raw LLM can do with the same tools. Every run
-discloses any open↔commercial tool substitution and follows the
+number we publish measures **what the canonical benchmark entry and its
+deterministic gate/runner chain can produce**, not what a raw LLM can do in
+isolation. Every run discloses any open↔commercial tool substitution and follows the
 [open-benchmark methodology](vibe-ic-marketplace/plugins/vibe-ic/skills/open-benchmark-methodology/SKILL.md).
 
-**Each row names the plugin version of the run that produced it — not today's
-plugin version.** The two VerilogEval suites were last re-run clean-room on
-2026-07-22 against plugin **v1.4.81** on vibeic-eda **0.2.26**; RTLLM's current
-figure is the 2026-07-12 campaign on **v1.3.88** (Claude Fable 5, vibeic-eda
-0.2.12); CVDP's is an earlier campaign on **v1.2.63**. Each run's `RESULT.md`
-names the exact image it used. The v1.4.81 VerilogEval runs do **not** record an
-authoring model in their `RESULT.md`, so no model is attributed to those two
-rows.
+**Every row names the authoring model and the plugin version that produced it —
+not today's plugin version.** The newest attributable campaign is GPT-5.6-Sol on
+plugin **v1.10.45** (2026-08-16). The Claude reference runs use Fable 5 on
+**v1.4.81** for VerilogEval and **v1.3.88** for RTLLM. These are therefore
+published **model + plugin** datapoints, not a controlled model-only experiment.
+Single-shot and one blind close-loop score are kept in separate columns.
 
-| Benchmark | Result | Notes |
-|---|---|---|
-| **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | **243/302 = 80.46%** official-compliant blind pass@1 *(plugin v1.2.63)* | **prompt+context-only** — the deterministic solver reads ONLY `input.prompt` + `input.context`; the hidden test harness (`.env`, cocotb testbench) and the golden solution are OFF-LIMITS oracle, enforced by a regression guard that proves the emit is byte-identical with vs without them. Scored on the official `run_benchmark.py` in the pinned `cvdp-sim` image. |
-| **RTLLM v2.0** | **49/50 = 98.0%** blind pass@1 (**49/49 = 100%** excluding the 1 proven upstream dataset defect) *(Fable 5, plugin v1.3.88)* | spec-to-RTL, runner-driven (Shape B), §4.05-blind, iverilog-scored; single-shot 47/50 = 94%, converged after ONE blind close-loop round. The sole residual (`ring_counter`) is a golden that fails its own testbench — a per-design RESULT entry, not a silent drop. |
-| **VerilogEval-v2** | **153/156 = 98.08%** blind pass@1, **single-shot** *(plugin v1.4.81)* | spec-to-RTL, Shape C, §4.05-blind, iverilog-scored. All 3 residuals are proven dataset defects — the score sits at the defect floor with no close-loop round. Excluding the confirmed defect: 153/155 = 98.71%. |
-| **VerilogEval-Human** | **154/156 = 98.72%** blind pass@1, **single-shot** *(plugin v1.4.81)* | code-complete (iccad2023), Shape C, §4.05-blind, iverilog-scored. Both residuals are proven dataset defects; identical score and identical fail set across three consecutive clean-room rounds (v1.4.68 → v1.4.74 → v1.4.81). |
+| Benchmark | Model · plugin | Clean single-shot | After one blind close-loop | Notes |
+|---|---|---:|---:|---|
+| **NVIDIA CVDP** (nonagentic code-generation, no-commercial) | Opus 4.8 · v1.2.63 | **243/302 = 80.46%** | — | Official-compliant prompt+context-only blind pass@1. The hidden harness and golden are off-limits, enforced by a byte-identity regression guard; scored by official `run_benchmark.py`. |
+| **RTLLM v2.0** | Claude Fable 5 · v1.3.88 | **47/50 = 94.0%** | **49/50 = 98.0%** | Runner-driven Shape B; one proven upstream defect in the final scorer record. |
+| **RTLLM v2.0** | [GPT-5.6-Sol · v1.10.45](https://github.com/vibeic/benchmark-data/tree/main/evaluation/rtllm/v1.10.45_gpt_5.6_sol) | **48/50 = 96.0%** | **49/50 = 98.0%** | Runner-driven Shape B. The sole official residual is an Icarus language-dialect scoring gap; the immutable official score remains 49/50. |
+| **VerilogEval-v2** | Claude Fable 5 · v1.4.81 | **153/156 = 98.08%** | — | Shape C, official Icarus harness; no scored recovery round. |
+| **VerilogEval-v2** | [GPT-5.6-Sol · v1.10.45](https://github.com/vibeic/benchmark-data/tree/main/evaluation/verilogeval_v2/v1.10.45_gpt_5.6_sol) | **153/156 = 98.08%** | — | Shape C; all 156 samples gate-emitted. Residual RCA did not patch or rescore a sample. |
+| **VerilogEval-Human** | Claude Fable 5 · v1.4.81 | **154/156 = 98.72%** | — | Shape C, official Icarus harness; no scored recovery round. |
+| **VerilogEval-Human** | [GPT-5.6-Sol · v1.10.45](https://github.com/vibeic/benchmark-data/tree/main/evaluation/verilogeval_human/v1.10.45_gpt_5.6_sol) | **153/156 = 98.08%** | **154/156 = 98.72%** | Shape C; one prompt-only recovery was emitted through the same gate before rescoring. |
 
-*Superseded figures:* this table previously published VerilogEval-Human at
-**153/156 = 98.08%** — that was the correct measurement on plugin **v1.3.88**
-(`verilogeval_human/run_cleanroom_v1388/`), superseded by the v1.4.81 re-run
-above. The v1.3.88 rows also reported a deterministic-vs-AI emit split
-(130/156 for v2, 129/156 for Human); the v1.4.81 runs do not record that split,
-so it is not carried forward.
+*Historical note:* VerilogEval-Human was 153/156 on the earlier Fable 5 / v1.3.88
+run and rose to 154/156 on the v1.4.81 clean-room re-run. The GPT rows are
+separate model+plugin measurements; they do not supersede the Claude rows.
 
 > **Honesty over score.** Compliance is a structural invariant of the plugin,
 > not a runtime convenience — no benchmark run reads the hidden harness or the
-> golden reference to inflate a number, and a fresh clean-room re-run reproduces
-> the published figure. Tool substitutions (Synopsys VCS → Icarus, Design
+> golden reference to inflate a number. Published artifacts, identity
+> attestations, and exact scorer commands make each figure independently
+> reopenable and rerunnable. Tool substitutions (Synopsys VCS → Icarus, Design
 > Compiler → Yosys+OpenROAD, …) are disclosed in every `RESULT.md`.
 
 ---
@@ -306,9 +304,9 @@ readiness) has been driven to completion, the IC also carries a
 ### `evaluation/` — the 7 evaluation sets
 
 Results from public benchmarks and from our own parity sweeps. Each set keeps
-its per-run directories plus a `RESULT.md` naming the plugin version and the
-exact toolchain image that produced the number (older runs also name the
-authoring model; the v1.4.81 VerilogEval runs do not).
+its version/model cells plus a `RESULT.md` and `RUN_MANIFEST.json` naming the
+plugin version, authoring model, scorer evidence, and exact toolchain identity
+that produced the number.
 
 | Set | Tracked size | What it is |
 |---|---|---|
