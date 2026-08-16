@@ -1156,8 +1156,38 @@ WAIVERS: Tuple[Waiver, ...] = (
             "written and had drifted by forty lines a day later, which is the "
             "rot the content grammar exists to end). The oracle rule that "
             "conflates the two is "
-            "programs/tests/matrix_d7_artifact_graph.py:1074-1085 "
-            "(_gate_consumers, `for lit in program_literals(prog)`). "
+            "programs/tests/matrix_d7_artifact_graph.py::"
+            "`for lit in program_literals(prog)` (the mining loop of "
+            "_gate_consumers). "
+            # vibe-ic#1289/#1290 — CONTENT anchors, not line numbers. BOTH of
+            # the citations above were written by line and BOTH had rotted by
+            # 2026-08-15, in the two different ways this notation exists to
+            # end. The yaml citation named 4242 and the flow grew 40 lines
+            # above it, so 4242 now reads a comment and `validate()` reported
+            # the citation unresolvable — a HARD red on
+            # test_waivers_meet_the_registry_standard. The oracle citation
+            # named 1074-1085, which held exactly that loop when it was
+            # written (9167b162e) and now holds the body of a DIFFERENT
+            # function, `flow_consumers`; `_gate_consumers` has moved to 1184
+            # and its `for lit in program_literals(prog)` to 1190. That
+            # citation still RESOLVED — `flow_consumers` calls
+            # `gate_input_paths`, a token this waiver also names in
+            # `gate_input_paths("34")` — so it went on READING as evidence
+            # while pointing at unrelated code, which is the worse of the two
+            # failures because nothing reports it.
+            # Historical numbers above carry no leading colon on purpose: a
+            # bare `:NNNN` inherits the last-named file and would be graded as
+            # a live citation.
+            #
+            # The remaining `path:line` citations in this entry are NOT
+            # converted, and the reason is measured rather than editorial: a
+            # content anchor must resolve to exactly ONE line, and
+            # `rep = Path(report) if report else (project / _REPORT_REL)`
+            # occurs twice in metal_fill_emit.py (at 133 and 319 — the pair is
+            # the point of the claim) while "no GDS to fill" occurs twice in
+            # phase3_one_shot_runner.py. Both would be refused as AMBIGUOUS by
+            # this registry's own rule, so the line form is the only form
+            # available there.
             "MEASURED 2026-08-14 on the rebased tree: "
             "`grep -rn cmp_fill_emit flow/ programs/*.py` names "
             "reports/phase3/cmp_fill_emit.json in metal_fill_emit.py alone, "
