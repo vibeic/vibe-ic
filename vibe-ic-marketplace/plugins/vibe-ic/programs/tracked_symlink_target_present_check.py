@@ -58,8 +58,33 @@ gate — the failure mode half this repo's recent history is about. So the 28 ar
 recorded, the register MAY ONLY SHRINK, anything NEW fails, and an entry that
 starts resolving fails too so the register cannot become standing permission.
 
-Exit: 0 nothing new, 1 a new broken pointer or a recorded one that healed,
-2 nothing was examined.
+ZERO POINTERS IS AN ANSWER; ZERO CORPUS IS NOT (vibe-ic#1700)
+=============================================================
+`git ls-files` returning no symlink used to end the run at rc 2, on the reading
+that "no symlink at all" can only mean the subdir is wrong or the corpus is
+missing. That reading was true while `benchmark-data/ic` carried 172 of them.
+It stopped being true when the published cells moved to `vibeic/benchmark-data`
+and the 31 dangling `steps/` pointers #1700 names left this repository with
+them. Measured at that commit (c5d7f2d00): what remains under `benchmark-data/`
+is 527 tracked files, 0 of them symlinks, and 0 `steps/` paths at all.
+
+So the gate refused, and `run` in `_gate_dispatch.sh` maps rc 2 to FAIL — the
+sweep that `tools/gatekeeper-land.sh` runs before every landing failed on a
+gate whose population had legitimately gone to zero.
+
+The distinction the program was missing is the one this repository states
+everywhere else: a command that could not look is not a zero, but a command
+that LOOKED and found nothing is. Both are now asked separately:
+
+    tracked paths under <subdir> == 0  ->  rc 2, could not look (wrong path,
+                                           corpus absent) — unchanged
+    tracked paths  > 0, symlinks == 0  ->  rc 0, WITH the denominator printed
+
+The FAIL arm is untouched: one committed pointer at a file that exists nowhere
+and is not deliberately ignored still returns rc 1, baseline or not.
+
+Exit: 0 nothing new, 1 a new broken pointer or a recorded one that no longer
+appears, 2 nothing was examined.
 """
 from __future__ import annotations
 
@@ -100,6 +125,20 @@ def tracked_symlinks(root: Path, subdir: str) -> Tuple[List[str], str]:
         if len(parts) == 4 and parts[0] == "120000":
             out.append(parts[3].strip())
     return out, ""
+
+
+def tracked_path_count(root: Path, subdir: str) -> Tuple[int, str]:
+    """How many paths git tracks under ``subdir`` — symlink or not.
+
+    This is the denominator that tells "the corpus is not here" apart from "the
+    corpus is here and holds no pointers". Asked of the INDEX for the same
+    reason as above: it must not depend on what this checkout materialised.
+    """
+    r = subprocess.run(["git", "-C", str(root), "ls-files", "--", subdir],
+                       capture_output=True, text=True, timeout=180)
+    if r.returncode != 0:
+        return 0, f"git ls-files failed: {r.stderr.strip()[:160]}"
+    return len([ln for ln in r.stdout.splitlines() if ln.strip()]), ""
 
 
 def broken(root: Path, rels: List[str]) -> List[dict]:
@@ -184,9 +223,16 @@ def main(argv=None) -> int:
         print(f"[NOT CHECKED] {err} — nothing was examined, which is not a "
               f"clean result", file=sys.stderr)
         return RC_NOTHING
-    if not rels:
-        print(f"[NOT CHECKED] no tracked symlink under {a.subdir} — either the "
-              f"path is wrong or the corpus is absent; not a pass",
+    # No symlink is either "nothing to check" or "nothing was checkable", and
+    # the denominator is what separates them (#1700).
+    population, perr = tracked_path_count(root, a.subdir)
+    if perr:
+        print(f"[NOT CHECKED] {perr} — nothing was examined, which is not a "
+              f"clean result", file=sys.stderr)
+        return RC_NOTHING
+    if not rels and population == 0:
+        print(f"[NOT CHECKED] git tracks nothing at all under {a.subdir} — "
+              f"either the path is wrong or the corpus is absent; not a pass",
               file=sys.stderr)
         return RC_NOTHING
 
@@ -210,8 +256,11 @@ def main(argv=None) -> int:
     new = sorted(set(hard) - set(recorded))
     healed = sorted(set(recorded) - set(hard))
 
+    # The denominator is printed with the numerator, always. "0 broken" over an
+    # unstated population is the shape #1700 is about.
     print(f"tracked_symlink_target_present: {len(rels)} tracked symlink(s) "
-          f"under {a.subdir}; {len(hard)} point at a file that exists nowhere, "
+          f"among {population} tracked path(s) under {a.subdir}; "
+          f"{len(hard)} point at a file that exists nowhere, "
           f"{len(local)} at an untracked file this machine happens to have, "
           f"{len(ignored)} into a tree .gitignore deliberately excludes")
     for f in found:
@@ -238,7 +287,8 @@ def main(argv=None) -> int:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
         Path(a.json).write_text(json.dumps(
             {"program": "tracked_symlink_target_present_check",
-             "tracked_symlinks": len(rels), "broken_everywhere": hard,
+             "tracked_symlinks": len(rels), "tracked_paths": population,
+             "broken_everywhere": hard,
              "untracked_target_present_locally": local,
              "target_deliberately_untracked": ignored,
              "new": new, "healed": healed}, indent=2) + "\n", encoding="utf-8")
@@ -249,13 +299,20 @@ def main(argv=None) -> int:
               f"and points at nothing:\n  " + "\n  ".join(new), file=sys.stderr)
         return RC_FINDING
     if healed:
-        print(f"[FAIL] {len(healed)} recorded entr(ies) now resolve. The "
-              f"register MAY ONLY SHRINK — drop them from it in the same "
-              f"commit that fixed them, or it becomes standing permission:\n  "
-              + "\n  ".join(healed), file=sys.stderr)
+        # "no longer broken" rather than "now resolve": since #1700 a recorded
+        # entry can also leave the register by having its POINTER deleted, and
+        # a message that names only the other cause sends the reader looking
+        # for a target that was never restored.
+        print(f"[FAIL] {len(healed)} recorded entr(ies) are no longer a broken "
+              f"pointer — the target resolves, or the pointer itself was "
+              f"removed. The register MAY ONLY SHRINK — drop them from it in "
+              f"the same commit that fixed them, or it becomes standing "
+              f"permission:\n  " + "\n  ".join(healed), file=sys.stderr)
         return RC_FINDING
-    print(f"[PASS] no NEW broken pointer ({len(recorded)} recorded as debt, "
-          f"repairable only by the benchmark-agent under NO-MIX). "
+    print(f"[PASS] no NEW broken pointer over {population} tracked path(s) "
+          f"under {a.subdir} carrying {len(rels)} symlink(s) "
+          f"({len(recorded)} recorded as debt, repairable only by the "
+          f"benchmark-agent under NO-MIX). "
           f"{len(local)} pointer(s) resolve only on this machine — that is the "
           f"host-dependence #555 reported, and it is disclosed rather than "
           f"failed on because the file does exist.", file=sys.stderr)

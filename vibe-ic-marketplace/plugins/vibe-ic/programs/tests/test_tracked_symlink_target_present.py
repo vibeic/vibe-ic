@@ -26,6 +26,8 @@ import pathlib
 import subprocess
 import sys
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import tracked_symlink_target_present_check as T                # noqa: E402
 
@@ -93,13 +95,100 @@ def test_a_missing_baseline_is_not_an_empty_one(tmp_path, capsys):
     assert "not an empty one" in capsys.readouterr().err
 
 
-def test_an_empty_corpus_refuses_rather_than_passing(tmp_path, capsys):
-    """No symlinks at all means the path is wrong or the corpus is absent."""
+def test_a_subdir_git_tracks_nothing_under_refuses_rather_than_passing(
+        tmp_path, capsys):
+    """"I could not look" is still not a pass — a wrong path, an absent corpus.
+
+    This is the half of the old `test_an_empty_corpus_refuses_rather_than_passing`
+    that was always right, kept verbatim in intent: nothing tracked under the
+    named subdir means the name is wrong or the tree is not here.
+    """
+    r = _repo(tmp_path)
+    (r / "elsewhere.txt").write_text("x")
+    _commit(r)
+    assert T.main(["--root", str(r), "--subdir", "nosuchdir"]) == T.RC_NOTHING
+    assert "not a pass" in capsys.readouterr().err
+
+
+def test_a_tracked_corpus_that_holds_no_symlink_is_a_real_zero(tmp_path, capsys):
+    """vibe-ic#1700 — the other half, which was WRONG, and cost a landing gate.
+
+    The old test asserted rc 2 for exactly this tree, on the reading that "no
+    symlink" can only mean "no corpus". After the published cells moved to
+    `vibeic/benchmark-data`, `benchmark-data/` in this repository holds 527
+    tracked files and zero symlinks — a corpus that is present and carries no
+    pointers. `run` in `_gate_dispatch.sh` maps rc 2 to FAIL, so the sweep
+    `tools/gatekeeper-land.sh` runs before every landing failed on it.
+
+    git ANSWERED here. That is a zero, and it is reported with its denominator
+    so a reader cannot mistake it for a population nobody enumerated.
+    """
     r = _repo(tmp_path)
     (r / "corpus" / "f.txt").write_text("x")
     _commit(r)
-    assert T.main(["--root", str(r), "--subdir", "corpus"]) == T.RC_NOTHING
-    assert "not a pass" in capsys.readouterr().err
+    bl = tmp_path / "empty.json"
+    bl.write_text(json.dumps({"known": []}))
+    assert T.main(["--root", str(r), "--subdir", "corpus",
+                   "--baseline", str(bl)]) == T.RC_OK
+    err = capsys.readouterr().err
+    assert "[PASS]" in err
+    assert "1 tracked path(s)" in err, \
+        "a zero without its denominator is the shape #1700 is about"
+
+
+def test_a_stale_register_over_a_symlink_free_corpus_still_fails(tmp_path, capsys):
+    """The ratchet must survive the population going to zero.
+
+    Otherwise #1700's own repair — deleting the 31 false pointers — would have
+    left the register naming 31 links that no longer exist, and the gate would
+    have passed over a register nobody could ever empty.
+    """
+    r = _repo(tmp_path)
+    (r / "corpus" / "f.txt").write_text("x")
+    _commit(r)
+    bl = tmp_path / "stale.json"
+    bl.write_text(json.dumps({"known": ["corpus/steps/gone.json"]}))
+    rc = T.main(["--root", str(r), "--subdir", "corpus", "--baseline", str(bl)])
+    assert rc == T.RC_FINDING
+    assert "MAY ONLY SHRINK" in capsys.readouterr().err
+
+
+def test_a_dangling_pointer_still_fails_when_the_corpus_is_otherwise_clean(
+        tmp_path, capsys):
+    """THE PAIRED ARM #1700 asks for, in the shape it asks for it.
+
+    One deliberately dangling symlink under `<corpus>/steps/`, everything else
+    a plain tracked file. If widening rc 2 -> rc 0 above had been bought by
+    weakening the gate, this is the test that would have gone green with it.
+    """
+    r = _repo(tmp_path)
+    (r / "corpus" / "f.txt").write_text("x")
+    os.symlink("../../nowhere.rpt", r / "corpus" / "steps" / "pre_pnr.rpt")
+    _commit(r)
+    bl = tmp_path / "empty.json"
+    bl.write_text(json.dumps({"known": []}))
+    assert T.main(["--root", str(r), "--subdir", "corpus",
+                   "--baseline", str(bl)]) == T.RC_FINDING
+    assert "corpus/steps/pre_pnr.rpt" in capsys.readouterr().err
+
+
+def test_exists_and_lexists_disagree_which_is_why_the_index_is_asked(tmp_path):
+    """#1700's actual complaint, pinned rather than described.
+
+    `os.path.exists()` follows the link and says the step produced nothing;
+    `os.path.lexists()` and `ls` say it produced something. Both are internally
+    consistent and they disagree. This program asks git's INDEX for the mode
+    instead, which is the same answer in every checkout.
+    """
+    r = _repo(tmp_path)
+    os.symlink("../../nowhere.rpt", r / "corpus" / "steps" / "pre_pnr.rpt")
+    _commit(r)
+    p = r / "corpus" / "steps" / "pre_pnr.rpt"
+    assert os.path.exists(p) is False
+    assert os.path.lexists(p) is True
+    rels, err = T.tracked_symlinks(r, "corpus")
+    assert err == ""
+    assert rels == ["corpus/steps/pre_pnr.rpt"]
 
 
 def test_a_recorded_entry_that_heals_must_fail(tmp_path, capsys):
@@ -196,3 +285,29 @@ def test_a_recorded_pointer_produces_a_passing_exit_code(tmp_path):
     bl.write_text(json.dumps({"known": ["corpus/steps/link.json"]}))
     assert T.main(["--root", str(r), "--subdir", "corpus",
                    "--baseline", str(bl)]) == T.RC_OK
+
+
+# --- and the gate must render a VERDICT on this repository, not refuse (#1700)
+
+def test_this_repository_gets_a_verdict_rather_than_a_refusal(capsys):
+    """The regression that made the landing sweep red, pinned on the real tree.
+
+    `tools/ci/repo_hygiene_gates.sh` wires this program with plain `run`, and
+    `_gate_dispatch.sh` maps rc 2 to FAIL. So "could not look" here is not a
+    soft outcome — it fails every landing. Measured on the commit that moved
+    the published cells out (c5d7f2d00): rc 2, `^^ FAILED: tracked-symlink
+    target present`.
+
+    SKIPPED, not passed, where `benchmark-data/` is genuinely absent — that is
+    the corpus-absent rule this repository already runs on, and a skip states
+    it could not look instead of claiming it did.
+    """
+    root = T._repo_root(pathlib.Path(T.__file__).resolve().parent)
+    population, err = T.tracked_path_count(root, "benchmark-data")
+    if err or population == 0:
+        pytest.skip(f"git tracks nothing under benchmark-data here "
+                    f"({err or 'population 0'}) — cannot look")
+    rc = T.main(["--root", str(root)])
+    assert rc != T.RC_NOTHING, (
+        "the gate refused on the real tree; wired with `run`, that is a FAIL "
+        "for every landing (vibe-ic#1700)")
