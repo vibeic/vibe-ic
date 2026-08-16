@@ -5959,6 +5959,34 @@ _DELAYED_BLOCKING_SELF_TOGGLE_RE = re.compile(
     r'#\s*(?:\([^;]*?\)|(?:\d+(?:\.\d+)?|[A-Za-z_]\w*))\s*'
     r'(?P<name>[A-Za-z_]\w*)\s*(?P<op>(?<![<>=!])=(?!=))\s*'
     r'~\s*(?P=name)\s*;', re.S)
+_BARE_ALWAYS_RE = re.compile(r'(?<![\w$])always(?![\w$])')
+_FOREVER_RE = re.compile(r'(?<![\w$])forever(?![\w$])')
+
+
+def _bare_always_spans(src: str) -> List[Tuple[int, int]]:
+    """Return bounded spans for delay-driven ``always`` statements only."""
+    spans: List[Tuple[int, int]] = []
+    for m in _BARE_ALWAYS_RE.finditer(src):
+        nxt = re.search(r'\S', src[m.end():])
+        if not nxt:
+            continue
+        body_start = m.end() + nxt.start()
+        if src[body_start] == '@':
+            continue
+        body, end = _statement_after(src, m.end())
+        if body:
+            spans.append((m.start(), end))
+    return spans
+
+
+def _forever_spans(src: str) -> List[Tuple[int, int]]:
+    """Return bounded spans for each ``forever`` statement body."""
+    spans: List[Tuple[int, int]] = []
+    for m in _FOREVER_RE.finditer(src):
+        body, end = _statement_after(src, m.end())
+        if body:
+            spans.append((m.start(), end))
+    return spans
 
 
 def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]:
@@ -5973,6 +6001,9 @@ def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]
         # This rule models a source/oscillator, not a DUT clocked by an input.
         if re.search(r'\binput\b', structural):
             continue
+        initial_spans = _initial_spans(structural)
+        bare_always_spans = _bare_always_spans(structural)
+        forever_spans = _forever_spans(structural)
         for m in _DELAYED_BLOCKING_SELF_TOGGLE_RE.finditer(structural):
             name = m.group('name')
             # The toggled signal must be a module output (ANSI or body style).
@@ -5980,17 +6011,19 @@ def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]
                              structural, re.S):
                 continue
 
-            before = structural[:m.start()]
-            procs = list(re.finditer(r'\b(initial|always)\b', before))
-            if not procs:
+            # The toggle must be structurally INSIDE the qualifying process.
+            # Looking only for the last preceding `initial`/`always` leaked
+            # across completed blocks and into task bodies, where `--fix`
+            # changed unrelated delayed assignments.  Bound each process first.
+            in_initial_forever = (
+                any(start <= m.start() < end for start, end in initial_spans)
+                and any(start <= m.start() < end for start, end in forever_spans))
+            in_bare_always = any(
+                start <= m.start() < end
+                and '@' not in structural[start:m.start()]
+                for start, end in bare_always_spans)
+            if not (in_initial_forever or in_bare_always):
                 continue
-            proc = procs[-1]
-            proc_kind = proc.group(1)
-            proc_prefix = before[proc.end():]
-            if proc_kind == 'initial' and not re.search(r'\bforever\b', proc_prefix):
-                continue
-            if proc_kind == 'always' and re.search(r'@', proc_prefix):
-                continue  # not a bare delay-driven oscillator
 
             writes = list(re.finditer(
                 r'\b' + re.escape(name) +
