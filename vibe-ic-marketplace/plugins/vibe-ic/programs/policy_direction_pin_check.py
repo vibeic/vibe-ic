@@ -166,6 +166,7 @@ DEFAULT_MAX_TEST_FILES = 40
 DEFAULT_JOBS = 6
 _PARALLEL_SCRATCH_PREFIX = "pdpc-par-"
 _RUN_LOCK_FD: Optional[int] = None
+_COHORT_ENV = "VIBEIC_POLICY_COHORT_LOCKED"
 
 
 # ---------------------------------------------------------------------------
@@ -1211,7 +1212,10 @@ def verify_pins_parallel(
     if dirty.returncode != 0 or dirty.stdout.strip():
         return None, ["parallel mutation verification needs a clean tracked "
                       "checkout because isolated workers are created from HEAD"]
-    rc_rec, recovery_lines = recover_all_journals()
+    if os.environ.get(_COHORT_ENV) == "1":
+        rc_rec, recovery_lines = recover_journal(journal_for(root))
+    else:
+        rc_rec, recovery_lines = recover_all_journals()
     for recovery_line in recovery_lines:
         print(recovery_line, file=sys.stderr if rc_rec else sys.stdout)
     if rc_rec:
@@ -1369,13 +1373,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="extra argument forwarded to the mutation pytest runs")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
+    # Candidate tests include this gate's own CLI tests.  An isolated worker is
+    # already covered by its parent's run lock; propagate that fact so a nested
+    # fixture invocation does not block forever trying to re-acquire the lock
+    # held by its own grandparent.
+    if args.isolated_worker:
+        os.environ[_COHORT_ENV] = "1"
+
     root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parent
     if not root.is_dir():
         print(f"[UNDETERMINED] policy_direction_pin_check: {root} is not a directory",
               file=sys.stderr)
         return RC_UNDETERMINED
 
-    if args.verify_pins and not args.isolated_worker:
+    if (args.verify_pins and not args.isolated_worker
+            and os.environ.get(_COHORT_ENV) != "1"):
         try:
             acquire_run_lock()
         except OSError as exc:
@@ -1475,7 +1487,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # not a dirty file this run can measure around: the sweep would re-derive
     # the argued value FROM it and report a self-consistent verdict over a
     # corrupt tree. Repair first, or refuse.
-    if args.isolated_worker:
+    if args.isolated_worker or os.environ.get(_COHORT_ENV) == "1":
         rc_rec, lines = recover_journal(journal_for(root))
     else:
         rc_rec, lines = recover_all_journals()

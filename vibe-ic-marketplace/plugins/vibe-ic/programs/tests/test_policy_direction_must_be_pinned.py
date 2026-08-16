@@ -19,6 +19,7 @@ import ast
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -63,13 +64,19 @@ def test_isolated_worker_never_recovers_a_live_peer_journal(tmp_path):
         "schema": 2, "file": str(target), "original": "original\n",
         "mutated_sha256": hashlib.sha256(b"mutant\n").hexdigest(),
     }))
+    prior_cohort = os.environ.get(C._COHORT_ENV)
     try:
         rc = C.main([str(own), "--verify-pins", "--isolated-worker"])
         assert rc == 0
+        assert os.environ.get(C._COHORT_ENV) == "1"
         assert target.read_text(encoding="utf-8") == "mutant\n"
         assert journal.is_file(), "the child consumed a live peer's journal"
     finally:
         journal.unlink(missing_ok=True)
+        if prior_cohort is None:
+            os.environ.pop(C._COHORT_ENV, None)
+        else:
+            os.environ[C._COHORT_ENV] = prior_cohort
 
 
 # ---------------------------------------------------------------------------

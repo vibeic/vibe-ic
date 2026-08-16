@@ -12,6 +12,7 @@ labels, mismatched declarations, and incomplete attestations all return rc 2.
 from __future__ import annotations
 
 import argparse
+import atexit
 import concurrent.futures
 import json
 import os
@@ -23,12 +24,32 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
+import _crash_safe_scratch as _scratch
 from _atomic_artefact import write_json, write_text
 from hygiene_shard_plan import load_profile, plan
+from policy_direction_pin_check import acquire_run_lock, recover_all_journals
 
 HOST_LABEL = "gates are host-independent"
 DEFAULT_JOBS = 8
 DEFAULT_WORKER_TIMEOUT = 1800
+_FRESH_PREFIX = "hygiene-fresh-"
+
+
+def _unregister_fresh(scratch: Path) -> None:
+    wt = scratch / "wt"
+    if not wt.exists():
+        return
+    subprocess.run(["git", "-C", str(wt), "worktree", "unlock", str(wt)],
+                   capture_output=True, text=True, timeout=120)
+    subprocess.run(["git", "-C", str(wt), "worktree", "remove", "--force",
+                    str(wt)], capture_output=True, text=True, timeout=120)
+
+
+def _release_fresh(res: Any, repo: Path) -> None:
+    _unregister_fresh(res.path)
+    res.release()
+    subprocess.run(["git", "-C", str(repo), "worktree", "prune"],
+                   capture_output=True, text=True, timeout=120)
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -236,72 +257,134 @@ def main(argv=None) -> int:
             print("[INFO] unprofiled gates assigned with conservative cost: "
                   + ", ".join(unprofiled[:8]))
 
+        # One lock protects the broad orphan-journal recovery for BOTH policy
+        # arms.  The two policy parents then use keyed recovery and may overlap;
+        # without this cohort the second parent can "repair" the first one's
+        # live mutant underneath pytest.
+        try:
+            acquire_run_lock()
+            recovery_rc, recovery_lines = recover_all_journals()
+        except OSError as exc:
+            print(f"[ERROR] cannot lock/recover policy mutation journals: {exc}",
+                  file=sys.stderr)
+            return 2
+        for line in recovery_lines:
+            print(line, file=sys.stderr if recovery_rc else sys.stdout)
+        if recovery_rc:
+            print("[ERROR] an abandoned policy mutation could not be recovered",
+                  file=sys.stderr)
+            return 2
+
+        fresh_res, _ = _scratch.reserve(
+            _FRESH_PREFIX, remover=_unregister_fresh)
+        fresh_root = fresh_res.path / "wt"
+        add = subprocess.run(
+            ["git", "-C", str(root), "worktree", "add", "-q", "--detach",
+             str(fresh_root), "HEAD"], capture_output=True, text=True,
+            timeout=180)
+        if add.returncode != 0:
+            fresh_res.release()
+            print("[ERROR] could not create the pipelined fresh tree: "
+                  + (add.stderr or add.stdout).strip()[:240], file=sys.stderr)
+            return 2
+        cleanup = lambda: _release_fresh(fresh_res, root)
+        atexit.register(cleanup)
+
         total_shards = jobs + 1
         workers = []
         for i, bucket in enumerate(buckets):
             labels_path = tmp / f"labels-{i}.txt"
             labels_path.write_text("\n".join(bucket) + "\n", encoding="utf-8")
-            summary = tmp / f"summary-{i}.json"
-            attest = tmp / f"attest-{i}.jsonl"
-            env = os.environ.copy()
-            env["GATE_DISPATCH_ATTESTATION_FILE"] = str(attest)
-            argv_i = ["bash", str(script), "--shard", f"{i}/{total_shards}",
-                      "--shard-labels", str(labels_path),
-                      "--summary-json", str(summary)]
-            workers.append((i, bucket, summary, attest, argv_i, env))
+            for arm, arm_root in (("A", root), ("B", fresh_root)):
+                summary = tmp / f"summary-{arm}-{i}.json"
+                attest = tmp / f"attest-{arm}-{i}.jsonl"
+                env = os.environ.copy()
+                env["GATE_DISPATCH_ATTESTATION_FILE"] = str(attest)
+                env["VIBEIC_POLICY_COHORT_LOCKED"] = "1"
+                arm_script = arm_root / "tools" / "ci" / "repo_hygiene_gates.sh"
+                argv_i = ["bash", str(arm_script), "--shard",
+                          f"{i}/{total_shards}", "--shard-labels",
+                          str(labels_path), "--summary-json", str(summary)]
+                workers.append((arm, i, bucket, arm_root, summary, attest,
+                                argv_i, env))
 
         def run_worker(row):
-            i, bucket, summary, attest, argv_i, env = row
-            rc, out, err = _run(argv_i, root, env, args.worker_timeout)
-            return i, bucket, summary, attest, rc, out, err
+            arm, i, bucket, arm_root, summary, attest, argv_i, env = row
+            rc, out, err = _run(argv_i, arm_root, env, args.worker_timeout)
+            return arm, i, bucket, summary, attest, rc, out, err
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs * 2) as pool:
             results = list(pool.map(run_worker, workers))
 
         docs: List[Tuple[Path, Dict[str, Any]]] = []
         a_attestations: List[Dict[str, Any]] = []
-        for i, bucket, summary, attest, rc, out, err in sorted(results):
-            print(f"=== hygiene shard {i}/{total_shards}: "
+        b_attestations: List[Dict[str, Any]] = []
+        for arm, i, bucket, summary, attest, rc, out, err in sorted(results):
+            print(f"=== hygiene arm {arm} shard {i}/{total_shards}: "
                   f"{len(bucket)} gate(s), rc={rc} ===")
             if out:
                 print(out, end="" if out.endswith("\n") else "\n")
             if err:
-                problems.append(f"shard {i}: {err}")
+                problems.append(f"arm {arm} shard {i}: {err}")
             if not summary.is_file():
-                problems.append(f"shard {i}: no summary (rc={rc})")
+                problems.append(f"arm {arm} shard {i}: no summary (rc={rc})")
                 continue
             try:
                 doc = _load_json(summary)
                 rows = _load_jsonl(attest)
             except (OSError, ValueError) as exc:
-                problems.append(f"shard {i}: incomplete machine record: {exc}")
+                problems.append(
+                    f"arm {arm} shard {i}: incomplete machine record: {exc}")
                 continue
-            docs.append((summary, doc))
-            a_attestations.extend(rows)
+            problems.extend(_validate_declarations(
+                reference, doc, f"arm {arm} shard {i}"))
+            if arm == "B" and doc.get("wiring_errors"):
+                problems.append(
+                    f"arm B shard {i}: dispatcher wiring error(s): "
+                    + "; ".join(str(x) for x in doc["wiring_errors"][:3]))
+            if arm == "A":
+                docs.append((summary, doc))
+                a_attestations.extend(rows)
+            else:
+                b_attestations.extend(rows)
 
-        # Establish exact Arm-A coverage before allowing the dependent phase.
+        # Establish exact A/B coverage before allowing the dependent comparison.
         a_by_label: Dict[str, List[Dict[str, Any]]] = {}
+        b_by_label: Dict[str, List[Dict[str, Any]]] = {}
         for row in a_attestations:
             a_by_label.setdefault(str(row.get("label")), []).append(row)
+        for row in b_attestations:
+            b_by_label.setdefault(str(row.get("label")), []).append(row)
         for label in phase_a_labels:
             if len(a_by_label.get(label, [])) != 1:
                 problems.append(
                     f"Arm A {label!r}: expected one attestation, got "
                     f"{len(a_by_label.get(label, []))}")
+            if len(b_by_label.get(label, [])) != 1:
+                problems.append(
+                    f"Arm B {label!r}: expected one attestation, got "
+                    f"{len(b_by_label.get(label, []))}")
         if set(a_by_label) - set(phase_a_labels):
             problems.append("Arm A produced unplanned attestations")
+        if set(b_by_label) - set(phase_a_labels):
+            problems.append("Arm B produced unplanned attestations")
 
         requested_attest = os.environ.get("GATE_DISPATCH_ATTESTATION_FILE")
         merged_attest = (Path(requested_attest).resolve() if requested_attest
                          else tmp / "merged-attest.jsonl")
+        fresh_attest = tmp / "fresh-attest.jsonl"
         if not problems:
             ordered_a = [a_by_label[label][0] for label in phase_a_labels]
+            ordered_b = [b_by_label[label][0] for label in phase_a_labels]
             _write_jsonl(merged_attest, ordered_a)
+            _write_jsonl(fresh_attest, ordered_b)
             host_labels = tmp / "labels-host.txt"
             host_labels.write_text(HOST_LABEL + "\n", encoding="utf-8")
             host_summary = tmp / "summary-host.json"
             host_env = os.environ.copy()
             host_env["GATE_DISPATCH_ATTESTATION_FILE"] = str(merged_attest)
+            host_env["VIBEIC_HOST_FRESH_ATTESTATIONS"] = str(fresh_attest)
+            host_env["VIBEIC_POLICY_COHORT_LOCKED"] = "1"
             host_argv = ["bash", str(script), "--shard",
                          f"{jobs}/{total_shards}", "--shard-labels",
                          str(host_labels), "--summary-json", str(host_summary)]
@@ -332,6 +415,8 @@ def main(argv=None) -> int:
         final = merge_records(reference, docs, all_attestations, elapsed,
                               problems)
         write_json(args.summary_json, final, ensure_ascii=False)
+        _release_fresh(fresh_res, root)
+        atexit.unregister(cleanup)
         rc = _summary_rc(final)
         if problems:
             for problem in problems:

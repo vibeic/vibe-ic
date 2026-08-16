@@ -1007,6 +1007,87 @@ def _audit_doc(res: Audit, selected: Optional[List[str]] = None) -> Dict:
     }
 
 
+def precomputed_audit(repo_root: Path, checkout_attestations: Path,
+                      fresh_attestations: Path, timeout: int = 600) -> Audit:
+    """Compare concurrently-produced Arm A/B process records.
+
+    The records were emitted by the same dispatcher command in two trees; no
+    verdict is reconstructed from prose.  Any missing, duplicate, wrong-command
+    or semantic mismatch is a finding/refusal.  This is the pipelined common
+    path: Arm B no longer waits for the last Arm-A gate before it starts.
+    """
+    scratch = sweep_abandoned_scratch(repo_root)
+    script = repo_root / "tools" / "ci" / "repo_hygiene_gates.sh"
+    gates = corpus_gates(script)
+    declared = len(gates)
+    if not gates:
+        return Audit("NOTHING_SCANNED", [], None, 0, 0, [], scratch)
+    dirt = checkout_dirt(repo_root, timeout)
+    if dirt is None:
+        return _setup("STATUS_UNAVAILABLE", "STATUS_UNAVAILABLE",
+                      "`git status` did not answer", None, declared, scratch)
+    if dirt.tracked:
+        return _setup("DIRTY_CHECKOUT", "DIRTY_CHECKOUT",
+                      f"{len(dirt.tracked)} tracked path(s) are modified",
+                      dirt, declared, scratch)
+    try:
+        arm_a = _load_checkout_attestations(checkout_attestations)
+        arm_b = _load_checkout_attestations(fresh_attestations)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _setup(
+            "ATTESTATION_UNAVAILABLE", "ATTESTATION_UNAVAILABLE",
+            f"a pipelined arm has no complete machine record: {exc}", dirt,
+            declared, scratch)
+
+    findings: List[Dict] = []
+    not_probed: List[Tuple[str, str]] = []
+    for lineno, text in inert_exclusions(script):
+        findings.append({
+            "gate": f"(script line {lineno})", "kind": "INERT_EXCLUSION",
+            "detail": "an EXCLUDE directive is written but excludes nothing",
+            "checkout": text, "worktree": "-"})
+    probed = 0
+    for gate in gates:
+        reason = _not_probed_reason(gate)
+        if reason is not None:
+            not_probed.append((gate.label, reason))
+            continue
+        probed += 1
+        a = arm_a.get(gate.label)
+        b = arm_b.get(gate.label)
+        if a is None or b is None:
+            findings.append({
+                "gate": gate.label, "kind": "PIPELINE_RECORD_MISSING",
+                "detail": "the gate did not produce one complete record in "
+                          "both concurrently-run trees",
+                "checkout": "NORECORD" if a is None else _attestation_summary(a),
+                "worktree": "NORECORD" if b is None else _attestation_summary(b)})
+            continue
+        if a.get("argv_sha256") != b.get("argv_sha256"):
+            findings.append({
+                "gate": gate.label, "kind": "PIPELINE_WRONG_COMMAND",
+                "detail": "the two records belong to different normalized argv",
+                "checkout": str(a.get("argv_sha256", "NORECORD")),
+                "worktree": str(b.get("argv_sha256", "NORECORD"))})
+            continue
+        if a.get("semantic_sha256") != b.get("semantic_sha256"):
+            findings.append({
+                "gate": gate.label, "kind": "HOST_OR_NONDETERMINISTIC_VERDICT",
+                "detail": "the same command on the same commit produced "
+                          "different structured outcomes in the checkout and "
+                          "fresh worktree. A one-off mismatch is not usable "
+                          "evidence and is never folded into PASS",
+                "checkout": _attestation_summary(a),
+                "worktree": _attestation_summary(b)})
+    if findings:
+        return Audit("FAIL", findings, dirt, declared, probed, not_probed,
+                     scratch)
+    if dirt.ignored_reported and dirt.stimulus == 0:
+        return Audit("NO_STIMULUS", [], dirt, declared, probed, not_probed,
+                     scratch)
+    return Audit("PASS", [], dirt, declared, probed, not_probed, scratch)
+
+
 def parallel_audit(repo_root: Path, jobs: int,
                    checkout_attestations: Optional[Path],
                    timeout: int = 600) -> Audit:
@@ -1223,6 +1304,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             res = audit(root, checkout_attestations=a.checkout_attestations,
                         only_labels=selected, include_script_findings=False)
+    elif os.environ.get("VIBEIC_HOST_FRESH_ATTESTATIONS"):
+        if a.checkout_attestations is None:
+            res = _setup(
+                "ATTESTATION_UNAVAILABLE", "ATTESTATION_UNAVAILABLE",
+                "pipelined fresh-arm evidence was supplied without Arm A",
+                None, len(corpus_gates(
+                    root / "tools" / "ci" / "repo_hygiene_gates.sh")))
+        else:
+            res = precomputed_audit(
+                root, a.checkout_attestations,
+                Path(os.environ["VIBEIC_HOST_FRESH_ATTESTATIONS"]))
     elif a.jobs > 1:
         res = parallel_audit(root, a.jobs, a.checkout_attestations)
     else:

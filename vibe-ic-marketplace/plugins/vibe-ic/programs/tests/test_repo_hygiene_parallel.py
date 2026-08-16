@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -13,6 +14,14 @@ spec = importlib.util.spec_from_file_location(
 assert spec and spec.loader
 P = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(P)
+
+host_spec = importlib.util.spec_from_file_location(
+    "_host_independence_pipeline",
+    PROGRAMS / "gate_host_independence_check.py")
+assert host_spec and host_spec.loader
+H = importlib.util.module_from_spec(host_spec)
+host_spec.loader.exec_module(H)
+from gate_process_attestation import process_attestation
 
 
 def gate(label, state):
@@ -83,3 +92,40 @@ def test_missing_process_attestation_cannot_become_green():
     assert any(P.HOST_LABEL in problem and "attestation" in problem
                for problem in problems)
     assert P._summary_rc(doc) == 2
+
+
+def _attest(path: Path, output: str = "[PASS] same"):
+    row = process_attestation("ordinary", output, 0, ["python3", "gate.py"])
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+
+def test_pipelined_host_comparison_accepts_matching_machine_records(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(H, "corpus_gates", lambda _script: [
+        H.Gate("ordinary", "$ROOT", "python3 gate.py", None)])
+    monkeypatch.setattr(H, "checkout_dirt", lambda _root, _timeout:
+                        H.Dirt([], ["?? stimulus"], [], True))
+    monkeypatch.setattr(H, "inert_exclusions", lambda _script: [])
+    monkeypatch.setattr(H, "sweep_abandoned_scratch", lambda _root: {})
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    _attest(a)
+    _attest(b)
+    result = H.precomputed_audit(tmp_path, a, b)
+    assert result.verdict == "PASS"
+    assert result.declared == result.probed == 1
+
+
+def test_pipelined_host_comparison_refuses_a_semantic_mismatch(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(H, "corpus_gates", lambda _script: [
+        H.Gate("ordinary", "$ROOT", "python3 gate.py", None)])
+    monkeypatch.setattr(H, "checkout_dirt", lambda _root, _timeout:
+                        H.Dirt([], ["?? stimulus"], [], True))
+    monkeypatch.setattr(H, "inert_exclusions", lambda _script: [])
+    monkeypatch.setattr(H, "sweep_abandoned_scratch", lambda _root: {})
+    a, b = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
+    _attest(a, "[PASS] same")
+    _attest(b, "[FAIL] changed")
+    result = H.precomputed_audit(tmp_path, a, b)
+    assert result.verdict == "FAIL"
+    assert result.findings[0]["kind"] == "HOST_OR_NONDETERMINISTIC_VERDICT"
