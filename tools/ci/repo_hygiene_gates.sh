@@ -1201,7 +1201,24 @@ run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_che
 # holding one file — in 1m50.203s, i.e. 8% under the 120s bound that would have
 # reported it as unrunnable. Handed the scratch root it now refuses it as a
 # ZERO DENOMINATOR in 0.03s, which is what that probe was asking for.
-run "63x8 census freshness" "$ROOT" python3 "$ROOT/tools/gen_matrix_63x8_census.py" "$ROOT" --check
+# MOVED OUT OF THE LANDING PATH (owner decision, 2026-08-16).
+#
+# `63x8 census freshness` asks whether the campaign's published matrix figures are
+# still true. That is a QUALITY question about the 63x9 campaign, and it was the
+# only 63x8 gate in this file. Landing asks a different question -- does this change
+# break anything -- and a stale census breaks nothing: it makes one published number
+# out of date, which blocks the campaign, not the push.
+#
+# The two tiers are now separate by construction. Run it where it belongs:
+#     python3 tools/gen_matrix_63x8_census.py <root> --check
+# and `test_matrix_63x8_census_freshness.py` still enforces it in the suite, so the
+# figure cannot drift unnoticed -- it simply no longer sits between a fix and main.
+#
+# NOT REMOVED FOR SPEED. Measured on the trimmed tree it is 64s, which is not what
+# made landing slow; the earlier 110s+ readings were taken before benchmark-data was
+# split out and while five shard runs were saturating the host. The reason is
+# layering, and stating the cost honestly matters because a wrong reason survives
+# into the next decision.
 
 # A call site writes a literal into a parameter that picks between named
 # alternatives, prose argues WHICH WAY, and no test can see the difference.
