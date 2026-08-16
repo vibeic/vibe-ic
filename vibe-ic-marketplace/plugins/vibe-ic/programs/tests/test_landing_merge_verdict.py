@@ -399,6 +399,32 @@ def test_an_uninspectable_candidate_test_worktree_is_unmeasurable():
     assert any("COULD NOT BE INSPECTED" in r for r in v.reasons)
 
 
+def test_a_candidate_test_arm_that_moved_to_another_commit_is_refused():
+    v = _decide(candidate_test_worktree_status="wrong-head")
+    assert v.ok is False
+    assert any("MOVED OFF THE VERIFIED COMMIT" in r for r in v.reasons)
+
+
+def test_a_base_test_arm_that_wrote_the_tree_is_refused():
+    v = _decide(base_test_worktree_status="dirty")
+    assert v.ok is False
+    assert any("BASE TEST ARM WROTE" in r for r in v.reasons)
+
+
+def test_an_uninspectable_base_test_worktree_is_unmeasurable():
+    v = _decide(base_test_worktree_status="unknown")
+    assert v.ok is False
+    assert v.unmeasurable is True
+    assert any("BASE TEST WORKTREE COULD NOT BE INSPECTED" in r
+               for r in v.reasons)
+
+
+def test_a_base_test_arm_that_moved_to_another_commit_is_refused():
+    v = _decide(base_test_worktree_status="wrong-head")
+    assert v.ok is False
+    assert any("MOVED OFF THE BASE COMMIT" in r for r in v.reasons)
+
+
 def test_a_candidate_that_ran_no_tests_is_not_a_pass():
     v = _decide(delta=_delta(candidate_total=0, base_total=0, overlap=0))
     assert v.ok is False
@@ -960,6 +986,18 @@ def test_the_verify_script_hands_the_verdict_arm_as_own_selection():
     # ...and the file must exist even when the run short-circuits, or the flag
     # points at nothing and the disclosure is the one that fires.
     assert body.count(': > "$RUN/selection_base.txt"') >= 1
+    assert "--candidate-test-worktree-status" in body
+    assert "--base-test-worktree-status" in body
+    assert 'attest_test_worktree()' in body
+    assert 'git -C "$wt" read-tree "$expected_tree"' in body
+    assert 'export GIT_NO_REPLACE_OBJECTS=1' in body
+    assert 'git -C "$wt" diff-files --name-status' in body
+    assert '"$WT_CAND_TESTS" "$VERIFIED_SHA" "$VERIFIED_TREE" candidate_tests' in body
+    assert '"$WT_BASE_TESTS" "$BASE_SHA" "$BASE_TREE" base_tests' in body
+    assert 'gatekeeper-base-test-cache-schema=4-exact-tree' in body
+    assert "grep -qx 'schema=4-exact-tree'" in body
+    assert '[ "$A1_WORKTREE_STATUS" = "clean" ]' in body, \
+        "dirty base-test evidence can still be published into the cache"
 
 
 def test_cli_returns_one_on_a_new_failure(tmp_path):
@@ -1361,10 +1399,131 @@ def test_end_to_end_a_known_good_branch_is_allowed(sandbox, tmp_path):
         "the non-target B2 lane minted a standalone stamp before B1 joined")
     assert any("merge verifier owns" in label
                for label in doc["land"]["report"])
-    assert doc["base_land"] is not None, "arm A2 never ran, so the gate tier was asserted"
+    assert doc["base_land"] is not None, \
+        "arm A2 never ran, so the gate tier was asserted"
     assert any("targeted tests" in label
                for label in doc["base_land"]["skip"]), (
         "A2 duplicated the targeted suite already measured by A1")
+
+
+def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
+        sandbox, tmp_path):
+    """Clean porcelain is not proof that B1 tested the requested commit."""
+    repo = tmp_path / "wrong-head-repo"
+    cloned = subprocess.run(
+        ["git", "clone", "-q", str(sandbox), str(repo)],
+        capture_output=True, text=True, timeout=_T)
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "wrong_head")
+    test_file = (repo / "vibe-ic-marketplace/plugins/vibe-ic/programs/tests"
+                 / "test_thing.py")
+    test_file.write_text(
+        "import subprocess\n"
+        "def test_moves_the_detached_subject_but_stays_green():\n"
+        "    p=subprocess.run(['git','reset','--hard','HEAD^'], "
+        "capture_output=True, text=True)\n"
+        "    assert p.returncode == 0, p.stderr\n")
+    _git(repo, "add", str(test_file))
+    assert _git(repo, "commit", "-qm", "move the B1 subject").returncode == 0
+
+    r, doc = _verify(repo, "wrong_head", tmp_path)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["candidate_test_worktree_status"] == "wrong-head"
+    assert any("MOVED OFF THE VERIFIED COMMIT" in reason
+               for reason in doc["reasons"])
+    assert doc["delta"]["new_failures"] == []
+
+
+def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
+        sandbox, tmp_path):
+    """The subject index is not evidence that the subject bytes stayed fixed."""
+    repo = tmp_path / "hidden-dirty-repo"
+    cloned = subprocess.run(
+        ["git", "clone", "-q", str(sandbox), str(repo)],
+        capture_output=True, text=True, timeout=_T)
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "hidden_dirty")
+    test_file = (repo / "vibe-ic-marketplace/plugins/vibe-ic/programs/tests"
+                 / "test_thing.py")
+    test_file.write_text(
+        "import pathlib\n"
+        "import subprocess\n"
+        "def test_hides_changed_subject_bytes_but_stays_green():\n"
+        "    root=pathlib.Path(__file__).resolve().parents[5]\n"
+        "    rel='vibe-ic-marketplace/plugins/vibe-ic/programs/thing.py'\n"
+        "    p=subprocess.run(['git','update-index','--assume-unchanged',rel], "
+        "cwd=root, capture_output=True, text=True)\n"
+        "    assert p.returncode == 0, p.stderr\n"
+        "    (root / rel).write_text('VALUE = 999\\n')\n")
+    _git(repo, "add", str(test_file))
+    assert _git(repo, "commit", "-qm", "hide changed B1 bytes").returncode == 0
+
+    r, doc = _verify(repo, "hidden_dirty", tmp_path)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["candidate_test_worktree_status"] == "dirty"
+    assert any("WROTE INTO ITS WORKTREE" in reason
+               for reason in doc["reasons"])
+    assert doc["delta"]["new_failures"] == []
+
+
+def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
+        sandbox, tmp_path):
+    """Mutable refs/replace cannot redefine the literal tree B1 must attest."""
+    repo = tmp_path / "replace-ref-repo"
+    cloned = subprocess.run(
+        ["git", "clone", "-q", str(sandbox), str(repo)],
+        capture_output=True, text=True, timeout=_T)
+    assert cloned.returncode == 0, cloned.stderr
+    _git(repo, "config", "user.email", "t@localhost")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "checkout", "-q", "-b", "replace_dirty")
+    test_file = (repo / "vibe-ic-marketplace/plugins/vibe-ic/programs/tests"
+                 / "test_thing.py")
+    test_file.write_text(
+        "import os\n"
+        "import pathlib\n"
+        "import subprocess\n"
+        "def test_redefines_head_but_stays_green():\n"
+        "    root=pathlib.Path(__file__).resolve().parents[5]\n"
+        "    rel='vibe-ic-marketplace/plugins/vibe-ic/programs/thing.py'\n"
+        "    env=dict(os.environ)\n"
+        "    env.pop('GIT_NO_REPLACE_OBJECTS', None)\n"
+        "    def run(*args):\n"
+        "        return subprocess.run(['git',*args], cwd=root, env=env, "
+        "capture_output=True, text=True)\n"
+        "    head=run('rev-parse','HEAD').stdout.strip()\n"
+        "    (root / rel).write_text('VALUE = 999\\n')\n"
+        "    assert run('add',rel).returncode == 0\n"
+        "    tree=run('write-tree').stdout.strip()\n"
+        "    forged=run('commit-tree',tree,'-p',head,'-m','forged').stdout.strip()\n"
+        "    p=run('replace',head,forged)\n"
+        "    assert p.returncode == 0, p.stderr\n"
+        "    assert run('status','--porcelain').stdout.strip() == ''\n")
+    _git(repo, "add", str(test_file))
+    assert _git(repo, "commit", "-qm", "try to redefine B1 tree").returncode == 0
+
+    try:
+        r, doc = _verify(repo, "replace_dirty", tmp_path)
+    finally:
+        replace_refs = _git(
+            repo, "for-each-ref", "--format=%(refname)", "refs/replace")
+        for ref in replace_refs.stdout.splitlines():
+            _git(repo, "update-ref", "-d", ref)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["candidate_test_worktree_status"] == "dirty"
+    assert any("WROTE INTO ITS WORKTREE" in reason
+               for reason in doc["reasons"])
+    assert doc["delta"]["new_failures"] == []
 
 
 def test_end_to_end_base_gate_cache_hits_exactly_and_misses_after_base_moves(

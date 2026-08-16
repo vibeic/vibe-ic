@@ -702,7 +702,8 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
            base_aggregate_process_present: bool = True,
            candidate_gate_rc: int = 0,
            require_composite_gate_record: bool = False,
-           candidate_test_worktree_status: str = "clean") -> Verdict:
+           candidate_test_worktree_status: str = "clean",
+           base_test_worktree_status: str = "clean") -> Verdict:
     reasons: List[str] = []
     notes: List[str] = []
     disclosures: List[str] = []
@@ -818,10 +819,29 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             "THE CANDIDATE TEST WORKTREE COULD NOT BE INSPECTED AFTER B1 — "
             "the verifier cannot prove the parallel test arm left its subject "
             "unchanged.")
-    if candidate_test_worktree_status != "clean":
+    if candidate_test_worktree_status == "wrong-head":
+        reasons.append(
+            "THE CANDIDATE TEST ARM MOVED OFF THE VERIFIED COMMIT — B1's "
+            "JUnit is about a different tree than the tree that would land.")
+    elif candidate_test_worktree_status != "clean":
         reasons.append(
             "THE CANDIDATE TEST ARM WROTE INTO ITS WORKTREE — B1 did not "
             "measure an immutable candidate tree.")
+
+    if base_selection_supplied and base_test_worktree_status == "unknown":
+        return _stop(
+            "THE BASE TEST WORKTREE COULD NOT BE INSPECTED AFTER A1 — the "
+            "verifier cannot prove the baseline test arm left its subject "
+            "unchanged.")
+    if (base_selection_supplied
+            and base_test_worktree_status == "wrong-head"):
+        reasons.append(
+            "THE BASE TEST ARM MOVED OFF THE BASE COMMIT — A1's JUnit is "
+            "about a different baseline and cannot be subtracted.")
+    elif base_selection_supplied and base_test_worktree_status != "clean":
+        reasons.append(
+            "THE BASE TEST ARM WROTE INTO ITS WORKTREE — A1 did not measure "
+            "an immutable baseline tree.")
 
     # Runtime attestations are read from the report itself — never source text
     # and never the combined driver/subject stdout.  The aggregate session is
@@ -1108,9 +1128,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="require the B2 rc and matching terminal sentinel; "
                          "used when targeted evidence comes from parallel B1")
     ap.add_argument("--candidate-test-worktree-status", default="clean",
-                    choices=("clean", "dirty", "unknown"),
+                    choices=("clean", "dirty", "wrong-head", "unknown"),
                     help="trusted post-B1 git-status result from its isolated "
                          "candidate-test worktree")
+    ap.add_argument("--base-test-worktree-status", default="clean",
+                    choices=("clean", "dirty", "wrong-head", "unknown"),
+                    help="trusted post-A1 git-status result from its isolated "
+                         "base-test worktree")
     ap.add_argument("--json", dest="json_out", default=None)
     a = ap.parse_args(argv)
 
@@ -1216,7 +1240,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                require_composite_gate_record=(
                    a.require_composite_gate_record),
                candidate_test_worktree_status=(
-                   a.candidate_test_worktree_status))
+                   a.candidate_test_worktree_status),
+               base_test_worktree_status=a.base_test_worktree_status)
 
     if a.gate_edited:
         v.notes.append("this branch edits the gate that judges it: "
@@ -1263,6 +1288,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 a.require_composite_gate_record),
             "candidate_test_worktree_status": (
                 a.candidate_test_worktree_status),
+            "base_test_worktree_status": a.base_test_worktree_status,
             "base_land": base_land.as_dict() if base_land else None,
             "delta": delta.as_dict(),
             "selection_size": len(selection),

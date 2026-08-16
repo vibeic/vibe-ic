@@ -359,6 +359,107 @@ def test_progress_stall_cleans_a_descendant_that_escaped_the_process_group(
     assert not late_file.exists(), out
 
 
+def test_natural_exit_reaps_dead_adopted_zombie_without_norecord(
+        tmp_path):
+    """A dead child awaiting its subreaper is bookkeeping, not live work."""
+    pid_file = tmp_path / "zombie.pid"
+    corpus = _tree(tmp_path, {
+        "test_zombie.py": (
+            "import os,pathlib,time\n"
+            "def test_leaves_an_unwaited_dead_child():\n"
+            "    pid=os.fork()\n"
+            "    if pid == 0: os._exit(0)\n"
+            "    deadline=time.monotonic()+2\n"
+            "    state=''\n"
+            "    while time.monotonic() < deadline:\n"
+            "        raw=pathlib.Path(f'/proc/{pid}/stat').read_text()\n"
+            "        state=raw[raw.rfind(')')+2:].split()[0]\n"
+            "        if state == 'Z': break\n"
+            "        time.sleep(.01)\n"
+            f"    pathlib.Path({str(pid_file)!r}).write_text(str(pid))\n"
+            "    assert state == 'Z'\n")})
+    junit = tmp_path / "zombie-reaped.xml"
+
+    proc = _run_driver(
+        corpus, junit, "--aggregate-check", "--aggregate-only",
+        "--aggregate-stall-after", "3")
+
+    assert proc.returncode == D.RC_OK, proc.stdout + proc.stderr
+    assert "AGGREGATE_COMPLETE  rc=0" in proc.stdout
+    assert "DESCENDANT" not in proc.stdout
+    zombie_pid = int(pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(zombie_pid, 0)
+    assert _files_in(junit) == ["<aggregate>", "test_zombie.py"]
+
+
+def test_natural_exit_with_live_descendant_is_norecord_after_cleanup(
+        tmp_path):
+    """Killing unfinished asynchronous work must never turn JUnit green."""
+    pid_file = tmp_path / "live.pid"
+    late_file = tmp_path / "live-late-write"
+    child = (
+        "import pathlib,time; time.sleep(1); "
+        f"pathlib.Path({str(late_file)!r}).write_text('leaked')")
+    corpus = _tree(tmp_path, {
+        "test_live.py": (
+            "import pathlib,subprocess,sys\n"
+            "def test_returns_before_child_finishes():\n"
+            f"    p=subprocess.Popen([sys.executable,'-c',{child!r}], "
+            "start_new_session=True)\n"
+            f"    pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))\n"
+            "    assert True\n")})
+    junit = tmp_path / "live-cleaned.xml"
+
+    proc = _run_driver(
+        corpus, junit, "--aggregate-check", "--aggregate-only",
+        "--aggregate-stall-after", "3")
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert "LIVE_DESCENDANTS_CLEANED:" in proc.stdout
+    assert "AGGREGATE_NORECORD" in proc.stdout
+    assert _files_in(junit) == []
+    escaped_pid = int(pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(escaped_pid, 0)
+    time.sleep(1.1)
+    assert not late_file.exists(), proc.stdout
+
+
+def test_unproved_final_descendant_census_is_norecord(tmp_path, monkeypatch):
+    """Never turn attempted cleanup into proof that cleanup succeeded."""
+    corpus = _tree(tmp_path, {"test_green.py": _GREEN})
+    junit = tmp_path / "unproved-cleanup.xml"
+    real_cleanup = D._cleanup_job
+
+    def unproved(root_pid, baseline, **kwargs):
+        cleaned = real_cleanup(root_pid, baseline, **kwargs)
+        return D.CleanupResult(
+            cleaned.observed, {999999}, cleaned.census_ok)
+
+    # Force the post-exit cleanup path while allowing the real helper cleanup
+    # to run.  The fake survivor represents D-state/permission-denied residue.
+    real_jobs = D._job_processes_checked
+    calls = {"n": 0}
+
+    def one_live_then_real(root_pid, baseline):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ({999999: 1}, True)
+        return real_jobs(root_pid, baseline)
+
+    monkeypatch.setattr(D, "_job_processes_checked", one_live_then_real)
+    monkeypatch.setattr(D, "_cleanup_job", unproved)
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.05)
+
+    rc, out, incomplete = D.run_one(
+        _pytest_cmd(), "test_green.py", junit, 2, str(corpus))
+
+    assert rc == 0 and incomplete, out
+    assert "DESCENDANT_CLEANUP_INCOMPLETE:" in out
+    assert "survivors=[999999]" in out
+
+
 def test_driver_signal_cleanup_reaps_the_active_detached_descendant(tmp_path):
     """Verifier cancellation reaches the driver, not its new-session child."""
     corpus = tmp_path / "corpus"

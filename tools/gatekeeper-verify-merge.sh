@@ -164,6 +164,10 @@ REPO=""
 # value can only ever point at the wrong repository. An EMPTY value is worse
 # than a wrong one: git takes it literally and every `rev-parse` fails.
 unset GIT_DIR GIT_WORK_TREE
+# Replacement objects are mutable repository metadata, not part of the commit
+# being verified.  Never let a subject-created refs/replace entry change what
+# any parent-side object lookup means.
+export GIT_NO_REPLACE_OBJECTS=1
 
 die() { printf 'gatekeeper-verify-merge: %s\n' "$*" >&2; exit 2; }
 
@@ -237,6 +241,88 @@ WT_BASE_TESTS="$RUN/base-tests"
 RUN_ID="$(basename "$RUN")"
 HEAD_REF="refs/gk-verify/$RUN_ID/head"
 MERGE_REF="refs/gk-verify/$RUN_ID/merge"
+
+# Verify the bytes that a test arm actually read, not the worktree's mutable
+# index.  A subject can set assume-unchanged/skip-worktree and then edit a
+# tracked file; HEAD and ordinary `git status` both still look clean.  A fresh
+# index populated from the expected commit carries none of those flags, so
+# diff-files must hash the real worktree bytes against the expected tree.
+attest_test_worktree() {
+  local wt="$1" expected_commit="$2" expected_tree="$3" label="$4"
+  local report="$RUN/${label}.worktree_status"
+  local index="$RUN/.${label}.attestation-index"
+  local tracked="$RUN/.${label}.tracked-diff"
+  local untracked="$RUN/.${label}.untracked"
+  local head rc flags
+
+  if ! head="$(git -C "$wt" rev-parse HEAD 2>/dev/null)"; then
+    printf 'inspection failed: cannot read HEAD\n' > "$report"
+    printf 'unknown\n'
+    return
+  fi
+  if [ "$head" != "$expected_commit" ]; then
+    printf 'expected=%s\nactual=%s\n' "$expected_commit" "$head" > "$report"
+    printf 'wrong-head\n'
+    return
+  fi
+
+  # Flags alone are residue too.  More importantly, the independent index
+  # below prevents either flag from hiding changed bytes from this decision.
+  if ! flags="$(git -C "$wt" ls-files -v 2>/dev/null)"; then
+    printf 'inspection failed: cannot read subject index flags\n' > "$report"
+    printf 'unknown\n'
+    return
+  fi
+  if printf '%s\n' "$flags" | grep -Eq '^(S|[a-z]) '; then
+    printf 'subject index contains assume-unchanged/skip-worktree entries\n' \
+      > "$report"
+    printf '%s\n' "$flags" | grep -E '^(S|[a-z]) ' >> "$report"
+    printf 'dirty\n'
+    return
+  fi
+
+  if ! GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$index" \
+       git -C "$wt" read-tree "$expected_tree" \
+       >/dev/null 2>&1; then
+    printf 'inspection failed: cannot materialize expected tree index\n' \
+      > "$report"
+    printf 'unknown\n'
+    return
+  fi
+  # A read-tree index has no worktree stat cache.  Refresh matching entries so
+  # unchanged files do not all appear modified; mismatches legitimately make
+  # refresh return 1 and are decided by diff-files below.
+  GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$index" \
+    git -C "$wt" update-index --really-refresh \
+    >/dev/null 2>&1 || true
+  GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$index" \
+    git -C "$wt" diff-files --name-status \
+    --no-ext-diff --no-textconv --ignore-submodules=none \
+    > "$tracked" 2>/dev/null
+  rc=$?
+  if [ "$rc" -gt 1 ]; then
+    printf 'inspection failed: cannot compare tracked worktree bytes\n' \
+      > "$report"
+    printf 'unknown\n'
+    return
+  fi
+  if ! GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$index" \
+       git -C "$wt" ls-files --others \
+       --exclude-standard > "$untracked" 2>/dev/null; then
+    printf 'inspection failed: cannot enumerate untracked files\n' > "$report"
+    printf 'unknown\n'
+    return
+  fi
+  if [ -s "$tracked" ] || [ -s "$untracked" ]; then
+    {
+      [ ! -s "$tracked" ] || { printf 'tracked differences:\n'; cat "$tracked"; }
+      [ ! -s "$untracked" ] || { printf 'untracked files:\n'; cat "$untracked"; }
+    } > "$report"
+    printf 'dirty\n'
+    return
+  fi
+  printf 'clean\n'
+}
 
 cleanup_event() {
   # Test/diagnostic-only semantic events.  The probe directory is outside the
@@ -340,6 +426,12 @@ else
   HEAD_SHA="$("${G[@]}" rev-parse "$REF" 2>/dev/null)" || die "cannot resolve $REF"
 fi
 BASE_SHA="$("${G[@]}" rev-parse "$BASE" 2>/dev/null)" || die "cannot resolve $BASE"
+BASE_TREE="$("${G[@]}" rev-parse "$BASE_SHA^{tree}" 2>/dev/null)" \
+  || die "cannot resolve the base tree"
+if [ -n "$("${G[@]}" for-each-ref --format='%(refname)' refs/replace \
+     2>/dev/null)" ]; then
+  die "repository has active refs/replace; the verified object graph is not canonical"
+fi
 # THE FORGE'S ANSWER IS ABOUT THE FORGE'S BASE. `refs/pull/<n>/merge` is the merge
 # of the PR head into the tip of the branch the PR TARGETS; asked about any other
 # base it is not a second opinion, it is a different question. Comparing them
@@ -539,6 +631,7 @@ CAND_JUNIT="$RUN/candidate.xml"
 BASE_JUNIT="$RUN/base.xml"
 B2_RC=2
 B1_WORKTREE_STATUS=unknown
+A1_WORKTREE_STATUS=unknown
 BASE_LAND_ARG=()
 # The two arms' hygiene records are retained as audit artifacts.  The verdict
 # currently compares the printed gate labels; these files must not be described
@@ -620,6 +713,7 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   A1_CACHED_MANIFEST=""
   A1_CACHE_LOCK_FD=""
   A1_CACHE_OWNER=0
+  A1_WORKTREE_STATUS=clean
   if [ -s "$RUN/selection_base.txt" ]; then
     A1_ASKED=1
     # NO `--maxfail` here on purpose: arm A must produce the COMPLETE pre-existing
@@ -652,12 +746,12 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     if [ -n "$BASE_GATE_CACHE" ]; then
       mkdir -p "$BASE_GATE_CACHE"
       A1_FINGERPRINT="$({
-        printf '%s\n' 'gatekeeper-base-test-cache-schema=2-green-only' \
+        printf '%s\n' 'gatekeeper-base-test-cache-schema=4-exact-tree' \
           "base=$BASE_SHA" "host=$THIS_HOST" \
           "boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)" \
           "path=${PATH:-}" "tmpdir=${TMPDIR:-/tmp}" \
           "stall=${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
-          'contract=aggregate-only;pytest-timeout=180;cacheprovider=off;autoload=off'
+          'contract=aggregate-only;pytest-timeout=180;cacheprovider=off;autoload=off;bytecode=off'
         env -0 | LC_ALL=C sort -z | sha256sum | awk '{print $1}'
         sha256sum "$RUN/selection_base.txt" "$A1_DRIVER" \
           "$CAND_PLUGIN/programs/_watchdog.py" \
@@ -685,7 +779,7 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     if [ "$A1_CACHE_OWNER" = "1" ] \
        && [ -s "$A1_CACHED_XML" ] && [ -s "$A1_CACHED_LOG" ] \
        && [ -s "$A1_CACHED_MANIFEST" ] \
-       && grep -qx 'schema=2-green-only' "$A1_CACHED_MANIFEST" \
+       && grep -qx 'schema=4-exact-tree' "$A1_CACHED_MANIFEST" \
        && grep -qx "base_sha=$BASE_SHA" "$A1_CACHED_MANIFEST" \
        && grep -qx "host=$THIS_HOST" "$A1_CACHED_MANIFEST" \
        && grep -qx "fingerprint=$A1_FINGERPRINT" "$A1_CACHED_MANIFEST" \
@@ -709,7 +803,8 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
           printf "%s\n" "NORECORD  <all selected files>  candidate carries no pytest_per_file_junit.py instrument (vibe-ic#1654)"
           exit 2
         fi
-        exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 GATEKEEPER_VERIFY_ARM=A1 \
+        exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
+          GATEKEEPER_VERIFY_ARM=A1 \
           python3 "$4" --selection "$2" --junit "$3" \
           --stall-after "$5" --aggregate-check --aggregate-only \
           --aggregate-stall-after "$6" \
@@ -838,7 +933,8 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       mkdir -p "$GATEKEEPER_CONCURRENCY_PROBE_DIR"
       : > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/B1.started"
     fi
-    exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 GATEKEEPER_VERIFY_ARM=B1 \
+    exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
+      GATEKEEPER_VERIFY_ARM=B1 \
       python3 "$4" --selection "$2" --junit "$3" \
       --stall-after "$5" --aggregate-check --aggregate-only \
       --aggregate-stall-after "$6" --stop-after-failures 0 \
@@ -876,14 +972,8 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
   wait "$B1_PID"
   B1_RC=$?
   B1_PID=""
-  B1_WORKTREE_STATUS=clean
-  if ! B1_STATUS="$(git -C "$WT_CAND_TESTS" status --porcelain \
-      --untracked-files=all 2>/dev/null)"; then
-    B1_WORKTREE_STATUS=unknown
-  elif [ -n "$B1_STATUS" ]; then
-    B1_WORKTREE_STATUS=dirty
-    printf '%s\n' "$B1_STATUS" > "$RUN/candidate_tests.worktree_status"
-  fi
+  B1_WORKTREE_STATUS="$(attest_test_worktree \
+    "$WT_CAND_TESTS" "$VERIFIED_SHA" "$VERIFIED_TREE" candidate_tests)"
   wait "$B2_PID"
   B2_RC=$?
   B2_PID=""
@@ -894,6 +984,17 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     wait "$A1_PID"
     A1_RC=$?
     A1_PID=""
+  fi
+  if [ "$A1_ASKED" = "1" ]; then
+    A1_WORKTREE_STATUS="$(attest_test_worktree \
+      "$WT_BASE_TESTS" "$BASE_SHA" "$BASE_TREE" base_tests)"
+  fi
+  if [ -n "$("${G[@]}" for-each-ref --format='%(refname)' refs/replace \
+       2>/dev/null)" ]; then
+    B1_WORKTREE_STATUS=dirty
+    [ "$A1_ASKED" != "1" ] || A1_WORKTREE_STATUS=dirty
+    printf 'test/gate arms created refs/replace metadata\n' \
+      >> "$RUN/candidate_tests.worktree_status"
   fi
   if [ "$A1_ASKED" = "1" ]; then
     # AND SAY SO WHEN IT DID NOT RUN. `tail -1` of a pytest that died before a
@@ -915,13 +1016,14 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       echo "--- arm A1 (base ${BASE_SHA:0:12}): rc=$A1_RC, $A1_SUMMARY"
       if [ "$A1_FROM_CACHE" = "0" ] && [ "$A1_CACHE_OWNER" = "1" ] \
          && [ -n "$A1_CACHED_XML" ] && [ "$A1_RC" = "0" ] \
+         && [ "$A1_WORKTREE_STATUS" = "clean" ] \
          && grep -q '^AGGREGATE_COMPLETE' "$RUN/base_tests.log" \
          && aggregate_cache_valid "$BASE_JUNIT" "$RUN/selection_base.txt"; then
         A1_CACHE_TMP="$A1_CACHE_PREFIX.tmp.$$"
         cp "$BASE_JUNIT" "$A1_CACHE_TMP.xml"
         cp "$RUN/base_tests.log" "$A1_CACHE_TMP.log"
         {
-          printf 'schema=2-green-only\n'
+          printf 'schema=4-exact-tree\n'
           printf 'base_sha=%s\n' "$BASE_SHA"
           printf 'host=%s\n' "$THIS_HOST"
           printf 'fingerprint=%s\n' "$A1_FINGERPRINT"
@@ -1003,6 +1105,7 @@ python3 "$VERDICT_PROG" \
   --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
   --candidate-gate-rc "$B2_RC" --require-composite-gate-record \
   --candidate-test-worktree-status "$B1_WORKTREE_STATUS" \
+  --base-test-worktree-status "$A1_WORKTREE_STATUS" \
   --verification-tier "$TIER" --git-version "$GIT_VERSION" \
   --merge-tree-min-version "$MERGE_TREE_MIN_VERSION" \
   ${TIER_REASON:+--tier-reason "$TIER_REASON"} \

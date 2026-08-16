@@ -81,6 +81,16 @@ It removes accidental stdout/CPU false-progress. JUnit and the OS process rc
 remain authoritative for the result, and missing/malformed/incomplete sidecar
 state fails closed as NORECORD.
 
+The driver is also a Linux child subreaper.  After a NATURAL pytest exit it
+first reaps adopted zombies, then performs a fresh pid/starttime census.  Dead
+children that merely awaited their subreaper do not erase a complete verdict.
+Any descendant still LIVE at that point is a real asynchronous leak: it is
+terminated and verified gone so it cannot contaminate the next arm, but the
+session remains NORECORD because killing unfinished work cannot turn it green.
+An unreadable census or any survivor is likewise NORECORD.  The outer verifier
+independently checks both isolated test worktrees after cleanup, so a late child
+write cannot be mistaken for an immutable measurement.
+
 chip-AGNOSTIC: pure process and XML plumbing. No design, PDK, vendor or process
 literal appears here.
 
@@ -132,6 +142,7 @@ import sys
 import tempfile
 import time
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -421,8 +432,23 @@ def _enable_subreaper() -> bool:
 
 def _proc_snapshot() -> Dict[int, Tuple[int, int, int]]:
     """pid -> (ppid, starttime, cpu_ticks), from one coherent-ish /proc pass."""
+    return _proc_snapshot_checked()[0]
+
+
+def _proc_snapshot_checked() -> Tuple[Dict[int, Tuple[int, int, int]], bool]:
+    """Return a process snapshot and whether the census was trustworthy.
+
+    A process disappearing between ``iterdir`` and ``read_text`` is a normal
+    race.  Any other unreadable/malformed live entry means the supervisor
+    cannot prove that its descendant set is empty and must fail closed.
+    """
     out: Dict[int, Tuple[int, int, int]] = {}
-    for entry in Path("/proc").iterdir():
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return {}, False
+    complete = True
+    for entry in entries:
         if not entry.name.isdigit():
             continue
         try:
@@ -432,9 +458,17 @@ def _proc_snapshot() -> Dict[int, Tuple[int, int, int]]:
             out[int(entry.name)] = (
                 int(fields[1]), int(fields[19]),
                 int(fields[11]) + int(fields[12]))
-        except (OSError, ValueError, IndexError):
+        except FileNotFoundError:
             continue
-    return out
+        except (OSError, ValueError, IndexError):
+            # Do not turn a permission/parsing failure for a still-live PID
+            # into proof that it does not exist.  A vanished entry is benign.
+            try:
+                if entry.exists():
+                    complete = False
+            except OSError:
+                complete = False
+    return out, complete
 
 
 def _descendants(snapshot: Dict[int, Tuple[int, int, int]], root: int) -> Set[int]:
@@ -451,7 +485,14 @@ def _descendants(snapshot: Dict[int, Tuple[int, int, int]], root: int) -> Set[in
 def _job_processes(root_pid: int,
                    baseline: Set[Tuple[int, int]]) -> Dict[int, int]:
     """Processes attributable to this one pytest launch, including escapees."""
-    snap = _proc_snapshot()
+    return _job_processes_checked(root_pid, baseline)[0]
+
+
+def _job_processes_checked(
+        root_pid: int,
+        baseline: Set[Tuple[int, int]]) -> Tuple[Dict[int, int], bool]:
+    """Return attributable pid/starttime identities plus census integrity."""
+    snap, complete = _proc_snapshot_checked()
     pids = _descendants(snap, root_pid)
     if root_pid in snap:
         pids.add(root_pid)
@@ -462,7 +503,7 @@ def _job_processes(root_pid: int,
         ident = (pid, snap[pid][1])
         if ident not in baseline:
             pids.add(pid)
-    return {pid: snap[pid][1] for pid in pids if pid in snap}
+    return ({pid: snap[pid][1] for pid in pids if pid in snap}, complete)
 
 
 def _signal_identities(identities: Dict[int, int], sig: int) -> None:
@@ -487,12 +528,20 @@ def _reap_adopted() -> None:
             return
 
 
+@dataclass(frozen=True)
+class CleanupResult:
+    observed: Set[int]
+    survivors: Set[int]
+    census_ok: bool
+
+
 def _cleanup_job(root_pid: int, baseline: Set[Tuple[int, int]],
-                 *, term_grace_s: float = 2.0) -> Set[int]:
-    """Terminate and verify every descendant, even if it changed sessions."""
-    identities = _job_processes(root_pid, baseline)
+                 *, term_grace_s: float = 2.0) -> CleanupResult:
+    """Terminate descendants and return a load-bearing final-zero proof."""
+    identities, census_ok = _job_processes_checked(root_pid, baseline)
     if not identities:
-        return set()
+        final, final_ok = _job_processes_checked(root_pid, baseline)
+        return CleanupResult(set(), set(final), census_ok and final_ok)
     observed = set(identities)
     _signal_identities(identities, signal.SIGTERM)
     deadline = time.monotonic() + term_grace_s
@@ -500,10 +549,13 @@ def _cleanup_job(root_pid: int, baseline: Set[Tuple[int, int]],
     while time.monotonic() < deadline:
         time.sleep(0.05)
         _reap_adopted()
-        current = _job_processes(root_pid, baseline)
+        current, scan_ok = _job_processes_checked(root_pid, baseline)
+        census_ok = census_ok and scan_ok
         observed.update(current)
         if not current:
-            return observed
+            final, final_ok = _job_processes_checked(root_pid, baseline)
+            return CleanupResult(
+                observed, set(final), census_ok and final_ok)
         identities.update(current)
     _signal_identities(identities, signal.SIGKILL)
     # This short interval verifies teardown; it is not a runtime estimate for
@@ -513,12 +565,16 @@ def _cleanup_job(root_pid: int, baseline: Set[Tuple[int, int]],
     while time.monotonic() < deadline:
         time.sleep(0.05)
         _reap_adopted()
-        current = _job_processes(root_pid, baseline)
+        current, scan_ok = _job_processes_checked(root_pid, baseline)
+        census_ok = census_ok and scan_ok
         observed.update(current)
         if not current:
             break
         _signal_identities(current, signal.SIGKILL)
-    return observed
+    _reap_adopted()
+    final, final_ok = _job_processes_checked(root_pid, baseline)
+    observed.update(final)
+    return CleanupResult(observed, set(final), census_ok and final_ok)
 
 
 def _shutdown_handler(signum, _frame) -> None:
@@ -544,8 +600,10 @@ def _norecord_reason(rc: Optional[int], out: str, incomplete: bool,
     if marker in out:
         detail = out.split(marker, 1)[1].splitlines()[0].strip()
         return f"pytest progress protocol incomplete: {detail}"
-    if "DESCENDANT_LEAK:" in out:
-        return "pytest exited with live descendants (cleaned by supervisor)"
+    if "DESCENDANT_CLEANUP_INCOMPLETE:" in out:
+        return "pytest descendant cleanup could not prove a final empty census"
+    if "LIVE_DESCENDANTS_CLEANED:" in out:
+        return "pytest exited with unfinished live descendants"
     if incomplete:
         return "pytest supervision ended without a complete liveness record"
     return f"the session exited rc={rc} without writing a complete junit"
@@ -559,11 +617,16 @@ def _run_progress_supervised(
     if not _enable_subreaper():
         return None, "SUBREAPER_UNAVAILABLE: descendant cleanup is not provable\n", True
 
-    snap = _proc_snapshot()
+    snap, initial_census_ok = _proc_snapshot_checked()
+    if not initial_census_ok:
+        return (None, "PROCESS_CENSUS_UNAVAILABLE: /proc could not be read "
+                "completely\n", True)
     baseline = {(pid, start) for pid, (_ppid, start, _cpu) in snap.items()
                 if pid in _descendants(snap, os.getpid())}
     holder: Dict[str, subprocess.Popen] = {}
     killed: Set[int] = set()
+    cleanup_census_ok = True
+    cleanup_survivors: Set[int] = set()
 
     def _popen(argv, **kwargs):
         global _ACTIVE_JOB
@@ -576,7 +639,11 @@ def _run_progress_supervised(
         return proc
 
     def _kill(proc, _reason: str) -> None:
-        killed.update(_cleanup_job(proc.pid, baseline))
+        nonlocal cleanup_census_ok, cleanup_survivors
+        cleanup = _cleanup_job(proc.pid, baseline)
+        killed.update(cleanup.observed)
+        cleanup_census_ok = cleanup_census_ok and cleanup.census_ok
+        cleanup_survivors.update(cleanup.survivors)
 
     progress_fd, progress_name = tempfile.mkstemp(
         prefix="vibeic-pytest-progress-", suffix=".jsonl")
@@ -609,20 +676,39 @@ def _run_progress_supervised(
             pass
     proc = holder.get("proc")
     leaked: Set[int] = set()
+    post_exit_cleanup_ok = cleanup_census_ok and not cleanup_survivors
     if proc is not None:
-        leaked = set(_job_processes(proc.pid, baseline))
-        if leaked:
-            killed.update(_cleanup_job(proc.pid, baseline))
+        # Linux subreapers adopt already-dead grandchildren as zombies.  Reap
+        # them BEFORE asking whether pytest left unfinished work; the former is
+        # bookkeeping, while a process still present after this reap is live
+        # asynchronous work and makes the pytest verdict incomplete.
+        _reap_adopted()
+        live, live_census_ok = _job_processes_checked(proc.pid, baseline)
+        leaked = set(live)
+        if leaked or not live_census_ok:
+            cleanup = _cleanup_job(proc.pid, baseline)
+            killed.update(cleanup.observed)
+            cleanup_census_ok = cleanup_census_ok and cleanup.census_ok
+            cleanup_survivors.update(cleanup.survivors)
+        post_exit_cleanup_ok = (live_census_ok and cleanup_census_ok
+                                and not cleanup_survivors)
     _ACTIVE_JOB = None
     _reap_adopted()
     out = (result.out or "") + (result.err or "")
-    if leaked:
-        out += ("\nDESCENDANT_LEAK: pytest exited while descendant process(es) "
-                f"remained; cleaned pids={sorted(leaked)}\n")
+    if leaked and post_exit_cleanup_ok:
+        out += ("\nLIVE_DESCENDANTS_CLEANED: pytest exited with unfinished "
+                "descendant process(es); final census is empty, but killing "
+                "unfinished work cannot make the record complete; "
+                f"cleaned pids={sorted(killed or leaked)}\n")
+    elif not post_exit_cleanup_ok:
+        out += ("\nDESCENDANT_CLEANUP_INCOMPLETE: final empty census was not "
+                f"proved; observed={sorted(killed or leaked)}; "
+                f"survivors={sorted(cleanup_survivors)}; "
+                f"census_ok={cleanup_census_ok}\n")
     if not protocol_complete:
         out += f"\nPROGRESS_PROTOCOL_INCOMPLETE: {protocol_error}\n"
     incomplete = (result.outcome != "natural" or bool(leaked)
-                  or not protocol_complete)
+                  or not post_exit_cleanup_ok or not protocol_complete)
     return result.rc, out, incomplete
 
 
