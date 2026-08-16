@@ -2166,16 +2166,38 @@ def _decoded(chunk) -> str:
 def _cell_rc_from_report(junit: Path, proc_rc: int) -> Tuple[Optional[int], str]:
     """``(cell rc, why-unreadable)`` from pytest's OWN report of the one cell.
 
-    ``0``/``1`` is the CELL's colour. ``None`` means the report did not carry
-    exactly one testcase, and the reason is returned rather than folded into a
-    colour — a replay that could not read its cell must be NOT_REPLAYABLE, never
-    a quiet ALREADY_RED.
+    ``0``/``1`` is the CELL's colour. ``None`` means the cell has no colour to
+    read, and the reason is returned rather than folded into one — a replay that
+    could not read its cell must be NOT_REPLAYABLE, never a quiet ALREADY_RED
+    and never a quiet STAYED_GREEN.
 
-    A ``skipped`` testcase maps to 0, which is what the exit status already
-    said: the two locks that consume this ask whether the cell went PASS ->
-    FAIL, and a skip is not a fail. It is only ever a witness's BASELINE that
-    could be skipped, and LOCK 2's `proved` still requires the mutant arm to go
-    non-zero with the declared signal, so a skip cannot manufacture a red.
+    A ``skipped`` testcase is one of those, and it was the LAST unreadable path
+    still being given a colour (vibe-ic#1421). It used to map to 0, on this
+    argument:
+
+        "the two locks that consume this ask whether the cell went PASS ->
+        FAIL, and a skip is not a fail. It is only ever a witness's BASELINE
+        that could be skipped ... so a skip cannot manufacture a red."
+
+    The last sentence is false, and the conclusion only ever covered ONE of the
+    two ways to be wrong. The skip conditions in a cell test are properties of
+    the CHECKOUT, not of the mutation — dimension 3's cell skips when the
+    published corpus is not in this tree — so they hold on BOTH arms, and the
+    mutant arm skips too. `replay` then reads baseline 0, mutant 0, and scores
+    the pair STAYED_GREEN, whose meaning in LOCK 2's own words is "the ledger
+    says this edit reddens the cell; re-running it says otherwise, so the
+    recorded proof no longer holds". Measured on ``ee849c19e``:
+
+        D3-UNDECLARED-ARTEFACT @ D1  ->  STAYED_GREEN, baseline_rc=0,
+        mutant_rc=0, not_replayable=''      (both arms: `1 skipped`)
+
+    That is the headline claim of vibe-ic#1421 — "a recorded mutation stopped
+    reddening its witness" — asserted over a cell nobody looked at. A skip
+    cannot manufacture a red; it manufactures the FALSE NEGATIVE instead, which
+    is the expensive direction and the one this ledger exists to refuse. It is
+    the same conflation already removed from a fired bound (#1403), a session
+    exit status read as the cell's colour (#1412) and an already-red witness
+    (#1432); this is the fourth and it is the one that pointed the wrong way.
     """
     if not junit.is_file():
         return None, (f"pytest wrote no report (process rc={proc_rc}) — the "
@@ -2190,7 +2212,23 @@ def _cell_rc_from_report(junit: Path, proc_rc: int) -> Tuple[Optional[int], str]
                       f"(process rc={proc_rc}) — the nodeid selected nothing, "
                       f"or collection produced more than the cell")
     bad = [c for c in cases[0] if c.tag in ("failure", "error")]
-    return (1 if bad else 0), ""
+    if bad:
+        return 1, ""
+    skipped = [c for c in cases[0] if c.tag == "skipped"]
+    if skipped:
+        said = (skipped[0].get("message") or skipped[0].get("type")
+                or "").strip().replace("\n", " ")
+        return None, (
+            f"pytest SKIPPED the cell (process rc={proc_rc}), so this arm was "
+            f"NOT MEASURED: {said or 'no reason recorded'}. A skipped cell has "
+            f"no colour. Scored 0 it makes a mutant arm nobody ran read as "
+            f"STAYED_GREEN — a recorded mutation that stopped reddening its "
+            f"witness — and a baseline arm nobody ran read as a green witness. "
+            f"That is not evidence the gate stopped catching, and it is not a "
+            f"reason to re-record the ledger or re-pick the witness. Give the "
+            f"cell what it needs to answer (the skip reason names it) and "
+            f"re-run the pair")
+    return 0, ""
 
 
 def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
