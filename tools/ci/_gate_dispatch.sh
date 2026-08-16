@@ -153,6 +153,12 @@
 # --- state -----------------------------------------------------------------
 GATE_DISPATCH_SUMMARY_JSON=""
 GATE_DISPATCH_LIST_ONLY=0
+# Optional machine channel written after each completed gate.  The hygiene
+# script enables it for the real run; fixture users that source this library
+# without the helper retain the historical execution path byte-for-byte.
+GATE_DISPATCH_ATTESTATION_FILE="${GATE_DISPATCH_ATTESTATION_FILE:-}"
+GATE_DISPATCH_ATTESTATION_HELPER="${GATE_DISPATCH_ATTESTATION_HELPER:-}"
+GATE_DISPATCH_ATTESTATION_FAILED=0
 #: `--shard I/N` (vibe-ic#1144). -1 = not sharded, run everything.
 GATE_DISPATCH_SHARD_I=-1
 GATE_DISPATCH_SHARD_N=0
@@ -418,12 +424,49 @@ exemption describes a state this gate cannot reach"
     return 0
   fi
   echo "── $shown"
-  local t0="$SECONDS" rc=0 before="" after="" watched=1
+  local t0="$SECONDS" rc=0 before="" after="" watched=1 capture=""
   before="$(_gate_dispatch_corpus_state)" || watched=0
   # `|| rc=$?` and NOT a bare `( ... ); rc=$?` — the caller runs under `set -e`,
   # where a failing subshell aborts before the next line and the disclosure
   # below would never print.
-  ( cd "$wd" && "$@" ) || rc=$?
+  if [ -n "$GATE_DISPATCH_ATTESTATION_FILE" ]; then
+    if [ -f "$GATE_DISPATCH_ATTESTATION_HELPER" ]; then
+      capture="$(mktemp "${GATE_DISPATCH_ATTESTATION_FILE}.gate.XXXXXX")"
+      local -a _pipe_rc=()
+      # One combined stream is intentional: it is the process evidence a human
+      # sees in the landing log, and tee keeps that stream live while the helper
+      # derives the machine record from the exact same bytes.
+      if ( cd "$wd" && "$@" ) 2>&1 | tee "$capture"; then
+        _pipe_rc=("${PIPESTATUS[@]}")
+      else
+        _pipe_rc=("${PIPESTATUS[@]}")
+      fi
+      rc="${_pipe_rc[0]}"
+      if [ "${_pipe_rc[1]:-1}" -ne 0 ]; then
+        GATE_DISPATCH_ATTESTATION_FAILED=1
+        echo "   ^^ PROCESS ATTESTATION FAILED: $label — tee could not" \
+             "preserve the complete process stream; a partial record is not" \
+             "accepted as evidence" >&2
+      elif ! python3 "$GATE_DISPATCH_ATTESTATION_HELPER" \
+          --label "$label" --returncode "$rc" --output-log "$capture" \
+          --append-jsonl "$GATE_DISPATCH_ATTESTATION_FILE" \
+          --root "${ROOT:-$wd}" --root "$wd" -- "$@"; then
+        GATE_DISPATCH_ATTESTATION_FAILED=1
+        echo "   ^^ PROCESS ATTESTATION FAILED: $label — the gate ran, but its" \
+             "machine verdict record was not written; host comparison will" \
+             "refuse rather than reconstruct it from prose" >&2
+      fi
+      rm -f -- "$capture"
+    else
+      ( cd "$wd" && "$@" ) || rc=$?
+      GATE_DISPATCH_ATTESTATION_FAILED=1
+      echo "   ^^ PROCESS ATTESTATION FAILED: $label — helper missing at" \
+           "${GATE_DISPATCH_ATTESTATION_HELPER:-<unset>}; this run cannot" \
+           "certify a tree from console prose" >&2
+    fi
+  else
+    ( cd "$wd" && "$@" ) || rc=$?
+  fi
   local secs=$(( SECONDS - t0 ))
   GATE_SECONDS+=("$secs")
   if [ "$watched" -eq 0 ]; then
@@ -749,6 +792,19 @@ doc = {
     "seconds": total,
     "gates": gates,
 }
+attestation_path = os.environ.get("GATE_DISPATCH_ATTESTATION_FILE", "")
+process_attestations = []
+if attestation_path and os.path.isfile(attestation_path):
+    with open(attestation_path, encoding="utf-8") as af:
+        for lineno, line in enumerate(af, start=1):
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("complete") is not True:
+                raise SystemExit(
+                    f"incomplete process attestation at line {lineno}")
+            process_attestations.append(rec)
+doc["process_attestations"] = process_attestations
 with open(out, "w", encoding="utf-8") as fh:
     json.dump(doc, fh, indent=2, ensure_ascii=False)
     fh.write("\n")
@@ -764,6 +820,11 @@ gate_dispatch_finish() {
   local failed=0 decided=0 elsewhere=0 ran=0
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
   local refused="" writers="" expired="" nexpired=0
+
+  if [ "$GATE_DISPATCH_ATTESTATION_FAILED" -ne 0 ]; then
+    _gate_wiring_error "one or more gate processes completed without a "\
+"machine attestation; the run cannot certify a tree from a partial record"
+  fi
 
   # vibe-ic#584 — an exemption declared after the last gate attaches to
   # nothing. Caught rather than ignored: the author believed they had covered a

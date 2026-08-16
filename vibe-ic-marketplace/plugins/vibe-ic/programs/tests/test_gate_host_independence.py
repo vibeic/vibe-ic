@@ -52,6 +52,7 @@ import pytest
 _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 import gate_host_independence_check as G  # noqa: E402
+import gate_process_attestation as A  # noqa: E402
 
 _REPO = _PROGRAMS.parents[3]
 
@@ -296,6 +297,14 @@ def test_the_cwd_token_is_preserved(tmp_path):
     assert all(g.cmd and not g.cmd.lstrip().startswith("#") for g in gates)
 
 
+def test_pytest_wall_clock_is_not_mistaken_for_a_different_verdict():
+    """Both arms passed the same 108 tests; 15.44s vs 16.26s is not RED."""
+    a = G._verdict_line("108 passed in 15.44s\n")
+    b = G._verdict_line("108 passed in 16.26s\n")
+    assert a == b == "108 passed in <TIME>s"
+    assert G._verdict_line("107 passed, 1 failed in 15.44s") != a
+
+
 def test_539_a_gate_that_needs_the_network_is_EXCLUDED_in_the_real_script():
     """#539. The rule, asserted over the REAL script rather than a fixture: a
     gate that requires a REMOTE cannot be inside a two-invocation determinism
@@ -484,6 +493,36 @@ def test_a_real_difference_still_survives_normalisation(tmp_path):
     res = G.audit(r, timeout=_T)
     assert res.verdict == "FAIL", res
     assert res.findings[0]["kind"] == "HOST_DEPENDENT_VERDICT"
+
+
+def test_different_finding_identities_cannot_cancel_behind_the_same_count(
+        tmp_path):
+    """The two arms can fail equally while disagreeing about WHAT is wrong.
+
+    Comparing only the final ``1 finding`` line and process rc turns that real
+    host-dependent disagreement into PASS.  The finding identity set is part
+    of the verdict, not diagnostic decoration.
+    """
+    r = _repo_with(
+        tmp_path,
+        'run "identity" "$ROOT" python3 identity.py\n',
+        untracked=True)
+    (r / "identity.py").write_text(
+        "from pathlib import Path\n"
+        "if Path('stray.txt').exists():\n"
+        "    print('[FAIL] LOCAL_LEFTOVER')\n"
+        "else:\n"
+        "    print('[FAIL] PUBLISHED_TREE_ONLY')\n"
+        "print('[FAIL] 1 finding')\n"
+        "raise SystemExit(1)\n")
+    subprocess.run(["git", "-C", str(r), "add", "identity.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "identity"],
+                   check=True)
+
+    res = G.audit(r, timeout=_T)
+    assert res.verdict == "FAIL", res
+    assert any(f["kind"] == "HOST_DEPENDENT_VERDICT"
+               for f in res.findings), res.findings
 
 
 # ==========================================================================
@@ -867,3 +906,75 @@ def test_the_reproduce_step_costs_nothing_when_the_arms_AGREE(tmp_path):
     G.audit(r, timeout=_T)
     assert marker.read_text() == "2", (
         f"an agreeing gate was driven {marker.read_text()} times, not 2")
+
+
+def test_the_outer_checkout_attestation_replaces_the_duplicate_arm_A(tmp_path):
+    """Outer hygiene already ran A; host comparison launches only fresh B."""
+    calls = tmp_path / "calls.txt"
+    r = _repo_with(tmp_path, 'run "agreeable" "$ROOT" python3 agreeable.py\n',
+                   untracked=True)
+    (r / "agreeable.py").write_text(
+        "from pathlib import Path\n"
+        f"p=Path({str(calls)!r})\n"
+        "p.write_text(str(int(p.read_text()) + 1) if p.exists() else '1')\n"
+        "print('[PASS] 1 item examined')\n")
+    subprocess.run(["git", "-C", str(r), "add", "agreeable.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "agreeable"],
+                   check=True)
+    argv = G._expand('python3 agreeable.py', r)
+    record = A.process_attestation(
+        "agreeable", "[PASS] 1 item examined\n", 0, argv, roots=(r,))
+    attestations = tmp_path / "outer.jsonl"
+    A.append_private_jsonl(attestations, record)
+
+    res = G.audit(r, timeout=_T, checkout_attestations=attestations)
+    assert res.verdict == "PASS", res
+    assert calls.read_text() == "1", (
+        "the host probe reran checkout Arm A instead of consuming the exact "
+        "outer process attestation")
+
+
+def test_a_missing_checkout_attestation_is_a_named_refusal(tmp_path):
+    r = _repo_with(tmp_path, 'run "x" "$ROOT" python3 x.py\n',
+                   untracked=True)
+    (r / "x.py").write_text("print('[PASS] 1 item examined')\n")
+    subprocess.run(["git", "-C", str(r), "add", "x.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "x"], check=True)
+    att = tmp_path / "outer.jsonl"
+    A.append_private_jsonl(att, A.process_attestation(
+        "some other gate", "[PASS] 1 item examined\n", 0,
+        ["python3", "other.py"], roots=(r,)))
+
+    res = G.audit(r, timeout=_T, checkout_attestations=att)
+    assert res.verdict == "FAIL", res
+    assert any(f["kind"] == "CHECKOUT_ATTESTATION_MISSING"
+               for f in res.findings), res.findings
+
+
+def test_reused_and_fresh_arms_preserve_the_same_stdout_stderr_order(tmp_path):
+    """The outer ``2>&1 | tee`` stream and fresh arm are one instrument.
+
+    With piped Python output, stderr is unbuffered while stdout flushes at
+    exit.  Capturing them separately and concatenating stdout first reverses
+    the observed order and manufactures a one-round disagreement.
+    """
+    r = _repo_with(tmp_path, 'run "mixed" "$ROOT" python3 mixed.py\n',
+                   untracked=True)
+    (r / "mixed.py").write_text(
+        "import sys\n"
+        "print('[PASS] 1 item examined')\n"
+        "print('diagnostic on stderr', file=sys.stderr)\n")
+    subprocess.run(["git", "-C", str(r), "add", "mixed.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "mixed"],
+                   check=True)
+    argv = G._expand("python3 mixed.py", r)
+    proc = subprocess.run(
+        argv, cwd=r, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, check=False)
+    att = tmp_path / "outer.jsonl"
+    A.append_private_jsonl(att, A.process_attestation(
+        "mixed", proc.stdout, proc.returncode, argv, roots=(r,)))
+
+    res = G.audit(r, timeout=_T, checkout_attestations=att)
+    assert res.verdict == "PASS", res
+    assert not res.findings, res.findings
