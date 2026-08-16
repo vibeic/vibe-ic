@@ -237,8 +237,27 @@ def _default_index_writer(repo: Path) -> List[str]:
     return [str(INDEX.relative_to(repo))]
 
 
-def _default_census_writer(repo: Path) -> Tuple[List[str], Optional[str]]:
+def _default_census_writer(repo: Path,
+                           timeout_s: float = CENSUS_TIMEOUT_S,
+                           ) -> Tuple[List[str], Optional[str]]:
     """Re-derive the 63x8 census. Returns ``(paths written, reason it failed)``.
+
+    `timeout_s` exists because THE BOUND MUST BE ABLE TO FIRE WHERE THE CODE RUNS,
+    and this function has two callers with wall clocks an order of magnitude apart:
+
+      * `tools/gatekeeper-land.sh` — no outer clock, ~90 min gate, `CENSUS_TIMEOUT_S`
+        (600 s) is right and is sized from real runs (vibe-ic#1382: 102 s, ~250 s, 255 s).
+      * `programs/tests/test_issue1129_gatekeeper_prepare_landing.py` — driven under
+        `pytest --timeout=180`, so a 600 s bound CAN NEVER FIRE FIRST. The harness clock
+        wins every time, and with `--timeout-method=thread` pytest cannot unwind the
+        stuck thread, so it aborts the WHOLE SESSION. Measured on `ee849c19e`: the full
+        suite died at 27%, printed no `short test summary`, and left ZERO `FAILED`
+        lines — a reader grepping `^FAILED` gets 0 and reads an aborted run as a clean
+        one. One slow module cost the verdict for every module behind it.
+
+    Lowering `CENSUS_TIMEOUT_S` itself would be the wrong repair: it would guarantee the
+    production step can never succeed, which the constant's own comment warns about. The
+    bound is not wrong — it was being applied where a smaller one had to win.
 
     A REASON, not an exception, because this step is best-effort by design —
     see the module docstring. Both halves of the pair are meaningful at once:
@@ -261,7 +280,7 @@ def _default_census_writer(repo: Path) -> Tuple[List[str], Optional[str]]:
             start_new_session=True)
         timed_out = False
         try:
-            stdout, stderr = proc.communicate(timeout=CENSUS_TIMEOUT_S)
+            stdout, stderr = proc.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
             timed_out = True
             # Kill the WHOLE writer group, not only its Python parent.  The
@@ -306,7 +325,7 @@ def _default_census_writer(repo: Path) -> Tuple[List[str], Optional[str]]:
             for rel in sorted(set(dirty_paths(repo)) - before):
                 rc, _out = _git(repo, "checkout", "--", rel)
                 (undone if rc == 0 else failed).append(rel)
-            reason = f"the generator did not finish within {CENSUS_TIMEOUT_S}s"
+            reason = f"the generator did not finish within {timeout_s}s"
             if undone:
                 reason += f"; reverted {len(undone)} partial write(s)"
             if failed:
@@ -354,6 +373,7 @@ def _default_version_writer(repo: Path, plugin: Path,
 
 def prepare(repo: Path, *, do_commit: bool,
             index_writer=None, version_writer=None, census_writer=None,
+            census_timeout_s: Optional[float] = None,
             plugin_root: Optional[Path] = None) -> Tuple[int, List[str], List[str]]:
     """Run every mechanical fixer. Returns (rc, notes, declared_paths).
 
@@ -420,7 +440,15 @@ def prepare(repo: Path, *, do_commit: bool,
     # about. Whatever it wrote before dying is still declared, so the boundary
     # below judges it exactly as it judges a clean run.
     try:
-        wrote_c, census_why = (census_writer or _default_census_writer)(repo)
+        # `census_timeout_s` reaches ONLY the default writer. An injected stand-in
+        # keeps its own signature — narrowing the seam to fit a knob the caller may
+        # not know about would break every existing injection site.
+        if census_writer is not None:
+            wrote_c, census_why = census_writer(repo)
+        elif census_timeout_s is None:
+            wrote_c, census_why = _default_census_writer(repo)
+        else:
+            wrote_c, census_why = _default_census_writer(repo, census_timeout_s)
     except Exception as exc:                                 # noqa: BLE001
         wrote_c, census_why = [], f"{type(exc).__name__}: {exc}"
     declared |= set(wrote_c)
