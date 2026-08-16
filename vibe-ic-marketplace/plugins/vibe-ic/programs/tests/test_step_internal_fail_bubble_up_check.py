@@ -9,6 +9,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "programs"))
 
 import step_internal_fail_bubble_up_check as g  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 
 def _proj(tmp_path: Path) -> Path:
@@ -366,14 +367,28 @@ def test_growth_is_still_told_apart_from_a_paid_debt(tmp_path):
 
 
 def _shipped_population():
+    """(program, cwd, the recorded population, the directory that population names).
+
+    THE POPULATION IS STILL THE RECORDED ONE; only its ROOT can move. The register
+    spells its population relative to the repository (`benchmark-data/ic`), but the
+    published run trees themselves now live in vibeic/benchmark-data. When a caller
+    names a clone through `VIBE_IC_BENCHMARK_DATA` the population is the SAME
+    sub-path of THAT root — so the sweep grades the corpus the caller named rather
+    than an in-repo remnant that no longer carries a single `reports/` tree.
+    """
     prog = Path(__file__).resolve().parents[1] / "step_internal_fail_bubble_up_check.py"
     repo = prog.resolve().parents[4]
     bl = json.loads(
         (prog.parent / "step_internal_fail_bubble_up_baseline.json")
         .read_text(encoding="utf-8"))
-    return prog, repo, bl["corpus_population"]
+    pop = bl["corpus_population"]
+    root = corpus_root()
+    corpus = (root / Path(pop).relative_to("benchmark-data") if root is not None
+              else repo / pop)
+    return prog, repo, pop, corpus
 
 
+@needs_corpus
 def test_the_shipped_register_agrees_with_the_shipped_corpus():
     """The register and the tree must agree on THIS commit, not on whichever
     day somebody last ran it by hand. Without this, #1025 recurs in silence.
@@ -387,13 +402,14 @@ def test_the_shipped_register_agrees_with_the_shipped_corpus():
     recorded root is the CI root, so this is the gate's own population.
     """
     import subprocess
-    prog, repo, pop = _shipped_population()
+    prog, repo, pop, corpus = _shipped_population()
     r = subprocess.run(
-        [sys.executable, str(prog), "--corpus", str(repo / pop)],
+        [sys.executable, str(prog), "--corpus", str(corpus)],
         capture_output=True, text=True, timeout=_BOUND_S, cwd=str(repo))
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@needs_corpus
 def test_a_sweep_of_a_DIFFERENT_root_is_refused_not_answered():
     """THE PAIRED GUARD for the test above (vibe-ic#1223).
 
@@ -406,9 +422,9 @@ def test_a_sweep_of_a_DIFFERENT_root_is_refused_not_answered():
     rc 2, never 0 and never 1.
     """
     import subprocess
-    prog, repo, pop = _shipped_population()
-    other = (repo / pop).parent
-    assert other != repo / pop and other.is_dir(), other
+    prog, repo, pop, corpus = _shipped_population()
+    other = corpus.parent
+    assert other != corpus and other.is_dir(), other
     r = subprocess.run(
         [sys.executable, str(prog), "--corpus", str(other)],
         capture_output=True, text=True, timeout=_BOUND_S, cwd=str(repo))

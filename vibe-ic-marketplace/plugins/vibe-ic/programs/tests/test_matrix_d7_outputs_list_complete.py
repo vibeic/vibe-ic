@@ -199,6 +199,20 @@ from matrix_63x8 import flowref as F
 from matrix_63x8 import waivers
 from matrix_63x8.cells import cells_for
 
+# WHERE W2's OBSERVED PRODUCER ORACLE WENT.
+#
+# `matrix_d7_write_record` binds W2 to the `reports/write_ledger.json` a run
+# left behind, and every root that carries one — `RECORD_BOUND_ROOTS` below —
+# is a PUBLISHED CELL. Those moved to https://github.com/vibeic/benchmark-data,
+# so in this checkout `R.record_roots()` is empty, W2 degrades to the AST alone,
+# and the findings that only the OBSERVED half could see disappear. A waived
+# cell whose finding disappears XPASSes, and a strict xfail turns that into
+# "the waiver is stale — remove it". It is not stale; the evidence for it was
+# not readable. A check that cannot measure must never report that it measured,
+# so those cells SKIP naming the corpus (vibe-ic#1357's rule for an absent tool,
+# applied to an absent corpus) and run untouched wherever the corpus is present.
+from _published_corpus import SKIP_REASON, corpus_root, needs_corpus  # noqa: E402
+
 DIM = 7
 
 #: Number of entries in ``matrix_d7_artifact_graph.RESOLUTION_LIMITS``, pinned
@@ -331,6 +345,16 @@ def test_d7_required_outputs_list_is_complete(cell, record_property):
     )
 
     findings = G.findings_for(sid)
+    # A WAIVED cell with nothing to show, on a tree where W2's OBSERVED half
+    # observed nothing and there is no corpus to read it from, is UNMEASURABLE
+    # rather than healed: the finding its waiver names may be exactly one of the
+    # record-promoted ones that vanished with the published cells. Reporting the
+    # strict-xfail XPASS would tell an author to delete a waiver on the strength
+    # of evidence nobody read. All four conditions are required, so a cell that
+    # genuinely healed still XPASSes wherever the record binding is alive.
+    if (not findings and _waiver_for(sid) is not None
+            and not R.observed_writes() and corpus_root() is None):
+        pytest.skip(SKIP_REASON)
     assert not findings, _describe(sid, findings)
 
 
@@ -1172,6 +1196,14 @@ def test_waivers_meet_the_registry_standard():
         for w in dim_waivers()
         if not G.findings_for(w.step_id) and G.na_precondition(w.step_id) is None
     ]
+    # Same unmeasurable state as the cell test above, reached from the registry
+    # side: with W2's OBSERVED half empty and no corpus to read it from, a
+    # record-promoted finding is invisible and its waiver looks like dead
+    # weight. "Remove them" would be advice founded on evidence nobody read.
+    # Everything else in this test has already been asserted by the time this
+    # line is reached; only the LAST claim is the one that cannot be made.
+    if inert and not R.observed_writes() and corpus_root() is None:
+        pytest.skip(SKIP_REASON)
     assert not inert, (
         f"waivers whose step has no findings — remove them: {inert}"
     )
@@ -1769,6 +1801,7 @@ def pin_complaints(pinned, measured, observed, notes):
     return out
 
 
+@needs_corpus
 def test_d7_the_write_record_population_is_named_root_by_root():
     """Backward compatibility, stated rather than assumed.
 

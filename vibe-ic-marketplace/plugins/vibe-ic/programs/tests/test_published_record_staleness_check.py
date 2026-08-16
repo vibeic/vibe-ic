@@ -59,10 +59,21 @@ import _record_adjudication as _ra         # noqa: E402
 import published_record_staleness_check as P  # noqa: E402
 import si_mcf_sta_check as SI              # noqa: E402
 
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
 _REPO = _PROGRAMS.parents[3]
+#: The CLI's DEFAULT corpus argument — still this path, whatever it holds. Used
+#: only by the read-only control, whose subject is the program, not the cells.
 _CORPUS = _REPO / "benchmark-data"
 _FIXTURES = _PROGRAMS / "tests" / "fixtures" / "si_mcf_zero_coupling"
 _CLI = _PROGRAMS / "published_record_staleness_check.py"
+#: The register the CLI loads when it is given no corpus argument. Naming it
+#: here lets the two published-corpus tests keep the register/corpus PAIRING
+#: when the cells are read from a clone elsewhere — handing the CLI an explicit
+#: corpus root suppresses the default register on purpose (see its comment),
+#: so the pairing has to be restored explicitly or every recorded entry would
+#: look PAID.
+_DEFAULT_REGISTER = _PROGRAMS / P.DEFAULT_BASELINE
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -663,18 +674,29 @@ def test_ignore_baseline_gives_the_raw_answer(tmp_path):
     assert _run(root, "--baseline", str(bl), "--ignore-baseline")[0] == 1
 
 
+@needs_corpus
 def test_the_shipped_register_is_current(tmp_path):
     """Every recorded entry is still stale, and nothing stale is unrecorded.
 
-    Run against the DEFAULT corpus and the DEFAULT register — the pairing the
+    Run against the PUBLISHED corpus and the DEFAULT register — the pairing the
     register describes — so a corrected record or a newly-superseded one shows
     up here rather than in whoever next reads CI.
+
+    The old guard asked whether `<repo>/benchmark-data` was a directory. It
+    still is — it holds the design INPUT — while the result cells moved to
+    vibeic/benchmark-data, so the guard passed and the CLI then answered rc 2
+    (VACUOUS_PASS, 0 records found). That is "I could not look" being reported
+    as a defect in the register.
+
+    When the cells are read from a clone, the register must be named
+    explicitly: handing the CLI a corpus root deliberately suppresses the
+    default register, and without it every recorded entry would read as PAID.
     """
-    if not _CORPUS.is_dir():
-        pytest.skip("no published corpus here")
-    r = subprocess.run([sys.executable, str(_CLI)],
-                       capture_output=True, text=True, timeout=60)
-    assert r.returncode == 0, r.stderr
+    argv = [sys.executable, str(_CLI)]
+    if corpus_root() != _CORPUS:
+        argv += [str(corpus_root()), "--baseline", str(_DEFAULT_REGISTER)]
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 # ── 6. the behavioural pin no fingerprint can give ─────────────────────────
@@ -969,7 +991,7 @@ def test_write_baseline_still_drops_an_entry_that_was_re_adjudicated(tmp_path):
 
 
 # ── 8. the real corpus, which is why this program exists ───────────────────
-@pytest.mark.skipif(not _CORPUS.is_dir(), reason="no published corpus here")
+@needs_corpus
 def test_runs_on_the_real_published_corpus_and_stays_decisive(tmp_path):
     """Structural, so it survives the benchmark-agent correcting the records.
 
@@ -979,7 +1001,8 @@ def test_runs_on_the_real_published_corpus_and_stays_decisive(tmp_path):
     denominator adds up, and that every staleness it reports is reproducible
     from the named record's own fields.
     """
-    rc, rep, _se = _report(_CORPUS, tmp_path)
+    _CELLS = corpus_root()
+    rc, rep, _se = _report(_CELLS, tmp_path)
     assert rc in (0, 1)
     s = rep["summary"]
     assert s["records_found"] > 0
@@ -990,7 +1013,7 @@ def test_runs_on_the_real_published_corpus_and_stays_decisive(tmp_path):
     for f in rep["findings"]:
         if f["kind"] != P.STALE:
             continue
-        rec = json.loads((_CORPUS / f["record"]).read_text())
+        rec = json.loads((_CELLS / f["record"]).read_text())
         assert rec["verdict"] == f["carried_verdict"]
         # The gate-SPECIFIC substance, keyed on which gate declared the rule.
         # This line used to run for EVERY stale record — a si_mcf_sta_check

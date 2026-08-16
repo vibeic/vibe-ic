@@ -484,6 +484,29 @@ from matrix_63x8.cells import cells_for
 
 import _plugin_tree
 
+# WHERE THIS DIMENSION'S EVIDENCE WENT.
+#
+# Every admissible run root this module cites is a PUBLISHED CELL or a run tree
+# that was staged beside one — `benchmark-data/ic/<IC>/v<version>_<PDK>/` and
+# friends. Those moved to https://github.com/vibeic/benchmark-data, so in this
+# checkout `run_roots()` resolves NOTHING and `audit_step` reports every
+# declared artefact as "NOT produced".
+#
+# That report would be a LIE of a specific and expensive kind: it names a defect
+# in the flow ("this step does not produce what it declares") when the truth is
+# that the evidence is in another repository and could not be read. A check that
+# cannot measure must never report that it measured — the same rule vibe-ic#1357
+# fixed for an absent TOOL (skip naming the tool, not a failure about a missing
+# artefact). So: corpus absent -> SKIP naming the corpus; corpus present -> run
+# exactly as before, and still able to fail.
+#
+# NOTE ON THE ENV POINTER. `VIBE_IC_BENCHMARK_DATA` is read here ONLY to answer
+# "is there a corpus at all". It is deliberately NOT wired into `run_roots()`:
+# #527 removed every $HOME search, env override and machine-path manifest from
+# this dimension precisely so a cell's colour could not become a property of the
+# host, and re-introducing one to make cells green again would undo that.
+from _published_corpus import SKIP_REASON, corpus_root, needs_corpus  # noqa: E402
+
 # The flow's OWN glob resolver. Imported, never re-implemented: it carries two
 # non-obvious fallbacks (reports/<category>/<rest> and the canonical analog
 # dir) whose absence would make this module report FALSE NEGATIVES against a
@@ -2037,6 +2060,16 @@ def test_d3_required_outputs_are_produced(cell):
         return
 
     # ---- ENFORCED / WAIVED: the real predicate ----------------------
+    # ...but only where there is something to read it against. With no
+    # admissible run root AND no published corpus to point at, `audit_step`
+    # cannot look at a single byte, and reporting "N required_outputs are NOT
+    # produced" would charge the flow with a defect this tree has no evidence
+    # for. The two conditions are BOTH required on purpose: a discovery bug that
+    # emptied `run_roots()` while the corpus IS present must still redden here,
+    # and `test_d3_run_root_discovery_is_live` is the test that says so.
+    if not run_roots() and corpus_root() is None:
+        pytest.skip(SKIP_REASON)
+
     missing, details = audit_step(sid)
     assert not missing, (
         f"step {sid} ({F.step_name(sid)}) declares {len(F.required_outputs(sid))} "
@@ -2061,6 +2094,7 @@ def test_d3_manifest_covers_exactly_the_flow_steps():
     assert len(cells_for(DIM)) == len(live) == 63
 
 
+@needs_corpus
 def test_d3_run_root_discovery_is_live():
     """Discovery must actually find the in-repo evidence trees.
 
@@ -2118,6 +2152,7 @@ def test_d3_every_admissible_run_root_is_a_real_flow_run():
     )
 
 
+@needs_corpus
 def test_d3_waived_steps_still_produce_their_unwaived_entries():
     """A waived cell xfails whatever the reason; this keeps the rest honest.
 
@@ -2403,6 +2438,7 @@ def test_d3_cell_states_partition_all_63_steps():
     )
 
 
+@needs_corpus
 def test_d3_evidence_is_live_wherever_the_run_root_exists():
     """No entry may read FIXTURE while its run root IS present.
 
@@ -2838,6 +2874,7 @@ def test_d3_a8_producer_is_reachable_from_a_flow_path():
 # the host-dependence the published artefact makes unnecessary.
 
 
+@needs_corpus
 def test_d3_the_compliance_audit_does_not_create_declared_outputs():
     """THE SELF-CERTIFICATION GUARD. An audit must not write its own evidence.
 
@@ -2951,6 +2988,7 @@ def test_d3_m1_merge_inputs_are_absent_from_every_run_root():
         f"{ {k: v.get('reason') for k, v in verdicts.items()} })")
 
 
+@needs_corpus
 def test_d3_zero_byte_artefacts_are_not_counted_as_produced():
     """The rule that makes this dimension mean anything, exercised directly.
 
@@ -3429,6 +3467,7 @@ UNEVIDENCED_CELLS: Tuple[str, ...] = (
 )
 
 
+@needs_corpus
 def test_d3_unevidenced_cells_are_named_cell_by_cell():
     """Name the cells this dimension cannot answer, and pin the population.
 
@@ -3571,6 +3610,7 @@ def unevidenced_closing_cost() -> Tuple[int, Tuple[Tuple[str, str, int], ...]]:
     return total, tuple(rows)
 
 
+@needs_corpus
 def test_d3_the_cost_of_closing_the_unevidenced_class_is_measured():
     """vibe-ic#1457 — the stated reason this class stays red is a NUMBER.
 
@@ -3750,6 +3790,7 @@ UNEVIDENCED_OUTSIDE_THE_PUBLISH_CONTRACT: Tuple[Tuple[str, str], ...] = (
 )
 
 
+@needs_corpus
 def test_d3_the_run_tree_remedy_is_withdrawn_where_the_publisher_cannot_stage_it():
     """vibe-ic#1349 — do not offer a publish that cannot carry the artefact.
 
@@ -3925,6 +3966,7 @@ UNEVIDENCED_WITHOUT_A_NAMED_PRODUCER: Tuple[Tuple[str, str], ...] = (
 )
 
 
+@needs_corpus
 def test_d3_the_unevidenced_population_is_split_by_which_gap_it_has():
     """Pin WHICH unevidenced entries have no producer, in both directions.
 
@@ -4737,6 +4779,7 @@ def _staged_root_with_a_real_ledger(src: Path, probe: Path, commit) -> Ledger:
     return led
 
 
+@needs_corpus
 def test_d3_the_ledger_binding_is_exercised_by_the_repos_own_evidence():
     """The binding runs on THIS REPOSITORY's trees, not only on a probe.
 
@@ -4841,6 +4884,7 @@ def test_d3_the_ledger_binding_is_exercised_by_the_repos_own_evidence():
         + "\n  ".join(changed[:20]))
 
 
+@needs_corpus
 def test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit():
     """WHY the ledger above is derived and never committed — measured.
 
@@ -5111,6 +5155,7 @@ def _blind_capture_reason(label: str, doc) -> str:
             f"none, because this dimension trusts it")
 
 
+@needs_corpus
 def test_d3_no_committed_ledger_was_captured_from_a_checkout():
     """A ledger walked over a git checkout attributes nothing — refuse it.
 

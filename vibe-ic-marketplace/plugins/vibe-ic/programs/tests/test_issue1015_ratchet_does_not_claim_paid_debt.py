@@ -40,6 +40,8 @@ from pathlib import Path
 
 import pytest
 
+from _published_corpus import corpus_root, needs_corpus
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 CHECK = PROGRAMS / "step_internal_fail_bubble_up_check.py"
 BASELINE = PROGRAMS / "step_internal_fail_bubble_up_baseline.json"
@@ -60,8 +62,30 @@ REPO_ROOT = PROGRAMS.parents[3]
 # A test that measured one while the gate ratchets the other would be grading a
 # population the gate never looks at, which is the whole failure class #1015 is
 # about. So the baseline names its own population and this reads it back.
-CORPUS = REPO_ROOT / json.loads(
+_POPULATION = json.loads(
     BASELINE.read_text(encoding="utf-8"))["corpus_population"]
+
+# ...AND WHERE THAT POPULATION NOW LIVES. `corpus_population` is spelled
+# relative to the REPOSITORY (`benchmark-data/ic`) because the published cells
+# used to be here. They are in vibeic/benchmark-data now, and a clone of THAT
+# repository IS the `benchmark-data` directory — so the identical population is
+# `ic` inside it. Only the LEADING component moves; the population itself is
+# still the one the record names, which is the invariant #1223 is about.
+#
+# The in-repo spelling stays the fallback so the module still imports where
+# there is no corpus at all; every predicate that actually READS the corpus is
+# `@needs_corpus` and skips there rather than measuring an empty tree.
+def _population_under(root: Path) -> Path:
+    p = Path(_POPULATION)
+    try:
+        return root / p.relative_to("benchmark-data")
+    except ValueError:                      # a population named some other way
+        return root / p
+
+
+_CORPUS_ROOT = corpus_root()
+CORPUS = (_population_under(_CORPUS_ROOT) if _CORPUS_ROOT is not None
+          else REPO_ROOT / _POPULATION)
 
 
 def _load():
@@ -126,6 +150,7 @@ def _live() -> dict:
     return m.check_corpus(CORPUS)
 
 
+@needs_corpus
 def test_the_baseline_cites_no_run_tree_that_is_gone():
     """A citation that outlives its cell.
 
@@ -152,6 +177,7 @@ def test_the_baseline_cites_no_run_tree_that_is_gone():
         f"--write-baseline`.")
 
 
+@needs_corpus
 def test_the_baseline_does_not_claim_debt_that_is_paid():
     """The recorded total must equal the live one.
 
@@ -175,6 +201,7 @@ def test_the_baseline_does_not_claim_debt_that_is_paid():
            "baseline to accommodate it."))
 
 
+@needs_corpus
 def test_the_denominator_is_recorded_too_not_just_the_numerator():
     """`findings_total` alone cannot tell "the failures were fixed" from "the
     runs carrying them were withdrawn". The swept/with-reports counts are what
@@ -187,6 +214,7 @@ def test_the_denominator_is_recorded_too_not_just_the_numerator():
         f"population moved and the record did not follow it.")
 
 
+@needs_corpus
 def test_a_zero_population_is_refused_rather_than_recorded_as_clean():
     """The anti-starvation guard, and it is not hypothetical: #1025 is exactly
     this checker returning VACUOUS_PASS over zero published run trees. If the

@@ -86,6 +86,36 @@ import matrix_mutation_ledger as L
 from matrix_63x8 import flowref as F
 from matrix_63x8.cells import DIMENSION_NAMES
 
+# THE ONE CHANNEL WHOSE SUBJECT LEFT THIS REPOSITORY.
+#
+# `L.MUTATIONS` edits the flow yaml or the plugin tree — both are here, and
+# nothing below about them changes. `L.ARTEFACT_MUTATIONS` edits a number inside
+# a PUBLISHED REPORT, and every one of its entries names the published run
+# `ic/spm/v1.10.18_sky130A`, which now lives in
+# https://github.com/vibeic/benchmark-data. In this checkout those eight entries
+# cannot resolve, cannot replay, and cannot be spoken about at all.
+#
+# The rule this repository already applies to an absent TOOL (vibe-ic#1357)
+# applies to an absent CORPUS: a check that cannot measure must never report
+# that it measured. Where an assertion below mixes the channels, the artefact
+# half is set aside ONLY when there is no corpus to read — the aggregate is
+# byte-for-byte what it was wherever `VIBE_IC_BENCHMARK_DATA` points at a clone,
+# and the artefact channel's own LOCK 1 / LOCK 2 live in
+# `test_matrix_artefact_mutation_channel.py`, corpus-gated there.
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
+
+
+def _artefact_names_when_unreadable() -> frozenset:
+    """Entry names this checkout cannot speak about: empty wherever it can.
+
+    Returns the ARTEFACT_MUTATION names only while the published corpus is
+    absent. With a corpus present this is empty, so every caller's aggregate is
+    exactly the one it was before — including its ability to FAIL.
+    """
+    if corpus_root() is not None:
+        return frozenset()
+    return frozenset(m.name for m in L.ARTEFACT_MUTATIONS)
+
 TESTS_DIR = Path(__file__).resolve().parent
 DIMENSION_MODULE_GLOB = "test_matrix_d[1-8]_*.py"
 
@@ -561,7 +591,14 @@ def test_reverse_case_reordering_the_flow_does_not_trip_the_gate(tmp_path):
     A gate that fires on any yaml edit is not a coverage gate, it is a diff
     alarm. The dimension-5 waiver closures landed by moving A6, DT2 and DT3 in
     the declaration order; that class of change must not cost anyone a red here.
+
+    ORDER is what this measures, so the eight ARTEFACT entries are set aside
+    where their published run is not in the checkout (see
+    ``_artefact_names_when_unreadable``): they are unresolvable for a reason the
+    reordering did not cause, and letting them redden this test would blame the
+    yaml for a corpus that moved. With a corpus present nothing is set aside.
     """
+    deaf = _artefact_names_when_unreadable()
     doc = copy.deepcopy(L.load_flow())
     steps = doc["steps"]
     steps.insert(0, steps.pop())            # last step declared first
@@ -574,9 +611,11 @@ def test_reverse_case_reordering_the_flow_does_not_trip_the_gate(tmp_path):
     os.environ[L.FLOW_YAML_ENV] = str(shuffled)
     try:
         rep = L.census(cell_states())
-        assert not L.unresolved(), (
-            f"reordering the flow made {len(L.unresolved())} recorded edit "
-            f"site(s) unresolvable; LOCK 1 must key off step ids, not order")
+        bad = [u for u in L.unresolved() if u[0] not in deaf]
+        assert not bad, (
+            f"reordering the flow made {len(bad)} recorded edit "
+            f"site(s) unresolvable; LOCK 1 must key off step ids, not order:\n"
+            f"  - " + "\n  - ".join(f"{n} @ step {s}: {p}" for n, s, p in bad))
     finally:
         if old is None:
             os.environ.pop(L.FLOW_YAML_ENV, None)
@@ -618,8 +657,18 @@ def test_lock1_every_recorded_edit_site_still_exists():
     anti-rot half: a refactor that moves the ``_STRUCTURAL_RTL_GATES`` literal
     or drops a step's ``files_exist`` key makes the recorded edit unreproducible
     and says so, instead of leaving a stale proof in place.
+
+    ``L.unresolved()`` spans all three channels. The eight ARTEFACT entries in
+    it resolve against a PUBLISHED RUN, so where the corpus is not in the
+    checkout they are set aside here and asserted — unchanged, at full strength —
+    by ``test_matrix_artefact_mutation_channel.py::
+    test_lock1_the_entry_resolves_against_the_live_tree``, which skips naming the
+    corpus in exactly the same condition. The 691 yaml/tree pairs are still
+    re-resolved on every run, and with a corpus present this line is the one that
+    was here before.
     """
-    bad = L.unresolved()
+    deaf = _artefact_names_when_unreadable()
+    bad = [u for u in L.unresolved() if u[0] not in deaf]
     pairs = sum(len(m.applies_to) for m in L.MUTATIONS)
     assert pairs > 0
     assert not bad, (
@@ -822,7 +871,27 @@ def replay_results() -> Tuple[L.ReplayResult, ...]:
     return L.replay_many(plan, jobs=8, timeout=REPLAY_TIMEOUT)
 
 
-@pytest.mark.parametrize("name", [m.name for m in L.MUTATIONS])
+def _lock2_params():
+    """One param per entry, corpus-gated for the ones whose WITNESS needs it.
+
+    A replay proves nothing unless the witness cell it re-runs can reach a
+    verdict. Dimension 3's cell test is answered out of the published corpus —
+    ``test_matrix_d3_outputs_produced`` skips naming the corpus where there is
+    none — so a dimension-3 entry replayed here would watch a SKIP before the
+    edit and a SKIP after it and conclude the recorded proof no longer holds.
+    That is a statement about the corpus, not about the ledger, so those entries
+    skip for the corpus's own reason instead. Every other entry's witness is
+    answered from the flow yaml and the plugin tree, both of which are here, and
+    is left exactly as it was.
+    """
+    out = []
+    for m in L.MUTATIONS:
+        marks = [needs_corpus] if m.dim == 3 else []
+        out.append(pytest.param(m.name, marks=marks))
+    return out
+
+
+@pytest.mark.parametrize("name", _lock2_params())
 def test_lock2_the_mutation_really_reddens_its_witness(name):
     """LOCK 2: perform the edit for real and watch the cell go PASS -> FAIL.
 
@@ -867,6 +936,7 @@ def test_lock2_the_mutation_really_reddens_its_witness(name):
         f"reason; fix the reds under it or the entry is carrying no proof.")
 
 
+@needs_corpus
 def test_the_replay_actually_ran_and_is_not_starved(record_property):
     """Anti-starvation guard on LOCK 2's own instrument.
 
@@ -874,6 +944,14 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
     because its input had been emptied. A replay plan that silently produced
     zero pairs would make every assertion above vacuously true, so the plan's
     size is compared against the ledger and reported.
+
+    CORPUS-GATED as a WHOLE, unlike LOCK 1 above, because there is nothing here
+    to set aside: this is an AGGREGATE over ``L.replay_plan()``, whose expected
+    size counts ``len(L.ARTEFACT_MUTATIONS)`` and whose UNMEASURABLE ratchet is
+    a proportion of it. Eight of its members name a published run this checkout
+    does not have, so the denominator itself is unreadable and every figure
+    computed from it would be about a plan that could not be executed. Point
+    ``VIBE_IC_BENCHMARK_DATA`` at a clone and it runs, ratchet and all.
     """
     results = replay_results()
     plan = L.replay_plan()

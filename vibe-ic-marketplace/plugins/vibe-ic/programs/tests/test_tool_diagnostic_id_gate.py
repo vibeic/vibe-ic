@@ -21,6 +21,7 @@ GATE = PLUGIN_ROOT / "programs" / "tool_diagnostic_id_gate.py"
 
 sys.path.insert(0, str(PLUGIN_ROOT / "programs"))
 import tool_diagnostic_id_gate as G  # noqa: E402
+from _published_corpus import corpus_root, needs_corpus  # noqa: E402
 
 TODAY = date(2026, 8, 12)
 
@@ -326,7 +327,16 @@ def test_the_census_shape_folds_into_per_step_metrics(tmp_path):
 # each claim is re-derived here and a drift is a RED, not a stale sentence.
 # ===========================================================================
 REPO_ROOT = PLUGIN_ROOT.parents[2]
-BD_IC = REPO_ROOT / "benchmark-data" / "ic"
+
+# The published cells moved to vibeic/benchmark-data. `benchmark-data/ic/` still
+# exists here — it holds the design INPUT — so its mere presence no longer proves
+# a cell is readable, which is why the `BD_IC.is_dir()` guards below are no longer
+# sufficient on their own and each corpus test also carries `@needs_corpus`. An
+# explicit `VIBE_IC_BENCHMARK_DATA` pointer names the tree to grade; without one
+# the in-repo path stays the answer, so a checkout that still carries cells is
+# graded exactly as before.
+_CORPUS = corpus_root()
+BD_IC = (_CORPUS if _CORPUS is not None else REPO_ROOT / "benchmark-data") / "ic"
 
 
 def _published_cells():
@@ -338,6 +348,7 @@ def _published_cells():
                   if c.is_dir() and G._cell_ordinal(c.name) is not None)
 
 
+@needs_corpus
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
 def test_the_prefix_coverage_claim_is_re_derived():
     """The COVERAGE claim, recomputed from the tree.
@@ -376,6 +387,7 @@ def test_the_prefix_coverage_claim_is_re_derived():
         "tree that has since moved")
 
 
+@needs_corpus
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
 def test_the_corpus_pair_resolves_and_the_gate_fires():
     """THE REPLACEMENT for a test that was meant to die, and did.
@@ -695,6 +707,7 @@ def _comparable_pairs():
             if G.find_previous(c) is not None]
 
 
+@needs_corpus
 @pytest.mark.skipif(not BD_IC.is_dir(), reason="no benchmark-data/ic in tree")
 def test_the_acceptance_records_REACHABILITY_claim_is_measured():
     """BOTH DIRECTIONS, so neither state is reachable by editing prose.
