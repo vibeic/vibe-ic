@@ -87,6 +87,13 @@ class TestZeroDenominatorRefusesRatherThanPasses:
     read 53/63 and every one of the extra 22 would be a cell that never ran.
     """
 
+    # CAMPAIGN TIER, and here it is also a repair. Both items in this class read
+    # `benchmark-data/evaluation/d9_flow_gate_reality/d9_reality.json`, which
+    # left this repository in c5d7f2d00. `tools/gatekeeper-land.sh`'s repo-tools
+    # arm discovers this file by an UNCONDITIONAL `find tools/`, so on a clean
+    # checkout the whole arm was rc=1 and no landing could be stamped. Declared,
+    # with subject and owner, in `programs/landing_excluded_corpus.py`.
+    @pytest.mark.campaign_tier
     def test_zero_denominator_steps_are_dark_with_that_cause(self):
         report = json.loads(
             (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
@@ -99,6 +106,7 @@ class TestZeroDenominatorRefusesRatherThanPasses:
             assert row["cause"] == "DENOMINATOR", (
                 f'{row["step"]}: zero denominator blamed on {row["cause"]}')
 
+    @pytest.mark.campaign_tier
     def test_no_cell_claims_to_have_moved_on_more_runs_than_it_probed(self):
         report = json.loads(
             (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
@@ -118,6 +126,10 @@ class TestThePageMayNotSoftenTheSentence:
             "This gate certifies CONSISTENCY AND ATTRIBUTION, "
             "never CORRECTNESS.")
 
+    # NOTE the split inside this class: `test_the_certification_sentence_is_verbatim`
+    # above reads ONE module constant and is a genuine landing regression — it
+    # stays. The three below render the published block from the absent report.
+    @pytest.mark.campaign_tier
     def test_the_rendered_block_carries_it_and_both_belief_lists(self):
         report = json.loads(
             (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
@@ -128,6 +140,7 @@ class TestThePageMayNotSoftenTheSentence:
         assert "foundry deck would sign it off" in block
         assert "silicon works" in block
 
+    @pytest.mark.campaign_tier
     def test_every_dark_cell_is_rendered_as_dark_with_a_named_cause(self):
         report = json.loads(
             (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
@@ -141,6 +154,7 @@ class TestThePageMayNotSoftenTheSentence:
                     f'{row["step"]}: cause {row["cause"]} has no rendering, so '
                     "the page would show a dark cell with no reason")
 
+    @pytest.mark.campaign_tier
     def test_the_block_does_not_claim_d9_is_shipped(self):
         report = json.loads(
             (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
@@ -170,6 +184,7 @@ class TestNoMeasuredNumberInTheBlockIsHandTyped:
             (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
              / "d9_reality.json").read_text())
 
+    @pytest.mark.campaign_tier
     @pytest.mark.parametrize(
         "field", ["on_disk", "all_py_in_programs", "referenced_by_flow"])
     def test_moving_the_measurement_moves_every_copy_in_the_block(self, field):
@@ -194,6 +209,7 @@ class TestDriftIsDetected:
     hand-typed total the page's masthead warns about.
     """
 
+    @pytest.mark.campaign_tier
     def test_check_fails_when_the_page_block_no_longer_matches(self, tmp_path):
         reality = (REPO / "benchmark-data" / "evaluation"
                    / "d9_flow_gate_reality" / "d9_reality.json")

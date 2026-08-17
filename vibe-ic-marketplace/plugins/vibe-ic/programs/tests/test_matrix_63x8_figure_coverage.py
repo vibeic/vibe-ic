@@ -209,6 +209,14 @@ def test_an_empty_corpus_is_not_a_pass(tmp_path):
 
 
 # ------------------------------------------------------ 5. THE REAL CORPUS --
+# CAMPAIGN TIER. Everything above this line drives the generator CLI over a
+# one-document corpus built in `tmp_path` — those are generator regressions and
+# they stay in the landing gate. The two below (and the block contract at the
+# end of the file) take the COMMITTED corpus as their population, so what they
+# answer is "is the published prose still true", which is the campaign's
+# question. Declared, with subject and owner, in
+# `programs/landing_excluded_corpus.py`; run by `tools/run_campaign_tier.sh`.
+@pytest.mark.campaign_tier
 def test_every_anchored_figure_in_the_committed_corpus_is_fresh():
     """#961, asserted against the tree instead of a fixture."""
     gen = _load_generator()
@@ -224,6 +232,7 @@ def test_every_anchored_figure_in_the_committed_corpus_is_fresh():
         "all, so this test passed without comparing a single number.")
 
 
+@pytest.mark.campaign_tier
 def test_the_five_figures_the_issue_named_are_anchored_and_live():
     """Named by BINDING, not by line number, so the test survives an edit.
 
@@ -291,6 +300,7 @@ def test_fix_figures_repairs_the_prose_and_is_idempotent(tmp_path):
 
 
 # --------------------------------------------- 8. PAIRED GUARD: the block --
+@pytest.mark.campaign_tier
 def test_the_generated_census_block_is_guarded_exactly_as_before():
     """The block contract must survive the change that reaches outside it.
 

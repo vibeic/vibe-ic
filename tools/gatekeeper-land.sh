@@ -348,8 +348,38 @@ run "write-guard baseline" \
 # unmeasurable. A landing gate that cannot answer for a wide PR is a landing gate
 # nobody uses.
 run_pytest() {
-  local sel out rc
+  local sel out rc deselect
   TARGETED_NORECORD=0
+  # ── WHAT THIS ARM DELIBERATELY DOES NOT RUN, AND WHY (2026-08-17) ──
+  #
+  # Owner directive: a landing must not run the 63x9 campaign's material. The
+  # 63x9 FLOW gates fire when the flow runs and are not this script's business;
+  # the LANDING gate answers "does this change break something that used to
+  # work". A third thing had grown here and is neither — a MATRIX SELF-AUDIT,
+  # e.g. "is the published headline figure in `matrix_63x8/README.md` still
+  # consistent with what the live suite counts". A stale published figure
+  # breaks nothing.
+  #
+  # THE EXPRESSION IS NOT WRITTEN HERE. `landing_excluded_corpus.py` owns the
+  # marker name AND the per-node record — reason, subject, owner — and its
+  # `--audit` (blocking, in `repo_hygiene_gates.sh`) fails BOTH when a declared
+  # node has lost the marker and when a marked node is undeclared. A literal
+  # `-m 'not …'` typed into this file would be a second copy of that name, and
+  # the way it drifts is the one this repo keeps paying for: it deselects
+  # nothing and still prints PASS.
+  #
+  # A REFUSAL, NOT A DEFAULT. If the registry cannot answer, this arm stops. An
+  # unfiltered run would be the SAFE direction for coverage and the wrong one
+  # for a reader, who would see a green landing that ran a different suite from
+  # the one this file claims.
+  if ! deselect="$( python3 "$PROGRAMS/landing_excluded_corpus.py" --marker-expr )"; then
+    echo "  FAIL  the landing exclusion registry did not answer, so what this"
+    echo "        arm runs is undeclared. That is never a pass."
+    FAILED=1; return
+  fi
+  printf '        targeted arm deselects: -m %s\n' "'$deselect'"
+  python3 "$PROGRAMS/landing_excluded_corpus.py" --brief \
+      vibe-ic-marketplace/ 2>&1 | sed 's/^/          /'
   # PREFLIGHT (vibe-ic#1446): the scratch root this pytest will use is part of
   # its verdict. A root inside a git work tree makes 46 tests report failures
   # that are the ROOT, not the tree — and each names its own subject rather
@@ -472,7 +502,8 @@ run_pytest() {
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
         -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
-        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
+        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread \
+        -m "$deselect" 2>&1 )"; then
     rc=0
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
@@ -557,8 +588,41 @@ fi
 # (census / tranche baseline / skip-routing ratchet) that goes stale the moment
 # a file is added, and it would go stale silently and in the safe-looking
 # direction: fewer files still reports PASS.
+# ── WHAT THIS ARM DELIBERATELY DOES NOT RUN (2026-08-17) ───────────────────
+#
+# DISCOVERY IS UNCHANGED and stays a bare `find`: the note above is right that a
+# roster goes stale silently and in the direction that still prints PASS. What
+# is subtracted is subtracted BY NAME, one pytest node at a time, from
+# `landing_excluded_corpus.py` — which carries each node's reason, the published
+# artefact it audits, and what runs it now (`tools/run_campaign_tier.sh`).
+#
+# WHAT IT REMOVES, and this is a repair rather than a saving: nine tests in the
+# D9 flow-gate-reality file open
+# `benchmark-data/evaluation/d9_flow_gate_reality/d9_reality.json`, which left
+# this repository in c5d7f2d00. MEASURED on a clean detached origin/main at
+# f6b0e77dd: 9 failed / 650 passed in 40.6 s, every failure a FileNotFoundError
+# on that path. This arm is UNCONDITIONAL, so the landing gate was rc=1 and
+# wrote no stamp on any checkout that did not happen to carry a leftover
+# untracked `benchmark-data/`. Those nine tests are NOT deleted; they audit an
+# artefact set that has already left this repo and they run beside it.
+#
+# (The paths are named here, ABOVE the function, and never inside it:
+# `tools/ci/test_repo_tools_tests_gate.py::test_discovery_is_not_hardcoded`
+# refuses a literal test path in the function body, and it is right to — that is
+# what a roster looks like when it starts.)
+#
+# THREE THINGS ARE ASSERTED, because a subtraction nobody checks is the glob
+# this comment exists to refuse:
+#   1. the registry answers at all (else REFUSE — never fall back to running
+#      everything, which would silently be a different suite from the one this
+#      file declares);
+#   2. a declared file that is PRESENT in the tree was actually discovered;
+#   3. the run really deselected the number of ITEMS the declaration expands to
+#      — the arity is read from the source, never typed. A marker that stopped
+#      being honoured and a `-m` that stopped being passed both present as
+#      `0 deselected`, and both would otherwise be invisible.
 run_repo_tools_pytest() {
-  local files out rc wg wrc snap
+  local files out rc wg wrc snap deselect expected got decl
   mapfile -t files < <(cd "$ROOT" && find tools \
       \( -name 'test_*.py' -o -name '*_test.py' \) -type f | sort)
   # An empty corpus is a VACUOUS pass, not a pass. A gate that reports success
@@ -568,6 +632,36 @@ run_repo_tools_pytest() {
     echo "        an empty corpus is not evidence that anything passed."
     FAILED=1; return
   fi
+  # ── A NAMED EXCLUSION, NOT A PATTERN — see the note above this function ──
+  if ! deselect="$( python3 "$PROGRAMS/landing_excluded_corpus.py" --marker-expr )"; then
+    echo "  FAIL  repo tools tests: the landing exclusion registry did not"
+    echo "        answer, so what this arm runs is undeclared. Not a pass."
+    FAILED=1; return
+  fi
+  if ! expected="$( python3 "$PROGRAMS/landing_excluded_corpus.py" \
+        --repo "$ROOT" --expected-items tools/ )"; then
+    echo "  FAIL  repo tools tests: the registry could not say how many items"
+    echo "        it excludes under this tree, so the subtraction is"
+    echo "        unverifiable. 'I could not look' is never a pass."
+    FAILED=1; return
+  fi
+  # A declared file that EXISTS in this tree and was not discovered means the
+  # `find` above and the declaration disagree about the corpus. (A declared
+  # file that is ABSENT is a different fault and belongs to the registry's own
+  # --audit gate, which runs against the repository rather than against
+  # whatever root this function was handed.)
+  while IFS= read -r decl; do
+    [ -n "$decl" ] || continue
+    [ -e "$ROOT/$decl" ] || continue
+    if ! printf '%s\n' "${files[@]}" | grep -qxF -- "$decl"; then
+      echo "  FAIL  repo tools tests: the registry declares an exclusion in"
+      echo "        '$decl', which is present but was NOT discovered — the"
+      echo "        corpus and the declaration disagree."
+      FAILED=1; return
+    fi
+  done < <(python3 "$PROGRAMS/landing_excluded_corpus.py" --paths tools/)
+  python3 "$PROGRAMS/landing_excluded_corpus.py" --brief tools/ 2>&1 \
+    | sed 's/^/          /'
   # The in-process `programs/suite_write_guard.py` is loaded by the PLUGIN
   # conftest and is NOT present in this session, so the property it asserts —
   # the suite writes nothing `git status --porcelain` would show — is asserted
@@ -587,7 +681,7 @@ run_repo_tools_pytest() {
   }
   out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
         -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-        "${files[@]}" 2>&1 )"
+        -m "$deselect" "${files[@]}" 2>&1 )"
   rc=$?
   wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
         --compare "$snap" 2>&1)"; wrc=$?
@@ -597,6 +691,19 @@ run_repo_tools_pytest() {
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
     FAILED=1; return
   fi
+  # THE SUBTRACTION MUST HAVE HAPPENED. `0 deselected` is what both failure
+  # modes look like — a marker that was renamed away, and a `-m` that stopped
+  # being passed — and pytest reports either as a clean green.
+  got="$(printf '%s\n' "$out" | grep -aoE '[0-9]+ deselected' \
+         | grep -aoE '^[0-9]+' | tail -1)"
+  got="${got:-0}"
+  if [ "$got" != "$expected" ]; then
+    printf '  FAIL  repo tools tests: the declaration says %s item(s) are excluded\n' "$expected"
+    printf '        under tools/, and pytest deselected %s. The exclusion did not\n' "$got"
+    printf '        happen, or it happened to something else.\n'
+    FAILED=1; return
+  fi
+  printf '        declared exclusions honoured: %s item(s) deselected\n' "$got"
   # rc 0 clean / 1 wrote / 2 NOT_CHECKED. 2 is NOT a pass: "I could not look"
   # must never reach a reader as "I looked and it was fine".
   if [ "$wrc" -ne 0 ]; then

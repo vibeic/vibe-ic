@@ -1355,6 +1355,33 @@ run "flow dependency graph" "$PLUGIN" python3 programs/flow_dependency_graph_che
 # split out and while five shard runs were saturating the host. The reason is
 # layering, and stating the cost honestly matters because a wrong reason survives
 # into the next decision.
+#
+# 2026-08-17 — THE SAME LINE, DRAWN THROUGH THE TWO PYTEST ARMS.
+#
+# The removal above took the census gate out of THIS file and left the same
+# material inside `gatekeeper-land.sh`'s two pytest arms, where it was larger:
+# a 504-cell nested run in the targeted arm, and nine tests in the
+# unconditional repo-tools arm reading a corpus that had left the repository.
+# `landing_excluded_corpus.py` declares, one pytest node at a time, what those
+# arms deliberately do not run — with the reason, the published artefact each
+# node audits, and what runs it now (`tools/run_campaign_tier.sh`).
+#
+# THIS GATE IS WHY THAT DECLARATION CAN BE TRUSTED, and it is deliberately the
+# cheap direction of the same question the removed gate asked. It fails BOTH
+# ways: a declared node that has lost its marker (the landing gate is running
+# something this file says it does not), and a MARKED node that is undeclared
+# (a regression test taken out of every landing with no reason, no subject and
+# no owner on the record). The second is the direction a silent glob exclusion
+# hides in, and it is the one this repo keeps paying for.
+#
+# STATIC — it parses the declared modules with `ast` rather than collecting
+# them, so it cannot be influenced by the suite it describes and costs
+# milliseconds, not the 64-241 s the census gate cost.
+#
+# host-independence: it is re-run by `gate_host_independence_check` below and is
+# a pure function of the tracked tree, so both arms see the same declaration.
+run "landing exclusions are declared" "$ROOT" \
+    python3 "$PG/landing_excluded_corpus.py" --repo "$ROOT" --audit
 
 # A call site writes a literal into a parameter that picks between named
 # alternatives, prose argues WHICH WAY, and no test can see the difference.

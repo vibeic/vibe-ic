@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1109
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1109)
+- **Total programs (excluding helpers / shims):** 1110
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1110)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1100 |
+| `any` | 1101 |
 
 ## Alphabetical listing
 
@@ -591,6 +591,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l_doc_todo_stub_count_check` | any | — | D3 program-first capture of the ``phase1-output-verify`` skill's "Completeness" checklist (item 1). |
 | `l_doc_unique_content_check` | any | Wave 31 | gate (Wave 31, v0.119.63). |
 | `landing_collateral_revert_check` | any | — | a squash must not silently revert work that landed alongside it in the same push. |
+| `landing_excluded_corpus` | any | — | what the LANDING GATE deliberately does not run, declared one test node at a time, with the reason and the owning artefact named. |
 | `landing_is_one_commit_check` | any | — | a landing is ONE commit, not two. |
 | `landing_merge_verdict` | any | — | the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all. |
 | `landing_unselectable_pytest_corpus` | any | — | the tracked pytest files NO landing stage can reach, enumerated so a stage can run them. |
@@ -1181,7 +1182,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1100 programs)
+### `any` (1101 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1743,6 +1744,7 @@ _(no programs in this group)_
 - `l_doc_todo_stub_count_check` — D3 program-first capture of the ``phase1-output-verify`` skill's "Completeness" checklist (item 1).
 - `l_doc_unique_content_check` — gate (Wave 31, v0.119.63).  _[Wave 31]_
 - `landing_collateral_revert_check` — a squash must not silently revert work that landed alongside it in the same push.
+- `landing_excluded_corpus` — what the LANDING GATE deliberately does not run, declared one test node at a time, with the reason and the owning artefact named.
 - `landing_is_one_commit_check` — a landing is ONE commit, not two.
 - `landing_merge_verdict` — the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all.
 - `landing_unselectable_pytest_corpus` — the tracked pytest files NO landing stage can reach, enumerated so a stage can run them.

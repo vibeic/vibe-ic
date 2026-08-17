@@ -95,6 +95,18 @@ def _total_row(block: str):
     return tuple(int(g) for g in m.groups())
 
 
+# ── CAMPAIGN TIER ────────────────────────────────────────────────────────
+# Every test in this file EXCEPT `test_the_generator_cli_can_go_red_and_green`
+# audits the PUBLISHED document `matrix_63x8/README.md`. That is a question
+# about the 63x9 campaign's own artefact, not about whether this change broke
+# something that used to work, so it is deselected from the landing gate and
+# runs under `tools/run_campaign_tier.sh` instead.
+#
+# The reason, the subject and the owner for each of the five are on the record
+# in `programs/landing_excluded_corpus.py`, which also refuses a marker that is
+# not declared there. Do not add or remove one of these markers without the
+# matching registry entry — the audit gate fails in both directions.
+@pytest.mark.campaign_tier
 def test_the_census_block_is_present_and_marked_generated():
     block = _block()
     assert "DO NOT EDIT BY HAND" in block
@@ -239,6 +251,7 @@ def _load_generator():
 #: nested outcome sessions now report finite pytest/domain checkpoints to the
 #: Landing Gate supervisor.  Disable pytest-timeout for this item: continuing
 #: measured work may finish; missing semantic progress becomes NORECORD.
+@pytest.mark.campaign_tier
 @pytest.mark.timeout(0)
 def test_the_census_block_is_fresh():
     """Re-derive it and refuse any drift.
@@ -320,6 +333,7 @@ def test_the_generator_cli_can_go_red_and_green(tmp_path):
         f"{red.stderr}")
 
 
+@pytest.mark.campaign_tier
 @pytest.mark.timeout(0)
 def test_the_published_total_equals_the_live_census():
     """Independent of the generator: the numbers on the page vs the tree.
@@ -383,6 +397,7 @@ def test_the_published_total_equals_the_live_census():
         f"figure.")
 
 
+@pytest.mark.campaign_tier
 def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
     """The finding, as an assertion. THIS is the one that fails on the old tree.
 
@@ -428,6 +443,7 @@ def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
         f"are added to the cells that were really measured.")
 
 
+@pytest.mark.campaign_tier
 def test_every_substitution_disclosure_says_what_was_substituted():
     """A bare "substituted" label discloses nothing a reader can act on."""
     mods = CV.dimension_modules()

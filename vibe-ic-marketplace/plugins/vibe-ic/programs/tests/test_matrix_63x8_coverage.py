@@ -968,6 +968,10 @@ def test_cell_ids_are_not_silently_renamed():
     )
 
 
+# CAMPAIGN TIER. This publishes the campaign's headline figure; it does not ask
+# whether this change broke something. Declared in
+# `programs/landing_excluded_corpus.py`, run by `tools/run_campaign_tier.sh`.
+@pytest.mark.campaign_tier
 def test_the_census_is_reported_for_humans(record_property):
     """Emit the split so a CI reader gets the number without reading the code.
 
@@ -1742,6 +1746,14 @@ def enforcement_census() -> Dict[Tuple[str, int], CellVerdict]:
     return _join_axes(state_census(), cell_outcomes())
 
 
+# ── CAMPAIGN TIER: the three items below are the 504-CELL RUN ────────────
+# `cell_outcomes()` is reached from nowhere else in this file (measured: its
+# only callers are the item below and `enforcement_census()`, whose only
+# callers are the two after it). Deselecting these three therefore removes the
+# whole nested 504-cell execution from the landing gate rather than merely
+# hiding its verdict — which is the difference between a separation and a
+# silencing. Declared in `programs/landing_excluded_corpus.py`.
+@pytest.mark.campaign_tier
 def test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved():
     """Anti-starvation guard for the second axis, mirroring the first's.
 
@@ -1770,6 +1782,7 @@ def test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved():
             f"{key}: pytest reported the item but it never ran ({obs})")
 
 
+@pytest.mark.campaign_tier
 def test_no_cell_is_counted_enforced_while_its_predicate_is_red():
     """A red predicate may not be counted as proof of enforcement.
 
@@ -1840,6 +1853,7 @@ def test_no_cell_is_counted_enforced_while_its_predicate_is_red():
               "record; see matrix_63x8/README.md, 'The three-state rule'.")
 
 
+@pytest.mark.campaign_tier
 def test_the_enforcement_census_is_reported_for_humans(record_property):
     """Emit the TWO-AXIS split, so the quotable number is the honest one."""
     joined = enforcement_census()
