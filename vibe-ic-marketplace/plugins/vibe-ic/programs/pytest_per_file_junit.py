@@ -164,6 +164,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import _watchdog as _wd
+import pytest_parallel_policy as _policy
 
 RC_OK = 0
 RC_RED = 1
@@ -1219,7 +1220,73 @@ def _read_fallback_outcome(job: _FallbackJob) -> _FallbackOutcome:
             _fallback_no_record(job.test_file, reason), log)
 
 
+def _isolation_groups(
+        indexed_files: Sequence[Tuple[int, str]],
+        ) -> List[List[Tuple[int, str]]]:
+    """Split one wave so a serial-roster file never shares it with anything.
+
+    THE DEFECT THIS CLOSES (measured 2026-08-17). This function's caller runs
+    every file in `indexed_files` CONCURRENTLY against the SAME live tree, and
+    ELEVEN files in the shipped corpus PLANT a program into that tree while
+    they run (see `pytest_parallel_policy.SERIAL_ONLY`; two were exposed by
+    measurement, the other nine by its `--audit`). Anything scanning the whole
+    programs directory at that moment counts the plant.
+
+    That is not hypothetical here. The identical shape was reproduced on a
+    93-file selection under `pytest-xdist --dist loadfile`: at n=16 and n=24,
+    `test_issue833_analog_l5_vacuous_reaches_umbrella::
+    test_the_gate_is_out_of_the_unrouted_inventory` FAILED with
+    `Finding(gate='_i528_planted_unrouted_check', …)` in its own message, and
+    `test_issue1130_wiring_population_parity` FAILED on the denominator it
+    states. Both pass serially and at n=8. Every one of those files is in the
+    corpus this recovery path schedules, so the recovery path can manufacture
+    a red that belongs to the SCHEDULE and not to the branch — and a red
+    landing costs a whole 31-minute round and lands nothing.
+
+    ORDER AND TOTALITY ARE PRESERVED: the concatenation of the groups is
+    `indexed_files` unchanged, so the caller still merges every file exactly
+    once, in selection order. Nothing stops being run and nothing stops being
+    measured; a rostered file simply gets the machine to itself.
+    """
+    groups: List[List[Tuple[int, str]]] = []
+    current: List[Tuple[int, str]] = []
+    for item in indexed_files:
+        if item[1] in _policy.SERIAL_ONLY:
+            if current:
+                groups.append(current)
+                current = []
+            groups.append([item])
+        else:
+            current.append(item)
+    if current:
+        groups.append(current)
+    return groups
+
+
 def _run_fallback_batch(
+        pytest_argv: Sequence[str], indexed_files: Sequence[Tuple[int, str]],
+        tmp: Path, stall_after: float, cwd: Optional[str], *,
+        progress_relay_path: Optional[Path] = None,
+        ) -> List[_FallbackOutcome]:
+    """Recover one wave, isolating the files that may not share a machine."""
+    groups = _isolation_groups(indexed_files)
+    if len(groups) == 1:
+        return _run_fallback_wave(
+            pytest_argv, indexed_files, tmp, stall_after, cwd,
+            progress_relay_path=progress_relay_path)
+    out: List[_FallbackOutcome] = []
+    for group in groups:
+        if len(group) == 1 and group[0][1] in _policy.SERIAL_ONLY:
+            print(f"FALLBACK_SERIAL_ISOLATION  {group[0][1]} — "
+                  f"{_policy.SERIAL_ONLY[group[0][1]].split('.')[0]}",
+                  flush=True)
+        out.extend(_run_fallback_wave(
+            pytest_argv, group, tmp, stall_after, cwd,
+            progress_relay_path=progress_relay_path))
+    return out
+
+
+def _run_fallback_wave(
         pytest_argv: Sequence[str], indexed_files: Sequence[Tuple[int, str]],
         tmp: Path, stall_after: float, cwd: Optional[str], *,
         progress_relay_path: Optional[Path] = None,
