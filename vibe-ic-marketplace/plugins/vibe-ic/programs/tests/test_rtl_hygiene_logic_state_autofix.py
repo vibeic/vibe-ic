@@ -128,6 +128,72 @@ endmodule
     assert rtl.read_text() == source
 
 
+def test_initial_relational_comparison_does_not_fake_initialization(tmp_path):
+    source = """\
+module dut(input logic clk, input logic d, output logic q);
+  logic observed;
+  initial begin
+    observed = q <= d;
+    if (q <= d)
+      observed = 1'b1;
+  end
+  always_ff @(posedge clk) q <= d;
+endmodule
+"""
+    rtl, result = _fix(tmp_path, source)
+
+    assert hygiene._initially_assigned_signals(source) == {"observed"}
+    assert result == (1, ["q"])
+    assert "    q = 0;" in rtl.read_text()
+
+
+@pytest.mark.parametrize(
+    "initial_statement",
+    [
+        """\
+initial if (d) begin
+  q = 1'b0;
+  r = 1'b0;
+end else begin
+  q = 1'b0;
+  r = 1'b0;
+end
+""",
+        """\
+initial case (d)
+  1'b0: begin q = 1'b0; r = 1'b0; end
+  default: begin q = 1'b0; r = 1'b0; end
+endcase
+""",
+        """\
+initial fork
+  q = 1'b0;
+  r = 1'b0;
+join
+""",
+    ],
+    ids=["if-else", "case", "fork-join"],
+)
+def test_compound_initial_without_outer_begin_is_fully_scanned(
+        tmp_path, initial_statement):
+    source = f"""\
+module dut(input logic clk, input logic d, output logic y);
+  logic q, r;
+  {initial_statement}
+  always_ff @(posedge clk) begin
+    q <= d;
+    r <= q;
+  end
+  always_comb y = q ^ r;
+endmodule
+"""
+    rtl, result = _fix(tmp_path, source)
+
+    assert hygiene._initially_assigned_signals(source) == {"q", "r"}
+    assert result == (0, [])
+    assert rtl.read_text() == source
+
+
 def test_far_existing_initial_on_registered_output_is_preserved(tmp_path):
     padding = "x" * 240
     source = f"""\
@@ -423,6 +489,69 @@ endmodule
             [IVERILOG, "-g2012", "-t", "null", str(rtl)],
             capture_output=True, text=True)
         assert compiled.returncode == 0, compiled.stderr
+
+
+@pytest.mark.parametrize("kind", ["reg", "logic"])
+def test_module_state_after_completed_always_block_remains_eligible(
+        tmp_path, kind):
+    source = f"""\
+module dut(input logic clk, input logic d, output logic y);
+  {kind} state0;
+  always @(posedge clk) begin : p_state0
+    state0 <= d;
+  end : p_state0
+  {kind} state1;
+  always @(posedge clk) state1 <= state0;
+  always @(*) y = state1;
+endmodule
+"""
+    rtl, result = _fix(tmp_path, source)
+
+    assert result == (2, ["state0", "state1"])
+    assert "    state0 = 0;" in rtl.read_text()
+    assert "    state1 = 0;" in rtl.read_text()
+
+
+@pytest.mark.parametrize("kind", ["reg", "logic"])
+def test_module_state_after_completed_initial_block_remains_eligible(
+        tmp_path, kind):
+    source = f"""\
+module dut(input logic clk, input logic d, output logic y);
+  logic observed;
+  initial begin : p_observe
+    observed = 1'b0;
+  end : p_observe
+  {kind} q;
+  always @(posedge clk) q <= d;
+  always @(*) y = q;
+endmodule
+"""
+    rtl, result = _fix(tmp_path, source)
+
+    assert result == (1, ["q"])
+    assert "    q = 0;" in rtl.read_text()
+
+
+@pytest.mark.parametrize("kind", ["reg", "logic"])
+@pytest.mark.parametrize(
+    "empty_item",
+    ["always @(*) begin end", "initial begin end"],
+    ids=["empty-always", "empty-initial"],
+)
+def test_module_state_after_empty_completed_block_remains_eligible(
+        tmp_path, kind, empty_item):
+    source = f"""\
+module dut(input logic clk, input logic d, output logic y);
+  {empty_item}
+  {kind} q;
+  always @(posedge clk) q <= d;
+  always @(*) y = q;
+endmodule
+"""
+    rtl, result = _fix(tmp_path, source)
+
+    assert result == (1, ["q"])
+    assert "    q = 0;" in rtl.read_text()
 
 
 def test_relational_logic_operand_is_not_mistaken_for_nba_state(tmp_path):
