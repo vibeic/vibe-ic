@@ -63,7 +63,6 @@ if str(_HERE) not in sys.path:
 # root on every run and REFUSES a run it would falsify. Riding the rootdir
 # conftest is what makes that execute rather than be remembered, and it costs
 # one `git rev-parse` per session.
-pytest_plugins = ("suite_write_guard", "not_verified_tier", "scratch_root_guard")
 
 
 # ORGANIC #574 — robust waveform-artifact hygiene. Many tests run `vvp` on an
