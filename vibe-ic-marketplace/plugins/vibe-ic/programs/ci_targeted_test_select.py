@@ -543,6 +543,79 @@ def _build_test_index(plugin_root: Path, source_stems: set[str]) -> dict[str, se
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
+# ---------------------------------------------------------------------------
+# PER-PROCESS MEMOS. Not a cache of the SELECTION — see `_edge_scan` for why a
+# selection cache would be wrong — but of the tree SCANS that this one process
+# performs more than once on the same unchanged tree.
+#
+# MEASURED on `f6b0e77dd`, 2596 test files, one process, `--base HEAD~1`
+# (14 changed paths, 102 files selected), cProfile:
+#
+#     _build_import_edge_index      ncalls 2   cumtime 15.376 s of 23.498 s
+#     _build_tool_reference_index   ncalls 5   cumtime  3.198 s
+#
+# Both counts are duplicates of ONE question. `select_tests` builds the
+# import-edge index for every source stem; `import_edge_gap` then builds the
+# SAME index again for the changed stems, re-reading and re-`ast.parse`-ing all
+# 2596 files. `select_tests` builds the tool-reference index once for all rule-7
+# keys; `select_unmappable` then rebuilds it ONE KEY AT A TIME, a full pass over
+# the same 2596 files per key.
+#
+# Nothing here changes what is emitted or what is disclosed. The memos are keyed
+# on the plugin root and live only for the life of the process, so a second
+# invocation on a changed tree re-reads it exactly as before.
+# ---------------------------------------------------------------------------
+_EDGE_SCAN_MEMO: dict[str, dict[str, frozenset[str]]] = {}
+_TOOL_REF_MEMO: dict[tuple[str, str], set[str]] = {}
+_REPO_FILES_MEMO: dict[str, list[str] | None] = {}
+
+
+def _edge_scan(plugin_root: Path) -> dict[str, frozenset[str]]:
+    """Map each plugin-rel test file -> every module name it BINDS.
+
+    The per-file half of `_build_import_edge_index`, split out so the file read,
+    the `ast.parse` and the two loader regexes happen ONCE per process instead of
+    once per caller. The stem filter is the cheap half and stays in the caller,
+    so this scan serves ANY stem set: `select_tests` asks for every source stem,
+    `import_edge_gap` asks for the changed stems, and both get the same answer
+    they got when each rebuilt the whole thing.
+
+    NOT a selection cache. The selection is a pure function of (resolved base
+    SHA, working tree) — but a new gate round exists precisely BECAUSE the tree
+    changed, so a cross-round cache on that key would essentially never hit,
+    while being wrong the one time the tree moved under it. This memo lives and
+    dies with the process, so it cannot outlive the tree it read.
+
+    Fail-open exactly as before: a file that cannot be read contributes no
+    entry, a file that cannot be parsed contributes its loader edges only.
+    """
+    key = str(plugin_root)
+    hit = _EDGE_SCAN_MEMO.get(key)
+    if hit is not None:
+        return hit
+    out: dict[str, frozenset[str]] = {}
+    tests_dir = plugin_root / _TESTS_REL
+    if tests_dir.is_dir():
+        for tp in sorted(tests_dir.rglob("test_*.py")):
+            try:
+                text = tp.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            rel = tp.relative_to(plugin_root).as_posix()
+            names: set[str] = set()
+            imported = _imported_module_names(text, _own_package(rel))
+            if imported:
+                names |= imported
+            for m in _LOADER_NAME_RE.finditer(text):
+                names.add(m.group(1))
+            for m in _LOADER_CALL_RE.finditer(text):
+                for lit in _LOADER_PY_LITERAL_RE.finditer(m.group("args")):
+                    names.add(Path(_norm(lit.group(1))).stem)
+            out[rel] = frozenset(names)
+    _EDGE_SCAN_MEMO[key] = out
+    return out
+
+
 def _build_import_edge_index(
     plugin_root: Path, source_stems: set[str],
 ) -> dict[str, set[str]]:
@@ -563,36 +636,18 @@ def _build_import_edge_index(
     Fail-open, matching rule 4: a file that cannot be read or parsed contributes
     no edges rather than aborting the selection. A selector that dies on one bad
     file selects nothing, and selecting nothing is the defect.
+
+    The per-file scan lives in `_edge_scan` and is memoised for the life of the
+    process; this function is the STEM FILTER over it. The two loader edge kinds
+    documented above are unchanged — an alias (`spec_from_file_location("<stem>",
+    …)`) and the `.py` literal the same call actually loads (vibe-ic#1176) — they
+    are simply collected once instead of once per caller. Identical output: the
+    old body computed `(imported | aliases | literals) & source_stems` per file,
+    which is what the intersection below computes.
     """
-    tests_dir = plugin_root / _TESTS_REL
-    if not tests_dir.is_dir():
-        return {}
-
     idx: dict[str, set[str]] = {}
-    for tp in sorted(tests_dir.rglob("test_*.py")):
-        try:
-            text = tp.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        rel = tp.relative_to(plugin_root).as_posix()
-
-        names: set[str] = set()
-        imported = _imported_module_names(text, _own_package(rel))
-        if imported:
-            names |= {n for n in imported if n in source_stems}
-        for m in _LOADER_NAME_RE.finditer(text):
-            if m.group(1) in source_stems:
-                names.add(m.group(1))
-        # …and the same call read for the file it LOADS, so an alias cannot hide
-        # the edge (vibe-ic#1176). Additive: a call whose alias already matched
-        # contributes the same stem twice and the set absorbs it.
-        for m in _LOADER_CALL_RE.finditer(text):
-            for lit in _LOADER_PY_LITERAL_RE.finditer(m.group("args")):
-                stem = Path(_norm(lit.group(1))).stem
-                if stem in source_stems:
-                    names.add(stem)
-
-        for n in names:
+    for rel, names in _edge_scan(plugin_root).items():
+        for n in names & source_stems:
             idx.setdefault(n, set()).add(rel)
     return idx
 
@@ -663,7 +718,20 @@ def _repo_files(repo_root: Path) -> list[str] | None:
     is not a git repo, and the caller degrades to basename keying there. What it
     must never do is raise — a selector that cannot list the tree still has to
     emit a list.
+
+    Memoised per repo root for the life of the process: `select_tests` and
+    `select_unmappable` each ask for the same listing of the same tree in the
+    same run. None is CACHED as None, because "this is not a git repo" is the
+    answer, not a failure to get one.
     """
+    memo_key = str(repo_root)
+    if memo_key in _REPO_FILES_MEMO:
+        return _REPO_FILES_MEMO[memo_key]
+    _REPO_FILES_MEMO[memo_key] = _repo_files_uncached(repo_root)
+    return _REPO_FILES_MEMO[memo_key]
+
+
+def _repo_files_uncached(repo_root: Path) -> list[str] | None:
     try:
         r = subprocess.run(
             ["git", "-C", str(repo_root), "ls-files"],
@@ -722,6 +790,14 @@ def _build_tool_reference_index(
 
     Unreadable files are skipped rather than failing the run: a selector that
     cannot read one test file must still emit a list.
+
+    MEMOISED PER KEY, for the life of the process. `select_tests` asks this
+    once for the whole key set; `select_unmappable` then asks it again ONE KEY
+    AT A TIME (its `index_cache` is per key, but the miss it fills costs a full
+    pass over the tests tree). Measured on `f6b0e77dd` with `--base HEAD~1`:
+    5 calls, 3.198 s cumulative, for 5 answers of which 4 were already known.
+    Cold keys are still resolved in ONE pass over the tree, so a genuinely new
+    key costs exactly what it did before.
     """
     index: dict[str, set[str]] = {}
     if not tool_basenames:
@@ -729,16 +805,26 @@ def _build_tool_reference_index(
     tests_dir = plugin_root / _TESTS_REL
     if not tests_dir.is_dir():
         return index
-    pats = {b: _tool_ref_pattern(b) for b in tool_basenames}
-    for tf in sorted(tests_dir.glob("test_*.py")):
-        try:
-            text = tf.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        rel = f"{_TESTS_REL}/{tf.name}"
-        for base, pat in pats.items():
-            if pat.search(text):
-                index.setdefault(base, set()).add(rel)
+    root = str(plugin_root)
+    cold = sorted(b for b in tool_basenames if (root, b) not in _TOOL_REF_MEMO)
+    if cold:
+        pats = {b: _tool_ref_pattern(b) for b in cold}
+        acc: dict[str, set[str]] = {b: set() for b in cold}
+        for tf in sorted(tests_dir.glob("test_*.py")):
+            try:
+                text = tf.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            rel = f"{_TESTS_REL}/{tf.name}"
+            for base, pat in pats.items():
+                if pat.search(text):
+                    acc[base].add(rel)
+        for b in cold:
+            _TOOL_REF_MEMO[(root, b)] = acc[b]
+    for b in sorted(tool_basenames):
+        hits = _TOOL_REF_MEMO[(root, b)]
+        if hits:
+            index[b] = set(hits)          # a COPY: callers must not edit the memo
     return index
 
 
