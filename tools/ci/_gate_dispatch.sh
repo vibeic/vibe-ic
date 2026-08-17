@@ -1229,10 +1229,20 @@ _gate_dispatch_emit() {
   # one of them. `undisclosed_loops` remains the un-prefixed remainder.
   local -a fields=()
   for (( i=0; i<n; i++ )); do
+    # NINE, not eight: vibe-ic#1729 appended the declared SCOPE. It is last so the
+    # first eight land byte-for-byte where every existing consumer reads them.
+    #
+    # Without it, `GATE_SCOPES` was appended here and read by NOTHING: no
+    # OUT_OF_SCOPE row in `--summary-json` carried the paths it claimed, so
+    # `gatekeeper_review`, the shard aggregator and the concurrency oracle were all
+    # blind to WHY a gate had been skipped. The module's own documented property
+    # says the scope is "attached … so the next reader can check the claim rather
+    # than inherit it", and a reader cannot check a claim that was never written.
     fields+=("${GATE_STATES[$i]}" "${GATE_SECONDS[$i]}"
              "${GATE_ITEM_CORPUS[$i]}" "${GATE_ITEM_IDX[$i]}"
              "${GATE_ITEM_TOTAL[$i]}" "${GATE_EX_UNTIL[$i]}"
-             "${GATE_EX_WHY[$i]}" "${GATE_LABELS[$i]}")
+             "${GATE_EX_WHY[$i]}" "${GATE_LABELS[$i]}"
+             "${GATE_SCOPES[$i]-}")
   done
   for (( i=0; i<nc; i++ )); do
     fields+=("${GATE_CORPUS_ITEMS[$i]}" "${GATE_CORPUS_GATES[$i]}"
@@ -1254,13 +1264,14 @@ SHARD = os.environ.get("GATE_DISPATCH_SHARD_ID") or None
 ng, nc, nw = int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6])
 today = sys.argv[7]
 rest = sys.argv[8:]
-# 8 per gate, not 6: vibe-ic#584 appended exempt_until/exempt_reason, and the
-# loop below reads gf[i+5..7] positionally.
-gf, rest = rest[:ng * 8], rest[ng * 8:]
+# 9 per gate: vibe-ic#584 appended exempt_until/exempt_reason (gf[i+5..6]) and
+# vibe-ic#1729 appended the declared scope (gf[i+8]). Positional, and appended at
+# the END each time, so every field an older consumer reads keeps its index.
+gf, rest = rest[:ng * 9], rest[ng * 9:]
 cf, rest = rest[:nc * 4], rest[nc * 4:]
 wiring, undisclosed = rest[:nw], rest[nw:]
 gates = []
-for i in range(0, len(gf), 8):
+for i in range(0, len(gf), 9):
     # The three loop keys are written ONLY for a gate a loop produced, so a
     # gate wired outside one records byte-for-byte what it recorded before
     # vibe-ic#957 — the record of the other ~70 must not move either.
@@ -1280,6 +1291,11 @@ for i in range(0, len(gf), 8):
     # `uncheckable_until`. An exemption expires whether or not it FIRED — it is
     # a promise to revisit, and a promise nobody is reminded of is not one.
     g["exemption_expired"] = bool(g["exempt_until"]) and g["exempt_until"] < today
+    # vibe-ic#1729. ALWAYS present, like exempt_until above and for the same
+    # reason: an absent key would leave a consumer unable to tell "this gate
+    # declared no scope" from "this record was written by an older script".
+    # A gate recorded OUT_OF_SCOPE without its scope is a skip nobody can check.
+    g["scope"] = gf[i + 8] or None
     gates.append(g)
 corpora = [{"name": cf[i + 3], "items": int(cf[i]), "gates": int(cf[i + 1]),
             "expansion": cf[i + 2]}
