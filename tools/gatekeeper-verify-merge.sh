@@ -771,7 +771,8 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
           "path=${PATH:-}" "tmpdir=${TMPDIR:-/tmp}" \
           "stall=${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
           "fallback_jobs=${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
-          'contract=aggregate-first-process-fallback;pytest-timeout=180;cacheprovider=off;autoload=off;bytecode=off'
+          "fallback_rescue_jobs=${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
+          'contract=aggregate-first-exhaustive-process-rescue;pytest-timeout=180;cacheprovider=off;autoload=off;bytecode=off'
         env -0 | LC_ALL=C sort -z | sha256sum | awk '{print $1}'
         sha256sum "$RUN/selection_base.txt" "$A1_DRIVER" \
           "$CAND_PLUGIN/programs/_watchdog.py" \
@@ -829,6 +830,7 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
           --stall-after "$5" --aggregate-check \
           --aggregate-stall-after "$6" \
           --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+          --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
           -- python3 -m pytest -q -p pytest_timeout \
           --timeout=180 --timeout-method=thread -p no:cacheprovider
       ' gkverify-a1 "$BASE_TEST_PLUGIN" "$RUN/selection_base.txt" "$BASE_JUNIT" \
@@ -991,6 +993,7 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       --stall-after "$5" --aggregate-check \
       --aggregate-stall-after "$6" \
       --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+      --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
       --stop-after-failures 0 \
       -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
       --timeout=180 --timeout-method=thread

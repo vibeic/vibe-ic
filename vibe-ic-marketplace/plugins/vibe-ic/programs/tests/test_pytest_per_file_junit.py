@@ -696,9 +696,9 @@ def test_stratified_probe_preserves_late_and_early_green_files(
 
     The forward order is the adversarial shape: eight file-local import hangs
     occupy the old consecutive first wave and two recoverable green files sit at
-    the tail. The reverse order proves that seeing a probe record disables the
-    systemic breaker even if a later consecutive wave is all-NORECORD. Both
-    orders must recover the same two files and merge them in selection order.
+    the tail. The reverse order proves that a later consecutive all-NORECORD wave
+    cannot truncate recovery either. Both orders must recover the same two files
+    and merge them in selection order.
     """
     ordered = [
         (f"test_{i:02d}_local_hang.py", (
@@ -751,14 +751,89 @@ def test_stratified_probe_preserves_late_and_early_green_files(
             if suite.get("name") in expected_green] == expected_green
 
 
-def test_systemic_import_hang_recovery_is_one_bounded_parallel_wave(tmp_path):
+def test_zero_record_probe_still_attempts_the_one_unprobed_green_file(
+        tmp_path):
+    """Eight sampled hangs cannot prove that an untried ninth file hangs.
+
+    This is the exact counterexample from the #1654 shipping review: with nine
+    files and the eight-worker first probe, index 5 is the sole unprobed index.
+    The other eight files hang only in fallback workers and the whole aggregate
+    hangs in a shared conftest.  A sample-based systemic breaker therefore loses
+    the one recoverable record.  Recovery must instead attempt every file.
+    """
+    probe_indices = D._stratified_probe_indices(9, 8)
+    assert probe_indices == [1, 2, 3, 4, 6, 7, 8, 9]
+    files = {}
+    for index in range(1, 10):
+        name = f"test_{index:02d}_{'green' if index == 5 else 'hang'}.py"
+        if index == 5:
+            files[name] = _GREEN
+        else:
+            files[name] = (
+                "import os,time\n"
+                f"if os.environ.get({_FALLBACK_ENV!r}) == '1':\n"
+                "    time.sleep(3600)\n"
+                f"def test_{index:02d}(): assert True\n")
+    corpus = _tree(tmp_path, files)
+    (corpus / "conftest.py").write_text(
+        "import os,time\n"
+        f"if os.environ.get({_FALLBACK_ENV!r}) != '1':\n"
+        "    time.sleep(3600)\n",
+        encoding="utf-8",
+    )
+    merged = tmp_path / "unprobed-green.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check",
+        "--aggregate-stall-after", "1", "--fallback-jobs", "8")
+
+    # Value first: this is what makes the pre-fix control substantive.  The old
+    # breaker returns [] and labels test_05_green.py NOTRUN.
+    assert _files_in(merged) == ["test_05_green.py"], proc.stdout + proc.stderr
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert proc.stdout.count("FALLBACK_PROGRESS") == 9
+    assert len([line for line in proc.stdout.splitlines()
+                if line.startswith("NORECORD  ")]) == 8
+    assert not [line for line in proc.stdout.splitlines()
+                if line.startswith("NOTRUN    ")]
+
+
+def test_rescue_parallelism_has_cpu_memory_pid_and_absolute_hard_caps(
+        monkeypatch):
+    """Corpus size/request alone can never become the process-pool width."""
+    monkeypatch.setattr(D, "_available_cpu_count", lambda: 3)
+    monkeypatch.setattr(
+        D, "_available_memory_bytes",
+        lambda: (D._FALLBACK_MEMORY_RESERVE_BYTES
+                 + 7 * D._FALLBACK_MEMORY_PER_JOB_BYTES))
+    monkeypatch.setattr(
+        D, "_cgroup_pid_headroom",
+        lambda: D._FALLBACK_PID_RESERVE + 5 * D._FALLBACK_PIDS_PER_JOB)
+
+    capacity = D._fallback_capacity(64, 1000)
+
+    assert capacity.jobs == 5
+    assert capacity.cpu_cap == 6
+    assert capacity.memory_cap == 7
+    assert capacity.pid_cap == 5
+    assert capacity.hard_cap == D.MAX_FALLBACK_PROCESSES
+
+    monkeypatch.setattr(D, "_available_cpu_count", lambda: 10_000)
+    monkeypatch.setattr(D, "_available_memory_bytes", lambda: 1 << 60)
+    monkeypatch.setattr(D, "_cgroup_pid_headroom", lambda: 1 << 30)
+    assert (D._fallback_capacity(10_000, 10_000).jobs
+            == D.MAX_FALLBACK_PROCESSES)
+
+
+def test_systemic_import_hang_recovery_is_bounded_parallel_not_serial(
+        tmp_path):
     """A shared collection hang must not multiply one stall by every file.
 
     The aggregate and every recovery worker deliberately hang in the common
-    conftest. Nine files exceed the default eight-worker width. The first wave
-    must span the corpus rather than take a lexical prefix; because every sampled
-    file still returns NORECORD, the correct path pays exactly one stratified
-    wave, names the one unprobed file NOTRUN, and keeps aggregate UNKNOWN at rc=2.
+    conftest. Nine files exceed the default eight-worker probe width. The first
+    wave spans eight paths; the resource-capped rescue must still attempt the
+    ninth. This costs two bounded parallel fallback waves, not nine serial stall
+    windows, while aggregate UNKNOWN remains rc=2.
     """
     count = D.DEFAULT_FALLBACK_JOBS + 1
     corpus = _tree(tmp_path, {
@@ -787,24 +862,25 @@ def test_systemic_import_hang_recovery_is_one_bounded_parallel_wave(tmp_path):
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
     assert "AGGREGATE_NORECORD" in proc.stdout
     # The 2 s watchdog poll makes one 1 s stall a few seconds on this host. The
-    # aggregate plus ONE parallel recovery wave stays bounded; the ninth file
-    # must never add another stall window. Keep this observed-value assertion
-    # before structural markers so the pre-fix control is behaviourally graded.
-    assert elapsed < 12, (
+    # aggregate plus TWO parallel fallback waves stays far below nine serial
+    # stalls. Keep this observed-value assertion before structural markers so a
+    # serial implementation is behaviourally rejected.
+    assert elapsed < 18, (
         f"parallel recovery took {elapsed:.2f}s; output:\n{proc.stdout}")
     probe_indices = D._stratified_probe_indices(
         count, D.DEFAULT_FALLBACK_JOBS)
     assert probe_indices == [1, 2, 3, 4, 6, 7, 8, 9]
     assert ("FALLBACK_STRATIFIED_PROBE  indices="
             + ",".join(str(i) for i in probe_indices)) in proc.stdout
-    assert len(list(markers.iterdir())) == D.DEFAULT_FALLBACK_JOBS
+    assert len(list(markers.iterdir())) == count
     assert len([line for line in proc.stdout.splitlines()
-                if line.startswith("NORECORD  ")]) == D.DEFAULT_FALLBACK_JOBS
-    assert len([line for line in proc.stdout.splitlines()
-                if line.startswith("NOTRUN    ")]) == 1
-    assert "FALLBACK_SYSTEMIC_NORECORD" in proc.stdout
-    assert "systemic semantic NORECORD circuit breaker" in proc.stdout
-    assert "NOTRUN    test_neighbour_4.py" in proc.stdout
+                if line.startswith("NORECORD  ")]) == count
+    assert not [line for line in proc.stdout.splitlines()
+                if line.startswith("NOTRUN    ")]
+    assert "FALLBACK_SYSTEMIC_NORECORD" not in proc.stdout
+    assert "FALLBACK_ZERO_RECORD_RESCUE" in proc.stdout
+    assert "phase=zero-record-rescue" in proc.stdout
+    assert "test_neighbour_4.py [fallback worker]" in proc.stdout
     assert _files_in(merged) == []
 
 
@@ -1174,10 +1250,17 @@ def test_both_landing_arms_run_through_this_driver():
         "the push-path aggregate fallback has no bounded process width")
     assert verify_src.count("--fallback-jobs") == 2, (
         "arm A1 and arm B1 do not both declare the bounded fallback width")
-    assert "contract=aggregate-first-process-fallback" in verify_src, (
+    assert land_src.split("run_pytest()")[-1].split(
+        "run_repo_tools_pytest")[0].count("--fallback-rescue-jobs") == 1, (
+        "the push path does not declare its exhaustive rescue ceiling")
+    assert verify_src.count("--fallback-rescue-jobs") == 2, (
+        "arm A1 and arm B1 do not both declare the exhaustive rescue ceiling")
+    assert "contract=aggregate-first-exhaustive-process-rescue" in verify_src, (
         "the base-test cache key does not name the process-isolated contract")
     assert "fallback_jobs=" in verify_src, (
         "the base-test cache fingerprint omits the fallback pool width")
+    assert "fallback_rescue_jobs=" in verify_src, (
+        "the base-test cache fingerprint omits the rescue pool width")
     assert "-p no:cacheprovider" in land_src.split("run_pytest()")[-1], (
         "arm B loads cacheprovider while A1 explicitly disables it")
     assert "grep -q 'programs/pytest_per_file_junit.py'" not in verify_src, (
