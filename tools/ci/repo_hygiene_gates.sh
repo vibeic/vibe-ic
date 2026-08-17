@@ -477,96 +477,47 @@ run "per-source record merges"          "$ROOT" python3 "$PG/per_source_record_m
 # SIBLING variable, and scans the raw one. Three detectors were built and
 # retracted on that basis; this one carries the known instance as a test.
 run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_scan_strips_comments_check.py"
-# ORGANIC #686 — a macro OBS is the vendor's statement of where the integrator
-# may not put metal. It is not in the PDK deck, so sign-off DRC cannot see a
-# crossing; and the wire is on the right net, so a connectivity audit cannot
-# either. Runs over every published cell that has both a routed DEF and a
-# macro LEF; rc=2 (nothing to look at) is tolerated, rc=1 is not.
-#
-# THE CELL LIST IS THE PUBLISHED ONE, NOT WHAT IS ON THIS DISK (2026-08-04).
-# It used to be `for _cell in "$ROOT"/benchmark-data/ic/*/*/` with an `[ -f
-# routed.def ]` filter, i.e. a glob over the working directory. A checkout that
-# has been used carries run leftovers, and each leftover that happens to hold a
-# routed DEF adds THREE gate invocations. Measured on the main checkout: 1078
-# leftovers took this script's declared-gate count from 68 to 169 and produced
-# 13 FAILs that were about the leftovers and not about the commit — reproduced
-# identically on two unrelated PRs, which is how the tree rather than the PRs
-# was identified, after hours of looking at the wrong thing.
-#
-# `git ls-files` makes the denominator a property of the COMMIT: the same 68
-# gates in a working checkout, a fresh clone and a scratch worktree. Same
-# `_published_tree` reasoning as the corpus gate at line 408 ("46 vs 17 is
-# exactly the host-dependence `_published_tree` exists to remove from a
-# baseline"), applied to the loop that decides how many gates there ARE.
-#
-# AND THE DENOMINATOR IS NOW PRINTED (vibe-ic#957). The corpus this loop
-# selects is ONE published cell — `git ls-files` over the glob below returns a
-# single routed DEF — so three gates run, once, over one item. Every one of the
-# three is honest about which cell it examined; the ROLL-UP that counted them
-# among ~74 green gates was not, and a reader took from it that post-route
-# geometry is checked across the published corpus. The count was true and the
-# impression was false.
-#
-# The iteration therefore goes through `gate_dispatch_over`, which measures the
-# expansion and states it — including at 1, and especially at 0, where the loop
-# declares no gate at all and there is nothing else left to notice its absence.
-# Nothing here types the number: a `for` that hand-quoted "1" would be the next
-# hand-maintained fact to drift, and drift is what this file exists to prevent.
-#
-# WHAT THIS DELIBERATELY DOES NOT DO: it does not change the corpus and does
-# not change which gates run. Whether more published cells should carry a
-# `phase3/stage3/pnr/routed.def` is a PUBLISHING decision with a real
-# repository-size cost, and that decision is not a side effect of making the
-# roll-up honest.
-_per_published_cell_gates() {
-  local _def="$1" _cell
-  _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
-  uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no readable macro/OBS geometry, so the intersection has no population -- an intersection it CAN compute and finds is rc 1"
-  run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
-    "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
-  # vibe-ic#693 — one of the 35 gates nothing invoked. A "0 DRC violations"
-  # certificate over an empty layout is the strongest form of an absence
-  # rendering as a pass, and the gate written for it was reachable only if an
-  # agent read a skill and remembered to run it. MEASURED on the published
-  # cells: it parses real geometry (8290 shapes, 35 violations) — a live
-  # verdict, not a shape that can only ever say "nothing to look at".
-  uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no parseable layout to judge the DRC certificate against, which is the state the gate exists to refuse to call a PASS"
-  run_tolerating_uncheckable "DRC PASS is not vacuous ($(basename "$(dirname "$_cell")"))" \
-    "$ROOT" python3 "$PG/drc_vacuous_pass_check.py" "$_cell"
-  # Another of the 35. Its subject is an inner FAIL that never reaches the outer
-  # verdict, and nothing ran it. It also had the defect: "nothing to examine"
-  # exited 0 printing VACUOUS_PASS, one branch above a test in its own file
-  # stating that "I could not look" must never share an exit code with "I looked
-  # and it was clean". MEASURED on the published cells: 67-68 reports examined
-  # each, so this is a live verdict over a real denominator.
-  uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no step reports to examine, which the gate refuses to score as clean rather than exiting 0 on an empty population"
-  run_tolerating_uncheckable "inner FAILs reach the verdict ($(basename "$(dirname "$_cell")"))" \
-    "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" "$_cell"
-  # vibe-ic#1241 — this gate was run by NOTHING but its own test, which proves
-  # the logic against a fixture the author wrote and never against an artefact.
-  # Wired here rather than into a flow step because its argument IS a published
-  # cell, so this loop is the one place the flow already hands it its subject.
-  #
-  # `run_tolerating_uncheckable` is not a softening: the gate's own documented
-  # contract is rc 2 = NO_BASELINE, "no previous run; nothing compared", and on
-  # this corpus that is EVERY cell — no design carries two cells of the same
-  # PDK, so `find_previous` has nothing to compare against. rc 2 is therefore
-  # the expected answer today and must be LOUD and non-fatal; rc 1, a genuinely
-  # new diagnostic id, still fails the suite. The day a second same-PDK cell is
-  # published the comparison path becomes live without this line changing.
-  uncheckable_until 2027-02-28 "per published cell: the gate's own documented contract is rc 2 = NO_BASELINE, 'no previous run; nothing compared', and on this corpus that is EVERY cell — no design carries two cells of the same PDK, so find_previous has nothing to compare against. A genuinely new diagnostic id is still rc 1"
-  run_tolerating_uncheckable "new tool diagnostic id ($(basename "$(dirname "$_cell")"))" \
-    "$PLUGIN" python3 programs/tool_diagnostic_id_gate.py "$_cell"
-}
 # NO `|| true` ANY MORE, and that is a repair rather than an omission: it used
 # to turn "git could not look" into an empty corpus, which is the vacuous pass
 # this repo removes from gates one at a time. `gate_dispatch_over` keeps the
 # producer's exit status and says so; an empty result is still not an error and
 # still does not abort the ~70 gates that have nothing to do with this corpus.
-gate_dispatch_over "published cells carrying a routed DEF" \
-  _per_published_cell_gates \
-  git -C "$ROOT" ls-files -- \
-    'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def'
+# ── MOVED OUT: THE PER-PUBLISHED-CELL GATES ARE FLOW GATES, NOT REGRESSIONS ──
+# This is where `_per_published_cell_gates` used to be dispatched, over
+# `git ls-files benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def`.
+#
+# WHAT IT RAN, and where each of those really belongs (MEASURED against
+# flow/phase1_phase2_phase3.yaml, which declares 94 gate programs across its 63
+# steps):
+#     macro_obs_geometry_intersect_check   -> flow step 21
+#     drc_vacuous_pass_check               -> flow step 31
+#     step_internal_fail_bubble_up_check   -> flow step 36
+#     tool_diagnostic_id_gate              -> declared by NO flow step
+# The first three are step gates the flow ALREADY executes when Phase 1/2/3 runs
+# that step. Running them again here asked a design question -- "is THIS PUBLISHED
+# CELL's DRC pass vacuous, does its macro OBS cross, do its inner FAILs reach the
+# verdict" -- of a landing, whose only question is "did this change break
+# something that used to work". Two different questions, and the entanglement cost
+# both: a landing carried work that was not its own, and the flow's gates were
+# re-run in a place that cannot answer them.
+#
+# THAT LAST PART IS MEASURED, not asserted: a landing tree tracks ZERO published
+# cells (`git ls-files benchmark-data/...routed.def` -> 0; benchmark-data left this
+# repo in v1.10.56), so this dispatch expanded over 0 items on every round. It was
+# not costing time -- it was VOID, the same shape as the 63x9 matrix assertions
+# separated in the same change.
+#
+# WHERE THEY RUN NOW:
+#   * at their step, when the flow runs -- steps 21 / 31 / 36, enforced by
+#     flow_compliance_check.py;
+#   * over an ALREADY-published corpus, by tools/ci/audit_63x9.sh, which resolves
+#     the corpus and REFUSES (rc 2) rather than passing when there is none.
+#
+# STILL OPEN, and deliberately not folded in silently: `tool_diagnostic_id_gate`
+# is NOT declared by any flow step, so "the flow runs it" is not true of it. It
+# moved to audit_63x9.sh with the others because its subject is likewise a
+# published cell, but whether it should instead become a step gate is a design
+# question this change does not answer.
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the

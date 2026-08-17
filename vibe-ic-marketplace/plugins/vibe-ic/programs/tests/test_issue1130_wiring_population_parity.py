@@ -202,6 +202,12 @@ def test_the_gate_it_found_still_exists_and_is_a_real_program():
     ("gate_is_wired_check.py", ["--root", str(_PLUGIN)], "gates:"),
     ("checker_execution_wiring_audit.py", [], "checker-shaped program(s)"),
 ])
+# 300 s, the driver's stall window and the most this item can actually be
+# granted, so the inner bound above is held to 300 // 3 = 100 rather than
+# to 60. Declared here rather than raised silently: this test really does
+# launch a 20-58 s subprocess, and the old 4-9%% margin is what made its
+# verdict move on host load.
+@pytest.mark.timeout(300)
 def test_the_wiring_gates_state_their_denominator_on_a_clean_run(prog, args, needle):
     #: 55s, not 170s. The harness runs this suite under `--timeout=180` and
     #: `ci_harness_timeout_ceiling_check` derives a per-call ceiling of
@@ -213,7 +219,14 @@ def test_the_wiring_gates_state_their_denominator_on_a_clean_run(prog, args, nee
     #: `checker_execution_wiring_audit` 18.9-20.3s. 55s is ~2.7x the slowest
     #: observed and still inside the ceiling.
     p = subprocess.run([sys.executable, str(_PROGRAMS / prog), *args],
-                       capture_output=True, text=True, timeout=55)
+                       # MEASURED 2026-08-18: this bound had 4-9%% margin against its own worst observed
+                       # run (55 vs 50.31 s / 60 vs 57.56 s), and it FLIPPED between three SERIAL runs of
+                       # the same tree -- passed / failed / passed -- with no parallelism involved at all.
+                       # A verdict that moves on host load is not a verdict about the code, and it was
+                       # about to be blamed on xdist. The item now declares 300 s (the driver's stall
+                       # window, the most it can actually be granted), which lifts the inner ceiling to
+                       # 300 // 3 = 100 -- ~1.7x the worst observed run instead of 1.04x.
+                       capture_output=True, text=True, timeout=100)
     out = p.stdout + p.stderr
     assert needle in out, out[:600]
     assert re.search(r"\d", out), out[:600]
