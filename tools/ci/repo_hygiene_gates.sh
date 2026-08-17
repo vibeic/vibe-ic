@@ -321,12 +321,20 @@ run "L-doc field producer"              "$ROOT" python3 "$PG/l_doc_field_produce
 # vibe-ic#371 — a tracked symlink recorded with an ABSOLUTE target resolves
 # only on the machine that wrote it. 159 of 172 were in that state and it made
 # the evidence-citation verdict differ between local and CI on the same commit.
-run "tracked-symlink portability"       "$ROOT" python3 "$PG/tracked_symlink_portability_check.py"
+#
+# `--corpus-may-be-absent` (vibe-ic#1710's treatment): the published corpus
+# moved to `vibeic/benchmark-data` in v1.10.56, so the hardcoded scan root is
+# gone from this repo and the gate refused (rc 2 -> FAIL) on every landing.
+# THE FLAG DOES NOT SILENCE IT. It only says "this repo need not carry a
+# corpus", turning nothing-anywhere into NO_CORPUS which STATES that nothing
+# was scanned; a $VIBE_IC_BENCHMARK_DATA that is set and broken is still
+# UNDETERMINED, and a corpus that IS supplied is still fully adjudicated.
+run "tracked-symlink portability"       "$ROOT" python3 "$PG/tracked_symlink_portability_check.py" --corpus-may-be-absent
 # The defect the line above deliberately declines. Its subject is whether a
 # pointer is relative and stays inside the repo; a target that exists nowhere
 # is a missing FILE, which its own comment says is different — and for months
 # the count was reported on every run with nothing failing on it (#555, #556).
-run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_target_present_check.py" --root "$ROOT"
+run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_target_present_check.py" --root "$ROOT" --corpus-may-be-absent
 # vibe-ic#794 — thirteen ORGANIC backlog items were WRITTEN into
 # `community/backlogs/` between 2026-06-14 and 2026-07-12 and never committed,
 # beside twenty-five siblings that were. Both populations look identical in
@@ -759,7 +767,18 @@ run "L4 -> SystemRDL disposition"       "$ROOT" python3 "$PG/l4_systemrdl_export
 # gate, and all three of its citations for the converged cells point at
 # directories that no longer exist. INDEX.md is a pure function of the tracked
 # artefacts, so a verdict that changes while its row does not is a FAIL here.
-run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_index.py" --check --root "$ROOT"
+#
+# `--corpus-may-be-absent` is passed because the corpus MOVED to its own
+# repository (v1.10.56), so this repo genuinely need not carry one — the same
+# opt-in `gatekeeper-land.sh` passes to `benchmark_evidence_structure_check`
+# after #1710, and for the same reason. It is opt-in HERE, at the call site,
+# rather than a default in the program: the flag only converts "no corpus
+# discoverable ANYWHERE" into NO_CORPUS (rc=0, generating and comparing
+# nothing, and SAYING so). It does not touch the two outcomes that matter —
+# a $VIBE_IC_BENCHMARK_DATA that is set and broken is still UNDETERMINED
+# (rc=2), and a corpus that IS resolvable is still walked and can still FAIL
+# on a stale index.
+run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_index.py" --check --root "$ROOT" --corpus-may-be-absent
 
 # vibe-ic#459 follow-up — the PROGRAMS index, alongside the evidence index above.
 # MAIN WENT RED TWICE (v1.7.40, v1.7.41) because a new program landed and

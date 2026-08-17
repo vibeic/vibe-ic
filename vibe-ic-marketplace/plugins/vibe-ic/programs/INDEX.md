@@ -837,7 +837,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `published_record_staleness_check` | any | — | a landed gate rule does not reach the records the gate already published. |
 | `pulse_decoder_edge_check` | any | — | Enforce rising-edge-driven classification in LOW-pulse decoders (PPM/PWM/AID/DALI/1-Wire/NEC-IR/UART-break style). |
 | `pvt_matrix_check` | any | — | PVT-matrix substance gate (ORGANIC-20260606 #442). |
-| `pytest_per_file_junit` | any | — | ONE pytest session per selected file, so a file that HANGS costs its own record and not the whole run's, plus a whole-selection semantics... |
+| `pytest_per_file_junit` | any | — | run the whole selection once, then recover with ONE pytest session per selected file only when that aggregate record is lost, so a file t... |
 | `qsf_gen` | any | Wave 72 | auto-generate Quartus QSF (FPGA pin assignments). |
 | `qspi_ospi_protocol_synth` | any | v0.1.91 | Quad/Octal SPI (QSPI/OSPI) — JEDEC Expanded SPI (xSPI, JESD251) protocol synth helper. |
 | `quartus_map_audit` | any | — | Scan Quartus .map.rpt for silent-failure indicators. |
@@ -1989,7 +1989,7 @@ _(no programs in this group)_
 - `published_record_staleness_check` — a landed gate rule does not reach the records the gate already published.
 - `pulse_decoder_edge_check` — Enforce rising-edge-driven classification in LOW-pulse decoders (PPM/PWM/AID/DALI/1-Wire/NEC-IR/UART-break style).
 - `pvt_matrix_check` — PVT-matrix substance gate (ORGANIC-20260606 #442).
-- `pytest_per_file_junit` — ONE pytest session per selected file, so a file that HANGS costs its own record and not the whole run's, plus a whole-selection semantics...
+- `pytest_per_file_junit` — run the whole selection once, then recover with ONE pytest session per selected file only when that aggregate record is lost, so a file t...
 - `qsf_gen` — auto-generate Quartus QSF (FPGA pin assignments).  _[Wave 72]_
 - `qspi_ospi_protocol_synth` — Quad/Octal SPI (QSPI/OSPI) — JEDEC Expanded SPI (xSPI, JESD251) protocol synth helper.  _[v0.1.91]_
 - `quartus_map_audit` — Scan Quartus .map.rpt for silent-failure indicators.
