@@ -267,6 +267,21 @@ def _empty_corpora(doc: dict) -> List[str]:
             if int(c.get("items") or 0) == 0]
 
 
+def _configured_empty_corpora(doc: dict) -> List[str]:
+    """Configured corpora that produced zero items, excluding explicit absence.
+
+    ``NO_CORPUS`` is a call-site declaration that no external corpus was
+    offered, with a dated exemption on its synthetic row.  It may be carried on
+    both arms so an unrelated push is not permanently blocked.  ``EXPANDED``
+    with zero items is different: a corpus *was* offered and the checker
+    population disappeared.  Differencing two such unknowns to CLEAN would
+    certify the exact empty measurement the dispatcher calls NOT_CHECKED.
+    """
+    return [str(c.get("name", "?")) for c in (doc.get("corpora") or [])
+            if int(c.get("items") or 0) == 0
+            and c.get("expansion") not in {"NO_CORPUS", "PRODUCER_FAILED"}]
+
+
 def delta(base: dict, cand: dict) -> dict:
     """Findings the candidate INTRODUCED. Raises :class:`Refusal` if unanswerable."""
     bg, cg = list(base["gates"]), list(cand["gates"])
@@ -303,6 +318,12 @@ def delta(base: dict, cand: dict) -> dict:
                 f"the {arm} run's corpus producer FAILED for {failed} — that "
                 f"loop covered an unknown fraction of its corpus, so a finding "
                 f"absent under it is not a finding that is not there")
+        empty = _configured_empty_corpora(doc)
+        if empty:
+            raise Refusal(
+                f"the {arm} run's configured corpus expanded over ZERO items "
+                f"for {empty} — no checker process ran, so this is "
+                "EMPTY_CORPUS/NOT_CHECKED rather than a clean measurement")
 
     # The record's own internal consistency: the top-level list and the
     # per-gate flags must name the same promises. A record that disagrees with
@@ -360,8 +381,8 @@ def delta(base: dict, cand: dict) -> dict:
         "carried": [list(k) for k in sorted((c_find & b_find).elements())],
         "cleared": [list(k) for k in sorted((b_find - c_find).elements())],
         "no_verdict_either_side": unknown_both,
-        # A loop that expanded over nothing declares no gate, so it is invisible
-        # in `gates` by construction — the case a reader most needs told.
+        # Explicit NO_CORPUS is allowed only as a disclosed no-verdict carried
+        # on both arms; configured empty corpora already refused above.
         "empty_corpora": sorted(set(_empty_corpora(base)) | set(_empty_corpora(cand))),
         "base_findings": sum(b_find.values()),
         "candidate_findings": sum(c_find.values()),

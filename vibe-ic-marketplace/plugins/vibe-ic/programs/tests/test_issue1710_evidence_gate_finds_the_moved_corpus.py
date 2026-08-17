@@ -40,6 +40,7 @@ against a gate that had been deleted.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -50,6 +51,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 PROG = PROGRAMS / "benchmark_evidence_structure_check.py"
 ENV = "VIBE_IC_BENCHMARK_DATA"
+HYGIENE = PROGRAMS.parents[3] / "tools" / "ci" / "repo_hygiene_gates.sh"
 
 
 def _run(*args: str, env_tree: str | None = None, cwd: Path | None = None):
@@ -188,3 +190,96 @@ def test_the_landing_gate_actually_passes_the_flag():
     assert all("--corpus-may-be-absent" in ln for ln in line), (
         f"the landing gate invokes the gate without the flag, so a repo with no "
         f"corpus is still blocked:\n" + "\n".join(line))
+
+
+def _hygiene_list(tmp_path: Path, env_tree: str | None = None):
+    summary = tmp_path / "hygiene-list.json"
+    env = dict(os.environ)
+    env.pop(ENV, None)
+    if env_tree is not None:
+        env[ENV] = env_tree
+    proc = subprocess.run(
+        ["bash", str(HYGIENE), "--list", "--summary-json", str(summary)],
+        capture_output=True, text=True, env=env)
+    assert summary.is_file(), proc.stdout + proc.stderr
+    return proc, json.loads(summary.read_text())
+
+
+def _init_corpus_repo(root: Path, *, routed_def: bool) -> Path:
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    cell = root / "ic" / "design" / "v1.10.55_test"
+    cell.mkdir(parents=True)
+    result = cell / "RESULT.md"
+    result.write_text("# fixture published cell\n")
+    subprocess.run(["git", "-C", str(root), "add", str(result)], check=True)
+    if routed_def:
+        path = cell / "phase3" / "stage3" / "pnr" / "routed.def"
+        path.parent.mkdir(parents=True)
+        path.write_text("VERSION 5.8 ;\nDESIGN fixture ;\nEND DESIGN\n")
+        subprocess.run(["git", "-C", str(root), "add", str(path)], check=True)
+    return root
+
+
+def _precomputed(doc):
+    return [gate for gate in doc["gates"]
+            if gate.get("execution") == "PRECOMPUTED_CORPUS"]
+
+
+def test_hygiene_no_config_is_named_and_dated_not_passed(tmp_path):
+    proc, doc = _hygiene_list(tmp_path)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    rows = _precomputed(doc)
+    assert len(rows) == 1, rows
+    assert rows[0]["state"] == "LISTED"
+    assert rows[0]["reason_code"] == "NO_CORPUS"
+    assert rows[0]["exempt_until"], rows[0]
+
+
+def test_hygiene_broken_pointer_is_not_laundered_as_no_corpus(tmp_path):
+    _, doc = _hygiene_list(tmp_path, str(tmp_path / "missing"))
+    rows = _precomputed(doc)
+    assert len(rows) == 1, rows
+    assert rows[0]["reason_code"] == "PRODUCER_FAILED"
+    assert rows[0]["exempt_until"] is None
+
+
+def test_hygiene_present_but_empty_corpus_is_not_no_corpus(tmp_path):
+    corpus = _init_corpus_repo(tmp_path / "corpus", routed_def=False)
+    _, doc = _hygiene_list(tmp_path, str(corpus))
+    rows = _precomputed(doc)
+    assert len(rows) == 1, rows
+    assert rows[0]["reason_code"] == "EMPTY_CORPUS"
+    assert rows[0]["exempt_until"] is None
+
+
+def test_hygiene_present_corpus_dispatches_real_cells(tmp_path):
+    corpus = _init_corpus_repo(tmp_path / "corpus", routed_def=True)
+    _, doc = _hygiene_list(tmp_path, str(corpus))
+    assert _precomputed(doc) == []
+    routed = [c for c in doc["corpora"]
+              if c["name"] == "published cells carrying a routed DEF"]
+    assert routed == [{"name": "published cells carrying a routed DEF",
+                       "items": 1, "gates": 4, "expansion": "EXPANDED"}]
+
+
+def test_hygiene_refuses_a_tracked_but_missing_routed_def(tmp_path):
+    """The git index is not evidence that the checker can read the subject.
+
+    A sparse checkout or dirty corpus may retain the routed-DEF path in
+    ``git ls-files`` after its worktree bytes disappeared.  Treating that path
+    as an item lets every per-cell checker decline and can make the configured
+    corpus look measured.
+    """
+    corpus = _init_corpus_repo(tmp_path / "corpus", routed_def=True)
+    routed_def = next(corpus.glob("ic/*/*/phase3/stage3/pnr/routed.def"))
+    routed_def.unlink()
+    _, doc = _hygiene_list(tmp_path, str(corpus))
+    rows = _precomputed(doc)
+    assert len(rows) == 1, rows
+    assert rows[0]["reason_code"] == "PRODUCER_FAILED"
+    assert rows[0]["exempt_until"] is None
+    corpus_row = next(c for c in doc["corpora"]
+                      if c["name"] == "published cells carrying a routed DEF")
+    assert corpus_row["items"] == 0
+    assert corpus_row["expansion"] == "PRODUCER_FAILED"

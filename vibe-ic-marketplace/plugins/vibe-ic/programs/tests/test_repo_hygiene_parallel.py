@@ -110,6 +110,63 @@ def test_missing_process_attestation_cannot_become_green():
     assert P._summary_rc(doc) == 2
 
 
+def test_empty_corpus_record_needs_one_owner_but_no_process_attestation():
+    """A measured empty expansion is evidence, not an invented process.
+
+    The dispatcher owns the synthetic NOT_CHECKED row.  It must be covered by
+    exactly one shard, while the process ledger must remain silent because no
+    checker process ran.  Treating absence of that impossible process as loss
+    made every post-split landing refuse before host comparison could start.
+    """
+    empty = 'corpus "published cells" is EMPTY — nothing was checked over it'
+    empty_ref = gate(empty, "NOT_CHECKED")
+    empty_ref.update(corpus="published cells", corpus_item=0, corpus_items=0,
+                     execution="PRECOMPUTED_CORPUS",
+                     reason_code="EMPTY_CORPUS")
+    reference, a, b, attest = fixture()
+    reference["gates"].insert(1, empty_ref)
+    reference["corpora"] = [{"name": "published cells", "items": 0,
+                              "gates": 1, "expansion": "EXPANDED"}]
+    a_empty = dict(empty_ref)
+    a_empty["state"] = "NOT_CHECKED"
+    b_empty = dict(empty_ref)
+    b_empty["state"] = "OTHER_SHARD"
+    a["gates"].insert(1, a_empty)
+    b["gates"].insert(1, b_empty)
+    a["corpora"] = b["corpora"] = reference["corpora"]
+
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+    assert problems == [], problems
+    assert doc["gates"][1]["state"] == "NOT_CHECKED"
+    assert not any(row.get("label") == empty
+                   for row in doc["process_attestations"])
+    assert doc["parallel"]["complete"] is True
+    assert doc["not_checked_unexempted"] == [empty]
+    assert P._summary_rc(doc) == 2
+
+
+def test_precomputed_corpus_evidence_must_match_between_arms():
+    empty = 'corpus "published cells" is EMPTY — nothing was checked over it'
+    template = gate(empty, "LISTED")
+    template.update(corpus="published cells", corpus_item=0, corpus_items=0,
+                    execution="PRECOMPUTED_CORPUS",
+                    reason_code="EMPTY_CORPUS")
+    reference = {"gates": [template]}
+    a_row = dict(template, state="NOT_CHECKED")
+    b_row = dict(a_row, reason_code="DIFFERENT")
+    a = [(Path("a"), {"gates": [a_row]})]
+    b = [(Path("b"), {"gates": [b_row]})]
+    problems = []
+    a_record = P._precomputed_arm_records(reference, a, "A", problems)
+    b_record = P._precomputed_arm_records(reference, b, "B", problems)
+    if a_record != b_record:
+        problems.append("Arm A/B precomputed corpus records differ")
+    assert any("reason_code differs" in problem for problem in problems)
+    assert any("Arm A/B" in problem for problem in problems)
+
+
 def test_worker_waits_for_completion_while_progress_events_keep_advancing(
         tmp_path, monkeypatch):
     """A slow run is not killed for exceeding an estimated runtime.

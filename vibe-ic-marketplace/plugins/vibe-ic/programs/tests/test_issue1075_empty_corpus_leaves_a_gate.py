@@ -134,6 +134,47 @@ def test_the_parallel_records_stay_aligned():
         f"states to labels: {lens}")
 
 
+def test_an_empty_corpus_synthetic_record_has_exactly_one_shard_owner():
+    """The record is declarative, but it still has one distributed owner.
+
+    Every shard expands the same empty producer.  Only the shard whose plan
+    names the synthetic label may carry NOT_CHECKED; all peers must carry
+    OTHER_SHARD.  Otherwise the parallel aggregator sees N owners for one
+    denominator row and correctly refuses the entire run.
+    """
+    label = 'corpus "an empty corpus" is EMPTY — nothing was checked over it'
+    owner = _drive(f'''
+        GATE_DISPATCH_SHARD_I=0
+        GATE_DISPATCH_SHARD_N=2
+        GATE_DISPATCH_SHARD_LABELS={label!r}
+        _body(){{ :; }}
+        gate_dispatch_over "an empty corpus" _body true
+        echo "STATE=${{GATE_STATES[*]}}"
+    ''')
+    peer = _drive('''
+        GATE_DISPATCH_SHARD_I=1
+        GATE_DISPATCH_SHARD_N=2
+        GATE_DISPATCH_SHARD_LABELS="some other gate"
+        _body(){ :; }
+        gate_dispatch_over "an empty corpus" _body true
+        echo "STATE=${GATE_STATES[*]}"
+    ''')
+    assert "STATE=NOT_CHECKED" in owner, owner
+    assert "STATE=OTHER_SHARD" in peer, peer
+
+
+def test_an_empty_corpus_is_listed_not_run_in_list_mode():
+    out = _drive('''
+        GATE_DISPATCH_LIST_ONLY=1
+        _body(){ :; }
+        gate_dispatch_over "an empty corpus" _body true
+        echo "STATE=${GATE_STATES[*]}"
+    ''')
+    assert "STATE=LISTED" in out, out
+    assert "EMPTY CORPUS" not in out, (
+        f"list mode claimed the synthetic record actually ran:\n{out}")
+
+
 # ── paired guards: the non-empty path must be untouched ─────────────────────
 
 def test_a_non_empty_corpus_gains_no_synthetic_gate():

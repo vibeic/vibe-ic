@@ -172,13 +172,6 @@ def _label_matcher(decl):
     return lambda got: bool(rx.match(got))
 
 
-#: The dispatcher's synthetic row for a corpus that expanded to nothing. Written
-#: by `gate_dispatch_over` in `tools/ci/_gate_dispatch.sh` (vibe-ic#1075), NOT by
-#: any `run` line — see `split_empty_corpus_records`.
-_EMPTY_CORPUS_LABEL_RE = re.compile(
-    r'\Acorpus "(?P<name>.+)" is EMPTY — nothing was checked over it\Z')
-
-
 def declared_corpora(script: Path):
     """Every corpus name the script hands to `gate_dispatch_over`, by PARSING.
 
@@ -198,8 +191,8 @@ def declared_corpora(script: Path):
     return out
 
 
-def split_empty_corpus_records(recorded_labels):
-    """(`run`-line invocations, corpus names whose loop expanded to NOTHING).
+def split_precomputed_corpus_records(recorded_gates):
+    """(`run`-line invocations, explicitly precomputed corpus records).
 
     A RECORD IS NOT ALWAYS AN INVOCATION. `gate_dispatch_over` deliberately
     appends one synthetic NOT_CHECKED row when its producer yields zero items,
@@ -216,21 +209,27 @@ def split_empty_corpus_records(recorded_labels):
     explains", and the merge gate looked broken. Nothing about the merge gate
     changed; a corpus emptied.
 
-    Partitioning here rather than teaching `reconcile` about corpora keeps the
-    drift check at full strength AND makes it independent of how many cells
-    happen to be published — the same test now runs at 0 items and at 100. The
-    caller must still prove each name is one the script DECLARES; a synthetic
-    row naming a corpus no `gate_dispatch_over` line mentions is exactly the
-    fabrication this file exists to catch, so it is returned, not swallowed.
+    The dispatcher identifies these rows with the machine field
+    ``execution=PRECOMPUTED_CORPUS``. The prose label is diagnostic only: a
+    label which merely *looks* like an empty-corpus message must not buy this
+    exception. Partitioning on the explicit field rather than English text
+    keeps the drift check at full strength and lets NO_CORPUS, EMPTY_CORPUS,
+    and PRODUCER_FAILED remain distinct.
+
+    The caller must still prove each corpus name is one the script DECLARES; a
+    precomputed row naming a corpus no `gate_dispatch_over` line mentions is
+    exactly the fabrication this file exists to catch.
     """
-    invocations, empty = [], []
-    for label in recorded_labels:
-        m = _EMPTY_CORPUS_LABEL_RE.match(label)
-        if m:
-            empty.append(m.group("name"))
+    invocations, precomputed = [], []
+    for gate in recorded_gates:
+        if gate.get("execution") == "PRECOMPUTED_CORPUS":
+            assert gate.get("reason_code") in {
+                "NO_CORPUS", "EMPTY_CORPUS", "PRODUCER_FAILED"
+            }, gate
+            precomputed.append(gate.get("corpus"))
         else:
-            invocations.append(label)
-    return invocations, empty
+            invocations.append(gate["label"])
+    return invocations, precomputed
 
 
 def reconcile(declarations, recorded_labels):
@@ -349,16 +348,16 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
     decls = GD.parse_declarations(_SCRIPT)
     assert decls, "the parser found no gates in the real hygiene script"
     doc = _list_record(_SCRIPT, _REPO)
-    recorded = [g["label"] for g in doc["gates"]]
+    recorded_gates = doc["gates"]
 
     # A record written BY THE DISPATCHER rather than by a `run` line is set
     # aside first — and only after the script is made to account for it. See
-    # `split_empty_corpus_records`: an empty corpus leaves a synthetic
+    # `split_precomputed_corpus_records`: an empty corpus leaves a synthetic
     # NOT_CHECKED row behind on purpose, and reconciling it against `run` lines
     # asks a question it can never answer. It is not waved through: its corpus
     # must be one the script DECLARES, so a synthetic-looking label the script
     # never asked for is still a fabricated gate and still red.
-    invocations, empty_corpora = split_empty_corpus_records(recorded)
+    invocations, empty_corpora = split_precomputed_corpus_records(recorded_gates)
     fabricated = sorted(set(empty_corpora) - set(declared_corpora(_SCRIPT)))
     assert not fabricated, (
         "the dispatcher recorded an EMPTY-corpus row for a corpus no "
@@ -372,7 +371,7 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
         "these `run` lines are declared outside any loop and never reached "
         f"the dispatcher — they are wired through something that bypasses "
         f"the recording: {silent}")
-    assert doc["declared"] == len(recorded)
+    assert doc["declared"] == len(recorded_gates)
     # IT USED TO SAY `len(recorded) >= len(decls)`, and that is false on a
     # correct script the moment a loop expands to nothing: 4 templated `run`
     # lines that fire zero times are 4 declarations backing 0 invocations, so
@@ -414,8 +413,8 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
     assert_invocations_decompose(decls, invocations)
 
 
-def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
-    """The control for `split_empty_corpus_records`, which must not become a
+def test_a_precomputed_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
+    """The control for `split_precomputed_corpus_records`, which must not become a
     hole through which any unexplained record escapes.
 
     Driven over a REAL script that sources the REAL dispatch library and runs a
@@ -449,16 +448,16 @@ def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
             'printf ""\n'))
         decls = GD.parse_declarations(script)
         doc = _list_record(script, root)
-        recorded = [g["label"] for g in doc["gates"]]
+        recorded_gates = doc["gates"]
         # Read inside the tempdir's lifetime — the script is gone below.
         corpora = declared_corpora(script)
 
     assert corpora == ["cells that do not exist"]
 
     # 1. the dispatcher really does record the empty corpus.
-    invocations, empty = split_empty_corpus_records(recorded)
-    assert empty == ["cells that do not exist"], recorded
-    assert len(recorded) == len(invocations) + 1
+    invocations, empty = split_precomputed_corpus_records(recorded_gates)
+    assert empty == ["cells that do not exist"], recorded_gates
+    assert len(recorded_gates) == len(invocations) + 1
 
     # 2. and with it set aside, a script whose loop expanded to nothing is
     #    clean — one literal declaration, one invocation, one templated
@@ -467,17 +466,26 @@ def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
     assert_invocations_decompose(decls, invocations)
     # Reconciling the RAW record is what was red, and naming it here is what
     # stops the partition being confused for a no-op.
+    recorded = [g["label"] for g in recorded_gates]
     assert reconcile(decls, recorded)[0] == [
         'corpus "cells that do not exist" is EMPTY — nothing was checked over it']
 
     # 3. THE CLAUSE THAT KEEPS IT HONEST: same phrasing, corpus the script never
     #    declared, still caught.
-    forged = 'corpus "a corpus nobody declared" is EMPTY — nothing was checked over it'
-    _inv, forged_empty = split_empty_corpus_records(recorded + [forged])
+    forged = {
+        "label": 'corpus "a corpus nobody declared" is EMPTY — nothing was checked over it',
+        "state": "NOT_CHECKED",
+        "seconds": 0,
+        "execution": "PRECOMPUTED_CORPUS",
+        "reason_code": "EMPTY_CORPUS",
+        "corpus": "a corpus nobody declared",
+    }
+    _inv, forged_empty = split_precomputed_corpus_records(recorded_gates + [forged])
     assert sorted(set(forged_empty) - set(corpora)) == ["a corpus nobody declared"]
-    # …and a record that is not the synthetic shape at all is untouched by the
-    # partition and reaches `reconcile` as before.
-    assert split_empty_corpus_records(["something else"]) == (["something else"], [])
+    # …and prose alone cannot spoof the machine field. It remains an ordinary
+    # unexplained invocation and reaches `reconcile` as before.
+    prose_only = {"label": forged["label"], "state": "NOT_CHECKED", "seconds": 0}
+    assert split_precomputed_corpus_records([prose_only]) == ([forged["label"]], [])
 
 
 def test_a_continued_run_line_is_read_as_the_one_command_bash_runs():
