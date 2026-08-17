@@ -1463,3 +1463,4 @@ run_tolerating_uncheckable "gates are host-independent" "$ROOT" \
 # Writes the coverage record (when asked), prints the roll-up WITH its own
 # denominator, and exits 0 / 1 / 2. See `_gate_dispatch.sh`.
 gate_dispatch_finish
+x # adversarial probe
