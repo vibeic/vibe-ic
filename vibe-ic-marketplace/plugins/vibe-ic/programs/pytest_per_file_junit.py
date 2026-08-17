@@ -450,8 +450,39 @@ class _SemanticProgressProbe:
             self._fail("partial event exceeds line limit")
             return self.score
         for raw in lines:
-            if not raw or len(raw) > _MAX_PROGRESS_LINE:
-                self._fail("empty/oversized event")
+            # AN EMPTY LINE IS A SEPARATOR, NOT A VIOLATION. It carries no event,
+            # so there is nothing to validate and nothing a stale or foreign
+            # writer could smuggle through it. Treating it as fatal is what killed
+            # the aggregate session.
+            #
+            # MEASURED: the supervised aggregate died after 362 s at
+            # PROGRESS_PROTOCOL_INCOMPLETE -> WATCHDOG_STALLED ->
+            # AGGREGATE_NORECORD rc=199, having recorded ZERO cases, while its own
+            # captured stdout showed the run alive and past 20%. Reproduced 3/3 on
+            # two hosts. 362 s of every round, for no coverage at all.
+            #
+            # WHY ONLY THE AGGREGATE EVER HIT IT. That session funnels ~5854 tests
+            # down one relay; a per-file session emits a few dozen events. One
+            # stray "\n" -- any writer ending a record with one, followed by
+            # another -- yields b"" between two perfectly good records. The
+            # aggregate meets that eventually; a per-file run essentially never
+            # does. The control is decisive: the SAME selection run as a plain
+            # aggregate with no supervisor completes in 1826 s. The session was
+            # never the problem; the reader was.
+            #
+            # AND THE FAILURE IS ABSORBING: once the protocol fails it stays
+            # failed, so every later real event stops counting as progress, the
+            # stall clock never advances again, and the watchdog kills a healthy
+            # run. One blank byte, the whole aggregate.
+            if not raw:
+                continue
+            # OVERSIZE STAYS FATAL, and must. A line past the limit is either a
+            # torn write or a writer not following the protocol, and neither may
+            # be counted as progress. (A partial line at the end of a chunk is a
+            # different case and is already handled by the `self.tail` check
+            # above, which keeps its own limit.)
+            if len(raw) > _MAX_PROGRESS_LINE:
+                self._fail("oversized event")
                 break
             try:
                 record = json.loads(raw.decode("utf-8"))
@@ -1500,6 +1531,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "the whole-selection canary is classified hung "
                          f"(default {DEFAULT_AGGREGATE_STALL_AFTER}); this is "
                          "not a runtime bound")
+    ap.add_argument(
+        "--parallel-first", action="store_true",
+        help="run the whole selection through the per-file PARALLEL path at "
+             "--fallback-jobs width instead of one serial aggregate process. "
+             "COSTS COVERAGE: the aggregate session preserves the order/"
+             "global-state semantics this driver replaced, so a failure that "
+             "only appears when file A runs before file B is no longer seen.")
     ap.add_argument("--fallback-jobs", type=int,
                     default=DEFAULT_FALLBACK_JOBS,
                     help="requested maximum independent supervisor processes "
@@ -1573,7 +1611,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # and a complete answer avoids N redundant pytest starts. If its record
         # is lost, per-file sessions run only as diagnostic recovery below; they
         # preserve neighbouring records but never clear aggregate_incomplete.
-        if a.aggregate_check:
+        # `aggregate_not_requested` IS NOT `aggregate_incomplete`. The second means
+        # "we asked and the record was lost" -- a refusal. This means "we did not
+        # ask". Collapsing them is how a run that SKIPPED a question comes to read
+        # as one that FAILED it; my first attempt set aggregate_incomplete here and
+        # every parallel run returned rc 2.
+        aggregate_not_requested = bool(a.parallel_first)
+        if a.aggregate_check and not a.parallel_first:
             aggregate_path = tmp / "aggregate.xml"
             print(f"=== [aggregate] {len(selection)} file(s) in one pytest "
                   "process", flush=True)
@@ -1609,8 +1653,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                       f"cases={aggregate_cases}  red={aggregate_red}",
                       flush=True)
 
-        if (not a.aggregate_only and a.aggregate_check
-                and aggregate_incomplete):
+        if (not a.aggregate_only
+                and (a.parallel_first
+                     or (a.aggregate_check and aggregate_incomplete))):
             print(f"=== [fallback] {len(selection)} file(s), "
                   f"{a.fallback_jobs} independent supervisor process(es)",
                   flush=True)
@@ -1654,7 +1699,91 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     recovery[index] = outcome
                     red_total += outcome.result.red
 
+                if a.parallel_first:
+                    # EVERY PARALLEL-SAFE FILE IN ONE WAVE; the tree-exclusive ones
+                    # follow, ONE AT A TIME, below. The probe/rescue split exists to
+                    # diagnose a LOST aggregate; with no aggregate to lose there is
+                    # nothing to probe for, and probing would only serialise the run.
+                    #
+                    # The split is a MEASURED list, not a heuristic
+                    # (`programs/_tree_exclusive_tests.py`): those 21 files either
+                    # write into the tree or assert something about the whole of it,
+                    # so two of them at once observe each other's artefacts. Measured
+                    # on a 374-file two-arm run: 34 parallel-only failures, all of
+                    # them in those files, and ZERO serial-only failures.
+                    import _tree_exclusive_tests as _tx
+                    probe_indices, _exclusive_indices = _tx.split(selection)
+                    if _exclusive_indices:
+                        print(f"=== [tree-exclusive] {len(_exclusive_indices)} file(s) "
+                              "will each get an isolated worktree",
+                              flush=True)
             _run_recovery_wave(probe_indices)
+            if a.parallel_first and _exclusive_indices:
+                # EACH ONE IN ITS OWN CHECKOUT, AND THEREFORE ALL AT ONCE.
+                #
+                # The first attempt ran these SERIALLY in the shared tree and the verdict
+                # hash did not move a bit (e08f83d7a507c013, identical to the unisolated
+                # run) -- which named the real cause: they fail not because they run
+                # BESIDE each other but because the PARALLEL WAVE dirties the tree, and a
+                # test whose assertion is "the shipped tree is clean" then reads that
+                # residue. Ordering them later cannot help; the damage precedes them.
+                #
+                # So they get a TREE each rather than an ORDER. And once nothing is
+                # shared there is nothing to serialise for, so they run concurrently like
+                # everything else: the isolation buys the parallelism back instead of
+                # spending it.
+                import _exclusive_worktrees as _xw
+                _commit = _xw.head_commit()
+                if not _commit:
+                    # A REFUSAL, NOT A SKIP. Without a commit there is no tree to make, and
+                    # a file that never ran must not read as one that passed.
+                    for _ix in _exclusive_indices:
+                        recovery[_ix] = _FallbackOutcome(
+                            _fallback_no_record(
+                                selection[_ix - 1],
+                                "isolated worktree not created: HEAD is unresolvable"),
+                            "EXCLUSIVE_WORKTREE_NORECORD: HEAD unresolvable\n")
+                else:
+                    _made = []
+                    for _ix, _path, _tag in _xw.plan(_exclusive_indices, selection):
+                        _wt, _err = _xw.make(_commit, _tag)
+                        if _wt is None:
+                            recovery[_ix] = _FallbackOutcome(
+                                _fallback_no_record(_path, _err or "worktree refused"),
+                                f"EXCLUSIVE_WORKTREE_NORECORD: {_err}\n")
+                            continue
+                        _made.append((_ix, _path, _wt))
+                    print(f"=== [tree-exclusive] {len(_made)} file(s), one isolated "
+                          "worktree each, run concurrently", flush=True)
+                    try:
+                        import concurrent.futures as _cf
+                        with _cf.ThreadPoolExecutor(max_workers=min(8, max(1, len(_made)))) as _ex:
+                            _futs = {
+                                _ex.submit(
+                                    _run_fallback_batch, pytest_argv, [(_ix, _path)], tmp,
+                                    a.stall_after, _xw.cwd_for(_wt),
+                                    progress_relay_path=(Path(a.progress_relay)
+                                                         if a.progress_relay else None)): _ix
+                                for _ix, _path, _wt in _made}
+                            for _f in _cf.as_completed(_futs):
+                                _ix = _futs[_f]
+                                try:
+                                    _out = _f.result()[0]
+                                except Exception as _exc:                      # noqa: BLE001
+                                    _out = _FallbackOutcome(
+                                        _fallback_no_record(
+                                            selection[_ix - 1],
+                                            f"isolated run failed: {_exc!r}"),
+                                        f"EXCLUSIVE_WORKTREE_NORECORD: {_exc!r}\n")
+                                recovery[_ix] = _out
+                                red_total += _out.result.red
+                    finally:
+                        # UNCONDITIONAL, including on the exception path: a leaked worktree
+                        # makes the NEXT round's clean-tree gate blame that round for a tree
+                        # this one left behind.
+                        for _ix, _path, _wt in _made:
+                            _xw.remove(_wt)
+                        _xw.prune()
             probe_set = set(probe_indices)
             remaining_indices = [
                 i for i in range(1, len(selection) + 1)
