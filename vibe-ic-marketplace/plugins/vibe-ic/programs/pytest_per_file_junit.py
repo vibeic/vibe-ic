@@ -101,6 +101,7 @@ USAGE
         [--stall-after SECONDS] [--stop-after-failures N] [--cwd DIR]
         [--aggregate-check] [--aggregate-only]
         [--aggregate-stall-after SECONDS] [--fallback-jobs N]
+        [--fallback-rescue-jobs N]
         -- <the full pytest command, e.g. python3 -m pytest -q --timeout=180>
 
 The command after ``--`` is run VERBATIM with ``-o junit_family=xunit1``, a
@@ -117,17 +118,18 @@ aggregate is the whole answer, so no per-file sessions are launched. An aggregat
 stall or missing/partial XML is ``AGGREGATE_NORECORD`` and remains an absolute
 landing refusal; only then are isolated per-file sessions launched to preserve
 every recoverable neighbouring record and name any individual ``NORECORD``.
-Those recovery sessions run in a bounded process pool. Each worker owns a
+Those recovery sessions run in bounded process pools. Each worker owns a
 separate semantic supervisor/subreaper; process-global cleanup state is never
-shared through threads. A systemic collection hang therefore costs one bounded,
-deterministic stratified probe across the ordered selection rather than one
-complete stall window per selected file. The probe includes both ends and evenly
-samples at most the pool width, so a contiguous directory-local cluster cannot
-stand in for the corpus. If that whole probe returns semantic NORECORD, a
-systemic circuit breaker stops there and names every remaining file ``NOTRUN``;
-if even one probe worker produced a complete record, recovery continues through
-every unprobed file. Results are emitted and merged in the original selection
-order regardless of which indices the probe ran first.
+shared through threads. The first wave is a deterministic stratified probe across
+the ordered selection, including both ends. It is an early diagnostic only: even
+when every probe returns semantic NORECORD, that sample is never allowed to infer
+the result of an untried file. Every remaining file is attempted through a
+resource-aware high-parallel rescue. Its simultaneous-worker width is the minimum
+of explicit request, CPU fan-out, available-memory reservation, cgroup PID
+headroom, and an absolute process ceiling. A systemic collection hang therefore
+costs bounded parallel waves rather than one stall window per selected file,
+without trading away the only recoverable record. Results are emitted and merged
+in the original selection order regardless of which indices ran first.
 
 ``--aggregate-only`` disables that diagnostic recovery. It remains available for
 callers that need exactly one whole-selection attempt, but the landing callers do
@@ -174,7 +176,20 @@ RC_CANNOT_ASK = 3
 DEFAULT_STALL_AFTER = 300
 DEFAULT_AGGREGATE_STALL_AFTER = 300
 DEFAULT_FALLBACK_JOBS = 8
+DEFAULT_FALLBACK_RESCUE_JOBS = 32
 DEFAULT_POLL_S = 2
+
+# Parallel fallback is diagnostic work after landing is already an absolute
+# RC_NORECORD refusal.  It should be broad enough to rescue a sparse good file,
+# but it must not fork according to corpus size.  These are concurrency limits,
+# never estimates of how long a healthy pytest session may run.
+MAX_FALLBACK_PROCESSES = 64
+_FALLBACK_CPU_FANOUT_PER_CORE = 2
+_FALLBACK_MEMORY_PER_JOB_BYTES = 512 * 1024 * 1024
+_FALLBACK_MEMORY_RESERVE_BYTES = 1024 * 1024 * 1024
+_FALLBACK_PIDS_PER_JOB = 8
+_FALLBACK_PID_RESERVE = 32
+_FALLBACK_UNMEASURED_RESOURCE_CAP = 4
 
 _PROGRESS_PATH_ENV = "VIBEIC_PYTEST_PROGRESS_FILE"
 _PROGRESS_NONCE_ENV = "VIBEIC_PYTEST_PROGRESS_NONCE"
@@ -243,6 +258,18 @@ class _FallbackOutcome:
 
     result: FileResult
     log: str
+
+
+@dataclass(frozen=True)
+class _FallbackCapacity:
+    """Auditable simultaneous-worker ceiling from three host resources."""
+
+    jobs: int
+    requested: int
+    cpu_cap: int
+    memory_cap: int
+    pid_cap: int
+    hard_cap: int = MAX_FALLBACK_PROCESSES
 
 
 class _SemanticProgressProbe:
@@ -957,6 +984,160 @@ def _fallback_no_record(test_file: str, reason: str) -> FileResult:
                       norecord_reason=reason)
 
 
+def _cgroup_v2_nodes() -> List[Path]:
+    """Return the current cgroup-v2 leaf through mount root, most local first."""
+    try:
+        relative: Optional[str] = None
+        for line in Path("/proc/self/cgroup").read_text(
+                encoding="ascii").splitlines():
+            fields = line.split(":", 2)
+            if len(fields) == 3 and fields[0] == "0":
+                relative = fields[2]
+                break
+        if relative is None:
+            return []
+        root = Path("/sys/fs/cgroup").resolve()
+        leaf = (root / relative.lstrip("/")).resolve()
+        try:
+            leaf.relative_to(root)
+        except ValueError:
+            return []
+        nodes = []
+        node = leaf
+        while True:
+            nodes.append(node)
+            if node == root:
+                return nodes
+            node = node.parent
+    except (OSError, UnicodeError):
+        return []
+
+
+def _available_cpu_count() -> Optional[int]:
+    """Return the tightest affinity/cgroup CPU allowance, rounded to cores."""
+    counts: List[int] = []
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            counts.append(len(os.sched_getaffinity(0)))
+        except OSError:
+            pass
+    host_count = os.cpu_count()
+    if host_count is not None:
+        counts.append(int(host_count))
+    for node in _cgroup_v2_nodes():
+        try:
+            fields = (node / "cpu.max").read_text(
+                encoding="ascii").split()
+            if len(fields) == 2 and fields[0] != "max":
+                quota, period = (int(value) for value in fields)
+                if quota >= 0 and period > 0:
+                    counts.append(max(1, (quota + period - 1) // period))
+        except (FileNotFoundError, ValueError):
+            pass
+    positive = [count for count in counts if count > 0]
+    return min(positive) if positive else None
+
+
+def _available_memory_bytes() -> Optional[int]:
+    """Return the tightest host/cgroup memory headroom available now."""
+    available: List[int] = []
+    try:
+        lines = Path("/proc/meminfo").read_text(
+            encoding="ascii").splitlines()
+        for line in lines:
+            fields = line.split()
+            if len(fields) == 3 and fields[0] == "MemAvailable:" \
+                    and fields[2] == "kB":
+                value = int(fields[1]) * 1024
+                if value >= 0:
+                    available.append(value)
+                break
+    except (OSError, UnicodeError, ValueError):
+        pass
+    for node in _cgroup_v2_nodes():
+        try:
+            maximum = (node / "memory.max").read_text(
+                encoding="ascii").strip()
+            current = int((node / "memory.current").read_text(
+                encoding="ascii").strip())
+            if maximum != "max":
+                available.append(max(0, int(maximum) - current))
+        except (FileNotFoundError, ValueError):
+            pass
+    return min(available) if available else None
+
+
+def _cgroup_pid_headroom() -> Optional[int]:
+    """Return the tightest finite cgroup-v2 PID headroom for this process.
+
+    A leaf scope can have a permissive ``pids.max`` while an ancestor is tight,
+    so inspect the leaf and every ancestor up to the cgroup mount. ``max`` is
+    unbounded at that level and contributes no finite cap.
+    """
+    headrooms: List[int] = []
+    for node in _cgroup_v2_nodes():
+        try:
+            maximum = (node / "pids.max").read_text(
+                encoding="ascii").strip()
+            current = int((node / "pids.current").read_text(
+                encoding="ascii").strip())
+            if maximum != "max":
+                headrooms.append(max(0, int(maximum) - current))
+        except (FileNotFoundError, ValueError):
+            # The cgroup mount root commonly has no pids controller file even
+            # when every delegated descendant does. Keep finite caps observed.
+            pass
+    return min(headrooms) if headrooms else None
+
+
+def _fallback_capacity(requested: int, remaining: int) -> _FallbackCapacity:
+    """Choose a hard simultaneous-worker ceiling from CPU, memory and PIDs.
+
+    The memory and PID terms are reservations for the supervisor, pytest child,
+    and ordinary helper descendants. They constrain *concurrency*, not healthy
+    runtime. An unavailable measurement is loud in the emitted cap values and
+    falls back to four workers rather than silently treating the resource as
+    unlimited.
+    """
+    cores = _available_cpu_count()
+    cpu_cap = (_FALLBACK_UNMEASURED_RESOURCE_CAP if cores is None else
+               max(1, int(cores) * _FALLBACK_CPU_FANOUT_PER_CORE))
+
+    available_memory = _available_memory_bytes()
+    if available_memory is None:
+        memory_cap = _FALLBACK_UNMEASURED_RESOURCE_CAP
+    else:
+        usable_memory = max(
+            0, available_memory - _FALLBACK_MEMORY_RESERVE_BYTES)
+        memory_cap = max(1, usable_memory // _FALLBACK_MEMORY_PER_JOB_BYTES)
+
+    pid_headroom = _cgroup_pid_headroom()
+    if pid_headroom is None:
+        pid_cap = _FALLBACK_UNMEASURED_RESOURCE_CAP
+    else:
+        usable_pids = max(0, pid_headroom - _FALLBACK_PID_RESERVE)
+        pid_cap = max(1, usable_pids // _FALLBACK_PIDS_PER_JOB)
+
+    jobs = max(1, min(
+        max(1, remaining), requested, MAX_FALLBACK_PROCESSES,
+        cpu_cap, memory_cap, pid_cap))
+    return _FallbackCapacity(
+        jobs=jobs, requested=requested, cpu_cap=cpu_cap,
+        memory_cap=memory_cap, pid_cap=pid_cap)
+
+
+def _print_fallback_capacity(phase: str, capacity: _FallbackCapacity) -> None:
+    print(
+        f"FALLBACK_RESOURCE_CAP  phase={phase} "
+        f"requested={capacity.requested} selected={capacity.jobs} "
+        f"cpu_cap={capacity.cpu_cap} memory_cap={capacity.memory_cap} "
+        f"pid_cap={capacity.pid_cap} hard_cap={capacity.hard_cap} "
+        f"memory_reservation_mib="
+        f"{_FALLBACK_MEMORY_PER_JOB_BYTES // (1024 * 1024)} "
+        f"pid_reservation={_FALLBACK_PIDS_PER_JOB}",
+        flush=True)
+
+
 def _stratified_probe_indices(total: int, jobs: int) -> List[int]:
     """Return deterministic 1-based probes spanning an ordered selection.
 
@@ -1298,8 +1479,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          f"{DEFAULT_STALL_AFTER}); this is not a runtime bound")
     ap.add_argument("--stop-after-failures", type=int, default=0,
                     help="stop launching files once this many red test cases "
-                         "have been seen; 0 means never stop. The files not "
-                         "launched are NAMED and stay out of the report")
+                         "have been seen; 0 means never stop. This does not "
+                         "truncate the exhaustive zero-record rescue, because "
+                         "an untried file cannot be inferred from a sample. "
+                         "Other files not launched are NAMED and stay out of "
+                         "the report")
     ap.add_argument("--aggregate-check", action="store_true",
                     help="run the whole selection first in one pytest process; "
                          "on a complete record stop there, otherwise run "
@@ -1317,10 +1501,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "not a runtime bound")
     ap.add_argument("--fallback-jobs", type=int,
                     default=DEFAULT_FALLBACK_JOBS,
-                    help="maximum independent supervisor processes used only "
-                         "for per-file recovery after aggregate NORECORD "
-                         f"(default {DEFAULT_FALLBACK_JOBS}); a multi-file "
-                         "stratified probe requires at least 2")
+                    help="requested maximum independent supervisor processes "
+                         "in the initial per-file recovery probe after aggregate "
+                         f"NORECORD (default {DEFAULT_FALLBACK_JOBS}); the actual "
+                         "width is resource-capped")
+    ap.add_argument("--fallback-rescue-jobs", type=int,
+                    default=DEFAULT_FALLBACK_RESCUE_JOBS,
+                    help="requested high-parallel width for all remaining files "
+                         "when the initial probe recovered zero complete records "
+                         f"(default {DEFAULT_FALLBACK_RESCUE_JOBS}); CPU, memory, "
+                         "PID and absolute hard caps still apply")
     ap.add_argument("--cwd", default=None,
                     help="run each pytest session from here")
     ap.add_argument("--progress-relay", default=None,
@@ -1336,8 +1526,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if a.stall_after <= 0 or a.aggregate_stall_after <= 0:
         ap.error("stall windows must be positive")
-    if a.fallback_jobs <= 0 or a.fallback_jobs > 64:
-        ap.error("--fallback-jobs must be between 1 and 64")
+    if a.fallback_jobs <= 0 or a.fallback_jobs > MAX_FALLBACK_PROCESSES:
+        ap.error(f"--fallback-jobs must be between 1 and "
+                 f"{MAX_FALLBACK_PROCESSES}")
+    if (a.fallback_rescue_jobs <= 0
+            or a.fallback_rescue_jobs > MAX_FALLBACK_PROCESSES):
+        ap.error(f"--fallback-rescue-jobs must be between 1 and "
+                 f"{MAX_FALLBACK_PROCESSES}")
 
     pytest_argv = list(a.pytest_argv)
     if pytest_argv and pytest_argv[0] == "--":
@@ -1363,14 +1558,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "was run. An empty corpus is not evidence that anything passed.",
               file=sys.stderr)
         return RC_CANNOT_ASK
-    if (a.aggregate_check and not a.aggregate_only and len(selection) > 1
-            and a.fallback_jobs < 2):
-        print("[SKIP] pytest_per_file_junit: --fallback-jobs=1 cannot sample "
-              "both the head and tail of a multi-file selection, so a "
-              "systemic fallback decision cannot be asked safely.",
-              file=sys.stderr)
-        return RC_CANNOT_ASK
-
     tmp = Path(tempfile.mkdtemp(prefix="perfile_junit_"))
     _install_shutdown_handlers()
     results: List[FileResult] = []
@@ -1428,12 +1615,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   flush=True)
 
             # The selector emits a sorted path list. A consecutive first batch
-            # can therefore contain one directory-local failure cluster and says
-            # nothing about the rest of the corpus. Probe the whole ordered span
-            # deterministically, including head and tail, before deciding whether
-            # an all-NORECORD loss is systemic.
+            # can therefore contain one directory-local failure cluster. Span the
+            # ordered corpus for useful early diagnostics, but never infer an
+            # untried file's result from this sample.
+            probe_capacity = _fallback_capacity(
+                a.fallback_jobs, len(selection))
+            _print_fallback_capacity("probe", probe_capacity)
             probe_indices = _stratified_probe_indices(
-                len(selection), a.fallback_jobs)
+                len(selection), probe_capacity.jobs)
             print("FALLBACK_STRATIFIED_PROBE  indices="
                   + ",".join(str(i) for i in probe_indices), flush=True)
             recovery: Dict[int, _FallbackOutcome] = {}
@@ -1471,41 +1660,45 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 if i not in probe_set]
             probe_has_record = any(
                 recovery[i].result.has_record for i in probe_indices)
-            if not probe_has_record:
-                # Only the corpus-spanning stratified probe may trip this
-                # breaker. A later consecutive wave is never representative;
-                # once any probe produced a record, every remaining file is
-                # attempted (subject only to the caller's explicit red limit).
-                reason = (
-                    "not launched: the stratified fallback probe produced zero "
-                    "complete records (systemic semantic NORECORD circuit "
-                    "breaker)")
-                print("FALLBACK_SYSTEMIC_NORECORD  probe="
+            # Zero complete probe records is evidence about those probe files,
+            # not the rest. The old systemic breaker silently skipped a unique
+            # recoverable ninth file after eight sampled hangs. In that exact
+            # high-loss shape, rescue every remaining file with a broader but
+            # explicitly CPU/memory/PID/absolute-capped pool. Because this is the
+            # sparse-record rescue, an unrelated red threshold cannot truncate
+            # it either: every remaining path must receive its own supervisor.
+            exhaustive_rescue = not probe_has_record
+            requested_width = (a.fallback_rescue_jobs if exhaustive_rescue
+                               else a.fallback_jobs)
+            remaining_capacity = _fallback_capacity(
+                requested_width, max(1, len(remaining_indices)))
+            if remaining_indices:
+                _print_fallback_capacity(
+                    "zero-record-rescue" if exhaustive_rescue else "recovery",
+                    remaining_capacity)
+            if exhaustive_rescue:
+                print("FALLBACK_ZERO_RECORD_RESCUE  probe="
                       + ",".join(str(i) for i in probe_indices)
-                      + f"  remaining={len(remaining_indices)} — stopping "
-                        "recovery after one all-NORECORD stratified probe",
+                      + f" remaining={len(remaining_indices)} "
+                        f"parallel_width={remaining_capacity.jobs} — every "
+                        "unprobed file will be attempted",
                       flush=True)
-                for index in remaining_indices:
-                    test_file = selection[index - 1]
-                    recovery[index] = _FallbackOutcome(
-                        FileResult(test_file, None, False, None, 0, 0,
-                                   skipped_by_stop=True,
-                                   norecord_reason=reason), "")
-            else:
-                next_remaining = 0
-                while next_remaining < len(remaining_indices):
-                    if (a.stop_after_failures
-                            and red_total >= a.stop_after_failures):
-                        for index in remaining_indices[next_remaining:]:
-                            test_file = selection[index - 1]
-                            recovery[index] = _FallbackOutcome(
-                                FileResult(test_file, None, False, None, 0, 0,
-                                           skipped_by_stop=True), "")
-                        break
-                    wave_indices = remaining_indices[
-                        next_remaining:next_remaining + a.fallback_jobs]
-                    _run_recovery_wave(wave_indices)
-                    next_remaining += len(wave_indices)
+
+            next_remaining = 0
+            while next_remaining < len(remaining_indices):
+                if (not exhaustive_rescue and a.stop_after_failures
+                        and red_total >= a.stop_after_failures):
+                    for index in remaining_indices[next_remaining:]:
+                        test_file = selection[index - 1]
+                        recovery[index] = _FallbackOutcome(
+                            FileResult(test_file, None, False, None, 0, 0,
+                                       skipped_by_stop=True), "")
+                    break
+                wave_indices = remaining_indices[
+                    next_remaining:
+                    next_remaining + remaining_capacity.jobs]
+                _run_recovery_wave(wave_indices)
+                next_remaining += len(wave_indices)
 
             # Selection order is the durable contract. The initial probe is
             # deliberately non-contiguous, but neither logs nor JUnit reveal its
