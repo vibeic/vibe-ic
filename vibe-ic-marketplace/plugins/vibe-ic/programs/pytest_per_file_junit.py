@@ -1479,11 +1479,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          f"{DEFAULT_STALL_AFTER}); this is not a runtime bound")
     ap.add_argument("--stop-after-failures", type=int, default=0,
                     help="stop launching files once this many red test cases "
-                         "have been seen; 0 means never stop. This does not "
-                         "truncate the exhaustive zero-record rescue, because "
-                         "an untried file cannot be inferred from a sample. "
-                         "Other files not launched are NAMED and stay out of "
-                         "the report")
+                         "have been seen in ordinary non-aggregate per-file "
+                         "mode; 0 means never stop. Diagnostic recovery after "
+                         "aggregate NORECORD always attempts every selected "
+                         "file, because an untried file cannot be inferred "
+                         "from a sample. Other files not launched are NAMED "
+                         "and stay out of the report")
     ap.add_argument("--aggregate-check", action="store_true",
                     help="run the whole selection first in one pytest process; "
                          "on a complete record stop there, otherwise run "
@@ -1665,8 +1666,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # recoverable ninth file after eight sampled hangs. In that exact
             # high-loss shape, rescue every remaining file with a broader but
             # explicitly CPU/memory/PID/absolute-capped pool. Because this is the
-            # sparse-record rescue, an unrelated red threshold cannot truncate
-            # it either: every remaining path must receive its own supervisor.
+            # sparse-record rescue, every remaining path must receive its own
+            # supervisor.
             exhaustive_rescue = not probe_has_record
             requested_width = (a.fallback_rescue_jobs if exhaustive_rescue
                                else a.fallback_jobs)
@@ -1686,14 +1687,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             next_remaining = 0
             while next_remaining < len(remaining_indices):
-                if (not exhaustive_rescue and a.stop_after_failures
-                        and red_total >= a.stop_after_failures):
-                    for index in remaining_indices[next_remaining:]:
-                        test_file = selection[index - 1]
-                        recovery[index] = _FallbackOutcome(
-                            FileResult(test_file, None, False, None, 0, 0,
-                                       skipped_by_stop=True), "")
-                    break
+                # Aggregate NORECORD has already made the whole-selection
+                # verdict UNKNOWN.  These sessions are evidence recovery, not
+                # a fail-fast ordinary run: a red count in the stratified probe
+                # says nothing about an untried path.  In particular, one probe
+                # file can exceed --stop-after-failures by itself while the
+                # sole recoverable green record sits at the unprobed index.
+                # Therefore the legacy threshold is intentionally absent from
+                # this loop; it remains enforced by the non-aggregate branch.
                 wave_indices = remaining_indices[
                     next_remaining:
                     next_remaining + remaining_capacity.jobs]
