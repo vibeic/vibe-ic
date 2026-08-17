@@ -137,6 +137,60 @@ def _pytest_cmd():
             "-p", "no:cacheprovider"]
 
 
+@pytest.fixture(autouse=True)
+def _pin_child_plugin_env(monkeypatch):
+    """Every child pytest this file starts runs with autoload OFF, as production does.
+
+    `_env()` below covers the four places this file calls `subprocess` directly.
+    It does NOT cover the larger set: tests that call `D.run_one(...)` IN-PROCESS,
+    where the driver spawns the child itself and the child inherits `os.environ`
+    rather than anything this file passes. Those children autoloaded every plugin
+    installed on the host, which on this one means
+
+        ImportError: cannot import name 'ContractName' from 'eth_typing'
+
+    from web3's `pytest_ethereum` entry point -- a plugin with nothing to do with
+    this repo, breaking child sessions because it happens to be installed.
+
+    Setting it in `os.environ` (not just in a passed `env=`) is what makes it
+    reach BOTH paths: an env var is inherited by every descendant, however deep,
+    and `monkeypatch.setenv` unwinds it after each test. This process is already
+    running, so it changes nothing about the session you are reading the output of.
+    """
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+
+
+def _env():
+    """The harness ENVIRONMENT, pinned the way the landing gate pins it.
+
+    `_pytest_cmd` above says "pinned the way the landing gate pins it" and pins
+    only half of it. The landing gate spells BOTH halves, and they are a pair:
+
+        gatekeeper-land.sh:466   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py
+        gatekeeper-land.sh:474   -- python3 -m pytest -q -p pytest_timeout ...
+
+    With autoload ON, `pytest_timeout`'s entry point registers the module under
+    the name `timeout`; the explicit `-p pytest_timeout` then registers THE SAME
+    MODULE under a second name, and pytest_timeout 2.4.0 raises
+
+        ValueError: Plugin already registered under a different name:
+            timeout=<module 'pytest_timeout'>
+
+    which killed every child session this file spawns -- MEASURED on origin/main,
+    28 failed / 20 passed, identical in an isolated 47 s run and inside the full
+    90-file targeted run, so it was never contention.
+
+    `-p pytest_timeout` is NOT redundant in production and must not be dropped:
+    autoload is OFF there, so it is the only thing that loads the plugin. What
+    was missing was its precondition. Copying a command without its environment
+    is how a test comes to exercise a configuration that production never runs --
+    and then to fail for a reason production could never hit.
+    """
+    e = dict(os.environ)
+    e["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    return e
+
+
 def _run_driver(corpus: Path, junit: Path, *extra, pytest_extra=()):
     return subprocess.run(
         [sys.executable, str(_PROG),
@@ -144,7 +198,7 @@ def _run_driver(corpus: Path, junit: Path, *extra, pytest_extra=()):
          "--junit", str(junit),
          "--stall-after", str(_STALL), *extra,
         "--"] + _pytest_cmd() + list(pytest_extra),
-        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+        cwd=str(corpus), env=_env(), capture_output=True, text=True, timeout=_T)
 
 
 def _files_in(junit: Path):
@@ -172,7 +226,7 @@ def test_one_session_loses_the_whole_record_and_per_file_does_not(tmp_path):
         _pytest_cmd() + ["-o", "junit_family=xunit1", f"--junitxml={single}",
                          "test_green_neighbour.py", "test_hangs_like_replay.py",
                          "test_green_after.py"],
-        cwd=str(corpus), capture_output=True, text=True, timeout=_T)
+        cwd=str(corpus), env=_env(), capture_output=True, text=True, timeout=_T)
     assert not single.exists(), (
         "the single-session arm wrote a junit — the hang fixture no longer "
         "reproduces #1654 and this test proves nothing")
@@ -538,7 +592,7 @@ def test_driver_signal_cleanup_reaps_the_active_detached_descendant(tmp_path):
         [sys.executable, str(_PROG), "--selection",
          str(corpus / "selection.txt"), "--junit", str(merged),
          "--stall-after", "30", "--"] + _pytest_cmd(),
-        cwd=str(corpus), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cwd=str(corpus), env=_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, start_new_session=True)
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline and not pid_file.is_file():
@@ -966,7 +1020,7 @@ def test_signal_during_parallel_fallback_reaps_detached_descendant(tmp_path):
          str(corpus / "selection.txt"), "--junit", str(merged),
          "--stall-after", "30", "--aggregate-check",
          "--aggregate-stall-after", "1", "--"] + _pytest_cmd(),
-        cwd=str(corpus), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cwd=str(corpus), env=_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, start_new_session=True)
     deadline = time.monotonic() + 12
     try:
@@ -1298,13 +1352,21 @@ def test_both_landing_arms_run_through_this_driver():
         "arm B suppresses per-file recovery after aggregate NORECORD")
     assert "--aggregate-check --aggregate-only" not in verify_src, (
         "arm A1/B1 suppress per-file recovery after aggregate NORECORD")
+    # BOTH COUNTS BELOW MOVED 1 -> 2 FOR THE SAME REASON, and neither was
+    # relaxed: each still demands that EVERY arm declares its bound.
+    # TWO, not one: the landing gate now runs a CANDIDATE arm and a BASE arm
+    # concurrently, and each declares its own bounded width. This assertion
+    # caught the second the moment it appeared, which is exactly what it is
+    # for -- an unbounded arm is an unbounded process count, and a NEW arm is
+    # where the bound gets forgotten. What it pins is that every arm is
+    # bounded; the number tracks the arm count rather than being frozen at 1.
     assert land_src.split("run_pytest()")[-1].split(
-        "run_repo_tools_pytest")[0].count("--fallback-jobs") == 1, (
+        "run_repo_tools_pytest")[0].count("--fallback-jobs") == 2, (
         "the push-path aggregate fallback has no bounded process width")
     assert verify_src.count("--fallback-jobs") == 2, (
         "arm A1 and arm B1 do not both declare the bounded fallback width")
     assert land_src.split("run_pytest()")[-1].split(
-        "run_repo_tools_pytest")[0].count("--fallback-rescue-jobs") == 1, (
+        "run_repo_tools_pytest")[0].count("--fallback-rescue-jobs") == 2, (
         "the push path does not declare its exhaustive rescue ceiling")
     assert verify_src.count("--fallback-rescue-jobs") == 2, (
         "arm A1 and arm B1 do not both declare the exhaustive rescue ceiling")
