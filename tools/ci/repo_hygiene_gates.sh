@@ -43,8 +43,11 @@ fi
 GATE_DISPATCH_ATTESTATION_HELPER="$PG/gate_process_attestation.py"
 export GATE_DISPATCH_ATTESTATION_FILE GATE_DISPATCH_ATTESTATION_HELPER
 _gate_attestation_cleanup() {
+  # `.lock` is the flock target the concurrent workers serialise their appends on
+  # (see `_gate_attest_locked`). It is swept with the file it guards.
   [ "$_GATE_ATTESTATION_OWNED" -eq 0 ] \
-    || rm -f -- "$GATE_DISPATCH_ATTESTATION_FILE"
+    || rm -f -- "$GATE_DISPATCH_ATTESTATION_FILE" \
+                "$GATE_DISPATCH_ATTESTATION_FILE.lock"
 }
 trap _gate_attestation_cleanup EXIT
 
