@@ -149,7 +149,12 @@ EXIT CODES
     0 = PASS      1 = FAIL (new test-only checker, baseline not shrunk, or a
                             SKILL-only disclosure that claims a reason without
                             stating one — #1270; SILENCE never blocks)
-    2 = SKIP (layout not found)
+    2 = NOT CHECKED (layout not found, or the residual baseline states no
+                     readable measurement: absent, unreadable, truncated)
+
+An explicitly empty ``{"known": []}`` baseline IS a measurement of a clean
+tree. The first test-only checker against it is therefore NEW and still exits
+1; only the absence of a readable measurement declines attribution.
 """
 from __future__ import annotations
 
@@ -622,14 +627,25 @@ def measure_triage(programs: Path, names: List[str], timeout: int = 200) -> Dict
 
 
 def _load_baseline(p: Path):
+    """The measured test-only residual, or ``None`` if none can be read.
+
+    Do not collapse ``None`` into ``[]``: the former says no comparison was
+    available, while the latter says the tree was measured and found clean.
+    """
     if not p.is_file():
         return None
     try:
-        d = json.loads(p.read_text(errors="replace"))
-    except (OSError, ValueError):
+        # A replacement character is not evidence that the persisted member
+        # name was measured.  Decode strictly so corrupt UTF-8 takes the same
+        # NOT CHECKED path as truncated JSON instead of fabricating a renamed
+        # baseline entry.
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
         return None
     k = d.get("known") if isinstance(d, dict) else d
-    return sorted({str(x) for x in k}) if isinstance(k, list) else None
+    if not isinstance(k, list) or any(not isinstance(x, str) for x in k):
+        return None
+    return sorted(set(k))
 
 
 def _resolve(repo_root: Path):
@@ -667,10 +683,28 @@ def main(argv=None) -> int:
         print("[SKIP] checker_execution_wiring_audit: plugin layout not found.")
         return 2
 
+    bl = Path(a.baseline) if a.baseline else here.parent / _BASELINE_NAME
+    base = _load_baseline(bl)
+    if base is None:
+        # Writing is the operation that can CREATE an absent measurement. It
+        # may bootstrap a missing path, but must never overwrite an existing
+        # unreadable/truncated artefact as though its old value were zero.
+        bootstrapping = (a.write_baseline and not bl.exists()
+                         and not bl.is_symlink())
+        if not bootstrapping:
+            print(
+                "NOT CHECKED: no checker-execution wiring baseline states a "
+                f"readable measurement at {bl} — absent, unreadable, or "
+                "truncated is not a measurement of zero, so no checker can "
+                "be called NEW. Measure this tree and record the baseline "
+                "before asking this audit to attribute anything. See "
+                "vibe-ic#1705.",
+                file=sys.stderr)
+            return 2
+
     rep = audit(plugin, root)
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
-    bl = Path(a.baseline) if a.baseline else here.parent / _BASELINE_NAME
     now = sorted(rep["test_only"] + rep["no_runner_at_all"])
 
     if a.write_baseline:
@@ -678,7 +712,7 @@ def main(argv=None) -> int:
             print("[FAIL] --scope-expanded needs a real reason (>=30 chars) "
                   "naming what the audit now looks at that it did not before.")
             return 1
-        prev = _load_baseline(bl)
+        prev = base
         if (prev is not None and len(now) > len(prev)
                 and a.scope_expanded is None):
             print(f"[FAIL] refusing to GROW the baseline "
@@ -741,7 +775,6 @@ def main(argv=None) -> int:
         print(f"  NOTE {len(stale)} recorded reason(s) no longer match a "
               f"SKILL-only checker (wired since, or renamed): "
               + ", ".join(stale[:6]))
-    base = _load_baseline(bl)
     new = [c for c in now if base is None or c not in set(base)]
     paid = [c for c in (base or []) if c not in set(now)]
     # EVERY POPULATION, INCLUDING THE ZEROS. vibe-ic#1130.
