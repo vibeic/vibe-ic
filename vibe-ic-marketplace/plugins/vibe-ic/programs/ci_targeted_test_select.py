@@ -380,6 +380,25 @@ SMOKE_BASENAMES: tuple[str, ...] = (
     # one-file diff that switches the mechanism off (`max_commits:
     # 9999999`): 16 tests selected, this guard NOT among them. ~3 s.
     "test_gate_red_since_check.py",
+    # vibe-ic#1734 — the same reachability argument, arriving through a TEST
+    # file. What this guard pins is that `ci_harness_timeout_ceiling_check.py`
+    # cannot be silenced by a marker: a `pytestmark = pytest.mark.timeout(0)`
+    # must retire neither a finding nor a RECORDED ADVISORY. The diff that
+    # reintroduces the defect is a ONE-LINE edit to some other test file, and
+    # no test is NAMED after that file, so MEASURED with this selector on
+    # exactly that diff (the line prepended to
+    # `programs/tests/test_matrix_mutation_ledger.py`): 18 tests selected, this
+    # guard NOT among them — while `tools/ci/repo_hygiene_gates.sh` ran the
+    # gate and returned rc=0 PASS. The PR that installs the silencer is
+    # precisely the PR whose changed-file set cannot reach the test that
+    # guards it. ~4 s.
+    #
+    # The floor is the SECOND copy, not the only one: the same assertions run
+    # inside the gate program itself (`self_check`), which
+    # `repo_hygiene_gates.sh` invokes on every landing. A guard for a change
+    # whose purpose is to make something SKIP has to be wired at the layer that
+    # always runs, not at the layer the change itself selects.
+    "test_ci_harness_timeout_ceiling_check.py",
 )
 
 # Directories under the plugin root that hold top-level SOURCE modules whose
