@@ -48,7 +48,7 @@ def _git(repo: Path, *args: str, env=None) -> subprocess.CompletedProcess:
     if env:
         e.update(env)
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
-                          text=True, env=e, timeout=120)
+                          text=True, env=e, timeout=60)
 
 
 @pytest.fixture()
@@ -121,7 +121,7 @@ def _run(argv, env=None):
     if env:
         e.update(env)
     return subprocess.run([sys.executable, str(PROG), *argv],
-                          capture_output=True, text=True, env=e, timeout=300)
+                          capture_output=True, text=True, env=e, timeout=60)
 
 
 def _bundle(tmp_path: Path, repo: Path, *, selection: Path | None = None,
@@ -421,6 +421,44 @@ def test_a_damaged_bundle_is_refused_when_it_is_read(tmp_path: Path,
     got = _lookup(b, tmp_path)
     assert got.returncode != 0, f"a {corrupt}-damaged bundle was served"
     assert got.stdout.startswith("MISS")
+
+
+@pytest.mark.parametrize("epoch_line,fragment", [
+    ("measured_epoch=1", "past the"),
+    ("measured_epoch=", "does not say when"),
+    (None, "does not say when"),
+])
+def test_a_bundle_is_not_believed_forever(tmp_path: Path, repo: Path,
+                                          epoch_line, fragment: str):
+    """The age bound, which is the only thing standing under the inputs the
+    key cannot see: wall-clock time, ignored files, a same-version reinstall.
+
+    A manifest that does not SAY when it was measured is refused too — an
+    unstated age is not a young one.
+    """
+    b = _bundle(tmp_path, repo)
+    assert _publish(b).returncode == 0
+    material = cache.key_material(repo, PLUGIN, b["selection"], b["harness"],
+                                 b["contract"])
+    manifest_p = Path(str(cache._prefix(b["cache_dir"], dict(material)["head"],
+                                        cache.key_digest(material)))
+                      + ".manifest")
+    kept = [ln for ln in manifest_p.read_text().splitlines()
+            if not ln.startswith("measured_epoch=")]
+    if epoch_line is not None:
+        kept.append(epoch_line)
+    manifest_p.write_text("\n".join(kept) + "\n")
+    got = _lookup(b, tmp_path)
+    assert got.returncode != 0
+    assert fragment in got.stdout, got.stdout
+
+
+def test_a_fresh_bundle_is_served_under_the_same_bound(tmp_path: Path,
+                                                       repo: Path):
+    """The control for the row above: the bound refuses AGE, not everything."""
+    b = _bundle(tmp_path, repo)
+    assert _publish(b).returncode == 0
+    assert _lookup(b, tmp_path).returncode == 0
 
 
 def test_the_program_reports_a_miss_rather_than_raising(tmp_path: Path):

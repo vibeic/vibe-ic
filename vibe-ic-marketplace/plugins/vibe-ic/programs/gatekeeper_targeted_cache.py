@@ -98,7 +98,8 @@ USAGE
 =====
     gatekeeper_targeted_cache.py key     --repo R --plugin P --selection S \
                                          --harness H --contract C [--explain]
-    gatekeeper_targeted_cache.py lookup  ... --junit-out X --log-out L
+    gatekeeper_targeted_cache.py lookup  ... --junit-out X --log-out L \
+                                         [--max-age-s S]
     gatekeeper_targeted_cache.py publish ... --junit X --log L --rc N \
                                          [--wall-s S]
 
@@ -157,6 +158,25 @@ INSTRUMENT_RELS = (
 #: small (one merged JUnit plus one log) but unbounded growth inside `.git` is
 #: a defect of its own.
 KEEP_BUNDLES = 40
+
+#: HOW OLD A BUNDLE MAY BE. Not a cleanup policy — a correctness bound on the
+#: inputs the key CANNOT see, of which there are exactly three and they are
+#: named rather than waved at:
+#:
+#:   * WALL-CLOCK TIME. A test that reads today's date is green until it is not,
+#:     on a tree that never moved. Nothing in the key changes when the day does.
+#:   * IGNORED FILES. `git ls-files --others --exclude-standard` is blind to
+#:     everything `.gitignore` covers — run roots, caches, generated artefacts —
+#:     and a test that reads one of those can change its answer between rounds.
+#:   * A SAME-VERSION REINSTALL. The distributions digest carries name and
+#:     version; a package reinstalled at the same version with different bytes
+#:     is invisible to it.
+#:
+#: None of the three is enumerable, so the honest thing is to bound how long a
+#: green may be believed rather than to claim it is eternal. Six hours covers
+#: the case this cache exists for — re-gating a tree during one landing session
+#: — and expires long before "the day changed".
+MAX_AGE_S = 6 * 3600
 
 
 # ------------------------------------------------------------------ utilities
@@ -558,6 +578,19 @@ def cmd_lookup(a) -> int:
         except OSError as exc:
             print(f"MISS  cannot deliver the bundle ({exc})")
             return RC_CANNOT_ASK
+        # THE AGE BOUND. Read from the manifest rather than from the file's
+        # mtime, which a copy or a restore rewrites.
+        epoch = next((ln.split("=", 1)[1] for ln in manifest
+                      if ln.startswith("measured_epoch=")), None)
+        try:
+            age = time.time() - float(epoch)                     # type: ignore
+        except (TypeError, ValueError):
+            print("MISS  bundle does not say when it was measured")
+            return RC_MISS
+        if age < 0 or age > a.max_age_s:
+            print(f"MISS  bundle is {int(age)} s old, past the "
+                  f"{int(a.max_age_s)} s bound")
+            return RC_MISS
         measured = next((ln.split("=", 1)[1] for ln in manifest
                          if ln.startswith("measured_at=")), "unknown")
         wall = next((ln.split("=", 1)[1] for ln in manifest
@@ -618,6 +651,7 @@ def cmd_publish(a) -> int:
                 "rc=0",
                 f"files={len(_selection_list(selection))}",
                 f"measured_at={time.strftime('%Y-%m-%dT%H:%M:%S%z')}",
+                f"measured_epoch={int(time.time())}",
                 f"measured_wall_s={a.wall_s}",
             ]) + "\n"
             tmp = str(prefix) + ".manifest.tmp"
@@ -645,6 +679,8 @@ def main(argv: list[str] | None = None) -> int:
     _common_args(p)
     p.add_argument("--junit-out", required=True)
     p.add_argument("--log-out", required=True)
+    p.add_argument("--max-age-s", type=float, default=MAX_AGE_S,
+                   help="refuse a bundle older than this (see MAX_AGE_S)")
     p.set_defaults(fn=cmd_lookup)
 
     p = sub.add_parser("publish", help="bank this round's tier result")
