@@ -207,8 +207,16 @@ _CLI_S = 30
 
 def _cli(root: Path, *extra):
     """Run the audit as the landing gate runs it, and return the process."""
+    argv = list(extra)
+    if "--baseline" not in argv:
+        # An absent ratchet artefact is not an empty measurement (#1705).
+        # These reporting tests need the explicit clean measurement they were
+        # always intending to exercise.
+        baseline = root / "checker-execution-baseline.json"
+        baseline.write_text(json.dumps({"known": []}) + "\n")
+        argv.extend(("--baseline", str(baseline)))
     return subprocess.run(
-        [sys.executable, str(PROG), "--repo-root", str(root), *extra],
+        [sys.executable, str(PROG), "--repo-root", str(root), *argv],
         capture_output=True, text=True, timeout=_CLI_S)
 
 
