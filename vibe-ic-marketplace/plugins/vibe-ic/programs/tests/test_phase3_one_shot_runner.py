@@ -29,28 +29,46 @@ import pytest
 
 #: EVERY test here launches `phase3_one_shot_runner.py`, and that launch does
 #: not fit the harness's 180 s item bound reliably. MEASURED: quiet, the six
-#: tests are `6 passed in 103.05 s` with a worst single call of 21.04 s; under
+#: tests are `6 passed in 95.04 s` with a worst single call of 21.04 s; under
 #: ordinary fleet contention the SAME call ran past 60 s. So the two numbers
 #: this file must declare are different from the defaults:
 #:
-#:   * the ITEM bound, here: 600 s, a CEILING and not a target, so a slow run
+#:   * the ITEM bound, here: 300 s, a CEILING and not a target, so a slow run
 #:     completes or fails on its own instead of taking every other file's
 #:     verdict down with it (`--timeout-method=thread` kills the SESSION);
-#:   * the INNER bound, `_run` below: 150 s, which `ci_harness_timeout_ceiling_
-#:     check` holds to 600 // 3 = 200 s.
+#:   * the INNER bound, `_run` below: 100 s, which `ci_harness_timeout_ceiling_
+#:     check` holds to 300 // 3 = 100 s.
+#:
+#: WHY 300 AND NOT THE 600 THIS LINE USED TO SAY (vibe-ic#1734). 600 was not a
+#: bound this file could actually have. TWO clocks run over it, not one:
+#:
+#:     pytest_per_file_junit.py --stall-after 300   <- the DRIVER. Unmovable
+#:                                                     from inside this file.
+#:       pytest --timeout=... --timeout-method=thread  <- movable by this mark.
+#:
+#: A `pytest.mark.timeout(600)` moves the INNER clock to 600 and leaves the
+#: outer one at 300. This file emits no progress relay events, so a run that
+#: passed 300 s of silence was killed by the DRIVER — before the 600 s mark it
+#: declared could ever be reached. The mark did not buy 600 s; it bought 300 s
+#: and a false belief about which number was protecting the file. Worse, it
+#: bought a raised CEILING for inner bounds on the strength of a budget that
+#: did not exist — which is precisely how a 150 s inner call came to look legal.
+#: `marker_ceiling` now returns None above 300 for exactly this reason, so a
+#: mark can no longer license an inner bound the driver will never honour.
 #:
 #: WHY `pytestmark` AND NOT A PER-TEST DECORATOR: the bound being declared
 #: lives in `_run`, a module-level helper all six tests share. A decorator on
 #: one test cannot govern a helper the other five also call; a module-level
 #: mark bounds every item in the file, so every call in it really does run
-#: inside a 600 s item. Verified rather than assumed --
+#: inside a 300 s item. Verified rather than assumed --
 #: `pytestmark = pytest.mark.timeout(30)` under `--timeout=2
 #: --timeout-method=thread` yields `2 passed`, not a killed session.
 #:
 #: WHY NOT SIMPLY LOWER `_run` TO 60: measured, that is a FALSE RED under
 #: contention -- the trade `test_matrix_63x8_census_freshness.py` already
-#: refused for the same reason.
-pytestmark = pytest.mark.timeout(600)
+#: refused for the same reason. 100 keeps that headroom AND fits the ceiling;
+#: it is the honest number, where 150-under-a-600-mark was not.
+pytestmark = pytest.mark.timeout(300)
 
 PROG = Path(__file__).resolve().parent.parent / \
     "phase3_one_shot_runner.py"
@@ -66,13 +84,25 @@ PROG = Path(__file__).resolve().parent.parent / \
 _ACK_OSS = "--allow-oss-pdk-fallback"
 
 
-#: 150 s against the 600 s item bound `pytestmark` declares above (ceiling
-#: 600 // 3 = 200). The old 90 s was measured against the wrong denominator:
+#: 100 s against the 300 s item bound `pytestmark` declares above (ceiling
+#: 300 // 3 = 100). The old 90 s was measured against the wrong denominator:
 #: it was chosen when the item bound was the harness's 180 s, where 90 s is
 #: half the budget and two calls in one test would end the SESSION.
 #: Invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277 --
 #: the bound is a parameter default, which the gate could not read.
-def _run(args: list, timeout: int = 150) -> subprocess.CompletedProcess:
+#:
+#: 100, not the 150 this said before (vibe-ic#1734). 150 was legal only against
+#: a 600 s mark the driver never honoured — see the note on `pytestmark`. Against
+#: the bound this file really runs under, the ceiling is 100 and 150 was 1.5x
+#: over it. MEASURED 2026-08-17: the whole module is 95 s across six launches, so
+#: 100 s for ONE launch is roughly six times the observed per-call cost and keeps
+#: the contention headroom that the refusal to drop to 60 was protecting.
+#:
+#: A default argument is the spelling that hid the single largest offender in this
+#: tree once before (#1277): the bound left the findings, the advisories AND the
+#: readable-bound denominator at the same time, so an over-ceiling call could
+#: report as "0 readable bounds / 0 not judged / PASS".
+def _run(args: list, timeout: int = 100) -> subprocess.CompletedProcess:
     if args and not args[0].startswith("-") and _ACK_OSS not in args:
         args = args + [_ACK_OSS]
     return subprocess.run(

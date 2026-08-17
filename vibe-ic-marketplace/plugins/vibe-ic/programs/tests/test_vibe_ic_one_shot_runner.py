@@ -130,12 +130,46 @@ def test_integration_aggregate_report_shape(tmp_path):
 #: test_a_bound_the_work_fits_restores_the_summary` — a marked test under
 #: `--timeout=2 --timeout-method=thread` yields `2 passed`, not a dead session.
 #:
-#: 1200 = a CEILING, not a target: 5.7x the worst run measured above, and
-#: `1200 // 3 = 400` is the ceiling the gate then holds the launch to, itself
-#: 1.9x that worst run. The launch is INLINE rather than through `_run` on
-#: purpose — a marker governs the item it decorates, so a bound inside a
-#: module-level helper shared with nine other tests could not be covered by it.
-@pytest.mark.timeout(1200)
+#: WHY THIS IS NOW 300 AND NOT 1200, AND WHY THE WORK ITSELF SHRANK
+#: (vibe-ic#1734). The 1200 above never bought 1200 s. TWO clocks run over this
+#: file and the marker only moves the inner one::
+#:
+#:     pytest_per_file_junit.py --stall-after 300   <- the DRIVER, and per its
+#:         own docstring "Captured output and CPU activity are deliberately not
+#:         progress": only a validated pytest EVENT resets it. This test emits
+#:         none for its whole duration, so 300 s of silence was always the real
+#:         bound, and blowing it is NORECORD — which REFUSES the landing, with
+#:         no summary line and no `FAILED` line, i.e. it greps as a clean sweep.
+#:       pytest --timeout=N --timeout-method=thread   <- what the marker moves.
+#:
+#: So `timeout(1200)` bought 300 s and a false belief about which number was
+#: protecting the file — and, worse, it bought a raised CEILING (1200 // 3 =
+#: 400) for the inner bound below, on the strength of a budget that did not
+#: exist. `marker_ceiling` now refuses to raise anything above 300 for exactly
+#: this reason, which is what surfaced this file.
+#:
+#: THE MEASUREMENT ABOVE IS WHY THE FIX IS `--skip-phase2` AND NOT A SMALLER
+#: NUMBER. 211.3 s worst = phase1 ~75 s + phase2 ~128 s, and this test asserts
+#: exactly one thing: that phase1 was DISPATCHED (`verdict != "SKIPPED"`). It
+#: never reads the phase2 entry. So ~128 s of the worst case was bought for an
+#: assertion nobody makes. `--skip-phase2` (added in the same change; the runner
+#: had --skip-phase1/-phase3/-analog/-hardware and this one missing) drops the
+#: work to the phase1 leg the test is actually about, and the plan still RECORDS
+#: phase2 as SKIPPED, so the end-to-end dispatch shape is still exercised.
+#:
+#: 300 is now the honest ceiling — the most the driver will ever honour — and
+#: `300 // 3 = 100` is what the gate holds the launch below. Against a ~75 s
+#: phase1 leg that is ~1.3x, which is TIGHTER than this file's other bounds and
+#: is stated rather than hidden: it is the largest bound the real budget allows.
+#: The trade is deliberate. Exceeding 100 s now yields a clean `FAILED` line
+#: naming this test; under the old 1200/400 pair, exceeding the real 300 s
+#: budget yielded NORECORD — a refused landing that reads as a clean sweep. A
+#: diagnosable red is strictly better than a silent one.
+#:
+#: The launch is INLINE rather than through `_run` on purpose — a marker governs
+#: the item it decorates, so a bound inside a module-level helper shared with
+#: nine other tests could not be covered by it.
+@pytest.mark.timeout(300)
 def test_need_phase1_auto_detects_prompt_input(tmp_path):
     """Staging input/phase1_prompt.md → phase1 attempts to run.
 
@@ -149,9 +183,13 @@ def test_need_phase1_auto_detects_prompt_input(tmp_path):
     (inp / "phase1_prompt.md").write_text(
         "Design a generic test chip TST_CHIP for orchestrator coverage.\n")
     cp = subprocess.run(
-        [sys.executable, str(PROG), str(project), "--skip-phase3",
-         "--skip-analog", "--ic-name", "TST_CHIP"],
-        capture_output=True, text=True, timeout=400,
+        [sys.executable, str(PROG), str(project), "--skip-phase2",
+         "--skip-phase3", "--skip-analog", "--ic-name", "TST_CHIP"],
+        # 100, not 400 — see the marker note above. 400 was licensed by a 1200 s
+        # marker the driver never honoured; against the 300 s budget this file
+        # really has, 300 // 3 = 100 is the ceiling, and a 400 s bound could not
+        # fire before the driver had already turned the whole file into NORECORD.
+        capture_output=True, text=True, timeout=100,
     )
     body = json.loads(
         (project / "reports" / "orchestrator" / "vibe_ic_one_shot.json").read_text())
@@ -159,6 +197,65 @@ def test_need_phase1_auto_detects_prompt_input(tmp_path):
     # phase1 attempted → not SKIPPED at the top dispatcher level.
     # (Inside phase1, individual steps may be SKIP/WAIVED — that's fine.)
     assert p_phase1["verdict"] != "SKIPPED"
+
+
+def _phase1_project(tmp_path):
+    project = tmp_path / "proj"
+    inp = project / "input"
+    inp.mkdir(parents=True)
+    (inp / "phase1_prompt.md").write_text(
+        "Design a generic test chip TST_CHIP for orchestrator coverage.\n")
+    return project
+
+
+@pytest.mark.timeout(300)
+def test_skip_phase2_skips_phase2_and_the_absence_of_the_flag_does_not(tmp_path):
+    """`--skip-phase2` (vibe-ic#1734) — BOTH DIRECTIONS, and that is the point.
+
+    The flag was added so `test_need_phase1_auto_detects_prompt_input` could stop
+    paying ~128 s for a phase2 leg it never inspects. That test passes the flag
+    but asserts only about PHASE 1 — so if `--skip-phase2` were accepted by
+    argparse and then wired to nothing, it would still pass, and the flag would
+    be verified by a test that cannot see it. A one-armed test here would repeat
+    the mistake one layer down: "phase2 is SKIPPED under the flag" is also true
+    of a runner that skips phase2 unconditionally, or of a run that never reached
+    phase2 at all because phase1 halted it.
+
+    So the paired arm is load-bearing. MEASURED on this project shape, same
+    invocation apart from the flag:
+
+        without --skip-phase2 : phase1='PASS'  phase2='FAIL'
+        with    --skip-phase2 : phase1='PASS'  phase2='SKIPPED'
+
+    phase1 PASSes in both, which is what makes the comparison mean anything: the
+    difference in the phase2 entry is attributable to the flag and not to a halt.
+    """
+    def _phase2_verdict(project, extra):
+        cp = subprocess.run(
+            [sys.executable, str(PROG), str(project), "--skip-phase3",
+             "--skip-analog", "--ic-name", "TST_CHIP", *extra],
+            capture_output=True, text=True, timeout=100,
+        )
+        rep = project / "reports" / "orchestrator" / "vibe_ic_one_shot.json"
+        assert rep.is_file(), (
+            f"no orchestrator report for extra={extra!r}; nothing below can be "
+            f"read as evidence about the flag\n{cp.stdout[-800:]}")
+        body = json.loads(rep.read_text())
+        phases = {p["name"]: p["verdict"] for p in body["phases"]}
+        assert phases.get("phase1") == "PASS", (
+            f"phase1 did not PASS (extra={extra!r}, phase1="
+            f"{phases.get('phase1')!r}); the phase2 entry would then reflect a "
+            f"HALT rather than the flag, and this comparison would prove nothing")
+        # The phase must still be RECORDED either way — "skipped on purpose" and
+        # "never reached" have to stay distinguishable to a reader.
+        assert "phase2" in phases, f"phase2 vanished from the plan (extra={extra!r})"
+        return phases["phase2"]
+
+    assert _phase2_verdict(_phase1_project(tmp_path / "on"), ["--skip-phase2"]) \
+        == "SKIPPED", "--skip-phase2 was accepted but phase2 still ran"
+    assert _phase2_verdict(_phase1_project(tmp_path / "off"), []) != "SKIPPED", (
+        "phase2 was SKIPPED WITHOUT the flag, so the assertion above would hold "
+        "against a runner that ignores --skip-phase2 entirely")
 
 
 def test_edge_top_name_forwarded(tmp_path):
