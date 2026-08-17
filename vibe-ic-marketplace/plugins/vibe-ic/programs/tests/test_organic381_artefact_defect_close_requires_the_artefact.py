@@ -25,6 +25,20 @@ from pathlib import Path
 
 import pytest
 
+
+#: 300 s AT MODULE LEVEL, not on one test. The 100 s bound below lives in
+#: `_run`, a helper EVERY test here shares, and a decorator on one test
+#: cannot govern a helper the others also call -- the same lesson
+#: test_phase3_one_shot_runner records. 300 is the driver's stall window
+#: and so the most this file can actually be granted; it holds the inner
+#: bound to 300 // 3 = 100.
+#:
+#: WHY IT WAS RAISED AT ALL (measured 2026-08-18): at 60 s this bound had
+#: 4%% margin over its own worst observed run of 57.56 s, and the verdict
+#: FLIPPED between three SERIAL runs of the same tree. A verdict that moves
+#: on host load is not a verdict about the code -- and it was about to be
+#: blamed on xdist, which would only ever have been the load, not the cause.
+pytestmark = pytest.mark.timeout(300)
 PROG = Path(__file__).resolve().parent.parent / "artefact_defect_close_check.py"
 sys.path.insert(0, str(PROG.parent))
 import artefact_defect_close_check as M  # noqa: E402
@@ -223,7 +237,14 @@ def _run(root: Path, issue_file: Path, rng: str, extra=()):
         [sys.executable, str(PROG), "--issue-number", "366", "--range", rng,
          "--offline", "--repo-root", str(root), "--issue-file", str(issue_file),
          *extra],
-        capture_output=True, text=True, timeout=60)
+        # MEASURED 2026-08-18: this bound had 4-9%% margin against its own worst observed
+        # run (55 vs 50.31 s / 60 vs 57.56 s), and it FLIPPED between three SERIAL runs of
+        # the same tree -- passed / failed / passed -- with no parallelism involved at all.
+        # A verdict that moves on host load is not a verdict about the code, and it was
+        # about to be blamed on xdist. The item now declares 300 s (the driver's stall
+        # window, the most it can actually be granted), which lifts the inner ceiling to
+        # 300 // 3 = 100 -- ~1.7x the worst observed run instead of 1.04x.
+        capture_output=True, text=True, timeout=100)
 
 
 def test_mutation_control_the_verdict_flips_when_the_artefact_is_repaired(tmp_path):
