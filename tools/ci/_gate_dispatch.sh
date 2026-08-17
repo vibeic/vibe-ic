@@ -853,8 +853,31 @@ _gate_pool_worker() {   # <idx> <tolerate> <may_write> <label> <shown> <until>
   # would be a NOT CHECKED for the whole comparison, at random, under load.
   # The PROGRESS mirror is deliberately left pointing at the shared file: it is
   # advisory and its entire purpose is to be observable WHILE the run is going.
+  #
+  # BESIDE THE OUTER FILE, NOT INSIDE THE POOL, AND THAT IS THE WHOLE POINT.
+  #
+  # This was `"$d.attest"`, under `$GATE_POOL_DIR`. `_gate_execute` derives its
+  # process capture from this path — `capture="$(mktemp "${…}.gate.XXXXXX")"` —
+  # and the attestation RECORD stores that capture's path as `output_log`.
+  # `_gate_pool_collect` concatenates the records into the outer file, so the
+  # records travelled; the files they point at did not. `gate_dispatch_finish`
+  # then removes the pool, and the consumer opening `output_log` gets:
+  #
+  #     ATTESTATION_UNAVAILABLE: the checkout-arm record is incomplete:
+  #     [Errno 2] No such file or directory: '/tmp/gate-pool.XXXXXX/7…'
+  #
+  # Measured across the change that introduced the pool: `gates are
+  # host-independent` went from `[600s]` (it ran, and hit its own bound) to
+  # `[0s] ATTESTATION_UNAVAILABLE` (it never started). It is declared
+  # `run_tolerating_uncheckable` under a dated exemption, so the regression was
+  # NOT VISIBLE AS A FAILURE — a real breakage wearing a legitimate NOT CHECKED,
+  # which is the shape this repo exists to remove.
+  #
+  # Anchoring to the outer file puts the per-worker record and its capture on the
+  # same filesystem lifetime the SEQUENTIAL path already relies on, so the paths
+  # in the record are still openable after the pool is gone.
   [ -z "$GATE_DISPATCH_ATTESTATION_FILE" ] \
-    || GATE_DISPATCH_ATTESTATION_FILE="$d.attest"
+    || GATE_DISPATCH_ATTESTATION_FILE="${GATE_DISPATCH_ATTESTATION_FILE}.w${idx}"
   _GX_STATE=""; _GX_SECS=0
   _gate_execute "$@" > "$d.out" 2> "$d.err"
   # WRITTEN LAST, AND RENAMED INTO PLACE. The result file is the worker's proof
@@ -986,8 +1009,23 @@ ${GATE_LABELS[$idx]}"
   GATE_SECONDS[$idx]="$secs"
   case "$st" in FAIL|WROTE_CORPUS) GATE_DISPATCH_FAIL=1 ;; esac
   [ "${attf:-0}" = "0" ] || GATE_DISPATCH_ATTESTATION_FAILED=1
-  if [ -n "$GATE_DISPATCH_ATTESTATION_FILE" ] && [ -s "$d.attest" ]; then
-    cat -- "$d.attest" >> "$GATE_DISPATCH_ATTESTATION_FILE"
+  # Reads the per-worker file BESIDE the outer one, matching where
+  # `_gate_pool_worker` now writes it.
+  #
+  # IT IS MERGED AND NOT REMOVED. Deleting it after the merge looks tidy and is
+  # wrong: a record can name its own attestation file, and the consumer follows
+  # that path. Measured while building this fix — with an `rm -f` here, the very
+  # next run reported
+  #
+  #     the checkout-arm record is incomplete:
+  #     [Errno 2] No such file or directory: '/tmp/attest-probe2.dpB1t9.w79'
+  #
+  # which is the SAME failure as the pool version, just with a shorter-lived file.
+  # The lifetime that matters is the outer file's, and its owner already has an
+  # EXIT trap; the siblings are swept there, after the last consumer has read.
+  local _w="${GATE_DISPATCH_ATTESTATION_FILE}.w${idx}"
+  if [ -n "$GATE_DISPATCH_ATTESTATION_FILE" ] && [ -s "$_w" ]; then
+    cat -- "$_w" >> "$GATE_DISPATCH_ATTESTATION_FILE"
   fi
   return 0
 }

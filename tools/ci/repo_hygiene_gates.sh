@@ -43,8 +43,17 @@ fi
 GATE_DISPATCH_ATTESTATION_HELPER="$PG/gate_process_attestation.py"
 export GATE_DISPATCH_ATTESTATION_FILE GATE_DISPATCH_ATTESTATION_HELPER
 _gate_attestation_cleanup() {
+  # The `.wN` siblings are the per-worker records the concurrent dispatcher
+  # writes. They are merged into the file above as each worker lands, and they
+  # are NOT removed there: a record can name its own attestation file, and the
+  # consumer (`gate_host_independence_check`, deliberately the last gate) opens
+  # that path. Sweeping them here — at EXIT, after every consumer has read — is
+  # the only point where their removal cannot make a record unreadable.
   [ "$_GATE_ATTESTATION_OWNED" -eq 0 ] \
-    || rm -f -- "$GATE_DISPATCH_ATTESTATION_FILE"
+    || rm -f -- "$GATE_DISPATCH_ATTESTATION_FILE" \
+                "$GATE_DISPATCH_ATTESTATION_FILE".w[0-9]* \
+                "$GATE_DISPATCH_ATTESTATION_FILE".w[0-9]*.gate.* \
+                "$GATE_DISPATCH_ATTESTATION_FILE".gate.*
 }
 trap _gate_attestation_cleanup EXIT
 
