@@ -349,6 +349,10 @@ run "write-guard baseline" \
 # nobody uses.
 run_pytest() {
   local sel out rc
+  # STAGE-LOCAL, deliberately not `$FAILED`. `$FAILED` may already be 1 from an
+  # earlier gate, and what decides whether THIS tier's answer may be banked is
+  # whether THIS tier was clean — not whether the landing was.
+  local stage_failed=0
   TARGETED_NORECORD=0
   # PREFLIGHT (vibe-ic#1446): the scratch root this pytest will use is part of
   # its verdict. A root inside a git work tree makes 46 tests report failures
@@ -401,7 +405,52 @@ run_pytest() {
   ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" ) 2>/dev/null
   if [ ! -s "$sel" ]; then
     echo "  FAIL  targeted test selection produced no files — not a clean result"
-    FAILED=1; rm -f "$sel"; return
+    FAILED=1; stage_failed=1; rm -f "$sel"; return
+  fi
+
+  # ── CROSS-ROUND REUSE OF THIS TIER (programs/gatekeeper_targeted_cache.py) ──
+  #
+  # This tier is 1525 s of a 1864 s round on this host — 81.8% of it — and until
+  # now no round could learn anything from the round before it. The stamp at the
+  # bottom of this file is WRITTEN and never read back for reuse, the merged
+  # junit goes to a `mktemp` that is removed on the way out, and
+  # `-p no:cacheprovider` deliberately denies pytest its own incremental
+  # substrate here. So re-gating an unchanged tree paid full price for an answer
+  # this host already had.
+  #
+  # THE ONLY THING THAT CAN GO WRONG IS A FALSE GREEN, so the key is exact
+  # rather than clever: the bundle is reused only when this checkout's BYTES are
+  # the named commit (fresh index, no untracked file, no `assume-unchanged`
+  # entry), the selection is byte-identical, and the interpreter, installed
+  # distributions, environment, host, boot, driver contract, instruments and
+  # THIS SCRIPT'S OWN SHA all match. Any difference — or any question the cache
+  # cannot answer — is a MISS, and a MISS runs the tier exactly as before.
+  #
+  # `--harness` is this file: an edit to the command below therefore invalidates
+  # every bundle, which is what keeps `$contract` from drifting out of sync with
+  # the command it claims to describe.
+  #
+  # `$BASE` is deliberately NOT in the key. It reaches this tier only through
+  # the selector, and the selection it produced is hashed in full.
+  local contract cache_log cache_xml cache_note from_cache=0 t0 t1 wall
+  contract="driver=pytest_per_file_junit"
+  contract="$contract;maxfail=${GATEKEEPER_PYTEST_MAXFAIL:-10}"
+  contract="$contract;stall=${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}"
+  contract="$contract;agg_stall=${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}"
+  contract="$contract;fallback_jobs=${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}"
+  contract="$contract;rescue_jobs=${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}"
+  contract="$contract;pytest=-q -p pytest_timeout -p no:cacheprovider"
+  contract="$contract --timeout=180 --timeout-method=thread;autoload=off"
+  cache_log="$(mktemp -t gk_tcache_log.XXXXXX)"
+  cache_xml="$(mktemp -t gk_tcache_xml.XXXXXX)"
+  if [ "${GATEKEEPER_TARGETED_CACHE:-1}" = "1" ]; then
+    if cache_note="$(python3 "$PROGRAMS/gatekeeper_targeted_cache.py" lookup \
+          --repo "$ROOT" --plugin "$PLUGIN" --selection "$sel" \
+          --harness "${BASH_SOURCE[0]}" --contract "$contract" \
+          --junit-out "$cache_xml" --log-out "$cache_log" 2>&1)"; then
+      from_cache=1
+    fi
+    printf '  REPORT  targeted test cache: %s\n' "${cache_note%%$'\n'*}"
   fi
   # THIS SESSION'S ENVIRONMENT IS PART OF THE GATE (vibe-ic#1047, one level up).
   #
@@ -463,7 +512,21 @@ run_pytest() {
   # `--timeout=180` stays declared HERE — `ci_harness_timeout_ceiling_check`
   # resolves the binding harness bound from this file (EXTRA_HARNESS_RELS) and a
   # bound moved into Python would vanish from its view.
-  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
+  #
+  # ON A CACHE HIT the stored driver stdout BECOMES `$out`, and every rule below
+  # is applied to it unchanged — the aggregate status, the NORECORD/NOTRUN
+  # families, the junit summary and the `suite_write_guard:` paired guard. The
+  # reuse path therefore cannot be more permissive than the live path, because
+  # it is judged by the same lines; and the bundle was only banked in the first
+  # place if it already satisfied all of them.
+  if [ "$from_cache" = "1" ]; then
+    out="$(cat "$cache_log")"
+    rc=0
+    cp -f "$cache_xml" "$merged"
+    wall=0
+  else
+    t0="$(date +%s)"
+    out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
         --selection "$sel" --junit "$merged" \
         --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
         --aggregate-check \
@@ -472,8 +535,12 @@ run_pytest() {
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
         -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
-        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
-    rc=0
+        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"
+    rc=$?
+    t1="$(date +%s)"
+    wall=$((t1 - t0))
+  fi
+  if [ "$rc" -eq 0 ]; then
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
     # the write guard from the session would be a false green, and it would look
@@ -482,10 +549,9 @@ run_pytest() {
     if ! printf '%s\n' "$out" | grep -qa 'suite_write_guard:'; then
       echo "  FAIL  suite_write_guard did not report — the session ran WITHOUT the"
       echo "        write guard, so 'the suite wrote nothing' was never checked."
-      FAILED=1
+      FAILED=1; stage_failed=1
     fi
   else
-    rc=$?
     printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # THE FILES WITH NO RECORD, ALWAYS AND FIRST. They are the one thing a
     # reader cannot reconstruct from the tail of a 91-file run, and `tail -6`
@@ -493,7 +559,7 @@ run_pytest() {
     # cost the record.
     printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
-    FAILED=1
+    FAILED=1; stage_failed=1
     [ "$rc" -eq 2 ] && TARGETED_NORECORD=1
   fi
   # Human-facing diagnostics only. The merge verdict does NOT trust this mixed
@@ -503,26 +569,47 @@ run_pytest() {
     printf '  REPORT  targeted test process verdicts embedded in junit\n'
   else
     printf '  FAIL  targeted test instrument produced no junit summary\n'
-    FAILED=1
+    FAILED=1; stage_failed=1
   fi
   if printf '%s\n' "$out" | grep -qa '^NORECORD'; then
     printf '  FAIL  targeted per-file session produced no complete record\n'
-    FAILED=1
+    FAILED=1; stage_failed=1
   fi
   if printf '%s\n' "$out" | grep -qa '^NOTRUN'; then
     printf '  FAIL  targeted per-file session was not run\n'
-    FAILED=1
+    FAILED=1; stage_failed=1
   fi
   if printf '%s\n' "$out" | grep -qa '^AGGREGATE_NORECORD'; then
     printf '  FAIL  targeted aggregate session produced no complete record\n'
-    FAILED=1
+    FAILED=1; stage_failed=1
   elif printf '%s\n' "$out" | grep -qa '^AGGREGATE_COMPLETE'; then
     printf '  REPORT  targeted aggregate session completed\n'
   else
     printf '  FAIL  targeted aggregate session produced no status\n'
-    FAILED=1
+    FAILED=1; stage_failed=1
   fi
-  rm -f "$sel"
+  # BANK IT — but only a tier that answered completely and GREEN, measured by
+  # this round rather than reported by it. `stage_failed` is 0 only when every
+  # rule above passed, and the program re-asks all of them of the artefacts
+  # themselves before it stores anything, so a log that says the right words
+  # over a junit that does not cover the selection is refused.
+  #
+  # A RED IS NEVER BANKED. Reusing one would be fail-closed and would save the
+  # same wall clock, but this suite has measured load-sensitive failures whose
+  # in-test subprocess budgets sit within single-digit percent of their observed
+  # wall clock; banking one would freeze a flake into a refusal that re-running
+  # could never clear, because the key of an unchanged tree does not change.
+  if [ "${GATEKEEPER_TARGETED_CACHE:-1}" = "1" ] && [ "$from_cache" = "0" ] \
+     && [ "$rc" -eq 0 ] && [ "$stage_failed" -eq 0 ]; then
+    printf '%s\n' "$out" > "$cache_log"
+    printf '  REPORT  targeted test cache: %s\n' \
+      "$(python3 "$PROGRAMS/gatekeeper_targeted_cache.py" publish \
+           --repo "$ROOT" --plugin "$PLUGIN" --selection "$sel" \
+           --harness "${BASH_SOURCE[0]}" --contract "$contract" \
+           --junit "$merged" --log "$cache_log" --rc 0 --wall-s "$wall" 2>&1 \
+         | head -1)"
+  fi
+  rm -f "$sel" "$cache_log" "$cache_xml"
   if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
 }
 if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then

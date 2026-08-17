@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1109
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1109)
+- **Total programs (excluding helpers / shims):** 1110
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1110)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1100 |
+| `any` | 1101 |
 
 ## Alphabetical listing
 
@@ -435,6 +435,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gatekeeper_prepare_landing` | any | — | do the mechanical things the landing gate refuses a batch for, and refuse ONLY what a program cannot fix (vibe-ic#1129). |
 | `gatekeeper_review` | any | — | the DETERMINISTIC half of the single PR gatekeeper. |
 | `gatekeeper_stale_branch_check` | any | — | the STALE-BRANCH / phantom-revert guard. |
+| `gatekeeper_targeted_cache` | any | — | cross-round reuse for the TARGETED test tier. |
 | `gddr6_protocol_synth` | any | — | GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory). |
 | `gds_antenna_deck_check` | any | — | independent GDS-geometry process-antenna sign-off. |
 | `gds_ip_attribution` | any | — | Embed IP attribution metadata into the foundry handoff GDS as user-data records. |
@@ -1181,7 +1182,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1100 programs)
+### `any` (1101 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1588,6 +1589,7 @@ _(no programs in this group)_
 - `gatekeeper_prepare_landing` — do the mechanical things the landing gate refuses a batch for, and refuse ONLY what a program cannot fix (vibe-ic#1129).
 - `gatekeeper_review` — the DETERMINISTIC half of the single PR gatekeeper.
 - `gatekeeper_stale_branch_check` — the STALE-BRANCH / phantom-revert guard.
+- `gatekeeper_targeted_cache` — cross-round reuse for the TARGETED test tier.
 - `gddr6_protocol_synth` — GDDR6 SGRAM (JEDEC JESD250) protocol synth helper (graphics DDR memory).
 - `gds_antenna_deck_check` — independent GDS-geometry process-antenna sign-off.
 - `gds_ip_attribution` — Embed IP attribution metadata into the foundry handoff GDS as user-data records.
