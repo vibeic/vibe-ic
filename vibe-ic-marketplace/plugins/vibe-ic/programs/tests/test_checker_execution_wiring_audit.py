@@ -307,17 +307,92 @@ def test_resolved_entry_forces_the_baseline_to_shrink(tmp_path):
 
 
 def test_real_repo_runs_and_is_deterministic():
-    """End-to-end on this repo: two runs must agree."""
+    """End-to-end on this repo: two runs must agree.
+
+    STILL TWO COLD SCANS OF THE REAL CORPUS, which is what this test cost
+    before `_strip_prose` was memoised. `a` is answered from the memo the first
+    scan filled; `b` recomputes from an empty one. So a `_strip_prose` that
+    stopped being a function of its input still shows up here as `a != b`, and
+    the assertion covers what it covered before.
+
+    The memo's own equivalence is asserted FIRST and on the real 4021-file
+    corpus rather than on a fixture: `warm` is every file a HIT, `cold` is
+    every file recomputed, and they must be the same dict. `misses` and `hits`
+    are asserted too, because an equivalence over a memo that never fired is
+    vacuous — an empty result is not a zero.
+    """
     root = PROG.parents[4]
     if not (root / "vibe-ic-marketplace").is_dir():
         pytest.skip("not in the repo layout")
-    a = M.audit(PROG.parents[1], root)
-    b = M.audit(PROG.parents[1], root)
+    plugin = PROG.parents[1]
+
+    M.strip_cache_clear()
+    cold = M._haystacks(plugin, root)              # cold scan 1
+    filled = M.strip_cache_stats()
+    warm = M._haystacks(plugin, root)             # every file a memo HIT
+    fired = M.strip_cache_stats()["hits"] - filled["hits"]
+    assert filled["misses"] > 1000, filled         # the cold scan really parsed
+    assert fired > 1000, f"the memo did not fire; {fired} hit(s)"
+    assert warm == cold, "the memo returned something recomputation does not"
+
+    a = M.audit(plugin, root)                      # warm
+    M.strip_cache_clear()
+    b = M.audit(plugin, root)                      # cold scan 2
     assert a == b
     assert a["checkers"] > 100
     # And the answer must be a real measurement, not the all-empty-haystack
     # degenerate one below. See the `.claude/worktrees` regression.
     assert len(a["no_runner_at_all"]) < a["checkers"]
+
+
+def test_the_memo_is_keyed_on_content_not_on_the_path(tmp_path):
+    """The staleness a `(path, mtime, size)` key would let through.
+
+    `_strip_prose` is memoised so the same corpus is not parsed five times in
+    one process. The hazard a memo introduces is answering for bytes it never
+    read, so the key is the CONTENT. This plants the case that separates the
+    two: the same path, the SAME LENGTH, different bytes, rewritten inside one
+    process — a comment that mentions the checker becomes a real invocation.
+
+    Keyed on content this flips the verdict. Keyed on the path (or on
+    path+size, or on a same-second mtime) it would not, and the audit would be
+    reporting on a file it had not read.
+    """
+    now = 'import subprocess as s\ns.run(["sample_check.py"])\n'
+    was = "# a comment naming sample_check".ljust(len(now) - 1) + "\n"
+    assert len(was) == len(now), "the fixture must hold the length constant"
+    _tree(tmp_path, test="import sample_check\n", prog=was)
+    assert "sample_check.py" in _run(tmp_path)["test_only"]
+
+    other = (tmp_path / "vibe-ic-marketplace/plugins/vibe-ic/programs/other.py")
+    assert other.read_text() == was
+    other.write_text(now)
+    assert _run(tmp_path)["test_only"] == [], (
+        "the memo answered from content it no longer holds")
+
+
+def test_the_memo_returns_what_recomputation_returns(tmp_path):
+    """Bidirectional pairing for the memo: HIT and MISS must agree.
+
+    Asserted on the predicate itself rather than only through the verdict, so
+    the property survives a caller that stops going through `audit()`.
+    """
+    src = ('"""prose naming sample_check."""\n'
+           '# comment naming sample_check\n'
+           'import subprocess\n'
+           'subprocess.run(["python3", "sample_check.py"])  # trailing\n')
+    p = tmp_path / "m.py"
+    p.write_text(src)
+    M.strip_cache_clear()
+    cold = M._strip_prose(p, src)
+    assert M.strip_cache_stats() == {"hits": 0, "misses": 1, "entries": 1}
+    warm = M._strip_prose(p, src)
+    assert M.strip_cache_stats()["hits"] == 1
+    assert warm == cold
+    assert cold == M._strip_prose_uncached(p, src)
+    # and the memo did not swallow the predicate: prose out, literal in
+    assert "prose" not in cold and "comment" not in cold
+    assert "sample_check" in cold
 
 
 def test_a_checkout_living_under_dot_claude_worktrees_is_not_all_skipped(tmp_path):
