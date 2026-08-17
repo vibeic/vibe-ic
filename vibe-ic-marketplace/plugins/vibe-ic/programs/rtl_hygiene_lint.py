@@ -5963,6 +5963,46 @@ _BARE_ALWAYS_RE = re.compile(r'(?<![\w$])always(?![\w$])')
 _FOREVER_RE = re.compile(r'(?<![\w$])forever(?![\w$])')
 
 
+def _blank_preprocessor_conditionals(src: str) -> str:
+    """Blank every conditional-compilation branch without shifting offsets.
+
+    This autofixer has no access to the simulator/synthesizer's ``-D`` macro
+    environment.  Treating a branch as active would therefore be a guess, and
+    procedural keywords in an inactive (even syntactically incomplete) branch
+    can lend false scope to live code after `` `endif``.  Exclude the complete
+    conditional region, including nested branches, and leave unconditional
+    source available to the rule.  This is deliberately fail-closed: a real
+    oscillator behind a macro is left untouched rather than rewritten under an
+    unproved configuration.
+    """
+    out: List[str] = []
+    depth = 0
+    continuation = False
+    conditional_open = re.compile(r'^\s*`(?:ifdef|ifndef)\b')
+    conditional_close = re.compile(r'^\s*`endif\b')
+    directive = re.compile(r'^\s*`[A-Za-z_]\w*')
+
+    for line in src.splitlines(keepends=True):
+        opens = bool(conditional_open.match(line))
+        closes = bool(conditional_close.match(line))
+        hidden = depth > 0 or opens or closes or continuation \
+            or bool(directive.match(line))
+        if hidden:
+            out.append(''.join('\n' if ch == '\n' else '\r' if ch == '\r'
+                               else ' ' for ch in line))
+        else:
+            out.append(line)
+
+        if opens:
+            depth += 1
+        if closes and depth > 0:
+            depth -= 1
+        continuation = (bool(directive.match(line)) or continuation) \
+            and line.rstrip('\r\n').rstrip().endswith('\\')
+
+    return ''.join(out)
+
+
 def _bare_always_spans(src: str) -> List[Tuple[int, int]]:
     """Return bounded spans for delay-driven ``always`` statements only."""
     spans: List[Tuple[int, int]] = []
@@ -5993,7 +6033,7 @@ def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]
     """Return conservative delayed self-toggle sites with raw-text offsets."""
     if _is_testbench(raw, path):
         return []
-    scan = strip_comments(raw)
+    scan = _blank_preprocessor_conditionals(strip_comments(raw))
     sites: List[Dict] = []
     for _module_name, lo, hi in _module_regions(scan):
         region = scan[lo:hi]
