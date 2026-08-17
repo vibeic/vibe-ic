@@ -182,6 +182,9 @@ _SKILL_ONLY_NAME = "checker_skill_only_reasons.json"
 _SKIP_PARTS = frozenset((".claude", "node_modules", ".git", "worktrees"))
 
 
+# MEASUREMENT CONTROL ARM, not a change: this comment exists only so a
+# landing round on this branch selects the same test files as the branch
+# it is the paired baseline for. No behaviour here is touched.
 def _strip_prose(path: Path, text: str) -> str:
     """Remove COMMENTS and DOCSTRINGS — prose names a checker, it never runs one.
 

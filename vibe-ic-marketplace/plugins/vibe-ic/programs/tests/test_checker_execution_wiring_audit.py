@@ -306,6 +306,7 @@ def test_resolved_entry_forces_the_baseline_to_shrink(tmp_path):
     assert "now HAVE a real runner" in rc.stdout
 
 
+# MEASUREMENT CONTROL ARM, not a change — see the program file.
 def test_real_repo_runs_and_is_deterministic():
     """End-to-end on this repo: two runs must agree."""
     root = PROG.parents[4]
