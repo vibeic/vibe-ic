@@ -875,6 +875,47 @@ def test_collect_only_protocol_accepts_complete_collection_without_test_runs(
     assert "before every selected item completed" in normal_reason
 
 
+def test_collect_only_driver_accepts_collection_and_refuses_execution(tmp_path):
+    """Both directions through the real helper-process CLI, with no wall cap."""
+    corpus = tmp_path / "collect-driver"
+    corpus.mkdir()
+    marker = corpus / "executed"
+    test_file = corpus / "test_subject.py"
+    test_file.write_text(
+        "from pathlib import Path\n\n"
+        "def test_must_not_run():\n"
+        f"    Path({str(marker)!r}).write_text('ran')\n",
+        encoding="utf-8")
+    selection = corpus / "selection.txt"
+    selection.write_text(str(test_file) + "\n", encoding="utf-8")
+
+    def invoke(*pytest_args):
+        # The enclosing semantic pytest driver owns liveness.  This parity
+        # control deliberately adds no guessed total-runtime timeout.
+        return subprocess.run(
+            [sys.executable, str(_PROG),
+             "--selection", str(selection),
+             "--junit", str(corpus / "merged.xml"),
+             "--aggregate-only", "--collect-only",
+             "--aggregate-stall-after", str(_STALL), "--",
+             sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+             *pytest_args],
+            cwd=str(corpus), capture_output=True, text=True,
+            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"})
+
+    collected = invoke("--collect-only")
+    assert collected.returncode == D.RC_OK, collected.stdout + collected.stderr
+    assert "AGGREGATE_COLLECTION_COMPLETE" in collected.stdout
+    assert not marker.exists(), "collect-only helper executed the selected test"
+
+    executed = invoke()
+    assert marker.read_text(encoding="utf-8") == "ran"
+    assert executed.returncode == D.RC_NORECORD, (
+        executed.stdout + executed.stderr)
+    assert "collect-only session unexpectedly executed test items" in (
+        executed.stdout + executed.stderr)
+
+
 @pytest.mark.parametrize("bad", [
     {"completed": 1, "total": 3},  # duplicate
     {"completed": 3, "total": 3},  # gap

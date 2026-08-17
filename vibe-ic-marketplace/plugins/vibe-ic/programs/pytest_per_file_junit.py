@@ -99,6 +99,7 @@ USAGE
     python3 pytest_per_file_junit.py --selection SEL --junit OUT
         [--stall-after SECONDS] [--stop-after-failures N] [--cwd DIR]
         [--aggregate-check] [--aggregate-only]
+        [--collect-only]
         [--aggregate-stall-after SECONDS]
         -- <the full pytest command, e.g. python3 -m pytest -q --timeout=180>
 
@@ -120,6 +121,13 @@ whole-selection question exactly once and does not first repeat it as N isolated
 per-file sessions.  Per-file recovery remains available for an operator after an
 aggregate NORECORD, but it cannot turn that UNKNOWN into a landing pass and is
 therefore deliberately outside the success critical path.
+
+``--collect-only`` is the narrow helper-process mode used by a pytest meta-test
+that needs pytest's live collection result.  It is valid only with
+``--aggregate-only`` and changes the semantic terminal rule from "every selected
+test finished" to "collection finished and no selected test ran".  The helper
+still owns the subreaper and process-global wait calls; the pytest process asking
+the meta-question never does.
 
 EXIT CODES
 ----------
@@ -801,6 +809,7 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
                   junit_path: Path, stall_after: float,
                   cwd: Optional[str], *,
                   progress_relay_path: Optional[Path] = None,
+                  collect_only: bool = False,
                   ) -> Tuple[Optional[int], str, bool]:
     """Run the original whole-selection pytest shape as a semantics canary."""
     cmd = list(pytest_argv) + [
@@ -809,7 +818,8 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
         *test_files,
     ]
     return _run_progress_supervised(
-        cmd, stall_after, cwd, progress_relay_path=progress_relay_path)
+        cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
+        collect_only=collect_only)
 
 
 def _append_process_case(root: ET.Element, *, classname: str, name: str,
@@ -921,6 +931,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="run only the whole-selection session; this is the "
                          "landing critical-path mode and implies "
                          "--aggregate-check")
+    ap.add_argument("--collect-only", action="store_true",
+                    help="accept a complete pytest --collect-only lifecycle; "
+                         "valid only with --aggregate-only, and refuses if any "
+                         "test item executes")
     ap.add_argument("--aggregate-stall-after", type=float,
                     default=DEFAULT_AGGREGATE_STALL_AFTER,
                     help="seconds with no validated pytest lifecycle event before "
@@ -939,6 +953,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if a.aggregate_only:
         a.aggregate_check = True
+
+    if a.collect_only and not a.aggregate_only:
+        ap.error("--collect-only requires --aggregate-only")
 
     if a.stall_after <= 0 or a.aggregate_stall_after <= 0:
         ap.error("stall windows must be positive")
@@ -1025,22 +1042,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 pytest_argv, selection, aggregate_path,
                 a.aggregate_stall_after, a.cwd,
                 progress_relay_path=(Path(a.progress_relay)
-                                     if a.progress_relay else None))
+                                     if a.progress_relay else None),
+                collect_only=a.collect_only)
             sys.stdout.write(out)
             if not out.endswith("\n"):
                 sys.stdout.write("\n")
-            aggregate_suites = _load_suites(aggregate_path)
+            aggregate_suites = (None if a.collect_only
+                                else _load_suites(aggregate_path))
             if aggregate_suites is not None:
                 for suite in aggregate_suites:
                     cases, red = _count(suite)
                     aggregate_cases += cases
                     aggregate_red += red
-            # rc 0/1 are pytest's complete normal outcomes. Everything else is
-            # interrupted/internal/usage/no-collection and cannot certify the
-            # whole-selection semantics even if a partial XML happened to parse.
-            if (aggregate_killed or aggregate_suites is None
-                    or aggregate_cases == 0
-                    or aggregate_rc not in (0, 1)):
+            # In collection mode the validated semantic lifecycle IS the
+            # completeness record: a collect-only junit legitimately carries no
+            # testcase.  In ordinary mode rc 0/1 plus a non-empty junit remain
+            # required exactly as before.
+            invalid_collection = (a.collect_only
+                                  and (aggregate_killed or aggregate_rc != 0))
+            invalid_run = (not a.collect_only
+                           and (aggregate_killed or aggregate_suites is None
+                                or aggregate_cases == 0
+                                or aggregate_rc not in (0, 1)))
+            if invalid_collection or invalid_run:
                 aggregate_incomplete = True
                 why = _norecord_reason(
                     aggregate_rc, out, aggregate_killed,
@@ -1048,6 +1072,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"AGGREGATE_NORECORD  {why} — cross-file/order semantics "
                       "are UNKNOWN, not clean", flush=True)
                 aggregate_suites = None
+            elif a.collect_only:
+                print(f"AGGREGATE_COLLECTION_COMPLETE  rc={aggregate_rc}  "
+                      "validated pytest collection lifecycle; zero test items "
+                      "executed", flush=True)
             else:
                 print(f"AGGREGATE_COMPLETE  rc={aggregate_rc}  "
                       f"cases={aggregate_cases}  red={aggregate_red}",
