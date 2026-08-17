@@ -385,6 +385,187 @@ def test_dispatcher_refuses_a_nonzero_final_descendant_census(
     assert problem and "final descendant census is not zero" in problem
 
 
+def test_transient_incomplete_census_cannot_publish_zero_with_live_descendant(
+        tmp_path, monkeypatch):
+    """UNKNOWN /proc state is not proof that an adopted daemon vanished."""
+    _require_pidfd_events()
+    ready = tmp_path / "transient-census.identity"
+    real_snapshot = P._owned._proc_snapshot_checked
+    scans = 0
+
+    def transiently_incomplete_snapshot():
+        nonlocal scans
+        scans += 1
+        # Calls 1-2 are the pre-launch capability/baseline reads.  Hide the
+        # adopted daemon from the first five post-launch reads, then recover.
+        # The production failure was that two empty-but-incomplete reads were
+        # accepted as a final zero before recovery could expose the live child.
+        if 3 <= scans <= 7:
+            own = P._owned._read_proc_identity(os.getpid())
+            return ({os.getpid(): own} if own is not None else {}, False)
+        return real_snapshot()
+
+    monkeypatch.setattr(
+        P._owned, "_proc_snapshot_checked", transiently_incomplete_snapshot)
+    daemon = (
+        "import os,pathlib,signal,sys,time\n"
+        "os.setsid()\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "raw=pathlib.Path('/proc/self/stat').read_text()\n"
+        "start=int(raw[raw.rfind(')')+2:].split()[19])\n"
+        "pathlib.Path(sys.argv[1]).write_text(f'{os.getpid()} {start}\\n')\n"
+        "time.sleep(30)\n"
+    )
+    parent = (
+        "import pathlib,subprocess,sys,time\n"
+        f"subprocess.Popen([sys.executable, '-c', {daemon!r}, sys.argv[1]])\n"
+        "p=pathlib.Path(sys.argv[1])\n"
+        "while not p.is_file(): time.sleep(0.001)\n"
+    )
+    result = P._owned.run_owned(
+        [sys.executable, "-c", parent, str(ready)], tmp_path,
+        os.environ.copy(), progress_path=None,
+        stall_grace_s=1, poll_s=0.02)
+    pid, _starttime = (int(value) for value in ready.read_text().split())
+    try:
+        pidfd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        pidfd = None
+        alive = False
+    else:
+        poller = select.poll()
+        poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+        alive = not bool(poller.poll(0))
+    if alive:
+        signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+        poller.poll()
+    if pidfd is not None:
+        os.close(pidfd)
+    assert alive is False, (
+        "INCOMPLETE_CENSUS_PUBLISHED_ZERO_WITH_LIVE_DESCENDANT: "
+        f"result={result}; scans={scans}")
+
+
+def test_launch_registration_masks_term_and_owns_identity_read_failure(
+        tmp_path):
+    """TERM between Popen and registration cannot outrun pidfd ownership."""
+    _require_pidfd_events()
+    identity = tmp_path / "launch-window.identity"
+    pidfd_marker = tmp_path / "launch-window.pidfd-opened"
+    inner = r'''
+import os, signal, sys
+from pathlib import Path
+import _owned_process_supervisor as owned
+
+identity_path = Path(sys.argv[1])
+pidfd_marker = Path(sys.argv[2])
+real_read = owned._read_proc_identity
+real_pidfd_open = owned.os.pidfd_open
+fired = False
+
+def traced_pidfd_open(pid, *args, **kwargs):
+    value = real_pidfd_open(pid, *args, **kwargs)
+    current = real_read(pid)
+    if pid != os.getpid() and current is not None and current[0] == os.getpid():
+        pidfd_marker.write_text(str(pid))
+    return value
+
+def fail_during_registration(pid):
+    global fired
+    value = real_read(pid)
+    if not fired and value is not None and pid != os.getpid() and value[0] == os.getpid():
+        fired = True
+        identity_path.write_text(f"{pid} {value[1]}\n")
+        os.kill(os.getpid(), signal.SIGTERM)
+        raise OSError("INJECTED_IDENTITY_READ_FAILURE")
+    return value
+
+owned.os.pidfd_open = traced_pidfd_open
+owned._read_proc_identity = fail_during_registration
+owned.run_owned(
+    [sys.executable, "-c",
+     "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(30)"],
+    Path.cwd(), os.environ.copy(), progress_path=None,
+    stall_grace_s=5, poll_s=0.05)
+'''
+    env = os.environ.copy()
+    env["PYTHONPATH"] = (str(PROGRAMS) + os.pathsep
+                         + env.get("PYTHONPATH", ""))
+    helper = subprocess.run(
+        [sys.executable, "-c", inner, str(identity), str(pidfd_marker)],
+        env=env, capture_output=True, text=True)
+    pid, _starttime = (int(value) for value in identity.read_text().split())
+    try:
+        pidfd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        pidfd = None
+        alive = False
+    else:
+        poller = select.poll()
+        poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+        alive = not bool(poller.poll(0))
+    if alive:
+        signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+        poller.poll()
+    if pidfd is not None:
+        os.close(pidfd)
+    observed = {
+        "helper_rc": helper.returncode,
+        "root_pidfd_opened": pidfd_marker.is_file(),
+        "child_alive": alive,
+    }
+    assert observed == {
+        "helper_rc": 128 + signal.SIGTERM,
+        "root_pidfd_opened": True,
+        "child_alive": False,
+    }, observed
+
+
+def test_post_sigkill_pidfd_wait_has_a_finite_observation_cadence(monkeypatch):
+    """A reaper may wait forever overall, but each wait must stay observable."""
+    calls = []
+
+    class ObservablePoll:
+        def register(self, _fd, _events):
+            pass
+
+        def unregister(self, _fd):
+            pass
+
+        def poll(self, milliseconds=None):
+            calls.append(milliseconds)
+            return [(123, select.POLLIN)]
+
+    monkeypatch.setattr(P._owned.select, "poll", ObservablePoll)
+    P._owned._wait_pidfds({123: (456, 789)})
+    assert calls == [100], (
+        f"UNOBSERVABLE_TERMINATION_WAIT: poll arguments={calls}")
+
+
+def test_dispatcher_returns_rc2_when_reaper_reports_termination_pending(
+        tmp_path, monkeypatch):
+    """Post-SIGKILL uncertainty blocks without blocking the dispatcher."""
+    wrapper = tmp_path / "forced_pending_supervisor.py"
+    wrapper.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(PROGRAMS)!r})\n"
+        "import _owned_process_supervisor as owned\n"
+        "owned._wait_pidfds_until = lambda handles, deadline: dict(handles)\n"
+        "raise SystemExit(owned.main())\n",
+        encoding="utf-8")
+    monkeypatch.setattr(P._owned, "__file__", str(wrapper))
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.02)
+    rc, _out, problem = P._run(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        tmp_path, os.environ.copy(), stall_grace_s=0.15)
+    observed = {
+        "rc": rc,
+        "termination_pending": bool(
+            problem and "OWNED_SUPERVISOR_TERMINATION_PENDING" in problem),
+    }
+    assert observed == {"rc": 2, "termination_pending": True}, observed
+
+
 def _attest(path: Path, output: str = "[PASS] same"):
     row = process_attestation("ordinary", output, 0, ["python3", "gate.py"])
     path.write_text(json.dumps(row) + "\n", encoding="utf-8")
