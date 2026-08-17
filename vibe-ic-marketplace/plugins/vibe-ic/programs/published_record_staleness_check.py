@@ -1254,3 +1254,5 @@ def _write_baseline(bl_path: Path, now: List[str], prev: Optional[List[str]],
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+# selector-probe: no-op line added by the xdist equivalence experiment
