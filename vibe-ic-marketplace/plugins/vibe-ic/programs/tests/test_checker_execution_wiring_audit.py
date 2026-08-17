@@ -16,6 +16,7 @@ confident false accusation:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -318,6 +319,43 @@ def test_real_repo_runs_and_is_deterministic():
     # And the answer must be a real measurement, not the all-empty-haystack
     # degenerate one below. See the `.claude/worktrees` regression.
     assert len(a["no_runner_at_all"]) < a["checkers"]
+
+
+def test_a_second_scan_re_reads_a_file_that_changed_without_its_mtime(tmp_path):
+    """THE MEMO MAY NOT BE A GUESS.
+
+    `_strip_prose` and the tokeniser are memoised so the six whole-tree scans
+    this suite drives over ONE unchanging tree cost one `ast.parse` instead of
+    six (measured on this tree: 20.1 s for the first scan, 0.48 s for each
+    later one). The memo is keyed on a digest of the bytes the caller just
+    read, and that choice is exactly what this test pins.
+
+    The mutation below is the one a `(path, mtime, size)` key CANNOT survive:
+    same path, same byte count, same `st_mtime_ns`, different content. A memo
+    that answered from the previous scan here would report a runner that is no
+    longer in the tree — a checker credited as wired by bytes that no longer
+    exist, which is the accusation-shaped defect this whole program is about,
+    inverted.
+    """
+    plugin = _tree(tmp_path)
+    runner = tmp_path / "tools" / "runner.sh"
+    runner.write_text("python3 sample_check.py  # wired\n")
+    before = runner.stat()
+
+    assert M._haystacks(plugin, tmp_path)["TOOLS"], "the probe read nothing"
+    assert _run(tmp_path)["no_runner_at_all"] == []
+
+    # Same length, same mtime to the nanosecond, different bytes.
+    runner.write_text("python3 sample_XXXXX.py  # wired\n")
+    os.utime(runner, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = runner.stat()
+    assert (after.st_size, after.st_mtime_ns) == \
+           (before.st_size, before.st_mtime_ns), \
+        "the probe failed to reproduce the same-size same-mtime mutation"
+
+    assert _run(tmp_path)["no_runner_at_all"] == ["sample_check.py"], (
+        "the second scan answered from a stale memo — the wiring it reported "
+        "is not in the tree any more")
 
 
 def test_a_checkout_living_under_dot_claude_worktrees_is_not_all_skipped(tmp_path):
