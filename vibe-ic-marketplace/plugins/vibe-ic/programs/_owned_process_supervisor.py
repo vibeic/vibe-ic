@@ -10,13 +10,16 @@ and double-forked descendants adopt to this helper, are retained by a fresh
 descendant census, and are signalled through pidfds.  A terminal result is
 published only after a complete final census explicitly contains zero owned
 processes.  There is no whole-run wall timeout; the underlying watchdog uses
-forward progress, and post-SIGKILL completion waits on kernel exit events.
+forward progress.  A durable termination-pending transition releases the outer
+dispatcher with rc 2 while this isolated helper continues to own and reap work
+until kernel exit events plus a complete final census prove zero descendants.
 """
 from __future__ import annotations
 
 import argparse
 import ctypes
 import errno
+import json
 import os
 import select
 import signal
@@ -24,7 +27,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import _watchdog as _wd
 from _atomic_artefact import write_json
@@ -32,7 +35,10 @@ from _atomic_artefact import write_json
 _PR_SET_CHILD_SUBREAPER = 36
 _PROTOCOL = 1
 _TERM_GRACE_S = 2.0
+_KILL_CONFIRM_GRACE_S = 1.0
+_REAPER_POLL_MS = 100
 Identity = Tuple[int, int]  # (pid, /proc starttime)
+PendingNotifier = Callable[[str, Set[Identity], bool], None]
 
 
 @dataclass(frozen=True)
@@ -56,7 +62,16 @@ class CleanupResult:
     census_ok: bool
 
 
-_ACTIVE_JOB: Optional[Tuple[subprocess.Popen, Identity, Set[Identity]]] = None
+@dataclass(frozen=True)
+class ActiveJob:
+    proc: subprocess.Popen
+    root: Identity
+    baseline: Set[Identity]
+    root_pidfd: Optional[int]
+    pending_notifier: Optional[PendingNotifier]
+
+
+_ACTIVE_JOB: Optional[ActiveJob] = None
 _IN_SHUTDOWN = False
 
 
@@ -241,7 +256,13 @@ def _wait_pidfds_until(handles: Dict[int, Identity], deadline: float
 
 
 def _wait_pidfds(handles: Dict[int, Identity]) -> None:
-    """Wait for kernel exit events, with no guessed wall-clock deadline."""
+    """Reap on kernel exit events with a finite observability cadence.
+
+    The loop has no total runtime estimate: a D-state task may retain its
+    dedicated helper for as long as the kernel needs.  Each individual poll is
+    bounded, however, so the helper remains inspectable and never disappears
+    into an unobservable ``poll(None)`` wait.
+    """
     remaining = set(handles)
     if not remaining:
         return
@@ -249,7 +270,7 @@ def _wait_pidfds(handles: Dict[int, Identity]) -> None:
     for pidfd in remaining:
         poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
     while remaining:
-        for pidfd, _event in poller.poll():
+        for pidfd, _event in poller.poll(_REAPER_POLL_MS):
             if pidfd in remaining:
                 poller.unregister(pidfd)
                 remaining.remove(pidfd)
@@ -265,26 +286,56 @@ def _close_pidfds(handles: Iterable[int]) -> None:
 
 def _cleanup_job(proc: subprocess.Popen, root: Identity,
                  baseline: Set[Identity],
-                 *, term_grace_s: float = _TERM_GRACE_S) -> CleanupResult:
+                 *, root_pidfd: Optional[int] = None,
+                 pending_notifier: Optional[PendingNotifier] = None,
+                 term_grace_s: float = _TERM_GRACE_S) -> CleanupResult:
     """Stop every attributable identity and prove a complete final zero.
 
     The TERM interval is a shutdown policy, not an estimate of job runtime.
     Once SIGKILL is sent, completion is driven solely by pidfd exit events.
     Newly-forked/adopted identities are censused in subsequent kill waves.
     """
+    def notify(reason: str, identities: Set[Identity], complete: bool) -> None:
+        if pending_notifier is not None:
+            try:
+                pending_notifier(reason, set(identities), complete)
+            except Exception:
+                # Observability must be louder, never more destructive: a
+                # sidecar/pipe failure cannot abort the only subreaper that
+                # still owns live work.  The production notifier has an
+                # independent pipe fallback; this guard protects cleanup from
+                # injected or future notifier failures as well.
+                pass
+
     observed: Set[Identity] = set()
     census_ok = True
     current, scan_ok = _job_processes_checked(root, baseline)
     census_ok = census_ok and scan_ok
     observed.update(current)
+    if not scan_ok:
+        notify("census_incomplete", current, False)
 
     term_handles, open_ok = _open_pidfds(current)
     census_ok = census_ok and open_ok
+    if (root_pidfd is not None and proc.poll() is None
+            and root not in term_handles.values()):
+        try:
+            term_handles[os.dup(root_pidfd)] = root
+        except OSError:
+            census_ok = False
+            notify("root_pidfd_dup_failed", current or {root}, False)
     census_ok = _signal_pidfds(term_handles, signal.SIGTERM) and census_ok
     remaining = _wait_pidfds_until(
         term_handles, time.monotonic() + term_grace_s)
     census_ok = _signal_pidfds(remaining, signal.SIGKILL) and census_ok
-    _wait_pidfds(remaining)
+    kill_pending = _wait_pidfds_until(
+        remaining, time.monotonic() + _KILL_CONFIRM_GRACE_S)
+    if kill_pending:
+        notify("sigkill_pending", set(kill_pending.values()), census_ok)
+        # This helper remains the attributable subreaper.  The outer dispatcher
+        # has already received a named rc=2 state and need not wait; this loop is
+        # event-driven and keeps ownership until the kernel confirms exit.
+        _wait_pidfds(kill_pending)
     _close_pidfds(term_handles)
 
     # The root's pidfd event is ready now.  Let Popen own its wait status before
@@ -302,24 +353,38 @@ def _cleanup_job(proc: subprocess.Popen, root: Identity,
         current, scan_ok = _job_processes_checked(root, baseline)
         census_ok = census_ok and scan_ok
         observed.update(current)
-        if not current:
+        if not scan_ok:
+            # UNKNOWN is not zero.  Tell the dispatcher immediately, then keep
+            # this isolated helper alive until a complete census recovers.
+            notify("census_incomplete", current, False)
+        if not current and scan_ok:
             # A second complete pass is the load-bearing final-zero record.
             final, final_ok = _job_processes_checked(root, baseline)
             census_ok = census_ok and final_ok
             observed.update(final)
-            if not final:
+            if not final and final_ok:
                 return CleanupResult(observed, set(), census_ok)
+            if not final_ok:
+                notify("census_incomplete", final, False)
             current = final
+        if not current:
+            time.sleep(_REAPER_POLL_MS / 1000.0)
+            continue
 
         handles, open_ok = _open_pidfds(current)
         census_ok = census_ok and open_ok
         # A same-PID/new-starttime replacement is never signalled through the
         # stale identity.  The fresh census supplies its own verified pidfd.
         if not handles:
-            time.sleep(0.01)
+            notify("pidfd_unavailable", current, False)
+            time.sleep(_REAPER_POLL_MS / 1000.0)
             continue
         census_ok = _signal_pidfds(handles, signal.SIGKILL) and census_ok
-        _wait_pidfds(handles)
+        kill_pending = _wait_pidfds_until(
+            handles, time.monotonic() + _KILL_CONFIRM_GRACE_S)
+        if kill_pending:
+            notify("sigkill_pending", set(kill_pending.values()), census_ok)
+            _wait_pidfds(kill_pending)
         _close_pidfds(handles)
         _reap_adopted()
 
@@ -331,6 +396,8 @@ def _capability_error() -> str:
         return "os.pidfd_open is unavailable"
     if not hasattr(signal, "pidfd_send_signal"):
         return "signal.pidfd_send_signal is unavailable"
+    if not hasattr(signal, "pthread_sigmask"):
+        return "signal.pthread_sigmask is unavailable"
     if not hasattr(select, "poll"):
         return "select.poll is unavailable"
     try:
@@ -349,19 +416,30 @@ def _capability_error() -> str:
 
 def _shutdown_handler(signum, _frame) -> None:
     global _IN_SHUTDOWN
-    if not _IN_SHUTDOWN:
-        _IN_SHUTDOWN = True
-        active = _ACTIVE_JOB
-        if active is not None:
-            _cleanup_job(active[0], active[1], active[2])
+    if _IN_SHUTDOWN:
+        # A second TERM/INT must not interrupt the cleanup already retaining
+        # reaper ownership.  SIGKILL remains the caller's explicit hard stop.
+        return
+    _IN_SHUTDOWN = True
+    signal.pthread_sigmask(
+        signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+    active = _ACTIVE_JOB
+    if active is not None:
+        _cleanup_job(
+            active.proc, active.root, active.baseline,
+            root_pidfd=active.root_pidfd,
+            pending_notifier=active.pending_notifier)
     raise SystemExit(128 + int(signum))
 
 
 def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
               progress_path: Optional[Path], stall_grace_s: float,
-              poll_s: float) -> OwnedRunResult:
+              poll_s: float,
+              pending_notifier: Optional[PendingNotifier] = None
+              ) -> OwnedRunResult:
     """Run one job and return only after its final owned census is zero."""
-    global _ACTIVE_JOB
+    global _ACTIVE_JOB, _IN_SHUTDOWN
+    _IN_SHUTDOWN = False
     capability_error = _capability_error()
     if capability_error:
         return OwnedRunResult(
@@ -382,6 +460,7 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
     old_int = signal.signal(signal.SIGINT, _shutdown_handler)
     holder: Dict[str, subprocess.Popen] = {}
     root_identity: Dict[str, Identity] = {}
+    root_pidfd_holder: Dict[str, int] = {}
     launch_identity_ok = True
     cleanups: List[CleanupResult] = []
 
@@ -389,29 +468,63 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
         global _ACTIVE_JOB
         nonlocal launch_identity_ok
         kwargs.pop("stderr", None)
-        proc = subprocess.Popen(
-            command, cwd=str(cwd), start_new_session=True,
-            stderr=subprocess.STDOUT, **kwargs)
         try:
-            observed = _read_proc_identity(proc.pid)
-        except (OSError, ValueError, IndexError):
-            observed = None
-        if observed is None:
-            # The helper is still the direct parent, so its adopted-descendant
-            # census can clean the job.  The missing root starttime nevertheless
-            # makes the ownership record fail closed.
+            previous_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+        except (AttributeError, OSError):
+            raise RuntimeError(
+                "shutdown signals cannot be blocked during ownership launch")
+        try:
+            # A forked child inherits the calling thread's signal mask.  Restore
+            # the pre-critical-section mask in this dedicated, single-threaded
+            # helper's child so TERM remains a real graceful-shutdown phase for
+            # the supervised job instead of being silently blocked forever.
+            def restore_child_signal_mask() -> None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+            proc = subprocess.Popen(
+                command, cwd=str(cwd), start_new_session=True,
+                stderr=subprocess.STDOUT,
+                preexec_fn=restore_child_signal_mask, **kwargs)
+            holder["proc"] = proc
             root = (proc.pid, -1)
-            launch_identity_ok = False
-        else:
-            root = (proc.pid, observed[1])
-        holder["proc"] = proc
-        root_identity["value"] = root
-        _ACTIVE_JOB = (proc, root, baseline)
-        return proc
+            root_identity["value"] = root
+            try:
+                root_fd = os.pidfd_open(proc.pid)
+            except OSError:
+                root_fd = None
+                launch_identity_ok = False
+            else:
+                root_pidfd_holder["value"] = root_fd
+
+            # Register a directly-signalable child BEFORE the fallible /proc
+            # starttime read and before pending TERM/INT can be delivered.
+            _ACTIVE_JOB = ActiveJob(
+                proc, root, baseline, root_fd, pending_notifier)
+            try:
+                observed = _read_proc_identity(proc.pid)
+            except (OSError, ValueError, IndexError):
+                observed = None
+            if observed is None:
+                # The stable root pidfd remains enough to stop the direct child;
+                # census integrity is still marked false until ancestry recovers.
+                launch_identity_ok = False
+            else:
+                root = (proc.pid, observed[1])
+                root_identity["value"] = root
+                _ACTIVE_JOB = ActiveJob(
+                    proc, root, baseline, root_fd, pending_notifier)
+            return proc
+        finally:
+            # A TERM/INT received anywhere after Popen is delivered only after
+            # `_ACTIVE_JOB` owns a pidfd-backed cleanup path.
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
     def _kill(proc, _reason):
         cleanups.append(_cleanup_job(
-            proc, root_identity["value"], baseline))
+            proc, root_identity["value"], baseline,
+            root_pidfd=root_pidfd_holder.get("value"),
+            pending_notifier=pending_notifier))
 
     try:
         result = _wd.run_supervised(
@@ -435,7 +548,10 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
             if result.outcome == "natural" and live:
                 leaked_after_natural = set(live)
             if live or not live_ok:
-                cleanup = _cleanup_job(proc, root, baseline)
+                cleanup = _cleanup_job(
+                    proc, root, baseline,
+                    root_pidfd=root_pidfd_holder.get("value"),
+                    pending_notifier=pending_notifier)
                 cleanups.append(cleanup)
                 observed.update(cleanup.observed)
                 census_ok = census_ok and cleanup.census_ok
@@ -444,9 +560,19 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
         final: Set[Identity] = set()
         final_ok = True
         if proc is not None:
-            final, final_ok = _job_processes_checked(
-                root_identity["value"], baseline)
-            observed.update(final)
+            while True:
+                final, final_ok = _job_processes_checked(
+                    root_identity["value"], baseline)
+                observed.update(final)
+                if not final and final_ok:
+                    break
+                cleanup = _cleanup_job(
+                    proc, root_identity["value"], baseline,
+                    root_pidfd=root_pidfd_holder.get("value"),
+                    pending_notifier=pending_notifier)
+                cleanups.append(cleanup)
+                observed.update(cleanup.observed)
+                census_ok = census_ok and cleanup.census_ok
         census_ok = census_ok and final_ok
         if final:
             # Never publish a terminal protocol record with owned work alive.
@@ -482,10 +608,19 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
         proc = holder.get("proc")
         root = root_identity.get("value")
         if proc is not None and root is not None:
-            _cleanup_job(proc, root, baseline)
+            _cleanup_job(
+                proc, root, baseline,
+                root_pidfd=root_pidfd_holder.get("value"),
+                pending_notifier=pending_notifier)
         raise
     finally:
         _ACTIVE_JOB = None
+        root_fd = root_pidfd_holder.get("value")
+        if root_fd is not None:
+            try:
+                os.close(root_fd)
+            except OSError:
+                pass
         signal.signal(signal.SIGTERM, old_term)
         signal.signal(signal.SIGINT, old_int)
 
@@ -493,6 +628,8 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--result", type=Path, required=True)
+    parser.add_argument("--status", type=Path)
+    parser.add_argument("--event-fd", type=int)
     parser.add_argument("--cwd", type=Path, required=True)
     parser.add_argument("--progress", type=Path)
     parser.add_argument("--stall-grace", type=float, required=True)
@@ -504,10 +641,89 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         command = command[1:]
     if not command or args.stall_grace <= 0 or args.poll <= 0:
         parser.error("a command and positive progress windows are required")
+    event_fd = args.event_fd
+    if event_fd is not None:
+        # The dispatcher passed this descriptor only to the helper.  Restore
+        # CLOEXEC before launching the supervised command so an adversarial
+        # descendant cannot forge supervisor state on the private channel.
+        os.set_inheritable(event_fd, False)
+    own_identity = _read_proc_identity(os.getpid())
+    own_starttime = own_identity[1] if own_identity is not None else -1
+    if args.status is not None:
+        write_json(args.status, {
+            "protocol": _PROTOCOL,
+            "state": "running",
+            "reaper_pid": os.getpid(),
+            "reaper_starttime": own_starttime,
+        }, ensure_ascii=False)
+    pending_events: List[Dict[str, object]] = []
+    announced: Set[Tuple[str, Tuple[Identity, ...]]] = set()
+
+    def notify_pending(reason: str, identities: Set[Identity],
+                       census_ok: bool) -> None:
+        key = (reason, tuple(sorted(identities)))
+        if key in announced:
+            return
+        announced.add(key)
+        event: Dict[str, object] = {
+            "protocol": _PROTOCOL,
+            "state": "termination_pending",
+            "reason": reason,
+            "reaper_pid": os.getpid(),
+            "reaper_starttime": own_starttime,
+            "pending_descendants": _identity_rows(identities),
+            "census_ok": bool(census_ok),
+        }
+        pending_events.append(event)
+        if args.status is not None:
+            try:
+                write_json(args.status, {
+                    "protocol": _PROTOCOL,
+                    "state": "termination_pending",
+                    "events": pending_events,
+                }, ensure_ascii=False)
+            except (OSError, TypeError, ValueError) as exc:
+                # The private pipe is an independent state channel.  Report
+                # the durable-record failure there, keep cleanup running, and
+                # let the outer dispatcher retain this helper with rc=2.
+                event["status_error"] = (
+                    f"{type(exc).__name__}: {exc}")
+        if event_fd is not None:
+            payload = (json.dumps(event, ensure_ascii=True, sort_keys=True)
+                       + "\n").encode("ascii")
+            try:
+                while payload:
+                    payload = payload[os.write(event_fd, payload):]
+            except (BrokenPipeError, OSError):
+                # The dispatcher may already have returned rc=2.  The durable
+                # sidecar remains inspectable and this helper keeps ownership.
+                pass
+
     result = run_owned(
         command, args.cwd, os.environ.copy(), progress_path=args.progress,
-        stall_grace_s=args.stall_grace, poll_s=args.poll)
+        stall_grace_s=args.stall_grace, poll_s=args.poll,
+        pending_notifier=notify_pending)
     write_json(args.result, asdict(result), ensure_ascii=False)
+    if pending_events and args.status is not None:
+        write_json(args.status, {
+            "protocol": _PROTOCOL,
+            "state": "reaper_complete",
+            "events": pending_events,
+            "result": asdict(result),
+        }, ensure_ascii=False)
+    elif args.status is not None:
+        write_json(args.status, {
+            "protocol": _PROTOCOL,
+            "state": "complete",
+            "reaper_pid": os.getpid(),
+            "reaper_starttime": own_starttime,
+            "result": asdict(result),
+        }, ensure_ascii=False)
+    if event_fd is not None:
+        try:
+            os.close(event_fd)
+        except OSError:
+            pass
     return 0
 
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Run repo hygiene as a fail-closed local parallel DAG.
 
+ENFORCEMENT: blocking — incomplete ownership, termination-pending work, missing
+records, or an undecided gate returns rc 2 and stops the hygiene tier.
+
 Phase A assigns every gate except host-independence to exactly one measured
 shard.  Phase B runs host-independence alone after deterministically merging
 the exact process attestations produced by A.  This preserves the dependency
@@ -16,10 +19,14 @@ import atexit
 import concurrent.futures
 import json
 import os
+import select
+import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -42,6 +49,70 @@ DEFAULT_JOBS = 8
 DEFAULT_STALL_GRACE_S = 300
 DEFAULT_POLL_S = 5
 _FRESH_PREFIX = "hygiene-fresh-"
+_OWNED_REAPER_PREFIX = "hygiene-owned-reaper-"
+_PENDING_REAPERS: Dict[
+    Tuple[int, int], Tuple[subprocess.Popen, int | None, Path]
+] = {}
+_PENDING_REAPERS_LOCK = threading.Lock()
+_ACTIVE_REAPER_SCRATCH: set[Path] = set()
+
+
+def _reap_completed_reaper_records() -> None:
+    """Remove only attributed records whose exact reaper identity is gone."""
+    tmp_root = Path(tempfile.gettempdir())
+    for scratch in tmp_root.glob(_OWNED_REAPER_PREFIX + "*"):
+        with _PENDING_REAPERS_LOCK:
+            if scratch in _ACTIVE_REAPER_SCRATCH:
+                continue
+        status = scratch / "reaper-status.json"
+        try:
+            doc = _load_json(status)
+            if doc.get("state") == "reaper_complete":
+                events = doc.get("events") or []
+                last = events[-1]
+                pid = int(last["reaper_pid"])
+                starttime = int(last["reaper_starttime"])
+            elif doc.get("state") == "complete":
+                pid = int(doc["reaper_pid"])
+                starttime = int(doc["reaper_starttime"])
+            else:
+                continue
+        except (OSError, ValueError, TypeError, KeyError, IndexError,
+                json.JSONDecodeError):
+            continue
+        try:
+            live = _owned._read_proc_identity(pid)
+        except (OSError, ValueError, IndexError):
+            continue
+        if live is None or live[1] != starttime:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _retain_pending_reaper(helper: subprocess.Popen, helper_pidfd: int | None,
+                           scratch: Path, starttime: int) -> None:
+    """Keep a strong, inspectable owner until its SIGKILL-pending tree exits."""
+    key = (helper.pid, starttime)
+    with _PENDING_REAPERS_LOCK:
+        _PENDING_REAPERS[key] = (helper, helper_pidfd, scratch)
+
+    def finish() -> None:
+        try:
+            helper.wait()
+        finally:
+            if helper_pidfd is not None:
+                try:
+                    os.close(helper_pidfd)
+                except OSError:
+                    pass
+            with _PENDING_REAPERS_LOCK:
+                _PENDING_REAPERS.pop(key, None)
+                _ACTIVE_REAPER_SCRATCH.discard(scratch)
+            # Keep the tiny status/result directory as termination evidence.
+            # A later invocation may reap completed records; deleting it here
+            # would race the caller that is reporting the rc=2 sidecar path.
+
+    threading.Thread(
+        target=finish, name=f"owned-reaper-{helper.pid}", daemon=True).start()
 
 
 def _unregister_fresh(scratch: Path) -> None:
@@ -99,15 +170,43 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
     silent and making no recorded progress for ``stall_grace_s`` is killed.
     """
     # Subreaper state and waitpid(-1) are process-global.  `_run` is called by
-    # several dispatcher threads, so each job gets a dedicated one-job helper
-    # process instead of letting those threads steal one another's children.
-    # The helper owns a PID/starttime census and publishes a result only after
-    # its final attributable census is explicitly zero.
-    with tempfile.TemporaryDirectory(prefix="hygiene-owned-run-") as td:
-        result_path = Path(td) / "owned-result.json"
+    # several dispatcher threads, so each job gets a dedicated one-job helper.
+    # The private pipe is the semantic state channel: the outer thread waits on
+    # either a helper-exit pidfd event or an explicit termination-pending event,
+    # never on an estimated whole-job deadline.
+    if not hasattr(os, "pidfd_open") or not hasattr(select, "poll"):
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: dispatcher pidfd "
+                "exit events are unavailable")
+    try:
+        probe_pidfd = os.pidfd_open(os.getpid())
+    except OSError as exc:
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: dispatcher cannot open "
+                f"pidfd exit events: {exc}")
+    else:
+        os.close(probe_pidfd)
+
+    _reap_completed_reaper_records()
+    scratch = Path(tempfile.mkdtemp(prefix=_OWNED_REAPER_PREFIX))
+    with _PENDING_REAPERS_LOCK:
+        _ACTIVE_REAPER_SCRATCH.add(scratch)
+    result_path = scratch / "owned-result.json"
+    status_path = scratch / "reaper-status.json"
+    diagnostic_path = scratch / "helper.log"
+    event_read = -1
+    event_write = -1
+    helper: subprocess.Popen | None = None
+    helper_pidfd: int | None = None
+    diagnostic_fh = None
+    retained = False
+    try:
+        event_read, event_write = os.pipe()
+        os.set_blocking(event_read, False)
+        diagnostic_fh = diagnostic_path.open("wb")
         helper_argv = [
             sys.executable, str(Path(_owned.__file__).resolve()),
             "--result", str(result_path),
+            "--status", str(status_path),
+            "--event-fd", str(event_write),
             "--cwd", str(cwd.resolve()),
             "--stall-grace", str(stall_grace_s),
             "--poll", str(DEFAULT_POLL_S),
@@ -115,11 +214,194 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
         if progress_path is not None:
             helper_argv.extend(["--progress", str(progress_path.resolve())])
         helper_argv.extend(["--", *argv])
-        # No guessed total timeout: the helper's progress watchdog owns runtime
-        # liveness, and its teardown waits on kernel pidfd exit events.
-        helper = subprocess.run(
-            helper_argv, env=env, capture_output=True, text=True)
-        helper_diagnostic = (helper.stdout or "") + (helper.stderr or "")
+        helper = subprocess.Popen(
+            helper_argv, env=env, stdout=diagnostic_fh,
+            stderr=subprocess.STDOUT, pass_fds=(event_write,),
+            start_new_session=True)
+        diagnostic_fh.close()
+        os.close(event_write)
+        event_write = -1
+        try:
+            helper_pidfd = os.pidfd_open(helper.pid)
+        except OSError as exc:
+            helper.send_signal(signal.SIGTERM)
+            helper_diagnostic = diagnostic_path.read_text(
+                encoding="utf-8", errors="replace")
+            try:
+                observed = _owned._read_proc_identity(helper.pid)
+            except (OSError, ValueError, IndexError):
+                observed = None
+            starttime = observed[1] if observed is not None else -1
+            _retain_pending_reaper(helper, None, scratch, starttime)
+            retained = True
+            helper = None
+            return (2, helper_diagnostic,
+                    "OWNED_SUPERVISOR_NORECORD: cannot own helper pidfd: "
+                    f"{exc}")
+
+        poller = select.poll()
+        poller.register(event_read,
+                        select.POLLIN | select.POLLHUP | select.POLLERR)
+        poller.register(helper_pidfd,
+                        select.POLLIN | select.POLLHUP | select.POLLERR)
+        event_buffer = b""
+        pending: Dict[str, Any] | None = None
+        helper_exited = False
+        channel_failed = False
+
+        def drain_pending_events() -> None:
+            nonlocal event_buffer, pending
+            while True:
+                try:
+                    chunk = os.read(event_read, 65536)
+                except BlockingIOError:
+                    break
+                if not chunk:
+                    break
+                event_buffer += chunk
+                while b"\n" in event_buffer:
+                    raw, event_buffer = event_buffer.split(b"\n", 1)
+                    if not raw:
+                        continue
+                    try:
+                        candidate = json.loads(raw.decode("ascii"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        candidate = {"state": "invalid"}
+                    if (isinstance(candidate, dict)
+                            and candidate.get("state")
+                            == "termination_pending"):
+                        pending = candidate
+
+        while not pending and not helper_exited:
+            # Both watched objects are kernel events.  There is deliberately no
+            # wall-clock estimate for how long a healthy helper may run.
+            events = poller.poll()
+            pipe_events = [event for fd, event in events
+                           if fd == event_read]
+            if pipe_events:
+                drain_pending_events()
+                if pending is None and any(
+                        event & (select.POLLHUP | select.POLLERR)
+                        for event in pipe_events):
+                    # The sidecar is written before the pipe event.  Recover a
+                    # transition if the helper closed between those operations.
+                    try:
+                        durable = _load_json(status_path)
+                    except (OSError, ValueError, json.JSONDecodeError):
+                        durable = {}
+                    events_doc = durable.get("events")
+                    if isinstance(events_doc, list):
+                        for candidate in reversed(events_doc):
+                            if (isinstance(candidate, dict)
+                                    and candidate.get("state")
+                                    == "termination_pending"):
+                                pending = candidate
+                                break
+                    if pending is None:
+                        if (result_path.is_file()
+                                or durable.get("state") == "complete"):
+                            # Normal helper shutdown writes its result/status
+                            # before closing the channel.  Stop watching the
+                            # now-permanent HUP and await its pidfd exit event.
+                            poller.unregister(event_read)
+                        else:
+                            channel_failed = True
+            if pending is not None:
+                break
+            if channel_failed:
+                break
+            if any(fd == helper_pidfd for fd, _event in events):
+                # The helper can publish a pending transition immediately before
+                # exit.  Drain the private channel before classifying the pidfd
+                # event so a fast reaper completion cannot hide that rc=2 state.
+                drain_pending_events()
+                helper_exited = pending is None
+
+        helper_diagnostic = diagnostic_path.read_text(
+            encoding="utf-8", errors="replace")
+        if channel_failed:
+            helper.send_signal(signal.SIGTERM)
+            try:
+                observed = _owned._read_proc_identity(helper.pid)
+            except (OSError, ValueError, IndexError):
+                observed = None
+            starttime = observed[1] if observed is not None else -1
+            _retain_pending_reaper(
+                helper, helper_pidfd, scratch, starttime)
+            retained = True
+            helper = None
+            helper_pidfd = None
+            return (2, helper_diagnostic,
+                    "OWNED_SUPERVISOR_NORECORD: private termination-state "
+                    "channel closed before a terminal record")
+        if pending is not None:
+            try:
+                observed = _owned._read_proc_identity(helper.pid)
+            except (OSError, ValueError, IndexError):
+                observed = None
+            expected_start = pending.get("reaper_starttime")
+            violations: List[str] = []
+            try:
+                status_doc = _load_json(status_path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                status_doc = {}
+                violations.append(f"unreadable durable pending status: {exc}")
+            if status_doc.get("state") not in (
+                    "termination_pending", "reaper_complete"):
+                violations.append("durable sidecar has no pending state")
+            if pending.get("protocol") != 1:
+                violations.append("unknown pending protocol")
+            if pending.get("reaper_pid") != helper.pid:
+                violations.append("pending record names a different reaper PID")
+            if not isinstance(expected_start, int) or expected_start < 0:
+                violations.append("pending record has no reaper starttime")
+            if (observed is not None and isinstance(expected_start, int)
+                    and observed[1] != expected_start):
+                violations.append("reaper PID/starttime identity changed")
+            if not isinstance(pending.get("reason"), str):
+                violations.append("pending record has no reason")
+            if not isinstance(pending.get("pending_descendants"), list):
+                violations.append("pending record has no descendant census")
+            if pending.get("status_error"):
+                violations.append(
+                    "durable pending sidecar failed: "
+                    f"{pending['status_error']}")
+            if violations:
+                if helper.poll() is None:
+                    # A pending transition proves cleanup is already active.
+                    # Retain that unique subreaper; do not interrupt it with a
+                    # nested signal-handler cleanup merely because one of its
+                    # observability records was malformed.
+                    retain_start = (
+                        observed[1] if observed is not None else
+                        expected_start if isinstance(expected_start, int)
+                        else -1)
+                    _retain_pending_reaper(
+                        helper, helper_pidfd, scratch, int(retain_start))
+                    retained = True
+                    helper = None
+                    helper_pidfd = None
+                return (2, helper_diagnostic,
+                        "OWNED_SUPERVISOR_NORECORD: invalid pending state: "
+                        + "; ".join(violations))
+
+            # Transfer the live Popen/pidfd objects to a background waiter.  The
+            # helper is a session-isolated subreaper and continues to own the
+            # SIGKILL-pending tree; the dispatcher can now fail closed with rc2.
+            _retain_pending_reaper(
+                helper, helper_pidfd, scratch, int(expected_start))
+            retained = True
+            helper = None
+            helper_pidfd = None
+            reason = str(pending["reason"])
+            descendants = pending.get("pending_descendants")
+            return (2, helper_diagnostic,
+                    "OWNED_SUPERVISOR_TERMINATION_PENDING: "
+                    f"reason={reason}; reaper={pending['reaper_pid']}/"
+                    f"{expected_start}; descendants={descendants!r}; "
+                    f"status={status_path}")
+
+        helper.wait()
         if helper.returncode != 0 or not result_path.is_file():
             return (2, helper_diagnostic,
                     "OWNED_SUPERVISOR_NORECORD: helper did not publish its "
@@ -129,6 +411,44 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             return (2, helper_diagnostic,
                     f"OWNED_SUPERVISOR_NORECORD: invalid result: {exc}")
+    except BaseException:
+        if helper is not None and helper.poll() is None:
+            # The helper is session-isolated, so explicitly request its cleanup
+            # when this dispatcher thread is cancelled.
+            helper.send_signal(signal.SIGTERM)
+            try:
+                observed = _owned._read_proc_identity(helper.pid)
+            except (OSError, ValueError, IndexError):
+                observed = None
+            starttime = observed[1] if observed is not None else -1
+            _retain_pending_reaper(
+                helper, helper_pidfd, scratch, starttime)
+            retained = True
+            helper = None
+            helper_pidfd = None
+        raise
+    finally:
+        if event_read >= 0:
+            try:
+                os.close(event_read)
+            except OSError:
+                pass
+        if event_write >= 0:
+            try:
+                os.close(event_write)
+            except OSError:
+                pass
+        if diagnostic_fh is not None and not diagnostic_fh.closed:
+            diagnostic_fh.close()
+        if helper_pidfd is not None:
+            try:
+                os.close(helper_pidfd)
+            except OSError:
+                pass
+        if not retained:
+            shutil.rmtree(scratch, ignore_errors=True)
+            with _PENDING_REAPERS_LOCK:
+                _ACTIVE_REAPER_SCRATCH.discard(scratch)
 
     body = str(record.get("body") or "")
     if helper_diagnostic:
