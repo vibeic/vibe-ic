@@ -15,6 +15,7 @@ of the dispatch code would drift from the code CI runs.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -23,6 +24,7 @@ from pathlib import Path
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
 _LIB = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
+_AUDIT63 = _REPO / "tools" / "ci" / "audit_63x9.sh"
 _HYGIENE = _REPO / "tools" / "ci" / "repo_hygiene_gates.sh"
 
 #: Every fixture gate returns instantly; this only stops a hung one from taking
@@ -325,12 +327,34 @@ def test_the_tracked_cells_are_still_reached():
         subprocess.run(["git", "-C", str(clone), "commit", "-qm", "b"],
                        check=True)
 
+        # THE SUBJECT MOVED; THE QUESTION DID NOT. The per-cell gates left
+        # repo_hygiene_gates.sh because each judges a PUBLISHED CELL -- macro OBS
+        # is flow step 21, DRC-vacuous 31, inner-FAIL-bubble-up 36 -- which is a
+        # design question, while a landing asks only "did this change break
+        # something that used to work". They now live in tools/ci/audit_63x9.sh.
+        #
+        # REPOINTED RATHER THAN DELETED, deliberately: this assertion IS the
+        # fan-out completeness guard, and deleting it when its subject moved is
+        # exactly the silent coverage cut this test's own docstring warns about.
+        # It also still pins TRACKED-not-disk: audit_63x9.sh reads `git ls-files`,
+        # and the sibling test above holds the other direction.
+        shutil.copy2(_AUDIT63, clone / "tools/ci/audit_63x9.sh")
+        _env = dict(os.environ)
+        _env["VIBE_IC_BENCHMARK_DATA"] = str(clone / "benchmark-data")
         out = subprocess.run(
-            ["bash", str(clone / "tools/ci/repo_hygiene_gates.sh"), "--list"],
-            cwd=str(clone), capture_output=True, text=True, timeout=_T)
-        assert out.returncode == 0, out.stderr
-        percell = [ln for ln in out.stdout.splitlines()
-                   if ln.startswith("macro OBS not crossed")]
+            ["bash", str(clone / "tools/ci/audit_63x9.sh"), "--repo", str(clone)],
+            cwd=str(clone), capture_output=True, text=True, timeout=_T, env=_env)
+        # rc is deliberately NOT asserted. With no evaluation/ tree the runner
+        # REFUSES (rc 2), which is correct behaviour and is not what this test is
+        # about. What it is about is the POPULATION the runner says it will judge.
+        _pop = [ln for ln in (out.stdout + out.stderr).splitlines()
+                if "published cell(s)" in ln]
+        assert _pop, (
+            "audit_63x9.sh did not state its population at all, so this test "
+            f"cannot tell coverage from silence:\n{out.stdout[-500:]}{out.stderr[-500:]}")
+        _n = next((int(t) for t in _pop[0].replace(",", " ").split() if t.isdigit()), None)
+        assert _n is not None, f"could not read a count from: {_pop[0]!r}"
+        percell = [None] * _n
         tracked = subprocess.run(
             ["git", "-C", str(clone), "ls-files", "--",
              "benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def"],
