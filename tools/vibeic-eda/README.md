@@ -13,7 +13,7 @@ you have the whole fixed toolchain. The image is published to the **GitHub Conta
 Registry (GHCR)** and is public (no login required):
 
 ```bash
-docker pull ghcr.io/vibeic/vibeic-eda:0.3.5
+docker pull ghcr.io/vibeic/vibeic-eda:0.3.6
 ```
 
 > The image lives on GHCR (`ghcr.io/vibeic/...`), **not** Docker Hub — always use the
@@ -53,7 +53,7 @@ Full scoreboard (8 forks, gatekeeper-verified proofs): [`FIX_STATUS.md`](./FIX_S
 **Headless / batch (CI, scripted flows):**
 ```bash
 docker rm -f vibeic-eda 2>/dev/null || true   # "name already in use"? drop the old container first
-docker run -d --name vibeic-eda ghcr.io/vibeic/vibeic-eda:0.3.5 --skip sleep infinity
+docker run -d --name vibeic-eda ghcr.io/vibeic/vibeic-eda:0.3.6 --skip sleep infinity
 docker exec vibeic-eda yosys --version
 docker exec vibeic-eda openroad -version
 ```
@@ -65,7 +65,7 @@ container, or you get `cd: No such file or directory`. Start it with an identity
 ```bash
 docker run -d --name vibeic-eda \
   -v "$PWD:$PWD" -w "$PWD" \
-  ghcr.io/vibeic/vibeic-eda:0.3.5 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:0.3.6 --skip sleep infinity
 # then point the MCP at it:  EDA_CONTAINER=vibeic-eda
 ```
 
@@ -73,14 +73,14 @@ docker run -d --name vibeic-eda \
 ```bash
 docker run -d --name vibeic-eda \
   -p 5901:5901 -p 8080:80 \
-  ghcr.io/vibeic/vibeic-eda:0.3.5
+  ghcr.io/vibeic/vibeic-eda:0.3.6
 # noVNC:  http://localhost:8080     VNC: localhost:5901   (default password: abc123)
 ```
 
 **Mount your design directory:**
 ```bash
 docker run -it --rm -v "$PWD:/foss/designs/work" -w /foss/designs/work \
-  ghcr.io/vibeic/vibeic-eda:0.3.5 bash
+  ghcr.io/vibeic/vibeic-eda:0.3.6 bash
 ```
 
 Tools live at the same paths as the iic-osic-tools base (`/foss/tools/bin/...`), so any
@@ -146,7 +146,7 @@ Semantic versions track the fix-program milestones in `FIX_STATUS.md`:
 - `ghcr.io/vibeic/vibeic-eda:X.Y.Z` — immutable, reproducible from the pinned SHAs at that tag.
 - `ghcr.io/vibeic/vibeic-eda:latest` — the newest released `X.Y.Z`.
 
-Current: **0.3.5** — makes every EDA tool resolve on a **non-login `docker exec` PATH**
+Current: **0.3.6** — makes every EDA tool resolve on a **non-login `docker exec` PATH**
 (a global `ENV PATH` bakes `/foss/tools/bin` into the image), so the bare
 `docker exec vibeic-eda yosys --version` shown above works with no login shell and no
 per-command `export PATH`. Builds on **0.2.11**, which added **native in-KLayout
