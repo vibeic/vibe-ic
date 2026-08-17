@@ -54,13 +54,13 @@ gate_dispatch_init "$@"
 # All ten are BLOCKING.  A program's rc 2 is a failed landing here: the corpus
 # checkout passed preflight, so inability to examine it is a broken contract,
 # not an environment exemption.
-run "L-doc field producer"              "$CORPUS" python3 "$PG/l_doc_field_producer_check.py" "$CORPUS/ic"
+run "L-doc field producer"              "$CORPUS" python3 "$PG/l_doc_field_producer_check.py" "$CORPUS/ic" --baseline "$CORPUS/ci/baselines/l_doc_field_producer_baseline.json"
 run "tracked-symlink portability"       "$CORPUS" python3 "$PG/tracked_symlink_portability_check.py" "$CORPUS"
 run "tracked-symlink target present"    "$CORPUS" python3 "$PG/tracked_symlink_target_present_check.py" --root "$CORPUS" --subdir .
 run "evidence citation resolves"        "$CORPUS" python3 "$PG/evidence_citation_resolves_check.py" "$CORPUS/ic" --baseline "$CORPUS/evidence_citation_baseline.json"
 run "citation routing is true"          "$CORPUS" python3 "$PG/citation_routing_is_true_check.py" --root "$CORPUS"
-run "cross-layer reference regression"  "$CORPUS" python3 "$PG/cross_layer_reference_check.py" --corpus "$CORPUS/ic"
-run "step FAIL bubbles up"               "$CORPUS" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$CORPUS/ic"
+run "cross-layer reference regression"  "$CORPUS" python3 "$PG/cross_layer_reference_check.py" --corpus "$CORPUS/ic" --baseline "$CORPUS/ci/baselines/cross_layer_reference_baseline.json"
+run "step FAIL bubbles up"               "$CORPUS" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$CORPUS/ic" --baseline "$CORPUS/ci/baselines/step_internal_fail_bubble_up_baseline.json"
 run "L4 -> SystemRDL disposition"        "$CORPUS" python3 "$PG/l4_systemrdl_export.py" audit-corpus --root "$CORPUS"
 run "published-evidence index honest"    "$CORPUS" python3 "$PG/benchmark_evidence_index.py" --check --data-root "$CORPUS"
 run "published records not superseded"   "$CORPUS" python3 "$PG/published_record_staleness_check.py" "$CORPUS"

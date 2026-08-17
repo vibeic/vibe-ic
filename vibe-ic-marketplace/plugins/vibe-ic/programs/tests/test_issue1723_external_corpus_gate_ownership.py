@@ -81,10 +81,30 @@ def _corpus(tmp_path: Path, *, remote: str | None = None) -> Path:
         "tooling_repository": "vibeic/vibe-ic",
         "tooling_lock": ".vibe-ic-tooling-lock.json",
         "runner": contract["external_runner"],
+        "baselines": contract["baselines"],
         "gates": [row["label"] for row in contract["gates"]],
     }
     (root / ".vibe-ic-corpus.json").write_text(
         json.dumps(marker, indent=2) + "\n", encoding="utf-8")
+    plugin_commit = _run("git", "-C", str(ROOT), "rev-parse", "HEAD^{commit}")
+    assert plugin_commit.returncode == 0, plugin_commit.stderr
+    (root / ".vibe-ic-tooling-lock.json").write_text(json.dumps({
+        "schema_version": 1,
+        "repository": "vibeic/vibe-ic",
+        "commit": plugin_commit.stdout.strip(),
+        "contract_id": contract["contract_id"],
+    }, indent=2) + "\n", encoding="utf-8")
+    for rel in (
+        ".github/workflows/corpus-hygiene.yml",
+        "CORPUS_MIGRATION_LEDGER.json",
+        "CORPUS_MIGRATION_LEDGER.md",
+        "ci/landing-gate.sh",
+        *contract["baselines"].values(),
+    ):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n" if path.suffix == ".json" else "fixture\n",
+                        encoding="utf-8")
     _commit_all(root)
     if remote is not None:
         _run("git", "-C", str(root), "remote", "set-url", "origin", remote)
@@ -126,7 +146,7 @@ def test_external_runner_refuses_when_no_corpus_was_offered() -> None:
 def test_exact_clean_canonical_checkout_satisfies_preflight(tmp_path: Path) -> None:
     corpus = _corpus(tmp_path)
     report = _module().check_corpus(ROOT, corpus)
-    assert report["tracked_paths"] == 4
+    assert report["tracked_paths"] == 12
     assert re.fullmatch(r"[0-9a-f]{40}", report["corpus_commit"])
     assert report["corpus_origin"] == "https://github.com/vibeic/benchmark-data"
 
@@ -162,6 +182,22 @@ def test_subdirectory_pointer_is_rejected_instead_of_narrowing_silently(
     )
     assert proc.returncode == 1
     assert "exact checkout top level" in proc.stderr
+
+
+def test_tooling_lock_must_name_the_exact_executing_commit(tmp_path: Path) -> None:
+    corpus = _corpus(tmp_path)
+    lock = corpus / ".vibe-ic-tooling-lock.json"
+    doc = json.loads(lock.read_text(encoding="utf-8"))
+    doc["commit"] = "f" * 40
+    lock.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    _run("git", "-C", str(corpus), "add", str(lock))
+    _run("git", "-C", str(corpus), "commit", "-qm", "wrong lock")
+    proc = _run(
+        "python3", str(CHECKER), "--plugin-root", str(ROOT),
+        "--corpus", str(corpus),
+    )
+    assert proc.returncode == 1
+    assert "exact executing plugin commit" in proc.stderr
 
 
 def test_index_checker_understands_the_external_repository_layout(tmp_path: Path) -> None:

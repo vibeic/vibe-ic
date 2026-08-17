@@ -34,6 +34,14 @@ from typing import Any, Dict, List, Sequence, Tuple
 CONTRACT_REL = Path("tools/ci/benchmark_data_hygiene_contract.json")
 REQUIRED_CORPUS_PATHS = (
     ".vibe-ic-corpus.json",
+    ".vibe-ic-tooling-lock.json",
+    ".github/workflows/corpus-hygiene.yml",
+    "CORPUS_MIGRATION_LEDGER.json",
+    "CORPUS_MIGRATION_LEDGER.md",
+    "ci/landing-gate.sh",
+    "ci/baselines/l_doc_field_producer_baseline.json",
+    "ci/baselines/cross_layer_reference_baseline.json",
+    "ci/baselines/step_internal_fail_bubble_up_baseline.json",
     "evidence_citation_baseline.json",
     "ic/INDEX.md",
     "ic/retention.json",
@@ -139,6 +147,17 @@ def check_local(plugin_root: Path) -> Dict[str, Any]:
                 f"external runner never invokes {program} for {row.get('label')!r}"
             )
 
+    baselines = contract.get("baselines")
+    if not isinstance(baselines, dict) or len(baselines) != 3:
+        raise ContractError("contract must name exactly three data-owned ratchet baselines")
+    for owner, rel in baselines.items():
+        if not isinstance(rel, str) or not rel.startswith("ci/baselines/"):
+            raise ContractError(f"invalid data-owned baseline for {owner!r}: {rel!r}")
+        if rel not in external_text:
+            raise ContractError(
+                f"external runner does not pass the data-owned baseline {rel!r}"
+            )
+
     if (plugin_root / "benchmark-data").exists():
         raise ContractError(
             "plugin checkout unexpectedly contains benchmark-data; ownership is ambiguous"
@@ -201,6 +220,7 @@ def check_corpus(plugin_root: Path, corpus: Path) -> Dict[str, Any]:
         "tooling_repository": "vibeic/vibe-ic",
         "tooling_lock": ".vibe-ic-tooling-lock.json",
         "runner": contract.get("external_runner"),
+        "baselines": contract.get("baselines"),
         "gates": expected_labels,
     }
     actual_marker = {key: marker.get(key) for key in expected_marker}
@@ -212,11 +232,30 @@ def check_corpus(plugin_root: Path, corpus: Path) -> Dict[str, Any]:
     if marker_labels != expected_labels:
         raise ContractError("corpus marker gate order/set is not exact")
 
+    lock_path = top / str(marker.get("tooling_lock", ""))
+    lock = _load_json(lock_path)
+    locked_commit = lock.get("commit")
+    if (
+        lock.get("schema_version") != 1
+        or lock.get("contract_id") != contract.get("contract_id")
+        or lock.get("repository") != marker.get("tooling_repository")
+        or not isinstance(locked_commit, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", locked_commit)
+    ):
+        raise ContractError("corpus tooling lock is incomplete or disagrees with the marker")
+    plugin_commit = _git(plugin_root.resolve(), "rev-parse", "HEAD^{commit}").strip()
+    if locked_commit != plugin_commit:
+        raise ContractError(
+            "corpus tooling lock does not name the exact executing plugin commit: "
+            f"locked={locked_commit}, executing={plugin_commit}"
+        )
+
     return {
         **local,
         "corpus_root": str(top),
         "corpus_commit": head,
         "corpus_origin": origin,
+        "tooling_commit": locked_commit,
         "tracked_paths": len(tracked),
     }
 

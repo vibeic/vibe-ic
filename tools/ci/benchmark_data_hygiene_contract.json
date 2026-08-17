@@ -7,6 +7,11 @@
   "corpus_marker": ".vibe-ic-corpus.json",
   "external_runner": "tools/ci/benchmark_data_hygiene_gates.sh",
   "plugin_landing_runner": "tools/ci/repo_hygiene_gates.sh",
+  "baselines": {
+    "l_doc_field_producer": "ci/baselines/l_doc_field_producer_baseline.json",
+    "cross_layer_reference": "ci/baselines/cross_layer_reference_baseline.json",
+    "step_internal_fail_bubble_up": "ci/baselines/step_internal_fail_bubble_up_baseline.json"
+  },
   "gates": [
     {
       "label": "L-doc field producer",
