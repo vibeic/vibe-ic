@@ -45,6 +45,30 @@ def test_internalerror_is_error():
     assert state == "error"
 
 
+def test_a_round_that_never_started_is_error_not_failure():
+    """`gatekeeper-land.sh` exits 3 when another round holds the worktree lock,
+    or when the lock could not be taken at all. NOTHING was measured, so this is
+    the same event as a collection death — filing it as `failure` sends the
+    first reader hunting for a violation in commits no gate ever read.
+
+    Both states block the merge; only the message changes."""
+    out = ("gatekeeper-land: REFUSED — another landing round already holds "
+           "this worktree.\n    holder:   pid 4242 on host since ...\n")
+    state, desc = gksp.classify(3, out)
+    assert state == "error", (state, desc)
+    assert "COULD NOT RUN" in desc and "never started" in desc, desc
+
+
+def test_a_real_internal_error_still_outranks_the_lock_reading_of_exit_3():
+    """NEGATIVE CONTROL for the rule above. Exit 3 is not reserved: a collection
+    death can also exit 3, and `_NOTHING_RAN` must still be the thing that
+    classifies it, or the lock reading would mislabel every one of them."""
+    state, desc = gksp.classify(
+        3, "INTERNALERROR> ImportError: cannot import name 'foo'\n")
+    assert state == "error"
+    assert "collection died" in desc, desc
+
+
 def test_real_failures_are_failure():
     """PR #1056's measured output: the gate ran and disagreed."""
     state, desc = gksp.classify(1, "2 failed, 379 passed in 90.63s\n")
