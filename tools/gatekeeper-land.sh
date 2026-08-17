@@ -347,6 +347,26 @@ run "write-guard baseline" \
 # stopped the candidate at 1437 tests, which the verdict correctly refused as
 # unmeasurable. A landing gate that cannot answer for a wide PR is a landing gate
 # nobody uses.
+# `-m "not audit_63x9"` — THE LANDING GATE ANSWERS ONE QUESTION AND IT IS NOT THIS
+# ONE. A landing asks "did this change break something that used to work". The
+# 63x9 audit asks "is the published audit of our 63 flow steps x 9 dimensions
+# still honest" — it grades a PUBLISHED ARTEFACT against a corpus, and a landing
+# tree carries no corpus (benchmark-data left this repo in v1.10.56). So here
+# those tests cannot audit anything; they are VOID, not slow, and their permanent
+# red refused landings that broke nothing.
+#
+# MEASURED in a corpus-less tree, both directions, because either half alone
+# proves nothing (mark everything and the first passes; mark nothing and the
+# second does):
+#     -m audit_63x9        -> 12 failed, 35 deselected   (exactly the corpus-dependent set)
+#     -m "not audit_63x9"  ->  0 failed, 35 passed, rc=0 (the same three files, green)
+# 12 + 35 = 47 = every test in those files, so the partition is exact.
+#
+# THIS SAVES NO TIME AND IS NOT MEANT TO. The 12 assertions cost 0.13 s together;
+# the 247 s their arm takes is collection and import, which the landing pays
+# anyway for the 35 that stay. What it buys is that the landing stops being
+# refused by a question a landing tree cannot answer.
+# The audit still runs, where the corpus is: tools/ci/audit_63x9.sh
 run_pytest() {
   local sel out rc
   TARGETED_NORECORD=0
@@ -472,6 +492,7 @@ run_pytest() {
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
         -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
+        -m "not audit_63x9" \
         "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
     rc=0
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
@@ -486,15 +507,107 @@ run_pytest() {
     fi
   else
     rc=$?
-    printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
+    printf '  RED   targeted tests (%s file(s)) — deciding whether it is a REGRESSION\n' "$(wc -l < "$sel")"
     # THE FILES WITH NO RECORD, ALWAYS AND FIRST. They are the one thing a
     # reader cannot reconstruct from the tail of a 91-file run, and `tail -6`
     # would show whichever file happened to be last instead of the one that
     # cost the record.
     printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
+    # THE RED CASES BY NAME. `tail -6` below CANNOT reach them and never could:
+    # the driver's summary block is nine lines, so the tail always lands inside
+    # the arithmetic and the failure list scrolls past above it. Measured on a
+    # 3-red selection: the reader got `aggregate complete rc=1 cases=93 red=3`
+    # and not one of the three names, while the names sat 8 lines further up.
+    # No tail depth fixes that — the red count is unbounded — so the names are
+    # selected by NAME here, exactly like the NORECORD lines above.
+    # THE RED CASES BY NAME. The driver's summary is nine lines, so the
+    # `tail -6` below can never reach pytest's failure list -- and MEASURED,
+    # the driver emits no `RED` line of its own either, so an earlier grep for
+    # one printed nothing and merely moved the reason the names were
+    # unreadable. They live in the JUNIT, so the junit is what gets read.
+    if [ -s "$merged" ]; then
+      python3 "$ROOT/tools/ci/print_junit_reds.py" "$merged" 2>&1 \
+        | sed 's/^/          /'
+    fi
+
+    # ── THE DIFFERENTIAL: A LANDING IS JUDGED ON WHAT IT BREAKS ──────────────
+    # Reached ONLY when the candidate is red, and that is the whole economy: a
+    # green round pays nothing; a base arm is run only to EXPLAIN a red.
+    #
+    # WHY (measured 2026-08-18): pre-push refuses any push to main whose commit
+    # lacks this gate's stamp, this arm judged ABSOLUTELY, and clean origin/main
+    # ITSELF carried red tests — so nothing could reach main, not even a commit
+    # fixing those reds. Five rounds, ~2.5 h of gate wall clock, zero landings.
+    # Meanwhile changes DID land through the PR path, which GitHub merges
+    # server-side where no local hook runs: the only path that honoured the gate
+    # was unusable and the usable path never ran it. That is how the reds
+    # accumulated.
+    #
+    # The rule is not new here. gatekeeper-verify-merge.sh:116 already says
+    # "candidate is judged on WHAT IT BREAKS", and this script's own fail-fast
+    # comment says "the differential still has to decide whether they were
+    # pre-existing" — but that differential lived only in verify-merge, so the
+    # direct-push path never performed it. This performs it.
+    #
+    # NO --maxfail ON THE BASE ARM: a truncated base has no failure SET, only a
+    # prefix of one, and a new failure past the cut would read as pre-existing
+    # (verify-merge:737 forbids it for the same reason).
+    #
+    # WHOLE-TREE GATES ARE UNTOUCHED. NDA tokens, version monotonicity, collateral
+    # revert, corpus writes stay ABSOLUTE: inheriting a violation is not a licence
+    # to add one.
+    if [ "${GATEKEEPER_TARGETED_DIFFERENTIAL:-1}" = "1" ] && [ -s "$merged" ] \
+       && [ "$rc" -ne 2 ]; then
+      _base_sha="$(git -C "$ROOT" merge-base HEAD "${GATEKEEPER_BASE:-origin/main}" 2>/dev/null)"
+      if [ -z "$_base_sha" ]; then
+        echo "        DIFFERENTIAL NOT RUN: no merge base — refusing on the absolute"
+        echo "        verdict, because unknown must not be cheaper than red."
+      else
+        _bwt="$(mktemp -d -t gk_base.XXXXXX)"; rmdir "$_bwt"
+        _bjunit="$(mktemp -t gk_basejunit.XXXXXX)"
+        printf '        base arm at %s (the SAME %s file(s), no --maxfail)\n' \
+          "$(echo "$_base_sha" | cut -c1-12)" "$(wc -l < "$sel")"
+        if git -C "$ROOT" worktree add -q --detach "$_bwt" "$_base_sha" 2>/dev/null; then
+          # THE SAME SELECTION FILE, not one re-derived at the base: re-deriving
+          # would compare two different populations and call the difference a
+          # regression.
+          ( cd "$_bwt/vibe-ic-marketplace/plugins/vibe-ic" \
+            && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
+                 --selection "$sel" --junit "$_bjunit" \
+                 --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+                 --aggregate-check \
+                 --aggregate-stall-after "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+                 --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+                 --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
+                 -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
+                 -m "not audit_63x9" \
+                 --timeout=180 --timeout-method=thread ) >/dev/null 2>&1
+          _dout="$(python3 "$ROOT/tools/ci/targeted_regression_verdict.py" \
+                     --candidate "$merged" --base "$_bjunit" 2>&1)"
+          _drc=$?
+          printf '%s\n' "$_dout" | sed 's/^/        /'
+          case "$_drc" in
+            0) printf '  PASS  targeted tests — no NEW failure (judged as a regression)\n'
+               rc=0 ;;
+            1) printf '  FAIL  targeted tests — this change breaks something that worked\n' ;;
+            *) printf '  FAIL  targeted tests — differential NOT DETERMINED; refusing\n' ;;
+          esac
+          git -C "$ROOT" worktree remove --force "$_bwt" 2>/dev/null
+        else
+          echo "        DIFFERENTIAL NOT RUN: could not create the base worktree"
+        fi
+        rm -f "$_bjunit"
+      fi
+    fi
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
-    FAILED=1
-    [ "$rc" -eq 2 ] && TARGETED_NORECORD=1
+    # CONDITIONAL ON rc, because the differential above may have cleared it.
+    # This line was unconditional, which would have made the whole regression
+    # verdict decorative: it could print PASS and the round would still fail.
+    # A verdict nothing acts on is not a verdict.
+    if [ "$rc" -ne 0 ]; then
+      FAILED=1
+      [ "$rc" -eq 2 ] && TARGETED_NORECORD=1
+    fi
   fi
   # Human-facing diagnostics only. The merge verdict does NOT trust this mixed
   # driver/subject stdout channel: pytest can print marker-looking text. It
@@ -523,7 +636,19 @@ run_pytest() {
     FAILED=1
   fi
   rm -f "$sel"
-  if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
+  # THE EVIDENCE OUTLIVES THE RUN THAT FAILED. A green run's report is
+  # reconstructible by re-running; a RED one's is the only copy of what broke,
+  # and deleting it unconditionally is why every round could report `red=3` and
+  # leave nothing to read. Kept ONLY on failure and ONLY when the caller did not
+  # name its own target, so the successful critical path is byte-for-byte
+  # unchanged and no green run accumulates files.
+  if [ -n "$merged_tmp" ]; then
+    if [ "$rc" -ne 0 ]; then
+      printf '  REPORT  targeted test junit kept for reading: %s\n' "$merged_tmp"
+    else
+      rm -f "$merged_tmp"
+    fi
+  fi
 }
 if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
   echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
@@ -586,6 +711,7 @@ run_repo_tools_pytest() {
     FAILED=1; rm -f "$snap"; return
   }
   out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+        -m "not audit_63x9" \
         -q -p pytest_timeout --timeout=180 --timeout-method=thread \
         "${files[@]}" 2>&1 )"
   rc=$?
@@ -703,6 +829,7 @@ run_unselectable_pytest() {
   # landing gate, on every batch — and :213 fails the WHOLE landing when the
   # tree moves under the gates, so the price is the batch.
   out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+        -m "not audit_63x9" \
         -q -p pytest_timeout --timeout=180 --timeout-method=thread \
         "${files[@]}" 2>&1 )"
   rc=$?
