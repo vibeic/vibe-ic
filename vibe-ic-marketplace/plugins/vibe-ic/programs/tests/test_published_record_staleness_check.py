@@ -43,7 +43,9 @@ real input rather than true on paper.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import subprocess
 import sys
@@ -77,6 +79,20 @@ _DEFAULT_REGISTER = _PROGRAMS / P.DEFAULT_BASELINE
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
+def _invoke_cli(argv) -> tuple:
+    """Invoke the Python entry point directly under pytest's lifecycle.
+
+    This checker is pure Python and does not own external descendants.  A
+    second fixed wall deadline here competed with the enclosing semantic
+    supervisor and could kill a healthy, progressing aggregate session.
+    """
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        rc = P.main(list(argv))
+    return rc, stdout.getvalue(), stderr.getvalue()
+
+
 def _si_record(verdict="PASS", coupling_pairs=0, findings=None, **extra):
     """A published si_mcf_sta_check record, in the shape HEAD actually holds.
 
@@ -117,11 +133,9 @@ def _corpus(tmp_path: Path, records: dict) -> Path:
 
 
 def _run(root: Path, *args, programs_dir: Path = None) -> tuple:
-    """Drive the real CLI in a subprocess; return (rc, stdout, stderr)."""
-    argv = [sys.executable, str(_CLI), str(root),
-            "--programs-dir", str(programs_dir or _PROGRAMS), *args]
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
-    return r.returncode, r.stdout, r.stderr
+    """Drive the real CLI entry point; return (rc, stdout, stderr)."""
+    argv = [str(root), "--programs-dir", str(programs_dir or _PROGRAMS), *args]
+    return _invoke_cli(argv)
 
 
 def _report(root: Path, tmp_path: Path, *args, programs_dir: Path = None):
@@ -692,11 +706,11 @@ def test_the_shipped_register_is_current(tmp_path):
     explicitly: handing the CLI a corpus root deliberately suppresses the
     default register, and without it every recorded entry would read as PAID.
     """
-    argv = [sys.executable, str(_CLI)]
+    argv = []
     if corpus_root() != _CORPUS:
         argv += [str(corpus_root()), "--baseline", str(_DEFAULT_REGISTER)]
-    r = subprocess.run(argv, capture_output=True, text=True, timeout=120)
-    assert r.returncode == 0, r.stdout + r.stderr
+    rc, stdout, stderr = _invoke_cli(argv)
+    assert rc == 0, stdout + stderr
 
 
 # ── 6. the behavioural pin no fingerprint can give ─────────────────────────

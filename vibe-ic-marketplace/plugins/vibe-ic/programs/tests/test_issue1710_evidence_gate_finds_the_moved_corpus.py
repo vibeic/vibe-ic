@@ -39,16 +39,17 @@ against a gate that had been deleted.
 """
 from __future__ import annotations
 
-import importlib.util
+import contextlib
+import io
 import os
-import subprocess
-import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
+import benchmark_evidence_structure_check as B
+
 PROGRAMS = Path(__file__).resolve().parents[1]
-PROG = PROGRAMS / "benchmark_evidence_structure_check.py"
 ENV = "VIBE_IC_BENCHMARK_DATA"
 
 
@@ -57,10 +58,19 @@ def _run(*args: str, env_tree: str | None = None, cwd: Path | None = None):
     env.pop(ENV, None)
     if env_tree is not None:
         env[ENV] = env_tree
-    out = subprocess.run([sys.executable, str(PROG), *args],
-                         capture_output=True, text=True, timeout=180,
-                         cwd=str(cwd) if cwd else None, env=env)
-    return out.returncode, (out.stdout + out.stderr)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    previous_cwd = Path.cwd()
+    with mock.patch.dict(os.environ, env, clear=True), \
+            contextlib.redirect_stdout(stdout), \
+            contextlib.redirect_stderr(stderr):
+        try:
+            if cwd is not None:
+                os.chdir(cwd)
+            rc = B.main(list(args))
+        finally:
+            os.chdir(previous_cwd)
+    return rc, stdout.getvalue() + stderr.getvalue()
 
 
 @pytest.fixture()
