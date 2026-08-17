@@ -87,7 +87,7 @@ from pathlib import Path
 #: FUNCTION further down this file is a different thing — it asks the hygiene
 #: script which items its own loop expands over. Importing a name out of the
 #: module rather than the module itself keeps the two from shadowing.
-from _published_corpus import needs_corpus
+from _published_corpus import corpus_root, needs_corpus
 
 _TESTS = Path(__file__).resolve().parent
 _PROGRAMS = _TESTS.parent
@@ -125,19 +125,21 @@ _538 = _load(_TESTS, "test_issue538_merge_gate_covers_ci_hygiene")
 def _published_corpus() -> list:
     """The items the gate script's own producer selects, run for real.
 
-    The glob is SCRAPED from the script — the single quoted pattern under
-    `benchmark-data` — so this test cannot disagree with the script about what
-    the corpus is, and cannot go stale when the layout moves. Present in the
-    script both before and after #957, so the discovery works in both arms and
-    only the disclosure assertions can fail.
+    The corpus root comes from the suite-wide resolver, while the relative glob
+    is SCRAPED from the script's producer. Thus an external
+    ``VIBE_IC_BENCHMARK_DATA`` clone and the shell gate enumerate the same
+    repository and path contract; this test cannot silently fall back to the
+    input-only ``vibe-ic/benchmark-data`` directory after the repository split.
     """
+    root = corpus_root()
+    assert root is not None, "needs_corpus allowed a test with no corpus root"
     text = _SCRIPT.read_text(errors="replace")
     globs = sorted({m.group(1) for m in
-                    re.finditer(r"'(benchmark-data/[^']*\*[^']*)'", text)})
+                    re.finditer(r"'(ic/[^']*\*[^']*)'", text)})
     assert len(globs) == 1, (
         "the hygiene script no longer names exactly one published-corpus "
         f"glob, so this test cannot know what the loop expands over: {globs}")
-    out = subprocess.run(["git", "-C", str(_REPO), "ls-files", "--", globs[0]],
+    out = subprocess.run(["git", "-C", str(root), "ls-files", "--", globs[0]],
                          capture_output=True, text=True, timeout=_T)
     assert out.returncode == 0, out.stderr
     return [p for p in out.stdout.split() if p]
@@ -310,7 +312,7 @@ def test_a_loop_that_expands_over_NOTHING_is_still_reported(tmp_path):
         f'_body() {{ run "per item ($1)" "$ROOT" {_OK}; }}\n'
         'gate_dispatch_over "an empty corpus" _body printf ""\n'))
     text = out.stdout + out.stderr
-    assert out.returncode == 0, text
+    assert out.returncode == 2, text
     assert doc["declared"] == 2, (
         "the empty corpus left no gate behind — the flat gate is the only one "
         f"declared, which is the #957 defect #1075 removes:\n{doc}")
@@ -334,9 +336,10 @@ def test_a_loop_that_expands_over_NOTHING_is_still_reported(tmp_path):
     # "all", it is "1 of 2 gate(s) passed; 1 NOT CHECKED". The REQUIREMENT is
     # unchanged and is asserted here on the closing roll-up whatever its shape —
     # it must name the corpus and say nothing was checked over it.
-    closing = [ln for ln in out.stdout.splitlines()
+    closing = [ln for ln in text.splitlines()
                if ln.startswith("repo_hygiene_gates: ")
-               and ("gate(s) passed" in ln or ln.startswith(
+               and ("gate(s) passed" in ln or "certifies NOTHING" in ln
+                    or ln.startswith(
                    "repo_hygiene_gates: all "))]
     assert closing, text
     assert "an empty corpus" in closing[-1] and "NOT a pass" in closing[-1], (
@@ -357,10 +360,50 @@ def test_a_producer_that_FAILED_is_not_reported_as_an_empty_corpus(tmp_path):
         'gate_dispatch_over "an unreadable corpus" _body '
         'git -C /nonexistent-corpus-root ls-files\n'))
     text = out.stdout + out.stderr
-    assert out.returncode == 0, text
+    assert out.returncode == 2, text
     assert [c for c in doc.get("corpora", [])
             if c.get("expansion") == "PRODUCER_FAILED"], json.dumps(doc)
     assert "PRODUCER FAILED" in text, text
+    assert "certifies NOTHING" in text, text
+
+
+def test_a_partially_printing_failed_producer_does_not_certify_its_prefix(tmp_path):
+    """A producer's printed prefix is not its denominator when it exits nonzero."""
+    out, doc = _run_fixture(tmp_path, (
+        f'run "a flat gate" "$ROOT" {_OK}\n'
+        f'_body() {{ run "per item ($1)" "$ROOT" {_OK}; }}\n'
+        '_partial() { printf "one\\n"; return 2; }\n'
+        'gate_dispatch_over "a partial corpus" _body _partial\n'))
+    text = out.stdout + out.stderr
+    assert out.returncode == 2, text
+    corpus = next(c for c in doc["corpora"]
+                  if c["name"] == "a partial corpus")
+    assert corpus == {"name": "a partial corpus", "items": 1, "gates": 2,
+                      "expansion": "PRODUCER_FAILED"}
+    precomputed = [g for g in doc["gates"]
+                   if g.get("reason_code") == "PRODUCER_FAILED"]
+    assert len(precomputed) == 1, doc
+    assert "certifies NOTHING" in text, text
+
+
+def test_explicit_no_corpus_with_a_dated_exemption_keeps_unrelated_work_live(
+        tmp_path):
+    """The reverse control required by #1710: absence is not broken config."""
+    out, doc = _run_fixture(tmp_path, (
+        f'run "a flat gate" "$ROOT" {_OK}\n'
+        '_body() { :; }\n'
+        'corpus_absent_until 2999-12-31 "external evidence is optional here"\n'
+        '_absent() { return 3; }\n'
+        'gate_dispatch_over "an optional external corpus" _body _absent\n'))
+    text = out.stdout + out.stderr
+    assert out.returncode == 0, text
+    corpus = next(c for c in doc["corpora"]
+                  if c["name"] == "an optional external corpus")
+    assert corpus["expansion"] == "NO_CORPUS"
+    row = next(g for g in doc["gates"]
+               if g.get("reason_code") == "NO_CORPUS")
+    assert row["exempt_until"] == "2999-12-31"
+    assert doc["not_checked_unexempted"] == []
 
 
 def test_a_loop_written_AROUND_the_dispatcher_is_caught_and_named(tmp_path):
@@ -423,6 +466,7 @@ def test_the_record_still_carries_the_gate_LABEL_as_its_identity():
     assert not silent, silent
 
 
+@needs_corpus
 def test_every_published_cell_is_still_covered_by_every_per_cell_gate():
     """The other half: a disclosure that was achieved by dropping a gate, or by
     narrowing the corpus, would be a coverage cut wearing a fix's clothes.

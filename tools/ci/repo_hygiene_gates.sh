@@ -465,7 +465,11 @@ run "declaration scans strip comments"  "$ROOT" python3 "$PG/hdl_declaration_sca
 # roll-up honest.
 _per_published_cell_gates() {
   local _def="$1" _cell
-  _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
+  if [[ "$_def" = /* ]]; then
+    _cell="${_def%/phase3/stage3/pnr/routed.def}"
+  else
+    _cell="$ROOT/${_def%/phase3/stage3/pnr/routed.def}"
+  fi
   uncheckable_until 2027-02-28 "per published cell: rc 2 when this cell ships no readable macro/OBS geometry, so the intersection has no population -- an intersection it CAN compute and finds is rc 1"
   run_tolerating_uncheckable "macro OBS not crossed ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$_cell"
@@ -503,15 +507,58 @@ _per_published_cell_gates() {
   run_tolerating_uncheckable "new tool diagnostic id ($(basename "$(dirname "$_cell")"))" \
     "$PLUGIN" python3 programs/tool_diagnostic_id_gate.py "$_cell"
 }
-# NO `|| true` ANY MORE, and that is a repair rather than an omission: it used
-# to turn "git could not look" into an empty corpus, which is the vacuous pass
-# this repo removes from gates one at a time. `gate_dispatch_over` keeps the
-# producer's exit status and says so; an empty result is still not an error and
-# still does not abort the ~70 gates that have nothing to do with this corpus.
+# Resolve the corpus where every post-split test resolves it: an explicit
+# VIBE_IC_BENCHMARK_DATA clone wins, then the historical in-repo path.  rc 3 is
+# reserved for "nobody configured a corpus"; a set-but-broken pointer is rc 2
+# and can never buy the absence exemption below.  A present repository with no
+# routed DEF is rc 0 + zero items, i.e. EMPTY_CORPUS, also unexempted.
+_published_routed_defs() {
+  local corpus="${VIBE_IC_BENCHMARK_DATA:-}"
+  if [ -n "$corpus" ]; then
+    if [ ! -d "$corpus" ]; then
+      echo "VIBE_IC_BENCHMARK_DATA=$corpus is not a directory" >&2
+      return 2
+    fi
+  else
+    corpus="$ROOT/benchmark-data"
+    if [ ! -d "$corpus" ] || \
+       [ -z "$(find "$corpus/ic" -mindepth 2 -maxdepth 2 -type d \
+                    -name 'v*' -print -quit 2>/dev/null)" ]; then
+      return 3
+    fi
+  fi
+  if [ -z "$(find "$corpus/ic" -mindepth 2 -maxdepth 2 -type d \
+                  -name 'v*' -print -quit 2>/dev/null)" ]; then
+    echo "published corpus $corpus contains no ic/<design>/v<version> cell" >&2
+    return 2
+  fi
+  if ! git -C "$corpus" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "published corpus $corpus is not a git work tree" >&2
+    return 2
+  fi
+  local rel tracked
+  local -a rels=()
+  if ! tracked="$(git -C "$corpus" ls-files -- \
+      'ic/*/*/phase3/stage3/pnr/routed.def')"; then
+    echo "could not enumerate routed DEF records in $corpus" >&2
+    return 2
+  fi
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    if [ ! -f "$corpus/$rel" ] || [ ! -r "$corpus/$rel" ]; then
+      echo "published corpus index names unreadable or missing $corpus/$rel" >&2
+      return 2
+    fi
+    rels+=("$rel")
+  done <<<"$tracked"
+  for rel in "${rels[@]}"; do
+    printf '%s/%s\n' "$corpus" "$rel"
+  done
+}
+corpus_absent_until 2027-02-28 "the published cells moved to vibeic/benchmark-data; an unrelated vibe-ic checkout may have no corpus configured, so this is explicit NO_CORPUS rather than PASS. A configured-but-broken or present-but-empty corpus remains blocking"
 gate_dispatch_over "published cells carrying a routed DEF" \
   _per_published_cell_gates \
-  git -C "$ROOT" ls-files -- \
-    'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def'
+  _published_routed_defs
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the

@@ -95,6 +95,24 @@ def _base_gates():
     ]
 
 
+def _precomputed_corpus_gate(name, reason, *, exempt_until=None):
+    if reason == "NO_CORPUS":
+        label = f'corpus "{name}" is NOT CONFIGURED — nothing was checked over it'
+    else:
+        label = f'corpus "{name}" is EMPTY — nothing was checked over it'
+    gate = _gate(label, "NOT_CHECKED", corpus=name)
+    gate.update({
+        "execution": "PRECOMPUTED_CORPUS",
+        "reason_code": reason,
+        "corpus_item": 0,
+        "corpus_items": 0,
+        "exempt_until": exempt_until,
+        "exempt_reason": ("external corpus is optional for unrelated pushes"
+                          if exempt_until else None),
+    })
+    return gate
+
+
 def _write(tmp_path, name, doc):
     p = tmp_path / name
     p.write_text(json.dumps(doc), encoding="utf-8")
@@ -308,6 +326,43 @@ def test_a_failed_corpus_producer_refuses(tmp_path):
                                  "items": 0}]))
     rc, out = _run(base, cand)
     assert rc == H.RC_REFUSED
+
+
+def test_a_configured_empty_corpus_refuses_even_when_both_arms_match():
+    """Two identical unknowns are not a clean measurement.
+
+    This is the exact permissive shape behind #1710: the configured repository
+    exists, but its routed-DEF population is zero.  Before this guard both arms
+    carried the same synthetic NOT_CHECKED row and ``delta`` returned CLEAN.
+    """
+    name = "published cells carrying a routed DEF"
+    gates = _base_gates() + [_precomputed_corpus_gate(name, "EMPTY_CORPUS")]
+    doc = _record(
+        gates,
+        not_checked=1,
+        not_checked_unexempted=[gates[-1]["label"]],
+        corpora=[{"name": name, "items": 0, "gates": 1,
+                  "expansion": "EXPANDED"}],
+    )
+    with pytest.raises(H.Refusal) as exc:
+        H.delta(doc, copy.deepcopy(doc))
+    assert "configured corpus expanded over ZERO items" in str(exc.value)
+
+
+def test_explicit_no_corpus_on_both_arms_remains_a_disclosed_non_verdict():
+    """The paired control: an unrelated push need not fetch external evidence."""
+    name = "published cells carrying a routed DEF"
+    gate = _precomputed_corpus_gate(
+        name, "NO_CORPUS", exempt_until="2027-02-28")
+    doc = _record(
+        _base_gates() + [gate],
+        not_checked=1,
+        corpora=[{"name": name, "items": 0, "gates": 1,
+                  "expansion": "NO_CORPUS"}],
+    )
+    result = H.delta(doc, copy.deepcopy(doc))
+    assert result["status"] == H.CLEAN
+    assert gate["label"] in result["no_verdict_either_side"]
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -153,6 +153,58 @@ def _validate_declarations(reference: Dict[str, Any], doc: Dict[str, Any],
     return problems
 
 
+def _needs_process_attestation(gate: Dict[str, Any]) -> bool:
+    """Whether a denominator row represents an executed checker process.
+
+    ``gate_dispatch_over`` records an empty expansion as a synthetic
+    NOT_CHECKED row with the impossible real-item coordinate 0 of 0.  It is
+    load-bearing coverage evidence, but no checker process existed to attest.
+    Real corpus items are one-based, so this machine shape is unambiguous and
+    avoids parsing a human-facing label.
+    """
+    return gate.get("execution") != "PRECOMPUTED_CORPUS"
+
+
+_PRECOMPUTED_FIELDS = (
+    "label", "state", "execution", "reason_code", "corpus", "corpus_item",
+    "corpus_items", "exempt_until", "exempt_reason", "exemption_expired",
+)
+
+
+def _precomputed_arm_records(reference: Dict[str, Any],
+                             docs: List[Tuple[Path, Dict[str, Any]]],
+                             arm: str, problems: List[str]) -> Dict[str, Dict]:
+    """Collect exactly one machine-authenticated precomputed row per label."""
+    wanted = {str(g.get("label")): g
+              for g in reference.get("gates") or []
+              if g.get("execution") == "PRECOMPUTED_CORPUS"}
+    found: Dict[str, Dict] = {}
+    for label, template in wanted.items():
+        rows = [gate for _, doc in docs for gate in (doc.get("gates") or [])
+                if str(gate.get("label")) == label
+                and gate.get("state") != "OTHER_SHARD"]
+        if len(rows) != 1:
+            problems.append(
+                f"Arm {arm} precomputed {label!r}: expected one owning "
+                f"summary record, got {len(rows)}")
+            continue
+        row = rows[0]
+        if row.get("state") != "NOT_CHECKED":
+            problems.append(
+                f"Arm {arm} precomputed {label!r}: owner state is "
+                f"{row.get('state')!r}, expected NOT_CHECKED")
+        for field in _PRECOMPUTED_FIELDS:
+            if field == "state":
+                continue
+            if row.get(field) != template.get(field):
+                problems.append(
+                    f"Arm {arm} precomputed {label!r}: {field} differs "
+                    "from the declared record")
+        found[label] = {field: row.get(field)
+                        for field in _PRECOMPUTED_FIELDS}
+    return found
+
+
 def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, Any]]],
                   attestations: List[Dict[str, Any]], elapsed: int,
                   problems: List[str]) -> Dict[str, Any]:
@@ -188,8 +240,9 @@ def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, An
     for row in attestations:
         by_label.setdefault(str(row.get("label")), []).append(row)
     for label, gate in zip(labels, gates):
-        should_have = gate.get("state") in ("PASS", "FAIL", "NOT_CHECKED",
-                                             "WROTE_CORPUS")
+        should_have = (_needs_process_attestation(gate)
+                       and gate.get("state") in
+                       ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS"))
         count = len(by_label.get(label, []))
         if should_have and count != 1:
             problems.append(
@@ -239,6 +292,8 @@ def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, An
 
 def _summary_rc(doc: Dict[str, Any]) -> int:
     if doc.get("wiring_errors") or not int(doc.get("declared") or 0):
+        return 2
+    if doc.get("not_checked_unexempted"):
         return 2
     if doc.get("failed") or doc.get("wrote_corpus") \
             or doc.get("exemptions_expired"):
@@ -297,6 +352,11 @@ def main(argv=None) -> int:
                   f"got {labels.count(HOST_LABEL)}", file=sys.stderr)
             return 2
         phase_a_labels = [label for label in labels if label != HOST_LABEL]
+        attested_phase_labels = [
+            str(gate.get("label")) for gate in reference.get("gates") or []
+            if str(gate.get("label")) != HOST_LABEL
+            and _needs_process_attestation(gate)
+        ]
         sensitive = [label for label in LOAD_SENSITIVE_LABELS
                      if label in phase_a_labels]
         primary_labels = [label for label in phase_a_labels
@@ -420,6 +480,8 @@ def main(argv=None) -> int:
                 results.append(run_worker(row))
 
         docs: List[Tuple[Path, Dict[str, Any]]] = []
+        a_docs: List[Tuple[Path, Dict[str, Any]]] = []
+        b_docs: List[Tuple[Path, Dict[str, Any]]] = []
         a_attestations: List[Dict[str, Any]] = []
         b_attestations: List[Dict[str, Any]] = []
         for arm, i, bucket, summary, attest, rc, out, err in sorted(results):
@@ -447,8 +509,10 @@ def main(argv=None) -> int:
                     + "; ".join(str(x) for x in doc["wiring_errors"][:3]))
             if arm == "A":
                 docs.append((summary, doc))
+                a_docs.append((summary, doc))
                 a_attestations.extend(rows)
             else:
+                b_docs.append((summary, doc))
                 b_attestations.extend(rows)
 
         # Establish exact A/B coverage before allowing the dependent comparison.
@@ -458,7 +522,13 @@ def main(argv=None) -> int:
             a_by_label.setdefault(str(row.get("label")), []).append(row)
         for row in b_attestations:
             b_by_label.setdefault(str(row.get("label")), []).append(row)
-        for label in phase_a_labels:
+        a_precomputed = _precomputed_arm_records(
+            reference, a_docs, "A", problems)
+        b_precomputed = _precomputed_arm_records(
+            reference, b_docs, "B", problems)
+        if a_precomputed != b_precomputed:
+            problems.append("Arm A/B precomputed corpus records differ")
+        for label in attested_phase_labels:
             if len(a_by_label.get(label, [])) != 1:
                 problems.append(
                     f"Arm A {label!r}: expected one attestation, got "
@@ -467,9 +537,9 @@ def main(argv=None) -> int:
                 problems.append(
                     f"Arm B {label!r}: expected one attestation, got "
                     f"{len(b_by_label.get(label, []))}")
-        if set(a_by_label) - set(phase_a_labels):
+        if set(a_by_label) - set(attested_phase_labels):
             problems.append("Arm A produced unplanned attestations")
-        if set(b_by_label) - set(phase_a_labels):
+        if set(b_by_label) - set(attested_phase_labels):
             problems.append("Arm B produced unplanned attestations")
 
         requested_attest = requested_progress
@@ -477,8 +547,10 @@ def main(argv=None) -> int:
                          else tmp / "merged-attest.jsonl")
         fresh_attest = tmp / "fresh-attest.jsonl"
         if not problems:
-            ordered_a = [a_by_label[label][0] for label in phase_a_labels]
-            ordered_b = [b_by_label[label][0] for label in phase_a_labels]
+            ordered_a = [a_by_label[label][0]
+                         for label in attested_phase_labels]
+            ordered_b = [b_by_label[label][0]
+                         for label in attested_phase_labels]
             _write_jsonl(merged_attest, ordered_a)
             _write_jsonl(fresh_attest, ordered_b)
             host_labels = tmp / "labels-host.txt"
