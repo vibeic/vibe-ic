@@ -281,7 +281,8 @@ def firings(declarations, recorded_labels):
     return [counts[id(d)] for d in declarations]
 
 
-def assert_invocations_decompose(declarations, recorded_labels):
+def assert_invocations_decompose(declarations, recorded_labels,
+                                 no_templates_ok=False):
     """The invocation count decomposes into the declarations that explain it.
 
     A FUNCTION rather than three inline asserts so that the positive controls
@@ -290,6 +291,30 @@ def assert_invocations_decompose(declarations, recorded_labels):
     you the precondition holds; it does not tell you the assertion still fires.
     """
     templated = [d for d in declarations if d.runtime_expansion]
+    if not templated and no_templates_ok:
+        # ZERO TEMPLATED DECLARATIONS IS NOW LEGITIMATE FOR THE REAL SCRIPT, and
+        # saying so is not a relaxation. Runtime-expanded labels existed here for
+        # ONE reason: the per-published-cell fan-out, whose labels carried
+        # `$(basename ...)`. That fan-out moved to tools/ci/audit_63x9.sh because
+        # each of its gates judges a PUBLISHED CELL (flow steps 21 / 31 / 36) --
+        # a design question, not the "did this change break something" question a
+        # landing asks. Demanding a templated line back would be demanding a
+        # feature so that a test about it can keep running.
+        #
+        # SKIP, not pass: a skip is named in the summary, so the dormancy of this
+        # arm is visible rather than absorbed into a green count. The moment a
+        # templated line reappears, everything below runs again.
+        #
+        # THE FLAG DEFAULTS TO FALSE ON PURPOSE. Every positive control below
+        # drives this function with SYNTHETIC declarations and expects it to
+        # RAISE. If the skip fired for them too, the controls would stop proving
+        # the assertion still fires -- which is the one thing they exist for.
+        import pytest as _pytest
+        _pytest.skip(
+            "no templated `run` line in this declaration set; the per-cell "
+            "fan-out that carried them now lives in tools/ci/audit_63x9.sh, "
+            "where test_corpus_write_guard::"
+            "test_the_tracked_cells_are_still_reached pins its coverage")
     assert templated, (
         "no templated `run` line remains in the hygiene script, so a "
         "declaration and an invocation are now the same thing and this file's "
@@ -411,7 +436,8 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
     # `pytest.raises` rather than restating its condition -- a control that
     # asserts the precondition is a control that cannot tell you the assertion
     # still fires.
-    assert_invocations_decompose(decls, invocations)
+    assert_invocations_decompose(decls, invocations,
+                                     no_templates_ok=True)
 
 
 def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
@@ -464,7 +490,8 @@ def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
     #    clean — one literal declaration, one invocation, one templated
     #    declaration that legitimately fired zero times.
     assert reconcile(decls, invocations) == ([], [])
-    assert_invocations_decompose(decls, invocations)
+    assert_invocations_decompose(decls, invocations,
+                                     no_templates_ok=True)
     # Reconciling the RAW record is what was red, and naming it here is what
     # stops the partition being confused for a no-op.
     assert reconcile(decls, recorded)[0] == [
