@@ -798,6 +798,59 @@ def test_zero_record_probe_still_attempts_the_one_unprobed_green_file(
                 if line.startswith("NOTRUN    ")]
 
 
+def test_aggregate_norecord_fallback_ignores_legacy_failure_threshold(
+        tmp_path):
+    """Once aggregate evidence is lost, every fallback path needs an outcome.
+
+    This is the exact nine-file counterexample from the final #1654 review.
+    The stratified eight-worker probe omits index 5.  One probed file alone
+    contributes ten red cases, so the legacy per-file failure threshold is
+    already reached before the sole green file is considered.  That threshold
+    may bound an ordinary non-aggregate run, but it cannot truncate diagnostic
+    recovery after aggregate NORECORD: doing so erases the only recoverable
+    green record and makes the fallback evidence a sampled prefix again.
+    """
+    probe_indices = D._stratified_probe_indices(9, 8)
+    assert probe_indices == [1, 2, 3, 4, 6, 7, 8, 9]
+    ten_red = "".join(
+        f"def test_red_{i}():\n    assert False\n\n" for i in range(10))
+    files = {}
+    for index in range(1, 10):
+        name = f"test_{index:02d}_{'green' if index == 5 else 'red'}.py"
+        files[name] = (_GREEN if index == 5 else
+                       (ten_red if index == 1 else _RED))
+    corpus = _tree(tmp_path, files)
+    (corpus / "conftest.py").write_text(
+        "import os,time\n"
+        f"if os.environ.get({_FALLBACK_ENV!r}) != '1':\n"
+        "    time.sleep(3600)\n",
+        encoding="utf-8",
+    )
+    merged = tmp_path / "aggregate-norecord-threshold.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check",
+        "--aggregate-stall-after", "1", "--fallback-jobs", "8",
+        "--stop-after-failures", "10")
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert "AGGREGATE_NORECORD" in proc.stdout
+    assert proc.stdout.count("FALLBACK_PROGRESS") == 9
+    assert not [line for line in proc.stdout.splitlines()
+                if line.startswith("NORECORD  ")]
+    assert not [line for line in proc.stdout.splitlines()
+                if line.startswith("NOTRUN    ")]
+    selected = list(files)
+    headings = [line for line in proc.stdout.splitlines()
+                if line.startswith("=== [")
+                and line.endswith("[fallback worker]")]
+    assert headings == [
+        f"=== [{i}/9] {name} [fallback worker]"
+        for i, name in enumerate(selected, start=1)]
+    assert _files_in(merged) == sorted(selected)
+    assert "test_05_green.py" in _files_in(merged)
+
+
 def test_rescue_parallelism_has_cpu_memory_pid_and_absolute_hard_caps(
         monkeypatch):
     """Corpus size/request alone can never become the process-pool width."""
