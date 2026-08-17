@@ -454,9 +454,10 @@ run_pytest() {
   # Landing now asks the authoritative question exactly once: the original
   # whole-selection session, supervised by validated pytest lifecycle progress.
   # A complete aggregate JUnit plus its exact OS process verdict is sufficient
-  # evidence.  AGGREGATE_NORECORD is an absolute refusal; per-file recovery is
-  # useful diagnostics after that refusal, but cannot make UNKNOWN land and is
-  # deliberately outside this critical path.
+  # evidence.  AGGREGATE_NORECORD is an absolute refusal. Only after that
+  # refusal does the driver run per-file recovery, preserving every neighbouring
+  # record it can and naming the file(s) it cannot measure. Recovery cannot make
+  # UNKNOWN land and adds no work to the successful critical path.
   #
   # THE PYTEST COMMAND IS PASSED IN VERBATIM, not built inside the driver, so
   # `--timeout=180` stays declared HERE — `ci_harness_timeout_ceiling_check`
@@ -465,8 +466,9 @@ run_pytest() {
   if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
         --selection "$sel" --junit "$merged" \
         --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
-        --aggregate-check --aggregate-only \
+        --aggregate-check \
         --aggregate-stall-after "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+        --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
         -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
         "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then

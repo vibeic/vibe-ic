@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""pytest_per_file_junit.py — ONE pytest session per selected file, so a file
-that HANGS costs its own record and not the whole run's, plus a whole-selection
-semantics canary so process isolation cannot hide cross-file failures
+"""pytest_per_file_junit.py — run the whole selection once, then recover with
+ONE pytest session per selected file only when that aggregate record is lost, so
+a file that HANGS costs its own diagnostic record and not every neighbour's,
+while the whole-selection answer remains an absolute requirement
 (vibe-ic#1654).
 
 THIS PROGRAM MEASURES. It forms no landing opinion; `landing_merge_verdict.py`
@@ -99,7 +100,7 @@ USAGE
     python3 pytest_per_file_junit.py --selection SEL --junit OUT
         [--stall-after SECONDS] [--stop-after-failures N] [--cwd DIR]
         [--aggregate-check] [--aggregate-only]
-        [--aggregate-stall-after SECONDS]
+        [--aggregate-stall-after SECONDS] [--fallback-jobs N]
         -- <the full pytest command, e.g. python3 -m pytest -q --timeout=180>
 
 The command after ``--`` is run VERBATIM with ``-o junit_family=xunit1``, a
@@ -108,18 +109,31 @@ built here so the harness bound stays declared at ONE site — the caller's line
 in `tools/gatekeeper-land.sh`, which is where `ci_harness_timeout_ceiling_check`
 reads it from.
 
-With ``--aggregate-check`` the same command is also run once over the entire
-selection. Its testcase ids are namespaced under ``pytest_aggregate`` and its
-exact process rc is recorded under a stable process key. That preserves the
-single-process order/global-state semantics of the command this driver replaced;
-an aggregate stall or missing/partial XML is ``AGGREGATE_NORECORD`` and must be
-an absolute landing refusal.
+With ``--aggregate-check`` the command first runs once over the entire selection.
+Its testcase ids are namespaced under ``pytest_aggregate`` and its exact process
+rc is recorded under a stable process key. That preserves the single-process
+order/global-state semantics of the command this driver replaced. A complete
+aggregate is the whole answer, so no per-file sessions are launched. An aggregate
+stall or missing/partial XML is ``AGGREGATE_NORECORD`` and remains an absolute
+landing refusal; only then are isolated per-file sessions launched to preserve
+every recoverable neighbouring record and name any individual ``NORECORD``.
+Those recovery sessions run in a bounded process pool. Each worker owns a
+separate semantic supervisor/subreaper; process-global cleanup state is never
+shared through threads. A systemic collection hang therefore costs one bounded,
+deterministic stratified probe across the ordered selection rather than one
+complete stall window per selected file. The probe includes both ends and evenly
+samples at most the pool width, so a contiguous directory-local cluster cannot
+stand in for the corpus. If that whole probe returns semantic NORECORD, a
+systemic circuit breaker stops there and names every remaining file ``NOTRUN``;
+if even one probe worker produced a complete record, recovery continues through
+every unprobed file. Results are emitted and merged in the original selection
+order regardless of which indices the probe ran first.
 
-``--aggregate-only`` is the landing critical-path mode.  It runs that original
-whole-selection question exactly once and does not first repeat it as N isolated
-per-file sessions.  Per-file recovery remains available for an operator after an
-aggregate NORECORD, but it cannot turn that UNKNOWN into a landing pass and is
-therefore deliberately outside the success critical path.
+``--aggregate-only`` disables that diagnostic recovery. It remains available for
+callers that need exactly one whole-selection attempt, but the landing callers do
+not use it: after aggregate NORECORD they retain per-file evidence while still
+returning ``RC_NORECORD``. Recovery therefore adds no work to the successful
+critical path and can never turn UNKNOWN into a landing pass.
 
 EXIT CODES
 ----------
@@ -134,6 +148,7 @@ import argparse
 import ctypes
 import json
 import os
+import selectors
 import secrets
 import shutil
 import signal
@@ -158,6 +173,7 @@ RC_CANNOT_ASK = 3
 #: healthy session that keeps completing pytest stages can run indefinitely.
 DEFAULT_STALL_AFTER = 300
 DEFAULT_AGGREGATE_STALL_AFTER = 300
+DEFAULT_FALLBACK_JOBS = 8
 DEFAULT_POLL_S = 2
 
 _PROGRESS_PATH_ENV = "VIBEIC_PYTEST_PROGRESS_FILE"
@@ -173,6 +189,9 @@ _MAX_DOMAIN_PROGRESS_SCOPES = 64
 
 _PR_SET_CHILD_SUBREAPER = 36
 _ACTIVE_JOB: Optional[Tuple[int, Set[Tuple[int, int]]]] = None
+_ACTIVE_FALLBACK_BASELINE: Optional[Set[Tuple[int, int]]] = None
+_FALLBACK_WORKER_FLAG = "--_fallback-worker-spec"
+_FALLBACK_WORKER_ENV = "VIBEIC_PYTEST_FALLBACK_WORKER"
 
 #: Outcomes that count toward `--stop-after-failures`, matching what
 #: `landing_merge_verdict.RED` counts.
@@ -203,6 +222,27 @@ class FileResult:
     @property
     def has_record(self) -> bool:
         return self.suite is not None
+
+
+@dataclass
+class _FallbackJob:
+    """One process-isolated per-file recovery worker."""
+
+    index: int
+    test_file: str
+    junit_path: Path
+    meta_path: Path
+    log_path: Path
+    proc: subprocess.Popen
+    pidfd: Optional[int] = None
+
+
+@dataclass
+class _FallbackOutcome:
+    """A recovered file result plus its captured deterministic-order log."""
+
+    result: FileResult
+    log: str
 
 
 class _SemanticProgressProbe:
@@ -614,6 +654,15 @@ def _shutdown_handler(signum, _frame) -> None:
     job = _ACTIVE_JOB
     if job is not None:
         _cleanup_job(job[0], job[1])
+    # Parallel recovery never calls the process-global supervisor from threads:
+    # each file lives in its own supervisor process.  This parent is itself a
+    # subreaper, so every worker and any session-detached grandchild is a new
+    # descendant relative to the frozen pre-pool baseline.  Root -1 selects no
+    # ordinary process but lets `_job_processes_checked` collect exactly that
+    # attributable post-baseline set for TERM/KILL/final-zero verification.
+    fallback_baseline = _ACTIVE_FALLBACK_BASELINE
+    if fallback_baseline is not None:
+        _cleanup_job(-1, fallback_baseline)
     raise SystemExit(128 + int(signum))
 
 
@@ -802,6 +851,349 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
         cmd, stall_after, cwd, progress_relay_path=progress_relay_path)
 
 
+def _write_json_atomic(path: Path, payload: object) -> None:
+    """Publish one private worker record with the completeness marker last."""
+    temporary = path.with_name(path.name + f".tmp.{os.getpid()}")
+    temporary.write_text(json.dumps(payload, sort_keys=True) + "\n",
+                         encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _fallback_worker_main(spec_path: Path) -> int:
+    """Run one per-file supervisor in its own OS process.
+
+    `_run_progress_supervised` owns process-global subreaper and signal state, so
+    it must never be called concurrently in threads.  The pool parent therefore
+    launches this private entry point once per selected file.  The raw pytest
+    JUnit and an atomic metadata sidecar travel back to the parent; only the
+    parent performs the deterministic selection-order merge.
+    """
+    try:
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        required = {
+            "schema", "test_file", "junit", "meta", "stall_after", "cwd",
+            "progress_relay", "pytest_argv",
+        }
+        if (not isinstance(spec, dict) or set(spec) != required
+                or spec.get("schema") != 1
+                or not isinstance(spec.get("test_file"), str)
+                or not isinstance(spec.get("junit"), str)
+                or not isinstance(spec.get("meta"), str)
+                or not isinstance(spec.get("stall_after"), (int, float))
+                or spec.get("stall_after") <= 0
+                or spec.get("cwd") is not None
+                and not isinstance(spec.get("cwd"), str)
+                or spec.get("progress_relay") is not None
+                and not isinstance(spec.get("progress_relay"), str)
+                or not isinstance(spec.get("pytest_argv"), list)
+                or not all(isinstance(v, str)
+                           for v in spec.get("pytest_argv", []))):
+            raise ValueError("wrong fallback worker spec shape")
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        print(f"FALLBACK_WORKER_NORECORD: unusable worker spec at "
+              f"{spec_path}: {exc}", file=sys.stderr, flush=True)
+        return RC_CANNOT_ASK
+
+    test_file = spec["test_file"]
+    junit_path = Path(spec["junit"])
+    meta_path = Path(spec["meta"])
+    relay = (Path(spec["progress_relay"])
+             if spec["progress_relay"] is not None else None)
+    _install_shutdown_handlers()
+    rc: Optional[int] = None
+    out = ""
+    killed = True
+    suites: Optional[List[ET.Element]] = None
+    cases = 0
+    red = 0
+    try:
+        rc, out, killed = run_one(
+            spec["pytest_argv"], test_file, junit_path,
+            float(spec["stall_after"]), spec["cwd"],
+            progress_relay_path=relay)
+        sys.stdout.write(out)
+        if not out.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+        suites = _load_suites(junit_path)
+        if killed or rc not in (0, 1):
+            suites = None
+        if suites is not None:
+            for suite in suites:
+                n_cases, n_red = _count(suite)
+                cases += n_cases
+                red += n_red
+    except Exception as exc:  # fail closed; shutdown signals are SystemExit
+        out += f"\nFALLBACK_WORKER_NORECORD: supervisor raised {exc!r}\n"
+        print(out.splitlines()[-1], file=sys.stderr, flush=True)
+        killed = True
+        suites = None
+
+    has_record = suites is not None
+    reason = ("" if has_record else
+              _norecord_reason(rc, out, killed, float(spec["stall_after"])))
+    try:
+        _write_json_atomic(meta_path, {
+            "schema": 1,
+            "test_file": test_file,
+            "pytest_rc": rc,
+            "killed": bool(killed),
+            "cases": cases,
+            "red": red,
+            "has_record": has_record,
+            "norecord_reason": reason,
+        })
+    except OSError as exc:
+        print(f"FALLBACK_WORKER_NORECORD: metadata publish failed: {exc}",
+              file=sys.stderr, flush=True)
+        return RC_NORECORD
+    if not has_record:
+        return RC_NORECORD
+    return RC_RED if red or rc != 0 else RC_OK
+
+
+def _fallback_no_record(test_file: str, reason: str) -> FileResult:
+    return FileResult(test_file, None, True, None, 0, 0,
+                      norecord_reason=reason)
+
+
+def _stratified_probe_indices(total: int, jobs: int) -> List[int]:
+    """Return deterministic 1-based probes spanning an ordered selection.
+
+    The first fallback wave is the only wave allowed to classify a loss as
+    systemic. Sampling the first ``jobs`` paths would make that classification a
+    property of lexical path clustering, because the production selector emits a
+    sorted list. For a multi-file selection the configured width must therefore
+    permit both endpoints; interior probes use integer half-up rounding over the
+    full span so the result is platform-independent and contains no duplicates.
+    """
+    if total <= 0 or jobs <= 0:
+        return []
+    width = min(total, jobs)
+    if width == 1:
+        return [1]
+    span = total - 1
+    gaps = width - 1
+    return [1 + (probe * span + gaps // 2) // gaps
+            for probe in range(width)]
+
+
+def _read_fallback_outcome(job: _FallbackJob) -> _FallbackOutcome:
+    """Validate a worker's atomic metadata against its raw pytest JUnit."""
+    try:
+        log = job.log_path.read_text(errors="replace")
+    except OSError as exc:
+        log = f"FALLBACK_WORKER_NORECORD: log unreadable: {exc}\n"
+    reason = "fallback supervisor produced no complete worker record"
+    try:
+        meta = json.loads(job.meta_path.read_text(encoding="utf-8"))
+        required = {
+            "schema", "test_file", "pytest_rc", "killed", "cases", "red",
+            "has_record", "norecord_reason",
+        }
+        if (not isinstance(meta, dict) or set(meta) != required
+                or meta.get("schema") != 1
+                or meta.get("test_file") != job.test_file
+                or meta.get("pytest_rc") is not None
+                and not isinstance(meta.get("pytest_rc"), int)
+                or not isinstance(meta.get("killed"), bool)
+                or not isinstance(meta.get("cases"), int)
+                or meta.get("cases") < 0
+                or not isinstance(meta.get("red"), int)
+                or meta.get("red") < 0
+                or not isinstance(meta.get("has_record"), bool)
+                or not isinstance(meta.get("norecord_reason"), str)):
+            raise ValueError("wrong worker metadata shape")
+        reason = meta["norecord_reason"] or reason
+        suites = _load_suites(job.junit_path)
+        pytest_rc = meta["pytest_rc"]
+        if (not meta["has_record"] or meta["killed"]
+                or pytest_rc not in (0, 1) or suites is None
+                or job.proc.returncode not in (RC_OK, RC_RED)):
+            return _FallbackOutcome(
+                _fallback_no_record(job.test_file, reason), log)
+        cases = 0
+        red = 0
+        for suite in suites:
+            n_cases, n_red = _count(suite)
+            cases += n_cases
+            red += n_red
+        if cases != meta["cases"] or red != meta["red"]:
+            raise ValueError(
+                "worker metadata/JUnit count mismatch "
+                f"({meta['cases']}/{meta['red']} vs {cases}/{red})")
+        expected_worker_rc = RC_RED if red or pytest_rc != 0 else RC_OK
+        if job.proc.returncode != expected_worker_rc:
+            raise ValueError(
+                "worker process verdict mismatch "
+                f"({job.proc.returncode} vs {expected_worker_rc})")
+        return _FallbackOutcome(
+            FileResult(job.test_file, pytest_rc, False, suites, cases, red),
+            log)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        if log and not log.endswith("\n"):
+            log += "\n"
+        log += f"FALLBACK_WORKER_NORECORD: {exc}\n"
+        return _FallbackOutcome(
+            _fallback_no_record(job.test_file, reason), log)
+
+
+def _run_fallback_batch(
+        pytest_argv: Sequence[str], indexed_files: Sequence[Tuple[int, str]],
+        tmp: Path, stall_after: float, cwd: Optional[str], *,
+        progress_relay_path: Optional[Path] = None,
+        ) -> List[_FallbackOutcome]:
+    """Recover one fixed-width batch in independent supervisor processes."""
+    global _ACTIVE_FALLBACK_BASELINE
+    if not _enable_subreaper():
+        return [_FallbackOutcome(
+            _fallback_no_record(path,
+                                "fallback parent subreaper is unavailable"),
+            "SUBREAPER_UNAVAILABLE: parallel recovery is not provable\n")
+                for _index, path in indexed_files]
+    snap, initial_census_ok = _proc_snapshot_checked()
+    if not initial_census_ok:
+        return [_FallbackOutcome(
+            _fallback_no_record(path,
+                                "fallback parent process census is unavailable"),
+            "PROCESS_CENSUS_UNAVAILABLE: parallel recovery is not provable\n")
+                for _index, path in indexed_files]
+    baseline = {(pid, start) for pid, (_ppid, start, _cpu) in snap.items()
+                if pid in _descendants(snap, os.getpid())}
+    _ACTIVE_FALLBACK_BASELINE = baseline
+    jobs: Dict[int, _FallbackJob] = {}
+    selector: Optional[selectors.BaseSelector] = None
+    use_pidfds = hasattr(os, "pidfd_open")
+    if use_pidfds:
+        selector = selectors.DefaultSelector()
+    outcomes: Dict[int, _FallbackOutcome] = {}
+    normal_completion = False
+    try:
+        for index, test_file in indexed_files:
+            stem = f"fallback-{index:05d}"
+            junit_path = tmp / f"{stem}.xml"
+            meta_path = tmp / f"{stem}.json"
+            log_path = tmp / f"{stem}.log"
+            spec_path = tmp / f"{stem}.spec.json"
+            _write_json_atomic(spec_path, {
+                "schema": 1,
+                "test_file": test_file,
+                "junit": str(junit_path),
+                "meta": str(meta_path),
+                "stall_after": stall_after,
+                "cwd": cwd,
+                "progress_relay": (str(progress_relay_path)
+                                   if progress_relay_path is not None else None),
+                "pytest_argv": list(pytest_argv),
+            })
+            child_env = os.environ.copy()
+            child_env[_FALLBACK_WORKER_ENV] = "1"
+            try:
+                with log_path.open("wb") as log_file:
+                    proc = subprocess.Popen(
+                        [sys.executable, str(Path(__file__).resolve()),
+                         _FALLBACK_WORKER_FLAG, str(spec_path)],
+                        stdout=log_file, stderr=subprocess.STDOUT,
+                        start_new_session=True, env=child_env)
+            except OSError as exc:
+                outcomes[index] = _FallbackOutcome(
+                    _fallback_no_record(
+                        test_file,
+                        f"fallback supervisor could not start: {exc}"),
+                    f"FALLBACK_WORKER_NORECORD: could not start: {exc}\n")
+                continue
+            job = _FallbackJob(index, test_file, junit_path, meta_path,
+                               log_path, proc)
+            jobs[proc.pid] = job
+            if selector is not None:
+                try:
+                    job.pidfd = os.pidfd_open(proc.pid, 0)
+                    selector.register(job.pidfd, selectors.EVENT_READ, proc.pid)
+                except OSError:
+                    use_pidfds = False
+                    continue
+
+        if not use_pidfds and selector is not None:
+            selector.close()
+            selector = None
+            for job in jobs.values():
+                if job.pidfd is not None:
+                    os.close(job.pidfd)
+                    job.pidfd = None
+
+        pending = set(jobs)
+        while pending:
+            finished: List[int] = []
+            if selector is not None:
+                for key, _mask in selector.select():
+                    finished.append(int(key.data))
+            else:
+                finished = [pid for pid in pending
+                            if jobs[pid].proc.poll() is not None]
+                if not finished:
+                    # watchdog-exempt: this poll never declares a verdict or
+                    # kills work; every worker has its own semantic supervisor.
+                    time.sleep(0.05)
+                    continue
+            for pid in finished:
+                if pid not in pending:
+                    continue
+                job = jobs[pid]
+                job.proc.wait()
+                if selector is not None and job.pidfd is not None:
+                    selector.unregister(job.pidfd)
+                    os.close(job.pidfd)
+                    job.pidfd = None
+                pending.remove(pid)
+                outcomes[job.index] = _read_fallback_outcome(job)
+                print(f"FALLBACK_PROGRESS  completed={len(outcomes)}/"
+                      f"{len(indexed_files)}", flush=True)
+
+        _reap_adopted()
+        live, live_census_ok = _job_processes_checked(-1, baseline)
+        cleanup = CleanupResult(set(), set(), True)
+        if live or not live_census_ok:
+            cleanup = _cleanup_job(-1, baseline)
+        cleanup_ok = (live_census_ok and cleanup.census_ok
+                      and not cleanup.survivors and not live)
+        if not cleanup_ok or live:
+            detail = ("parallel fallback could not prove an empty descendant "
+                      f"census; observed={sorted(cleanup.observed or set(live))}; "
+                      f"survivors={sorted(cleanup.survivors)}")
+            for index, test_file in indexed_files:
+                previous = outcomes.get(index)
+                log = previous.log if previous is not None else ""
+                if log and not log.endswith("\n"):
+                    log += "\n"
+                outcomes[index] = _FallbackOutcome(
+                    _fallback_no_record(test_file, detail),
+                    log + f"FALLBACK_WORKER_NORECORD: {detail}\n")
+        normal_completion = True
+    finally:
+        if selector is not None:
+            selector.close()
+        for job in jobs.values():
+            if job.pidfd is not None:
+                try:
+                    os.close(job.pidfd)
+                except OSError:
+                    pass
+                job.pidfd = None
+        if not normal_completion:
+            _cleanup_job(-1, baseline)
+            for job in jobs.values():
+                try:
+                    job.proc.wait(timeout=0.1)
+                except (subprocess.TimeoutExpired, ChildProcessError):
+                    pass
+        _ACTIVE_FALLBACK_BASELINE = None
+        _reap_adopted()
+    return [outcomes.get(index, _FallbackOutcome(
+        _fallback_no_record(path, "fallback worker result is absent"),
+        "FALLBACK_WORKER_NORECORD: result is absent\n"))
+            for index, path in indexed_files]
+
+
 def _append_process_case(root: ET.Element, *, classname: str, name: str,
                          file_name: str, rc: int) -> None:
     """Append one stable-key process-status testcase (present on both arms)."""
@@ -890,6 +1282,11 @@ def merge(results: Sequence[FileResult], out_path: Path,
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    parsed_argv = list(sys.argv[1:] if argv is None else argv)
+    if (len(parsed_argv) == 2
+            and parsed_argv[0] == _FALLBACK_WORKER_FLAG):
+        return _fallback_worker_main(Path(parsed_argv[1]))
+
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--selection", required=True,
                     help="file with one test path per line")
@@ -904,12 +1301,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "have been seen; 0 means never stop. The files not "
                          "launched are NAMED and stay out of the report")
     ap.add_argument("--aggregate-check", action="store_true",
-                    help="also run the whole selection in one pytest process "
-                         "and namespace its junit into the merged report; "
-                         "preserves cross-file/order semantics")
+                    help="run the whole selection first in one pytest process; "
+                         "on a complete record stop there, otherwise run "
+                         "per-file diagnostic recovery while preserving the "
+                         "aggregate NORECORD refusal")
     ap.add_argument("--aggregate-only", action="store_true",
-                    help="run only the whole-selection session; this is the "
-                         "landing critical-path mode and implies "
+                    help="run only the whole-selection session, disabling "
+                         "per-file diagnostic recovery; implies "
                          "--aggregate-check")
     ap.add_argument("--aggregate-stall-after", type=float,
                     default=DEFAULT_AGGREGATE_STALL_AFTER,
@@ -917,6 +1315,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "the whole-selection canary is classified hung "
                          f"(default {DEFAULT_AGGREGATE_STALL_AFTER}); this is "
                          "not a runtime bound")
+    ap.add_argument("--fallback-jobs", type=int,
+                    default=DEFAULT_FALLBACK_JOBS,
+                    help="maximum independent supervisor processes used only "
+                         "for per-file recovery after aggregate NORECORD "
+                         f"(default {DEFAULT_FALLBACK_JOBS}); a multi-file "
+                         "stratified probe requires at least 2")
     ap.add_argument("--cwd", default=None,
                     help="run each pytest session from here")
     ap.add_argument("--progress-relay", default=None,
@@ -925,13 +1329,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "evidence")
     ap.add_argument("pytest_argv", nargs=argparse.REMAINDER,
                     help="-- followed by the full pytest command")
-    a = ap.parse_args(argv)
+    a = ap.parse_args(parsed_argv)
 
     if a.aggregate_only:
         a.aggregate_check = True
 
     if a.stall_after <= 0 or a.aggregate_stall_after <= 0:
         ap.error("stall windows must be positive")
+    if a.fallback_jobs <= 0 or a.fallback_jobs > 64:
+        ap.error("--fallback-jobs must be between 1 and 64")
 
     pytest_argv = list(a.pytest_argv)
     if pytest_argv and pytest_argv[0] == "--":
@@ -957,6 +1363,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "was run. An empty corpus is not evidence that anything passed.",
               file=sys.stderr)
         return RC_CANNOT_ASK
+    if (a.aggregate_check and not a.aggregate_only and len(selection) > 1
+            and a.fallback_jobs < 2):
+        print("[SKIP] pytest_per_file_junit: --fallback-jobs=1 cannot sample "
+              "both the head and tail of a multi-file selection, so a "
+              "systemic fallback decision cannot be asked safely.",
+              file=sys.stderr)
+        return RC_CANNOT_ASK
 
     tmp = Path(tempfile.mkdtemp(prefix="perfile_junit_"))
     _install_shutdown_handlers()
@@ -968,7 +1381,152 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     aggregate_cases = 0
     aggregate_incomplete = False
     try:
-        if not a.aggregate_only:
+        # Aggregate FIRST. It is the authoritative whole-selection question,
+        # and a complete answer avoids N redundant pytest starts. If its record
+        # is lost, per-file sessions run only as diagnostic recovery below; they
+        # preserve neighbouring records but never clear aggregate_incomplete.
+        if a.aggregate_check:
+            aggregate_path = tmp / "aggregate.xml"
+            print(f"=== [aggregate] {len(selection)} file(s) in one pytest "
+                  "process", flush=True)
+            aggregate_rc, out, aggregate_killed = run_aggregate(
+                pytest_argv, selection, aggregate_path,
+                a.aggregate_stall_after, a.cwd,
+                progress_relay_path=(Path(a.progress_relay)
+                                     if a.progress_relay else None))
+            sys.stdout.write(out)
+            if not out.endswith("\n"):
+                sys.stdout.write("\n")
+            aggregate_suites = _load_suites(aggregate_path)
+            if aggregate_suites is not None:
+                for suite in aggregate_suites:
+                    cases, red = _count(suite)
+                    aggregate_cases += cases
+                    aggregate_red += red
+            # rc 0/1 are pytest's complete normal outcomes. Everything else is
+            # interrupted/internal/usage/no-collection and cannot certify the
+            # whole-selection semantics even if a partial XML happened to parse.
+            if (aggregate_killed or aggregate_suites is None
+                    or aggregate_cases == 0
+                    or aggregate_rc not in (0, 1)):
+                aggregate_incomplete = True
+                why = _norecord_reason(
+                    aggregate_rc, out, aggregate_killed,
+                    a.aggregate_stall_after)
+                print(f"AGGREGATE_NORECORD  {why} — cross-file/order semantics "
+                      "are UNKNOWN, not clean", flush=True)
+                aggregate_suites = None
+            else:
+                print(f"AGGREGATE_COMPLETE  rc={aggregate_rc}  "
+                      f"cases={aggregate_cases}  red={aggregate_red}",
+                      flush=True)
+
+        if (not a.aggregate_only and a.aggregate_check
+                and aggregate_incomplete):
+            print(f"=== [fallback] {len(selection)} file(s), "
+                  f"{a.fallback_jobs} independent supervisor process(es)",
+                  flush=True)
+
+            # The selector emits a sorted path list. A consecutive first batch
+            # can therefore contain one directory-local failure cluster and says
+            # nothing about the rest of the corpus. Probe the whole ordered span
+            # deterministically, including head and tail, before deciding whether
+            # an all-NORECORD loss is systemic.
+            probe_indices = _stratified_probe_indices(
+                len(selection), a.fallback_jobs)
+            print("FALLBACK_STRATIFIED_PROBE  indices="
+                  + ",".join(str(i) for i in probe_indices), flush=True)
+            recovery: Dict[int, _FallbackOutcome] = {}
+
+            def _run_recovery_wave(indices: Sequence[int]) -> None:
+                nonlocal red_total
+                indexed = [(i, selection[i - 1]) for i in indices]
+                try:
+                    outcomes = _run_fallback_batch(
+                        pytest_argv, indexed, tmp, a.stall_after, a.cwd,
+                        progress_relay_path=(Path(a.progress_relay)
+                                             if a.progress_relay else None))
+                except Exception as exc:
+                    # Batch orchestration is diagnostic plumbing. Its own
+                    # failure is a named NORECORD for every file in the wave,
+                    # never an uncaught traceback that leaves no merged report.
+                    detail = f"fallback batch orchestration failed: {exc!r}"
+                    print(f"FALLBACK_BATCH_NORECORD  {detail}", flush=True)
+                    outcomes = [_FallbackOutcome(
+                        _fallback_no_record(test_file, detail),
+                        f"FALLBACK_WORKER_NORECORD: {detail}\n")
+                                for _i, test_file in indexed]
+                # Workers finish in scheduler order, but neither that race nor
+                # the stratified probe order may change stdout/JUnit ordering.
+                # Hold every outcome by its original 1-based selection index and
+                # emit/merge only after the recovery decision is complete.
+                for (index, _test_file), outcome in zip(indexed, outcomes):
+                    recovery[index] = outcome
+                    red_total += outcome.result.red
+
+            _run_recovery_wave(probe_indices)
+            probe_set = set(probe_indices)
+            remaining_indices = [
+                i for i in range(1, len(selection) + 1)
+                if i not in probe_set]
+            probe_has_record = any(
+                recovery[i].result.has_record for i in probe_indices)
+            if not probe_has_record:
+                # Only the corpus-spanning stratified probe may trip this
+                # breaker. A later consecutive wave is never representative;
+                # once any probe produced a record, every remaining file is
+                # attempted (subject only to the caller's explicit red limit).
+                reason = (
+                    "not launched: the stratified fallback probe produced zero "
+                    "complete records (systemic semantic NORECORD circuit "
+                    "breaker)")
+                print("FALLBACK_SYSTEMIC_NORECORD  probe="
+                      + ",".join(str(i) for i in probe_indices)
+                      + f"  remaining={len(remaining_indices)} — stopping "
+                        "recovery after one all-NORECORD stratified probe",
+                      flush=True)
+                for index in remaining_indices:
+                    test_file = selection[index - 1]
+                    recovery[index] = _FallbackOutcome(
+                        FileResult(test_file, None, False, None, 0, 0,
+                                   skipped_by_stop=True,
+                                   norecord_reason=reason), "")
+            else:
+                next_remaining = 0
+                while next_remaining < len(remaining_indices):
+                    if (a.stop_after_failures
+                            and red_total >= a.stop_after_failures):
+                        for index in remaining_indices[next_remaining:]:
+                            test_file = selection[index - 1]
+                            recovery[index] = _FallbackOutcome(
+                                FileResult(test_file, None, False, None, 0, 0,
+                                           skipped_by_stop=True), "")
+                        break
+                    wave_indices = remaining_indices[
+                        next_remaining:next_remaining + a.fallback_jobs]
+                    _run_recovery_wave(wave_indices)
+                    next_remaining += len(wave_indices)
+
+            # Selection order is the durable contract. The initial probe is
+            # deliberately non-contiguous, but neither logs nor JUnit reveal its
+            # execution order as the semantic result order.
+            for i, test_file in enumerate(selection, start=1):
+                outcome = recovery[i]
+                result = outcome.result
+                results.append(result)
+                if result.skipped_by_stop:
+                    continue
+                print(f"=== [{i}/{len(selection)}] {test_file} "
+                      "[fallback worker]", flush=True)
+                sys.stdout.write(outcome.log)
+                if outcome.log and not outcome.log.endswith("\n"):
+                    sys.stdout.write("\n")
+                state = ("NORECORD" if not result.has_record else
+                         ("red" if result.red or result.rc != 0 else "ok"))
+                print(f"--- {test_file}  rc={result.rc}  "
+                      f"cases={result.cases}  red={result.red}  {state}",
+                      flush=True)
+        elif not a.aggregate_only and not a.aggregate_check:
             for i, test_file in enumerate(selection, start=1):
                 if a.stop_after_failures and red_total >= a.stop_after_failures:
                     results.append(FileResult(
@@ -1007,41 +1565,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          else ("red" if red or rc != 0 else "ok"))
                 print(f"--- {test_file}  rc={rc}  cases={cases}  red={red}  "
                       f"{state}", flush=True)
-        if a.aggregate_check:
-            aggregate_path = tmp / "aggregate.xml"
-            print(f"=== [aggregate] {len(selection)} file(s) in one pytest "
-                  "process", flush=True)
-            aggregate_rc, out, aggregate_killed = run_aggregate(
-                pytest_argv, selection, aggregate_path,
-                a.aggregate_stall_after, a.cwd,
-                progress_relay_path=(Path(a.progress_relay)
-                                     if a.progress_relay else None))
-            sys.stdout.write(out)
-            if not out.endswith("\n"):
-                sys.stdout.write("\n")
-            aggregate_suites = _load_suites(aggregate_path)
-            if aggregate_suites is not None:
-                for suite in aggregate_suites:
-                    cases, red = _count(suite)
-                    aggregate_cases += cases
-                    aggregate_red += red
-            # rc 0/1 are pytest's complete normal outcomes. Everything else is
-            # interrupted/internal/usage/no-collection and cannot certify the
-            # whole-selection semantics even if a partial XML happened to parse.
-            if (aggregate_killed or aggregate_suites is None
-                    or aggregate_cases == 0
-                    or aggregate_rc not in (0, 1)):
-                aggregate_incomplete = True
-                why = _norecord_reason(
-                    aggregate_rc, out, aggregate_killed,
-                    a.aggregate_stall_after)
-                print(f"AGGREGATE_NORECORD  {why} — cross-file/order semantics "
-                      "are UNKNOWN, not clean", flush=True)
-                aggregate_suites = None
-            else:
-                print(f"AGGREGATE_COMPLETE  rc={aggregate_rc}  "
-                      f"cases={aggregate_cases}  red={aggregate_red}",
-                      flush=True)
         total = merge(results, Path(a.junit), aggregate_suites, aggregate_rc)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1056,8 +1579,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"NORECORD  {r.path}  {r.norecord_reason} — this file's result is UNKNOWN, "
               f"not clean")
     for r in notrun:
-        print(f"NOTRUN    {r.path}  not launched: --stop-after-failures="
-              f"{a.stop_after_failures} was already reached")
+        reason = (r.norecord_reason or
+                  "not launched: --stop-after-failures="
+                  f"{a.stop_after_failures} was already reached")
+        print(f"NOTRUN    {r.path}  {reason}")
     # A file that WROTE a report carrying zero test cases is a THIRD state, and
     # it is named rather than folded into either neighbour: the session did run
     # and did answer, and what it answered is "nothing was collected here". The
@@ -1071,7 +1596,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   f"carries no test case")
 
     print("=== pytest junit summary")
-    print(f"  mode       {'aggregate-only' if a.aggregate_only else 'per-file'}")
+    mode = ("aggregate-only" if a.aggregate_only else
+            ("aggregate-first" if a.aggregate_check else "per-file"))
+    print(f"  mode       {mode}")
     print(f"  asked      {len(selection)}")
     print(f"  recorded   {len(recorded)}")
     print(f"  NORECORD   {len(norecord)}")

@@ -38,12 +38,15 @@ from pathlib import Path
 
 import pytest
 
+from _hostpaths import require_repo
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 import pytest_per_file_junit as D                              # noqa: E402
 
 _PROG = _PROGRAMS / "pytest_per_file_junit.py"
+_FALLBACK_ENV = "VIBEIC_PYTEST_FALLBACK_WORKER"
 
 #: Inner bound for every subprocess this file launches. Each one runs at most
 #: three trivial pytest sessions plus one deliberately-killed one, measured at
@@ -582,9 +585,13 @@ def test_aggregate_canary_preserves_cross_file_process_semantics(tmp_path):
     assert "test_02_check" in aggregate_failures[0].get("classname")
 
 
-def test_complete_aggregate_only_does_not_launch_per_file_sessions(
+def test_complete_aggregate_check_does_not_launch_per_file_sessions(
         tmp_path, monkeypatch):
-    """The healthy landing path asks the whole-selection question once."""
+    """The healthy landing path asks the whole-selection question once.
+
+    `--aggregate-check` is aggregate-first: isolated sessions are diagnostic
+    recovery, not a tax paid by every complete run.
+    """
     corpus = _tree(tmp_path, {
         "test_first.py": _GREEN,
         "test_second.py": _GREEN_AFTER,
@@ -601,7 +608,7 @@ def test_complete_aggregate_only_does_not_launch_per_file_sessions(
     merged = tmp_path / "aggregate-only.xml"
 
     proc = _run_driver(
-        corpus, merged, "--aggregate-check", "--aggregate-only",
+        corpus, merged, "--aggregate-check",
         "--aggregate-stall-after", str(_STALL))
 
     assert proc.returncode == D.RC_OK, proc.stdout + proc.stderr
@@ -615,9 +622,9 @@ def test_complete_aggregate_only_does_not_launch_per_file_sessions(
                 if tc.get("classname") == "pytest_aggregate_process"]) == 1
 
 
-def test_aggregate_only_norecord_refuses_without_running_diagnostic_fallback(
+def test_aggregate_norecord_runs_diagnostic_fallback_and_stays_unknown(
         tmp_path):
-    """UNKNOWN stops the critical path; diagnostics never convert it to green."""
+    """UNKNOWN is refused, after preserving every recoverable file record."""
     corpus = _tree(tmp_path, {
         "test_01_mutate.py": (
             "import shared_state\n"
@@ -628,18 +635,228 @@ def test_aggregate_only_norecord_refuses_without_running_diagnostic_fallback(
             "def test_hangs_only_after_the_other_file():\n"
             "    if shared_state.value:\n"
             "        time.sleep(3600)\n"),
+        "test_03_green.py": _GREEN,
+        "test_04_green.py": _GREEN_AFTER,
+        "test_05_green.py": _GREEN,
     })
     (corpus / "shared_state.py").write_text("value = 0\n", encoding="utf-8")
     merged = tmp_path / "aggregate-norecord.xml"
 
     proc = _run_driver(
-        corpus, merged, "--aggregate-check", "--aggregate-only",
-        "--aggregate-stall-after", "1")
+        corpus, merged, "--aggregate-check",
+        "--aggregate-stall-after", "1", "--fallback-jobs", "2")
 
     assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
     assert "AGGREGATE_NORECORD" in proc.stdout
-    assert "=== [1/" not in proc.stdout
-    assert not list(ET.parse(str(merged)).iter("testcase"))
+    assert "=== [1/" in proc.stdout
+    assert proc.stdout.index("=== [aggregate]") < proc.stdout.index("=== [1/")
+    assert "FALLBACK_SYSTEMIC_NORECORD" not in proc.stdout
+    assert proc.stdout.count("FALLBACK_PROGRESS") == 5
+    expected_files = [
+        "test_01_mutate.py", "test_02_hang.py", "test_03_green.py",
+        "test_04_green.py", "test_05_green.py"]
+    assert _files_in(merged) == expected_files
+    root = ET.parse(str(merged)).getroot()
+    assert [suite.get("name") for suite in root.iter("testsuite")
+            if suite.get("name") in expected_files] == expected_files
+    assert len([tc for tc in root.iter("testcase")
+                if tc.get("classname") == "pytest_per_file_process"]) == 5
+    assert not [tc for tc in ET.parse(str(merged)).iter("testcase")
+                if (tc.get("classname") or "").startswith("pytest_aggregate.")]
+
+
+def test_aggregate_loss_confines_norecord_to_the_hanging_file(tmp_path):
+    """The #1654 shape keeps both neighbouring records after aggregate loss."""
+    corpus = _tree(tmp_path, {
+        "test_green_neighbour.py": _GREEN,
+        "test_hangs_at_import.py": _HANGS_AT_IMPORT,
+        "test_green_after.py": _GREEN_AFTER,
+    })
+    merged = tmp_path / "aggregate-fallback.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check", "--aggregate-stall-after", "1")
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert proc.stdout.index("=== [aggregate]") < proc.stdout.index("=== [1/")
+    markers = [line for line in proc.stdout.splitlines()
+               if line.startswith("NORECORD")]
+    assert len(markers) == 1, proc.stdout
+    assert "test_hangs_at_import.py" in markers[0]
+    assert "not clean" in markers[0]
+    assert _files_in(merged) == ["test_green_after.py",
+                                 "test_green_neighbour.py"]
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=[
+    "eight-local-hangs-first", "two-green-files-first"])
+def test_stratified_probe_preserves_late_and_early_green_files(
+        tmp_path, reverse):
+    """A lexical cluster of local hangs is not a systemic corpus failure.
+
+    The forward order is the adversarial shape: eight file-local import hangs
+    occupy the old consecutive first wave and two recoverable green files sit at
+    the tail. The reverse order proves that seeing a probe record disables the
+    systemic breaker even if a later consecutive wave is all-NORECORD. Both
+    orders must recover the same two files and merge them in selection order.
+    """
+    ordered = [
+        (f"test_{i:02d}_local_hang.py", (
+            "import os,time\n"
+            f"if os.environ.get({_FALLBACK_ENV!r}) == '1':\n"
+            "    time.sleep(3600)\n"
+            f"def test_{i:02d}(): assert True\n"))
+        for i in range(1, 9)
+    ] + [
+        ("test_09_green.py", _GREEN),
+        ("test_10_green.py", _GREEN_AFTER),
+    ]
+    if reverse:
+        ordered.reverse()
+    corpus = _tree(tmp_path, dict(ordered))
+    (corpus / "conftest.py").write_text(
+        "import os,time\n"
+        f"if os.environ.get({_FALLBACK_ENV!r}) != '1':\n"
+        "    time.sleep(3600)\n",
+        encoding="utf-8",
+    )
+    merged = tmp_path / "stratified-local-cluster.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check",
+        "--aggregate-stall-after", "1", "--fallback-jobs", "8")
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert "AGGREGATE_NORECORD" in proc.stdout
+    assert ("FALLBACK_STRATIFIED_PROBE  "
+            "indices=1,2,4,5,6,7,9,10") in proc.stdout
+    assert "FALLBACK_SYSTEMIC_NORECORD" not in proc.stdout
+    assert proc.stdout.count("FALLBACK_PROGRESS") == 10
+    assert len([line for line in proc.stdout.splitlines()
+                if line.startswith("NORECORD  ")]) == 8
+    assert not [line for line in proc.stdout.splitlines()
+                if line.startswith("NOTRUN    ")]
+
+    selected = [name for name, _body in ordered]
+    headings = [line for line in proc.stdout.splitlines()
+                if line.startswith("=== [")
+                and line.endswith("[fallback worker]")]
+    assert headings == [
+        f"=== [{i}/10] {name} [fallback worker]"
+        for i, name in enumerate(selected, start=1)]
+    expected_green = [name for name in selected if "green" in name]
+    assert _files_in(merged) == sorted(expected_green)
+    root = ET.parse(str(merged)).getroot()
+    assert [suite.get("name") for suite in root.iter("testsuite")
+            if suite.get("name") in expected_green] == expected_green
+
+
+def test_systemic_import_hang_recovery_is_one_bounded_parallel_wave(tmp_path):
+    """A shared collection hang must not multiply one stall by every file.
+
+    The aggregate and every recovery worker deliberately hang in the common
+    conftest. Nine files exceed the default eight-worker width. The first wave
+    must span the corpus rather than take a lexical prefix; because every sampled
+    file still returns NORECORD, the correct path pays exactly one stratified
+    wave, names the one unprobed file NOTRUN, and keeps aggregate UNKNOWN at rc=2.
+    """
+    count = D.DEFAULT_FALLBACK_JOBS + 1
+    corpus = _tree(tmp_path, {
+        f"test_neighbour_{i}.py": (
+            f"def test_neighbour_{i}():\n    assert {i} == {i}\n")
+        for i in range(count)
+    })
+    markers = tmp_path / "fallback-workers"
+    markers.mkdir()
+    (corpus / "conftest.py").write_text(
+        "import os, pathlib, time\n"
+        f"root = pathlib.Path({str(markers)!r})\n"
+        f"if os.environ.get({_FALLBACK_ENV!r}) == '1':\n"
+        "    (root / str(os.getpid())).touch()\n"
+        "time.sleep(3600)\n",
+        encoding="utf-8",
+    )
+    merged = tmp_path / "systemic-import-hang.xml"
+
+    started = time.monotonic()
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check",
+        "--aggregate-stall-after", "1")
+    elapsed = time.monotonic() - started
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert "AGGREGATE_NORECORD" in proc.stdout
+    # The 2 s watchdog poll makes one 1 s stall a few seconds on this host. The
+    # aggregate plus ONE parallel recovery wave stays bounded; the ninth file
+    # must never add another stall window. Keep this observed-value assertion
+    # before structural markers so the pre-fix control is behaviourally graded.
+    assert elapsed < 12, (
+        f"parallel recovery took {elapsed:.2f}s; output:\n{proc.stdout}")
+    probe_indices = D._stratified_probe_indices(
+        count, D.DEFAULT_FALLBACK_JOBS)
+    assert probe_indices == [1, 2, 3, 4, 6, 7, 8, 9]
+    assert ("FALLBACK_STRATIFIED_PROBE  indices="
+            + ",".join(str(i) for i in probe_indices)) in proc.stdout
+    assert len(list(markers.iterdir())) == D.DEFAULT_FALLBACK_JOBS
+    assert len([line for line in proc.stdout.splitlines()
+                if line.startswith("NORECORD  ")]) == D.DEFAULT_FALLBACK_JOBS
+    assert len([line for line in proc.stdout.splitlines()
+                if line.startswith("NOTRUN    ")]) == 1
+    assert "FALLBACK_SYSTEMIC_NORECORD" in proc.stdout
+    assert "systemic semantic NORECORD circuit breaker" in proc.stdout
+    assert "NOTRUN    test_neighbour_4.py" in proc.stdout
+    assert _files_in(merged) == []
+
+
+def test_signal_during_parallel_fallback_reaps_detached_descendant(tmp_path):
+    """Cancelling the pool cannot leave a worker's session escapee writing late."""
+    pid_file = tmp_path / "fallback-escaped.pid"
+    late_file = tmp_path / "fallback-late-write"
+    child = (
+        "import pathlib,time; time.sleep(2); "
+        f"pathlib.Path({str(late_file)!r}).write_text('leaked')"
+    )
+    corpus = _tree(tmp_path, {
+        "test_00_aggregate_trigger.py": (
+            "import os,time\n"
+            f"if os.environ.get({_FALLBACK_ENV!r}) != '1':\n"
+            "    time.sleep(3600)\n"
+            "def test_trigger_recovers(): assert True\n"),
+        "test_01_worker_escape.py": (
+            "import os,pathlib,subprocess,sys,time\n"
+            f"if os.environ.get({_FALLBACK_ENV!r}) == '1':\n"
+            f"    p=subprocess.Popen([sys.executable,'-c',{child!r}], "
+            "start_new_session=True)\n"
+            f"    pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))\n"
+            "    time.sleep(3600)\n"
+            "def test_never_reached(): assert True\n"),
+    })
+    merged = tmp_path / "parallel-signal.xml"
+    driver = subprocess.Popen(
+        [sys.executable, str(_PROG), "--selection",
+         str(corpus / "selection.txt"), "--junit", str(merged),
+         "--stall-after", "30", "--aggregate-check",
+         "--aggregate-stall-after", "1", "--"] + _pytest_cmd(),
+        cwd=str(corpus), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, start_new_session=True)
+    deadline = time.monotonic() + 12
+    try:
+        while time.monotonic() < deadline and not pid_file.is_file():
+            time.sleep(0.05)
+        assert pid_file.is_file(), "parallel fallback never launched its escapee"
+        escaped_pid = int(pid_file.read_text())
+
+        os.kill(driver.pid, signal.SIGTERM)
+        driver.wait(timeout=15)
+
+        with pytest.raises(ProcessLookupError):
+            os.kill(escaped_pid, 0)
+        time.sleep(2.1)
+        assert not late_file.exists()
+    finally:
+        if driver.poll() is None:
+            os.killpg(driver.pid, signal.SIGKILL)
+            driver.wait(timeout=5)
 
 
 def test_aggregate_norecord_is_named_and_returns_unknown(tmp_path):
@@ -924,7 +1141,7 @@ def test_process_verdict_key_is_stable_and_carries_exact_rc(tmp_path):
 # ── the driver is the instrument BOTH arms use ───────────────────────────────
 
 def _repo_root() -> Path:
-    return _PROGRAMS.parents[3]
+    return require_repo(".")
 
 
 def test_both_landing_arms_run_through_this_driver():
@@ -947,10 +1164,20 @@ def test_both_landing_arms_run_through_this_driver():
         "arm B isolates every file without the whole-selection semantics canary")
     assert "--aggregate-check" in verify_src, (
         "arm A1 and arm B do not share the aggregate semantics canary")
-    assert "--aggregate-only" in land_src.split("run_pytest()")[-1], (
-        "arm B still repeats every selected file before the aggregate session")
-    assert "--aggregate-only" in verify_src, (
-        "arm A1 still repeats every selected file before the aggregate session")
+    assert "--aggregate-check --aggregate-only" not in land_src.split(
+        "run_pytest()")[-1], (
+        "arm B suppresses per-file recovery after aggregate NORECORD")
+    assert "--aggregate-check --aggregate-only" not in verify_src, (
+        "arm A1/B1 suppress per-file recovery after aggregate NORECORD")
+    assert land_src.split("run_pytest()")[-1].split(
+        "run_repo_tools_pytest")[0].count("--fallback-jobs") == 1, (
+        "the push-path aggregate fallback has no bounded process width")
+    assert verify_src.count("--fallback-jobs") == 2, (
+        "arm A1 and arm B1 do not both declare the bounded fallback width")
+    assert "contract=aggregate-first-process-fallback" in verify_src, (
+        "the base-test cache key does not name the process-isolated contract")
+    assert "fallback_jobs=" in verify_src, (
+        "the base-test cache fingerprint omits the fallback pool width")
     assert "-p no:cacheprovider" in land_src.split("run_pytest()")[-1], (
         "arm B loads cacheprovider while A1 explicitly disables it")
     assert "grep -q 'programs/pytest_per_file_junit.py'" not in verify_src, (

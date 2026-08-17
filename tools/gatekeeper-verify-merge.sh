@@ -756,10 +756,11 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     # in `gatekeeper-land.sh`), so both settings of the ambient switch could
     # take this arm down while arm B ran. Declared here instead of inherited.
     # A1, A2 and B are the critical path, so start A1 now and join it only after
-    # B finishes. Both test arms use the candidate's exact aggregate-only
+    # B finishes. Both test arms use the candidate's exact aggregate-first
     # instrument; source-text guessing cannot select a mismatched runner. The
-    # successful path therefore asks each tree's whole-selection question once,
-    # instead of N per-file processes followed by the same aggregate again.
+    # successful path therefore asks each tree's whole-selection question once.
+    # Only an aggregate NORECORD triggers per-file diagnostic recovery, and that
+    # recovery cannot clear the aggregate refusal.
     A1_DRIVER="$CAND_PLUGIN/programs/pytest_per_file_junit.py"
     if [ -n "$BASE_GATE_CACHE" ]; then
       mkdir -p "$BASE_GATE_CACHE"
@@ -769,7 +770,8 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
           "boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)" \
           "path=${PATH:-}" "tmpdir=${TMPDIR:-/tmp}" \
           "stall=${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
-          'contract=aggregate-only;pytest-timeout=180;cacheprovider=off;autoload=off;bytecode=off'
+          "fallback_jobs=${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+          'contract=aggregate-first-process-fallback;pytest-timeout=180;cacheprovider=off;autoload=off;bytecode=off'
         env -0 | LC_ALL=C sort -z | sha256sum | awk '{print $1}'
         sha256sum "$RUN/selection_base.txt" "$A1_DRIVER" \
           "$CAND_PLUGIN/programs/_watchdog.py" \
@@ -824,8 +826,9 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
         exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
           GATEKEEPER_VERIFY_ARM=A1 \
           python3 "$4" --selection "$2" --junit "$3" \
-          --stall-after "$5" --aggregate-check --aggregate-only \
+          --stall-after "$5" --aggregate-check \
           --aggregate-stall-after "$6" \
+          --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
           -- python3 -m pytest -q -p pytest_timeout \
           --timeout=180 --timeout-method=thread -p no:cacheprovider
       ' gkverify-a1 "$BASE_TEST_PLUGIN" "$RUN/selection_base.txt" "$BASE_JUNIT" \
@@ -985,8 +988,10 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
     exec env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
       GATEKEEPER_VERIFY_ARM=B1 \
       python3 "$4" --selection "$2" --junit "$3" \
-      --stall-after "$5" --aggregate-check --aggregate-only \
-      --aggregate-stall-after "$6" --stop-after-failures 0 \
+      --stall-after "$5" --aggregate-check \
+      --aggregate-stall-after "$6" \
+      --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+      --stop-after-failures 0 \
       -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
       --timeout=180 --timeout-method=thread
   ' gkverify-b1 "$CAND_TEST_PLUGIN" "$RUN/selection.txt" "$CAND_JUNIT" \
