@@ -253,15 +253,31 @@ def test_a_covered_tree_whose_stage_vanished_is_a_finding(mod, tmp_path):
                 if "run_repo_tools_pytest" in f]
 
 
-def test_an_exclusion_that_matches_nothing_is_a_finding(mod):
-    """Roster rot, in the one place this program keeps a roster."""
-    files = [f for f in (mod.tracked_test_files(_REPO) or [])
-             if not f.startswith("benchmark-data/")]
-    assert files, "premise moved: nothing tracked outside benchmark-data/"
+def test_an_exclusion_that_matches_nothing_is_a_finding(mod, monkeypatch):
+    """Roster rot, in the one place this program keeps a roster.
+
+    THIS USED TO ASSERT ON `benchmark-data/` BY NAME, and that coupling broke it.
+    The roster held exactly that one entry; when the corpus moved to
+    vibeic/benchmark-data the entry was withdrawn, the roster became `()`, and this
+    test had nothing left to iterate — it failed not because the mechanism regressed
+    but because the example it was written against was gone.
+
+    A guard over a REGISTRY must not depend on any particular member of it. So the
+    entry is now synthetic and injected: the mechanism is what is under test, and it
+    stays under test whether the shipped roster holds one entry, ten, or none.
+    """
+    stale = mod.Excluded(
+        prefix="a-tree-that-is-not-in-this-repository/",
+        why="a synthetic entry, long enough to satisfy any written-reason rule, "
+            "existing only so this test measures the staleness MECHANISM rather "
+            "than the presence of one particular roster member.")
+    monkeypatch.setattr(mod, "_EXCLUDED", (stale,))
+    files = mod.tracked_test_files(_REPO) or []
+    assert files, "partitioned an empty file list; this is not a measurement"
     part = mod.partition(files, mod.plugin_rel(_REPO))
     findings = mod.audit(_REPO, part, mod.plugin_rel(_REPO))
-    assert any("benchmark-data/" in f and "NO tracked test file" in f
-               for f in findings), (
+    assert any("a-tree-that-is-not-in-this-repository/" in f
+               and "NO tracked test file" in f for f in findings), (
         f"an exclusion describing nothing raised no finding: {findings}")
 
 
