@@ -210,6 +210,19 @@ def test_the_hygiene_record_is_produced_even_when_nobody_asked():
         "gatekeeper-verify-merge.sh reads that record")
 
 
+def test_the_consumer_is_part_of_the_cached_base_gate_contract():
+    """`gatekeeper-verify-merge.sh` keys its reusable BASE record on the files
+    that decide what the gates mean. This program now decides one of them, so a
+    change to it must invalidate a cached base — otherwise the base arm's
+    verdict was produced by one contract and the candidate's by another.
+    """
+    verify = _REPO / "tools" / "gatekeeper-verify-merge.sh"
+    src = _skip_unless(verify)
+    assert "programs/landing_gate_result_consume.py" in src, (
+        "the consumer is not in the base-gate-cache fingerprint, so a change "
+        "to it would be differenced against a stale base record")
+
+
 def test_the_temporary_record_is_cleaned_up():
     src = _skip_unless(_LAND)
     assert 'rm -f "$FP" "$WG_BASE" "$GK_HYG_TMP"' in src, (
