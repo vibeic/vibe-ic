@@ -161,6 +161,16 @@ def classify(rc: int, out: str) -> tuple[str, str]:
     """
     if any(p.search(out) for p in _NOTHING_RAN):
         return "error", "gate COULD NOT RUN (collection died / no tests ran) — nothing was measured"
+    # rc=3 is `gatekeeper-land.sh` saying THE ROUND NEVER STARTED: another round
+    # holds this worktree's lock, or the lock could not be taken. It is the same
+    # event as a collection death — nothing was measured — and filing it as
+    # `failure` would send the first reader hunting for a violation in commits
+    # no gate ever read. Both states block a merge, so this changes what a human
+    # is TOLD and nothing about what is allowed through.
+    if rc == 3:
+        return "error", ("gate COULD NOT RUN (exit 3: the landing round never "
+                         "started — the worktree lock was not available) — "
+                         "nothing was measured")
     m = _DID_RUN.search(out)
     if rc == 0:
         if not m:
