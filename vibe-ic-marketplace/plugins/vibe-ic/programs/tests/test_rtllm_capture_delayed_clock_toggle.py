@@ -133,6 +133,18 @@ endmodule
     # event-driven, not the delay-only oscillator class this fixer owns.
     "module m(output reg y, output reg z); initial y=0; initial z=0; "
     "always begin #1; @(posedge z); #5 y=~y; end endmodule\n",
+    # The same event-driven boundary inside an initial/forever process.
+    "module m(output reg y); reg trigger; "
+    "initial begin trigger=0; #1 trigger=1; end "
+    "initial begin y=0; forever begin @(posedge trigger); #5 y=~y; end end "
+    "endmodule\n",
+    # A macro may carry that event control; without preprocessing its meaning
+    # is unresolved, so the fixer must decline rather than guess.
+    "`define EVENT @(posedge trigger)\n"
+    "module m(output reg y); reg trigger; "
+    "initial begin trigger=0; #1 trigger=1; end "
+    "initial begin y=0; forever begin `EVENT; #5 y=~y; end end "
+    "endmodule\n",
 ])
 def test_no_leak_near_miss_patterns_are_untouched(text):
     assert _hits(text) == []

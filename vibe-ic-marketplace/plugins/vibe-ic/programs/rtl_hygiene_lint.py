@@ -6057,7 +6057,15 @@ def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]
             # changed unrelated delayed assignments.  Bound each process first.
             in_initial_forever = (
                 any(start <= m.start() < end for start, end in initial_spans)
-                and any(start <= m.start() < end for start, end in forever_spans))
+                and any(
+                    start <= m.start() < end
+                    # A forever loop that waits on an event before this toggle
+                    # is event-driven, not the delay-only oscillator class.
+                    # An unresolved macro in the same prefix may expand to the
+                    # event control, so it is equally non-rewritable.
+                    and '@' not in structural[start:m.start()]
+                    and '`' not in structural[start:m.start()]
+                    for start, end in forever_spans))
             in_bare_always = any(
                 start <= m.start() < end
                 and '@' not in structural[start:m.start()]
