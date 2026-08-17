@@ -1324,7 +1324,21 @@ def select_tests(
         # Checked BEFORE the `.py` guard below, which is one of the two reasons
         # this population was invisible: a `.sh` never survived to reach a rule.
         if _is_repo_tool(rel):
-            changed_tools.add(Path(rel).name)
+            # The PATH, not the basename. Rule 6 shipped keyed on the bare
+            # basename with NO uniqueness test, so a tools/ file whose
+            # basename is an ordinary word claimed every test whose text
+            # happens to hold that word. MEASURED on f6b0e77dd:
+            # `tools/*/README.md` -> 69 test files (40 files in this repo
+            # are named README.md), and `tools/vibeic-eda/VERSION` -> 139,
+            # of which 125 match the bare token only — e.g. a test writing
+            # `"VERSION 5.8 ;\nDESIGN top ;"`, a layout-exchange-format
+            # header keyword, not a reference to that file at all.
+            # Resolved to a DISTINCTIVE key at use time below, which is the
+            # guard rule 7 already applies and which this module's own
+            # docstring states as doctrine: under-selecting an ambiguous
+            # name is recoverable, over-selecting teaches people to ignore
+            # the selection.
+            changed_tools.add(_norm(rel))
             continue
         if not rel.endswith(".py"):
             # (7) anything else the rules below cannot classify. Formerly a
@@ -1397,9 +1411,18 @@ def select_tests(
     # silent break is most expensive. A test that names the script by path is
     # a STATED dependency, not noise that needs bounding.
     if changed_tools:
-        tool_index = _build_tool_reference_index(plugin_root, changed_tools)
-        for base in changed_tools:
-            selected |= tool_index.get(base, set())
+        # `_repo_files` returns None when the tree is not a git checkout —
+        # a synthetic fixture tree is not one — and `_distinctive_key` then
+        # falls back to the basename. So rule 6's tmp_path tests keep the
+        # shipped behaviour exactly, and only the REAL tree, where
+        # uniqueness is decidable, is tightened.
+        tool_repo_files = _repo_files(_repo_root_of(plugin_root, plugin_prefix))
+        tool_keys = {k for k in (_distinctive_key(t, tool_repo_files)
+                                 for t in changed_tools) if k}
+        if tool_keys:
+            tool_index = _build_tool_reference_index(plugin_root, tool_keys)
+            for key in tool_keys:
+                selected |= tool_index.get(key, set())
 
     # (7) Everything no other rule claimed. LAZY like rules 4 and 6: the tree is
     # listed only when such a path is actually in the diff, so the common case
