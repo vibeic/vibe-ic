@@ -33,6 +33,7 @@ Usage:
             [--max-eco 3]
             [--skip-hardware]
             [--skip-phase1]
+            [--skip-phase2]
             [--skip-analog]
             [--skip-phase3]
             [--die-um 1500x1500]
@@ -534,6 +535,15 @@ def main() -> int:
     p.add_argument("--max-eco", type=int, default=3)
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--skip-phase1", action="store_true")
+    #: vibe-ic#1734 — the missing member of this set. `--skip-phase1`,
+    #: `--skip-phase3`, `--skip-analog` and `--skip-hardware` all existed;
+    #: phase2 alone could not be skipped, so a caller who wanted to exercise the
+    #: phase1 DISPATCH DECISION had to pay for a full phase2 run it never
+    #: inspected (~128 s of the ~211 s worst case measured in
+    #: test_vibe_ic_one_shot_runner.py). Same semantics as its siblings: the plan
+    #: still RECORDS the phase, as SKIPPED, so a reader can tell "skipped on
+    #: purpose" from "never reached" — the distinction `halted_at` already keeps.
+    p.add_argument("--skip-phase2", action="store_true")
     p.add_argument("--skip-analog", action="store_true")
     p.add_argument("--skip-phase3", action="store_true")
     p.add_argument("--die-um", default="auto",
@@ -811,7 +821,7 @@ def main() -> int:
         advisories.append(f"flow {flow_top_note}")
 
     # ---------------- Phase 2 ----------------
-    if not halted_at:
+    if not halted_at and not args.skip_phase2:
         runner = _phase_runner("phase2")
         p2_args = [str(project),
                    "--top-name", flow_top,
