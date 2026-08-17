@@ -78,13 +78,25 @@ def _run(prog: Path, *args: str, env_tree: str | None = None):
     env.pop(ENV, None)                      # never inherit the developer's own
     if env_tree is not None:
         env[ENV] = env_tree
+    # 60 s, not 300: the landing harness runs this file at `--timeout=180
+    # --timeout-method=thread`, where thread method cannot unwind a stuck
+    # thread — a 300 s inner bound can never fire, so pytest kills the whole
+    # SESSION at 180 s and every other file in the subset loses its verdict.
+    # `ci_harness_timeout_ceiling_check` flags exactly this (vibe-ic#542,
+    # #1734). MEASURED before lowering, `--durations=15` over all 36 items in
+    # this file: worst single `call` 0.08 s, whole file 2.54 s. These gates
+    # read the checkout and launch nothing; 60 s is ~750x the worst observed
+    # call, so this is a genuine lowering and not a bound trimmed to a number
+    # that will go red under contention.
     r = subprocess.run([sys.executable, str(prog), *args], env=env,
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=60)
     return r.returncode, (r.stdout + r.stderr)
 
 
 def _git(cwd: Path, *a: str) -> None:
-    subprocess.run(["git", "-C", str(cwd), *a], check=True, timeout=120,
+    # Same reason as `_run` above. `git init/config/add/commit` on a fixture
+    # tree of a few files: measured well under a second, bounded at 60.
+    subprocess.run(["git", "-C", str(cwd), *a], check=True, timeout=60,
                    capture_output=True)
 
 

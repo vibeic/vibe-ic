@@ -492,6 +492,14 @@ run_pytest() {
     # would show whichever file happened to be last instead of the one that
     # cost the record.
     printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
+    # THE RED CASES BY NAME. `tail -6` below CANNOT reach them and never could:
+    # the driver's summary block is nine lines, so the tail always lands inside
+    # the arithmetic and the failure list scrolls past above it. Measured on a
+    # 3-red selection: the reader got `aggregate complete rc=1 cases=93 red=3`
+    # and not one of the three names, while the names sat 8 lines further up.
+    # No tail depth fixes that — the red count is unbounded — so the names are
+    # selected by NAME here, exactly like the NORECORD lines above.
+    printf '%s\n' "$out" | grep -a '^RED  ' | sed 's/^/          /'
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
     FAILED=1
     [ "$rc" -eq 2 ] && TARGETED_NORECORD=1
@@ -523,7 +531,19 @@ run_pytest() {
     FAILED=1
   fi
   rm -f "$sel"
-  if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
+  # THE EVIDENCE OUTLIVES THE RUN THAT FAILED. A green run's report is
+  # reconstructible by re-running; a RED one's is the only copy of what broke,
+  # and deleting it unconditionally is why every round could report `red=3` and
+  # leave nothing to read. Kept ONLY on failure and ONLY when the caller did not
+  # name its own target, so the successful critical path is byte-for-byte
+  # unchanged and no green run accumulates files.
+  if [ -n "$merged_tmp" ]; then
+    if [ "$rc" -ne 0 ]; then
+      printf '  REPORT  targeted test junit kept for reading: %s\n' "$merged_tmp"
+    else
+      rm -f "$merged_tmp"
+    fi
+  fi
 }
 if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
   echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
