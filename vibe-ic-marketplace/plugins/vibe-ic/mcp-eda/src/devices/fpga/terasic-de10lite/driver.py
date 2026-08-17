@@ -39,6 +39,7 @@ import argparse
 import glob
 import json
 import os
+import tempfile
 import re
 import shlex
 import shutil
@@ -395,6 +396,39 @@ def _run_rtl_precheck_gate(
     return r.returncode, report
 
 
+def _is_never_a_project_root(path: str) -> bool:
+    """Directories that may never be returned as a project root, however many
+    markers they happen to contain.
+
+    MEASURED 2026-08-17: a stray `/tmp/waivers.json`, dropped by an unrelated run
+    on 2026-07-29, scored `/tmp` at 2 and made it the resolved project root for
+    EVERY SOF anywhere under `/tmp`. The consequence is not a wrong path in a log
+    line -- `_run_flow_compliance_pre_burn` is then pointed at `/tmp` and audits
+    the whole of it, and the caller burns a device on the strength of that
+    audit's verdict.
+
+    The markers are heuristics and cannot be made unambiguous; what CAN be made
+    unambiguous is the FLOOR. A SOF's project root is never the filesystem root,
+    never the system temp directory, and never the user's home directory -- each
+    is a SHARED location whose contents are written by things unrelated to this
+    project, which is precisely how this happened.
+
+    This is a floor, not a ban on paths BELOW them: `/tmp/myproject` resolves
+    fine, and so does `~/work/chip`. Only the shared parents themselves refuse.
+    """
+    try:
+        real = os.path.realpath(path)
+    except OSError:
+        return True                     # cannot even name it -> cannot trust it
+    shared = {os.path.realpath(os.sep)}
+    for candidate in (tempfile.gettempdir(), os.path.expanduser("~")):
+        try:
+            shared.add(os.path.realpath(candidate))
+        except OSError:
+            pass
+    return real in shared
+
+
 def _resolve_project_root_from_sof(sof_path: str) -> Optional[str]:
     """Wave 20 (v0.119.52) helper: walk up from a SOF to the project
     root.
@@ -436,7 +470,7 @@ def _resolve_project_root_from_sof(sof_path: str) -> Optional[str]:
         for hint in ("rtl", "phase23_completion_audit.json", "phase2", "phase3"):
             if os.path.exists(os.path.join(cur, hint)):
                 score += 1
-        if score > 0:
+        if score > 0 and not _is_never_a_project_root(cur):
             candidates.append((score, cur))
     if not candidates:
         return None
