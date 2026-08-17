@@ -1822,3 +1822,5 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+# selector-probe: no-op line added by the xdist equivalence experiment
