@@ -73,7 +73,12 @@ RC_CANNOT_CONSUME = 2
 
 
 def _refuse(message: str) -> int:
-    print(f"[CANNOT CONSUME] {message}")
+    # `[FAIL]` DELIBERATELY LEADS THE LINE. `tools/gatekeeper-land.sh`'s `run`
+    # helper prints the FAILING lines first by grepping for `^\s*(FAIL|ERROR)`
+    # or `[FAIL]`, then a `tail -5`. A refusal spelled only "CANNOT CONSUME"
+    # would reach the reader as five lines of tail with the reason off the top,
+    # which is the "named nowhere" defect that comment was written about.
+    print(f"[FAIL] CANNOT CONSUME: {message}")
     print("consume: refusing to state a verdict I did not read — "
           "'I could not look' is not 'I looked and it was clean'")
     return RC_CANNOT_CONSUME

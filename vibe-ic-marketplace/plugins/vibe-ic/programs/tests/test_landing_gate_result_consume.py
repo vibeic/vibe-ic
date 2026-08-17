@@ -88,6 +88,17 @@ def test_a_missing_record_is_not_a_pass(tmp_path):
     assert "CANNOT CONSUME" in got.stdout
 
 
+def test_a_refusal_is_MARKED_so_the_landing_log_names_it(tmp_path):
+    """`gatekeeper-land.sh`'s `run` prints the FAILING lines first by matching
+    `^\\s*(FAIL|ERROR)` / `[FAIL]`, then a bare `tail -5`. A refusal that
+    matched neither would reach the reader as tail with the reason scrolled
+    off — the "the failure was real, it was named nowhere" defect that comment
+    in the landing script was written about.
+    """
+    got = _run(tmp_path / "never-written.json")
+    assert got.stdout.startswith("[FAIL]"), got.stdout
+
+
 def test_an_empty_record_is_not_a_pass(tmp_path):
     p = tmp_path / "hygiene.json"
     p.write_text("", encoding="utf-8")
