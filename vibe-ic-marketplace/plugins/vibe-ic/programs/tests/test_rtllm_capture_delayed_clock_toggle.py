@@ -9,10 +9,13 @@ from pathlib import Path
 import pytest
 
 import rtl_hygiene_lint as lint
+from _hostpaths import require_repo
 
 
-REAL_FIXTURES = Path(__file__).parent / "fixtures" / "real_benchmark"
-BLOCKING = (REAL_FIXTURES / "delay_driven_output_oscillator.v").read_text()
+_BLOCKING_FIXTURE_PARTS = (
+    "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+    "fixtures", "real_benchmark", "delay_driven_output_oscillator.v",
+)
 TASK_NEAR_MISS = """
 module task_source(output reg y, output reg unrelated_wave);
   initial y = 0;
@@ -25,6 +28,23 @@ module task_source(output reg y, output reg unrelated_wave);
   initial unrelated_wave = 0;
 endmodule
 """
+DISABLED_PREPROCESSOR_NEAR_MISS = """
+module guarded_task_source(output reg y);
+`ifdef NEVER
+  initial begin
+    forever begin
+`endif
+  initial y = 0;
+  task toggle_y;
+    #5 y = ~y;
+  endtask
+endmodule
+"""
+
+
+def _blocking_fixture() -> str:
+    """Read the checked-in benchmark-derived oscillator through hostpaths."""
+    return require_repo(*_BLOCKING_FIXTURE_PARTS).read_text()
 
 
 def _hits(text: str, path: str = "oscillator.v"):
@@ -33,21 +53,21 @@ def _hits(text: str, path: str = "oscillator.v"):
 
 
 def test_detects_narrow_no_input_delayed_self_toggle():
-    hits = _hits(BLOCKING)
+    hits = _hits(_blocking_fixture())
     assert [(h.rule, h.symbol) for h in hits] == [
         ("delayed-blocking-clock-toggle", "wave")]
 
 
 def test_rule_is_wired_into_lint_file(tmp_path):
     rtl = tmp_path / "oscillator.v"
-    rtl.write_text(BLOCKING)
+    rtl.write_text(_blocking_fixture())
     assert any(f.rule == "delayed-blocking-clock-toggle"
                for f in lint.lint_file(rtl))
 
 
 def test_fix_changes_only_toggle_operator_and_is_idempotent(tmp_path):
     rtl = tmp_path / "oscillator.v"
-    rtl.write_text(BLOCKING)
+    rtl.write_text(_blocking_fixture())
     count, names = lint.autofix_delayed_blocking_clock_toggle(rtl)
     assert (count, names) == (1, ["wave"])
     fixed = rtl.read_text()
@@ -59,7 +79,7 @@ def test_fix_changes_only_toggle_operator_and_is_idempotent(tmp_path):
 
 def test_cli_fix_wires_the_repair_into_the_canonical_emit_path(tmp_path):
     rtl = tmp_path / "oscillator.v"
-    rtl.write_text(BLOCKING)
+    rtl.write_text(_blocking_fixture())
     cp = subprocess.run([sys.executable, lint.__file__, "--fix", str(rtl)],
                         capture_output=True, text=True, timeout=30)
     assert cp.returncode == 0, cp.stderr
@@ -82,10 +102,9 @@ endmodule
 
 
 @pytest.mark.parametrize("text", [
-    # Already deterministic.
-    BLOCKING.replace("wave = ~wave", "wave <= ~wave"),
     # A real input means this is not a standalone source/oscillator model.
-    BLOCKING.replace("    output reg wave", "    input enable,\n    output reg wave"),
+    "module m(input enable, output reg wave); initial wave=0; "
+    "always #5 wave=~wave; endmodule\n",
     # Ordinary combinational blocking assignment: no delay, no oscillator.
     "module m(input a, output reg y); always @(*) y = ~a; endmodule\n",
     # Synthesizable edge-clocked blocking assignment: never blanket-rewrite.
@@ -110,6 +129,11 @@ def test_no_leak_near_miss_patterns_are_untouched(text):
     assert _hits(text) == []
 
 
+def test_already_deterministic_real_fixture_is_untouched():
+    text = _blocking_fixture().replace("wave = ~wave", "wave <= ~wave")
+    assert _hits(text) == []
+
+
 def test_fix_does_not_rewrite_task_body_after_unrelated_oscillator(tmp_path):
     rtl = tmp_path / "task_source.v"
     rtl.write_text(TASK_NEAR_MISS)
@@ -117,8 +141,28 @@ def test_fix_does_not_rewrite_task_body_after_unrelated_oscillator(tmp_path):
     assert rtl.read_text() == TASK_NEAR_MISS
 
 
+def test_disabled_preprocessor_scope_cannot_rewrite_later_task(tmp_path):
+    """Inactive procedural keywords cannot lend scope to live task code."""
+    if not shutil.which("iverilog"):
+        pytest.skip("iverilog is required")
+    rtl = tmp_path / "guarded_task_source.v"
+    rtl.write_text(DISABLED_PREPROCESSOR_NEAR_MISS)
+    before = subprocess.run(
+        ["iverilog", "-g2012", "-tnull", str(rtl)],
+        capture_output=True, text=True)
+    assert before.returncode == 0, before.stderr
+
+    assert lint.autofix_delayed_blocking_clock_toggle(rtl) == (0, [])
+    assert rtl.read_text() == DISABLED_PREPROCESSOR_NEAR_MISS
+
+    after = subprocess.run(
+        ["iverilog", "-g2012", "-tnull", str(rtl)],
+        capture_output=True, text=True)
+    assert after.returncode == 0, after.stderr
+
+
 def test_testbench_module_is_never_rewritten():
-    text = BLOCKING.replace("module oscillator", "module oscillator_tb")
+    text = _blocking_fixture().replace("module oscillator", "module oscillator_tb")
     assert _hits(text, "oscillator_tb.v") == []
 
 
@@ -127,7 +171,7 @@ def test_fix_reproduces_same_timestamp_official_sampling_semantics(tmp_path):
         pytest.skip("iverilog + vvp are required")
     rtl = tmp_path / "oscillator.v"
     tb = tmp_path / "testbench.v"
-    rtl.write_text(BLOCKING)
+    rtl.write_text(_blocking_fixture())
     tb.write_text("""
 module tb;
   wire wave;
