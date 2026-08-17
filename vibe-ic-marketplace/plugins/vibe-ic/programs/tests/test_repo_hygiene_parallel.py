@@ -4,7 +4,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import select
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -150,34 +152,96 @@ def test_worker_classifies_silent_idle_process_as_stalled_not_timed_out(
 def test_stall_kills_a_term_ignoring_descendant_not_only_its_wrapper(
         tmp_path, monkeypatch):
     monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
+    child_pid_path = tmp_path / "grandchild.pid"
+    real_killpg = os.killpg
+    delivered = []
+    exit_events = {}
+
+    def traced_killpg(pgid, sig):
+        """Retain the kernel exit event before SIGKILL makes the PID vanish."""
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        pidfd = os.pidfd_open(child_pid) if sig == signal.SIGKILL else None
+        try:
+            real_killpg(pgid, sig)
+        except BaseException:
+            if pidfd is not None:
+                os.close(pidfd)
+            raise
+        delivered.append((pgid, sig))
+        if pidfd is not None:
+            exit_events[child_pid] = pidfd
+
+    monkeypatch.setattr(P.os, "killpg", traced_killpg)
+
+    def stall_after_descendant_ready(command, *, popen_factory, kill, env,
+                                     **_kwargs):
+        """Inject STALLED only after the descendant reports kernel readiness."""
+        proc = popen_factory(command, stdout=subprocess.PIPE, env=env)
+        while True:
+            try:
+                int(child_pid_path.read_text(encoding="utf-8"))
+                break
+            except (FileNotFoundError, ValueError):
+                time.sleep(0)  # yield; readiness, not elapsed time, owns this wait
+        kill(proc, "stalled")
+        stdout, _ = proc.communicate()
+        return P._wd.SupervisedResult(
+            P._wd.RC_STALLED, stdout.decode(errors="replace"),
+            "\nWATCHDOG_STALLED: injected after descendant readiness",
+            "stalled")
+
+    monkeypatch.setattr(P._wd, "run_supervised", stall_after_descendant_ready)
     grandchild = (
-        "import os,signal,time\n"
+        "import os,pathlib,signal,sys,time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "print('GRANDCHILD='+str(os.getpid()), flush=True)\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+        "print('GRANDCHILD='+str(os.getpid())"
+        "+' PGRP='+str(os.getpgrp()), flush=True)\n"
+        "os.close(1); os.close(2)\n"
         "time.sleep(30)\n"
     )
     parent = (
         "import subprocess,sys,time\n"
-        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}, "
+        "sys.argv[1]])\n"
         "time.sleep(30)\n"
     )
     rc, out, problem = P._run(
-        [sys.executable, "-c", parent], tmp_path, os.environ.copy(),
-        stall_grace_s=0.3)
+        [sys.executable, "-c", parent, str(child_pid_path)], tmp_path,
+        os.environ.copy())
     assert rc == P._wd.RC_STALLED and problem, (rc, out, problem)
     line = next(line for line in out.splitlines()
                 if line.startswith("GRANDCHILD="))
-    child_pid = int(line.split("=", 1)[1])
-    deadline = time.monotonic() + 2
-    while time.monotonic() < deadline:
+    fields = dict(part.split("=", 1) for part in line.split())
+    child_pid = int(fields["GRANDCHILD"])
+    child_pgrp = int(fields["PGRP"])
+    term_count = delivered.count((child_pgrp, signal.SIGTERM))
+    kill_count = delivered.count((child_pgrp, signal.SIGKILL))
+    if kill_count != 1:
+        # A broken candidate must fail without leaking its deliberately
+        # TERM-immune descendant into the rest of the test session.
         try:
-            os.kill(child_pid, 0)
+            real_killpg(child_pgrp, signal.SIGKILL)
         except ProcessLookupError:
-            break
-        time.sleep(0.02)
-    else:
-        os.kill(child_pid, signal.SIGKILL)
-        raise AssertionError(f"TERM-ignoring descendant {child_pid} survived")
+            pass
+    assert term_count == 1, delivered
+    assert kill_count == 1, delivered
+
+    # pidfd readiness is the kernel's process-exit event.  Unlike kill(pid, 0),
+    # it becomes ready when execution has ended even if an overloaded host has
+    # not reaped the resulting zombie yet.  Wait for that event with no guessed
+    # wall-clock deadline: the successful SIGKILL delivery above guarantees it
+    # for this sleeping synthetic descendant.
+    pidfd = exit_events.pop(child_pid)
+    try:
+        poller = select.poll()
+        poller.register(pidfd, select.POLLIN)
+        events = poller.poll()
+    finally:
+        os.close(pidfd)
+        for leftover in exit_events.values():
+            os.close(leftover)
+    assert events, f"no kernel exit event for descendant {child_pid}"
 
 
 def _attest(path: Path, output: str = "[PASS] same"):
