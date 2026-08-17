@@ -98,9 +98,9 @@ def _resolve_docker_image() -> str:
     if env:
         return env
     candidates = (
-        "ghcr.io/vibeic/vibeic-eda:0.3.5",
-        "vibeic-eda:0.3.5",
-        "vibeic/vibeic-eda:0.3.5",
+        "ghcr.io/vibeic/vibeic-eda:0.3.6",
+        "vibeic-eda:0.3.6",
+        "vibeic/vibeic-eda:0.3.6",
         "hpretl/iic-osic-tools:latest",
     )
     for img in candidates:
@@ -114,7 +114,7 @@ def _resolve_docker_image() -> str:
     # nothing found locally — return the fork's pinned canonical name; the
     # caller's `docker run` then pulls exactly the verified image (or surfaces
     # a clear pull error) rather than running a stale floating tag.
-    return "ghcr.io/vibeic/vibeic-eda:0.3.5"
+    return "ghcr.io/vibeic/vibeic-eda:0.3.6"
 
 
 DOCKER_IMAGE = _resolve_docker_image()
