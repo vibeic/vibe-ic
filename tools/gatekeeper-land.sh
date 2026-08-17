@@ -13,6 +13,25 @@
 #
 # Usage:  tools/gatekeeper-land.sh [--cheap-only] [--prepare]
 #
+# EXIT CODES
+#   0  every gate asked passed; the tree is stamped (unless GATEKEEPER_NO_STAMP)
+#   1  a gate failed, or preparation was refused. Any stale stamp is removed.
+#   2  a bad argument, or an absolute refusal (aggregate NORECORD under
+#      GATEKEEPER_FAIL_FAST_NORECORD)
+#   3  THE ROUND NEVER STARTED — another round holds this worktree's lock, or
+#      the lock could not be taken at all. NOTHING was measured, and in
+#      particular the stamp is left exactly as it was: a round that measured
+#      nothing must not overrule one that is measuring.
+#
+# ONE ROUND AT A TIME. This script takes an exclusive `flock` on the
+# PER-WORKTREE git dir for its whole duration; see the block below the argument
+# parser for the measurement that made that necessary and for why it BUYS
+# coverage instead of spending it.
+#
+# A CHEAP-TIER FAILURE STOPS THE ROUND before the full tier — after the cheap
+# tier has run to completion, so the finding list is still complete — and the
+# run fingerprint is re-asserted between stages rather than only at the end.
+#
 # --prepare (vibe-ic#1129) — do the MECHANICAL things this script would
 # otherwise refuse a batch for, before the cheap tier runs, and let the gates
 # refuse only what is left:
@@ -59,6 +78,94 @@ for _arg in "$@"; do
   esac
 done
 
+# ── ONE ROUND AT A TIME, PER WORKTREE ──────────────────────────────────────
+#
+# MEASURED: two full rounds were observed running in the SAME worktree 19 s
+# apart, and one of them burned all 1864 s only to end on `worktree unchanged
+# since the gates started` — a concurrent process had dropped a file in. There
+# was no lock anywhere in this file, so nothing had an opinion about that.
+#
+# THE LOSS IS NOT ONLY WALL CLOCK, and this is the half that matters:
+# `programs/tests/test_issue1129_gatekeeper_prepare_landing.py::
+# test_the_real_program_runs_against_this_repo_and_honours_its_boundary` opens
+# with `if G.dirty_paths(repo_root): pytest.skip(...)`. A second round dirtying
+# the tree does not FAIL that test — it DOWNGRADES it to `skipped`, and a
+# landing test that skipped is a check that silently stopped being made. So
+# serialising the rounds BUYS coverage; it does not spend any.
+#
+# PER-WORKTREE, computed exactly like the stamp below and for the same reason:
+# `--absolute-git-dir` is the per-worktree git dir. `gatekeeper-verify-merge.sh`
+# runs this script on the BASE worktree and on the CANDIDATE worktree AT THE
+# SAME TIME (arms A2 and B2), and those are two `git worktree add` checkouts, so
+# they take two different locks and the verifier is unaffected. A lock keyed on
+# the common git dir would deadlock it on every merge verification.
+#
+# THE LOCK IS NOT RELEASED UNTIL THE ROUND ENDS: fd 9 stays open for the life of
+# the process, so a crash, a kill or an early `exit` all release it — there is
+# no stale lock to clean up, only a stale holder note, which the next winner
+# overwrites.
+#
+# A LOCK THAT COULD NOT BE TAKEN IS NOT A LOCK. If `flock(1)` is absent the
+# round refuses instead of running unprotected: "I could not exclude anyone"
+# must never reach an operator as "I have this worktree".
+GK_GIT_DIR="$(git rev-parse --absolute-git-dir)"
+GK_LOCK="$GK_GIT_DIR/gatekeeper-land.lock"
+GK_HOLDER="$GK_GIT_DIR/gatekeeper-land.holder"
+if ! command -v flock >/dev/null 2>&1; then
+  echo "gatekeeper-land: REFUSED — flock(1) is not installed, so this round" >&2
+  echo "    cannot take an exclusive lock on this worktree:" >&2
+  echo "    worktree: $ROOT" >&2
+  echo "    Running without the lock is how two rounds came to share one" >&2
+  echo "    worktree and measure each other's edits. Install util-linux." >&2
+  exit 3
+fi
+# ASKED BEFORE `exec`, because a failed redirection on `exec` kills a
+# non-interactive shell where it stands — the round would exit 1, which reads
+# like a gate finding rather than like a host problem.
+if ! : >> "$GK_LOCK" 2>/dev/null; then
+  echo "gatekeeper-land: REFUSED — the round lock is not writable:" >&2
+  echo "    lock:     $GK_LOCK" >&2
+  echo "    Without it this round cannot exclude a second one, and running" >&2
+  echo "    unprotected is the state this refusal exists to end." >&2
+  exit 3
+fi
+# APPEND, never truncate. `exec 9>` empties the file BEFORE flock is asked for,
+# so a loser would erase the record it is about to read. The holder note is a
+# separate file for the same reason: only the winner ever writes it.
+exec 9>>"$GK_LOCK"
+if ! flock -n 9; then
+  echo "gatekeeper-land: REFUSED — another landing round already holds this worktree." >&2
+  echo "    worktree: $ROOT" >&2
+  echo "    lock:     $GK_LOCK" >&2
+  if [ -s "$GK_HOLDER" ]; then
+    sed 's/^/    holder:   /' "$GK_HOLDER" >&2
+    # THE ONE FAILURE MODE THIS LOCK ADDS, named rather than left to be
+    # rediscovered: fd 9 is INHERITED, so a gate that leaves a process behind
+    # keeps the lock after the round itself is gone. The holder pid is checked
+    # so that case reads as what it is instead of as a live round.
+    _gk_pid="$(awk '{print $2; exit}' "$GK_HOLDER" 2>/dev/null)"
+    if [ -n "${_gk_pid:-}" ] && ! kill -0 "$_gk_pid" 2>/dev/null; then
+      echo "    NOTE:     that pid is GONE — the lock is held by something the" >&2
+      echo "              round left behind, which inherited the open fd." >&2
+      echo "              Find it with:  fuser -v $GK_LOCK" >&2
+    fi
+  else
+    echo "    holder:   held, but the holder had not yet written its note" >&2
+  fi
+  echo "    Two rounds in one worktree read each other's edits: one of them" >&2
+  echo "    paid 1864 s and ended on 'worktree unchanged since the gates" >&2
+  echo "    started', and a landing test downgraded itself to skipped." >&2
+  echo "    Wait for the holder above, or run from your own worktree." >&2
+  # DELIBERATELY NOT TOUCHING THE STAMP. This round measured nothing, and the
+  # holder is still running; dropping its stamp here would make one round
+  # sabotage another's verdict.
+  exit 3
+fi
+printf 'pid %s on %s since %s (args: %s)\n' \
+    "$$" "$(uname -n)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${*:-none}" \
+    > "$GK_HOLDER"
+trap 'rm -f "$GK_HOLDER"' EXIT
+
 FAILED=0
 # REPORT, not a gate. Prints what a probe found and NEVER touches FAILED.
 #
@@ -102,6 +209,53 @@ run() {                              # run <label> <cmd…>
     printf '%s\n' "$out" | tail -5 | sed 's/^/          /'
     FAILED=1
   fi
+}
+
+# ── THE FINGERPRINT, RE-ASSERTED BETWEEN STAGES ────────────────────────────
+#
+# The run fingerprint is captured in the cheap tier at about second 4 and, until
+# this helper existed, was compared exactly ONCE — at the very end of the round.
+# MEASURED: a round that had lost its tree burned all 1864 s before saying so,
+# and the answer it finally gave ("worktree unchanged since the gates started")
+# named a 31-minute window rather than a stage.
+#
+# The comparison is one `git status` plus one `git diff HEAD` over the shipped
+# paths: 0.26-0.61 s, measured three times on this repo. Asking it between
+# stages costs ~1 s a round and pays back a whole tier the first time a tree
+# moves early.
+#
+# IT CAN ONLY REFUSE EARLIER, NEVER INSTEAD. The end-of-round gate below is
+# untouched and stays the authoritative one; this helper runs the SAME program
+# against the SAME recorded fingerprint, so anything it catches is something
+# that gate would also have caught — except for a change made AND reverted
+# inside one stage, which the end-of-round comparison misses by construction
+# (see the program's own "WHAT THE FINGERPRINT DOES NOT COVER"). That direction
+# is more coverage, not less.
+#
+# ONLY rc=1 STOPS THE ROUND. rc=1 is the definitive answer — the tree MOVED —
+# and every stage after it would be measuring a tree that is not the one this
+# round would stamp. Any other non-zero is "I could not look": it is recorded as
+# a FAILURE exactly as `run` would record it, and the round continues so the
+# remaining stages still report their findings.
+checkpoint_fingerprint() {           # checkpoint_fingerprint <label>
+  local label="$1" out rc
+  out="$(python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
+        --expect-fingerprint "$FP" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '  PASS  %s\n' "$label"
+    return 0
+  fi
+  printf '  FAIL  %s\n' "$label"
+  printf '%s\n' "$out" | tail -8 | sed 's/^/          /'
+  FAILED=1
+  [ "$rc" -ne 1 ] && return 0
+  echo "--- remaining stages NOT RUN — the tree moved under the gates. Every"
+  echo "    stage after this point would measure a tree that is not the one"
+  echo "    this round would stamp, so its verdict would be about nothing."
+  echo "    Re-run on a settled tree."
+  rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+  exit 1
 }
 
 echo "=== gatekeeper landing gates — base=$BASE ==="
@@ -270,7 +424,10 @@ fi
 # stamped 9fd81bb45 — a tree that never existed. FP is per-run, so two gates in
 # one checkout do not read each other's.
 FP="$(mktemp -t gk_fingerprint.XXXXXX)"
-trap 'rm -f "$FP"' EXIT
+# `$GK_HOLDER` is carried forward: an EXIT trap REPLACES the previous one, and
+# dropping it here would leave every finished round's holder note behind for the
+# next loser to print as if it were live.
+trap 'rm -f "$FP" "$GK_HOLDER"' EXIT
 run "worktree carries no uncommitted change" \
     python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
         --emit-fingerprint "$FP"
@@ -297,6 +454,34 @@ if [ "$CHEAP_ONLY" = "1" ]; then
   exit "$FAILED"
 fi
 
+# ── A CHEAP-TIER REFUSAL DOES NOT BUY THE FULL TIER ────────────────────────
+#
+# MEASURED over five consecutive rounds: two of them were provably unstampable
+# within 3 SECONDS — a cheap gate had already failed — and each still paid the
+# whole ~1860 s round before saying so. Nothing below can turn that into a
+# stamp: the stamp is written on `FAILED -eq 0` alone, so once FAILED is 1 the
+# rest of this file cannot change the verdict, only the bill.
+#
+# THIS IS NOT A FIRST-FAILURE ABORT, and the distinction is the whole design.
+# The cheap tier above has ALREADY RUN TO COMPLETION at this line: every one of
+# its gates was asked and every finding is printed, because an operator must be
+# able to fix the whole list in one pass instead of re-running an hour-long gate
+# once per finding. `run` never exits; it records. This line refuses to ENTER
+# the next tier and nothing else.
+#
+# `tools/ci/test_gatekeeper_land_round_exclusivity.py` pins BOTH halves — the
+# complete finding list, and the tier that must not start — because a change
+# that turned this into an abort-on-first-failure would look identical here.
+if [ "$FAILED" -ne 0 ]; then
+  echo "--- full tier NOT ENTERED — the cheap tier above already refuses this landing ---"
+  echo "    Every cheap gate ran and every finding is listed above. Fix them and"
+  echo "    re-run: the full tier cannot turn a failed cheap gate into a stamp,"
+  echo "    and five measured rounds spent ~31 min each proving that."
+  rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+  exit "$FAILED"
+fi
+
 echo "--- full tier (minutes; stamps the tree on success) ---"
 
 # vibe-ic#1029 — the full tier is the window in which the gates read the tree,
@@ -314,9 +499,14 @@ echo "--- full tier (minutes; stamps the tree on success) ---"
 # plugin's rootdir conftest) cannot see them. That gap is exactly the stage
 # whose family this repo already caught rewriting 77 tracked files.
 WG_BASE="$(mktemp -t gk_writeguard.XXXXXX)"
-trap 'rm -f "$FP" "$WG_BASE"' EXIT
+trap 'rm -f "$FP" "$WG_BASE" "$GK_HOLDER"' EXIT
 run "write-guard baseline" \
     python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --snapshot "$WG_BASE"
+
+# CHECKPOINT 1 of 4. Cheapest possible place to catch the tree moving during the
+# cheap tier: everything expensive is still ahead, so this one can save the
+# whole ~31-minute round rather than the tail of it.
+checkpoint_fingerprint "worktree unchanged entering the full tier"
 
 # The TARGETED TEST RUN, carried over verbatim from the retired ci.yml:130-132.
 # Omitted from the first version of this script, which covered the governance
@@ -531,6 +721,11 @@ else
   run_pytest
 fi
 
+# CHECKPOINT 2 of 4. The targeted arm is 82-84% of the round (measured), so it
+# is also the widest window in which the tree can move unobserved. Asked here,
+# the answer names THAT stage instead of the whole round.
+checkpoint_fingerprint "worktree unchanged after the targeted tests"
+
 # Merge verification already has enough evidence to refuse once the aggregate
 # session produced NO complete record.  Continuing through every remaining gate
 # cannot turn UNKNOWN into PASS; it only burns the critical path.  Ordinary red
@@ -737,6 +932,11 @@ run_unselectable_pytest
 run "unselectable-test census is not stale" \
     python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
 
+# CHECKPOINT 3 of 4. These two stages run pytest with cwd=$ROOT — the widest
+# blast radius any stage here has — and the hygiene tier below is another
+# 253-347 s that a moved tree would spend for nothing.
+checkpoint_fingerprint "worktree unchanged after the repo-tools and unselectable tests"
+
 # THE HYGIENE TIER, AND THE RECORD THAT LETS IT BE DIFFERENCED (vibe-ic#1498).
 #
 # The label below is ONE line for a suite of ~70 gates, and
@@ -773,6 +973,13 @@ run "repo hygiene gates"      "${GK_HYG_ENV[@]}" \
     bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
     "${GK_HYG[@]+"${GK_HYG[@]}"}"
 run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+
+# CHECKPOINT 4 of 4. `repo_hygiene_gates.sh` and `plugin_full_audit.py` are the
+# family this repo has already caught rewriting 77 tracked files, and they run
+# OUTSIDE the pytest session, so the in-process write guard cannot see them.
+# The write-guard compare below answers "did they write"; this answers "is this
+# still the tree we are about to stamp", which is the stamp's own claim.
+checkpoint_fingerprint "worktree unchanged after the hygiene tier"
 
 # #1029 — the standing assertion, executed: everything above ran against this
 # tree, so nothing above may have CHANGED it. Names every offending path rather

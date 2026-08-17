@@ -81,10 +81,20 @@ def test_the_removal_path_uses_it_too():
     # matching it made this test pass while asserting nothing about the stamp.
     rms = [l for l in body.splitlines()
            if "rm -f" in l and "gatekeeper-stamp" in l]
-    # Failure removes a stale stamp, and composite merge verification also
-    # removes one on its successful NO_STAMP path.  Both paths must resolve the
-    # same per-worktree location the writer and hook use.
-    assert len(rms) == 2, rms
+    # THE ROSTER, exact on purpose: adding a refusal path that forgets the stamp
+    # is invisible, so the count is asserted and a new path has to come here and
+    # say so. Four paths drop it today:
+    #
+    #   1. the terminal failure block          — any gate failed
+    #   2. the composite NO_STAMP path         — merge verification owns the join
+    #   3. the cheap-tier refusal              — the full tier is not entered
+    #   4. the mid-round fingerprint abort     — the tree moved under the gates
+    #
+    # 3 and 4 exit BEFORE the terminal block, so without their own removal a
+    # stale stamp from an earlier round would survive a red one — the one
+    # direction of this bug that fails OPEN. All four must resolve the same
+    # per-worktree location the writer and the hook use.
+    assert len(rms) == 4, rms
     assert all(_EXPR in line for line in rms)
 
 
