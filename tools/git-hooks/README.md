@@ -12,6 +12,45 @@ Re-running is safe (idempotent). Pass `--force` to replace a pre-existing hook
 of the same name. The installer creates **symlinks**, so a later `git pull` that
 improves a hook takes effect with no re-install.
 
+**Run it from the main checkout, not from a linked worktree.** The installer now
+refuses the latter without `--force`, and the reason is in the next section.
+
+## A stale hook is a lie, not a degradation
+
+`.git/hooks/` is not versioned, so nothing in git relates the file that *runs*
+to the file this repository *ships*. Measured 2026-08-17 on the orchestrator
+host: `.git/hooks/pre-push` was **410 lines**, that checkout's
+`tools/git-hooks/pre-push` was **293**, **137 lines differing**. Pushes were
+being judged by a gate set the repository does not declare — in one direction a
+hook still running two gates deliberately relocated to `gatekeeper-land.sh` on
+2026-08-14 while missing newer ones.
+
+So `pre-push` **compares itself to `tools/git-hooks/pre-push` and refuses the
+push on any difference**, before it runs a single gate:
+
+```
+pre-push: BLOCKED — the installed hook is NOT the hook this tree declares.
+    differing lines: 137
+    fix: tools/install-git-hooks.sh --force
+```
+
+It compares **content**, so a symlink install (identical to its target) and a
+copy install take the same code path. It refuses rather than warns: a warning on
+a hook that is already wrong prints into the scrollback of a push that succeeds.
+
+## Why the installer refuses a linked worktree
+
+Hooks live in the **shared** git dir — `git rev-parse --git-path hooks` answers
+the common `.git/hooks` from a linked worktree too. A `ln -s` run from a
+worktree therefore points the hook that *every* checkout runs at a directory
+that is temporary by design. When the worktree is removed the symlink dangles,
+and **git treats an unresolvable hook path as no hook at all: no message, no
+exit code**. The guard that silently comes off is the NDA guard.
+
+The hook's own self-check cannot cover this — a hook that is never executed
+checks nothing — which is why the refusal lives in the installer, before the
+symlink exists.
+
 ## The hooks
 
 | Hook | When it runs | What it blocks |

@@ -61,6 +61,87 @@ _hook_aborted() {
 trap '_hook_aborted "$LINENO" "$BASH_COMMAND"' ERR
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# --- THE HOOK THAT RUNS MUST BE THE HOOK THIS TREE DECLARES -------------------
+#
+# `.git/hooks/` IS NOT VERSIONED, so nothing in git relates the file that runs to
+# the file this repository ships. Between them sits a copy made by whoever last
+# ran the installer, and no command in the repo compares the two.
+#
+# MEASURED on the orchestrator host, 2026-08-17:
+#
+#     installed  .git/hooks/pre-push          410 lines
+#     declared   tools/git-hooks/pre-push     293 lines   (that checkout's HEAD)
+#     differing lines                         137
+#
+# The two copies had drifted by a third of the file, in BOTH directions across
+# hosts: one host ran a hook older than its tree, which still ran two gates that
+# were deliberately relocated to `gatekeeper-land.sh` on 2026-08-14 and MISSED
+# newer ones; here the tree is older than the hook. Either way the sentence is
+# the same, and it is the sentence this repository exists to refuse:
+#
+#     pushes were judged by a gate set the repository does not declare.
+#
+# A drifted hook is not a degraded hook. It is a hook whose PASS means nothing —
+# the reader believes the declared gates ran, and cannot tell from any output
+# that they did not. That is the lie-shape, in the guard on every push.
+#
+# So this REFUSES rather than warns. A warning on a hook that is already wrong
+# is printed into the scrollback of a push that succeeds, which is exactly where
+# nobody reads it, and the push carries the undeclared verdict anyway.
+#
+# WORKS AS A SYMLINK *AND* AS A COPY, with one comparison rather than two code
+# paths: `cmp` compares CONTENT and follows symlinks, so the installer's symlink
+# is trivially identical to its target and a copy is compared byte for byte. No
+# `readlink`, no canonicalisation, nothing that behaves differently on the two
+# installation shapes — the shape that is not exercised is the shape that rots.
+#
+# It also catches the cross-worktree symlink that `tools/install-git-hooks.sh`
+# now refuses to create: hooks live in the SHARED git dir, so a symlink into
+# worktree A is what worktree B runs, and when B's `tools/git-hooks/pre-push`
+# differs from A's this fires.
+#
+# WHAT IT CANNOT CATCH, stated because a guard whose limits are unstated gets
+# trusted past them: if the symlink DANGLES — worktree A removed — git treats
+# the hook as absent and runs nothing, silently. No hook can defend against not
+# being run. That case is the installer's guard, not this one.
+#
+# BEFORE THE `CHECKER` EARLY EXIT BELOW, DELIBERATELY. That branch `exit 0`s a
+# push when the NDA checker is missing, so a hook stale enough to have lost its
+# way to the checker would exit clean and never reach a self-check placed after
+# it. The check that decides whether ANY verdict here is meaningful has to be
+# the first one.
+HOOK_DECLARED="$REPO_ROOT/tools/git-hooks/pre-push"
+HOOK_RUNNING="${BASH_SOURCE[0]:-$0}"
+
+_stale_hook_refuse() {             # _stale_hook_refuse <headline> [detail line…]
+  echo "pre-push: BLOCKED — $1" >&2
+  shift
+  for _line in "$@"; do echo "    $_line" >&2; done
+  echo "    running:  $HOOK_RUNNING" >&2
+  echo "    declared: $HOOK_DECLARED" >&2
+  echo "    No gate ran. A verdict from a gate set this tree does not declare" >&2
+  echo "    is not a verdict, so none was produced." >&2
+  echo "    fix: tools/install-git-hooks.sh --force" >&2
+  exit 1
+}
+
+if [ ! -f "$HOOK_DECLARED" ]; then
+  # A GATE THAT COULD NOT LOOK HAS NOT PASSED — the same rule run_gate applies
+  # to rc 2 below. Without the declared file there is nothing to compare against,
+  # so the installed hook's provenance is unknown, not fine.
+  _stale_hook_refuse "this tree declares no pre-push hook to check against."
+elif [ ! -f "$HOOK_RUNNING" ]; then
+  _stale_hook_refuse "the running hook cannot read its own file."
+elif ! cmp -s "$HOOK_RUNNING" "$HOOK_DECLARED"; then
+  # `|| true` IS LOAD-BEARING: `diff` exits 1 when the files differ, `pipefail`
+  # carries that to the pipeline, the assignment carries it, and `set -e` would
+  # kill the hook here — on exactly the path this guard exists to serve.
+  _differing="$(diff "$HOOK_RUNNING" "$HOOK_DECLARED" | grep -c '^[<>]' || true)"
+  _stale_hook_refuse "the installed hook is NOT the hook this tree declares." \
+    "differing lines: ${_differing:-unknown}"
+fi
+
 CHECKER="$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/commit_msg_nda_check.py"
 ZERO='0000000000000000000000000000000000000000'
 
