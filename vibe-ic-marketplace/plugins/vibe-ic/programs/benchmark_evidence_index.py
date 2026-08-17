@@ -438,9 +438,18 @@ def render(rows: List[Dict[str, str]], retention: Dict[str, str],
 # Driver
 # ─────────────────────────────────────────────────────────────────────
 
-def build(repo_root: Path) -> Tuple[str, List[str]]:
-    """(rendered index, findings). Findings are non-render problems."""
-    ic_root = repo_root / IC_SUBDIR
+def build(repo_root: Path, data_root: Optional[Path] = None) -> Tuple[str, List[str]]:
+    """(rendered index, findings). Findings are non-render problems.
+
+    ``repo_root`` retains the historical in-tree layout.  ``data_root`` is the
+    top level of the canonical external ``vibeic/benchmark-data`` checkout,
+    where the same tree is tracked as ``ic/`` rather than
+    ``benchmark-data/ic/``.  The two forms select the same published cells;
+    callers must choose one explicitly so an absent in-tree corpus cannot be
+    mistaken for an empty external one.
+    """
+    ic_root = ((data_root / "ic") if data_root is not None
+               else (repo_root / IC_SUBDIR))
     if not ic_root.is_dir():
         raise SystemExit(f"[{GATE}] no such directory: {ic_root}")
     tracked = _published_tree.published_paths(ic_root)
@@ -466,6 +475,10 @@ def main(argv=None) -> int:
                     "failure record.")
     ap.add_argument("--root", default=None,
                     help="repo root (default: infer from this file)")
+    ap.add_argument(
+        "--data-root", default=None,
+        help=("top level of the external vibeic/benchmark-data checkout; "
+              "mutually exclusive with --root and reads ic/INDEX.md"))
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--write", action="store_true",
                    help="regenerate the index in place")
@@ -473,22 +486,28 @@ def main(argv=None) -> int:
                    help="verify the committed index matches the tree (default)")
     args = ap.parse_args(argv)
 
+    if args.root and args.data_root:
+        ap.error("--root and --data-root are mutually exclusive")
     repo_root = (Path(args.root).resolve() if args.root
                  else Path(__file__).resolve().parents[4])
-    index_path = repo_root / IC_SUBDIR / INDEX_NAME
+    data_root = Path(args.data_root).resolve() if args.data_root else None
+    index_path = ((data_root / "ic") if data_root is not None
+                  else (repo_root / IC_SUBDIR)) / INDEX_NAME
 
-    want, findings = build(repo_root)
+    want, findings = build(repo_root, data_root)
 
     if args.write:
         index_path.parent.mkdir(parents=True, exist_ok=True)
         index_path.write_text(want, encoding="utf-8")
-        print(f"[{GATE}] wrote {index_path.relative_to(repo_root)}")
+        display_root = data_root if data_root is not None else repo_root
+        print(f"[{GATE}] wrote {index_path.relative_to(display_root)}")
         for f in findings:
             print(f"  [FINDING] {f}")
         return 1 if findings else 0
 
     if not index_path.is_file():
-        print(f"[{GATE}] FAIL: {index_path.relative_to(repo_root)} does not "
+        display_root = data_root if data_root is not None else repo_root
+        print(f"[{GATE}] FAIL: {index_path.relative_to(display_root)} does not "
               f"exist. The tree publishes cells whose verdicts a reader cannot "
               f"see. Run with --write.")
         return 1
@@ -496,11 +515,13 @@ def main(argv=None) -> int:
     have = index_path.read_text(encoding="utf-8", errors="replace")
     if have == want and not findings:
         n = have.count("\n| `")
-        print(f"[{GATE}] PASS: {index_path.relative_to(repo_root)} matches the "
+        display_root = data_root if data_root is not None else repo_root
+        print(f"[{GATE}] PASS: {index_path.relative_to(display_root)} matches the "
               f"tree ({n} cell row(s)).")
         return 0
 
-    print(f"[{GATE}] FAIL: {index_path.relative_to(repo_root)} disagrees with "
+    display_root = data_root if data_root is not None else repo_root
+    print(f"[{GATE}] FAIL: {index_path.relative_to(display_root)} disagrees with "
           f"the artefacts it describes.")
     for f in findings:
         print(f"  [FINDING] {f}")

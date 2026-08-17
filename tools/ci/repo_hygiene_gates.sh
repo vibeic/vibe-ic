@@ -310,20 +310,13 @@ run "flow-gate enforcement audit"       "$ROOT" python3 "$PG/flow_gate_enforceme
 # also refuses the degenerate repair of deleting the surviving one.
 run "stage membership declared once"    "$ROOT" python3 "$PG/flow_stage_membership_single_declaration_check.py"
 
-# vibe-ic#312 family — a checker that reads a field NO document populates sees
-# an empty value, and an empty value is indistinguishable from a clean one.
-# Measured five times in one campaign; three were "the producer never existed".
-run "L-doc field producer"              "$ROOT" python3 "$PG/l_doc_field_producer_check.py"
-
-# vibe-ic#371 — a tracked symlink recorded with an ABSOLUTE target resolves
-# only on the machine that wrote it. 159 of 172 were in that state and it made
-# the evidence-citation verdict differ between local and CI on the same commit.
-run "tracked-symlink portability"       "$ROOT" python3 "$PG/tracked_symlink_portability_check.py"
-# The defect the line above deliberately declines. Its subject is whether a
-# pointer is relative and stays inside the repo; a target that exists nowhere
-# is a missing FILE, which its own comment says is different — and for months
-# the count was reported on every run with nothing failing on it (#555, #556).
-run "tracked-symlink target present"    "$ROOT" python3 "$PG/tracked_symlink_target_present_check.py" --root "$ROOT"
+# vibe-ic#1723 — the published corpus is owned by vibeic/benchmark-data, so its
+# ten BLOCKING gates moved as one lane to benchmark_data_hygiene_gates.sh.  This
+# local check proves none were merely dropped or left here to fail over an
+# absent directory.  The data repository's own landing workflow supplies an
+# exact clean checkout and runs that lane; a missing/broken pointer fails there.
+run "external benchmark-data gate ownership" "$ROOT" \
+  python3 "$HERE/benchmark_data_contract_check.py" --plugin-root "$ROOT"
 # vibe-ic#794 — thirteen ORGANIC backlog items were WRITTEN into
 # `community/backlogs/` between 2026-06-14 and 2026-07-12 and never committed,
 # beside twenty-five siblings that were. Both populations look identical in
@@ -392,15 +385,6 @@ run_tolerating_uncheckable "STA engines agree" "$PLUGIN" python3 programs/sta_en
 run "P0 gate invocability drift"        "$PLUGIN" python3 programs/p0_gate_invocability_drift_check.py
 
 run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_parses_check.py" --root "$ROOT"
-
-# vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log
-# is unverifiable, and the failure is silent.
-run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_resolves_check.py"
-# The record the gate above now TRUSTS for its disclosures. It may only say
-# a citation resolves when it does — verified against the cell as committed,
-# because the publisher computes the decision against the tree it had and
-# nothing re-derived it afterwards (8 false RESOLVES rows, measured).
-run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is_true_check.py" --root "$ROOT"
 
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
@@ -625,84 +609,6 @@ run "declared outputs are findable"     "$ROOT" python3 "$PG/provenance_declared
 # and exits 0 — SKIPPED is not a PASS, and the log says so.
 run "artefact-defect close discipline" "$ROOT" python3 "$PG/artefact_defect_close_check.py" --recent 60
 
-# vibe-ic#376 — a value present in the layer that PRODUCES it and unreachable
-# by the layer that CONSUMES it, while both layers pass their own gates. 23
-# hand-written pairwise gates each cover one slice of that class. This is the
-# general mechanism over declared cross-layer references; the corpus mode
-# judges every published cell and compares against a recorded count, so the
-# repo cannot grow a NEW instance of the class silently. The recorded breaks
-# are real and their repair is open (layer-contract-doctrine §6); a count may
-# shrink freely, any increase is red.
-# SCOPE: its own --corpus argument names benchmark-data/ic and nothing else.
-#        Read from the command line below, not from where the program lives:
-#        `gen_programs_index.py` sits in tools/ yet reads the marketplace,
-#        so "where it is" is the wrong question and this scope answers
-#        "what it reads".
-# NO gate_scope HERE, DELIBERATELY, AND THE MEASUREMENT IS WHY.
-#
-# This gate carried `gate_scope benchmark-data/ic/` from v1.10.53 until it was
-# withdrawn. The scope was WRONG in the one direction that matters: it excludes
-# the checker's own body and its own ratchet register.
-#
-#   cross_layer_reference_check.py reads programs/cross_layer_reference_baseline.json
-#   -- its debt register, whose header says a findings count may SHRINK freely and
-#   any INCREASE fails CI. Under that scope, a commit that only widens the register
-#   touches nothing in benchmark-data/ic/, so the one gate guarding it does not run.
-#
-# The general rule this is an instance of: a scope that excludes the gate's own
-# executable body makes the gate unable to fail on a change to ITSELF, and
-# "edit the checker instead of the artefact" is precisely the change most likely
-# to be an attempt to silence it. Measured across the 48 scopes proposed in the
-# same sweep: 13 of them had this shape, and 5 of those 13 guard something that
-# is RED on this tree today.
-run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_reference_check.py" --corpus "$ROOT/benchmark-data/ic"
-
-# vibe-ic#693 — `flow_compliance_check` classifies a project from each step's
-# `pass.flag` and never walks the per-step report JSON, so a step can ship
-# pass.flag while one of its own sub-reports declares verdict=FAIL. This walks
-# them and requires each FAIL/MISSING to be ACKNOWLEDGED — by a waivers.json
-# entry naming the report, or by an orchestrator/audit record naming it.
-#
-# NON-BLOCKING BY RATCHET, not by being toothless. Measured over the 46 run
-# trees on a working checkout, `--strict` reddens 16 of them on 33 findings the
-# gate did not create; landing that blocking is an outage. The corpus mode
-# instead sweeps the PUBLISHED (git-tracked) run trees and ratchets the count
-# recorded in `step_internal_fail_bubble_up_baseline.json`. The count may shrink
-# freely; a NEW unacknowledged step-internal FAIL is red.
-# Published, not on-disk, on purpose: 46 vs the tracked population is exactly
-# the host-dependence `_published_tree` exists to remove from a baseline.
-#
-# A RUN TREE IS ONE THAT OWNS A TRACKED reports/ TREE, not one whose directory
-# NAME matches a convention (vibe-ic#1223). It used to be `clean_run_*`, which
-# on v1.10.42 reached 3 of the 16 published run trees under this root and
-# reported 5 of the 22 unacknowledged findings they carry. The numbers are NOT
-# repeated here: the baseline records `findings_total` and `corpus_population`,
-# and `test_the_recorded_population_is_the_one_the_ci_gate_sweeps` asserts the
-# root named on the line below is the one that record was measured over — so
-# this comment cannot drift out of agreement with the gate again.
-# SCOPE: its own --corpus argument names benchmark-data/ic and nothing else.
-#        Read from the command line below, not from where the program lives:
-#        `gen_programs_index.py` sits in tools/ yet reads the marketplace,
-#        so "where it is" is the wrong question and this scope answers
-#        "what it reads".
-# NO gate_scope HERE, DELIBERATELY, AND THE MEASUREMENT IS WHY.
-#
-# This gate carried `gate_scope benchmark-data/ic/` from v1.10.53 until it was
-# withdrawn. The scope was WRONG in the one direction that matters: it excludes
-# the checker's own body and its own ratchet register.
-#
-#   cross_layer_reference_check.py reads programs/cross_layer_reference_baseline.json
-#   -- its debt register, whose header says a findings count may SHRINK freely and
-#   any INCREASE fails CI. Under that scope, a commit that only widens the register
-#   touches nothing in benchmark-data/ic/, so the one gate guarding it does not run.
-#
-# The general rule this is an instance of: a scope that excludes the gate's own
-# executable body makes the gate unable to fail on a change to ITSELF, and
-# "edit the checker instead of the artefact" is precisely the change most likely
-# to be an attempt to silence it. Measured across the 48 scopes proposed in the
-# same sweep: 13 of them had this shape, and 5 of those 13 guard something that
-# is RED on this tree today.
-run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic"
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard
 # on that list's contract — complete over the non-PASS steps, inventing none,
@@ -731,32 +637,6 @@ run_tolerating_uncheckable "blocker list contract on committed reports" "$ROOT" 
 # in none of them. An IHP netlist was handed the SKY130A ATPG cell model while
 # the artefact recorded `generic_unmapped`.
 run "per-PDK table coverage"            "$ROOT" python3 "$PG/pdk_table_coverage_check.py"
-
-# vibe-ic#377 (item B) — L4's register/field vocabulary is the one part of our
-# schema whose domain is semantically CLOSED, and a ratified standard already
-# enumerates it. This gate does not migrate anything: it asserts that every
-# register/field key appearing in the published L4 corpus has a RECORDED answer
-# to "what can SystemRDL 2.0 say about this" — NATIVE, UDP, LOSSY or DROPPED,
-# each with a reason. A key with no answer would be dropped from every export
-# in silence, and a .rdl that silently omits what it cannot express reads as a
-# complete description of a register map it does not describe. Remedy when it
-# fires: one row in DISPOSITION. Measured at wiring time: 201 documents, 41
-# register keys, 18 field keys, all classified.
-run "L4 -> SystemRDL disposition"       "$ROOT" python3 "$PG/l4_systemrdl_export.py" audit-corpus --root "$ROOT"
-
-# vibe-ic#440 — benchmark-data/ic/ is what this project points at when it says
-# a cell converged, and it also holds runs that did not. Measured: 28 published
-# cells, 3 with an audit verdict of PASS_WITH_WAIVERS; two assert success in
-# their RESULT.md while their own audit artefact reads FAIL, and one has an
-# orchestrator report saying PASS_WITH_WAIVERS next to an audit saying FAIL.
-# Deleting the failures (#421) was refused on measurement — that would make
-# "we never ran this" and "we ran it, it failed, and we kept the record" the
-# same state. The repair is to LABEL, and the label has to be gated: the
-# hand-maintained BENCHMARK_IC_CAMPAIGN_STATUS.md is the version without a
-# gate, and all three of its citations for the converged cells point at
-# directories that no longer exist. INDEX.md is a pure function of the tracked
-# artefacts, so a verdict that changes while its row does not is a FAIL here.
-run "published-evidence index honest"   "$ROOT" python3 "$PG/benchmark_evidence_index.py" --check --root "$ROOT"
 
 # vibe-ic#459 follow-up — the PROGRAMS index, alongside the evidence index above.
 # MAIN WENT RED TWICE (v1.7.40, v1.7.41) because a new program landed and
@@ -952,18 +832,6 @@ run "silent remedy decline"             "$PLUGIN" python3 programs/silent_declin
 # every id the flow declares is readable — it fires when the id shape is
 # ADDED, not after a run has already published a wrong FAIL count.
 run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary_rollup_consistency_check.py
-
-# vibe-ic#510 — a landed gate rule changes what the plugin certifies FROM NOW
-# ON and does nothing to the records already published. v1.7.73 landed #502
-# (an SI sign-off that re-derived zero coupling folds is VACUOUS_PASS, not
-# PASS) and two of the seven tracked si_mcf_sta_check records still said PASS
-# beside coupling_pairs: 0 — one of them the artefact #502 was filed about.
-# Nothing measured the gap. Re-adjudicates every published record against its
-# own gate's CURRENT rules, decided FROM THE RECORD (the inputs are gone —
-# #506), and REPORTS: correcting a published record is the benchmark-agent's
-# commit under NO-MIX, so the two are a recorded debt here and anything NEW —
-# or a gate whose rules changed without re-review — fails.
-run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
 
 # vibe-ic#904 — a design-input document made a CHECKABLE factual claim about the
 # installed PDK, the claim was false, and nothing in the flow noticed. The
