@@ -227,3 +227,5 @@ def population_key(corpus: Path, origin: str) -> str:
             return (CANONICAL_CORPUS_NAME if rel == "."
                     else f"{CANONICAL_CORPUS_NAME}/{rel}")
     return c.name
+
+# selector-probe: no-op line added by the xdist equivalence experiment
