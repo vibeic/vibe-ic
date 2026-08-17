@@ -735,6 +735,57 @@ _gate_attest_locked() {
 }
 
 
+# `_gate_outcome_facts <rc>` — every independently observed fact about HOW a
+# gate's process ended, on one line, with none of them allowed to hide another.
+#
+# WHY (measured on origin/main at v1.10.64). The FAIL line was
+# `^^ FAILED: <label> [<n>s]` and the summary record's per-gate row is
+# `{label, state, seconds, …}` — neither carries the exit status. So a gate the
+# kernel OOM-killed (rc 137) and a gate that found one real defect (rc 1) print
+# BYTE-IDENTICAL lines and record byte-identical rows. Those two demand opposite
+# responses — re-run the machine, versus fix the tree — and the roll-up a
+# maintainer reads before a landing cannot tell them apart. `run` also turns
+# rc 127 (the command is not there at all) into the same FAIL as rc 1, which is
+# correct as a VERDICT and useless as a DIAGNOSIS.
+#
+# The rc IS in the attestation JSONL (`gate_process_attestation --returncode`),
+# but that channel exists only when `GATE_DISPATCH_ATTESTATION_FILE` is set, it
+# is a different file from `--summary-json`, and no human reads it. The fact was
+# observed and then withheld from the one reader who acts on it.
+#
+# ADOPTED FROM deepseek-harness `scripts/run-gates.ts::formatGateResultReason`,
+# whose docstring is the whole rule: "error, exit, and signal facts without
+# allowing one to hide another". Its `facts.join(', ')` and its explicit
+# `'no exit code or signal'` fallback are both reproduced, because a renderer
+# that prints nothing when it knows nothing is the empty-result-is-a-zero shape
+# one level down.
+#
+# PURELY DIAGNOSTIC. It classifies nothing, changes no state, and is called only
+# on a path that has already decided FAIL — a gate's verdict is what it always
+# was, and no gate can pass or fail differently because of this line.
+_gate_outcome_facts() {
+  local rc="${1:-}" signame=""
+  case "$rc" in
+    ''|*[!0-9]*) printf 'no exit code or signal'; return 0 ;;
+  esac
+  # 128+N is the shell's encoding of "killed by signal N". Reported ALONGSIDE
+  # the raw status, never instead of it: `kill -l` is the interpretation and
+  # the number is the observation, and a reader must be able to check one
+  # against the other.
+  if [ "$rc" -gt 128 ] && [ "$rc" -lt 192 ]; then
+    signame="$(kill -l "$(( rc - 128 ))" 2>/dev/null || true)"
+  fi
+  if [ -n "$signame" ]; then
+    printf 'exit %s, signal SIG%s' "$rc" "${signame#SIG}"
+  elif [ "$rc" -eq 127 ]; then
+    printf 'exit 127, command not found'
+  elif [ "$rc" -eq 126 ]; then
+    printf 'exit 126, found but not executable'
+  else
+    printf 'exit %s' "$rc"
+  fi
+}
+
 _gate_execute() {
   local tolerate="$1" may_write="$2" label="$3" shown="$4"
   local ex_until="$5" ex_why="$6" wd="$7"; shift 7
@@ -833,7 +884,9 @@ _gate_execute() {
          "— exempt until ${ex_until:-<NONE>}: ${ex_why:-<no reason declared>}" >&2
   else
     _GX_STATE="FAIL"
-    echo "   ^^ FAILED: $label [${secs}s]" >&2
+    # The label and the seconds keep their exact byte positions: two other
+    # programs and `test_gate_concurrency.sh` match this prefix literally.
+    echo "   ^^ FAILED: $label [${secs}s] — $(_gate_outcome_facts "$rc")" >&2
   fi
   return 0
 }

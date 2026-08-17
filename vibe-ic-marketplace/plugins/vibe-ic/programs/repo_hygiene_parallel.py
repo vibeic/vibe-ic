@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -504,33 +505,87 @@ def _validate_declarations(reference: Dict[str, Any], doc: Dict[str, Any],
     return problems
 
 
+#: How many roster rows a gate's verdict must be paired against.
+#:
+#: A LABEL IS NOT UNIQUE, AND THAT IS BY DESIGN. `_gate_dispatch.sh::_dispatch`
+#: records the label UNCHANGED for every item a `gate_dispatch_over` loop expands
+#: over — the item note is printed beside it and deliberately kept out of the
+#: identity, so two other programs can reconcile each record against the `run`
+#: line that produced it. A corpus of N items therefore declares the same label N
+#: times, in the `--list` roster and in every shard record alike.
+#:
+#: MEASURED on origin/main at v1.10.64, driving `merge_records` directly with a
+#: complete, all-green, single-shard record (scratchpad probe, both directions):
+#:
+#:     corpus items      declared   passed   rc   problems
+#:     1                        3        3    0          0
+#:     2                        6        0    2         12
+#:     3                        9        0    2         18
+#:
+#: `published cells carrying a routed DEF` is 1 item today, which is the only
+#: reason this is latent. At the second published cell every gate that loop
+#: dispatches was rewritten from PASS to NOT_CHECKED and the whole parallel run
+#: refused — a green corpus reading as "nothing was checked", diagnosed as a
+#: shard-ownership fault that had not occurred.
+#:
+#: The pairing key is therefore MULTIPLICITY, not identity: a label the roster
+#: declares once must be owned exactly once, and a label it declares N times must
+#: be owned exactly N times. The exactly-once guarantee per ROSTER ROW is
+#: unchanged — only the denominator it is checked against stops being hard-wired
+#: to 1. For the ~80 gates that are not loop-driven, N is 1 and every count,
+#: message and verdict below is byte-for-byte what it was.
+def _declared_times(labels: Sequence[str]) -> Dict[str, int]:
+    return Counter(labels)
+
+
+#: Order one label's records the way the roster declares them, so roster slot i
+#: pairs with item i's verdict rather than with whichever shard answered first.
+#: Absent on a gate no loop produced, where the order is already trivial.
+def _corpus_item(gate: Dict[str, Any]) -> int:
+    try:
+        return int(gate.get("corpus_item") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, Any]]],
                   attestations: List[Dict[str, Any]], elapsed: int,
                   problems: List[str]) -> Dict[str, Any]:
     """Build the dispatcher's full summary schema from exactly-once shards."""
     labels = [str(g["label"]) for g in reference.get("gates") or []]
+    declared_times = _declared_times(labels)
     chosen: Dict[str, List[Dict[str, Any]]] = {label: [] for label in labels}
     for path, doc in docs:
         problems.extend(_validate_declarations(reference, doc, str(path)))
         for gate in doc.get("gates") or []:
             if gate.get("state") != "OTHER_SHARD":
                 chosen.setdefault(str(gate.get("label")), []).append(gate)
+    for rows in chosen.values():
+        rows.sort(key=_corpus_item)
 
     gates: List[Dict[str, Any]] = []
-    for label in labels:
+    queues = {label: list(rows) for label, rows in chosen.items()}
+    #: Said ONCE per label. A miscounted label is one defect however many roster
+    #: rows it has, and repeating it per row buries the other labels' problems.
+    named: set = set()
+    for index, label in enumerate(labels):
         rows = chosen.get(label, [])
-        if len(rows) != 1:
-            problems.append(
-                f"{label!r}: expected one owning shard record, got {len(rows)}")
+        want = declared_times[label]
+        if len(rows) != want:
+            if label not in named:
+                named.add(label)
+                problems.append(
+                    f"{label!r}: expected {want} owning shard record(s), "
+                    f"got {len(rows)}")
             # Preserve the declared denominator even in the refusal artefact.
-            template = next(g for g in reference["gates"]
-                            if str(g["label"]) == label)
-            row = dict(template)
+            # Indexed rather than searched by label: with a loop-driven label the
+            # first matching roster row is the wrong item for every slot but one.
+            row = dict(reference["gates"][index])
             row["state"] = "NOT_CHECKED"
             row["seconds"] = 0
             gates.append(row)
         else:
-            gates.append(rows[0])
+            gates.append(queues[label].pop(0))
     extras = sorted(set(chosen) - set(labels))
     if extras:
         problems.append("unplanned labels ran: " + ", ".join(extras[:6]))
@@ -538,13 +593,19 @@ def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, An
     by_label: Dict[str, List[Dict[str, Any]]] = {}
     for row in attestations:
         by_label.setdefault(str(row.get("label")), []).append(row)
-    for label, gate in zip(labels, gates):
-        should_have = gate.get("state") in ("PASS", "FAIL", "NOT_CHECKED",
-                                             "WROTE_CORPUS")
+    #: The attestation channel records only the label (`gate_process_attestation
+    #: --label`), so it cannot name the item either. Counted the same way for the
+    #: same reason: N executed rows under one label owe N attestations.
+    executed: Dict[str, int] = Counter(
+        label for label, gate in zip(labels, gates)
+        if gate.get("state") in ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS"))
+    for label in dict.fromkeys(labels):
+        want = executed.get(label, 0)
         count = len(by_label.get(label, []))
-        if should_have and count != 1:
+        if want and count != want:
             problems.append(
-                f"{label!r}: expected one process attestation, got {count}")
+                f"{label!r}: expected {want} process attestation(s), "
+                f"got {count}")
     att_extra = sorted(set(by_label) - set(labels))
     if att_extra:
         problems.append("unplanned process attestations: "

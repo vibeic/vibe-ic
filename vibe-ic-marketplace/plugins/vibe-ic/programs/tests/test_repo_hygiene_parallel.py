@@ -118,6 +118,109 @@ def test_missing_process_attestation_cannot_become_green():
     assert P._summary_rc(doc) == 2
 
 
+# --- a loop-driven corpus declares one label per ITEM (vibe-ic#<new>) --------
+# `_gate_dispatch.sh::_dispatch` records a gate's label UNCHANGED once per item a
+# `gate_dispatch_over` loop expands over, so a corpus of N items puts the same
+# label into the roster N times.  Pairing shard records by label alone read that
+# as N shards claiming one gate.  Both directions below: N items must merge
+# green, and a record genuinely missing from one of the N slots must still refuse.
+def loop_fixture(items, corpus="published cells carrying a routed DEF"):
+    def item_gate(label, state, index):
+        row = gate(label, state)
+        row.update({"corpus": corpus, "corpus_item": index,
+                    "corpus_items": items})
+        return row
+
+    labels = [(label, index)
+              for index in range(1, items + 1)
+              for label in ("post-route geometry", "antenna")]
+    reference = {
+        "gates": [item_gate(label, "LISTED", i) for label, i in labels]
+                 + [gate(P.HOST_LABEL, "LISTED")],
+        "corpora": [{"name": corpus, "items": items, "gates": 2 * items,
+                     "expansion": "EXPANDED"}],
+        "undisclosed_loops": [], "today": "2026-08-17",
+    }
+    a = {"listed_only": False, "shard": "0/2", "today": "2026-08-17",
+         "gates": [item_gate(label, "PASS", i) for label, i in labels]
+                  + [gate(P.HOST_LABEL, "OTHER_SHARD")],
+         "corpora": reference["corpora"], "undisclosed_loops": [],
+         "wiring_errors": []}
+    b = {"listed_only": False, "shard": "1/2", "today": "2026-08-17",
+         "gates": [item_gate(label, "OTHER_SHARD", i) for label, i in labels]
+                  + [gate(P.HOST_LABEL, "PASS")],
+         "corpora": reference["corpora"], "undisclosed_loops": [],
+         "wiring_errors": []}
+    attest = [{"label": label, "complete": True} for label, _ in labels]
+    attest.append({"label": P.HOST_LABEL, "complete": True})
+    return reference, a, b, attest
+
+
+@pytest.mark.parametrize("items", [1, 2, 3])
+def test_loop_driven_corpus_merges_every_item(items):
+    """CAN PASS: N items under one label is complete coverage, not a duplicate."""
+    reference, a, b, attest = loop_fixture(items)
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+    assert problems == []
+    assert doc["declared"] == 2 * items + 1
+    assert doc["passed"] == 2 * items + 1
+    assert doc["not_checked"] == 0
+    assert P._summary_rc(doc) == 0
+    # Every item's verdict is carried, under its own item index.
+    seen = sorted((g["label"], g["corpus_item"]) for g in doc["gates"]
+                  if "corpus_item" in g)
+    assert seen == sorted((label, i) for label, i in
+                          [(l, i) for i in range(1, items + 1)
+                           for l in ("post-route geometry", "antenna")])
+
+
+def test_loop_driven_corpus_with_a_missing_item_is_still_refused():
+    """CAN FAIL: one item short of the declared N is not coverage."""
+    reference, a, b, attest = loop_fixture(3)
+    a["gates"] = [g for g in a["gates"]
+                  if not (g.get("label") == "antenna"
+                          and g.get("corpus_item") == 2)]
+    b["gates"] = [g for g in b["gates"]
+                  if not (g.get("label") == "antenna"
+                          and g.get("corpus_item") == 2)]
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+    assert any("antenna" in problem and "got 2" in problem
+               for problem in problems), problems
+    assert doc["declared"] == 7
+    assert doc["not_checked"] >= 1
+    assert P._summary_rc(doc) == 2
+
+
+def test_loop_driven_corpus_with_an_extra_item_record_is_refused():
+    """CAN FAIL: more records than the roster declared is not coverage either."""
+    reference, a, b, attest = loop_fixture(2)
+    extra = dict(a["gates"][0])
+    extra["corpus_item"] = 9
+    a["gates"].append(extra)
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+    assert any("got 3" in problem for problem in problems), problems
+    assert P._summary_rc(doc) == 2
+
+
+def test_loop_driven_corpus_missing_one_attestation_cannot_become_green():
+    """CAN FAIL: N executed rows under one label owe N process attestations."""
+    reference, a, b, attest = loop_fixture(3)
+    thinned = [row for row in attest if row["label"] != "antenna"]
+    thinned.append({"label": "antenna", "complete": True})
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          thinned, 12, problems)
+    assert any("antenna" in problem and "attestation" in problem
+               and "got 1" in problem for problem in problems), problems
+    assert P._summary_rc(doc) == 2
+
+
 def test_worker_waits_for_completion_while_progress_events_keep_advancing(
         tmp_path, monkeypatch):
     """A slow run is not killed for exceeding an estimated runtime.

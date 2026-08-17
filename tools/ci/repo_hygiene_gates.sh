@@ -96,6 +96,31 @@ run_tolerating_uncheckable "PPA head-to-head records" "$ROOT" \
     python3 "$PG/ppa_head_to_head_check.py" --corpus "$ROOT/benchmark-data"
 
 run "plugin version stated in prose" "$ROOT" python3 "$PG/plugin_version_prose_sync_check.py" "$ROOT"
+# THE DISPATCHER'S OWN PAIRED GUARDS, WHICH NOTHING RAN.
+#
+# `_gate_dispatch.sh` is the file every gate in this script funnels through, and
+# it ships with three bash harnesses beside it — 41 assertions, one of them cited
+# by name in the #P3 landing commit as that feature's acceptance evidence.
+# MEASURED on origin/main at v1.10.64: no script, workflow or gate invokes any of
+# them. `run_repo_tools_pytest` sweeps `tools/` for PYTEST and these are bash, so
+# they fell through it; this script declared 83 gates and none was a harness.
+#
+# The sweeper REFUSES (rc 2) on an empty discovery rather than printing a clean
+# "0 failed", which is the one way a gate like this turns itself off. Its own
+# paired guard is `tools/ci/test_run_gate_harnesses.py` — pytest, deliberately,
+# so it is covered by the repo-tools gate that already exists instead of adding a
+# fourth harness to the set nothing swept.
+#
+# COST, MEASURED on a 32-core fleet host: 41 s for all four harnesses
+# (concurrency 40 s, outcome-facts 1 s, scope 0 s, scope-pairing 0 s). It runs
+# under the existing 150 s slowest gate, so at the measured `GATEKEEPER_HYGIENE_
+# JOBS=8` default it does not move the critical path. It ADDS coverage; it
+# withdraws none.
+#
+# NO `gate_scope` HERE, DELIBERATELY. A scope is opt-in narrowing and 0 of 83
+# gates carry one today; making this the first would be a coverage decision
+# riding in on a coverage fix.
+run "gate dispatcher harnesses" "$ROOT" bash "$ROOT/tools/ci/run_gate_harnesses.sh"
 # vibe-ic#585 — `docker exec ... timeout=N` bounds the local CLIENT; the tool
 # inside the container keeps running as an orphan. The checker that finds those
 # call sites shipped with nothing but its own test running it, which
