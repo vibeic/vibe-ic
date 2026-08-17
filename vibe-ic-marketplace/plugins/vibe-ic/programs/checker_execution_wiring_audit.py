@@ -154,6 +154,7 @@ EXIT CODES
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -182,7 +183,53 @@ _SKILL_ONLY_NAME = "checker_skill_only_reasons.json"
 _SKIP_PARTS = frozenset((".claude", "node_modules", ".git", "worktrees"))
 
 
+#: CONTENT-ADDRESSED MEMOS. `_strip_prose` and the tokeniser are PURE functions
+#: of `(suffix, text)` and `text` — `path` is read for `.suffix` and nothing
+#: else — so the same bytes always produce the same answer and there is nothing
+#: to gain by deriving it twice.
+#:
+#: WHY A DIGEST AND NOT AN mtime. An mtime/size key is a GUESS that the file did
+#: not change, and a wrong guess here does not fail loudly: it hands a caller the
+#: previous tree's stripped source and the audit reports wiring that is no longer
+#: there. The key is a hash OF THE BYTES THE CALLER JUST READ, so a file that
+#: changed cannot hit a stale entry — a memo that can only be reused for input it
+#: has actually seen is not a staleness risk, it is the same computation.
+#:
+#: WHAT IT BUYS, MEASURED on `f6b0e77dd` (8HD-9, 32 cores): one scan reads 4021
+#: files / 67.1 MB in 0.16 s, tokenises in 0.84 s, and spends 17.95 s in
+#: `ast.parse` inside `_strip_prose`. Digesting all 4021 texts costs 0.08 s.
+#: `programs/tests/test_issue693_signoff_integrity_wiring.py` alone drives six
+#: whole-tree scans (four parametrised `_haystacks` + two `audit`) over one
+#: unchanging tree, and `--help`-style single-scan callers pay only the 0.08 s.
+#:
+#: NOT A CACHE ACROSS PROCESSES. Nothing is written to disk; a fresh process
+#: re-derives everything, which is what every production invocation does.
+_PROSE_MEMO: Dict[tuple, str] = {}
+_TOKEN_MEMO: Dict[bytes, Set[str]] = {}
+#: Bound so a long-lived process cannot grow the memo without limit. Cleared
+#: wholesale rather than evicted: correctness never depends on a hit.
+_MEMO_MAX = 32768
+
+
+def _digest(text: str) -> bytes:
+    return hashlib.blake2b(text.encode("utf-8", "surrogatepass"),
+                           digest_size=16).digest()
+
+
 def _strip_prose(path: Path, text: str) -> str:
+    """Memoised front for `_strip_prose_uncached`, keyed on the BYTES."""
+    key = (path.suffix, _digest(text))
+    hit = _PROSE_MEMO.get(key)
+    if hit is not None:
+        return hit
+    out = _strip_prose_uncached(path, text)
+    if len(_PROSE_MEMO) >= _MEMO_MAX:
+        _PROSE_MEMO.clear()
+    _PROSE_MEMO[key] = out
+    return out
+
+
+def _strip_prose_uncached(path: Path, text: str) -> str:
     """Remove COMMENTS and DOCSTRINGS — prose names a checker, it never runs one.
 
     This is not a nicety. Adding a docstring to THIS file that named
@@ -309,9 +356,26 @@ def runners(stem: str, hay: Dict[str, Dict[str, str]], self_path: str) -> Set[st
     return found
 
 
+def _tokens(text: str) -> Set[str]:
+    """`set(_TOKEN_RE.findall(text))`, memoised on the bytes (see `_PROSE_MEMO`).
+
+    The set is returned SHARED, and every caller in this file only reads it
+    (`stem in tokens`). Mutating a returned set would corrupt every later
+    reader, which is why nothing here hands it to anything that writes.
+    """
+    key = _digest(text)
+    hit = _TOKEN_MEMO.get(key)
+    if hit is not None:
+        return hit
+    out = set(_TOKEN_RE.findall(text))
+    if len(_TOKEN_MEMO) >= _MEMO_MAX:
+        _TOKEN_MEMO.clear()
+    _TOKEN_MEMO[key] = out
+    return out
+
+
 def _tokenise(hay: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, Set[str]]]:
-    return {k: {p: set(_TOKEN_RE.findall(t)) for p, t in v.items()}
-            for k, v in hay.items()}
+    return {k: {p: _tokens(t) for p, t in v.items()} for k, v in hay.items()}
 
 
 def flow_declared_gate_programs(flow_yaml: Path) -> Set[str]:
