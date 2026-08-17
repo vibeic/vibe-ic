@@ -134,6 +134,27 @@ def _published_corpus() -> list:
     text = _SCRIPT.read_text(errors="replace")
     globs = sorted({m.group(1) for m in
                     re.finditer(r"'(benchmark-data/[^']*\*[^']*)'", text)})
+    if not globs:
+        # ZERO PUBLISHED-CORPUS GLOBS IS NOW THE TRUTH, not a defect. The only
+        # one this script named belonged to the per-published-cell fan-out, and
+        # that fan-out moved to tools/ci/audit_63x9.sh: each of its gates judges a
+        # PUBLISHED CELL (flow steps 21 / 31 / 36), a design question, while a
+        # landing asks only "did this change break something that used to work".
+        #
+        # SKIP rather than pass, so the dormancy is NAMED in the summary instead
+        # of absorbed into a green count, and this arm wakes by itself the moment
+        # a glob reappears. The coverage it pinned is pinned now by
+        # test_corpus_write_guard::test_the_tracked_cells_are_still_reached,
+        # which asks audit_63x9.sh the same 'every TRACKED cell is reached'
+        # question over a two-cell fixture.
+        #
+        # THE `== 1` BELOW IS LEFT ALONE ON PURPOSE: more than one glob still
+        # means this test cannot know what the loop expands over, and that is
+        # still a failure, not a skip.
+        import pytest as _pytest
+        _pytest.skip(
+            "the hygiene script names no published-corpus glob; the per-cell "
+            "fan-out that owned it now lives in tools/ci/audit_63x9.sh")
     assert len(globs) == 1, (
         "the hygiene script no longer names exactly one published-corpus "
         f"glob, so this test cannot know what the loop expands over: {globs}")
