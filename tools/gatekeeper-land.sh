@@ -347,6 +347,26 @@ run "write-guard baseline" \
 # stopped the candidate at 1437 tests, which the verdict correctly refused as
 # unmeasurable. A landing gate that cannot answer for a wide PR is a landing gate
 # nobody uses.
+# `-m "not audit_63x9"` — THE LANDING GATE ANSWERS ONE QUESTION AND IT IS NOT THIS
+# ONE. A landing asks "did this change break something that used to work". The
+# 63x9 audit asks "is the published audit of our 63 flow steps x 9 dimensions
+# still honest" — it grades a PUBLISHED ARTEFACT against a corpus, and a landing
+# tree carries no corpus (benchmark-data left this repo in v1.10.56). So here
+# those tests cannot audit anything; they are VOID, not slow, and their permanent
+# red refused landings that broke nothing.
+#
+# MEASURED in a corpus-less tree, both directions, because either half alone
+# proves nothing (mark everything and the first passes; mark nothing and the
+# second does):
+#     -m audit_63x9        -> 12 failed, 35 deselected   (exactly the corpus-dependent set)
+#     -m "not audit_63x9"  ->  0 failed, 35 passed, rc=0 (the same three files, green)
+# 12 + 35 = 47 = every test in those files, so the partition is exact.
+#
+# THIS SAVES NO TIME AND IS NOT MEANT TO. The 12 assertions cost 0.13 s together;
+# the 247 s their arm takes is collection and import, which the landing pays
+# anyway for the 35 that stay. What it buys is that the landing stops being
+# refused by a question a landing tree cannot answer.
+# The audit still runs, where the corpus is: tools/ci/audit_63x9.sh
 run_pytest() {
   local sel out rc
   TARGETED_NORECORD=0
@@ -472,6 +492,7 @@ run_pytest() {
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
         -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
+        -m "not audit_63x9" \
         "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
     rc=0
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
@@ -492,6 +513,22 @@ run_pytest() {
     # would show whichever file happened to be last instead of the one that
     # cost the record.
     printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
+    # THE RED CASES BY NAME. `tail -6` below CANNOT reach them and never could:
+    # the driver's summary block is nine lines, so the tail always lands inside
+    # the arithmetic and the failure list scrolls past above it. Measured on a
+    # 3-red selection: the reader got `aggregate complete rc=1 cases=93 red=3`
+    # and not one of the three names, while the names sat 8 lines further up.
+    # No tail depth fixes that — the red count is unbounded — so the names are
+    # selected by NAME here, exactly like the NORECORD lines above.
+    # THE RED CASES BY NAME. The driver's summary is nine lines, so the
+    # `tail -6` below can never reach pytest's failure list -- and MEASURED,
+    # the driver emits no `RED` line of its own either, so an earlier grep for
+    # one printed nothing and merely moved the reason the names were
+    # unreadable. They live in the JUNIT, so the junit is what gets read.
+    if [ -s "$merged" ]; then
+      python3 "$ROOT/tools/ci/print_junit_reds.py" "$merged" 2>&1 \
+        | sed 's/^/          /'
+    fi
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
     FAILED=1
     [ "$rc" -eq 2 ] && TARGETED_NORECORD=1
@@ -523,7 +560,19 @@ run_pytest() {
     FAILED=1
   fi
   rm -f "$sel"
-  if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
+  # THE EVIDENCE OUTLIVES THE RUN THAT FAILED. A green run's report is
+  # reconstructible by re-running; a RED one's is the only copy of what broke,
+  # and deleting it unconditionally is why every round could report `red=3` and
+  # leave nothing to read. Kept ONLY on failure and ONLY when the caller did not
+  # name its own target, so the successful critical path is byte-for-byte
+  # unchanged and no green run accumulates files.
+  if [ -n "$merged_tmp" ]; then
+    if [ "$rc" -ne 0 ]; then
+      printf '  REPORT  targeted test junit kept for reading: %s\n' "$merged_tmp"
+    else
+      rm -f "$merged_tmp"
+    fi
+  fi
 }
 if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
   echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
@@ -586,6 +635,7 @@ run_repo_tools_pytest() {
     FAILED=1; rm -f "$snap"; return
   }
   out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+        -m "not audit_63x9" \
         -q -p pytest_timeout --timeout=180 --timeout-method=thread \
         "${files[@]}" 2>&1 )"
   rc=$?
@@ -702,7 +752,8 @@ run_unselectable_pytest() {
   # ONE session and it fails. This stage would have been the author, in the
   # landing gate, on every batch — and :213 fails the WHOLE landing when the
   # tree moves under the gates, so the price is the batch.
-  out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+  out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \ \
+        -m "not audit_63x9"
         -q -p pytest_timeout --timeout=180 --timeout-method=thread \
         "${files[@]}" 2>&1 )"
   rc=$?
