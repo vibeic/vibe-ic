@@ -879,7 +879,8 @@ if [ "$SHORT_CIRCUIT" = "0" ]; then
       bash --version 2>&1 | head -1 || true
       sha256sum "$WT_BASE/tools/gatekeeper-land.sh" \
         "$WT_BASE/tools/ci/repo_hygiene_gates.sh" \
-        "$WT_BASE/$PLUGIN_REL/programs/plugin_full_audit.py" 2>/dev/null \
+        "$WT_BASE/$PLUGIN_REL/programs/plugin_full_audit.py" \
+        "$WT_BASE/$PLUGIN_REL/programs/landing_gate_result_consume.py" 2>/dev/null \
         | awk '{print $1}' || true
     } | sha256sum | awk '{print $1}')"
     CACHE_PREFIX="$BASE_GATE_CACHE/$BASE_SHA.$CACHE_FINGERPRINT"
