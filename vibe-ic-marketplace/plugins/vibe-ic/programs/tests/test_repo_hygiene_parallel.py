@@ -11,6 +11,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
@@ -151,15 +153,29 @@ def test_worker_classifies_silent_idle_process_as_stalled_not_timed_out(
 
 def test_stall_kills_a_term_ignoring_descendant_not_only_its_wrapper(
         tmp_path, monkeypatch):
+    if not hasattr(os, "pidfd_open") or not hasattr(select, "poll"):
+        pytest.skip(
+            "pidfd process-exit events are unavailable on this platform; "
+            "the descendant cleanup assertion requires Linux pidfd support")
+    try:
+        capability_fd = os.pidfd_open(os.getpid())
+    except OSError as exc:
+        pytest.skip(
+            "the running kernel cannot provide pidfd process-exit events: "
+            f"{exc}")
+    else:
+        os.close(capability_fd)
+
     monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
-    child_pid_path = tmp_path / "grandchild.pid"
+    child_identity_path = tmp_path / "grandchild.identity"
     real_killpg = os.killpg
     delivered = []
     exit_events = {}
+    identity = {}
 
     def traced_killpg(pgid, sig):
         """Retain the kernel exit event before SIGKILL makes the PID vanish."""
-        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        child_pid = identity["pid"]
         pidfd = os.pidfd_open(child_pid) if sig == signal.SIGKILL else None
         try:
             real_killpg(pgid, sig)
@@ -169,7 +185,9 @@ def test_stall_kills_a_term_ignoring_descendant_not_only_its_wrapper(
             raise
         delivered.append((pgid, sig))
         if pidfd is not None:
-            exit_events[child_pid] = pidfd
+            previous = exit_events.setdefault(child_pid, pidfd)
+            if previous != pidfd:
+                os.close(pidfd)
 
     monkeypatch.setattr(P.os, "killpg", traced_killpg)
 
@@ -179,7 +197,14 @@ def test_stall_kills_a_term_ignoring_descendant_not_only_its_wrapper(
         proc = popen_factory(command, stdout=subprocess.PIPE, env=env)
         while True:
             try:
-                int(child_pid_path.read_text(encoding="utf-8"))
+                fields = child_identity_path.read_text(
+                    encoding="utf-8").split()
+                if len(fields) != 2:
+                    raise ValueError("identity needs PID and PGRP")
+                child_pid, child_pgrp = (int(field) for field in fields)
+                if child_pid < 1 or child_pgrp < 1:
+                    raise ValueError("identity values must be positive")
+                identity.update(pid=child_pid, pgrp=child_pgrp)
                 break
             except (FileNotFoundError, ValueError):
                 time.sleep(0)  # yield; readiness, not elapsed time, owns this wait
@@ -194,10 +219,16 @@ def test_stall_kills_a_term_ignoring_descendant_not_only_its_wrapper(
     grandchild = (
         "import os,pathlib,signal,sys,time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
-        "print('GRANDCHILD='+str(os.getpid())"
-        "+' PGRP='+str(os.getpgrp()), flush=True)\n"
+        "pid=os.getpid(); pgrp=os.getpgrp()\n"
         "os.close(1); os.close(2)\n"
+        "ready=pathlib.Path(sys.argv[1])\n"
+        "staged=ready.with_name(ready.name+'.tmp-'+str(pid))\n"
+        "staged.write_text(str(pid)+' '+str(pgrp)+'\\n')\n"
+        "os.replace(staged, ready)\n"
+        # Preserve the adversarial scheduling gap that used to let cleanup kill
+        # this child before the stdout identity line the assertion depended on.
+        # Readiness is now self-contained, so no later output is required.
+        "time.sleep(0.25)\n"
         "time.sleep(30)\n"
     )
     parent = (
@@ -207,14 +238,11 @@ def test_stall_kills_a_term_ignoring_descendant_not_only_its_wrapper(
         "time.sleep(30)\n"
     )
     rc, out, problem = P._run(
-        [sys.executable, "-c", parent, str(child_pid_path)], tmp_path,
+        [sys.executable, "-c", parent, str(child_identity_path)], tmp_path,
         os.environ.copy())
     assert rc == P._wd.RC_STALLED and problem, (rc, out, problem)
-    line = next(line for line in out.splitlines()
-                if line.startswith("GRANDCHILD="))
-    fields = dict(part.split("=", 1) for part in line.split())
-    child_pid = int(fields["GRANDCHILD"])
-    child_pgrp = int(fields["PGRP"])
+    child_pid = identity["pid"]
+    child_pgrp = identity["pgrp"]
     term_count = delivered.count((child_pgrp, signal.SIGTERM))
     kill_count = delivered.count((child_pgrp, signal.SIGKILL))
     if kill_count != 1:
@@ -224,21 +252,24 @@ def test_stall_kills_a_term_ignoring_descendant_not_only_its_wrapper(
             real_killpg(child_pgrp, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    assert term_count == 1, delivered
-    assert kill_count == 1, delivered
-
-    # pidfd readiness is the kernel's process-exit event.  Unlike kill(pid, 0),
-    # it becomes ready when execution has ended even if an overloaded host has
-    # not reaped the resulting zombie yet.  Wait for that event with no guessed
-    # wall-clock deadline: the successful SIGKILL delivery above guarantees it
-    # for this sleeping synthetic descendant.
-    pidfd = exit_events.pop(child_pid)
+    pidfd = exit_events.pop(child_pid, None)
     try:
+        assert term_count == 1, delivered
+        assert kill_count == 1, delivered
+        assert pidfd is not None, (
+            f"SIGKILL for descendant {child_pid} carried no pidfd exit event")
+
+        # pidfd readiness is the kernel's process-exit event.  Unlike
+        # kill(pid, 0), it becomes ready when execution has ended even if an
+        # overloaded host has not reaped the resulting zombie yet.  Wait for
+        # that event with no guessed wall-clock deadline: successful SIGKILL to
+        # this controlled, sleeping process guarantees it.
         poller = select.poll()
         poller.register(pidfd, select.POLLIN)
         events = poller.poll()
     finally:
-        os.close(pidfd)
+        if pidfd is not None:
+            os.close(pidfd)
         for leftover in exit_events.values():
             os.close(leftover)
     assert events, f"no kernel exit event for descendant {child_pid}"
