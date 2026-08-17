@@ -763,16 +763,69 @@ run "unselectable-test census is not stale" \
 # The record is written by `gate_dispatch_finish` BEFORE every one of its exit
 # paths, so a FAILING run still yields one. A baseline that only existed when
 # the base was green would be useless precisely when it is needed.
+#
+# ── THE RECORD IS ALWAYS PRODUCED, EVEN WHEN NOBODY ASKED FOR IT ────────────
+#
+# Same reasoning as `merged_tmp` in `run_pytest` above, and the same shape: the
+# run that does NOT export a record is the same run in every other respect, and
+# measuring it differently is an asymmetry with no subject. A temporary target
+# costs nothing and keeps ONE instrument.
+#
+# What needs it here is the `plugin full audit` line below, which STOPPED
+# running that program a second time and re-states the verdict this suite
+# already reached about it. With the record only conditionally written, that
+# line would have been unable to answer on the push path — which is every
+# landing that is not a merge verification.
 GK_HYG=()
-[ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
-  && GK_HYG=(--summary-json "$GATEKEEPER_HYGIENE_REPORT")
+GK_HYG_TMP=""
+GK_HYG_RECORD="${GATEKEEPER_HYGIENE_REPORT:-}"
+if [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ]; then
+  GK_HYG=(--summary-json "$GATEKEEPER_HYGIENE_REPORT")
+else
+  GK_HYG_TMP="$(mktemp -t gk_hygrec.XXXXXX)"
+  GK_HYG_RECORD="$GK_HYG_TMP"
+  GK_HYG=(--summary-json "$GK_HYG_TMP")
+fi
+trap 'rm -f "$FP" "$WG_BASE" "$GK_HYG_TMP"' EXIT
 GK_HYG_ENV=()
 [ -n "${GATEKEEPER_HYGIENE_PROGRESS:-}" ] \
   && GK_HYG_ENV=(env "GATE_DISPATCH_ATTESTATION_FILE=$GATEKEEPER_HYGIENE_PROGRESS")
 run "repo hygiene gates"      "${GK_HYG_ENV[@]}" \
     bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
     "${GK_HYG[@]+"${GK_HYG[@]}"}"
-run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+# THE SAME AUDIT THE SUITE ABOVE JUST RAN — CONSUMED, NOT RE-RUN.
+#
+# `repo_hygiene_gates.sh:171` runs `plugin_full_audit.py` as its `plugin full
+# audit` gate, and this line used to run it AGAIN, three lines later, in the
+# same tier, over the same tree. MEASURED at origin/main f6b0e77dd, the two
+# call sites back to back on one worktree:
+#
+#     cd $PLUGIN && python3 programs/plugin_full_audit.py           rc=0  19.64 s
+#     cd $ROOT   && python3 $PROGRAMS/plugin_full_audit.py $PLUGIN  rc=0  20.00 s
+#     sha256(stdout) c79a86b0…  IDENTICAL   sha256(stderr) e3b0c442…  IDENTICAL
+#
+# Not the same verdict — the same BYTES, on both channels. Nor can the two argv
+# forms address different subjects: the program's default plugin root is
+# `Path(__file__).resolve().parent.parent`, and `$PROGRAMS` is
+# `$PLUGIN/programs`, so the argument this line passed IS the path the other
+# site derives. ~20 s of every landing, spent asking one program the same
+# question twice.
+#
+# NOTHING HERE STOPS BEING CHECKED. `repo_hygiene_gates.sh` still EXECUTES the
+# audit, still prints its findings, is still driven twice by
+# `gate_host_independence_check`, and a FAIL there is re-stated as a FAIL here —
+# `landing_gate_result_consume.py` exits 1 on a recorded FAIL and 2 on every way
+# of not knowing (record absent, `--list` run, label renamed, label ambiguous,
+# state not a verdict), and `run` treats both as FAIL. What was removed is the
+# second EXECUTION, not the second VERDICT: this label still appears in the gate
+# log, so `landing_merge_verdict`'s by-label differencing is unchanged.
+#
+# The label it consumes is spelled in `tools/ci/repo_hygiene_gates.sh`, so a
+# rename there makes this line refuse rather than silently pass — asserted by
+# `programs/tests/test_landing_gate_result_consume.py`.
+run "plugin full audit"       python3 "$PROGRAMS/landing_gate_result_consume.py" \
+    --record "$GK_HYG_RECORD" --gate "plugin full audit" \
+    --subject "programs/plugin_full_audit.py"
 
 # #1029 — the standing assertion, executed: everything above ran against this
 # tree, so nothing above may have CHANGED it. Names every offending path rather
