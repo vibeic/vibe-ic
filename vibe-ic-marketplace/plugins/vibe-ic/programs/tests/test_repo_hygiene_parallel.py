@@ -155,6 +155,27 @@ def test_worker_classifies_silent_idle_process_as_stalled_not_timed_out(
     assert problem and "outcome=stalled" in problem
 
 
+def test_launch_critical_section_does_not_block_term_in_the_job(
+        tmp_path, monkeypatch):
+    """The helper's registration mask must not leak through exec."""
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
+    marker = tmp_path / "graceful-term-observed"
+    child = (
+        "import pathlib,signal,sys,time\n"
+        "marker=pathlib.Path(sys.argv[1])\n"
+        "def stop(_signum,_frame):\n"
+        " marker.write_text('TERM\\n')\n"
+        " raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM,stop)\n"
+        "time.sleep(30)\n"
+    )
+    rc, out, problem = P._run(
+        [sys.executable, "-c", child, str(marker)], tmp_path,
+        os.environ.copy(), stall_grace_s=0.3)
+    assert rc == W.RC_STALLED, (rc, out, problem)
+    assert marker.read_text(encoding="utf-8") == "TERM\n"
+
+
 def test_parallel_runs_keep_each_helpers_wait_status_isolated(
         tmp_path, monkeypatch):
     monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
@@ -361,23 +382,19 @@ def test_reused_root_pid_is_not_walked_as_the_launched_tree(monkeypatch):
 
 def test_dispatcher_refuses_a_nonzero_final_descendant_census(
         tmp_path, monkeypatch):
-    def forged_helper(command, **_kwargs):
-        result = Path(command[command.index("--result") + 1])
-        result.write_text(json.dumps({
-            "protocol": 1,
-            "rc": 0,
-            "body": "",
-            "problem": None,
-            "outcome": "natural",
-            "launched": True,
-            "census_ok": True,
-            "final_descendants": [{"pid": 123, "starttime": 456}],
-            "observed": [{"pid": 123, "starttime": 456}],
-            "capability_error": "",
-        }), encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr(P.subprocess, "run", forged_helper)
+    forged = tmp_path / "forged-final-census.py"
+    forged.write_text(
+        "import json,sys\n"
+        "from pathlib import Path\n"
+        "result=Path(sys.argv[sys.argv.index('--result')+1])\n"
+        "result.write_text(json.dumps({"
+        "'protocol':1,'rc':0,'body':'','problem':None,'outcome':'natural',"
+        "'launched':True,'census_ok':True,"
+        "'final_descendants':[{'pid':123,'starttime':456}],"
+        "'observed':[{'pid':123,'starttime':456}],"
+        "'capability_error':''}))\n",
+        encoding="utf-8")
+    monkeypatch.setattr(P._owned, "__file__", str(forged))
     rc, _out, problem = P._run(
         [sys.executable, "-c", "raise SystemExit(0)"], tmp_path,
         os.environ.copy())
@@ -542,6 +559,11 @@ def test_post_sigkill_pidfd_wait_has_a_finite_observation_cadence(monkeypatch):
         f"UNOBSERVABLE_TERMINATION_WAIT: poll arguments={calls}")
 
 
+def test_reentrant_shutdown_signal_cannot_interrupt_owned_cleanup(monkeypatch):
+    monkeypatch.setattr(P._owned, "_IN_SHUTDOWN", True)
+    assert P._owned._shutdown_handler(signal.SIGINT, None) is None
+
+
 def test_dispatcher_returns_rc2_when_reaper_reports_termination_pending(
         tmp_path, monkeypatch):
     """Post-SIGKILL uncertainty blocks without blocking the dispatcher."""
@@ -564,6 +586,33 @@ def test_dispatcher_returns_rc2_when_reaper_reports_termination_pending(
             problem and "OWNED_SUPERVISOR_TERMINATION_PENDING" in problem),
     }
     assert observed == {"rc": 2, "termination_pending": True}, observed
+
+
+def test_pending_sidecar_failure_keeps_cleanup_owned_and_returns_rc2(
+        tmp_path, monkeypatch):
+    """Observability I/O failure must not tear down the sole subreaper."""
+    wrapper = tmp_path / "failed_pending_sidecar_supervisor.py"
+    wrapper.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(PROGRAMS)!r})\n"
+        "import _owned_process_supervisor as owned\n"
+        "real_write_json = owned.write_json\n"
+        "def fail_pending(path, value, **kwargs):\n"
+        " if value.get('state') == 'termination_pending':\n"
+        "  raise OSError('INJECTED_PENDING_SIDECAR_FAILURE')\n"
+        " return real_write_json(path, value, **kwargs)\n"
+        "owned.write_json = fail_pending\n"
+        "owned._wait_pidfds_until = lambda handles, deadline: dict(handles)\n"
+        "raise SystemExit(owned.main())\n",
+        encoding="utf-8")
+    monkeypatch.setattr(P._owned, "__file__", str(wrapper))
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.02)
+    rc, _out, problem = P._run(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        tmp_path, os.environ.copy(), stall_grace_s=0.15)
+    assert rc == 2
+    assert problem and "durable pending sidecar failed" in problem
+    assert "INJECTED_PENDING_SIDECAR_FAILURE" in problem
 
 
 def _attest(path: Path, output: str = "[PASS] same"):
