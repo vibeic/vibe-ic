@@ -16,7 +16,6 @@ import atexit
 import concurrent.futures
 import json
 import os
-import signal
 import stat
 import subprocess
 import sys
@@ -26,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
 import _crash_safe_scratch as _scratch
-import _watchdog as _wd
+import _owned_process_supervisor as _owned
 from _atomic_artefact import write_json, write_text
 from hygiene_shard_plan import load_profile, plan
 from policy_direction_pin_check import acquire_run_lock, recover_all_journals
@@ -99,41 +98,73 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
     allowed to finish however long it needs.  Only a process that is both
     silent and making no recorded progress for ``stall_grace_s`` is killed.
     """
-    def _popen(command, **kwargs):
-        # One process group per shard lets a genuine stall kill the complete
-        # descendant tree rather than only its wrapper shell.
-        kwargs.pop("stderr", None)
-        return subprocess.Popen(
-            command, cwd=str(cwd), start_new_session=True,
-            stderr=subprocess.STDOUT, **kwargs)
+    # Subreaper state and waitpid(-1) are process-global.  `_run` is called by
+    # several dispatcher threads, so each job gets a dedicated one-job helper
+    # process instead of letting those threads steal one another's children.
+    # The helper owns a PID/starttime census and publishes a result only after
+    # its final attributable census is explicitly zero.
+    with tempfile.TemporaryDirectory(prefix="hygiene-owned-run-") as td:
+        result_path = Path(td) / "owned-result.json"
+        helper_argv = [
+            sys.executable, str(Path(_owned.__file__).resolve()),
+            "--result", str(result_path),
+            "--cwd", str(cwd.resolve()),
+            "--stall-grace", str(stall_grace_s),
+            "--poll", str(DEFAULT_POLL_S),
+        ]
+        if progress_path is not None:
+            helper_argv.extend(["--progress", str(progress_path.resolve())])
+        helper_argv.extend(["--", *argv])
+        # No guessed total timeout: the helper's progress watchdog owns runtime
+        # liveness, and its teardown waits on kernel pidfd exit events.
+        helper = subprocess.run(
+            helper_argv, env=env, capture_output=True, text=True)
+        helper_diagnostic = (helper.stdout or "") + (helper.stderr or "")
+        if helper.returncode != 0 or not result_path.is_file():
+            return (2, helper_diagnostic,
+                    "OWNED_SUPERVISOR_NORECORD: helper did not publish its "
+                    f"terminal census (helper rc={helper.returncode})")
+        try:
+            record = _load_json(result_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return (2, helper_diagnostic,
+                    f"OWNED_SUPERVISOR_NORECORD: invalid result: {exc}")
 
-    def _kill_group(proc, _reason):
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
-        # The wrapper may have exited on TERM while a descendant ignored it.
-        # Address the process GROUP even after wait() returned naturally.
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-    result = _wd.run_supervised(
-        argv, env=env, log_path=progress_path,
-        stall_grace_s=stall_grace_s, poll_s=DEFAULT_POLL_S,
-        hard_ceiling_s=float("inf"), popen_factory=_popen,
-        kill=_kill_group)
-    body = (result.out or "") + (result.err or "")
-    problem = None
-    if result.outcome != "natural":
-        problem = (f"progress watchdog outcome={result.outcome}, "
-                   f"rc={result.rc}; the shard did not complete naturally")
-    return result.rc, body, problem
+    body = str(record.get("body") or "")
+    if helper_diagnostic:
+        body += helper_diagnostic
+    violations: List[str] = []
+    if record.get("protocol") != 1:
+        violations.append("unknown ownership protocol")
+    if not isinstance(record.get("rc"), int):
+        violations.append("missing integer child rc")
+    if not isinstance(record.get("launched"), bool):
+        violations.append("missing launch state")
+    if not isinstance(record.get("census_ok"), bool):
+        violations.append("missing census integrity state")
+    if not isinstance(record.get("outcome"), str):
+        violations.append("missing supervisor outcome")
+    if not isinstance(record.get("observed"), list):
+        violations.append("missing observed-identity census")
+    final = record.get("final_descendants")
+    if final != []:
+        violations.append(f"final descendant census is not zero: {final!r}")
+    if record.get("launched") and record.get("census_ok") is not True:
+        violations.append("PID/starttime census was not continuously provable")
+    recorded_problem = record.get("problem")
+    if recorded_problem is not None and not isinstance(recorded_problem, str):
+        violations.append("malformed problem record")
+        recorded_problem = None
+    if (record.get("launched") is False
+            and (record.get("rc") == 0 or not recorded_problem)):
+        violations.append("helper reported success without launching the job")
+    if violations:
+        violations.insert(0, "OWNED_SUPERVISOR_REFUSED")
+    problem = "; ".join(
+        [item for item in [recorded_problem, *violations] if item]) or None
+    rc = (2 if violations else
+          record.get("rc") if isinstance(record.get("rc"), int) else 2)
+    return rc, body, problem
 
 
 def _validate_declarations(reference: Dict[str, Any], doc: Dict[str, Any],
