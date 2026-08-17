@@ -534,19 +534,28 @@ def test_a_marked_item_is_judged_against_its_own_bound():
     """`@pytest.mark.timeout(N)` IS pytest-timeout's per-item bound, so a call
     inside such a test cannot kill the session at the harness bound. Judging it
     against `harness // 3` reports a risk that provably cannot occur."""
+    # 300, not 600. vibe-ic#1734 round 3 capped a marker-derived ceiling at the
+    # driver stall window (`DRIVER_STALL_S`), because no pytest marker raises
+    # `pytest_per_file_junit.py --stall-after 300` and a ceiling above it would be a
+    # number nothing in the run honours. 600 therefore buys NOTHING now, and the
+    # largest ceiling a marker can reach is 300 // 3 = 100.
+    #
+    # The subject is unchanged and so are the relations: one call exactly AT the
+    # ceiling raises nothing, one call a single second OVER it raises exactly one
+    # finding. Only the absolute numbers moved, and they were never the subject.
     src = """
         import subprocess, pytest
-        @pytest.mark.timeout(600)
+        @pytest.mark.timeout(300)
         def test_slow():
-            subprocess.run(['x'], timeout=200)
+            subprocess.run(['x'], timeout=100)
     """
     findings, _u, sites = _scan(src)
     assert findings == [] and sites == 1, findings
-    over = C.scan_source_report(textwrap.dedent(src).replace("timeout=200",
-                                                             "timeout=201"),
+    over = C.scan_source_report(textwrap.dedent(src).replace("timeout=100",
+                                                             "timeout=101"),
                                 "f.py", _CEIL)
-    assert [f.seconds for f in over["findings"]] == [201], (
-        "600 // 3 = 200 must still be a CEILING, not a waiver")
+    assert [f.seconds for f in over["findings"]] == [101], (
+        "300 // 3 = 100 must still be a CEILING, not a waiver")
 
 
 def test_a_marker_below_the_harness_bound_tightens_the_ceiling():
@@ -563,17 +572,21 @@ def test_a_marker_below_the_harness_bound_tightens_the_ceiling():
 def test_an_unmarked_test_beside_a_marked_one_keeps_the_harness_ceiling():
     """The raised ceiling belongs to the item that declares it and to nothing
     else — otherwise one marker would quietly re-bound a whole file."""
+    # 300 // 3 = 100 since vibe-ic#1734 round 3 capped marker-derived ceilings at
+    # the driver stall window. The subject is the SCOPE of a raised ceiling, not its
+    # size: the marked item clears its call, the unmarked neighbour with the
+    # identical call does not.
     rep = C.scan_source_report(textwrap.dedent("""
         import subprocess, pytest
-        @pytest.mark.timeout(600)
+        @pytest.mark.timeout(300)
         def test_slow():
-            subprocess.run(['x'], timeout=200)
+            subprocess.run(['x'], timeout=100)
         def test_neighbour():
-            subprocess.run(['x'], timeout=200)
+            subprocess.run(['x'], timeout=100)
     """), "f.py", _CEIL)
     assert [f.line for f in rep["findings"]] == [7], rep["findings"]
     assert [(m.test, m.seconds, m.ceiling) for m in rep["marked_items"]] == [
-        ("test_slow", 600, 200)]
+        ("test_slow", 300, 100)]
 
 
 def test_a_marker_on_a_helper_does_not_raise_the_callers_item_bound():
@@ -609,18 +622,21 @@ def test_a_module_level_pytestmark_bounds_every_call_in_the_file():
     """The case a per-test decorator cannot reach: the launcher call lives in a
     module-level helper every test in the file shares, so no decorator governs
     it. `pytestmark` bounds every ITEM in the module, so it does."""
+    # 300, capped at the driver stall window (vibe-ic#1734 round 3); the helper's
+    # default bound moves with it so it stays comfortably UNDER the ceiling, which
+    # is the relation this case is about.
     rep = C.scan_source_report(textwrap.dedent("""
         import subprocess, pytest
-        pytestmark = pytest.mark.timeout(600)
-        def _run(args, timeout=150):
+        pytestmark = pytest.mark.timeout(300)
+        def _run(args, timeout=75):
             return subprocess.run(args, timeout=timeout)
         def test_a():
             return _run(['x'])
     """), "f.py", _CEIL)
     assert rep["findings"] == [], rep["findings"]
     assert rep["sites"] == 1
-    assert [(m.seconds, m.ceiling) for m in rep["marked_items"]] == [(600, 200)]
-    # …and it is still a CEILING: 201 is over 600 // 3.
+    assert [(m.seconds, m.ceiling) for m in rep["marked_items"]] == [(300, 100)]
+    # …and it is still a CEILING: 101 is over 300 // 3.
     over = C.scan_source_report(textwrap.dedent("""
         import subprocess, pytest
         pytestmark = pytest.mark.timeout(600)
@@ -651,17 +667,21 @@ def test_the_marked_population_is_printed_with_its_value(tmp_path):
     _workflow(tmp_path, "pytest --timeout=180")
     tests = tmp_path / "t"
     tests.mkdir()
+    # 300, the largest a marker may buy since vibe-ic#1734 round 3 capped
+    # marker-derived ceilings at the driver stall window. The subject is that
+    # raising a ceiling is a VISIBLE act — the marker and the number it bought are
+    # both printed — which is unchanged.
     (tests / "test_x.py").write_text(
         "import subprocess, pytest\n"
-        "@pytest.mark.timeout(600)\n"
+        "@pytest.mark.timeout(300)\n"
         "def test_slow():\n"
-        "    subprocess.run(['x'], timeout=200)\n", encoding="utf-8")
+        "    subprocess.run(['x'], timeout=100)\n", encoding="utf-8")
     proc = subprocess.run(
         [sys.executable, str(_PROG), str(tmp_path), "--tests-root",
          str(tests)], capture_output=True, text=True, timeout=_T)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "@pytest.mark.timeout(600)" in proc.stdout
-    assert "judged against 200s" in proc.stdout
+    assert "@pytest.mark.timeout(300)" in proc.stdout
+    assert "judged against 100s" in proc.stdout
 
 
 def test_the_ceiling_itself_is_allowed_and_one_second_over_is_not():
