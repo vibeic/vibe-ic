@@ -26,6 +26,14 @@ the Vibe-IC runner:
   - work/<design>/reports/orchestrator/vibe_ic_one_shot.json (Shape-B run)
   - work/<design>/phase1/generated_docs/L*.json  (Shape-B fact graph)
 
+Trust boundary: this is a cooperative workflow/evidence-integrity gate, not a
+cryptographic or OS-principal attestation service.  It rejects missing,
+malformed, stale-taxonomy, or structurally impossible runner records.  Code
+already executing as the same uid can reconstruct local files and is outside
+this gate's authority; claiming protection against that caller would require a
+separate principal or signing service.  Score reports must not describe this
+check as proof against a malicious same-uid author.
+
 A run dir that lacks all of these is rejected unless the caller explicitly
 passes --allow-direct-agent (which still emits a mandatory disclosure).
 
@@ -426,8 +434,9 @@ def audit(project: Path) -> Tuple[str, List[EntryGuardFinding]]:
 
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        description=("Enforce that a benchmark/IC run started through the "
-                     "Vibe-IC plugin (vibe_ic_one_shot_runner.py)."))
+        description=("Validate structural evidence that a benchmark/IC run "
+                     "started through the Vibe-IC plugin "
+                     "(vibe_ic_one_shot_runner.py)."))
     ap.add_argument("project", help="project / run directory to audit")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 when evidence is missing (default: warn only)")
@@ -459,7 +468,8 @@ def main(argv: List[str] | None = None) -> int:
         out.write_text(json.dumps(report, indent=2) + "\n")
 
     if verdict == "PASS":
-        print(f"PASS: Vibe-IC runner entry evidence found — {project}")
+        print(f"PASS: Vibe-IC structural runner-entry evidence found — "
+              f"{project}")
         return 0
 
     # FAIL branch
