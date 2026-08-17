@@ -116,7 +116,7 @@ PULL_REMEDY = 'docker pull ghcr.io/vibeic/vibeic-eda:$(cat tools/vibeic-eda/VERS
 RUN_REMEDY = 'bash tools/vibeic-eda/restart-eda.sh'
 
 _IMAGE_STATE, _IMAGE_DETAIL = probe(
-    ["docker", "image", "inspect", "ghcr.io/vibeic/vibeic-eda:0.3.2"])
+    ["docker", "image", "inspect", "ghcr.io/vibeic/vibeic-eda:0.3.4"])
 
 
 @pytest.mark.skipif(
