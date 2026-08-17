@@ -801,3 +801,5 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+# selector-probe: no-op line added by the xdist equivalence experiment
