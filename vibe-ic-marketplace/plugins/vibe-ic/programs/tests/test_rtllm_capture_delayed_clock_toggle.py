@@ -40,6 +40,15 @@ module guarded_task_source(output reg y);
   endtask
 endmodule
 """
+MACRO_EVENT_CONTROL_NEAR_MISS = r"""
+`define EVENT @(posedge trigger)
+module macro_event_source(output reg wave);
+  reg trigger;
+  initial begin trigger = 0; wave = 0; end
+  always #1 trigger = ~trigger;
+  always `EVENT #5 wave = ~wave;
+endmodule
+"""
 
 
 def _blocking_fixture() -> str:
@@ -154,6 +163,26 @@ def test_disabled_preprocessor_scope_cannot_rewrite_later_task(tmp_path):
 
     assert lint.autofix_delayed_blocking_clock_toggle(rtl) == (0, [])
     assert rtl.read_text() == DISABLED_PREPROCESSOR_NEAR_MISS
+
+    after = subprocess.run(
+        ["iverilog", "-g2012", "-tnull", str(rtl)],
+        capture_output=True, text=True)
+    assert after.returncode == 0, after.stderr
+
+
+def test_macro_event_control_is_not_rewritten_as_a_bare_oscillator(tmp_path):
+    """An unresolved macro after ``always`` may expand to an event control."""
+    if not shutil.which("iverilog"):
+        pytest.skip("iverilog is required")
+    rtl = tmp_path / "macro_event_source.v"
+    rtl.write_text(MACRO_EVENT_CONTROL_NEAR_MISS)
+    before = subprocess.run(
+        ["iverilog", "-g2012", "-tnull", str(rtl)],
+        capture_output=True, text=True)
+    assert before.returncode == 0, before.stderr
+
+    assert lint.autofix_delayed_blocking_clock_toggle(rtl) == (0, [])
+    assert rtl.read_text() == MACRO_EVENT_CONTROL_NEAR_MISS
 
     after = subprocess.run(
         ["iverilog", "-g2012", "-tnull", str(rtl)],

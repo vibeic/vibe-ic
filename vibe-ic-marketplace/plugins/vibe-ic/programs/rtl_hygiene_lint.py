@@ -6061,6 +6061,12 @@ def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]
             in_bare_always = any(
                 start <= m.start() < end
                 and '@' not in structural[start:m.start()]
+                # Without the caller's macro environment, a backtick token in
+                # the owning `always` prefix may expand to an event control
+                # (for example `EVENT -> @(posedge clk)`).  Rewriting in that
+                # state would guess that an event-driven process is a free-
+                # running oscillator, so leave it untouched.
+                and '`' not in structural[start:m.start()]
                 for start, end in bare_always_spans)
             if not (in_initial_forever or in_bare_always):
                 continue
