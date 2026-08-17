@@ -104,6 +104,7 @@ from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 import pytest
+import pytest_per_file_junit as D
 
 from matrix_63x8 import flowref as F
 from matrix_63x8 import substitution as SUB
@@ -298,23 +299,24 @@ def collect_items() -> Tuple[Dict, ...]:
         env["MATRIX_CELL_COLLECT_OUT"] = str(out)
         env["PYTHONPATH"] = os.pathsep.join(
             [str(scratch)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-        proc = subprocess.run(
+        rc, diagnostic, incomplete = D._run_progress_supervised(
             [sys.executable, "-m", "pytest", *[str(p) for p in paths],
              "--collect-only", "-q", "-p", "no:randomly",
+             "-p", "_pytest_progress_plugin",
              "-p", "matrix_cell_collector"],
-            cwd=str(PLUGIN_ROOT), capture_output=True, text=True, timeout=60,
-            env=env,
+            _OUTCOME_PROGRESS_STALL_S, str(PLUGIN_ROOT), env=env,
+            collect_only=True,
         )
         assert out.is_file(), (
-            f"pytest collection produced no manifest (rc={proc.returncode}).\n"
+            f"pytest collection produced no manifest (rc={rc}).\n"
             f"A dimension module that fails to IMPORT contributes zero cells "
             f"and would otherwise look like a tidy green.\n"
-            f"stdout tail:\n{proc.stdout[-3000:]}\n"
-            f"stderr tail:\n{proc.stderr[-2000:]}"
+            f"diagnostic tail:\n{diagnostic[-5000:]}"
         )
-        assert proc.returncode == 0, (
-            f"collection exited {proc.returncode}; a collection ERROR silently "
-            f"removes every cell in the failing module.\n{proc.stdout[-3000:]}"
+        assert rc == 0 and not incomplete, (
+            f"collection exited rc={rc}, incomplete={incomplete}; a collection "
+            f"ERROR or incomplete semantic record silently removes every cell "
+            f"in the failing module.\n{diagnostic[-5000:]}"
         )
         return tuple(json.loads(out.read_text(encoding="utf-8")))
     finally:
@@ -1224,35 +1226,33 @@ def _run_outcome_reports(
         wave = paths[start:start + _width]
         relay_queue: queue.Queue = queue.Queue()
         with ThreadPoolExecutor(max_workers=len(wave)) as pool:
+            def _run_and_signal(path: Path):
+                try:
+                    return _run_one_module_outcome(
+                        path, cwd, len(wave), relay_queue)
+                finally:
+                    # One ordered sentinel per producer makes the merge loop
+                    # event-driven.  Every score from this producer was queued
+                    # before its sentinel, so seeing all sentinels proves no
+                    # progress record is still in flight.
+                    relay_queue.put((path, None))
+
             # `_width` is diagnostic only. It changes no liveness rule.
-            futures = [pool.submit(
-                _run_one_module_outcome, p, cwd, len(wave), relay_queue)
-                       for p in wave]
+            futures = [pool.submit(_run_and_signal, p) for p in wave]
             # Inner supervisors have their own private sidecars. Relay their
             # VALIDATED monotonic scores back to this outer pytest item via a
             # Queue, then emit from this MAIN thread only. Worker-thread writes
             # would race the plugin's global sequence and could corrupt the
             # outer protocol. A finite total prevents an infinite heartbeat.
             relay_seen: Dict[Path, int] = {path: 0 for path in wave}
-            while not all(future.done() for future in futures):
-                try:
-                    path, score = relay_queue.get(timeout=0.1)
-                except queue.Empty:
+            finished_relays: Set[Path] = set()
+            while len(finished_relays) < len(wave):
+                path, score = relay_queue.get()
+                if score is None:
+                    assert path not in finished_relays, (
+                        f"duplicate nested relay completion for {path.name}")
+                    finished_relays.add(path)
                     continue
-                previous = relay_seen[path]
-                assert previous < score <= _NESTED_PROGRESS_RELAY_TOTAL, (
-                    f"invalid nested semantic relay for {path.name}: "
-                    f"{previous} -> {score}")
-                for completed in range(previous + 1, score + 1):
-                    _domain_progress(
-                        f"matrix-outcome-child:{path.name}", completed,
-                        _NESTED_PROGRESS_RELAY_TOTAL)
-                relay_seen[path] = score
-            while True:
-                try:
-                    path, score = relay_queue.get_nowait()
-                except queue.Empty:
-                    break
                 previous = relay_seen[path]
                 assert previous < score <= _NESTED_PROGRESS_RELAY_TOTAL, (
                     f"invalid nested semantic relay for {path.name}: "

@@ -219,7 +219,8 @@ class _SemanticProgressProbe:
     }
     _COMMON = {"schema", "nonce", "pid", "seq", "event", "monotonic_ns"}
 
-    def __init__(self, path: Path, nonce: str, pid_fn):
+    def __init__(self, path: Path, nonce: str, pid_fn, *,
+                 collect_only: bool = False):
         self.path = path
         self.nonce = nonce
         self.pid_fn = pid_fn
@@ -238,6 +239,7 @@ class _SemanticProgressProbe:
         self.finished: Set[str] = set()
         self.declared_items: Optional[int] = None
         self.domain_progress: Dict[Tuple[str, str], Tuple[int, int]] = {}
+        self.collect_only = collect_only
 
     def close(self) -> None:
         self.file.close()
@@ -341,7 +343,12 @@ class _SemanticProgressProbe:
                     or self.declared_items is None):
                 self._fail("out-of-order session_finish")
                 return
-            if len(self.finished) != self.declared_items:
+            if self.collect_only and self.finished:
+                self._fail(
+                    "collect-only session unexpectedly executed test items")
+                return
+            if (not self.collect_only
+                    and len(self.finished) != self.declared_items):
                 self._fail(
                     "session finished before every selected item completed "
                     f"({len(self.finished)}/{self.declared_items})")
@@ -645,6 +652,8 @@ def _run_progress_supervised(
         cmd: Sequence[str], stall_after: float,
         cwd: Optional[str], *,
         progress_relay_path: Optional[Path] = None,
+        env: Optional[Dict[str, str]] = None,
+        collect_only: bool = False,
         ) -> Tuple[Optional[int], str, bool]:
     """Run until natural completion; stop only after semantic events stall."""
     global _ACTIVE_JOB
@@ -686,8 +695,9 @@ def _run_progress_supervised(
     nonce = secrets.token_hex(16)
     probe = _SemanticProgressProbe(
         progress_path, nonce,
-        lambda: holder["proc"].pid if "proc" in holder else None)
-    child_env = os.environ.copy()
+        lambda: holder["proc"].pid if "proc" in holder else None,
+        collect_only=collect_only)
+    child_env = dict(env) if env is not None else os.environ.copy()
     child_env[_PROGRESS_PATH_ENV] = progress_name
     child_env[_PROGRESS_NONCE_ENV] = nonce
     old_pythonpath = child_env.get("PYTHONPATH")

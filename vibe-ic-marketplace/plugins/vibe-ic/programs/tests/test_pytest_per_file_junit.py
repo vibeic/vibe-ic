@@ -840,6 +840,41 @@ def test_partial_progress_line_waits_but_is_never_progress(tmp_path):
     assert not ok and "truncated final event" in reason
 
 
+def test_collect_only_protocol_accepts_complete_collection_without_test_runs(
+        tmp_path):
+    sidecar = tmp_path / "progress.jsonl"
+    nonce = "nonce"
+    pid = os.getpid()
+    records = [
+        ("session_start", {}),
+        ("item_collected", {"nodeid": "test_cell.py::test_cell"}),
+        ("collection_finish", {"selected_items": 1}),
+        ("session_finish", {"exitstatus": 0}),
+    ]
+    with sidecar.open("w", encoding="utf-8") as fh:
+        for seq, (event, fields) in enumerate(records, start=1):
+            fh.write(json.dumps({
+                "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
+                "event": event, "monotonic_ns": seq, **fields,
+            }) + "\n")
+
+    probe = D._SemanticProgressProbe(
+        sidecar, nonce, lambda: pid, collect_only=True)
+    try:
+        ok, reason = probe.complete()
+    finally:
+        probe.close()
+    assert ok, reason
+
+    normal = D._SemanticProgressProbe(sidecar, nonce, lambda: pid)
+    try:
+        normal_ok, normal_reason = normal.complete()
+    finally:
+        normal.close()
+    assert not normal_ok
+    assert "before every selected item completed" in normal_reason
+
+
 @pytest.mark.parametrize("bad", [
     {"completed": 1, "total": 3},  # duplicate
     {"completed": 3, "total": 3},  # gap
