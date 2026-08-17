@@ -93,6 +93,19 @@ def _invoke_cli(argv) -> tuple:
     return rc, stdout.getvalue(), stderr.getvalue()
 
 
+def _invoke_real_cli(argv) -> tuple:
+    """Invoke the shipped entrypoint, with liveness owned by the outer driver.
+
+    There is deliberately no guessed per-call wall timeout here.  The landing
+    harness semantically supervises this pytest item; this one parity probe keeps
+    ``if __name__ == '__main__'`` and fresh-interpreter imports inside the tested
+    surface while the many table-driven cases stay cheap and in-process.
+    """
+    proc = subprocess.run(
+        [sys.executable, str(_CLI), *argv], capture_output=True, text=True)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
 def _si_record(verdict="PASS", coupling_pairs=0, findings=None, **extra):
     """A published si_mcf_sta_check record, in the shape HEAD actually holds.
 
@@ -148,6 +161,24 @@ def _report(root: Path, tmp_path: Path, *args, programs_dir: Path = None):
 def _tree_digest(root: Path) -> dict:
     return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+# ── 0. the production entrypoint is part of the gate ──────────────────────
+def test_real_cli_entrypoint_matches_direct_main(tmp_path):
+    """A green unit helper cannot hide an inert ``__main__`` guard.
+
+    The repo-hygiene dispatcher executes the file, not ``P.main``.  A guard that
+    exits zero without calling ``main`` therefore disables a blocking gate while
+    every direct unit case remains green.  Compare both paths on an observed rc=1
+    input so the parity assertion cannot pass merely because both did nothing.
+    """
+    missing = str(tmp_path / "not-a-corpus")
+    direct = _invoke_cli([missing])
+    process = _invoke_real_cli([missing])
+    assert direct[0] == 1, direct
+    assert process == direct, (
+        "the shipped Python entrypoint did not execute the same gate question "
+        f"as direct main(): process={process!r}, direct={direct!r}")
 
 
 # ── 1. the defect itself, on a corpus that carries only records ────────────

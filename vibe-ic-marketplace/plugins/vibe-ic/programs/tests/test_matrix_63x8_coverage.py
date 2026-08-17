@@ -104,7 +104,6 @@ from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 import pytest
-import pytest_per_file_junit as D
 
 from matrix_63x8 import flowref as F
 from matrix_63x8 import substitution as SUB
@@ -299,24 +298,100 @@ def collect_items() -> Tuple[Dict, ...]:
         env["MATRIX_CELL_COLLECT_OUT"] = str(out)
         env["PYTHONPATH"] = os.pathsep.join(
             [str(scratch)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-        rc, diagnostic, incomplete = D._run_progress_supervised(
-            [sys.executable, "-m", "pytest", *[str(p) for p in paths],
-             "--collect-only", "-q", "-p", "no:randomly",
-             "-p", "_pytest_progress_plugin",
-             "-p", "matrix_cell_collector"],
-            _OUTCOME_PROGRESS_STALL_S, str(PLUGIN_ROOT), env=env,
-            collect_only=True,
-        )
+        selection = scratch / "selection.txt"
+        selection.write_text(
+            "".join(f"{path}\n" for path in paths), encoding="utf-8")
+        junit = scratch / "collection-junit.xml"
+        relay = scratch / "semantic-progress.relay"
+        relay.touch(mode=0o600)
+        driver = TESTS_DIR.parent / "pytest_per_file_junit.py"
+        cmd = [
+            sys.executable, str(driver),
+            "--selection", str(selection), "--junit", str(junit),
+            "--aggregate-only", "--collect-only",
+            "--aggregate-stall-after", str(_OUTCOME_PROGRESS_STALL_S),
+            "--progress-relay", str(relay),
+            "--cwd", str(PLUGIN_ROOT), "--",
+            sys.executable, "-m", "pytest", "--collect-only", "-q",
+            "-p", "no:randomly", "-p", "matrix_cell_collector",
+        ]
+        log = scratch / "collection-driver.log"
+        relay_offset = 0
+        relay_tail = b""
+        last_score = 0
+        relay_error = ""
+
+        def publish_relay(*, final: bool = False) -> None:
+            """Relay only validated helper progress into this pytest item.
+
+            The process-global subreaper and waitpid calls stay in ``driver``;
+            this subject process only reads an append-only score file.  There is
+            no total-runtime estimate: natural helper exit or semantic stall in
+            the helper owns completion.
+            """
+            nonlocal relay_offset, relay_tail, last_score, relay_error
+            if relay_error:
+                return
+            try:
+                size = relay.stat().st_size
+                if size < relay_offset:
+                    relay_error = "relay truncated"
+                    return
+                with relay.open("rb") as relay_file:
+                    relay_file.seek(relay_offset)
+                    chunk = relay_file.read()
+            except OSError as exc:
+                relay_error = f"relay unreadable: {exc}"
+                return
+            relay_offset += len(chunk)
+            records = (relay_tail + chunk).split(b"\n")
+            relay_tail = records.pop()
+            for payload in records:
+                if not payload:
+                    relay_error = "empty relay score"
+                    return
+                try:
+                    score = int(payload.decode("ascii"))
+                except (UnicodeDecodeError, ValueError):
+                    relay_error = f"malformed relay score {payload!r}"
+                    return
+                if not last_score < score <= _NESTED_PROGRESS_RELAY_TOTAL:
+                    relay_error = (
+                        f"non-monotonic relay {last_score} -> {score}")
+                    return
+                for completed in range(last_score + 1, score + 1):
+                    _domain_progress(
+                        "matrix-collection-child", completed,
+                        _NESTED_PROGRESS_RELAY_TOTAL)
+                last_score = score
+            if final and relay_tail:
+                relay_error = "truncated final relay score"
+
+        with log.open("w+", encoding="utf-8") as log_file:
+            proc = subprocess.Popen(
+                cmd, cwd=str(PLUGIN_ROOT), stdout=log_file,
+                stderr=subprocess.STDOUT, text=True, env=env)
+            while proc.poll() is None:
+                publish_relay()
+                time.sleep(0.1)
+            publish_relay(final=True)
+            log_file.flush()
+            log_file.seek(0)
+            diagnostic = log_file.read()
+        rc = proc.returncode
         assert out.is_file(), (
             f"pytest collection produced no manifest (rc={rc}).\n"
             f"A dimension module that fails to IMPORT contributes zero cells "
             f"and would otherwise look like a tidy green.\n"
             f"diagnostic tail:\n{diagnostic[-5000:]}"
         )
-        assert rc == 0 and not incomplete, (
-            f"collection exited rc={rc}, incomplete={incomplete}; a collection "
-            f"ERROR or incomplete semantic record silently removes every cell "
-            f"in the failing module.\n{diagnostic[-5000:]}"
+        assert not relay_error, (
+            f"the collection helper's semantic relay is invalid: "
+            f"{relay_error}\n{diagnostic[-5000:]}")
+        assert rc == 0, (
+            f"collection helper exited rc={rc}; a collection ERROR or "
+            f"incomplete semantic record silently removes every cell in the "
+            f"failing module.\n{diagnostic[-5000:]}"
         )
         return tuple(json.loads(out.read_text(encoding="utf-8")))
     finally:
@@ -934,6 +1009,27 @@ def test_collection_is_real_and_not_starved():
             f"{path.name} contributed ZERO collected items — it either failed "
             f"to import or its parametrization produced nothing"
         )
+
+
+def test_collection_helper_does_not_reap_an_unrelated_pytest_child():
+    """The helper owns waitpid(-1); the pytest subject process never may.
+
+    The offending in-process supervisor reaped this already-exited child while
+    cleaning its own collection job.  ``subprocess.Popen.wait`` then lost the
+    real rc=7 and reported 0 — a concrete false-complete, not just interference.
+    """
+    unrelated = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.exit(7)"])
+    try:
+        collect_items.cache_clear()
+        assert collect_items(), "the isolated collection itself produced no record"
+        assert unrelated.wait() == 7, (
+            "collection stole an unrelated child's wait status; its real rc=7 "
+            "was rewritten by a process-global waitpid(-1)")
+    finally:
+        if unrelated.poll() is None:
+            unrelated.terminate()
+            unrelated.wait()
     # Every cell item must be a real, addressable nodeid.
     for rows in collected_cells().values():
         for row in rows:
