@@ -88,7 +88,9 @@ def test_an_empty_corpus_does_not_kill_the_sweep(tmp_path):
     assert "unbound variable" not in text, (
         f"the sweep DIED on its own array invariant over an empty corpus — "
         f"the one state the synthetic gate exists to report:\n{text}")
-    assert proc.returncode == 0, text
+    assert proc.returncode == 2, (
+        "the sweep must survive long enough to write its record, then refuse "
+        f"the unmeasured denominator with rc 2:\n{text}")
     assert doc is not None, (
         "no summary record was written at all. A consumer cannot tell this "
         "from a run that never happened, which is strictly worse than a "
@@ -132,10 +134,11 @@ def test_the_rollup_does_not_claim_an_exemption_that_does_not_exist(tmp_path):
     refusal from an unbought one, so it is the last place that may imply one.
     """
     proc, _ = _run(tmp_path, _EMPTY_LOOP)
-    rollup = [ln for ln in proc.stdout.splitlines()
+    text = proc.stdout + proc.stderr
+    rollup = [ln for ln in text.splitlines()
               if ln.startswith("repo_hygiene_gates:") and "NOT a pass" in ln]
 
-    assert len(rollup) == 1, proc.stdout
+    assert len(rollup) == 1, text
     assert "exempt until )" not in rollup[0], (
         f"the roll-up claims an exemption with a blank date:\n{rollup[0]}")
     assert "NO EXEMPTION DECLARED" in rollup[0], rollup[0]

@@ -235,6 +235,11 @@ GATE_PENDING_UNTIL=""
 GATE_PENDING_SCOPE=""
 GATE_SCOPES=()
 GATE_PENDING_WHY=""
+# Conditional exemption for the NEXT corpus expansion only. It is consumed
+# only when the producer returns rc 3 = no corpus was configured; a broken
+# pointer and a present-but-empty corpus remain unexempted.
+GATE_PENDING_CORPUS_ABSENT_UNTIL=""
+GATE_PENDING_CORPUS_ABSENT_WHY=""
 #: Parallel to GATE_LABELS — empty for the (normal) unexempted gates.
 declare -a GATE_EX_UNTIL=() GATE_EX_WHY=() GATE_WIRING_ERRORS=()
 
@@ -353,6 +358,29 @@ must be ISO-8601 YYYY-MM-DD"
 must state WHY the gate can be unable to run"
   fi
   GATE_PENDING_UNTIL="$until"; GATE_PENDING_WHY="$why"
+}
+
+# `corpus_absent_until <YYYY-MM-DD> <why>` — the NEXT
+# `gate_dispatch_over` may report explicit NO_CORPUS when its producer returns
+# rc 3. This is separate from `uncheckable_until`: a conditional corpus
+# exemption must never drift onto the first real per-item gate.
+corpus_absent_until() {
+  local until="${1:-}" why="${2:-}"
+  if [ -n "$GATE_PENDING_CORPUS_ABSENT_UNTIL" ]; then
+    _gate_wiring_error "a corpus-absence exemption (until \
+$GATE_PENDING_CORPUS_ABSENT_UNTIL) was declared and never attached before \
+'corpus_absent_until ${until}'"
+  fi
+  if ! [[ "$until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    _gate_wiring_error "'corpus_absent_until ${until:-<empty>}': the review \
+date must be ISO-8601 YYYY-MM-DD"
+  fi
+  if [ -z "$why" ]; then
+    _gate_wiring_error "'corpus_absent_until ${until:-<empty>}': an exemption \
+must state WHY no corpus may be configured"
+  fi
+  GATE_PENDING_CORPUS_ABSENT_UNTIL="$until"
+  GATE_PENDING_CORPUS_ABSENT_WHY="$why"
 }
 
 # `gate_scope <path> [<path>…]` — declare the paths the NEXT gate reads (#P3).
@@ -561,6 +589,13 @@ _gate_dispatch_corpus_state() {
 # place a gate is executed and the ONE place its outcome is recorded.
 _dispatch() {
   local tolerate="$1" may_write="$2" label="$3" wd="$4"; shift 4
+  if [ -n "$GATE_PENDING_CORPUS_ABSENT_UNTIL" ]; then
+    _gate_wiring_error "a corpus-absence exemption (until \
+$GATE_PENDING_CORPUS_ABSENT_UNTIL) was followed by ordinary gate '$label' \
+instead of gate_dispatch_over"
+    GATE_PENDING_CORPUS_ABSENT_UNTIL=""
+    GATE_PENDING_CORPUS_ABSENT_WHY=""
+  fi
   # vibe-ic#584 — consume the pending exemption FIRST and unconditionally, so a
   # mis-wired gate cannot leave it armed for the next one: an exemption written
   # for gate N silently excusing gate N+1 is worse than none at all.
@@ -987,6 +1022,15 @@ ${GATE_LABELS[$idx]}"
   case "$st" in FAIL|WROTE_CORPUS) GATE_DISPATCH_FAIL=1 ;; esac
   [ "${attf:-0}" = "0" ] || GATE_DISPATCH_ATTESTATION_FAILED=1
   if [ -n "$GATE_DISPATCH_ATTESTATION_FILE" ] && [ -s "$d.attest" ]; then
+    # The helper creates each worker-private record with mode 0600.  The first
+    # shell redirection into the merged file used the caller's umask instead,
+    # reopening that owner-only ledger as 0664 on the normal developer umask.
+    # Collection is serialized in this parent, so create/lock down the target
+    # before appending without introducing a concurrent writer race.
+    if [ ! -e "$GATE_DISPATCH_ATTESTATION_FILE" ]; then
+      ( umask 077; : > "$GATE_DISPATCH_ATTESTATION_FILE" )
+    fi
+    chmod 600 -- "$GATE_DISPATCH_ATTESTATION_FILE"
     cat -- "$d.attest" >> "$GATE_DISPATCH_ATTESTATION_FILE"
   fi
   return 0
@@ -1029,6 +1073,43 @@ run_writing_the_corpus() {                # <label> <cwd> <cmd...>
   _dispatch 0 1 "$@"
 }
 
+# A zero-item expansion has no checker process to run, but it is still a row in
+# the declared denominator (#1075).  Keep that special case on ONE path so list
+# mode, sharding, the positional arrays, and the human note cannot disagree.
+_gate_dispatch_precomputed_corpus() {  # <corpus-name> <reason> <until> <why>
+  local corpus="$1"
+  local reason="$2" until="${3:-}" why="${4:-}" label
+  local reason_text="${reason//_/ }"
+  case "$reason" in
+    NO_CORPUS)
+      label="corpus \"$corpus\" is NOT CONFIGURED — nothing was checked over it" ;;
+    PRODUCER_FAILED)
+      label="corpus \"$corpus\" producer FAILED — coverage is unknown" ;;
+    *)
+      label="corpus \"$corpus\" is EMPTY — nothing was checked over it" ;;
+  esac
+  local state="NOT_CHECKED"
+  if [ "$GATE_DISPATCH_LIST_ONLY" -eq 1 ]; then
+    state="LISTED"
+  elif ! _gate_dispatch_owns "$label"; then
+    state="OTHER_SHARD"
+  fi
+  GATE_LABELS+=("$label")
+  GATE_STATES+=("$state")
+  GATE_SECONDS+=("0")
+  GATE_EX_UNTIL+=("$until")
+  GATE_EX_WHY+=("$why")
+  GATE_SCOPES+=("")
+  GATE_ITEM_CORPUS+=("$corpus")
+  GATE_ITEM_IDX+=("0")
+  GATE_ITEM_TOTAL+=("0")
+  if [ "$state" = "NOT_CHECKED" ]; then
+    _gate_dispatch_say_err "   ^^ $reason_text \"$corpus\": no checker process \
+ran. Recorded NOT_CHECKED so the run carries a machine verdict instead of \
+silently shrinking its denominator."
+  fi
+}
+
 # --- the only way to wire a gate PER ITEM (vibe-ic#957) ---------------------
 #     gate_dispatch_over <corpus-name> <body-fn> <producer-cmd...>
 #
@@ -1050,7 +1131,11 @@ run_writing_the_corpus() {                # <label> <cwd> <cmd...>
 # why, in the log, on the line above the disclosure that it produced nothing.
 gate_dispatch_over() {
   local corpus="$1" body="$2"; shift 2
-  local out="" rc=0 line i
+  local absent_until="$GATE_PENDING_CORPUS_ABSENT_UNTIL"
+  local absent_why="$GATE_PENDING_CORPUS_ABSENT_WHY"
+  GATE_PENDING_CORPUS_ABSENT_UNTIL=""
+  GATE_PENDING_CORPUS_ABSENT_WHY=""
+  local out="" rc=0 line i no_corpus=0
   local -a items=()
   out="$("$@")" || rc=$?
   # `[ -n "$line" ]` because a here-string over an EMPTY producer still yields
@@ -1060,6 +1145,13 @@ gate_dispatch_over() {
     items+=("$line")
   done <<<"$out"
   local n=${#items[@]} before=${#GATE_LABELS[@]}
+  # rc 3 means NO_CORPUS only when it also produced no alleged items.  A
+  # producer that prints a partial population and then returns 3 failed; it
+  # must not buy the absence exemption and certify the printed prefix.
+  if [ "$rc" -eq 3 ] && [ -n "$absent_until" ] && [ "$n" -eq 0 ]; then
+    no_corpus=1
+    rc=0
+  fi
   if [ "$rc" -ne 0 ]; then
     _gate_dispatch_say_err "   ^^ CORPUS PRODUCER FAILED (rc $rc) for \
 \"$corpus\": the $n item(s) below are what it managed to print and NOT the \
@@ -1093,29 +1185,20 @@ corpus — read every verdict from this loop as covering an unknown fraction of 
   # is deliberately NOT a FAIL — an empty corpus is not a broken design, and
   # calling it one would make every host without published evidence red for a
   # reason that is about the corpus. But it is never a silent PASS.
-  if [ "$n" -eq 0 ] && [ "$rc" -eq 0 ]; then
-    GATE_LABELS+=("corpus \"$corpus\" is EMPTY — nothing was checked over it")
-    GATE_STATES+=("NOT_CHECKED")
-    GATE_SECONDS+=("0")
-    # IN LOCKSTEP, and that is the whole point: every reader below indexes these
-    # arrays by the SAME `i` out of `${#GATE_LABELS[@]}`. This synthetic row was
-    # appending six of the eight, so `GATE_EX_UNTIL[$i]` was unbound for it and
-    # `set -u` killed the run at the expiry sweep — a corpus that expands over
-    # nothing took the whole dispatcher down. It carries no exemption, so the
-    # honest value is empty, which every reader already treats as "none".
-    GATE_EX_UNTIL+=("")
-    GATE_EX_WHY+=("")
-    GATE_ITEM_CORPUS+=("$corpus")
-    GATE_ITEM_IDX+=("0")
-    GATE_ITEM_TOTAL+=("0")
-    _gate_dispatch_say_err "   ^^ EMPTY CORPUS \"$corpus\": 0 item(s), so \
-the gates it would have dispatched did not run. Recorded NOT_CHECKED so the run \
-carries a verdict for it instead of no verdict at all."
+  if [ "$n" -eq 0 ] && [ "$no_corpus" -eq 1 ]; then
+    _gate_dispatch_precomputed_corpus "$corpus" "NO_CORPUS" \
+      "$absent_until" "$absent_why"
+  elif [ "$n" -eq 0 ] && [ "$rc" -eq 0 ]; then
+    _gate_dispatch_precomputed_corpus "$corpus" "EMPTY_CORPUS" "" ""
+  elif [ "$rc" -ne 0 ]; then
+    _gate_dispatch_precomputed_corpus "$corpus" "PRODUCER_FAILED" "" ""
   fi
   GATE_CORPUS_NAMES+=("$corpus")
   GATE_CORPUS_ITEMS+=("$n")
   GATE_CORPUS_GATES+=("$(( ${#GATE_LABELS[@]} - before ))")
-  if [ "$rc" -eq 0 ]; then
+  if [ "$no_corpus" -eq 1 ]; then
+    GATE_CORPUS_STATE+=("NO_CORPUS")
+  elif [ "$rc" -eq 0 ]; then
     GATE_CORPUS_STATE+=("EXPANDED")
   else
     GATE_CORPUS_STATE+=("PRODUCER_FAILED")
@@ -1137,16 +1220,22 @@ _gate_dispatch_corpora_rollup() {
     gates="${GATE_CORPUS_GATES[$i]}"
     if [ "$items" -eq 0 ]; then
       echo "repo_hygiene_gates: loop corpus \"$name\" expanded over 0 item(s)" \
-           "— it declared 0 gate(s) and NOTHING was checked over it; no gate" \
-           "in this run reports that, because none exists"
+           "— it declared $gates synthetic NOT_CHECKED record(s), but no" \
+           "checker process ran over it"
     else
       echo "repo_hygiene_gates: loop corpus \"$name\" expanded over $items" \
            "item(s) -> $gates of $declared declared gate(s); those verdicts" \
            "cover $items item(s), NOT the corpus at large"
     fi
-    [ "${GATE_CORPUS_STATE[$i]}" = "EXPANDED" ] || \
-      echo "repo_hygiene_gates: loop corpus \"$name\" — its PRODUCER FAILED," \
-           "so even that item count is a floor and not the corpus"
+    case "${GATE_CORPUS_STATE[$i]}" in
+      EXPANDED) ;;
+      NO_CORPUS)
+        echo "repo_hygiene_gates: loop corpus \"$name\" — NO CORPUS was" \
+             "configured; this is an exempted non-verdict, not a PASS" ;;
+      *)
+        echo "repo_hygiene_gates: loop corpus \"$name\" — its PRODUCER FAILED," \
+             "so even that item count is a floor and not the corpus" ;;
+    esac
   done
 }
 
@@ -1236,6 +1325,16 @@ for i in range(0, len(gf), 8):
 corpora = [{"name": cf[i + 3], "items": int(cf[i]), "gates": int(cf[i + 1]),
             "expansion": cf[i + 2]}
            for i in range(0, len(cf), 4)]
+corpus_expansion = {c["name"]: c["expansion"] for c in corpora}
+for g in gates:
+    if g.get("corpus_item") == 0:
+        # There is no process to attest: this is a denominator record emitted
+        # by `_gate_dispatch_precomputed_corpus`.
+        g["execution"] = "PRECOMPUTED_CORPUS"
+        expansion = corpus_expansion.get(g["corpus"])
+        g["reason_code"] = (expansion if expansion in
+                            {"NO_CORPUS", "PRODUCER_FAILED"}
+                            else "EMPTY_CORPUS")
 n = lambda s: sum(1 for g in gates if g["state"] == s)
 doc = {
     "listed_only": list_only,
@@ -1318,7 +1417,7 @@ gate_dispatch_finish() {
   # below could state `declared` and `notchecked`; none of them could state how
   # many gates reached a VERDICT, or how many of those were red, because
   # nothing here added either up.
-  local failed=0 decided=0 elsewhere=0 ran=0
+  local failed=0 decided=0 elsewhere=0 ran=0 unexempted=0
   local total=$(( SECONDS - GATE_DISPATCH_T0 ))
   local refused="" writers="" expired="" nexpired=0
 
@@ -1333,6 +1432,11 @@ gate_dispatch_finish() {
   if [ -n "$GATE_PENDING_UNTIL" ]; then
     _gate_wiring_error "an exemption (until $GATE_PENDING_UNTIL) was declared \
 after the last gate and attaches to nothing"
+  fi
+  if [ -n "$GATE_PENDING_CORPUS_ABSENT_UNTIL" ]; then
+    _gate_wiring_error "a corpus-absence exemption (until \
+$GATE_PENDING_CORPUS_ABSENT_UNTIL) was declared after the last corpus expansion \
+and attaches to nothing"
   fi
   for (( i=0; i<declared; i++ )); do
     if [ -n "${GATE_EX_UNTIL[$i]}" ] \
@@ -1446,6 +1550,7 @@ after the last gate and attaches to nothing"
         if [ -n "${GATE_EX_UNTIL[$i]}" ]; then
           refused="$refused (exempt until ${GATE_EX_UNTIL[$i]})"
         else
+          unexempted=$(( unexempted + 1 ))
           refused="$refused (NO EXEMPTION DECLARED)"
         fi ;;
       WROTE_CORPUS)
@@ -1459,6 +1564,20 @@ after the last gate and attaches to nothing"
   # after it read. OTHER_SHARD is not this host's question at all.
   decided=$(( passed + failed ))
   ran=$(( declared - elsewhere ))
+
+  # A configured-but-empty or failed corpus is not a pre-existing finding that
+  # two landing arms may subtract.  It is an unmeasured denominator.  rc 2 is
+  # load-bearing here as well as in the JSON consumer: direct pre-push callers
+  # branch on this process status and must not read the prose "NOT a pass"
+  # beside rc 0.  Explicit NO_CORPUS carries a dated exemption and therefore
+  # does not enter this branch.
+  if [ "$unexempted" -ne 0 ]; then
+    echo "repo_hygiene_gates: $unexempted gate(s) NOT CHECKED with NO" \
+         "EXEMPTION — this is NOT a pass; this run certifies NOTHING over:" \
+         "$refused" \
+         "(${total}s)" >&2
+    exit 2
+  fi
 
   if [ "$wrote" -ne 0 ]; then
     # Named separately from a plain FAIL and BEFORE it: a gate that modified
