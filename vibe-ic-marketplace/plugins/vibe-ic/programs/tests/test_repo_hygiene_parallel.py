@@ -1,13 +1,16 @@
 """The local hygiene DAG must be faster without becoming a smaller gate."""
 from __future__ import annotations
 
+import concurrent.futures
 import importlib.util
+import errno
 import json
 import os
 import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -21,6 +24,7 @@ spec = importlib.util.spec_from_file_location(
 assert spec and spec.loader
 P = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(P)
+import _watchdog as W
 
 host_spec = importlib.util.spec_from_file_location(
     "_host_independence_pipeline",
@@ -146,133 +150,239 @@ def test_worker_classifies_silent_idle_process_as_stalled_not_timed_out(
     rc, out, problem = P._run(
         [sys.executable, "-c", "import time; time.sleep(30)"], tmp_path,
         os.environ.copy(), stall_grace_s=0.3)
-    assert rc == P._wd.RC_STALLED
+    assert rc == W.RC_STALLED
     assert "WATCHDOG_STALLED" in out
     assert problem and "outcome=stalled" in problem
 
 
-def test_stall_kills_a_term_ignoring_descendant_not_only_its_wrapper(
+def test_parallel_runs_keep_each_helpers_wait_status_isolated(
         tmp_path, monkeypatch):
-    if not hasattr(os, "pidfd_open") or not hasattr(select, "poll"):
-        pytest.skip(
-            "pidfd process-exit events are unavailable on this platform; "
-            "the descendant cleanup assertion requires Linux pidfd support")
-    try:
-        capability_fd = os.pidfd_open(os.getpid())
-    except OSError as exc:
-        pytest.skip(
-            "the running kernel cannot provide pidfd process-exit events: "
-            f"{exc}")
-    else:
-        os.close(capability_fd)
-
     monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
-    child_identity_path = tmp_path / "grandchild.identity"
-    real_killpg = os.killpg
-    delivered = []
-    exit_events = {}
-    identity = {}
 
-    def traced_killpg(pgid, sig):
-        """Retain the kernel exit event before SIGKILL makes the PID vanish."""
-        child_pid = identity["pid"]
-        pidfd = os.pidfd_open(child_pid) if sig == signal.SIGKILL else None
+    def invoke(code):
+        return P._run(
+            [sys.executable, "-c",
+             f"import time; time.sleep(0.1); raise SystemExit({code})"],
+            tmp_path, os.environ.copy(), stall_grace_s=0.3)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(invoke, [3, 7]))
+    assert [(rc, problem) for rc, _out, problem in results] == [
+        (3, None), (7, None)]
+
+
+def _require_pidfd_events():
+    if (not hasattr(os, "pidfd_open")
+            or not hasattr(signal, "pidfd_send_signal")
+            or not hasattr(select, "poll") or not Path("/proc").is_dir()):
+        pytest.skip("Linux pidfd process-exit events are unavailable")
+    try:
+        probe = os.pidfd_open(os.getpid())
+    except OSError as exc:
+        pytest.skip(f"the running kernel cannot provide pidfd events: {exc}")
+    else:
+        os.close(probe)
+
+
+def _observe_identity(path: Path, done: threading.Event, holder: dict) -> None:
+    """Open the child's pidfd while its published starttime still matches."""
+    while not done.is_set():
         try:
-            real_killpg(pgid, sig)
-        except BaseException:
-            if pidfd is not None:
+            fields = path.read_text(encoding="utf-8").split()
+            if len(fields) != 3:
+                raise ValueError("identity needs PID, PGRP and starttime")
+            pid, pgrp, starttime = (int(field) for field in fields)
+            pidfd = os.pidfd_open(pid)
+            raw = Path(f"/proc/{pid}/stat").read_text()
+            current = int(raw[raw.rfind(")") + 2:].split()[19])
+            if current != starttime:
                 os.close(pidfd)
-            raise
-        delivered.append((pgid, sig))
-        if pidfd is not None:
-            previous = exit_events.setdefault(child_pid, pidfd)
-            if previous != pidfd:
-                os.close(pidfd)
+                holder["error"] = (
+                    f"PID_REUSED: {pid} {starttime} -> {current}")
+            else:
+                holder.update(pid=pid, pgrp=pgrp, starttime=starttime,
+                              pidfd=pidfd)
+            return
+        except (FileNotFoundError, ProcessLookupError, ValueError):
+            time.sleep(0)
 
-    monkeypatch.setattr(P.os, "killpg", traced_killpg)
 
-    def stall_after_descendant_ready(command, *, popen_factory, kill, env,
-                                     **_kwargs):
-        """Inject STALLED only after the descendant reports kernel readiness."""
-        proc = popen_factory(command, stdout=subprocess.PIPE, env=env)
-        while True:
-            try:
-                fields = child_identity_path.read_text(
-                    encoding="utf-8").split()
-                if len(fields) != 2:
-                    raise ValueError("identity needs PID and PGRP")
-                child_pid, child_pgrp = (int(field) for field in fields)
-                if child_pid < 1 or child_pgrp < 1:
-                    raise ValueError("identity values must be positive")
-                identity.update(pid=child_pid, pgrp=child_pgrp)
-                break
-            except (FileNotFoundError, ValueError):
-                time.sleep(0)  # yield; readiness, not elapsed time, owns this wait
-        kill(proc, "stalled")
-        stdout, _ = proc.communicate()
-        return P._wd.SupervisedResult(
-            P._wd.RC_STALLED, stdout.decode(errors="replace"),
-            "\nWATCHDOG_STALLED: injected after descendant readiness",
-            "stalled")
+def _stalling_tree(tmp_path: Path, monkeypatch, *, detached: bool,
+                   trigger: Path | None = None, late_write: Path | None = None):
+    """Run a real silent stall and retain the grandchild's kernel exit event."""
+    _require_pidfd_events()
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
+    ready = tmp_path / ("setsid.identity" if detached else "group.identity")
+    done = threading.Event()
+    identity: dict = {}
+    observer = threading.Thread(
+        target=_observe_identity, args=(ready, done, identity), daemon=True)
+    observer.start()
 
-    monkeypatch.setattr(P._wd, "run_supervised", stall_after_descendant_ready)
+    setup = "os.setsid()\n" if detached else ""
+    fifo_setup = (
+        "fifo=os.open(sys.argv[2], os.O_RDWR | os.O_NONBLOCK)\n"
+        if trigger is not None else "")
+    tail = (
+        "os.read(fifo, 1)\n"
+        "pathlib.Path(sys.argv[3]).write_text('ESCAPED_LATE_WRITE\\n')\n"
+        if trigger is not None else "time.sleep(30)\n")
     grandchild = (
         "import os,pathlib,signal,sys,time\n"
+        f"{setup}"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
         "pid=os.getpid(); pgrp=os.getpgrp()\n"
+        "raw=pathlib.Path('/proc/self/stat').read_text()\n"
+        "start=int(raw[raw.rfind(')')+2:].split()[19])\n"
+        f"{fifo_setup}"
         "os.close(1); os.close(2)\n"
         "ready=pathlib.Path(sys.argv[1])\n"
         "staged=ready.with_name(ready.name+'.tmp-'+str(pid))\n"
-        "staged.write_text(str(pid)+' '+str(pgrp)+'\\n')\n"
+        "staged.write_text(f'{pid} {pgrp} {start}\\n')\n"
         "os.replace(staged, ready)\n"
-        # Preserve the adversarial scheduling gap that used to let cleanup kill
-        # this child before the stdout identity line the assertion depended on.
-        # Readiness is now self-contained, so no later output is required.
-        "time.sleep(0.25)\n"
-        "time.sleep(30)\n"
+        f"{tail}"
     )
+    child_args = ["sys.argv[1]"]
+    if trigger is not None:
+        child_args.extend(["sys.argv[2]", "sys.argv[3]"])
     parent = (
-        "import subprocess,sys,time\n"
+        "import os,pathlib,subprocess,sys,time\n"
         f"subprocess.Popen([sys.executable, '-c', {grandchild!r}, "
-        "sys.argv[1]])\n"
+        + ", ".join(child_args) + "])\n"
+        "ready=pathlib.Path(sys.argv[1])\n"
+        "while not ready.is_file():\n"
+        " print('waiting-for-owned-identity', flush=True)\n"
+        " time.sleep(0.01)\n"
+        "os.close(1); os.close(2)\n"
         "time.sleep(30)\n"
     )
-    rc, out, problem = P._run(
-        [sys.executable, "-c", parent, str(child_identity_path)], tmp_path,
-        os.environ.copy())
-    assert rc == P._wd.RC_STALLED and problem, (rc, out, problem)
-    child_pid = identity["pid"]
-    child_pgrp = identity["pgrp"]
-    term_count = delivered.count((child_pgrp, signal.SIGTERM))
-    kill_count = delivered.count((child_pgrp, signal.SIGKILL))
-    if kill_count != 1:
-        # A broken candidate must fail without leaking its deliberately
-        # TERM-immune descendant into the rest of the test session.
-        try:
-            real_killpg(child_pgrp, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    pidfd = exit_events.pop(child_pid, None)
+    argv = [sys.executable, "-c", parent, str(ready)]
+    if trigger is not None:
+        argv.extend([str(trigger), str(late_write)])
     try:
-        assert term_count == 1, delivered
-        assert kill_count == 1, delivered
-        assert pidfd is not None, (
-            f"SIGKILL for descendant {child_pid} carried no pidfd exit event")
-
-        # pidfd readiness is the kernel's process-exit event.  Unlike
-        # kill(pid, 0), it becomes ready when execution has ended even if an
-        # overloaded host has not reaped the resulting zombie yet.  Wait for
-        # that event with no guessed wall-clock deadline: successful SIGKILL to
-        # this controlled, sleeping process guarantees it.
-        poller = select.poll()
-        poller.register(pidfd, select.POLLIN)
-        events = poller.poll()
+        rc, out, problem = P._run(
+            argv, tmp_path, os.environ.copy(), stall_grace_s=0.25)
     finally:
-        if pidfd is not None:
-            os.close(pidfd)
-        for leftover in exit_events.values():
-            os.close(leftover)
-    assert events, f"no kernel exit event for descendant {child_pid}"
+        done.set()
+        observer.join()
+    assert "error" not in identity, identity.get("error")
+    assert "pidfd" in identity, (
+        f"child identity was never observed; ready={ready.exists()}")
+    return rc, out, problem, identity
+
+
+def _assert_owned_exit(rc, out, problem, identity, *, detached: bool):
+    pidfd = identity["pidfd"]
+    poller = select.poll()
+    poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    exited = bool(poller.poll(0))
+    if not exited:
+        # A failing candidate must not leak the fixture into later tests.
+        signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+        poller.poll()
+    os.close(pidfd)
+    assert rc == W.RC_STALLED and problem, (rc, out, problem)
+    assert "outcome=stalled" in problem
+    assert exited is True, (
+        f"ESCAPED_ALIVE={not exited}; pid={identity['pid']}; "
+        f"starttime={identity['starttime']}; detached={detached}")
+    if detached:
+        assert identity["pgrp"] == identity["pid"], identity
+    else:
+        assert identity["pgrp"] != identity["pid"], identity
+
+
+@pytest.mark.parametrize("detached", [False, True], ids=["same-pgrp", "setsid"])
+def test_stall_returns_only_after_every_owned_descendant_exits(
+        tmp_path, monkeypatch, detached):
+    result = _stalling_tree(tmp_path, monkeypatch, detached=detached)
+    _assert_owned_exit(*result, detached=detached)
+
+
+def test_setsid_descendant_cannot_perform_a_late_write_after_run_returns(
+        tmp_path, monkeypatch):
+    trigger = tmp_path / "late-write.trigger"
+    late_write = tmp_path / "late-write.txt"
+    os.mkfifo(trigger)
+    result = _stalling_tree(
+        tmp_path, monkeypatch, detached=True,
+        trigger=trigger, late_write=late_write)
+    _assert_owned_exit(*result, detached=True)
+    with pytest.raises(OSError) as exc:
+        writer = os.open(trigger, os.O_WRONLY | os.O_NONBLOCK)
+        os.close(writer)
+    assert exc.value.errno == errno.ENXIO, exc.value
+    assert not late_write.exists(), (
+        "an owned setsid descendant remained able to write after _run returned")
+
+
+def test_pidfd_unavailable_refuses_before_launch(tmp_path, monkeypatch):
+    marker = tmp_path / "must-not-launch"
+    monkeypatch.delattr(P._owned.os, "pidfd_open")
+    result = P._owned.run_owned(
+        [sys.executable, "-c",
+         f"from pathlib import Path; Path({str(marker)!r}).write_text('ran')"],
+        tmp_path, os.environ.copy(), progress_path=None,
+        stall_grace_s=0.25, poll_s=0.05)
+    assert result.launched is False
+    assert result.rc == 2
+    assert result.final_descendants == []
+    assert result.census_ok is False
+    assert result.problem and "pidfd_open is unavailable" in result.problem
+    assert not marker.exists(), "an unowned process was launched fail-open"
+
+
+def test_pid_reuse_between_census_and_pidfd_open_fails_closed(monkeypatch):
+    real_open = os.open
+    readings = iter([(1, 12345), (1, 54321)])
+    monkeypatch.setattr(
+        P._owned, "_read_proc_identity", lambda _pid: next(readings))
+    monkeypatch.setattr(
+        P._owned.os, "pidfd_open",
+        lambda _pid: real_open("/dev/null", os.O_RDONLY))
+    pidfd, identity_ok = P._owned._open_identity_pidfd((777, 12345))
+    assert pidfd is None
+    assert identity_ok is False, (
+        "a reused PID was accepted as the originally-owned process")
+
+
+def test_reused_root_pid_is_not_walked_as_the_launched_tree(monkeypatch):
+    supervisor = os.getpid()
+    monkeypatch.setattr(P._owned, "_proc_snapshot_checked", lambda: ({
+        supervisor: (1, 100),
+        777: (1, 54321),       # same PID, not launched starttime 12345
+        888: (777, 60000),     # belongs to the replacement, not our job
+    }, True))
+    owned, census_ok = P._owned._job_processes_checked((777, 12345), set())
+    assert owned == set(), owned
+    assert census_ok is False, (
+        "a reused root PID was treated as the original ancestry root")
+
+
+def test_dispatcher_refuses_a_nonzero_final_descendant_census(
+        tmp_path, monkeypatch):
+    def forged_helper(command, **_kwargs):
+        result = Path(command[command.index("--result") + 1])
+        result.write_text(json.dumps({
+            "protocol": 1,
+            "rc": 0,
+            "body": "",
+            "problem": None,
+            "outcome": "natural",
+            "launched": True,
+            "census_ok": True,
+            "final_descendants": [{"pid": 123, "starttime": 456}],
+            "observed": [{"pid": 123, "starttime": 456}],
+            "capability_error": "",
+        }), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(P.subprocess, "run", forged_helper)
+    rc, _out, problem = P._run(
+        [sys.executable, "-c", "raise SystemExit(0)"], tmp_path,
+        os.environ.copy())
+    assert rc == 2
+    assert problem and "final descendant census is not zero" in problem
 
 
 def _attest(path: Path, output: str = "[PASS] same"):
