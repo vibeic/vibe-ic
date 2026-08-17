@@ -58,18 +58,30 @@ def _run(prog: Path, *args: str, env_tree: str | None = None):
     imported `main()` and asserted on returned objects would leave the rc free
     to be anything, which is how a gate that had stopped gating once kept eight
     green tests.
+
+    60 s, not 180 (vibe-ic#1711). 180 was the WHOLE pytest session budget, and
+    with `--timeout-method=thread` a bound that large can never fire as a TEST
+    failure: pytest kills the SESSION first, `--maxfail` stops applying, and
+    every other file in the subset loses its verdict. 60 s is the ceiling
+    `ci_harness_timeout_ceiling_check` resolves (180 // 3) and the bound 464
+    other call sites in this corpus already use. MEASURED here: 18 passed in
+    1.19 s, slowest item 0.04 s — 60 s cannot fire on passing work.
     """
     env = dict(os.environ)
     env.pop(ENV, None)                      # never inherit the developer's own
     if env_tree is not None:
         env[ENV] = env_tree
     r = subprocess.run([sys.executable, str(prog), *args], env=env,
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, timeout=60)
     return r.returncode, (r.stdout + r.stderr)
 
 
+# 60 s for the same reason as `_run` above (it was 120). These are `git init` /
+# `add` / `commit` over a handful of files in a tmp_path, measured well under a
+# second each; a bound of 120 could only ever be reached after the 180 s session
+# clock had already killed the run.
 def _git(cwd: Path, *a: str) -> None:
-    subprocess.run(["git", "-C", str(cwd), *a], check=True, timeout=120,
+    subprocess.run(["git", "-C", str(cwd), *a], check=True, timeout=60,
                    capture_output=True)
 
 

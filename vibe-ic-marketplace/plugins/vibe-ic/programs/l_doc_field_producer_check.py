@@ -46,6 +46,61 @@ structure that this flat scan does not reach, and reporting it would be
 inventing a defect out of the scanner's own blind spot. Those fields are
 COUNTED AND PRINTED so the blind spot is visible rather than silent.
 
+WHERE THE CORPUS IS, NOW THAT IT IS NOT HERE (#1710's treatment, applied)
+-------------------------------------------------------------------------
+The scan root was the first ancestor directory holding `benchmark-data/ic`.
+v1.10.56 moved the published corpus to its own repository, so in this repo that
+directory is gone and the gate answered:
+
+    [SKIP] l_doc_field_producer_check: no corpus
+           (benchmark-data/ic not found).                            rc 2
+
+That refusal was CORRECT for what it was asked — a check that could not look has
+not passed, and `run` in `_gate_dispatch.sh` maps rc 2 to FAIL — but it was asked
+the wrong question, and "the corpus is somewhere else" and "somebody pointed me
+at a corpus and was wrong" came out as the same word. The FOUR outcomes, which
+must not collapse:
+
+    $VIBE_IC_BENCHMARK_DATA set + unreadable   -> UNDETERMINED (rc 2). NEVER
+                                                  excused, with or without the
+                                                  opt-in below.
+    set + present but carrying no `ic/`        -> UNDETERMINED (rc 2). A pointer
+                                                  that does not resolve to this
+                                                  gate's scan root is a broken
+                                                  configuration; guessing a
+                                                  different subtree would be a
+                                                  gate scanning a tree nobody
+                                                  named.
+    nothing anywhere + the CALL SITE opted in  -> NO_CORPUS (rc 0). Nothing was
+                                                  scanned and NOTHING IS CLAIMED
+                                                  to have been scanned.
+    nothing anywhere + nobody said so          -> UNDETERMINED (rc 2). Unchanged.
+
+The override is ANNOUNCED on stderr, and the opt-in is a flag the call site
+passes — never a default.
+
+WHY THERE IS NO "AND IT MUST BE A GIT CHECKOUT" ROW HERE, unlike
+`tracked_symlink_portability_check` and `evidence_citation_resolves_check`: this
+gate never reads git's INDEX. It counts VALUES inside documents with an
+`rglob`, so a corpus delivered as a tarball or an archive export is a tree it
+can honestly answer about. The two gates that DO read the index refuse a loose
+directory, because there an empty `git ls-files` is "I could not look" wearing
+the shape of "there are none".
+
+TWO ZEROES THAT ARE NOT RESULTS (the same rule, one level in)
+-------------------------------------------------------------
+An EMPTY RESULT IS NOT A ZERO, and this program had two ways to produce one:
+
+  * `--programs` aimed anywhere without `*_check.py` in it reads ZERO readers,
+    so no field can have a finding and the gate prints `[PASS] no NEW
+    reader-without-producer`. Nothing was analysed.
+  * a corpus directory that exists and holds no L-doc scans ZERO documents, so
+    `now` is empty, every recorded entry looks like it "now HAS a producer",
+    and the gate FAILs with a reason that is not the truth — or, under
+    `--write-baseline`, silently EMPTIES the debt register.
+
+Both are UNDETERMINED (rc 2). A denominator of zero is a refusal, not a verdict.
+
 chip-AGNOSTIC: field names are discovered from the checkers themselves and
 counted against whatever corpus is present. No design, PDK or vendor
 literal appears here.
@@ -54,18 +109,27 @@ USAGE
 -----
     python3 l_doc_field_producer_check.py [CORPUS] [--programs DIR]
                                           [--json OUT] [--write-baseline]
+                                          [--corpus-may-be-absent]
+    VIBE_IC_BENCHMARK_DATA=/path/to/benchmark-data-clone \
+        python3 l_doc_field_producer_check.py
 
 EXIT CODES
 ----------
-    0 = PASS      1 = FAIL (new reader-without-producer)      2 = SKIP
+    0 = PASS, or NO_CORPUS (opted in, and it says nothing was scanned)
+    1 = FAIL (new reader-without-producer)
+    2 = UNDETERMINED (no corpus, a corpus pointer that is set and wrong, or a
+        zero denominator on either side of the comparison)
 """
 from __future__ import annotations
 
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Set
+
+import _corpus_location as _corpus         # sibling program, one seam for all
 
 # `fields.get("name")` / `f.get("name")` — the shape every L-doc checker uses
 # to pull a structured value out of a layer document.
@@ -73,6 +137,21 @@ _READ_RE = re.compile(r'fields?\W{0,12}\.get\(\s*["\']([a-z0-9_]{4,40})["\']')
 
 _DEFAULT_CORPUS_REL = "benchmark-data/ic"
 _BASELINE_NAME = "l_doc_field_producer_baseline.json"
+
+#: Where a caller may point us at a clone of the published corpus. Taken from
+#: `_corpus_location` rather than re-spelled here: one name for one thing, and
+#: gates that disagree about where the corpus lives will disagree about whether
+#: it was checked.
+CORPUS_ENV = _corpus.CORPUS_ENV
+
+#: The pointer names the benchmark-data ROOT (that is the repository that moved);
+#: this gate's population is the IC sign-off trees BELOW it, which is the same
+#: `ic` suffix `_DEFAULT_CORPUS_REL` carries.
+_CORPUS_SUBDIR = "ic"
+
+#: What this gate would have examined, for the NO_CORPUS line. A zero is stated
+#: over a NAMED population or it is a silence.
+_SCANNED = "published L-doc(s)"
 
 
 def readers(programs: Path) -> Dict[str, int]:
@@ -150,19 +229,68 @@ def main(argv=None) -> int:
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--baseline", default=None)
     ap.add_argument("--write-baseline", action="store_true")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the "
+                         "published corpus. Turns 'no corpus discoverable "
+                         "anywhere' from UNDETERMINED into NO_CORPUS (rc 0), "
+                         "which STATES that nothing was scanned. It does NOT "
+                         f"excuse a pointer that is set and broken: ${CORPUS_ENV} "
+                         "aimed at something unreadable, or at a clone with no "
+                         f"{_CORPUS_SUBDIR}/ in it, is UNDETERMINED with or "
+                         "without this flag.")
     a = ap.parse_args(argv)
 
     here = Path(__file__).resolve()
     programs = Path(a.programs) if a.programs else here.parent
-    corpus = (Path(a.corpus) if a.corpus else
-              next((b / _DEFAULT_CORPUS_REL for b in here.parents
-                    if (b / _DEFAULT_CORPUS_REL).is_dir()), None))
-    if corpus is None or not corpus.is_dir():
-        print(f"[SKIP] l_doc_field_producer_check: no corpus "
-              f"({a.corpus or _DEFAULT_CORPUS_REL} not found).")
-        return 2
+
+    # WHERE THE CORPUS IS, ASKED THROUGH THE ONE SEAM THAT ANSWERS IT (#1710).
+    # `_corpus_location.resolve` follows $VIBE_IC_BENCHMARK_DATA only when the
+    # NAMED path carries no corpus, and announces either way. That asymmetry is
+    # deliberate and measured: letting the pointer win over a root that IS
+    # readable makes every developer who has it exported run a different gate
+    # from CI, and it is a gate scanning a tree nobody named.
+    #
+    # The fallback name stays the literal relative path the old message printed,
+    # so a reader still learns WHAT was looked for when nothing is found.
+    named = (Path(a.corpus) if a.corpus else
+             next((b / _DEFAULT_CORPUS_REL for b in here.parents
+                   if (b / _DEFAULT_CORPUS_REL).is_dir()),
+                  Path(_DEFAULT_CORPUS_REL)))
+    corpus, origin = _corpus.resolve(named, subdir=_CORPUS_SUBDIR,
+                                     gate="l_doc_field_producer_check",
+                                     announce=True)
+    if not corpus.is_dir():
+        # FOUR OUTCOMES, decided in one place: a pointer that is set and wrong
+        # is UNDETERMINED (never excused by the opt-in); nothing anywhere is
+        # NO_CORPUS only when the CALL SITE said the repo need not carry one;
+        # otherwise UNDETERMINED, unchanged.
+        return _corpus.refuse("l_doc_field_producer_check", named, corpus,
+                              origin, a.corpus_may_be_absent, _SCANNED)
 
     rep = audit(programs, corpus)
+
+    # ZERO ON EITHER SIDE IS A REFUSAL, NOT A VERDICT. This gate compares two
+    # populations, and an empty one makes the comparison vacuous in a way that
+    # LOOKS like a result:
+    #   * no readers  -> no field can be found, and it prints [PASS];
+    #   * no documents-> `now` is empty, so every recorded entry reads as
+    #                    "resolved" and the run FAILs for a reason that is false
+    #                    — or, with --write-baseline, wipes the register.
+    if rep["fields_read"] == 0:
+        print(f"UNDETERMINED: no *_check.py under {programs} reads an L-doc "
+              f"field, so this gate had NOTHING to look for. Zero readers is "
+              f"'I could not look', not 'every field has a producer'.",
+              file=sys.stderr)
+        return 2
+    if rep["docs_scanned"] == 0:
+        print(f"UNDETERMINED: {corpus} is a directory but holds no L-doc this "
+              f"gate can read (0 of them carry a `fields` object), so 0 "
+              f"document(s) were scanned against {rep['fields_read']} field(s) "
+              f"read by checkers. A zero denominator cannot say whether a "
+              f"field has a producer, and adjudicating the baseline against it "
+              f"would report every recorded entry as resolved.", file=sys.stderr)
+        return 2
+
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(rep, indent=2) + "\n")
     bl = Path(a.baseline) if a.baseline else here.parent / _BASELINE_NAME
@@ -201,8 +329,11 @@ def main(argv=None) -> int:
         print(f"wrote {bl} ({len(now)} entr(ies))")
         return 0
 
-    print(f"l_doc_field_producer_check: {rep['docs_scanned']} L-doc(s), "
-          f"{rep['fields_read']} field(s) read by checkers")
+    # The tree actually scanned is NAMED, not implied. Whatever this gate read,
+    # it says so — a gate that scans a different tree from the one on its
+    # command line is the silence #1710 removed.
+    print(f"l_doc_field_producer_check: {rep['docs_scanned']} L-doc(s) under "
+          f"{corpus}, {rep['fields_read']} field(s) read by checkers")
     # The blind spot is PRINTED, never silent: a field absent from every
     # document may be nested beyond this flat scan, and claiming it as a
     # defect would be inventing one out of the scanner's own limits.
