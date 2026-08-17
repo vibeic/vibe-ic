@@ -699,6 +699,42 @@ exemption describes a state this gate cannot reach"
 # non-zero return would kill the worker BEFORE it wrote its result file, and a
 # missing result file is read (correctly) as a killed worker. A gate that merely
 # FAILED must never present as a lost one.
+#: `_gate_attest_locked <jsonl-target> <helper-args...>` — append one record under
+#: an exclusive lock keyed to the target file.
+#:
+#: WHY A LOCK AND NOT A FILE PER WORKER. The per-worker file was the first design
+#: and it created the defect it was meant to avoid, one level down: the consumer
+#: reads `GATE_DISPATCH_ATTESTATION_FILE` STRAIGHT OUT OF ITS OWN ENVIRONMENT
+#: (`gate_host_independence_check.py:1302`), so pointing each worker at a private
+#: file pointed that gate at its own not-yet-written record instead of all 79.
+#: There is one correct path, the caller owns it, and concurrency has to bend
+#: around that rather than the other way round.
+#:
+#: FAIL-CLOSED IN BOTH DIRECTIONS THAT MATTER:
+#:   * no flock on the host -> DO NOT write unlocked. An interleaved record makes
+#:     the consumer refuse the whole comparison at random under load, which is
+#:     worse than a named refusal here.
+#:   * lock not acquired within the timeout -> also a refusal. A gate that gave up
+#:     waiting and wrote anyway is the interleaving this exists to prevent.
+#: Both return non-zero, and every caller turns that into PROCESS ATTESTATION
+#: FAILED — never into a silent success.
+#:
+#: 120 s is far above any observed contention (83 gates, 8 workers, each append is
+#: a few milliseconds) and far below the enclosing gate's own bound, so a timeout
+#: here means something is genuinely wedged rather than merely busy.
+_gate_attest_locked() {
+  local target="$1"; shift
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "   ^^ PROCESS ATTESTATION FAILED: no flock on this host, and appending" \
+         "a record unlocked would let two workers interleave one JSON line —" \
+         "which the consumer refuses for the WHOLE comparison" >&2
+    return 1
+  fi
+  flock --timeout 120 "${target}.lock" \
+    python3 "$GATE_DISPATCH_ATTESTATION_HELPER" "$@"
+}
+
+
 _gate_execute() {
   local tolerate="$1" may_write="$2" label="$3" shown="$4"
   local ex_until="$5" ex_why="$6" wd="$7"; shift 7
@@ -728,7 +764,7 @@ _gate_execute() {
         echo "   ^^ PROCESS ATTESTATION FAILED: $label — tee could not" \
              "preserve the complete process stream; a partial record is not" \
              "accepted as evidence" >&2
-      elif ! python3 "$GATE_DISPATCH_ATTESTATION_HELPER" \
+      elif ! _gate_attest_locked "$GATE_DISPATCH_ATTESTATION_FILE" \
           --label "$label" --returncode "$rc" --output-log "$capture" \
           --append-jsonl "$GATE_DISPATCH_ATTESTATION_FILE" \
           --root "${ROOT:-$wd}" --root "$wd" -- "$@"; then
@@ -738,7 +774,7 @@ _gate_execute() {
              "refuse rather than reconstruct it from prose" >&2
       elif [ -n "$GATE_DISPATCH_PROGRESS_FILE" ] \
            && [ "$GATE_DISPATCH_PROGRESS_FILE" != "$GATE_DISPATCH_ATTESTATION_FILE" ] \
-           && ! python3 "$GATE_DISPATCH_ATTESTATION_HELPER" \
+           && ! _gate_attest_locked "$GATE_DISPATCH_PROGRESS_FILE" \
           --label "$label" --returncode "$rc" --output-log "$capture" \
           --append-jsonl "$GATE_DISPATCH_PROGRESS_FILE" \
           --root "${ROOT:-$wd}" --root "$wd" -- "$@"; then
@@ -846,15 +882,26 @@ _gate_pool_worker() {   # <idx> <tolerate> <may_write> <label> <shown> <until>
                         # <why> <cwd> <cmd...>
   local idx="$1"; shift
   local d="$GATE_POOL_DIR/$idx"
-  # A PRIVATE attestation file per gate, concatenated back in DECLARATION order
-  # by `_gate_pool_collect`. Eight processes appending JSON lines to one file
-  # would interleave a record sooner or later, and the consumer of that file
-  # (`gate_host_independence_check`) refuses a malformed one — so the failure
-  # would be a NOT CHECKED for the whole comparison, at random, under load.
-  # The PROGRESS mirror is deliberately left pointing at the shared file: it is
-  # advisory and its entire purpose is to be observable WHILE the run is going.
-  [ -z "$GATE_DISPATCH_ATTESTATION_FILE" ] \
-    || GATE_DISPATCH_ATTESTATION_FILE="$d.attest"
+  # THE ATTESTATION FILE IS NOT REDIRECTED. Workers append to the one the caller
+  # owns, serialised by `flock` in `_gate_execute`.
+  #
+  # This used to point each worker at `$d.attest` inside the pool, to stop eight
+  # processes interleaving JSON lines into one file. The interleaving worry was
+  # real; the placement was not. `_gate_execute` derives its process capture from
+  # this path, the attestation RECORD stores that path, `_gate_pool_collect`
+  # concatenated the records into the outer file — so the records travelled and
+  # the files they named did not, and `gate_dispatch_finish` then removed the
+  # pool. Measured: `gates are host-independent` went from `[600s]` (it ran) to
+  # `[0s] ATTESTATION_UNAVAILABLE — [Errno 2] … '/tmp/gate-pool.XXXXXX/7…'`.
+  #
+  # Two follow-up fixes each moved the ENOENT one file along, which is the signal
+  # that the indirection itself was the defect rather than any particular
+  # lifetime. A lock removes the class: one path, owned by the caller, living
+  # exactly as long as the caller's own EXIT trap, with no derived location for a
+  # consumer to follow into something already deleted.
+  #
+  # Cost: one `flock` per gate on a run whose gates average eleven seconds.
+  :
   _GX_STATE=""; _GX_SECS=0
   _gate_execute "$@" > "$d.out" 2> "$d.err"
   # WRITTEN LAST, AND RENAMED INTO PLACE. The result file is the worker's proof
@@ -986,9 +1033,10 @@ ${GATE_LABELS[$idx]}"
   GATE_SECONDS[$idx]="$secs"
   case "$st" in FAIL|WROTE_CORPUS) GATE_DISPATCH_FAIL=1 ;; esac
   [ "${attf:-0}" = "0" ] || GATE_DISPATCH_ATTESTATION_FAILED=1
-  if [ -n "$GATE_DISPATCH_ATTESTATION_FILE" ] && [ -s "$d.attest" ]; then
-    cat -- "$d.attest" >> "$GATE_DISPATCH_ATTESTATION_FILE"
-  fi
+  # NOTHING TO MERGE. Workers append directly to the caller's file under a lock
+  # (`_gate_attest_locked`), so there is no per-worker copy to concatenate and no
+  # derived path for a consumer to follow into a directory this function's caller
+  # is about to delete.
   return 0
 }
 
