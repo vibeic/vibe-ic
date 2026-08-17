@@ -37,6 +37,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -47,6 +48,7 @@ import step_preflight as _spf  # required_inputs PRE-FLIGHT at every dispatch si
 # THE L-document write chokepoint — records the producing release on the
 # L1 / L4 / L8 documents this runner back-fills from a prompt.
 import l_doc_generator_stamp as _stamp
+import _entry_attestation
 
 # Phase 1 owns the doc-extraction track. The ~47k-line
 # doc-extraction implementation lives in `phase1_doc_one_shot_runner.py`.
@@ -563,6 +565,42 @@ def run_phase1_second_track(project: Path, rc_in: int) -> int:
 
 # ── Top-level dispatcher ───────────────────────────────────────────
 
+def _finalize_entry_attestation(project: Path, report_path: Path,
+                                completion_rc: int) -> int:
+    """Record a completed producer; strict score-time verification gates it."""
+    docs = project / "phase1" / "generated_docs"
+    has_docs = docs.is_dir() and any(docs.glob("L*.json"))
+    if not has_docs:
+        print("ENTRY_ATTESTATION_NOT_RECORDED: runner produced no L-document "
+              "to attest", file=sys.stderr)
+        return int(completion_rc)
+    test_root = None
+    ledger_override = None
+    # Pytest subprocesses must not leave temporary-project rows in the real
+    # passwd-derived state ledger.  This affects producer WRITE only; the strict
+    # guard deliberately ignores every env-selected path.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        test_root = (Path(tempfile.gettempdir()) /
+                     f"vibe-ic-entry-attestation-test-{os.getuid()}-{os.getpid()}")
+        test_root.mkdir(mode=0o700, exist_ok=True)
+        ledger_override = test_root / "entry.jsonl"
+    try:
+        _entry_attestation.record_completed_run(
+            project, runner="phase1_one_shot_runner",
+            completion_rc=completion_rc, report=report_path,
+            ledger_path_override=ledger_override)
+    except _entry_attestation.AttestationError as exc:
+        print("ENTRY_ATTESTATION_NOT_RECORDED: " + str(exc), file=sys.stderr)
+    finally:
+        if test_root is not None:
+            try:
+                (test_root / "entry.jsonl").unlink(missing_ok=True)
+                test_root.rmdir()
+            except OSError:
+                pass
+    return int(completion_rc)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -652,9 +690,10 @@ def main() -> int:
         # A, the vendor-document front door) without a steps tree.
         summary["steps_view"] = _pl.emit_steps_view(
             project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
-        (reports / "phase1_one_shot.json").write_text(
+        report_path = reports / "phase1_one_shot.json"
+        report_path.write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-        return rc
+        return _finalize_entry_attestation(project, report_path, rc)
 
     # Prompt mode: original phase1_engine path
     plan: List[StepResult] = []
@@ -698,13 +737,15 @@ def main() -> int:
     # reports/audit/steps_view.json either way.
     summary["steps_view"] = _pl.emit_steps_view(
         project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
-    (reports / "phase1_one_shot.json").write_text(
+    report_path = reports / "phase1_one_shot.json"
+    report_path.write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     print(f"\n=== phase1_one_shot_runner DONE (mode={mode}) ===")
     print(f"verdict: {summary['verdict']}")
     for s in plan:
         print(f"  {s.status:6} {s.name:24} {s.detail[:120]}")
-    return max(0 if summary["verdict"] != "FAIL" else 1, rc_second)
+    final_rc = max(0 if summary["verdict"] != "FAIL" else 1, rc_second)
+    return _finalize_entry_attestation(project, report_path, final_rc)
 
 
 if __name__ == "__main__":

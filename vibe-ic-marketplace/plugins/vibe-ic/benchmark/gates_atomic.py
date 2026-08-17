@@ -64,7 +64,7 @@ Exit 0 iff phase1_run_all + iverilog_compile pass (the two hard gates).
 On hard-PASS the scoreable artifact lands at <workdir>/../samples/<prob>_sample01.sv.
 """
 from __future__ import annotations
-import argparse, json, os, subprocess, sys
+import argparse, json, os, subprocess, sys, tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent          # .../benchmark/
@@ -116,6 +116,41 @@ def _l9_rendered(wd: Path) -> bool:
         if d.is_dir() and any(d.glob("L9*.json")):
             return True
     return False
+
+
+def record_phase1_entry_attestation(wd: Path, prob: str, rc: int,
+                                    phase1_step: dict, *,
+                                    ledger_path_override: Path | None = None):
+    """Commit Shape-C Phase-1 only after the real engine/fallback completed."""
+    if str(PROGRAMS) not in sys.path:
+        sys.path.insert(0, str(PROGRAMS))
+    import _entry_attestation as _entry_att
+    report = wd / "reports" / "gates_atomic_phase1.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({
+        "runner": "gates_atomic", "project": str(wd.resolve()),
+        "prob": prob, "completion_rc": rc,
+        "phase1_run_all": phase1_step,
+    }, indent=2) + "\n")
+    test_root = None
+    if ledger_path_override is None and os.environ.get("PYTEST_CURRENT_TEST"):
+        test_root = (Path(tempfile.gettempdir()) /
+                     f"vibe-ic-entry-attestation-test-{os.getuid()}-{os.getpid()}")
+        test_root.mkdir(mode=0o700, exist_ok=True)
+        ledger_path_override = test_root / "entry.jsonl"
+    try:
+        return _entry_att.record_completed_run(
+            wd, runner="gates_atomic", completion_rc=rc, report=report,
+            l_doc_dirs=[wd / "out" / "generated_docs",
+                        wd / "phase1_proj" / "phase1" / "generated_docs"],
+            ledger_path_override=ledger_path_override)
+    finally:
+        if test_root is not None:
+            try:
+                (test_root / "entry.jsonl").unlink(missing_ok=True)
+                test_root.rmdir()
+            except OSError:
+                pass
 
 
 def main():
@@ -240,6 +275,16 @@ def main():
     l9_ok = _l9_rendered(wd)
     steps["phase1_run_all"] = {"verdict": "PASS" if rc == 0 and l9_ok else "FAIL",
                                "rc": rc, "l9_rendered": l9_ok, "log": out[-400:]}
+    if steps["phase1_run_all"]["verdict"] == "PASS":
+        # Strict entry provenance lives outside the author-writable run tree.
+        # The report and L-docs below are hashed inputs, not self-attestation.
+        try:
+            record_phase1_entry_attestation(
+                wd, a.prob, rc, steps["phase1_run_all"])
+        except Exception as exc:
+            print("ENTRY_ATTESTATION_NOT_RECORDED: " + str(exc),
+                  file=sys.stderr)
+            sys.exit(2)
 
     # 2. pre-RTL spec self-consistency lint (prompt alone)
     rc, out = run([sys.executable, str(PROGRAMS / "spec_self_consistency_check.py"),

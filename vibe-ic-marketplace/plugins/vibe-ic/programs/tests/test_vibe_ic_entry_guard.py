@@ -11,6 +11,8 @@ Covers:
 from __future__ import annotations
 
 import json
+import importlib.util
+import os
 import subprocess
 import sys
 import tempfile
@@ -25,13 +27,38 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import l_doc_generator_stamp as generator_stamp
+import _entry_attestation as entry_attestation
+import vibe_ic_entry_guard as entry_guard
+import phase1_one_shot_runner as phase1_runner
 from _entry_guard_fixture import prompt_report_document
 
+_GATES_SPEC = importlib.util.spec_from_file_location(
+    "entry_attestation_gates_atomic",
+    PROGRAMS.parent / "benchmark" / "gates_atomic.py")
+assert _GATES_SPEC and _GATES_SPEC.loader
+gates_atomic = importlib.util.module_from_spec(_GATES_SPEC)
+_GATES_SPEC.loader.exec_module(gates_atomic)
 
-def run(args, cwd=None):
+
+def run(args, cwd=None, env=None):
     cp = subprocess.run([sys.executable, str(GUARD), *args],
-                        capture_output=True, text=True, cwd=str(cwd) if cwd else None)
+                        capture_output=True, text=True,
+                        cwd=str(cwd) if cwd else None, env=env)
     return cp.returncode, cp.stdout, cp.stderr
+
+
+def _test_ledger(tmp_path: Path) -> Path:
+    state = tmp_path / "external-state"
+    state.mkdir(mode=0o700)
+    return state / "entry.jsonl"
+
+
+def _record_test_attestation(project: Path, ledger: Path,
+                             rc: int = 0):
+    return entry_attestation.record_completed_run(
+        project, runner="phase1_one_shot_runner", completion_rc=rc,
+        report=project / "reports" / "phase1_one_shot.json",
+        ledger_path_override=ledger)
 
 
 def _valid_orchestrator_report(project: Path):
@@ -73,7 +100,7 @@ def test_pass_with_orchestrator_report():
         rep.mkdir(parents=True)
         (rep / "vibe_ic_one_shot.json").write_text(
             json.dumps(_valid_orchestrator_report(td)))
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0
         assert "PASS" in out
 
@@ -88,7 +115,7 @@ def test_pass_with_phase1_report(rel):
         rep = td / rel
         rep.parent.mkdir(parents=True)
         rep.write_text(json.dumps(_valid_phase1_report(td)))
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0
 
 
@@ -101,8 +128,19 @@ def test_pass_with_prompt_mode_phase1_report():
         rep = td / "reports" / "phase1_one_shot.json"
         rep.parent.mkdir(parents=True)
         rep.write_text(json.dumps(_valid_prompt_phase1_report(td)))
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0, err
+
+
+def test_strict_rejects_handwritten_prompt_envelope_without_runner_attestation():
+    """A reconstructable report in the run tree is not process provenance."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        rep = td / "reports" / "phase1_one_shot.json"
+        rep.parent.mkdir(parents=True)
+        rep.write_text(json.dumps(_valid_prompt_phase1_report(td)))
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1, (out, err)
 
 
 def test_pass_with_failed_docs_mode_phase1_report():
@@ -114,7 +152,7 @@ def test_pass_with_failed_docs_mode_phase1_report():
         report = _valid_phase1_report(td)
         report.update({"verdict": "FAIL", "delegated_rc": 1})
         rep.write_text(json.dumps(report))
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0, err
 
 
@@ -124,8 +162,220 @@ def test_pass_with_l1_datasheet():
         gd = td / "phase1" / "generated_docs"
         gd.mkdir(parents=True)
         (gd / "L1_DATASHEET.json").write_text(json.dumps(_valid_layer_doc()))
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0
+
+
+def test_strict_rejects_public_stamp_without_runner_attestation():
+    """Calling the public stamp API cannot impersonate a completed runner."""
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        gd = td / "phase1" / "generated_docs"
+        gd.mkdir(parents=True)
+        forged = generator_stamp.stamp(
+            {"fields": {"ic_name": "TopModule"}},
+            emitter="phase1_one_shot_runner._seed_structural_ports")
+        (gd / "L1_DATASHEET.json").write_text(json.dumps(forged))
+        rc, out, err = run([str(td), "--strict"])
+        assert rc == 1, (out, err)
+
+
+def test_strict_accepts_latest_external_runner_attestation(tmp_path):
+    project = tmp_path / "project"
+    report = project / "reports" / "phase1_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps(_valid_prompt_phase1_report(project)))
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L1_DATASHEET.json").write_text(
+        json.dumps(_valid_layer_doc()))
+    ledger = _test_ledger(tmp_path)
+    _record_test_attestation(project, ledger)
+
+    verdict, findings = entry_guard.audit(
+        project, strict=True, ledger_path_override=ledger)
+    assert verdict == "PASS", findings
+
+
+def test_strict_rejects_same_path_replacement_after_attestation(tmp_path):
+    project = tmp_path / "project"
+    report = project / "reports" / "phase1_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps(_valid_prompt_phase1_report(project)))
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    l1 = docs / "L1_DATASHEET.json"
+    l1.write_text(json.dumps(_valid_layer_doc()))
+    ledger = _test_ledger(tmp_path)
+    _record_test_attestation(project, ledger)
+
+    original = l1.read_text()
+    l1.unlink()
+    l1.write_text(original)
+    verdict, findings = entry_guard.audit(
+        project, strict=True, ledger_path_override=ledger)
+    assert verdict == "FAIL"
+    assert "stat identity changed" in findings[0].detail
+
+
+def test_strict_rejects_replayed_nonce(tmp_path):
+    project = tmp_path / "project"
+    report = project / "reports" / "phase1_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps(_valid_prompt_phase1_report(project)))
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L1_DATASHEET.json").write_text(
+        json.dumps(_valid_layer_doc()))
+    ledger = _test_ledger(tmp_path)
+    _record_test_attestation(project, ledger)
+    line = ledger.read_text()
+    ledger.write_text(line + line)
+    ledger.chmod(0o600)
+
+    verdict, findings = entry_guard.audit(
+        project, strict=True, ledger_path_override=ledger)
+    assert verdict == "FAIL"
+    assert "replayed nonce" in findings[0].detail
+
+
+def test_strict_cli_ignores_home_and_xdg_ledger_redirects(tmp_path):
+    project = tmp_path / "project"
+    report = project / "reports" / "phase1_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps(_valid_prompt_phase1_report(project)))
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L1_DATASHEET.json").write_text(
+        json.dumps(_valid_layer_doc()))
+    fake_ledger = _test_ledger(tmp_path)
+    _record_test_attestation(project, fake_ledger)
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path / "fake-home")
+    env["XDG_STATE_HOME"] = str(fake_ledger.parent)
+
+    rc, out, err = run([str(project), "--strict"], env=env)
+    assert rc == 1
+    assert "ledger unavailable" in err
+
+
+def test_strict_rejects_ledger_mode_and_symlink_anomalies(tmp_path):
+    project = tmp_path / "project"
+    report = project / "reports" / "phase1_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps(_valid_prompt_phase1_report(project)))
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L1_DATASHEET.json").write_text(
+        json.dumps(_valid_layer_doc()))
+    ledger = _test_ledger(tmp_path)
+    _record_test_attestation(project, ledger)
+    ledger.chmod(0o644)
+    verdict, findings = entry_guard.audit(
+        project, strict=True, ledger_path_override=ledger)
+    assert verdict == "FAIL"
+    assert "mode 0600" in findings[0].detail
+
+    ledger.chmod(0o600)
+    ledger.parent.chmod(0o755)
+    verdict, findings = entry_guard.audit(
+        project, strict=True, ledger_path_override=ledger)
+    assert verdict == "FAIL"
+    assert "mode 0700" in findings[0].detail
+
+    ledger.parent.chmod(0o700)
+    target = ledger.with_name("target.jsonl")
+    ledger.rename(target)
+    ledger.symlink_to(target)
+    verdict, findings = entry_guard.audit(
+        project, strict=True, ledger_path_override=ledger)
+    assert verdict == "FAIL"
+    assert "ledger unavailable" in findings[0].detail
+
+
+def test_phase1_attestation_write_failure_preserves_flow_rc_and_warns(
+        tmp_path, monkeypatch, capsys):
+    project = tmp_path / "project"
+    report = project / "reports" / "phase1_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text("{}\n")
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L1_DATASHEET.json").write_text("{}\n")
+
+    def fail(*args, **kwargs):
+        raise entry_attestation.AttestationError("read-only user state")
+
+    monkeypatch.setattr(entry_attestation, "record_completed_run", fail)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    assert phase1_runner._finalize_entry_attestation(project, report, 0) == 0
+    assert "ENTRY_ATTESTATION_NOT_RECORDED" in capsys.readouterr().err
+
+
+def test_real_phase1_front_door_writes_canonical_attestation_and_strict_passes(
+        tmp_path):
+    """Prove-by-run, with its originating-host test ledger cleaned afterward."""
+    project = tmp_path / "project"
+    prompt = project / "input" / "phase1_prompt.md"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("# a 4-bit up counter with a synchronous reset\n")
+    canonical = entry_attestation.ledger_path(project)
+    env = os.environ.copy()
+    env.pop("PYTEST_CURRENT_TEST", None)  # exercise the production writer path
+    try:
+        cp = subprocess.run(
+            [sys.executable, str(PROGRAMS / "phase1_one_shot_runner.py"),
+             str(project), "--mode", "prompt", "--ic-name", "TST_CHIP"],
+            capture_output=True, text=True, env=env)
+        assert cp.returncode == 0, cp.stderr
+        guarded = subprocess.run(
+            [sys.executable, str(GUARD), str(project), "--strict"],
+            capture_output=True, text=True, env=env)
+        assert guarded.returncode == 0, guarded.stderr
+        assert "PASS" in guarded.stdout
+    finally:
+        canonical.unlink(missing_ok=True)
+
+
+def test_shape_b_run_root_accepts_each_real_phase1_child_attestation(tmp_path):
+    run_root = tmp_path / "run"
+    project = run_root / "work" / "design_a"
+    report = project / "reports" / "phase1_one_shot.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps(_valid_prompt_phase1_report(project)))
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L1_DATASHEET.json").write_text(
+        json.dumps(_valid_layer_doc()))
+    ledger = _test_ledger(tmp_path)
+    _record_test_attestation(project, ledger)
+
+    verdict, findings = entry_guard.audit(
+        run_root, strict=True, ledger_path_override=ledger)
+    assert verdict == "PASS", findings
+
+
+def test_shape_c_actual_gate_producer_attests_and_new_doc_invalidates(tmp_path):
+    run_root = tmp_path / "run"
+    work = run_root / "work" / "Prob001"
+    docs = work / "out" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps(
+        _valid_layer_doc({"top_module": "TopModule"})))
+    ledger = _test_ledger(tmp_path)
+    step = {"verdict": "PASS", "rc": 0, "l9_rendered": True, "log": ""}
+    gates_atomic.record_phase1_entry_attestation(
+        work, "Prob001", 0, step, ledger_path_override=ledger)
+
+    verdict, findings = entry_guard.audit(
+        run_root, strict=True, ledger_path_override=ledger)
+    assert verdict == "PASS", findings
+
+    (docs / "L1_DATASHEET.json").write_text(json.dumps(_valid_layer_doc()))
+    verdict, findings = entry_guard.audit(
+        run_root, strict=True, ledger_path_override=ledger)
+    assert verdict == "FAIL"
+    assert "complete L-doc set differs" in findings[0].detail
 
 
 @pytest.mark.parametrize("emitter", [
@@ -141,7 +391,7 @@ def test_pass_with_each_shipped_l_doc_writer_shape(emitter):
         gd.mkdir(parents=True)
         (gd / "L1_DATASHEET.json").write_text(
             json.dumps(_valid_layer_doc(emitter=emitter)))
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0, err
 
 
@@ -209,7 +459,7 @@ def test_pass_shape_c_out_generated_docs():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         _shape_c(td, "work/Prob001_zero/out/generated_docs", "L1_DATASHEET.json")
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0, err
         assert "PASS" in out
 
@@ -220,7 +470,7 @@ def test_pass_shape_c_phase1_proj_layout():
         _shape_c(td, "work/Prob153_gshare/phase1_proj/phase1/generated_docs",
                  "L9_INTEGRATION_SPEC.json",
                  json.dumps(_valid_layer_doc({"top_module": "TopModule"})))
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0, err
 
 
@@ -233,7 +483,7 @@ def test_pass_shape_b_orchestrator_report():
         rep.mkdir(parents=True)
         (rep / "vibe_ic_one_shot.json").write_text(
             json.dumps(_valid_orchestrator_report(rep.parents[1])))
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0, err
 
 
@@ -242,7 +492,7 @@ def test_pass_shape_b_phase1_layer_doc():
         td = Path(td)
         _shape_c(td, "work/design_a/phase1/generated_docs",
                  "L1_DATASHEET.json")
-        rc, out, err = run([str(td), "--strict"])
+        rc, out, err = run([str(td)])
         assert rc == 0, err
 
 

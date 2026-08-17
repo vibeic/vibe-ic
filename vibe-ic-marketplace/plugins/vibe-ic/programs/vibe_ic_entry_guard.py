@@ -16,8 +16,7 @@ Canonical single entry point:
 That orchestrator already integrates phase1_one_shot_runner.py (which in turn
 invokes phase1_engine.cli), then phase2 / analog / phase3.
 
-This guard accepts any of the following as evidence that the run went through
-the Vibe-IC runner:
+In advisory mode this guard recognizes the following structural evidence:
 
   - reports/orchestrator/vibe_ic_one_shot.json   (full orchestrator report)
   - reports/orchestrator/phase1_one_shot.json    (phase1 standalone runner)
@@ -27,7 +26,13 @@ the Vibe-IC runner:
   - work/<design>/phase1/generated_docs/L*.json  (Shape-B fact graph)
 
 A run dir that lacks all of these is rejected unless the caller explicitly
-passes --allow-direct-agent (which still emits a mandatory disclosure).
+passes --allow-direct-agent (which still emits a mandatory disclosure). In
+``--strict`` mode structural files are not provenance: the originating host's
+fixed passwd-derived user-state ledger must contain the latest runner-completion
+row, and its report/L-doc hashes plus stat identities must still match. Moving a
+published archive to another host does not move that ledger; strict verification
+therefore fails loudly until the design is re-run on that host. This is an
+originating-host run attestation, not portable or cryptographic provenance.
 
 Usage:
     python3 vibe_ic_entry_guard.py <project|run_dir> [--strict]
@@ -54,6 +59,7 @@ from typing import List, Tuple
 
 import l_doc_generator_stamp as _generator_stamp
 import l_doc_taxonomy as _l_doc_taxonomy
+import _entry_attestation
 
 
 # Ordered: strongest evidence first.  Any one of these is sufficient.
@@ -419,9 +425,45 @@ def _has_evidence(project: Path) -> Tuple[bool, List[EntryGuardFinding]]:
     return False, findings
 
 
-def audit(project: Path) -> Tuple[str, List[EntryGuardFinding]]:
+def audit(project: Path, *, strict: bool = False,
+          ledger_path_override: Path | None = None) \
+        -> Tuple[str, List[EntryGuardFinding]]:
     ok, findings = _has_evidence(project)
-    return ("PASS", []) if ok else ("FAIL", findings)
+    if not ok:
+        return "FAIL", findings
+    if strict:
+        candidates: List[Path] = []
+        if ((project / "reports" / "phase1_one_shot.json").is_file()
+                or (project / "phase1" / "generated_docs").is_dir()):
+            candidates.append(project.resolve())
+        work = project / "work"
+        if work.is_dir():
+            for child in sorted(path for path in work.iterdir()
+                                if path.is_dir()):
+                if (any((child / rel).is_dir() for rel in (
+                        "phase1/generated_docs", "out/generated_docs",
+                        "phase1_proj/phase1/generated_docs"))
+                        or (child / "reports" / "orchestrator"
+                            / "vibe_ic_one_shot.json").is_file()):
+                    candidates.append(child.resolve())
+        if not candidates:
+            candidates = [project.resolve()]
+        if ledger_path_override is not None and len(candidates) != 1:
+            return "FAIL", [EntryGuardFinding(
+                rule="INVALID_ATTESTATION_TEST_INJECTION", path=str(project),
+                detail="one injected ledger path cannot verify multiple projects")]
+        for candidate in candidates:
+            attested, detail = _entry_attestation.verify_latest(
+                candidate, ledger_path_override=ledger_path_override)
+            if not attested:
+                return "FAIL", [EntryGuardFinding(
+                    rule="MISSING_EXTERNAL_RUNNER_ATTESTATION",
+                    path=str(candidate),
+                    detail=("run-tree evidence is structurally valid but is not "
+                            f"runner provenance: {detail}. Strict mode requires "
+                            "the latest fixed user-state ledger row to match the "
+                            "report and every L-document exactly."))]
+    return "PASS", []
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -442,7 +484,7 @@ def main(argv: List[str] | None = None) -> int:
         print(f"error: project/run dir not found: {project}", file=sys.stderr)
         return 2
 
-    verdict, findings = audit(project)
+    verdict, findings = audit(project, strict=args.strict)
 
     report = {
         "gate": "vibe_ic_entry_guard",
