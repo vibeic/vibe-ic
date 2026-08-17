@@ -35,6 +35,10 @@ def _baseline(path: Path, state: str) -> Path:
         path.mkdir()
     elif state == "truncated":
         path.write_text('{"known": [', encoding="utf-8")
+    elif state == "invalid_utf8":
+        path.write_bytes(b'{"known": ["sample_check.py\xff"]}')
+    elif state == "invalid_schema":
+        path.write_text('{"known": [null]}', encoding="utf-8")
     else:
         assert state == "absent"
         assert not path.exists()
@@ -73,7 +77,9 @@ def _run(*argv: str) -> subprocess.CompletedProcess[str]:
         [sys.executable, *argv], capture_output=True, text=True, check=False)
 
 
-@pytest.mark.parametrize("state", ("absent", "unreadable", "truncated"))
+@pytest.mark.parametrize(
+    "state", ("absent", "unreadable", "truncated", "invalid_utf8",
+              "invalid_schema"))
 def test_flow_enforcement_audit_refuses_a_baseline_it_cannot_read(
         tmp_path: Path, state: str) -> None:
     flow, programs = _flow_tree(tmp_path)
@@ -122,7 +128,9 @@ def test_flow_enforcement_audit_does_not_overwrite_a_truncated_measurement(
     assert baseline.read_text(encoding="utf-8") == truncated
 
 
-@pytest.mark.parametrize("state", ("absent", "unreadable", "truncated"))
+@pytest.mark.parametrize(
+    "state", ("absent", "unreadable", "truncated", "invalid_utf8",
+              "invalid_schema"))
 def test_checker_wiring_audit_refuses_a_baseline_it_cannot_read(
         tmp_path: Path, state: str) -> None:
     _wiring_tree(tmp_path)

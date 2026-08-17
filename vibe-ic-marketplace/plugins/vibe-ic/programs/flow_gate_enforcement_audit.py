@@ -1601,6 +1601,10 @@ def _load_baseline_doc(path: Path) -> Optional[dict]:
     if any(key in loaded and not isinstance(loaded[key], list)
            for key in registers):
         return None
+    if any(not isinstance(entry, str)
+           for key in registers
+           for entry in loaded.get(key, [])):
+        return None
     return loaded
 
 

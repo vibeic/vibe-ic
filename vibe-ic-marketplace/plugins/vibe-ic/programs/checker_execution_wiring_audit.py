@@ -635,11 +635,17 @@ def _load_baseline(p: Path):
     if not p.is_file():
         return None
     try:
-        d = json.loads(p.read_text(errors="replace"))
-    except (OSError, ValueError):
+        # A replacement character is not evidence that the persisted member
+        # name was measured.  Decode strictly so corrupt UTF-8 takes the same
+        # NOT CHECKED path as truncated JSON instead of fabricating a renamed
+        # baseline entry.
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
         return None
     k = d.get("known") if isinstance(d, dict) else d
-    return sorted({str(x) for x in k}) if isinstance(k, list) else None
+    if not isinstance(k, list) or any(not isinstance(x, str) for x in k):
+        return None
+    return sorted(set(k))
 
 
 def _resolve(repo_root: Path):
