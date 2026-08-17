@@ -5959,13 +5959,81 @@ _DELAYED_BLOCKING_SELF_TOGGLE_RE = re.compile(
     r'#\s*(?:\([^;]*?\)|(?:\d+(?:\.\d+)?|[A-Za-z_]\w*))\s*'
     r'(?P<name>[A-Za-z_]\w*)\s*(?P<op>(?<![<>=!])=(?!=))\s*'
     r'~\s*(?P=name)\s*;', re.S)
+_BARE_ALWAYS_RE = re.compile(r'(?<![\w$])always(?![\w$])')
+_FOREVER_RE = re.compile(r'(?<![\w$])forever(?![\w$])')
+
+
+def _blank_preprocessor_conditionals(src: str) -> str:
+    """Blank every conditional-compilation branch without shifting offsets.
+
+    This autofixer has no access to the simulator/synthesizer's ``-D`` macro
+    environment.  Treating a branch as active would therefore be a guess, and
+    procedural keywords in an inactive (even syntactically incomplete) branch
+    can lend false scope to live code after `` `endif``.  Exclude the complete
+    conditional region, including nested branches, and leave unconditional
+    source available to the rule.  This is deliberately fail-closed: a real
+    oscillator behind a macro is left untouched rather than rewritten under an
+    unproved configuration.
+    """
+    out: List[str] = []
+    depth = 0
+    continuation = False
+    conditional_open = re.compile(r'^\s*`(?:ifdef|ifndef)\b')
+    conditional_close = re.compile(r'^\s*`endif\b')
+    directive = re.compile(r'^\s*`[A-Za-z_]\w*')
+
+    for line in src.splitlines(keepends=True):
+        opens = bool(conditional_open.match(line))
+        closes = bool(conditional_close.match(line))
+        hidden = depth > 0 or opens or closes or continuation \
+            or bool(directive.match(line))
+        if hidden:
+            out.append(''.join('\n' if ch == '\n' else '\r' if ch == '\r'
+                               else ' ' for ch in line))
+        else:
+            out.append(line)
+
+        if opens:
+            depth += 1
+        if closes and depth > 0:
+            depth -= 1
+        continuation = (bool(directive.match(line)) or continuation) \
+            and line.rstrip('\r\n').rstrip().endswith('\\')
+
+    return ''.join(out)
+
+
+def _bare_always_spans(src: str) -> List[Tuple[int, int]]:
+    """Return bounded spans for delay-driven ``always`` statements only."""
+    spans: List[Tuple[int, int]] = []
+    for m in _BARE_ALWAYS_RE.finditer(src):
+        nxt = re.search(r'\S', src[m.end():])
+        if not nxt:
+            continue
+        body_start = m.end() + nxt.start()
+        if src[body_start] == '@':
+            continue
+        body, end = _statement_after(src, m.end())
+        if body:
+            spans.append((m.start(), end))
+    return spans
+
+
+def _forever_spans(src: str) -> List[Tuple[int, int]]:
+    """Return bounded spans for each ``forever`` statement body."""
+    spans: List[Tuple[int, int]] = []
+    for m in _FOREVER_RE.finditer(src):
+        body, end = _statement_after(src, m.end())
+        if body:
+            spans.append((m.start(), end))
+    return spans
 
 
 def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]:
     """Return conservative delayed self-toggle sites with raw-text offsets."""
     if _is_testbench(raw, path):
         return []
-    scan = strip_comments(raw)
+    scan = _blank_preprocessor_conditionals(strip_comments(raw))
     sites: List[Dict] = []
     for _module_name, lo, hi in _module_regions(scan):
         region = scan[lo:hi]
@@ -5973,6 +6041,9 @@ def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]
         # This rule models a source/oscillator, not a DUT clocked by an input.
         if re.search(r'\binput\b', structural):
             continue
+        initial_spans = _initial_spans(structural)
+        bare_always_spans = _bare_always_spans(structural)
+        forever_spans = _forever_spans(structural)
         for m in _DELAYED_BLOCKING_SELF_TOGGLE_RE.finditer(structural):
             name = m.group('name')
             # The toggled signal must be a module output (ANSI or body style).
@@ -5980,17 +6051,33 @@ def _delayed_blocking_clock_toggle_sites(raw: str, path: str = "") -> List[Dict]
                              structural, re.S):
                 continue
 
-            before = structural[:m.start()]
-            procs = list(re.finditer(r'\b(initial|always)\b', before))
-            if not procs:
+            # The toggle must be structurally INSIDE the qualifying process.
+            # Looking only for the last preceding `initial`/`always` leaked
+            # across completed blocks and into task bodies, where `--fix`
+            # changed unrelated delayed assignments.  Bound each process first.
+            in_initial_forever = (
+                any(start <= m.start() < end for start, end in initial_spans)
+                and any(
+                    start <= m.start() < end
+                    # A forever loop that waits on an event before this toggle
+                    # is event-driven, not the delay-only oscillator class.
+                    # An unresolved macro in the same prefix may expand to the
+                    # event control, so it is equally non-rewritable.
+                    and '@' not in structural[start:m.start()]
+                    and '`' not in structural[start:m.start()]
+                    for start, end in forever_spans))
+            in_bare_always = any(
+                start <= m.start() < end
+                and '@' not in structural[start:m.start()]
+                # Without the caller's macro environment, a backtick token in
+                # the owning `always` prefix may expand to an event control
+                # (for example `EVENT -> @(posedge clk)`).  Rewriting in that
+                # state would guess that an event-driven process is a free-
+                # running oscillator, so leave it untouched.
+                and '`' not in structural[start:m.start()]
+                for start, end in bare_always_spans)
+            if not (in_initial_forever or in_bare_always):
                 continue
-            proc = procs[-1]
-            proc_kind = proc.group(1)
-            proc_prefix = before[proc.end():]
-            if proc_kind == 'initial' and not re.search(r'\bforever\b', proc_prefix):
-                continue
-            if proc_kind == 'always' and re.search(r'@', proc_prefix):
-                continue  # not a bare delay-driven oscillator
 
             writes = list(re.finditer(
                 r'\b' + re.escape(name) +
