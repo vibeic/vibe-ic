@@ -51,6 +51,49 @@ baseline file and this gate FAILs on:
 Regenerate it deliberately with `--write-baseline` (and only ever to a
 SMALLER set — the gate re-checks that on the next run).
 
+WHERE THE CORPUS IS, NOW THAT IT IS NOT HERE (#1710's treatment, applied)
+-------------------------------------------------------------------------
+The scan root was the first ancestor directory holding `benchmark-data/ic`, and
+the BASELINE lives with the data it describes (`root.parent/` — see
+`_BASELINE_NAME`). v1.10.56 moved the published corpus to its own repository, so
+BOTH went at once and the gate answered:
+
+    [SKIP] evidence_citation_resolves_check: no scan root
+           (benchmark-data/ic not found).                            rc 2
+
+That refusal was CORRECT for what it was asked — `run` in `_gate_dispatch.sh`
+maps rc 2 to FAIL, so a check that could not look did not pass — but it was asked
+the wrong question. `$VIBE_IC_BENCHMARK_DATA` now names the benchmark-data ROOT,
+this gate scans `ic/` below it, and the register is picked up from that same
+clone, so the debt and the tree it describes stay together. FOUR outcomes, and
+collapsing any two of them is the defect:
+
+    pointer set + unreadable          -> UNDETERMINED (rc 2). Never excused.
+    pointer set + present but NOT a
+      git checkout                    -> UNDETERMINED (rc 2). See below.
+    nothing anywhere + the CALL SITE
+      opted in                        -> NO_CORPUS (rc 0). Nothing scanned and
+                                         NOTHING CLAIMED to have been scanned.
+    nothing anywhere + nobody said so -> UNDETERMINED (rc 2). Unchanged.
+
+A DIRECTORY IS NOT A CHECKOUT, AND THIS GATE READS GIT'S INDEX
+---------------------------------------------------------------
+`tracked_files()` returns None when `git ls-files` cannot answer, and `scan()`
+then enumerates with `root.rglob("*.md")` and satisfies citations from the DISK.
+That fallback is disclosed and is tolerable for a root somebody named on the
+command line. It is NOT tolerable for a corpus that arrived through the pointer:
+the corpus lives in its own repository now, so a tarball fetch, an archive
+export, a `git clone` that died or a worktree without `.git` all produce a tree
+that is PRESENT and has no index — and over it an untracked local artefact
+satisfies a citation the published tree does not ship. That is a failed fetch
+CERTIFYING a corpus, which is strictly worse than NO_CORPUS: NO_CORPUS at least
+states that nothing was scanned. So a pointer that does not resolve to a git
+checkout is UNDETERMINED.
+
+AND ZERO DOCUMENTS IS NOT ZERO FINDINGS. A scan root that exists and holds no
+Markdown produced `[PASS] every cited evidence artifact resolves` over nothing
+at all. An empty result is not a zero: rc 2.
+
 chip-AGNOSTIC: pure Markdown/filesystem structure. No design, PDK, vendor or
 value literal appears here.
 
@@ -58,13 +101,18 @@ USAGE
 -----
     python3 evidence_citation_resolves_check.py [ROOT] [--json OUT]
                                                 [--write-baseline]
+                                                [--corpus-may-be-absent]
+    VIBE_IC_BENCHMARK_DATA=/path/to/benchmark-data-clone \
+        python3 evidence_citation_resolves_check.py
 
 EXIT CODES
 ----------
     0 = PASS (every citation resolves, or the unresolved set is within a
-        baseline that has not grown)
+        baseline that has not grown), or NO_CORPUS (opted in, and it says
+        nothing was scanned)
     1 = FAIL (a new dangling citation, or the baseline grew / went stale)
-    2 = SKIP (no scan root — nothing to check)
+    2 = UNDETERMINED (no scan root, a corpus pointer that is set and wrong, a
+        supplied corpus that is not a git checkout, or zero documents scanned)
 """
 from __future__ import annotations
 
@@ -76,6 +124,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import _corpus_location as _corpus         # sibling program, one seam for all
 
 # Extensions that carry sign-off EVIDENCE. Deliberately narrow: this gate
 # judges "the proof you pointed at is missing", not "every path in prose".
@@ -179,6 +229,19 @@ _BASELINE_NAME = "evidence_citation_baseline.json"
 # DEFAULT SCOPE — the IC sign-off trees, where a document asking a reader to
 # believe a result points at the artifact that backs it.
 _DEFAULT_ROOT_REL = "benchmark-data/ic"
+
+#: Where a caller may point us at a clone of the published corpus. Taken from
+#: `_corpus_location` rather than re-spelled here: one name for one thing.
+CORPUS_ENV = _corpus.CORPUS_ENV
+
+#: The pointer names the benchmark-data ROOT — that is the repository that moved,
+#: and it is what carries this gate's BASELINE beside the data it describes. The
+#: scan root is the `ic` subtree below it, the same suffix `_DEFAULT_ROOT_REL`
+#: carries. `programs/tests/_published_corpus` composes it the same way.
+_CORPUS_SUBDIR = "ic"
+
+#: What this gate would have examined, for the NO_CORPUS line.
+_SCANNED = "published sign-off document(s)"
 
 # OUT OF SCOPE BY DEFAULT, stated here rather than left as a silent narrowing:
 # `benchmark-data/evaluation/` holds PER-TASK, machine-generated run outputs
@@ -487,9 +550,18 @@ def _disclosed_map(root: Path, tracked: Optional[set]) -> Dict[Tuple[str, str], 
 def scan(root: Path, tracked: Optional[set] = None
          ) -> Tuple[List[Dict[str, str]], int, int, List[str],
                     List[Dict[str, str]], List[Dict[str, str]],
-                    List[Dict[str, str]]]:
+                    List[Dict[str, str]], int]:
     """`(dangling, cited_total, docs_scanned, zero_citation_docs, oversize,
-    unjudged, outside)`.
+    unjudged, outside, files_enumerated)`.
+
+    `files_enumerated` IS THE DENOMINATOR, and it is NOT `docs_scanned`.
+    `docs_scanned` counts files that CONTRIBUTED — every Markdown file read,
+    plus only those JSON reports that declare a verdict and name an artefact —
+    so a tree of configuration JSON legitimately scores 0 there while having
+    been fully examined. Returning the enumerated count from HERE rather than
+    re-deriving it in `main()` keeps one enumeration: a second `rglob`/`tracked`
+    filter typed out beside this one would be a count that looks authoritative
+    and tracks nothing, which this repo has already paid for once.
 
     The last three are DISCLOSURE channels, never folded into the verdict:
     `oversize` is a token past the expansion bound, `unjudged` a dangling
@@ -581,7 +653,8 @@ def scan(root: Path, tracked: Optional[set] = None
                 if (_d, tok) in disclosed:
                     continue
                 dangling.append({"doc": _d, "citation": f"[{field}] {tok}"})
-    return dangling, cited, docs, zero_docs, oversize, unjudged, outside
+    return (dangling, cited, docs, zero_docs, oversize, unjudged, outside,
+            len(_mds) + len(_jsons))
 
 
 def _working_tree_dirt(root: Path) -> List[str]:
@@ -645,25 +718,77 @@ def main(argv=None) -> int:
                          "regression). Requires a reason, which is recorded "
                          "in the baseline beside the previous size — a "
                          "deliberate, auditable act, never a bypass flag.")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the "
+                         "published corpus. Turns 'no scan root discoverable "
+                         "anywhere' from UNDETERMINED into NO_CORPUS (rc 0), "
+                         "which STATES that nothing was scanned. It does NOT "
+                         f"excuse a pointer that is set and broken: ${CORPUS_ENV} "
+                         "aimed at something unreadable, at a clone with no "
+                         "`ic/` in it, or at a directory that is not a git "
+                         "checkout is UNDETERMINED with or without this flag.")
     args = ap.parse_args(argv)
 
     here = Path(__file__).resolve()
     explicit_root = bool(args.root)
-    if args.root:
-        root = Path(args.root)
-    else:
-        root = next((b / _DEFAULT_ROOT_REL for b in here.parents
-                     if (b / _DEFAULT_ROOT_REL).is_dir()), None)
-    if root is None or not root.is_dir():
-        print("[SKIP] evidence_citation_resolves_check: no scan root "
-              f"({args.root or _DEFAULT_ROOT_REL} not found).")
-        return 2
+
+    # WHERE THE CORPUS IS, ASKED THROUGH THE ONE SEAM THAT ANSWERS IT (#1710).
+    # `_corpus_location.resolve` follows $VIBE_IC_BENCHMARK_DATA only when the
+    # NAMED path carries no corpus, and announces either way — so a developer
+    # who has the pointer exported still runs the gate CI runs when they name a
+    # readable root, and still learns which tree produced the verdict.
+    named = (Path(args.root) if args.root else
+             next((b / _DEFAULT_ROOT_REL for b in here.parents
+                   if (b / _DEFAULT_ROOT_REL).is_dir()),
+                  Path(_DEFAULT_ROOT_REL)))
+    root, origin = _corpus.resolve(named, subdir=_CORPUS_SUBDIR,
+                                   gate="evidence_citation_resolves_check",
+                                   announce=True)
+    if not root.is_dir():
+        return _corpus.refuse("evidence_citation_resolves_check", named, root,
+                              origin, args.corpus_may_be_absent, _SCANNED)
 
     baseline_path = (Path(args.baseline) if args.baseline
                      else root.parent / _BASELINE_NAME)
+    if origin == _corpus.ENV:
+        # THE REGISTER TRAVELS WITH THE DATA IT DESCRIBES. Said out loud because
+        # a debt register read from somewhere other than the tree it was
+        # measured over reports paid debts that were never paid.
+        print(f"note: register read from {baseline_path}", file=sys.stderr)
     tracked = tracked_files(root)
-    dangling, cited, docs, zero_docs, oversize, unjudged, outside = scan(
-        root, tracked)
+    # A SUPPLIED CORPUS MUST BE A CHECKOUT. `tracked_files` returns None when
+    # git cannot answer, and `scan()` then walks the DISK and lets an untracked
+    # local artefact satisfy a citation — a weaker question, answered under the
+    # same name. Tolerated for a root a human typed (the WARNING below says so);
+    # never for one a fetch produced, because a dead clone would then certify a
+    # corpus instead of reporting that it could not be read.
+    if origin == _corpus.ENV and tracked is None:
+        reason = _corpus.not_a_checkout_reason(root, "tracked documents") or (
+            f"{root} is a git checkout but git tracks no regular file under it, "
+            f"so this gate enumerated nothing from the index.")
+        print(f"UNDETERMINED: {reason} This gate judges whether the REPOSITORY "
+              f"ships the proof, never whether this machine happens to hold it. "
+              f"Point {CORPUS_ENV} at a clone.", file=sys.stderr)
+        return 2
+    dangling, cited, docs, zero_docs, oversize, unjudged, outside, enumerated \
+        = scan(root, tracked)
+    # AN EMPTY POPULATION IS NOT A CLEAN ONE. A scan root that exists and holds
+    # nothing this gate reads yields no citation, no finding, and — before this
+    # — the sentence "[PASS] every cited evidence artifact resolves" over
+    # nothing at all.
+    #
+    # THE TEST IS ON `enumerated`, NOT ON `docs`. `docs` counts files that
+    # CONTRIBUTED a citation, and a tree of verdict-less configuration JSON
+    # legitimately contributes none while having been completely read; failing
+    # that would be measuring a proxy and reporting it as the property.
+    if enumerated == 0:
+        print(f"UNDETERMINED: {root} is a directory but this gate enumerated 0 "
+              f"file(s) it can read there (no .md, no .json), so 0 citation(s) "
+              f"were checked. Nothing enumerated is 'I found nothing to read', "
+              f"which cannot support a verdict about whether cited artefacts "
+              f"resolve — and it would report every recorded debt as paid.",
+              file=sys.stderr)
+        return 2
     now = sorted({_key(d) for d in dangling})
 
     if args.write_baseline:
@@ -728,6 +853,10 @@ def main(argv=None) -> int:
     result = {
         "program": "evidence_citation_resolves_check",
         "docs_scanned": docs,
+        # THE ENUMERATED POPULATION, beside the contributing one. A reader who
+        # sees only `docs_scanned: 0` cannot tell "read nothing" from "read a
+        # thousand files, none of which cited anything".
+        "files_enumerated": enumerated,
         "citations_checked": cited,
         "unresolved_total": len(now),
         # THE DENOMINATOR, per vibe-ic#1044. A gate that says PASS without
@@ -750,8 +879,9 @@ def main(argv=None) -> int:
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(result, indent=2) + "\n")
 
-    print(f"evidence_citation_resolves_check: {docs} doc(s), "
-          f"{cited} citation(s) checked under {root}")
+    print(f"evidence_citation_resolves_check: {docs} contributing doc(s) of "
+          f"{enumerated} file(s) enumerated, {cited} citation(s) checked "
+          f"under {root}")
     if outside:
         print(f"  OUT OF SCOPE   : {len(outside)} citation(s) resolve against the "
               f"repository but ABOVE this gate's scan root — the document is "

@@ -129,18 +129,56 @@ produces exactly this. The denominator is now disclosed on every pass, so
 "no FAIL/MISSING reports" can no longer be read without knowing how many
 reports that was over.
 
+WHERE THE CORPUS IS, NOW THAT IT IS NOT HERE (vibe-ic#1710's treatment)
+-----------------------------------------------------------------------
+`tools/ci/repo_hygiene_gates.sh` sweeps `--corpus "$ROOT/benchmark-data/ic"`.
+v1.10.56 moved the published corpus to its own repository, so that directory is
+gone from this repo and the gate answered
+
+    error: not a directory: <repo>/benchmark-data/ic                     rc 2
+
+`_corpus_location` resolves it now, the override is ANNOUNCED, and the four
+outcomes stay distinct (see that module). The population key follows the corpus:
+the baseline records `corpus_population: benchmark-data/ic` and the tree that
+name refers to is the `ic/` directory at the ROOT of the clone, so a sweep
+reached through the pointer is normalised back to that spelling rather than
+being refused as "a different population" (vibe-ic#1223 is about not comparing
+DIFFERENT sets, not about not renaming the same one).
+
+AND THE REGISTER IS NOT EXCUSED WITH THE SWEEP
+----------------------------------------------
+`step_internal_fail_bubble_up_baseline.json` lives beside this program and did
+NOT move with the corpus, so a NO_CORPUS that returned rc 0 without opening it
+would leave the ratchet free to be widened by hand — the same hole the corpus
+fix is meant to close, entered from the other side.
+
+What is still checkable with no corpus is the register's own arithmetic:
+`findings_total` is the sum of `per_run` BY CONSTRUCTION (`check_corpus` adds
+`len(fs)` to both in the same breath), so a `findings_total` raised by hand to
+buy headroom contradicts the map printed beside it. Under NO_CORPUS:
+
+    register absent / unparseable / malformed        -> UNDETERMINED (rc 2)
+    `findings_total` != sum(`per_run`)               -> FAIL (rc 1)
+    consistent                                       -> rc 0, printing what it
+                                                        holds and stating that
+                                                        nothing was re-measured
+
 Usage:
     python3 step_internal_fail_bubble_up_check.py <project_dir>
                                                    [--json <out>] [--strict]
     python3 step_internal_fail_bubble_up_check.py --corpus benchmark-data/ic
                                                    [--baseline <f>] [--write-baseline]
+                                                   [--corpus-may-be-absent]
 
 Exit codes:
     0  PASS — reports were examined and every FAIL/MISSING one is
-       acknowledged; also a report-only run, or a corpus at-or-below baseline
+       acknowledged; also a report-only run, or a corpus at-or-below baseline,
+       or NO_CORPUS (opted in, and it says 0 run trees were swept)
     1  FAIL — an unacknowledged FAIL in PROJECT mode (or under --strict), or
-       corpus GROWTH
-    2  NOT EXAMINED (nothing to look at), or argument / I/O error
+       corpus GROWTH, or a register whose own numbers contradict each other
+    2  NOT EXAMINED (nothing to look at), UNDETERMINED (the corpus could not be
+       resolved, or a corpus pointer that is set and wrong), or argument / I/O
+       error
 
 chip-AGNOSTIC. No vendor / IC / specific filename hardcoded.
 """
@@ -154,6 +192,10 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple  # noqa: F401
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _corpus_location as _cloc                    # noqa: E402
+
+GATE = "step_internal_fail_bubble_up_check"
 
 _FAIL_VERDICTS = {"FAIL", "MISSING"}
 
@@ -558,7 +600,7 @@ def _load_baseline(p: Path) -> Optional[Dict[str, Any]]:
     return d
 
 
-def _population_key(corpus: Path) -> str:
+def _population_key(corpus: Path, origin: str = _cloc.NAMED) -> str:
     """WHICH population a count was taken over, as a repo-relative path.
 
     THE INTEGER IS MEANINGLESS WITHOUT THE SET IT COUNTED (vibe-ic#1223). The
@@ -580,15 +622,18 @@ def _population_key(corpus: Path) -> str:
     FAIL would be a verdict over a population never examined.
 
     Recorded in the baseline and compared, rather than assumed equal.
+
+    THE SAME SET ACQUIRED A SECOND SPELLING WHEN THE CORPUS MOVED OUT
+    (v1.10.56). `benchmark-data/ic` in this repository and `ic` at the root of
+    the published-corpus clone are the SAME cells — the split moved the tree,
+    it did not change the population. Refusing to ratchet one against the other
+    would be #1223 applied to a case it is not about, and the effect would be
+    that supplying a corpus makes the gate answer NOT CHECKED forever. So the
+    ENV origin is normalised back to the canonical name, in
+    `_corpus_location.population_key`, where the two spellings are reconciled
+    once instead of per gate.
     """
-    c = corpus.resolve()
-    for anc in (c, *c.parents):
-        if (anc / ".git").exists():
-            try:
-                return c.relative_to(anc).as_posix() or "."
-            except ValueError:              # noqa: PERF203
-                break
-    return c.name
+    return _cloc.population_key(corpus, origin)
 
 
 def _run_key(rel: str) -> str:
@@ -710,6 +755,72 @@ def _decompose_shrink(base: Dict[str, Any],
     }
 
 
+def _adjudicate_register_without_a_corpus(bl: Path) -> int:
+    """NO_CORPUS has been decided; now answer for the ratchet register itself.
+
+    The corpus moved to its own repository; this register did not. Returning
+    rc 0 without opening it would leave the one number that gates this gate
+    free to be raised by hand, which is the same false certificate the corpus
+    fix exists to remove, entered from the other side.
+
+    ONE INVARIANT IS STILL CHECKABLE WITH NO CORPUS, and it is not a proxy:
+    `check_corpus` adds `len(fs)` to `findings_total` and writes it into
+    `per_run[rel]` in the same breath, so `findings_total == sum(per_run)` for
+    every document `--write-baseline` can produce. Raising the ceiling by hand
+    to make a NEW finding stop being new breaks it.
+
+    WHAT THIS DOES NOT CLAIM. It does not say the recorded findings are still
+    there, or still unacknowledged — that needs the corpus, and this run did
+    not have one. The printed verdict says so in those words.
+    """
+    if not bl.is_file():
+        print(f"[NOT CHECKED] {GATE}: no corpus was swept, so the baseline "
+              f"register is the only thing left to adjudicate, and there is no "
+              f"file at {bl}. An absent ratchet is not an empty one: this run "
+              f"has judged NOTHING and that is not a pass.", file=sys.stderr)
+        return 2
+    doc = _load_baseline(bl)
+    if doc is None:
+        print(f"[NOT CHECKED] {GATE}: no corpus was swept, and {bl} could not "
+              f"be read as a register (missing or non-integer "
+              f"`findings_total`). Unreadable is not empty; this run has "
+              f"judged NOTHING.", file=sys.stderr)
+        return 2
+    total = doc["findings_total"]
+    per_run = doc["per_run"]
+    summed = sum(v for v in per_run.values() if isinstance(v, int))
+    pop = doc.get("corpus_population")
+    if not isinstance(pop, str) or not pop:
+        print(f"[NOT CHECKED] {GATE}: no corpus was swept, and {bl} records no "
+              f"`corpus_population`, so there is no statement of WHICH set "
+              f"{total} was counted over. An integer with no population is not "
+              f"a ratchet (vibe-ic#1223).", file=sys.stderr)
+        return 2
+    if total != summed:
+        print(f"[FAIL] {GATE}: no corpus was swept, and the register "
+              f"contradicts itself — findings_total={total} while `per_run` "
+              f"sums to {summed} across {len(per_run)} run(s). The writer "
+              f"produces those two numbers from the same counter, so they "
+              f"cannot disagree in a document --write-baseline wrote. A "
+              f"ceiling raised by hand is headroom for a finding nobody "
+              f"measured; re-record {bl} with --write-baseline over a corpus "
+              f"that reaches.", file=sys.stderr)
+        return 1
+    carried = sum(v for v in doc["withdrawn_unexamined"].values()
+                  if isinstance(v, int))
+    print(f"[{GATE}] register: findings_total={total} over "
+          f"'{pop}' ({len(per_run)} run(s) named, sum agrees), plus "
+          f"{carried} withdrawn_unexamined still declaring FAIL.",
+          file=sys.stderr)
+    print(f"[{GATE}] NO_CORPUS: 0 published run tree(s) swept, 0 report(s) "
+          f"examined. The register's numbers were NOT RE-MEASURED and nothing "
+          f"is claimed about whether those {total} finding(s) are still "
+          f"unacknowledged — only that the register is internally consistent "
+          f"and was not widened by hand. Point ${_cloc.CORPUS_ENV} at a clone "
+          f"to re-measure.", file=sys.stderr)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Doctrine rule #4 — every step-internal "
@@ -728,6 +839,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "count may shrink freely, growth is rc 1.")
     ap.add_argument("--baseline", default=None)
     ap.add_argument("--write-baseline", action="store_true")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the "
+                         "published corpus. Turns 'no corpus discoverable "
+                         "anywhere' from UNDETERMINED into NO_CORPUS (rc 0), "
+                         "which STATES that 0 run trees were swept. It does "
+                         f"NOT excuse a ${_cloc.CORPUS_ENV} that is set and "
+                         "broken, and it does NOT excuse the baseline "
+                         "register: that lives in this repo, did not move with "
+                         "the corpus, and its own arithmetic is still checked.")
     args = ap.parse_args(argv)
 
     # A POSITIONAL BESIDE --corpus IS A CONTRADICTION, AND IT USED TO BE SILENT.
@@ -769,16 +889,61 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     if args.corpus:
-        corpus = Path(args.corpus)
+        named = Path(args.corpus)
+        bl = Path(args.baseline) if args.baseline else _HERE / BASELINE_NAME
+        corpus, origin = _cloc.resolve(named, subdir="ic", gate=GATE,
+                                       announce=True)
         if not corpus.is_dir():
-            print(f"error: not a directory: {corpus}", file=sys.stderr)
-            return 2
+            # WAS: `error: not a directory` at rc 2 — one word for three
+            # different facts (the corpus moved, the pointer is wrong, nobody
+            # said whether it has to be here). See `_corpus_location`.
+            rc = _cloc.refuse(GATE, named, corpus, origin,
+                              args.corpus_may_be_absent,
+                              "published run tree(s)")
+            if rc != 0:
+                return rc
+            if args.write_baseline:
+                # A write from a scan that did not happen is the vibe-ic#1025
+                # destruction with a friendlier banner: `findings_total` would
+                # be rewritten to 0 and the recorded reference point lost.
+                print(f"[REFUSED] {GATE}: --write-baseline with no corpus "
+                      f"would record findings_total=0 as a measurement and "
+                      f"destroy {bl}. NOTHING WAS SWEPT (vibe-ic#1025).",
+                      file=sys.stderr)
+                return 2
+            # NO_CORPUS EXCUSES THE SWEEP, NEVER THE REGISTER.
+            return _adjudicate_register_without_a_corpus(bl)
+        if origin == _cloc.ENV:
+            # `_published_run_trees` reads git's INDEX via `_published_tree`
+            # and FALLS BACK TO A DISK WALK when it cannot. Over a corpus that
+            # is present but not a checkout, the sweep silently changes
+            # population and then ratchets the result against a baseline
+            # recorded over the tracked one.
+            why = _cloc.not_a_checkout_reason(corpus, "published run trees")
+            if why is None:
+                # A CHECKOUT THAT TRACKS NOTHING IS THE SAME EMPTY RESULT WITH
+                # a `.git` beside it: `_published_tree.published_paths` returns
+                # None for "git could not answer" AND for "the index is empty",
+                # and `_published_run_trees` sends both to the disk.
+                sys.path.insert(0, str(_HERE))
+                import _published_tree                  # noqa: PLC0415
+                if _published_tree.published_paths(corpus) is None:
+                    why = (f"{corpus} is a git checkout that tracks NOTHING, "
+                           f"so the published population is empty and "
+                           f"`_published_run_trees` would fall back to a disk "
+                           f"walk.")
+            if why:
+                print(f"[{GATE}] UNDETERMINED: {why} `_published_run_trees` "
+                      f"would fall back to a disk walk, and a count from that "
+                      f"population is not a line to hold against a baseline "
+                      f"measured over the tracked one (vibe-ic#1223).",
+                      file=sys.stderr)
+                return 2
         rep = check_corpus(corpus)
         if args.json:
             out = Path(args.json)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps(rep, indent=2) + "\n")
-        bl = Path(args.baseline) if args.baseline else _HERE / BASELINE_NAME
         now = rep["findings_total"]
         if args.write_baseline:
             # vibe-ic#1025. REFUSE to record a number a sweep did not measure.
@@ -870,7 +1035,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "findings_total": now,
                 # vibe-ic#1223 — WHICH population produced this count. Without
                 # it the integer below is comparable to anything.
-                "corpus_population": _population_key(corpus),
+                "corpus_population": _population_key(corpus, origin),
                 "runs_swept": rep["runs_swept"],
                 "runs_with_reports": rep["runs_with_reports"],
                 "per_run": rep["per_run"],
@@ -890,7 +1055,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         doc[k] = v
             bl.write_text(json.dumps(doc, indent=2) + "\n")
             print(f"wrote {bl} (findings_total={now}, "
-                  f"population={_population_key(corpus)}, "
+                  f"population={_population_key(corpus, origin)}, "
                   f"withdrawn_unexamined={sum(withdrawn.values())})")
             return 0
         base_doc = _load_baseline(bl)
@@ -915,7 +1080,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # None, which means "I do not know what it was measured over" and is
         # left to ratchet exactly as it did — silently reinterpreting an old
         # record as agreeing would be the assumption this guard removes.
-        want_pop = _population_key(corpus)
+        want_pop = _population_key(corpus, origin)
         have_pop = base_doc.get("corpus_population")
         if isinstance(have_pop, str) and have_pop != want_pop:
             print(f"[NOT CHECKED] the baseline at {bl} was measured over "

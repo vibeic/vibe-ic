@@ -141,8 +141,13 @@ def test_the_partition_is_still_exhaustive_with_no_exclusions():
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(not _repo_is_git(), reason="needs the real git checkout to partition")
 def test_the_shipped_roster_faults_nothing_on_this_tree():
+    # 60 s, not 180 (vibe-ic#1711). 180 was the WHOLE pytest session budget, so
+    # under `--timeout-method=thread` it could never fire as a TEST failure —
+    # pytest kills the SESSION first and every other file in the subset loses
+    # its verdict. MEASURED on this tree: `--repo <root> --audit` partitions
+    # 2,734 tracked test files in 0.04 s, so 60 s is ~1500x the observed cost.
     out = subprocess.run(
         [sys.executable, str(PROG), "--repo", str(REPO), "--audit"],
-        capture_output=True, text=True, timeout=180)
+        capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, (
         f"the shipped exclusion roster is stale again:\n{out.stdout}\n{out.stderr}")
