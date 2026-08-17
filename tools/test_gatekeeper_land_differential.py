@@ -382,30 +382,49 @@ def test_base_evidence_for_another_base_is_refused(synthetic, tmp_path):
     assert "the base evidence is for" in cp.stdout + cp.stderr
 
 
-def test_a_cross_host_base_record_makes_the_hygiene_tier_absolute(
-        synthetic, tmp_path):
-    """UNKNOWN NEVER BUYS LENIENCY.
+def test_a_cross_host_base_bundle_is_never_subtracted(tmp_path, synthetic):
+    """A RED BASELINE IS NOT PORTABLE — measured, not assumed.
 
-    `hygiene_finding_delta` refuses a cross-host pair by design — findings are
-    host-dependent and `gate_host_independence_check` is itself one of the
-    gates. The verdict's own fallback for a missing pair is the COARSE per-label
-    comparison, under which a base-red hygiene label excuses the candidate's
-    whole hygiene tier. That is the permissive direction, so the driver promotes
-    the tier to ABSOLUTE instead.
+    Same base commit, same 90-file selection, same driver, 2026-08-18:
+    8HD-8 reported 2176 test ids and 6 red; 8HD-4 reported 2118 and 9. Three of
+    the extra reds are an environment-dependent family and 58 ids did not exist
+    on the second host at all. Subtracting that baseline from a candidate
+    measured here would excuse three failures this host calls NEW — the
+    laundering direction. So a foreign bundle degrades the run to DEMAND GREEN
+    and the hygiene tier to ABSOLUTE, and excuses nothing.
     """
     root, base = synthetic
     out = tmp_path / "evidence"
-    # A bundle whose base arm ALSO failed the hygiene tier — under the coarse
-    # per-label fallback that would excuse the candidate's failure outright.
-    _run(root, base, a2_gate_line="FAIL  repo hygiene gates",
+    # A bundle whose base arm was red in BOTH tiers. On this host that would
+    # excuse the same reds on the candidate; from another host it must not.
+    _run(root, base, base_test="failed", a2_gate_line="FAIL  repo hygiene gates",
          extra=("--base-arm-only", str(out)))
     (out / "host").write_text("some-other-host\n")
-    cp, _ = _run(
-        root, base, gate_line="FAIL  repo hygiene gates",
-        extra=("--base-evidence", str(out)))
+
+    cp, _ = _run(root, base, cand_test="failed",
+                 gate_line="FAIL  repo hygiene gates",
+                 extra=("--base-evidence", str(out)))
     assert cp.returncode == 1, cp.stdout
-    assert "judged ABSOLUTELY" in cp.stdout
+    assert "A RED BASELINE IS NOT PORTABLE" in cp.stdout
+    # The test tier degraded to demand green rather than subtracting.
+    assert "NEW FAILURE(S) THIS BRANCH OWNS" in cp.stdout
+    # The hygiene tier went absolute rather than falling back to per-label.
     assert "THE HYGIENE TIER FAILED AND COULD NOT BE DIFFERENCED" in cp.stdout
+    # And the foreign evidence is still SHOWN, because a cross-check a reader
+    # cannot see is not a cross-check.
+    assert "foreign-base-FAIL" in cp.stdout
+
+
+def test_a_same_host_bundle_is_subtracted(tmp_path, synthetic):
+    """The paired control. Without it the test above would pass on a driver
+    that simply ignored `--base-evidence` entirely."""
+    root, base = synthetic
+    out = tmp_path / "evidence"
+    _run(root, base, base_test="failed", extra=("--base-arm-only", str(out)))
+    cp, _ = _run(root, base, cand_test="failed",
+                 extra=("--base-evidence", str(out)))
+    assert cp.returncode == 0, cp.stdout
+    assert "INHERITED  test" in cp.stdout
 
 
 # ---------------------------------------------- the arms' declared contract

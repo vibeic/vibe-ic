@@ -123,16 +123,25 @@
 #   B2  gatekeeper-land.sh on the candidate       targeted tier skipped
 #
 # TWO HOSTS: `--base-arm-only <dir>` runs A1+A2 and writes an evidence bundle;
-# `--base-evidence <dir>` consumes one instead of running them. So the base arm
-# can be measured on a second machine, concurrently, and the bundle carried
-# over. IT IS NOT FREE, and the cost is measured rather than assumed: hygiene
-# findings are host-dependent — `gate_host_independence_check` is itself one of
-# those gates — so `hygiene_finding_delta.compare` REFUSES a cross-host pair by
-# design (`hygiene_finding_delta.py:118-124, :372-392`). A cross-host bundle
-# therefore loses the ~80-gate FINDING differential, and rather than let that
-# fall back to the lenient per-label comparison this script makes the hygiene
-# tier ABSOLUTE for that run. Same host is the STRONGER configuration and is
-# the default.
+# `--base-evidence <dir>` consumes one instead of running them.
+#
+# AND THE SECOND HOST IS A CROSS-CHECK, NOT A SHORTCUT. This was built to split
+# the cost across two machines and the measurement says it cannot be used that
+# way. Same base f6b0e77dd, same 90-file selection, same driver, 2026-08-18:
+#
+#     8HD-8   2176 test id(s)   6 red
+#     8HD-4   2118 test id(s)   9 red   (+3 environment-dependent, 58 ids absent)
+#
+# Subtracting the second host's baseline from a candidate measured on the first
+# would excuse three failures the first host calls NEW. A red baseline is not
+# portable. So a bundle whose `host` is not this one is READ, PRINTED, and NEVER
+# SUBTRACTED: the run degrades to DEMAND GREEN and the hygiene tier to ABSOLUTE.
+# `hygiene_finding_delta` already refuses a cross-host pair for the same reason
+# one dimension over (`hygiene_finding_delta.py:118-124, :372-392`).
+#
+# BOTH ARMS ON ONE HOST IS THE ONLY CONFIGURATION THAT CAN SUBTRACT ANYTHING,
+# and it is the default. Concurrency is what makes that affordable, not a
+# second machine.
 #
 # Usage:
 #   tools/gatekeeper-land-differential.sh [--base <ref>] [--json <path>]
@@ -472,19 +481,51 @@ if [ -n "$BASE_ARM_ONLY" ]; then
 fi
 
 # -------------------------------------------------- --base-evidence: consume one
+#
+# A FOREIGN BASE ARM IS A CROSS-CHECK, NEVER AN EXCUSE — and that is MEASURED,
+# not cautious. Same base commit (f6b0e77dd), same 90-file selection, same
+# driver, two fleet hosts, 2026-08-18:
+#
+#     8HD-8   2176 test id(s)   6 red
+#     8HD-4   2118 test id(s)   9 red
+#
+# The three extra reds on the second host are an environment-dependent family
+# (an external simulator's availability), and 58 test ids did not even exist
+# there. Subtracting THAT base from a candidate measured here would excuse
+# three failures this host would have called NEW — which is precisely the
+# laundering direction this whole file exists to close. Nothing about a red
+# baseline is portable, so a bundle from another host is READ and REPORTED and
+# never subtracted, and the run degrades to DEMAND GREEN.
 HYGIENE_TIER_ABSOLUTE=0
 if [ -n "$BASE_EVIDENCE" ]; then
   [ -f "$BASE_EVIDENCE/base_sha" ] || die "--base-evidence $BASE_EVIDENCE has no base_sha"
   EV_BASE="$(cat "$BASE_EVIDENCE/base_sha")"
   [ "$EV_BASE" = "$BASE_SHA" ] || die "the base evidence is for ${EV_BASE:0:12}, this landing is against ${BASE_SHA:0:12}"
-  cp "$BASE_EVIDENCE/base.xml" "$BASE_JUNIT" 2>/dev/null
-  cp "$BASE_EVIDENCE/base_land.log" "$BASE_LAND_LOG" 2>/dev/null
-  cp "$BASE_EVIDENCE/base_hygiene.json" "$BASE_HYG" 2>/dev/null
-  cp "$BASE_EVIDENCE/selection_base.txt" "$RUN/selection_base.txt" 2>/dev/null
-  BASE_HYG_HOST="$(cat "$BASE_EVIDENCE/host" 2>/dev/null || echo '')"
-  A1_STATUS="$(sed -n 's/^a1_worktree=//p' "$BASE_EVIDENCE/manifest" | tail -1)"
-  [ -n "$A1_STATUS" ] || A1_STATUS=unknown
-  echo "--- base evidence: ${BASE_SHA:0:12} measured on ${BASE_HYG_HOST:-UNKNOWN}"
+  EV_HOST="$(cat "$BASE_EVIDENCE/host" 2>/dev/null || echo '')"
+  if [ -n "$EV_HOST" ] && [ "$EV_HOST" = "$THIS_HOST" ]; then
+    cp "$BASE_EVIDENCE/base.xml" "$BASE_JUNIT" 2>/dev/null
+    cp "$BASE_EVIDENCE/base_land.log" "$BASE_LAND_LOG" 2>/dev/null
+    cp "$BASE_EVIDENCE/base_hygiene.json" "$BASE_HYG" 2>/dev/null
+    cp "$BASE_EVIDENCE/selection_base.txt" "$RUN/selection_base.txt" 2>/dev/null
+    BASE_HYG_HOST="$EV_HOST"
+    A1_STATUS="$(sed -n 's/^a1_worktree=//p' "$BASE_EVIDENCE/manifest" | tail -1)"
+    [ -n "$A1_STATUS" ] || A1_STATUS=unknown
+    echo "--- base evidence: ${BASE_SHA:0:12} measured on $EV_HOST — this host, so it is subtracted"
+  else
+    BASE_HYG_HOST=""
+    A1_STATUS=clean
+    echo "--- base evidence: measured on ${EV_HOST:-UNKNOWN}, this run is on $THIS_HOST."
+    echo "    A RED BASELINE IS NOT PORTABLE — measured 2026-08-18, two hosts gave 6"
+    echo "    and 9 reds over the SAME base and the SAME selection, and 58 test ids"
+    echo "    existed on only one of them. Subtracting a foreign baseline would"
+    echo "    excuse failures this host calls NEW. It is therefore NOT subtracted:"
+    echo "    the differential degrades to DEMAND GREEN and the hygiene tier to"
+    echo "    ABSOLUTE. The bundle below is a cross-check for a reader, not an"
+    echo "    input to the verdict:"
+    if [ -s "$BASE_EVIDENCE/base_land.log" ]; then
+      sed -n 's/^  FAIL  /      foreign-base-FAIL  /p' "$BASE_EVIDENCE/base_land.log"
+    fi
+  fi
 fi
 
 # ---------------------------------- the hygiene pair, and what a host split costs
