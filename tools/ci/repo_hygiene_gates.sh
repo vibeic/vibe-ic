@@ -1363,6 +1363,29 @@ run "declared reports are written atomically" "$PLUGIN" python3 programs/atomic_
 # executions without weakening the two-tree assertion. Missing/malformed
 # records are rc 2 NOT CHECKED, never reconstructed from console prose.
 uncheckable_until 2027-02-28 "needs a CLEAN checkout and a complete machine record from this enclosing hygiene run: rc 2 means tracked modifications or missing attestation made the comparison meaningless (a genuinely host-dependent gate is rc 1)"
+# SERIAL, AND THE REASON IS THE WHOLE POINT OF THIS GATE.
+#
+# It compares each gate's record from THIS run against a fresh-worktree run, so it
+# needs every other gate's process record to already exist. Under `--jobs 8` it is
+# declared last and still starts while the slowest gates are in flight, so their
+# records are not written yet and it reports:
+#
+#     [CHECKOUT_ATTESTATION_MISSING] an argued direction is pinned
+#         the outer hygiene run supplied no complete process record for this
+#         declared gate; the fresh arm was not run
+#         checkout: NORECORD    worktree: NOT RUN
+#
+# Measured: the gates it named missing were exactly the slowest — "an argued
+# direction is pinned" (150 s), "gates disclose their denominator" (47 s), "liar
+# census controls still fire" (30 s). The attestation FILE was complete afterwards
+# (79 declared, 79 records, 0 missing); what was incomplete was the file AT THE
+# MOMENT THIS GATE READ IT.
+#
+# `gate_serial` drains the pool first, which restores the ordering the sequential
+# run gave it for free. Declaration order was never the guarantee — completion
+# order was, and concurrency separated the two.
+gate_serial "it reads every other gate's process record, so all of them must have \
+finished; under concurrency the slowest are still running when it starts"
 run_tolerating_uncheckable "gates are host-independent" "$ROOT" \
   python3 "$PG/gate_host_independence_check.py" "$ROOT" \
   --jobs 8
