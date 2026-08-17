@@ -154,6 +154,7 @@ EXIT CODES
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -182,6 +183,37 @@ _SKILL_ONLY_NAME = "checker_skill_only_reasons.json"
 _SKIP_PARTS = frozenset((".claude", "node_modules", ".git", "worktrees"))
 
 
+#: Memo for `_strip_prose`, keyed on the CONTENT that produced each answer.
+#: See `_strip_prose` for why this is a memo and not a file cache.
+_STRIP_CACHE: Dict[tuple, str] = {}
+#: Observable so a test can prove the memo FIRED rather than assume it did —
+#: an equivalence assertion over a cache that never got a hit is vacuous.
+_STRIP_STATS: Dict[str, int] = {"hits": 0, "misses": 0}
+#: A bound, so a long-lived process cannot grow this without limit. Past the
+#: bound the memo stops RECORDING; it never stops being correct, because a
+#: miss recomputes. 4021 files are in scope on this repo today.
+_STRIP_CACHE_MAX_ENTRIES = 40000
+
+
+def strip_cache_clear() -> None:
+    """Forget every memoised answer, and the hit/miss counters with it.
+
+    Exists so a caller that is MEASURING the audit — `test_real_repo_runs_and_
+    is_deterministic` compares two independent runs — can force both of them to
+    recompute. A determinism check whose second run is answered from the first
+    run's memo compares a value with itself.
+    """
+    _STRIP_CACHE.clear()
+    _STRIP_STATS["hits"] = 0
+    _STRIP_STATS["misses"] = 0
+
+
+def strip_cache_stats() -> Dict[str, int]:
+    """`{hits, misses, entries}` since the last `strip_cache_clear()`."""
+    return {"hits": _STRIP_STATS["hits"], "misses": _STRIP_STATS["misses"],
+            "entries": len(_STRIP_CACHE)}
+
+
 def _strip_prose(path: Path, text: str) -> str:
     """Remove COMMENTS and DOCSTRINGS — prose names a checker, it never runs one.
 
@@ -193,6 +225,52 @@ def _strip_prose(path: Path, text: str) -> str:
 
     String LITERALS are kept: `subprocess.run([..., "foo_check.py"])` is a
     real invocation. Only bare-expression strings (docstrings) are dropped.
+
+    MEMOISED ON CONTENT, AND ONLY ON CONTENT
+    ----------------------------------------
+    The answer is a pure function of `(path.suffix, text)`: the suffix picks
+    the branch, the text is the whole input. Nothing else about the file is
+    read. So a memo keyed on a digest of that pair does not APPROXIMATE the
+    recomputed answer, it is the same value handed back.
+
+    Keyed on the bytes and deliberately NOT on `(path, mtime, size)`. mtime is
+    a CLAIM about a file; the text is the input to the function. A cache keyed
+    on the claim answers for bytes it never read, and this repo already knows
+    what that costs — the same shape as a checker whose population excluded its
+    own finding. `test_the_memo_is_keyed_on_content_not_on_the_path` plants
+    exactly that: same path, same length, different bytes, inside one process.
+
+    WHY IT IS WORTH THE STATE. Measured on 2026-08-17 at f6b0e77dd, 4021 files
+    / 41.5 MB, python3.10 — a RECORD of the input to this decision, not a claim
+    this checkout maintains. One scan was 19.7 s: 10.8 s in
+    `tokenize.generate_tokens`, 4.4 s in `ast.parse`, 3.8 s in the docstring
+    walk, and 0.15 s reading the files. So the cost is PARSING, not IO, and
+    caching the bytes would have bought nothing. Fifteen full-corpus scans
+    happened in one 17-file pytest arm, ten of them inside a single process —
+    five in `test_issue693_signoff_integrity_wiring.py` alone (a 4-case
+    parametrize plus one `audit()`), over a corpus identical every time. A
+    repeated scan is 0.42 s: the read still happens, the digest still happens,
+    only the parsing does not.
+    """
+    key = (path.suffix,
+           hashlib.blake2b(text.encode("utf-8", "surrogatepass"),
+                           digest_size=32).digest())
+    hit = _STRIP_CACHE.get(key)
+    if hit is not None:
+        _STRIP_STATS["hits"] += 1
+        return hit
+    out = _strip_prose_uncached(path, text)
+    _STRIP_STATS["misses"] += 1
+    if len(_STRIP_CACHE) < _STRIP_CACHE_MAX_ENTRIES:
+        _STRIP_CACHE[key] = out
+    return out
+
+
+def _strip_prose_uncached(path: Path, text: str) -> str:
+    """`_strip_prose` with the memo taken off — the answer, computed.
+
+    Split out so the memo has something to be compared AGAINST, and so the
+    predicate stays one function rather than being interleaved with caching.
     """
     if path.suffix == ".py":
         try:
