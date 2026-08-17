@@ -1223,8 +1223,20 @@ def _run_fallback_batch(
         pytest_argv: Sequence[str], indexed_files: Sequence[Tuple[int, str]],
         tmp: Path, stall_after: float, cwd: Optional[str], *,
         progress_relay_path: Optional[Path] = None,
+        cwd_by_index: Optional[Dict[int, str]] = None,
         ) -> List[_FallbackOutcome]:
-    """Recover one fixed-width batch in independent supervisor processes."""
+    """Recover one fixed-width batch in independent supervisor processes.
+
+    `cwd_by_index` gives an individual file its OWN working directory while still
+    being part of THIS batch. The tree-exclusive files need that: each runs in its
+    own checkout, but they must share one batch because this function is NOT
+    reentrant -- it sets the module-global `_ACTIVE_FALLBACK_BASELINE` and proves
+    its result against a census of THIS process's descendants. Two calls in flight
+    at once therefore see each other's supervisors, and MEASURED, each concludes it
+    "could not prove an empty descendant census" and returns NORECORD for its own
+    file. Running them as one batch is what makes the isolation concurrent instead
+    of merely parallel-looking.
+    """
     global _ACTIVE_FALLBACK_BASELINE
     if not _enable_subreaper():
         return [_FallbackOutcome(
@@ -1262,7 +1274,7 @@ def _run_fallback_batch(
                 "junit": str(junit_path),
                 "meta": str(meta_path),
                 "stall_after": stall_after,
-                "cwd": cwd,
+                "cwd": (cwd_by_index or {}).get(index, cwd),
                 "progress_relay": (str(progress_relay_path)
                                    if progress_relay_path is not None else None),
                 "pytest_argv": list(pytest_argv),
@@ -1500,6 +1512,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "the whole-selection canary is classified hung "
                          f"(default {DEFAULT_AGGREGATE_STALL_AFTER}); this is "
                          "not a runtime bound")
+    ap.add_argument(
+        "--parallel-first", action="store_true",
+        help="run the whole selection through the per-file PARALLEL path at "
+             "--fallback-jobs width instead of one serial aggregate process. "
+             "COSTS COVERAGE: the aggregate session preserves the order/"
+             "global-state semantics this driver replaced, so a failure that "
+             "only appears when file A runs before file B is no longer seen.")
     ap.add_argument("--fallback-jobs", type=int,
                     default=DEFAULT_FALLBACK_JOBS,
                     help="requested maximum independent supervisor processes "
@@ -1568,12 +1587,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     aggregate_red = 0
     aggregate_cases = 0
     aggregate_incomplete = False
+    # THE PARALLEL PATH'S OWN CENSUS, declared out here for the same reason the
+    # aggregate counters are: the status line is printed AFTER the try/finally,
+    # and a name that only exists inside the branch is a name the reporter cannot
+    # read. That is not hypothetical -- `_exclusive_indices` was exactly such a
+    # name, assigned inside the recovery-wave closure and read at the top level,
+    # and it raised NameError on every single `--parallel-first` run.
+    parallel_wave_ran = False
+    parallel_exclusive_indices: List[int] = []
     try:
         # Aggregate FIRST. It is the authoritative whole-selection question,
         # and a complete answer avoids N redundant pytest starts. If its record
         # is lost, per-file sessions run only as diagnostic recovery below; they
         # preserve neighbouring records but never clear aggregate_incomplete.
-        if a.aggregate_check:
+        # `aggregate_not_requested` IS NOT `aggregate_incomplete`. The second means
+        # "we asked and the record was lost" -- a refusal. This means "we did not
+        # ask". Collapsing them is how a run that SKIPPED a question comes to read
+        # as one that FAILED it; my first attempt set aggregate_incomplete here and
+        # every parallel run returned rc 2.
+        aggregate_not_requested = bool(a.parallel_first)
+        if a.aggregate_check and not a.parallel_first:
             aggregate_path = tmp / "aggregate.xml"
             print(f"=== [aggregate] {len(selection)} file(s) in one pytest "
                   "process", flush=True)
@@ -1609,24 +1642,64 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                       f"cases={aggregate_cases}  red={aggregate_red}",
                       flush=True)
 
-        if (not a.aggregate_only and a.aggregate_check
-                and aggregate_incomplete):
+        if (not a.aggregate_only
+                and (a.parallel_first
+                     or (a.aggregate_check and aggregate_incomplete))):
             print(f"=== [fallback] {len(selection)} file(s), "
                   f"{a.fallback_jobs} independent supervisor process(es)",
                   flush=True)
 
-            # The selector emits a sorted path list. A consecutive first batch
-            # can therefore contain one directory-local failure cluster. Span the
-            # ordered corpus for useful early diagnostics, but never infer an
-            # untried file's result from this sample.
-            probe_capacity = _fallback_capacity(
-                a.fallback_jobs, len(selection))
-            _print_fallback_capacity("probe", probe_capacity)
-            probe_indices = _stratified_probe_indices(
-                len(selection), probe_capacity.jobs)
-            print("FALLBACK_STRATIFIED_PROBE  indices="
-                  + ",".join(str(i) for i in probe_indices), flush=True)
             recovery: Dict[int, _FallbackOutcome] = {}
+            _exclusive_indices: List[int] = []
+            if a.parallel_first:
+                # EVERY PARALLEL-SAFE FILE IN WAVES; the tree-exclusive ones get a
+                # checkout each, below. The probe/rescue split exists to diagnose a
+                # LOST aggregate; with no aggregate to lose there is nothing to
+                # probe for, and a stratified sample would only mean the first wave
+                # skips over files it could have been running.
+                #
+                # The split is a MEASURED list, not a heuristic
+                # (`programs/_tree_exclusive_tests.py`): those 21 files either
+                # write into the tree or assert something about the whole of it,
+                # so two of them at once observe each other's artefacts. Measured
+                # on a 374-file two-arm run: 34 parallel-only failures, all of
+                # them in those files, and ZERO serial-only failures.
+                #
+                # COMPUTED HERE, AT THE TOP LEVEL, not inside `_run_recovery_wave`.
+                # It used to be computed inside that closure, which made both names
+                # closure-locals: the split ran AFTER the wave it was supposed to
+                # choose, and the read below raised NameError. The wave is bounded
+                # by capacity exactly as the probe was -- `_run_fallback_batch`
+                # starts one supervisor PER ITEM and caps nothing itself, so
+                # handing it the whole parallel-safe set at once would be a fork
+                # bomb, not a speedup.
+                import _tree_exclusive_tests as _tx
+                _parallel_indices, _exclusive_indices = _tx.split(selection)
+                parallel_exclusive_indices = list(_exclusive_indices)
+                parallel_wave_ran = True
+                probe_capacity = _fallback_capacity(
+                    a.fallback_jobs, max(1, len(_parallel_indices)))
+                _print_fallback_capacity("parallel-wave", probe_capacity)
+                probe_indices = _parallel_indices[:probe_capacity.jobs]
+                print(f"PARALLEL_SPLIT  parallel_safe={len(_parallel_indices)} "
+                      f"tree_exclusive={len(_exclusive_indices)} "
+                      f"asked={len(selection)}", flush=True)
+                if _exclusive_indices:
+                    print(f"=== [tree-exclusive] {len(_exclusive_indices)} file(s) "
+                          "will run in an isolated checkout each",
+                          flush=True)
+            else:
+                # The selector emits a sorted path list. A consecutive first batch
+                # can therefore contain one directory-local failure cluster. Span
+                # the ordered corpus for useful early diagnostics, but never infer
+                # an untried file's result from this sample.
+                probe_capacity = _fallback_capacity(
+                    a.fallback_jobs, len(selection))
+                _print_fallback_capacity("probe", probe_capacity)
+                probe_indices = _stratified_probe_indices(
+                    len(selection), probe_capacity.jobs)
+                print("FALLBACK_STRATIFIED_PROBE  indices="
+                      + ",".join(str(i) for i in probe_indices), flush=True)
 
             def _run_recovery_wave(indices: Sequence[int]) -> None:
                 nonlocal red_total
@@ -1654,11 +1727,102 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     recovery[index] = outcome
                     red_total += outcome.result.red
 
-            _run_recovery_wave(probe_indices)
+            if probe_indices:
+                _run_recovery_wave(probe_indices)
+            if a.parallel_first and _exclusive_indices:
+                # EACH ONE IN ITS OWN CHECKOUT, AND THEREFORE ALL AT ONCE.
+                #
+                # The first attempt ran these SERIALLY in the shared tree and the verdict
+                # hash did not move a bit (e08f83d7a507c013, identical to the unisolated
+                # run) -- which named the real cause: they fail not because they run
+                # BESIDE each other but because the PARALLEL WAVE dirties the tree, and a
+                # test whose assertion is "the shipped tree is clean" then reads that
+                # residue. Ordering them later cannot help; the damage precedes them.
+                #
+                # So they get a TREE each rather than an ORDER. And once nothing is
+                # shared there is nothing to serialise for, so they run concurrently like
+                # everything else: the isolation buys the parallelism back instead of
+                # spending it.
+                import _exclusive_worktrees as _xw
+                _commit = _xw.head_commit()
+                if not _commit:
+                    # A REFUSAL, NOT A SKIP. Without a commit there is no tree to make, and
+                    # a file that never ran must not read as one that passed.
+                    for _ix in _exclusive_indices:
+                        recovery[_ix] = _FallbackOutcome(
+                            _fallback_no_record(
+                                selection[_ix - 1],
+                                "isolated worktree not created: HEAD is unresolvable"),
+                            "EXCLUSIVE_WORKTREE_NORECORD: HEAD unresolvable\n")
+                else:
+                    _made = []
+                    for _ix, _path, _tag in _xw.plan(_exclusive_indices, selection):
+                        _wt, _err = _xw.make(_commit, _tag)
+                        if _wt is None:
+                            recovery[_ix] = _FallbackOutcome(
+                                _fallback_no_record(_path, _err or "worktree refused"),
+                                f"EXCLUSIVE_WORKTREE_NORECORD: {_err}\n")
+                            continue
+                        _made.append((_ix, _path, _wt))
+                    print(f"=== [tree-exclusive] {len(_made)} file(s), one isolated "
+                          "worktree each, run concurrently", flush=True)
+                    # ONE BATCH, EACH FILE WITH ITS OWN cwd -- NOT ONE BATCH PER
+                    # FILE IN A THREAD POOL. The thread pool was the obvious way to
+                    # write this and it is the one way that cannot work:
+                    # `_run_fallback_batch` sets a module-global baseline and proves
+                    # each result against a census of this process's descendants, so
+                    # concurrent calls observe each other's supervisors. MEASURED on
+                    # a 3-file selection with 2 tree-exclusive files: BOTH came back
+                    # `could not prove an empty descendant census ... survivors=[]`,
+                    # while the same file run alone recorded rc=0 cases=9. Every one
+                    # of the 21 would have been NORECORD, and NORECORD is a refusal,
+                    # so no round on this path could ever have stamped.
+                    #
+                    # The batch is still chunked by the same capacity as any other
+                    # wave: one supervisor per file, and nothing here is exempt from
+                    # the width that bounds the rest of the run.
+                    _exc_capacity = _fallback_capacity(
+                        a.fallback_jobs, max(1, len(_made)))
+                    _print_fallback_capacity("tree-exclusive", _exc_capacity)
+                    try:
+                        for _off in range(0, len(_made), max(1, _exc_capacity.jobs)):
+                            _chunk = _made[_off:_off + max(1, _exc_capacity.jobs)]
+                            _indexed = [(_ix, _path) for _ix, _path, _wt in _chunk]
+                            _cwds = {_ix: _xw.cwd_for(_wt)
+                                     for _ix, _path, _wt in _chunk}
+                            try:
+                                _outs = _run_fallback_batch(
+                                    pytest_argv, _indexed, tmp, a.stall_after, a.cwd,
+                                    progress_relay_path=(Path(a.progress_relay)
+                                                         if a.progress_relay else None),
+                                    cwd_by_index=_cwds)
+                            except Exception as _exc:                      # noqa: BLE001
+                                _outs = [_FallbackOutcome(
+                                    _fallback_no_record(
+                                        _path, f"isolated run failed: {_exc!r}"),
+                                    f"EXCLUSIVE_WORKTREE_NORECORD: {_exc!r}\n")
+                                    for _ix, _path in _indexed]
+                            for (_ix, _path), _out in zip(_indexed, _outs):
+                                recovery[_ix] = _out
+                                red_total += _out.result.red
+                    finally:
+                        # UNCONDITIONAL, including on the exception path: a leaked worktree
+                        # makes the NEXT round's clean-tree gate blame that round for a tree
+                        # this one left behind.
+                        for _ix, _path, _wt in _made:
+                            _xw.remove(_wt)
+                        _xw.prune()
             probe_set = set(probe_indices)
+            # `not in recovery` AS WELL AS `not in probe_set`. On the parallel path
+            # the tree-exclusive files were just measured in a checkout each, and
+            # they are not in probe_set -- so the rescue loop below would have run
+            # every one of them A SECOND TIME in the shared tree and overwritten the
+            # isolated record with the very collision the isolation was bought to
+            # avoid. On the aggregate path `recovery` holds exactly probe_set at
+            # this point, so the added clause changes nothing there.
             remaining_indices = [
                 i for i in range(1, len(selection) + 1)
-                if i not in probe_set]
+                if i not in probe_set and i not in recovery]
             probe_has_record = any(
                 recovery[i].result.has_record for i in probe_indices)
             # Zero complete probe records is evidence about those probe files,
@@ -1677,7 +1841,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 _print_fallback_capacity(
                     "zero-record-rescue" if exhaustive_rescue else "recovery",
                     remaining_capacity)
-            if exhaustive_rescue:
+            if exhaustive_rescue and remaining_indices:
                 print("FALLBACK_ZERO_RECORD_RESCUE  probe="
                       + ",".join(str(i) for i in probe_indices)
                       + f" remaining={len(remaining_indices)} "
@@ -1789,9 +1953,45 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"EMPTY     {r.path}  rc={r.rc}: a report was written and it "
                   f"carries no test case")
 
+    # ── THE PARALLEL PATH'S STATUS LINE ──────────────────────────────────────
+    # Exactly symmetric to AGGREGATE_COMPLETE / AGGREGATE_NORECORD above, and for
+    # the same reason: a stage that produced NO RECORD must never read as a stage
+    # that produced a clean one. The aggregate path answered "was the whole
+    # selection measured in one process?" with one line; the parallel path has no
+    # such process, so it answers the SAME question from the only evidence it
+    # does have -- the per-file census.
+    #
+    # It is printed UNCONDITIONALLY whenever the parallel path was taken, so that
+    # its ABSENCE is itself a verdict: a driver that died (as the NameError one
+    # did, after a full parallel wave and before this point) prints neither
+    # COMPLETE nor NORECORD, and the reader must refuse rather than infer.
+    if parallel_wave_ran:
+        _exc_planned = len(parallel_exclusive_indices)
+        _exc_recorded = sum(
+            1 for _i in parallel_exclusive_indices
+            if _i <= len(results) and results[_i - 1].has_record)
+        _why = []
+        if len(recorded) != len(selection):
+            _why.append(f"{len(selection) - len(recorded)} of {len(selection)} "
+                        "selected file(s) carry no record")
+        if _exc_recorded != _exc_planned:
+            _why.append(f"{_exc_planned - _exc_recorded} tree-exclusive file(s) "
+                        "were planned an isolated checkout and did not produce one")
+        if _why:
+            print("PARALLEL_NORECORD  " + "; ".join(_why)
+                  + " — the whole-selection result is UNKNOWN, not clean",
+                  flush=True)
+        else:
+            print(f"PARALLEL_COMPLETE  asked={len(selection)}  "
+                  f"recorded={len(recorded)}  norecord={len(norecord)}  "
+                  f"notrun={len(notrun)}  "
+                  f"tree_exclusive={_exc_recorded}/{_exc_planned}  "
+                  f"red={red_total}", flush=True)
+
     print("=== pytest junit summary")
     mode = ("aggregate-only" if a.aggregate_only else
-            ("aggregate-first" if a.aggregate_check else "per-file"))
+            ("parallel-first" if a.parallel_first else
+             ("aggregate-first" if a.aggregate_check else "per-file")))
     print(f"  mode       {mode}")
     print(f"  asked      {len(selection)}")
     print(f"  recorded   {len(recorded)}")
