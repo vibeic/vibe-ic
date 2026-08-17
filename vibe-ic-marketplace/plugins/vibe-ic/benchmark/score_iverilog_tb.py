@@ -6,10 +6,12 @@ Generalizes the two scorers used in the 2026-05-28 sweep
 Driven by the per-benchmark entry in BENCHMARK_REGISTRY.json so a new plugin user
 runs `/vibe-ic-benchmark <bench>` and gets the right scoring without writing code.
 
-Substitution disclosure: this scorer uses iverilog 12 -g2012 in place of Synopsys
-VCS or Cadence Xcelium (per open-benchmark-methodology skill § 3). It runs vvp
-with cwd=design_dir so the official TB's relative-path `$readmemh(...)` resolves
-(per § 3 cwd-rule).
+Substitution disclosure: this scorer uses the detected host iverilog (``-g2012``)
+in place of Synopsys VCS or Cadence Xcelium (per open-benchmark-methodology
+skill § 3) and records the probed host version in ``pass_at_1.json``. Only a
+detected SV-2012 tool gap escalates: Shape B uses container Verilator 5.x and
+Shape C uses the vibeic-eda fork-iverilog-14. It runs vvp with cwd=design_dir so
+the official TB's relative-path `$readmemh(...)` resolves (per § 3 cwd-rule).
 
 LAYOUTS supported (BENCHMARK_REGISTRY.layout):
 
@@ -65,6 +67,34 @@ if _PROGRAMS_DIR.is_dir() and str(_PROGRAMS_DIR) not in sys.path:
 
 def _registry_path() -> Path:
     return Path(__file__).resolve().parent / "BENCHMARK_REGISTRY.json"
+
+
+_TOOL_GAP_FALLBACK_DISCLOSURE = (
+    "tool-gap only: Shape B escalates to container Verilator 5.x; "
+    "Shape C escalates to vibeic-eda fork-iverilog-14"
+)
+
+
+def _host_iverilog_version() -> str:
+    """Probe the host Icarus version, returning ``unknown`` on any failure.
+
+    Icarus exposes its version through ``-V`` (``--version`` returns nonzero on
+    supported releases).  Never infer a version from repository prose or the
+    fallback container: this value describes the host binary actually used by
+    the scorer's primary compile path.
+    """
+    try:
+        probe = subprocess.run(
+            ["iverilog", "-V"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if probe.returncode != 0:
+        return "unknown"
+    output = (probe.stdout or "") + "\n" + (probe.stderr or "")
+    match = re.search(
+        r'\bIcarus\s+Verilog\s+version\s+([0-9]+(?:\.[0-9]+)+)\b',
+        output, re.IGNORECASE)
+    return match.group(1) if match else "unknown"
 
 
 # benchmark-enhancement-capture (2026-06-01): canonical power-up gate.
@@ -151,7 +181,7 @@ def _resolve_sample_b(design: str, samples: Path, dataset: Path,
 
 
 # Scorer fix: Verilator escalation for SV-2012 testbench tool-gaps.
-# The host iverilog 12 (AND container iverilog 13) internal-error on some SV-2012
+# Host Icarus releases can internal-error on some SV-2012
 # testbench constructs — array-aggregate/array-literal initializers (`{8'd1,...}`)
 # and `break;` in for-loops. These are a TOOL-GAP in the open *simulator*, NOT a
 # candidate-RTL bug. Verilator 5.x supports both constructs, so it is the correct
@@ -1712,7 +1742,7 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
             return {"design": design, "verdict": "SKIP",
                     "reason": "iverilog_absent",
                     "log": f"COMMAND_NOT_FOUND: {e}"}
-        # iverilog-12 prints "sorry: <feature> not supported" for SV-2012 TB
+        # Host iverilog may print "sorry: <feature> not supported" for SV-2012 TB
         # constructs but STILL EXITS 0 (e.g. asyn_fifo's `break;`), so a tool-gap
         # must be detected on the OUTPUT, not just the return code. ring_counter's
         # array-literal init exits non-zero ("internal error … elaborate"). Catch
@@ -2121,7 +2151,12 @@ def main():
         results = [_score_shape_c(p, samples, dataset, layout, args) for p in probs]
         ident = "problem"
 
-    # an earlier release — designs flagged as scorer_substitution_gap (iverilog 12 lacks an
+    # Metadata-only probe after every scoring verdict is already derived: tool
+    # disclosure can never influence compilation, fallback selection, verdicts,
+    # or denominators.
+    host_iverilog_version = _host_iverilog_version()
+
+    # an earlier release — designs flagged as scorer_substitution_gap (host iverilog lacks an
     # SV-2012 feature the TB uses, e.g. array-literal init or `break;` in loops)
     # don't count against pass rate, per open-benchmark-methodology § 3. The
     # field lives in BENCHMARK_REGISTRY.json. Empty list (= no gap) is the default.
@@ -2134,7 +2169,11 @@ def main():
                 r["original_verdict"] = r["verdict"]
                 r["original_reason"] = r.get("reason", "")
                 r["verdict"] = "SKIP"
-                r["reason"] = "scorer_substitution_gap — TB uses an SV-2012 feature iverilog 12 doesn't implement; not counted against pass rate per open-benchmark-methodology § 3"
+                r["reason"] = (
+                    "scorer_substitution_gap — TB uses an SV-2012 feature "
+                    f"unavailable in host iverilog {host_iverilog_version}; "
+                    "not counted against pass rate per "
+                    "open-benchmark-methodology § 3")
 
     # Honesty audit (opt-in via scorer_args.verify_discriminating): flag any PASS
     # whose TB is non-discriminating (a constant-0 stub also passes it). These are
@@ -2211,7 +2250,9 @@ def main():
     summary = {
         "benchmark": entry["title"],
         "shape": shape,
-        "tool": "iverilog 12 (host) substituting for Synopsys VCS / Cadence Xcelium",
+        "tool": (f"iverilog {host_iverilog_version} (host) substituting for "
+                 "Synopsys VCS / Cadence Xcelium"),
+        "tool_gap_fallback": _TOOL_GAP_FALLBACK_DISCLOSURE,
         "tool_substitution_note": "Functional pass@1 only. PPA stage (DC) not scored — would not be apples-to-apples vs the upstream methodology. See open-benchmark-methodology skill § 3.",
         "total": n, "passed": npass, "skipped_scorer_gap": nskip,
         "pass_at_1_pct": round(100.0 * npass / n_eff, 2) if n_eff else 0.0,
