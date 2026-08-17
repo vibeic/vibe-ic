@@ -158,30 +158,17 @@ def _covered(plugin_rel: str = _PLUGIN_REL) -> Tuple[Covered, ...]:
     )
 
 
-#: NOTHING IS EXCLUDED, AND THAT EMPTINESS IS DECLARED RATHER THAN LEFT SILENT.
-#:
-#: This held exactly one entry, `benchmark-data/`, excluding the CVDP corpus's own
-#: harness files — cocotb `test_runner.py` and the per-problem testbenches it drives,
-#: which are INPUTS to a benchmark rather than tests of this repo.
-#:
-#: That corpus now lives in `vibeic/benchmark-data`. There is no `benchmark-data/` in
-#: this repository, so the exclusion subtracted nothing, and `audit()` said so:
-#:
-#:     declared exclusion 'benchmark-data/' matches NO tracked test file
-#:     — the reason it states no longer describes this tree.
-#:
-#: It was right, and it was right BEFORE the removal too: measured at `6d70bd74c`
-#: (trees still present) and at `e23d0be5e` (trees gone), rc=1 with the identical
-#: finding. The 121 harness files had already left when the corpus was pruned to the
-#: cells that actually pass, so the roster had been stale for longer than the split.
-#:
-#: An empty tuple is the correct state and NOT an oversight. It is spelled out here
-#: because a registry that silently holds nothing is indistinguishable from one
-#: somebody emptied by accident, and `audit()` cannot tell those apart either — it
-#: can only fault a declaration that matches nothing, never the absence of one.
-#:
-#: If a corpus is ever vendored back into this tree, the entry comes back with it.
-_EXCLUDED: Tuple[Excluded, ...] = ()
+_EXCLUDED: Tuple[Excluded, ...] = (
+    Excluded(
+        prefix="benchmark-data/",
+        why="CVDP corpus artefacts — the scored harness's OWN files (cocotb "
+            "`test_runner.py` and the per-problem testbenches it drives), "
+            "published as evidence of a run. They are inputs to a benchmark, "
+            "not tests of this repo, and running them would need the EDA "
+            "toolchain the benchmark supplies. Counting them would inflate "
+            "the denominator this issue is measured against.",
+    ),
+)
 
 
 def repo_root(start: Optional[Path] = None) -> Optional[Path]:
