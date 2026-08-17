@@ -403,6 +403,30 @@ run_pytest() {
     echo "  FAIL  targeted test selection produced no files — not a clean result"
     FAILED=1; rm -f "$sel"; return
   fi
+  # THE SCHEDULE MUST NOT BE ABLE TO INVENT A RED (measured 2026-08-17).
+  #
+  # The recovery path below runs 8 files of this selection AT ONCE — 32 in the
+  # zero-record rescue — against ONE live tree, and eleven files in this suite
+  # PLANT a program into that tree while they run, because the shipped
+  # resolvers they drive look up bare names in the real PROGRAMS directory.
+  # Reproduced under `pytest-xdist --dist loadfile` on a 93-file selection:
+  # at n=16 and n=24 `test_issue833_analog_l5_vacuous_reaches_umbrella` failed
+  # with `Finding(gate='_i528_planted_unrouted_check', …)` in its own message
+  # and `test_issue1130_wiring_population_parity` failed on its denominator;
+  # both pass serially and at n=8. `pytest_per_file_junit` now keeps every
+  # rostered file alone in its wave. This line is the paired guard: it costs
+  # 0.6 s on 93 files and refuses a selection carrying a tree writer the
+  # roster does not know about, which is the only way that isolation can
+  # silently stop covering the corpus it was written for.
+  ( cd "$PLUGIN" && python3 programs/pytest_parallel_policy.py \
+        --audit --selection "$sel" ) >/dev/null 2>&1 || {
+    echo "  FAIL  a selected test writes into the shipped tree and is not on"
+    echo "        the serial roster — the recovery wave could schedule it"
+    echo "        beside a whole-tree scanner and manufacture a red:"
+    ( cd "$PLUGIN" && python3 programs/pytest_parallel_policy.py \
+          --audit --selection "$sel" ) 2>&1 | head -6 | sed 's/^/          /'
+    FAILED=1
+  }
   # THIS SESSION'S ENVIRONMENT IS PART OF THE GATE (vibe-ic#1047, one level up).
   #
   # #1047 fixed the environment of a pytest this suite SPAWNS. The same defect was
