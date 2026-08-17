@@ -20,6 +20,7 @@ reviewer can re-derive it.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +29,60 @@ import pytest
 
 TOOLS = Path(__file__).resolve().parent
 REPO = TOOLS.parent
+
+#: WHERE THE CORPUS IS, after v1.10.56 moved `benchmark-data/` out of this repo.
+#:
+#: Every test below reads ONE artefact — `d9_reality.json` — and each read used to
+#: be spelled inline as `(REPO / "benchmark-data" / ...)`. Once the tree left the
+#: repo those seven reads became seven `FileNotFoundError`s: not a verdict, a
+#: crash, and a crash inside a test file reads as a red suite whose cause is one
+#: missing directory rather than anything about D9.
+#:
+#: The env var is `programs/_corpus_location.py`'s, deliberately and not a second
+#: convention: seven gates already agree where the corpus is by agreeing with that
+#: module, and a test file that invented its own name would be able to disagree
+#: with all of them while looking correct.
+CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+_REALITY_REL = Path("evaluation") / "d9_flow_gate_reality" / "d9_reality.json"
+
+
+def _reality_path():
+    """The artefact, or None. NONE MEANS 'NOT FOUND', NOT 'EMPTY'.
+
+    Checked in the same order `_corpus_location.resolve` uses: the named tree in
+    the repo wins when it is present (a developer who still has it gets the real
+    thing), and the pointer takes over only when it is absent.
+    """
+    named = REPO / "benchmark-data" / _REALITY_REL
+    if named.is_file():
+        return named
+    ptr = (os.environ.get(CORPUS_ENV) or "").strip()
+    if ptr:                      # an EMPTY pointer is absent, not `Path("")`
+        cand = Path(ptr) / _REALITY_REL
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _reality():
+    """Load it, or SKIP with the reason spelled out.
+
+    Skipping is the honest outcome here and a PASS would not be: these tests
+    assert things about the CONTENT of a corpus, so with no corpus there is
+    nothing to be right about. pytest reports SKIPPED by name, so the loss of
+    coverage is visible in the summary line rather than absorbed into a green
+    count — which is the whole difference between this and returning `{}`.
+    """
+    p = _reality_path()
+    if p is None:
+        pytest.skip(
+            f"d9 corpus absent: neither {REPO / 'benchmark-data' / _REALITY_REL} "
+            f"nor ${CORPUS_ENV}/{_REALITY_REL} exists. benchmark-data left this "
+            f"repo in v1.10.56; point ${CORPUS_ENV} at a checkout of it to run "
+            f"these.")
+    return json.loads(p.read_text())
+
+
 sys.path.insert(0, str(TOOLS))
 
 import d9_flow_gate_reality as d9  # noqa: E402
@@ -78,6 +133,12 @@ class TestAGreenThatSurvivesDeletionIsNotAMeasurement:
         assert d9.verdict_moved(cell(ERROR, None), cell(NO_INPUT, 2)) is False
 
 
+# ── audit_63x9: THIS TEST AUDITS A PUBLISHED ARTEFACT, NOT THIS CHANGE ──────
+# It reads the published 63x9 corpus. A landing tree does not carry one
+# (benchmark-data left this repo in v1.10.56), so here it cannot audit anything
+# -- it is not slow, it is VOID, and its permanent red blocks landings that
+# broke nothing. Run it where the corpus is: tools/ci/audit_63x9.sh
+@pytest.mark.audit_63x9
 class TestZeroDenominatorRefusesRatherThanPasses:
     """The house rule (``gate_zero_denominator_refuses_check``): a verdict over
     an empty population is a refusal, never a pass.
@@ -88,9 +149,7 @@ class TestZeroDenominatorRefusesRatherThanPasses:
     """
 
     def test_zero_denominator_steps_are_dark_with_that_cause(self):
-        report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+        report = _reality()
         zero = [r for r in report["rows"] if r["denominator"] == 0]
         assert zero, "no zero-denominator step found; corpus shape changed"
         for row in zero:
@@ -100,9 +159,7 @@ class TestZeroDenominatorRefusesRatherThanPasses:
                 f'{row["step"]}: zero denominator blamed on {row["cause"]}')
 
     def test_no_cell_claims_to_have_moved_on_more_runs_than_it_probed(self):
-        report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+        report = _reality()
         for row in report["rows"]:
             assert row["runs_moved"] <= row["runs_probed"], row["step"]
             assert row["runs_probed"] <= row["denominator"], row["step"]
@@ -118,20 +175,28 @@ class TestThePageMayNotSoftenTheSentence:
             "This gate certifies CONSISTENCY AND ATTRIBUTION, "
             "never CORRECTNESS.")
 
+    # ── audit_63x9: THIS TEST AUDITS A PUBLISHED ARTEFACT, NOT THIS CHANGE ──────
+    # It reads the published 63x9 corpus. A landing tree does not carry one
+    # (benchmark-data left this repo in v1.10.56), so here it cannot audit anything
+    # -- it is not slow, it is VOID, and its permanent red blocks landings that
+    # broke nothing. Run it where the corpus is: tools/ci/audit_63x9.sh
+    @pytest.mark.audit_63x9
     def test_the_rendered_block_carries_it_and_both_belief_lists(self):
-        report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+        report = _reality()
         block = gen.render(report)
         assert gen.CERTIFIES in block
         assert "MAY believe" in block and "MAY NOT believe" in block
         assert "foundry deck would sign it off" in block
         assert "silicon works" in block
 
+    # ── audit_63x9: THIS TEST AUDITS A PUBLISHED ARTEFACT, NOT THIS CHANGE ──────
+    # It reads the published 63x9 corpus. A landing tree does not carry one
+    # (benchmark-data left this repo in v1.10.56), so here it cannot audit anything
+    # -- it is not slow, it is VOID, and its permanent red blocks landings that
+    # broke nothing. Run it where the corpus is: tools/ci/audit_63x9.sh
+    @pytest.mark.audit_63x9
     def test_every_dark_cell_is_rendered_as_dark_with_a_named_cause(self):
-        report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+        report = _reality()
         block = gen.render(report)
         assert block.count('class="d9-dark"') == report["dark"], (
             "the number of rows drawn dark must equal the number measured dark")
@@ -141,15 +206,25 @@ class TestThePageMayNotSoftenTheSentence:
                     f'{row["step"]}: cause {row["cause"]} has no rendering, so '
                     "the page would show a dark cell with no reason")
 
+    # ── audit_63x9: THIS TEST AUDITS A PUBLISHED ARTEFACT, NOT THIS CHANGE ──────
+    # It reads the published 63x9 corpus. A landing tree does not carry one
+    # (benchmark-data left this repo in v1.10.56), so here it cannot audit anything
+    # -- it is not slow, it is VOID, and its permanent red blocks landings that
+    # broke nothing. Run it where the corpus is: tools/ci/audit_63x9.sh
+    @pytest.mark.audit_63x9
     def test_the_block_does_not_claim_d9_is_shipped(self):
-        report = json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+        report = _reality()
         block = gen.render(report)
         assert "D9 不是一個已經出貨的維度" in block
         assert "PLANNED" in block
 
 
+# ── audit_63x9: THIS TEST AUDITS A PUBLISHED ARTEFACT, NOT THIS CHANGE ──────
+# It reads the published 63x9 corpus. A landing tree does not carry one
+# (benchmark-data left this repo in v1.10.56), so here it cannot audit anything
+# -- it is not slow, it is VOID, and its permanent red blocks landings that
+# broke nothing. Run it where the corpus is: tools/ci/audit_63x9.sh
+@pytest.mark.audit_63x9
 class TestNoMeasuredNumberInTheBlockIsHandTyped:
     """A literal typed into the prose beside a derived cell is this page's own
     defect, committed inside the section that exists to name it.
@@ -166,9 +241,7 @@ class TestNoMeasuredNumberInTheBlockIsHandTyped:
     """
 
     def _report(self):
-        return json.loads(
-            (REPO / "benchmark-data" / "evaluation" / "d9_flow_gate_reality"
-             / "d9_reality.json").read_text())
+        return _reality()
 
     @pytest.mark.parametrize(
         "field", ["on_disk", "all_py_in_programs", "referenced_by_flow"])
@@ -189,15 +262,19 @@ class TestNoMeasuredNumberInTheBlockIsHandTyped:
             "hand-typed, not derived, and will drift with the next commit")
 
 
+# ── audit_63x9: THIS TEST AUDITS A PUBLISHED ARTEFACT, NOT THIS CHANGE ──────
+# It reads the published 63x9 corpus. A landing tree does not carry one
+# (benchmark-data left this repo in v1.10.56), so here it cannot audit anything
+# -- it is not slow, it is VOID, and its permanent red blocks landings that
+# broke nothing. Run it where the corpus is: tools/ci/audit_63x9.sh
+@pytest.mark.audit_63x9
 class TestDriftIsDetected:
     """``--check`` is the only thing standing between this block and the
     hand-typed total the page's masthead warns about.
     """
 
     def test_check_fails_when_the_page_block_no_longer_matches(self, tmp_path):
-        reality = (REPO / "benchmark-data" / "evaluation"
-                   / "d9_flow_gate_reality" / "d9_reality.json")
-        report = json.loads(reality.read_text())
+        report = _reality()
         page = tmp_path / "p.html"
         page.write_text("<style>\n</style>\n"
                         "<!-- END GENERATED SCORE -->\n</div>\n")
