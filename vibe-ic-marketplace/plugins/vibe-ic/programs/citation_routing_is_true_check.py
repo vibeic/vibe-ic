@@ -47,17 +47,58 @@ document's own directory, then each ancestor up to the cell root. A
 single-base resolver would fabricate findings for cell-root-relative citations
 — the same measurement error `evidence_citation_resolves_check` records.
 
+WHERE ITS SUBJECT WENT (#1710's treatment, applied)
+---------------------------------------------------
+THIS GATE'S SUBJECT LEFT WITH THE CORPUS — it was never absent from this repo in
+the first place. Every `CITATION_ROUTING.txt` is published INSIDE a converged
+cell, and the four that existed were deleted by c5d7f2d0 / e23d0be5e, the commits
+that moved the published results to `vibeic/benchmark-data`:
+
+    benchmark-data/ic/caravel_user_project/v1.9.43_<pdk>/CITATION_ROUTING.txt
+    benchmark-data/ic/spm/v1.10.18_<pdk>/CITATION_ROUTING.txt
+    benchmark-data/ic/spm/v1.9.96_<pdk>/CITATION_ROUTING.txt
+    benchmark-data/ic/u_hawaii_adc/v1.9.86_<pdk>/CITATION_ROUTING.txt
+
+So the gate answered `[CANNOT DETERMINE] no tracked CITATION_ROUTING.txt found`,
+rc 2, which `run` in `_gate_dispatch.sh` maps to FAIL. The refusal was CORRECT —
+a check that could not look has not passed — and it stays. What is added is the
+ability to LOOK WHERE THE RECORDS NOW ARE, and a way for the call site to say
+that this repo need not carry them.
+
+    pointer set + unreadable          -> UNDETERMINED (rc 2). Never excused.
+    pointer set + not a git checkout  -> UNDETERMINED (rc 2). This gate reads
+                                         git's INDEX; an empty `ls-files` over a
+                                         loose directory is "I could not look",
+                                         not "there are none".
+    pointer set + a checkout tracking
+      no record at all                -> UNDETERMINED (rc 2). Somebody named a
+                                         corpus that carries none of this gate's
+                                         subject; that is a broken pointer, not
+                                         an absent one.
+    nothing anywhere + the CALL SITE
+      opted in                        -> NO_CORPUS (rc 0). Nothing scanned and
+                                         NOTHING CLAIMED to have been scanned.
+    nothing anywhere + nobody said so -> UNDETERMINED (rc 2). Unchanged.
+
+The two populations are UNIONED, not swapped: records tracked in THIS repo are
+still adjudicated when a corpus is also supplied. A record that comes home must
+not stop being judged because a pointer is set.
+
 chip-AGNOSTIC: pure filesystem structure. No design, PDK, vendor or value
 literal appears here.
 
 USAGE
 -----
     citation_routing_is_true_check.py [--root .] [--json OUT]
+                                      [--corpus-may-be-absent]
+    VIBE_IC_BENCHMARK_DATA=/path/to/benchmark-data-clone \
+        citation_routing_is_true_check.py --root .
 
-    exit 0 = every RESOLVES row resolves
+    exit 0 = every RESOLVES row resolves, or NO_CORPUS (opted in, and it says
+             nothing was scanned)
     exit 1 = at least one does not (BLOCKING)
-    exit 2 = could not be determined (no cell found, unreadable record) —
-             never a vacuous pass
+    exit 2 = could not be determined (no record found, unreadable record, a
+             corpus pointer that is set and wrong) — never a vacuous pass
 """
 from __future__ import annotations
 
@@ -68,7 +109,19 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import _corpus_location as _corpus         # sibling program, one seam for all
+
 _ROUTING_NAME = "CITATION_ROUTING.txt"
+
+#: Where a caller may point us at a clone of the published corpus. Taken from
+#: `_corpus_location` rather than re-spelled here: one name for one thing.
+#:
+#: `_corpus_location.resolve` is deliberately NOT used to pick this gate's scan
+#: root. That helper answers "the named corpus is missing — may I use the
+#: pointer instead?", and this gate's named root is the REPOSITORY, which always
+#: exists. Here the corpus is an ADDITIONAL population, not a replacement one:
+#: see the union in `main`.
+CORPUS_ENV = _corpus.CORPUS_ENV
 _RESOLVES = "RESOLVES"
 # The decisions that assert a reader CANNOT follow the citation. Listed so a
 # decision word this gate has never seen is reported rather than silently
@@ -149,6 +202,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=".")
     ap.add_argument("--json", dest="json_out")
+    ap.add_argument("--corpus-may-be-absent", action="store_true",
+                    help="the caller asserts this repo need not carry the "
+                         "published corpus. Turns 'no record tracked anywhere' "
+                         "from UNDETERMINED into NO_CORPUS (rc 0), which STATES "
+                         "that nothing was adjudicated. It does NOT excuse a "
+                         f"pointer that is set and broken: ${CORPUS_ENV} aimed "
+                         "at something unreadable, at a directory that is not a "
+                         "git checkout, or at a checkout tracking no "
+                         f"{_ROUTING_NAME} at all stays UNDETERMINED.")
     a = ap.parse_args(argv)
     root = Path(a.root).resolve()
 
@@ -158,9 +220,66 @@ def main(argv=None) -> int:
               "tracked files, so no published record was read. NOT a pass.",
               file=sys.stderr)
         return 2
+
+    # THE CORPUS IS ADDED, NOT SWAPPED IN, AND THE OVERRIDE IS ANNOUNCED (#1710).
+    # This gate's subject ships INSIDE published cells, so it left with them in
+    # v1.10.56. A record that later comes home to this repo must still be judged,
+    # which is why the two populations are unioned rather than exchanged.
+    env_tree = _corpus.env_pointer()
+    if env_tree:
+        print(f"note: {CORPUS_ENV} adds a corpus to scan -> {env_tree}",
+              file=sys.stderr)
+        corpus = Path(env_tree)
+        if not corpus.is_dir():
+            # SET AND WRONG IS NOT ABSENT. A mistyped path, a failed clone or a
+            # no-op CI fetch step must never come out as a green gate over
+            # nothing — the exact shape #1710 closed.
+            print(f"UNDETERMINED: {CORPUS_ENV}={env_tree} is set and is not a "
+                  f"readable directory, so no published record was read there. "
+                  f"A pointer that is set and wrong is a broken configuration, "
+                  f"not an absent corpus, and --corpus-may-be-absent does not "
+                  f"excuse it.", file=sys.stderr)
+            return 2
+        _loose = _corpus.not_a_checkout_reason(corpus,
+                                               f"tracked {_ROUTING_NAME}")
+        if _loose:
+            print(f"UNDETERMINED: {_loose} Point {CORPUS_ENV} at a clone.",
+                  file=sys.stderr)
+            return 2
+        corpus_files = tracked_routing_files(corpus)
+        if corpus_files is None:
+            print(f"[CANNOT DETERMINE] citation_routing_is_true: git could not "
+                  f"list tracked files under {env_tree}, so the corpus was not "
+                  f"read. NOT a pass.", file=sys.stderr)
+            return 2
+        if not corpus_files:
+            # The pointer was SET and led to a checkout carrying none of this
+            # gate's subject. That is somebody's broken configuration, and the
+            # opt-in must not reach it.
+            print(f"UNDETERMINED: {CORPUS_ENV}={env_tree} is a git checkout but "
+                  f"tracks no {_ROUTING_NAME} at all. A corpus that was NAMED "
+                  f"and carries none of this gate's subject is a wrong pointer, "
+                  f"not an absent corpus.", file=sys.stderr)
+            return 2
+        print(f"note: {len(corpus_files)} tracked {_ROUTING_NAME} under "
+              f"{env_tree}, {len(files)} under {root}", file=sys.stderr)
+        files = files + corpus_files
+
     if not files:
+        if a.corpus_may_be_absent:
+            # rc 0, and it must never read as an adjudication that happened.
+            print(f"NO_CORPUS: no tracked {_ROUTING_NAME} under {root} and "
+                  f"{CORPUS_ENV} is unset. This gate's subject ships inside a "
+                  f"published cell, and the published cells live in their own "
+                  f"repository now. NOTHING WAS SCANNED — 0 record(s) read, "
+                  f"0 RESOLVES row(s) adjudicated and nothing is claimed. Point "
+                  f"{CORPUS_ENV} at a clone to make this gate check something.",
+                  file=sys.stderr)
+            return 0
         print("[CANNOT DETERMINE] citation_routing_is_true: no tracked "
-              f"{_ROUTING_NAME} found under {root}. NOT a pass.", file=sys.stderr)
+              f"{_ROUTING_NAME} found under {root}. NOT a pass. Set "
+              f"{CORPUS_ENV}, or pass --corpus-may-be-absent if this repo need "
+              f"not carry a corpus.", file=sys.stderr)
         return 2
 
     reports = [audit_cell(f.parent) for f in files]

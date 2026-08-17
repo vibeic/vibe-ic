@@ -316,7 +316,17 @@ run "stage membership declared once"    "$ROOT" python3 "$PG/flow_stage_membersh
 # vibe-ic#312 family — a checker that reads a field NO document populates sees
 # an empty value, and an empty value is indistinguishable from a clean one.
 # Measured five times in one campaign; three were "the producer never existed".
-run "L-doc field producer"              "$ROOT" python3 "$PG/l_doc_field_producer_check.py"
+#
+# `--corpus-may-be-absent` (vibe-ic#1710's treatment): the L-docs this gate
+# counts producers over moved to `vibeic/benchmark-data` in v1.10.56, so the
+# hardcoded `benchmark-data/ic` is gone from this repo and the gate refused
+# (rc 2 -> FAIL) on every landing. THE FLAG DOES NOT SILENCE IT. It only says
+# "this repo need not carry a corpus", turning nothing-anywhere into NO_CORPUS
+# which STATES that 0 documents were examined; a $VIBE_IC_BENCHMARK_DATA that is
+# set and broken is still UNDETERMINED, a corpus that IS supplied is still fully
+# adjudicated, and a corpus present but holding no L-doc is UNDETERMINED rather
+# than a comparison against zero.
+run "L-doc field producer"              "$ROOT" python3 "$PG/l_doc_field_producer_check.py" --corpus-may-be-absent
 
 # vibe-ic#371 — a tracked symlink recorded with an ABSOLUTE target resolves
 # only on the machine that wrote it. 159 of 172 were in that state and it made
@@ -406,12 +416,30 @@ run "tracked JSON/YAML parses"          "$ROOT" python3 "$PG/tracked_json_yaml_p
 
 # vibe-ic#361 — an evidence document that cites `foo.log` and ships no foo.log
 # is unverifiable, and the failure is silent.
-run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_resolves_check.py"
+#
+# `--corpus-may-be-absent` (vibe-ic#1710's treatment): the sign-off documents AND
+# the debt register that describes them both left with the corpus in v1.10.56 —
+# the baseline lives beside the data (`root.parent/`), so they moved together.
+# The flag turns nothing-anywhere into NO_CORPUS, which STATES that 0 documents
+# were enumerated; a pointer that is set and broken stays UNDETERMINED, a corpus
+# that is present but NOT a git checkout stays UNDETERMINED (this gate reads the
+# INDEX, and over a loose directory an untracked local artefact would satisfy a
+# citation the published tree does not ship), and a supplied corpus is still
+# fully adjudicated against the register that travelled with it.
+run "evidence citation resolves"        "$ROOT" python3 "$PG/evidence_citation_resolves_check.py" --corpus-may-be-absent
 # The record the gate above now TRUSTS for its disclosures. It may only say
 # a citation resolves when it does — verified against the cell as committed,
 # because the publisher computes the decision against the tree it had and
 # nothing re-derived it afterwards (8 false RESOLVES rows, measured).
-run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is_true_check.py" --root "$ROOT"
+#
+# `--corpus-may-be-absent`: this gate's SUBJECT left with the corpus. A
+# CITATION_ROUTING.txt ships inside a published cell, and the four that existed
+# were deleted by the same commits that moved the cells out, so there is nothing
+# in this repo for it to read. The pointer ADDS the corpus rather than replacing
+# this repo (a record that comes home is still judged), a pointer set and broken
+# or aimed at a non-checkout stays UNDETERMINED, and a supplied corpus carrying a
+# false RESOLVES row still FAILs.
+run "citation routing is true"          "$ROOT" python3 "$PG/citation_routing_is_true_check.py" --root "$ROOT" --corpus-may-be-absent
 
 # vibe-ic#381 — a checker only its own unit test ever runs has zero coverage of
 # real inputs: the fixture proves the logic, never the artefacts.
@@ -666,7 +694,22 @@ run "artefact-defect close discipline" "$ROOT" python3 "$PG/artefact_defect_clos
 # to be an attempt to silence it. Measured across the 48 scopes proposed in the
 # same sweep: 13 of them had this shape, and 5 of those 13 guard something that
 # is RED on this tree today.
-run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_reference_check.py" --corpus "$ROOT/benchmark-data/ic"
+#
+# `--corpus-may-be-absent` (vibe-ic#1710's treatment): the published corpus
+# moved to `vibeic/benchmark-data` in v1.10.56, so `$ROOT/benchmark-data/ic`
+# is gone from this repo and the sweep refused on every landing. THE FLAG DOES
+# NOT SILENCE THE GATE. It converts nothing-discoverable-anywhere into
+# NO_CORPUS (rc 0) which STATES that 0 cells were swept; a
+# $VIBE_IC_BENCHMARK_DATA that is set and broken is still UNDETERMINED (rc 2),
+# a pointer-supplied tree that is not a git checkout is UNDETERMINED, and a
+# corpus that IS resolvable is swept and can still FAIL.
+#
+# AND IT DOES NOT EXCUSE THE REGISTER. `cross_layer_reference_baseline.json`
+# lives in THIS repo and did not move; under NO_CORPUS the gate still opens it
+# and FAILs (rc 1) if its `seal` does not match the counts beside it. That is
+# what keeps the withdrawn `gate_scope` above from being reintroduced as an
+# rc 0 that never read the file.
+run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_reference_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
 
 # vibe-ic#693 — `flow_compliance_check` classifies a project from each step's
 # `pass.flag` and never walks the per-step report JSON, so a step can ship
@@ -713,7 +756,14 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # to be an attempt to silence it. Measured across the 48 scopes proposed in the
 # same sweep: 13 of them had this shape, and 5 of those 13 guard something that
 # is RED on this tree today.
-run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic"
+#
+# `--corpus-may-be-absent`, same treatment and same limits as the gate above:
+# NO_CORPUS states that 0 published run trees were swept, a set-and-broken
+# pointer is still UNDETERMINED, and a resolvable corpus still ratchets. The
+# baseline register did not move with the corpus either, so a corpus-less run
+# still checks that `findings_total` equals the sum of `per_run` — a ceiling
+# raised by hand to buy headroom is rc 1 with or without a corpus.
+run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard
 # on that list's contract — complete over the non-PASS steps, inventing none,
@@ -753,7 +803,18 @@ run "per-PDK table coverage"            "$ROOT" python3 "$PG/pdk_table_coverage_
 # complete description of a register map it does not describe. Remedy when it
 # fires: one row in DISPOSITION. Measured at wiring time: 201 documents, 41
 # register keys, 18 field keys, all classified.
-run "L4 -> SystemRDL disposition"       "$ROOT" python3 "$PG/l4_systemrdl_export.py" audit-corpus --root "$ROOT"
+#
+# `--corpus-may-be-absent` (vibe-ic#1710's treatment): all 199 tracked
+# `L4_REGMAP.json` lived under `benchmark-data/` and left with it in v1.10.56,
+# so `--root "$ROOT"` now finds none and the gate refused (rc 2 -> FAIL) on every
+# landing. The flag turns nothing-anywhere into NO_CORPUS, which STATES that 0
+# documents were parsed and the disposition table was not exercised.
+# $VIBE_IC_BENCHMARK_DATA is ADDED to "$ROOT" rather than replacing it — an L4
+# document that comes home to this repo keeps being audited — a pointer set and
+# broken stays UNDETERMINED, and a corpus whose documents are all unreadable is
+# UNDETERMINED rather than the PASS-over-nothing this program shipped once
+# before ("audit-corpus found 0 of 201 documents -> PASS").
+run "L4 -> SystemRDL disposition"       "$ROOT" python3 "$PG/l4_systemrdl_export.py" audit-corpus --root "$ROOT" --corpus-may-be-absent
 
 # vibe-ic#440 — benchmark-data/ic/ is what this project points at when it says
 # a cell converged, and it also holds runs that did not. Measured: 28 published
@@ -985,7 +1046,16 @@ run "final-summary roll-up consistency" "$PLUGIN" python3 programs/final_summary
 # #506), and REPORTS: correcting a published record is the benchmark-agent's
 # commit under NO-MIX, so the two are a recorded debt here and anything NEW —
 # or a gate whose rules changed without re-review — fails.
-run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py"
+#
+# `--corpus-may-be-absent` (vibe-ic#1710's treatment). Before it this gate did
+# not refuse, it CRASHED — `ERROR: not a directory: <repo>/benchmark-data` at
+# rc 1, which in this program means "a published record carries a verdict its
+# gate would not issue today". It reported a finding against records it never
+# opened. The flag converts nothing-anywhere into NO_CORPUS (rc 0) stating 0
+# records were adjudicated; a set-and-broken $VIBE_IC_BENCHMARK_DATA is still
+# UNDETERMINED (rc 2), and the debt register is STILL put through the #922
+# may-only-shrink checks, which need no corpus to ask.
+run "published records not superseded" "$ROOT" python3 "$PG/published_record_staleness_check.py" --corpus-may-be-absent
 
 # vibe-ic#904 — a design-input document made a CHECKABLE factual claim about the
 # installed PDK, the claim was false, and nothing in the flow noticed. The

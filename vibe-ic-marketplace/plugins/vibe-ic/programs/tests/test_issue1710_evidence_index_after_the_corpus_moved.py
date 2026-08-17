@@ -65,13 +65,20 @@ ENV = "VIBE_IC_BENCHMARK_DATA"
 AUDIT_REL = "reports/audit/phase23_completion_audit.json"
 
 
+# 60 s, not 180 (vibe-ic#1711). 180 was the WHOLE pytest session budget, and
+# with `--timeout-method=thread` a bound that large can never fire as a TEST
+# failure: pytest kills the SESSION first, `--maxfail` stops applying, and every
+# other file in the subset loses its verdict. 60 s is the ceiling
+# `ci_harness_timeout_ceiling_check` resolves (180 // 3) and the bound 464 other
+# call sites in this corpus already use. MEASURED here: 9 passed in 0.77 s,
+# slowest item 0.07 s — 60 s is ~850x that, so it cannot fire on passing work.
 def _run(*args: str, env_tree: str | None = None):
     env = dict(os.environ)
     env.pop(ENV, None)
     if env_tree is not None:
         env[ENV] = env_tree
     out = subprocess.run([sys.executable, str(PROG), *args],
-                         capture_output=True, text=True, timeout=180, env=env)
+                         capture_output=True, text=True, timeout=60, env=env)
     return out.returncode, (out.stdout + out.stderr)
 
 
