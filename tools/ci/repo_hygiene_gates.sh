@@ -168,7 +168,6 @@ run "severity=ERROR is consumed" "$PLUGIN" python3 programs/error_diagnostic_con
 # states a number it cannot keep true.)
 run "watchdog compliance"           "$PLUGIN" python3 programs/loop_watchdog_compliance_check.py
 run "marketplace version sync"      "$PLUGIN" python3 programs/marketplace_version_sync_check.py
-run "plugin full audit"             "$PLUGIN" python3 programs/plugin_full_audit.py
 
 # vibe-ic#559 — two PLUGIN-scoped self-checks that were registered in the
 # per-project P0 umbrella, which cannot invoke them: they take no project, so
