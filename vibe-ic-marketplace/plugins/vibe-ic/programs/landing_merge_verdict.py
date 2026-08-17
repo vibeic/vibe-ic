@@ -159,6 +159,28 @@ to detect.
                           PERFORMED — nothing is left to disagree with it. The
                           forge's `refs/pull/<n>/merge` still cross-checks it
                           whenever the forge merged this same base.
+    TIER `direct-push`    the DIRECT-PUSH path (`git push origin main`), driven
+                          by `tools/gatekeeper-land-differential.sh`. There is
+                          no PR, no forge merge and no squash: the commit being
+                          pushed IS the commit that lands and its tree IS the
+                          tree that lands, so squash-vs-rebase is NOT
+                          APPLICABLE rather than not performed — there are not
+                          two computations of one tree for one to disagree
+                          with. THAT DISTINCTION IS THE WHOLE POINT OF THE
+                          SEPARATE CODE: `NOT_PERFORMED` names evidence that
+                          was lost, `NOT_APPLICABLE` names evidence that never
+                          existed, and a reader who cannot tell them apart
+                          cannot tell a degraded run from a complete one.
+                          The caller must therefore pass the SAME oid as
+                          `--expected-tree` and `--verified-tree` (the pushed
+                          commit's tree) and leave `--replayed-tree` and
+                          `--github-tree` empty; the cross-tree refusals above
+                          stay armed and fire if it does not.
+                          THE FAST-FORWARD ASSERTION IS NOT WAIVED, it is
+                          simply owned elsewhere: `gatekeeper-land.sh` runs
+                          `gatekeeper_stale_branch_check` over the real range
+                          on the candidate arm, where an empty base range makes
+                          it range-scoped and therefore ABSOLUTE.
 
 Everything else is identical: same squash commit built from the tree under test,
 same `gatekeeper-land.sh`, same test and gate differentials, same fail-closed
@@ -184,7 +206,8 @@ Usage
         --base-junit <path> --candidate-junit <path>
         [--base-hygiene <path> --candidate-hygiene <path>
          --base-hygiene-host <name> --candidate-hygiene-host <name>]
-        [--verification-tier merge-tree|rebase-replay] [--git-version <v>]
+        [--verification-tier merge-tree|rebase-replay|direct-push]
+        [--git-version <v>]
         [--merge-tree-min-version <v>] [--tier-reason <text>]
         [--gate-edited <path>...] [--maxfail N] [--json <out>]
 
@@ -418,7 +441,15 @@ class Verdict:
 # program knows how to reason about, and it FAILS CLOSED on one — see `decide`.
 TIER_MERGE_TREE = "merge-tree"
 TIER_REBASE_REPLAY = "rebase-replay"
-TIERS = (TIER_MERGE_TREE, TIER_REBASE_REPLAY)
+#: The DIRECT-PUSH path. Not a degradation of the merge path — a different
+#: question with a different answer set. Nothing is squashed, so there is no
+#: second computation of the landing tree to cross-check the first against, and
+#: the honest disclosure is NOT_APPLICABLE rather than NOT_PERFORMED. Every
+#: OTHER refusal in `decide` is computed exactly as the merge path computes it,
+#: including the cross-tree checks, which the caller keeps armed by passing the
+#: pushed commit's tree as BOTH `expected_tree` and `verified_tree`.
+TIER_DIRECT_PUSH = "direct-push"
+TIERS = (TIER_MERGE_TREE, TIER_REBASE_REPLAY, TIER_DIRECT_PUSH)
 MERGE_TREE_MIN_VERSION = "2.38"
 
 
@@ -833,7 +864,26 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             f"nothing was."], notes, unmeasurable=True,
             disclosures=["VERIFICATION_TIER_UNKNOWN"])
 
-    if verification_tier == TIER_REBASE_REPLAY:
+    if verification_tier == TIER_DIRECT_PUSH:
+        # NOT a third degradation of the merge path. On `git push origin main`
+        # the commit under gate IS the commit that lands, so there is no second
+        # computation of one tree for a cross-check to compare — the check is
+        # NOT APPLICABLE, and the code says so in its own word rather than
+        # borrowing the fallback's, because borrowing it would tell a reader
+        # that something was lost here.
+        disclosures += ["VERIFICATION_TIER_DIRECT_PUSH",
+                        "SQUASH_VS_REBASE_CROSS_CHECK_NOT_APPLICABLE"]
+        notes.append(
+            "DIRECT-PUSH TIER: nothing is squashed and no forge merge exists, "
+            "so the tree measured is the tree that lands and the "
+            "squash-vs-rebase cross-check is NOT APPLICABLE (not 'not "
+            "performed' — there is no second tree it could disagree with). "
+            "Every other refusal reason was computed exactly as the merge path "
+            "computes it, including the cross-tree checks, which the caller "
+            "keeps armed by passing the pushed commit's tree as both "
+            "--expected-tree and --verified-tree."
+            + (f" ({tier_reason})" if tier_reason else ""))
+    elif verification_tier == TIER_REBASE_REPLAY:
         disclosures += ["VERIFICATION_TIER_REBASE_REPLAY",
                         "SQUASH_VS_REBASE_CROSS_CHECK_NOT_PERFORMED"]
         notes.append(
@@ -1311,8 +1361,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          f"the 3-way merge, cross-checked by the replay) or "
                          f"{TIER_REBASE_REPLAY} (the fallback: the replay IS "
                          f"the tree under test and the squash-vs-rebase "
-                         f"cross-check is not performed). Any other value "
-                         f"refuses as unmeasurable")
+                         f"cross-check is not performed) or "
+                         f"{TIER_DIRECT_PUSH} (the direct-push path: no PR, no "
+                         f"squash, no forge merge — the commit under gate IS "
+                         f"the commit that lands, so the cross-check is NOT "
+                         f"APPLICABLE rather than not performed). Any other "
+                         f"value refuses as unmeasurable")
     ap.add_argument("--git-version", default="",
                     help="the git version measured on this host, named in the "
                          "tier disclosure so the refusal is actionable")
@@ -1528,8 +1582,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # `disclosures` is the stable code list to key on.
             "verification_tier": a.verification_tier,
             "tier_degraded": a.verification_tier != TIER_MERGE_TREE,
+            # THREE VALUES, NOT TWO. `NOT_APPLICABLE` is the direct-push
+            # answer and it is NOT a synonym for `NOT_PERFORMED`: one says the
+            # cross-check was skipped, the other says there was never a second
+            # tree to cross-check. Collapsing them would make a complete
+            # direct-push verdict indistinguishable from a degraded merge one.
             "squash_vs_rebase_cross_check": (
                 "PERFORMED" if a.verification_tier == TIER_MERGE_TREE
+                else "NOT_APPLICABLE"
+                if a.verification_tier == TIER_DIRECT_PUSH
                 else "NOT_PERFORMED"),
             "tier_reason": a.tier_reason,
             "disclosures": v.disclosures,

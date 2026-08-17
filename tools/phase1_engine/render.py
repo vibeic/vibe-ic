@@ -210,6 +210,8 @@ def _humanize_value(key: str, value: Any) -> Optional[str]:
             # preserve the `.0` for haystack fidelity. Integer-typed
             # inputs (`100`) still render without `.0`; only
             # float-typed values keep their format.
+            if isinstance(value, float) and value.is_integer():
+                return f"{int(value)} {unit}"
             return f"{value} {unit}"
     return None
 
