@@ -1418,3 +1418,250 @@ def test_the_pass_sentence_does_not_outrun_what_was_checked(tmp_path):
         "the PASS sentence claims a bound this very run printed a "
         "counterexample to\n" + proc.stdout)
     assert "300s driver stall window" in proc.stdout, proc.stdout
+
+
+# ── the doors the round-2 review left open (vibe-ic#1734) ────────────────────
+#
+# Round 2 refuted round 1 with the same defect renumbered: `timeout(0)` was
+# closed and `timeout(2700)` did the identical thing. Both of the doors below
+# were still open on `origin/main` at 397b3f25f, MEASURED with the shipped
+# program, and neither is a spelling of a number the cases above already read.
+
+def test_a_marker_may_not_retire_a_recorded_advisory(tmp_path):
+    """An advisory is a DEBT, not a verdict, and a marker may not pay it off.
+
+    The advisory lane records a bound this gate could NOT judge, so a reader
+    knows to look. Whether the contributor also wrote a marker has no bearing on
+    whether the callee is resolvable — but the ceiling test sat in front of the
+    callee test, so raising the ceiling retired the entry.
+
+    MEASURED on origin/main at 397b3f25f, harness 180 / stall 300::
+
+        mystery.launch(timeout=90)                  above the ceiling: 1
+        + pytestmark = pytest.mark.timeout(300)     above the ceiling: 0
+
+    One added line erased a recorded debt nobody agreed to pay off. 90 s is
+    chosen because it is inside the band a marker can legitimately buy
+    (60 < 90 <= 300 // 3), which is the only band where the door is reachable.
+    """
+    _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 300)
+    tests = tmp_path / "t"
+    tests.mkdir()
+    call = "    mystery.launch(['x'], timeout=90)\n"
+    (tests / "test_bare.py").write_text(
+        "import mystery\ndef test_x():\n" + call, encoding="utf-8")
+    (tests / "test_marked.py").write_text(
+        "import mystery, pytest\npytestmark = pytest.mark.timeout(300)\n"
+        "def test_x():\n" + call, encoding="utf-8")
+    out = tmp_path / "r.json"
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(tmp_path), "--tests-root", str(tests),
+         "--json", str(out)], capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    advisories = json.loads(out.read_text())["unresolved_above_ceiling"]
+    named = sorted(Path(a["path"]).name for a in advisories)
+    assert named == ["test_bare.py", "test_marked.py"], (
+        "the marked file's advisory was retired by its own marker — the "
+        f"exemption reached the disclosure lane\n{proc.stdout}"
+    )
+
+
+def test_an_added_mark_cannot_loosen_a_mark_set(tmp_path):
+    """Defect 4's surviving spelling. Round 2 recorded this as closed.
+
+    It was closed only for the pair it was checked against. `min()` over the raw
+    seconds picks `timeout(0)`, and 0 is not the tightest mark — it means there
+    is NO item clock, so it resolves to the stall window, the LOOSEST ceiling
+    this gate grants. Against `[timeout(0), timeout(300)]` both marks cap to the
+    same 100 s and the defect is invisible; it is only visible against a mark
+    BELOW the stall window.
+
+    MEASURED on origin/main at 397b3f25f, harness 180 / stall 300::
+
+        pytestmark = pytest.mark.timeout(30)                  10 s   rc 1
+        pytestmark = [pytest.mark.timeout(0),                100 s   rc 0
+                      pytest.mark.timeout(30)]
+
+    One ADDED mark turned a finding into a pass over the identical call. So the
+    reduction runs over the ceiling each mark PRODUCES, never over the mark.
+    """
+    _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 300)
+    tests = tmp_path / "t"
+    tests.mkdir()
+    (tests / "test_x.py").write_text(
+        "import subprocess, pytest\n"
+        "pytestmark = [pytest.mark.timeout(0), pytest.mark.timeout(30)]\n"
+        "def test_x():\n"
+        "    subprocess.run(['x'], timeout=90)\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(tmp_path), "--tests-root", str(tests)],
+        capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, (
+        "adding `pytest.mark.timeout(0)` beside a 30 s mark raised the ceiling "
+        "from 10 s to 100 s — a mark set is looser than its tightest member\n"
+        + proc.stdout)
+    assert "judged against 10s" in proc.stdout, proc.stdout
+
+
+def test_a_mark_set_is_never_looser_than_its_tightest_member():
+    """The property behind the case above, over every pairing that matters.
+
+    Stated as an invariant rather than as one more number, because "closed for
+    the pair it was checked against" is exactly how defect 4 survived round 2.
+    """
+    stall = 300
+    base = 180 // C.CEILING_DIVISOR
+    marks = (0, 1, 30, 60, 100, 300, 900, 2700)
+    for a in marks:
+        for b in marks:
+            got = C._tightest_marker([(a, 1), (b, 2)], base, stall)
+            assert got is not None
+            pair = C.marker_ceiling(got[0], base, stall)
+            alone = min(C.marker_ceiling(a, base, stall),
+                        C.marker_ceiling(b, base, stall))
+            assert pair == alone, (a, b, pair, alone)
+
+
+# ── the guard is wired at the layer that always runs ─────────────────────────
+
+#: Every door `self_check` must name. A door is a MECHANISM, not a number:
+#: the withheld v1.10.62 fix advertised coverage of `timeout(0)` BY NAME and
+#: returned rc 0 while `timeout(2700)` walked a 900 s bound through the
+#: positive-marker door on the same file with the same advisory.
+_DOORS = (
+    "raise",     "a marker raises the ceiling past the driver stall window",
+    "finding",   "a marker retires a finding over the cap",
+    "advisory",  "a marker retires a recorded advisory",
+    "markset",   "an added mark loosens a mark set",
+    "zero",      "a zero marker is read as a bound of zero seconds",
+    "direction", "the cap loosens a marker-derived ceiling instead of "
+                 "tightening it",
+    "named",     "a raised ceiling admits a resolvable call and names nothing",
+)
+
+
+def test_the_self_check_names_one_door_per_mechanism():
+    """`--self-check-only` is the gate's own record of what it covers."""
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), "--self-check-only"],
+        capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    for door in _DOORS[1::2]:
+        assert door in proc.stdout, (door, proc.stdout)
+    assert "[OPEN]" not in proc.stdout, proc.stdout
+
+
+def test_the_self_check_runs_before_the_scan_on_every_invocation(tmp_path):
+    """Defect 3's independent half.
+
+    `SMOKE_BASENAMES` makes THIS FILE run on every PR; that covers the case
+    where the gate's own test is what must run. It does not cover the case where
+    the gate runs at all — so the program refuses to judge anyone else while one
+    of its own doors is open, on every invocation the hygiene script makes.
+
+    Proven by REVERTING the advisory fix in a scratch copy and watching the door
+    named for it open. A guard never seen to fail has not been shown to
+    discriminate.
+    """
+    src = _PROG.read_text()
+    broken = src.replace(
+        "            advisory_floor = min(call_ceiling, ceiling)\n"
+        "            if seconds <= advisory_floor:\n",
+        "            if seconds <= call_ceiling:\n", 1)
+    assert broken != src, "the reverted line no longer exists — retarget this"
+    copy = tmp_path / "reverted.py"
+    copy.write_text(broken, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(copy), "--self-check-only"],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, (
+        "the advisory door was reopened and the self-check still passed\n"
+        + proc.stdout)
+    assert "[OPEN] a marker retires a recorded advisory" in proc.stdout, \
+        proc.stdout
+    # …and it refuses to judge the tree at all, rather than reporting on it.
+    scan = subprocess.run([sys.executable, str(copy), str(tmp_path)],
+                          capture_output=True, text=True, timeout=_T)
+    assert scan.returncode == 1, scan.stdout
+    assert "cannot judge anything else" in scan.stdout, scan.stdout
+
+
+def test_the_gates_own_test_is_in_the_smoke_floor():
+    """The other half of defect 3, read from the selector's own roster.
+
+    MEASURED with the real selector at 7c376e348: adding
+    `pytestmark = pytest.mark.timeout(2700)` to one test file selected 18 files
+    and this one was not among them — the PR that reopens an exemption is
+    precisely the PR whose changed-file set cannot reach the guard.
+    """
+    sys.path.insert(0, str(_PROGRAMS))
+    import ci_targeted_test_select as S            # noqa: E402
+    assert Path(__file__).name in S.SMOKE_BASENAMES
+
+
+def test_a_raised_ceiling_names_the_call_it_admitted(tmp_path):
+    """The one population the exemption actually MOVES, given a denominator.
+
+    Every round of #1734 has argued over the same sentence -- "a resolvable call
+    quietly left the findings". It cannot be answered by refusing the raise: the
+    raise IS the mechanism, and it is already capped at a bound the contributor
+    cannot supply. It is answered by naming the call the raise admitted.
+
+    `marked_items` was not enough. It says a ceiling was raised and to what; it
+    does not say which CALL needed it, so a reader had to reconstruct the moved
+    set by diffing against a run with the marker removed. A raise that admits a
+    call and reports nothing is indistinguishable from no raise at all.
+    """
+    _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 300)
+    tests = tmp_path / "t"
+    tests.mkdir()
+    (tests / "test_x.py").write_text(
+        "import subprocess, pytest\n"
+        "pytestmark = pytest.mark.timeout(300)\n"
+        "def test_x():\n"
+        "    subprocess.run(['x'], timeout=90)\n", encoding="utf-8")
+    out = tmp_path / "r.json"
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(tmp_path), "--tests-root", str(tests),
+         "--json", str(out)], capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # 90 s clears the raised 100 s ceiling, so it is NOT a finding …
+    doc = json.loads(out.read_text())
+    assert doc["findings"] == [], doc["findings"]
+    # … and it is still in the judged denominator: the exemption changes the
+    # number a call is judged against, it never drops one from the set.
+    assert doc["bounded_sites"] == 1, doc
+    # … and it is NAMED, with the ceiling that admitted it and the default it
+    # would have failed.
+    moved = doc["permitted_by_raise"]
+    assert [q["seconds"] for q in moved] == [90], moved
+    assert "raised to 100s" in moved[0]["resolved_via"], moved
+    assert "default 60s" in moved[0]["resolved_via"], moved
+    assert "admitted ONLY by a raised ceiling" in proc.stdout, proc.stdout
+    assert "subprocess.run(timeout=90)" in proc.stdout, proc.stdout
+
+
+def test_the_admitted_population_prints_its_zero(tmp_path):
+    """A line that appears only when it is non-zero cannot be trusted absent.
+
+    Same argument the advisory and marked lines are printed under. A reader
+    seeing no `admitted ONLY by a raised ceiling` line cannot tell whether the
+    exemption moved nothing or whether the disclosure stopped working.
+    """
+    _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 300)
+    tests = tmp_path / "t"
+    tests.mkdir()
+    (tests / "test_x.py").write_text(
+        "import subprocess\n"
+        "def test_x():\n"
+        "    subprocess.run(['x'], timeout=10)\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(tmp_path), "--tests-root", str(tests)],
+        capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 0, proc.stdout
+    assert "admitted ONLY by a raised ceiling" in proc.stdout, proc.stdout
+    assert "raised ceiling (over the 60s default, inside their own " \
+           "marker's): 0" in proc.stdout, proc.stdout
