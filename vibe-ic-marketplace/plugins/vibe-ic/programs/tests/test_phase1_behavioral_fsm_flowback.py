@@ -8,6 +8,7 @@ still DEFERs without touching the project.
 """
 import json
 from pathlib import Path
+import shutil
 import sys
 
 import pytest
@@ -180,6 +181,58 @@ def test_symlinked_plain_source_cannot_relabel_generated_l9_as_program_first(
     assert runner._gather_phase1_plain_spec_text(project) == ("", [])
     assert runner._try_phase1_behavioral_fsm_rtl(project, 0.0) is None
     assert not (project / "phase2" / "stage1" / "rtl").exists()
+
+
+def test_symlinked_phase1_ancestor_cannot_relabel_external_l9_as_program_first(
+        tmp_path):
+    project = _project(tmp_path / "project")
+    shutil.rmtree(project / "phase1")
+    generated_root = tmp_path / "external_generated_root"
+    input_doc = generated_root / "input_doc"
+    input_doc.mkdir(parents=True)
+    (input_doc / "L9_AI_GENERATED.md").write_text(COMPLETE_DIRECTIONAL_FALL)
+    (project / "phase1").symlink_to(generated_root, target_is_directory=True)
+
+    assert runner._gather_phase1_plain_spec_text(project) == ("", [])
+    assert runner._try_phase1_behavioral_fsm_rtl(project, 0.0) is None
+    assert not (project / "phase2" / "stage1" / "rtl").exists()
+
+
+def test_symlinked_input_root_cannot_cross_the_source_boundary(tmp_path):
+    project = _project(tmp_path / "project")
+    shutil.rmtree(project / "phase1" / "input_doc")
+    external = tmp_path / "external_input_doc"
+    external.mkdir()
+    (external / "design.md").write_text(COMPLETE_DIRECTIONAL_FALL)
+    (project / "phase1" / "input_doc").symlink_to(
+        external, target_is_directory=True)
+
+    assert runner._gather_phase1_plain_spec_text(project) == ("", [])
+
+
+def test_symlinked_descendant_invalidates_the_whole_source_tree(tmp_path):
+    project = _project(tmp_path / "project")
+    external = tmp_path / "external_descendant"
+    external.mkdir()
+    (external / "L9_AI_GENERATED.md").write_text(COMPLETE_DIRECTIONAL_FALL)
+    (project / "phase1" / "input_doc" / "nested").symlink_to(
+        external, target_is_directory=True)
+
+    assert runner._gather_phase1_plain_spec_text(project) == ("", [])
+
+
+@pytest.mark.parametrize("link_kind", ["out_of_root", "broken"])
+def test_out_of_root_and_broken_source_symlinks_fail_closed(
+        tmp_path, link_kind):
+    project = _project(tmp_path / "project")
+    source_dir = project / "phase1" / "input_doc"
+    target = tmp_path / (
+        "external_L9.md" if link_kind == "out_of_root" else "missing_L9.md")
+    if link_kind == "out_of_root":
+        target.write_text(COMPLETE_DIRECTIONAL_FALL)
+    (source_dir / f"{link_kind}.md").symlink_to(target)
+
+    assert runner._gather_phase1_plain_spec_text(project) == ("", [])
 
 
 def test_provenance_stamp_makes_second_process_idempotent(tmp_path):

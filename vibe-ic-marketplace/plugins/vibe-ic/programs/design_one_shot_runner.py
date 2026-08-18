@@ -1803,15 +1803,33 @@ def _gather_phase1_plain_spec_text(project: Path) -> Tuple[str, List[str]]:
     """
     chunks: List[str] = []
     sources: List[str] = []
+    try:
+        # The caller-supplied project is the provenance boundary.  A symlinked
+        # boundary makes the lexical ``phase1/input_*`` claim unverifiable.
+        if project.is_symlink():
+            return "", []
+        project_root = project.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return "", []
     for directory in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
-        if not directory.is_dir():
-            continue
         try:
-            if directory.is_symlink():
+            source_rel = directory.relative_to(project)
+            # ``Path.is_symlink`` examines only the final component.  Inspect
+            # every component below the project boundary so ``phase1 -> L9``
+            # cannot make a regular-looking ``phase1/input_doc`` trustworthy.
+            cursor = project
+            for component in source_rel.parts:
+                cursor /= component
+                if cursor.is_symlink():
+                    return "", []
+            if not directory.exists():
+                continue
+            if not directory.is_dir():
                 return "", []
             allowed_root = directory.resolve(strict=True)
-            entries = sorted(directory.rglob("*"))
-        except OSError:
+            allowed_root.relative_to(project_root)
+            entries = sorted(allowed_root.rglob("*"))
+        except (OSError, RuntimeError, ValueError):
             return "", []
         for path in entries:
             try:
@@ -1825,7 +1843,7 @@ def _gather_phase1_plain_spec_text(project: Path) -> Tuple[str, List[str]]:
                         or path.suffix.lower() not in (".md", ".txt")):
                     continue
                 chunks.append(resolved.read_text(errors="replace"))
-                sources.append(str(path.relative_to(project)))
+                sources.append(str(source_rel / path.relative_to(allowed_root)))
             except (OSError, RuntimeError, ValueError):
                 return "", []
     return "\n\n".join(chunks), sources

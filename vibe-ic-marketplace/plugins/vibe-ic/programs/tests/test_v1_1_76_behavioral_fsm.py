@@ -527,8 +527,24 @@ def test_directional_bump_fall_rejects_active_low_support_role():
     assert bfsm.synth(prompt) is None
 
 
-def test_directional_bump_fall_rejects_active_low_reset_name_convention():
-    prompt = _directional_module_prompt().replace("areset", "areset_n")
+@pytest.mark.parametrize(
+    "reset_name",
+    [
+        "areset_n",
+        "reset_n_i",
+        "areset_n_i",
+        "reset_ni",
+        "reset_b",
+        "reset_bar",
+        "reset_l",
+        "no_reset",
+        "not_reset",
+        "reset_disable",
+    ],
+)
+def test_directional_bump_fall_rejects_noncanonical_reset_names(reset_name):
+    """Shape C emits active-high reset only for its finite positive aliases."""
+    prompt = _directional_module_prompt().replace("areset", reset_name)
     assert prompt != _directional_module_prompt()
     assert bfsm.synth(prompt) is None
 
@@ -571,6 +587,13 @@ def test_directional_bump_fall_rejects_multiple_actor_identity_mutations():
     for pattern, replacement in _ACTOR_IDENTITY_MUTATIONS:
         prompt, count = re.subn(pattern, replacement, prompt, count=1)
         assert count == 1
+    assert bfsm.synth(prompt) is None
+
+
+def test_directional_bump_fall_does_not_collapse_distinct_actor_identifiers():
+    prompt = _named_directional_fixture_prompt().replace("Lemming", "robot_")
+    prompt = prompt.replace(
+        "if a robot_ is bumped", "if a robot_s is bumped", 1)
     assert bfsm.synth(prompt) is None
 
 

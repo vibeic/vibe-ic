@@ -316,9 +316,8 @@ def _synth_reset_pulse(prompt, top, clk, rst, out_name):
 # --------------------------------------------------------------------------- #
 # Shape (C): mechanically-complete directional bump+fall Moore walker.
 # --------------------------------------------------------------------------- #
-# Shared reset-name polarity convention used by Shape C and the structured-
-# prose dialect below.  A trailing ``n`` on a reset name is an interface fact,
-# even when nearby prose incorrectly claims active-high operation.
+# Reset-name polarity convention used by the structured-prose dialect below.
+# Shape C has the stricter finite positive grammar declared separately below.
 _DIA_RSTN_NAME_RE = re.compile(
     r"(?:rst|reset|areset)_?n$|^aresetn$|^resetn$", re.I)
 
@@ -335,6 +334,23 @@ _DIRECTIONAL_ROLE_ALIASES = {
     "walk_right": frozenset(
         ("walk_right", "walking_right", "move_right", "moving_right")),
     "falling": frozenset(("aaah", "fall", "falling", "fall_alarm")),
+}
+
+# Shape C emits an active-high asynchronous reset directly.  Reset discovery is
+# intentionally broad for the older shapes, so prove the narrower Shape-C
+# interface with a finite positive grammar before that shared classifier can
+# turn names such as ``reset_n_i`` or ``no_reset`` into active-high controls.
+_DIRECTIONAL_ACTIVE_HIGH_RESET_ALIASES = frozenset(
+    ("areset", "reset_signal"))
+
+# Only these corpus-backed singular/plural spellings denote one story actor.
+# Do not derive plurals by stripping a trailing ``s``: the actor grammar also
+# permits identifiers, where distinct names such as ``robot_`` and ``robot_s``
+# must never collapse to one identity.
+_DIRECTIONAL_ACTOR_PLURALS = {
+    "lemmings": "lemming",
+    "robots": "robot",
+    "walkers": "walker",
 }
 
 
@@ -373,13 +389,9 @@ def _directional_fall_roles(other_ins, outs):
 
 
 def _directional_actor_key(noun: str):
-    """Normalize the one harmless singular/plural variation in this dialect."""
+    """Normalize only explicitly proven singular/plural actor spellings."""
     noun = noun.lower()
-    if noun.endswith("ies") and len(noun) > 3:
-        return noun[:-3] + "y"
-    if noun.endswith("s") and not noun.endswith("ss") and len(noun) > 1:
-        return noun[:-1]
-    return noun
+    return _DIRECTIONAL_ACTOR_PLURALS.get(noun, noun)
 
 
 def _directional_fall_actor_is_bound(prompt: str):
@@ -578,7 +590,7 @@ def _directional_fall_reset(prompt: str, rst: str):
     asynchronous" states the active reset edge without using the words
     "active-high", while the older shapes deliberately require an explicit level.
     """
-    if _DIA_RSTN_NAME_RE.search(rst):
+    if rst.lower() not in _DIRECTIONAL_ACTIVE_HIGH_RESET_ALIASES:
         return False
     low = " ".join(prompt.split()).lower()
     reset_clause = re.search(
