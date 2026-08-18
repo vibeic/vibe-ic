@@ -2534,6 +2534,19 @@ def _phase1_copy_entry_fd(
             published = True
             _phase1_remove_inode_aliases(
                 dst_parent_fd, dst_fd, keep=dst_name)
+        except OSError as exc:
+            # PARITY WITH THE DIRECTORY BRANCH ABOVE.  That branch contains
+            # every OSError of the whole copy as a named refusal; this one
+            # contained only the `open()`.  So a WRITE-side failure — ENOSPC,
+            # EDQUOT, EROFS, a mode revoked between stat and fchmod — escaped
+            # `step_rtl_gen` as a raw OSError instead of the BLOCKED StepResult
+            # every other snapshot failure returns.  `step_rtl_gen` catches
+            # `_Phase1RtlOutputRefused` and nothing else, so the caller got an
+            # exception where the contract promises a result.
+            raise _Phase1RtlOutputRefused(
+                "PROJECT_SNAPSHOT_COPY_REFUSED",
+                project_label / src_name,
+                f"a project file could not be copied safely: {exc}") from exc
         finally:
             if dst_fd is not None:
                 # The fallback publication inode initially has a hidden alias.
@@ -2796,21 +2809,26 @@ class _Phase1StagedTreeTransaction:
                 last = exc
         return str(last or "transaction container remained non-empty")
 
+    def _container_aliases(self, held: os.stat_result) -> List[str]:
+        """Project-root names currently bound to the held container inode."""
+        aliases: List[str] = []
+        for name in os.listdir(self.binding.project_fd):
+            try:
+                current = os.stat(
+                    name, dir_fd=self.binding.project_fd,
+                    follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if _phase1_same_inode(held, current):
+                aliases.append(name)
+        return aliases
+
     def _remove_container_aliases(self) -> Optional[str]:
         """Remove only project-root names still bound to the held container."""
         held = os.fstat(self.container_fd)
         last: Optional[Exception] = None
         for _attempt in range(3):
-            aliases = []
-            for name in os.listdir(self.binding.project_fd):
-                try:
-                    current = os.stat(
-                        name, dir_fd=self.binding.project_fd,
-                        follow_symlinks=False)
-                except FileNotFoundError:
-                    continue
-                if _phase1_same_inode(held, current):
-                    aliases.append(name)
+            aliases = self._container_aliases(held)
             if not aliases:
                 return None
             for name in aliases:
@@ -2818,6 +2836,17 @@ class _Phase1StagedTreeTransaction:
                     os.rmdir(name, dir_fd=self.binding.project_fd)
                 except Exception as exc:
                     last = exc
+        # THE FINAL PASS WAS NEVER RE-READ.  The loop only re-scans at the TOP
+        # of an attempt, so a third attempt that actually removed every alias
+        # still fell through and reported `last` — an exception raised on an
+        # EARLIER pass, about a name that no longer exists.  That turned a
+        # cleanup which fully succeeded into ALIAS_CLEANUP_FAILED, i.e. a
+        # warning on a transaction with nothing left to warn about.
+        try:
+            if not self._container_aliases(held):
+                return None
+        except Exception as exc:  # the re-read itself is best-effort
+            last = last or exc
         return str(last or "transaction container alias remained")
 
     def _close(self) -> None:
@@ -2936,14 +2965,35 @@ class _Phase1StagedTreeTransaction:
 
         # This also catches prepared partial copies that failed before their
         # per-top record reached publication.
-        if not blocked_old:
-            drain_error = self._drain()
-            if drain_error is not None:
-                errors.append(drain_error)
-            alias_error = self._remove_container_aliases()
-            if alias_error is not None:
-                errors.append(alias_error)
-        self._close()
+        try:
+            if not blocked_old:
+                try:
+                    drain_error = self._drain()
+                except Exception as exc:
+                    drain_error = str(exc)
+                if drain_error is not None:
+                    errors.append(
+                        "RTL_TRANSACTION_DRAIN_CLEANUP_FAILED: " + drain_error)
+                try:
+                    alias_error = self._remove_container_aliases()
+                except Exception as exc:
+                    alias_error = str(exc)
+                if alias_error is not None:
+                    errors.append(
+                        "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: " + alias_error)
+        finally:
+            # PARITY WITH finalize().  finalize() was made exception-total
+            # because destroying rollback authority and THEN raising reports a
+            # committed success as BLOCKED.  rollback() is the other half of
+            # that same irreversible pair and was left unhardened: a raising
+            # _drain()/_remove_container_aliases() skipped _close(), leaked the
+            # held container fd, and escaped as a raw exception from a caller
+            # whose only contract is to RETURN the list of rollback errors.
+            # Worse, it escaped from inside an `except` block, so step_rtl_gen's
+            # `finally` then re-entered rollback() on the same half-rolled-back,
+            # still-open transaction.  Cleanup failure is reported, never
+            # raised, and the descriptor is released on every path.
+            self._close()
         return errors
 
 
@@ -3171,8 +3221,13 @@ def _phase1_stamp_held_session(
                 binding.require_current()
                 _phase1_cleanup_isolated_stage(stage_binding, stage_temp)
             except Exception as exc:
-                rollback_errors = transaction.rollback()
+                # RELEASE OWNERSHIP BEFORE ROLLING BACK, not after.  The
+                # `finally` below rolls back whatever `transaction` still
+                # names; if rollback() itself failed mid-way the old order
+                # left it named and rolled the SAME transaction back twice.
+                rolling_back = transaction
                 transaction = None
+                rollback_errors = rolling_back.rollback()
                 if rollback_errors:
                     raise _Phase1RtlOutputRefused(
                         "RTL_TRANSACTION_ROLLBACK_REFUSED", binding.project,
@@ -5489,8 +5544,12 @@ def step_rtl_gen(project: Path, ic_class: str,
                 # become a new post-finalize failure seam.
                 _phase1_cleanup_isolated_stage(stage_binding, stage_temp)
             except Exception as exc:
-                rollback_errors = transaction.rollback()
+                # Same ordering rule as the deferred-stamp path above: the
+                # `finally` rolls back whatever `transaction` still names, so
+                # ownership is released BEFORE the rollback is attempted.
+                rolling_back = transaction
                 transaction = None
+                rollback_errors = rolling_back.rollback()
                 if replacement_binding is not None:
                     replacement_binding.close()
                     replacement_binding = None

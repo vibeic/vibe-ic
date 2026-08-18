@@ -6,7 +6,9 @@ production runner boundary: plain prose can reach that recognizer, while an
 incomplete spec, ambiguous top, non-behavioral registry result, or authored RTL
 still DEFERs without touching the project.
 """
+import errno
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -542,6 +544,155 @@ def test_alias_cleanup_error_after_drain_is_named_pass_warning(
     assert len(residue) == 1
     assert not list(residue[0].iterdir())
     residue[0].rmdir()
+
+
+def test_rollback_is_exception_total_and_releases_the_held_container(
+        tmp_path, monkeypatch):
+    """rollback() is the OTHER half of finalize()'s irreversible pair.
+
+    finalize() was made exception-total because destroying rollback authority
+    and then raising reports a committed success as BLOCKED.  rollback() has
+    exactly the same shape and was left unhardened: its caller's whole contract
+    is to RECEIVE the error list, and it calls this from inside an `except`
+    block.  A raise there skipped `_close()`, leaked the held container
+    descriptor, and escaped as a raw exception.
+    """
+    pair = _read_only_transaction_pair(tmp_path, nested=True)
+    project, binding, stage_binding, baseline, final = pair
+    try:
+        transaction = runner._phase1_commit_staged_tree(
+            binding, stage_binding, baseline, final)
+
+        def _explode(_transaction):
+            raise OSError("injected alias cleanup failure during rollback")
+
+        monkeypatch.setattr(
+            runner._Phase1StagedTreeTransaction, "_remove_container_aliases",
+            _explode)
+
+        errors = transaction.rollback()
+
+        assert any("RTL_TRANSACTION_ALIAS_CLEANUP_FAILED" in e
+                   for e in errors), errors
+        assert any("injected alias cleanup failure during rollback" in e
+                   for e in errors), errors
+        assert transaction.closed
+        assert transaction.container_fd == -1
+        old = project / "phase2" / "locked" / "deeper"
+        assert (old / "state.txt").read_text() == "old canonical\n"
+        assert not (old / "added.txt").exists()
+    finally:
+        stage_binding.close()
+        binding.close()
+        _unlock_test_tree(project, tmp_path / "stage")
+
+
+def test_a_failing_rollback_is_not_re_entered_from_the_finally(
+        tmp_path, monkeypatch):
+    """Ownership is released BEFORE rollback runs, not after.
+
+    `transaction = None` used to be assigned after `transaction.rollback()`,
+    so a rollback that failed part-way left itself named and the `finally`
+    rolled the SAME half-rolled-back transaction back a second time.
+    """
+    project = _project(tmp_path)
+    calls = []
+    real_rollback = runner._Phase1StagedTreeTransaction.rollback
+
+    def _counting_rollback(self):
+        calls.append(1)
+        real_rollback(self)
+        raise OSError("injected rollback defect")
+
+    def _fail_acceptance(*_args, **_kwargs):
+        raise OSError("injected acceptance failure")
+
+    monkeypatch.setattr(
+        runner._Phase1StagedTreeTransaction, "rollback", _counting_rollback)
+    monkeypatch.setattr(
+        runner, "_phase1_cleanup_isolated_stage", _fail_acceptance)
+
+    with pytest.raises(OSError):
+        runner.step_rtl_gen(project, "deliberately_unregistered_class")
+
+    assert len(calls) == 1, (
+        f"rollback ran {len(calls)}x — the `finally` re-entered it on a "
+        f"transaction that had already been rolled back")
+
+
+def test_regular_file_copy_contains_write_side_oserror_like_the_dir_branch(
+        tmp_path, monkeypatch):
+    """The two branches of _phase1_copy_entry_fd must fail the same way.
+
+    The directory branch wraps its whole body in `except OSError -> refusal`.
+    The regular-file branch wrapped only the `open()`, so a WRITE-side failure
+    (ENOSPC, EDQUOT, EROFS) escaped `step_rtl_gen` as a raw OSError — and
+    `step_rtl_gen` catches `_Phase1RtlOutputRefused` and nothing else, so the
+    caller got an exception where the contract promises a StepResult.
+    """
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "payload.txt").write_text("bytes\n")
+    destination = tmp_path / "dst"
+    destination.mkdir()
+
+    def _no_space(_fd, _payload):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(runner, "_phase1_write_held_inode", _no_space)
+    src_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        dst_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with pytest.raises(runner._Phase1RtlOutputRefused) as caught:
+                runner._phase1_copy_entry_fd(
+                    src_fd, "payload.txt", dst_fd, "payload.txt",
+                    Path("project"))
+        finally:
+            os.close(dst_fd)
+    finally:
+        os.close(src_fd)
+    assert caught.value.reason == "PROJECT_SNAPSHOT_COPY_REFUSED"
+    assert "No space left on device" in caught.value.detail
+
+
+def test_alias_cleanup_that_succeeds_on_the_final_attempt_is_not_failed(
+        tmp_path, monkeypatch):
+    """The last pass was never re-read, so a success was reported as failure.
+
+    The loop only re-scanned at the TOP of an attempt.  A third attempt that
+    actually removed every alias still fell through and returned `last` — an
+    exception from an EARLIER pass, about a name that no longer exists.
+    """
+    pair = _read_only_transaction_pair(tmp_path, nested=True)
+    project, binding, stage_binding, baseline, final = pair
+    transaction = None
+    try:
+        transaction = runner._phase1_commit_staged_tree(
+            binding, stage_binding, baseline, final)
+        assert transaction._drain() is None
+        real_rmdir = os.rmdir
+        attempts = []
+
+        def _fail_the_first_two(name, dir_fd=None):
+            attempts.append(name)
+            if len(attempts) <= 2:
+                raise OSError(errno.ENOTEMPTY, "Directory not empty")
+            return real_rmdir(name, dir_fd=dir_fd)
+
+        monkeypatch.setattr(os, "rmdir", _fail_the_first_two)
+
+        assert transaction._remove_container_aliases() is None
+        assert len(attempts) == 3
+        monkeypatch.undo()
+        assert not any(p.name.startswith(".vibeic-rtl-txn.")
+                       for p in project.iterdir())
+    finally:
+        if transaction is not None:
+            transaction._close()
+        stage_binding.close()
+        binding.close()
+        _unlock_test_tree(project, tmp_path / "stage")
 
 
 def test_stage_temp_cleanup_failure_rolls_back_before_finalize(
