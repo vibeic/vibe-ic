@@ -236,6 +236,90 @@ def test_hermetic_outer_progress_refuses_changed_item_denominator_or_ordinal():
     relay.observe(_OuterProbe(item_order=swapped))
     assert "nodeid/ordinal differs" in relay.problem
 
+
+def _stream_set_over(tmp_path, shares, *, item_order, declared=None,
+                     domain_progress=None):
+    """A real `_ProgressStreamSet` carrying one real probe per worker share."""
+    streams = D._ProgressStreamSet(
+        tmp_path, "0" * 32, lambda: os.getpid())
+    for index, finished in enumerate(shares):
+        name = f"w.gw{index}.{os.getpid()}.0.jsonl"
+        path = tmp_path / name
+        path.write_bytes(b"")
+        probe = D._SemanticProgressProbe(
+            path, streams.nonce, streams.pid_fn, partial_session=True)
+        probe.item_order = list(item_order)
+        probe.items = set(item_order)
+        probe.finished = set(finished)
+        probe.declared_items = (
+            len(item_order) if declared is None else declared)
+        probe.domain_progress = dict((domain_progress or {}).get(index, {}))
+        streams.streams[name] = probe
+        streams.kinds[name] = "worker"
+    return streams
+
+
+def test_hermetic_relay_reads_the_object_production_actually_hands_it(tmp_path):
+    """THE PAIRING NO TEST ABOVE MEASURES. Every relay test in this file feeds
+    `observe()` a hand-written duck type (`_OuterProbe`) that has the four
+    attributes by construction, so none of them can see whether the REAL
+    argument has them. `_run_progress_supervised` stopped passing
+    `_SemanticProgressProbe` and started passing `_ProgressStreamSet`; the set
+    defined none of `declared_items` / `item_order` / `finished` /
+    `domain_progress`, so the first watchdog sample raised AttributeError
+    inside the hermetic arm. The arm then died with no terminal progress
+    record and the runner could only report "candidate ended without the exact
+    semantic terminal record" — the relay's own refusal channel never fired,
+    so the cause was invisible. Measured against the real class here."""
+    items = ["test_a.py::test_one", "test_b.py::test_two"]
+    emitter = _OuterEmitter()
+    relay = D._HermeticAggregateProgress(
+        ["test_a.py", "test_b.py"], emitter=emitter)
+    assert relay.start()
+    # Two workers, each finishing only its own share: the union is the session.
+    streams = _stream_set_over(
+        tmp_path, [{items[0]}, {items[1]}], item_order=items)
+    try:
+        relay.observe(streams)
+        assert relay.finish()
+    finally:
+        streams.close()
+    assert emitter.rows == [
+        ("start", None),
+        ("checkpoint", "pytest:test_a.py"),
+        ("checkpoint", "pytest:test_b.py"),
+        ("checkpoint", "pytest:record-published"),
+        ("terminal", None),
+    ]
+
+
+def test_hermetic_relay_stays_silent_until_every_worker_agrees(tmp_path):
+    """The join may never be optimistic. While one worker has not yet declared
+    the collected selection, or the workers disagree about it, the set must
+    report `declared_items is None` so the relay emits NOTHING rather than
+    computing a denominator from a partial view."""
+    items = ["test_a.py::test_one", "test_b.py::test_two"]
+    emitter = _OuterEmitter()
+    relay = D._HermeticAggregateProgress(
+        ["test_a.py", "test_b.py"], emitter=emitter)
+    assert relay.start()
+    streams = _stream_set_over(
+        tmp_path, [{items[0]}, {items[1]}], item_order=items)
+    try:
+        undeclared = next(iter(streams.streams.values()))
+        undeclared.declared_items = None
+        assert streams.declared_items is None
+        relay.observe(streams)
+        assert emitter.rows == [("start", None)]
+        undeclared.declared_items = len(items)
+        undeclared.item_order = list(reversed(items))
+        assert streams.declared_items is None
+        relay.observe(streams)
+        assert emitter.rows == [("start", None)]
+    finally:
+        streams.close()
+
+
 #: The #1654 shape verbatim: `Future.result` -> `Condition.wait` ->
 #: `waiter.acquire`. `--timeout-method=thread` cannot interrupt it.
 _HANGS_IN_TEST = (

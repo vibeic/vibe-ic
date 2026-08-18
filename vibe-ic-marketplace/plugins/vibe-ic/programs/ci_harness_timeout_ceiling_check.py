@@ -286,7 +286,7 @@ _LANDING_SCRIPT_SHA256 = (
 # helper and never call it.  Bind the policy to the complete reviewed driver
 # whose functional tests prove selection -> aggregate JUnit coverage.
 _SEMANTIC_DRIVER_SHA256 = (
-    "a0cd7227628f340a63c14bb8df39dde54ab66f253a52fd895a3cda6a7993e625"
+    "5d270fa98e8aff656998e3c23a116e3d85ad55ce35d119807cf8e94a263b9cf0"
 )
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a

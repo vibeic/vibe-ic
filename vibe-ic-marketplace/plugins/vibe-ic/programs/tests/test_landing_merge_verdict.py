@@ -1453,6 +1453,60 @@ def test_neither_arm_can_read_the_others_scratch_file():
         "two concurrent verifications would fetch over one another's head ref"
 
 
+def _shell_function(source: str, name: str) -> str:
+    """The exact text of one top-level `name() { ... }` shell function."""
+    opening = f"{name}() {{\n"
+    start = source.index(opening)
+    end = source.index("\n}\n", start)
+    return source[start:end + len("\n}\n")]
+
+
+def test_reading_one_arms_exit_code_cannot_byte_compile_the_shared_runtime(
+        tmp_path):
+    """THE INSTRUMENT WROTE INTO THE THING IT WAS MEASURING.
+
+    `validated_arm_exit` imports the arm-receipt helper OUT OF the protected
+    runtime snapshot, and that snapshot's TREE DIGEST is what every later arm's
+    receipt is re-checked against.  It is invoked with
+    `PYTHONDONTWRITEBYTECODE=1 python3 -I`, which reads as belt and braces and
+    is neither: `-I` implies `-E`, so the interpreter IGNORES every PYTHON*
+    variable including that one.  The first call therefore byte-compiled the
+    helper into `<runtime>/tools/ci/__pycache__/`, the runtime grew by a file,
+    and the NEXT validation refused with "receipt runtime digest differs from
+    the current input" -> "B2 arm receipt is NORECORD".  B1 validates first, so
+    on main every branch lost its B2, A1 and A2 arms to the act of reading B1's
+    exit code.  Measured on the fixture: runtime files 57 -> 58.
+
+    Asserted BEHAVIOURALLY, against the script's own function text: a flag
+    assertion would pass on `-B` written into a comment, and the property that
+    matters is that the tree the reader imported from is byte-identical
+    afterwards.  The call is expected to FAIL here (there is no valid record);
+    the pollution happens during the import, before the record is ever read.
+    """
+    runtime = tmp_path / "runtime" / "tools" / "ci"
+    runtime.mkdir(parents=True)
+    for name in ("hermetic_landing_arm_receipt.py",
+                 "protected_landing_transition.py"):
+        shutil.copy2(_REPO_ROOT / "tools" / "ci" / name, runtime / name)
+    before = sorted(path.name for path in runtime.iterdir())
+
+    driver = tmp_path / "driver.sh"
+    driver.write_text(
+        "set -uo pipefail\n"
+        + _shell_function(_VERIFY.read_text(encoding="utf-8"),
+                          "validated_arm_exit")
+        + 'validated_arm_exit "$1" "$2"\n')
+    subprocess.run(
+        ["bash", str(driver), str(runtime / "hermetic_landing_arm_receipt.py"),
+         str(tmp_path / "no-such-record.json")],
+        capture_output=True, text=True, timeout=_T)
+
+    assert sorted(path.name for path in runtime.iterdir()) == before, \
+        "reading an arm's exit code changed the runtime tree it read from"
+    assert not list(runtime.rglob("__pycache__")), \
+        "the arm-exit reader byte-compiled the protected runtime snapshot"
+
+
 def test_the_candidate_arm_runs_without_a_maxfail_bound():
     """FOUND BY RUNNING AGAINST A REAL OPEN PR. `--maxfail=10` is right for the
     push path — stop early, the answer is "go fix it" — and WRONG for a
@@ -1525,9 +1579,95 @@ _STUB_LAND = r"""#!/usr/bin/env bash
 # A minimal stand-in for gatekeeper-land.sh with the same OBSERVABLE contract:
 # the sentinel, `  PASS  ` / `  FAIL  ` lines, a junit report when asked, and a
 # stamp only when everything passed.
+#
+# SINCE v1.10.69 THAT CONTRACT INCLUDES THE SEMANTIC LANDING RECORD, and this
+# stub carried none of it.  When the hermetic runner hands a landing arm
+# VIBEIC_LANDING_PROGRESS/VIBEIC_LANDING_COMPLETION, the real
+# `tools/gatekeeper-land.sh` publishes, in this exact order: one `start`
+# progress row, then for each parent-owned `landing:<ARM>` unit one journal row
+# AND one relayed checkpoint, then the completion record, then one `terminal`
+# row — and it exits with its own FAILED flag so the receipt's exit code and
+# the record's `returncode` agree.  A stub that emits none of that makes EVERY
+# arm die inside the runner with "candidate ended without the exact semantic
+# terminal record", which is a property of this fixture and not of the subject
+# under test, so no test in this file could reach any arm at all.
+#
+# The unit population is READ FROM `/input/progress-plan.json`, the same
+# parent-owned plan the runner validates the relay against, rather than
+# hard-coded here: a stub with its own copy of the list would drift from the
+# plan silently and fail as "differs from the parent-owned FSM".
 set -uo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
+RUNTIME_ROOT="${GATEKEEPER_RUNTIME_ROOT:-$ROOT}"
+FAILED=0
+LANDING_RECORD_ENABLED=0
+LANDING_RECORD_TOOL="$RUNTIME_ROOT/tools/ci/landing_completion_record.py"
+LANDING_PROGRESS_TOOL="$RUNTIME_ROOT/tools/ci/hermetic_progress_emit.py"
+LANDING_JOURNAL="${VIBEIC_LANDING_PROGRESS:-}"
+LANDING_COMPLETION="${VIBEIC_LANDING_COMPLETION:-}"
+LANDING_UNITS=()
+if [ -n "$LANDING_JOURNAL" ] || [ -n "$LANDING_COMPLETION" ]; then
+  if [ -z "$LANDING_JOURNAL" ] || [ -z "$LANDING_COMPLETION" ]; then
+    echo "[NORECORD] stub landing completion environment is partial" >&2
+    exit 2
+  fi
+  mapfile -t LANDING_UNITS < <(python3 -I -c '
+import json
+with open("/input/progress-plan.json", "rb") as handle:
+    for unit in json.load(handle)["units"]:
+        print(unit)
+') || { echo "[NORECORD] stub cannot read the parent progress plan" >&2; exit 2; }
+  [ "${#LANDING_UNITS[@]}" -gt 0 ] \
+    || { echo "[NORECORD] parent progress plan declared no unit" >&2; exit 2; }
+  python3 "$LANDING_PROGRESS_TOOL" start \
+    || { echo "[NORECORD] stub landing progress could not start" >&2; exit 2; }
+  LANDING_RECORD_ENABLED=1
+fi
+
+landing_record() {                  # landing_record <unit> <state> <rc>
+  [ "$LANDING_RECORD_ENABLED" = "1" ] || return 0
+  local unit="$1" state="$2" rc="$3" digest
+  digest="$(printf 'stub-land:%s:%s:%s' "$unit" "$state" "$rc" \
+            | sha256sum | awk '{print $1}')" \
+    || { echo "[NORECORD] cannot digest stub landing stage $unit" >&2; exit 2; }
+  python3 "$LANDING_RECORD_TOOL" append --journal "$LANDING_JOURNAL" \
+    --label "$unit" --state "$state" --returncode "$rc" \
+    --output-sha256 "$digest" \
+    || { echo "[NORECORD] cannot attest stub landing stage $unit" >&2; exit 2; }
+  python3 "$LANDING_PROGRESS_TOOL" checkpoint "$unit" \
+    || { echo "[NORECORD] cannot relay stub landing stage $unit" >&2; exit 2; }
+}
+
+# The one unit whose state this stub actually MEASURES is the targeted-test
+# tier; `full:repo-hygiene` follows the routed-transition branch below when it
+# runs.  Everything else is a cheap gate this fixture does not model, recorded
+# PASS so the journal carries the exact parent-owned population in order — the
+# population is what the runner checks, and a partial journal is refused.
+STUB_TARGETED_STATE=PASS
+STUB_TARGETED_RC=0
+STUB_HYGIENE_STATE=PASS
+STUB_HYGIENE_RC=0
+
+landing_publish() {
+  [ "$LANDING_RECORD_ENABLED" = "1" ] || return 0
+  local unit state rc
+  for unit in "${LANDING_UNITS[@]}"; do
+    state=PASS
+    rc=0
+    case "$unit" in
+      full:targeted-tests) state="$STUB_TARGETED_STATE"; rc="$STUB_TARGETED_RC" ;;
+      full:repo-hygiene)   state="$STUB_HYGIENE_STATE";  rc="$STUB_HYGIENE_RC" ;;
+    esac
+    [ "$state" = "FAIL" ] && FAILED=1
+    landing_record "$unit" "$state" "$rc"
+  done
+  python3 "$LANDING_RECORD_TOOL" finish --journal "$LANDING_JOURNAL" \
+    --record "$LANDING_COMPLETION" --failed "$FAILED" \
+    || { echo "[NORECORD] stub landing completion is incomplete" >&2; exit 2; }
+  python3 "$LANDING_PROGRESS_TOOL" terminal \
+    || { echo "[NORECORD] stub landing terminal is incomplete" >&2; exit 2; }
+}
 if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ]; then
   mkdir -p "$GATEKEEPER_CONCURRENCY_PROBE_DIR"
   : > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/${GATEKEEPER_VERIFY_ARM:-unknown}.started"
@@ -1598,20 +1738,45 @@ if [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ] \
     exit 2
   fi
   echo "  FAIL  repo hygiene gates"
+  STUB_HYGIENE_STATE=FAIL
+  STUB_HYGIENE_RC=1
+fi
+# THE HYGIENE SUMMARY IS PART OF A LANDING ARM'S OUTPUT, always — the verifier
+# seals `hygiene.json` out of both A2 and B2 with
+# `publish_validated_arm_artifact`, requires `corpus_inputs.benchmark_data_sha`
+# to bind the corpus it measured, and the completion record digests that exact
+# file.  Only the routed-transition branch above ever wrote one, so every other
+# arm had no hygiene artifact to seal.  Emit the ordinary one through the real
+# dispatcher (never a hand-written JSON blob: the digest must come from the
+# same emitter production uses) whenever that branch did not.
+if [ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
+   && [ ! -s "${GATEKEEPER_HYGIENE_REPORT}" ]; then
+  rm -f "${GATEKEEPER_HYGIENE_REPORT}.attest"
+  (
+    export GATE_DISPATCH_ATTESTATION_HELPER="$PLUGIN/programs/gate_process_attestation.py"
+    export GATE_DISPATCH_ATTESTATION_FILE="${GATEKEEPER_HYGIENE_REPORT}.attest"
+    . "$ROOT/tools/ci/_gate_dispatch.sh"
+    gate_dispatch_init --summary-json "$GATEKEEPER_HYGIENE_REPORT"
+    # One real dispatched gate, not zero: `hygiene_finding_delta` requires an
+    # exact bijection between the gates in PROCESS states and the process
+    # attestations, so a summary with a gate and no attestation is REFUSED and
+    # the verdict cannot compute the differential at all.
+    run "a cheap gate" "$ROOT" true
+    gate_dispatch_finish
+  ) >/dev/null 2>&1 || true
+  [ -s "${GATEKEEPER_HYGIENE_REPORT}" ] \
+    || { echo "[NORECORD] stub hygiene summary was not produced" >&2; exit 2; }
 fi
 echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="
 echo "  PASS  a cheap gate"
 SEL="$(mktemp -t stub_sel.XXXXXX)"
 JOUT="${GATEKEEPER_PYTEST_JUNIT:-$(mktemp -t stub_junit.XXXXXX)}"
 ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "${GATEKEEPER_BASE:-HEAD}" ) > "$SEL"
+STUB_STAMP=0
 if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
   echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
-  if [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
-    echo "  REPORT  merge verifier owns the independent targeted-test evidence"
-    echo "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ==="
-  else
-    echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
-  fi
+  STUB_TARGETED_STATE=SKIP
+  STUB_TARGETED_RC=0
 elif ( cd "$PLUGIN" && python3 programs/pytest_per_file_junit.py \
        --selection "$SEL" --junit "$JOUT" --stall-after 10 \
        --aggregate-check --aggregate-only --aggregate-stall-after 10 \
@@ -1619,15 +1784,39 @@ elif ( cd "$PLUGIN" && python3 programs/pytest_per_file_junit.py \
   echo "  PASS  targeted tests (1 file(s))"
   echo "  REPORT  targeted test process verdicts embedded in junit"
   echo "  REPORT  targeted aggregate session completed"
-  git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
-  echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
+  STUB_TARGETED_STATE=PASS
+  STUB_TARGETED_RC=0
+  STUB_STAMP=1
 else
   echo "  FAIL  targeted tests (1 file(s))"
   echo "  REPORT  targeted test process verdicts embedded in junit"
   echo "  REPORT  targeted aggregate session completed"
+  STUB_TARGETED_STATE=FAIL
+  STUB_TARGETED_RC=1
+fi
+# BEFORE the closing sentinel and before any stamp, exactly where the real
+# script publishes it: the journal, the completion record and the terminal
+# progress row are what make this arm's evidence readable at all, and a stamp
+# minted before them would claim a landing whose record does not exist.
+# `landing_publish` also sets FAILED from the journal it wrote.
+landing_publish
+if [ "$STUB_TARGETED_STATE" = "SKIP" ] \
+   && [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
+  echo "  REPORT  merge verifier owns the independent targeted-test evidence"
+  echo "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ==="
+elif [ "$STUB_TARGETED_STATE" = "FAIL" ]; then
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+else
+  [ "$STUB_STAMP" = "1" ] \
+    && git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
 fi
 rm -f "$SEL"
+# The receipt binds the arm's natural exit code to the completion record's
+# `returncode`, and the verifier refuses any pair other than 0:0 or 1:1.  The
+# stub therefore has to exit with the same FAILED flag it just attested rather
+# than always 0.
+exit "$FAILED"
 """
 
 # `thing.py` is ORDINARY SOURCE and `test_thing.py` pins it. The negative
@@ -1674,7 +1863,20 @@ def _fixture_blob(raw):
     return digest.hexdigest()
 
 
-def _write_phasea_manifest(repo):
+def _write_activated_manifest(repo):
+    """A protected-landing manifest that models the repository AS IT IS.
+
+    RENAMED, and the direction of the tuple reversed with it.  The helper used
+    to write the LIVE bytes as `current` and synthetic `b"phase-b:"+path`
+    placeholders as `next`, which put the sandbox in the PRE-activation state —
+    the exact state `require_semantic_runtime` refuses by design, added by the
+    same commit that made the refusal mandatory.  Every end-to-end test in this
+    file therefore died at `materialize_protected_runtime` before any arm
+    existed.  The real repository is the opposite: its live protected bytes ARE
+    the manifest's `next` tuple, so a real landing resolves STEADY next -> next
+    and passes.  The synthetic bytes now stand in for the PRIOR state, which is
+    the one no longer on disk.
+    """
     paths = sorted(_PROTECTED.REQUIRED_AUTHORITY_PATHS | _PROTECTED.RUNTIME_PATHS)
     role_rows = []
     current = []
@@ -1689,13 +1891,13 @@ def _write_phasea_manifest(repo):
         if rel in _PROTECTED.RUNTIME_PATHS:
             roles.append("runtime")
         role_rows.append({"path": rel, "roles": roles})
+        past = b"phase-a:" + rel.encode() if rel in _PROTECTED.RUNTIME_PATHS else raw
         current.append({
+            "path": rel, "mode": mode, "blob_oid": _fixture_blob(past),
+            "sha256": hashlib.sha256(past).hexdigest(), "size": len(past)})
+        next_files.append({
             "path": rel, "mode": mode, "blob_oid": _fixture_blob(raw),
             "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)})
-        future = b"phase-b:" + rel.encode() if rel in _PROTECTED.RUNTIME_PATHS else raw
-        next_files.append({
-            "path": rel, "mode": mode, "blob_oid": _fixture_blob(future),
-            "sha256": hashlib.sha256(future).hexdigest(), "size": len(future)})
     manifest = {
         "schema": 1, "kind": _PROTECTED.MANIFEST_KIND,
         "transition_id": "fixture-phase-b",
@@ -1808,7 +2010,7 @@ def sandbox(tmp_path_factory):
         control.write_text("def test_fixture_control():\n    assert True\n")
     (plugin / "pytest.ini").write_text("[pytest]\ntestpaths = programs/tests\n")
     (repo / "contended.txt").write_text("base\n")
-    _write_phasea_manifest(repo)
+    _write_activated_manifest(repo)
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -2228,7 +2430,7 @@ fi
 '''.replace("__HUNG_ARM__", hung_arm)
     assert needle in text
     land.write_text(text.replace(needle, hang + needle))
-    _write_phasea_manifest(repo)
+    _write_activated_manifest(repo)
     _git(repo, "add", "tools/gatekeeper-land.sh",
          _PROTECTED.MANIFEST_PATH)
     assert _git(repo, "commit", "-qm", "make interrupt control").returncode == 0
@@ -2244,8 +2446,19 @@ fi
          "--repo", str(repo), "--no-fetch", "--json", str(out)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         start_new_session=True,
+        # The same hermetic benchmark-data checkout `_verify` publishes. Without
+        # it the script falls back to `$HOME/_matrix_benchmark_data` — a host
+        # path this suite neither creates nor owns — so on any machine that does
+        # not happen to have the gatekeeper's canonical corpus checked out, the
+        # run died at "benchmark-data canonical checkout produced NORECORD"
+        # before either arm existed, and the test read that as "the arm never
+        # started".
         env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
-             "GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe)},
+             "GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe),
+             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
+                 str(_BENCHMARK_TEST["remote"])},
     )
     pid_file = probe / f"{hung_arm}.pid"
     deadline = time.monotonic() + 12
