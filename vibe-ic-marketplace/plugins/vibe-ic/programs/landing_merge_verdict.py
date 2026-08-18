@@ -126,6 +126,46 @@ EVERY WAY THE DIFFERENTIAL CAN DEGRADE, DEGRADES TOWARD STRICTER
     `LAND OK`. The list arm A was asked for arrives as `--base-selection`;
     without it the check cannot fire and says so in the notes.
 
+A PER-FILE NORECORD IS STRUCTURED EVIDENCE, NOT CONSOLE TEXT (vibe-ic#1709)
+==========================================================================
+`pytest_per_file_junit.py` keeps a file whose session died ABSENT from the
+merged report and names it on stdout as `NORECORD`. Which arm of this program
+reads that absence decided whether the refusal could say WHAT is missing.
+
+Until #1709 the answer was: neither. `missing_process_files` and
+`base_missing_process_files` were declared in :func:`decide`, initialised to
+`[]` in :func:`main`, and never populated; `junit_per_file_process_files` had no
+caller. The signal reached the verdict only through
+`tools/gatekeeper-land.sh`'s
+
+    grep -qa '^NORECORD' <driver combined stdout>
+
+which prints a gate LABEL — over the mixed driver/subject channel this file
+says everywhere else that it does not trust, because pytest can print
+marker-looking text into it. MEASURED on 7c376e348, one candidate report,
+aggregate suite intact, ONE selected file's per-file attestation removed, every
+other input byte-identical:
+
+    no label            LAND OK   rc=0   missing_candidate_process_files []
+    label on candidate  REFUSE    rc=1   ...still []  — "LANDING GATE FAILED"
+    label on BOTH arms  LAND OK   rc=0   ...still []
+
+The middle row is the one #1709 reported: a refusal that cannot name the file
+sends the next reader to the wrong place. The LAST row is worse and is the
+reason the fix is a REASON and not a better label. A label goes through the
+per-label gate differential, so the same NORECORD on both arms is scored
+PRE-EXISTING and excused — and a hang that fires on both arms is precisely the
+shape `pytest_per_file_junit.py` exists for; its own docstring rejects a
+synthetic red testcase for exactly this reason and the label reintroduced it.
+
+WHICH FILES THE QUESTION IS ASKED ABOUT is the part that must not be guessed.
+Per-file sessions are diagnostic recovery, so a healthy landing has NO per-file
+evidence and demanding one attestation per selected file unconditionally would
+refuse every landing — the ban. `per_file_record_gaps` derives the population
+from what the report claims instead: aggregate attested and no per-file
+evidence is NOT ASKED and says so; any per-file attestation, or a missing
+aggregate attestation, asks over the whole selection and NAMES every gap.
+
 There is no argument this program accepts that makes it more permissive than
 "demand green". That is the property that makes the relaxation safe. THE
 VERIFICATION TIER BELOW IS NOT AN EXCEPTION TO IT: a degraded tier reports what
@@ -681,6 +721,46 @@ def junit_per_file_process_files(path: Path) -> set:
     return {file_name for file_name, count in counts.items() if count == 1}
 
 
+def per_file_record_gaps(path: Path, selection: Sequence[str],
+                         aggregate_present: bool) -> Optional[List[str]]:
+    """Selected files with no valid per-file attestation — or ``None`` when the
+    question was NOT PUT, which is a different answer from "none missing".
+
+    WHEN THE QUESTION IS PUT (vibe-ic#1709)
+    ---------------------------------------
+    Per-file sessions are diagnostic recovery: `pytest_per_file_junit.py` runs
+    them only after the aggregate record is lost, so a healthy landing carries
+    an aggregate attestation and NO per-file evidence at all. Demanding one per
+    selected file unconditionally would refuse every landing — the ban this
+    whole program exists to avoid — so the population is derived from what the
+    report itself claims:
+
+      aggregate attested, no per-file evidence  -> NOT ASKED. The authoritative
+                                                   whole-selection question was
+                                                   answered and recovery never
+                                                   ran; ``None``.
+      any per-file attestation present          -> ASKED over the whole
+                                                   selection. The report claims
+                                                   per-file coverage, and a
+                                                   selected file missing from
+                                                   it is a session whose
+                                                   record was LOST, not one
+                                                   that was never needed.
+      no aggregate attestation                  -> ASKED. The aggregate is
+                                                   already an absolute refusal;
+                                                   asking here is what NAMES
+                                                   the file(s) behind it.
+
+    Returning ``None`` rather than ``[]`` for the first row is the same law the
+    rest of this file follows: a check that could not fire must be legible as
+    such, never as a check that fired and found nothing.
+    """
+    attested = junit_per_file_process_files(path)
+    if aggregate_present and not attested:
+        return None
+    return sorted(set(selection) - attested)
+
+
 def junit_has_aggregate_process(path: Path) -> bool:
     """Whether the report has exactly one valid aggregate attestation."""
     root = ET.parse(str(path)).getroot()
@@ -994,6 +1074,38 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
     # the original, authoritative whole-selection question.  Per-file sessions
     # are diagnostic recovery after aggregate NORECORD; requiring them on a
     # complete aggregate would repeat the suite on every successful landing.
+    # `per_file_record_gaps` therefore decides WHETHER the per-file question is
+    # put; this block decides what its answer means (vibe-ic#1709).
+    #
+    # BOTH LISTS ARE READ HERE AND NOWHERE ELSE. Until #1709 they were declared
+    # in this signature, initialised to `[]` in `main`, and never populated, so
+    # the only thing carrying a per-file NORECORD to this decision was
+    # `tools/gatekeeper-land.sh`'s `grep -qa '^NORECORD'` over the driver's
+    # COMBINED driver/subject stdout — a channel pytest can print into, and the
+    # one input this file's own docstring says it does not trust. Measured on
+    # 7c376e348 with a candidate report whose aggregate suite was intact and one
+    # selected file's per-file attestation removed:
+    #
+    #     grep label absent               -> LAND OK          rc=0
+    #     grep label on the candidate     -> REFUSE, generic  rc=1
+    #     grep label on BOTH arms         -> LAND OK          rc=0
+    #
+    # The third row is the worse half and it is why this is a REASON rather than
+    # a gate label: a label goes through the per-label base differential, so a
+    # hang that fires on both arms — the exact shape `pytest_per_file_junit.py`
+    # was written for — is scored PRE-EXISTING and excused. A reason is absolute
+    # and NAMES the file, which is the difference between a refusal a reader can
+    # act on and one that sends them looking in the wrong place.
+    if missing_process_files:
+        reasons.append(
+            f"{len(missing_process_files)} SELECTED TEST FILE(S) HAVE NO "
+            f"PER-FILE SESSION RECORD IN THE CANDIDATE REPORT — the per-file "
+            f"question was put (see `candidate_aggregate_process_present` for "
+            f"which of the two ways) and these files did not answer it, so "
+            f"their sessions are UNKNOWN, not clean. This is an absolute "
+            f"refusal and cannot be waived by the base gate log. Missing: "
+            + ", ".join(missing_process_files[:5])
+            + ("…" if len(missing_process_files) > 5 else ""))
     if not aggregate_process_present:
         reasons.append(
             "THE CANDIDATE AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD "
@@ -1007,7 +1119,18 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
             "by the machine record and cannot be treated as green.")
     # The base is the permissive arm of a differential, so its aggregate
     # attestation remains independently mandatory.  A complete candidate can
-    # never compensate for an unknown baseline.
+    # never compensate for an unknown baseline.  The per-file question is asked
+    # of arm A on the same terms and for #1443's reason: what the baseline did
+    # not measure is what the branch may delete for free.
+    if base_missing_process_files:
+        reasons.append(
+            f"{len(base_missing_process_files)} SELECTED TEST FILE(S) HAVE NO "
+            f"PER-FILE SESSION RECORD ON THE BASE — the per-file question was "
+            f"put of arm A and these files did not answer it, so what they "
+            f"would have shown is UNKNOWN and `silenced`/`weakened` were "
+            f"computed over a SUBSET of the baseline. Missing: "
+            + ", ".join(base_missing_process_files[:5])
+            + ("…" if len(base_missing_process_files) > 5 else ""))
     if base_selection_supplied and not base_aggregate_process_present:
         reasons.append(
             "THE BASE AGGREGATE TEST SESSION PRODUCED NO COMPLETE RECORD — "
@@ -1441,6 +1564,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     dropped: List[str] = []
     truncated = False
     missing_process_files: List[str] = []
+    #: Whether the per-file completeness question was PUT at all, which a reader
+    #: has to be able to tell from an empty list of gaps (vibe-ic#1709).
+    candidate_per_file_checked = False
     aggregate_process_present = False
     if cand is not None:
         candidate_path = Path(a.candidate_junit)
@@ -1449,6 +1575,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         truncated = (bool(dropped) and
                      junit_aggregate_red_count(candidate_path) >= a.maxfail)
         aggregate_process_present = junit_has_aggregate_process(candidate_path)
+        # THE STRUCTURED PATH, CONNECTED (vibe-ic#1709). An unreadable candidate
+        # report is deliberately left out: `cand is None` already refuses via
+        # `candidate_total == 0`, and naming every selected file there would
+        # report a per-file gap for a report nobody could parse.
+        gaps = per_file_record_gaps(
+            candidate_path, selection, aggregate_process_present)
+        candidate_per_file_checked = gaps is not None
+        missing_process_files = gaps or []
     # THE SAME QUESTION OF ARM A (vibe-ic#1443). The list is the base's OWN
     # selection, never `--selection`: a file the PR ADDS is legitimately absent
     # from the base report, and asking about it here would refuse every PR that
@@ -1458,6 +1592,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # the all-or-nothing note.
     base_dropped: List[str] = []
     base_missing_process_files: List[str] = []
+    base_per_file_checked = False
     base_aggregate_process_present = True
     if base_selection:
         if base_raw is None:
@@ -1470,6 +1605,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 - junit_aggregate_files(base_path, base_selection))
             base_aggregate_process_present = junit_has_aggregate_process(
                 base_path)
+            # Over the BASE's own selection, never `--selection` — same reason
+            # as `base_dropped` above: a file the PR ADDS cannot have a record
+            # on a base that does not contain it.
+            base_gaps = per_file_record_gaps(
+                base_path, base_selection, base_aggregate_process_present)
+            base_per_file_checked = base_gaps is not None
+            base_missing_process_files = base_gaps or []
 
     hygiene = read_hygiene_delta(
         a.base_hygiene, a.candidate_hygiene,
@@ -1579,15 +1721,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # nothing", which is why the size travels with the list.
             "base_selection_size": len(base_selection),
             "dropped_base_selected_files": base_dropped,
-            # Backward-compatible keys. Per-file sessions are diagnostic-only
-            # in aggregate evidence mode, so their absence is not missing
-            # verdict evidence and these lists are intentionally empty.
+            # PER-FILE COMPLETENESS, FROM STRUCTURED JUNIT (vibe-ic#1709). The
+            # `*_checked` flags travel with the lists for the reason
+            # `base_selection_size` travels with `dropped_base_selected_files`:
+            # an empty list means "asked and nothing missing" only when the
+            # question was put, and "aggregate-only evidence, per-file recovery
+            # never ran" otherwise. Two different facts, one shape.
             "missing_candidate_process_files": missing_process_files,
+            "candidate_per_file_records_checked": candidate_per_file_checked,
             "candidate_aggregate_process_present": aggregate_process_present,
             "missing_base_process_files": base_missing_process_files,
+            "base_per_file_records_checked": base_per_file_checked,
             "base_aggregate_process_present": (
                 base_aggregate_process_present),
-            "test_evidence_mode": "aggregate",
+            "test_evidence_mode": ("aggregate+per-file"
+                                   if candidate_per_file_checked
+                                   else "aggregate"),
             "gate_edited": a.gate_edited,
             # ---- WHAT THIS VERDICT DID NOT CHECK, MACHINE-READABLY ----
             # A disclosed weaker check beats a universal refusal ONLY if the
