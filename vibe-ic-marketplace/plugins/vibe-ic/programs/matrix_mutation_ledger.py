@@ -2608,20 +2608,92 @@ def replay_plan(mode: Optional[str] = None) -> Tuple[Tuple[str, str], ...]:
 def replay_many(plan: Sequence[Tuple[str, str]], jobs: int = 8,
                 timeout: int = 900,
                 progress_callback: Optional[Callable[[int, int], None]] = None,
+                budget: Optional[float] = None,
                 ) -> Tuple[ReplayResult, ...]:
+    """Re-execute every pair in ``plan``, optionally under a TOTAL wall budget.
+
+    ``timeout`` bounds ONE cell and ``budget`` bounds the WHOLE plan, and the
+    second is not a refinement of the first — it is the only bound that exists
+    at the level where this function can outlive its caller. ``timeout`` is
+    per-cell, so the aggregate cost of a plan was ``len(frozen)`` cells deep and
+    UNDECLARED: nothing anywhere stated how long ``replay_many`` may take, and
+    no amount of lowering ``timeout`` states it.
+
+    WHY AN UNDECLARED AGGREGATE IS NOT MERELY SLOW (vibe-ic#1410). The landing
+    harness pins ``--timeout=180 --timeout-method=thread``
+    (``tools/ci/repo_hygiene_gates.sh``). The thread method cannot unwind a
+    thread blocked in ``as_completed``, so when the aggregate exceeds the bound
+    pytest takes the whole PROCESS down rather than failing the test. MEASURED
+    on clean ``7c376e348``, default ``witness`` mode, whole file, that harness
+    with ``--timeout`` lowered to a bound this plan cannot afford::
+
+        REALEXIT=1
+        lines matching passed|failed|error in the whole output:   0
+        FAILED lines:                                             0
+
+    Ninety-odd tests had already reached a verdict and not one of them is
+    reported. A script grepping that output for failures reads ZERO, and zero
+    is what it reads whether the run was clean or never happened. AN EMPTY
+    RESULT IS NOT A ZERO, and this parameter is what stops one being produced.
+
+    ``budget=None`` (the default, and what the audit lane and every existing
+    caller uses) is exactly the previous behaviour: no deadline, every pair runs
+    however long it takes, and the population is asserted complete.
+
+    With a budget, pairs are run until the deadline and pairs that were never
+    STARTED are OMITTED from the return value — never fabricated, never scored,
+    never given a colour they were not measured to have. Omission is right HERE
+    and wrong for a cell that was attempted: a pair the pool never picked up was
+    not a replay at all, so there is no arm to report and nothing to call
+    NOT_REPLAYABLE. A pair that WAS started and whose cell blew its clamp keeps
+    the module's existing doctrine — ``_run_cell`` returns a REASON and
+    :func:`replay` scores it ``NOT_REPLAYABLE`` — and stays in the results.
+
+    The shortfall is therefore visible to the caller as
+    ``len(results) < len(plan)``, which is precisely what
+    ``test_the_replay_actually_ran_and_is_not_starved`` already asserts on. A
+    replay that was cut off reports itself as STARVED; it does not report the
+    mutations it never reached as having stopped reddening anything.
+
+    ``progress_callback`` is called only for pairs that actually produced a
+    result, and its denominator stays ``len(frozen)`` in every case. A cut-off
+    run therefore stops short of its own total, which is the disclosure — the
+    denominator must never shrink to match what was achieved.
+    """
+    import time
     frozen = tuple(plan)
     if not frozen:
         return ()
+    deadline = (None if budget is None
+                else time.monotonic() + max(0.0, float(budget)))
+
+    def _one(pair: Tuple[str, str]) -> Optional[ReplayResult]:
+        if deadline is None:
+            return replay(mutation(pair[0]), pair[1], timeout)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # NEVER STARTED. Returning None omits it; see the docstring for why
+            # omission is the honest answer for this case and only this case.
+            return None
+        # Halved because :func:`replay` runs TWO cells back to back (baseline
+        # then mutant) under this same bound, so an unhalved clamp lets a single
+        # pair overrun the whole-plan deadline by an entire cell.
+        cell = min(timeout, max(1, int(remaining // 2)))
+        return replay(mutation(pair[0]), pair[1], cell)
+
     results: List[Optional[ReplayResult]] = [None] * len(frozen)
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
         pending = {
-            pool.submit(replay, mutation(pair[0]), pair[1], timeout): index
+            pool.submit(_one, pair): index
             for index, pair in enumerate(frozen)
         }
         completed = 0
         try:
             for future in as_completed(pending):
-                results[pending[future]] = future.result()
+                outcome = future.result()
+                results[pending[future]] = outcome
+                if outcome is None:
+                    continue
                 completed += 1
                 if progress_callback is not None:
                     progress_callback(completed, len(frozen))
@@ -2629,7 +2701,8 @@ def replay_many(plan: Sequence[Tuple[str, str]], jobs: int = 8,
             for future in pending:
                 future.cancel()
             raise
-    assert all(result is not None for result in results)
+    if deadline is None:
+        assert all(result is not None for result in results)
     return tuple(result for result in results if result is not None)
 
 
