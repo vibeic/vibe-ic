@@ -324,10 +324,12 @@ run "write-guard baseline" \
 # `ci_harness_timeout_ceiling_check` lost its input and reported CANNOT
 # DETERMINE rather than passing.
 #
-# `--timeout=180` is load-bearing beyond this run: that check resolves the
-# harness bound from this line and fails any inner subprocess timeout above it,
-# because an inner bound larger than the harness does not fail a test — it
-# outlives the harness and takes the session down.
+# No fixed elapsed-time limit participates in this verdict.  The driver below
+# observes pytest's validated collection/test lifecycle protocol, owns the
+# complete descendant process tree, and has no total runtime ceiling.  A test
+# that keeps completing finite semantic work may therefore take as long as it
+# needs.  A session whose lifecycle stops produces NORECORD, never a fabricated
+# test failure and never a partial green JUnit.
 #
 # `GATEKEEPER_PYTEST_JUNIT=<path>` additionally writes a junit report for this
 # run. It changes NO verdict here — the `if out=…` below still decides — and
@@ -419,10 +421,9 @@ run_pytest() {
   # `gh pr merge` — the bypass vibe-ic#1019/#1036 is about.
   #
   # So the session declares what it loads instead of inheriting it. The suite needs
-  # exactly ONE third-party plugin — `pytest-timeout`, for the `--timeout` flags on
-  # this very line — verified by grepping the whole suite for the fixtures and marks
-  # of every other installed plugin: requests_mock 0 files, typeguard 0, anyio 0,
-  # hydra 0, xdist mentioned only in a README.
+  # no third-party entry-point plugin.  The progress plugin is loaded by the
+  # trusted driver through its explicit module path; pytest-timeout is
+  # deliberately absent because elapsed time is not a test verdict.
   #
   # `suite_write_guard` is UNAFFECTED and must stay that way: conftest.py loads it
   # through `pytest_plugins`, not through an entry point, so disabling autoload does
@@ -432,9 +433,9 @@ run_pytest() {
   #
   # ── ONE WHOLE-SELECTION SESSION ON THE LANDING CRITICAL PATH (#1654) ──
   #
-  # `--timeout-method=thread` cannot interrupt a blocking `waiter.acquire()`. It
-  # dumps every thread's stack and takes the PROCESS down, and a process that
-  # dies never writes its `--junitxml`. So ONE hanging file used to cost the
+  # A fixed pytest timeout cannot interrupt a blocking `waiter.acquire()` as a
+  # test failure. It dumps every thread's stack and takes the PROCESS down, and
+  # a process that dies never writes its `--junitxml`. So ONE hanging file used to cost the
   # WHOLE run's machine-readable record — measured at the #1650 tree with a
   # 91-file selection, where the hang was 1 file and the blast radius was the
   # other 90, on BOTH arms:
@@ -459,10 +460,9 @@ run_pytest() {
   # record it can and naming the file(s) it cannot measure. Recovery cannot make
   # UNKNOWN land and adds no work to the successful critical path.
   #
-  # THE PYTEST COMMAND IS PASSED IN VERBATIM, not built inside the driver, so
-  # `--timeout=180` stays declared HERE — `ci_harness_timeout_ceiling_check`
-  # resolves the binding harness bound from this file (EXTRA_HARNESS_RELS) and a
-  # bound moved into Python would vanish from its view.
+  # THE PYTEST COMMAND IS PASSED IN VERBATIM, not built inside the driver.  It
+  # intentionally carries no fixed timeout: only the driver's strict semantic
+  # lifecycle lease may classify the run NORECORD.
   if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
         --selection "$sel" --junit "$merged" \
         --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
@@ -471,8 +471,8 @@ run_pytest() {
         --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
-        -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
-        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
+        -- python3 -m pytest -q -p no:cacheprovider \
+        "${maxfail[@]+"${maxfail[@]}"}" 2>&1 )"; then
     rc=0
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
@@ -558,7 +558,7 @@ fi
 # a file is added, and it would go stale silently and in the safe-looking
 # direction: fewer files still reports PASS.
 run_repo_tools_pytest() {
-  local files out rc wg wrc snap
+  local files out rc wg wrc snap list merged
   mapfile -t files < <(cd "$ROOT" && find tools \
       \( -name 'test_*.py' -o -name '*_test.py' \) -type f | sort)
   # An empty corpus is a VACUOUS pass, not a pass. A gate that reports success
@@ -585,13 +585,23 @@ run_repo_tools_pytest() {
     echo "  FAIL  repo tools tests: could not baseline the tree — not a pass"
     FAILED=1; rm -f "$snap"; return
   }
-  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
-        -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-        "${files[@]}" 2>&1 )"
+  list="$(mktemp -t gk_tools_sel.XXXXXX)"
+  merged="$(mktemp -t gk_tools_junit.XXXXXX)"
+  printf '%s\n' "${files[@]}" > "$list"
+  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+        python3 "$PROGRAMS/pytest_per_file_junit.py" \
+        --selection "$list" --junit "$merged" --cwd "$ROOT" \
+        --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+        --aggregate-check \
+        --aggregate-stall-after "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+        --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+        --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
+        --stop-after-failures 0 \
+        -- python3 -m pytest -q -p no:cacheprovider 2>&1 )"
   rc=$?
   wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
         --compare "$snap" 2>&1)"; wrc=$?
-  rm -f "$snap"
+  rm -f "$snap" "$list" "$merged"
   if [ "$rc" -ne 0 ]; then
     printf '  FAIL  repo tools tests (%s file(s))\n' "${#files[@]}"
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
@@ -644,7 +654,7 @@ run_repo_tools_pytest
 # dir as a bare repo-root-relative path. From $PLUGIN two of these tests fail —
 # vibe-ic#1390, open, a defect in that resolution and not silenced here.
 run_unselectable_pytest() {
-  local files out rc wg wrc snap list lrc
+  local files out rc wg wrc snap list lrc merged
   list="$(mktemp -t gk_unsel.XXXXXX)"
   ( cd "$ROOT" && python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" \
         --repo "$ROOT" > "$list" ) ; lrc=$?
@@ -657,12 +667,12 @@ run_unselectable_pytest() {
     echo "        'I could not look', which is never a pass."
     FAILED=1; rm -f "$list"; return
   fi
-  mapfile -t files < "$list"; rm -f "$list"
+  mapfile -t files < "$list"
   if [ "${#files[@]}" -eq 0 ]; then
     echo "  FAIL  unselectable tests: the complement is EMPTY — either every"
     echo "        tree is genuinely covered (say so by declaring it) or the"
     echo "        census broke. A gate over zero items is not a pass."
-    FAILED=1; return
+    FAILED=1; rm -f "$list"; return
   fi
   # As in `run_repo_tools_pytest`: the in-process `suite_write_guard` is loaded
   # by the PLUGIN conftest, and this session's rootdir is not guaranteed to be
@@ -672,7 +682,7 @@ run_unselectable_pytest() {
   python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
       --snapshot "$snap" >/dev/null 2>&1 || {
     echo "  FAIL  unselectable tests: could not baseline the tree — not a pass"
-    FAILED=1; rm -f "$snap"; return
+    FAILED=1; rm -f "$snap" "$list"; return
   }
   # `PYTHONDONTWRITEBYTECODE=1` IS LOAD-BEARING HERE, and it is the one hazard
   # this stage adds that no existing guard can catch.
@@ -702,13 +712,22 @@ run_unselectable_pytest() {
   # ONE session and it fails. This stage would have been the author, in the
   # landing gate, on every batch — and :213 fails the WHOLE landing when the
   # tree moves under the gates, so the price is the batch.
-  out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
-        -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-        "${files[@]}" 2>&1 )"
+  merged="$(mktemp -t gk_unsel_junit.XXXXXX)"
+  out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 \
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+        python3 "$PROGRAMS/pytest_per_file_junit.py" \
+        --selection "$list" --junit "$merged" --cwd "$ROOT" \
+        --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+        --aggregate-check \
+        --aggregate-stall-after "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+        --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+        --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
+        --stop-after-failures 0 \
+        -- python3 -m pytest -q -p no:cacheprovider 2>&1 )"
   rc=$?
   wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
         --compare "$snap" 2>&1)"; wrc=$?
-  rm -f "$snap"
+  rm -f "$snap" "$list" "$merged"
   # THE COUNT IS NOT IN THE LABEL, and that is deliberate. #1431: the two arms
   # of `gatekeeper-verify-merge.sh` subtract gate logs BY PRINTED LABEL, so a
   # label carrying a discovery count renames its own gate whenever a branch adds

@@ -622,6 +622,38 @@ def test_complete_aggregate_check_does_not_launch_per_file_sessions(
                 if tc.get("classname") == "pytest_aggregate_process"]) == 1
 
 
+def test_aggregate_refuses_a_selected_file_that_collected_no_tests(tmp_path):
+    """rc=0 and one green case cannot shrink a two-file denominator."""
+    corpus = _tree(tmp_path, {
+        "test_empty.py": "# selected, but contains no pytest item\n",
+        "test_green.py": _GREEN,
+    })
+    merged = tmp_path / "aggregate-missing-file.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check", "--aggregate-only",
+        "--aggregate-stall-after", str(_STALL))
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert "AGGREGATE_NORECORD" in proc.stdout
+    assert "does not exactly cover the selected files" in proc.stdout
+    assert "test_empty.py" in proc.stdout
+    assert _files_in(merged) == []
+
+
+def test_duplicate_selected_file_is_refused_before_pytest_runs(tmp_path):
+    corpus = _tree(tmp_path, {"test_green.py": _GREEN})
+    (corpus / "selection.txt").write_text(
+        "test_green.py\n./test_green.py\n", encoding="utf-8")
+    merged = tmp_path / "duplicate-selection.xml"
+
+    proc = _run_driver(corpus, merged, "--aggregate-check")
+
+    assert proc.returncode == D.RC_CANNOT_ASK, proc.stdout + proc.stderr
+    assert "same file more than once" in proc.stderr
+    assert not merged.exists()
+
+
 def test_aggregate_norecord_runs_diagnostic_fallback_and_stays_unknown(
         tmp_path):
     """UNKNOWN is refused, after preserving every recoverable file record."""
@@ -1324,21 +1356,16 @@ def test_both_landing_arms_run_through_this_driver():
         "the single-session `xargs` invocation is still in run_pytest")
 
 
-def test_the_harness_bound_is_still_declared_where_the_gate_reads_it():
-    """The pytest command is passed to the driver VERBATIM so `--timeout=180`
-    stays in `tools/gatekeeper-land.sh`, which `ci_harness_timeout_ceiling_check`
-    lists in `EXTRA_HARNESS_RELS`. A bound moved into Python would vanish from
-    that resolver and the ceiling would come from a different file."""
+def test_the_landing_harness_declares_semantic_progress_not_elapsed_time():
+    """All landing populations use the driver's no-ceiling contract."""
     import ci_harness_timeout_ceiling_check as C
     root = _repo_root()
     if not (root / "tools" / "gatekeeper-land.sh").is_file():
         pytest.skip("the landing scripts are not shipped in this tree")
-    bounds = [b for b in C.harness_bounds(root)
-              if b.workflow == "gatekeeper-land.sh"]
-    assert bounds, (
-        "gatekeeper-land.sh no longer declares any pytest harness bound the "
-        "ceiling gate can read")
-    assert min(b.seconds for b in bounds) == 180, [b.as_dict() for b in bounds]
+    contract = C.landing_semantic_progress_contract(root)
+    assert contract["declared"] is True, contract
+    assert contract["errors"] == [], contract
+    assert len(contract["lanes"]) >= 3, contract
 
 
 def test_this_files_final_test_safety_bound_is_inside_the_ceiling():
