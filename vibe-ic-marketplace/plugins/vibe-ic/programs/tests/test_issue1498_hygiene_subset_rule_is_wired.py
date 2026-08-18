@@ -485,7 +485,14 @@ def test_end_to_end_the_record_says_when_it_was_not_asked(tmp_path):
 def test_the_hygiene_label_this_program_matches_is_the_one_land_sh_prints():
     """A regex that stopped matching the real label would silently disable the
     cross-check above, and nothing else in this file would notice."""
-    printed = re.findall(r'^run "([^"]*hygiene[^"]*)"',
+    # LEADING WHITESPACE IS ALLOWED, and only that. What this asserts is that
+    # the label `hygiene_finding_delta` keys on is the label the landing gate
+    # PRINTS; the column the `run` sits in is not part of that claim, and
+    # pinning it made this go red the moment the tier moved into a concurrent
+    # lane function while still printing exactly the same label. An absent or
+    # renamed hygiene label still empties `printed`, so the guard is unchanged
+    # in the direction it exists to fail.
+    printed = re.findall(r'^[ \t]*run "([^"]*hygiene[^"]*)"',
                          _LAND.read_text(encoding="utf-8"), re.M)
     assert printed, "gatekeeper-land.sh no longer runs a labelled hygiene tier"
     assert any(V._HYGIENE_TIER.match(l) for l in printed), printed

@@ -98,9 +98,32 @@ def test_the_new_stage_is_actually_wired(land_text):
     assert f"{_STAGE}()" in land_text, (
         f"{_STAGE} is not defined in tools/gatekeeper-land.sh — the "
         f"unselectable trees are still unreachable by a landing (#1424)")
-    assert re.search(rf"^{_STAGE}$", land_text, re.M), (
+    # CALLED, and REACHED. The literal `^stage$` this used to be was really two
+    # claims wearing one regex: "there is a call" and "control gets to it",
+    # and it could only express the second by insisting the call sat at column
+    # zero. The landing gate now runs its independent full-tier stages as
+    # concurrent LANES, so this call moved one level in — into `lane_corpus`,
+    # which `lane_launch` starts. Column zero stopped describing reachability.
+    #
+    # So the two claims are made separately. A call at any indentation counts;
+    # if it is indented, the shell function that contains it must itself be
+    # launched by name. A stage parked inside a helper nothing runs still fails
+    # here, which is the property this negative control exists for.
+    called = re.search(rf"^(?P<indent>[ \t]*){_STAGE}$", land_text, re.M)
+    assert called, (
         f"{_STAGE} is defined but never CALLED — a stage that does not run "
         f"cannot block anything")
+    if called.group("indent"):
+        holder = None
+        for m in re.finditer(r"^(\w+)\(\)\s*\{", land_text, re.M):
+            if m.start() < called.start():
+                holder = m.group(1)
+        assert holder is not None, (
+            f"{_STAGE} is called from inside something this test cannot name, "
+            f"so whether it runs at all is unknown — which is not a pass")
+        assert re.search(rf"^\s*lane_launch\s+\S+\s+{holder}\b", land_text, re.M), (
+            f"{_STAGE} is only called inside `{holder}`, and nothing launches "
+            f"`{holder}` — a stage that does not run cannot block anything")
     assert _PROG.name in land_text, (
         f"{_STAGE} does not invoke {_PROG.name}; whatever corpus it runs is "
         f"not the one this issue measures")

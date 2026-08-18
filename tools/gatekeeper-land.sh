@@ -341,9 +341,97 @@ echo "--- full tier (minutes; stamps the tree on success) ---"
 # plugin's rootdir conftest) cannot see them. That gap is exactly the stage
 # whose family this repo already caught rewriting 77 tracked files.
 WG_BASE="$(mktemp -t gk_writeguard.XXXXXX)"
-trap 'rm -f "$FP" "$WG_BASE"' EXIT
+LANE_DIR="$(mktemp -d -t gk_lanes.XXXXXX)"
+trap 'rm -f "$FP" "$WG_BASE"; rm -rf "$LANE_DIR"' EXIT
 run "write-guard baseline" \
     python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --snapshot "$WG_BASE"
+
+# ── THE FULL TIER RUNS ITS INDEPENDENT STAGES AT THE SAME TIME ──────────────
+#
+# MEASURED, this tree, one host, targeted arm skipped so only these stages are
+# in the number: 351.5 s serial — repo tools 40.3 s, unselectable 17.9 s,
+# census audit 0.04 s, hygiene 270.3 s, plugin full audit 21.3 s — while the
+# host sat at load 1.4 on 32 cores with exactly one process above 20% CPU.
+# The stages were never ordered with respect to each other; they were only
+# WRITTEN one after another.
+#
+# SAME HOST, SAME TREE, AFTER: 307.0 s. The 58.2 s corpus lane disappears
+# inside the hygiene lane's shadow and the duplicate audit is gone; against
+# that, running beside the corpus lane costs the hygiene tier 35 s of
+# contention (270.3 s -> 305.7 s), which is why the number is 44.6 s and not
+# 79.5 s. The full round, targeted arm included, is where the shape pays:
+# there the arm is ~82% of the round and every other stage now runs inside it.
+#
+# THE VERDICT DID NOT MOVE. Normalised {label -> state}, sorted and hashed,
+# excluding the one label deliberately removed below: d3e9b37210e515eb on both
+# arms, 22 rows each.
+#
+# WHAT IS ORDERED, and it still is:
+#
+#   * `write-guard baseline` above and `the full tier wrote nothing` below
+#     BRACKET everything here, and the fingerprint pair brackets those. Both
+#     brackets are taken on the MAIN shell, before any lane starts and after
+#     every lane has been joined, so the window they assert over is the same
+#     window as before — a wider one, in fact, because the lanes overlap.
+#   * `ci_targeted_test_select` still runs inside `run_pytest`, immediately
+#     before the session it selects for.
+#   * `unselectable-test census is not stale` still runs after the corpus it
+#     audits has been used, because both live in the same lane, in order.
+#
+# WHAT IS NOT ORDERED, asserted rather than assumed: every stage below reads
+# the tree and writes only to `$TMPDIR`. The evidence is this script's own
+# closing pair — `the full tier wrote nothing into the tree` and `worktree
+# unchanged since the gates started` — which certify, on every round, that
+# nothing in this window moved a tracked path. A lane that broke that would
+# be refused by the gate that already exists rather than by a comment here.
+#
+# OUTPUT IS BUFFERED AND REPLAYED IN DECLARATION ORDER, exactly as
+# `tools/ci/_gate_dispatch.sh` does it one level down, and for the same
+# measured reason: a finding printed under the wrong label sends the next
+# reader to the wrong file. The targeted arm keeps the FOREGROUND so its own
+# progress still streams; the other two lanes are replayed whole, in the order
+# they were declared, so the printed gate log is line-for-line the log this
+# script has always produced.
+#
+# A LANE THAT LEAVES NO RECORD IS A FAILURE, never a pass. A background
+# subshell can be killed, and its verdict would then be an absent file — which
+# is exactly the "I could not look" that must never reach the stamp as "I
+# looked and it was fine".
+# THE PID COMES BACK IN A VARIABLE, NOT ON STDOUT, and that is load-bearing:
+# `PID="$(lane_launch …)"` would start the background job inside the command
+# substitution's own subshell, so `wait "$PID"` in the main shell fails with
+# "not a child of this shell" — the lane would be unwaited, unjoined, and its
+# non-zero exit would never reach FAILED. A gate that cannot fail is worse than
+# no gate, so the mechanism that carries its verdict is not left to a subshell.
+LANE_PID=""
+lane_launch() {                      # lane_launch <name> <fn…>  → sets LANE_PID
+  local name="$1"; shift
+  (
+    FAILED=0
+    "$@" > "$LANE_DIR/$name.out" 2>&1
+    exit "$FAILED"
+  ) &
+  LANE_PID="$!"
+}
+lane_join() {                        # lane_join <name> <pid>
+  local name="$1" pid="$2" rc=0
+  wait "$pid" || rc=$?
+  if [ -f "$LANE_DIR/$name.out" ]; then
+    cat "$LANE_DIR/$name.out"
+  else
+    # THE LABEL IS CONSTANT AND THE LANE NAME IS ON THE DETAIL LINE (#1431).
+    # `landing_merge_verdict` subtracts the two arms' gate logs BY PRINTED
+    # LABEL, so a label carrying a per-run value renames its own gate between
+    # the base arm and the candidate arm and the verdict then reads one gate as
+    # two. Written with the name interpolated first; the repo's own
+    # `test_issue1431_gate_identity_is_not_a_tree_measurement` caught it.
+    printf '  FAIL  a concurrent full-tier lane produced no record\n'
+    printf '        lane %s left no output — a stage that left no record is\n' "$name"
+    printf '        not a stage that passed.\n'
+    FAILED=1
+  fi
+  [ "$rc" -eq 0 ] || FAILED=1
+}
 
 # The TARGETED TEST RUN, carried over verbatim from the retired ci.yml:130-132.
 # Omitted from the first version of this script, which covered the governance
@@ -552,22 +640,13 @@ run_pytest() {
   rm -f "$sel"
   if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
 }
-if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
-  echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
-else
-  run_pytest
-fi
-
-# Merge verification already has enough evidence to refuse once the aggregate
-# session produced NO complete record.  Continuing through every remaining gate
-# cannot turn UNKNOWN into PASS; it only burns the critical path.  Ordinary red
-# tests do NOT take this branch because the differential still has to decide
-# whether they were pre-existing.
-if [ "${GATEKEEPER_FAIL_FAST_NORECORD:-0}" = "1" ] \
-   && [ "${TARGETED_NORECORD:-0}" = "1" ]; then
-  echo "=== FAILURES ABOVE — aggregate NORECORD is an absolute refusal; remaining gates were not run"
-  exit 2
-fi
+lane_targeted() {
+  if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
+    echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
+  else
+    run_pytest
+  fi
+}
 
 # ── REPO-LEVEL tests (tools/) ──────────────────────────────────────────────
 # `run_pytest` above cannot reach them, and not by accident: the targeted
@@ -633,7 +712,6 @@ run_repo_tools_pytest() {
   fi
   printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
 }
-run_repo_tools_pytest
 
 # ── EVERY OTHER TREE THE SELECTOR CANNOT REACH ─────────────────────────────
 # vibe-ic#1424. `run_pytest` runs the SELECTOR'S list and the selector is rooted
@@ -755,14 +833,21 @@ run_unselectable_pytest() {
   fi
   echo "  PASS  unselectable tests"
 }
-run_unselectable_pytest
 
-# The census that decides the stage above must itself be trustworthy: a
-# subtrahend whose stage no longer exists, or an exclusion whose reason no
-# longer describes anything, both shrink the corpus in the direction that still
-# prints PASS. rc=1 on either.
-run "unselectable-test census is not stale" \
-    python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
+# ONE LANE, IN ORDER: both pytest stages take their own `suite_write_guard`
+# bracket, and the census below audits the very corpus the second one just ran.
+# Keeping the three together preserves that order for free and keeps the two
+# brackets from nesting inside each other.
+lane_corpus() {
+  run_repo_tools_pytest
+  run_unselectable_pytest
+  # The census that decides the stage above must itself be trustworthy: a
+  # subtrahend whose stage no longer exists, or an exclusion whose reason no
+  # longer describes anything, both shrink the corpus in the direction that
+  # still prints PASS. rc=1 on either.
+  run "unselectable-test census is not stale" \
+      python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
+}
 
 # THE HYGIENE TIER, AND THE RECORD THAT LETS IT BE DIFFERENCED (vibe-ic#1498).
 #
@@ -796,10 +881,68 @@ GK_HYG=()
 GK_HYG_ENV=()
 [ -n "${GATEKEEPER_HYGIENE_PROGRESS:-}" ] \
   && GK_HYG_ENV=(env "GATE_DISPATCH_ATTESTATION_FILE=$GATEKEEPER_HYGIENE_PROGRESS")
-run "repo hygiene gates"      "${GK_HYG_ENV[@]}" \
-    bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
-    "${GK_HYG[@]+"${GK_HYG[@]}"}"
-run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+lane_hygiene() {
+  run "repo hygiene gates"      "${GK_HYG_ENV[@]}" \
+      bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
+      "${GK_HYG[@]+"${GK_HYG[@]}"}"
+}
+
+# `plugin full audit` USED TO BE RUN A SECOND TIME HERE (vibe-ic FRONT-3).
+#
+# `tools/ci/repo_hygiene_gates.sh:171` already declares it —
+#     run "plugin full audit"  "$PLUGIN" python3 programs/plugin_full_audit.py
+# — and this file re-ran the same program a second time as
+#     run "plugin full audit"  python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+#
+# SAME SUBJECT, PROVEN RATHER THAN ARGUED. `plugin_full_audit.main` defaults
+# `plugin_root` to `Path(__file__).resolve().parent.parent`, which IS `$PLUGIN`,
+# so the explicit argument here named the directory the other call site reaches
+# by default; every path the program then touches is derived from that root, so
+# neither call reads its cwd. Executed back to back on a detached origin/main
+# worktree, the two argv forms produced byte-identical stdout, byte-identical
+# stderr and the same rc (sha256 of stdout+stderr c79a86b09f139cbb for both),
+# at 20.56 s and 20.33 s. In the round itself the second copy cost 21.29 s.
+#
+# So one of the two was 21 s of the landing critical path buying no coverage.
+# The HYGIENE copy is the one kept, because it is the one inside the tier's own
+# machine record: it carries a `--summary-json` state, it is one of the 80
+# declared gates that `gate_discloses_denominator_check` and the 63x8 census
+# count, and `gate_host_independence_check` re-drives it in a fresh worktree.
+# Deleting THAT one would have shrunk a declared denominator; deleting this one
+# removes a duplicate execution and nothing else.
+
+# ── LAUNCH, THEN JOIN IN DECLARATION ORDER ─────────────────────────────────
+#
+# The two background lanes start FIRST so their clock overlaps the targeted
+# arm, which is 82% of this round and stays in the foreground: its own output
+# is a progress channel a human watches, and it owns `TARGETED_NORECORD`, which
+# the refusal below reads.
+#
+# The joins are in DECLARATION order, not completion order, so the gate log
+# reads exactly as it did when these ran one after another.
+lane_launch hygiene lane_hygiene; HYG_PID="$LANE_PID"
+lane_launch corpus  lane_corpus;  COR_PID="$LANE_PID"
+lane_targeted
+lane_join corpus  "$COR_PID"
+lane_join hygiene "$HYG_PID"
+
+# Merge verification already has enough evidence to refuse once the aggregate
+# session produced NO complete record.  Continuing through every remaining gate
+# cannot turn UNKNOWN into PASS; it only burns the critical path.  Ordinary red
+# tests do NOT take this branch because the differential still has to decide
+# whether they were pre-existing.
+#
+# THE JOINS ABOVE ARE NOT "REMAINING GATES". They were launched before the
+# targeted arm and ran beside it, so by the time this line is reached their
+# verdicts already exist and have already been printed; abandoning them here
+# would discard evidence that has already been paid for and would orphan two
+# process trees. What is still refused is everything BELOW: the closing tree
+# gates and the stamp.
+if [ "${GATEKEEPER_FAIL_FAST_NORECORD:-0}" = "1" ] \
+   && [ "${TARGETED_NORECORD:-0}" = "1" ]; then
+  echo "=== FAILURES ABOVE — aggregate NORECORD is an absolute refusal; the closing tree gates were not run"
+  exit 2
+fi
 
 # #1029 — the standing assertion, executed: everything above ran against this
 # tree, so nothing above may have CHANGED it. Names every offending path rather
