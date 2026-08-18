@@ -128,6 +128,31 @@ nothing to report. A cell whose run produced no steps tree at all says so in
 one line, which is a different fact from a cell published before this
 existed.
 
+THE PDK-REVISION GUARD (anti-irreproducibility) — BLOCKING
+==========================================================
+A cell published here is a sign-off number for one (IC x PDK). The toolchain
+half of that claim has been recorded since `reports/container_image.json`
+existed; the PDK half was never recorded at all. Everything a run said about
+its PDK said the REQUEST — `--pdk <name>` on this program's own command line,
+`env_PDK_ROOT` in a repro bundle, the registry entry, and this cell's own
+`v<version>_<PDK>` directory name — and a name is not a revision. Two cells a
+year apart, against a re-pulled volume, are byte-identical in that record and
+were measured against different process data.
+
+So a run must arrive carrying `reports/pdk_revision.json`, written at run time
+by `pdk_revision_resolve` from the tree the tools ACTUALLY READ (resolved
+through symlinks, revision taken from an artefact the tree itself ships).
+Absent, unreadable, or carrying no declared revision -> REFUSE, nothing is
+staged. There is no flag that turns this into a warning and no spelling of
+"unknown" that satisfies it: a record that says the revision could not be
+determined is the gap restated, not the gap closed.
+
+This is a guard on the RUN, not a retroactive rule about cells already
+published: a cell that predates the record is untouched, and only a NEW
+sign-off has to arrive attributable. That is the same scoping the repo already
+chose for `benchmark_run_manifest` -- "what must not happen again is a NEW
+number arriving without its composition".
+
 THE CONVERGENCE GUARD (anti-fabrication)
 ========================================
 Only a run whose machine verdict is PASS or PASS_WITH_WAIVERS is publishable.
@@ -238,6 +263,48 @@ class Refuse(Exception):
 # --------------------------------------------------------------------------
 # Verdict helpers.
 # --------------------------------------------------------------------------
+
+def _pdk_revision(run_dir: Path) -> Dict[str, object]:
+    """The run's resolved PDK revision, or REFUSE. **BLOCKING** — a failure
+    here stops the publish and stages nothing.
+
+    The record is READ, never re-derived: at publish time the tree that ran may
+    be on another host, another image, or gone, so anything computed here would
+    describe the PUBLISHER's PDK rather than the run's. That substitution is
+    the whole failure class this guard exists to close, one layer up.
+
+    `record_gaps` is IMPORTED from the program that writes the record, so the
+    writer and this reader cannot drift into two different notions of
+    "recorded" — the same rule the write-ledger guard below follows.
+    """
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    import pdk_revision_resolve as _prr
+
+    rec, err = _prr.load_record(run_dir)
+    if rec is None:
+        raise Refuse(
+            f"the run records no PDK revision ({err} under {run_dir}). A "
+            f"sign-off is a claim about a design measured against a PROCESS, "
+            f"and this run names the process only by the word passed on the "
+            f"command line — so the numbers in it cannot be re-derived later. "
+            f"Produce the record from the tree that ran:\n"
+            f"    python3 {Path(__file__).parent}/pdk_revision_resolve.py "
+            f"--from-run {run_dir} --container <name> "
+            f"--json {run_dir}/{_prr.RECORD_REL}\n"
+            f"  (the one-shot runner writes it automatically at finalize)")
+    gaps = _prr.record_gaps(rec)
+    if gaps:
+        raise Refuse(
+            f"{run_dir}/{_prr.RECORD_REL} does not name a PDK revision:\n  - "
+            + "\n  - ".join(gaps)
+            + "\n  This is NOT waivable by writing 'unknown' into the field: "
+              "an unnamed process revision makes every sign-off number in this "
+              "cell unreproducible, which is the one thing publishing it is "
+              "supposed to prevent.")
+    return rec
+
 
 def _audit_verdict(run_dir: Path, verdict_json: Optional[Path]) -> Tuple[str, Path]:
     """Return (verdict, source_path) from the run's flow-compliance audit JSON."""
@@ -1242,6 +1309,12 @@ def publish(args: argparse.Namespace) -> dict:
             f"run verdict is {verdict} (from {verdict_src}); only a converged "
             f"run (PASS / PASS_WITH_WAIVERS) may be published as evidence")
 
+    # --- PDK-revision guard (BLOCKING) ---
+    # After convergence, because "this run passed" and "this run can be
+    # re-derived" are separate questions and the reader is better served by
+    # the first refusal naming the first one.
+    pdk_rev = _pdk_revision(run_dir)
+
     # --- RESULT.md (independent audit) required + consistent ---
     result_md = Path(args.result_md).resolve() if args.result_md else (run_dir / "RESULT.md")
     if not result_md.is_file() or result_md.stat().st_size == 0:
@@ -1363,6 +1436,11 @@ def publish(args: argparse.Namespace) -> dict:
     summary = {
         "ic": args.ic,
         "pdk": args.pdk,
+        # The NAME above is the request; this is what actually ran. Both are
+        # kept because they answer different questions and a reader who sees
+        # only the first cannot tell that.
+        "pdk_revision": pdk_rev.get("revision"),
+        "pdk_revision_record": pdk_rev,
         "plugin_version": args.plugin_version,
         "verdict": verdict,
         "verdict_source": str(verdict_src),
@@ -1761,6 +1839,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     verb = "WOULD STAGE" if summary["dry_run"] else "STAGED"
     print(f"[{verb}] {summary['ic']} × {summary['pdk']}  ->  {summary['dest']}")
     print(f"  verdict     : {summary['verdict']} (source: {summary['verdict_source']})")
+    print(f"  pdk revision: {summary['pdk_revision']} "
+          f"(read from the tree that ran, not from --pdk)")
     print(f"  GDS_MANIFEST: {summary['gds_manifest']}")
     recs = summary["layout_routing"]
     kept = [r for r in recs if r["decision"] == "STAGED"]
