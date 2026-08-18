@@ -33,12 +33,12 @@ workspace; use a directory you already have (e.g. your project folder).
 export VIBEIC_DESIGNS="/path/to/your/designs"         # ← your project / designs folder (must already exist)
 [ -d "$VIBEIC_DESIGNS" ] || { echo "VIBEIC_DESIGNS must point at an existing directory"; exit 1; }
 
-docker pull ghcr.io/vibeic/vibeic-eda:0.3.6          # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
+docker pull ghcr.io/vibeic/vibeic-eda:0.3.10          # canonical image; to build from source: git clone https://github.com/vibeic/vibeic-eda
 docker rm -f vibeic-eda 2>/dev/null || true           # "name already in use" = an old container exists; drop it first
 docker run -d --name vibeic-eda \
   -v "$VIBEIC_DESIGNS:$VIBEIC_DESIGNS:rw" \
   -v "$VIBEIC_DESIGNS:/foss/designs:rw" \
-  ghcr.io/vibeic/vibeic-eda:0.3.6 --skip sleep infinity
+  ghcr.io/vibeic/vibeic-eda:0.3.10 --skip sleep infinity
 docker exec vibeic-eda yosys --version                # sanity check → prints a version (bare exec resolves since 0.2.12)
 ```
 
