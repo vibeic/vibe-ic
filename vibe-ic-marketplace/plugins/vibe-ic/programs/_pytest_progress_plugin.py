@@ -5,6 +5,12 @@ subject stdout/stderr or CPU activity as pytest progress.  This is a liveness
 channel, not verdict evidence and not a privilege boundary: the plugin and the
 tests necessarily run in the same Python process.  JUnit plus the OS process
 return code remain the inputs to the landing verdict.
+
+Each emitting PROCESS owns its own stream file inside the directory the parent
+names, so a parallel pytest session (pytest-xdist) produces N independent
+streams rather than one interleaved one.  No record field changes: the record
+schema is identical to the single-process case, and every parent-side clause
+keeps validating one process's stream.
 """
 from __future__ import annotations
 
@@ -14,17 +20,77 @@ import threading
 import time
 
 
-_PATH_ENV = "VIBEIC_PYTEST_PROGRESS_FILE"
+_DIR_ENV = "VIBEIC_PYTEST_PROGRESS_DIR"
 _NONCE_ENV = "VIBEIC_PYTEST_PROGRESS_NONCE"
 _SCHEMA = 1
 _seq = 0
 _current_nodeid = None
 _emit_lock = threading.Lock()
 
+#: This process's own stream file, chosen once in ``pytest_configure``.
+#:
+#: ONE PROCESS OWNS ONE STREAM.  ``seq`` is a module global and therefore a
+#: per-interpreter fact; ``monotonic_ns`` and the lifecycle stage machine are
+#: likewise per-process.  Writing every process into one shared file is what
+#: forces the parent to demultiplex N interleaved emitters.  Giving each
+#: process its own file keeps every parent-side clause a per-process
+#: statement, exactly as it was before pytest-xdist existed.
+#:
+#: ``None`` means "this process must stay silent": either the parent did not
+#: ask for progress, or this is the xdist CONTROLLER, whose stream is a
+#: different shape (it reports every test_finish but never collects) and is
+#: therefore not a stream the protocol can validate.  The workers between them
+#: report the whole session, so nothing is lost by the controller's silence.
+_path = None
+_WORKER_ID_OK = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+
+
+def _own_ppid() -> int:
+    """Parent pid as of THIS call, read without trusting a cached value."""
+    return os.getppid()
+
+
+def _is_xdist_worker(config) -> bool:
+    # Same duck-typed test the xdist library itself uses
+    # (xdist.plugin.is_xdist_worker) and the same one this repo already uses
+    # in suite_write_guard.py; it needs no import of xdist.
+    return hasattr(config, "workerinput")
+
+
+def _is_xdist_controller(config) -> bool:
+    # ``dist`` only exists as an option once the xdist plugin is registered,
+    # so the default matters: without xdist there is no controller at all.
+    return (not _is_xdist_worker(config)
+            and getattr(config.option, "dist", "no") != "no")
+
+
+def pytest_configure(config) -> None:
+    """Claim this process's own stream file, or decide to stay silent."""
+    global _path
+    directory = os.environ.get(_DIR_ENV)
+    nonce = os.environ.get(_NONCE_ENV)
+    if not directory or not nonce:
+        return
+    if _is_xdist_controller(config):
+        return
+    if _is_xdist_worker(config):
+        worker = str(config.workerinput.get("workerid", ""))
+        if (not worker or len(worker) > 32
+                or not set(worker) <= _WORKER_ID_OK):
+            # An unnameable stream is not a stream. Staying silent makes the
+            # parent refuse the session rather than accept an unattributable
+            # one.
+            return
+        name = f"w.{worker}.{os.getpid()}.{_own_ppid()}.jsonl"
+    else:
+        name = f"m.{os.getpid()}.{_own_ppid()}.jsonl"
+    _path = os.path.join(directory, name)
+
 
 def _emit(event: str, **fields) -> None:
     global _seq
-    path = os.environ.get(_PATH_ENV)
+    path = _path
     nonce = os.environ.get(_NONCE_ENV)
     if not path or not nonce:
         return
