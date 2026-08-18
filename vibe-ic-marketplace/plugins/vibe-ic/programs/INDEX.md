@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1111
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1111)
+- **Total programs (excluding helpers / shims):** 1112
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1112)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1102 |
+| `any` | 1103 |
 
 ## Alphabetical listing
 
@@ -731,6 +731,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pdk_metal_density_windows` | any | — | serve a PDK's OWN per-layer density window. |
 | `pdk_otp_altsyncram_inject` | any | — | v1.6.224 (ORGANIC-20260512-followup-3). |
 | `pdk_registry_selectable_check` | any | — | a PDK the image ships must be SELECTABLE, and every asset the registry declares must RESOLVE. |
+| `pdk_revision_resolve` | any | — | the PDK revision a run signed off against, read from the tree that ran. |
 | `pdk_table_coverage_check` | any | — | registering a PDK in one table registers it in none of the others, and nothing said so. |
 | `pdk_udp_synth_shim_gen` | any | — | v1.6.218 (ORGANIC-20260512-followup). |
 | `pdk_via_patch_meets_layer_min_width_check` | any | — | a via's metal patch must be at least as wide as that metal layer's own declared minimum width. |
@@ -1183,7 +1184,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1102 programs)
+### `any` (1103 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1885,6 +1886,7 @@ _(no programs in this group)_
 - `pdk_metal_density_windows` — serve a PDK's OWN per-layer density window.
 - `pdk_otp_altsyncram_inject` — v1.6.224 (ORGANIC-20260512-followup-3).
 - `pdk_registry_selectable_check` — a PDK the image ships must be SELECTABLE, and every asset the registry declares must RESOLVE.
+- `pdk_revision_resolve` — the PDK revision a run signed off against, read from the tree that ran.
 - `pdk_table_coverage_check` — registering a PDK in one table registers it in none of the others, and nothing said so.
 - `pdk_udp_synth_shim_gen` — v1.6.218 (ORGANIC-20260512-followup).
 - `pdk_via_patch_meets_layer_min_width_check` — a via's metal patch must be at least as wide as that metal layer's own declared minimum width.
