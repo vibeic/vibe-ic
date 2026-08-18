@@ -14381,9 +14381,11 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
           PDK liberty exposes no tie cell,
       (b) sets every spare to FIRM (= DEF `+ FIXED`) via odb so they are
           write-protected in all subsequent DEF emissions,
-      (c) runs check_placement (DPL-0033 catch) to verify alignment —
-          a NONFATAL note is printed but the flow continues so a residual
-          off-site issue is surfaced without aborting PnR.
+      (c) runs check_placement to verify alignment and RECORDS THE TOOL'S
+          OWN VIOLATION COUNT (`SPARE_CHECK_PLACEMENT_VIOLATIONS <n>`). The
+          flow continues either way — aborting PnR here destroys the report
+          the failure has to appear in — and `placement_legality_check`,
+          wired into step 17's gate, is what refuses on a non-zero count.
     Chip-AGNOSTIC: uses generic spare_ name prefix + odb API."""
     instances = plan.get("instances", [])
     _spare_names = [i.get("name") for i in instances if i.get("cell")]
@@ -14614,15 +14616,13 @@ def _build_spare_postfix_tcl(plan: Dict[str, Any],
         "  } _stn_e]} { puts \"SPARE_TIE_NET_DONT_TOUCH_NONFATAL: $_stn -- $_stn_e\" }",
         "}",
         "# ORGANIC #562 — check_placement gate: verify no off-site spares",
-        "# remain after legalization. DPL-0033 is caught so a misaligned",
-        "# inherited instance does not abort PnR (print WARN, flow continues).",
-        "if {[catch {check_placement} _cp_err]} {",
-        "  puts \"SPARE_CHECK_PLACEMENT_WARN: $_cp_err\"",
-        "} else {",
-        "  puts \"SPARE_CHECK_PLACEMENT_PASS\"",
-        "}",
+        "# remain after legalization. The verdict is recorded as the",
+        "# tool's own VIOLATION COUNT, not as a WARN string. DPL-0033 still",
+        "# does not abort PnR here (that would destroy the report the failure",
+        "# has to appear in) — placement_legality_check refuses on the count.",
     ]
-    return "\n".join(lines) + "\n"
+    return ("\n".join(lines) + "\n"
+            + _build_check_placement_verdict_tcl("SPARE", "_spare"))
 
 
 # `SPARE_TIEOFF_CONNECTED <connected> of <candidates>` — emitted by
@@ -15373,6 +15373,71 @@ def _pg_net_cleanup_tcl() -> str:
 # rung measured from the live floorplan (#337) covers the case where even
 # 100 um is small relative to the die.
 _DPL_ESCALATION_SITES = (5, 20, 100)
+
+
+# --- The placer's OWN legality verdict, as a NUMBER --------------------------
+# From the installed binary's own `info body check_placement`:
+#
+#   # Returns the violation count. Without -no_abort a non-zero count raises
+#   # DPL-33 instead of returning, so an illegal placement can never be
+#   # mistaken for a legal one by a caller that ignores the result.
+#   return [dpl::check_placement_cmd $verbose $file_name $no_abort]
+#
+# The runner ignored the result. Both `check_placement` call sites outside the
+# legalization ladder wrapped the RAISING form in a `catch` and printed
+# `..._CHECK_PLACEMENT_WARN: $err` — DPL-33, the tool's own refusal, demoted to
+# a warning string that no gate read. Measured, on a DEF whose only edit is one
+# instance moved from site 3 to site 1:
+#
+#   [WARNING DPL-0005] Overlap check failed (1).
+#   [WARNING DPL-0011] Padding check failed (1).
+#   [ERROR   DPL-0033] detailed placement checks failed during check placement.
+#   SPARE_CHECK_PLACEMENT_WARN: DPL-0033
+#   -> placement_legality_check verdict: PASS, exit 0
+#
+# This builder asks for the COUNT (`-no_abort` makes the tool RETURN it instead
+# of raising) and prints it structurally, so `placement_legality_check` refuses
+# on the placer's own number rather than on the presence of a warning word.
+#
+# The Tcl still does not raise, deliberately and for the reason the ECO site
+# already documents: aborting PnR here destroys the report the failure has to
+# appear in. The refusal moves to the gate, which is wired into step 17's
+# `all_of` and whose non-zero exit is what stops the flow.
+#
+# Fail-closed on the tool, not just on the design:
+#   * `-no_abort` unsupported (an older OpenROAD) -> fall back to the RAISING
+#     form, where DPL-33 IS the illegal-placement signal, and record the raise.
+#   * `check_placement` unusable for another reason -> recorded as UNAVAILABLE.
+#     NOT DETERMINED is never printed as zero violations.
+def _build_check_placement_verdict_tcl(marker: str, var_tag: str = "") -> str:
+    """Tcl that records `check_placement`'s OWN violation count under `marker`.
+
+    Emits exactly one of:
+      <marker>_CHECK_PLACEMENT_VIOLATIONS <n>   the tool's count (0 == legal)
+      <marker>_CHECK_PLACEMENT_RAISED: <err>    DPL-33 — a non-zero count
+      <marker>_CHECK_PLACEMENT_UNAVAILABLE: <err>  the check could not run
+
+    chip-AGNOSTIC: an OpenROAD command name and the runner's own marker
+    grammar; no chip, PDK, library or design literal.
+    """
+    v = var_tag or ""
+    return (
+        f"# {marker}: the placer's own legality verdict, recorded as a COUNT.\n"
+        f"if {{[catch {{set _cpv{v} [check_placement -no_abort]}} _cpe{v}]}} {{\n"
+        f"  # -no_abort unsupported: use the raising form, where DPL-33 is\n"
+        f"  # itself the non-zero-violation signal.\n"
+        f"  if {{[catch {{check_placement}} _cpe2{v}]}} {{\n"
+        f"    puts \"{marker}_CHECK_PLACEMENT_RAISED: $_cpe2{v}\"\n"
+        f"  }} else {{\n"
+        f"    puts \"{marker}_CHECK_PLACEMENT_VIOLATIONS 0\"\n"
+        f"  }}\n"
+        f"}} elseif {{![string is integer -strict $_cpv{v}]}} {{\n"
+        f"  puts \"{marker}_CHECK_PLACEMENT_UNAVAILABLE: non-numeric result "
+        f"'$_cpv{v}'\"\n"
+        f"}} else {{\n"
+        f"  puts \"{marker}_CHECK_PLACEMENT_VIOLATIONS $_cpv{v}\"\n"
+        f"}}\n"
+    )
 
 
 def _build_escalating_legalize_tcl(marker: str, var_tag: str = "",
@@ -16711,8 +16776,10 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
       (c) DRT-0305: PG net cleanup before global_route — a dangling zero_/one_
           POWER/GROUND net in regular NETS makes TritonRoute abort ALL detailed
           routing. Inline the _pg_net_cleanup_tcl() pass first.
-      (d) DPL-0033: catch around check_placement — the call throws on inherited
-          mis-aligned instances rather than reporting them; catch keeps flow moving.
+      (d) DPL-0033: check_placement is asked for its VIOLATION COUNT
+          (`-no_abort` returns it instead of raising) and the number is
+          recorded as `ECO_CHECK_PLACEMENT_VIOLATIONS <n>`; the flow keeps
+          moving and `placement_legality_check` refuses on the count.
 
     Returns a ready-to-run TCL string (not an f-string template — real {/}).
     Chip-AGNOSTIC: no design-specific magic; only standard OpenROAD APIs."""
@@ -16878,7 +16945,7 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         + _start_comment +
         "#   (b) Signal-11: pass-2 repair is setup-only (no repair_design)\n"
         "#   (c) DRT-0305: PG net cleanup (zero_/one_ stubs) before global_route\n"
-        "#   (d) DPL-0033: catch around check_placement\n"
+        "#   (d) DPL-0033: check_placement's own violation COUNT recorded\n"
         "# Generated by phase3_one_shot_runner._build_eco_repair_tcl\n"
         # WHICH generator, not just that there was one. `_eco_deck_is_stale`
         # re-emits when this digest is absent or different, so a deck written
@@ -16964,15 +17031,13 @@ def _build_eco_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: str,
         "}\n"
         + _build_escalating_legalize_tcl("ECO_DPL", "_eco")
         + "\n"
-        "# ORGANIC #561 (d): DPL-0033 — catch around check_placement.\n"
-        "# check_placement throws on inherited mis-aligned instances; catch\n"
-        "# keeps the flow moving while still surfacing the WARN message.\n"
-        "if {[catch {check_placement} _cp_err]} {\n"
-        "  puts \"ECO_CHECK_PLACEMENT_WARN: $_cp_err\"\n"
-        "} else {\n"
-        "  puts \"ECO_CHECK_PLACEMENT_PASS\"\n"
-        "}\n"
-        "\n"
+        "# ORGANIC #561 (d): DPL-0033 — check_placement after the ECO's own\n"
+        "# legalization, recorded as the tool's own VIOLATION COUNT.\n"
+        "# It still does not abort PnR here — aborting destroys the report the\n"
+        "# failure has to appear in — and placement_legality_check, wired into\n"
+        "# step 17's `all_of`, is what refuses on the count.\n"
+        + _build_check_placement_verdict_tcl("ECO", "_ecocp")
+        + "\n"
         "# ORGANIC #561 (c): DRT-0305 — PG net cleanup before global_route.\n"
         "# A dangling zero_/one_ constant-tie net with POWER/GROUND SigType in\n"
         "# regular NETS makes TritonRoute abort ALL detailed routing.\n"
