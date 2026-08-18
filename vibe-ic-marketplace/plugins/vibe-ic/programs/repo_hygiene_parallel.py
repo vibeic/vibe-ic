@@ -30,10 +30,11 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 import _crash_safe_scratch as _scratch
 import _owned_process_supervisor as _owned
+import _semantic_child_progress as _semantic_progress
 import gate_process_attestation as _gate_attestation
 from _atomic_artefact import write_json, write_text
 from hygiene_shard_plan import load_profile, plan
@@ -207,6 +208,66 @@ def _load_json(path: Path) -> Dict[str, Any]:
     return doc
 
 
+def _exact_identity_rows(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    identities = []
+    for row in value:
+        if (not isinstance(row, dict)
+                or set(row) != {"pid", "starttime"}
+                or type(row.get("pid")) is not int or row["pid"] <= 0
+                or type(row.get("starttime")) is not int
+                or row["starttime"] < 0):
+            return False
+        identities.append((row["pid"], row["starttime"]))
+    return len(identities) == len(set(identities))
+
+
+def _owned_final_zero(doc: object) -> bool:
+    """Strict trusted-helper terminal record usable as an atomic proof."""
+    fields = {
+        "protocol", "rc", "body", "problem", "outcome", "launched",
+        "census_ok", "final_descendants", "observed", "capability_error",
+    }
+    return (isinstance(doc, dict) and set(doc) == fields
+            and type(doc.get("protocol")) is int and doc["protocol"] == 1
+            and type(doc.get("rc")) is int
+            and isinstance(doc.get("body"), str)
+            and (doc.get("problem") is None
+                 or isinstance(doc.get("problem"), str))
+            and doc.get("outcome") in {
+                "natural", "stalled", "ceiling", "aborted"}
+            and doc.get("launched") is True
+            and doc.get("census_ok") is True
+            and doc.get("final_descendants") == []
+            and _exact_identity_rows(doc.get("observed"))
+            and isinstance(doc.get("capability_error"), str))
+
+
+def _shutdown_final_zero(doc: object, *, helper_pid: int,
+                         helper_starttime: int | None,
+                         helper_rc: int | None) -> bool:
+    fields = {
+        "protocol", "state", "reaper_pid", "reaper_starttime", "exit_code",
+        "census_ok", "final_descendants", "observed",
+    }
+    return (isinstance(doc, dict) and set(doc) == fields
+            and type(doc.get("protocol")) is int and doc["protocol"] == 1
+            and doc.get("state") == "shutdown_complete"
+            and type(doc.get("reaper_pid")) is int
+            and doc["reaper_pid"] == helper_pid
+            and type(doc.get("reaper_starttime")) is int
+            and doc["reaper_starttime"] >= 0
+            and (helper_starttime is None
+                 or doc["reaper_starttime"] == helper_starttime)
+            and type(doc.get("exit_code")) is int
+            and doc["exit_code"] == 128 + signal.SIGTERM
+            and helper_rc == doc["exit_code"]
+            and doc.get("census_ok") is True
+            and doc.get("final_descendants") == []
+            and _exact_identity_rows(doc.get("observed")))
+
+
 def _load_jsonl(path: Path) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     with path.open(encoding="utf-8") as fh:
@@ -232,19 +293,34 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
          expected_progress_labels: Sequence[str] | None = None,
          stall_grace_s: float = DEFAULT_STALL_GRACE_S,
          atomic: bool = False,
-         owned_result_sink: Dict[str, Any] | None = None):
+         owned_result_sink: Dict[str, Any] | None = None,
+         semantic_progress_scope: str | None = None,
+         semantic_progress_units: Sequence[str] | None = None,
+         domain_progress_callback: Callable[[str, int, int], None] | None = None):
     """Run until natural completion while supervising FORWARD PROGRESS.
 
-    There is deliberately no whole-run timeout.  Output growth or a completed
-    gate attestation resets the stall clock, so a slow but progressing shard is
-    allowed to finish however long it needs.  Only a process that is both
-    silent and making no recorded progress for ``stall_grace_s`` is killed.
+    There is deliberately no whole-run timeout. Existing callers retain their
+    explicit output/attestation/atomic policy. Supplying ``semantic_progress_*``
+    selects the stricter issue-1710 mode: only exact parent-manifest checkpoints
+    renew the lease; stdout, CPU and generic log activity cannot. Validated
+    checkpoints are relayed while the direct child is still running.
     """
     # Subreaper state and waitpid(-1) are process-global.  `_run` is called by
     # several dispatcher threads, so each job gets a dedicated one-job helper.
     # The private pipe is the semantic state channel: the outer thread waits on
     # either a helper-exit pidfd event or an explicit termination-pending event,
     # never on an estimated whole-job deadline.
+    semantic_requested = (semantic_progress_scope is not None
+                          or semantic_progress_units is not None)
+    if (semantic_progress_scope is None) != (semantic_progress_units is None):
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: semantic progress scope "
+                "and finite unit manifest must be supplied together")
+    if domain_progress_callback is not None and not semantic_requested:
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: domain progress callback "
+                "has no semantic child channel")
+    if semantic_requested and (progress_path is not None or atomic):
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: semantic progress is "
+                "exclusive with attestation/log or atomic renewal")
     if not hasattr(os, "pidfd_open") or not hasattr(select, "poll"):
         return (2, "", "OWNED_SUPERVISOR_NORECORD: dispatcher pidfd "
                 "exit events are unavailable")
@@ -277,6 +353,22 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
     diagnostic_fh = None
     retained = False
     try:
+        semantic_plan = None
+        relay = None
+        helper_env = env
+        if semantic_requested:
+            try:
+                semantic_plan = _semantic_progress.prepare_parent(
+                    scratch, str(semantic_progress_scope),
+                    list(semantic_progress_units or ()), env)
+                relay = _semantic_progress.RelayValidator(
+                    semantic_plan.scope, len(semantic_plan.units),
+                    domain_progress_callback)
+                helper_env = semantic_plan.env
+            except (OSError, ValueError,
+                    _semantic_progress.ProgressProtocolError) as exc:
+                return (2, "", "OWNED_SUPERVISOR_NORECORD: cannot prepare "
+                        f"semantic child progress: {exc}")
         event_read, event_write = os.pipe()
         os.set_blocking(event_read, False)
         diagnostic_fh = diagnostic_path.open("wb")
@@ -302,9 +394,14 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
             ])
         elif atomic:
             helper_argv.append("--atomic")
+        if semantic_plan is not None:
+            helper_argv.extend([
+                "--semantic-progress-manifest",
+                str(semantic_plan.manifest_path),
+            ])
         helper_argv.extend(["--", *argv])
         helper = subprocess.Popen(
-            helper_argv, env=env, stdout=diagnostic_fh,
+            helper_argv, env=helper_env, stdout=diagnostic_fh,
             stderr=subprocess.STDOUT, pass_fds=(event_write,),
             start_new_session=True)
         diagnostic_fh.close()
@@ -337,9 +434,10 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
         pending: Dict[str, Any] | None = None
         helper_exited = False
         channel_failed = False
+        channel_failure = ""
 
         def drain_pending_events() -> None:
-            nonlocal event_buffer, pending
+            nonlocal event_buffer, pending, channel_failed, channel_failure
             while True:
                 try:
                     chunk = os.read(event_read, 65536)
@@ -351,9 +449,12 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
                 while b"\n" in event_buffer:
                     raw, event_buffer = event_buffer.split(b"\n", 1)
                     if not raw:
+                        channel_failed = True
+                        channel_failure = "empty private supervisor event"
                         continue
                     try:
-                        candidate = _strict_loads(raw.decode("ascii"))
+                        candidate = _semantic_progress.strict_loads(
+                            raw.decode("ascii"))
                     except (UnicodeDecodeError, ValueError,
                             json.JSONDecodeError):
                         candidate = {"state": "invalid"}
@@ -361,6 +462,19 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
                             and candidate.get("state")
                             == "termination_pending"):
                         pending = candidate
+                    elif (isinstance(candidate, dict)
+                          and candidate.get("state") == "domain_progress"):
+                        if relay is None:
+                            channel_failed = True
+                            channel_failure = "unexpected domain-progress relay"
+                        else:
+                            relay.accept(candidate)
+                            if relay.error:
+                                channel_failed = True
+                                channel_failure = relay.error
+                    else:
+                        channel_failed = True
+                        channel_failure = "invalid private supervisor event"
 
         while not pending and not helper_exited:
             # Both watched objects are kernel events.  There is deliberately no
@@ -370,6 +484,11 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
                            if fd == event_read]
             if pipe_events:
                 drain_pending_events()
+                if event_buffer and any(
+                        event & (select.POLLHUP | select.POLLERR)
+                        for event in pipe_events):
+                    channel_failed = True
+                    channel_failure = "truncated private supervisor event"
                 if pending is None and any(
                         event & (select.POLLHUP | select.POLLERR)
                         for event in pipe_events):
@@ -407,23 +526,86 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
                 drain_pending_events()
                 helper_exited = pending is None
 
-        helper_diagnostic = diagnostic_path.read_text(
-            encoding="utf-8", errors="replace")
+        if helper_exited and event_buffer and not channel_failed:
+            channel_failed = True
+            channel_failure = "truncated private supervisor event"
+
         if channel_failed:
-            helper.send_signal(signal.SIGTERM)
             try:
                 observed = _owned._read_proc_identity(helper.pid)
             except (OSError, ValueError, IndexError):
                 observed = None
-            starttime = observed[1] if observed is not None else -1
-            _retain_pending_reaper(
-                helper, helper_pidfd, scratch, starttime)
-            retained = True
-            helper = None
-            helper_pidfd = None
+            expected_starttime = observed[1] if observed is not None else None
+            if helper.poll() is None:
+                try:
+                    helper.send_signal(signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+            # A semantic callback is part of an enclosing atomic test lease.
+            # On relay failure retain ownership here, drain the helper-only
+            # pipe, and wait only on pidfd exit until the helper has published
+            # a trusted final-zero cleanup record. There is no elapsed bound.
+            pipe_registered = True
+            while helper.poll() is None:
+                for fd, event in poller.poll():
+                    if fd == event_read and pipe_registered:
+                        while True:
+                            try:
+                                chunk = os.read(event_read, 65536)
+                            except BlockingIOError:
+                                break
+                            if not chunk:
+                                break
+                        if event & (select.POLLHUP | select.POLLERR):
+                            poller.unregister(event_read)
+                            pipe_registered = False
+                    if fd == helper_pidfd:
+                        helper.wait()
+                        break
+            helper.wait()
+            helper_diagnostic = diagnostic_path.read_text(
+                encoding="utf-8", errors="replace")
+
+            cleanup_proof = ""
+            cleanup_verified = False
+            try:
+                status_doc = _semantic_progress.strict_loads(
+                    status_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, ValueError,
+                    json.JSONDecodeError) as exc:
+                status_doc = None
+                cleanup_proof = f"unreadable final-zero status: {exc}"
+            if isinstance(status_doc, dict):
+                if _shutdown_final_zero(
+                        status_doc, helper_pid=helper.pid,
+                        helper_starttime=expected_starttime,
+                        helper_rc=helper.returncode):
+                    cleanup_proof = "shutdown_complete/final_descendants=[]"
+                    cleanup_verified = True
+                else:
+                    cleanup_proof = "final-zero status differs"
+            if not cleanup_verified and result_path.is_file():
+                try:
+                    result_doc = _semantic_progress.strict_loads(
+                        result_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, ValueError,
+                        json.JSONDecodeError) as exc:
+                    cleanup_proof = (
+                        f"unreadable natural final-zero result: {exc}")
+                else:
+                    if helper.returncode == 0 and _owned_final_zero(result_doc):
+                        cleanup_proof = "natural/final_descendants=[]"
+                        cleanup_verified = True
+            if not cleanup_verified:
+                cleanup_proof = "UNPROVED: " + (cleanup_proof or "missing")
             return (2, helper_diagnostic,
-                    "OWNED_SUPERVISOR_NORECORD: private termination-state "
-                    "channel closed before a terminal record")
+                    "OWNED_SUPERVISOR_NORECORD: private supervisor channel "
+                    "failed before a terminal record"
+                    + (f": {channel_failure}" if channel_failure else "")
+                    + f"; atomic cleanup={cleanup_proof}")
+        helper_diagnostic = diagnostic_path.read_text(
+            encoding="utf-8", errors="replace")
         if pending is not None:
             try:
                 observed = _owned._read_proc_identity(helper.pid)
@@ -565,6 +747,16 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
     if recorded_problem is not None and not isinstance(recorded_problem, str):
         violations.append("malformed problem record")
         recorded_problem = None
+    if (isinstance(recorded_problem, str)
+            and "SEMANTIC_PROGRESS_NORECORD:" in recorded_problem):
+        violations.append(
+            "semantic child progress did not reach its exact terminal FSM")
+    if relay is not None and (
+            relay.error or relay.completed != relay.total):
+        violations.append(
+            "incomplete domain-progress relay "
+            f"({relay.completed}/{relay.total})"
+            + (f": {relay.error}" if relay.error else ""))
     if (record.get("launched") is False
             and (record.get("rc") == 0 or not recorded_problem)):
         violations.append("helper reported success without launching the job")

@@ -108,6 +108,10 @@ _UNSCANNABLE_BOUND_PATH = Path(os.devnull) / \
     ".vibeic-bound-corpus-pointer-missing"
 
 
+class CorpusIndexIndeterminate(RuntimeError):
+    """The index probe itself failed; callers must not infer a population."""
+
+
 def env_pointer() -> Optional[str]:
     """The raw pointer, or None. Read in one place so a test that clears it
     clears it for everybody."""
@@ -168,19 +172,32 @@ def resolve(named: Path, subdir: Optional[str] = None, gate: str = "",
     return named, NAMED
 
 
-def not_a_checkout_reason(root: Path, reads: str) -> Optional[str]:
+def not_a_checkout_reason(root: Path, reads: str, *,
+                          timeout: Optional[float] = 60,
+                          strict: bool = False) -> Optional[str]:
     """A sentence naming why `root` cannot answer an INDEX question, or None.
 
     None means "this IS a git checkout". Anything else is the message a gate
     that reads `git ls-files` must refuse with, because over a present tree
     that git cannot read, an empty enumeration reaches the audit as "there are
     none" and the program certifies it.
+
+    A semantic-progress caller passes ``strict=True, timeout=None``.  Its
+    owning supervisor, not a duration guess inside this probe, then turns a
+    hung or broken Git child into NORECORD.  Strict probe failures raise so
+    they cannot be mistaken for a successfully classified loose directory.
     """
+    if strict and timeout is not None:
+        raise ValueError(
+            "strict corpus index probes must be owned without an inner timeout")
     try:
         probe = subprocess.run(["git", "-C", str(root), "rev-parse",
                                 "--show-toplevel"],
-                               capture_output=True, text=True, timeout=60)
+                               capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:   # noqa: BLE001
+        if strict:
+            raise CorpusIndexIndeterminate(
+                f"git checkout probe failed for {root}: {exc}") from exc
         return (f"{root} exists but git could not be asked about it ({exc}), "
                 f"and this gate reads git's INDEX to enumerate {reads}. "
                 f"Enumerating zero of them is 'I could not look', not 'there "
