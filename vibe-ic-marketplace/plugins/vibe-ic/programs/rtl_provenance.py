@@ -58,7 +58,7 @@ LEDGER_NAME = "rtl.provenance.json"
 #: Files the ledger tracks.  Everything a generator emits as RTL; any
 #: other artefact dropped in ``rtl/`` is ignored so unrelated scratch
 #: files never masquerade as authorship.
-RTL_SUFFIXES = (".v", ".sv", ".vh", ".svh")
+RTL_SUFFIXES = (".v", ".sv", ".vh", ".svh", ".vhd", ".vhdl")
 
 #: Verdicts returned by :func:`classify`.
 EMPTY = "empty"

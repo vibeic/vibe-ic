@@ -1767,6 +1767,143 @@ def _try_canonical_primitive_rtl(project: Path, t0: float) -> Optional[StepResul
                 "shape": shape, "module": module, "program_first": True})
 
 
+def _phase1_declared_module_name(spec_text: str) -> Optional[str]:
+    """Return the ONE explicitly declared Phase-1 top name, else ``None``.
+
+    Plain input docs occur in both VerilogEval's module-header dialect and the
+    RTLLM ``Module name:`` dialect. Multiple identical declarations are harmless,
+    but conflicting names are an interface ambiguity and therefore an honest
+    SKIP (never guess ``chip_top``).
+    """
+    candidates = set()
+    patterns = (
+        r"(?im)^\s*module\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()",
+        r"(?i)\bmodule\s+(?:is\s+)?named\s+([A-Za-z_]\w*)\b",
+        r"(?im)^\s*module\s+name\s*:\s*(?:\n\s*)?([A-Za-z_]\w*)\b",
+        r'(?i)"(?:top_module|module_name)"\s*:\s*"([A-Za-z_]\w*)"',
+    )
+    for pattern in patterns:
+        candidates.update(m.group(1) for m in re.finditer(pattern, spec_text))
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+def _gather_phase1_plain_spec_text(project: Path) -> Tuple[str, List[str]]:
+    """Read only operator-supplied Phase-1 prose, never generated L-docs.
+
+    A generated L*.json may contain an LLM interpretation that is absent from
+    the source.  Letting it complete this deterministic parser would relabel an
+    AI-derived table as ``program-first; no LLM``.  Restricting the bridge to
+    input_prompt/input_doc keeps that provenance claim mechanically true.
+    """
+    chunks: List[str] = []
+    sources: List[str] = []
+    for directory in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in (".md", ".txt"):
+                continue
+            try:
+                chunks.append(path.read_text(errors="replace"))
+                sources.append(str(path.relative_to(project)))
+            except OSError:
+                pass
+    return "\n\n".join(chunks), sources
+
+
+def _try_phase1_behavioral_fsm_rtl(project: Path, t0: float,
+                                    force_regen: bool = False) -> Optional[StepResult]:
+    """Flow plain Phase-1 prose through the deterministic artifact registry.
+
+    This bridge is deliberately narrow: only the registry's fail-closed
+    ``behavioral_fsm`` family is accepted.  Every other artifact keeps its
+    existing structured-spec / canonical / authoring path.  The registry owns
+    semantic recognition; this helper owns only raw-source gathering, an explicit
+    unambiguous top name, the authored-RTL guard/provenance ledger, and staging.
+    """
+    desc, sources = _gather_phase1_plain_spec_text(project)
+    if not desc:
+        return None
+    module = _phase1_declared_module_name(desc)
+    if module is None:
+        return None
+    try:
+        import spec_artifact_registry as _reg  # noqa: E402
+        kind, rtl = _reg.generate(desc, module)
+    except Exception:
+        return None
+    if kind != "behavioral_fsm" or not rtl:
+        return None
+    # The top argument is part of the registry contract, but verify it before
+    # touching the project so a future generator regression remains a DEFER.
+    if not re.search(r"(?m)^\s*module\s+" + re.escape(module) + r"\b", rtl):
+        return None
+    rtl_dir = _pl.rtl_dir(project)
+    out = rtl_dir / f"{module}.v"
+    verdict, why, evidence = _rtl_prov.classify(project)
+    if verdict in _rtl_prov.PRESERVE_VERDICTS and not force_regen:
+        return None  # authored/unknown RTL — never overwrite or certify it
+    if verdict == _rtl_prov.GENERATED:
+        # Idempotent second run: accept only if the previously stamped file is
+        # byte-identical to what this version would emit.  A changed generator
+        # safely DEFERs instead of silently replacing a prior generated tree.
+        if out.is_file() and out.read_text(errors="replace") == rtl:
+            return StepResult(
+                "rtl_gen", "PASS", time.time() - t0,
+                f"existing provenance-stamped behavioral FSM RTL is byte-identical "
+                f"to spec_artifact_registry[{kind}] -> {out.relative_to(project)}",
+                output_files=[str(out)],
+                extras={"deterministic_generator": "spec_artifact_registry",
+                        "artifact_type": kind, "module": module,
+                        "program_first": True,
+                        "spec_source": "phase1_plain_prose",
+                        "spec_sources": sources, "idempotent": True,
+                        "rtl_provenance": verdict,
+                        "rtl_provenance_evidence": evidence})
+        if not force_regen:
+            return StepResult(
+                "rtl_gen", "WAIVED", time.time() - t0,
+                f"PRESERVED generator-owned RTL because current deterministic output "
+                f"differs; re-run with --force-rtl-regen to replace it ({why})",
+                extras={"deterministic_generator": "spec_artifact_registry",
+                        "artifact_type": kind, "module": module,
+                        "program_first": True, "preserved": True,
+                        "override_flag": "--force-rtl-regen",
+                        "rtl_provenance": verdict,
+                        "rtl_provenance_evidence": evidence})
+    preserved_note = ""
+    if verdict != _rtl_prov.EMPTY:
+        # Explicit regeneration is destructive but recoverable: preserve the
+        # entire old RTL tree first, then clear it so a renamed top cannot leave
+        # stale sibling modules behind.
+        try:
+            kept = _rtl_prov.preserve(project)
+        except OSError as exc:
+            return StepResult(
+                "rtl_gen", "FAIL", time.time() - t0,
+                f"--force-rtl-regen could not preserve existing RTL: {exc!r}; "
+                "refusing to replace it",
+                extras={"preserved": False, "rtl_provenance": verdict,
+                        "rtl_provenance_evidence": evidence})
+        import shutil
+        shutil.rmtree(rtl_dir)
+        preserved_note = f"; prior RTL preserved to {kept.name}/"
+    rtl_dir.mkdir(parents=True, exist_ok=True)
+    out.write_text(rtl)
+    generator = "spec_artifact_registry[behavioral_fsm]"
+    _rtl_prov.stamp(project, generator=generator)
+    return StepResult(
+        "rtl_gen", "PASS", time.time() - t0,
+        f"deterministic RTL via spec_artifact_registry[{kind}] from Phase-1 "
+        f"prose (program-first; no LLM) -> {out.relative_to(project)}"
+        f"{preserved_note}",
+        output_files=[str(out)],
+        extras={"deterministic_generator": "spec_artifact_registry",
+                "artifact_type": kind, "module": module,
+                "program_first": True, "spec_source": "phase1_plain_prose",
+                "spec_sources": sources, "rtl_provenance": _rtl_prov.GENERATED})
+
+
 def _enforce_power_up_determinism(rtl_dir: Path) -> int:
     """Run ``rtl_hygiene_lint --fix`` on every emitted RTL file so a reset-less
     registered output gets a deterministic ``initial <reg>=0;`` power-up (not X
@@ -3321,6 +3458,16 @@ def step_rtl_gen(project: Path, ic_class: str,
     _cp = _try_canonical_primitive_rtl(project, t0)
     if _cp is not None:
         return _cp
+    # A strictly recognized behavioral Moore FSM may live only in the original
+    # Phase-1 prompt/doc (before an L-doc extractor has materialized a structured
+    # rtl_spec).  Give that prose the same registry-backed deterministic path,
+    # while accepting only the behavioral_fsm family and otherwise DEFERring.
+    _behavior_force = (_FORCE_RTL_REGEN
+                       if force_regen is None else force_regen)
+    _bf = _try_phase1_behavioral_fsm_rtl(
+        project, t0, force_regen=_behavior_force)
+    if _bf is not None:
+        return _bf
     # Registry lookup → deterministic generator OR fallback skill.
     config = _lookup_class(ic_class)
     if config is None:
