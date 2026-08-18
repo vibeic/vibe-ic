@@ -120,6 +120,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -1047,19 +1048,46 @@ def check_adoption_target_resolves(new: str, allow_over_depth: bool = False) -> 
               f"release tag. A floating tag as the anchor would make every "
               f"pointer in this tree mean different bytes on different days.")
         return 1
-    tags, src = published_tags()
-    if tags is None:
+    # ASK ABOUT THIS TAG, NOT FOR THE TAG LIST. The question is exactly "can
+    # `docker pull` resolve {new}", and `/tags/list` is the wrong instrument:
+    # it is served from a cache that lags a push. Measured 2026-08-19, a full
+    # HOUR after 0.3.12 was pushed and while `docker manifest inspect
+    # ghcr.io/vibeic/vibeic-eda:0.3.12` succeeded, /tags/list still named
+    # 0.3.11 as the newest. So the anchor refused a correctly published
+    # release, the release recorded itself anchor-blocked, and the public page
+    # told readers no version had shipped and the lag below was real -- three
+    # false statements from one stale list.
+    #
+    # The per-tag manifest endpoint is authoritative, immediate, and is what
+    # `docker pull` itself consults. `_query_ghcr_digest` already speaks it
+    # (vibe-ic#423).
+    #
+    # A 404/403 is an ANSWER (the tag is not there), not a failure to reach the
+    # registry -- folding it into "unverifiable" would let a genuinely absent
+    # tag through, which is the pin this gate exists to refuse.
+    try:
+        digest = _query_ghcr_digest(GHCR_REPO, new)
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 403):
+            digest = None
+        else:
+            print(f"[NOT CHECKED] adoption target {new}: registry unverifiable "
+                  f"(HTTP {e.code}). Proceeding — but nothing confirmed that "
+                  f"{new} exists.")
+            return 0
+    except Exception as e:  # transport/parse — degrade, never crash
         print(f"[NOT CHECKED] adoption target {new}: registry unverifiable "
-              f"({src}). Proceeding — but nothing confirmed that {new} exists.")
+              f"({e.__class__.__name__}). Proceeding — but nothing confirmed "
+              f"that {new} exists.")
         return 0
-    if new not in tags:
-        newest = max(tags, key=_semver_key)
+    if not digest:
         print(f"[FAIL] UNRESOLVABLE ADOPTION TARGET: {new} does not exist on "
-              f"the registry (newest published: {newest}; source={src}).")
+              f"the registry (manifest for that exact tag did not resolve).")
         print(f"       Pinning it would point every install at a tag "
               f"`docker pull` cannot resolve (vibe-ic#354).")
         return 1
-    print(f"  adoption-target-resolves : OK ({new} is published; source={src})")
+    print(f"  adoption-target-resolves : OK ({new} is published; "
+          f"manifest {str(digest)[:19]}…)")
     depth_rc, depth_n = check_layer_depth(new, label="adoption target")
     if depth_rc == 1:
         if allow_over_depth:
