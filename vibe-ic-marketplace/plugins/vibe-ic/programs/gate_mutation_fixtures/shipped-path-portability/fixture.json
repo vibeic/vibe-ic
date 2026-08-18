@@ -1,0 +1,7 @@
+{
+  "gate_label": "shipped-path portability",
+  "why": "A shipped default that is one developer's absolute home directory resolves to nothing on every other machine, and materialises a workspace the user never asked for on a clean install.",
+  "expect_pass_rc": 0,
+  "expect_fail_rc": [1],
+  "expect_fail_message": "shipped_path_portability_check: FAIL"
+}

@@ -1,0 +1,7 @@
+{
+  "gate_label": "waveform artifact hygiene",
+  "why": "A raw simulation dump inside the bundle inflates the package and pollutes repo-wide greps. Classification is by content, so the mutation writes a real VCD header rather than an empty file named like one.",
+  "expect_pass_rc": 0,
+  "expect_fail_rc": [1],
+  "expect_fail_message": "FAIL — 1 waveform artifact(s)"
+}

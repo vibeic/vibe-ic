@@ -1,0 +1,7 @@
+{
+  "gate_label": "no gate is left neutered",
+  "why": "An injected early return makes a gate exit 0 before it looks at anything, so the flow reads PASS from a gate that can no longer fail. The mutation is exactly what an interrupted gate_cli_mutation_probe run leaves behind.",
+  "expect_pass_rc": 0,
+  "expect_fail_rc": [1],
+  "expect_fail_message": "[NEUTERED_GATE]"
+}

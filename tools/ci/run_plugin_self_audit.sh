@@ -59,8 +59,24 @@ for gate in "${GATES[@]}"; do
     fi
 done
 
+# Not in GATES above, because every entry there takes the PLUGIN root and this
+# one's subject is the REPO's gate dispatcher: which gates
+# `tools/ci/repo_hygiene_gates.sh` declares, and whether each carries a fixture
+# in BOTH directions. Wiring it here rather than only under pytest is the
+# difference between a checker something runs and a checker only its own test
+# runs -- the state `checker_execution_wiring_audit` blocks on.
+echo "=== gate_mutation_fixture_check ==="
+if python3 "$PROGRAMS/gate_mutation_fixture_check.py" "$ROOT"; then
+    echo
+else
+    rc=$?
+    echo "  -> FAIL (rc=$rc)"
+    fail=$((fail + 1))
+fi
+total=$(( ${#GATES[@]} + 1 ))
+
 if [ "$fail" -gt 0 ]; then
-    echo "==> $fail of ${#GATES[@]} gate(s) FAILed"
+    echo "==> $fail of ${total} gate(s) FAILed"
     exit 1
 fi
-echo "==> all ${#GATES[@]} self-audit gates PASS"
+echo "==> all ${total} self-audit gates PASS"

@@ -1,0 +1,7 @@
+{
+  "gate_label": "dead plugin path",
+  "why": "After plugin unification the second plugin tree no longer exists, so doctrine that branches on it sends an agent to a checker that is not there. The gate must reject shipped text that revives the retired path.",
+  "expect_pass_rc": 0,
+  "expect_fail_rc": [1],
+  "expect_fail_message": "FAIL — 1 retired-plugin reference(s)"
+}

@@ -1,0 +1,10 @@
+{
+  "gate_label": "chip-AGNOSTIC source guard",
+  "why": "The NDA panel is the strictest gate here: its stated contract is that `git grep <SKU>` stays 0 forever. A gate whose whole job is finding a token it has never been shown rejecting is the one that most needs a can-fail fixture — and the one whose fixture can least be stored, because storing it is the violation.",
+  "expect_pass_rc": 0,
+  "expect_fail_rc": [
+    1
+  ],
+  "expect_fail_message": "FAIL: 1 forbidden-token occurrence(s)",
+  "note_on_the_message": "The pinned message names the CLASS, not the token: quoting the token here would put it in a tracked file, which is the violation. The gate prints the count and the file; that is enough to tell a rejection from a refusal."
+}

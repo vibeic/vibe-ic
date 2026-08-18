@@ -1,0 +1,7 @@
+{
+  "gate_label": "argparse help format",
+  "why": "argparse percent-expands every help string, so a bare % makes --help crash with ValueError: incomplete format. The gate must reject the tree that carries one.",
+  "expect_pass_rc": 0,
+  "expect_fail_rc": [1],
+  "expect_fail_message": "bare % in argparse help"
+}
