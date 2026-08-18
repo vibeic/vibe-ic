@@ -1,6 +1,24 @@
 #!/usr/bin/env python3
 """mpw_precheck LIVE DRIVER (TAPEOUT-SIGNOFF P0#2, driver half).
 
+RETIRED SHUTTLE (vibe-ic#1744) — READ THIS BEFORE TRUSTING A VERDICT FROM HERE
+=============================================================================
+The counterparty this program addresses, the Efabless/chipIgnite open-MPW
+shuttle, CEASED OPERATING IN 2025. It no longer accepts submissions and it no
+longer refuses them. Nothing below is broken; it is pointed at a party that
+stopped answering.
+
+That distinction is the whole point of keeping this file. A gate we wrote can
+be made to pass by editing it; an external refusal cannot. This was the ONE
+interface in the tree whose verdict was not ultimately ours, and it is now
+aimed at nothing — so a run that produces no evidence here means
+NOT DETERMINED, permanently, and never "nothing to worry about".
+
+The LIVE external refusal is `tapeout_readiness_check.py`, which wraps the
+shuttle operator's own tool for the currently-running open-MPW path. Ask that
+one for a submittability verdict. This file is kept, not deleted, so the
+retirement is on the record rather than looking like an orphan.
+
 Doctrine: the Efabless/chipIgnite sky130 open-MPW shuttle gate is
 `efabless/mpw_precheck` — a Docker suite that runs a fixed ladder of
 license / makefile / default / documentation / consistency / gpio_defines /
@@ -72,6 +90,21 @@ except ImportError:  # pragma: no cover - package-context fallback
 
 ATTRIBUTION = "mpw_precheck_driver (TAPEOUT-SIGNOFF P0#2 driver half)"
 
+#: #1744 — this driver's counterparty ceased operating in 2025. See the RETIRED
+#: SHUTTLE banner at the top of this file.
+SHUTTLE_STATUS = "RETIRED"
+
+#: `overall_verdict` -> how an aggregator should read it. The three verdicts that
+#: mean "we obtained no external answer" all map to NOT_DETERMINED, and against a
+#: RETIRED shuttle that state is permanent: there is no run that would clear it.
+_VERDICT_CLASS: Dict[str, str] = {
+    "PASS": "PASS",
+    "FAIL": "FAIL",
+    "BLOCKED": "NOT_DETERMINED",
+    "INCOMPLETE": "NOT_DETERMINED",
+    "SKIPPED_CONDITION": "NOT_DETERMINED",
+}
+
 # The canonical shuttle image. Overridable; kept identical to the reference the
 # plugin already models in caravel_integration_runner.step_c1_run_precheck.
 DEFAULT_IMAGE = "efabless/mpw_precheck:latest"
@@ -123,6 +156,17 @@ class DriverReport:
     checks: List[str]
     ran: bool                       # did the container actually produce a run dir?
     overall_verdict: str            # BLOCKED / PASS / FAIL / INCOMPLETE / SKIPPED_CONDITION
+    # #1744 — the shuttle this driver addresses is RETIRED. These two fields are
+    # ADDITIVE on purpose: `overall_verdict` keeps its existing vocabulary so no
+    # consumer's reading of it changes, and the retirement is published beside
+    # it rather than by silently redefining a token others already parse.
+    shuttle_status: str = SHUTTLE_STATUS
+    # How an aggregator should read `overall_verdict`. BLOCKED against a retired
+    # counterparty is NOT a transient orchestration hiccup to be retried — it is
+    # permanent, and it is NOT_DETERMINED, which is neither a pass nor a design
+    # failure. Naming it stops "the precheck did not run" from being filed next
+    # to "the precheck ran and was fine".
+    verdict_class: str = ""
     project: str = ""
     docker_returncode: Optional[int] = None
     rundir: Optional[str] = None
@@ -135,6 +179,8 @@ class DriverReport:
 
     def as_dict(self) -> Dict[str, Any]:
         d = asdict(self)
+        d["verdict_class"] = self.verdict_class or _VERDICT_CLASS.get(
+            self.overall_verdict, "NOT_DETERMINED")
         d["emitted_by"] = ATTRIBUTION
         return d
 
@@ -334,7 +380,10 @@ def drive(
             project=project, docker_returncode=rc, rundir=str(rundir),
             blocked_reason=reason, command=cmd or [],
             notes="§4.05: precheck did not produce usable evidence — BLOCKED, "
-                  "never a fabricated PASS.")
+                  "never a fabricated PASS. #1744: this shuttle is RETIRED "
+                  "(operator ceased operating in 2025), so read this as "
+                  "NOT_DETERMINED and PERMANENT — no retry clears it. The live "
+                  "external refusal is tapeout_readiness_check.")
 
     # (1) Resolve the image (availability / optional pull).
     resolved = resolver(image, allow_pull)
