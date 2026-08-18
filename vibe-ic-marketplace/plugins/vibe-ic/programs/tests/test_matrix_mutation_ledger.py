@@ -1173,7 +1173,58 @@ def test_the_shortfall_note_says_NOT_MEASURED_and_never_a_lost_proof():
         replay_results.cache_clear()
 
 
+def test_a_stub_population_never_escapes_the_test_that_installed_it():
+    """The `finally` in the denominator test, driven in the failing direction.
+
+    `replay_results` is `lru_cache`d for the session, and the denominator test
+    drives it through a stub returning an empty population. Before this was in a
+    `finally`, that test failing left `()` cached and every LOCK 2
+    parametrisation after it reported `produced no replay result` — a verdict
+    about mutations no replay had touched. Measured shape on clean
+    `7c376e348` in `all` mode: 15 such parametrisations, 0 replays run.
+
+    So this drives the denominator test in EXACTLY that failing direction and
+    asserts the cache is clean afterwards. It fails if the `finally` is removed.
+    """
+    replay_results.cache_clear()
+    with pytest.MonkeyPatch.context() as mp:
+        # Make the `== 24` assertion legitimately false, which is what `all`
+        # mode does in the field.
+        mp.setattr(L, "replay_plan", lambda *a, **k: tuple(
+            (f"M{i}", f"s{i}") for i in range(25)))
+        with pytest.raises(AssertionError):
+            test_witness_replay_relays_the_exact_frozen_plan_denominator(mp)
+    assert replay_results.cache_info().currsize == 0, (
+        "the denominator test failed and left its STUB population cached; "
+        "every replay-driven test after it would read a population no replay "
+        "produced, and report it as mutations that stopped reddening")
+
+
 def test_witness_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
+    """The relayed denominator is the FROZEN plan, not what the replay achieved.
+
+    THE `finally` IS LOAD-BEARING (vibe-ic#1410). This test drives
+    `replay_results()` through a STUB that returns an empty population, and
+    `replay_results` is `lru_cache`d for the whole session. The trailing
+    `cache_clear()` used to be an ordinary last statement, so ANY assertion
+    here failing left the stub's `()` cached — and every replay-driven test
+    after it then read a population that no replay ever produced.
+
+    That is not hypothetical and it is not cosmetic. MEASURED on clean
+    `7c376e348` with `VIBE_IC_MATRIX_MUTATION_REPLAY=all`, where the plan is 707
+    pairs and the `== 24` below is legitimately false:
+
+        16 failed, 94 passed, 2 skipped in 18.78s
+        FAILED ...::test_witness_replay_relays_the_exact_frozen_plan_denominator
+        FAILED ...::test_lock2_the_mutation_really_reddens_its_witness[...]  x15
+
+    Fifteen LOCK 2 parametrisations reported `produced no replay result` — the
+    shape that reads as "the mutation stopped reddening its witness" — on a tree
+    where NO REPLAY HAD BEEN RUN AT ALL. A test's fixture leaked into the
+    instrument the rest of the file measures with, and the instrument then
+    reported verdicts about mutations it never touched. Restoring the cache in a
+    `finally` is what confines the stub to this test.
+    """
     replay_results.cache_clear()
     seen = []
 
@@ -1189,13 +1240,15 @@ def test_witness_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
         sys.modules[__name__], "_domain_progress",
         lambda scope, completed, total:
         seen.append((scope, completed, total)))
-    assert replay_results() == ()
-    assert len(L.replay_plan()) == 24
-    assert seen == [
-        ("matrix-mutation-replays", completed, 24)
-        for completed in range(1, 25)
-    ]
-    replay_results.cache_clear()
+    try:
+        assert replay_results() == ()
+        assert len(L.replay_plan()) == 24
+        assert seen == [
+            ("matrix-mutation-replays", completed, 24)
+            for completed in range(1, 25)
+        ]
+    finally:
+        replay_results.cache_clear()
 
 
 @lru_cache(maxsize=1)
