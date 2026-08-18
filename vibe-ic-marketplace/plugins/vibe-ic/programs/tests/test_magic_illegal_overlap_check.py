@@ -121,6 +121,31 @@ def test_absent_feedback_is_not_a_measured_zero(tmp_path):
     assert M._ve.exit_code(r["passed"], r["skipped"]) == M._ve.RC_FAIL
 
 
+def test_an_absent_dump_still_names_the_overlaps_the_transcript_kept(tmp_path):
+    """Absent dump + a talking transcript = name the count, not just the gap.
+
+    Both findings are ERROR and the verdict is FAIL either way; the point is
+    that triage gets a number it can act on instead of a second "look
+    elsewhere". The metric stays `null`, because a transcript count is a FLOOR
+    (a log, not the tool's own area list) and a floor is not a measurement.
+    """
+    proj = _project(
+        tmp_path, feedback=None,
+        transcript="Illegal overlap between nwell and pdiff "
+                   "(types do not connect)\n"
+                   "Illegal overlap between poly and li "
+                   "(types do not connect)\n"
+                   "2 problems occurred.  See feedback entries.\n")
+    r = M.check(proj)
+    assert r["passed"] is False
+    assert _rules(r)[:2] == ["MAGIC_ILLEGAL_OVERLAP",
+                             "EXTRACTION_FEEDBACK_ABSENT"]
+    assert r["counts"]["gate_count"] == 2
+    assert r["counts"]["determined"] is False
+    assert r["metrics"]["31__drv__magic_illegal_overlap__violation_count"] \
+        is None
+
+
 def test_the_two_failures_carry_different_rules_and_different_reasons(tmp_path):
     """Both FAIL, and a reader can tell WHICH failure it is looking at."""
     dirty = M.check(_project(tmp_path / "a",

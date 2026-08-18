@@ -402,9 +402,35 @@ def check(project: Path, under: Optional[str] = None) -> Dict[str, Any]:
                 f"`feedback save <dir>/{FEEDBACK_NAMES[0]}` to the extraction "
                 f"recipe and re-extract."),
         })
+        # The dump is gone, but the OTHER channel may still be here — and when
+        # it is, the failure can name the actual overlaps instead of only the
+        # missing file. Both are ERROR and both FAIL; this is about handing
+        # triage the count it can act on rather than a second "look elsewhere".
+        t_count, t_areas, t_read = read_transcripts(ext_dir)
+        base["transcripts_read"] = t_read
+        if t_count > 0:
+            base["findings"].insert(0, {
+                "rule": "MAGIC_ILLEGAL_OVERLAP", "severity": "ERROR",
+                "message": (
+                    f"the extraction TRANSCRIPT ({', '.join(t_read)}) carries "
+                    f"{t_count} occurrence(s) of {MARKER!r}, against a "
+                    f"threshold of {THRESHOLD}. The feedback dump that would "
+                    f"give each one a rectangle is absent, so this count is a "
+                    f"FLOOR — the transcript is a log, not the tool's own area "
+                    f"list. Re-extract with `feedback save` to localise them."),
+            })
+            base["counts"] = {"string_count": 0, "structural_count": 0,
+                              "record_count": 0, "case_insensitive_count": 0,
+                              "transcript_count": t_count,
+                              "areas_reported_by_tool": t_areas,
+                              "records_parsed": 0, "gate_count": t_count,
+                              "determined": False}
         base["summary"] = {"skipped": False, "reason": "feedback_absent",
                            "files_found": 0}
-        base["reason"] = "extraction feedback channel absent — NOT DETERMINED"
+        base["reason"] = (
+            f"extraction feedback channel absent — NOT DETERMINED"
+            + (f"; the transcript alone shows at least {t_count} illegal "
+               f"overlap(s)" if t_count else ""))
         return base
 
     # ── Read and count. ──────────────────────────────────────────────────────
