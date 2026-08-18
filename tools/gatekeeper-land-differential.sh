@@ -548,6 +548,34 @@ else
   echo "                           for this run — stricter, never more lenient."
 fi
 
+# ------------------------------------- the protected-source transition receipt
+#
+# `landing_merge_verdict.read_protected_transition_receipt` REFUSES with
+# "PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED" when no receipt is
+# supplied, and that refusal is UNMEASURABLE, not a red — so omitting it does
+# not make this path lenient, it makes it unable to answer at all, which is the
+# ban this whole script exists to end. The receipt is built exactly as
+# `gatekeeper-verify-merge.sh:356-365` builds it, from the SAME validator, over
+# the candidate worktrees this script already created; only `--candidate`
+# differs, because on the direct-push path the pushed commit IS what lands.
+#
+# FAIL-CLOSED: if the build refuses, nothing is passed and the verdict refuses
+# for the reason above. A protected tuple that could not be verified must never
+# reach the stamp as one that was. A landing that MOVES a protected path is
+# refused here on purpose — `protected_landing_transition.build_receipt:527`
+# ("PREPARE changed live protected bytes with the manifest") requires the
+# two-commit PREPARE-then-ACTIVATE shape, and this script does not get to
+# invent a third.
+PROTECTED_RECEIPT="$RUN/protected-landing-transition.json"
+PROTECTED_ARGS=()
+if python3 "$REPO/tools/ci/protected_landing_transition.py" verify \
+     --object-repo "$REPO" --base "$BASE_SHA" --candidate "$HEAD_SHA" \
+     --candidate-gates "$WT_CAND_GATES" --candidate-tests "$WT_CAND_TESTS" \
+     --receipt "$PROTECTED_RECEIPT" \
+   && [ -s "$PROTECTED_RECEIPT" ]; then
+  PROTECTED_ARGS=(--protected-transition-receipt "$PROTECTED_RECEIPT")
+fi
+
 # -------------------------------------------------------------- the verdict
 [ -f "$VERDICT_PROG" ] || die "no verdict program at $VERDICT_PROG"
 BASE_LAND_ARG=()
@@ -569,6 +597,7 @@ python3 "$VERDICT_PROG" \
   "${BASE_LAND_ARG[@]+"${BASE_LAND_ARG[@]}"}" \
   --base-junit "$BASE_JUNIT" --candidate-junit "$CAND_JUNIT" \
   "${HYG_ARGS[@]+"${HYG_ARGS[@]}"}" \
+  "${PROTECTED_ARGS[@]+"${PROTECTED_ARGS[@]}"}" \
   --candidate-gate-rc "$B2_RC" --require-composite-gate-record \
   --candidate-test-worktree-status "$B1_STATUS" \
   --base-test-worktree-status "$A1_STATUS" \
