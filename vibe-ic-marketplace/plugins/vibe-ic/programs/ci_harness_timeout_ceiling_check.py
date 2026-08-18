@@ -730,6 +730,58 @@ def inner_timeout_ceiling(repo_root: Path) -> Optional[int]:
     return None if harness is None else harness // CEILING_DIVISOR
 
 
+#: Where the driver's stall window is DECLARED. Resolved, never hand-copied, for
+#: the same reason the harness bound is: a number copied into this file is a
+#: second copy that cannot notice when the original moves.
+_STALL_SOURCE = ("vibe-ic-marketplace/plugins/vibe-ic/programs/"
+                 "pytest_per_file_junit.py", "DEFAULT_STALL_AFTER")
+
+
+def driver_stall_window(repo_root: Path) -> Optional[int]:
+    """Seconds an inner call may block before the DRIVER kills the session.
+
+    WHY THIS BOUND EXISTS ALONGSIDE THE HARNESS BOUND (vibe-ic#1734).
+
+    ``harness // 3`` assumes pytest's per-item clock is what ends a runaway call.
+    For an item carrying ``@pytest.mark.timeout(N)`` that is false, and the gate
+    already reads the marker. But the marker is supplied by the same contributor
+    whose bound is being judged, so it is not a constraint -- it is a dial. A
+    marker of 2700 buys a 900 s ceiling and silently retires a real 900 s bound.
+
+    The driver's stall window is the bound a contributor CANNOT supply. It is not
+    a runtime limit: it is how long the per-file driver tolerates NO validated
+    pytest lifecycle event before classifying the session hung. A blocking call
+    emits no such events, so it is exactly the window an inner call can hang in
+    before the SESSION -- not the test -- is killed. That is this gate's subject.
+
+    So the applicable item bound is ``min(marker or harness, stall)``, and
+    ``timeout(0)`` resolves to the stall window rather than to zero: zero means
+    "no per-item clock", and the stall clock is then the only thing left that can
+    end the call. Reading 0 as a BOUND of zero made every inner timeout in such a
+    file a violation -- which is how ``test_matrix_63x8_coverage.py:305
+    subprocess.run(timeout=60)`` was reported as a session risk in a file whose
+    items cannot be killed by the item clock at all, and blocked landing on main.
+
+    Returns None when the declaration cannot be read; the caller then falls back
+    to the harness bound, which is smaller and therefore the safe direction.
+    """
+    rel, const = _STALL_SOURCE
+    try:
+        tree = ast.parse((repo_root / rel).read_text(errors="replace"))
+    except (OSError, SyntaxError):
+        return None
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        tgt = node.targets[0]
+        if not (isinstance(tgt, ast.Name) and tgt.id == const):
+            continue
+        v = node.value
+        if isinstance(v, ast.Constant) and isinstance(v.value, (int, float)):
+            return int(v.value)
+    return None
+
+
 #: A checkout root, recognised WITHOUT reference to the harness sources.
 #:
 #: `.git` is tested with `exists()` and not `is_dir()` ON PURPOSE: in a
@@ -1298,18 +1350,53 @@ def module_item_marker(tree: ast.AST, consts: Dict[str, Tuple[float, int]]
     return best
 
 
-def scan_source(text: str, rel_path: str, ceiling: int
+
+def marker_ceiling(marker_seconds: float, base_ceiling: int,
+                   stall: Optional[int]) -> int:
+    """The per-call ceiling that applies inside an item carrying a timeout marker.
+
+    THREE CASES, AND THE CAP IS THE POINT (vibe-ic#1734):
+
+      marker N > 0   the item clock is N, so calls are judged against N // 3 --
+                     BUT never above the stall window, because a marker is
+                     supplied by the same contributor whose bound is judged and
+                     is therefore a dial, not a constraint. `timeout(2700)` used
+                     to buy a 900 s ceiling and retire a real 900 s bound.
+      marker 0       pytest-timeout DISABLES the item clock. Zero is not a bound
+                     of zero seconds; it means there is no per-item clock, and
+                     the driver's stall window is then the only thing that can
+                     end a blocking call. Judging against `0 // 3 == 0` made
+                     every inner timeout in such a file a violation.
+      no stall read  fall back to the harness bound, which is smaller. When the
+                     cap cannot be read the tighter answer is the safe one.
+    """
+    harness = base_ceiling * CEILING_DIVISOR
+    if stall:
+        effective = int(marker_seconds) if marker_seconds else stall
+        return min(effective, stall) // CEILING_DIVISOR
+    # NO STALL RESOLVED -> NO CAP, and `main` REFUSES in this state rather than
+    # publishing a verdict it cannot justify. Capping at the harness bound instead
+    # was tried and is wrong in a way worth recording: the marker exists precisely
+    # to REPLACE the harness item bound, so capping at it makes every marker inert
+    # and silently converts "this test genuinely needs longer" into a finding.
+    effective = int(marker_seconds) if marker_seconds else harness
+    return effective // CEILING_DIVISOR
+
+
+def scan_source(text: str, rel_path: str, ceiling: int,
+                stall: Optional[int] = None
                 ) -> Tuple[List[Finding], List[Finding], int]:
     """(findings, unresolved_above_ceiling, bounded_call_sites) for one file.
 
     Kept as the three-value shape every caller and test already uses; the
     marked-item census is the fourth thing `scan_source_report` returns.
     """
-    rep = scan_source_report(text, rel_path, ceiling)
+    rep = scan_source_report(text, rel_path, ceiling, stall)
     return rep["findings"], rep["unresolved_above_ceiling"], rep["sites"]
 
 
-def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
+def scan_source_report(text: str, rel_path: str, ceiling: int,
+                       stall: Optional[int] = None) -> Dict:
     """findings / unresolved / site count / marked items, for one file.
 
     Raises nothing: an unparseable file yields empty lists and is counted by
@@ -1341,7 +1428,7 @@ def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
     collectable_items = pytest_item_functions(tree)
     file_ceiling = ceiling
     if mod_marker is not None:
-        file_ceiling = int(mod_marker[0]) // CEILING_DIVISOR
+        file_ceiling = marker_ceiling(mod_marker[0], ceiling, stall)
         marked.append(MarkedItem(rel_path, mod_marker[1],
                                  "<pytestmark: every test in this file>",
                                  mod_marker[0], file_ceiling))
@@ -1352,7 +1439,7 @@ def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
         if mk is not None:
             fn_marker[id(fn)] = mk
             marked.append(MarkedItem(rel_path, fn.lineno, fn.name, mk,
-                                     int(mk) // CEILING_DIVISOR))
+                                     marker_ceiling(mk, ceiling, stall)))
 
     findings: List[Finding] = []
     unresolved: List[Finding] = []
@@ -1384,7 +1471,7 @@ def scan_source_report(text: str, rel_path: str, ceiling: int) -> Dict:
         call_ceiling = file_ceiling
         for fn in reversed(chain):
             if id(fn) in fn_marker:
-                call_ceiling = int(fn_marker[id(fn)]) // CEILING_DIVISOR
+                call_ceiling = marker_ceiling(fn_marker[id(fn)], ceiling, stall)
                 break
         for kw_name, val in kws:
             const_name = const_line = owner = None
@@ -1457,6 +1544,7 @@ def _resolve_parameter_default(val: ast.expr, chain: Tuple[ast.AST, ...],
 
 
 def scan_tree(tests_root: Path, ceiling: int, glob: str = "*.py",
+              stall: Optional[int] = None,
               anchor: Optional[Path] = None) -> Dict:
     findings: List[Finding] = []
     unresolved: List[Finding] = []
@@ -1481,7 +1569,7 @@ def scan_tree(tests_root: Path, ceiling: int, glob: str = "*.py",
             unparseable.append(rel)
             continue
         try:
-            one = scan_source_report(text, rel, ceiling)
+            one = scan_source_report(text, rel, ceiling, stall)
         except SyntaxError:
             unparseable.append(rel)
             continue
@@ -1495,7 +1583,7 @@ def scan_tree(tests_root: Path, ceiling: int, glob: str = "*.py",
 
 
 def scan_roots(roots: Sequence[Tuple[Path, str, Optional[Path]]],
-               ceiling: int) -> Dict:
+               ceiling: int, stall: Optional[int] = None) -> Dict:
     """Merge `scan_tree` over every root a pytest lane actually runs.
 
     Kept as a merge rather than one root with one glob because the two trees
@@ -1506,7 +1594,7 @@ def scan_roots(roots: Sequence[Tuple[Path, str, Optional[Path]]],
               "unresolved_above_ceiling": [], "marked_items": [],
               "unparseable": [], "roots": []}
     for root, glob, anchor in roots:
-        rep = scan_tree(root, ceiling, glob, anchor)
+        rep = scan_tree(root, ceiling, glob, stall=stall, anchor=anchor)
         merged["files"] += rep["files"]
         merged["bounded_sites"] += rep["bounded_sites"]
         merged["findings"].extend(rep["findings"])
@@ -1681,6 +1769,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "pass.")
         return 2
     ceiling = harness // CEILING_DIVISOR
+    # The cap a contributor cannot supply. Resolved, not stated; None falls back
+    # to the harness bound inside `marker_ceiling`, which is the tighter answer.
+    stall = driver_stall_window(repo_root)
+    if stall is None:
+        # A run that cannot read the cap cannot judge a marked item, and a marked
+        # item is exactly where the dial lives. Refusing is the only honest exit:
+        # without the cap this gate would publish PASS over ceilings a contributor
+        # set for themselves.
+        print("[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: could not read "
+              f"{_STALL_SOURCE[1]} from {_STALL_SOURCE[0]}, so the cap on a "
+              "marker-derived ceiling is unknown. A marked item cannot be judged "
+              "without it, and that is NOT a pass.")
+        return 2
     if not roots:
         print(f"[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: harness "
               f"bound {harness}s resolved, but no test tree to scan "
@@ -1688,7 +1789,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "examined, which is NOT a pass.")
         return 2
 
-    rep = scan_roots(roots, ceiling)
+    rep = scan_roots(roots, ceiling, stall)
 
     print(f"ci_harness_timeout_ceiling_check: harness bound {harness}s "
           f"(minimum of {len(bounds)} pytest invocation(s) in "
@@ -1766,9 +1867,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("  Remedy: lower the bound, or move the test out of the "
               "targeted subset if it genuinely needs longer.")
         return 1
-    print(f"[PASS] every resolvable blocking call is bounded at or under "
-          f"{ceiling}s, so its own timeout can fire before the {harness}s "
-          f"harness ends the session.")
+    # THE SENTENCE MUST NOT OUTRUN WHAT WAS CHECKED (vibe-ic#1734, defect 2).
+    # It used to read "bounded at or under {ceiling}s" flat. That is false the
+    # moment any marked item is judged against its own, larger, ceiling -- the run
+    # would assert a property two lines under its own printed counterexample. The
+    # claim is now stated as what is actually true of every judged call: each is
+    # under THE CEILING THAT APPLIES TO IT, and the cap on that ceiling is named
+    # so a reader can see no marker can raise it without bound.
+    cap = stall if stall else harness
+    marked_n = len(rep["marked_items"])
+    extra = (f"; {marked_n} marked item(s) are judged against their own marker, "
+             f"capped at the {cap}s driver stall window") if marked_n else ""
+    print(f"[PASS] every resolvable blocking call is bounded at or under the "
+          f"ceiling that applies to it -- {ceiling}s by default (the {harness}s "
+          f"harness bound // {CEILING_DIVISOR}){extra}. So no such call can "
+          f"outlive the bound that would otherwise end the SESSION.")
     return 0
 
 

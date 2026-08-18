@@ -75,6 +75,11 @@
 # is load-bearing: without it the guard cannot see the class that caused the
 # trouble, and would report clean over exactly the leftovers it exists to find.
 #
+# THAT BRACKET IS ONLY ATTRIBUTABLE WHEN ONE GATE RUNS INSIDE IT, so
+# `gate_dispatch_init` forces `GATE_DISPATCH_JOBS` to 1 whenever the guard is
+# ACTIVE, and says so. The reasoning, and the measurement that made it
+# necessary, are written at that line.
+#
 # A GENUINE PRODUCER declares itself with `run_writing_the_corpus`, the same way
 # a gate that may legitimately refuse declares itself with
 # `run_tolerating_uncheckable`. Declared in the wrapper NAME and not in a comment
@@ -509,6 +514,65 @@ checked for expiry"
     echo "gate_dispatch: --shard needs --shard-labels; refusing to run every" \
          "gate while calling itself a shard" >&2
     exit 2
+  fi
+  # THE CORPUS-WRITE GUARD NEEDS AN EXCLUSIVE WINDOW, so when it is ACTIVE the
+  # gates run one at a time.
+  #
+  # WHAT WENT WRONG. `_gate_execute` brackets each gate with a snapshot of the
+  # whole corpus and attributes the difference to THAT gate. That attribution is
+  # sound only while one gate runs at a time. #P4 made the default eight, so one
+  # gate's write now lands inside every concurrently-running gate's bracket and
+  # every one of them is recorded as a writer. MEASURED at v1.10.55 on the
+  # two-gate fixture in `test_corpus_write_guard.py` — one writer, one reader:
+  #
+  #     JOBS=1   wrote_corpus 1   passed 1   a writer WROTE_CORPUS / a reader PASS
+  #     JOBS=8   wrote_corpus 2   passed 0   BOTH recorded WROTE_CORPUS
+  #
+  # The reader wrote nothing. `git status` is a fact about the TREE, and the two
+  # brackets span the same instant, so it answers both of them identically: no
+  # tree-only observation can separate a writer from a gate that merely
+  # overlapped it. The choice is therefore between naming the wrong gate and
+  # running the watched gates one at a time, and #P4's own acceptance test
+  # settles it — "the set of (label -> state) pairs ... faster and different is a
+  # failure" (`test_gate_concurrency.sh`). A guard that names an innocent gate
+  # sends the next reader to the wrong file, which is the harm that test's case 1
+  # exists to prevent; it simply had no corpus-writer case, which is why this
+  # landed green.
+  #
+  # AND THE REST OF THE TIER IS BUILT ON THE CLAIM THIS RESTORES.
+  # `test_issue1087_write_guard_states_it_cannot_attribute.py` divides the two
+  # landing write guards by exactly this property — "`_gate_dispatch.sh`, per
+  # gate, CAN attribute" against the whole-tier snapshot in `gatekeeper-land.sh`
+  # that "names PATHS, never a gate", and #1087 is the record of what a false
+  # accusation cost when a reader took the nearest gate name off the log. The
+  # per-gate half stopped being able to attribute at v1.10.55 and nothing said
+  # so, so that division had quietly become untrue on the side it relies on.
+  #
+  # THIS IS THE RULE THE FILE ALREADY HAS, applied where it was missed. A
+  # declared producer (`run_writing_the_corpus`) is already forced serial two
+  # hundred lines below, "so that wiring one cannot silently make the corpus
+  # guard meaningless for the rest of the run" — and an UNDECLARED writer, which
+  # is the guard's actual subject, does exactly that and cannot be declared in
+  # advance. The only thing that covers it is the exclusive window.
+  #
+  # WHAT IT COSTS, and where. `benchmark-data/` moved to vibeic/benchmark-data at
+  # v1.10.60 and no longer exists in this repository, so the guard is INACTIVE on
+  # a plain checkout and the pool is untouched there — every number #P4 measured
+  # still stands on the tree CI runs. A checkout that has cloned the corpus back
+  # in-tree is the one that pays, and it is also the one where an invisible
+  # leftover costs hours, which is the trade this guard was landed to make.
+  #
+  # SAID OUT LOUD rather than inferred from a stopwatch: a run that quietly took
+  # six times as long for a reason nobody printed is its own defect.
+  if [ "$GATE_DISPATCH_JOBS" -gt 1 ] && [ "$GATE_DISPATCH_LIST_ONLY" -eq 0 ] \
+     && _gate_dispatch_corpus_state >/dev/null 2>&1; then
+    echo "gate_dispatch: the corpus-write guard is ACTIVE" \
+         "($(_gate_dispatch_corpus_root)/$GATE_DISPATCH_CORPUS_REL), so gates" \
+         "run ONE AT A TIME instead of $GATE_DISPATCH_JOBS at a time: a" \
+         "per-gate before/after snapshot of a SHARED tree can only be" \
+         "attributed to the gate that ran alone inside it, and a run that names" \
+         "the wrong writer is worse than a slower one." >&2
+    GATE_DISPATCH_JOBS=1
   fi
 }
 

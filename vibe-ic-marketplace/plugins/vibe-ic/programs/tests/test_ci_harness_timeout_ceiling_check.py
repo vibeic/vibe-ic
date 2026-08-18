@@ -59,6 +59,22 @@ def _workflow(tmp_path: Path, *commands: str) -> Path:
     return tmp_path
 
 
+def _stall(tmp_path: Path, seconds: int) -> Path:
+    """Declare the driver's stall window in a root, where the gate reads it.
+
+    The gate CAPS every marker-derived ceiling at this value, because a marker is
+    written by the same person whose bound is being judged and is therefore a
+    dial rather than a constraint. A root without this declaration cannot judge a
+    marked item at all, and the gate answers rc=2 there rather than guessing --
+    so every test that exercises a marker must state the window explicitly.
+    """
+    p = tmp_path / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "pytest_per_file_junit.py").write_text(
+        f"DEFAULT_STALL_AFTER = {seconds}\n", encoding="utf-8")
+    return tmp_path
+
+
 # ── the bound is read, and all of it ─────────────────────────────────────────
 
 def test_the_binding_bound_is_the_minimum_not_the_first(tmp_path):
@@ -508,6 +524,7 @@ def test_no_workflow_is_rc_2_and_says_it_is_not_a_pass(tmp_path):
 
 def test_an_empty_tree_discloses_that_it_examined_nothing(tmp_path):
     _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 300)
     empty = tmp_path / "nothing"
     empty.mkdir()
     proc = subprocess.run(
@@ -621,6 +638,7 @@ def test_the_advisory_population_is_printed_with_its_denominator(tmp_path):
     """An exclusion a reader cannot see is indistinguishable from a clean
     result. This is the one thing the allowlist owes."""
     _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 300)
     tests = tmp_path / "t"
     tests.mkdir()
     (tests / "test_x.py").write_text("mock_runner(['x'], timeout=900)\n",
@@ -954,6 +972,7 @@ def test_the_marked_population_is_printed_with_its_value(tmp_path):
     """Raising a ceiling must be a visible act, for the reason the advisory
     list is printed: an exclusion a reader cannot see reads as a clean run."""
     _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 900)
     tests = tmp_path / "t"
     tests.mkdir()
     (tests / "test_x.py").write_text(
@@ -1279,3 +1298,123 @@ def test_this_files_own_bounds_are_inside_the_ceiling():
     assert sites, "no bound was READ — has the scan stopped working?"
     assert not findings and not unresolved, "\n".join(
         str(x) for x in list(findings) + list(unresolved))
+
+
+# ── the marker is a DIAL, so it is capped (vibe-ic#1734) ─────────────────────
+#
+# One case per DOOR, not per number. The withheld v1.10.62 fix closed `0` and left
+# `2700`, and its own self-check advertised coverage of `timeout(0)` BY NAME while
+# a 900 s bound walked through the positive-marker door. Each test below is a door.
+
+def test_a_marker_cannot_raise_the_ceiling_past_the_driver_stall_window(tmp_path):
+    """THE DIAL. `timeout(2700)` used to buy a 900 s ceiling.
+
+    A marker is written by the same contributor whose inner bound is being
+    judged, so on its own it is not a constraint. The driver's stall window is
+    the bound they cannot also supply: it is how long the per-file driver
+    tolerates NO validated pytest lifecycle event before calling the session
+    hung, and a blocking call emits none.
+    """
+    _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 300)
+    tests = tmp_path / "t"
+    tests.mkdir()
+    (tests / "test_x.py").write_text(
+        "import subprocess, pytest\n"
+        "pytestmark = pytest.mark.timeout(2700)\n"
+        "def test_slow():\n"
+        "    subprocess.run(['x'], timeout=900)\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(tmp_path), "--tests-root", str(tests)],
+        capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, (
+        "a 900 s bound under a 2700 s marker was accepted -- the marker is being "
+        "used as a ceiling a contributor can set for themselves.\n" + proc.stdout)
+    assert "timeout=900" in proc.stdout
+    assert "judged against 100s" in proc.stdout, proc.stdout
+
+
+def test_a_zero_marker_is_no_item_bound_not_a_bound_of_zero(tmp_path):
+    """THE OTHER DOOR, and it must not become an exemption.
+
+    pytest-timeout treats 0 as DISABLED. Reading it as a bound of zero gives a
+    ceiling of `0 // 3 == 0`, which makes EVERY inner timeout in the file a
+    violation -- that is what reported `test_matrix_63x8_coverage.py:305
+    subprocess.run(timeout=60)` as a session risk and blocked landing on main.
+    Reading it as "unbounded" is the opposite error and installs a one-line
+    silencer. It is neither: with no item clock the stall window is what ends the
+    call, so that is what the call is judged against.
+    """
+    _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 300)
+    tests = tmp_path / "t"
+    tests.mkdir()
+    (tests / "test_x.py").write_text(
+        "import subprocess, pytest\n"
+        "pytestmark = pytest.mark.timeout(0)\n"
+        "def test_ok():\n"
+        "    subprocess.run(['x'], timeout=60)\n"
+        "def test_too_slow():\n"
+        "    subprocess.run(['y'], timeout=150)\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(tmp_path), "--tests-root", str(tests)],
+        capture_output=True, text=True, timeout=_T)
+    # 60 is fine under 300 // 3; 150 is not. Both halves matter: the first says
+    # zero is not a silencer's opposite, the second says it is not a silencer.
+    assert proc.returncode == 1, proc.stdout
+    assert "timeout=150" in proc.stdout, proc.stdout
+    assert "timeout=60" not in proc.stdout.split("[FAIL]")[-1], (
+        "a 60 s bound was reported under a disabled item clock whose stall "
+        "window is 300 s\n" + proc.stdout)
+
+
+def test_an_unreadable_stall_window_refuses_rather_than_passes(tmp_path):
+    """No cap read means a marked item cannot be judged. That is rc 2.
+
+    Falling back to the harness bound was tried and is wrong in its own way: the
+    marker exists to REPLACE the harness item bound, so capping at it makes every
+    marker inert and turns "this test genuinely needs longer" into a finding.
+    """
+    _workflow(tmp_path, "pytest --timeout=180")          # deliberately no _stall
+    tests = tmp_path / "t"
+    tests.mkdir()
+    (tests / "test_x.py").write_text(
+        "import subprocess\n"
+        "def test_ok():\n"
+        "    subprocess.run(['x'], timeout=10)\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(tmp_path), "--tests-root", str(tests)],
+        capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 2, proc.stdout
+    assert "CANNOT DETERMINE" in proc.stdout
+    assert "NOT a pass" in proc.stdout
+
+
+def test_the_pass_sentence_does_not_outrun_what_was_checked(tmp_path):
+    """vibe-ic#1734 defect 2: the verdict became literally false.
+
+    `every resolvable blocking call is bounded at or under 60s` was safe while the
+    only exclusions were UNRESOLVABLE callees -- which is why the word "resolvable"
+    is in it. Once a marked item is judged against a larger ceiling, a run can
+    print that sentence two lines under its own counterexample.
+    """
+    _workflow(tmp_path, "pytest --timeout=180")
+    _stall(tmp_path, 300)
+    tests = tmp_path / "t"
+    tests.mkdir()
+    (tests / "test_x.py").write_text(
+        "import subprocess, pytest\n"
+        "pytestmark = pytest.mark.timeout(300)\n"
+        "def test_ok():\n"
+        "    subprocess.run(['x'], timeout=90)\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(tmp_path), "--tests-root", str(tests)],
+        capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 0, proc.stdout
+    # 90 > the default 60 s ceiling and is still a PASS, so the sentence may not
+    # claim everything is under 60 s.
+    assert "judged against 100s" in proc.stdout, proc.stdout
+    assert "bounded at or under 60s" not in proc.stdout, (
+        "the PASS sentence claims a bound this very run printed a "
+        "counterexample to\n" + proc.stdout)
+    assert "300s driver stall window" in proc.stdout, proc.stdout

@@ -148,10 +148,16 @@ def test_need_phase1_auto_detects_prompt_input(tmp_path):
     inp.mkdir(parents=True)
     (inp / "phase1_prompt.md").write_text(
         "Design a generic test chip TST_CHIP for orchestrator coverage.\n")
+    # 90 s, not 400 s. `@pytest.mark.timeout(1200)` cannot license a 400 s call:
+    # the driver classifies a session hung after 300 s with no validated pytest
+    # lifecycle event, and a blocking call emits none, so a 400 s bound could
+    # never have fired -- the SESSION would have died first, taking every other
+    # file's verdict with it. Applicable ceiling is min(1200, 300) // 3 = 100.
+    # Measured: this test's own call takes 18.3 s.
     cp = subprocess.run(
         [sys.executable, str(PROG), str(project), "--skip-phase3",
          "--skip-analog", "--ic-name", "TST_CHIP"],
-        capture_output=True, text=True, timeout=400,
+        capture_output=True, text=True, timeout=90,
     )
     body = json.loads(
         (project / "reports" / "orchestrator" / "vibe_ic_one_shot.json").read_text())
