@@ -24,7 +24,8 @@ _FINDING_RE = re.compile(
     r"|FAILED\s+|ERROR\s+|FAIL(?:ED)?[\s:]"
     r"|AssertionError[\s:]|E\s{2,})",
     re.IGNORECASE)
-_PYTEST_TIME_RE = re.compile(r"\bin\s+\d+(?:\.\d+)?s\s*$")
+_PYTEST_TIME_RE = re.compile(
+    r"\bin\s+\d+(?:\.\d+)?s(?:\s+\(\d+:\d{2}:\d{2}\))?\s*$")
 
 
 def _is_finding_line(line: str) -> bool:
