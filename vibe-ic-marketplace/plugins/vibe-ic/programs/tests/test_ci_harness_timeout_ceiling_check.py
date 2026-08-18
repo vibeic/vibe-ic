@@ -41,6 +41,7 @@ sys.path.insert(0, str(_PROGRAMS))
 import ci_harness_timeout_ceiling_check as C          # noqa: E402
 
 _PROG = _PROGRAMS / "ci_harness_timeout_ceiling_check.py"
+_LAND = _PROGRAMS.parents[3] / "tools" / "gatekeeper-land.sh"
 
 #: Inner bound for every subprocess this file launches. The gate under test is
 #: a pure parse over a handful of files and measures in well under a second, so
@@ -176,22 +177,17 @@ def _semantic_checkout(tmp_path: Path, *, lane_suffix: str = "",
     tests.mkdir(parents=True)
     (root / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
     (root / "tools").mkdir()
-    lanes = "\n".join(
-        f"{population}() {{\n"
-        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
-        "\"$PROGRAMS/pytest_per_file_junit.py\" --aggregate-check "
-        f"-- python3 -m pytest -q {lane_suffix}\n"
-        "}"
-        for population in ("run_pytest", "run_repo_tools_pytest",
-                           "run_unselectable_pytest"))
+    lanes = _LAND.read_text(encoding="utf-8")
+    if lane_suffix:
+        lanes = lanes.replace(
+            "-- python3 -m pytest -q -p no:cacheprovider",
+            "-- python3 -m pytest -q -p no:cacheprovider " + lane_suffix)
     (root / "tools" / "gatekeeper-land.sh").write_text(
-        lanes + "\n", encoding="utf-8")
-    (programs / "pytest_per_file_junit.py").write_text(
-        "def _run_progress_supervised():\n"
-        "    return run_supervised(output_progress=False, "
-        "domain_progress_probe=_progress_sample, "
-        "hard_ceiling_s=float('inf'))\n" + driver_suffix,
+        lanes, encoding="utf-8")
+    shipped_driver = (_PROGRAMS / "pytest_per_file_junit.py").read_text(
         encoding="utf-8")
+    (programs / "pytest_per_file_junit.py").write_text(
+        shipped_driver + driver_suffix, encoding="utf-8")
     (tests / "test_one.py").write_text(
         "def test_one():\n    assert True\n", encoding="utf-8")
     return root
@@ -300,6 +296,176 @@ def test_removing_every_semantic_lane_is_not_legacy_success(tmp_path):
                           capture_output=True, text=True, timeout=_T)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "exactly one semantic aggregate lane" in proc.stdout
+
+
+@pytest.mark.parametrize("dead_prefix", [
+    "false && ",
+    "if false; then ",
+])
+def test_a_driver_command_in_dead_control_flow_is_not_a_lane(
+        tmp_path, dead_prefix):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    text = land.read_text(encoding="utf-8")
+    if dead_prefix.startswith("false"):
+        text = text.replace(
+            'out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1',
+            'false && out="$( cd "$ROOT" && '
+            'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1', 1)
+    else:
+        text = text.replace(
+            'out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1',
+            'if false; then\n'
+            'out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1', 1)
+        start = text.index("run_repo_tools_pytest() {")
+        end = text.index("\n}", start)
+        text = text[:end] + "\nfi" + text[end:]
+    land.write_text(text, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert ("canonical executable lane" in proc.stdout
+            or "conditional control" in proc.stdout)
+
+
+def test_an_unconditional_early_return_before_the_lane_is_refused(tmp_path):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    land.write_text(land.read_text(encoding="utf-8").replace(
+        "run_repo_tools_pytest() {\n",
+        "run_repo_tools_pytest() {\nreturn 0\n", 1), encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "can leave run_repo_tools_pytest before" in proc.stdout
+
+
+@pytest.mark.parametrize("population", [
+    "run_pytest", "run_repo_tools_pytest", "run_unselectable_pytest",
+])
+def test_an_exact_lane_call_cannot_be_made_dead(tmp_path, population):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    text = land.read_text(encoding="utf-8")
+    needle = ("  run_pytest\n" if population == "run_pytest"
+              else f"{population}\n")
+    text = text.replace(needle, "false && " + needle.lstrip(), 1)
+    land.write_text(text, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert ("execution prefix" in proc.stdout
+            or "reviewed top-level call site" in proc.stdout)
+
+
+def test_a_top_level_early_exit_cannot_skip_every_lane(tmp_path):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    text = land.read_text(encoding="utf-8")
+    land.write_text(text.replace("#!/usr/bin/env bash\n",
+                                 "#!/usr/bin/env bash\nexit 0\n", 1),
+                    encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "execution prefix" in proc.stdout
+
+
+def test_a_post_lane_success_exit_cannot_launder_a_red_lane(tmp_path):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    text = land.read_text(encoding="utf-8")
+    marker = "run_unselectable_pytest\n"
+    land.write_text(text.replace(marker, marker + "exit 0\n", 1),
+                    encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "complete reviewed executable" in proc.stdout
+
+
+@pytest.mark.parametrize("population", [
+    "run_pytest", "run_repo_tools_pytest", "run_unselectable_pytest",
+])
+def test_a_lane_cannot_be_redefined_before_its_reviewed_call(
+        tmp_path, population):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    text = land.read_text(encoding="utf-8")
+    call = ("  run_pytest\n" if population == "run_pytest"
+            else f"{population}\n")
+    text = text.replace(call,
+                        f"function {population} {{ :; }}\n" + call, 1)
+    land.write_text(text, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "execution prefix" in proc.stdout
+
+
+def test_an_unused_well_shaped_driver_helper_is_not_execution(tmp_path):
+    root = _semantic_checkout(tmp_path)
+    driver = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
+              "programs" / "pytest_per_file_junit.py")
+    driver.write_text(
+        "def run_supervised(**kwargs):\n    return 0\n"
+        "def _progress_sample():\n    return None\n"
+        "def _run_progress_supervised():\n"
+        "    return run_supervised(output_progress=False, "
+        "domain_progress_probe=_progress_sample, "
+        "hard_ceiling_s=float('inf'))\n"
+        "if __name__ == '__main__':\n"
+        "    print('AGGREGATE_COMPLETE cases=1')\n",
+        encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "not the exact reviewed executable" in proc.stdout
+
+
+def test_a_shell_comment_cannot_supply_the_aggregate_subject_command(tmp_path):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    text = land.read_text(encoding="utf-8")
+    text = text.replace("--aggregate-check", "# --aggregate-check")
+    land.write_text(text, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "does not require the aggregate" in proc.stdout
+    assert "subject-command boundary" in proc.stdout
+
+
+def test_shell_comment_stripping_preserves_quoted_hashes():
+    assert C._strip_shell_comment("echo '# kept' # removed") == "echo '# kept' "
+    assert C._strip_shell_comment('echo "# kept" # removed') == 'echo "# kept" '
+    assert C._strip_shell_comment(r"echo \\#kept # removed") == r"echo \\#kept "
+    assert C._strip_shell_comment("value=${x#prefix}") == "value=${x#prefix}"
+    assert C._strip_shell_comment(
+        'out="$( printf \'# kept\' # removed') == 'out="$( printf \'# kept\' '
+
+
+@pytest.mark.parametrize("declaration", [
+    "never_called() {",
+    "function never_called {",
+])
+def test_a_never_called_nested_function_cannot_own_the_lane(
+        tmp_path, declaration):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    text = land.read_text(encoding="utf-8")
+    start = text.index("run_repo_tools_pytest() {")
+    end = text.index("\n}", start)
+    body = text[start:end]
+    body = body.replace("run_repo_tools_pytest() {\n",
+                        "run_repo_tools_pytest() {\n" + declaration + "\n")
+    body += "\n}"
+    text = text[:start] + body + text[end:]
+    land.write_text(text, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "nests a function" in proc.stdout
 
 
 def test_the_shipped_tree_resolves_to_the_checkout_this_file_is_in():

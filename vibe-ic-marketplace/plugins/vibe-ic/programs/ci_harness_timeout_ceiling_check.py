@@ -187,6 +187,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -226,12 +227,57 @@ EXTRA_HARNESS_RELS = (
 _PYTEST_RE = re.compile(r"(?<![\w.-])pytest(?![\w.-])")
 _TIMEOUT_RE = re.compile(r"--timeout[= ](\d+)")
 _ELAPSED_WRAPPER_RE = re.compile(r"(?<![\w.-])timeout(?![\w.-])")
-_DRIVER_COMMAND_RE = re.compile(
-    r"(?:^|&&\s+|\(\s*)"
-    r"(?:PYTHONDONTWRITEBYTECODE=1\s+)?"
-    r"PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+"
-    r"(?:programs/pytest_per_file_junit\.py|"
-    r"\"\$PROGRAMS/pytest_per_file_junit\.py\")(?=\s)")
+_DRIVER_COMMAND_RE = {
+    "run_pytest": re.compile(
+        r'^\s*if\s+out="\$\(\s*cd\s+"\$PLUGIN"\s+&&\s+'
+        r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
+        r'programs/pytest_per_file_junit\.py(?=\s)'),
+    "run_repo_tools_pytest": re.compile(
+        r'^\s*out="\$\(\s*cd\s+"\$ROOT"\s+&&\s+'
+        r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
+        r'"\$PROGRAMS/pytest_per_file_junit\.py"(?=\s)'),
+    "run_unselectable_pytest": re.compile(
+        r'^\s*out="\$\(\s*cd\s+"\$ROOT"\s+&&\s+'
+        r'PYTHONDONTWRITEBYTECODE=1\s+'
+        r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
+        r'"\$PROGRAMS/pytest_per_file_junit\.py"(?=\s)'),
+}
+# Exact shipped function bodies are the control-flow contract.  A regex can
+# recognize a reassuring command that lives under ``if false``, inside a
+# never-called nested function, or even in heredoc data.  Hashing the complete
+# reviewed bodies turns every such control-flow rewrite into an explicit policy
+# change that the parent-side landing differential can review; there is no
+# permissive "looks command-like" fallback.
+_LANDING_LANE_SHA256 = {
+    "run_pytest":
+        "1c048cec8d45a9bfa050ea4d106f39120af023a8c4960f2c62acc1b164d1a048",
+    "run_repo_tools_pytest":
+        "a2bdbe0370b979a6a97a06be7b97c6448099aae225502b08894b1c69261401ef",
+    "run_unselectable_pytest":
+        "77c407fc431db3dd84463a51329d231b4c42019c8d438091bf254d7ad7ac9f00",
+}
+# Entry-to-last-lane control flow is reviewed as one indivisible contract.
+# Hashing only the three function definitions is insufficient: their exact
+# bodies can remain present while a top-level ``exit``, ``false && call``, or a
+# later function redefinition makes every call a no-op.  This prefix ends at
+# the third and final required invocation, so any executable rewrite that can
+# affect reachability must be reviewed together with a new digest.
+_LANDING_EXECUTION_PREFIX_SHA256 = (
+    "a7cc87f37bc909c0c9adb705b441fd907f48182dfb764bc138339519378e1541"
+)
+# A prefix proves the required calls are reached; the complete script proves a
+# later rewrite cannot erase their verdict (for example ``FAILED=0`` or an
+# early successful exit after the third call).  Gate control-flow changes are
+# intentionally an explicit policy migration, never a heuristic match.
+_LANDING_SCRIPT_SHA256 = (
+    "f9ef892b66cac9179abc5ffe8f7c7277c047d09414230a4c04c4eb2a208ce6c7"
+)
+# The helper AST is not enough: a counterfeit CLI can define the expected
+# helper and never call it.  Bind the policy to the complete reviewed driver
+# whose functional tests prove selection -> aggregate JUnit coverage.
+_SEMANTIC_DRIVER_SHA256 = (
+    "1eb94edae166b15e35deb9d0f763019cdfedcfc5bc1071aa38c90a2c8efc4ae3"
+)
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a
 #: future looser pattern would pick it up.
@@ -277,13 +323,80 @@ class HarnessBound:
                 "seconds": self.seconds, "command": self.command}
 
 
+def _strip_shell_comment(raw: str) -> str:
+    """Remove an executable Bash comment without touching quoted ``#``.
+
+    The semantic-lane contract is about what Bash executes, not reassuring
+    words after a comment marker.  ``shlex`` is not a Bash parser (notably for
+    command substitutions), so keep this deliberately small and exact: Bash
+    starts a comment at an unquoted ``#`` that begins a shell word.
+    """
+    quote: Optional[str] = None
+    # A command substitution inside double quotes is a fresh shell parse.  Its
+    # comments are executable comments even though the surrounding ``$(...)``
+    # sits inside a quoted assignment (the exact false-green this guards).
+    substitutions: List[Tuple[Optional[str], int]] = []
+    escaped = False
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote != "single":
+            escaped = True
+            index += 1
+            continue
+        if quote == "single":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "'" and quote is None:
+            quote = "single"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == "double" else "double"
+            index += 1
+            continue
+        if (char == "$" and index + 1 < len(raw)
+                and raw[index + 1] == "("):
+            substitutions.append((quote, 1))
+            quote = None
+            index += 2
+            continue
+        if substitutions and quote is None and char == "(":
+            outer, depth = substitutions[-1]
+            substitutions[-1] = (outer, depth + 1)
+            index += 1
+            continue
+        if substitutions and quote is None and char == ")":
+            outer, depth = substitutions[-1]
+            depth -= 1
+            if depth == 0:
+                substitutions.pop()
+                quote = outer
+            else:
+                substitutions[-1] = (outer, depth)
+            index += 1
+            continue
+        if (char == "#" and quote is None
+                and (index == 0 or raw[index - 1].isspace()
+                     or raw[index - 1] in ";|&()")):
+            return raw[:index]
+        index += 1
+    return raw
+
+
 def _logical_lines(text: str) -> Iterable[Tuple[int, str]]:
     """Yield (first_line_number, joined_command) with backslash continuations
     folded, so a flag on a continuation line belongs to its own command."""
     buf: List[str] = []
     start = 0
     for i, raw in enumerate(text.splitlines(), start=1):
-        stripped = raw.rstrip()
+        stripped = _strip_shell_comment(raw).rstrip()
         if not buf:
             start = i
         if stripped.endswith("\\"):
@@ -299,16 +412,25 @@ def _logical_lines(text: str) -> Iterable[Tuple[int, str]]:
 def _semantic_driver_contract_errors(driver: Path) -> List[str]:
     """Validate the executed supervisor call structurally, not by comments."""
     try:
-        source = driver.read_text(encoding="utf-8", errors="strict")
+        raw = driver.read_bytes()
+        source = raw.decode("utf-8", errors="strict")
         tree = ast.parse(source, filename=str(driver))
     except (OSError, UnicodeError, SyntaxError) as exc:
         return [f"semantic pytest driver cannot be parsed: {exc}"]
+    errors: List[str] = []
+    observed_digest = hashlib.sha256(raw).hexdigest()
+    if observed_digest != _SEMANTIC_DRIVER_SHA256:
+        errors.append(
+            "semantic pytest driver is not the exact reviewed executable "
+            f"(sha256={observed_digest}, expected="
+            f"{_SEMANTIC_DRIVER_SHA256})")
     functions = [node for node in tree.body
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                  and node.name == "_run_progress_supervised"]
     if len(functions) != 1:
-        return ["semantic pytest driver must define "
-                "_run_progress_supervised exactly once"]
+        errors.append("semantic pytest driver must define "
+                      "_run_progress_supervised exactly once")
+        return errors
     calls = [node for node in ast.walk(functions[0])
              if isinstance(node, ast.Call)
              and ((isinstance(node.func, ast.Attribute)
@@ -316,10 +438,11 @@ def _semantic_driver_contract_errors(driver: Path) -> List[str]:
                   or (isinstance(node.func, ast.Name)
                       and node.func.id == "run_supervised"))]
     if len(calls) != 1:
-        return ["_run_progress_supervised must call run_supervised exactly once"]
+        errors.append(
+            "_run_progress_supervised must call run_supervised exactly once")
+        return errors
     keywords = {kw.arg: kw.value for kw in calls[0].keywords
                 if kw.arg is not None}
-    errors: List[str] = []
     output = keywords.get("output_progress")
     if not (isinstance(output, ast.Constant) and output.value is False):
         errors.append("semantic pytest driver no longer proves: output bytes "
@@ -342,6 +465,40 @@ def _semantic_driver_contract_errors(driver: Path) -> List[str]:
     return errors
 
 
+def _shell_control_depths(lines: Sequence[str], start: int,
+                          end: int) -> Dict[int, int]:
+    """A deliberately narrow structural model for the three shipped functions.
+
+    Bash has no stdlib AST.  The landing functions use only ordinary
+    ``if/fi``, loops and ``case/esac`` control blocks, so track exactly those
+    block boundaries.  A semantic-driver command is accepted only at function
+    depth zero; putting the reassuring command under ``if false`` therefore
+    cannot satisfy the contract.  ``bash -n`` remains the syntax authority.
+    """
+    depths: Dict[int, int] = {}
+    depth = 0
+    for lineno in range(start + 1, end):
+        stripped = lines[lineno - 1].strip()
+        if not stripped or stripped.startswith("#"):
+            depths[lineno] = depth
+            continue
+        if re.match(r"^(fi|done|esac)\b", stripped):
+            depth = max(0, depth - 1)
+        depths[lineno] = depth
+        if re.match(r"^(if|for|while|until|case)\b", stripped):
+            # One-line controls close themselves and do not contain an
+            # independently accepted canonical driver command.
+            closes = ((stripped.startswith("if ") and re.search(
+                r";\s*fi(?:\s*;|\s*$)", stripped))
+                or (re.match(r"^(for|while|until)\b", stripped)
+                    and re.search(r";\s*done(?:\s*;|\s*$)", stripped))
+                or (stripped.startswith("case ")
+                    and re.search(r";\s*esac(?:\s*;|\s*$)", stripped)))
+            if not closes:
+                depth += 1
+    return depths
+
+
 def landing_semantic_progress_contract(repo_root: Path) -> Dict:
     """Validate the local landing pytest lanes' no-fixed-timeout contract.
 
@@ -357,15 +514,39 @@ def landing_semantic_progress_contract(repo_root: Path) -> Dict:
     errors: List[str] = []
     lanes: List[Dict] = []
     try:
-        land_text = land.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
+        land_raw = land.read_bytes()
+        land_text = land_raw.decode("utf-8", errors="strict")
+    except (OSError, UnicodeError) as exc:
         return {"declared": False, "errors": [
             f"landing script is unreadable: {exc}"], "lanes": []}
+
+    script_digest = hashlib.sha256(land_raw).hexdigest()
+    if script_digest != _LANDING_SCRIPT_SHA256:
+        errors.append(
+            "gatekeeper-land.sh is not the complete reviewed executable "
+            f"(sha256={script_digest}, expected={_LANDING_SCRIPT_SHA256})")
 
     source_lines = land_text.splitlines()
     populations = ("run_pytest", "run_repo_tools_pytest",
                    "run_unselectable_pytest")
+    final_calls = [i for i, line in enumerate(source_lines, 1)
+                   if line == "run_unselectable_pytest"]
+    if len(final_calls) != 1:
+        errors.append(
+            "gatekeeper-land.sh must invoke run_unselectable_pytest exactly "
+            "once at its reviewed top-level call site")
+    else:
+        prefix_bytes = ("\n".join(source_lines[:final_calls[0]]) +
+                        "\n").encode("utf-8")
+        prefix_digest = hashlib.sha256(prefix_bytes).hexdigest()
+        if prefix_digest != _LANDING_EXECUTION_PREFIX_SHA256:
+            errors.append(
+                "gatekeeper-land.sh entry-to-final-pytest execution prefix "
+                "is not the exact reviewed control flow "
+                f"(sha256={prefix_digest}, expected="
+                f"{_LANDING_EXECUTION_PREFIX_SHA256})")
     ranges: Dict[str, Tuple[int, int]] = {}
+    depths: Dict[str, Dict[int, int]] = {}
     for population in populations:
         starts = [i for i, line in enumerate(source_lines, 1)
                   if line.startswith(f"{population}() {{")]
@@ -380,37 +561,77 @@ def landing_semantic_progress_contract(repo_root: Path) -> Dict:
             errors.append(
                 f"gatekeeper-land.sh has no structural end for {population}")
             continue
+        function_bytes = ("\n".join(
+            source_lines[start - 1:ends[0]]) + "\n").encode("utf-8")
+        observed_digest = hashlib.sha256(function_bytes).hexdigest()
+        if observed_digest != _LANDING_LANE_SHA256[population]:
+            errors.append(
+                f"gatekeeper-land.sh function {population} is not the exact "
+                "reviewed executable body "
+                f"(sha256={observed_digest}, expected="
+                f"{_LANDING_LANE_SHA256[population]})")
+        if any("<<" in source_lines[i - 1]
+               for i in range(start + 1, ends[0])):
+            errors.append(
+                f"gatekeeper-land.sh function {population} contains a "
+                "heredoc; command-shaped data cannot prove lane execution")
+        nested = [i for i in range(start + 1, ends[0])
+                  if (re.match(
+                      r"^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*"
+                      r"\s*(?:\(\s*\))?\s*\{\s*$",
+                      source_lines[i - 1]) is not None)]
+        if nested:
+            errors.append(
+                f"gatekeeper-land.sh:{nested[0]} nests a function inside "
+                f"{population}; a never-called body cannot prove execution")
         ranges[population] = (start, ends[0])
+        depths[population] = _shell_control_depths(
+            source_lines, start, ends[0])
 
     for lineno, command in _logical_lines(land_text):
         stripped = command.lstrip()
         if stripped.startswith("#"):
             continue
-        driver_invocation = _DRIVER_COMMAND_RE.search(command) is not None
+        owners = [name for name, (start, end) in ranges.items()
+                  if start < lineno < end]
+        owner = owners[0] if len(owners) == 1 else None
+        driver_invocation = bool(
+            owner and _DRIVER_COMMAND_RE[owner].search(command))
         # A standalone `pytest` token in executable shell is forbidden unless
         # this exact logical command invokes the semantic driver.  This catches
         # env/absolute-path/function/array aliases without pretending to be a
         # complete shell parser.  The one diagnostic grep is data, not a lane.
         diagnostic = "grep -qa '^=== pytest junit summary'" in command
+        if ("pytest_per_file_junit.py" in command
+                and not driver_invocation and not stripped.startswith("#")):
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} names the semantic driver "
+                "outside its canonical executable lane")
         if (_PYTEST_RE.search(command) and not driver_invocation
                 and not diagnostic):
             errors.append(f"gatekeeper-land.sh:{lineno} mentions executable "
                           "pytest outside the semantic aggregate driver")
         if not driver_invocation:
+            if (owner and depths.get(owner, {}).get(lineno) == 0
+                    and re.match(r"^\s*(return|exit)(?:\s|$)", command)):
+                errors.append(
+                    f"gatekeeper-land.sh:{lineno} can leave {owner} before "
+                    "its semantic pytest lane")
             continue
-        owners = [name for name, (start, end) in ranges.items()
-                  if start < lineno < end]
-        owner = owners[0] if len(owners) == 1 else None
+        if depths.get(owner, {}).get(lineno) != 0:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} semantic pytest lane is nested "
+                "under conditional control")
         lanes.append({"population": owner, "line": lineno,
                       "command": " ".join(command.split())})
-        if owner is None:
-            errors.append(
-                f"gatekeeper-land.sh:{lineno} semantic pytest lane is not "
-                "owned by exactly one declared population")
         if "--aggregate-check" not in command:
             errors.append(
                 f"gatekeeper-land.sh:{lineno} does not require the aggregate "
                 "semantic pytest record")
+        if re.search(r"--\s+python3\s+-m\s+pytest(?:\s|$)", command) is None:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} does not execute pytest through "
+                "the semantic driver's subject-command boundary")
         if _TIMEOUT_RE.search(command) or "pytest_timeout" in command:
             errors.append(
                 f"gatekeeper-land.sh:{lineno} reintroduces a fixed pytest "
