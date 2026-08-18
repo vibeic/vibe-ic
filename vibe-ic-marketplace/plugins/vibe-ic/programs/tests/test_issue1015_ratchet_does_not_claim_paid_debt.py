@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -127,8 +128,30 @@ def test_the_recorded_population_is_the_one_the_ci_gate_sweeps():
     assert len(line) == 1, (
         f"expected exactly one corpus invocation of the gate in {gates.name}, "
         f"found {len(line)}: {line}")
-    swept = line[0].split("--corpus", 1)[1].strip().strip('"').strip()
+    # THE VALUE, NOT THE TAIL OF THE LINE. This read
+    # `line.split("--corpus", 1)[1]`, which is every character after the flag —
+    # so the moment `--corpus-may-be-absent` was appended to that invocation the
+    # "population the CI gate sweeps" became `benchmark-data/ic" \
+    # --corpus-may-be-absent` and this test reported a population disagreement
+    # that does not exist. An instrument that could only see "the rest of the
+    # string" was reporting "the argument". Tokenise the line the way the shell
+    # does and take the one token after the flag.
+    toks = shlex.split(line[0], comments=False)
+    assert "--corpus" in toks, (
+        f"the gate invocation in {gates.name} has no --corpus token once "
+        f"tokenised: {line[0]!r}")
+    i = toks.index("--corpus")
+    assert i + 1 < len(toks), (
+        f"--corpus is the last token of the gate invocation in {gates.name}, "
+        f"so it names no population: {line[0]!r}")
+    swept = toks[i + 1]
     swept = swept.replace("$ROOT/", "").replace("${ROOT}/", "")
+    # A SELF-CHECK ON THE PARSE, so the pre-fix reading cannot come back quietly:
+    # the value is one path, never a flag and never several tokens run together.
+    assert swept and not swept.startswith("-") and " " not in swept, (
+        f"parsed '{swept}' as the population the CI gate sweeps, which is not a "
+        f"single path — the parse is reading more of the command line than the "
+        f"argument.")
     recorded = json.loads(BASELINE.read_text(encoding="utf-8"))["corpus_population"]
     assert swept == recorded, (
         f"the CI gate sweeps '{swept}' and the baseline records its count over "
