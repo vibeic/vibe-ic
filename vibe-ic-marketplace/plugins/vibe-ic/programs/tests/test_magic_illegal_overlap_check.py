@@ -442,6 +442,46 @@ def test_flow_step31_gates_illegal_overlap_before_lvs():
     assert idx["magic_illegal_overlap_check"] < idx["lvs_signoff_guard"]
 
 
+def test_a_dirty_extraction_never_reaches_the_lvs_clause(tmp_path):
+    """The placement claim, proved through the real evaluator on the real yaml.
+
+    `flow_compliance_check._evaluate_gate` short-circuits an `all_of` at the
+    first failing BLOCKING sub-gate — only later ADVISORY clauses still run. So
+    clause ORDER decides what is even asked, and this gate sitting above the two
+    LVS clauses is what makes "between extraction and LVS" a fact rather than a
+    layout preference in the file.
+
+    The two clauses are read out of the shipped yaml in their shipped order, so
+    a future reorder breaks this test rather than silently un-gating LVS.
+    """
+    import yaml
+    import flow_compliance_check as F
+
+    doc = yaml.safe_load(FLOW.read_text())
+    step = next(s for s in doc["steps"] if s["id"] == 31)
+    clauses = step["gate"]["all_of"]
+    names = [c.get("program_exit_zero", "").split()[0] if
+             isinstance(c, dict) else "" for c in clauses]
+    pair = {"all_of": [clauses[names.index("magic_illegal_overlap_check")],
+                       clauses[names.index("lvs_report_check")]]}
+
+    dirty = _project(tmp_path / "d", feedback=MAGIC_DUMP_TWO_OVERLAPS)
+    passed, reasons = F._evaluate_gate(dirty, pair)
+    assert passed is False
+    assert any("magic_illegal_overlap_check" in r and "program failed" in r
+               for r in reasons)
+    assert not any("lvs_report_check" in r for r in reasons), (
+        "the LVS clause was asked about a netlist the extractor could not "
+        "decide — the whole point of the placement is that it is not")
+
+    # And the gate is not simply always-fatal: a measured-clean extraction
+    # lets evaluation proceed to the LVS clause, which then answers for itself.
+    clean = _project(tmp_path / "c", feedback="")
+    _passed, reasons = F._evaluate_gate(clean, pair)
+    assert any("lvs_report_check" in r for r in reasons), (
+        "a clean extraction must not block the LVS clause from running")
+
+
 def test_the_gate_is_spawned_inline_and_blocks_before_netgen():
     """Not merely declared: the runner spawns it and stops on its status.
 
