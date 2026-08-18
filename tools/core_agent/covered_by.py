@@ -21,6 +21,28 @@ CANDIDATES ARE CHOSEN BY FILE, NEVER BY PROSE
     A branch is a candidate when it touches the test's own file or the module
     the test drives. That is a fact about a diff. Prose is not consulted.
 
+THE SECOND FALSE ZERO: A DIFF NOBODY COULD READ  (measured 2026-08-18)
+    `gh pr list --json files` is rendered as the GraphQL field `files(first:
+    100)`. A PR with more than 100 changed files therefore arrives TRUNCATED,
+    silently, with no marker distinguishing it from a complete list. Measured on
+    vibe-ic#1028: `gh pr view 1028 --json files` returns exactly 100 paths, and
+    every one of them is `README.md` or under `benchmark-data/` — the
+    alphabetically first 100 — while `repos/.../pulls/1028/files` pages well past
+    3000. Not one path under `programs/`, `tools/` or the plugin tree is
+    visible, so #1028 could never be selected as a candidate for ANY test in
+    this repository, however squarely its diff lands on that test's file.
+
+    An empty or missing `files` array is the same shape from the other side: a
+    real pull request does not change zero files, so `[]` means the sub-query
+    answered nothing, not that the diff is empty.
+
+    In both cases the instrument measures "the test file is not among the paths
+    GitHub chose to hand back" and would otherwise report "this PR's diff does
+    not touch the test file". Those are different facts. A PR whose diff could
+    not be READ is therefore kept as a CANDIDATE and MEASURED by running the
+    test on it — never dropped from the denominator, which is the arithmetic
+    that turns a could-not-look into a confident UNCOVERED.
+
 THE FALSE ZERO THIS REFUSES TO REPORT
     A pytest run that dies during collection prints no summary line, and
     grepping its output for `FAILED` yields zero — which reads exactly like
@@ -55,6 +77,16 @@ _SUMMARY_RE = re.compile(
 
 PASSED, FAILED, UNMEASURED = "PASSED", "FAILED", "UNMEASURED"
 
+#: How many file rows `gh --json files` can return for one PR — the `first: 100`
+#: page of the GraphQL field. A list this long is INDISTINGUISHABLE from a diff
+#: that was cut off at the page boundary, so it is not believed.
+GH_FILES_PAGE = 100
+
+#: The value `parse_pr_files` records when a PR's changed-file list could not be
+#: established. Deliberately NOT `[]`: an empty list is a claim ("this PR
+#: touches nothing"), and `None` is the absence of one.
+UNRESOLVED = None
+
 
 def classify_run(stdout: str, returncode: int) -> str:
     """`PASSED` / `FAILED` / `UNMEASURED` for one pytest invocation.
@@ -86,12 +118,26 @@ def decide(results: Dict[int, str]) -> Tuple[int, List[int], List[int]]:
     return 1, covering, unmeasured
 
 
-def candidates(pr_files: Dict[int, Sequence[str]], test_path: str,
+def unresolved(pr_files: Dict[int, Optional[Sequence[str]]]) -> List[int]:
+    """PRs whose changed-file list could not be established (truncated/absent)."""
+    return sorted(n for n, files in pr_files.items() if files is UNRESOLVED)
+
+
+def candidates(pr_files: Dict[int, Optional[Sequence[str]]], test_path: str,
                also: Sequence[str] = ()) -> List[int]:
-    """PRs whose diff touches the test file or any of `also`, by FILE."""
+    """PRs whose diff touches the test file or any of `also`, by FILE.
+
+    A PR whose file list is `UNRESOLVED` is ALSO a candidate. Excluding it would
+    report "this PR's diff misses your file" on the strength of a diff nobody
+    read — the truncated-page defect in the module docstring. Including it costs
+    one test run; excluding it costs the duplicate this module exists to stop.
+    """
     want = {test_path, *also}
     out = []
     for n, files in pr_files.items():
+        if files is UNRESOLVED:
+            out.append(n)
+            continue
         if any(f == w or f.endswith("/" + w.lstrip("/")) for f in files for w in want):
             out.append(n)
     return sorted(out)
@@ -116,7 +162,17 @@ def report(code: int, covering: List[int], unmeasured: List[int], node: str) -> 
 
 
 def _run(cmd: Sequence[str], cwd: Optional[str] = None) -> Tuple[str, int]:
-    p = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=1800)
+    """Run `cmd`; a bound overrun is a non-zero rc with no output, never a raise.
+
+    Letting `TimeoutExpired` escape would abort `main` with Python's own exit
+    code 1 — which is this module's code for UNCOVERED, "the work is yours".
+    A bound that fired would then read as a measurement that found nothing.
+    """
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd,
+                           timeout=1800)
+    except subprocess.TimeoutExpired:
+        return "", 124
     return (p.stdout or "") + (p.stderr or ""), p.returncode
 
 
@@ -137,13 +193,20 @@ def measure(prs: Sequence[int], node: str, checkout: Callable[[int], Optional[st
     return out
 
 
-def parse_pr_files(payload: str) -> Dict[int, List[str]]:
-    """`{pr: [changed files]}` from `gh pr list --json number,files` output.
+def parse_pr_files(payload: str) -> Dict[int, Optional[List[str]]]:
+    """`{pr: [changed files] | UNRESOLVED}` from `gh pr list --json number,files`.
 
     Parsed rather than shelled per-PR: one API call for the whole fleet. A
     per-PR fan-out is what tripped GitHub's secondary rate limit on 2026-08-13
     while the primary counters still read 315/5000, which looks like a
     permission error and is not one.
+
+    A row is recorded as `UNRESOLVED` — not as an empty diff — when its `files`
+    array is missing, is not a list, is empty, or is exactly `GH_FILES_PAGE`
+    long. The last case is the one that bites: gh cannot say whether a 100-entry
+    list is a whole diff or the first page of one, so neither can this parser,
+    and guessing "whole" is what silently drops the repo's largest PRs out of
+    every candidate set.
     """
     try:
         rows = json.loads(payload or "[]")
@@ -151,20 +214,25 @@ def parse_pr_files(payload: str) -> Dict[int, List[str]]:
         return {}
     if not isinstance(rows, list):
         return {}
-    out: Dict[int, List[str]] = {}
+    out: Dict[int, Optional[List[str]]] = {}
     for r in rows:
         if not isinstance(r, dict) or "number" not in r:
             continue
-        files = [f.get("path", "") for f in (r.get("files") or [])
-                 if isinstance(f, dict)]
+        raw = r.get("files")
+        if not isinstance(raw, list) or not raw or len(raw) >= GH_FILES_PAGE:
+            out[int(r["number"])] = UNRESOLVED
+            continue
+        files = [f.get("path", "") for f in raw if isinstance(f, dict)]
         out[int(r["number"])] = [f for f in files if f]
     return out
 
 
-def open_pr_files(repo: str) -> Dict[int, List[str]]:
-    payload, _ = _run(["gh", "pr", "list", "--repo", repo, "--state", "open",
-                       "--json", "number,files", "--limit", "400"])
-    return parse_pr_files(payload)
+def open_pr_files(repo: str) -> Dict[int, Optional[List[str]]]:
+    payload, rc = _run(["gh", "pr", "list", "--repo", repo, "--state", "open",
+                        "--json", "number,files", "--limit", "400"])
+    # A non-zero gh is a BLOCKED enumeration, not an empty board. Parsing
+    # whatever it managed to print would turn a 504 into "no PR touches this".
+    return parse_pr_files(payload) if rc == 0 else {}
 
 
 def worktree_checkout(repo_dir: str, work_dir: str, repo: str):
@@ -209,8 +277,14 @@ def main(argv=None) -> int:
         print(report(2, [], [], a.node))
         return 2
     cands = candidates(pr_files, test_file, a.also)
-    print(f"{len(pr_files)} open PR(s); {len(cands)} touch {test_file}: "
+    blind = unresolved(pr_files)
+    print(f"{len(pr_files)} open PR(s); {len(cands)} candidate(s) for {test_file}: "
           + (", ".join(f"#{n}" for n in cands) or "none"), file=sys.stderr)
+    if blind:
+        print(f"  {len(blind)} of those are candidates only because their changed-file "
+              f"list could not be read (absent, or capped at gh's {GH_FILES_PAGE}-file "
+              "page): " + ", ".join(f"#{n}" for n in blind)
+              + " — measured rather than assumed to miss the file.", file=sys.stderr)
     results = measure(cands, a.node,
                       checkout=worktree_checkout(a.repo_dir, a.work_dir, a.repo))
     code, cov, unk = decide(results)
