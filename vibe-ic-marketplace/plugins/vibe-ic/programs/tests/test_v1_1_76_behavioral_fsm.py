@@ -79,8 +79,12 @@ def _directional_prompt(omit=(), extra=""):
         "outputs": (
             "The two walking states are moving left (move_left is 1) and moving "
             "right (move_right is 1)."),
-        "left_map": "If the walker is hit on the left, it will move right.",
-        "right_map": "If the walker is hit on the right, it will move left.",
+        "left_map": (
+            "If the walker is hit on the left (by receiving a 1 on hit_left), "
+            "it will move right."),
+        "right_map": (
+            "If the walker is hit on the right (by receiving a 1 on hit_right), "
+            "it will move left."),
         "both_map": "If hit on both sides at once, it will reverse direction.",
         "fall_output": (
             "When support=0, the walker will fall and fall_alarm is 1."),
@@ -122,9 +126,8 @@ def _named_directional_fixture_prompt():
     prompt = _directional_module_prompt()
     replacements = (
         ("for a creature", "for a Lemming"),
-        ("If it is bumped on the left",
-         "In particular, if a Lemming is bumped on the left "
-         "(by receiving a 1 on bump_left)"),
+        ("if a creature is bumped on the left",
+         "if a Lemming is bumped on the left"),
         ("the creature will fall", "the Lemming will fall"),
         ("When ground reappears, it will resume",
          "When the ground reappears (ground=1), the Lemming will resume walking"),
@@ -459,8 +462,8 @@ def test_directional_bump_fall_rejects_advanced_or_conflicting_features(extensio
         ("fall_alarm is 1", "fall_alarm is 0"),
         ("Implement this as a Moore state machine.",
          "This is not a Moore state machine."),
-        ("hit on the left, it will move right",
-         "hit on the left, it will not move right"),
+        ("1 on hit_left), it will move right",
+         "1 on hit_left), it will not move right"),
         ("support=0, the walker will fall",
          "support=0, the walker will not fall"),
         ("it will resume moving in the same direction",
@@ -723,9 +726,27 @@ def test_general_directional_shape_with_renamed_ports():
     assert "posedge clock or posedge reset_signal" in rtl
 
 
+@pytest.mark.parametrize("role", ("hit_left", "hit_right"))
+def test_directional_shape_requires_explicit_bump_asserted_values(role):
+    """Neutral role names do not prove that a bump is asserted at logic 1."""
+    prompt = _directional_prompt()
+    unbound = re.sub(
+        rf"\s*\(by receiving a 1 on {role}\)", "", prompt)
+    assert bfsm.synth(unbound) is None
+
+
+@pytest.mark.parametrize("role", ("hit_left", "hit_right"))
+def test_directional_shape_rejects_explicit_active_low_bump_value(role):
+    """The active-high canonical table must not consume explicit-zero bumps."""
+    prompt = _directional_prompt().replace(
+        f"receiving a 1 on {role}", f"receiving a 0 on {role}")
+    assert bfsm.synth(prompt) is None
+
+
 def test_general_directional_shape_with_renamed_story_noun():
     body = _directional_module_prompt()
     body = body.replace("for a creature", "for a robot")
+    body = body.replace("a creature is bumped", "a robot is bumped")
     body = body.replace("the creature will fall", "the robot will fall")
     body = body.replace("resetting the machine to", "resetting the robot to")
     prompt = (

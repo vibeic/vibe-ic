@@ -528,10 +528,14 @@ def _directional_fall_closed_dialect(prompt: str, roles, clk: str, rst: str):
         # Direction transitions.
         rf"in particular, if a [a-z_]\w* is bumped on the left\s*"
         rf"\(by receiving a 1 on {bl}\), it will walk right",
+        rf"if the [a-z_]\w* is hit on the left\s*"
+        rf"\(by receiving a 1 on {bl}\), it will move right",
         r"if the [a-z_]\w* is hit on the left, it will move right",
         r"if it is bumped on the left, it will walk right",
         rf"if it['’]s bumped on the right\s*\(by receiving a 1 on {br}\), "
         r"it will walk left",
+        rf"if the [a-z_]\w* is hit on the right\s*"
+        rf"\(by receiving a 1 on {br}\), it will move left",
         r"if the [a-z_]\w* is hit on the right, it will move left",
         r"if it is bumped on the right, it will walk left",
         r"if it['’]s bumped on both sides at the same time, it will still switch directions",
@@ -628,6 +632,18 @@ def _directional_fall_complete(prompt: str, roles, clk: str, rst: str):
     text = " ".join(prompt.split()).lower()
     if not _directional_fall_closed_dialect(prompt, roles, clk, rst):
         return False
+    # The transition prose must bind each selected bump port to the asserted
+    # logic value.  A role name without this fact is not a polarity contract:
+    # absence of an ``_n`` suffix cannot prove that logic 1 means "bumped".
+    # Shape C intentionally accepts only the corpus-backed finite phrasing; an
+    # unbound or explicit-zero condition belongs to the safe AI/defer path.
+    for role in (roles["bump_left"], roles["bump_right"]):
+        binding = (
+            rf"\breceiv(?:e|es|ed|ing)\s+(?:a\s+)?1\s+on\s+"
+            rf"{re.escape(role.lower())}\b"
+        )
+        if len(re.findall(binding, text)) != 1:
+            return False
     ground_role = roles["ground"].lower()
     if (ground_role.endswith("_n")
             or re.search(
