@@ -167,6 +167,197 @@ def test_the_landing_script_alone_is_enough_to_resolve_the_bound(tmp_path):
     assert C.ci_harness_timeout_seconds(root) == 180
 
 
+def _semantic_checkout(tmp_path: Path, *, lane_suffix: str = "",
+                       driver_suffix: str = "") -> Path:
+    root = tmp_path / "semantic"
+    programs = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
+                "programs")
+    tests = programs / "tests"
+    tests.mkdir(parents=True)
+    (root / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+    (root / "tools").mkdir()
+    lane_commands = {
+        "run_pytest": (
+            'if out="$( cd "$PLUGIN" && '
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
+            "programs/pytest_per_file_junit.py --aggregate-check "
+            f'-- python3 -m pytest -q {lane_suffix} )"; then\n'
+            "  :\nelse\n  :\nfi"),
+        "run_repo_tools_pytest": (
+            'out="$( cd "$ROOT" && '
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
+            "\"$PROGRAMS/pytest_per_file_junit.py\" --aggregate-check "
+            f'-- python3 -m pytest -q {lane_suffix} )"'),
+        "run_unselectable_pytest": (
+            'out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 '
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
+            "\"$PROGRAMS/pytest_per_file_junit.py\" --aggregate-check "
+            f'-- python3 -m pytest -q {lane_suffix} )"'),
+    }
+    lanes = "\n".join(
+        f"{population}() {{\n{lane_commands[population]}\n}}"
+        for population in ("run_pytest", "run_repo_tools_pytest",
+                           "run_unselectable_pytest"))
+    (root / "tools" / "gatekeeper-land.sh").write_text(
+        lanes + "\n", encoding="utf-8")
+    (programs / "pytest_per_file_junit.py").write_text(
+        "def _run_progress_supervised():\n"
+        "    return run_supervised(output_progress=False, "
+        "domain_progress_probe=_progress_sample, "
+        "hard_ceiling_s=float('inf'))\n" + driver_suffix,
+        encoding="utf-8")
+    (tests / "test_one.py").write_text(
+        "def test_one():\n    assert True\n", encoding="utf-8")
+    return root
+
+
+def test_semantic_landing_harness_has_no_elapsed_ceiling(tmp_path):
+    root = _semantic_checkout(tmp_path)
+    out = tmp_path / "semantic.json"
+    proc = subprocess.run(
+        [sys.executable, str(_PROG), str(root), "--json", str(out)],
+        capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["mode"] == "semantic_progress"
+    assert doc["harness_seconds"] is None
+    assert doc["ceiling_seconds"] is None
+    assert len(doc["semantic_lanes"]) == 3
+    assert "elapsed time is not a test verdict" in proc.stdout
+
+
+def test_half_migrated_semantic_lane_is_a_failure(tmp_path):
+    root = _semantic_checkout(tmp_path, lane_suffix="--timeout=180")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "fixed pytest elapsed-time verdict" in proc.stdout
+
+
+def test_semantic_driver_must_disable_output_and_total_ceiling(tmp_path):
+    root = _semantic_checkout(tmp_path)
+    driver = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
+              "programs" / "pytest_per_file_junit.py")
+    driver.write_text(
+        "def _run_progress_supervised():\n"
+        "    return run_supervised(output_progress=True, "
+        "domain_progress_probe=_progress_sample, hard_ceiling_s=300)\n",
+        encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "output bytes are not progress" in proc.stdout
+    assert "no whole-run elapsed ceiling" in proc.stdout
+
+
+def test_an_extra_direct_pytest_lane_cannot_bypass_semantic_supervision(
+        tmp_path):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    land.write_text(land.read_text(encoding="utf-8")
+                    + "python3 -m pytest -q test_unowned.py\n",
+                    encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "outside the semantic aggregate driver" in proc.stdout
+
+
+@pytest.mark.parametrize("bypass", [
+    "env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /usr/bin/python3 -m pytest -q",
+    "run_it=(python3 -m pytest); \"${run_it[@]}\"",
+    "run_pytest_alias() { python3 -m pytest -q; }; run_pytest_alias",
+])
+def test_alias_forms_cannot_hide_a_direct_pytest_lane(tmp_path, bypass):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    land.write_text(land.read_text(encoding="utf-8") + bypass + "\n",
+                    encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "outside the semantic aggregate driver" in proc.stdout
+
+
+def test_echoed_driver_words_and_comment_only_contract_are_not_execution(
+        tmp_path):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    land.write_text("\n".join(
+        f"{name}() {{\n"
+        "echo 'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 "
+        "\"$PROGRAMS/pytest_per_file_junit.py\" --aggregate-check -- "
+        "python3 -m pytest -q'\n"
+        "cmd=(python3 -m pytest); \"${cmd[@]}\"\n"
+        "}"
+        for name in ("run_pytest", "run_repo_tools_pytest",
+                     "run_unselectable_pytest")) + "\n", encoding="utf-8")
+    driver = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
+              "programs" / "pytest_per_file_junit.py")
+    driver.write_text(
+        "# output_progress=False\n"
+        "# domain_progress_probe=_progress_sample\n"
+        "# hard_ceiling_s=float('inf')\n",
+        encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "exactly one semantic aggregate lane" in proc.stdout
+    assert "must define _run_progress_supervised" in proc.stdout
+
+
+def test_removing_every_semantic_lane_is_not_legacy_success(tmp_path):
+    root = _semantic_checkout(tmp_path)
+    (root / "tools" / "gatekeeper-land.sh").write_text(
+        "echo no-test-lanes\n", encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "exactly one semantic aggregate lane" in proc.stdout
+
+
+@pytest.mark.parametrize("dead_prefix", [
+    "false && ",
+    "if false; then ",
+])
+def test_a_driver_command_in_dead_control_flow_is_not_a_lane(
+        tmp_path, dead_prefix):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    text = land.read_text(encoding="utf-8")
+    if dead_prefix.startswith("false"):
+        text = text.replace(
+            'out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1',
+            'false && out="$( cd "$ROOT" && '
+            'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1', 1)
+    else:
+        text = text.replace(
+            'out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1',
+            'if false; then\n'
+            'out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1', 1)
+        start = text.index("run_repo_tools_pytest() {")
+        end = text.index("\n}", start)
+        text = text[:end] + "\nfi" + text[end:]
+    land.write_text(text, encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert ("canonical executable lane" in proc.stdout
+            or "conditional control" in proc.stdout)
+
+
+def test_an_unconditional_early_return_before_the_lane_is_refused(tmp_path):
+    root = _semantic_checkout(tmp_path)
+    land = root / "tools" / "gatekeeper-land.sh"
+    land.write_text(land.read_text(encoding="utf-8").replace(
+        "run_repo_tools_pytest() {\n",
+        "run_repo_tools_pytest() {\nreturn 0\n", 1), encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(_PROG), str(root)],
+                          capture_output=True, text=True, timeout=_T)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "can leave run_repo_tools_pytest before" in proc.stdout
+
+
 def test_the_shipped_tree_resolves_to_the_checkout_this_file_is_in():
     """No fixture can prove this one: the resolver has to answer about the tree
     the test file actually lives in, which is what went wrong."""
@@ -769,10 +960,16 @@ def test_the_json_record_carries_what_the_text_says(tmp_path):
     assert proc.returncode == 0, proc.stdout[-4000:]
     doc = json.loads(out.read_text())
     assert doc["passed"] is True and doc["findings"] == []
-    assert doc["ceiling_seconds"] == \
-        doc["harness_seconds"] // doc["ceiling_divisor"]
+    if doc.get("mode") == "semantic_progress":
+        assert doc["harness_seconds"] is None
+        assert doc["ceiling_seconds"] is None
+        assert len(doc["semantic_lanes"]) >= 3
+    else:
+        assert doc["ceiling_seconds"] == \
+            doc["harness_seconds"] // doc["ceiling_divisor"]
     assert doc["files"] > 0 and doc["bounded_sites"] > 0
-    assert len(doc["harness_bounds"]) >= 2
+    if doc.get("mode") != "semantic_progress":
+        assert len(doc["harness_bounds"]) >= 2
 
 
 #: The advisory residual on the shipped tree: ZERO, and the number is no longer
@@ -881,6 +1078,9 @@ def test_the_advisory_residual_does_not_grow_unreviewed(tmp_path):
                    capture_output=True, text=True, timeout=_T)
     doc = json.loads(out.read_text())
     unresolved = doc["unresolved_above_ceiling"]
+    if doc.get("mode") == "semantic_progress":
+        assert unresolved == []
+        return
     unrecorded = [u for u in unresolved
                   if (u["path"], u["callee"]) not in _REVIEWED_ADVISORY_RESIDUAL]
     assert not unrecorded, (
@@ -908,8 +1108,12 @@ def test_a_recorded_advisory_that_stopped_existing_is_deleted(tmp_path):
     out = tmp_path / "r.json"
     subprocess.run([sys.executable, str(_PROG), str(root), "--json", str(out)],
                    capture_output=True, text=True, timeout=_T)
+    doc = json.loads(out.read_text())
+    if doc.get("mode") == "semantic_progress":
+        assert doc["unresolved_above_ceiling"] == []
+        return
     live = {(u["path"], u["callee"])
-            for u in json.loads(out.read_text())["unresolved_above_ceiling"]}
+            for u in doc["unresolved_above_ceiling"]}
     stale = sorted(k for k in _REVIEWED_ADVISORY_RESIDUAL if k not in live)
     assert not stale, (
         "recorded advisory entries the checker no longer reports — the bound "

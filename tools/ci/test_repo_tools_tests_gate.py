@@ -34,7 +34,8 @@ def _extract_fn(name):
     return "\n".join(src[start:end + 1])
 
 
-def _run_fn_against(tmp_path, test_body, name="test_probe.py"):
+def _run_fn_against(tmp_path, test_body, name="test_probe.py", *,
+                    extra_files=None):
     """Execute the extracted gate function with ROOT=<a throwaway git repo>.
 
     Returns (FAILED, combined_output).
@@ -51,6 +52,9 @@ def _run_fn_against(tmp_path, test_body, name="test_probe.py"):
     (root / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
     if test_body is not None:
         (root / "tools" / name).write_text(textwrap.dedent(test_body))
+    for extra_name, extra_body in (extra_files or {}).items():
+        (root / "tools" / extra_name).write_text(
+            textwrap.dedent(extra_body), encoding="utf-8")
     # commit so `git status --porcelain` starts clean
     subprocess.run(["git", "add", "-A"], cwd=root, check=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
@@ -119,6 +123,18 @@ def test_a_FAILING_repo_test_turns_the_gate_red(tmp_path):
     assert "FAIL  repo tools tests" in out, out
 
 
+def test_a_selected_empty_test_file_cannot_shrink_the_repo_tools_denominator(
+        tmp_path):
+    failed, out = _run_fn_against(
+        tmp_path, "def test_ok():\n    assert True\n",
+        extra_files={"test_empty_selected.py":
+                     "# selected by discovery but has no pytest item\n"})
+    assert failed == 1, (
+        "a selected file disappeared from aggregate JUnit and landed green:\n"
+        + out)
+    assert "FAIL  repo tools tests" in out, out
+
+
 def test_an_empty_corpus_is_refused_rather_than_reported_as_a_pass(tmp_path):
     """Zero discovered files must be FAIL, not a silent green.
 
@@ -163,13 +179,18 @@ def test_the_gate_names_its_denominator(tmp_path):
         f"the gate did not report its file count:\n{out}")
 
 
-def test_pytest_is_pinned_the_same_way_the_plugin_suite_is():
-    """Autoload pinning is why the plugin suite is runnable at all (#1047);
-    an unpinned second invocation reintroduces exactly that failure."""
+def test_pytest_is_progress_supervised_without_an_elapsed_verdict():
+    """Autoload pinning and semantic supervision apply to this lane too.
+
+    A fixed pytest timeout kills the session and loses its JUnit; it must never
+    be reintroduced as a quick substitute for the driver's lifecycle record.
+    """
     body = _extract_fn(_FN)
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in body
-    assert "-p pytest_timeout" in body
-    assert "--timeout-method=thread" in body
+    assert "pytest_per_file_junit.py" in body
+    assert "--aggregate-check" in body
+    assert "-p pytest_timeout" not in body
+    assert "--timeout" not in body
 
 
 def test_discovery_is_not_hardcoded():
