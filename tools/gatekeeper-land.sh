@@ -11,7 +11,13 @@
 #            and the pre-push hook REFUSES a push whose commit has no matching
 #            stamp. That makes the expensive tier enforced rather than optional.
 #
-# Usage:  tools/gatekeeper-land.sh [--cheap-only] [--prepare]
+# Usage:  tools/gatekeeper-land.sh [--cheap-only] [--prepare] [--serial]
+#
+# --serial (or GATEKEEPER_LANDING_SERIAL=1) runs the full tier's independent
+# stages one after another instead of in four lanes. It is an OPT-OUT: there is
+# no variable that opts IN, because a fast path nobody switches on is a fast
+# path nobody has. See "THE FULL TIER'S INDEPENDENT STAGES RUN AT THE SAME
+# TIME" below for what is and is not in the concurrent window.
 #
 # --prepare (vibe-ic#1129) — do the MECHANICAL things this script would
 # otherwise refuse a batch for, before the cheap tier runs, and let the gates
