@@ -75,6 +75,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
@@ -164,6 +165,72 @@ CANARY_STEP_ID = "ZZ_MUTATION_LEDGER_CANARY_STEP"
 #: recorded BY NAME with the measurement above in
 #: `test_ci_harness_timeout_ceiling_check._REVIEWED_ADVISORY_RESIDUAL`.
 REPLAY_TIMEOUT = 900
+
+#: Headroom between the replay's TOTAL wall budget and the per-test bound the
+#: harness is actually enforcing.
+#:
+#: `REPLAY_TIMEOUT` above bounds ONE cell. Nothing bounded the PLAN, so the
+#: aggregate was `len(plan)` cells deep and undeclared — and the pinned
+#: `--timeout-method=thread` does not fail the TEST when that aggregate is
+#: exceeded, it takes the whole SESSION. MEASURED on clean `7c376e348`, DEFAULT
+#: `witness` mode (not the audit mode — this is the lane that really runs),
+#: whole file, under the pinned harness with `--timeout` set to a bound this
+#: plan cannot afford:
+#:
+#:     REALEXIT=1
+#:     lines matching passed|failed|error in the whole output:   0
+#:     FAILED lines:                                             0
+#:     ... waiter.acquire() / +++ Timeout +++  in replay_many's as_completed
+#:
+#: Ninety-odd tests had already reached a verdict and not one is reported. A
+#: script grepping that output for failures reads ZERO — the same zero a clean
+#: run produces. An empty result is not a zero. With a budget the same run keeps
+#: its summary line and NAMES what it could not reach.
+#:
+#: 10 s, and DELIBERATELY SMALL, because the headroom IS the regression window:
+#: every second between `bound - headroom` and `bound` is a second in which a
+#: replay that WOULD have finished is cut off instead. Below `bound - headroom`
+#: nothing changes; above `bound` the session was dying anyway; only in between
+#: does a green become a named red. Shrinking the headroom shrinks the only harm
+#: this guard can do.
+#:
+#: 10 s is what the window has to absorb, not a round number picked by feel. The
+#: deadline is checked BEFORE each pair and `replay_many` halves the per-cell
+#: clamp so one pair cannot overrun it by a whole cell, so the residue is the
+#: last wave's process teardown plus the dict-build and assertions that follow
+#: the replay inside the same test (sub-second, measured). It is deliberately
+#: NOT a proportion of the bound: the overrun it covers does not grow with the
+#: bound.
+REPLAY_BUDGET_HEADROOM = 10
+
+#: Set by :func:`_record_harness_bound` from the bound pytest is REALLY
+#: enforcing. `None` means no per-test bound is in effect — the audit lane —
+#: and the replay then runs unbounded, exactly as it did before.
+_HARNESS_BOUND: object = None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _record_harness_bound(pytestconfig):
+    """Read the harness's own per-test bound instead of assuming 180.
+
+    Assuming it would make this file wrong the day the harness moves, and would
+    silently truncate the audit lane — which sets no bound at all — down to a
+    batch lane's budget.
+    """
+    global _HARNESS_BOUND
+    _HARNESS_BOUND = pytestconfig.getoption("timeout", default=None)
+
+
+def replay_budget() -> object:
+    """Total wall seconds the replay may spend, or ``None`` for unbounded."""
+    bound = _HARNESS_BOUND
+    try:
+        bound = float(bound)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if bound <= 0:
+        return None
+    return max(1.0, bound - REPLAY_BUDGET_HEADROOM)
 
 #: Bound for the two DIRECT pytest launches in this file (the growth control
 #: and the witness-address collection). NOT a round number picked by feel:
@@ -899,6 +966,213 @@ def test_replay_many_callback_failure_refuses_the_population(monkeypatch):
             progress_callback=refuse)
 
 
+def test_a_cut_off_replay_omits_unstarted_pairs_and_never_a_verdict():
+    """BIDIRECTIONAL control on the total wall budget (vibe-ic#1410).
+
+    The budget exists because ``timeout`` bounds one cell and nothing bounded
+    the plan, so the aggregate outlives the harness and
+    ``--timeout-method=thread`` takes the SESSION — 0 lines matching
+    ``passed|failed|error`` in the whole output, which greps as zero failures.
+
+    BOTH arms are asserted, because a budget that quietly swallowed pairs would
+    be a worse bug than the one it fixes:
+
+      * BOUNDED — the plan is cut off and the pairs that were never STARTED are
+        OMITTED. Not fabricated, not scored, not skipped. The shortfall is what
+        ``test_the_replay_actually_ran_and_is_not_starved`` reads.
+      * UNBOUNDED (``budget=None``: the audit lane and every previous caller) —
+        every pair runs. THIS ARM IS WHAT PROVES THE FIX DID NOT BUY ITS GREEN
+        BY MAKING THE REPLAY DO LESS.
+
+    And the boundary between omission and the module's NOT_REPLAYABLE doctrine
+    is asserted too: a pair that WAS started keeps its result whatever that
+    result says, because omission is only ever the answer for a replay that
+    never happened.
+
+    Driven against a stub rather than the real replay: what is under test is the
+    SCHEDULING, and a real pair costs tens of seconds.
+    """
+    plan = tuple((f"M{i}", f"stub{i}") for i in range(12))
+    seen_timeouts: List[int] = []
+
+    def stub(mut, sid=None, timeout=900):
+        seen_timeouts.append(int(timeout))
+        time.sleep(0.2)
+        return L.ReplayResult(str(mut), 1, str(sid), True, 0, 1, True, "")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(L, "mutation", lambda name: name)
+        mp.setattr(L, "replay", stub)
+
+        progress: List[Tuple[int, int]] = []
+        cut = L.replay_many(plan, jobs=1, timeout=REPLAY_TIMEOUT, budget=0.7,
+                            progress_callback=lambda c, t:
+                            progress.append((c, t)))
+        clamped = list(seen_timeouts)
+        seen_timeouts.clear()
+        full = L.replay_many(plan, jobs=1, timeout=REPLAY_TIMEOUT, budget=None)
+
+        def unreadable(mut, sid=None, timeout=900):
+            return L.ReplayResult(str(mut), 1, str(sid), True, None, None,
+                                  False, "", 0.0, "REDDENED",
+                                  "mutant arm: the bound fired")
+        mp.setattr(L, "replay", unreadable)
+        started = L.replay_many(plan[:2], jobs=1, timeout=REPLAY_TIMEOUT,
+                                budget=30)
+
+    assert 0 < len(cut) < len(plan), (
+        f"a 0.7 s budget over {len(plan)} pairs of 0.2 s each returned "
+        f"{len(cut)}; the budget either never fired or ate everything")
+    assert [r.step_id for r in cut] == [p[1] for p in plan[:len(cut)]], (
+        f"the surviving pairs are out of plan order: {[r.step_id for r in cut]}")
+    assert all(r.proved for r in cut), (
+        "a pair the budget DID reach must keep its real verdict; the budget "
+        "may decide what RUNS, never what a run CONCLUDED")
+    assert clamped and all(0 < t <= REPLAY_TIMEOUT for t in clamped), (
+        f"per-cell clamp went outside (0, {REPLAY_TIMEOUT}]: {clamped}")
+    # THE DENOMINATOR MUST NOT SHRINK TO MATCH WHAT WAS ACHIEVED. A cut-off run
+    # that relayed `(3, 3)` would report itself complete.
+    assert progress and all(total == len(plan) for _, total in progress), (
+        f"progress denominator moved off the frozen plan size: {progress}")
+    assert [c for c, _ in progress] == list(range(1, len(cut) + 1)), (
+        f"progress counted pairs that produced no result: {progress}")
+    assert len(full) == len(plan), (
+        f"budget=None replayed {len(full)} of {len(plan)}; the unbounded path "
+        f"is the audit lane and must be byte-for-byte what it was")
+    assert len(started) == 2 and all(
+        r.verdict == "NOT_REPLAYABLE" for r in started), (
+        "a pair that WAS started and could not read its cell must keep its "
+        "NOT_REPLAYABLE verdict; omission is only for a pair never started")
+
+
+def test_the_replay_budget_is_below_the_harness_bound_that_would_kill_it():
+    """The budget must come from the bound pytest is REALLY enforcing.
+
+    A budget at or above the harness bound is no budget at all — the session
+    dies first and the replay never gets to stop itself. And with no bound in
+    effect (the audit lane, which is where ``all`` mode belongs) there must be
+    NO budget, or this file would silently truncate the audit it was asked for.
+    """
+    bound = _HARNESS_BOUND
+    budget = replay_budget()
+    if budget is None:
+        assert not bound, (
+            f"no replay budget was derived although pytest is enforcing "
+            f"{bound!r} per test; the replay can still kill the session")
+        return
+    assert budget < float(bound), (
+        f"replay budget {budget}s is not below the harness bound {bound}s, so "
+        f"the session is killed before the replay can report a shortfall")
+    assert budget == max(1.0, float(bound) - REPLAY_BUDGET_HEADROOM), (
+        f"budget {budget}s is not {bound}s minus the declared "
+        f"{REPLAY_BUDGET_HEADROOM}s of headroom")
+
+
+def test_no_budget_at_all_leaves_the_replay_exactly_as_it_was():
+    """The audit lane's contract, asserted where a reader will look for it.
+
+    ``all`` mode is documented as costing minutes and belongs in a lane with no
+    per-test bound. If this file derived a budget there anyway it would cut the
+    audit off and report a shortfall for a run that was given all the time it
+    asked for — which is the same conflation, pointing the other way.
+    """
+    for absent in (None, "", 0, 0.0, "none"):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(sys.modules[__name__], "_HARNESS_BOUND", absent)
+            assert replay_budget() is None, (
+                f"harness bound {absent!r} means NO bound is in effect, but a "
+                f"budget of {replay_budget()} was derived from it")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sys.modules[__name__], "_HARNESS_BOUND", 180.0)
+        assert replay_budget() == 180.0 - REPLAY_BUDGET_HEADROOM
+
+
+def test_replay_results_actually_hands_the_budget_to_the_replay():
+    """The WIRING, not just the arithmetic.
+
+    `replay_budget()` deriving a correct number proves nothing if the number is
+    never passed to `replay_many` — and that one keyword is the whole fix. It is
+    the cheapest thing in this change to delete by accident, and deleting it
+    restores the session-killing behaviour with every other guard here still
+    green. So the call is asserted, not the constant.
+    """
+    replay_results.cache_clear()
+    captured = {}
+
+    def spy(plan, **kwargs):
+        captured.update(kwargs)
+        captured["plan"] = tuple(plan)
+        return ()
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(L, "replay_many", spy)
+            mp.setattr(sys.modules[__name__], "_HARNESS_BOUND", 180.0)
+            replay_results()
+    finally:
+        replay_results.cache_clear()
+
+    assert "budget" in captured, (
+        "replay_results() called replay_many WITHOUT a budget keyword; the "
+        "plan is unbounded again and the harness will kill the session instead "
+        "of the replay reporting a shortfall")
+    assert captured["budget"] == 180.0 - REPLAY_BUDGET_HEADROOM, (
+        f"replay_results() passed budget={captured['budget']!r} while the "
+        f"harness bound was 180.0; it must pass replay_budget()")
+    assert captured["timeout"] == REPLAY_TIMEOUT, (
+        "the per-cell bound must still be forwarded; the total budget REPLACES "
+        "nothing, it bounds the level that had no bound at all")
+
+
+def test_the_shortfall_note_says_NOT_MEASURED_and_never_a_lost_proof():
+    """The disclosure is the deliverable, so its WORDS are asserted.
+
+    A short population has two causes that read identically — starved upstream,
+    or cut off by this file's own budget — and they mean opposite things. If the
+    note goes missing, the reds it annotates say "the recorded proof no longer
+    holds" about pairs that were never run, which is the exact sentence that
+    sent an author hunting a regression that did not happen (vibe-ic#1410).
+    """
+    replay_results.cache_clear()
+    plan = L.replay_plan()
+    kept = plan[:2]
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(L, "replay_many", lambda p, **k: tuple(
+                L.ReplayResult(name, 1, sid, True, 0, 1, True, "")
+                for name, sid in kept))
+            mp.setattr(sys.modules[__name__], "_HARNESS_BOUND", 180.0)
+            assert len(replay_results()) == len(kept)
+            missing = replay_shortfall()
+            note = _cut_off_note()
+    finally:
+        replay_results.cache_clear()
+
+    assert missing == list(plan[2:]), (
+        f"the shortfall must be every plan pair with no result, in plan order; "
+        f"got {missing[:4]}")
+    assert "NOT HAPPEN" in note and "CUT OFF" in note, (
+        f"the note does not say the measurement did not happen: {note!r}")
+    assert f"{len(plan) - len(kept)} of {len(plan)}" in note, (
+        f"the note does not state the shortfall against the FULL plan "
+        f"denominator: {note!r}")
+    assert "do NOT re-record the ledger" in note, (
+        f"the note must refuse the evidence-deleting repair by name: {note!r}")
+    # And the reverse: a COMPLETE population must add no note at all, or every
+    # ordinary red acquires a cut-off excuse it has not earned.
+    replay_results.cache_clear()
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(L, "replay_many", lambda p, **k: tuple(
+                L.ReplayResult(name, 1, sid, True, 0, 1, True, "")
+                for name, sid in plan))
+            assert replay_shortfall() == []
+            assert _cut_off_note() == ""
+    finally:
+        replay_results.cache_clear()
+
+
 def test_witness_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
     replay_results.cache_clear()
     seen = []
@@ -932,7 +1206,42 @@ def replay_results() -> Tuple[L.ReplayResult, ...]:
         plan, jobs=8, timeout=REPLAY_TIMEOUT,
         progress_callback=lambda completed, total: _domain_progress(
             "matrix-mutation-replays", completed, total),
+        budget=replay_budget(),
     )
+
+
+def replay_shortfall() -> List[Tuple[str, str]]:
+    """Plan pairs the replay never STARTED, in plan order.
+
+    Non-empty ONLY when the total budget cut the plan off. These pairs were not
+    measured, so they carry no verdict and appear in no scoring: they are
+    reported as a shortfall, never as mutations that stopped reddening.
+    """
+    ran = {(r.mutation, r.step_id) for r in replay_results()}
+    return [pair for pair in L.replay_plan() if pair not in ran]
+
+
+def _cut_off_note() -> str:
+    """Say WHICH of the two things a short population is, in the failure text.
+
+    ``len(results) < len(plan)`` has two causes that read identically and mean
+    opposite things: the replay was starved by something upstream, or the
+    replay ran out of the budget this file gave it. Only the second is a
+    measurement that did not happen, and only this function can tell them apart
+    — so the distinction is stated in the assertion rather than left for the
+    reader to guess from a count.
+    """
+    missing = replay_shortfall()
+    if not missing:
+        return ""
+    return (f"\n\nTHE REPLAY WAS CUT OFF, so this is a measurement that did "
+            f"NOT HAPPEN rather than a proof that stopped holding: "
+            f"{len(missing)} of {len(L.replay_plan())} pair(s) were never "
+            f"started under a total budget of {replay_budget()}s "
+            f"(mode {L.replay_mode()!r}, harness bound {_HARNESS_BOUND}). "
+            f"Nothing here says a mutation stopped reddening anything. Fix the "
+            f"budget or the lane — do NOT re-record the ledger to match.\n"
+            f"Unreached: {missing[:6]}{' ...' if len(missing) > 6 else ''}")
 
 
 def _lock2_params():
@@ -994,7 +1303,7 @@ def test_lock2_the_mutation_really_reddens_its_witness(name):
     """
     results = {(r.mutation, r.step_id): r for r in replay_results()}
     mine = [r for (n, _), r in results.items() if n == name]
-    assert mine, f"{name} produced no replay result"
+    assert mine, f"{name} produced no replay result{_cut_off_note()}"
     for r in mine:
         if r.unmeasurable:
             continue
@@ -1034,7 +1343,8 @@ def test_the_replay_actually_ran_and_is_not_starved(record_property):
                 ) + len(L.ARTEFACT_MUTATIONS)
     assert len(results) == len(plan) == expected > 0, (
         f"replayed {len(results)} pair(s) for a plan of {len(plan)}; mode "
-        f"{L.replay_mode()!r} should re-execute {expected}")
+        f"{L.replay_mode()!r} should re-execute {expected}"
+        f"{_cut_off_note()}")
     assert len({(r.mutation, r.step_id) for r in results}) == len(results), (
         "the replay plan contains duplicate pairs, so the count overstates "
         "what was actually re-executed")
