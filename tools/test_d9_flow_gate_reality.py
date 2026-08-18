@@ -20,6 +20,7 @@ reviewer can re-derive it.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -226,3 +227,110 @@ class TestDriftIsDetected:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+class TestTheInstrumentCanStillReachTheCorpusItMeasures:
+    """The corpus left this repository (#1723); the instrument did not follow.
+
+    MEASURED on ``origin/main`` at ``397b3f25f``, both D9 instruments::
+
+        $ python3 tools/d9_flow_gate_reality.py --out <dir>
+        benchmark-data/ not found                                      rc=2
+        $ python3 tools/d9_content_census.py --out <file>
+        REFUSE — no published runs. ...                                rc=2
+
+    Both refusals are HONEST and neither is a measurement, so the ninth
+    dimension had no live answer at all: the only D9 figures quotable were the
+    ones frozen in ``d9_reality/d9_reality.json``, and the CONTENT half — the
+    arm that separates "the gate read the bytes" from "the gate noticed the
+    file was gone" — had never produced one.
+
+    These pin the seam that makes it reachable again, and pin it in the
+    direction that can go wrong quietly: a pointer that is SET and WRONG must
+    refuse, and the corpus-clean check must ask the tree the runs were read
+    from rather than the one that no longer has them.
+    """
+
+    def test_a_broken_pointer_refuses_instead_of_reading_as_no_corpus(
+            self, tmp_path, monkeypatch):
+        """Somebody who sets the variable has NAMED a corpus.
+
+        Rendering "your path is wrong" as "there is no corpus here" is how a
+        mistyped path, a failed clone or a no-op CI fetch buys a clean-looking
+        refusal that nobody investigates. The sibling helper
+        (`programs/tests/_published_corpus.py`) settled this and the rule is
+        not re-argued — only re-pinned on this instrument.
+        """
+        monkeypatch.setenv(d9.CORPUS_ENV, str(tmp_path / "nowhere"))
+        with pytest.raises(SystemExit) as exc:
+            d9.corpus_clone()
+        assert d9.CORPUS_ENV in str(exc.value)
+
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        monkeypatch.setenv(d9.CORPUS_ENV, str(empty))
+        with pytest.raises(SystemExit):
+            d9.corpus_clone()
+
+        monkeypatch.delenv(d9.CORPUS_ENV, raising=False)
+        assert d9.corpus_clone() is None, (
+            "with no pointer set this must be None — 'nobody offered a corpus' "
+            "and 'the offered corpus is broken' are different facts")
+
+    def test_run_paths_keep_their_prefix_and_resolve_into_the_clone(
+            self, tmp_path, monkeypatch):
+        """A figure measured against a clone must be quotable against the
+        published tree without translation, so run ids keep the
+        ``benchmark-data/`` prefix everywhere and only :func:`run_path` spends
+        it.
+        """
+        clone = tmp_path / "clone"
+        (clone / "ic" / "d" / "v1_p").mkdir(parents=True)
+        monkeypatch.setenv(d9.CORPUS_ENV, str(clone))
+
+        rel = "benchmark-data/ic/d/v1_p"
+        assert d9.run_path(REPO, rel) == clone / "ic/d/v1_p"
+
+        monkeypatch.delenv(d9.CORPUS_ENV, raising=False)
+        assert d9.run_path(REPO, rel) == REPO / rel, (
+            "with no clone offered the path must resolve exactly as it always "
+            "did; the seam may add a tree, never move the old one")
+
+    def test_the_corpus_clean_check_asks_the_tree_the_runs_came_from(
+            self, tmp_path, monkeypatch):
+        """THE DISCRIMINATION. Arm B deletes and arm C rewrites, both on copies
+        — and the end-of-sweep guard exists because a writer the probe missed
+        would dirty the real corpus anyway.
+
+        Pointed at a clone, the pre-seam guard ran ``git status --porcelain --
+        benchmark-data`` inside the PLUGIN repo, which no longer has that path.
+        It answered CLEAN over a directory that does not exist, whatever the
+        clone looked like: a check whose answer does not depend on its subject.
+        Both directions are driven on a real repository below.
+        """
+        clone = tmp_path / "clone"
+        (clone / "ic" / "d" / "v1_p").mkdir(parents=True)
+        env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
+               "GIT_CONFIG_SYSTEM": os.devnull}
+        subprocess.run(["git", "init", "-q"], cwd=clone, check=True, env=env,
+                       capture_output=True)
+        keep = clone / "ic" / "d" / "v1_p" / "kept.txt"
+        keep.write_text("published\n")
+        subprocess.run(["git", "add", "ic/d/v1_p/kept.txt"], cwd=clone,
+                       check=True, env=env, capture_output=True)
+        subprocess.run(["git", "-c", "user.name=d9", "-c", "user.email=d9@x",
+                        "commit", "-qm", "seed"], cwd=clone, check=True,
+                       env=env, capture_output=True)
+
+        monkeypatch.setenv(d9.CORPUS_ENV, str(clone))
+        clean, body = d9.verify_corpus_clean(REPO)
+        assert clean and body == "", (
+            f"a freshly committed clone reported dirty: {body!r} — the "
+            f"positive direction has to hold or the negative one below proves "
+            f"nothing")
+
+        keep.write_text("a writer the probe missed got here\n")
+        clean, body = d9.verify_corpus_clean(REPO)
+        assert not clean and "kept.txt" in body, (
+            f"the sweep guard did not see a modified file in the very tree the "
+            f"runs were copied from: clean={clean} body={body!r}")
