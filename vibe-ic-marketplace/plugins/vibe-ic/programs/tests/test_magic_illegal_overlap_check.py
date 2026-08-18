@@ -154,6 +154,42 @@ def test_no_extraction_at_all_is_disclosed_vacuous_and_says_it_is_not_a_pass(
     assert M._ve.VACUOUS_STDOUT_SENTINEL in (cp.stdout + cp.stderr)
 
 
+def test_a_published_lvs_verdict_is_itself_extraction_evidence(tmp_path):
+    """The one way rc 2 could be manufactured, closed.
+
+    Delete the extraction directory and the gate would have "nothing to be
+    about" — a disclosed vacuous pass — while `reports/phase3/lvs.rpt` still
+    certifies a unique match. The implication runs one way: an LVS report means
+    a netlist was compared, that netlist came from an extraction, and that
+    extraction had a feedback channel.
+    """
+    for rel in M.LVS_VERDICT_RELS:
+        proj = tmp_path / rel.replace("/", "_")
+        (proj / "reports/phase3").mkdir(parents=True)
+        (proj / rel).write_text("Final result: Circuits match uniquely.\n")
+        assert not (proj / M.EXTRACTED_REL).exists()
+        r = M.check(proj)
+        assert r["skipped"] is False, f"{rel} must defeat the vacuous route"
+        assert r["passed"] is False
+        assert "EXTRACTION_FEEDBACK_ABSENT" in _rules(r)
+        assert rel in r["extraction_evidence"]
+
+
+def test_a_project_with_neither_an_extraction_nor_an_lvs_verdict_is_vacuous(
+        tmp_path):
+    """The evidence rule must still leave a genuine no-run case rc 2.
+
+    Without this, "evidence" could creep until every empty directory FAILs and
+    the gate stops distinguishing "nothing ran" from "something ran and hid".
+    """
+    proj = tmp_path / "empty"
+    (proj / "reports/phase3").mkdir(parents=True)
+    (proj / "reports/phase3/drc_signoff.rpt").write_text("0 total errors\n")
+    r = M.check(proj)
+    assert r["skipped"] is True
+    assert r["extraction_evidence"] == []
+
+
 # --------------------------------------------------------------------------- #
 # trap (2) — two counts, and a disagreement is loud
 # --------------------------------------------------------------------------- #

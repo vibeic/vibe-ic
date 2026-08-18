@@ -4216,17 +4216,27 @@ steps:
         #
         # BLAST RADIUS: 0 run trees in the landing base — benchmark-data moved
         # to its own repository at v1.10.56 (#1723), and this checkout carries
-        # 0 routed.def / 0 lvs.rpt / 0 drc_signoff.rpt. Measured against the
-        # last in-repo snapshot of that corpus (worktree _a1489, 9 candidate
-        # roots): 7 rc-2, and 2 rc-1 — ic/caravel_user_project and
-        # ic/subservient, both of which extracted with the pre-W2.3 recipe and
-        # so never dumped the channel. That is the finding, not a regression:
-        # caravel_user_project published `LVS_MATCH` / "Circuits match
-        # uniquely" with its illegal-overlap count NOT DETERMINED. Its
-        # transcript carries 0 occurrences of the marker and 0 `problems
-        # occurred` lines, which is weak evidence the extraction was in fact
-        # clean — but it is not the measurement, and this gate says so rather
-        # than rounding it to zero.
+        # 0 routed.def / 0 lvs.rpt / 0 drc_signoff.rpt, so this clause re-grades
+        # nothing that lands here.
+        #
+        # WHAT IT FINDS ON REAL RUNS, measured against the last in-repo snapshot
+        # of that corpus (14 candidate roots — every directory carrying either
+        # an `extracted/` dir or `reports/phase3/lvs.rpt`; some are nested, so
+        # this over-counts distinct runs): 6 rc-2 and 8 rc-1, every rc-1 an
+        # EXTRACTION_FEEDBACK_ABSENT. SEVEN OF THE EIGHT ALREADY PUBLISH
+        # "Circuits match uniquely" — caravel_user_project (x2), sha256
+        # clean_run_v1422 and v1427, and spm on three different PDKs. The
+        # eighth (subservient) published "failed pin matching".
+        #
+        # Stated exactly: that is NOT a claim those extractions were dirty. It
+        # is the claim this gate exists to make — seven clean LVS certificates
+        # were issued while the illegal-overlap count was NOT DETERMINED,
+        # because the pre-W2.3 recipe never dumped the channel that carries it.
+        # caravel_user_project's transcript carries 0 occurrences of the marker
+        # and 0 `problems occurred` lines, which is weak evidence it was in fact
+        # clean — but weak evidence is not the measurement, and rounding it to
+        # zero is the defect, not the fix. Re-extracting with the recipe this
+        # change ships turns every one of those NOT DETERMINEDs into a number.
         #
         # THE GATE'S OWN --json TARGET IS DELIBERATELY NOT DECLARED in
         # required_outputs. No producer outside this clause writes it, so
