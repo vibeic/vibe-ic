@@ -617,9 +617,12 @@ def check(project: Path, under: Optional[str] = None) -> Dict[str, Any]:
         base["findings"].insert(0, {
             "rule": "MAGIC_ILLEGAL_OVERLAP", "severity": "ERROR",
             "message": (
-                f"the extractor reported {count} illegal overlap(s) over "
-                f"{record_count} feedback area(s), against a threshold of "
-                f"{THRESHOLD}. Each one is geometry the extractor refused to "
+                f"the extractor reported {count} illegal overlap(s), against a "
+                f"threshold of {THRESHOLD}. Counted from: feedback dump "
+                f"string={string_count} structural={structural_count} "
+                f"({record_count} area(s)), transcript={transcript_count} — "
+                f"the verdict takes the LARGEST, so a channel that lost them "
+                f"cannot lower it. Each one is geometry the extractor refused to "
                 f"connect, so the `.subckt` it went on to write describes a "
                 f"design the layout does not. An LVS run over that netlist can "
                 f"report a unique match and mean nothing. Fix the layout at "
