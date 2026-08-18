@@ -561,7 +561,7 @@ VERDICT_JSON="${JSON_OUT:-$RUN/verdict.json}"
 # and the tier code says NOT_APPLICABLE rather than NOT_PERFORMED so a reader
 # can tell "there was never a second tree" from "we did not look".
 python3 "$VERDICT_PROG" \
-  --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" \
+  --base-sha "$BASE_SHA" --base-tree "$BASE_TREE" --head-sha "$HEAD_SHA" \
   --verified-sha "$HEAD_SHA" --rebase-status ok \
   --expected-tree "$HEAD_TREE" --verified-tree "$HEAD_TREE" \
   --land-log "$CAND_LAND_LOG" --selection "$RUN/selection.txt" \
