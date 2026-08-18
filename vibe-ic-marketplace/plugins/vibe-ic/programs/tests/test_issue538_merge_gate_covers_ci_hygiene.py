@@ -896,7 +896,7 @@ def test_landing_shaped_gates_stay_out_of_the_repo_hygiene_lane(gate):
 # ==========================================================================
 # 6. THE v1.7.92 INCIDENT, REPRODUCED AGAINST THE REAL TREE
 # ==========================================================================
-def test_a_new_program_without_a_regenerated_index_is_refused():
+def test_a_new_program_without_a_regenerated_index_is_refused(tmp_path):
     """The v1.7.92 state, end to end through the merge gate.
 
     A program is added and `INDEX.md` is not regenerated — exactly what
@@ -906,36 +906,65 @@ def test_a_new_program_without_a_regenerated_index_is_refused():
     `_audit`, so it is invisible to a name-shaped derivation of the gate list;
     only invoking the script reaches it.
 
-    Uses the REAL gate against the REAL tree — the probe program is written
-    into the live `programs/` directory and removed in `finally`, which is the
-    technique `test_gate_discloses_denominator.py` already uses for the same
-    reason: a fixture cannot prove a gate reads the artefacts it ships to read.
+    Uses the REAL gate over a HARDLINK FARM of the shipped programs. It used
+    to plant the probe program into the LIVE `programs/` directory and unlink
+    it in `finally` — the technique the neighbouring denominator test used for
+    the same reason, and which that file no longer uses either. Under the
+    landing gate's per-file recovery path many pytest sessions share ONE
+    checkout, so for the body of this test every neighbour enumerating
+    `programs/` counted a probe program that is in no commit, AND saw the
+    index legitimately stale because of it. That is this gate's own finding,
+    manufactured on a branch that did not earn it, and the `finally` removes
+    the evidence before anyone can look.
+
+    `gen_programs_index.py` resolves its programs dir from its OWN location
+    (`Path(__file__).parent.parent / vibe-ic-marketplace/plugins/vibe-ic/
+    programs`), and the hygiene fixture script already parameterises
+    `ROOT`/`PLUGIN`/`PG`. So a copy of the tool in a private repo whose
+    `programs/` is a farm of the same inodes runs the SAME check over the SAME
+    program bodies — and the probe lands in a tree this test owns.
     """
-    import tempfile
+    import os
+    import shutil
+
+    repo = tmp_path / "repo"
+    progs = repo / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "programs"
+    progs.mkdir(parents=True)
+    (repo / "tools").mkdir(parents=True)
+    tool = repo / "tools" / "gen_programs_index.py"
+    shutil.copy2(_REPO / "tools" / "gen_programs_index.py", tool)
+    for src in sorted(_PROGRAMS.glob("*.py")):
+        if src.is_file():
+            os.link(src, progs / src.name)
+    # Start FRESH, so (a) below is a control and not a coincidence.
+    gen = subprocess.run([sys.executable, str(tool), "--out",
+                          str(progs / "INDEX.md")],
+                         capture_output=True, text=True, timeout=300)
+    assert gen.returncode == 0, gen.stderr
+
     # NOT `_probe_…`: `gen_programs_index._is_helper` skips any name starting
-    # with an underscore, so the underscore-prefixed probe the neighbouring
-    # denominator test uses would leave the index legitimately fresh and this
-    # test would pass while proving nothing. Caught by the (a) control below,
-    # which is the reason it is there.
-    probe = _PROGRAMS / "probe_issue538_unindexed_throwaway.py"
+    # with an underscore, so an underscore-prefixed probe would leave the index
+    # legitimately fresh and this test would pass while proving nothing. Caught
+    # by the (a) control below, which is the reason it is there.
+    probe = progs / "probe_issue538_unindexed_throwaway.py"
     line = ('run "programs index fresh" "$ROOT" '
-            f'python3 "{_REPO}/tools/gen_programs_index.py" --check\n')
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            script = _fixture_script(Path(td), line)
+            f'python3 "{tool}" --check\n')
+    script = _fixture_script(repo, line)
 
-            # (a) control — before the program exists, the index is fresh.
-            before = GR.repo_hygiene_gate(_REPO, script=script)
-            assert before.rc == 0, (
-                "the index was ALREADY stale before this test touched "
-                f"anything, so it proves nothing: {before.summary}")
+    # (a) control — before the program exists, the index is fresh.
+    before = GR.repo_hygiene_gate(repo, script=script)
+    assert before.rc == 0, (
+        "the index was ALREADY stale before this test touched "
+        f"anything, so it proves nothing: {before.summary}")
 
-            # (b) the incident — a new program, no regenerated index.
-            probe.write_text('"""throwaway (vibe-ic#538 test)."""\n')
-            after = GR.repo_hygiene_gate(_REPO, script=script)
-    finally:
-        if probe.exists():
-            probe.unlink()
+    # (b) the incident — a new program, no regenerated index.
+    probe.write_text('"""throwaway (vibe-ic#538 test)."""\n')
+    after = GR.repo_hygiene_gate(repo, script=script)
+
+    assert not (_PROGRAMS / probe.name).exists(), (
+        "the probe reached the live programs dir; a concurrent pytest session "
+        "enumerating programs/ counts it, and reports the index it staled as "
+        "this branch's finding")
 
     assert after.rc == 1, (
         "the merge gate did NOT refuse a landing that adds a program without "

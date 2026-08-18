@@ -43,6 +43,7 @@ _PLUGIN = _PROGRAMS.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 import gate_skip_routing_check as gsrc  # noqa: E402
+import _private_tree as _T  # noqa: E402
 import _vacuous_exit as _vx  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
@@ -69,7 +70,7 @@ def test_consumer_reads_the_unbracketed_token_and_not_the_bracketed_one():
     assert _vx.VACUOUS_STDOUT_SENTINEL.startswith(gsrc._CONSUMER_SENTINEL)
 
 
-def test_consumer_reads_only_two_channels(tmp_path):
+def test_consumer_reads_only_two_channels(tmp_path, monkeypatch):
     """A JSON report saying VACUOUS_PASS is NOT a third channel.
 
     `_check_program_exit_zero` never opens the report file, so a gate whose
@@ -77,9 +78,13 @@ def test_consumer_reads_only_two_channels(tmp_path):
     credited a plain PASS. This is why the check does not accept the report as
     routing.
     """
-    # `_resolve_program_cmd` resolves a bare name against PROGRAMS_DIR, so the
-    # fixture has to live there for the real consumer to run it at all.
-    gate = _PROGRAMS / "_i528_report_only_disclosure_check.py"
+    # `_resolve_program_cmd` resolves a bare name against `_flow.PROGRAMS_DIR`,
+    # which it reads at CALL time — so pointing that at a directory this test
+    # owns exercises the same bare-name resolution on the same shipped
+    # function. It used to be pointed at the live programs dir instead, which
+    # planted this fixture beside the shipped programs for the length of the
+    # test; see `_private_tree` for what a concurrent session then measures.
+    gate = tmp_path / "_i528_report_only_disclosure_check.py"
     gate.write_text(textwrap.dedent('''\
         """Temporary fixture planted by test_gate_skip_routing_check."""
         import json, sys
@@ -88,6 +93,7 @@ def test_consumer_reads_only_two_channels(tmp_path):
         print("examined nothing")
         sys.exit(0)
         '''), encoding="utf-8")
+    monkeypatch.setattr(_flow, "PROGRAMS_DIR", tmp_path)
     try:
         passed, out = _flow._check_program_exit_zero(
             tmp_path, "_i528_report_only_disclosure_check")
@@ -577,10 +583,14 @@ def test_ratchet_is_silent_when_the_measurement_matches():
 def test_a_new_gate_with_an_unrouted_skip_fails_the_shipped_check(tmp_path):
     """The standing requirement: the class cannot grow unnoticed.
 
-    Driven against the REAL plugin tree with the REAL inventory, plus one
-    planted gate — so this exercises the shipped ratchet, not a stub.
+    Driven against the REAL inventory over a HARDLINK FARM of the shipped
+    programs plus one planted gate — same inodes, same flow yaml, same
+    ratchet, so this exercises the shipped check and not a stub. The farm is
+    what keeps the plant out of the tree every concurrent pytest session is
+    reading; see `_private_tree`.
     """
-    planted = _PROGRAMS / "_i528_planted_unrouted_check.py"
+    plugin = _T.private_plugin(tmp_path)
+    planted = plugin / "programs" / "_i528_planted_unrouted_check.py"
     planted.write_text(textwrap.dedent('''\
         """Temporary fixture planted by test_gate_skip_routing_check."""
         import argparse, sys
@@ -593,15 +603,13 @@ def test_a_new_gate_with_an_unrouted_skip_fails_the_shipped_check(tmp_path):
         if __name__ == "__main__":
             sys.exit(main())
         '''), encoding="utf-8")
-    try:
-        r = subprocess.run(
-            [sys.executable, str(_PROGRAMS / "gate_skip_routing_check.py"),
-             str(_PLUGIN)], capture_output=True, text=True, timeout=60)
-        assert r.returncode == 1, r.stdout
-        assert "_i528_planted_unrouted_check" in r.stdout
-        assert "RATCHET-NOT IN THE INVENTORY" in r.stdout
-    finally:
-        planted.unlink()
+    r = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "gate_skip_routing_check.py"),
+         str(plugin)], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 1, r.stdout
+    assert "_i528_planted_unrouted_check" in r.stdout
+    assert "RATCHET-NOT IN THE INVENTORY" in r.stdout
+    _T.assert_live_tree_unplanted("_i528_*")
 
 
 def test_the_shipped_tree_is_clean_under_the_ratchet():

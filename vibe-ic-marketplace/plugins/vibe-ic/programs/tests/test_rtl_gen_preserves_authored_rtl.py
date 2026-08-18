@@ -29,7 +29,9 @@ design. The guard is keyed on RTL provenance alone.
 """
 from __future__ import annotations
 
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -42,6 +44,28 @@ if str(PROGRAMS_DIR) not in sys.path:
 import design_one_shot_runner as R  # noqa: E402
 
 STUB_NAME = "_zz_test_authored_guard_stub_gen.py"
+
+#: Where the stub generator is written. It used to be the LIVE `programs/`
+#: dir — `PROGRAMS_DIR / STUB_NAME`, cleaned up by an autouse fixture. The
+#: landing gate's per-file recovery path runs many pytest sessions at once over
+#: ONE shared checkout, so for the body of each of these tests every neighbour
+#: enumerating `programs/` counted an undocumented, untested `.py` as a program
+#: of this branch. Nineteen of those plants happen in this file alone. Because
+#: the fixture removes them, `git status --porcelain` afterwards is clean and
+#: the reds they manufacture point at nothing.
+#:
+#: `design_one_shot_runner` builds the generator path as `PROGRAMS_DIR /
+#: config["rtl_gen"]`, and `Path("/a") / "/tmp/x.py"` is `/tmp/x.py` — so an
+#: ABSOLUTE `rtl_gen` reaches the same dispatch through the same expression,
+#: with the stub in a directory this module owns. `Path(cmd[1]).name` still
+#: reads `STUB_NAME`, which is what the interception below keys on.
+_STUB_DIRS: list = []
+
+
+def _stub_path() -> Path:
+    d = Path(tempfile.mkdtemp(prefix="zz_authored_guard_stub_"))
+    _STUB_DIRS.append(d)
+    return d / STUB_NAME
 
 # A stub generator that emits exactly one file, so "did the generator
 # run?" is observable from the file set alone.
@@ -73,8 +97,10 @@ def _install_class(monkeypatch, gen_src: str = STUB_SRC,
     Chip-AGNOSTIC by construction: no real IC class, no real generator,
     no ic_class.json involvement.
     """
-    stub = PROGRAMS_DIR / STUB_NAME
+    stub = _stub_path()
     stub.write_text(gen_src)
+    if rtl_gen == STUB_NAME:
+        rtl_gen = str(stub)
 
     config = {"name": CLASS_NAME, "rtl_gen": rtl_gen,
               "fallback_skill": fallback_skill}
@@ -91,7 +117,12 @@ def _install_class(monkeypatch, gen_src: str = STUB_SRC,
 @pytest.fixture(autouse=True)
 def _cleanup_stub():
     yield
-    (PROGRAMS_DIR / STUB_NAME).unlink(missing_ok=True)
+    for d in _STUB_DIRS:
+        shutil.rmtree(d, ignore_errors=True)
+    _STUB_DIRS.clear()
+    assert not (PROGRAMS_DIR / STUB_NAME).exists(), (
+        f"{STUB_NAME} was planted in the live programs dir; a concurrent "
+        f"pytest session enumerating programs/ counts it as this branch's")
 
 
 def _rtl(project: Path) -> Path:
@@ -467,10 +498,11 @@ def test_guard_ignores_ic_class_identity(tmp_path, monkeypatch):
     outcomes = []
     for class_name in ("some_class_a", "some_class_b"):
         _install_class(monkeypatch)
+        stub = str(_STUB_DIRS[-1] / STUB_NAME)
         monkeypatch.setattr(
             R, "_lookup_class",
-            lambda c: {"name": c, "rtl_gen": STUB_NAME,
-                       "fallback_skill": "spec-to-rtl"})
+            lambda c, _s=stub: {"name": c, "rtl_gen": _s,
+                                "fallback_skill": "spec-to-rtl"})
         project = _new_project(tmp_path / class_name)
         R.step_rtl_gen(project, class_name)
         _end_run_and_start_new()

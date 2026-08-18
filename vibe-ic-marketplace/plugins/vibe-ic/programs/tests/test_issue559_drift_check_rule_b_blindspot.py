@@ -57,6 +57,8 @@ F = _load("flow_compliance_check", "flow_compliance_check.py")
 D = _load("p0_gate_invocability_drift_check",
           "p0_gate_invocability_drift_check.py")
 
+import _private_tree as _T  # noqa: E402
+
 #: Reached THROUGH the module under test, never re-imported. A fresh `_load`
 #: would hand back a second module object, and patching that one would prove
 #: nothing about what the ratchet actually calls. `getattr` rather than
@@ -86,6 +88,34 @@ def _gate(tmp_path: pathlib.Path, name: str, body: str) -> pathlib.Path:
     p.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
     p.chmod(p.stat().st_mode | stat.S_IEXEC)
     return p
+
+
+def _planted_in_a_private_farm(tmp_path, monkeypatch, name: str, body: str):
+    """Register *name* as a structural gate whose file lives OUTSIDE the tree.
+
+    THE GATE USED TO BE WRITTEN INTO THE LIVE `programs/` DIR, because the
+    umbrella's own argv builder resolves a gate as
+    `flow_compliance_check.PROGRAMS_DIR / f"{gate}.py"` and the whole point of
+    #492 is that this test must drive the SAME builder. Planting there put an
+    extra, deliberately-broken `.py` beside the shipped programs for the length
+    of the test; the landing gate's per-file parallel path runs many pytest
+    sessions over ONE checkout, so every neighbour enumerating `programs/`
+    counted it as this branch's. The `finally` that removed it also removed the
+    evidence, so `git status --porcelain` came back clean over a manufactured
+    red.
+
+    Pointing `PROGRAMS_DIR` at a HARDLINK FARM of the shipped programs keeps
+    every real gate byte-identical (same inode) and the builder unchanged,
+    while the plant lands in a directory this test owns.
+    """
+    plugin = _T.private_plugin(tmp_path)
+    farm = plugin / "programs"
+    _gate(farm, name, body)
+    monkeypatch.setitem(sys.modules, "flow_compliance_check", F)
+    monkeypatch.setattr(F, "PROGRAMS_DIR", farm)
+    monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES",
+                        tuple(F._STRUCTURAL_RTL_GATES) + (name,))
+    return farm
 
 
 # ---------------------------------------------------------------------------
@@ -194,25 +224,19 @@ def test_a_newly_registered_hand_rolled_gate_fails_the_ratchet(
     the ratchet must go red. On origin/main it prints `[PASS] ... No new silent
     gate` while P0 reports PASS over a check that never ran."""
     name = "brand_new_hand_rolled_check"
-    _gate(_PROGRAMS, name, _HAND_ROLLED)
-    try:
-        # `measure()` does its own `import flow_compliance_check`, and sibling
-        # test modules in the same session load their own copy into
-        # `sys.modules` — patching only our `F` would patch an object the
-        # measurement never reads, and the test would pass or fail on file
-        # ordering.
-        monkeypatch.setitem(sys.modules, "flow_compliance_check", F)
-        monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES",
-                            tuple(F._STRUCTURAL_RTL_GATES) + (name,))
-        res = D.measure(jobs=4)
-        assert name in res["measured"], (
-            "a newly registered gate that hand-rolls its required-argument "
-            "check was measured as INVOCABLE; it returns no verdict, P0 still "
-            "says PASS, and the ratchet built to notice says nothing")
-        assert D.main([]) == D.RC_DRIFT
-        assert name in capsys.readouterr().err
-    finally:
-        (_PROGRAMS / f"{name}.py").unlink(missing_ok=True)
+    # `measure()` does its own `import flow_compliance_check`, and sibling test
+    # modules in the same session load their own copy into `sys.modules` —
+    # patching only our `F` would patch an object the measurement never reads,
+    # and the test would pass or fail on file ordering.
+    _planted_in_a_private_farm(tmp_path, monkeypatch, name, _HAND_ROLLED)
+    res = D.measure(jobs=4)
+    assert name in res["measured"], (
+        "a newly registered gate that hand-rolls its required-argument "
+        "check was measured as INVOCABLE; it returns no verdict, P0 still "
+        "says PASS, and the ratchet built to notice says nothing")
+    assert D.main([]) == D.RC_DRIFT
+    assert name in capsys.readouterr().err
+    _T.assert_live_tree_unplanted("brand_new_*_check.py")
 
 
 # ---------------------------------------------------------------------------
@@ -236,13 +260,11 @@ def test_a_rule_b_gate_is_not_filed_as_mechanical_wiring(tmp_path, monkeypatch):
     `needs_design_value`. Filing it as a wiring gap tells the next reader that
     an adapter row would fix it, and it would not."""
     name = "brand_new_semantic_check"
-    _gate(_PROGRAMS, name, _HAND_ROLLED)
-    try:
-        out = D._split_undecided([name])
-        assert out["needs_design_value"] == [name], out
-        assert out["wiring_gap"] == [], out
-    finally:
-        (_PROGRAMS / f"{name}.py").unlink(missing_ok=True)
+    _planted_in_a_private_farm(tmp_path, monkeypatch, name, _HAND_ROLLED)
+    out = D._split_undecided([name])
+    assert out["needs_design_value"] == [name], out
+    assert out["wiring_gap"] == [], out
+    _T.assert_live_tree_unplanted("brand_new_*_check.py")
 
 
 # ---------------------------------------------------------------------------

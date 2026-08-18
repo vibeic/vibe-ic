@@ -36,6 +36,9 @@ _PREFIX = "vibe-ic-marketplace/plugins/vibe-ic"
 _D7 = "programs/tests/test_matrix_d7_outputs_list_complete.py"
 
 
+import _private_tree as _T  # noqa: E402
+
+
 def _selector():
     path = _PLUGIN / "programs" / "ci_targeted_test_select.py"
     spec = importlib.util.spec_from_file_location("_sel_1387", path)
@@ -45,9 +48,32 @@ def _selector():
     return mod
 
 
-def _select(paths):
+def _select(paths, plugin=None):
     return _selector().select_tests(
-        [f"{_PREFIX}/{p}" for p in paths], _PLUGIN, plugin_prefix=_PREFIX)
+        [f"{_PREFIX}/{p}" for p in paths], plugin or _PLUGIN,
+        plugin_prefix=_PREFIX)
+
+
+def _private_plugin_with_a_probe(tmp_path, name: str, body: str):
+    """A plugin-shaped hardlink farm carrying one brand-new test file.
+
+    THE PROBE USED TO BE WRITTEN INTO THE LIVE `programs/tests/` DIR and
+    unlinked in a `finally`. The landing gate's per-file recovery path runs
+    many pytest sessions at once over ONE shared checkout, so for the body of
+    these two tests every neighbour saw an extra `test_zz1387_*.py` in the
+    tree — and a spurious TEST file is worse than a spurious program, because
+    the selectors, the per-file schedulers and the "every program has a test"
+    audits all enumerate exactly that directory. The `finally` removes it, so
+    `git status --porcelain` is clean and the manufactured red has no trace.
+
+    `select_tests` takes the plugin root as an argument, so a farm is a
+    complete substitute: every shipped file is the SAME INODE, and the probe is
+    a new one that cannot reach the real tree.
+    """
+    plugin = _T.private_plugin(tmp_path, include_tests=True)
+    probe = plugin / "programs" / "tests" / name
+    probe.write_text(body, encoding="utf-8")
+    return plugin
 
 
 def test_the_1265_case_selects_the_glob_consumer():
@@ -75,23 +101,20 @@ def test_the_edge_is_DERIVED_not_a_hand_list(tmp_path, monkeypatch):
     corpus-walking test. So the guard is that a BRAND-NEW file, never named
     anywhere, is picked up with no edit to the selector.
     """
-    probe = _PLUGIN / "programs" / "tests" / "test_zz1387_derived_probe.py"
-    probe.write_text(
+    plugin = _private_plugin_with_a_probe(
+        tmp_path, "test_zz1387_derived_probe.py",
         "import pathlib\n\n\n"
         "def test_probe():\n"
-        "    list(pathlib.Path('programs').glob('*.py'))\n",
-        encoding="utf-8")
-    try:
-        sel = _select(["programs/eda_report_audit.py"])
-    finally:
-        probe.unlink()
+        "    list(pathlib.Path('programs').glob('*.py'))\n")
+    sel = _select(["programs/eda_report_audit.py"], plugin)
+    _T.assert_live_tree_unplanted("tests/test_zz1387_*.py")
     assert "programs/tests/test_zz1387_derived_probe.py" in sel, (
         "a newly written test that globs `*.py` was not selected — the rule is "
         "behaving like a hand-list, which is the defect #527/#530 removed and "
         "rule 4's docstring forbids")
 
 
-def test_an_UNSHAPED_glob_is_not_an_edge():
+def test_an_UNSHAPED_glob_is_not_an_edge(tmp_path):
     """`tmp_path.glob('*')` must not couple a fixture to the whole source tree.
 
     ANTI-COST guard, and it is load-bearing: measured on this tree, 38 of the 56
@@ -101,16 +124,13 @@ def test_an_UNSHAPED_glob_is_not_an_edge():
     matches everything names no shape, exactly the objection that keeps
     `iterdir()` out.
     """
-    probe = _PLUGIN / "programs" / "tests" / "test_zz1387_unshaped_probe.py"
-    probe.write_text(
+    plugin = _private_plugin_with_a_probe(
+        tmp_path, "test_zz1387_unshaped_probe.py",
         "import pathlib\n\n\n"
         "def test_probe(tmp_path):\n"
-        "    list(tmp_path.glob('*'))\n",
-        encoding="utf-8")
-    try:
-        sel = _select(["programs/eda_report_audit.py"])
-    finally:
-        probe.unlink()
+        "    list(tmp_path.glob('*'))\n")
+    sel = _select(["programs/eda_report_audit.py"], plugin)
+    _T.assert_live_tree_unplanted("tests/test_zz1387_*.py")
     assert "programs/tests/test_zz1387_unshaped_probe.py" not in sel, (
         "a `glob('*')` over a tmp_path was treated as a dependency on the "
         "source tree; that edge is unshaped and would select 38 extra files "

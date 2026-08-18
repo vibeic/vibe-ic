@@ -734,43 +734,68 @@ def test_expand_globs_glob_zero_matches_dropped(tmp_path):
 # pre-tapeout / digital-only projects to FAIL the canonical-flow
 # audit on those steps despite having legitimate skip-conditions.
 
-def test_check_program_exit_zero_rc2_is_vacuous_pass(tmp_path):
+def _helper_dir(tmp_path, monkeypatch):
+    """A private programs dir for one-off helper gates, and the redirect to it.
+
+    THE HELPERS USED TO BE WRITTEN INTO THE LIVE `programs/` DIR, because
+    `_check_program_exit_zero` resolves a bare gate name against
+    `flow_compliance_check.PROGRAMS_DIR`. It reads that global at CALL time, so
+    pointing it at a directory this test owns drives exactly the same shipped
+    resolution over exactly the same helper.
+
+    Why it matters: the landing gate's per-file recovery path runs many pytest
+    sessions at once over ONE shared checkout, so for the body of each of these
+    tests every neighbour enumerating `programs/` counted `_pytest_*_helper.py`
+    as programs of this branch — several of which exist to crash or to exit
+    non-zero. The `finally` unlinks them, so `git status --porcelain` is clean
+    afterwards and the manufactured finding has no evidence behind it.
+    """
+    from programs.flow_compliance_check import PROGRAMS_DIR  # noqa: PLC0415
+    import programs.flow_compliance_check as _fcc            # noqa: PLC0415
+    d = tmp_path / "helper_programs"
+    d.mkdir(exist_ok=True)
+    monkeypatch.setattr(_fcc, "PROGRAMS_DIR", d)
+    return d, PROGRAMS_DIR
+
+
+def _no_helper_reached_the_live_tree(live_programs_dir):
+    strays = sorted(p.name for p in live_programs_dir.glob("_pytest_*_helper.py"))
+    assert not strays, (
+        f"this test planted {strays} into the live programs dir; a concurrent "
+        f"pytest session enumerating programs/ counts them as this branch's")
+
+
+def test_check_program_exit_zero_rc2_is_vacuous_pass(tmp_path, monkeypatch):
     """Program exiting 2 is treated as PASS with VACUOUS_HINT prefix
     so check_step promotes the verdict to VACUOUS_PASS."""
     from programs.flow_compliance_check import (
         _check_program_exit_zero,
         _VACUOUS_HINT_PREFIX,
-        PROGRAMS_DIR,
     )
-    # Plant a one-off helper program that exits 2.
-    helper = PROGRAMS_DIR / "_pytest_rc2_helper.py"
-    helper.write_text(
+    # A one-off helper program that exits 2, in a dir this test owns.
+    d, live = _helper_dir(tmp_path, monkeypatch)
+    (d / "_pytest_rc2_helper.py").write_text(
         "import sys; print('verdict: SKIP'); sys.exit(2)\n"
     )
-    try:
-        passed, snippet = _check_program_exit_zero(tmp_path, "_pytest_rc2_helper")
-        assert passed is True, f"rc=2 should be PASS (vacuous), got {passed}"
-        assert snippet.startswith(_VACUOUS_HINT_PREFIX), (
-            f"snippet missing vacuous-hint prefix: {snippet!r}"
-        )
-    finally:
-        helper.unlink(missing_ok=True)
+    passed, snippet = _check_program_exit_zero(tmp_path, "_pytest_rc2_helper")
+    assert passed is True, f"rc=2 should be PASS (vacuous), got {passed}"
+    assert snippet.startswith(_VACUOUS_HINT_PREFIX), (
+        f"snippet missing vacuous-hint prefix: {snippet!r}"
+    )
+    _no_helper_reached_the_live_tree(live)
 
 
-def test_check_program_exit_zero_rc1_still_fails(tmp_path):
+def test_check_program_exit_zero_rc1_still_fails(tmp_path, monkeypatch):
     """rc=1 must still register as FAIL — the rc=2 carve-out doesn't
     affect rc=1 semantics."""
-    from programs.flow_compliance_check import (
-        _check_program_exit_zero, PROGRAMS_DIR,
-    )
-    helper = PROGRAMS_DIR / "_pytest_rc1_helper.py"
-    helper.write_text("import sys; print('FAIL: bad'); sys.exit(1)\n")
-    try:
-        passed, snippet = _check_program_exit_zero(tmp_path, "_pytest_rc1_helper")
-        assert passed is False
-        assert "FAIL: bad" in snippet
-    finally:
-        helper.unlink(missing_ok=True)
+    from programs.flow_compliance_check import _check_program_exit_zero
+    d, live = _helper_dir(tmp_path, monkeypatch)
+    (d / "_pytest_rc1_helper.py").write_text(
+        "import sys; print('FAIL: bad'); sys.exit(1)\n")
+    passed, snippet = _check_program_exit_zero(tmp_path, "_pytest_rc1_helper")
+    assert passed is False
+    assert "FAIL: bad" in snippet
+    _no_helper_reached_the_live_tree(live)
 
 
 # ─── CRASH vs VERDICT: the distinction must not depend on the path ────
@@ -839,19 +864,14 @@ def _deep_project(tmp_path):
     return deep
 
 
-def _run_helper(name, src, project):
-    from programs.flow_compliance_check import (
-        _check_program_exit_zero, PROGRAMS_DIR,
-    )
-    helper = PROGRAMS_DIR / f"{name}.py"
-    helper.write_text(src)
-    try:
-        return _check_program_exit_zero(project, f"{name} .")
-    finally:
-        helper.unlink(missing_ok=True)
+def _run_helper(name, src, project, helper_dir):
+    """Run *src* as gate *name* out of *helper_dir* — never the live tree."""
+    from programs.flow_compliance_check import _check_program_exit_zero
+    (helper_dir / f"{name}.py").write_text(src)
+    return _check_program_exit_zero(project, f"{name} .")
 
 
-def test_crash_is_flagged_as_a_crash_at_any_checkout_depth(tmp_path):
+def test_crash_is_flagged_as_a_crash_at_any_checkout_depth(tmp_path, monkeypatch):
     """An unhandled exception is disclosed as one, short path or deep."""
     from programs.flow_compliance_check import (
         _CRASH_HINT_PREFIX, _OUTPUT_SNIPPET_CHARS, looks_like_python_traceback,
@@ -864,10 +884,11 @@ def test_crash_is_flagged_as_a_crash_at_any_checkout_depth(tmp_path):
         f"the {_OUTPUT_SNIPPET_CHARS}-char evidence window it exists to "
         f"overflow — this test would prove nothing")
 
+    hd, live = _helper_dir(tmp_path, monkeypatch)
     results = {}
     for label, project in (("shallow", shallow), ("deep", deep)):
         passed, snippet = _run_helper("_pytest_crash_helper",
-                                      _CRASH_HELPER_SRC, project)
+                                      _CRASH_HELPER_SRC, project, hd)
         assert passed is False, f"{label}: a crash must not be a PASS"
         assert snippet.startswith(_CRASH_HINT_PREFIX), (
             f"{label} (path {len(str(project))} chars): the crash carries no "
@@ -911,7 +932,7 @@ _INDENTED_THEN_COL0_ERROR_SRC = (
 )
 
 
-def test_a_real_verdict_is_not_mistaken_for_a_crash(tmp_path):
+def test_a_real_verdict_is_not_mistaken_for_a_crash(tmp_path, monkeypatch):
     """rc 1 with a substantive finding is never DISCLOSED as a crash.
 
     Three helpers, each built to trip a careless crash detector: one prints an
@@ -934,6 +955,7 @@ def test_a_real_verdict_is_not_mistaken_for_a_crash(tmp_path):
     shallow.mkdir()
     deep = _deep_project(tmp_path)
 
+    hd, live = _helper_dir(tmp_path, monkeypatch)
     for name, src, marker in (
         ("_pytest_verdict_helper", _VERDICT_HELPER_SRC, "verdict: FAIL"),
         ("_pytest_quoted_tb_helper", _QUOTED_TRACEBACK_HELPER_SRC,
@@ -942,7 +964,7 @@ def test_a_real_verdict_is_not_mistaken_for_a_crash(tmp_path):
          "verdict: FAIL"),
     ):
         for label, project in (("shallow", shallow), ("deep", deep)):
-            passed, snippet = _run_helper(name, src, project)
+            passed, snippet = _run_helper(name, src, project, hd)
             assert passed is False, f"{name}/{label}: rc 1 must stay a FAIL"
             assert not snippet.startswith(_CRASH_HINT_PREFIX), (
                 f"{name}/{label}: a real verdict was disclosed as a CRASH, "
@@ -968,7 +990,7 @@ def test_a_real_verdict_is_not_mistaken_for_a_crash(tmp_path):
             # marker this code does not preserve would be asserting a wish.
 
 
-def test_rc0_and_rc2_are_untouched_by_the_crash_branch(tmp_path):
+def test_rc0_and_rc2_are_untouched_by_the_crash_branch(tmp_path, monkeypatch):
     """The crash branch sits AFTER the PASS / vacuous / waiver arms.
 
     A gate that exits 0 or 2 has reached a verdict; printing traceback-shaped
@@ -985,8 +1007,9 @@ def test_rc0_and_rc2_are_untouched_by_the_crash_branch(tmp_path):
         "print('[PASS] 12/12 checks clean')\n"
         "sys.exit(0)\n"
     )
+    hd, live = _helper_dir(tmp_path, monkeypatch)
     passed, snippet = _run_helper("_pytest_noisy_pass_helper", noisy_pass,
-                                  tmp_path)
+                                  tmp_path, hd)
     assert passed is True, "rc 0 must stay a PASS"
     assert not snippet.startswith(_CRASH_HINT_PREFIX)
 
@@ -997,6 +1020,6 @@ def test_rc0_and_rc2_are_untouched_by_the_crash_branch(tmp_path):
         "sys.exit(2)\n"
     )
     passed, snippet = _run_helper("_pytest_noisy_skip_helper", noisy_skip,
-                                  tmp_path)
+                                  tmp_path, hd)
     assert passed is True, "rc 2 must stay a disclosed skip"
     assert snippet.startswith(_VACUOUS_HINT_PREFIX)

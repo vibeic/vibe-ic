@@ -12,6 +12,42 @@ PROGRAM = Path(__file__).parent.parent / "phase1_gate_contract_check.py"
 PROGRAMS_DIR = Path(__file__).parent.parent
 
 
+def _private_plugin(tmp_path: Path) -> tuple[Path, Path]:
+    """A private plugin tree the checker can be run FROM, with a real flow.
+
+    THE FAKE GATES USED TO BE WRITTEN INTO THE LIVE `programs/` DIR. Each of
+    the three tests below planted a `__fake_gate_*__.py` beside the shipped
+    programs for the duration of its body and unlinked it in a `finally`.
+    Serially nothing sees it; the landing gate's per-file parallel path runs one
+    pytest session per file over ONE shared checkout, so every concurrent
+    session that enumerates `programs/` counted the fakes as programs of this
+    branch — and the fakes are built to violate the contract, so they are read
+    as findings. Because the `finally` removes them, `git status --porcelain`
+    is clean afterwards and the manufactured red has nothing to follow.
+
+    `phase1_gate_contract_check` resolves everything it reads from its OWN
+    location — `PROGRAMS_DIR = Path(__file__).parent`, `TESTS_DIR`, and
+    `FLOW_YAML = PROGRAMS_DIR.parent / "flow" / ...`. So a copy of the program
+    in a private `programs/` dir, with `flow/` symlinked to the real one, reads
+    the SAME flow definition and the same contract rules while looking at a
+    gate inventory this test owns. Nothing about what is being checked changes.
+    """
+    plugin = tmp_path / "plugin"
+    progs = plugin / "programs"
+    (progs / "tests").mkdir(parents=True)
+    shutil.copy2(PROGRAM, progs / PROGRAM.name)
+    (plugin / "flow").symlink_to(PROGRAMS_DIR.parent / "flow",
+                                 target_is_directory=True)
+    return progs, progs / PROGRAM.name
+
+
+def _no_fake_gate_reached_the_live_tree():
+    strays = sorted(p.name for p in PROGRAMS_DIR.glob("__fake_gate_*__.py"))
+    assert not strays, (
+        f"this test planted {strays} into the live programs dir; a concurrent "
+        f"session enumerating programs/ would count them as the branch's")
+
+
 def test_default_7_gates_pass():
     """The 7 gates shipped in v0.74 must all satisfy the contract."""
     r = subprocess.run(
@@ -45,7 +81,8 @@ def test_fake_gate_missing_contract_clauses(tmp_path):
     # - No --json in source → missing_json_flag
     # - No pytest file → missing_pytest
     # - Not in flow YAML → not_wired_into_flow
-    fake_gate = PROGRAMS_DIR / "__fake_gate_for_test__.py"
+    progs, program = _private_plugin(tmp_path)
+    fake_gate = progs / "__fake_gate_for_test__.py"
     fake_gate.write_text(textwrap.dedent("""
         import sys
         if __name__ == "__main__":
@@ -53,7 +90,7 @@ def test_fake_gate_missing_contract_clauses(tmp_path):
     """))
     try:
         r = subprocess.run(
-            [sys.executable, str(PROGRAM),
+            [sys.executable, str(program),
              "--gates", "__fake_gate_for_test__", "--json"],
             capture_output=True, text=True,
         )
@@ -65,12 +102,13 @@ def test_fake_gate_missing_contract_clauses(tmp_path):
         assert "missing_pytest" in rules
         assert "not_wired_into_flow" in rules
     finally:
-        fake_gate.unlink(missing_ok=True)
+        _no_fake_gate_reached_the_live_tree()
 
 
 def test_fake_gate_with_docstring_but_missing_sections(tmp_path):
     """Gate with docstring but no Usage/Exit-codes sections is flagged."""
-    fake_gate = PROGRAMS_DIR / "__fake_gate_sections_test__.py"
+    progs, program = _private_plugin(tmp_path)
+    fake_gate = progs / "__fake_gate_sections_test__.py"
     fake_gate.write_text(textwrap.dedent('''
         """
         Minimal gate — intentionally missing required sections.
@@ -84,7 +122,7 @@ def test_fake_gate_with_docstring_but_missing_sections(tmp_path):
     '''))
     try:
         r = subprocess.run(
-            [sys.executable, str(PROGRAM),
+            [sys.executable, str(program),
              "--gates", "__fake_gate_sections_test__", "--json"],
             capture_output=True, text=True,
         )
@@ -94,12 +132,13 @@ def test_fake_gate_with_docstring_but_missing_sections(tmp_path):
         assert "missing_usage_section" in rules
         assert "missing_exit_codes_section" in rules
     finally:
-        fake_gate.unlink(missing_ok=True)
+        _no_fake_gate_reached_the_live_tree()
 
 
 def test_gate_without_help_flag_fails(tmp_path):
     """Gate whose --help returns nonzero is flagged."""
-    fake_gate = PROGRAMS_DIR / "__fake_gate_help_test__.py"
+    progs, program = _private_plugin(tmp_path)
+    fake_gate = progs / "__fake_gate_help_test__.py"
     fake_gate.write_text(textwrap.dedent('''
         """
         Minimal gate with broken --help.
@@ -122,7 +161,7 @@ def test_gate_without_help_flag_fails(tmp_path):
     '''))
     try:
         r = subprocess.run(
-            [sys.executable, str(PROGRAM),
+            [sys.executable, str(program),
              "--gates", "__fake_gate_help_test__", "--json"],
             capture_output=True, text=True,
         )
@@ -131,7 +170,7 @@ def test_gate_without_help_flag_fails(tmp_path):
         rules = [f["rule"] for f in out["findings"]]
         assert "help_nonzero" in rules
     finally:
-        fake_gate.unlink(missing_ok=True)
+        _no_fake_gate_reached_the_live_tree()
 
 
 def test_empty_gates_list_errors():

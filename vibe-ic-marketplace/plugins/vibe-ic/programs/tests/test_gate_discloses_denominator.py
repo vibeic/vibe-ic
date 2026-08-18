@@ -32,70 +32,82 @@ _REPO = _PROGRAMS.parents[3]   # plugins/vibe-ic/programs -> repo root
 
 
 def _fake_repo(tmp_path: Path, gate_bodies: dict) -> Path:
-    """A repo whose CI script names throwaway gates written into programs/."""
+    """A repo whose CI script names throwaway gates, written INSIDE that repo.
+
+    THE PROBES USED TO GO INTO THE LIVE `programs/` DIR. The CI line said
+    `python3 "$PG/_probe_<name>.py"`, `$PG` resolves to this checkout's real
+    programs directory, so each of these tests planted a `.py` there for the
+    duration of its body and unlinked it in a `finally`. Serially nothing sees
+    it. The landing gate's per-file parallel path runs one pytest session per
+    file over ONE shared checkout, so every concurrent session enumerating
+    `programs/` counted the probes — and reported the count as a property of
+    the branch. The `finally` means `git status --porcelain` is clean
+    afterwards, so the manufactured red leaves nothing to follow.
+
+    `$ROOT/` resolves against the fake repo, which is under `tmp_path`. That is
+    already the shape `test_a_host_excluded_gate_is_not_indirectly_launched_by_
+    the_meta_sweep` uses below (`python3 "$ROOT/remote.py"`), so the resolver
+    path is the one this file already exercises — and the probes now live in a
+    tree this test owns.
+    """
     r = tmp_path / "repo"
     (r / "tools" / "ci").mkdir(parents=True)
+    (r / "programs").mkdir(parents=True, exist_ok=True)
     lines = []
     for name, body in gate_bodies.items():
-        (_PROGRAMS / f"_probe_{name}.py").write_text(body)
-        lines.append(f'run "{name}" "$ROOT" python3 "$PG/_probe_{name}.py"')
+        (r / "programs" / f"_probe_{name}.py").write_text(body)
+        lines.append(
+            f'run "{name}" "$ROOT" python3 "$ROOT/programs/_probe_{name}.py"')
     (r / "tools" / "ci" / "repo_hygiene_gates.sh").write_text(
         "\n".join(lines) + "\n")
     return r
 
 
-def _cleanup(names):
-    for n in names:
-        p = _PROGRAMS / f"_probe_{n}.py"
-        if p.exists():
-            p.unlink()
+def _no_probe_reached_the_live_tree():
+    """Nothing this module writes may land in the shipped programs dir."""
+    strays = sorted(p.name for p in _PROGRAMS.glob("_probe_*.py"))
+    assert not strays, (
+        f"this test planted {strays} into the live programs dir; a concurrent "
+        f"session enumerating programs/ would count them as the branch's")
 
 
 def test_a_silent_pass_over_an_empty_tree_is_caught(tmp_path):
     """THE LOAD-BEARING CASE."""
-    try:
-        r = _fake_repo(tmp_path, {"silent": 'print("PASS: everything is fine")\n'})
-        verdict, findings = G.audit(r)
-        assert verdict == "FAIL", findings
-        assert findings[0]["kind"] == "PASS_WITHOUT_DENOMINATOR"
-        assert findings[0]["gate"] == "silent"
-    finally:
-        _cleanup(["silent"])
+    r = _fake_repo(tmp_path, {"silent": 'print("PASS: everything is fine")\n'})
+    verdict, findings = G.audit(r)
+    assert verdict == "FAIL", findings
+    assert findings[0]["kind"] == "PASS_WITHOUT_DENOMINATOR"
+    assert findings[0]["gate"] == "silent"
+    _no_probe_reached_the_live_tree()
 
 
 def test_a_pass_that_states_a_count_is_accepted(tmp_path):
     """The paired half. A gate that says how many is honest even at zero."""
-    try:
-        r = _fake_repo(tmp_path, {
-            "honest": 'print("PASS (0 item(s) examined): nothing to check")\n'})
-        verdict, findings = G.audit(r)
-        assert verdict == "PASS", findings
-    finally:
-        _cleanup(["honest"])
+    r = _fake_repo(tmp_path, {
+        "honest": 'print("PASS (0 item(s) examined): nothing to check")\n'})
+    verdict, findings = G.audit(r)
+    assert verdict == "PASS", findings
+    _no_probe_reached_the_live_tree()
 
 
 def test_an_explicit_nothing_to_check_is_accepted_without_a_number(tmp_path):
     """`artefact_defect_close_check` says "[SKIPPED] no issue corpus" and that
     IS the disclosure — a count is one way to be honest, not the only way."""
-    try:
-        r = _fake_repo(tmp_path, {
-            "skipper": 'print("[SKIPPED] no issue corpus present")\n'})
-        verdict, findings = G.audit(r)
-        assert verdict == "PASS", findings
-    finally:
-        _cleanup(["skipper"])
+    r = _fake_repo(tmp_path, {
+        "skipper": 'print("[SKIPPED] no issue corpus present")\n'})
+    verdict, findings = G.audit(r)
+    assert verdict == "PASS", findings
+    _no_probe_reached_the_live_tree()
 
 
 def test_a_gate_that_FAILS_on_empty_is_not_flagged(tmp_path):
     """Only a PASS makes a claim. A non-zero exit is not a false certificate,
     whatever it prints."""
-    try:
-        r = _fake_repo(tmp_path, {
-            "failer": 'import sys\nprint("nope")\nsys.exit(1)\n'})
-        verdict, findings = G.audit(r)
-        assert verdict == "PASS", findings
-    finally:
-        _cleanup(["failer"])
+    r = _fake_repo(tmp_path, {
+        "failer": 'import sys\nprint("nope")\nsys.exit(1)\n'})
+    verdict, findings = G.audit(r)
+    assert verdict == "PASS", findings
+    _no_probe_reached_the_live_tree()
 
 
 def test_an_empty_gate_list_is_NOT_a_pass(tmp_path):

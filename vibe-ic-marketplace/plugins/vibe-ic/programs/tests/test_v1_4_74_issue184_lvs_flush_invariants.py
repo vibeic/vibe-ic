@@ -26,6 +26,8 @@ chip-AGNOSTIC: pure file-I/O timing, no design/PDK literal.
 """
 import sys
 import threading
+import shutil
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -47,8 +49,12 @@ TRUNCATED_REPORT = "Contents of circuit 1:  Circuit: 'x'\nFlattening ...\n"
 
 class ReadFlushedRealFsTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(__file__).resolve().parent / "_tmp_v1_4_74"
-        self.tmp.mkdir(exist_ok=True)
+        # A private scratch dir, NOT `programs/tests/_tmp_v1_4_74`. Under the
+        # landing gate's per-file parallel path many pytest sessions share one
+        # checkout, so a scratch directory created inside the corpus is a
+        # directory every neighbour enumerating `programs/tests/` sees and
+        # counts, and the tearDown that removes it also removes the evidence.
+        self.tmp = Path(tempfile.mkdtemp(prefix="v1_4_74_lvs_"))
         self.rpt = self.tmp / "lvs.rpt"
         if self.rpt.exists():
             self.rpt.unlink()
@@ -56,10 +62,8 @@ class ReadFlushedRealFsTest(unittest.TestCase):
     def tearDown(self):
         if self.rpt.exists():
             self.rpt.unlink()
-        try:
-            self.tmp.rmdir()
-        except OSError:
-            pass
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        assert not (Path(__file__).resolve().parent / "_tmp_v1_4_74").exists()
 
     # ── the fix: a real late flush is caught on a clean exit ──────────────
     def test_real_late_flush_caught_on_clean_exit(self):

@@ -2869,13 +2869,34 @@ def test_d2_a_real_crash_is_disclosed_by_the_consumer_not_guessed(
         f"the {FCC._OUTPUT_SNIPPET_CHARS}-char evidence window it exists to "
         f"overflow — this cell would prove nothing")
     src, overflows = _D2_CRASH_SHAPES[shape]
-    helper = FCC.PROGRAMS_DIR / f"_d2_crash_probe_{shape}.py"
+    # THE PROBE USED TO GO INTO THE LIVE `programs/` DIR — `FCC.PROGRAMS_DIR /
+    # f"_d2_crash_probe_{shape}.py"`, unlinked in a `finally`. That is the one
+    # thing a test may not do here: the landing gate's per-file recovery path
+    # runs many pytest sessions at once over ONE shared checkout, so for the
+    # body of this cell every neighbour that enumerates `programs/` counted a
+    # deliberately-crashing `.py` as a program of this branch. Because the
+    # `finally` removes it, `git status --porcelain` is empty afterwards and
+    # the red it manufactures has nothing to point at.
+    #
+    # `_check_program_exit_zero` resolves a bare gate name against
+    # `FCC.PROGRAMS_DIR`, read at CALL time, so a private directory drives the
+    # identical shipped resolution over the identical probe. The subject —
+    # a really-crashing gate, a really-overflowing path, the real consumer —
+    # is untouched.
+    helper_dir = tmp_path / "d2_crash_probe_programs"
+    helper_dir.mkdir()
+    helper = helper_dir / f"_d2_crash_probe_{shape}.py"
     helper.write_text(src, encoding="utf-8")
+    _live_programs = FCC.PROGRAMS_DIR
+    FCC.PROGRAMS_DIR = helper_dir
     try:
         passed, out = FCC._check_program_exit_zero(
             project, f"{helper.stem} {project}")
     finally:
-        helper.unlink(missing_ok=True)
+        FCC.PROGRAMS_DIR = _live_programs
+    assert not list(_live_programs.glob("_d2_crash_probe_*.py")), (
+        "a crash probe was left in the live programs dir; a concurrent pytest "
+        "session enumerating programs/ counts it as this branch's")
 
     assert passed is False, f"{shape}: a crash must never be a PASS"
     assert out.startswith(FCC._CRASH_HINT_PREFIX), (

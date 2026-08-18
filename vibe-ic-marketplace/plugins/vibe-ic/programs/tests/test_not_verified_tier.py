@@ -169,11 +169,16 @@ def _skip_reason_text(node: ast.AST) -> str:
     return " ".join(chunks).lower()
 
 
-def _undeclared_infra_skips():
+def _undeclared_infra_skips(tests_dir=None):
     """Every `pytest.skip`/`skipif` in the corpus that names infrastructure and
-    did NOT come through the tier. Returns ``[(relpath, lineno, reason)]``."""
+    did NOT come through the tier. Returns ``[(relpath, lineno, reason)]``.
+
+    *tests_dir* defaults to the shipped corpus. The paired control below passes
+    a directory of its own so it can plant a probe without writing a test
+    module into the tree every other pytest session is reading.
+    """
     out = []
-    for path in sorted(TESTS_DIR.glob("test_*.py")):
+    for path in sorted((tests_dir or TESTS_DIR).glob("test_*.py")):
         if path.name == Path(__file__).name:
             continue
         try:
@@ -306,15 +311,23 @@ def test_the_rot_guard_can_actually_fire(tmp_path):
     corpus filled with undeclared sites. This plants one and shows the detector
     sees it, using the same function the real assertion uses.
     """
-    planted = TESTS_DIR / "test_zz_not_verified_rot_probe.py"
+    # PLANTED IN A DIRECTORY THIS TEST OWNS. It used to go into the live
+    # `programs/tests/` dir: the landing gate's per-file recovery path runs
+    # many pytest sessions at once over ONE checkout, so a neighbour
+    # enumerating the corpus counted a test module that is in no commit — and
+    # this one is built to carry exactly the undeclared skip the ratchet
+    # refuses, so it reads as a NEW violation of this file's own inventory.
+    # The `finally` removes it, leaving `git status --porcelain` clean over a
+    # manufactured red. The scanner takes a directory, so the SAME function the
+    # real assertion uses is what runs here.
+    planted = tmp_path / "test_zz_not_verified_rot_probe.py"
     planted.write_text(
         "import pytest\n"
         "def test_planted():\n"
         "    pytest.skip('vibeic-eda container not available')\n")
-    try:
-        found = _undeclared_infra_skips()
-    finally:
-        planted.unlink(missing_ok=True)
+    found = _undeclared_infra_skips(tmp_path)
+    assert not (TESTS_DIR / planted.name).exists(), (
+        "the probe reached the live tests dir")
     assert any(f == planted.name for f, _ln, _r in found), (
         "the rot guard did not see a planted undeclared infrastructure skip, "
         f"so it is a ban rather than a check. Saw: {found}")
