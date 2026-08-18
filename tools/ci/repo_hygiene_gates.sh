@@ -772,6 +772,15 @@ run "cross-layer reference regression"  "$ROOT" python3 "$PG/cross_layer_referen
 # baseline register did not move with the corpus either, so a corpus-less run
 # still checks that `findings_total` equals the sum of `per_run` — a ceiling
 # raised by hand to buy headroom is rc 1 with or without a corpus.
+#
+# AND A CEILING LOWERED BY HAND IS TOO (vibe-ic#1704). The register records the
+# counts it moved FROM beside the counts it holds, plus the reason it was
+# allowed to fall; a corpus-less run re-checks that pairing exactly as it
+# re-checks the sum. `--write-baseline` — the command this gate tells an
+# operator to run on a shrink — refuses to lower any of `findings_total`,
+# `runs_swept` or `runs_with_reports` without `--shrink-reason '<why>'`.
+# Nothing on the line below writes anything, so this gate is read-only as
+# before.
 run "step FAIL bubbles up"              "$ROOT" python3 "$PG/step_internal_fail_bubble_up_check.py" --corpus "$ROOT/benchmark-data/ic" --corpus-may-be-absent
 # Its neighbour one artefact over: `flow_compliance_check` now emits a CLASSIFIED
 # BLOCKER LIST beside the tally, and `blocker_classification_check` is the guard

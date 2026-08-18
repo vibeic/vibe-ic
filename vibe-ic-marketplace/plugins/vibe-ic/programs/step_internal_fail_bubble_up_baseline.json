@@ -1,25 +1,32 @@
 {
   "_comment": "Unacknowledged step-internal FAIL/MISSING reports across the PUBLISHED (git-tracked) run trees \u2014 a run tree being any directory that owns a tracked reports/**/*.json, which is what the gate can read, NOT a directory whose name matches a convention (vibe-ic#1223). MAY ONLY SHRINK UNDER A FIXED POPULATION \u2014 each one is a report declaring FAIL that no waiver and no orchestrator record names. The wrong repair is to loosen the matcher until the number falls (vibe-ic#693). `corpus_population` is the root this count was taken over and is part of the record: the gate refuses to ratchet a count from one population against a sweep of another.",
   "_withdrawn_comment": "Findings that left findings_total because their run left the published corpus (or stopped carrying a reports/ tree), NOT because anyone examined them (vibe-ic#1202). Recorded so a fall in findings_total can never be read as debt paid. These reports still declare FAIL. NOT part of findings_total and not a ceiling on anything \u2014 the ratchet is over the published corpus only.",
-  "findings_total": 22,
+  "_absent_comment": "Findings whose run tree is NOT UNDER THE SWEPT CORPUS at all, so this gate never opened it (vibe-ic#1704). Separate from withdrawn_unexamined, which names run trees the sweep DID open and found publishing no reports/ file it reads. Whether these were removed from publication or were never published into this corpus is not something a sweep of one corpus can tell; `shrink_reason` is where that is stated by whoever looked. NOT part of findings_total and not a ceiling on anything.",
+  "findings_total": 1,
   "corpus_population": "benchmark-data/ic",
-  "runs_swept": 16,
-  "runs_with_reports": 16,
+  "runs_swept": 4,
+  "runs_with_reports": 4,
+  "previous_findings_total": 22,
+  "previous_runs_swept": 16,
+  "previous_runs_with_reports": 16,
+  "shrink_reason": "vibe-ic#1704: re-derived over the published corpus (vibeic/benchmark-data, ic/ at 146d665) after the v1.10.56 split. NOTHING HERE IS REPAIR \u2014 the gate's own decomposition attributes all 21 lost findings to runs that left the sweep without being examined, 0 to runs whose count fell while somebody was reading them. THE CORPUS SHRANK BY A PUBLISHING DECISION, NOT BY ENGINEERING: benchmark-data commit ac2ae519f4 'publish only what passed and conforms' kept the four cells whose own RESULT.md says PASS and whose benchmark_evidence_structure_check rc is 0, dropped one cell whose own result says FAIL, and removed every clean_run_* directory and every loose phase1/phase2/phase3/reports/sim/steps tree sitting directly under an IC as NON-CONFORMING rather than as failures \u2014 PUBLISHING.md permits only input/ and v*/ at that level. So the nine run trees this register named were published into that repository and then removed from it by that decision; they were not deleted from the flow's design input, which is untouched, and not one of their FAIL reports was re-read. Six of them keep an IC directory the sweep can still open and are carried in withdrawn_unexamined; three have no run tree under the corpus at all and are carried in absent_from_corpus, which claims nothing about what they say today.",
   "per_run": {
-    "caravel_user_project": 1,
-    "caravel_user_project/v1.9.43_sky130A": 2,
-    "edge_llm_accel": 6,
-    "edge_llm_matmul_accel": 1,
-    "ibex": 1,
-    "opentitan_aes": 1,
-    "sha256/clean_run_v1422_20260715": 2,
-    "sha256/clean_run_v1427_20260715": 3,
-    "subservient": 4,
     "u_hawaii_adc/v1.9.86_sky130A": 1
   },
   "withdrawn_unexamined": {
+    "caravel_user_project": 1,
+    "edge_llm_accel": 6,
+    "edge_llm_matmul_accel": 1,
+    "ibex": 1,
     "ic/u_hawaii_adc/clean_run_v1422_20260715": 1,
-    "ic/u_hawaii_adc/clean_run_v1427_20260715": 1
+    "ic/u_hawaii_adc/clean_run_v1427_20260715": 1,
+    "opentitan_aes": 1,
+    "subservient": 4
+  },
+  "absent_from_corpus": {
+    "caravel_user_project/v1.9.43_sky130A": 2,
+    "sha256/clean_run_v1422_20260715": 2,
+    "sha256/clean_run_v1427_20260715": 3
   },
   "_withdrawn_provenance": "Re-derived from git, not re-measured: 94c7572aa moved this file 7 -> 5 and its diff shows both sha256 runs UNCHANGED (2 and 3) while both u_hawaii_adc runs left. Zero repaired, two withdrawn. Replaying that commit's parent baseline through the fixed gate against the corpus at 75776dbbb reproduces exactly these two entries."
 }
