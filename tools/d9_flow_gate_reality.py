@@ -126,7 +126,7 @@ from matrix_63x8 import flowref as F  # noqa: E402
 # The four buckets and the classifier are the sibling instrument's, imported so
 # the two tables cannot disagree about what a vacuous pass is.
 from d9_corpus_baseline import (  # noqa: E402
-    CLEAN, FINDING, NO_INPUT, ERROR, classify, discover_runs,
+    CLEAN, FINDING, NO_INPUT, ERROR, classify,
 )
 
 CONTENT_DERIVED = (CLEAN, FINDING)
@@ -148,10 +148,104 @@ TECH_LEF_PATTERNS = ("*.tlef", "*tech.lef", "*.tech.lef", "*technology.lef")
 
 
 # ─────────────────────────────────────────────────────────── corpus census
+#: Where a caller may point this instrument at a clone of `vibeic/benchmark-data`.
+#: THE SAME NAME the test suite already uses (`programs/tests/_published_corpus.py`,
+#: `CORPUS_ENV`), because two pointers at one corpus is how a host ends up with
+#: one instrument measuring and the other refusing.
+CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+
+
+def _pointer_state(p: Path) -> str:
+    """Which of the two ways a named corpus can be wrong this one is."""
+    return ("the path does not exist" if not p.exists()
+            else "the path exists but has no ic/")
+
+
+def corpus_clone() -> Optional[Path]:
+    """The clone named by :data:`CORPUS_ENV`, or ``None`` when none was offered.
+
+    WHY THIS EXISTS (vibe-ic#1723)
+    ==============================
+    ``benchmark-data/`` left this repository at v1.10.56, and every path in this
+    instrument was resolved from ``REPO``. MEASURED on ``origin/main`` at
+    ``397b3f25f``::
+
+        $ python3 tools/d9_flow_gate_reality.py --out /tmp/x
+        benchmark-data/ not found
+        rc=2
+
+        $ python3 tools/d9_content_census.py --out /tmp/y
+        REFUSE — no published runs. ...
+        rc=2
+
+    Both are HONEST refusals and neither is a measurement, so the ninth
+    dimension had no live answer at all — the only D9 numbers a reader can
+    quote are the ones frozen in ``tools/d9_reality/d9_reality.json``, and the
+    CONTENT half (``d9_content_census``) has never had one.
+
+    A BROKEN POINTER RAISES rather than degrading to "no corpus". That
+    distinction is the sibling helper's and is not re-argued here: somebody who
+    sets the variable has NAMED a corpus, and rendering "your path is wrong" as
+    "there is nothing to look at" is how a mistyped path buys a clean run.
+    """
+    env = os.environ.get(CORPUS_ENV)
+    if not env:
+        return None
+    p = Path(env)
+    if (p / "ic").is_dir():
+        return p
+    raise SystemExit(
+        f"{CORPUS_ENV}={env!r} names a corpus with no ic/ directory "
+        f"({_pointer_state(p)}). "
+        f"That is a broken pointer, not an absent corpus — unset "
+        f"{CORPUS_ENV} to get the honest refusal instead.")
+
+
+def run_path(repo: Path, rel: str) -> Path:
+    """Resolve a ``benchmark-data/<...>`` run path against whichever tree holds it.
+
+    Run paths keep their ``benchmark-data/`` prefix everywhere in this
+    instrument and in its report, so a figure measured against a clone is
+    quotable against the published tree without translation. This is the one
+    place the prefix is spent.
+    """
+    clone = corpus_clone()
+    if clone is not None and rel.startswith("benchmark-data/"):
+        return clone / rel[len("benchmark-data/"):]
+    return repo / rel
+
+
 def tracked_files(repo: Path) -> List[str]:
+    """Every tracked path under the corpus, ALWAYS ``benchmark-data/``-prefixed.
+
+    PUBLISHED == git-tracked, in the clone exactly as in the repo: a working
+    run tree that ``.gitignore`` excludes is not a published run and must not
+    become one by being on somebody's disk.
+    """
+    clone = corpus_clone()
+    if clone is not None:
+        out = subprocess.run(["git", "ls-files"], cwd=clone,
+                             capture_output=True, text=True, check=True)
+        return ["benchmark-data/" + line for line in out.stdout.splitlines()
+                if line]
     out = subprocess.run(["git", "ls-files", "benchmark-data"], cwd=repo,
                          capture_output=True, text=True, check=True)
     return out.stdout.splitlines()
+
+
+def runs_from_tracked(tracked: Sequence[str]) -> Tuple[List[str], str]:
+    """The published run dirs inside an already-computed tracked list.
+
+    Same marker and same definition as ``d9_corpus_baseline.discover_runs`` — a
+    tracked directory holding ``phase1/generated_docs/`` — read off the list
+    this instrument already holds instead of shelling out a second time against
+    a tree that may not be the one carrying the corpus.
+    """
+    marker = "/phase1/generated_docs/"
+    runs = sorted({line[: line.index(marker)]
+                   for line in tracked if marker in line})
+    return runs, ("git ls-files (corpus) | dirs containing "
+                  "phase1/generated_docs/")
 
 
 def index_runs(tracked: Sequence[str], runs: Sequence[str]) -> Dict[str, Set[str]]:
@@ -273,7 +367,7 @@ def probe_writers(programs: Sequence[str], runs: Sequence[str], repo: Path,
     verifies the corpus at the end rather than trusting this.
     """
     sized = sorted(runs, key=lambda r: sum(
-        f.stat().st_size for f in (repo / r).rglob("*") if f.is_file()))
+        f.stat().st_size for f in run_path(repo, r).rglob("*") if f.is_file()))
     probes = sorted({sized[0], sized[len(sized) // 2], sized[-1]})
     found: Dict[str, str] = {}
     for name in programs:
@@ -286,7 +380,7 @@ def probe_writers(programs: Sequence[str], runs: Sequence[str], repo: Path,
             tmp = scratch / f"probe_{name}"
             shutil.rmtree(tmp, ignore_errors=True)
             try:
-                shutil.copytree(repo / rel, tmp, symlinks=True)
+                shutil.copytree(run_path(repo, rel), tmp, symlinks=True)
                 before = _snapshot(tmp)
                 try:
                     subprocess.run([sys.executable, str(prog), str(tmp)],
@@ -381,7 +475,7 @@ def two_arm_cell(step_id: str, run_rel: str, programs: Sequence[str],
     tmp = Path(tempfile.mkdtemp(dir=str(scratch)))
     try:
         dest = tmp / "run"
-        shutil.copytree(repo / run_rel, dest, symlinks=True)
+        shutil.copytree(run_path(repo, run_rel), dest, symlinks=True)
         arm_a = {p: _drive(F.program_path(p), dest, timeout) for p in programs
                  if F.program_path(p)}
         removed = remove_declared_outputs(dest, step_id)
@@ -596,8 +690,9 @@ def build_report(repo: Path, runs: List[str], by_run: Dict[str, Set[str]],
         "generated_by": "tools/d9_flow_gate_reality.py",
         "corpus": {
             "runs": len(runs),
-            "how": ("git ls-files benchmark-data | dirs containing "
-                    "phase1/generated_docs/"),
+            "how": runs_from_tracked(tracked_files(repo))[1],
+            "read_from": ("clone via " + CORPUS_ENV
+                          if corpus_clone() is not None else "this checkout"),
             "tech_lef_runs": len(tech_lef_runs),
         },
         "steps": len(rows),
@@ -666,7 +761,7 @@ def evidence_findings(repo: Path, by_run: Dict[str, Set[str]],
     prose = 0
     for rel in l19:
         try:
-            doc = json.loads((repo / rel).read_text(errors="ignore"))
+            doc = json.loads(run_path(repo, rel).read_text(errors="ignore"))
         except Exception:
             continue
         fields = doc.get("fields", doc) if isinstance(doc, dict) else {}
@@ -696,8 +791,21 @@ def evidence_findings(repo: Path, by_run: Dict[str, Set[str]],
 
 
 def verify_corpus_clean(repo: Path) -> Tuple[bool, str]:
-    out = subprocess.run(["git", "status", "--porcelain", "--", "benchmark-data"],
-                         cwd=repo, capture_output=True, text=True)
+    """`git status` over WHICHEVER tree the runs were actually read from.
+
+    Asking the plugin repo about `benchmark-data/` when the runs came from a
+    clone is a check whose answer does not depend on its subject — it would
+    have reported CLEAN over a directory that no longer exists while a writer
+    the probe missed dirtied the clone.
+    """
+    clone = corpus_clone()
+    if clone is not None:
+        out = subprocess.run(["git", "status", "--porcelain"],
+                             cwd=clone, capture_output=True, text=True)
+    else:
+        out = subprocess.run(
+            ["git", "status", "--porcelain", "--", "benchmark-data"],
+            cwd=repo, capture_output=True, text=True)
     body = out.stdout.strip()
     return (not body), body
 
@@ -713,12 +821,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "cap dropped; it is never a silent truncation.")
     args = ap.parse_args(argv)
 
-    if not BENCH.is_dir():
-        print("benchmark-data/ not found", file=sys.stderr)
+    if corpus_clone() is None and not BENCH.is_dir():
+        print(f"benchmark-data/ not found, and {CORPUS_ENV} is unset. The "
+              f"published runs left this repository (#1723); point "
+              f"{CORPUS_ENV} at a clone of vibeic/benchmark-data to measure "
+              f"against them. This is 'could not look', not 'nothing moved'.",
+              file=sys.stderr)
         return 2
 
     tracked = tracked_files(REPO)
-    runs, how = discover_runs(REPO)
+    runs, how = runs_from_tracked(tracked)
     if not runs:
         print("no published runs discovered", file=sys.stderr)
         return 2

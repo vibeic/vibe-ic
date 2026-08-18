@@ -299,7 +299,7 @@ def three_arm_cell(step_id: str, run_rel: str, programs: Sequence[str],
     tmp = Path(tempfile.mkdtemp(dir=str(scratch)))
     try:
         dest = tmp / "run"
-        shutil.copytree(repo / run_rel, dest, symlinks=True)
+        shutil.copytree(R.run_path(repo, run_rel), dest, symlinks=True)
         progs = [p for p in programs if F.program_path(p)]
 
         arm_a = {p: R._drive(F.program_path(p), dest, timeout) for p in progs}
@@ -369,14 +369,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     repo = REPO
     tracked = R.tracked_files(repo)
-    runs = R.published_runs(tracked) if hasattr(R, "published_runs") else None
-    if runs is None:
-        runs = sorted({f.rsplit("/phase1/generated_docs/", 1)[0]
-                       for f in tracked if "/phase1/generated_docs/" in f})
+    runs, _how = R.runs_from_tracked(tracked)
     if not runs:
-        print("REFUSE — no published runs. A content census over nothing is not "
-              "a census, and after a corpus withdrawal this is the expected "
-              "state, not a clean one.")
+        print(f"REFUSE — no published runs. A content census over nothing is not "
+              f"a census, and after a corpus withdrawal this is the expected "
+              f"state, not a clean one. The cells live in vibeic/benchmark-data; "
+              f"point {R.CORPUS_ENV} at a clone to census them.")
         return 2
     by_run = R.index_runs(tracked, runs)
 
