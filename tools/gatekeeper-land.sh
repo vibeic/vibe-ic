@@ -387,6 +387,41 @@ fi
 
 echo "--- full tier (minutes; stamps the tree on success) ---"
 
+# ── CAN THIS HOST LOOK AT ALL? ASKED ONCE, BEFORE THE ARMS ────────────────
+#
+# The three test arms below run their child through the isolated trusted entry.
+# Isolated mode suppresses the USER site directory, so on a host whose test
+# runner is installed only there the child dies before emitting one lifecycle
+# event and EVERY selected file in EVERY arm is reported NORECORD — UNKNOWN,
+# not clean and not red — with no junit test case in existence anywhere.
+#
+# MEASURED on this host at 7c376e348, the repo-tools arm alone:
+#
+#     asked 40  recorded 0  NORECORD 40  aggregate INCOMPLETE rc=2 cases=0
+#
+# Across the three arms that is hundreds of UNKNOWN lines naming hundreds of
+# innocent files and not one line naming the cause. The commit that introduced
+# it ALREADY KNEW the cause: `tools/ci/test_repo_tools_tests_gate.py:65` skips
+# three of its OWN tests with exactly this diagnosis. The knowledge was applied
+# to that commit's CI tests and not to this gate, which :47-52 still documents
+# as a supported host shape.
+#
+# A gate that cannot look must say so ONCE, attributably, and name the remedy.
+# It must not answer a question it could not ask, hundreds of times, and leave
+# the reader to infer why. The probe EXECUTES the real entry on a synthetic
+# one-test subject rather than merely importing the runner, because a runtime
+# that imports and then cannot report produces the identical every-file-UNKNOWN
+# shape. It costs milliseconds against a tier that costs an hour and a half.
+#
+# The refusal text belongs to the program, not to this line: one owner for the
+# cause and the remedy, so they cannot drift apart. rc 2 = REFUSE, and it is
+# fatal here — a tier that cannot measure anything has nothing to say later.
+if ! python3 "$PROGRAMS/landing_pytest_runtime_preflight.py"; then
+  echo "=== REFUSED — the landing test arms cannot produce a record on this host;"
+  echo "    no arm was run and no stamp was written. See the cause and remedy above."
+  exit 2
+fi
+
 # vibe-ic#1029 — the full tier is the window in which the gates read the tree,
 # and it is the window in which they have three times been caught WRITING to
 # it. `landing_worktree_is_clean_check --expect-fingerprint` at the end of this

@@ -263,14 +263,24 @@ _LANDING_LANE_SHA256 = {
 # the third and final required invocation, so any executable rewrite that can
 # affect reachability must be reviewed together with a new digest.
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "c0b1e3908370859c4f179ff4064cc3a9ef46401e2ce713924fd43e5cc2ed1551"
+    "3d844dc8404dd2391fa597a2ad0ecc913e274fb4ba11a00e5e0c8fd742198bf6"
 )
+# RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
+# moved for one reason and it is stated here rather than left to `git log`: the
+# three lanes' bodies are byte-identical (their digests above did not move), and
+# what changed is the control flow ahead of them — a fatal `rc 2` refusal that
+# runs `landing_pytest_runtime_preflight.py` before the first arm, so a host on
+# which the isolated trusted entry cannot import the runner refuses ONCE with a
+# named cause instead of reporting NORECORD for every file in all three arms.
+# Both new digests are DERIVED from the reviewed script by this file's own
+# `landing_semantic_progress_contract` rule, never hand-transcribed.
+#
 # A prefix proves the required calls are reached; the complete script proves a
 # later rewrite cannot erase their verdict (for example ``FAILED=0`` or an
 # early successful exit after the third call).  Gate control-flow changes are
 # intentionally an explicit policy migration, never a heuristic match.
 _LANDING_SCRIPT_SHA256 = (
-    "bf0475d17d6fb8cbb93f60321b229b479790358474eec61a0260c42bf50ae88f"
+    "d07a2e1c46ca82b2fd90e7931e298c8d3302f1a7b6c41f3facf2cf4ff0801497"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver
