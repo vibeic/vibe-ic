@@ -338,6 +338,7 @@ WHICH_GATES = (
     ("test_hamming_synth", "_HAS_IVERILOG"),
     ("test_issue186_p2_regmap_transaction_oracle", "_HAVE_IVERILOG"),
     ("test_issue1437_absent_iverilog_reaches_a_declared_verdict", "_HAS_IVERILOG"),
+    ("test_issue1745_a_printed_verdict_is_not_a_measured_one", "_HAVE_IV"),
     ("test_issue716_intended_transparent_latch_emit", "_HAS_AB"),
     ("test_issue716_intended_transparent_latch_emit", "_HAS_VERILATOR"),
     ("test_kmap_truth_table_oracle_check", "_HAS_EDA"),

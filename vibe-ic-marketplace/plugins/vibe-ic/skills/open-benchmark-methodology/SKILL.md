@@ -957,10 +957,23 @@ engineering item on the fork backlog, not a permanent ceiling.
 4. **T2→T1** — build/extend a DETERMINISTIC solver and iverilog-VERIFY its emit
    against the testbench. Promote ONLY on a real pass.
 
-### The two honesty gates that make the number trustworthy
+### The honesty gates that make the number trustworthy
 
 - **iverilog-authoritative**: a Tier-1 claim is accepted ONLY on a real
   `Mismatches: 0` pass; a fired-but-wrong emit is dropped to T2, never shipped.
+- **not-FORGEABLE (vibe-ic#1745)**: "iverilog-authoritative" only holds while the
+  verdict line comes from the HARNESS. The DUT shares the simulation's stdout, so
+  a candidate can simply PRINT `Mismatches: 0 in N samples` and be scored a pass
+  on logic it never implemented — measured on this tree with two candidates
+  carrying identical wrong logic, the second adding one `$display`: FAIL and
+  PASS, on a simulation that reported `Mismatches: 10 in 20` for both. Every
+  scorer here (`benchmark/score_iverilog_tb.py` Shape B + C, and the three
+  `*_tier_pipeline.py`) now runs `programs/harness_verdict_forgery_check.py` over
+  the candidate BEFORE scoring it, with the scorer's OWN pass pattern, and
+  refuses one that can emit it. A refused candidate is counted FAIL and STAYS in
+  the denominator — it was attempted — and `pass_at_1.json` carries
+  `verdict_forgery_count` / `verdict_forgery_problems`, plus
+  `verdict_forgery_check: "NOT CHECKED"` if the gate itself could not be loaded.
 - **GENERAL-not-OVERFIT (the §4.05 bar a Tier-1 solver MUST clear)**: a solver may
   be promoted to the deterministic tier ONLY if it keys on operation/structure
   semantics and reads EVERY constant from the interface width or parsed prose. A

@@ -77,6 +77,7 @@ import spec_artifact_registry as _registry  # noqa: E402  generate(text,top)->(k
 # consulted only on a registry miss/fail (see deterministic_emit). §4.05-clean.
 import verilogeval_human_tier1_solvers as _supplemental_solvers  # noqa: E402
 import semantic_spec_floor_check as _semfloor  # noqa: E402  golden-vs-prompt semantic floor
+import harness_verdict_forgery_check as _forgery  # noqa: E402  vibe-ic#1745 DUT-verdict forgery
 
 TIER_PROGRAM = 1   # registry DETERMINISTICALLY emits RTL that iverilog-PASSES _test.sv
 TIER_AI_EMIT = 2   # COMPLETE spec (ifc interface + every stated structure) + gate
@@ -277,6 +278,11 @@ def _interface_complete(prob: dict, gate: dict) -> bool:
 # predicate to it would silently stop reporting genuine compile failures.
 _TOOL_ABSENT = "iverilog: COMMAND_NOT_FOUND"
 
+# The PASS DIRECTION of the harness's own `Mismatches: N in M samples` line —
+# what a candidate has to PRINT to be scored a pass (vibe-ic#1745). Kept next to
+# the reader below so the two can never drift apart.
+_PASS_DIRECTION_RE = r"Mismatches:\s*0+\s+in\s+[1-9]\d*\s+samples"
+
 
 def _tool_was_absent(log: str) -> bool:
     """True iff `log` is _run_iverilog's own absent-compiler sentinel."""
@@ -304,6 +310,16 @@ def _run_iverilog(top_sv_text: Optional[str], ref_path: str, test_path: str,
             top_text = re.sub(r"\bRefModule\b", top_name, ref_text)
         else:
             top_text = top_sv_text
+            # vibe-ic#1745 — the DUT shares stdout with the testbench, so a
+            # candidate can PRINT the `Mismatches: 0 in N samples` line this
+            # function reads. A candidate that can print the verdict is not
+            # scoreable on the transcript the verdict is read from. Applied ONLY
+            # to solver-supplied text: the `top_sv_text is None` branch above
+            # feeds the GOLDEN, which is not a submission, and a floor claim
+            # must not be manufactured out of this gate.
+            _forged = _forgery.forgery_reason(top_text, [_PASS_DIRECTION_RE])
+            if _forged is not None:
+                return False, _forged
         (tdp / "top.sv").write_text(top_text)
         (tdp / "ref.sv").write_text(ref_text)
         (tdp / "test.sv").write_text(Path(test_path).read_text(errors="replace"))
