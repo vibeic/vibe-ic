@@ -1,0 +1,8 @@
+# Terasic DE10-Lite (MAX10) and other Altera USB-Blaster JTAG cables.
+# Covers USB-Blaster I (PID 0x6001/6002/6003) and USB-Blaster II (0x6010/6810).
+# plugdev group r/w so quartus_pgm can talk to the board without sudo.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="09fb", ATTRS{idProduct}=="6001", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="09fb", ATTRS{idProduct}=="6002", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="09fb", ATTRS{idProduct}=="6003", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="09fb", ATTRS{idProduct}=="6010", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="09fb", ATTRS{idProduct}=="6810", MODE="0660", GROUP="plugdev"

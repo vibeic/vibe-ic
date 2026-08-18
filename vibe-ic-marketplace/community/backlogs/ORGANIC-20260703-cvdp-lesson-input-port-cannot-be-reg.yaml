@@ -1,0 +1,44 @@
+type: enhancement
+severity: P3
+component: skill:ic-expert-agent
+
+title: >-
+  Add a general authoring lesson — an `input`/`inout` PORT must never be declared
+  `reg`; only `output` ports may be `reg`. `input reg <p>` ELAB_ERRORs on the
+  official icarus-13 sim even though some hosts accept it.
+
+plugin_version: "1.2.96"
+
+pattern: |
+  Two independent blind authors declared an input port as `input reg [W-1:0] p`
+  (binary_search_tree_sorting_0001: `input reg data_in`; _0014: `input reg` on
+  keys/left_child/right_child/root). Host iverilog-11 tolerated it, but the CVDP
+  scorer's icarus-13 rejects it hard:
+    error: Port data_in of module <m> is declared as input and as a reg type.
+  → whole-module ELAB_ERROR → every test fails. The cvdp_gate yosys/iverilog-13
+  smoke CAUGHT and BLOCKED these (good), but they are a recurring authoring
+  antipattern worth a captured lesson so they stop being emitted.
+
+suggested_fix: |
+  Add a `### Skill:` lesson to agents/ic-expert-agent.md (chip-AGNOSTIC):
+  "Port direction vs data type: an `input` or `inout` port is a net — never
+  declare it `reg`. Only `output` ports may be `reg` (a driven variable). Write
+  `input [W-1:0] x;` (implicit wire) and `output reg [W-1:0] y;`. `input reg x`
+  is illegal in strict SystemVerilog and ELAB_ERRORs on icarus-13 (the CVDP
+  scorer), even if a lax host simulator accepts it."
+  Optionally add a deterministic rtl_hygiene_lint --fix rule that rewrites
+  `input reg` / `inout reg` -> `input` / `inout` (the reg keyword on an input is
+  always removable without semantic change).
+
+evidence:
+  run: benchmark_external/cvdp/run_hard94_v1296_20260703
+  fixed_in_run: both drafts repaired (input reg -> input) and re-gated 94/94
+  filed_by: benchmark-agent (clean-room CVDP hard-94 on v1.2.96)
+
+resolution:
+  status: fix-landed
+  landed_by: repo-gatekeeper
+  commits:
+    - "b6cb0be6 — input-reg authoring lesson landed with PR #99"
+  annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"
+  triage_2026_07_06: verified — fix-landed (b6cb0be6); autofix_input_reg_port live in rtl_hygiene_lint.py

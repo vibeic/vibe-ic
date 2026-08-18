@@ -1,0 +1,25 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Auto-generated compliance spec for skill 'checkpoint-gate'
+# Refines vibe-ic/skills/checkpoint-gate/SKILL.md output requirements.
+skill: checkpoint-gate
+
+requirements:
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_gate_criteria
+    description: "Gate criteria checklist"
+    pattern: '(gate|criteria|checklist|milestone|ready|block|proceed)'
+    skill_section: 'Gate'
+
+cross_checks:
+  - id: X_text_only_skill
+    description: "Pure analysis/planning skill — no verifiable artifact. Compliance via regex only."
+    rule: text_only_report

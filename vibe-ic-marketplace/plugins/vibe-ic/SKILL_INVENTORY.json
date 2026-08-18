@@ -1,0 +1,394 @@
+{
+  "schema_version": 1,
+  "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
+  "total": 63,
+  "by_tier": {
+    "debug": 13,
+    "judgment": 7,
+    "nl_primary": 33,
+    "unclassified": 2,
+    "verification": 8
+  },
+  "skills": [
+    "ams-sim",
+    "analog-extraction-resim",
+    "analog-flow-orchestrate",
+    "analog-hardmacro-gen",
+    "analog-hw-measure",
+    "analog-hw-testbench-gen",
+    "analog-hw-tuning-loop",
+    "analog-layout",
+    "analog-netlist-gen",
+    "analog-output-verify",
+    "analog-sizing",
+    "analog-sizing-loop",
+    "analog-spec-extract",
+    "analog-topology-select",
+    "architecture-explore",
+    "benchmark-enhancement-capture",
+    "benchmark-verify",
+    "catalog-glue-author",
+    "checkpoint-gate",
+    "community-backlog-submit",
+    "compliance-gate-spot-check",
+    "core-agent-loop",
+    "design-for-eco",
+    "drc-fix",
+    "eco-plan",
+    "equivalence-check",
+    "field-agent-loop",
+    "flow-change-acceptance",
+    "fork-gatekeeper-loop",
+    "formal-verify",
+    "fpga-hps-bridge",
+    "fpga-led-probe-allocation",
+    "fpga-signaltap",
+    "full-test-audit",
+    "gatekeeper-loop",
+    "hls-c2rtl",
+    "hold-fix",
+    "hw-debug-loop",
+    "ir-drop-triage",
+    "layer-contract-doctrine",
+    "lvs-triage",
+    "mixed-signal-cosim",
+    "open-benchmark-methodology",
+    "phase1",
+    "phase1-completeness-deep-review",
+    "phase1-coverage-loop",
+    "phase1-output-verify",
+    "phase2-rtl-verify",
+    "phase3-backend-verify",
+    "ppa-predict",
+    "regression-issue-fix",
+    "regression-manage",
+    "rtl-repair",
+    "rtl-review",
+    "scope-pattern-attestation",
+    "spec-review",
+    "spec-to-rtl",
+    "spec-validator",
+    "sta-review",
+    "synth-doctor",
+    "tapeout-checklist",
+    "testbench-gen",
+    "yield-diagnostic"
+  ],
+  "detail": [
+    {
+      "name": "ams-sim",
+      "frontmatter_name": "ams-sim",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-extraction-resim",
+      "frontmatter_name": "analog-extraction-resim",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-flow-orchestrate",
+      "frontmatter_name": "analog-flow-orchestrate",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-hardmacro-gen",
+      "frontmatter_name": "analog-hardmacro-gen",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-hw-measure",
+      "frontmatter_name": "analog-hw-measure",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-hw-testbench-gen",
+      "frontmatter_name": "analog-hw-testbench-gen",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-hw-tuning-loop",
+      "frontmatter_name": "analog-hw-tuning-loop",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-layout",
+      "frontmatter_name": "analog-layout",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-netlist-gen",
+      "frontmatter_name": "analog-netlist-gen",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-output-verify",
+      "frontmatter_name": "analog-output-verify",
+      "tier": "verification"
+    },
+    {
+      "name": "analog-sizing",
+      "frontmatter_name": "analog-sizing",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-sizing-loop",
+      "frontmatter_name": "analog-sizing-loop",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-spec-extract",
+      "frontmatter_name": "analog-spec-extract",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "analog-topology-select",
+      "frontmatter_name": "analog-topology-select",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "architecture-explore",
+      "frontmatter_name": "architecture-explore",
+      "tier": "judgment"
+    },
+    {
+      "name": "benchmark-enhancement-capture",
+      "frontmatter_name": "benchmark-enhancement-capture",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "benchmark-verify",
+      "frontmatter_name": "benchmark-verify",
+      "tier": "verification"
+    },
+    {
+      "name": "catalog-glue-author",
+      "frontmatter_name": "catalog-glue-author",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "checkpoint-gate",
+      "frontmatter_name": "checkpoint-gate",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "community-backlog-submit",
+      "frontmatter_name": "community-backlog-submit",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "compliance-gate-spot-check",
+      "frontmatter_name": "compliance-gate-spot-check",
+      "tier": "verification"
+    },
+    {
+      "name": "core-agent-loop",
+      "frontmatter_name": "core-agent-loop",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "design-for-eco",
+      "frontmatter_name": "design-for-eco",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "drc-fix",
+      "frontmatter_name": "drc-fix",
+      "tier": "debug"
+    },
+    {
+      "name": "eco-plan",
+      "frontmatter_name": "eco-plan",
+      "tier": "debug"
+    },
+    {
+      "name": "equivalence-check",
+      "frontmatter_name": "equivalence-check",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "field-agent-loop",
+      "frontmatter_name": "field-agent-loop",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "flow-change-acceptance",
+      "frontmatter_name": "flow-change-acceptance",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "fork-gatekeeper-loop",
+      "frontmatter_name": "fork-gatekeeper-loop",
+      "tier": "unclassified"
+    },
+    {
+      "name": "formal-verify",
+      "frontmatter_name": "formal-verify",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "fpga-hps-bridge",
+      "frontmatter_name": "fpga-hps-bridge",
+      "tier": "debug"
+    },
+    {
+      "name": "fpga-led-probe-allocation",
+      "frontmatter_name": "fpga-led-probe-allocation",
+      "tier": "debug"
+    },
+    {
+      "name": "fpga-signaltap",
+      "frontmatter_name": "fpga-signaltap",
+      "tier": "debug"
+    },
+    {
+      "name": "full-test-audit",
+      "frontmatter_name": "full-test-audit",
+      "tier": "verification"
+    },
+    {
+      "name": "gatekeeper-loop",
+      "frontmatter_name": "gatekeeper-loop",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "hls-c2rtl",
+      "frontmatter_name": "hls-c2rtl",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "hold-fix",
+      "frontmatter_name": "hold-fix",
+      "tier": "debug"
+    },
+    {
+      "name": "hw-debug-loop",
+      "frontmatter_name": "hw-debug-loop",
+      "tier": "debug"
+    },
+    {
+      "name": "ir-drop-triage",
+      "frontmatter_name": "ir-drop-triage",
+      "tier": "debug"
+    },
+    {
+      "name": "layer-contract-doctrine",
+      "frontmatter_name": "layer-contract-doctrine",
+      "tier": "judgment"
+    },
+    {
+      "name": "lvs-triage",
+      "frontmatter_name": "lvs-triage",
+      "tier": "debug"
+    },
+    {
+      "name": "mixed-signal-cosim",
+      "frontmatter_name": "mixed-signal-cosim",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "open-benchmark-methodology",
+      "frontmatter_name": "open-benchmark-methodology",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "phase1",
+      "frontmatter_name": "phase1",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "phase1-completeness-deep-review",
+      "frontmatter_name": "phase1-completeness-deep-review",
+      "tier": "verification"
+    },
+    {
+      "name": "phase1-coverage-loop",
+      "frontmatter_name": "phase1-coverage-loop",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "phase1-output-verify",
+      "frontmatter_name": "phase1-output-verify",
+      "tier": "verification"
+    },
+    {
+      "name": "phase2-rtl-verify",
+      "frontmatter_name": "phase2-rtl-verify",
+      "tier": "verification"
+    },
+    {
+      "name": "phase3-backend-verify",
+      "frontmatter_name": "phase3-backend-verify",
+      "tier": "verification"
+    },
+    {
+      "name": "ppa-predict",
+      "frontmatter_name": "ppa-predict",
+      "tier": "judgment"
+    },
+    {
+      "name": "regression-issue-fix",
+      "frontmatter_name": "regression-issue-fix",
+      "tier": "debug"
+    },
+    {
+      "name": "regression-manage",
+      "frontmatter_name": "regression-manage",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "rtl-repair",
+      "frontmatter_name": "rtl-repair",
+      "tier": "debug"
+    },
+    {
+      "name": "rtl-review",
+      "frontmatter_name": "rtl-review",
+      "tier": "judgment"
+    },
+    {
+      "name": "scope-pattern-attestation",
+      "frontmatter_name": "scope-pattern-attestation",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "spec-review",
+      "frontmatter_name": "spec-review",
+      "tier": "judgment"
+    },
+    {
+      "name": "spec-to-rtl",
+      "frontmatter_name": "spec-to-rtl",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "spec-validator",
+      "frontmatter_name": "spec-validator",
+      "tier": "nl_primary"
+    },
+    {
+      "name": "sta-review",
+      "frontmatter_name": "sta-review",
+      "tier": "judgment"
+    },
+    {
+      "name": "synth-doctor",
+      "frontmatter_name": "synth-doctor",
+      "tier": "debug"
+    },
+    {
+      "name": "tapeout-checklist",
+      "frontmatter_name": "tapeout-checklist",
+      "tier": "judgment"
+    },
+    {
+      "name": "testbench-gen",
+      "frontmatter_name": "testbench-gen",
+      "tier": "unclassified"
+    },
+    {
+      "name": "yield-diagnostic",
+      "frontmatter_name": "yield-diagnostic",
+      "tier": "debug"
+    }
+  ]
+}

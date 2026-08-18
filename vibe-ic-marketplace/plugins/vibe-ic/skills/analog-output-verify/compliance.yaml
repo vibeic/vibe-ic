@@ -1,0 +1,30 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Wave 82 (v1.6.2) — generated to satisfy
+# test_tools_and_integration::test_every_skill_has_compliance_yaml.
+# Analog A1-A9 output verification spot-check.
+skill: analog-output-verify
+
+requirements:
+  - id: R_has_output_section
+    description: "Output / verification report section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report|Verification))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_analog_artifacts
+    description: "Mentions analog artifacts (SPICE / netlist / corner / hardmacro)"
+    pattern: '(SPICE|spice|netlist|corner|hardmacro|magic|layout)'
+    skill_section: 'Analog Verification'
+
+cross_checks:
+  - id: X_text_only_skill
+    description: "Analog output verification spot-check report skill."
+    rule: text_only_report

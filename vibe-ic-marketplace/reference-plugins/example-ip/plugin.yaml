@@ -1,0 +1,20 @@
+plugin_id: tiny-uart
+namespace: example-org
+layer: ip
+version: 0.1.0
+schema_version: vibe-ic-plugin/v1
+
+publisher:
+  org: Example IC Design Lab
+  contact: ic-team@example.org
+  trust_tier: experimental
+
+provenance:
+  source_kind: open-source
+  built_from: 'local:./vibe-ic-marketplace/reference-plugins/example-ip'
+
+ip:
+  deliverable_kind: soft-ip
+  metadata: ./ip_metadata.yaml
+  artifacts:
+    rtl: ./files/tiny_uart.v

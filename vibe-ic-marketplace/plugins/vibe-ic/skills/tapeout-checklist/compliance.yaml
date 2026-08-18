@@ -1,0 +1,46 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: full_markdown
+
+# Compliance spec for skill 'tapeout-checklist' (v0.40)
+# Enhanced: must cover 8 signoff categories with status and waiver documentation
+skill: tapeout-checklist
+
+requirements:
+  - id: R_has_output_section
+    description: "Output format/schema section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_signoff_categories
+    description: "Covers multiple signoff categories (DRC, LVS, STA, DFT, power, functional, physical)"
+    pattern: '(DRC|LVS|STA|DFT|power|functional|physical|timing|antenna|ERC)'
+    skill_section: 'Signoff Coverage'
+  - id: R_status_per_item
+    description: "Each checklist item has a status indicator (green/yellow/red or PASS/FAIL/WAIVED)"
+    pattern: '(green|yellow|red|PASS|FAIL|WAIV|clean|not.*clean|\u2705|\u274c|\u26a0|GO|NO.GO)'
+    skill_section: 'Item Status'
+  - id: R_waiver_documentation
+    description: "Any non-green items have waiver justification or remediation plan"
+    pattern: '(waiver|waiv|justif|rationale|accept.*risk|remediat|exception|known.*issue)'
+    skill_section: 'Waiver Governance'
+
+cross_checks:
+  - id: X_gds_size_check
+    description: "Run gds_size_check.py to verify GDS file exists and is reasonable size"
+    rule: postcheck_pass_only
+  - id: X_synth_netlist_check
+    description: "Run synth_netlist_check.py to verify synthesis completed"
+    rule: postcheck_pass_only
+  - id: X_mcp_execution_verify
+    description: "Verify required MCP tools were actually executed (not just reported)"
+    rule: postcheck_pass_only
+  - id: X_tapeout_signoff_check
+    description: "Verify tapeout has GDS, netlist, timing report, DRC evidence"
+    rule: postcheck_pass_only

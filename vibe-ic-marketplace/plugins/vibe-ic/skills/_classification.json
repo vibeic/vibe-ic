@@ -1,0 +1,101 @@
+{
+  "_comment": "4-tier skill classification — programs are the main line; skills exist in 4 tiers to verify, judge, debug, or handle NL-only tasks. Skills whose content is replicable by deterministic code get ported to programs and deleted.",
+  "schema_version": 2,
+  "model": "4-tier",
+  "tiers": {
+    "verification": {
+      "description": "Run AFTER program PASS to spot-check the deterministic output. AI MUST invoke before claiming PASS to user.",
+      "skills": [
+        "analog-output-verify",
+        "benchmark-verify",
+        "compliance-gate-spot-check",
+        "full-test-audit",
+        "phase1-completeness-deep-review",
+        "phase1-output-verify",
+        "phase2-rtl-verify",
+        "phase3-backend-verify"
+      ]
+    },
+    "judgment": {
+      "description": "Programs cannot determine subjective quality. AI invokes when output needs domain interpretation.",
+      "skills": [
+        "architecture-explore",
+        "layer-contract-doctrine",
+        "ppa-predict",
+        "rtl-review",
+        "spec-review",
+        "sta-review",
+        "tapeout-checklist"
+      ]
+    },
+    "debug": {
+      "description": "Programs FAIL → AI close-loops via debug skill. Triggered automatically when runner returns FAIL.",
+      "skills": [
+        "drc-fix",
+        "eco-plan",
+        "fpga-hps-bridge",
+        "fpga-led-probe-allocation",
+        "fpga-signaltap",
+        "hold-fix",
+        "hw-debug-loop",
+        "ir-drop-triage",
+        "lvs-triage",
+        "regression-issue-fix",
+        "rtl-repair",
+        "synth-doctor",
+        "yield-diagnostic"
+      ]
+    },
+    "nl_primary": {
+      "description": "No deterministic equivalent exists. AI invokes directly when user intent matches.",
+      "skills": [
+        "ams-sim",
+        "analog-extraction-resim",
+        "analog-flow-orchestrate",
+        "analog-hardmacro-gen",
+        "analog-hw-measure",
+        "analog-hw-testbench-gen",
+        "analog-hw-tuning-loop",
+        "analog-layout",
+        "analog-netlist-gen",
+        "analog-sizing",
+        "analog-sizing-loop",
+        "analog-spec-extract",
+        "analog-topology-select",
+        "benchmark-enhancement-capture",
+        "catalog-glue-author",
+        "checkpoint-gate",
+        "community-backlog-submit",
+        "core-agent-loop",
+        "design-for-eco",
+        "equivalence-check",
+        "field-agent-loop",
+        "flow-change-acceptance",
+        "formal-verify",
+        "gatekeeper-loop",
+        "hls-c2rtl",
+        "mixed-signal-cosim",
+        "open-benchmark-methodology",
+        "phase1",
+        "phase1-coverage-loop",
+        "regression-manage",
+        "scope-pattern-attestation",
+        "spec-to-rtl",
+        "spec-validator"
+      ]
+    }
+  },
+  "deprecated_skills": {
+    "_comment": "Skills already replaced by deterministic programs and archived under .deprecated_skills/.",
+    "skills": [
+      "phase1-orchestrate",
+      "flow-orchestrate",
+      "assertion-gen",
+      "def2gds",
+      "drc-from-lef",
+      "lvs-open-source",
+      "pdk-metal-stack-select",
+      "phase1-coverage-report-gen"
+    ]
+  }
+}

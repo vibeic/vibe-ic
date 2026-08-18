@@ -1,0 +1,20 @@
+class: memory-controller
+layer: L1
+qbank:
+  memory_type:
+    expert:       ["Memory type — DDR / DDR2 / DDR3 / DDR4 / LPDDR / LPDDR4 / LPDDR5 / SDR / RPC / SPI-Flash / NAND?"]
+    intermediate: ["What kind of external memory — DDR3, DDR4, LPDDR4, SPI flash?"]
+    beginner:     ["What memory sits outside the chip — DRAM or Flash?"]
+
+  memory_standard:
+    expert:       ["JEDEC reference (e.g. JESD79-4)?"]
+    intermediate: ["Which JEDEC standard does it follow?"]
+    beginner:     []
+
+  phy_frequency_ratio:
+    expert:       ["Core-to-PHY frequency ratio — 1:2 or 1:4?"]
+    intermediate: ["The ratio between the user-side core clock and the memory-side PHY clock."]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # 1:2

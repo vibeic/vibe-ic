@@ -1,0 +1,18 @@
+class: apb-peripheral
+layer: L7
+# v0.74 E+F-implement: APB peripheral test/debug
+qbank:
+  test_modes.register_loopback:
+    expert:       ["Register-loopback test mode (write-then-read verification)?"]
+    intermediate: ["Is there a test mode for software to exercise every register?"]
+    beginner:     []
+
+  test_modes.irq_force:
+    expert:       ["Force-IRQ debug bit in status register?"]
+    intermediate: ["Any way for software to force an interrupt for debug?"]
+    beginner:     []
+
+  debug_hooks.pslverr_inject:
+    expert:       ["PSLVERR-injection debug hook?"]
+    intermediate: ["Any way to force PSLVERR for bus error-handling testing?"]
+    beginner:     []

@@ -1,0 +1,27 @@
+class: memory-controller
+layer: L2
+qbank:
+  data_width:
+    expert:       ["User-side data bus width (bits)?"]
+    intermediate: ["How wide is the data bus on the user side — 32, 64, 128, 256?"]
+    beginner:     []
+
+  addr_width:
+    expert:       ["User-side address width (bits)?"]
+    intermediate: ["Address width seen by the user — typically 32."]
+    beginner:     []
+
+  user_interface:
+    expert:       ["User-side interface — Native / AXI-MM / Wishbone / Avalon?"]
+    intermediate: ["Which bus flavour does the user-side speak — AXI memory-mapped, Wishbone, or native?"]
+    beginner:     []
+
+  phy_interface:
+    expert:       ["PHY interface — DFI / SPI-pads / QSPI / direct?"]
+    intermediate: ["How does the controller talk to the PHY — DFI for DRAM, raw pads for flash?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["dram"]
+        respond_with_default: "DFI"
+      - if_user_says: ["spi flash"]
+        respond_with_default: "SPI-pads"

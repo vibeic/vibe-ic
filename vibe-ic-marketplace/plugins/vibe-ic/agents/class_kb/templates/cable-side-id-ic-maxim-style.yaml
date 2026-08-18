@@ -1,0 +1,40 @@
+# cable-side-id-ic-maxim-style — sub-class of cable-side-id-ic for
+# designs that follow the Maxim / Dallas 1-Wire-influenced architecture
+# (single-wire pad, CRC-8 MAXIM polynomial, pad/decoder/encoder/checker/
+# command/MAC/OTP/wake-gen structural decomposition).
+#
+# Added v0.56 (2026-04-24) to host the IC-A-style submodule names
+# that previously lived in `cable-side-id-ic.yaml` parent. The parent
+# class now describes only the generic single-wire ID controller
+# structural minimums; pick this sub-class when the design specifically
+# follows the Maxim/Dallas decomposition.
+class: cable-side-id-ic-maxim-style
+parent: cable-side-id-ic
+
+# All facts inherit from cable-side-id-ic.yaml — no new fact additions.
+# The differentiator is the spec_floor's required-submodule list below.
+facts: {}
+
+# -----------------------------------------------------------------------------
+# spec_floor — Maxim-style ICs require a specific submodule decomposition
+# -----------------------------------------------------------------------------
+# Inherits all numeric floors from the parent, then ADDS the
+# named-submodule requirement (only checked when this sub-class is
+# explicitly chosen via L1.class_path or --class-path override).
+spec_floor:
+  L6_submodule_count_min: 10           # tighter than parent's 6
+  L6_required_submodules:              # named submodules per Maxim-style architecture
+    - pad_ctrl
+    - dclk
+    - drst
+    - rx_phy
+    - tx_phy
+    - rx_chk
+    - rx_cmd
+    - mac
+    - otp_ctrl
+    - gen_wake
+  L9_top_level_port_count_min: 18      # tighter than parent's 14
+
+# Sequence naming inherited from parent (v0.54 added strip_suffixes
+# to the parent template).

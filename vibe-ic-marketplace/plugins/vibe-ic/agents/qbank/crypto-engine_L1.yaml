@@ -1,0 +1,42 @@
+class: crypto-engine
+layer: L1
+qbank:
+  crypto_family:
+    expert:       ["Crypto family — block-cipher / hash-function / stream-cipher / rng?"]
+    intermediate: ["What kind of crypto primitive — symmetric cipher, hash, stream cipher, or RNG?"]
+    beginner:     ["What is the crypto doing — encrypting data, fingerprinting data, generating keystream, or making randomness?"]
+
+  algorithm_name:
+    expert:       ["Algorithm name — AES / SHA-256 / SHA-3 / ChaCha / TRNG?"]
+    intermediate: ["Which specific algorithm — AES, SHA-256, SHA-3, ChaCha20, or a TRNG?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["encrypt", "symmetric"]
+        respond_with_default: "AES (FIPS-197)"
+      - if_user_says: ["hash", "digest"]
+        respond_with_default: "SHA-256 (FIPS-180-4)"
+
+  standard_reference:
+    expert:       ["FIPS / NIST reference?"]
+    intermediate: []
+    beginner:     []
+
+  block_width_bits:
+    expert:       ["Block width (bits)?"]
+    intermediate: ["How wide is one block — 128 for AES, 512 for SHA-256?"]
+    beginner:     []
+
+  digest_width_bits:
+    expert:       ["Digest width (hash only, bits)?"]
+    intermediate: ["For hashes only — output digest width (224/256/384/512)."]
+    beginner:     []
+
+  key_width_bits:
+    expert:       ["Key width (bits)?"]
+    intermediate: ["Key size — 128, 192, 256?"]
+    beginner:     []
+
+  iv_nonce_width_bits:
+    expert:       ["IV/nonce width (stream/rng only)?"]
+    intermediate: []
+    beginner:     []

@@ -1,0 +1,52 @@
+ip_name: blake2s_core
+ip_version: "0.50"
+ip_class: blake2s_hash
+license: BSD-2-Clause
+canonical_url: https://github.com/secworks/blake2s
+canonical_commit: "master"
+authors:
+  - "Joachim Strömbergson <joachim@secworks.se>"
+description: >
+  RFC 7693 BLAKE2s hash function. Memory-mapped register interface.
+  Faster than SHA-256 in software; this hardware impl benefits from
+  the simpler ChaCha-derived round function (only XOR/ADD/ROT).
+
+implements:
+  algorithm: blake2s
+  standard: rfc_7693
+  digest_width_bits_max: 256
+  block_width_bits: 512
+
+matches_when:
+  - "L2.function == 'blake2s' OR L2.function == 'blake2'"
+  - "L2.crypto_family == 'blake2' OR L2.crypto_family == 'blake'"
+  - "L4 contains 'RFC 7693' OR L4 contains 'BLAKE2'"
+
+interface:
+  ports:
+    - {name: clk,        dir: in,  width: 1}
+    - {name: reset_n,    dir: in,  width: 1}
+    - {name: cs,         dir: in,  width: 1}
+    - {name: we,         dir: in,  width: 1}
+    - {name: address,    dir: in,  width: 8}
+    - {name: write_data, dir: in,  width: 32}
+    - {name: read_data,  dir: out, width: 32}
+  parameters: []
+
+rtl_files:
+  - src/rtl/blake2s.v
+  - src/rtl/blake2s_core.v
+  - src/rtl/blake2s_m_select.v
+  - src/rtl/blake2s_G.v
+
+synth:
+  pdk_compatible: [sky130A]
+  tested_clock_period_ns: 10
+  area_ge: 3500
+  openlane_tapeout_track_record: "secworks/blake2s SKY130 OpenLane CI"
+
+integration_notes: >
+  Supports keyed (HMAC-equivalent) and unkeyed modes. Personalisation
+  + salt + key are written via register-mapped interface.
+
+depends_on: []

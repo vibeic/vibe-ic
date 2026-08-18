@@ -1,0 +1,38 @@
+class: cable-side-id-ic
+layer: L6
+qbank:
+  submodule_control_logic.mac:
+    expert:       ["MAC FSM — states, transitions, key signals?"]
+    intermediate: ["The media-access-control block — what states does it go through from idle to command-complete?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["standard"]
+        respond_with_default: "{states: [IDLE, WAKE_DETECT, RX_HEADER, RX_PAYLOAD, TX_RESPONSE, DONE]}"
+
+  submodule_control_logic.rx_phy:
+    expert:       ["RX_PHY — bit-level decoder FSM?"]
+    intermediate: ["The PHY receiver — how does it sample and decode each bit?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true
+
+  submodule_control_logic.rx_cmd:
+    expert:       ["RX_CMD — opcode dispatch logic?"]
+    intermediate: ["The command-parser — how does it map opcodes to internal actions?"]
+    beginner:     []
+
+  submodule_control_logic.rx_chk:
+    expert:       ["RX_CHK — frame validity checker (CRC + length)?"]
+    intermediate: ["The frame-checker — what errors does it detect and how does it react?"]
+    beginner:     []
+
+  submodule_control_logic.otp_ctrl:
+    expert:       ["OTP_CTRL — read/write/ECC sequencing?"]
+    intermediate: ["The OTP controller — how does it handle reads and (one-time) programming?"]
+    beginner:     []
+
+  submodule_control_logic.cc_ctrl:
+    expert:       ["CC_CTRL — CC-line steering / throttle FSM?"]
+    intermediate: ["The CC-throttle block — how does it gate or shape the CC output?"]
+    beginner:     []

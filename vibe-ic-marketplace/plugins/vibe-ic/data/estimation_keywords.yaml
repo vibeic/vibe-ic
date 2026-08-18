@@ -1,0 +1,71 @@
+# estimation_keywords.yaml — multi-language list of words that signal a
+# coverage / metric claim was eyeballed instead of measured by a tool.
+#
+# Used by:
+#   plugins/vibe-ic-d/programs/fpga_verification_audit.py
+#
+# Each entry under `keywords` is treated as a regex (case-insensitive,
+# unicode). Add language-specific variants here instead of editing the
+# program source. Soft-threshold patterns (`>= 95%`, `≥ 95%`) live in
+# the separate `soft_threshold_patterns` block.
+#
+# Why YAML, not Python: the audit program is the same code regardless
+# of the report language; only the keyword list changes.
+
+# --------------------------------------------------------------------- #
+# Plain estimation words / phrases (regex)
+# --------------------------------------------------------------------- #
+keywords:
+  # English
+  - "estimated"
+  - "estimate"
+  - "approx(?:imate)?"
+  - "approximately"
+  - "roughly"
+  - "around"
+
+  # Traditional Chinese
+  - "大約"
+  - "估計"
+  - "約"
+  - "預估"
+  - "粗估"
+
+  # Simplified Chinese (extra glyphs not covered above)
+  - "估算"
+
+  # Japanese
+  - "およそ"
+  - "推定"
+  - "概ね"
+
+  # Korean
+  - "약"
+  - "추정"
+  - "대략"
+
+  # Spanish / Portuguese / French — common evaluation reports
+  - "aproximad[ao]?"
+  - "estimad[ao]?"
+  - "environ"
+  - "à peu près"
+
+  # German
+  - "schätzungsweise"
+  - "ungefähr"
+  - 'ca\.'
+
+# --------------------------------------------------------------------- #
+# Soft thresholds: claims like "≥ 95%" / ">= 95%" — these mean the
+# author chose a comfortable lower bound rather than reporting the
+# real number.
+#
+# Patterns are written in single-quoted YAML so backslashes survive
+# verbatim (this gate ships a stdlib-only YAML reader; double-quoted
+# YAML escape rules are not supported).
+# --------------------------------------------------------------------- #
+soft_threshold_patterns:
+  - '(?:≥|>=)\s*\d+(?:\.\d+)?\s*%'
+  - '(?:>|＞)\s*\d+(?:\.\d+)?\s*%'                # > 95 % (full-width >)
+  - '(?:超過|超出|高於)\s*\d+(?:\.\d+)?\s*%'      # zh "超過 95%"
+  - '(?:以上)\s*\d+(?:\.\d+)?\s*%'                 # zh trailing form

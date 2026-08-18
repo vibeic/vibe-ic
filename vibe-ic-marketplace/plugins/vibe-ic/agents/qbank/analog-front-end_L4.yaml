@@ -1,0 +1,23 @@
+class: analog-front-end
+layer: L4
+# v0.74 E+F-implement: AFE control register map + I2C/SPI addressing
+qbank:
+  register_map:
+    expert:       ["Register map — offset / name / access / reset / fields?"]
+    intermediate: ["What registers does the host write to configure the chip?"]
+    beginner:     ["What settings can software change at runtime?"]
+
+  i2c_address_pin_count:
+    expert:       ["I2C address-select pin count (0–2 external)?"]
+    intermediate: ["Are there any pins that set the I2C address?"]
+    beginner:     []
+
+  spi_chip_select_count:
+    expert:       ["SPI chip-select pin count?"]
+    intermediate: ["How many SPI chip-selects are exposed?"]
+    beginner:     []
+
+  pointer_register_present:
+    expert:       ["Pointer-register indirection (2-step: write pointer, then data)?"]
+    intermediate: ["Does the chip use a pointer register (SMBus-style 2-phase access)?"]
+    beginner:     []

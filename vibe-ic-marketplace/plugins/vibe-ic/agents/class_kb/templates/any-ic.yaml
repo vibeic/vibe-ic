@@ -1,0 +1,105 @@
+# any-ic — root fact template
+# Every IC regardless of class must carry these facts.
+class: any-ic
+parent: null
+
+facts:
+  # v0.74 A-implement Phase 1: K1 paths aligned to benchmark L*.json paths
+  # (was: ic_name / overview.* / functional_requirements / dtop_top_level / ...)
+  L1:
+    - {path: document_id,                   type: string, required: true, defaultable: true}
+    - {path: part_number,                   type: string, required: true, defaultable: false, provenance: user_stated}
+    - {path: source_documents,              type: list_of_strings, required: false, defaultable: true}
+    - {path: description,                   type: string, required: true, provenance: user_stated_or_defaulted}
+    - {path: package,                       type: string, required: true, defaultable: true}
+    # v0.74 A-implement Phase 2: datasheet-critical paths (were declared-in-benchmark but undeclared-in-K1)
+    - {path: pinout,                        type: dict, required: true, min_keys: 2}
+    - {path: pin_count,                     type: integer, required: true, defaultable: true}
+    - {path: electrical_characteristics,    type: dict, required: true, min_keys: 1}
+    - {path: absolute_max_ratings,          type: dict, required: false}
+    - {path: reliability,                   type: dict, required: false}
+    # D3 rubric / Phase 2 prevention of the "16% catastrophe" prose-vs-list gap:
+    # every IC must publish a structured supported_interfaces array (one entry
+    # per external bus). Auto-derived by tools/phase1_engine/interfaces_floor.py
+    # when the IC docs don't already declare it.
+    - {path: supported_interfaces,          type: list_of_dicts, required: true, min_len: 1, defaultable: true}
+    # v1.6.271 — for #128 ORGANIC-phase1 product_family slot.
+    # Real datasheets / READMEs name a chip with TWO identifiers in sequence:
+    # a marketing family name AND a specific part number. The NL ingester
+    # historically dropped the family token because there was no destination
+    # field. Optional dict; populated when stated.
+    - {path: product_family,                type: dict, required: false}
+    # v1.6.271 — for #129 ORGANIC-phase1 tapeout_metadata sub-block.
+    # Fabrication-metadata facts (foundry process node, tapeout date, die
+    # dimensions, upstream repo, project origin) are first-class identifiers
+    # of the project even though they're not runtime behaviour. Each sub-
+    # field is individually optional; the block exists so honest extractions
+    # have a typed home rather than landing in L9.process_technology free-
+    # text or L9.power_domains catch-all. NL-ingest extraction template is
+    # expected to populate this when the input carries the facts.
+    - {path: tapeout_metadata,              type: dict, required: false}
+
+  L2:
+    - {path: document_id,                   type: string, required: true, defaultable: true}
+    - {path: requirements,                  type: list_of_dicts, required: true, min_len: 3, schema: [id, text]}
+    - {path: functional_description,        type: string, required: true}
+
+  L5:
+    - {path: document_id,                   type: string, required: true, defaultable: true}
+    - {path: pads,                          type: list_of_dicts, required: true}
+    - {path: timing_notes,                  type: string, required: false}
+
+  L6:
+    - {path: document_id,                   type: string, required: true, defaultable: true}
+    - {path: submodule_control_logic,       type: dict, required: true}
+    # v0.74 A-implement Phase 2: FSM-critical
+    - {path: states,                        type: list_of_dicts, required: false}
+    - {path: transitions,                   type: list_of_dicts, required: false}
+    - {path: top_level_fsm,                 type: dict, required: false}
+
+  L7:
+    - {path: document_id,                   type: string, required: true, defaultable: true}
+    - {path: test_modes,                    type: list_of_dicts, required: true, min_len: 1}
+    - {path: debug_hooks,                   type: list, required: false}
+
+  L8:
+    - {path: document_id,                   type: string, required: true, defaultable: true}
+    - {path: reset_timing.por_to_first_wake_ready_us, type: number, required: true, defaultable: true}
+
+  L8R:
+    - {path: document_id,                   type: string, required: true, defaultable: true}
+    - {path: clock_frequency_hz,            type: integer, required: true, provenance: user_stated_or_derived}
+    # v1.6.273 — for #132 ORGANIC-phase1 typed slot for per-device-per-corner
+    # PPA / synthesis-evaluation tables. Two recurring shapes:
+    #   (a) FPGA soft-IP READMEs enumerate per-{device-family, speedgrade}
+    #       synthesis results (LUT / DFF / BRAM / DSP counts + max freq).
+    #   (b) ASIC datasheet "Electrical / PPA" sections enumerate per-{process,
+    #       voltage, temperature} corner timing slack / power / area.
+    # Pre-v1.6.273 the only typed home was scalar `clock_frequency_hz`, so
+    # multi-row PPA tables dropped wholesale (16/25 missing tokens on a
+    # single soft-IP benchmark were per-device frequency literals).
+    # Each entry is optional inside the row — the NL ingester only stamps
+    # what the input states. The list itself is optional (ICs without such
+    # tables are unaffected).
+    - {path: synthesis_results, type: list_of_dicts, required: false,
+       schema: [device_family, device_part, corner, frequency_hz, lut_count,
+                register_count, dsp_count, bram_count, area_um2, power_mw,
+                toolchain, toolchain_version, source]}
+    # Sibling list for ASIC-style PVT corner enumeration. Same optionality
+    # rules — populated only when the input has a power-corner table.
+    - {path: power_corners,     type: list_of_dicts, required: false,
+       schema: [process, voltage_v, temperature_c, dynamic_power_mw,
+                leakage_power_uw, source]}
+
+  L9:
+    - {path: document_id,                   type: string, required: true, defaultable: true}
+    - {path: top_level_ports,               type: list_of_dicts, required: true, min_len: 1}
+    - {path: submodules,                    type: list_of_dicts, required: true, min_len: 1}
+    # v0.74 A-implement Phase 2: integration-critical
+    - {path: clock_reset,                   type: dict, required: false}
+    - {path: internal_wires,                type: list_of_dicts, required: false}
+    - {path: parameters,                    type: dict, required: false}
+
+# NOTE: L3 and L4 are not here — they are protocol-ic / memory-controller specifics.
+# Crypto engines often don't have L3 (no external protocol); memory controllers
+# have a different L4 shape.

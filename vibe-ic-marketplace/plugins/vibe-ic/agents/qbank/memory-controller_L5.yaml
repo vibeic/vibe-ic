@@ -1,0 +1,23 @@
+class: memory-controller
+layer: L5
+# v0.74 E+F-implement: memory controller interface options
+qbank:
+  bist_support:
+    expert:       ["BIST support — March / checkerboard / pattern coverage?"]
+    intermediate: ["Does the controller support memory-BIST? Which patterns?"]
+    beginner:     []
+
+  crossbar_frontend:
+    expert:       ["Frontend type — crossbar / arbiter / single-port?"]
+    intermediate: ["What's the user-facing frontend — a crossbar, arbitrated, or single-port?"]
+    beginner:     []
+
+  dma_frontend:
+    expert:       ["DMA front-end channel count?"]
+    intermediate: ["Are there dedicated DMA channels into the controller?"]
+    beginner:     []
+
+  ecc_support:
+    expert:       ["ECC support — SECDED / single-error-correct / none?"]
+    intermediate: ["Any error-correction coding?"]
+    beginner:     ["Can the chip detect or fix memory errors?"]

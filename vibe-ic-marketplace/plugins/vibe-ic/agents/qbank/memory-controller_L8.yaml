@@ -1,0 +1,18 @@
+class: memory-controller
+layer: L8
+# v0.74 E+F-implement: memory controller timing
+qbank:
+  phy_timing:
+    expert:       ["PHY-side timing — tCK / tRCD / tRP / tCL / tFAW / tRAS?"]
+    intermediate: ["Key JEDEC timing parameters — tCK, tRCD, tRP, tCL?"]
+    beginner:     []
+
+  write_cycle_ms:
+    expert:       ["Write cycle time (flash) in ms?"]
+    intermediate: ["For flash: how long does one page write take?"]
+    beginner:     []
+
+  erase_cycles_max:
+    expert:       ["Maximum erase cycles (flash endurance)?"]
+    intermediate: ["Flash endurance — how many erase cycles per block?"]
+    beginner:     []

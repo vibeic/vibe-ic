@@ -1,0 +1,818 @@
+#!/usr/bin/env bash
+# gatekeeper-land.sh — everything `gatekeeper-ci.yml` and `ci.yml` would have run,
+# run locally, because Actions is disabled at the account level (vibe-ic#550) and
+# the appeal was rejected. This is not a stopgap: it is the enforcement path.
+#
+# Split by cost, because a slow check is a bypassed check:
+#
+#   CHEAP  — also run by the pre-push hook on EVERY push (see tools/git-hooks/).
+#   FULL   — the multi-minute suites. Too slow for a hook, so on success this
+#            script stamps `.git/gatekeeper-stamp` with the tree SHA it verified,
+#            and the pre-push hook REFUSES a push whose commit has no matching
+#            stamp. That makes the expensive tier enforced rather than optional.
+#
+# Usage:  tools/gatekeeper-land.sh [--cheap-only] [--prepare]
+#
+# --prepare (vibe-ic#1129) — do the MECHANICAL things this script would
+# otherwise refuse a batch for, before the cheap tier runs, and let the gates
+# refuse only what is left:
+#
+#     version_bump_monotonic_check    the version was not bumped
+#     landing_is_one_commit          no [vX.Y.Z]-tagged commit on the tip
+#     test_programs_index_freshness  programs/INDEX.md is stale
+#     63x8 census freshness          the derived figures are stale (#1382)
+#
+# None of those is a judgement, each already has a program that owns it, and a
+# refusal for one of them costs an hour of gate wall-clock while saying nothing
+# about the code under test. OFF BY DEFAULT: it rewrites the tip commit, which
+# is the operator's call, not a side effect of asking for a verdict.
+#
+# The census line is the LAND-TIME DERIVATION POINT (vibe-ic#1382). That gate
+# blocked eleven of thirteen finished batches on 2026-08-13 and not one of those
+# was a defect in a PR it stopped — every figure was off by exactly one, one gate
+# added by one PR with the derived figures never re-derived. Re-deriving here
+# does not silence it: `repo_hygiene_gates.sh` still runs the generator's own
+# `--check` afterwards, on the tree this step produced. Alone among the steps
+# above it is BEST EFFORT — its generator can fail on a loaded host for reasons
+# no re-derivation reaches (#1277), and a fatal step would refuse every landing.
+#
+# The preparation is delegated to `gatekeeper_prepare_landing.py`, which REFUSES
+# if anything outside the set its writers declared is dirty — the gate must not
+# become a path for editing its own subject (#1029, #1089). If preparation
+# refuses, this script stops: a landing whose preparation could not be
+# attributed is not a landing worth an hour.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+PROGRAMS="$ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
+PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
+PJSON="$PLUGIN/.claude-plugin/plugin.json"
+BASE="${GATEKEEPER_BASE:-origin/main}"
+RANGE="${BASE}..HEAD"
+CHEAP_ONLY=0
+PREPARE=0
+for _arg in "$@"; do
+  case "$_arg" in
+    --cheap-only) CHEAP_ONLY=1 ;;
+    --prepare)    PREPARE=1 ;;
+    *) echo "gatekeeper-land: unknown argument '$_arg'" >&2; exit 2 ;;
+  esac
+done
+
+FAILED=0
+# REPORT, not a gate. Prints what a probe found and NEVER touches FAILED.
+#
+# It exists so that a measurement whose blast radius is not yet a landing bar
+# still EXECUTES against every landing instead of being parked in a flag nobody
+# passes. The distinction is written into the label, so a reader of this log
+# can never mistake a REPORT line for a PASS.
+report() {                           # report <label> <cmd…>
+  local label="$1"; shift
+  local out rc
+  out="$("$@" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf '  REPORT  %s\n' "$label"
+  else
+    printf '  REPORT  %s (rc=%s — NOT blocking)\n' "$label" "$rc"
+  fi
+  printf '%s\n' "$out" | grep -aE 'REPORT|VIOLATION|\[FAIL\]|\[SKIP\]' \
+    | head -8 | sed 's/^/            /'
+}
+run() {                              # run <label> <cmd…>
+  local label="$1"; shift
+  local out
+  if out="$("$@" 2>&1)"; then
+    printf '  PASS  %s\n' "$label"
+  else
+    printf '  FAIL  %s\n' "$label"
+    # The FAILING lines first, then the tail — not the tail alone.
+    #
+    # A gate that aggregates others puts its failure in the middle and its
+    # summary at the end, so `tail` shows the wrong thing by construction. On
+    # 2026-07-30 this reported `FAIL repo hygiene gates` (37 sub-gates) with
+    # five lines of a DIFFERENT sub-gate's PASS output underneath it. The
+    # failure was real, it was named nowhere, and the whole 17-minute run had
+    # to be repeated just to find out which gate it was.
+    #
+    # The tail is kept because the summary line usually lives there and is
+    # worth having; it is no longer the ONLY thing kept.
+    printf '%s\n' "$out" \
+      | grep -aE '^[[:space:]]*(FAIL|ERROR)|\[FAIL\]|\[ERROR\]|FAILED' \
+      | head -12 | sed 's/^/          /'
+    printf '%s\n' "$out" | tail -5 | sed 's/^/          /'
+    FAILED=1
+  fi
+}
+
+echo "=== gatekeeper landing gates — base=$BASE ==="
+
+# vibe-ic#1129 — the mechanical repairs, BEFORE anything measures them. A gate
+# that refuses for a reason a program can fix spends an hour saying so.
+if [ "$PREPARE" = "1" ]; then
+  echo "--- prepare (vibe-ic#1129: the mechanical three, then get out of the way) ---"
+  if python3 "$PROGRAMS/gatekeeper_prepare_landing.py" --repo "$ROOT" --commit; then
+    :
+  else
+    echo "  FAIL  preparation REFUSED — see above. Not proceeding: a landing whose"
+    echo "        preparation could not be attributed is not one worth an hour."
+    exit 1
+  fi
+fi
+
+echo "--- cheap tier (also enforced by the pre-push hook) ---"
+
+# An empty range means nothing new is being landed; the NDA checkers correctly
+# refuse an empty scan, so the no-op is skipped rather than reported as a pass.
+if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
+  run "NDA — commit messages"   python3 "$PROGRAMS/commit_msg_nda_check.py" --repo "$ROOT" --rev-range "$RANGE"
+  run "NDA — added content/paths" python3 "$PROGRAMS/nda_diff_scan_check.py" --rev-range "$RANGE"
+  # `GATEKEEPER_VERSION_BY_GATEKEEPER=1` — the VERSION-LESS authoring-PR path,
+  # for `tools/gatekeeper-verify-merge.sh` (vibe-ic#1019). The version is
+  # assigned AT MERGE by the gatekeeper, so a PR under verification legitimately
+  # carries no bump and demanding one here would refuse every conformant PR —
+  # the same deferral `tools/git-hooks/pre-push` already applies off-main, using
+  # the same flag the program already ships. A BACKWARDS version is still
+  # refused in both directions, so this defers the gate and does not disable it.
+  # Unset (the push path) is unchanged: current == previous still FAILs.
+  if [ "${GATEKEEPER_VERSION_BY_GATEKEEPER:-0}" = "1" ]; then
+    run "version monotonic (assigned at merge — deferred)" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE" --version-by-gatekeeper
+  else
+    run "version bumped monotonically" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE"
+  fi
+  run "agent check-in scope"    python3 "$PROGRAMS/agent_checkin_scope_guard.py" --role core-agent --base "$BASE"
+  # `--corpus-may-be-absent`: the published corpus lives in vibeic/benchmark-data,
+  # so THIS repo legitimately has no `benchmark-data/`. Without the flag the gate
+  # correctly reports UNDETERMINED and blocks every push — a gate that refuses
+  # every landing is the ban this repo already learned to distrust.
+  #
+  # It is NOT a licence. With VIBE_IC_BENCHMARK_DATA pointing at a clone the gate
+  # scans it and can still fail; with the pointer set and broken it is still
+  # UNDETERMINED, flag or no flag. The flag only names the one case it was written
+  # for: nothing configured, nothing local, nothing claimed.
+  run "benchmark evidence structure" python3 "$PROGRAMS/benchmark_evidence_structure_check.py" --tree benchmark-data --corpus-may-be-absent --changed-since "$BASE"
+  # vibe-ic#635 — a NEW published number must arrive with its composition.
+  # Scoped `--changed-since` like the gate above: 20 of the 25 runs already
+  # published carry no per-problem name set, and applying this retroactively
+  # would fail every landing over work nobody is doing.
+  run "benchmark run manifest" python3 "$PROGRAMS/benchmark_run_manifest.py" check --tree benchmark-data --changed-since "$BASE"
+  # PER-RUN, not a fixed name. `tools/gatekeeper-verify-merge.sh` (vibe-ic#1019)
+  # runs this script for the BASE and for the CANDIDATE at the same time — two
+  # arms of one differential — and a shared `/tmp/gk_*.txt` would have had each
+  # arm reading the other's range. A gate that silently answers about the wrong
+  # tree is the defect this whole file exists to stop.
+  MSGFILE="$(mktemp -t gk_commit_text.XXXXXX)"
+  git log --format='%B' "$RANGE" > "$MSGFILE" 2>/dev/null
+  run "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" "$MSGFILE"
+  rm -f "$MSGFILE"
+  # 2026-08-03 — the batch that landed five PRs from a 6.5-hour-stale base and
+  # let three of its own commits erase the other two. `gatekeeper_stale_branch_check`
+  # said STALE_OVERLAP on all five BEFORE the land; nothing looked at the
+  # commits AFTER they existed, which is the artefact this script pushes.
+  run "no collateral revert within the push" \
+      python3 "$PROGRAMS/landing_collateral_revert_check.py" --repo "$ROOT" --rev-range "$RANGE"
+  # 2026-08-05 — THE OTHER HALF OF THE SAME QUESTION, and the half nothing here
+  # was asking. The gate above reads the commits INSIDE this push; this reads
+  # whether the tree being pushed actually contains the base it names as its
+  # parent.
+  #
+  # `1766746f6` named origin/main (v1.9.78) as its parent and carried v1.9.77's
+  # tree: 81 files, 9258 deletions, 13 commits reverted, 15 files deleted. It
+  # passed every shape check here — one commit ahead of the base, no in-range
+  # predecessor to revert, and `gatekeeper_stale_branch_check` itself said FRESH,
+  # because the head really does descend from the tip. Only a human read caught
+  # it, an hour before it would have landed.
+  #
+  # The checker was already blocking in `gatekeeper_review`; it had never been
+  # wired HERE, which is the script that writes the stamp the pre-push hook
+  # demands — so the landing path had no opinion on the landing method at all.
+  run "tree contains the base it claims as parent" \
+      python3 "$PROGRAMS/gatekeeper_stale_branch_check.py" --repo "$ROOT" \
+          --base "$BASE" --head HEAD
+else
+  echo "  SKIP  range is empty — nothing new to land"
+fi
+run "marketplace <-> plugin version sync" python3 "$PROGRAMS/marketplace_version_sync_check.py"
+# A landing is normally ONE commit. A batch is legitimate when several
+# independent changes land together — NO-MIX forces a benchmark-data fix and a
+# plugin change into separate commits, for instance — and the gate accepts that
+# via --batch, which additionally requires the version bump to sit on the TIP.
+# Auto-detected rather than configured, so a batch is never silently waved
+# through as if it were a single landing.
+#
+# AN EMPTY RANGE IS NOT A LANDING, so it is not a landing of one commit either.
+# Asked over `X..X` the checker sees ZERO commits and answers FAIL — a vacuous
+# refusal, and one with teeth beyond this line: `gatekeeper-verify-merge.sh`
+# (vibe-ic#1019) runs this script over an empty range on the BASE to learn which
+# gates are ALREADY failing, and a gate that fails vacuously there would let a
+# candidate's REAL one-commit violation be waived as pre-existing. Range-scoped
+# gates must SKIP over an empty range, exactly as the block above already does.
+GK_RANGE_N="$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)"
+if [ "$GK_RANGE_N" = "0" ]; then
+  echo "  SKIP  landing shape — range is empty, so there is no landing to shape"
+elif [ "$GK_RANGE_N" -gt 1 ]; then
+  run "landing is a valid batch (version on tip)" \
+      python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE" --batch
+else
+  run "landing is one commit" \
+      python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE"
+fi
+
+# The gate above asks whether the batch has a legal SHAPE. This asks what it
+# CONTAINS: does more than one member of this landing claim the same issue?
+#
+# vibe-ic#1411 — the only mechanism this repo has for noticing two changes doing
+# one job is a MERGE CONFLICT, and of the 22 issues carrying more than one open
+# PR, 16 had members sharing no file, so nothing reported them. #1080 is the
+# confirmed instance: two PRs shipped two metric schemas for one issue, each
+# with its own passing tests, and the pair was found by accident.
+#
+# `competing_pr_claim_groups.py` (#1413) computes that. Until this line it was
+# reachable from nowhere — measured on its own branch, the only references to it
+# outside itself were `INDEX.md`, which is a generated catalog and not a caller,
+# and its own test. A report nothing runs produces no report.
+#
+# THE `--rev-range` MODE, not the API mode: this script must work offline —
+# `gatekeeper-verify-merge.sh` runs it twice, for the base and for the
+# candidate, as one differential — and a report that can only ask GitHub is a
+# report the landing path cannot use.
+#
+# REPORT, not a gate, and the reason is measured rather than cautious: several
+# of those 16 are legitimate splits verified by hand (#1241 has nineteen rows,
+# #1097 names three distinct mechanisms, #1115's pair repairs different
+# channels). A bar that refuses all of them is red every day, and a bar that is
+# red every day is the one people learn to bypass. What this asserts is only
+# that nobody has looked yet.
+if [ "$GK_RANGE_N" = "0" ]; then
+  echo "  SKIP  competing claims — range is empty, so there is nothing claimed"
+else
+  report "issues claimed by more than one commit in this landing" \
+      python3 "$PROGRAMS/competing_pr_claim_groups.py" \
+          --repo-root "$ROOT" --rev-range "$RANGE"
+fi
+
+# Everything above reasons about COMMITS. A tracked file still modified in the
+# worktree means the tree they verified is not the tree the author has.
+#
+# v1.9.12 landed HALF of #591 this way: `git stash pop` does not restore
+# staged-ness, and the explicit `git add` that followed named two of the four
+# files. The commit message asserted "undecided silence is a hard error" and the
+# hard error was in one of the two left behind. Every gate here passed, because
+# the test file was left behind WITH the code it tests — the landed repository
+# was self-consistent, which is exactly what a suite measures.
+#
+# Cheap tier: it is one `git status`, and it is the last thing that can tell a
+# complete landing from a coherent fragment of one.
+#
+# ...and the tree must still be THAT tree when the stamp is written. The full
+# tier below runs for minutes and reads the WORKTREE, while the stamp names a
+# COMMIT. On the v1.9.16 run the gate started at 10:28 on a clean tree, an
+# unrelated file was edited at 10:35, and the targeted tests ran at 10:41 and
+# stamped 9fd81bb45 — a tree that never existed. FP is per-run, so two gates in
+# one checkout do not read each other's.
+FP="$(mktemp -t gk_fingerprint.XXXXXX)"
+trap 'rm -f "$FP"' EXIT
+run "worktree carries no uncommitted change" \
+    python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
+        --emit-fingerprint "$FP"
+
+# The gate above deliberately EXCLUDES untracked paths (`??`) — see its module
+# docstring. That exclusion is right for its question and leaves a gap for a
+# different one: an untracked, un-ignored `*scratch*` path is one `git add -A`
+# from being committed, which is why this repo forbids `-A`. ORGANIC #720 found
+# four of them sitting in the tree for three to nine days.
+#
+# REPORT, not a gate, and the reason is measured rather than cautious: all four
+# of those paths are ignored at origin/main (`.gitignore` 139-143), so across
+# 250 checkouts on one host the ONLY thing this half still finds is
+# `vibe-ic-marketplace/scratch_geom_signoff_tests/` in 61 checkouts that are
+# BEHIND origin/main. A bar whose one instance is already closed is a bar that
+# only ever fires on somebody's scratch notes. `--worktree-blocking` promotes
+# it when that changes.
+report "untracked scratch paths in this checkout" \
+    python3 "$PROGRAMS/gitignore_scratch_guard.py" --root "$ROOT" \
+        --include-worktree
+
+if [ "$CHEAP_ONLY" = "1" ]; then
+  echo "--- full tier SKIPPED (--cheap-only) — no stamp will be written ---"
+  exit "$FAILED"
+fi
+
+echo "--- full tier (minutes; stamps the tree on success) ---"
+
+# vibe-ic#1029 — the full tier is the window in which the gates read the tree,
+# and it is the window in which they have three times been caught WRITING to
+# it. `landing_worktree_is_clean_check --expect-fingerprint` at the end of this
+# tier already refuses the stamp when a TRACKED file moved; what it does not do
+# is name what moved, or see the untracked (`??`) half that `git add -A` would
+# sweep just the same.
+#
+# This baseline pairs with the compare below to answer, by name, "did the full
+# tier write into the tree". It is deliberately taken around the WHOLE tier
+# rather than around pytest alone: `repo_hygiene_gates.sh` and
+# `plugin_full_audit.py` run INSIDE this window but OUTSIDE the pytest command,
+# so the in-process pytest guard (programs/suite_write_guard.py, loaded by the
+# plugin's rootdir conftest) cannot see them. That gap is exactly the stage
+# whose family this repo already caught rewriting 77 tracked files.
+WG_BASE="$(mktemp -t gk_writeguard.XXXXXX)"
+trap 'rm -f "$FP" "$WG_BASE"' EXIT
+run "write-guard baseline" \
+    python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --snapshot "$WG_BASE"
+
+# The TARGETED TEST RUN, carried over verbatim from the retired ci.yml:130-132.
+# Omitted from the first version of this script, which covered the governance
+# gates and quietly dropped the tests — the gap surfaced when
+# `ci_harness_timeout_ceiling_check` lost its input and reported CANNOT
+# DETERMINE rather than passing.
+#
+# `--timeout=180` is load-bearing beyond this run: that check resolves the
+# harness bound from this line and fails any inner subprocess timeout above it,
+# because an inner bound larger than the harness does not fail a test — it
+# outlives the harness and takes the session down.
+#
+# `GATEKEEPER_PYTEST_JUNIT=<path>` additionally writes a junit report for this
+# run. It changes NO verdict here — the `if out=…` below still decides — and
+# exists because `gatekeeper-verify-merge.sh` (vibe-ic#1019) compares the
+# candidate's failed SET against the base's. Without a report it would have to
+# run the same suite a second time, and a landing gate slow enough to be
+# bypassed is a bypassed gate. `xunit1` is asked for because it is the family
+# that carries the `file` attribute, so a selected file that produced no test
+# case at all can be told from a clean one.
+#
+# `GATEKEEPER_PYTEST_MAXFAIL=<n>` overrides `--maxfail`; `0` removes the bound.
+# `10` stays the default and the push path is unchanged — stopping early is right
+# when the answer is "this is red, go fix it". It is WRONG for a differential:
+# `gatekeeper-verify-merge.sh` compares the candidate's failed SET against the
+# base's, and a truncated run has no failed set, only a prefix of one. Measured
+# on PR #1028 (137 selected files, 3242 tests at the base): `--maxfail=10`
+# stopped the candidate at 1437 tests, which the verdict correctly refused as
+# unmeasurable. A landing gate that cannot answer for a wide PR is a landing gate
+# nobody uses.
+run_pytest() {
+  local sel out rc
+  TARGETED_NORECORD=0
+  # PREFLIGHT (vibe-ic#1446): the scratch root this pytest will use is part of
+  # its verdict. A root inside a git work tree makes 46 tests report failures
+  # that are the ROOT, not the tree — and each names its own subject rather
+  # than the cause, so a landing can spend an hour producing a red that says
+  # nothing true about the branch. The in-process guard (conftest.py loads
+  # programs/scratch_root_guard.py through pytest_plugins, exactly as it loads
+  # suite_write_guard) refuses too, but only once pytest is already starting —
+  # after the selection below has been built. Asked here it costs milliseconds
+  # and is answered before anything else runs.
+  if ! out="$( cd "$PLUGIN" && python3 programs/scratch_root_guard.py 2>&1 )"; then
+    echo "  FAIL  the scratch root would falsify this run"
+    printf '%s\n' "$out" | sed 's/^/          /'
+    FAILED=1; return
+  fi
+  # PER-RUN: see the MSGFILE note above. Two concurrent arms sharing one
+  # selection file would each run the other's test list.
+  sel="$(mktemp -t gk_sel.XXXXXX)"
+  local maxfail=(--maxfail="${GATEKEEPER_PYTEST_MAXFAIL:-10}")
+  [ "${GATEKEEPER_PYTEST_MAXFAIL:-10}" = "0" ] && maxfail=()
+  # THE MERGED REPORT IS ALWAYS PRODUCED, even when nobody asked for it
+  # (vibe-ic#1654). The per-file driver below needs somewhere to merge to, and
+  # the run that does NOT export a junit is the same run in every other
+  # respect — measuring it differently is the asymmetry #1417 spent a version
+  # removing. A temporary target costs nothing and keeps ONE instrument.
+  local merged="${GATEKEEPER_PYTEST_JUNIT:-}"
+  local merged_tmp=""
+  if [ -z "$merged" ]; then
+    merged_tmp="$(mktemp -t gk_junit.XXXXXX)"
+    merged="$merged_tmp"
+  fi
+  if [ -n "${GATEKEEPER_PYTEST_JUNIT:-}" ]; then
+    # REMOVE THE TARGET FIRST, so a leftover can never be read as THIS run's record.
+    #
+    # A pytest that TIMES OUT writes no junit at all. Meanwhile
+    # programs/tests/test_landing_merge_verdict.py builds a stub gatekeeper-land.sh that
+    # honours this same variable and runs it with the inherited environment; its stub
+    # selector emits one synthetic file, so it leaves a 1-test report at this exact path.
+    #
+    # MEASURED twice today. MEGA4: the targeted-tests gate timed out, and the junit left
+    # behind was 374 bytes, tests="1", carrying `test_thing::test_value_is_one` — a
+    # fixture name, not a real test — for a session of 1368. MEGA was the same shape.
+    #
+    # The file therefore EXISTED, PARSED, and described a different run. That is worse
+    # than a missing file: absence is honest, and this is not. Removing it up front means
+    # a timed-out run leaves NO junit, which is the truthful state, and the judge's
+    # "refuse when the complete record is absent" rule then applies correctly.
+    rm -f "$GATEKEEPER_PYTEST_JUNIT" 2>/dev/null || true
+  fi
+  ( cd "$PLUGIN" && python3 programs/ci_targeted_test_select.py --base "$BASE" > "$sel" ) 2>/dev/null
+  if [ ! -s "$sel" ]; then
+    echo "  FAIL  targeted test selection produced no files — not a clean result"
+    FAILED=1; rm -f "$sel"; return
+  fi
+  # THIS SESSION'S ENVIRONMENT IS PART OF THE GATE (vibe-ic#1047, one level up).
+  #
+  # #1047 fixed the environment of a pytest this suite SPAWNS. The same defect was
+  # sitting on the suite the LANDING GATE ITSELF runs, and it was worse, because
+  # this is the session whose exit code decides whether a change may be pushed.
+  #
+  # Bare `python3 -m pytest` autoloads every `pytest11` entry point installed on
+  # the host. Measured on the landing host 2026-08-12: of 8 installed entry points
+  # exactly one — `web3`'s `pytest_ethereum` — raises at import
+  # (`ImportError: cannot import name 'ContractName' from 'eth_typing'`), and it
+  # takes the session down AT COLLECTION. Not one test runs. A package this repo
+  # does not use, has never imported, and does not ship made the landing gate
+  # unrunnable, which is precisely why merges were going around it via
+  # `gh pr merge` — the bypass vibe-ic#1019/#1036 is about.
+  #
+  # So the session declares what it loads instead of inheriting it. The suite needs
+  # exactly ONE third-party plugin — `pytest-timeout`, for the `--timeout` flags on
+  # this very line — verified by grepping the whole suite for the fixtures and marks
+  # of every other installed plugin: requests_mock 0 files, typeguard 0, anyio 0,
+  # hydra 0, xdist mentioned only in a README.
+  #
+  # `suite_write_guard` is UNAFFECTED and must stay that way: conftest.py loads it
+  # through `pytest_plugins`, not through an entry point, so disabling autoload does
+  # not disarm the write guard. That is the check that would have made this fix a
+  # false green, so it is asserted rather than assumed — the guard's PASS/FAIL line
+  # must still appear in `out`.
+  #
+  # ── ONE WHOLE-SELECTION SESSION ON THE LANDING CRITICAL PATH (#1654) ──
+  #
+  # `--timeout-method=thread` cannot interrupt a blocking `waiter.acquire()`. It
+  # dumps every thread's stack and takes the PROCESS down, and a process that
+  # dies never writes its `--junitxml`. So ONE hanging file used to cost the
+  # WHOLE run's machine-readable record — measured at the #1650 tree with a
+  # 91-file selection, where the hang was 1 file and the blast radius was the
+  # other 90, on BOTH arms:
+  #
+  #     ARM_cand_RC=123   ls: cannot access '/tmp/junit_full_cand.xml'
+  #     ARM_base_RC=143   ls: cannot access '/tmp/junit_full_base.xml'
+  #
+  # Reproduced on this tree at 1adbf3444 with three files, one of them hanging
+  # in the exact `Future.result -> Condition.wait -> waiter.acquire` shape: the
+  # green file that had ALREADY PASSED lost its record too.
+  #
+  # The first #1654 repair ran N isolated sessions and then repeated the whole
+  # selection as an aggregate semantics canary.  That preserved neighbouring
+  # records after a hang, but made every successful landing pay for BOTH
+  # questions and erased cross-file/order semantics from the first copy.
+  #
+  # Landing now asks the authoritative question exactly once: the original
+  # whole-selection session, supervised by validated pytest lifecycle progress.
+  # A complete aggregate JUnit plus its exact OS process verdict is sufficient
+  # evidence.  AGGREGATE_NORECORD is an absolute refusal. Only after that
+  # refusal does the driver run per-file recovery, preserving every neighbouring
+  # record it can and naming the file(s) it cannot measure. Recovery cannot make
+  # UNKNOWN land and adds no work to the successful critical path.
+  #
+  # THE PYTEST COMMAND IS PASSED IN VERBATIM, not built inside the driver, so
+  # `--timeout=180` stays declared HERE — `ci_harness_timeout_ceiling_check`
+  # resolves the binding harness bound from this file (EXTRA_HARNESS_RELS) and a
+  # bound moved into Python would vanish from its view.
+  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
+        --selection "$sel" --junit "$merged" \
+        --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+        --aggregate-check \
+        --aggregate-stall-after "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+        --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+        --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
+        --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
+        -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
+        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
+    rc=0
+    printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
+    # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
+    # the write guard from the session would be a false green, and it would look
+    # exactly like this one. The guard reports on every session it is loaded into,
+    # so its absence from the output means it did not run.
+    if ! printf '%s\n' "$out" | grep -qa 'suite_write_guard:'; then
+      echo "  FAIL  suite_write_guard did not report — the session ran WITHOUT the"
+      echo "        write guard, so 'the suite wrote nothing' was never checked."
+      FAILED=1
+    fi
+  else
+    rc=$?
+    printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
+    # THE FILES WITH NO RECORD, ALWAYS AND FIRST. They are the one thing a
+    # reader cannot reconstruct from the tail of a 91-file run, and `tail -6`
+    # would show whichever file happened to be last instead of the one that
+    # cost the record.
+    printf '%s\n' "$out" | grep -a '^NORECORD\|^NOTRUN\|^AGGREGATE_NORECORD' | sed 's/^/          /'
+    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    FAILED=1
+    [ "$rc" -eq 2 ] && TARGETED_NORECORD=1
+  fi
+  # Human-facing diagnostics only. The merge verdict does NOT trust this mixed
+  # driver/subject stdout channel: pytest can print marker-looking text. It
+  # derives completeness from exact process suites in the merged JUnit.
+  if printf '%s\n' "$out" | grep -qa '^=== pytest junit summary'; then
+    printf '  REPORT  targeted test process verdicts embedded in junit\n'
+  else
+    printf '  FAIL  targeted test instrument produced no junit summary\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^NORECORD'; then
+    printf '  FAIL  targeted per-file session produced no complete record\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^NOTRUN'; then
+    printf '  FAIL  targeted per-file session was not run\n'
+    FAILED=1
+  fi
+  if printf '%s\n' "$out" | grep -qa '^AGGREGATE_NORECORD'; then
+    printf '  FAIL  targeted aggregate session produced no complete record\n'
+    FAILED=1
+  elif printf '%s\n' "$out" | grep -qa '^AGGREGATE_COMPLETE'; then
+    printf '  REPORT  targeted aggregate session completed\n'
+  else
+    printf '  FAIL  targeted aggregate session produced no status\n'
+    FAILED=1
+  fi
+  rm -f "$sel"
+  if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
+}
+if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
+  echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
+else
+  run_pytest
+fi
+
+# Merge verification already has enough evidence to refuse once the aggregate
+# session produced NO complete record.  Continuing through every remaining gate
+# cannot turn UNKNOWN into PASS; it only burns the critical path.  Ordinary red
+# tests do NOT take this branch because the differential still has to decide
+# whether they were pre-existing.
+if [ "${GATEKEEPER_FAIL_FAST_NORECORD:-0}" = "1" ] \
+   && [ "${TARGETED_NORECORD:-0}" = "1" ]; then
+  echo "=== FAILURES ABOVE — aggregate NORECORD is an absolute refusal; remaining gates were not run"
+  exit 2
+fi
+
+# ── REPO-LEVEL tests (tools/) ──────────────────────────────────────────────
+# `run_pytest` above cannot reach them, and not by accident: the targeted
+# selector is PLUGIN-scoped by construction —
+#     _SOURCE_DIRS = ("programs", "benchmark");  _TESTS_REL = "programs/tests"
+# — and it is invoked with cwd=$PLUGIN, so `tools/` at the repo root is not
+# even addressable from there. No change to any file under `tools/` can select
+# a test, and no test under `tools/` can be selected by any change. Measured on
+# a38902d16: 28 files / 552 tests that gate NOTHING. They were all green, which
+# is exactly why it stayed invisible — a blind spot announces itself only when
+# something behind it breaks, and by then it has been blind for a while.
+#
+# DISCOVERY, never a roster. A hardcoded list is the recorded-register defect
+# (census / tranche baseline / skip-routing ratchet) that goes stale the moment
+# a file is added, and it would go stale silently and in the safe-looking
+# direction: fewer files still reports PASS.
+run_repo_tools_pytest() {
+  local files out rc wg wrc snap
+  mapfile -t files < <(cd "$ROOT" && find tools \
+      \( -name 'test_*.py' -o -name '*_test.py' \) -type f | sort)
+  # An empty corpus is a VACUOUS pass, not a pass. A gate that reports success
+  # over zero items is indistinguishable from one that works, and is worse.
+  if [ "${#files[@]}" -eq 0 ]; then
+    echo "  FAIL  repo tools tests: discovery matched NO files under tools/ —"
+    echo "        an empty corpus is not evidence that anything passed."
+    FAILED=1; return
+  fi
+  # The in-process `programs/suite_write_guard.py` is loaded by the PLUGIN
+  # conftest and is NOT present in this session, so the property it asserts —
+  # the suite writes nothing `git status --porcelain` would show — is asserted
+  # here from the outside rather than quietly dropped.
+  #
+  # DELEGATED to that same program via its --snapshot/--compare CLI instead of
+  # diffing `git status` by hand. A hand-rolled comparison is a SECOND
+  # definition of "wrote to the tree" that can drift from the first, and the
+  # first one already knows that `__pycache__`/`.pytest_cache`/`*.pyc` are
+  # regenerable and not a violation. (Written by hand first; the test below
+  # caught it flagging pytest's own bytecode cache as a write.)
+  snap="$(mktemp -t gk_tools_wg.XXXXXX)"
+  python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+      --snapshot "$snap" >/dev/null 2>&1 || {
+    echo "  FAIL  repo tools tests: could not baseline the tree — not a pass"
+    FAILED=1; rm -f "$snap"; return
+  }
+  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+        -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+        "${files[@]}" 2>&1 )"
+  rc=$?
+  wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+        --compare "$snap" 2>&1)"; wrc=$?
+  rm -f "$snap"
+  if [ "$rc" -ne 0 ]; then
+    printf '  FAIL  repo tools tests (%s file(s))\n' "${#files[@]}"
+    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    FAILED=1; return
+  fi
+  # rc 0 clean / 1 wrote / 2 NOT_CHECKED. 2 is NOT a pass: "I could not look"
+  # must never reach a reader as "I looked and it was fine".
+  if [ "$wrc" -ne 0 ]; then
+    printf '  FAIL  repo tools tests wrote to the tree (write-guard rc=%s)\n' "$wrc"
+    printf '%s\n' "$wg" | tail -8 | sed 's/^/          /'
+    FAILED=1; return
+  fi
+  printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
+}
+run_repo_tools_pytest
+
+# ── EVERY OTHER TREE THE SELECTOR CANNOT REACH ─────────────────────────────
+# vibe-ic#1424. `run_pytest` runs the SELECTOR'S list and the selector is rooted
+# at `programs/tests` (`_TESTS_REL`, and an explicit filter at :698), so it can
+# emit nothing else — MEASURED on 3d13e2c59 against a real base: 29 files
+# selected, 0 of them outside that tree. `run_repo_tools_pytest` above closed
+# the same hole for repo-root `tools/` and only for that. What was still left
+# with NO landing stage at all, tracked files only:
+#
+#     skills/*/tests/               67 files    222 tests
+#     mcp-eda/                      31          201
+#     tools/phase1_engine/tests/     8          121
+#     _shared/                       3          283
+#                                  ---         ----
+#                                  109 files    827 pytest nodes
+#
+# #1391 and #1420 wired two of those trees into `run_tests.sh`, which is the
+# DEVELOPER-facing full suite. Neither extended landing coverage, and the
+# natural reading of "wired into the runners" is that it does. It did not: a
+# developer running the full suite saw those failures; a landing never could.
+#
+# THE CORPUS IS A COMPLEMENT, NEVER A ROSTER — "every tracked test file MINUS
+# what a stage already runs MINUS what is DECLARED out". A list of trees would
+# go stale the first time one is added, silently and in the direction that
+# still prints PASS. `benchmark-data/`'s 121 `test_*.py` are the one declared
+# exclusion (CVDP corpus artefacts, not this repo's tests), stated in the
+# program with its reason rather than implied by a constant.
+#
+# COST, measured as this line runs it: 761 passed, 58 skipped, 5 xfailed,
+# 3 xpassed, 0 failed in 21 s. Zero INHERITED reds — not zero cost: the point
+# of adopting a tree is that its FUTURE reds block a landing.
+#
+# cwd is $ROOT, as for `run_repo_tools_pytest`, and that is where this code
+# says it lives: `tools/phase1_engine/gap_detect.py:43` resolves its defaults
+# dir as a bare repo-root-relative path. From $PLUGIN two of these tests fail —
+# vibe-ic#1390, open, a defect in that resolution and not silenced here.
+run_unselectable_pytest() {
+  local files out rc wg wrc snap list lrc
+  list="$(mktemp -t gk_unsel.XXXXXX)"
+  ( cd "$ROOT" && python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" \
+        --repo "$ROOT" > "$list" ) ; lrc=$?
+  # rc 2 is NOT DETERMINED. It is not an empty corpus, and it must not be
+  # allowed to look like one — the whole defect this stage exists for is a
+  # set of tests nobody could tell from a set that passed.
+  if [ "$lrc" -ne 0 ]; then
+    echo "  FAIL  unselectable tests: the corpus could not be enumerated"
+    echo "        (landing_unselectable_pytest_corpus.py rc=$lrc) — that is"
+    echo "        'I could not look', which is never a pass."
+    FAILED=1; rm -f "$list"; return
+  fi
+  mapfile -t files < "$list"; rm -f "$list"
+  if [ "${#files[@]}" -eq 0 ]; then
+    echo "  FAIL  unselectable tests: the complement is EMPTY — either every"
+    echo "        tree is genuinely covered (say so by declaring it) or the"
+    echo "        census broke. A gate over zero items is not a pass."
+    FAILED=1; return
+  fi
+  # As in `run_repo_tools_pytest`: the in-process `suite_write_guard` is loaded
+  # by the PLUGIN conftest, and this session's rootdir is not guaranteed to be
+  # it, so the same property is asserted from the outside via the same program
+  # rather than quietly dropped.
+  snap="$(mktemp -t gk_unsel_wg.XXXXXX)"
+  python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+      --snapshot "$snap" >/dev/null 2>&1 || {
+    echo "  FAIL  unselectable tests: could not baseline the tree — not a pass"
+    FAILED=1; rm -f "$snap"; return
+  }
+  # `PYTHONDONTWRITEBYTECODE=1` IS LOAD-BEARING HERE, and it is the one hazard
+  # this stage adds that no existing guard can catch.
+  #
+  # 67 of the 109 files are `skills/*/tests/`, and they import shipped
+  # `skills/**/programs/*.py`. The IMPORT writes the bytecode — into the SHIPPED
+  # tree. MEASURED on a fresh worktree, digesting `skills/` by relative path +
+  # size:
+  #
+  #   clean, corpus never run          214 files   0 .pyc    b7a2de20…
+  #   corpus run WITHOUT this token    283 files  69 .pyc    f6ad615c…  (+64 __pycache__ dirs)
+  #   corpus run WITH this token       214 files   0 .pyc    b7a2de20…  identical to clean
+  #
+  # NOTHING ELSE SEES IT. `.pyc` is gitignored, so `git status`, `git add -A`,
+  # `gitignore_scratch_guard --include-worktree` and this stage's OWN
+  # `suite_write_guard` bracket all report clean with the 69 present: the guard
+  # skips regenerable artefacts by design, which is correct for the guard and is
+  # not a reason to leave the writes in.
+  #
+  # The collision it would make reachable is already named in the tree.
+  # `test_tools_and_integration.py::test_shipped_skills_tree_is_untouched_by_this_session`
+  # digests `skills/` at COLLECTION and compares at the end, and its own message
+  # predicts this exact case: the writer is an import of a shipped
+  # `skills/**/programs/*.py`, "invisible to git, `git add -A` and
+  # suite_write_guard, so this digest is the only thing that sees it — which is
+  # why it presents with no obvious author". Put those 67 files and that test in
+  # ONE session and it fails. This stage would have been the author, in the
+  # landing gate, on every batch — and :213 fails the WHOLE landing when the
+  # tree moves under the gates, so the price is the batch.
+  out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
+        -q -p pytest_timeout --timeout=180 --timeout-method=thread \
+        "${files[@]}" 2>&1 )"
+  rc=$?
+  wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
+        --compare "$snap" 2>&1)"; wrc=$?
+  rm -f "$snap"
+  # THE COUNT IS NOT IN THE LABEL, and that is deliberate. #1431: the two arms
+  # of `gatekeeper-verify-merge.sh` subtract gate logs BY PRINTED LABEL, so a
+  # label carrying a discovery count renames its own gate whenever a branch adds
+  # a test file — and the verdict then reads a repaired gate as a silenced one.
+  # This corpus grows with every new tree, which is exactly the branch shape
+  # that would trip it, so the count is REPORTED on its own line instead.
+  printf '        unselectable corpus: %s file(s)\n' "${#files[@]}"
+  if [ "$rc" -ne 0 ]; then
+    echo "  FAIL  unselectable tests"
+    printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
+    FAILED=1; return
+  fi
+  if [ "$wrc" -ne 0 ]; then
+    printf '  FAIL  unselectable tests wrote to the tree (write-guard rc=%s)\n' "$wrc"
+    printf '%s\n' "$wg" | tail -8 | sed 's/^/          /'
+    FAILED=1; return
+  fi
+  echo "  PASS  unselectable tests"
+}
+run_unselectable_pytest
+
+# The census that decides the stage above must itself be trustworthy: a
+# subtrahend whose stage no longer exists, or an exclusion whose reason no
+# longer describes anything, both shrink the corpus in the direction that still
+# prints PASS. rc=1 on either.
+run "unselectable-test census is not stale" \
+    python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
+
+# THE HYGIENE TIER, AND THE RECORD THAT LETS IT BE DIFFERENCED (vibe-ic#1498).
+#
+# The label below is ONE line for a suite of ~70 gates, and
+# `landing_merge_verdict` subtracts the two arms' gate logs BY LABEL. So the
+# hygiene tier is judged at a granularity of one: while the base's suite is red
+# — it has been, repeatedly, and `gate_red_since.json` exists because of it —
+# the whole label is excused on the candidate too, and a finding this branch
+# INTRODUCED under it is invisible. That is the permissive direction, and it is
+# the direction nothing catches.
+#
+# `GATEKEEPER_HYGIENE_REPORT=<path>` makes this run write the suite's own
+# `--summary-json` record there, which is what `hygiene_finding_delta.py` needs
+# to answer the finer question — "which findings does the candidate have that
+# the base does not" — instead of "is the count zero".
+#
+# IT CHANGES NO VERDICT HERE, exactly like `GATEKEEPER_PYTEST_JUNIT` above: the
+# `run` below still decides this line, and with the variable unset the command
+# is byte-for-byte the one this file has always issued. The differencing is
+# done by `landing_merge_verdict`, which is the program that already owns the
+# test tier's differential and is supplied by the VERIFIER rather than by the
+# tree under test — a branch must not be able to change what counts as a
+# refusal (see `gatekeeper-verify-merge.sh`, "WHERE EACH HALF COMES FROM").
+#
+# The record is written by `gate_dispatch_finish` BEFORE every one of its exit
+# paths, so a FAILING run still yields one. A baseline that only existed when
+# the base was green would be useless precisely when it is needed.
+GK_HYG=()
+[ -n "${GATEKEEPER_HYGIENE_REPORT:-}" ] \
+  && GK_HYG=(--summary-json "$GATEKEEPER_HYGIENE_REPORT")
+GK_HYG_ENV=()
+[ -n "${GATEKEEPER_HYGIENE_PROGRESS:-}" ] \
+  && GK_HYG_ENV=(env "GATE_DISPATCH_ATTESTATION_FILE=$GATEKEEPER_HYGIENE_PROGRESS")
+run "repo hygiene gates"      "${GK_HYG_ENV[@]}" \
+    bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
+    "${GK_HYG[@]+"${GK_HYG[@]}"}"
+run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+
+# #1029 — the standing assertion, executed: everything above ran against this
+# tree, so nothing above may have CHANGED it. Names every offending path rather
+# than only failing, because a count is what made three writers cost three
+# separate accidental discoveries. rc=2 (could not look) fails here too: `run`
+# treats any non-zero as FAIL, which is the point — "I could not measure" must
+# never reach the stamp as "I measured and it was clean".
+run "the full tier wrote nothing into the tree" \
+    python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --compare "$WG_BASE"
+
+# LAST, and after every suite has read the tree. Everything above answers
+# "do the gates pass"; this answers "did they all read the same tree", which is
+# the question the stamp actually asserts.
+run "worktree unchanged since the gates started" \
+    python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
+        --expect-fingerprint "$FP"
+
+if [ "$FAILED" -eq 0 ] && [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
+  # Merge verification runs the authoritative aggregate test session in its
+  # own parallel arm.  This lane therefore proves ONLY the non-target gates and
+  # must never mint a standalone push stamp before that evidence is joined.
+  rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  echo "  REPORT  merge verifier owns the independent targeted-test evidence"
+  echo "=== ALL NON-TARGET GATES COMPLETE — stamp withheld for composite verdict ==="
+elif [ "$FAILED" -eq 0 ]; then
+  # Stamp the exact commit these suites were verified against. The hook compares
+  # this to what is being pushed, so a later commit invalidates it automatically.
+  #
+  # `--absolute-git-dir`, not "$ROOT/.git". In a WORKTREE `.git` is a FILE (a
+  # `gitdir:` pointer), so the redirect died with "Not a directory" and no stamp
+  # was ever written — while the hook, computing the same path the same way,
+  # found no stamp and refused the push. Landing from a worktree was therefore
+  # impossible, and the failure named neither cause. `--absolute-git-dir` gives
+  # the PER-WORKTREE dir (…/.git/worktrees/<name>), which is what this stamp
+  # must be: two worktrees sitting at different commits must not share one, or a
+  # gate run in one would authorise a push from the other.
+  git rev-parse HEAD > "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  echo "=== ALL GATES PASS — stamped $(git rev-parse --short HEAD) ==="
+else
+  rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
+  echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+fi
+exit "$FAILED"

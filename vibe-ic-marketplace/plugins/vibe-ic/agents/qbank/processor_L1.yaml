@@ -1,0 +1,48 @@
+class: processor
+layer: L1
+qbank:
+  isa_base:
+    expert:       ["ISA base — RV32I / RV32E / RV32IMC / RV64GCB / other?"]
+    intermediate: ["Which RISC-V base — RV32I (minimal 32-bit), RV32E (embedded 16-reg), RV64G (full 64-bit)?"]
+    beginner:     ["Is it a 32-bit or 64-bit CPU, and roughly what features?"]
+    follow_ups:
+      - if_user_says: ["minimal", "tiny", "picorv32"]
+        respond_with_default: "RV32IMC"
+      - if_user_says: ["linux", "full featured"]
+        respond_with_default: "RV64GCB"
+
+  isa_extensions:
+    expert:       ["ISA extensions — M, C, A, F, D, B, Zicsr, Zifencei, Xcv, Zkn...?"]
+    intermediate: ["Which extensions beyond the base — multiplier (M), compressed (C), atomic (A), float (F/D)?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["basic"]
+        respond_with_default: "['I', 'M', 'C', 'Zicsr']"
+
+  privilege_modes:
+    expert:       ["Privilege modes — M/S/U/H subset?"]
+    intermediate: ["Which privilege levels — just M (machine), or also S (supervisor) and U (user)?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["embedded"]
+        respond_with_default: "['M']"
+      - if_user_says: ["linux"]
+        respond_with_default: "['M', 'S', 'U']"
+
+  regfile_size:
+    expert:       ["Register-file depth — 32 or 16?"]
+    intermediate: ["Register count — 32 for RV32I, 16 for RV32E."]
+    beginner:     []
+
+  regfile_width_bits:
+    expert:       ["Register width — 32 or 64?"]
+    intermediate: []
+    beginner:     []
+
+  endianness:
+    expert:       ["Endianness — little or big?"]
+    intermediate: []
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true   # little

@@ -1,0 +1,30 @@
+# generic-ic — NEUTRAL fallback floor for an UNKNOWN IC class.
+#
+# phase1_quality_parity_check.find_class_template() lands here whenever the
+# resolved class-leaf is NOT one of the known class templates. Before this
+# template existed the fallback chain defaulted to `cable-side-id-ic`, so an
+# unrelated design (accelerator / DSP / bridge / whatever) was mis-scored
+# against SERIAL-ID-IC floors — opcode-count >= 8, a CRC-8 poly whitelist,
+# 64-byte OTP — none of which apply to it. That mis-application is the defect
+# this template fixes: an unknown class now pulls a small CLASS-AGNOSTIC floor
+# instead of a protocol-specific one.
+#
+# Design rule for this floor: include ONLY structural minimums that EVERY
+# non-trivial digital IC satisfies regardless of function, and NOTHING that is
+# specific to a protocol / memory / crypto / analog subclass. Concretely:
+#   * NO L3 opcode-count / CRC-poly floor  (protocol-ic concept)
+#   * NO L4 OTP-bytes / regmap floor        (many valid ICs are register-less
+#                                            datapath or have no NVM at all)
+#   * ONLY the two universals below.
+# The values are deliberately conservative so a real design never false-FAILs;
+# the gate only catches a DEGENERATE Phase-1 output (0 submodules / 0 ports).
+class: generic-ic
+parent: any-ic
+
+spec_floor:
+  # Every non-trivial IC decomposes into at least a datapath + control + a
+  # top/glue — three structural submodules is the smallest honest floor.
+  L6_submodule_count_min: 3
+  # Every chip has at least a couple of boundary ports (a clock/enable plus at
+  # least one I/O). Two is the smallest floor that still rejects a 0-port stub.
+  L9_top_level_port_count_min: 2

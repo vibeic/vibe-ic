@@ -1,0 +1,33 @@
+class: crypto-engine
+layer: L8R
+# v0.74 E+F-implement: crypto engine RTL cycle constants
+qbank:
+  cycles_per_round:
+    expert:       ["Cycles per round?"]
+    intermediate: ["How many cycles does one round of the core operation take?"]
+    beginner:     []
+
+  total_cycles_per_block:
+    expert:       ["Total cycles from start strobe to done assert per block?"]
+    intermediate: ["Total cycle count from 'start' to 'done' for a single block?"]
+    beginner:     []
+
+  entropy_sources:
+    expert:       ["Entropy sources — ring-oscillator / metastable-latch / external seed (RNG subclass only)?"]
+    intermediate: ["For an RNG: where does the entropy come from?"]
+    beginner:     []
+
+  reseed_policy:
+    expert:       ["Reseed policy — never / after N blocks / on command (RNG)?"]
+    intermediate: ["When does the RNG reseed — on power-up only, or periodically?"]
+    beginner:     []
+
+  side_channel_protection:
+    expert:       ["Side-channel protections — masking / hiding / dual-rail?"]
+    intermediate: ["Any counter-measures against side-channel attacks?"]
+    beginner:     []
+
+  implementation_status:
+    expert:       ["Implementation status — RTL-only / taped out / silicon-verified?"]
+    intermediate: ["Is this a reference RTL, a hardened IP, or silicon-proven?"]
+    beginner:     []

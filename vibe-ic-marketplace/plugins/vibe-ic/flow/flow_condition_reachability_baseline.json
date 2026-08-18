@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "Known-open self-disabling flow conditions (vibe-ic#220).",
+    "",
+    "Every entry here IS a hole: a step gated on the artefact whose absence is",
+    "the defect the step exists to catch. They are listed rather than fixed",
+    "because each is owned by an in-flight change on the same subsystem, and",
+    "silently allowlisting them would recreate exactly the invisibility this",
+    "guard exists to remove.",
+    "",
+    "flow_condition_reachability_check.py FAILs on any hole NOT listed here, and",
+    "ALSO FAILs when a listed entry is no longer a hole. A fix must therefore",
+    "delete its baseline entry in the same change — the file cannot rot into a",
+    "permanent excuse.",
+    "",
+    "Do not add to this file to make a build green. Add to it only with an",
+    "owner, and only when the fix genuinely belongs in another change."
+  ],
+  "holes": [
+    {
+      "step": "DT2",
+      "program": null,
+      "paths": [
+        "phase2/stage2/dft/cut_netlist.v",
+        "phase3/stage3/extracted/*.spef",
+        "phase3/stage3/pnr/*_pnr.v"
+      ],
+      "owner": "vibe-ic#235 — PRODUCER + CONSUMER halves LANDED; flow-YAML wire STILL BLOCKED on a missing non-fatal flow verdict. RESTORED 2026-07-28 at convergence merge: the dimension-6 attempt to close it by re-arming DT2 on its own producer's outputs was measured to be a REGRESSION and was withdrawn — see this entry's note.",
+      "note": "Same shape as DT1 and strictly worse: the condition is ALL-of, so ANY one of the three inputs going missing disarms the step. STATUS (vibe-ic#235): the PRODUCER half is DONE — phase3_one_shot_runner.run_at_speed_atpg_producers writes `phase2/stage2/dft/path_delay_atpg_not_run.json` on every self-disable branch (precondition_unmet / producer_wrote_no_artifact / producer_execution_error) and DELETES it once a real grade exists. The CONSUMER half is DONE — path_delay_coverage_check now reads that record and answers BLOCKED (rc 1, still not a pass) with the recorded reason, instead of a bare FAIL that cannot tell 'never ran' from 'ran and could not measure'. This stays a hole because the REMAINING — and NOT the edit this note previously prescribed. It said to add the disclosure path to condition.files_exist with `any_of: true`, and called that safe because the BLOCKED branch had landed. MEASURED, that edit BREAKS the flow: `flow_compliance_check` has no BLOCKED verdict (its set is PASS/FAIL/MISSING/SKIPPED-CONDITION/SKIPPED-SETUP-REQUIRED/DEFERRED-BY-UPSTREAM/VACUOUS-PASS/WAIVED-DEFERRED) and the consumer returns rc 1 for BLOCKED exactly as it does for FAIL. Arming the condition therefore flips this step from SKIPPED-CONDITION to a hard FAIL on EVERY design that has a cut netlist and has not yet routed — strictly worse than the silent skip it was meant to cure. Closing this entry needs a FLOW-LEVEL non-fatal verdict for 'ran, disclosed, could not measure' first; until that exists the disclosure record is the fix and this entry stays open by design.  |  RESTORED 2026-07-28. A dimension-6 change replaced this ALL-of condition with an any-of over the PRODUCER'S OWN OUTPUTS (reports/phase2/dft/path_delay_coverage.json OR phase2/stage2/dft/path_delay_atpg_not_run.json). Measured on a copy of a tracked run root with ONE mutation — delete reports/phase2/dft/path_delay_coverage.json, the artefact DT2 exists to report on: with the ALL-of condition the step goes MISSING and the flow verdict is FAIL (rc 1); with the producer-outputs condition the step goes SKIPPED-CONDITION, leaves the executed-PASS denominator (total_required subtracts SKIPPED-CONDITION) and the flow verdict is PASS (rc 0). That trades an input-side self-disable for an output-side one and is strictly worse, because the producer never running is a production-reachable state (run_at_speed_atpg_producers lives inside step_canonicalize_artefacts, which a routing FAIL that returns early from step_pnr skips) and path_delay_atpg_not_run.json exists in 0 of the 12 tracked run roots. The condition is back to the ALL-of spelling and this entry is a hole again."
+    }
+  ],
+  "_closed": [
+    "DT3 (vibe-ic#235 cascade) — CLOSED by declaring DT1's and DT2's coverage reports as each step's SOLE single-branch required_output. DT3's two trigger paths are now T3 BACKSTOP: if either upstream grade vanishes, the step that owns it goes MISSING loudly, so DT3's disappearance is no longer silent. NOT closed by this: the flow-level non-fatal verdict for 'ran, disclosed, could not measure' that the DT2 entry still waits on — DT3's condition was NOT armed on the disclosure record, exactly as the note measured it must not be."
+  ]
+}

@@ -1,0 +1,67 @@
+ip_name: lfsr
+ip_version: "0.1.0"
+ip_class: linear_feedback_shift_register
+license: MIT
+canonical_url: https://github.com/alexforencich/verilog-lfsr
+canonical_commit: "master"
+authors:
+  - "Alex Forencich"
+description: >
+  Parameterizable Linear Feedback Shift Register family. Includes:
+  configurable LFSR generator, PRBS generator/checker, scrambler/
+  descrambler, CRC engine (all CRC standards as polynomial parameter).
+
+implements:
+  function: lfsr
+  variants:
+    - generic_lfsr
+    - prbs_generator
+    - prbs_checker
+    - scrambler
+    - descrambler
+    - crc_engine
+  parameter_LFSR_WIDTH: [8, 16, 32, 64]
+  parameter_LFSR_POLY: configurable
+
+matches_when:
+  - "L2.function == 'lfsr' OR L2.function == 'prbs' OR L2.function == 'scrambler'"
+  - "L2.function == 'crc' OR L2.function == 'crc-32' OR L2.function == 'crc-16'"
+  - "L4 contains 'PRBS' OR L4 contains 'LFSR' OR L4 contains 'scrambler'"
+  - "L2.peripheral_class == 'crc' OR L2.peripheral_class == 'lfsr'"
+
+interface:
+  ports:
+    - {name: clk,        dir: in,  width: 1}
+    - {name: rst,        dir: in,  width: 1}
+    - {name: data_in,    dir: in,  width: "DATA_WIDTH"}
+    - {name: data_in_valid, dir: in, width: 1}
+    - {name: state_in,   dir: in,  width: "LFSR_WIDTH"}
+    - {name: data_out,   dir: out, width: "DATA_WIDTH"}
+    - {name: state_out,  dir: out, width: "LFSR_WIDTH"}
+  parameters:
+    - {name: LFSR_WIDTH, default: 31}
+    - {name: LFSR_POLY,  default: "31'h10000001"}
+    - {name: LFSR_CONFIG, default: '"FIBONACCI"', description: "FIBONACCI or GALOIS"}
+    - {name: LFSR_FEED_FORWARD, default: 0}
+    - {name: REVERSE,    default: 0}
+    - {name: DATA_WIDTH, default: 8}
+    - {name: STYLE,      default: '"AUTO"'}
+
+rtl_files:
+  - rtl/lfsr.v
+  - rtl/lfsr_crc.v
+  - rtl/lfsr_prbs_gen.v
+  - rtl/lfsr_prbs_check.v
+  - rtl/lfsr_scramble.v
+  - rtl/lfsr_descramble.v
+
+synth:
+  pdk_compatible: [sky130A, gf180mcuD, fpga]
+  tested_clock_period_ns: 5
+  area_ge: 500
+
+integration_notes: >
+  For CRC, set LFSR_WIDTH=32, LFSR_POLY=32'h04C11DB7 (CRC-32 IEEE 802.3).
+  For PRBS-23, set LFSR_WIDTH=23, LFSR_POLY=23'h410000 (ITU-T O.150).
+
+depends_on: []

@@ -1,0 +1,30 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Wave 82 (v1.6.2) — generated to satisfy
+# test_tools_and_integration::test_every_skill_has_compliance_yaml.
+# Phase 2 RTL verification spot-check skill.
+skill: phase2-rtl-verify
+
+requirements:
+  - id: R_has_output_section
+    description: "Output / verification report section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report|Verification))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_l9_contract_check
+    description: "Mentions L9 contract / integration spec verification"
+    pattern: '(L9|integration[_\s]spec|contract)'
+    skill_section: 'Verification'
+
+cross_checks:
+  - id: X_text_only_skill
+    description: "RTL verification spot-check report skill."
+    rule: text_only_report

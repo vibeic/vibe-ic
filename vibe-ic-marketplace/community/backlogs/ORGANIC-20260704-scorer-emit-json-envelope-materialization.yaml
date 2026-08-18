@@ -1,0 +1,43 @@
+type: bug
+severity: P2
+component: benchmark:cvdp_gate
+
+title: >-
+  Three hard-94 responses were materialized by the scorer as a RAW JSON patch
+  envelope instead of extracted SystemVerilog (compile fails on JSON text) —
+  emit/materialization path corner, recovered by re-emitting the identical RTL
+
+plugin_version: "1.3.3"
+
+pattern: |
+  On the hard-94 v1.3.2 score, 3 problems (elevator_control_0009,
+  manchester_enc_0005, scrambler_0018) FAILED with the official sim compiling
+  what was literally a JSON wrapper/envelope rather than the Verilog completion
+  — an INFRA_FLAKE class: the identical RTL re-emitted through the same gate
+  passed compile. Root indication: a completion shape (likely the JSON-dict
+  code-envelope path) that the scorer-side materialization writes verbatim
+  instead of extracting the RTL entry, OR a gate emit corner that double-encodes.
+  This is the #535 transmission-integrity family but on a shape the roundtrip
+  check does not currently catch (it verifies byte-identity + reparse of the
+  EXTRACTED code, which can pass while the harness-side materialization uses the
+  raw completion).
+
+suggested_fix: |
+  (1) Reproduce with the three archived resp records (resp_v132.jsonl) and diff
+  gate-side extract_code vs scorer-side materialization to find which side
+  diverges. (2) Extend the #535 roundtrip gate to ALSO simulate the scorer's
+  materialization path (write the file exactly as run_benchmark.py local_import
+  does) and iverilog it — catching envelope shapes the extract-based reparse
+  misses. (3) Add the three records as regression fixtures.
+
+evidence:
+  run: benchmark_external/cvdp/run_hard94_unified_20260703 (score_v132 vs score_c2final)
+  recovery: all 3 pass after plain re-emit of identical RTL
+  filed_by: benchmark-agent (hard-94 converge round 2)
+
+resolution:
+  status: resolved
+  date: "2026-07-06"
+  by: repo-gatekeeper triage sweep
+  note: >-
+    same root cause as completion-packaging; single-file json_dict normalize-to-bare (#680) live

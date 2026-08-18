@@ -1,0 +1,123 @@
+ip_name: serv
+ip_version: "1.4.0"
+ip_class: rv32i_bit_serial_cpu
+license: ISC
+canonical_url: https://github.com/olofk/serv
+canonical_commit: "1.4.0"
+authors:
+  - "Olof Kindgren <olof.kindgren@gmail.com>"
+description: >
+  The world's smallest RISC-V CPU. Bit-serial RV32I implementation,
+  ~2.1 kGE area. Multi-time OpenMPW tape-out validated.
+
+implements:
+  isa: rv32i
+  isa_extensions_mandatory: [zifencei]
+  isa_extensions_optional: [c, m, zicsr]
+  architecture: bit_serial
+  cycles_per_op_avg: 32
+  reset_strategy_options: [mini, none]
+  parameter_RESET_PC_range: ["0x00000000", "0xFFFFFFFC"]
+
+matches_when:
+  - "L2.cpu_isa starts with 'rv32i' AND L2.cpu_arch contains 'bit-serial' or 'bit_serial'"
+  - "L2.cpu_family == 'risc-v' AND L1.target_area_ge < 5000"
+  - "L8.submodule_required contains 'rv32i_cpu' AND L2.power_budget_mw < 5"
+
+interface:
+  ports:
+    - {name: clk,            dir: in,  width: 1}
+    - {name: i_rst,          dir: in,  width: 1}
+    - {name: i_timer_irq,    dir: in,  width: 1}
+    - {name: o_ibus_adr,     dir: out, width: 32}
+    - {name: o_ibus_cyc,     dir: out, width: 1}
+    - {name: i_ibus_rdt,     dir: in,  width: 32}
+    - {name: i_ibus_ack,     dir: in,  width: 1}
+    - {name: o_dbus_adr,     dir: out, width: 32}
+    - {name: o_dbus_dat,     dir: out, width: 32}
+    - {name: o_dbus_sel,     dir: out, width: 4}
+    - {name: o_dbus_we,      dir: out, width: 1}
+    - {name: o_dbus_cyc,     dir: out, width: 1}
+    - {name: i_dbus_rdt,     dir: in,  width: 32}
+    - {name: i_dbus_ack,     dir: in,  width: 1}
+    - {name: o_ext_rs1,      dir: out, width: 32}
+    - {name: o_ext_rs2,      dir: out, width: 32}
+    - {name: o_ext_funct3,   dir: out, width: 3}
+    - {name: i_ext_rd,       dir: in,  width: 32}
+    - {name: i_ext_ready,    dir: in,  width: 1}
+    - {name: o_mdu_valid,    dir: out, width: 1}
+  parameters:
+    - {name: RESET_PC,       default: "0x00000000"}
+    - {name: RESET_STRATEGY, default: "MINI"}
+    - {name: WITH_CSR,       default: 1}
+    - {name: MDU,            default: 0}
+    - {name: PRE_REGISTER,   default: 1}
+    # `sim` gates a simulation-only `generate` block in the SERV
+    # introspection/debug wrapper (serv_debug.v) that uses
+    # $value$plusargs / $fopen / $display system tasks to dump CPU/RF
+    # state during simulation. Default 0 (synth-safe). Set 1 only for
+    # simulation; yosys cannot elaborate the PLI/system-task generate
+    # block, so sim=1 ABORTS synthesis. See synth_safe_params below.
+    - {name: sim,            default: 0,
+       description: "sim-only debug/introspection generate block enable (PLI/system tasks). 0 = synth-safe, 1 = simulation only."}
+
+# v0.2.102 — for #492. synth_safe_params instructs catalog-glue-author
+# to PIN `sim=0` whenever it instantiates SERV for synthesis, so the
+# sim-only $value$plusargs/$fopen generate block is never elaborated by
+# yosys. The functional oracle / reference TB may still drive sim=1 in
+# simulation (the construct is legal under iverilog); only the SYNTHESIS
+# instantiation is forced to the synth-safe value.
+synth_safe_params:
+  - param: sim
+    synth_safe_value: 0
+    sim_value: 1
+    reason: >
+      Gates a simulation-only generate block in the SERV debug/
+      introspection wrapper that uses $value$plusargs / $fopen /
+      $display system tasks. yosys cannot elaborate these PLI/system
+      tasks — instantiating with sim=1 aborts synthesis while sim=0
+      synthesises cleanly and the functional oracle still passes.
+
+rtl_files:
+  - rtl/serv_aligner.v
+  - rtl/serv_alu.v
+  - rtl/serv_bufreg.v
+  - rtl/serv_bufreg2.v
+  - rtl/serv_compdec.v
+  - rtl/serv_csr.v
+  - rtl/serv_ctrl.v
+  - rtl/serv_debug.v
+  - rtl/serv_decode.v
+  - rtl/serv_immdec.v
+  - rtl/serv_mem_if.v
+  - rtl/serv_rf_if.v
+  - rtl/serv_rf_ram.v
+  - rtl/serv_rf_ram_if.v
+  - rtl/serv_rf_top.v
+  - rtl/serv_state.v
+  - rtl/serv_synth_wrapper.v
+  - rtl/serv_top.v
+  # v1.6.574 — for strict-blind subservient pilot gap finding.
+  # servile/* convenience wrapper (recommended Pattern B in
+  # integration_guide.md). Plugin should pull these when the spec
+  # mentions 'shared SRAM' or 'unified memory'.
+  - servile/servile.v
+  - servile/servile_arbiter.v
+  - servile/servile_mux.v
+  - servile/servile_rf_mem_if.v
+
+synth:
+  pdk_compatible: [sky130A, gf180mcuD]
+  tested_clock_period_ns: 10
+  area_ge: 2100
+  openlane_tapeout_track_record: "OpenMPW-1, OpenMPW-3, chipIgnite multiple shuttles"
+
+integration_notes: >
+  SERV exposes RF interface separately from main memory bus. For a
+  shared-SRAM SoC (RF + I-mem + D-mem in one SRAM), pair with the
+  `servile` wrapper (included in serv repo at servile/*.v) which
+  handles the RF-RAM-IF adapter. Plugin should auto-include servile
+  files when matching SERV against an L2 spec that says
+  'shared SRAM' or 'unified memory'.
+
+depends_on: []

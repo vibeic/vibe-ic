@@ -1,0 +1,30 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Wave 82 (v1.6.2) — generated to satisfy
+# test_tools_and_integration::test_every_skill_has_compliance_yaml.
+# Spot-check skill: emits a compliance audit report.
+skill: compliance-gate-spot-check
+
+requirements:
+  - id: R_has_output_section
+    description: "Output / report section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_pass_fail_verdict
+    description: "Spot-check verdict (pass / fail / waived)"
+    pattern: '(PASS|FAIL|WAIVED|pass|fail|waived)'
+    skill_section: 'Verdict'
+
+cross_checks:
+  - id: X_text_only_skill
+    description: "Audit-report skill — no verifiable artifact beyond text output."
+    rule: text_only_report

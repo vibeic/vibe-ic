@@ -1,0 +1,132 @@
+# cable-side-id-ic — generic class for single-wire ID + power-management
+# ICs that live in cables / plugs / connectors. Examples: USB Type-C
+# E-marker chips, accessory-identification ICs in proprietary connectors.
+# This template encodes hardware-floor invariants common to the class;
+# specific opcode lists / payload bytes / vendor packages remain in the
+# user-supplied L1-L27 layer documents (no vendor copy is bundled here).
+class: cable-side-id-ic
+parent: protocol-ic
+
+facts:
+  L1:
+    - {path: electrical_characteristics.supply_vbus,    type: dict, required: true, keys: [min, typ, max, unit]}
+    - {path: electrical_characteristics.supply_1v8,     type: dict, required: true, keys: [min, typ, max, unit]}
+    - {path: electrical_characteristics.osc_freq,       type: dict, required: true, keys: [nominal, unit, trim_range_percent]}
+    - {path: electrical_characteristics.id_bus_vil,     type: number, required: true}
+    - {path: electrical_characteristics.id_bus_vih,     type: number, required: true}
+    - {path: pinout.VBUS,                               type: string, required: true}
+    - {path: pinout.ID_BUS,                             type: string, required: true}
+    - {path: pinout.CC_I,                               type: string, required: true}
+    - {path: pinout.CC_O,                               type: string, required: true}
+    - {path: protocol_summary,                          type: string, required: true}
+
+  L4:
+    - {path: otp_map_128x8,                             type: list_of_dicts, required: true, schema: [addr, name, description]}
+
+  L6:
+    # Required submodule keys for cable-side FSMs
+    - {path: submodule_control_logic.mac,               type: dict, required: true}
+    - {path: submodule_control_logic.rx_phy,            type: dict, required: true}
+    - {path: submodule_control_logic.rx_cmd,            type: dict, required: true}
+    - {path: submodule_control_logic.rx_chk,            type: dict, required: true}
+    - {path: submodule_control_logic.otp_ctrl,          type: dict, required: true}
+    - {path: submodule_control_logic.cc_ctrl,           type: dict, required: true}
+
+  L7:
+    # Generic test-sequence list. The specific tester (USB-HID tester, vendor jig,
+    # or ATE program) is captured in L13_LAB_CALIBRATION when known.
+    - {path: production_test_sequence,                  type: list_of_strings, required: false, comment: "Optional list of host-side commands the production tester sends to a known-good DUT"}
+
+  L8:
+    - {path: break_timing.break_low_min_us,             type: number, required: true}
+    - {path: reset_timing.por_to_first_wake_ready_us,   type: number, required: true}
+
+  # v0.74 A-implement Phase 2: cable-side cycle-accurate constants
+  # (subset of 48 benchmark L8R paths — ones most critical for RTL generation)
+  L8R:
+    - {path: bit_period_cycles,                         type: integer, required: true, derives_from: L8.aid_bit_timing.bit_period_us × L8R.clock_frequency_hz}
+    - {path: wake_low_min_cycles,                       type: integer, required: true}
+    - {path: wake_low_max_cycles,                       type: integer, required: true}
+    - {path: break_low_min_cycles,                      type: integer, required: true}
+    - {path: break_low_max_cycles,                      type: integer, required: false}
+    - {path: rx_to_tx_delay_min_cycles,                 type: integer, required: true}
+    - {path: rx_to_tx_delay_max_cycles,                 type: integer, required: true}
+    - {path: por_to_ready_cycles,                       type: integer, required: true}
+    - {path: otp_load_cycles,                           type: integer, required: false}
+    - {path: crc8_polynomial,                           type: string, required: true, mirror: L3.frame_format.crc.poly}
+    - {path: crc8_init,                                 type: string, required: true, mirror: L3.frame_format.crc.init}
+    - {path: opcode_mask_hi,                            type: string, required: false}
+    - {path: opcode_mask_lo,                            type: string, required: false}
+
+# -----------------------------------------------------------------------------
+# spec_floor — quantitative minimums enforced by phase1_quality_parity_check.py
+# -----------------------------------------------------------------------------
+# Rationale: when a vague / non-technical user leaves Phase-1 under-specified,
+# the IC Expert MUST lift the design to these floors using documented defaults
+# (auto_decided: true). Without this, low-fidelity personas produce degenerate
+# ICs (4 opcodes / 32-byte OTP / placeholder CRC) that pass presence+schema
+# checks but can never reach hardware-class maturity.
+#
+# Floors below are derived from the trained 96-IC corpus median for
+# protocol-ic subclass members.
+spec_floor:
+  # All numbers are floor-only minimums — actual designs typically exceed
+  # them. Numbers chosen as the median observed across trained protocol-ic
+  # corpus, not against any single vendor IC.
+  # ----- Phase 1 extended layers (v0.50) -----
+  L10_test_cases_min: 8               # cmd_response cases the spec defines + ≥1 error + ≥1 state_transition
+  L10_cmd_response_min: 4             # at minimum: ID/wake, status read, write, error
+  L11_calibration_tables_min: 2       # decoder windows + response timing
+  L12_sequences_min: 2                # at minimum: a multi-step unlock or wake + a validation chain
+  L12_required_sequence_categories:   # by category, not by vendor-specific id
+    - validation_chain
+    - host_stimulus_sequence
+  # ----- original L1-L23 floors -----
+  L3_opcode_count_min: 8              # median across protocol-ic class
+  # L3_crc_poly_allowed is a SOFT whitelist — the gate only enforces it
+  # when L3 actually declares a crc poly. Cable-plug ID protocols vary;
+  # pick from any standard CRC-8 polynomial list. v0.56: removed
+  # vendor-specific comments from individual entries (the prior list
+  # tagged 0x31 as "IC-A style", which was a vendor leak).
+  L3_crc_poly_allowed:                # industry-standard CRC-8 polynomials
+    - "0x07"      # ATM HEC / SMBus PEC
+    - "0x31"      # MAXIM / Dallas / 1-Wire
+    - "0x1D"      # SAE-J1850
+    - "0x9B"      # WCDMA
+    - "0xD5"      # DVB-S2
+  L4_otp_bytes_min: 64                # byte-addressable OTP
+  L4_regmap_reg_count_min: 4          # minimum runtime registers
+  # v0.56: L6_required_submodules removed from this generic parent
+  # class (the previous list was IC-A-Maxim-style verbatim and broke
+  # any cable-plug ID controller that used a different decomposition).
+  # Specific architectures should declare their required submodules in
+  # a sub-class — see cable-side-id-ic-maxim-style.yaml.
+  L6_submodule_count_min: 6           # generic structural floor: pad +
+                                       # rx-decode + tx-encode + state +
+                                       # cmd dispatch + memory/NV
+  L9_internal_wire_count_min: 24
+  L9_top_level_port_count_min: 14     # was 18 — generic-class floor;
+                                       # IC-A-style designs typically
+                                       # exceed this comfortably
+
+# -----------------------------------------------------------------------------
+# sequence_naming — used by l12_tb_coverage_check.py to derive testbench
+# filename candidates from L12 sequence ids. Each suffix listed here is
+# stripped from the lower-cased sequence id when generating tb_*.v candidate
+# names, so e.g. `TEST_MODE_ENTRY` → also tries `tb_test_mode.v` and
+# `tb_testmode.v`. Without this list, only literal-snake_case and flat
+# variants are tried.
+#
+# Added v0.54 (2026-04-24) to remove the IC-A-specific suffix list that
+# was hard-coded in l12_tb_coverage_check.py prior to v0.53. Each IC class
+# template now declares its own naming conventions.
+# -----------------------------------------------------------------------------
+sequence_naming:
+  # Suffixes stripped before forming abbreviated tb candidates. Match
+  # is case-insensitive against the sequence id's lower-cased form.
+  strip_suffixes:
+    - entry            # *_ENTRY → *
+    - unlock           # *_UNLOCK → *
+    - validation       # *_VALIDATION → *
+    - chain            # *_CHAIN → *
+    - "[0-9]+ms"       # *_700MS → *  (regex per suffix)

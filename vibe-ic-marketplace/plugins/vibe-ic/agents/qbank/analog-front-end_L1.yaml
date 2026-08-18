@@ -1,0 +1,31 @@
+class: analog-front-end
+layer: L1
+# v0.74 E+F-implement: AFE datasheet facts (converter type, resolution, channels)
+qbank:
+  converter_type:
+    expert:       ["ADC / DAC / comparator / voltage_reference / PGA / mux_only?"]
+    intermediate: ["Is this an ADC, a DAC, a comparator, a voltage reference, or something else?"]
+    beginner:     ["Does the chip turn analog signals into digital (ADC) or the other way around (DAC)?"]
+
+  resolution_bits:
+    expert:       ["Native resolution in bits?"]
+    intermediate: ["How many bits of resolution — 8, 10, 12, 14, 16?"]
+    beginner:     []   # technical; default by converter class
+
+  channel_count:
+    expert:       ["Single-ended channel count?"]
+    intermediate: ["How many input (or output) channels does the chip have?"]
+    beginner:     ["How many signals does the chip convert at once?"]
+    follow_ups:
+      - if_user_says: ["one", "single"]
+        respond_with_default: 1
+
+  differential_capable:
+    expert:       ["Differential-input capable?"]
+    intermediate: ["Can the chip sample differential signals (two pins per channel)?"]
+    beginner:     []
+
+  input_voltage_range_v:
+    expert:       ["Input voltage range (min, max) under nominal VREF?"]
+    intermediate: ["What voltage range does the input need to accept — 0 to VDD, ±VREF, rail-to-rail?"]
+    beginner:     ["What's the expected voltage swing on the analog pin?"]

@@ -1,0 +1,38 @@
+class: memory-controller
+layer: L4
+# v0.74 E+F-implement: memory controller address mapping + command
+qbank:
+  address_mapping:
+    expert:       ["Address mapping — row/bank/col ordering, bank-interleave policy?"]
+    intermediate: ["How does the controller split a linear address into row/bank/column?"]
+    beginner:     []
+
+  addressing_scheme:
+    expert:       ["Addressing scheme — byte-addressable / word-addressable / page-addressable?"]
+    intermediate: ["Is the memory byte-addressable, word-addressable, or page-based?"]
+    beginner:     []
+
+  bank_machine_count:
+    expert:       ["Bank machine count (DRAM controllers)?"]
+    intermediate: ["How many bank machines does the controller have?"]
+    beginner:     []
+
+  command_depth:
+    expert:       ["Command-queue depth?"]
+    intermediate: ["How many pending commands does the queue hold?"]
+    beginner:     []
+
+  refresh_scheme:
+    expert:       ["DRAM refresh — auto-refresh cadence, self-refresh entry/exit?"]
+    intermediate: ["How does the controller handle refresh — continuous, burst, self?"]
+    beginner:     []
+
+  page_size_bytes:
+    expert:       ["Page / row size in bytes?"]
+    intermediate: ["How big is a single page/row of memory?"]
+    beginner:     []
+
+  ack_poll_semantics:
+    expert:       ["ACK / polling semantics (flash controllers — busy bit vs interrupt)?"]
+    intermediate: ["For flash: does the controller poll busy, or raise an interrupt on done?"]
+    beginner:     []

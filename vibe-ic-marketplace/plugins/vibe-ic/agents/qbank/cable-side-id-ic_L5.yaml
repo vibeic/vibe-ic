@@ -1,0 +1,18 @@
+class: cable-side-id-ic
+layer: L5
+# v0.74 E+F-implement: cable-side ID pad-level ADI
+qbank:
+  pads.id_bus:
+    expert:       ["ID_BUS pad — pull-up strength, slew, Schmitt threshold?"]
+    intermediate: ["Describe the ID_BUS pad electrically — pull-up, slew, open-drain?"]
+    beginner:     []
+
+  pads.cc_passthrough:
+    expert:       ["CC-I / CC-O pads — on-resistance, gate-control source, ESD path?"]
+    intermediate: ["How does the CC pass-through work electrically — switch RON, gate signal?"]
+    beginner:     ["How does the chip gate the CC line?"]
+
+  pads.vbus_sense:
+    expert:       ["VBUS sense threshold, hysteresis, absolute max?"]
+    intermediate: ["At what VBUS level does the chip turn on? Any hysteresis?"]
+    beginner:     []

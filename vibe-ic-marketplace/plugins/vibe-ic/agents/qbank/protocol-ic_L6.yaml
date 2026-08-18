@@ -1,0 +1,23 @@
+class: protocol-ic
+layer: L6
+# v0.74 E+F-implement: protocol-IC control structure (RX/TX/decode/state)
+qbank:
+  submodule_control_logic.rx_phy:
+    expert:       ["RX PHY submodule — serial-to-parallel, bit-decode, sampling point?"]
+    intermediate: ["What owns the receive-side bit decoding — a dedicated FSM?"]
+    beginner:     []
+
+  submodule_control_logic.rx_cmd:
+    expert:       ["Command-decode FSM — opcode window, payload-length gate?"]
+    intermediate: ["How does the chip decide which command it just received?"]
+    beginner:     []
+
+  submodule_control_logic.tx_phy:
+    expert:       ["TX PHY submodule — response encoder, bit timing?"]
+    intermediate: ["What generates the outgoing bits with correct timing?"]
+    beginner:     []
+
+  submodule_control_logic.top_fsm:
+    expert:       ["Top-level control FSM — idle/rx/decode/exec/tx/wait states?"]
+    intermediate: ["What's the high-level state machine that orchestrates receive → execute → respond?"]
+    beginner:     ["What are the main things the chip does, step by step?"]

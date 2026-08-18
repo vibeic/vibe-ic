@@ -1,0 +1,51 @@
+ip_name: sha3_core
+ip_version: "0.50"
+ip_class: nist_sha3_keccak_hash
+license: BSD-2-Clause
+canonical_url: https://github.com/secworks/sha3
+canonical_commit: "master"
+authors:
+  - "Joachim Strömbergson <joachim@secworks.se>"
+description: >
+  NIST FIPS-202 SHA-3 (Keccak) hash function. Supports SHA3-224, SHA3-256,
+  SHA3-384, SHA3-512 + SHAKE128/256 XOF modes. Memory-mapped register
+  interface.
+
+implements:
+  algorithm: sha3
+  algorithm_variants: [sha3_224, sha3_256, sha3_384, sha3_512, shake128, shake256]
+  standard: nist_fips_202
+  permutation: keccak_p_1600_24
+
+matches_when:
+  - "L2.function == 'sha-3' OR L2.function == 'sha3' OR L2.function == 'keccak'"
+  - "L2.crypto_family == 'sha-3' OR L2.crypto_family == 'keccak'"
+  - "L4 contains 'NIST FIPS-202' OR L4 contains 'Keccak'"
+  - "L2.function == 'shake128' OR L2.function == 'shake256'"
+
+interface:
+  ports:
+    - {name: clk,        dir: in,  width: 1}
+    - {name: reset_n,    dir: in,  width: 1}
+    - {name: cs,         dir: in,  width: 1}
+    - {name: we,         dir: in,  width: 1}
+    - {name: addr,       dir: in,  width: 8}
+    - {name: write_data, dir: in,  width: 32}
+    - {name: read_data,  dir: out, width: 32}
+  parameters: []
+
+rtl_files:
+  - src/rtl/sha3.v
+  - src/rtl/sha3_core.v
+
+synth:
+  pdk_compatible: [sky130A]
+  tested_clock_period_ns: 10
+  area_ge: 15000
+  openlane_tapeout_track_record: "secworks/sha3 passes OpenLane SKY130 CI"
+
+integration_notes: >
+  Selects mode via MODE register (SHA3-224 / -256 / -384 / -512 / SHAKE128 /
+  SHAKE256). For SHAKE modes, caller controls output length.
+
+depends_on: []

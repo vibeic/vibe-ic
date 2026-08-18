@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""Tests for project_outputs_in_tree_check.py — chip-AGNOSTIC volatile-
+storage gate.
+
+Covers:
+  1. POSITIVE_PASS — RESULT.md / waivers.json / reports/ have no /tmp
+                     references.
+  2. POSITIVE_FAIL — RESULT.md cites a /tmp/<file> AND that file exists
+                     on disk (live external artifact).
+  3. SKIP_NON_APPLICABLE — project tree is empty (no scan target files
+                     at all → no findings → PASS, the SKIP analogue).
+  4. SKIP_NO_CONSTRUCT — same (covered by #3).
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+PROG = Path(__file__).resolve().parent.parent / \
+    "project_outputs_in_tree_check.py"
+
+
+def _run(project_dir: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(PROG), str(project_dir)],
+        capture_output=True, text=True,
+    )
+
+
+# -- Test 1: POSITIVE_PASS — clean project --
+
+def test_positive_pass_clean_project(tmp_path):
+    (tmp_path / "RESULT.md").write_text(
+        "# Project results\n"
+        "All artifacts under reports/ and rtl/ — no volatile paths.\n"
+    )
+    (tmp_path / "waivers.json").write_text(json.dumps({}))
+    (tmp_path / "reports").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "reports" / "build.json").write_text(json.dumps({
+        "status": "PASS", "artifact": "phase2/stage1/rtl/chip_top.sv",
+    }))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
+    assert "no /tmp" in r.stdout
+
+
+# -- Test 2: POSITIVE_FAIL — live /tmp artifact --
+
+def test_positive_fail_live_tmp(tmp_path):
+    # Create an artifact in /tmp that actually exists.
+    sentinel = Path("/tmp") / f"vibe_test_artifact_{tmp_path.name}.gds"
+    sentinel.write_text("# fake GDS\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(
+            f"GDS produced at: {sentinel}\n"
+        )
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+        assert "live external-storage" in r.stdout
+        assert str(sentinel) in r.stdout
+    finally:
+        try:
+            sentinel.unlink()
+        except FileNotFoundError:
+            pass
+
+
+# -- Test 3: SKIP_NON_APPLICABLE — empty project (no scan files) --
+
+def test_skip_empty_project(tmp_path):
+    # Empty project — no RESULT.md, no waivers.json, no reports/.
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
+    assert "no /tmp" in r.stdout
+
+
+# -- Test 4: SKIP_NO_CONSTRUCT — only unrelated files --
+
+def test_skip_unrelated_files(tmp_path):
+    (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
+    (tmp_path / "phase2" / "stage1" / "rtl" / "top.sv").write_text(
+        "module top();\nendmodule\n"
+    )
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
+
+
+# -- Test 5: WARN — dangling /tmp reference (file gone) --
+
+def test_dangling_tmp_reference(tmp_path):
+    """Reference to /tmp/<file> that no longer exists → still FAIL
+    (because findings list is non-empty), with WARN sub-line."""
+    (tmp_path / "RESULT.md").write_text(
+        "# Lost results\n"
+        "Used /tmp/dead_artifact_xyz_does_not_exist_anywhere.gds\n"
+    )
+    r = _run(tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    # No live findings, but dangling counted in fail_count.
+    assert "[WARN]" in r.stdout
+    assert "dangling external-path" in r.stdout
+
+
+# -- Test 6: PASS_WITH_WAIVER --
+
+def test_pass_with_waiver(tmp_path):
+    (tmp_path / "RESULT.md").write_text(
+        "Cache: /tmp/build_cache_123/intermediate.json\n"
+    )
+    rationale = (
+        "Build cache lives in /tmp by design — never used as audit "
+        "evidence; ticket BUILD-101 documents the cache architecture "
+        "and rotation policy."
+    )
+    (tmp_path / "waivers.json").write_text(json.dumps({
+        "project_artifacts_external_storage_intentional": rationale,
+    }))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS_WITH_WAIVER]" in r.stdout
+
+
+# -- Test 7: usage error --
+
+def test_usage_error():
+    r = subprocess.run([sys.executable, str(PROG)], capture_output=True,
+                       text=True)
+    assert r.returncode == 2
+
+
+# ── R7 (v1.3.50) — a PINNED plugin worktree is a legit plugin source ─────────
+
+def test_r7_pinned_plugin_wt_prefix_passes(tmp_path):
+    """A `/tmp/.../wt-*/vibe-ic-marketplace/plugins/vibe-ic/...` reference (real
+    plugin.json) is a legit plugin SOURCE — disclosed, NON-blocking (PASS).
+
+    Uses a real volatile prefix (/tmp) because that is what triggered the
+    original false positive."""
+    import shutil
+    import tempfile
+    volbase = Path(tempfile.mkdtemp(dir="/tmp", prefix="wt-v1350-"))
+    try:
+        root = volbase / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "vibe-ic", "version": "1.3.50"}))
+        (root / "programs").mkdir()
+        src = root / "programs" / "flow_compliance_check.py"
+        src.write_text("# pinned plugin program\n")
+        (tmp_path / "RESULT.md").write_text(f"Ran gate at: {src}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "[PASS]" in r.stdout
+        assert "pinned plugin-source" in r.stdout
+    finally:
+        shutil.rmtree(volbase, ignore_errors=True)
+
+
+def test_r7_pinned_plugin_claude_worktrees_passes(tmp_path):
+    """The `.claude/worktrees/<wt>/vibe-ic-marketplace/plugins/vibe-ic/...`
+    pinning marker variant is also recognised as plugin source (PASS)."""
+    import tempfile
+    volbase = Path(tempfile.mkdtemp(dir="/tmp", prefix="run-"))
+    try:
+        root = (volbase / ".claude" / "worktrees" / "agent-xyz"
+                / "vibe-ic-marketplace" / "plugins" / "vibe-ic")
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text("{}")
+        (root / "phase1_phase2_phase3.yaml").write_text("steps: []\n")
+        src = root / "phase1_phase2_phase3.yaml"
+        (tmp_path / "RESULT.md").write_text(f"config: {src}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "[PASS]" in r.stdout
+        assert "pinned plugin-source" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(volbase, ignore_errors=True)
+
+
+def test_r7_genuine_volatile_output_still_fails(tmp_path):
+    """A genuine volatile project OUTPUT (real /tmp GDS, NOT a plugin root) must
+    STILL FAIL — the R7 exemption must not create a false-negative."""
+    import tempfile
+    outdir = Path(tempfile.mkdtemp(dir="/tmp", prefix="realrun-"))
+    sentinel = outdir / "design.gds"
+    sentinel.write_text("# fake GDS\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(f"GDS produced at: {sentinel}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outdir, ignore_errors=True)
+
+
+def test_r7_anchor_substring_without_plugin_json_fails(tmp_path):
+    """A /tmp path that merely CONTAINS the plugin anchor substring but has NO
+    `.claude-plugin/plugin.json` is NOT a real plugin root → must FAIL (the hard
+    marker gate blocks the false-negative)."""
+    import tempfile
+    outdir = Path(tempfile.mkdtemp(dir="/tmp", prefix="wt-fake-"))
+    fake = (outdir / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "out.gds")
+    fake.parent.mkdir(parents=True)
+    fake.write_text("# not a plugin\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(f"Output: {fake}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outdir, ignore_errors=True)
+
+
+def test_r7_dotdot_escape_out_of_plugin_still_fails(tmp_path):
+    """§4.05 false-negative guard — a `..`-escape that starts inside a pinned
+    plugin worktree but climbs OUT to a genuine volatile output
+    (`.../vibe-ic/../../../design.gds`) must NOT be exempted: normalization
+    destroys the plugin anchor, so it is (correctly) FLAGGED."""
+    import shutil
+    import tempfile
+    volbase = Path(tempfile.mkdtemp(dir="/tmp", prefix="wt-v1350-"))
+    try:
+        root = volbase / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text("{}")
+        # a real output ABOVE the plugin, reached via .. from inside it
+        escaped = volbase / "design.gds"
+        escaped.write_text("# real volatile output\n")
+        cited = root / ".." / ".." / ".." / "design.gds"   # escapes to volbase
+        (tmp_path / "RESULT.md").write_text(f"GDS at: {cited}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        shutil.rmtree(volbase, ignore_errors=True)
+
+
+def test_r7_intree_dotdot_still_recognised(tmp_path):
+    """An IN-TREE `..` that stays under the plugin root
+    (`.../vibe-ic/programs/../plugin.json`) is still recognised as plugin
+    source (PASS) — the guard only rejects escapes, not in-tree normalization."""
+    import shutil
+    import tempfile
+    volbase = Path(tempfile.mkdtemp(dir="/tmp", prefix="wt-v1350-"))
+    try:
+        root = volbase / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text("{}")
+        (root / "programs").mkdir()
+        (root / "phase3_one_shot_runner.py").write_text("# src\n")
+        cited = root / "programs" / ".." / "phase3_one_shot_runner.py"
+        (tmp_path / "RESULT.md").write_text(f"ran: {cited}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "[PASS]" in r.stdout
+        assert "pinned plugin-source" in r.stdout
+    finally:
+        shutil.rmtree(volbase, ignore_errors=True)
+
+
+def test_r7_plugin_root_without_pin_marker_fails(tmp_path):
+    """A real plugin root (has plugin.json) but with NO worktree/scratch pin
+    marker above the anchor is NOT exempted → FAIL. Keeps the exemption narrow."""
+    import tempfile
+    outdir = Path(tempfile.mkdtemp(dir="/tmp", prefix="plainroot-"))
+    root = outdir / "vibe-ic-marketplace" / "plugins" / "vibe-ic"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text("{}")
+    src = root / "x.py"
+    src.write_text("# x\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(f"ref: {src}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outdir, ignore_errors=True)
+
+
+# ── In-tree self-references (audit self-inflation) ───────────────────────────
+# A project audited from a volatile root (the standard way to audit without
+# mutating the original) writes its OWN absolute paths into reports/**/*.json.
+# Those are in-tree BY DEFINITION; before the fix the gate reported them as
+# external storage, so the audit manufactured its own violations.
+#
+# `tmp_path` is itself under /tmp, so these tests reproduce the real condition
+# without simulating it: the project root genuinely IS at a volatile path.
+
+def test_in_tree_self_reference_is_not_external_storage(tmp_path):
+    """The defect direction. A report citing the project's OWN absolute path
+    must not be an external-storage finding — the file is inside the tree."""
+    own = tmp_path / "phase3" / "stage4" / "gds" / "top.gds"
+    own.parent.mkdir(parents=True)
+    own.write_text("# GDS\n")
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "gds_substance.json").write_text(json.dumps({
+        "gds": str(own), "status": "PASS",
+    }))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
+    assert "external-storage artifact" not in r.stdout
+
+
+def test_in_tree_self_reference_is_disclosed_not_silent(tmp_path):
+    """The exemption must be visible. A silently-dropped class reads as
+    'nothing was there' — the gate has to say what it excused."""
+    own = tmp_path / "phase2" / "stage2" / "synth" / "netlist.v"
+    own.parent.mkdir(parents=True)
+    own.write_text("// netlist\n")
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "synth.json").write_text(json.dumps(
+        {"netlist": str(own)}))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "in-tree self-reference" in r.stdout
+    assert str(tmp_path) in r.stdout
+
+
+def test_genuine_external_artifact_still_fails_from_a_volatile_project(
+        tmp_path):
+    """ANTI-RUBBER-STAMP. The project root is volatile, so a blanket
+    'everything under /tmp is fine' rule would pass this — it must not.
+    A path OUTSIDE the project is still external storage."""
+    import tempfile
+    outside = Path(tempfile.mkdtemp(dir="/tmp", prefix="outside-"))
+    stray = outside / "chip_top.gds"
+    stray.write_text("# real GDS left outside the tree\n")
+    try:
+        (tmp_path / "RESULT.md").write_text(f"the GDS is at {stray}\n")
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+        assert str(stray) in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outside, ignore_errors=True)
+
+
+def test_symlink_out_of_the_tree_is_still_external(tmp_path):
+    """A path that is LEXICALLY inside the project but symlinks OUT of it is
+    still external storage — the artifact does not live in the tree. Pins
+    that the containment test resolves rather than string-prefixes."""
+    import tempfile
+    outside = Path(tempfile.mkdtemp(dir="/tmp", prefix="linktarget-"))
+    target = outside / "netlist.v"
+    target.write_text("// lives outside\n")
+    inside = tmp_path / "steps" / "9_synth"
+    inside.mkdir(parents=True)
+    link = inside / "netlist.v"
+    link.symlink_to(target)
+    try:
+        (tmp_path / "reports").mkdir()
+        (tmp_path / "reports" / "s.json").write_text(json.dumps(
+            {"netlist": str(link)}))
+        r = _run(tmp_path)
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "[FAIL]" in r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(outside, ignore_errors=True)
+
+
+def test_project_root_itself_cited_is_in_tree(tmp_path):
+    """The boundary case: a report citing the project ROOT (not a child).
+    `p == project` must count as inside, not merely `project in p.parents`."""
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "audit.json").write_text(json.dumps(
+        {"project": str(tmp_path)}))
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout

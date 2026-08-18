@@ -1,0 +1,23 @@
+class: protocol-ic
+layer: L9
+# v0.74 E+F-implement: protocol-IC DTOP integration signals
+qbank:
+  top_level_ports.serial_in:
+    expert:       ["Serial input DTOP port name (rx side)?"]
+    intermediate: ["What's the input pin name for the serial receive?"]
+    beginner:     []
+
+  top_level_ports.serial_out_en:
+    expert:       ["Serial output enable (for open-drain / tri-state)?"]
+    intermediate: ["If open-drain, what's the output-enable pin?"]
+    beginner:     []
+
+  top_level_ports.serial_out_data:
+    expert:       ["Serial output data DTOP port?"]
+    intermediate: ["Output data pin for the transmit path?"]
+    beginner:     []
+
+  submodules.top_fsm:
+    expert:       ["Top-FSM submodule instance (orchestrator)?"]
+    intermediate: ["Is there an explicit top-level control submodule?"]
+    beginner:     []

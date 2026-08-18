@@ -1,0 +1,8 @@
+class: protocol-ic
+layer: L1
+# v0.74 E+F-implement: protocol-IC datasheet-level facts
+qbank:
+  protocol_summary:
+    expert:       ["Protocol summary — name, wire count, duplex, framing style?"]
+    intermediate: ["In one sentence, what protocol does the chip speak?"]
+    beginner:     ["How does the host talk to the chip — one wire, two wires, more?"]

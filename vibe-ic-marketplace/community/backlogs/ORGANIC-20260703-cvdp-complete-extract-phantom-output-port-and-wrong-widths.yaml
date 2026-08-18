@@ -1,0 +1,67 @@
+type: bug
+severity: P2
+component: program:cvdp_complete_extract
+
+title: >-
+  cvdp_complete_extract emits a malformed conformance spec — a phantom port
+  literally named "output" (Verilog keyword mis-parsed as a port) plus wrong
+  port widths — which risks Tier-2 gate FALSE-REJECT of correct blind RTL
+
+plugin_version: "1.2.96"
+
+pattern: |
+  The program-extracted conformance spec (cvdp_solve_pipeline.solve()['gate'],
+  built by cvdp_complete_extract.extract) parses port declarations from the
+  prompt/context and, for several 64b/66b problems, produces a bogus port list:
+
+    * cvdp_copilot_64b66b_decoder_0001: invents a port {name:"output", dir:input,
+      width:66} and reports decoder_data_in as width 2 (should be [65:0]).
+    * cvdp_copilot_64b66b_encoder_0005: reports encoder_control_in as 64-bit and
+      encoder_data_out as 2-bit (given context RTL is 8-bit control / 66-bit out).
+    * cvdp_copilot_64b66b_encoder_0009: adds a phantom output port `bit`[64]
+      (the `bit` keyword mis-parsed) not present in the context RTL.
+
+  The "output" case is a keyword-as-identifier parse bug: the extractor is
+  scanning declaration text and latches the direction keyword `output` as if it
+  were the port NAME. Widths are being read from an adjacent/typo token rather
+  than the port's own range.
+
+  MEASURED (canary v1.2.96): FOUR independent blind authors each hit this and
+  each correctly OVERRODE the extracted_spec.json in favor of the authoritative
+  prompt.md / context port declarations, so it caused no fail THIS round. But
+  the spec is consumed as the Tier-2/Tier-3 CONFORMANCE GATE — a gate built from
+  a phantom `output` port or a 2-bit-vs-66-bit width would REJECT a correct
+  emit (false-reject) or PASS a wrong one, exactly the stabilizer inverting.
+
+repro: |
+  cd <plugin>; python3 -c "import sys;sys.path.insert(0,'programs');\
+  import cvdp_solve_pipeline as P, json;\
+  r=[json.loads(l) for l in open('<dataset>')][3];\  # 64b66b_decoder_0001
+  print(json.dumps(P.solve(r)['gate'],indent=2))"
+  -> ports include {"name":"output",...}; decoder_data_in width 2.
+
+suggested_fix: |
+  In cvdp_complete_extract port parsing:
+    - Treat `input`/`output`/`inout` as DIRECTION tokens only; never accept one
+      as a port identifier. Reject/skip any parsed port whose name is a Verilog
+      reserved word (output, input, inout, wire, reg, logic, bit, ...).
+    - Bind each port's width to ITS OWN `[msb:lsb]` range token, not the nearest
+      numeric token (the width=2 bleak looks like it grabbed the sync-header `2`).
+    - Add a self-consistency assert: extracted port widths must reconcile with
+      any context-RTL declaration of the same port; on conflict prefer context
+      and flag the record (the extractor is downstream of authoritative RTL).
+  Add a regression fixture from 64b66b_decoder_0001 / encoder_0005 / encoder_0009.
+
+evidence:
+  run: benchmark_external/cvdp/run_canary_v1296_20260703
+  confirmations: 4 independent blind authors (decoder_0001, encoder_0005,
+    encoder_0009, decoder_0011) reported and overrode the malformed spec
+  filed_by: benchmark-agent (clean-room CVDP canary on v1.2.96)
+
+resolution:
+  status: fix-landed
+  landed_by: repo-gatekeeper
+  commits:
+    - "b6cb0be6 — fix(cvdp): complete-extract phantom-port + header-authoritative widths (PR #99)"
+  annotated_at_merge: "2026-07-03 (PR #97, gatekeeper annotation)"
+  triage_2026_07_06: verified — cvdp_complete_extract.py _RESERVED_PORT_WORDS filter live; independent repro shows no phantom port + correct 66-bit width

@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""project_outputs_in_tree_check.py
+
+Closes the silent-loss bug where build / EDA tools write outputs to
+``/tmp/`` (or other volatile locations outside the project tree) and the
+agent forgets to copy them back. The next reboot / tmpfs sweep destroys
+the evidence. Worse, gate authors then waiver the missing canonical-path
+artifacts thinking they were never produced.
+
+Concrete failure mode (project-agnostic example):
+    PnR / GDS tools accept caller-supplied output paths. When agents
+    pick a scratch dir under /tmp/, the artifacts are real but live
+    on volatile tmpfs. waivers.json + RESULT.md then cite those paths
+    and a later audit assumes the artifacts were never produced — so
+    spurious waivers get opened for results that DO exist, just outside
+    the project tree. A reboot or tmpfs sweep then permanently destroys
+    the evidence.
+
+This gate is **chip-AGNOSTIC**:
+
+    Scan the project's waivers.json + RESULT.md + reports/*.json for
+    any reference to absolute paths starting with /tmp/, /var/tmp/,
+    or any path explicitly outside the project root. FAIL when found
+    AND the referenced file actually exists at that path (i.e. the
+    artifact got produced but was left outside the project tree).
+
+    The fix is for the agent to copy those artifacts to canonical
+    locations under <project>/ before claiming completion.
+
+Honors waiver ``project_artifacts_external_storage_intentional`` (>=60
+chars per offending path).
+
+Usage:
+    python3 project_outputs_in_tree_check.py <project_dir>
+
+Exit codes:
+    0  PASS / SKIP (no /tmp references OR all waived)
+    1  FAIL (/tmp references found AND artifacts still on disk)
+    2  IO / parse error
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import List, Optional, Set, Tuple
+
+
+WAIVER_KEY = "project_artifacts_external_storage_intentional"
+WAIVER_MIN = 60
+
+
+# Volatile / external-storage prefixes. Any absolute path starting with
+# one of these is flagged.
+_VOLATILE_PREFIXES = (
+    "/tmp/",
+    "/var/tmp/",
+    "/dev/shm/",
+    "/run/",
+)
+
+# Files to scan for path references.
+_SCAN_GLOBS = (
+    "RESULT.md",
+    "waivers.json",
+    "reports/**/*.json",
+    "reports/**/*.md",
+    "reports/*.log",
+    "phase1/generated_docs/*.json",
+)
+
+
+_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9_/])(/(?:tmp|var/tmp|dev/shm|run)/[A-Za-z0-9_./-]+)"
+)
+
+
+# ── R7 (v1.3.50 fork-adapt) — a PINNED plugin worktree is a legit plugin source ──
+# When the whole flow runs with the vibe-ic plugin PINNED under a scratch/worktree
+# location (e.g. `/tmp/.../.claude/worktrees/<wt>/vibe-ic-marketplace/plugins/
+# vibe-ic/...` or `/tmp/.../wt-<ver>-*/vibe-ic-marketplace/plugins/vibe-ic/...`),
+# RESULT.md / reports/ legitimately cite the plugin's OWN program/config files by
+# their pinned absolute path. Because that path begins with a volatile prefix
+# (/tmp, /run, …), the raw scanner used to flag the plugin's own source as a
+# "live external-storage artifact" and HALT the flow — a FALSE POSITIVE that is
+# purely an artifact of WHERE the plugin was pinned, not a lost project OUTPUT.
+#
+# A path is a pinned-plugin SOURCE (not a volatile project output) iff ALL hold:
+#   (1) it contains the plugin-root anchor  .../vibe-ic-marketplace/plugins/vibe-ic/…
+#   (2) an ancestor above that anchor is a worktree/scratch dir — either the
+#       consecutive `.claude/worktrees` pair OR a `wt-*` dir (the pinning markers)
+#   (3) the resolved plugin root actually carries `.claude-plugin/plugin.json`
+#       (i.e. it REALLY is a plugin checkout, not just a coincidental substring).
+# All three together make it impossible for a genuine volatile project artifact
+# (a stray /tmp/<run>/design.gds) to be mis-exempted: (3) is the hard gate — no
+# plugin.json → not a plugin root → still FLAGGED. chip-AGNOSTIC (pure path/marker).
+_PLUGIN_ANCHOR = ("vibe-ic-marketplace", "plugins", "vibe-ic")
+
+
+def _pinned_plugin_root(path_str: str) -> Optional[Path]:
+    """If `path_str` resolves INTO a pinned plugin worktree, return the plugin
+    root Path (…/vibe-ic-marketplace/plugins/vibe-ic); else None.
+
+    Deterministic path-pattern + plugin-root marker check (R7). Returns None
+    unless the path both matches the pinned-worktree layout AND the resolved
+    plugin root carries `.claude-plugin/plugin.json` on disk.
+
+    §4.05 false-negative guard: the path is LEXICALLY normalized first
+    (os.path.normpath), so a `..`-escape such as
+    `.../vibe-ic/../../../out.gds` collapses to `/…/out.gds` — the plugin anchor
+    is destroyed and the genuine escaped output is (correctly) NOT exempted. An
+    in-tree `..` (`.../vibe-ic/programs/../x.py`) stays under the plugin root and
+    is still recognised. A belt-and-suspenders containment check re-confirms the
+    file lives under the resolved plugin root."""
+    parts = Path(os.path.normpath(path_str)).parts
+    # (1) locate the plugin-root anchor within the path.
+    anchor_idx = None
+    for i in range(len(parts) - 2):
+        if (parts[i], parts[i + 1], parts[i + 2]) == _PLUGIN_ANCHOR:
+            anchor_idx = i
+            break
+    if anchor_idx is None:
+        return None
+    ancestors = parts[:anchor_idx]
+    # (2) a worktree/scratch pinning marker must sit above the anchor.
+    pinned = any(a.startswith("wt-") for a in ancestors)
+    if not pinned:
+        for j, a in enumerate(ancestors):
+            if a == "worktrees" and j > 0 and ancestors[j - 1] == ".claude":
+                pinned = True
+                break
+    if not pinned:
+        return None
+    # (3) hard gate — the resolved root must be a REAL plugin checkout AND the
+    # normalized file must live UNDER it (containment; blocks any `..` escape).
+    root = Path(*parts[: anchor_idx + 3])
+    norm = Path(os.path.normpath(path_str))
+    try:
+        norm.relative_to(root)
+    except ValueError:
+        return None
+    if (root / ".claude-plugin" / "plugin.json").is_file():
+        return root
+    return None
+
+
+def _waiver_count(project: Path) -> int:
+    p = project / "waivers.json"
+    if not p.exists():
+        return 0
+    try:
+        d = json.loads(p.read_text())
+    except Exception:
+        return 0
+    v = d.get(WAIVER_KEY)
+    if isinstance(v, str):
+        return 1 if len(v.strip()) >= WAIVER_MIN else 0
+    if isinstance(v, list):
+        return sum(1 for s in v
+                   if isinstance(s, str) and len(s.strip()) >= WAIVER_MIN)
+    return 0
+
+
+def _inside_project(path_str: str, project: Path) -> bool:
+    """True when `path_str` resolves to the project root or anything under it.
+
+    A volatile-looking absolute path is only an EXTERNAL-STORAGE finding when
+    it points OUTSIDE the project being audited.  When the project root itself
+    sits under a volatile prefix (`/tmp/...`, `/var/tmp/...`, `/dev/shm/...`,
+    `/run/...`) every absolute self-reference the flow writes into its own
+    `reports/**/*.json` matches `_PATH_RE` — so the gate reported the project's
+    OWN in-tree files as artifacts that must be "copied into the project tree".
+
+    That is self-inflating, because `flow_compliance_check` REGENERATES those
+    gate JSONs (stamping the absolute project path into them) every time it
+    runs: auditing a project from a scratch copy — the standard way to audit
+    without mutating the original — manufactures the very violation being
+    audited for, and the count grows with each audit run.
+
+    Measured on a real run dir (spm x ihp-sg13g2), copied to /tmp and audited:
+        before any audit run : 1 live external-storage artifact
+        after ONE audit run  : 21 live, 13 gate JSONs now carrying the copy's
+                               own absolute path
+    The only variable between the two readings is that the audit ran.
+
+    Sibling precedent: this file already carves out two non-violating classes
+    the same way — R7 pinned plugin worktrees (`_pinned_plugin_root`) and #622
+    log-sourced ephemeral tool paths. The project's own tree is the third, and
+    the most basic: `project` is already resolved at the top of `main()`.
+    """
+    try:
+        p = Path(path_str).resolve()
+    except (OSError, ValueError):
+        return False
+    return p == project or project in p.parents
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("usage: project_outputs_in_tree_check <project_dir>",
+              file=sys.stderr)
+        return 2
+    project = Path(sys.argv[1]).resolve()
+    if not project.is_dir():
+        print(f"ERROR: {project} not a directory", file=sys.stderr)
+        return 2
+
+    # (file, path, exists_on_disk, from_log)
+    findings: List[Tuple[str, str, bool, bool]] = []
+    # R7 — pinned plugin-source references (disclosed, non-blocking).
+    plugin_src: List[Tuple[str, str]] = []
+    # In-tree self-references: absolute paths that resolve INSIDE the project
+    # being audited (counted only, never a finding — see _inside_project).
+    in_tree_self = 0
+    seen: Set[str] = set()
+    for pat in _SCAN_GLOBS:
+        for f in project.glob(pat):
+            if not f.is_file():
+                continue
+            try:
+                txt = f.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            from_log = f.name.endswith(".log")
+            for m in _PATH_RE.finditer(txt):
+                p = m.group(1).rstrip(".,;:)")
+                if p in seen:
+                    continue
+                seen.add(p)
+                # A path that resolves INSIDE the project being audited is
+                # in-tree BY DEFINITION, whatever the project root happens to
+                # be. Must precede the exists() classification: otherwise
+                # auditing a project that itself lives under /tmp reports the
+                # project's OWN files as external storage.
+                if _inside_project(p, project):
+                    in_tree_self += 1
+                    continue
+                # R7 — a pinned plugin worktree path is a legitimate plugin
+                # SOURCE, not a volatile project output. Disclose, never FAIL.
+                if _pinned_plugin_root(p) is not None:
+                    plugin_src.append((str(f.relative_to(project)), p))
+                    continue
+                exists = Path(p).exists()
+                findings.append(
+                    (str(f.relative_to(project)), p, exists, from_log))
+
+    # ORGANIC #622 — a /tmp reference found INSIDE A LOG FILE (*.log) is a
+    # tool-internal ephemeral path (e.g. a yosys/LEC scratch genlib the OS
+    # /tmp-sweep removes after the run), NOT a project OUTPUT that must live in
+    # the tree. Logs reference ephemeral tool paths by nature, so a log-sourced
+    # reference is auto-classified EPHEMERAL — disclosed but NON-BLOCKING, no
+    # per-path waiver required. Only references in the canonical artefact files
+    # (RESULT.md / waivers.json / reports/**/*.json|md / generated_docs/*.json)
+    # — where a real deliverable's location is declared — can FAIL this gate.
+    ephemeral = [(f, p, e) for (f, p, e, lg) in findings if lg]
+    nonlog = [(f, p, e) for (f, p, e, lg) in findings if not lg]
+
+    # R7 — a pinned plugin worktree path (…/vibe-ic-marketplace/plugins/vibe-ic/
+    # … under a `.claude/worktrees` or `wt-*` dir, with a real plugin.json) is a
+    # legitimate plugin SOURCE, not a volatile project OUTPUT. Disclosed, never
+    # FAILs — it is only cited because the plugin itself was pinned there.
+    if plugin_src:
+        print(f"[INFO] project_outputs_in_tree_check: "
+              f"{len(plugin_src)} pinned plugin-source reference(s) "
+              f"(vibe-ic plugin pinned under a worktree/scratch dir; a "
+              f"legitimate plugin source, NOT a volatile project output — "
+              f"non-blocking):")
+        for f, p in plugin_src[:5]:
+            print(f"  - {f} → {p}")
+        if len(plugin_src) > 5:
+            print(f"  ... +{len(plugin_src)-5} more")
+
+    if in_tree_self:
+        print(f"[INFO] project_outputs_in_tree_check: "
+              f"{in_tree_self} in-tree self-reference(s) under the project "
+              f"root {project} — in-tree by definition, non-blocking (the "
+              f"project itself lives at a volatile path; these are its OWN "
+              f"files, not external storage)")
+
+    if ephemeral:
+        print(f"[INFO] project_outputs_in_tree_check: "
+              f"{len(ephemeral)} ephemeral tool-path reference(s) inside "
+              f"log file(s) — non-blocking (logs cite transient /tmp tool "
+              f"paths by nature; not project outputs):")
+        for f, p, e in ephemeral[:5]:
+            print(f"  - {f} → {p} "
+                  f"({'still present' if e else 'swept'})")
+        if len(ephemeral) > 5:
+            print(f"  ... +{len(ephemeral)-5} more")
+
+    if not nonlog:
+        print("[PASS] project_outputs_in_tree_check: "
+              "no /tmp / /var/tmp / /dev/shm / /run paths referenced "
+              "in RESULT.md / waivers.json / reports/ / generated_docs/ "
+              "(log-only ephemeral tool paths excluded — #622)")
+        return 0
+
+    # Split: live (file exists at /tmp) vs. dangling (referenced but gone)
+    live = [(f, p) for (f, p, e) in nonlog if e]
+    dangling = [(f, p) for (f, p, e) in nonlog if not e]
+
+    waiver_n = _waiver_count(project)
+    fail_count = len(live) + len(dangling)
+
+    if waiver_n >= fail_count:
+        print(f"[PASS_WITH_WAIVER] "
+              f"project_outputs_in_tree_check: "
+              f"{fail_count} external-path reference(s) but {waiver_n} "
+              f"waiver(s) under '{WAIVER_KEY}'.")
+        return 0
+
+    if live:
+        print(f"[FAIL] project_outputs_in_tree_check: "
+              f"{len(live)} live external-storage artifact(s) "
+              f"(file exists at volatile path — must copy into project "
+              f"tree before claiming completion):")
+        for f, p in live[:8]:
+            print(f"  - referenced in {f} → {p} (file exists)")
+        if len(live) > 8:
+            print(f"  ... +{len(live)-8} more")
+
+    if dangling:
+        print(f"[WARN] project_outputs_in_tree_check: "
+              f"{len(dangling)} dangling external-path reference(s) "
+              f"(file no longer exists — likely lost to /tmp sweep):")
+        for f, p in dangling[:5]:
+            print(f"  - {f} → {p} (NOT found on disk)")
+        if len(dangling) > 5:
+            print(f"  ... +{len(dangling)-5} more")
+
+    print(f"\nFix: copy live artifacts to canonical project paths and "
+          f"update references. Then re-run audit. To accept volatile "
+          f"storage (e.g. cache that's intentionally ephemeral), add "
+          f"waiver '{WAIVER_KEY}' (one per path, >={WAIVER_MIN} chars).")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

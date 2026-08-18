@@ -1,0 +1,58 @@
+# bus-controller — on-chip fabric (crossbar, interconnect, bridge).
+# Synthesised from verilog-axi characterization.
+class: bus-controller
+parent: digital-ic
+
+facts:
+  L1:
+    - {path: protocol_family,               type: string,          required: true,  comment: "AXI4 | AXI4-Lite | AXI-Stream | Wishbone | APB | AHB | OBI | mixed"}
+    - {path: topology,                      type: string,          required: true,  comment: "crossbar | interconnect | bridge | adapter | cdc | width-adapter"}
+
+  L2:
+    - {path: data_width,                    type: integer,         required: true,  comment: "bits, e.g. 32/64/128/256/512"}
+    - {path: addr_width,                    type: integer,         required: true,  comment: "bits"}
+    - {path: strb_width,                    type: integer,         required: true,  defaultable: true, default_candidate: "data_width/8"}
+    - {path: id_width,                      type: integer,         required: false, comment: "AXI only"}
+    - {path: user_width,                    type: dict,            required: false, keys: [aw, w, b, ar, r], comment: "sideband widths"}
+    - {path: slave_count,                   type: integer,         required: true,  comment: "S_COUNT"}
+    - {path: master_count,                  type: integer,         required: true,  comment: "M_COUNT"}
+    - {path: threads_per_port,              type: integer,         required: false}
+    - {path: outstanding_per_port,          type: dict,            required: false, keys: [accept, issue]}
+
+  L4:
+    - {path: address_decode_regions,        type: list_of_dicts,   required: true,  schema: [master_index, base, size_bytes], comment: "M_BASE_ADDR / M_ADDR_WIDTH"}
+    - {path: decode_error_policy,           type: string,          required: true,  defaultable: true, default_candidate: "DECERR", comment: "DECERR | tied-low | custom"}
+
+  L5:
+    - {path: read_write_paths_split,        type: boolean,         required: true,  defaultable: true, default_candidate: true, comment: "true for AXI _rd/_wr split implementations"}
+    - {path: ordering_model,                type: string,          required: true,  comment: "per-ID | nonblocking | strict-in-order"}
+
+  L8R:
+    - {path: cdc_support,                   type: boolean,         required: true,  defaultable: true, default_candidate: false}
+    - {path: generator_script,              type: string,          required: false, comment: "Python wrapper script if applicable (e.g. axi_crossbar_wrap.py)"}
+
+spec_floor:
+  L10_test_cases_min: 8
+  L10_cmd_response_min: 4
+  L11_calibration_tables_min: 1
+  L12_sequences_min: 2
+  L12_required_sequence_ids:
+    - HANDSHAKE_BEAT
+    - ERROR_PROPAGATION
+  L6_submodule_count_min: 2
+  L9_top_level_port_count_min: 8
+
+# -----------------------------------------------------------------------------
+# sequence_naming — added v0.57 D5 for l12_tb_coverage_check
+# -----------------------------------------------------------------------------
+# Bus-controller L12 sequences typically end in _SEQUENCE / _ARBITRATION /
+# _HANDSHAKE / _BURST / _RECOVERY. Strip the most common suffixes so
+# `tb_<sequence>.v` candidates match `tb_<short>.v` files.
+sequence_naming:
+  strip_suffixes:
+    - sequence
+    - arbitration
+    - handshake
+    - burst
+    - recovery
+    - reset

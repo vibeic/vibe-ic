@@ -1,0 +1,55 @@
+ip_name: chacha_core
+ip_version: "0.50"
+ip_class: chacha_stream_cipher
+license: BSD-2-Clause
+canonical_url: https://github.com/secworks/chacha
+canonical_commit: "master"
+authors:
+  - "Joachim Strömbergson <joachim@secworks.se>"
+description: >
+  ChaCha20 stream cipher implementation. Bernstein/RFC 7539 spec. Memory-
+  mapped register interface. Supports 128-bit and 256-bit key configurations,
+  64-bit IV + 64-bit counter.
+
+implements:
+  algorithm: chacha
+  algorithm_variants: [chacha20]
+  standard: rfc_7539
+  rounds: 20
+  block_width_bits: 512
+  key_width_bits: [128, 256]
+  iv_width_bits: 64
+
+matches_when:
+  - "L2.function == 'chacha' OR L2.function == 'chacha20'"
+  - "L2.crypto_family == 'chacha' OR L2.crypto_family == 'stream_cipher'"
+  - "L4 contains 'RFC 7539' OR L4 contains 'ChaCha20'"
+
+interface:
+  ports:
+    - {name: clk,        dir: in,  width: 1}
+    - {name: reset_n,    dir: in,  width: 1}
+    - {name: cs,         dir: in,  width: 1}
+    - {name: we,         dir: in,  width: 1}
+    - {name: addr,       dir: in,  width: 8}
+    - {name: write_data, dir: in,  width: 32}
+    - {name: read_data,  dir: out, width: 32}
+  parameters: []
+
+rtl_files:
+  - src/rtl/chacha.v
+  - src/rtl/chacha_core.v
+  - src/rtl/chacha_qr.v
+
+synth:
+  pdk_compatible: [sky130A]
+  tested_clock_period_ns: 10
+  area_ge: 8000
+  openlane_tapeout_track_record: "secworks/chacha passes OpenLane SKY130 CI"
+
+integration_notes: >
+  Per RFC 7539, 12-byte (96-bit) IV is recommended; this core's 64-bit IV
+  is the original Bernstein spec. For RFC 7539 compliance, caller must
+  partition IV space appropriately.
+
+depends_on: []

@@ -1,0 +1,18 @@
+class: protocol-ic
+layer: L2
+# v0.74 E+F-implement: protocol-IC functional requirements (beyond any-ic L2)
+qbank:
+  requirements.error_behavior:
+    expert:       ["Error-handling behavior — silent drop / NACK / error code return?"]
+    intermediate: ["What happens when a malformed frame arrives — silent drop, NACK, or error response?"]
+    beginner:     ["What should the chip do when it receives a bad message?"]
+
+  requirements.max_throughput:
+    expert:       ["Max sustained throughput (bytes/sec)?"]
+    intermediate: ["What's the peak data rate the protocol must sustain?"]
+    beginner:     ["Roughly how fast does data need to move through the chip?"]
+
+  requirements.addressing_mode:
+    expert:       ["Addressing — broadcast / unicast / multicast / none?"]
+    intermediate: ["Does the chip support multiple devices on the same bus?"]
+    beginner:     []

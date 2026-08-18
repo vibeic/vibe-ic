@@ -1,0 +1,188 @@
+# industry_tech_allowlist.yaml — v0.1.44
+#
+# General-convention IC technical identifiers that legitimately appear in
+# Vibe-IC skill text WITHOUT backtick wrapping. The enhancement-capture
+# honesty rule says skill content should describe GENERAL patterns; this
+# list is the small exception for industry vocabulary so common it would
+# be noise to backtick every occurrence.
+#
+# Membership rule (STRICT): each entry MUST be either
+#   (a) An industry-standard signal / parameter / convention name
+#       (rst_n, always_ff, data_width) — universal across designs, or
+#   (b) A foundry / PDK / tool name (skywater, sky130, gf180, tsmc) —
+#       proper-noun reference, not a benchmark or this-plugin-specific
+#       name.
+#
+# NEVER add:
+#   - Benchmark design leaf-names (radix2_div, freq_divbyeven, asyn_fifo) —
+#     the whole point of the honesty rule is to keep these out.
+#   - This-plugin's program names (phase1_engine, eda_cocotb, etc.) — they
+#     should be backtick-wrapped in skill text (markdown best practice).
+#     Plugin renames invalidate skill content; backticks are stable.
+#   - General English words that happen to have underscores (none come to
+#     mind; this rule is here for completeness).
+#
+# To propose an addition: open a PR adding the term + a one-line citation
+# of an industry standard (IEEE 1364, OpenROAD doc, foundry datasheet,
+# Wikipedia) showing the term is universal vocabulary.
+#
+# When loaded by programs/enhancement_emit.py, this YAML's `entries` list
+# is normalized to lowercase and frozenset-ed. The list itself is sorted
+# alphabetically within each category for review.
+
+categories:
+  reset_clock_convention:
+    description: "Active-low reset, clock naming, FF type qualifiers — universal SV style."
+    entries:
+      - always_comb
+      - always_ff
+      - always_latch
+      - chip_top
+      - clk
+      - clk_n
+      - clk_p
+      - reset_n
+      - rst
+      - rst_n
+
+  fsm_convention:
+    description: "Standard FSM state-variable naming."
+    entries:
+      - current_state
+      - next_state
+
+  handshake_protocol:
+    description: "Universal valid/ready handshake (any AXI-style stream interface)."
+    entries:
+      - din_valid
+      - dout_valid
+      - res_ready
+      - res_valid
+
+  rtl_parameter_convention:
+    description: "Conventional Verilog parameter names; industry-universal RTL."
+    entries:
+      - addr_width
+      - data_width
+      - fifo_depth
+
+  scorer_verdict_category:
+    description: "Compile / sim verdict categories used by the open-benchmark scorer."
+    entries:
+      - compile_error
+      - functional_mismatch
+      - sim_timeout
+      - work_dir
+
+  protocol_generation:
+    description: >-
+      Bus / link / fieldbus generation names — JEDEC, USB-IF, PCI-SIG, ARM
+      AMBA, JEDEC HBM, ARINC, MIL-STD, TIA, JESD, PSI5. #798: these have the
+      SAME shape as a benchmark design leaf-name (`ddr4` vs `lemmings1`), so
+      no shape rule can separate them; a finite public list is the honest
+      discriminator. Every entry here is the name of a published standard,
+      never a design. Pinned against collision with the benchmark leaf-name
+      corpora by test_industry_allowlist_never_contains_a_benchmark_leaf_name.
+    entries:
+      - ahb3
+      - ahb5
+      - apb3
+      - apb4
+      - arinc429
+      - axi3
+      - axi4
+      - ddr3
+      - ddr4
+      - ddr5
+      - gddr6
+      - hbm3
+      - jesd204
+      - lpddr4
+      - lpddr5
+      - milstd1553
+      - pcie3
+      - pcie4
+      - pcie5
+      - psi5
+      - rs485
+      - usb2
+      - usb3
+      - usb4
+
+  encoding_and_width:
+    description: >-
+      Checksum / hash / text-encoding / numeric-format names — IEEE 754,
+      Unicode, RFC 4648, FIPS 180, ISO/IEC. #798: same residue as
+      protocol_generation; `sha256` and `popcount255` are the same shape.
+    entries:
+      - base64
+      - bf16
+      - crc16
+      - crc32
+      - crc64
+      - crc8
+      - float16
+      - float32
+      - float64
+      - fp16
+      - fp32
+      - fp8
+      - int16
+      - int32
+      - int64
+      - int8
+      - md5
+      - sha1
+      - sha256
+      - sha512
+      - uint16
+      - uint32
+      - uint8
+      - utf16
+      - utf32
+      - utf8
+
+  pdk_foundry:
+    description: >-
+      PDK / foundry names; proper-noun reference. #798: a PDK name whose
+      digits are followed by more letters (sg13g2, sky130a, gf180mcu) is
+      structurally indistinguishable from a benchmark design leaf-name
+      (radix2_div), so no shape rule can separate them — the honest
+      discriminator is this finite, public, enumerable list.
+    entries:
+      - asap7
+      - freepdk45
+      - gf180
+      - gf180mcu
+      - nangate45
+      - sg13g2
+      - sky130
+      - sky130a
+      - sky130b
+      - skywater
+      - tsmc
+
+  python_exception:
+    description: "Python exception names referenced in tool-integration skills."
+    entries:
+      - module_not_found_error
+
+  rf_analog_unit:
+    description: "Standard RF/analog unit suffixes (refused otherwise by camelCase rule)."
+    entries:
+      - dbm
+      - ghz
+      - khz
+      - mah
+      - mhz
+
+  sta_timing_name:
+    description: "Universal STA timing-path constraint names."
+    entries:
+      - t_cyc
+      - t_h
+      - t_hold
+      - t_recovery
+      - t_removal
+      - t_setup
+      - t_su

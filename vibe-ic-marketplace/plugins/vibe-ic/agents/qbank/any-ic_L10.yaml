@@ -1,0 +1,46 @@
+class: any-ic
+layer: L10
+# L10 TEST_CASES — deterministic CMD->RSP byte vectors used by
+# `cmd_response_conformance_check.py` (Phase 2) to drive RTL via iverilog.
+# Phase 1 collects the spec-implied set; Phase 2 may add discovered cases.
+# Path convention: L10.test_cases[i].{id, category, cmd_hex, expected_rsp_hex, notes}
+qbank:
+  test_cases[0].id:
+    expert:       ["First L10 test case id (e.g. TC01_GET_ID, RD_REG_CONFIG)?"]
+    intermediate: ["Each test case needs a short id — what's the first one called?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["no specific cases", "generic"]
+        respond_with_default: "TC01_HAPPY_PATH"
+
+  test_cases[0].category:
+    expert:       ["Category — one of {cmd_response, error_path, state_transition, timing_sequence, analog_interaction}?"]
+    intermediate: ["Is the first test case a normal command, an error case, a state transition, or a timing test?"]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["normal", "happy", "default"]
+        respond_with_default: "cmd_response"
+
+  test_cases[0].cmd_hex:
+    expert:       ["Host TX bytes (hex, space-separated, no 0x)?"]
+    intermediate: ["What bytes does the host send for this case? Hex, e.g. `70 00 01`."]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true
+
+  test_cases[0].expected_rsp_hex:
+    expert:       ["Expected device RX bytes (hex, space-separated)? Use XX for don't-care bytes."]
+    intermediate: ["What bytes should the device respond with? Use XX where the value depends on hardware state."]
+    beginner:     []
+    follow_ups:
+      - if_user_says: ["unknown", "tbd"]
+        respond_with_default: "XX"
+
+  test_cases[0].notes:
+    expert:       ["Notes for this case (timing constraints, expected pre/post conditions)?"]
+    intermediate: ["Anything special — like a timing window, a state precondition?"]
+    beginner:     []
+    follow_ups:
+      - if_ambiguous: []
+        defer_to_default: true

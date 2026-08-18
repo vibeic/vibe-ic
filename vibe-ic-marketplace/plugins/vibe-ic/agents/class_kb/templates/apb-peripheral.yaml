@@ -1,0 +1,69 @@
+# apb-peripheral — APB3/APB4 slave peripheral (apb_gpio, apb_timer, …).
+# Bus-driven (memory-mapped registers via PSEL/PENABLE/PWRITE/PADDR), NOT
+# a serial framed protocol. v0.62 detached from `protocol-ic` (which would
+# force `frame_format`, `aid_bit_timing`, `wake_timing`, `response_timing`
+# fields that don't apply to APB) and re-parented under `digital-ic` —
+# now a direct sibling of `protocol-ic`.
+class: apb-peripheral
+parent: digital-ic
+
+facts:
+  L1:
+    - {path: apb_spec_version,              type: string,          required: true,  defaultable: true, default_candidate: "APB3", comment: "APB2 | APB3 | APB4"}
+    - {path: apb_addr_width,                type: integer,         required: true,  defaultable: true, default_candidate: 12, comment: "PADDR width — 4 KB default"}
+    - {path: apb_data_width,                type: integer,         required: true,  defaultable: true, default_candidate: 32}
+
+  L2:
+    - {path: clock_name,                    type: string,          required: true,  defaultable: true, default_candidate: "HCLK"}
+    - {path: reset_name,                    type: string,          required: true,  defaultable: true, default_candidate: "HRESETn"}
+    - {path: reset_polarity,                type: string,          required: true,  defaultable: true, default_candidate: "active-low"}
+    - {path: wait_states,                   type: integer,         required: true,  defaultable: true, default_candidate: 0, comment: "PREADY=1 always when 0 wait states"}
+    - {path: pslverr_supported,             type: boolean,         required: true,  defaultable: true, default_candidate: true}
+
+  L4:
+    - {path: register_map,                  type: list_of_dicts,   required: true,  schema: [offset, name, access, reset_value, description], comment: "access ∈ {R, W, RW, W1C, W1S}"}
+    - {path: irq_count,                     type: integer,         required: true,  defaultable: true, default_candidate: 1, comment: "apb_timer: 2 per timer; apb_gpio: aggregated"}
+    - {path: irq_type,                      type: string,          required: true,  defaultable: true, default_candidate: "level", comment: "level | edge | level-and-edge-select"}
+    - {path: set_clr_atomicity,             type: boolean,         required: false, comment: "apb_gpio PADOUTSET/PADOUTCLR semantics"}
+
+  L5:
+    - {path: dft_hooks,                     type: list_of_strings, required: false, comment: "e.g. dft_cg_enable_i for clock-gating"}
+    - {path: input_synchronizer_depth,      type: integer,         required: false, defaultable: true, default_candidate: 2, comment: "Depth for async pad-input CDC"}
+    - {path: parameter_sweep,               type: dict,            required: false, comment: "e.g. {PAD_NUM: [8,16,32,64], TIMER_CNT: [1,2,4]}"}
+
+  L8R:
+    - {path: address_alignment,             type: string,          required: true,  defaultable: true, default_candidate: "word-aligned"}
+    - {path: irq_clear_mechanism,           type: string,          required: true,  comment: "W1C | ctrl-write | auto-clear-on-read"}
+
+
+# -----------------------------------------------------------------------------
+# spec_floor — added v0.56 (2026-04-24)
+# -----------------------------------------------------------------------------
+# APB slaves (apb_gpio, apb_timer, apb_spi). Small footprint by design.
+spec_floor:
+  L10_test_cases_min: 4                # APB read + write + W1C + access-fault
+  L10_cmd_response_min: 2              # READ + WRITE
+  L11_calibration_tables_min: 0        # most APB peripherals need none
+  L12_sequences_min: 1
+  L12_required_sequence_categories:
+    - register_access_sequence
+  # No L3 opcode floor — APB peripherals are bus-driven not opcode-driven.
+  L4_regmap_reg_count_min: 3           # CTRL + STATUS + DATA
+  L6_submodule_count_min: 3            # apb_iface + functional_core + irq_gen
+  L9_internal_wire_count_min: 12
+  L9_top_level_port_count_min: 10      # APB signals (PSEL/PENABLE/PWRITE/PADDR/...) + functional pads
+
+# -----------------------------------------------------------------------------
+# sequence_naming — per-class strip_suffixes for l12_tb_coverage_check.py
+# -----------------------------------------------------------------------------
+# Added v0.56 C2 — every class with L12_required_sequence_categories
+# now ships its own strip_suffixes list, so the L12-tb-coverage gate
+# can match `tb_<short>.v` files even when the canonical sequence id
+# carries one of the conventional suffixes.
+sequence_naming:
+  strip_suffixes:
+    - sequence            # *_SEQUENCE → *
+    - chain               # *_CHAIN → *
+    - entry               # *_ENTRY → *
+    - exit                # *_EXIT → *
+    - init                # *_INIT → *

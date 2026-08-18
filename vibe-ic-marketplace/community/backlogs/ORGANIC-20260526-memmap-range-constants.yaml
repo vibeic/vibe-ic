@@ -1,0 +1,52 @@
+type: enhancement
+severity: P1
+component: program:phase1_doc_one_shot_runner
+plugin_version: "0.1.2"
+
+title: >-
+  Phase-1 doc-extraction L8/L4 constant harvester should split prose
+  hex address-range constants into both endpoint literals
+
+pattern: |
+  When a vendor document describes a memory map or address space in
+  prose using a hex RANGE expression of the form
+  "(0xAAAAAAAA-0xBBBBBBBB)", the deterministic L8/L4 constant harvester
+  captures neither endpoint reliably. Standalone hex literals are
+  caught, but the two boundary values embedded in a range expression
+  (lower bound, upper bound) can be dropped. For any IC whose
+  documentation defines an address-map split, bus decode window, or
+  protected region as a hex range in prose, these structural constants
+  silently fail to land in the L docs, dropping that input doc below
+  100% capture and requiring an AI deep-review patch every run.
+
+suggested_fix: |
+  Add a range-aware regex to the L8/L4 ingestion pass, e.g.
+  0x[0-9A-Fa-f]{1,8}\s*[-–—]\s*0x[0-9A-Fa-f]{1,8}, and emit
+  BOTH endpoints as address-map / RTL constants (kind:
+  indexed_register_address) with provenance pointing at the source
+  line. This catches the entire class of prose memory-map ranges
+  without AI involvement.
+
+id: "ORGANIC-20260526-memmap-range-constants"
+submitted_at: "2026-05-26T03:00:00+08:00"
+status: resolved
+resolved_at: "2026-06-05"
+resolution: >-
+  Re-verified against the current 0.2.42 plugin: the suggested fix is
+  fully implemented as _RE_MEMMAP_RANGE + _extract_memmap_range_constants
+  in programs/phase1_doc_one_shot_runner.py (:24905-24969) — range-aware
+  regex 0x[0-9A-Fa-f]{1,8}\s*[-–—]\s*0x[0-9A-Fa-f]{1,8} covering ASCII
+  hyphen / en-dash / em-dash, emitting BOTH endpoints as
+  kind=indexed_register_address entries with provenance (evidence file +
+  verbatim source line), lo<hi range guard, and address_int dedup.
+  Reproduced the original session scenario: the verbatim prose
+  "(0x00000000-0x3FFFFFFF)" / "(0x40000000-0xFFFFFFFF)" now yields all
+  four boundary literals deterministically (no AI deep-review needed).
+  Regression coverage: programs/tests/test_orch_phase1_catalog_fixes.py
+  (memmap_range cases) — 57/57 PASS on 2026-06-05.
+session_context: >-
+  Fresh field-agent Vibe-IC run on a bit-serial RISC-V SoC benchmark;
+  one vendor doc dropped to 82.3% capture because a prose memory-map
+  split expression "(0x00000000-0x3FFFFFFF)" / "(0x40000000-0xFFFFFFFF)"
+  lost its three boundary hex literals until AI deep-review patched
+  them into L8_RTL_CONSTANTS via the durable sidecar.

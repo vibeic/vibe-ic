@@ -1,0 +1,19 @@
+# Auto-generated compliance spec for skill 'analog-hw-testbench-gen'
+# Refines vibe-ic/skills/analog-hw-testbench-gen/SKILL.md output requirements.
+skill: analog-hw-testbench-gen
+
+requirements:
+  - id: R_has_output_section
+    description: "Output format/schema section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+
+cross_checks: []

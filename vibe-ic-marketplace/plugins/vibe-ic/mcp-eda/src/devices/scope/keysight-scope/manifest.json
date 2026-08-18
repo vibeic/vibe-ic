@@ -1,0 +1,162 @@
+{
+  "vendor": "keysight",
+  "vendor_full_name": "Keysight Technologies",
+  "vendor_homepage": "https://www.keysight.com/",
+  "device_class": "oscilloscope",
+  "ivi_class": "IviScope",
+  "version": "0.1.0",
+  "supported_platforms": ["linux"],
+  "permissions": [
+    "require_group:plugdev"
+  ],
+  "supported_models": [
+    "DSO-X 3014T (verified)",
+    "InfiniiVision 3000T family (likely-compatible)",
+    "InfiniiVision 4000X family (likely-compatible)"
+  ],
+  "tools": [
+    {
+      "name": "device_scope_capture",
+      "description": "Arm a Keysight InfiniiVision-class scope, capture a single window on one channel via SCPI :WAVEFORM:DATA?, return raw (time_us, voltage) samples as CSV-encoded text inside the JSON response.",
+      "driver": "driver.py",
+      "tool_mode": "capture",
+      "mode": "hw",
+      "timeout_sec": 60,
+      "schema": {
+        "channel": {
+          "type": "integer",
+          "default": 4,
+          "description": "Scope channel (1..4) connected to the signal under test."
+        },
+        "span_ms": {
+          "type": "number",
+          "default": 50,
+          "description": "Capture window length in milliseconds."
+        },
+        "trigger_slope": {
+          "type": "string",
+          "enum": ["rising", "falling"],
+          "default": "falling",
+          "description": "Edge polarity to trigger on."
+        },
+        "trigger_level_v": {
+          "type": "number",
+          "default": 1.5,
+          "description": "Trigger threshold in volts (1.5V = mid-rail for 3.3V CMOS)."
+        },
+        "trigger_timeout_s": {
+          "type": "number",
+          "default": 30,
+          "description": "Seconds to wait for the first trigger before giving up."
+        },
+        "vid": {
+          "type": "integer",
+          "optional": true,
+          "description": "Override USB VID (default 0x2a8d = Keysight)."
+        },
+        "pid": {
+          "type": "integer",
+          "optional": true,
+          "description": "Override USB PID (default 0x1768 = DSO-X 3014T)."
+        },
+        "no_configure": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip channel/timebase setup (use scope's current state)."
+        }
+      }
+    },
+    {
+      "name": "device_scope_periodic_pulse_check",
+      "description": "Capture a single window from a Keysight scope, find LOW pulses by hysteresis threshold-cross, and return PASS/FAIL based on whether ≥2 pulses match a target inter-pulse period (within tolerance). Designed for catching periodic anomalies like the v0.64 wake_ctrl tITO timer-freeze bug.",
+      "driver": "driver.py",
+      "tool_mode": "pulse_check",
+      "mode": "hw",
+      "timeout_sec": 60,
+      "schema": {
+        "channel": {
+          "type": "integer",
+          "default": 4,
+          "description": "Scope channel (1..4) connected to the signal under test."
+        },
+        "span_ms": {
+          "type": "number",
+          "default": 50,
+          "description": "Capture window length in milliseconds."
+        },
+        "trigger_slope": {
+          "type": "string",
+          "enum": ["rising", "falling"],
+          "default": "falling",
+          "description": "Edge polarity to trigger on."
+        },
+        "trigger_level_v": {
+          "type": "number",
+          "default": 1.5,
+          "description": "Trigger threshold in volts."
+        },
+        "trigger_timeout_s": {
+          "type": "number",
+          "default": 30,
+          "description": "Seconds to wait for the first trigger before giving up."
+        },
+        "pulse_min_us": {
+          "type": "number",
+          "default": 10,
+          "description": "Minimum LOW-pulse width to accept (microseconds)."
+        },
+        "pulse_max_us": {
+          "type": "number",
+          "default": 100,
+          "description": "Maximum LOW-pulse width to accept (microseconds)."
+        },
+        "period_ms": {
+          "type": "number",
+          "default": 5,
+          "description": "Expected inter-pulse period (milliseconds). Pulses with consecutive gaps near this value are considered periodic."
+        },
+        "period_tol_ms": {
+          "type": "number",
+          "default": 1,
+          "description": "Tolerance (± ms) for the periodicity match."
+        },
+        "low_thresh_v": {
+          "type": "number",
+          "default": 0.8,
+          "description": "Voltage below which the signal is considered LOW (hysteresis low rail)."
+        },
+        "high_thresh_v": {
+          "type": "number",
+          "default": 2.0,
+          "description": "Voltage above which the signal is considered HIGH (hysteresis high rail)."
+        },
+        "vid": {
+          "type": "integer",
+          "optional": true,
+          "description": "Override USB VID (default 0x2a8d)."
+        },
+        "pid": {
+          "type": "integer",
+          "optional": true,
+          "description": "Override USB PID (default 0x1768)."
+        },
+        "no_configure": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip channel/timebase setup (use scope's current state)."
+        }
+      }
+    }
+  ],
+  "resources": [
+    {
+      "name": "current_setup",
+      "uri": "scope://keysight-dso-x-3014t/current_setup",
+      "description": "Live read of trigger / timebase / channel / probe state via SCPI query (no acquisition arm). Returns the current scope configuration so agents can reason about it before invoking capture tools.",
+      "driver": "driver.py",
+      "tool_mode": "read_state",
+      "mime_type": "application/json",
+      "timeout_sec": 10
+    }
+  ]
+}

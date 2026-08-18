@@ -1,0 +1,65 @@
+ip_name: shared_sram_rf
+ip_version: "0.2.2"
+ip_class: bit_serial_cpu_shared_sram
+license: Apache-2.0
+canonical_url: https://github.com/olofk/subservient
+canonical_commit: "master"
+authors:
+  - "Olof Kindgren <olof.kindgren@gmail.com>"
+description: >
+  Single-SRAM design for bit-serial RV32I (SERV) that combines instruction
+  memory, data memory, and register file in one SRAM. Saves significant
+  area for ultra-small MPW class chips. Forms the core of the subservient
+  reference SoC.
+
+implements:
+  memory_topology: shared_single_sram
+  used_with_cpu: serv
+  io_types: [instruction_fetch, data_load_store, rf_read_write]
+  arbitration: round_robin_priority
+  ram_width: 8
+  rf_storage_window_bytes: 128
+
+matches_when:
+  - "L2 mentions 'shared SRAM' or 'unified memory' or 'RF + I-mem + D-mem'"
+  - "L2.cpu_family == 'risc-v' AND L2.memory_topology == 'unified'"
+  - "L1.target_area_ge < 5000 AND L8.submodule contains 'rv32i' AND 'sram'"
+
+interface:
+  ports:
+    - {name: i_clk,         dir: in,  width: 1}
+    - {name: i_rst,         dir: in,  width: 1}
+    - {name: o_sram_waddr,  dir: out, width: "aw (default 10 for 1 KiB)"}
+    - {name: o_sram_wdata,  dir: out, width: 8}
+    - {name: o_sram_wen,    dir: out, width: 1}
+    - {name: o_sram_raddr,  dir: out, width: "aw"}
+    - {name: i_sram_rdata,  dir: in,  width: 8}
+    - {name: o_sram_ren,    dir: out, width: 1}
+    - {name: o_gpio,        dir: out, width: 1}
+  parameters:
+    - {name: memsize, default: 1024, description: "SRAM size in bytes; common: 256/512/1024/2048"}
+    - {name: WITH_CSR, default: 1, description: "passes through to SERV"}
+
+rtl_files:
+  - rtl/subservient.v
+  - rtl/subservient_core.v
+  - rtl/subservient_rf_ram_if.v
+  - rtl/subservient_ram.v
+  - rtl/subservient_gpio.v
+  - rtl/subservient_debug_switch.v
+
+synth:
+  pdk_compatible: [sky130A, gf180mcuD]
+  tested_clock_period_ns: 10
+  area_ge: 3000
+  openlane_tapeout_track_record: "OpenMPW subservient shuttle (multiple tape-outs)"
+
+integration_notes: >
+  This IP includes the SoC top wrapper (subservient.v). It instantiates
+  SERV (via servile) internally. When Plugin selects this IP, it should
+  AUTOMATICALLY pull `cpu/serv/` as well (depends_on). External SRAM
+  port group is exposed for chip-level SRAM macro / std-cell composed
+  RAM.
+
+depends_on:
+  - serv

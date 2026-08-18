@@ -1,0 +1,43 @@
+# Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
+testability: structured
+
+# Compliance spec for skill 'ir-drop-triage' (v0.35)
+# Enhanced: power integrity analysis must be executed, not just documented
+skill: ir-drop-triage
+
+requirements:
+  - id: R_has_output_section
+    description: "Output format/schema section present"
+    pattern: '(##\s+(?:Output|Findings|Result|Report))'
+    skill_section: 'Output/Handoff'
+  - id: R_next_step
+    description: "At least one 'Next:' handoff line"
+    pattern: 'Next:\s*(?:run\s+)?/\w'
+    skill_section: 'Output/Handoff'
+  - id: R_status_or_summary
+    description: "Has a Summary or STATUS block"
+    pattern: '(##\s+Summary|\*\*STATUS\*\*:)'
+    skill_section: 'Output/Handoff'
+  - id: R_ir_drop_value
+    description: "Static IR drop value reported (mV or % of Vdd)"
+    pattern: '(IR.*drop.*m[Vv]|voltage.*drop|static.*IR|drop.*%.*Vdd|worst.*drop)'
+    skill_section: 'IR Drop Results'
+  - id: R_power_grid_analysis
+    description: "Power grid/PDN analysis performed"
+    pattern: '(power.*grid|PDN|power.*network|VDD.*VSS.*strap|power.*mesh|power.*ring)'
+    skill_section: 'PDN Analysis'
+  - id: R_tool_execution
+    description: "IR drop tool actually executed (RedHawk, Voltus, OpenROAD PSM, or equivalent)"
+    pattern: '(RedHawk|Voltus|PrimePower|OpenROAD.*PSM|analyze_power_grid|IR.*analysis.*run)'
+    skill_section: 'Tool Execution'
+
+cross_checks:
+  - id: X_eda_log_check
+    description: "Verify IR drop report exists with expected content"
+    rule: postcheck_pass_only
+  - id: X_mcp_execution_verify
+    description: "Verify required MCP tools were actually executed (not just reported)"
+    rule: postcheck_pass_only
+  - id: X_ir_drop_report_check
+    description: "Verify IR-drop report has voltage drop values"
+    rule: postcheck_pass_only

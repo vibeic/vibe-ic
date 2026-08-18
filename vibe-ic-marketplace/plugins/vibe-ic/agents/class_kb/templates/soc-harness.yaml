@@ -1,0 +1,63 @@
+# soc-harness — pre-hardened chip template (Caravel / Caravan / openframe).
+# Carrier shell around a user-project area; substantially different fact shape
+# than a digital-ic core. Parent is any-ic (NOT digital-ic) because the harness
+# includes analog-capable variants (Caravan) and a full padframe.
+class: soc-harness
+parent: any-ic
+
+facts:
+  L1:
+    - {path: harness_variant,               type: string,          required: true,  comment: "caravel | caravan | caravel_openframe"}
+    - {path: pdk_target,                    type: string,          required: true,  comment: "sky130A | sky130B | sg13g2 | gf180mcuC etc."}
+    - {path: license,                       type: string,          required: true,  defaultable: true, default_candidate: "Apache-2.0"}
+
+  L2:
+    - {path: pad_count,                     type: dict,            required: true,  keys: [mprj_io, mprj_pwr, flash, other], comment: "Caravel: mprj_io=38, mprj_pwr=4"}
+    - {path: user_project_area_wires,       type: dict,            required: true,  keys: [la_data, la_oenb, la_iena, user_irq, wbs_present], comment: "la_data=128 bits in Caravel"}
+    - {path: power_rails,                   type: list_of_strings, required: true,  comment: "vddio, vdda1, vccd1, vssa1, vssd, … per wrapper"}
+
+  L4:
+    - {path: housekeeping_interface,        type: dict,            required: true,  keys: [spi_bridged_to_wishbone, boots_from_spi_flash, configures_gpio_defaults]}
+    - {path: gpio_defaults_block,           type: boolean,         required: true,  defaultable: true, default_candidate: true, comment: "caravel: gpio_defaults_block.v programs pad power-up modes"}
+    - {path: mgmt_protect_present,          type: boolean,         required: true,  defaultable: true, default_candidate: true, comment: "Isolation between mgmt SoC and user project"}
+    - {path: user_project_id,               type: string,          required: false, comment: "32-bit USER_PROJECT_ID string"}
+
+  L5:
+    - {path: management_soc_present,        type: boolean,         required: true,  comment: "true for caravel/caravan; false for caravel_openframe"}
+    - {path: user_area_analog_capable,      type: boolean,         required: true,  defaultable: true, default_candidate: false, comment: "true for caravan"}
+    - {path: digital_pll_present,           type: boolean,         required: true,  defaultable: true, default_candidate: true}
+
+  L8:
+    - {path: default_pin_map,               type: list_of_dicts,   required: true,  schema: [mprj_io_index, function], comment: "e.g. JTAG/SDO/SDI/CSB/SCK/UART/IRQ on io[0:7]; SPI on [32:35]; flash io2/io3 on [36:37]"}
+
+  L8R:
+    - {path: deliverables,                  type: list_of_strings, required: true,  comment: "def/, gds/, lef/, lib/, mag/, maglef/, spef/, spi/, xschem/, openlane/, signoff/"}
+    - {path: rtl_file_count,                type: integer,         required: false, comment: "Caravel: 61"}
+
+spec_floor:
+  L10_test_cases_min: 8
+  L10_cmd_response_min: 4
+  L11_calibration_tables_min: 1
+  L12_sequences_min: 3
+  L12_required_sequence_ids:
+    - POWER_UP_SEQUENCE
+    - BOOT_FROM_ROM
+    - ENTER_LOW_POWER
+  L6_submodule_count_min: 6
+  L9_top_level_port_count_min: 20
+
+# -----------------------------------------------------------------------------
+# sequence_naming — added v0.57 D5 for l12_tb_coverage_check
+# -----------------------------------------------------------------------------
+# SoC-harness L12 sequences typically end in _BRINGUP / _POWERDOWN /
+# _CLOCK_DOMAIN_CROSSING / _ISOLATION / _SCAN / _ENABLE / _SHUTDOWN.
+sequence_naming:
+  strip_suffixes:
+    - bringup
+    - powerdown
+    - shutdown
+    - clock_domain_crossing
+    - isolation
+    - scan
+    - enable
+    - sequence
