@@ -428,7 +428,7 @@ def check(project: Path, under: Optional[str] = None) -> Dict[str, Any]:
         base["summary"] = {"skipped": False, "reason": "feedback_absent",
                            "files_found": 0}
         base["reason"] = (
-            f"extraction feedback channel absent — NOT DETERMINED"
+            "extraction feedback channel absent — NOT DETERMINED"
             + (f"; the transcript alone shows at least {t_count} illegal "
                f"overlap(s)" if t_count else ""))
         return base
@@ -518,10 +518,10 @@ def check(project: Path, under: Optional[str] = None) -> Dict[str, Any]:
                 f"{sum(p['records_parsed'] for p in per_file)} parsed). "
                 f"{len(structural_defects)} structural defect(s) were seen"
                 + (f": {structural_defects[0]}" if structural_defects else "")
-                + f". The structural view UNDERCOUNTS here, so a gate reading "
-                f"it alone would report a cleaner extraction than the file "
-                f"describes. The verdict below is taken from the LARGER of the "
-                f"two."),
+                + ". The structural view UNDERCOUNTS here, so a gate reading "
+                "it alone would report a cleaner extraction than the file "
+                "describes. The verdict below is taken from the LARGER of "
+                "the two."),
         })
 
     # A dump the parser could only partly read, whose unreadable part carries
