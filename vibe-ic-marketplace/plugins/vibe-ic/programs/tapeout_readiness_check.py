@@ -773,11 +773,18 @@ def report_to_text(rep: ReadinessReport) -> str:
     out.append(f"  stages      : {rep.stage_summary}")
     if isinstance(rep.stopped_at_stage, str) \
             and rep.stopped_at_stage != NOT_DETERMINED:
-        out.append(f"  stopped at  : stage {rep.stopped_at_index} "
+        # A ladder that finished did not STOP anywhere. Saying it stopped at its
+        # own final stage reads as a halt, and a submitter skimming a wall of
+        # reports should not have to check the verdict to tell the two apart.
+        label = "last stage  " if rep.verdict == PASS else "stopped at  "
+        out.append(f"  {label}: stage {rep.stopped_at_index} "
                    f"— {rep.stopped_at_stage}")
     if isinstance(rep.stages_never_ran, list):
-        out.append(f"  NEVER RAN   : {len(rep.stages_never_ran)} stage(s) — "
-                   + ", ".join(rep.stages_never_ran))
+        if rep.stages_never_ran:
+            out.append(f"  NEVER RAN   : {len(rep.stages_never_ran)} stage(s) — "
+                       + ", ".join(rep.stages_never_ran))
+        else:
+            out.append("  NEVER RAN   : none — every stage of the ladder ran")
     else:
         out.append(f"  NEVER RAN   : {NOT_DETERMINED}")
     if rep.refusal_text:

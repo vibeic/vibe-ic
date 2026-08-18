@@ -391,6 +391,19 @@ class TestRefusalAccounting:
         assert "NEVER RAN   : 13 stage(s)" in text
         assert "1 failure" not in text
 
+    def test_a_finished_ladder_does_not_read_as_a_halt(self, layout, tmp_path):
+        """A PASS has no stage it stopped at, and no stage it skipped."""
+        rep = _eval(layout, FakeDocker(run_rc=0, steps_written=16,
+                                       error_log=None), tmp_path)
+        text = mod.report_to_text(rep)
+        assert "stopped at" not in text
+        assert "last stage  : stage 16 — Write the Layout" in text
+        assert "NEVER RAN   : none — every stage of the ladder ran" in text
+        # The refusing shape still says it stopped.
+        ref = _eval(layout, FakeDocker(run_rc=1, steps_written=3),
+                    tmp_path, rundir=tmp_path / "run2")
+        assert "stopped at  : stage 3" in mod.report_to_text(ref)
+
     def test_the_cob_ladder_changes_the_denominator(self, layout, tmp_path):
         cob = LADDER[:3] + [("KLayout.CheckPadMask", "Check Pad Mask")] \
             + LADDER[3:]
