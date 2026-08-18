@@ -130,7 +130,10 @@ SITES: tuple[Site, ...] = (
     Site(PLUGIN_README, "programs_catalogued", 2),
     Site(PLUGIN_README, "test_files", 3),
     Site(PLUGIN_README, "mcp_test_files", 1),
-    Site(PLUGIN_README, "skills", 4),
+    # 3, not 4: the L1/L2/L3 coverage sentence is a PINNED measurement ("at
+    # <sha> on <date>"), and re-deriving it would destroy the record. That is
+    # the same boundary `derived_corpus_figure_check` draws, applied here.
+    Site(PLUGIN_README, "skills", 3),
 )
 
 

@@ -105,6 +105,16 @@ def _version_writer(repo_path: Path, plugin: Path, old):
     return [PJSON_REL]
 
 
+def _inventory_writer(repo_path: Path):
+    """Stand-in, for the same reason `_index_writer` is one: the real writer
+    resolves its own paths from `__file__` and would write into the REAL
+    checkout from inside this synthetic repo."""
+    rel = "vibe-ic-marketplace/plugins/vibe-ic/PROGRAM_INVENTORY.json"
+    (repo_path / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo_path / rel).write_text('{"counts": {}}\n', encoding="utf-8")
+    return [rel]
+
+
 def _census_writer_ok(repo_path: Path):
     """The generator's success shape: both halves rewritten, both declared."""
     (repo_path / CENSUS_REL).write_text("fresh census block\n", encoding="utf-8")
@@ -115,6 +125,7 @@ def _census_writer_ok(repo_path: Path):
 def _run(repo_path, **kw):
     kw.setdefault("do_commit", False)
     kw.setdefault("index_writer", _index_writer)
+    kw.setdefault("inventory_writer", _inventory_writer)
     kw.setdefault("version_writer", _version_writer)
     kw.setdefault("census_writer", _census_writer_ok)
     kw.setdefault("plugin_root",

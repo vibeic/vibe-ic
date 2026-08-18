@@ -108,7 +108,8 @@ artifact on disk — see **Honesty gates** below.
 | **L2 — Deterministic programs** | Artifact checks (files, JSON, RTL, reports) | Agent claims without evidence |
 | **L3 — mcp_execution_verify** | MCP tool execution proof via manifest | Agent faking tool runs |
 
-Measured over the 63 skills at `397b3f25f` on 2026-08-19: **63/63** ship a
+Measured at `397b3f25f` on 2026-08-19, over every skill then shipping — a record of
+that measurement, not a figure anything keeps current: **63/63** ship a
 `compliance.yaml` (L1), **35/63** declare a non-empty `cross_checks:` block (L2),
 **6/63** wire `mcp_execution_verify` (L3).
 Coverage is deliberately uneven — advisory/methodology skills have no artifact to check,
