@@ -4,39 +4,75 @@ Scope: what LibreLane CHECKS that Vibe-IC does not, and what therefore reaches
 silicon through us. Not a survey of what LibreLane is — that is already published
 and was re-measured, not re-derived (see §0).
 
-## §0 Provenance and the delta against the published survey
+## §0 Provenance, and the 16-vs-101 reconciliation
 
-Read from the copy shipped in the pinned EDA image, not from the web:
+Read from the canonical repository, cloned to this host:
 
-    image   ghcr.io/vibeic/vibeic-eda:0.2.29 (image id 45fd4d622fe1)
-    path    /usr/local/lib/python3.12/dist-packages/librelane
-    version librelane.__version__ == "3.1.0.dev1"
-            (dist-info METADATA: Name librelane, Version 3.1.0.dev1)
+    https://github.com/librelane/librelane
+    git clone --depth 1   ->   head bf8cc13c3b6314a099fabac208393d323cc5bfe2
+    committed 2026-08-17 14:56:06 +0300, "hotfix: fix bash syntax in ci"
+    pyproject.toml: version = "3.0.10"   (the clone carries no tags: `git describe` fails)
 
-The published survey was read at tag 3.0.8. The copy available here is
-3.1.0.dev1, a pre-release of the next minor. NOT DETERMINED: I did not reach a
-git checkout of tag 3.0.8, so per-commit diffing was not possible; only the
-published counts could be re-measured.
+Every measurement below was taken by putting THAT clone first on `sys.path`
+inside the EDA image and asserting `librelane.__file__.startswith("/clone")`, so
+the numbers are the repository's, not the image wheel's.
 
-Re-measured, at 3.1.0.dev1:
+**Caution about the image wheel.** `ghcr.io/vibeic/vibeic-eda:0.2.29` ships
+`librelane-3.1.0.dev1`, and despite the higher version string it is NOT this
+tree: `steps/klayout.py` differs by 86 lines, and the difference runs the wrong
+way — the clone at 3.0.10 has `KLAYOUT_DRC_DEFINES` with a deprecation shim for
+`KLAYOUT_DRC_OPTIONS`, while the 3.1.0.dev1 wheel still has the old name. The
+image's librelane is off the main line. Nine of the ten files this report cites
+are nevertheless byte-identical between the two
+(`steps/step.py`, `steps/checker.py`, `steps/magic.py`, `state/state.py`,
+`state/design_format.py`, `common/types.py`, `scripts/odbpy/disconnected_pins.py`,
+`flows/classic.py`); the tenth, `steps/klayout.py`, differs only in that rename,
+and the XOR step this report cites is identical at lines 340-354.
 
-| published claim        | measured now | verdict     |
-|------------------------|--------------|-------------|
-| 101 registered Steps   | 101          | CONFIRMED   |
-| 8 Flows                | 8            | CONFIRMED   |
-| 23 DesignFormat views  | 23           | CONFIRMED   |
+### The reconciliation
 
-Flows measured: Chip, Classic, OpenInKLayout, OpenInMagic, OpenInOpenROAD,
-Optimizing, SynthesisExploration, VHDLClassic.
+`librelane/steps/` holds **16 entries** — module FILES. The published **101** is
+registered Step CLASSES. Both are correct; they count different things, and the
+mechanism is explicit.
 
-No drift to correct. One instrument note for whoever re-measures the third row:
-`DesignFormat.factory.list()` returns 46, not 23, because `alts` are registered
-as extra keys and `list()` returns `.id` per registry *value*
-(`state/design_format.py:121-147`). It returns 34/17 if called before
-`import librelane.steps`, because the step modules register the remaining
-formats on import. The correct instrument is
-`len(set(DesignFormat.factory.list()))` AFTER importing `librelane.steps`.
-A count taken any other way is a measurement of the import order.
+**Registration mechanism.** A Step class is registered by the decorator
+`@Step.factory.register()` (`librelane/steps/step.py:1461-1474`), which stores
+the class under `cls.id.lower()` in the factory's private dict and refuses any
+class whose `.id` is still `NotImplemented`. Because the key is the id, the
+registry cannot hold duplicates, so `Step.factory.list()`
+(`steps/step.py:1485-1490`) returns one entry per registered class.
+`Flow` uses the identical pattern (`@Flow.factory.register()`).
+`DesignFormat` does NOT: it registers an *instance* via
+`DesignFormat(...).register()` (`state/design_format.py:92-93`), and the factory
+also indexes every `alts` entry (`state/design_format.py:120-130`), while
+`list()` returns `.id` per registry VALUE (`state/design_format.py:142-147`) —
+so its raw `list()` is 46 for 23 formats.
+
+**Counts at bf8cc13, by two independent instruments.**
+
+| quantity            | static (source) | runtime (clone's own registry) | published | verdict   |
+|---------------------|-----------------|--------------------------------|-----------|-----------|
+| registered Steps    | 101 `@Step.factory.register()` sites | 101 | 101 | CONFIRMED |
+| Flows               | 8 `@Flow.factory.register()` sites   | 8   | 8   | CONFIRMED |
+| DesignFormat views  | 23 `.register()` call sites          | 23 unique ids (46 registry entries) | 23 | CONFIRMED |
+| files in `steps/`   | 16              | —                              | not published | — |
+
+The 101 decorator sites live in 10 of the 16 files
+(openroad.py 33, odb.py 21, checker.py 21, klayout.py 10, magic.py 7,
+pyosys.py 4, misc.py 2, yosys.py 1, verilator.py 1, netgen.py 1). The other six
+are infrastructure and register nothing: `__init__.py`, `__main__.py`,
+`step.py`, `tclstep.py`, `common_variables.py`, `openroad_alerts.py`.
+The 23 DesignFormat sites: 17 in `state/design_format.py`, plus 2 in
+`steps/magic.py`, 2 in `steps/openroad.py`, 1 in `steps/klayout.py`,
+1 in `steps/pyosys.py`.
+
+**Verdict on our published page: NO DRIFT. 101 / 23 / 8 are all still true at
+bf8cc13.** The only correction is to the instrument, not the number: anyone
+re-measuring the DesignFormat row must use
+`len(set(DesignFormat.factory.list()))` AFTER `import librelane.steps`. The raw
+call returns 46 (alts double-count) or 34/17 (before the steps modules import
+and register the remaining formats). A count taken any other way is a
+measurement of the import order.
 
 ## §1 The five gaps, ranked by silicon consequence
 
@@ -219,7 +255,8 @@ mounted PDK.
 
 ## §3 Upstream checks that CANNOT FAIL — evidence
 
-All measured against the 3.1.0.dev1 copy above, in the container.
+All measured at bf8cc13, running the clone's own code (`librelane.__file__`
+asserted to start with `/clone`), inside the EDA image for its dependencies.
 
 (a) **All 20 registered `MetricChecker` steps PASS on an empty metrics dict.**
     `steps/checker.py:112-133`: `metric_value = state_in.metrics.get(...)`; when
@@ -281,3 +318,103 @@ All measured against the 3.1.0.dev1 copy above, in the container.
   which is the check its docstring describes.
 * **Config provenance: neither side has it.** Nothing to adopt; noted so it is
   not mistaken for a place to copy from.
+
+## §5 The typed Step contract, at bf8cc13 — how it is declared, how far it is enforced
+
+This is the piece we intend to adopt: a declared output that is absent becoming a
+refusal BY CONSTRUCTION, instead of something each gate re-checks for itself.
+Read it before adopting it — the declaration is worth taking, the enforcement is
+half-built.
+
+### How the declaration is written
+
+`librelane/steps/step.py:453-458` — three class variables, two of them sentinel:
+
+    id: str = NotImplemented
+    inputs: ClassVar[List[DesignFormat]] = NotImplemented
+    outputs: ClassVar[List[DesignFormat]] = NotImplemented
+    config_vars: ClassVar[List[Variable]] = []
+
+Documented at `step.py:404-416`: `inputs` are "required for this step. These will
+be validated by the `start` method"; `outputs` are those that "may be emitted",
+and "a step is not allowed to modify design formats not declared in `outputs`".
+Note the asymmetry in the prose itself — inputs are *validated*, outputs *may* be
+emitted.
+
+Declaration is MANDATORY and enforced at class level: `step.py:610-615` refuses
+to instantiate or use any subclass that left `id`, `inputs` or `outputs` at
+`NotImplemented` — "Abstract step … does not implement the .{attr} property and
+cannot be {action}". A composite step derives both from its constituents
+(`step.py:1514-1537`). This part is sound, and it is the part to copy: a step
+CANNOT exist without saying what it reads and what it writes.
+
+`DesignFormat` also carries per-format optionality — `mkOptional()`
+(`state/design_format.py:152-153`) sets `_instance_optional`, which the input
+check honours — so "required" vs "optional" is a property of the declaration,
+not of the checking code.
+
+### How far it is enforced
+
+**Inputs: enforced, at key level.** `step.py:1158-1163`, inside `start()`, before
+`run()` is called:
+
+    for input in self.inputs:
+        value = state_in_result.get_by_df(input)
+        if value is None and not input.optional:
+            raise StepException(f"{type(self).__name__}: missing required input '{input.id}'")
+
+Measured, positive control: a step declaring `inputs=[nl]` started on `State({})`
+raises `StepException: E2: missing required input 'nl'`. The instrument can fail.
+
+But the predicate is `value is None` — key presence, not file existence.
+Measured: a state entry pointing at a file that was **deleted from disk** is
+accepted and the step runs.
+
+**Outputs: not enforced at all.** After `run()` returns, `step.py:1177-1183`:
+
+    metrics = GenericImmutableDict(state_in_result.metrics, overrides=metrics_updates)
+    self.state_out = state_in_result.__class__(state_in_result, overrides=views_updates, metrics=metrics)
+
+`views_updates` is merged as OVERRIDES onto the incoming state. Nothing compares
+`views_updates.keys()` against `self.outputs`. The only post-run check is
+`self.state_out.validate()` (`step.py:1185-1190`), and that never touches the
+filesystem (§3(d)).
+
+Three consequences, each measured at bf8cc13:
+
+| case | result |
+|---|---|
+| Step declares `outputs=[nl]`, `run()` returns `({}, {})` | `start()` returns success; `state_out["nl"]` is still **the previous step's file**, contents intact |
+| Step declares `outputs=[nl]`, returns `{"nl": Path("/does/not/exist.nl.v")}` | `start()` returns success; `state_out["nl"]` is a path that does not exist |
+| Next step declares `inputs=[nl]` and consumes either of the above | passes its input check — the key is present |
+
+So on a missing output the answer to "refusal, or a downstream step reading a
+stale file?" is: **a downstream step reading a stale file**, silently, with the
+stale artefact also written into `state_out.json` as if this step had produced
+it. On a *present but nonexistent* output it is worse: the state records a path
+no tool ever wrote, and the refusal is deferred until whichever downstream tool
+first tries to open it — attributing the failure to that tool, not to the step
+that lied.
+
+### What to adopt, and what to add
+
+Adopt: the mandatory, class-level, machine-refused declaration. That is the part
+that removes per-gate re-checking, and it is exactly what our
+`required_inputs` / `required_outputs` already express in
+`flow/phase1_phase2_phase3.yaml` (56 of 63 steps declare inputs, 61 of 63 declare
+outputs) and what `programs/step_required_inputs_check.py` already
+cross-validates.
+
+Do NOT adopt the enforcement, because there is none to adopt. Whatever we build
+must close all three of these, which upstream leaves open:
+
+1. after a step returns, assert that every non-optional declared output is
+   present in the step's own updates — not merely present in the merged state,
+   which is how a stale predecessor artefact satisfies it;
+2. assert the declared path EXISTS on disk, and is non-empty — the input check
+   and `State.validate()` both stop at key presence;
+3. bind the artefact to THIS run — a path that exists because a previous run
+   wrote it is the same failure as a stale state entry. Our
+   `programs/provenance_hash_audit.py` already compares sha256 and
+   mtime-against-gate-run; that is the predicate the contract needs, applied at
+   the step boundary rather than at audit time.
