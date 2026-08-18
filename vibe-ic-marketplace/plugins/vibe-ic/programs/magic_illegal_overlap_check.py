@@ -127,6 +127,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _vacuous_exit as _ve  # noqa: E402
 import step_metrics as _sm  # noqa: E402
+from _atomic_artefact import write_json as _atomic_write_json  # noqa: E402  vibe-ic#1082
 
 GATE = "magic_illegal_overlap_check"
 
@@ -702,9 +703,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         report["metrics_file"] = str(written) if written else None
 
     if a.json_out:
+        # vibe-ic#1082 — through the atomic helper, not `write_text`. This is a
+        # DECLARED report destination (flow step 31 names it), so a reader that
+        # arrives mid-write must see the old file or the new one, never half a
+        # verdict. `atomic_artifact_write_check` FAILs the plain form, and it
+        # caught this file before it landed.
         out = Path(a.json_out)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+        _atomic_write_json(out, report)
 
     passed, skipped = bool(report["passed"]), bool(report["skipped"])
     print(_ve.verdict_line(GATE, passed, skipped,
