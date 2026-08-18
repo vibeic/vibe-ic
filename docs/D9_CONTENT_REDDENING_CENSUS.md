@@ -31,6 +31,26 @@ citation, because a line-moving commit rots the number and not the name.
 | 8 | `missing_caught` | `test_d8_missing_caught` (`test_matrix_d8_missing_caught.py:696`): `probe_positive` (:517) requires a PASS-tier verdict with every declared output synthesized, and `probe_negative` (:538) requires `check_step` to return `MISSING` naming the entry once exactly one is removed. | **NO, and the fixture says so out loud.** `_materialize` seeds each output with `fixture_body`, which is `"d8 fixture artefact\n"` for every suffix outside `{.json,.jsonl,.v,.sv}`, and `check_step` returns PASS-tier on it. The dimension's own question is about ABSENCE by construction — "when a declared output IS missing, which mechanism catches it" — so a present-but-wrong artefact is out of its scope by definition, not by oversight. | **NOT DETERMINED — deliberately not attempted here.** A third arm ("all outputs present, one of them corrupt, and `check_step` must not certify") reddens on `flow_compliance_check.check_step` on day one, because the `required_outputs` layer there (`_resolve_required_output`) is a glob-and-stat with no byte read. That is a FLOW-level change reaching all 63 steps and every user project; it is measured and named here rather than half-landed. |
 | 9 | `output_is_correct` (not shipped) | Two instruments, no flow gate. `tools/d9_flow_gate_reality.py` decides MOVES/DARK by a two-arm mutation whose arm B **deletes** the declared outputs. `tools/d9_content_census.py` adds arm C, which **corrupts** them in place. | **YES via arm C — and until this change nobody could run it.** Both instruments resolved the corpus from `REPO/benchmark-data`, which left the repository at v1.10.56 (#1723), so at `397b3f25f` both exit rc=2 without measuring. | done — see *What changed*. The absence/content gap is now a measured number, below. |
 
+### Dimension 8's NOT DETERMINED, measured rather than asserted
+
+The claim above — that `check_step`'s `required_outputs` layer never reads a
+byte — is not an inference from the source. Driven through d8's own
+`_materialize` on step 8 (one literal `.json` entry) with the same `PASS_GATE`
+substitution the dimension uses, so the only thing under test is the outputs
+layer:
+
+```
+step 8 required_outputs: ['reports/phase2/sdc_check.json']
+  kind-correct JSON                             -> status='PASS'  evidence=['reports/phase2/sdc_check.json']
+  PRESENT AND WRONG (not JSON)                  -> status='PASS'  evidence=['reports/phase2/sdc_check.json']
+  PRESENT AND WRONG (valid JSON, wrong shape)   -> status='PASS'  evidence=['reports/phase2/sdc_check.json']
+```
+
+Three different files, one verdict. The declared artefact discharges the
+declaration by existing. That is the flow-level shape of the same defect d3
+carried, and closing it there is a change to `_resolve_required_output` that
+reaches all 63 steps and every user project — named here, not half-landed.
+
 ## What the ninth dimension measures once it can run
 
 `tools/d9_content_census.py`, 63 steps against 91 published runs, one run per
