@@ -130,6 +130,22 @@ def wiring_haystack():
     `test_issue1129_gatekeeper_prepare_landing.py` drives the real writers) can
     therefore not hand the next consumer an answer about the tree as it was.
 
+    The signature BRACKETS the read rather than preceding it, and that is the
+    difference between a guard and a decoration. Taken only before, it describes
+    the tree at the start of a ~19 s read and is then filed as though it
+    described the bytes that came out of the other end; a writer active during
+    that window gets a haystack matching no tree state cached and re-served as
+    current. Taken before AND after, with storage conditional on the two
+    agreeing, the cached haystack is only ever offered under a signature the
+    read itself saw.
+
+    WHAT IS STILL NOT CLOSED, because it should be named rather than implied: a
+    writer that mutates the tree DURING the read and restores it exactly before
+    the closing signature is taken still slips through, and closing that needs
+    the haystack and its signature derived from ONE read of each file rather
+    than two. Nothing in this suite writes to the tree that way today; the
+    residual window is narrow, real, and undefended.
+
     WHY IT IS A FIXTURE AND NOT A CACHE IN THE PROGRAM. See the note on
     `checker_execution_wiring_audit.audit`: that module's own suite proves the
     audit is deterministic by running it twice and comparing, and an internal
@@ -157,10 +173,34 @@ def wiring_haystack():
         key = (str(plugin.resolve()), str(root.resolve()))
         signature = _wiring.haystack_signature(plugin, root)
         hit = cache.get(key)
-        if hit is None or hit[0] != signature:
-            cache[key] = (signature,
-                          _wiring._tokenise(_wiring._haystacks(plugin, root)))
-        return cache[key][1]
+        if hit is not None and hit[0] == signature:
+            return hit[1]
+
+        # BRACKET THE READ, do not merely precede it. The signature is cheap
+        # (0.10 s) and the read is not (~19 s over 4024 files), so a signature
+        # taken only BEFORE the read describes the tree at the start of a
+        # nineteen-second window and is then stored as if it described the
+        # bytes that came out of it. Demonstrated, not theorised: with a
+        # concurrent writer removing a planted defect for the middle of the
+        # read and restoring it afterwards, the consumer was handed a haystack
+        # built from a tree that no longer existed and PASSED on a broken tree,
+        # and the five later hand-outs re-certified that same poisoned haystack
+        # as current. Re-read the signature AFTER the haystack and store only
+        # on agreement, so nothing is ever cached under a signature the read
+        # did not actually see.
+        for _ in range(3):
+            hay = _wiring._tokenise(_wiring._haystacks(plugin, root))
+            after = _wiring.haystack_signature(plugin, root)
+            if after == signature:
+                cache[key] = (after, hay)
+                return hay
+            signature = after
+
+        # The tree moved under three consecutive reads. Hand back the freshest
+        # one but DO NOT cache it: a haystack whose signature could not be
+        # confirmed must not become the answer every later consumer is given.
+        cache.pop(key, None)
+        return hay
 
     return _get
 

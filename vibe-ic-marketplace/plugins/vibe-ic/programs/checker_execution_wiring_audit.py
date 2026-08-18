@@ -302,11 +302,25 @@ def _haystacks(plugin: Path, repo_root: Path) -> Dict[str, Dict[str, str]]:
 def haystack_signature(plugin: Path, repo_root: Path) -> str:
     """A CONTENT fingerprint of every input a haystack is built from.
 
-    sha256 over `(category, path, bytes)` for each file `_haystack_sources`
-    names, so two signatures are equal exactly when the reading pass would see
-    the same text. Its only purpose is to let a caller that wants the same
-    haystack twice (`programs/tests/conftest.py::wiring_haystack`) PROVE the
-    tree has not moved underneath it instead of assuming so.
+    sha256 over LENGTH-PREFIXED `(category, path, resolved path, skip decision,
+    bytes)` for each file `_haystack_sources` names, so two signatures are equal
+    exactly when the reading pass would see the same text. Its only purpose is
+    to let a caller that wants the same haystack twice
+    (`programs/tests/conftest.py::wiring_haystack`) PROVE the tree has not moved
+    underneath it instead of assuming so.
+
+    WHY THOSE FIVE FIELDS AND NOT `(category, path, bytes)`, which is what this
+    hashed when it was first written. Both extra fields were DEMONSTRATED holes,
+    not hypothesised ones. (1) Unprefixed `\\0` separators are not injective: a
+    file whose content carries `\\0` and a sibling's absolute path reproduces the
+    byte stream of a tree with one more file in it, so two different trees hash
+    the same. (2) Whether a file is read at all is decided by its RESOLVED path
+    (`_SKIP_PARTS & _rel_parts`); hashing only the unresolved name left a
+    directory-symlink retarget invisible — identical content, identical names,
+    resolution moved under `worktrees/`, the file left the haystack, `runners()`
+    went from `{"TOOLS"}` to `set()`, and the signature did not move. Both cost
+    a fraction of the read they guard; a signature with a known blind spot is
+    the exact failure this mechanism exists to prevent.
 
     WHY CONTENT AND NOT `(mtime_ns, size)`. Both were measured on 2026-08-18
     against this checkout — the stat form 0.034 s, this one 0.10 s, against
@@ -322,18 +336,38 @@ def haystack_signature(plugin: Path, repo_root: Path) -> str:
     function.
     """
     import hashlib  # noqa: PLC0415
+    root = repo_root.resolve()
     acc = hashlib.sha256()
+
+    def _field(b: bytes) -> None:
+        # LENGTH-PREFIXED, not delimiter-separated. A bare `\0` separator does
+        # not make the stream injective: a file whose CONTENT contains `\0`
+        # plus another file's path can reproduce the byte stream of a tree that
+        # holds one more file, so two different trees share a signature. Cheap
+        # to close, and "cannot miss" has to be true to be worth stating.
+        acc.update(str(len(b)).encode())
+        acc.update(b":")
+        acc.update(b)
+
     for kind, paths in sorted(_haystack_sources(plugin, repo_root).items()):
         for f in sorted(paths):
-            acc.update(kind.encode())
-            acc.update(b"\0")
-            acc.update(str(f).encode())
-            acc.update(b"\0")
+            _field(kind.encode())
+            _field(str(f).encode())
+            # The RESOLVED path decides whether `_read` skips this file at all
+            # (`_SKIP_PARTS & _rel_parts`, which resolves). Hashing only the
+            # unresolved name leaves a directory-symlink retarget invisible:
+            # same content, same name, resolution moves under `.claude/` or
+            # `worktrees/`, the file silently leaves the haystack and the
+            # signature does not move. Hash what the read actually keys on.
             try:
-                acc.update(f.read_bytes())
+                _field(str(f.resolve()).encode())
             except OSError:
-                acc.update(b"<unreadable>")
-            acc.update(b"\0")
+                _field(b"<unresolvable>")
+            _field(b"skip" if _SKIP_PARTS & _rel_parts(f, root) else b"keep")
+            try:
+                _field(f.read_bytes())
+            except OSError:
+                _field(b"<unreadable>")
     return acc.hexdigest()
 
 

@@ -518,3 +518,77 @@ def test_the_population_never_invents_a_program_this_checkout_lacks(tmp_path):
     programs = Path(__file__).resolve().parents[1]
     assert "no_such_program_anywhere.py" in M.flow_declared_gate_programs(f)
     assert "no_such_program_anywhere.py" not in M.checker_population(programs, f)
+
+
+def test_a_tree_that_moves_during_the_read_is_never_the_cached_answer(
+        tmp_path, wiring_haystack, monkeypatch):
+    """The re-use guard must BRACKET the read, not merely precede it.
+
+    A signature taken only before the read describes the tree at the start of a
+    ~19 s window and is then filed as the signature of the bytes that came out
+    of the other end. This drives that exact shape deterministically: a writer
+    changes a verdict-bearing file WHILE `_haystacks` is running, exactly once.
+
+    The haystack produced by that read matches no state the tree was ever in,
+    so it must not become the session's answer. With the closing signature in
+    place the mismatch is seen and the read is retried, and the hand-out
+    describes the tree as it now is. Without it, the pre-mutation view is filed
+    under the pre-read signature and every later hand-out re-certifies it.
+    """
+    plugin = _tree(tmp_path, test="import sample_check\n")
+    ci = tmp_path / ".github" / "workflows" / "ci.yml"
+    target = str(plugin / "programs" / "sample_check.py")
+    real_haystacks = M._haystacks
+    reads = []
+
+    def _mutating_read(p, r):
+        out = real_haystacks(p, r)
+        reads.append(M.runners("sample_check", M._tokenise(out), target))
+        if len(reads) == 1:
+            # The tree moves after the bytes were read and before the caller
+            # can take a closing signature: the concurrent-writer window.
+            ci.write_text("name: CI\njobs:\n  a:\n    steps:\n"
+                          "      - run: python3 programs/sample_check.py\n")
+        return out
+
+    monkeypatch.setattr(M, "_haystacks", _mutating_read)
+    served = wiring_haystack(plugin, tmp_path)
+    monkeypatch.undo()
+
+    assert reads[0] == {"TEST"}, \
+        "precondition: the first read genuinely predates the CI runner"
+    assert len(reads) > 1, \
+        "a read whose closing signature disagreed must not have been accepted"
+    assert "CI" in M.runners("sample_check", served, target), \
+        "the mid-read view of the tree was served as the session's answer"
+    assert wiring_haystack(plugin, tmp_path) is served, \
+        "the settled haystack must then be cached like any other"
+
+
+def test_a_tree_that_never_settles_is_not_cached(tmp_path, wiring_haystack,
+                                                 monkeypatch):
+    """A build whose closing signature never matched is answered, not filed.
+
+    If the tree moves under every read the guard cannot certify anything. The
+    caller still gets the freshest read — refusing to answer would take out the
+    session — but caching it would hand that uncertifiable haystack to every
+    later consumer with no further checking.
+    """
+    plugin = _tree(tmp_path, test="import sample_check\n")
+    ci = tmp_path / ".github" / "workflows" / "ci.yml"
+    real_haystacks = M._haystacks
+    n = []
+
+    def _always_moving(p, r):
+        out = real_haystacks(p, r)
+        n.append(1)
+        ci.write_text("name: CI-%d\n" % len(n))
+        return out
+
+    monkeypatch.setattr(M, "_haystacks", _always_moving)
+    first = wiring_haystack(plugin, tmp_path)
+    assert len(n) == 3, "the guard must bound its retries, not spin"
+    second = wiring_haystack(plugin, tmp_path)
+    monkeypatch.undo()
+    assert second is not first, \
+        "an uncertifiable haystack must not be served again from cache"
