@@ -265,12 +265,39 @@ def _stamp_write(text: str):
     return m
 
 
+#: WHERE the last suite finishes, located by what the line DOES.
+#:
+#: This used to be `land_sh.rindex("plugin_full_audit.py")`, and that literal
+#: was doing two jobs: naming the last suite, and assuming the suites run one
+#: after another so that the LAST ONE DECLARED is the last one to finish.
+#:
+#: Both premises moved. `plugin_full_audit.py` was run twice per round — once
+#: here and once as `repo_hygiene_gates.sh`'s own declared gate, byte-identical
+#: output, ~21 s — and the duplicate here was removed; and the independent full
+#: tier stages now run CONCURRENTLY, so declaration order is no longer
+#: completion order. Against a concurrent tier the honest anchor is the point
+#: where every lane has been WAITED FOR, which is the last `lane_join`: after
+#: it, and only after it, has every suite finished reading the tree.
+#:
+#: The fallback keeps this test meaningful for a tree that has not adopted the
+#: lanes — including the fixture scripts and any older checkout — by falling
+#: back to the last hygiene-suite invocation, which is the last suite declared
+#: in the sequential shape.
+def _last_suite(text: str) -> int:
+    for token in ("lane_join", "repo_hygiene_gates.sh", "plugin_full_audit.py"):
+        if token in text:
+            return text.rindex(token)
+    raise AssertionError(
+        "gatekeeper-land.sh names no suite this test can anchor on — the "
+        "fingerprint comparison then has nothing to be ordered against")
+
+
 def test_the_comparison_runs_after_the_last_suite_and_before_the_stamp(land_sh):
     """THE WHOLE FIX. Before the last suite it leaves the window open; after
     the stamp it cannot withhold one."""
     emit = land_sh.index("--emit-fingerprint")
     expect = land_sh.index("--expect-fingerprint")
-    last_suite = land_sh.rindex("plugin_full_audit.py")
+    last_suite = _last_suite(land_sh)
     stamp = _stamp_write(land_sh).start()
     assert emit < last_suite, "the fingerprint is taken after the suites ran"
     assert last_suite < expect, (
