@@ -1324,21 +1324,16 @@ def test_both_landing_arms_run_through_this_driver():
         "the single-session `xargs` invocation is still in run_pytest")
 
 
-def test_the_harness_bound_is_still_declared_where_the_gate_reads_it():
-    """The pytest command is passed to the driver VERBATIM so `--timeout=180`
-    stays in `tools/gatekeeper-land.sh`, which `ci_harness_timeout_ceiling_check`
-    lists in `EXTRA_HARNESS_RELS`. A bound moved into Python would vanish from
-    that resolver and the ceiling would come from a different file."""
+def test_the_landing_harness_declares_semantic_progress_not_elapsed_time():
+    """All landing populations use the driver's no-ceiling contract."""
     import ci_harness_timeout_ceiling_check as C
     root = _repo_root()
     if not (root / "tools" / "gatekeeper-land.sh").is_file():
         pytest.skip("the landing scripts are not shipped in this tree")
-    bounds = [b for b in C.harness_bounds(root)
-              if b.workflow == "gatekeeper-land.sh"]
-    assert bounds, (
-        "gatekeeper-land.sh no longer declares any pytest harness bound the "
-        "ceiling gate can read")
-    assert min(b.seconds for b in bounds) == 180, [b.as_dict() for b in bounds]
+    contract = C.landing_semantic_progress_contract(root)
+    assert contract["declared"] is True, contract
+    assert contract["errors"] == [], contract
+    assert len(contract["lanes"]) >= 3, contract
 
 
 def test_this_files_final_test_safety_bound_is_inside_the_ceiling():

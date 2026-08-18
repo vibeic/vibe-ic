@@ -163,13 +163,18 @@ def test_the_gate_names_its_denominator(tmp_path):
         f"the gate did not report its file count:\n{out}")
 
 
-def test_pytest_is_pinned_the_same_way_the_plugin_suite_is():
-    """Autoload pinning is why the plugin suite is runnable at all (#1047);
-    an unpinned second invocation reintroduces exactly that failure."""
+def test_pytest_is_progress_supervised_without_an_elapsed_verdict():
+    """Autoload pinning and semantic supervision apply to this lane too.
+
+    A fixed pytest timeout kills the session and loses its JUnit; it must never
+    be reintroduced as a quick substitute for the driver's lifecycle record.
+    """
     body = _extract_fn(_FN)
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" in body
-    assert "-p pytest_timeout" in body
-    assert "--timeout-method=thread" in body
+    assert "pytest_per_file_junit.py" in body
+    assert "--aggregate-check" in body
+    assert "-p pytest_timeout" not in body
+    assert "--timeout" not in body
 
 
 def test_discovery_is_not_hardcoded():

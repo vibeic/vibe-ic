@@ -67,7 +67,9 @@ green testcase XML from erasing a session-level refusal.
 
 PROGRESS SUPERVISION, NOT A RUNTIME GUESS
 =========================================
-pytest-timeout remains a last-resort per-test guard. The outer supervisor does
+There is deliberately no pytest-timeout guard on the landing path. A fixed
+elapsed limit kills the session rather than measuring a test and makes
+healthy-but-slow work indistinguishable from a hang. The outer supervisor does
 not guess how long a file or the aggregate selection should take. A private
 pytest plugin appends completed collection/test lifecycle events to a structured
 sidecar and the supervisor watches ONLY validated, strictly ordered events.
@@ -102,13 +104,12 @@ USAGE
         [--aggregate-check] [--aggregate-only]
         [--aggregate-stall-after SECONDS] [--fallback-jobs N]
         [--fallback-rescue-jobs N]
-        -- <the full pytest command, e.g. python3 -m pytest -q --timeout=180>
+        -- <the full pytest command, e.g. python3 -m pytest -q>
 
 The command after ``--`` is run VERBATIM with ``-o junit_family=xunit1``, a
 per-file ``--junitxml`` and the one file appended. It is passed in rather than
-built here so the harness bound stays declared at ONE site — the caller's line
-in `tools/gatekeeper-land.sh`, which is where `ci_harness_timeout_ceiling_check`
-reads it from.
+built here so callers can pin their pytest environment without granting this
+driver authority to invent a verdict-affecting elapsed-time limit.
 
 With ``--aggregate-check`` the command first runs once over the entire selection.
 Its testcase ids are namespaced under ``pytest_aggregate`` and its exact process

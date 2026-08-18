@@ -48,9 +48,9 @@ _LAND = _REPO / "tools" / "gatekeeper-land.sh"
 # The stage this issue adds. Named once; every assertion below reads it.
 _STAGE = "run_unselectable_pytest"
 
-# Every inner subprocess in this file is bounded well under the harness's own
-# --timeout=180 / 3 ceiling (programs/ci_harness_timeout_ceiling_check.py), so
-# a hang here fails ONE test instead of taking the session down unnamed.
+# This direct unit-test helper keeps a local diagnostic subprocess bound.  The
+# landing verdict itself has no elapsed ceiling: it is supervised by validated
+# pytest lifecycle progress and records a stall as NORECORD.
 _BOUND = 60
 
 
@@ -164,17 +164,15 @@ def test_the_selector_still_cannot_emit_anything_in_the_corpus(mod):
         "stage's corpus, it may now overlap the targeted run")
 
 
-def test_the_stage_bound_matches_the_other_pytest_stages(land_text):
-    """One harness bound, not two.
-
-    `ci_harness_timeout_ceiling_check` derives every test's inner-subprocess
-    ceiling from the harness bound. A stage that bounded its pytest differently
-    would make that ceiling ambiguous, and the looser lane is the one that takes
-    the session down instead of one test.
-    """
-    bounds = set(re.findall(r"--timeout=(\d+)", land_text))
-    assert bounds == {"180"}, (
-        f"gatekeeper-land.sh now carries more than one pytest bound: {bounds}")
+def test_the_stage_uses_semantic_progress_not_an_elapsed_verdict(land_text):
+    """A slow-but-progressing session must not become a test failure."""
+    body = land_text.split(f"{_STAGE}() {{", 1)
+    assert len(body) == 2, f"{_STAGE} not found"
+    body = body[1].split("\n}\n", 1)[0]
+    assert "pytest_per_file_junit.py" in body
+    assert "--aggregate-check" in body
+    assert "--timeout" not in body
+    assert "pytest_timeout" not in body
 
 
 def test_the_stage_writes_no_bytecode_into_the_shipped_skills_tree(land_text):
@@ -199,12 +197,11 @@ def test_the_stage_writes_no_bytecode_into_the_shipped_skills_tree(land_text):
     body = land_text.split(f"{_STAGE}() {{", 1)
     assert len(body) == 2, f"{_STAGE} not found"
     body = body[1].split("\n}\n", 1)[0]
-    invocations = [ln for ln in body.splitlines() if "python3 -m pytest" in ln]
-    assert invocations, f"{_STAGE} runs no pytest at all"
-    for ln in invocations:
-        assert "PYTHONDONTWRITEBYTECODE=1" in ln, (
-            "the stage's pytest may write .pyc into the shipped skills/ tree, "
-            "and nothing else in the landing sequence can see it: " + ln.strip())
+    assert "pytest_per_file_junit.py" in body, (
+        f"{_STAGE} does not run the semantic pytest driver")
+    assert "PYTHONDONTWRITEBYTECODE=1" in body, (
+        "the stage's pytest may write .pyc into the shipped skills/ tree, "
+        "and nothing else in the landing sequence can see it")
 
 
 def test_the_stage_label_carries_no_discovery_count(land_text):
