@@ -1,41 +1,41 @@
-"""Phase-B parity: the landing runtime IS the activated tuple, exactly.
+"""The landing runtime is one of its manifest's TWO authorised states, exactly.
 
-This file replaces `test_phase_a_dormant_parity.py`, whose subject was the
-Phase-A commit: "install transition evidence WITHOUT activating Phase B". Every
-assertion in that file was a DORMANCY claim -- the five protected runtime paths
-still equal base 116, the hygiene script still behaves exactly like base 116,
-and Phase-B's routed producer and structural opt-in are not wired. ACTIVATE
-falsifies all of them BY DESIGN, so keeping it would have pinned main to a
-premise the tree had deliberately left behind: five tests that can only ever be
-red, which is worse than no test, because a permanently-red guard trains the
-reader to ignore the file.
+HISTORY OF THIS FILE, because it has been rewritten twice and both rewrites were
+the design working rather than churn. `test_phase_a_dormant_parity.py` asserted
+Phase-A DORMANCY; ACTIVATE falsified every one of its claims by design, so it was
+replaced by a file asserting the activated tuple. That file in turn pinned ONE
+moment — `live == next` — and the next repair to a protected runtime path
+falsified it the same way. A guard that can only be true between two landings
+trains the reader to ignore it, which is worse than no guard.
 
-The rigour is retained and inverted. This is still an object-database test, not
-a restatement of production constants: the expected bytes are read from the
-manifest that `protected_landing_transition.py` itself verifies at landing
-time, and the historical half is read from the PREPARE commit's object
-database.
+So this file asserts the INVARIANT instead of the moment, and the invariant is
+the manifest's own: `protected_landing_transition._match_state` accepts a
+protected tuple that equals `current` OR `next` and refuses everything else,
+because those are the only two states a landing may observe. PREPARE moves the
+manifest and no bytes; ACTIVATE moves the bytes and no manifest. Both are
+legitimate tips and this file is true at both.
 
-Three invariants, which together say "the activation happened, completely, and
-nothing else moved":
+What keeps that from being a weaker claim is the BICONDITIONAL below: the state
+the tuple is in must agree with what the runtime actually does. A tree at `next`
+must carry the repair `next` was authorised for; a tree at `current` must not. A
+half-activation — some protected paths moved, or the bytes moved without the
+behaviour — satisfies neither side and is exactly what the landing verifier
+refuses.
 
-  1. The manifest is the one this transition was authorised for -- schema, kind,
-     both state ids, and a 47-path protected set whose roles are known.
-  2. The manifest's `current` tuple is still EXACTLY the commit it was PREPAREd
-     against (Phase-A head, not base 116 -- Phase-A had already installed the
-     authority files, so 28 of the 47 paths differ from 116 and 0 differ from
-     the PREPARE commit). That is a fact about history and stays assertable
-     forever; it is what makes the `next` tuple a *move* rather than a
-     free-standing claim.
-  3. The LIVE tree equals the manifest's `next` tuple for all 47 paths -- byte
-     length, sha256 and git blob oid. Nine of those paths genuinely change
-     between `current` and `next`; the other 38 must be untouched, and a
-     mixture is exactly what the landing verifier refuses.
+Four invariants, which together say "the runtime is at an authorised state,
+completely, and nothing else moved":
 
-Post-activation the state machine settles by itself: ACTIVATE leaves the
-manifest unchanged, so the next landing observes base_state_id ==
-candidate_state_id == `semantic-landing-v1` and classifies as STEADY (see
-`protected_landing_transition.py`, `_match_state` / operation selection).
+  1. The manifest is a well-formed transition — schema, kind, both state ids, and
+     a 47-path protected set whose roles are known. Its `paths` set is IMMUTABLE
+     under this protocol (PREPARE refuses a path-set change and ACTIVATE refuses
+     any manifest change at all), so the count is pinned rather than counted.
+  2. `current` is EXACTLY the live tuple at the commit the transition was
+     PREPAREd against. That is a fact about history and stays assertable forever;
+     it is what makes `next` a *move* rather than a free-standing claim.
+  3. The live tree equals `current` or `next` for all 47 paths — byte length,
+     sha256 and git blob oid — and the paths that differ between the two tuples
+     are exactly the declared move.
+  4. The behaviour agrees with the state (the biconditional).
 """
 from __future__ import annotations
 
@@ -50,54 +50,51 @@ import pytest
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-# The commit the manifest was PREPAREd against (Phase-A head). Measured: the
-# manifest's `current` tuple matches all 47 paths here and 28 of them differ
-# from base 116, because Phase-A had already installed the authority files.
-_PREPARE = "d78f84997aff"
 _MANIFEST = "tools/ci/protected_landing_transition.json"
 _DISPATCH = "tools/ci/_gate_dispatch.sh"
 _HYGIENE = "tools/ci/repo_hygiene_gates.sh"
+_LAND = "tools/gatekeeper-land.sh"
 
-_CURRENT_ID = "legacy-landing-v1"
-_NEXT_ID = "semantic-landing-v1"
+# The commit `semantic-landing-v2` was PREPAREd against: the activated
+# `semantic-landing-v1` tip. Measured: the manifest's `current` tuple matches all
+# 47 paths here.
+_PREPARE = "7c376e348"
+_CURRENT_ID = "semantic-landing-v1"
+_NEXT_ID = "semantic-landing-v2"
 _PROTECTED_PATHS = 47
 _ROLES = frozenset({"authority", "runtime"})
 
-# The nine paths whose bytes genuinely move. Named rather than counted, so that
-# a manifest which quietly widened or narrowed the activation is caught here
-# instead of silently redefining what "the activation" was.
+# The paths whose bytes this transition moves. NAMED rather than counted, so a
+# manifest edit that quietly widened or narrowed the move is caught here instead
+# of being confirmed by the byte-equality test against the edited manifest.
 _MOVED = frozenset({
-    "tools/ci/repo_hygiene_gates.sh",
     "tools/gatekeeper-land.sh",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/_pytest_progress_plugin.py",
     "vibe-ic-marketplace/plugins/vibe-ic/programs/ci_harness_timeout_ceiling_check.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/matrix_mutation_ledger.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/pytest_per_file_junit.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_63x8_coverage.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_artefact_mutation_channel.py",
-    "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_matrix_mutation_ledger.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/trusted_pytest_entry.py",
 })
+
+# WHAT `semantic-landing-v2` IS FOR, in one readable token per claim. v1 routed
+# all three landing arms through the isolated trusted entry, and `-I` suppresses
+# the USER site directory: on a host whose test runner lives only there the child
+# died before one lifecycle event and EVERY selected file in EVERY arm reported
+# NORECORD, with no junit test case anywhere. Measured on the landing host at
+# 7c376e348, the repo-tools arm alone: asked 40, recorded 0, NORECORD 40.
+_PREFLIGHT_PROGRAM = "landing_pytest_runtime_preflight.py"
+_HOST_LANE_ENV = "VIBEIC_TRUSTED_PYTEST_SITE"
 
 
 def _git_bytes(*args: str, input_bytes: bytes | None = None) -> bytes:
     proc = subprocess.run(
-        ["git", *args],
-        cwd=_ROOT,
-        input=input_bytes,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=60,
-        check=False,
-    )
+        ["git", *args], cwd=_ROOT, input=input_bytes,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
     assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
     return proc.stdout
 
 
 def _commit_present(rev: str) -> bool:
     proc = subprocess.run(
-        ["git", "cat-file", "-e", f"{rev}^{{commit}}"],
-        cwd=_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        check=False)
+        ["git", "cat-file", "-e", f"{rev}^{{commit}}"], cwd=_ROOT,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     return proc.returncode == 0
 
 
@@ -125,7 +122,29 @@ def manifest() -> dict:
     return json.loads((_ROOT / _MANIFEST).read_text(encoding="utf-8"))
 
 
-def test_the_manifest_is_the_authorised_transition(manifest):
+@pytest.fixture(scope="module")
+def live_state(manifest) -> str:
+    """Which authorised state the tree is at — the verifier's own rule.
+
+    `_match_state` refuses a tuple matching neither, so a test that could not
+    decide would be describing a tree the landing verifier already rejects.
+    """
+    live = {row["path"]: _observed(row["path"])
+            for row in manifest["next"]["files"]}
+    for side in ("current", "next"):
+        recorded = {row["path"]: _recorded(row) for row in manifest[side]["files"]}
+        if live == recorded:
+            return manifest[side]["id"]
+    drift = sorted(path for path, value in live.items()
+                   if value != {row["path"]: _recorded(row)
+                                for row in manifest["next"]["files"]}[path])
+    pytest.fail(
+        "the live protected tuple matches NEITHER authorised atomic state, "
+        "which is what protected_landing_transition._match_state refuses. "
+        f"Paths differing from `{_NEXT_ID}`: {drift}")
+
+
+def test_the_manifest_is_a_wellformed_authorised_transition(manifest):
     assert manifest["schema"] == 1
     assert manifest["kind"] == "vibeic.protected-landing-transition"
     assert manifest["manifest_path"] == _MANIFEST
@@ -140,23 +159,16 @@ def test_the_manifest_is_the_authorised_transition(manifest):
         assert row["roles"], f"{row['path']} carries no role"
         assert set(row["roles"]) <= _ROLES, row
 
-    # Both tuples must describe exactly the protected path set -- no side
-    # entries, no omissions. An asymmetric tuple would let a path move without
-    # either state naming it.
+    # Both tuples must describe exactly the protected path set — no side entries,
+    # no omissions. An asymmetric tuple would let a path move without either
+    # state naming it.
     for side in ("current", "next"):
         recorded = [row["path"] for row in manifest[side]["files"]]
         assert sorted(recorded) == sorted(paths), side
 
 
 def test_the_current_tuple_is_exactly_the_prepare_commit(manifest):
-    """History half. `next` is a MOVE only if `current` is where we moved from.
-
-    The anchor is the PREPARE commit, NOT base 116. PREPARE requires
-    `candidate_manifest["current"]["files"] == base_files` observed at the
-    commit the manifest was authored against, and Phase-A had already added the
-    27 authority files and rewritten `_gate_dispatch.sh` by then. Measured: 28
-    of the 47 paths differ from base 116 and 0 differ from the PREPARE commit.
-    """
+    """History half. `next` is a MOVE only if `current` is where we moved from."""
     if not _commit_present(_PREPARE):
         pytest.skip(
             f"the PREPARE commit {_PREPARE[:12]} is not in this checkout's "
@@ -175,43 +187,66 @@ def test_the_current_tuple_is_exactly_the_prepare_commit(manifest):
             _recorded(row), path
 
 
-def test_the_live_tree_is_exactly_the_activated_next_tuple(manifest):
-    """The activation half: every protected path, byte-identical to `next`."""
-    drift = []
-    for row in manifest["next"]["files"]:
-        path = row["path"]
-        assert (_ROOT / path).is_file(), f"{path} is named by the manifest but absent"
-        if _observed(path) != _recorded(row):
-            drift.append(path)
-    assert drift == [], (
-        "the live protected tuple is not the activated state; these paths do "
-        f"not match the manifest's `{_NEXT_ID}` tuple: {drift}")
-
-
-def test_the_activation_moved_exactly_the_nine_runtime_paths(manifest):
-    """A partial or widened activation is refused by the landing verifier.
+def test_the_transition_moves_exactly_the_declared_runtime_paths(manifest):
+    """A partial or widened move is refused by the landing verifier.
 
     Pinning the set here catches a manifest edit that redefined the move, which
-    the byte-equality test above would otherwise happily confirm against the
-    edited manifest.
+    the state test above would otherwise happily confirm against the edited
+    manifest.
     """
     current = {row["path"]: _recorded(row) for row in manifest["current"]["files"]}
     nxt = {row["path"]: _recorded(row) for row in manifest["next"]["files"]}
     moved = {path for path in nxt if current[path] != nxt[path]}
     assert moved == _MOVED
-    for path in nxt:
+
+
+def test_the_live_tree_is_one_of_the_two_authorised_states(manifest, live_state):
+    """`live_state` fails if it is neither; this pins what "neither" would mean."""
+    assert live_state in {_CURRENT_ID, _NEXT_ID}
+    # Whatever state the tree is at, the 44 paths OUTSIDE the move are identical
+    # in both tuples, so they are asserted unconditionally. A mixture is exactly
+    # what the landing verifier refuses.
+    current = {row["path"]: _recorded(row) for row in manifest["current"]["files"]}
+    for path, recorded in current.items():
         if path not in _MOVED:
-            assert _observed(path) == current[path], (
-                f"{path} is outside the activation but its live bytes moved")
+            assert _observed(path) == recorded, (
+                f"{path} is outside the declared move but its live bytes moved")
+
+
+def test_the_runtime_behaviour_agrees_with_the_state_it_is_in(live_state):
+    """THE BICONDITIONAL. Bytes and behaviour must move together or not at all.
+
+    `semantic-landing-v2` exists to make the landing REFUSE ONCE, attributably,
+    on a host where the isolated trusted entry cannot import the test runner —
+    instead of reporting NORECORD for every file in all three arms. So a tree at
+    `next` must carry that refusal and the host lane it names, and a tree at
+    `current` must carry neither. Asserting only one direction would let a
+    reverted runtime sit under an activated manifest and still read as green.
+    """
+    land = (_ROOT / _LAND).read_text(encoding="utf-8")
+    entry = (_ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
+             "programs" / "trusted_pytest_entry.py").read_text(encoding="utf-8")
+    activated = live_state == _NEXT_ID
+
+    assert (_PREFLIGHT_PROGRAM in land) is activated, (
+        f"state is {live_state} but the landing "
+        f"{'does not run' if activated else 'runs'} the runtime preflight")
+    assert (_HOST_LANE_ENV in entry) is activated, (
+        f"state is {live_state} but the trusted entry "
+        f"{'has no' if activated else 'has a'} host lane")
+    if activated:
+        # The preflight must be able to STOP the tier, not merely run in it.
+        guard = re.search(
+            r'^if ! python3 "\$PROGRAMS/' + re.escape(_PREFLIGHT_PROGRAM)
+            + r'"; then\n(?:.*\n)*?^fi$', land, re.MULTILINE)
+        assert guard, "the runtime preflight is not a fatal top-level guard"
+        assert "exit 2" in guard.group(0), (
+            "the runtime preflight guard does not refuse the landing")
 
 
 def test_phase_b_routed_producer_and_structural_opt_in_are_active():
-    """The inversion of the Phase-A dormancy claim.
-
-    While Phase-A was dormant these three had to be ABSENT from the hygiene
-    script; activation is precisely the moment they become present, and the
-    legacy in-repo `git ls-files` producer callsite is retired.
-    """
+    """Carried forward unchanged from the v1 activation: these became present at
+    ACTIVATE and no later transition may quietly undo them."""
     hygiene = (_ROOT / _HYGIENE).read_text(encoding="utf-8")
     dispatch = (_ROOT / _DISPATCH).read_text(encoding="utf-8")
 
@@ -232,14 +267,14 @@ def test_phase_b_routed_producer_and_structural_opt_in_are_active():
         "the legacy in-repo git-ls-files producer callsite survived activation")
 
 
-def test_the_activated_runtime_no_longer_uses_a_wall_clock_pytest_timeout():
-    """The point of the transition, asserted on the artefact rather than trusted.
+def test_the_landing_runtime_has_no_wall_clock_pytest_timeout():
+    """The point of the v1 transition, still asserted on the artefact.
 
-    `-p pytest_timeout --timeout=...` kills the session and loses its JUnit, so
-    a hang becomes an unattributable red. Semantic progress replaces it; if the
+    `-p pytest_timeout --timeout=...` kills the session and loses its JUnit, so a
+    hang becomes an unattributable red. Semantic progress replaces it; if the
     timeout idiom came back the transition would have been undone in place.
     """
-    land = (_ROOT / "tools" / "gatekeeper-land.sh").read_text(encoding="utf-8")
+    land = (_ROOT / _LAND).read_text(encoding="utf-8")
     body = re.search(
         r"^run_repo_tools_pytest\(\) \{.*?^\}", land, re.MULTILINE | re.DOTALL)
     assert body, "run_repo_tools_pytest is gone from gatekeeper-land.sh"
