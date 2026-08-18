@@ -171,6 +171,38 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# 4.6. Stated counts vs the generated inventories
+# --------------------------------------------------------------------------
+# A count typed into a README stops being true the moment the tree moves, and
+# nothing noticed for a month: the READMEs said 917 deterministic programs while
+# the glob they cited returned 1178. The three inventories
+# (PROGRAM_INVENTORY.json / SKILL_INVENTORY.json / MCP_TOOL_INVENTORY.json) each
+# had a drift guard proving the ARTEFACT matched the TREE; none proved the PROSE
+# quoted the artefact.
+#
+# Read-only here on purpose. `--fix` re-types the numbers mechanically and runs
+# at LAND (gatekeeper_prepare_landing.py), for the reason #1382 settled for the
+# 63x8 census: tree-wide counters that every branch rewrites do not stack.
+echo ""
+echo "--- Stated counts vs generated inventories ---"
+COUNT_GATE="$PROJECT_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs/stated_count_drift_check.py"
+if [ -f "$COUNT_GATE" ]; then
+    if python3 "$COUNT_GATE" --root "$PROJECT_ROOT" >/dev/null 2>&1; then
+        echo "  PASS: every registered stated count matches its generated inventory"
+    else
+        python3 "$COUNT_GATE" --root "$PROJECT_ROOT" || true
+        echo "  FAIL: a stated count drifted."
+        echo "        Re-derive: python3 vibe-ic-marketplace/plugins/vibe-ic/programs/gen_program_inventory.py"
+        echo "        Re-type  : python3 vibe-ic-marketplace/plugins/vibe-ic/programs/stated_count_drift_check.py --fix"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    # A gate that is not there has NOT passed.
+    echo "  FAIL: stated_count_drift_check.py absent — NOT CHECKED"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# --------------------------------------------------------------------------
 # 5. Check for accidental secret/credential files
 # --------------------------------------------------------------------------
 echo ""

@@ -14,13 +14,13 @@ and the contribution guides for extending it.
 |---|---|
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
 | Plugin version | **1.10.82** |
-| Deterministic programs | **917** (`plugins/vibe-ic/programs/*.py`) |
-| Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
+| Deterministic programs | **1180** top-level modules (`plugins/vibe-ic/programs/*.py`), **1113** catalogued in [`programs/INDEX.md`](plugins/vibe-ic/programs/INDEX.md) — generated into [`PROGRAM_INVENTORY.json`](plugins/vibe-ic/PROGRAM_INVENTORY.json) |
+| Skills | **63** skills (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) — generated into [`SKILL_INVENTORY.json`](plugins/vibe-ic/SKILL_INVENTORY.json) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
-| MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
+| MCP-EDA tools | **56** tools (48 EDA + 7 lab-device + 1 health) — generated into [`MCP_TOOL_INVENTORY.json`](plugins/vibe-ic/mcp-eda/MCP_TOOL_INVENTORY.json) |
 | Canonical flow | **63 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) |
-| Test files | **2,545** under `plugins/vibe-ic/programs/tests/` + **31** under `plugins/vibe-ic/mcp-eda/test/` (tracked `test_*.py`, measured at `75776dbb`) |
+| Test files | **2611** `test_*.py` under `plugins/vibe-ic/programs/tests/`, plus **31** under `plugins/vibe-ic/mcp-eda/test/` — generated (`test_files` / `mcp_test_files` in `PROGRAM_INVENTORY.json`) |
 | License | Apache-2.0 |
 
 ---
@@ -37,7 +37,7 @@ Design**: the AI agent is the core decision-maker; EDA tools are callable
 execution engines.
 
 It is also **program-first**. The product is the deterministic runner chain
-(`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 917 programs
+(`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1180 top-level programs
 → MCP-EDA), not a prompt. **60 of the 63 flow steps are gated by a program
 whose exit code is the verdict**; the AI is the fall-through when a program
 cannot decide, never the thing that declares PASS.
@@ -355,7 +355,7 @@ claude plugin install vibe-ic
 
 The MCP-EDA server lives **inside** the plugin
 (`plugins/vibe-ic/mcp-eda/`), so one install gets the skills, the agents, the
-917 programs, and all 56 EDA/device tools. See
+1180 top-level programs, and all 56 EDA/device tools. See
 [`plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md`](plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md)
 for the container prerequisites.
 
@@ -457,7 +457,23 @@ auto-registered on install. Inventory of record:
 
 ---
 
-## Deterministic programs (917)
+## Deterministic programs (1180 top-level modules)
+
+**Four different true counts live in `programs/`, and they are not
+interchangeable.** There are **1180** top-level modules (`programs/*.py`, the
+non-recursive glob — helpers and deprecation shims included), **1113**
+catalogued in [`plugins/vibe-ic/programs/INDEX.md`](plugins/vibe-ic/programs/INDEX.md)
+once those are excluded, and **578** checker-shaped ones (`*_check.py`,
+`*_audit.py`, `*_lint.py`). A recursive walk of `programs/` returns **3821**
+`.py` files, but that walk includes `tests/` and the sub-packages, so it is not
+a program count at all.
+
+Every one of those numbers is generated into
+[`plugins/vibe-ic/PROGRAM_INVENTORY.json`](plugins/vibe-ic/PROGRAM_INVENTORY.json)
+by `programs/gen_program_inventory.py`, alongside a one-line definition of what
+each key counts. Quote a count by naming the key it came from; never hand-type
+one. `programs/stated_count_drift_check.py` FAILs, naming the file and line, if
+a number stated here stops matching the inventory.
 
 ```bash
 cd plugins/vibe-ic && python3 -m pytest programs/tests/ -q
@@ -550,12 +566,12 @@ vibe-ic-marketplace/
         │   └── lessons/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
-        ├── skills/                      ← 60 skills, each + compliance.yaml
-        ├── programs/                    ← 3,737 programs
+        ├── skills/                      ← 63 skills, each + compliance.yaml
+        ├── programs/                    ← 1180 top-level programs
         │   ├── flow_compliance_check.py ← final gate
         │   ├── stage{1,2,3,4}_compliance.py
         │   ├── pdk_registry.json, ic_class_registry.json
-        │   └── tests/                   ← 2,545 test files
+        │   └── tests/                   ← 2611 `test_*.py`
         ├── mcp-eda/                     ← bundled MCP server, 56 tools
         ├── ip-catalog/                  ← reusable open-source IP index
         └── hooks/

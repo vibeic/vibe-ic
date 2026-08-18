@@ -68,6 +68,16 @@ def _index_writer(repo_path: Path):
     return [rel]
 
 
+def _inventory_writer(repo_path: Path):
+    """Stand-in for the real one, which resolves its own paths from `__file__`
+    and would therefore write into the REAL checkout from inside a synthetic
+    repo — the #1029 shape these fixtures exist to stay clear of."""
+    rel = "vibe-ic-marketplace/plugins/vibe-ic/PROGRAM_INVENTORY.json"
+    (repo_path / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo_path / rel).write_text('{"counts": {}}\n', encoding="utf-8")
+    return [rel]
+
+
 def _version_writer(repo_path: Path, plugin: Path, old):
     rel = "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json"
     (repo_path / rel).write_text('{"version": "1.2.4"}\n', encoding="utf-8")
@@ -77,6 +87,7 @@ def _version_writer(repo_path: Path, plugin: Path, old):
 def _run(repo_path, **kw):
     kw.setdefault("do_commit", False)
     kw.setdefault("index_writer", _index_writer)
+    kw.setdefault("inventory_writer", _inventory_writer)
     kw.setdefault("version_writer", _version_writer)
     kw.setdefault("plugin_root", repo_path / "vibe-ic-marketplace/plugins/vibe-ic")
     return G.prepare(repo_path, **kw)

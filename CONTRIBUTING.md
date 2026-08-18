@@ -147,6 +147,18 @@ python3 vibe-ic-marketplace/plugins/vibe-ic/programs/source_chip_agnostic_check.
 > skill needs `compliance.yaml` + `tests/test_compliance.py`
 > (`_shared/bootstrap_compliance.py` + `_shared/gen_compliance_tests.py`).
 
+> Never hand-type a count. The number of programs, skills and MCP tools is
+> GENERATED — `PROGRAM_INVENTORY.json` (`programs/gen_program_inventory.py`),
+> `SKILL_INVENTORY.json` (`programs/gen_skill_inventory.py`),
+> `MCP_TOOL_INVENTORY.json` (`mcp-eda/tools/gen_mcp_tool_inventory.py`) — and
+> `programs/stated_count_drift_check.py` FAILs, naming the file and line, when
+> prose stops matching. Quote a number by naming the key it came from; each key's
+> `definitions` entry says what it counts, because `programs/*.py` and
+> `*_check.py` are both true answers to "how many programs?" and differ by more
+> than a factor of two. Adding a program moves those counters, so the
+> re-derivation runs at LAND (`gatekeeper_prepare_landing.py`); to do it by hand,
+> `python3 programs/gen_program_inventory.py && python3 programs/stated_count_drift_check.py --fix`.
+
 ### 6. Commit + push
 
 Conventional commit style preferred but not strictly required:

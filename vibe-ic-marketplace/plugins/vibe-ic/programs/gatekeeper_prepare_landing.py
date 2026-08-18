@@ -11,12 +11,16 @@ deterministic, mechanical, and already owned by a tool in this repo:
     landing_is_one_commit             no `[vX.Y.Z]`-tagged commit on the tip
     test_programs_index_freshness     programs/INDEX.md is stale
     63x8 census freshness             the derived figures are stale (#1382)
+    test_gen_program_inventory        PROGRAM_INVENTORY.json is stale, and with
+                                      it every program count the READMEs state
 
 None of those is a judgement. Each has a program that already knows the answer:
 `gatekeeper_assign_version.py --write` (the version, and it writes plugin.json,
 every marketplace.json and the README prose in one place),
 `marketplace_version_sync_check.py --fix` (residual manifest drift),
-`tools/gen_programs_index.py` (the index), and
+`tools/gen_programs_index.py` (the index),
+`programs/gen_program_inventory.py` + `programs/stated_count_drift_check.py
+--fix` (the program counts, and the README prose that quotes them), and
 `tools/gen_matrix_63x8_census.py --fix` (the 63x8 derived figures).
 
 WHERE THE 63x8 CENSUS IS DERIVED, AND WHY IT IS HERE (vibe-ic#1382)
@@ -146,6 +150,9 @@ REPO = PLUGIN.parent.parent.parent
 INDEX = HERE / "INDEX.md"
 GEN_INDEX = REPO / "tools" / "gen_programs_index.py"
 GEN_CENSUS = REPO / "tools" / "gen_matrix_63x8_census.py"
+GEN_INVENTORY = HERE / "gen_program_inventory.py"
+STATED_COUNTS = HERE / "stated_count_drift_check.py"
+PROGRAM_INVENTORY = PLUGIN / "PROGRAM_INVENTORY.json"
 
 #: Wall-clock bound on the census re-derivation, in seconds.
 #:
@@ -235,6 +242,49 @@ def _default_index_writer(repo: Path) -> List[str]:
         raise RuntimeError(f"rc={proc.returncode}: "
                            f"{(proc.stdout + proc.stderr).strip()[:200]}")
     return [str(INDEX.relative_to(repo))]
+
+
+def _default_inventory_writer(repo: Path) -> List[str]:
+    """Re-derive `PROGRAM_INVENTORY.json` and re-type the counts the READMEs
+    state from it. Returns the repo-relative paths it wrote.
+
+    HERE FOR THE SAME REASON THE INDEX IS. The inventory carries tree-wide
+    counters, so every branch that adds one program rewrites the same line with
+    a different total and no two of them stack — the pathology #1382 measured
+    for the 63x8 census and #1431 for `programs/INDEX.md`. Deriving at LAND is
+    the reading this repo already adopted; asking each author to re-type six
+    README numbers would have re-created it a third time.
+
+    Ordered AFTER the index deliberately: `programs_catalogued` is read out of
+    INDEX.md's generated Stats line, so an inventory derived before the index
+    would publish the previous batch's catalogue total.
+
+    UNRUNNABLE-on-failure, like the index and unlike the census: both steps are
+    pure functions of tracked files and finish in about a second, so one that
+    cannot run means the checkout is broken. A `site-count` finding — prose
+    reworded past the anchor, or a new unregistered claim — is NOT mechanical
+    and raises here rather than being papered over.
+    """
+    for tool in (GEN_INVENTORY, STATED_COUNTS):
+        if not tool.is_file():
+            raise FileNotFoundError(f"{tool} is missing")
+    gen = subprocess.run([sys.executable, str(GEN_INVENTORY)],
+                         capture_output=True, text=True)
+    if gen.returncode != 0:
+        raise RuntimeError(f"gen_program_inventory rc={gen.returncode}: "
+                           f"{(gen.stdout + gen.stderr).strip()[:200]}")
+    wrote = [str(PROGRAM_INVENTORY.relative_to(repo))]
+
+    fix = subprocess.run([sys.executable, str(STATED_COUNTS), "--fix"],
+                         capture_output=True, text=True)
+    wrote += [ln.split(" ", 1)[1].strip()
+              for ln in fix.stdout.splitlines() if ln.startswith("FIXED ")]
+    if fix.returncode != 0:
+        raise RuntimeError(
+            f"stated_count_drift_check --fix rc={fix.returncode} — a stated "
+            f"count this step cannot mechanically re-type: "
+            f"{(fix.stdout + fix.stderr).strip()[-400:]}")
+    return wrote
 
 
 def _default_census_writer(repo: Path,
@@ -388,6 +438,7 @@ def _default_version_writer(repo: Path, plugin: Path,
 
 def prepare(repo: Path, *, do_commit: bool,
             index_writer=None, version_writer=None, census_writer=None,
+            inventory_writer=None,
             census_timeout_s: Optional[float] = None,
             plugin_root: Optional[Path] = None) -> Tuple[int, List[str], List[str]]:
     """Run every mechanical fixer. Returns (rc, notes, declared_paths).
@@ -437,6 +488,20 @@ def prepare(repo: Path, *, do_commit: bool,
         return RC_UNRUNNABLE, notes, sorted(declared)
     declared |= set(wrote)
     notes.append(f"index regenerated -> {', '.join(sorted(wrote))}")
+
+    # ---- 1a. the program inventory + the counts the READMEs state ---------
+    # AFTER the index: programs_catalogued is read from INDEX.md's Stats line.
+    try:
+        wrote_i = (inventory_writer or _default_inventory_writer)(repo)
+    except Exception as exc:                                 # noqa: BLE001
+        notes.append(f"UNRUNNABLE: program-inventory regeneration failed: {exc}")
+        return RC_UNRUNNABLE, notes, sorted(declared)
+    if not wrote_i:
+        notes.append("UNRUNNABLE: the inventory writer declared no files, so "
+                     "the boundary cannot be established for it")
+        return RC_UNRUNNABLE, notes, sorted(declared)
+    declared |= set(wrote_i)
+    notes.append(f"program inventory regenerated -> {', '.join(sorted(wrote_i))}")
 
     # ---- 1b. the 63x8 census (vibe-ic#1382) -------------------------------
     # THE ADOPTION OF READING (a): derive at LAND, so the figures are true at

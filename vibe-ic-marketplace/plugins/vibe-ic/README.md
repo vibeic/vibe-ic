@@ -2,12 +2,17 @@
 
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
-The plugin is no longer "compliance regexes over agent prose". It is **917 Python
-programs** (888 catalogued in [`programs/INDEX.md`](programs/INDEX.md), helpers and
-deprecation shims excluded) that run the flow, **60 skills** that back the programs up
-where judgment is genuinely required, **6 slash commands**, **9 agents**, and
-**1608 test files**. Programs decide; skills only fill the holes the programs
-deliberately leave.
+The plugin is no longer "compliance regexes over agent prose". It is **1180 top-level
+Python programs** (`programs/*.py`; **1113** catalogued in
+[`programs/INDEX.md`](programs/INDEX.md) once helpers and deprecation shims are
+excluded) that run the flow, **63 skills** that back the programs up where judgment is
+genuinely required, **6 slash commands**, **9 agents**, and **2611** `test_*.py`.
+Programs decide; skills only fill the holes the programs deliberately leave.
+
+Those counts are generated, not typed: [`PROGRAM_INVENTORY.json`](PROGRAM_INVENTORY.json)
+(`programs/gen_program_inventory.py`) and [`SKILL_INVENTORY.json`](SKILL_INVENTORY.json)
+(`programs/gen_skill_inventory.py`) hold them, each key with a one-line definition of what
+it counts, and `programs/stated_count_drift_check.py` FAILs when prose drifts from them.
 
 ## ► The one front door
 
@@ -103,8 +108,9 @@ artifact on disk — see **Honesty gates** below.
 | **L2 — Deterministic programs** | Artifact checks (files, JSON, RTL, reports) | Agent claims without evidence |
 | **L3 — mcp_execution_verify** | MCP tool execution proof via manifest | Agent faking tool runs |
 
-Measured over the 60 skills: **60/60** ship a `compliance.yaml` (L1), **33/60** declare a
-non-empty `cross_checks:` block (L2), **6/60** wire `mcp_execution_verify` (L3).
+Measured over the 63 skills at `397b3f25f` on 2026-08-19: **63/63** ship a
+`compliance.yaml` (L1), **35/63** declare a non-empty `cross_checks:` block (L2),
+**6/63** wire `mcp_execution_verify` (L3).
 Coverage is deliberately uneven — advisory/methodology skills have no artifact to check,
 which is the physical limit of the approach, not a backlog item.
 
@@ -197,12 +203,12 @@ separate **`VIBEIC_OPENROAD_THREADS`** (`mcp-eda/src/lib/pnr_threads.mjs`,
    metadata fields, tool invocations, hand-off lines) as a regex list.
 2. A shared driver `_shared/skill_compliance_check.py` audits any
    agent-produced output against the YAML.
-3. **917 deterministic programs** verify actual artifacts on disk — not
+3. **1180 top-level deterministic programs** verify actual artifacts on disk — not
    just what the agent wrote in its report.
 
 ## Layout
 
-At 917 programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
+At 1180 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
 generated instead. `programs/INDEX.md` is produced by `tools/gen_programs_index.py`, and a
 CI freshness test diffs the regenerated index against the committed one and FAILs on drift.
 
@@ -219,7 +225,7 @@ plugins/vibe-ic/
 │   ├── bootstrap_compliance.py    — regenerates all compliance.yaml
 │   ├── gen_compliance_tests.py    — regenerates all test_compliance.py
 │   └── add_compliance_gate.py     — adds gate section to SKILL.md files
-├── programs/                      — 917 .py (888 catalogued)
+├── programs/                      — 1180 top-level `*.py` (1113 catalogued)
 │   ├── INDEX.md                   — AUTO-GENERATED catalog; CI-checked for drift
 │   ├── vibe_ic_one_shot_runner.py — THE front door
 │   ├── phase1_one_shot_runner.py  — and phase1_doc_, phase2_, phase23_,
@@ -229,9 +235,9 @@ plugins/vibe-ic/
 │   ├── l_doc_taxonomy.py          — L1..L27 layer definitions
 │   ├── _commercial_pdk.py         — config-driven commercial-PDK resolution
 │   ├── gds_antenna/, metal_fill/  — sub-packages
-│   └── tests/                     — 1608 test files
-├── skills/                        — 60 skills, each with SKILL.md + compliance.yaml
-│   └── <skill>/tests/             — 62 per-skill compliance regression files
+│   └── tests/                     — 2611 `test_*.py`
+├── skills/                        — 63 skills, each with SKILL.md + compliance.yaml
+│   └── <skill>/tests/             — 63 per-skill compliance regression files
 ├── commands/                      — 6 slash commands + _anti_fabrication_rules.md
 ├── agents/                        — 9 agents (ic-expert, core, field, gatekeeper,
 │                                    repo-gatekeeper, benchmark, 3 personas)
@@ -243,8 +249,8 @@ plugins/vibe-ic/
 
 ## Test suite
 
-**1608 test files** under `programs/tests/`, plus **62** per-skill compliance regressions
-under `skills/*/tests/`.
+**2611** `test_*.py` under `programs/tests/`, plus **31** under `mcp-eda/test/`, plus one
+per-skill compliance regression for each of the **63 skills** under `skills/*/tests/`.
 
 Run it the CI way — a bare `pytest` from the plugin root, exactly as
 `.github/workflows/ci.yml` and `gatekeeper-ci.yml` do:
@@ -312,7 +318,7 @@ architecture (v0.40).
 Everything since has come from the same loop, run continuously: drive real ICs and open
 benchmarks through the flow, find where an AI judgment call rescued a run, and absorb
 that judgment back into a deterministic program with a regression test. That is why the
-program count moved from 41 to 917 — and why the honesty gates exist at all. Each one was
+program count moved from 41 to 1180 top-level programs — and why the honesty gates exist at all. Each one was
 written after a real run reported a pass it could not back.
 
 ## License

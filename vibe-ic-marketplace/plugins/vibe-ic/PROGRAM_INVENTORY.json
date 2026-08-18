@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "_comment": "AUTHORITATIVE program inventory \u2014 generated from the tree by programs/gen_program_inventory.py. Do NOT hand-edit; every stated program count (READMEs, website, docs) must read its number from `counts` here, naming the key it quotes, never hand-typed. `definitions` says what each key counts \u2014 they are different questions with different true answers.",
+  "counts": {
+    "programs_top_level": 1180,
+    "programs_catalogued": 1113,
+    "checkers_top_level": 578,
+    "check_suffix_only": 545,
+    "py_files_recursive": 3821,
+    "test_files": 2611,
+    "mcp_test_files": 31
+  },
+  "definitions": {
+    "programs_top_level": "programs/*.py \u2014 the non-recursive glob; every top-level module, including helpers (_*.py) and deprecation shims.",
+    "programs_catalogued": "the subset programs/INDEX.md catalogues (helpers and deprecation shims excluded); read from INDEX.md's own generated Stats line.",
+    "checkers_top_level": "top-level *_check.py + *_audit.py + *_lint.py \u2014 the checker-shaped subset of programs_top_level, a different count and not a correction of it.",
+    "check_suffix_only": "top-level *_check.py alone.",
+    "py_files_recursive": "every *.py anywhere under programs/, including tests/ and the sub-packages; this counts the test suite and is not a program count.",
+    "test_files": "test_*.py anywhere under programs/tests/.",
+    "mcp_test_files": "test_*.py anywhere under mcp-eda/test/."
+  },
+  "programs_sha256": "0e6df04ab25898470102e72d8d23e93cf0ad84a2011e6cbf1f6b503eb5eab908",
+  "programs_enumerated_in": "programs/INDEX.md"
+}
