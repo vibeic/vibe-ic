@@ -143,7 +143,33 @@ Exit codes:
                                             printed PASS.
        — or a recorded entry that no longer holds, which must be paid down out
        of its register rather than left standing as permission.
-    2  I/O error, or the flow definition could not be parsed
+    2  I/O error, the flow definition could not be parsed, or the baseline FILE
+       states no measurement at all (vibe-ic#1705)
+
+AN ABSENT BASELINE FILE IS NOT AN UNRECORDED REGISTER (vibe-ic#1705)
+--------------------------------------------------------------------
+`_recorded()` below already draws the distinction that matters INSIDE a
+baseline: a register key that is absent from a document is UNRECORDED, not
+empty, and an UNRECORDED register with findings exits 1 telling you to record
+it. That is right, and it is about a document that EXISTS and states a
+measurement — the one caller that reaches it being a baseline written before
+#886 opened the second register.
+
+The FILE not being there is a different fact, and it used to arrive at the same
+place: an unreadable or missing baseline became `doc = {}`, every register read
+as UNRECORDED, and MEASURED on `origin/main` with the file moved aside this
+audit printed
+
+    [FAIL] `undeclared_known` is UNRECORDED in flow_gate_enforcement_baseline
+    .json and 116 gate(s) are AUDIT_ONLY while declaring no intent at all …
+
+— 116 findings attributed to a tree the audit had nothing to compare against,
+none of which the change under test introduced. So: a baseline file that states
+no measurement (absent, unreadable, not a JSON object) is NOT CHECKED, rc 2,
+and it says which path it could not read. A file that IS readable keeps the
+per-register UNRECORDED semantics exactly as #886 left them, and one recording
+`{"known": [], "undeclared_known": []}` is a measurement — of a clean tree —
+that still FAILs on the first finding.
 """
 from __future__ import annotations
 
@@ -1681,6 +1707,25 @@ def audit(flow: Path, programs: Path) -> dict:
     }
 
 
+def _load_baseline_doc(path: Path) -> Optional[dict]:
+    """The recorded document, or None when the FILE states no measurement.
+
+    None and `{}` are DIFFERENT answers and the caller must not collapse them:
+    `{}` is a document that exists and records no register (which `_recorded`
+    then reports as UNRECORDED, per #886); None says "I could not read one at
+    all". A truncated baseline — the artefact half-written by a killed run —
+    arrives here as the latter and gets the same refusal any other unreadable
+    evidence gets. vibe-ic#1705.
+    """
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Audit which flow gates can actually stop a run.")
@@ -1773,13 +1818,23 @@ def main(argv: Optional[List[str]] = None) -> int:
                    for u in (rep.get("undeclared_audit_only") or []))
     bl_path = Path(a.baseline) if a.baseline else (
         _HERE / "flow_gate_enforcement_baseline.json")
-    doc: dict = {}
-    if bl_path.is_file():
-        try:
-            loaded = json.loads(bl_path.read_text())
-            doc = loaded if isinstance(loaded, dict) else {}
-        except (OSError, ValueError):
-            doc = {}
+    stated = _load_baseline_doc(bl_path)
+    if stated is None and not a.write_baseline:
+        # BEFORE any register verdict, deliberately: printing the findings and
+        # then refusing would leave 116 accusations on the record, and it is
+        # those a reader carries away. vibe-ic#1705.
+        print(f"\n[NOT CHECKED] no baseline states a measurement at {bl_path} "
+              f"— {len(now)} contradiction/orphan and {len(now_u)} undeclared "
+              f"audit-only gate(s) stand in this tree, but with nothing to "
+              f"compare against not one of them can be called NEW. Measure "
+              f"this tree and record it with --write-baseline "
+              f"--scope-expanded '<why>' before asking this audit to "
+              f"attribute anything. See vibe-ic#1705.", file=sys.stderr)
+        return 2
+    # `--write-baseline` is the one caller for which "no file yet" is the
+    # normal state — it is how the first measurement gets recorded — so it
+    # reads an absent document as the empty one it is about to replace.
+    doc: dict = stated or {}
 
     def _recorded(key: str) -> Optional[List[str]]:
         """A register that is ABSENT is UNRECORDED, not empty. The two differ:

@@ -144,12 +144,32 @@ USAGE
     python3 checker_execution_wiring_audit.py [--repo-root DIR]
                                               [--json OUT] [--write-baseline]
 
+AN ABSENT BASELINE IS NOT A MEASUREMENT OF ZERO (vibe-ic#1705)
+--------------------------------------------------------------
+Every verdict here is `new = current - baseline`, and that subtraction only
+attributes anything when the baseline states a measurement of the tree in front
+of it. `_load_baseline` already answers None for absent / unreadable /
+shapeless, but the caller then read None as an empty set: MEASURED on
+`origin/main` with the baseline moved aside, this audit reported all 31
+pre-existing test-only checkers as NEW —
+
+    [FAIL] 31 checker(s) that NOTHING but their own test runs …           rc 1
+
+— and printed `baseline 0` in its own population line, which is the absent
+value wearing a measured one's clothes. The 31 are the tree's recorded
+residual; not one of them landed in the change under test. So a baseline that
+states no measurement makes this audit NOT CHECKED (rc 2) rather than a
+fabricated accusation. An explicitly empty register (`"known": []`) IS a
+measurement — of a tree with no test-only checker — and the first one against
+it still FAILs.
+
 EXIT CODES
 ----------
     0 = PASS      1 = FAIL (new test-only checker, baseline not shrunk, or a
                             SKILL-only disclosure that claims a reason without
                             stating one — #1270; SILENCE never blocks)
-    2 = SKIP (layout not found)
+    2 = NOT CHECKED (layout not found, or the baseline states no measurement
+                     to compare against — absent, unreadable, truncated)
 """
 from __future__ import annotations
 
@@ -713,6 +733,20 @@ def main(argv=None) -> int:
         print(f"wrote {bl} ({len(now)} entr(ies))")
         return 0
 
+    # BEFORE THE SUMMARY, DELIBERATELY (vibe-ic#1705). The population line below
+    # prints `baseline {0 if base is None else len(base)}` — printing "baseline
+    # 0" and then refusing would leave the number that is not a number on the
+    # record, and it is that number the reader carries away.
+    base = _load_baseline(bl)
+    if base is None:
+        print(f"[NOT CHECKED] no baseline states a measurement at {bl} — "
+              f"{len(now)} checker(s) in this tree are run by nothing but "
+              f"their own test, but with nothing to compare against none of "
+              f"them can be called NEW. Record this tree with "
+              f"--write-baseline before asking this audit to attribute "
+              f"anything. See vibe-ic#1705.", file=sys.stderr)
+        return 2
+
     print(f"checker_execution_wiring_audit: {rep['checkers']} checker-shaped "
           f"program(s) of {rep['all_programs']} in programs/")
     # Read from the plugin UNDER AUDIT, not from wherever this file happens to
@@ -741,9 +775,8 @@ def main(argv=None) -> int:
         print(f"  NOTE {len(stale)} recorded reason(s) no longer match a "
               f"SKILL-only checker (wired since, or renamed): "
               + ", ".join(stale[:6]))
-    base = _load_baseline(bl)
-    new = [c for c in now if base is None or c not in set(base)]
-    paid = [c for c in (base or []) if c not in set(now)]
+    new = [c for c in now if c not in set(base)]
+    paid = [c for c in base if c not in set(now)]
     # EVERY POPULATION, INCLUDING THE ZEROS. vibe-ic#1130.
     #
     # `no runner at all` used to print only when it was non-zero. At zero the
@@ -757,7 +790,7 @@ def main(argv=None) -> int:
     # found none" from "this line is missing because nobody looked".
     print(f"  population     : test-only {len(rep['test_only'])}, "
           f"no-runner-at-all {len(rep['no_runner_at_all'])}, "
-          f"skill-only {len(so)}, baseline {0 if base is None else len(base)} "
+          f"skill-only {len(so)}, baseline {len(base)} "
           f"— stated even at zero (#1130)")
     for c in rep["no_runner_at_all"][:10]:
         print(f"   (no runner at all) {c}")
@@ -784,7 +817,7 @@ def main(argv=None) -> int:
                   f"(>= {_MIN_DECISION_REASON} chars), not gesture at one: "
                   f"{str(reasons.get(c))[:80]!r}")
     decisions = _load_decisions(bl)
-    stale = check_unwired_by_decision(rep, decisions, base or [])
+    stale = check_unwired_by_decision(rep, decisions, base)
     if stale:
         print(f"[FAIL] {len(stale)} problem(s) in `unwired_by_decision` — a "
               f"'deliberately unwired' record that is no longer true is a "

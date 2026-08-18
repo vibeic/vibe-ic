@@ -118,8 +118,22 @@ corpus. Pointing $VIBE_IC_BENCHMARK_DATA at a clone must still find them and
 still return rc 1 — the flag exists for the case where there is nothing to look
 at, and it must never reach the case where there is.
 
+AND THE REGISTER ITSELF (vibe-ic#1705)
+======================================
+An UNREADABLE register already refused here — "a missing register is not an
+empty one", in those words. An ABSENT one did not: it fell to `recorded = []`,
+which is the same value a register that was written and found clean carries.
+The verdict is `new = hard - recorded` and `healed = recorded - hard`, so with
+the file gone every pre-existing broken pointer becomes a NEW one attributed to
+whatever change is under test, and nothing can ever be reported as healed. The
+corpus left this repository before that could be measured here, so it is a
+latent site rather than a live one — the same class #1705 measured on three
+other ratchets, closed on the same terms. `--write-baseline` is exempt: it is
+how an absent register stops being absent.
+
 Exit: 0 nothing new (or NO_CORPUS, which says so), 1 a new broken pointer or a
-recorded one that no longer appears, 2 nothing was examined.
+recorded one that no longer appears, 2 nothing was examined — including a
+register that states no measurement (absent or unreadable).
 """
 from __future__ import annotations
 
@@ -331,6 +345,15 @@ def main(argv=None) -> int:
             print(f"[NOT CHECKED] {bl_path} is unreadable — a missing register "
                   f"is not an empty one", file=sys.stderr)
             return RC_NOTHING
+    elif not a.write_baseline:
+        # The sentence above, applied to the case that reached it as `[]`.
+        # vibe-ic#1705.
+        print(f"[NOT CHECKED] no register states a measurement at {bl_path} — "
+              f"an ABSENT one is not an empty one either, and without it no "
+              f"broken pointer found here can be called NEW and none can be "
+              f"called healed. Record this tree with --write-baseline first.",
+              file=sys.stderr)
+        return RC_NOTHING
 
     rels, err = tracked_symlinks(root, subdir)
     if err:

@@ -12,8 +12,10 @@ outlive the condition it describes:
   * `step_internal_fail_bubble_up_check` — acknowledgment is IDENTITY, not a
     shared category token; `verdict_mode: ADVISES` is an answer, not a silence;
     the project verdict stays blocking.
-  * `silent_decline_audit` — a bare run cannot be wired as a gate, so the
-    ratchet must refuse without a baseline rather than pass quietly.
+  * `silent_decline_audit` — a bare run could not be wired as a gate, so the
+    ratchet must refuse without a baseline rather than pass quietly. (The bare
+    run ratchets too since vibe-ic#1705, which found that its exit 0 was the
+    same either way; the refusal asserted below is unchanged.)
   * `checkpoint_gate_check` — INVENTORIED, and the record is re-derived: the
     moment anything machine-wires it, the disclosure is false and CI says so.
 """

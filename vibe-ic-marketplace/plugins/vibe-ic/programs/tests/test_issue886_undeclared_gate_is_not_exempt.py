@@ -101,6 +101,25 @@ def _tree(root: Path, *, gates: dict, enforced=(), extra: dict = None):
     return flow, programs
 
 
+def _measured_clean(programs: Path) -> Path:
+    """A baseline recording BOTH registers as measured and empty.
+
+    These two tests used to pass a path that does not exist, which reached the
+    audit as "both registers UNRECORDED" and happened to produce the same exit
+    codes. vibe-ic#1705 separated the two: a baseline FILE that states no
+    measurement is NOT CHECKED (rc 2), because `current - absent` attributes
+    nothing in either direction. What each test below is about — a finding
+    against a clean measurement fails, a wired gate against the same one does
+    not — is unchanged, and now rests on a measurement rather than on the
+    absence of one. The UNRECORDED-register semantics this file exists for are
+    pinned by `test_an_absent_register_is_unrecorded_not_empty` below, where
+    the file IS readable and one register is missing from it.
+    """
+    bl = programs / "measured_clean_baseline.json"
+    bl.write_text(json.dumps({"known": [], "undeclared_known": []}))
+    return bl
+
+
 # ------------------------------------------------- (a) silence is not consent
 
 def test_an_undeclared_audit_only_gate_is_reported():
@@ -113,7 +132,7 @@ def test_an_undeclared_audit_only_gate_is_reported():
     rep = m.audit(flow, programs)
     assert [u["gate"] for u in rep["undeclared_audit_only"]] == ["quiet_check.py"], rep
     assert m.main(["--flow", str(flow), "--programs", str(programs),
-                   "--baseline", str(programs / "nonexistent.json")]) == 1
+                   "--baseline", str(_measured_clean(programs))]) == 1
 
 
 def test_an_undeclared_gate_that_a_runner_invokes_is_not_reported():
@@ -128,7 +147,7 @@ def test_an_undeclared_gate_that_a_runner_invokes_is_not_reported():
     rep = m.audit(flow, programs)
     assert rep["undeclared_audit_only"] == [], rep
     assert m.main(["--flow", str(flow), "--programs", str(programs),
-                   "--baseline", str(programs / "nonexistent.json")]) == 0
+                   "--baseline", str(_measured_clean(programs))]) == 0
 
 
 def test_a_declared_advisory_audit_only_gate_is_not_reported():
