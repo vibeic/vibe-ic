@@ -381,6 +381,15 @@ OBSERVED_PREFIX = "run-record"
 #: refusal is never silent.
 ATTRIBUTED_CONFIDENCE = frozenset({"provenance_output", "window"})
 
+#: What :attr:`Observation.producer_label` says when the record put an entry on
+#: an attributed rung and then named no producer on it. It is deliberately NOT
+#: a tool name and not a rung name: a reader who sees it is reading "this
+#: record could not tell", which is the one thing the old ``or`` chain could
+#: not say. Entries in this state are refused before they can reach W2 (see
+#: :func:`_index`); the constant exists so that the formatter cannot invent a
+#: name even if some future caller builds an Observation by hand.
+UNNAMED_PRODUCER = "producer-not-named"
+
 
 @dataclass(frozen=True)
 class RecordRoot:
@@ -408,7 +417,32 @@ class Observation:
 
     @property
     def producer_label(self) -> str:
-        who = self.producer or self.producer_confidence or "unattributed"
+        """The producer this observation NAMES, or a label saying it named none.
+
+        The label used to read ``self.producer or self.producer_confidence or
+        "unattributed"``. That ``or`` chain is the same collapse
+        :data:`ATTRIBUTED_CONFIDENCE` refuses one level up, spelled again in
+        the formatter: when the record supplies no producer the label borrowed
+        the CONFIDENCE RUNG and handed it back in the position a producer name
+        occupies, so ``run-record:provenance_output`` — the name of a rung —
+        read to every consumer as the name of a tool. The rung filter closes
+        the common path into that chain but not the chain itself: the ladder
+        sets ``producer = real[0]["tool"]`` / ``w["tool"]`` on the two
+        attributed rungs, and a provenance record carrying no ``tool`` (or an
+        empty one) reaches here on an attributed rung naming nobody. The
+        filter and this property are therefore both required, and neither
+        substitutes for the other.
+
+        A label is a REPORT, so a report of "I could not tell" is what this
+        returns — never a fabricated name, and never a bare ``OBSERVED_PREFIX``
+        that a reader could mistake for one. The rung is still printed, because
+        the rung is a real fact about the record; it is printed where a reader
+        can see it is not an answer.
+        """
+        who = (self.producer or "").strip()
+        if not who:
+            return (f"{OBSERVED_PREFIX}:{UNNAMED_PRODUCER}"
+                    f"({self.producer_confidence})")
         return f"{OBSERVED_PREFIX}:{who}"
 
     def __str__(self) -> str:  # pragma: no cover - cosmetic
@@ -670,6 +704,20 @@ def _index() -> Tuple[Dict[str, Tuple[Observation, ...]],
             if confidence not in ATTRIBUTED_CONFIDENCE:
                 unattributed.append(f"{rel} ({confidence})")
                 continue
+            # ...AND IT MUST ACTUALLY NAME ONE. The rung is the record's claim
+            # that it could attribute the write; `producer` is the attribution
+            # itself. A record making the claim and supplying no name is
+            # self-contradictory, and it is reachable: the ladder reads the
+            # tool out of the provenance record (`real[0]["tool"]`,
+            # `w["tool"]`), so a provenance line with a null or empty `tool`
+            # lands on `provenance_output` naming nobody. Admitting it made W2
+            # promote the path on the strength of a rung — "I could not tell"
+            # reported as a measurement, which is the defect this whole filter
+            # exists to stop, arriving through the one rung the filter admits.
+            named = str(rec.get("producer") or "").strip()
+            if not named:
+                unattributed.append(f"{rel} ({confidence}, no producer named)")
+                continue
             by_path.setdefault(rel, []).append(Observation(
                 root=root.label,
                 rel=rel,
@@ -692,12 +740,16 @@ def _index() -> Tuple[Dict[str, Tuple[Observation, ...]],
             if unattributed:
                 notes.append(
                     f"{root.label}: {len(unattributed)} residual path(s) "
-                    f"refused as UNATTRIBUTED — the record names them but "
-                    f"puts them on a producer-confidence rung outside "
-                    f"{sorted(ATTRIBUTED_CONFIDENCE)}, i.e. it did not witness "
-                    f"a tool writing them. That is a statement about this "
-                    f"run's provenance coverage, not evidence that the flow "
-                    f"produces the path, so W2's oracle stays the AST for them")
+                    f"refused as UNATTRIBUTED — the record names the path but "
+                    f"not a producer for it: either the entry sits on a "
+                    f"producer-confidence rung outside "
+                    f"{sorted(ATTRIBUTED_CONFIDENCE)}, or it claims one of "
+                    f"those rungs and supplies no producer name (each entry "
+                    f"says which). Both are the record reporting that it did "
+                    f"not witness a tool writing the path. That is a statement "
+                    f"about this run's provenance coverage, not evidence that "
+                    f"the flow produces the path, so W2's oracle stays the AST "
+                    f"for them")
     return ({k: tuple(v) for k, v in by_path.items()},
             tuple(notes), rejections)
 
@@ -754,6 +806,7 @@ def clear_caches() -> None:
 __all__ = [
     "RECORD_REL",
     "OBSERVED_PREFIX",
+    "UNNAMED_PRODUCER",
     "RecordRoot",
     "Observation",
     "Rejected",

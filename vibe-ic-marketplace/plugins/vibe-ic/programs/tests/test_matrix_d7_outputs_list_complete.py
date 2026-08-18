@@ -1834,6 +1834,108 @@ def test_d7_a_record_that_names_no_producer_promotes_nothing(monkeypatch):
     _unbind()
 
 
+def test_d7_an_attributed_rung_that_names_nobody_is_still_nobody(monkeypatch):
+    """The rung filter is not enough: the rung's PROMISE must also be kept.
+
+    :data:`matrix_d7_write_record.ATTRIBUTED_CONFIDENCE` refuses the three rungs
+    that say "could not tell". It cannot see the case where the record CLAIMS an
+    attributed rung and then supplies no producer on it — and that case is not
+    hypothetical, because the two things are written independently:
+    ``step_write_ledger`` sets ``producer`` from the provenance record's own
+    ``tool`` field while setting ``producer_confidence`` from which branch of
+    the ladder it took, and the reader consults the COMMITTED json, not the
+    emitter's memory. A record truncated, hand-edited, or written by a different
+    version of the emitter reaches this reader with the claim and without the
+    name.
+
+    What made that reach W2 as an answer was ``Observation.producer_label``'s
+    old ``self.producer or self.producer_confidence or "unattributed"``: with no
+    producer it borrowed the RUNG and returned it in the position a producer
+    name occupies, so ``run-record:provenance_output`` — the name of a rung —
+    became the flow's evidence that a tool wrote the path.
+
+    This control PLANTS that record. It starts from ARM A of the guard above —
+    a real wrapped write, really attributed by the real emitter — and removes
+    exactly one thing: the producer name, leaving the rung intact. Nothing else
+    about the tree, the record or the path changes, so a pass here cannot come
+    from the path being uninteresting.
+    """
+    candidates = _w2_dropped_candidates()
+    assert candidates, "no candidate path; see the FORWARD control"
+
+    for path, owner in candidates:
+        with _probe_run_root("d7_rung_claimed_unnamed_") as (probe, commit):
+            doc = _plant_record(probe, commit, path, attributed=True)
+            rec = next((r for r in doc["residual"]["written_never_declared"]
+                        if r.get("rel") == path), None)
+            if rec is None:
+                continue          # the emitter's own exclusions; try the next
+            assert rec.get("producer_confidence") in R.ATTRIBUTED_CONFIDENCE
+            assert rec.get("producer"), rec
+
+            # ---- CONTROL: intact record, real name -> promotes -------
+            _bind(monkeypatch, probe)
+            assert R.observed_producers_of(path), (
+                f"the intact arm does not promote, so the planted arm below "
+                f"would prove nothing: {R.binding_notes()}")
+            assert any(f.path == path for f in G.findings_for(owner))
+            named_label = R.observed_producers_of(path)
+
+            # ---- PLANTED DEFECT: keep the rung, drop the name --------
+            record = probe / R.RECORD_REL
+            doc2 = json.loads(record.read_text())
+            for r in doc2["residual"]["written_never_declared"]:
+                if r.get("rel") == path:
+                    r["producer"] = None
+            record.write_text(json.dumps(doc2, indent=2) + "\n")
+            commit(R.RECORD_REL)
+            R.clear_caches()
+            G.clear_flow_caches()
+
+            # 1. The LABEL must report that it could not tell, and must not
+            #    hand back the rung dressed as a name.
+            obs = R.Observation(root="probe", rel=path, size_bytes=1,
+                                producer=None,
+                                producer_confidence="provenance_output")
+            assert obs.producer_label != f"{R.OBSERVED_PREFIX}:provenance_output", (
+                "the label returned the confidence rung in the position a "
+                "producer name occupies — a reader, and W2, cannot tell it "
+                "from a tool called 'provenance_output'")
+            assert R.UNNAMED_PRODUCER in obs.producer_label, obs.producer_label
+            assert "provenance_output" in obs.producer_label, (
+                "the rung is a real fact about the record and must still be "
+                "printed — just not where an answer goes")
+            assert R.Observation(root="probe", rel=path, size_bytes=1,
+                                 producer="   ",
+                                 producer_confidence="window"
+                                 ).producer_label.startswith(
+                f"{R.OBSERVED_PREFIX}:{R.UNNAMED_PRODUCER}"), (
+                "whitespace is not a producer name")
+
+            # 2. And it must not PROMOTE. A label that says "I could not tell"
+            #    is still a non-empty string, so a consumer testing only for
+            #    emptiness would promote on it.
+            assert not R.observed_producers_of(path), (
+                f"the record claims the {rec['producer_confidence']!r} rung "
+                f"and names NO producer, yet the reader handed it to W2 as "
+                f"one: {R.observed_producers_of(path)} (intact arm said "
+                f"{named_label})")
+            assert not any(f.path == path for f in G.findings_for(owner)), (
+                f"W2 charged step {owner} with producing {path!r} on the "
+                f"strength of a rung name. Findings: "
+                f"{[str(f) for f in G.findings_for(owner)]}")
+
+            # 3. NEVER SILENT — refused by name, and the reason distinguishes
+            #    this from the rung refusal it is not.
+            assert any(path in item and "no producer named" in item
+                       for r in R.rejections().values()
+                       for item in r.unattributed), R.rejections()
+            _unbind()
+            return
+    pytest.fail("the emitter reported none of the candidate paths in its "
+                "residual, so this control could not be planted")
+
+
 #: Run roots whose write record this dimension consults. RE-MEASURED
 #: 2026-08-12; the population was empty when this module landed and is not
 #: empty now.
