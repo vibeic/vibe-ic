@@ -3981,6 +3981,61 @@ steps:
         # BLAST RADIUS over the 13 published runs carrying this artefact: 0.
         # All 6 runs green on this gate today stay green.
         - program_exit_zero: "drc_report_check . --mode drc --signoff --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_signoff.json"
+        # W2.3 — THE EXTRACTOR'S OWN ERROR CHANNEL, READ BEFORE ITS OUTPUT IS
+        # BELIEVED. Placed HERE, above the two LVS clauses, because that is the
+        # order the question has to be asked in: magic files every rectangle it
+        # refused to connect ("Illegal overlap between <a> and <b> (types do
+        # not connect)") as a FEEDBACK AREA, and the netlist it writes anyway
+        # describes a design the layout does not. netgen will compare that
+        # netlist and can answer `Circuits match uniquely`. A clean LVS
+        # certificate over an extraction that said it could not read the layout
+        # is a dead chip with a clean report, and every clause below this one
+        # is downstream of that netlist.
+        #
+        # MEASURED, and this is what was missing: on origin/main at 397b3f25f,
+        # `grep -rEil "illegal.{0,3}overlap"` over the whole plugin returns 0
+        # files and `feedback\.txt` returns 0 over the whole repo. The
+        # extraction-side program validated the commands we SENT
+        # (magic_extract_spice_emit: `extract all`, `ext2spice lvs`); the four
+        # LVS-side programs read netgen's verdict. Nothing read what magic said
+        # back.
+        #
+        # DIFFERENT FROM the runner's #477 ceiling, deliberately: that asks
+        # "did the extraction COLLAPSE", off the transcript's `N errors` line,
+        # at 1000. This asks "did the extractor REFUSE a rectangle", off the
+        # feedback areas, at 0 — LibreLane's `Checker.IllegalOverlap` threshold,
+        # and the only defensible one, since one undecidable rectangle is one
+        # place the netlist is fiction.
+        #
+        # rc 2 (no extraction under phase3/stage3/extracted at all) is a
+        # DISCLOSED vacuous pass, the same convention the two DRC clauses above
+        # use — but an extraction that RAN and left no feedback dump is rc 1,
+        # not rc 2. `feedback save` writes an EMPTY file when there are no
+        # areas, so a clean extraction leaves a 0-byte file; an absent file is
+        # therefore an unmeasured nothing and never a measured zero.
+        #
+        # BLAST RADIUS: 0 run trees in the landing base — benchmark-data moved
+        # to its own repository at v1.10.56 (#1723), and this checkout carries
+        # 0 routed.def / 0 lvs.rpt / 0 drc_signoff.rpt. Measured against the
+        # last in-repo snapshot of that corpus (worktree _a1489, 9 candidate
+        # roots): 7 rc-2, and 2 rc-1 — ic/caravel_user_project and
+        # ic/subservient, both of which extracted with the pre-W2.3 recipe and
+        # so never dumped the channel. That is the finding, not a regression:
+        # caravel_user_project published `LVS_MATCH` / "Circuits match
+        # uniquely" with its illegal-overlap count NOT DETERMINED. Its
+        # transcript carries 0 occurrences of the marker and 0 `problems
+        # occurred` lines, which is weak evidence the extraction was in fact
+        # clean — but it is not the measurement, and this gate says so rather
+        # than rounding it to zero.
+        #
+        # THE GATE'S OWN --json TARGET IS DELIBERATELY NOT DECLARED in
+        # required_outputs. No producer outside this clause writes it, so
+        # declaring it would put this step in the same SELF-CERTIFIED EVIDENCE
+        # position the lvs.json / erc_density.json note above describes — the
+        # audit would re-probe after the gate and credit the copy the gate just
+        # wrote. It buys no evidence and costs a MISSING on every tree that has
+        # not re-run. The gate clause is what enforces; the report is triage.
+        - program_exit_zero: "magic_illegal_overlap_check . --json reports/phase3/magic_illegal_overlap.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
         # vibe-ic#693 — the LVS counterpart, and a DIFFERENT question from the
         # gate above: not "did netgen say match" but "could netgen's match mean
