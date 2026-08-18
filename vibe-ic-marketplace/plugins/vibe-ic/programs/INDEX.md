@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1111
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1111)
+- **Total programs (excluding helpers / shims):** 1112
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1112)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1102 |
+| `any` | 1103 |
 
 ## Alphabetical listing
 
@@ -443,6 +443,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gds_streamout_layermap_check` | any | — | Deterministic sign-off streamout layer conformance checker. |
 | `gds_substance_check` | any | — | the shipped chip GDS must be a structurally valid GDSII stream carrying layout substance proportional to the design's own placed-instance... |
 | `gds_topcell_name_check` | any | — | Deterministic GDSII top-cell-name verifier. |
+| `gen_program_inventory` | any | — | single source of truth for every stated count of this plugin's `programs/` population. |
 | `gen_skill_inventory` | any | — | single source of truth for the AI-skill count. |
 | `general_synth` | any | — | GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har... |
 | `generated_artifact_conflict_resolve` | any | — | resolve the merge conflicts that carry no information, and REFUSE every conflict that does. |
@@ -1183,7 +1184,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1102 programs)
+### `any` (1103 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1598,6 +1599,7 @@ _(no programs in this group)_
 - `gds_streamout_layermap_check` — Deterministic sign-off streamout layer conformance checker.
 - `gds_substance_check` — the shipped chip GDS must be a structurally valid GDSII stream carrying layout substance proportional to the design's own placed-instance...
 - `gds_topcell_name_check` — Deterministic GDSII top-cell-name verifier.
+- `gen_program_inventory` — single source of truth for every stated count of this plugin's `programs/` population.
 - `gen_skill_inventory` — single source of truth for the AI-skill count.
 - `general_synth` — GENERAL (§4.05-audited) deterministic STRUCTURAL solvers for the RTLLM doc->RTL designs whose function is a STANDARD, fully-specified har...
 - `generated_artifact_conflict_resolve` — resolve the merge conflicts that carry no information, and REFUSE every conflict that does.
