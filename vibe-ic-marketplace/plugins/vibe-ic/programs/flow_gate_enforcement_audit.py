@@ -143,7 +143,10 @@ Exit codes:
                                             printed PASS.
        — or a recorded entry that no longer holds, which must be paid down out
        of its register rather than left standing as permission.
-    2  I/O error, or the flow definition could not be parsed
+    2  NOT CHECKED: I/O error, the flow definition could not be parsed, or the
+       residual baseline states no readable measurement (absent, unreadable,
+       truncated). An explicitly empty register is still a measurement and
+       the first offender against it still exits 1.
 """
 from __future__ import annotations
 
@@ -1681,6 +1684,38 @@ def audit(flow: Path, programs: Path) -> dict:
     }
 
 
+def _load_baseline_doc(path: Path) -> Optional[dict]:
+    """A readable baseline document, or ``None`` when none was measured.
+
+    ``None`` and an explicit empty list are intentionally different values.
+    This audit attributes findings with ``current - baseline``; treating an
+    absent or truncated artefact as ``{}`` turns every inherited finding into
+    a regression, while treating the same state on a clean tree fabricates a
+    PASS.  A partial older document may still carry one measured register, so
+    it remains readable and the existing UNRECORDED-register logic below owns
+    the missing key.
+    """
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    registers = ("known", "undeclared_known")
+    if not any(key in loaded for key in registers):
+        return None
+    if any(key in loaded and not isinstance(loaded[key], list)
+           for key in registers):
+        return None
+    if any(not isinstance(entry, str)
+           for key in registers
+           for entry in loaded.get(key, [])):
+        return None
+    return loaded
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Audit which flow gates can actually stop a run.")
@@ -1704,6 +1739,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not flow.is_file():
         print(f"IO_ERROR: no flow definition at {flow}", file=sys.stderr)
         return 2
+    bl_path = Path(a.baseline) if a.baseline else (
+        _HERE / "flow_gate_enforcement_baseline.json")
+    doc = _load_baseline_doc(bl_path)
+    if doc is None:
+        # ``--write-baseline`` is the one operation that CREATES the missing
+        # measurement.  It may bootstrap an absent path, but it must not
+        # overwrite an existing unreadable/truncated artefact as though the
+        # previous measurement had been empty.
+        bootstrapping = (a.write_baseline and not bl_path.exists()
+                         and not bl_path.is_symlink())
+        if not bootstrapping:
+            print(
+                "NOT CHECKED: no flow-gate enforcement baseline states a "
+                f"readable measurement at {bl_path} — absent, unreadable, or "
+                "truncated is not a measurement of zero, so no current "
+                "finding can be called NEW. Measure this tree and record the "
+                "baseline before asking this audit to attribute anything. "
+                "See vibe-ic#1705.",
+                file=sys.stderr)
+            return 2
+        doc = {}
     try:
         rep = audit(flow, programs)
     except FlowGrammarError as exc:
@@ -1771,16 +1827,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                  + [f"orphan::{o['gate']}" for o in (rep.get("orphaned") or [])])
     now_u = sorted(f"undeclared::{u['gate']}"
                    for u in (rep.get("undeclared_audit_only") or []))
-    bl_path = Path(a.baseline) if a.baseline else (
-        _HERE / "flow_gate_enforcement_baseline.json")
-    doc: dict = {}
-    if bl_path.is_file():
-        try:
-            loaded = json.loads(bl_path.read_text())
-            doc = loaded if isinstance(loaded, dict) else {}
-        except (OSError, ValueError):
-            doc = {}
-
     def _recorded(key: str) -> Optional[List[str]]:
         """A register that is ABSENT is UNRECORDED, not empty. The two differ:
         an empty register asserts "no debt", an absent one asserts nothing at
