@@ -1131,7 +1131,7 @@ def _find_host_quartus_sh() -> Optional[str]:
                 cand2 = child / "bin" / "quartus_sh"
                 if cand2.is_file():
                     candidates.append(cand2)
-        except OSError:
+        except (OSError, RuntimeError):
             pass
 
     for c in candidates:
@@ -1794,20 +1794,40 @@ def _gather_phase1_plain_spec_text(project: Path) -> Tuple[str, List[str]]:
     the source.  Letting it complete this deterministic parser would relabel an
     AI-derived table as ``program-first; no LLM``.  Restricting the bridge to
     input_prompt/input_doc keeps that provenance claim mechanically true.
+
+    Symlinks are not source provenance: an apparently allowed ``design.md`` can
+    otherwise point at generated_docs/L9 (or anywhere else) and cross this trust
+    boundary.  Any symlink entry fails the whole gather closed.  Every regular
+    source must also resolve beneath the resolved allowed root; a resolution or
+    traversal error is a refusal, never a silently skipped file.
     """
     chunks: List[str] = []
     sources: List[str] = []
     for directory in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
         if not directory.is_dir():
             continue
-        for path in sorted(directory.rglob("*")):
-            if not path.is_file() or path.suffix.lower() not in (".md", ".txt"):
-                continue
+        try:
+            if directory.is_symlink():
+                return "", []
+            allowed_root = directory.resolve(strict=True)
+            entries = sorted(directory.rglob("*"))
+        except OSError:
+            return "", []
+        for path in entries:
             try:
-                chunks.append(path.read_text(errors="replace"))
+                # Check before suffix/type filtering: a symlinked directory or
+                # non-prose entry still makes this claimed source tree untrusted.
+                if path.is_symlink():
+                    return "", []
+                resolved = path.resolve(strict=True)
+                resolved.relative_to(allowed_root)
+                if (not resolved.is_file()
+                        or path.suffix.lower() not in (".md", ".txt")):
+                    continue
+                chunks.append(resolved.read_text(errors="replace"))
                 sources.append(str(path.relative_to(project)))
-            except OSError:
-                pass
+            except (OSError, RuntimeError, ValueError):
+                return "", []
     return "\n\n".join(chunks), sources
 
 

@@ -316,20 +316,33 @@ def _synth_reset_pulse(prompt, top, clk, rst, out_name):
 # --------------------------------------------------------------------------- #
 # Shape (C): mechanically-complete directional bump+fall Moore walker.
 # --------------------------------------------------------------------------- #
-def _port_tokens(name: str):
-    return set(re.findall(r"[a-z0-9]+", name.lower().replace("_", " ")))
+# Shared reset-name polarity convention used by Shape C and the structured-
+# prose dialect below.  A trailing ``n`` on a reset name is an interface fact,
+# even when nearby prose incorrectly claims active-high operation.
+_DIA_RSTN_NAME_RE = re.compile(
+    r"(?:rst|reset|areset)_?n$|^aresetn$|^resetn$", re.I)
+
+# This is deliberately a finite POSITIVE identifier grammar.  Token containment
+# is not a polarity proof: e.g. ``no_ground`` contains ``ground`` but states the
+# opposite condition.  New aliases must be added here deliberately together with
+# a prose-binding regression; arbitrary prefixes/suffixes are never accepted.
+_DIRECTIONAL_ROLE_ALIASES = {
+    "bump_left": frozenset(("bump_left", "hit_left")),
+    "bump_right": frozenset(("bump_right", "hit_right")),
+    "ground": frozenset(("ground", "support")),
+    "walk_left": frozenset(
+        ("walk_left", "walking_left", "move_left", "moving_left")),
+    "walk_right": frozenset(
+        ("walk_right", "walking_right", "move_right", "moving_right")),
+    "falling": frozenset(("aaah", "fall", "falling", "fall_alarm")),
+}
 
 
-def _unique_role(ports, predicate):
-    matches = [name for name, width in ports if width == 1 and predicate(name)]
+def _unique_role(ports, role):
+    aliases = _DIRECTIONAL_ROLE_ALIASES[role]
+    matches = [name for name, width in ports
+               if width == 1 and name.lower() in aliases]
     return matches[0] if len(matches) == 1 else None
-
-
-def _has_role(name: str, role_words, side: str | None = None):
-    toks = _port_tokens(name)
-    if side and side not in toks:
-        return False
-    return bool(toks.intersection(role_words))
 
 
 def _directional_fall_roles(other_ins, outs):
@@ -340,23 +353,13 @@ def _directional_fall_roles(other_ins, outs):
     """
     if len(other_ins) != 3 or len(outs) != 3:
         return None
-    bump_words = {"bump", "bumped", "hit", "obstacle"}
-    walk_words = {"walk", "walking", "move", "moving"}
-    ground_words = {"ground", "support", "supported"}
-    fall_words = {"aaah", "fall", "falling"}
     roles = {
-        "bump_left": _unique_role(
-            other_ins, lambda n: _has_role(n, bump_words, "left")),
-        "bump_right": _unique_role(
-            other_ins, lambda n: _has_role(n, bump_words, "right")),
-        "ground": _unique_role(
-            other_ins, lambda n: _has_role(n, ground_words)),
-        "walk_left": _unique_role(
-            outs, lambda n: _has_role(n, walk_words, "left")),
-        "walk_right": _unique_role(
-            outs, lambda n: _has_role(n, walk_words, "right")),
-        "falling": _unique_role(
-            outs, lambda n: _has_role(n, fall_words)),
+        "bump_left": _unique_role(other_ins, "bump_left"),
+        "bump_right": _unique_role(other_ins, "bump_right"),
+        "ground": _unique_role(other_ins, "ground"),
+        "walk_left": _unique_role(outs, "walk_left"),
+        "walk_right": _unique_role(outs, "walk_right"),
+        "falling": _unique_role(outs, "falling"),
     }
     if any(v is None for v in roles.values()):
         return None
@@ -369,6 +372,64 @@ def _directional_fall_roles(other_ins, outs):
     return roles
 
 
+def _directional_actor_key(noun: str):
+    """Normalize the one harmless singular/plural variation in this dialect."""
+    noun = noun.lower()
+    if noun.endswith("ies") and len(noun) > 3:
+        return noun[:-3] + "y"
+    if noun.endswith("s") and not noun.endswith("ss") and len(noun) > 1:
+        return noun[:-1]
+    return noun
+
+
+def _directional_fall_actor_is_bound(prompt: str):
+    """Prove that every explicit story actor denotes one identity.
+
+    Pronouns and the literal ``machine`` (the FSM itself) are closed, generic
+    coreferences.  All named nouns in the preamble, world, transition, fall,
+    resume, and reset clauses must agree modulo singular/plural spelling.  This
+    keeps the recognizer general (a consistently renamed actor still works) but
+    prevents unrelated nouns in individual clauses from being silently treated
+    as the same entity.
+    """
+    text = " ".join(prompt.split()).lower()
+    actors = []
+
+    def add_matches(pattern, groups=(1,)):
+        for match in re.finditer(pattern, text):
+            for group in groups:
+                noun = match.group(group)
+                if noun not in {"it", "machine"}:
+                    actors.append(_directional_actor_key(noun))
+
+    add_matches(
+        r"\bcreate a moore state machine for (?:an?\s+|the\s+)?"
+        r"([a-z_]\w*) that walks and falls\b")
+    # The game name is the named actor. ``critters``/``creatures`` is a finite
+    # generic class description, not a second proper identity.
+    add_matches(
+        r"\bthe game ([a-z_]\w*) involves (?:critters|creatures) with "
+        r"fairly simple brains\b")
+    add_matches(
+        r"\bin the ([a-z_]\w*)['’]\s+2d world,\s*([a-z_]\w*) can be\b",
+        (1, 2))
+    add_matches(
+        r"\bif (?:an?|the) ([a-z_]\w*) is (?:bumped|hit) on the left\b")
+    add_matches(
+        r"\bif (?:an?|the) ([a-z_]\w*) is (?:bumped|hit) on the right\b")
+    add_matches(
+        r"\bwhen (?:ground|support)\s*=\s*0,\s*(?:the\s+)?"
+        r"([a-z_]\w*) will fall\b")
+    add_matches(
+        r"\bwhen (?:the\s+)?(?:ground|support) reappears"
+        r"(?:\s*\([^)]*\))?,\s*(?:the\s+)?([a-z_]\w*) will resume\b")
+    add_matches(
+        r"\breset\w*\s+(?:the\s+)?([a-z_]\w*)"
+        r"(?:\s+machine)?\s+to (?:walk|move) left\b")
+
+    return len(set(actors)) == 1
+
+
 def _directional_fall_closed_dialect(prompt: str, roles, clk: str, rst: str):
     """Consume every sentence in the one supported prose dialect.
 
@@ -379,6 +440,9 @@ def _directional_fall_closed_dialect(prompt: str, roles, clk: str, rst: str):
     prose is an honest SKIP.  The forms bind functional role identifiers, not a
     benchmark id or design leaf name.
     """
+    if not _directional_fall_actor_is_bound(prompt):
+        return False
+
     wl = re.escape(roles["walk_left"].lower())
     wr = re.escape(roles["walk_right"].lower())
     falling = re.escape(roles["falling"].lower())
@@ -439,9 +503,9 @@ def _directional_fall_closed_dialect(prompt: str, roles, clk: str, rst: str):
         # Interface / benign introduction forms in the supported dialects.
         r"i would like you to implement a module named [a-z_]\w* with the following interface",
         r"all input and output ports are one bit unless otherwise specified",
-        r"the game [a-z_]\w* involves [a-z_]\w* with fairly simple brains",
+        r"the game [a-z_]\w* involves (?:critters|creatures) with fairly simple brains",
         r"so simple that we are going to model it using a finite state machine",
-        r"create a moore state machine for a creature that walks and falls",
+        r"create a moore state machine for a [a-z_]\w* that walks and falls",
         # Moore-output declaration (three equivalent, closed phrasings).
         rf"in the (?P<world_actor>[a-z_]\w*)['’]\s+2d world, "
         rf"(?P=world_actor) can be in one of two states:"
@@ -514,6 +578,8 @@ def _directional_fall_reset(prompt: str, rst: str):
     asynchronous" states the active reset edge without using the words
     "active-high", while the older shapes deliberately require an explicit level.
     """
+    if _DIA_RSTN_NAME_RE.search(rst):
+        return False
     low = " ".join(prompt.split()).lower()
     reset_clause = re.search(
         rf"\b{re.escape(rst.lower())}\b[^.]{{0,260}}(?:reset\w*|active[-\s]?high)"
@@ -825,9 +891,7 @@ def synth(prompt_text: str, top: str = "TopModule"):
 _DIA_MODNAME_RE = re.compile(r"^\s*Module\s+name\s*[:：]", re.I | re.M)
 _DIA_INPORTS_RE = re.compile(r"^\s*Input\s+ports?\s*[:：]", re.I | re.M)
 
-# A reset whose name carries the active-low `_n` suffix (rst_n/reset_n/aresetn/resetn);
-# active-low is ALSO confirmable from prose ("negative-edge ... reset"/"active low").
-_DIA_RSTN_NAME_RE = re.compile(r"(?:rst|reset|areset)_?n$|^aresetn$|^resetn$", re.I)
+# Active-low is ALSO confirmable from prose ("negative-edge ... reset"/"active low").
 _DIA_ACTIVE_LOW_PROSE_RE = re.compile(
     r"negative[-\s]edge(?:[-\s]triggered)?[^.\n]*reset|active[-\s]?low", re.I)
 # A "Mealy" prompt is NOT this (Moore) family — left to mealy_sequence_synth.

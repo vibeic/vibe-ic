@@ -165,15 +165,36 @@ def test_generated_ldoc_cannot_complete_incomplete_raw_prose(tmp_path):
     assert not (project / "phase2" / "stage1" / "rtl").exists()
 
 
-def test_provenance_stamp_makes_second_run_idempotent(tmp_path):
+def test_symlinked_plain_source_cannot_relabel_generated_l9_as_program_first(
+        tmp_path):
+    """An L9-derived prose file is not operator input through a symlink alias."""
+    project = _project(tmp_path)
+    generated = project / "phase1" / "generated_docs"
+    generated.mkdir(parents=True)
+    l9_generated = generated / "L9_AI_GENERATED.md"
+    l9_generated.write_text(COMPLETE_DIRECTIONAL_FALL)
+    source = project / "phase1" / "input_doc" / "design.md"
+    source.unlink()
+    source.symlink_to(l9_generated)
+
+    assert runner._gather_phase1_plain_spec_text(project) == ("", [])
+    assert runner._try_phase1_behavioral_fsm_rtl(project, 0.0) is None
+    assert not (project / "phase2" / "stage1" / "rtl").exists()
+
+
+def test_provenance_stamp_makes_second_process_idempotent(tmp_path):
     project = _project(tmp_path)
     first = runner._try_phase1_behavioral_fsm_rtl(project, 0.0)
     assert first is not None and first.status == "PASS"
     assert rtl_provenance.classify(project)[0] == rtl_provenance.GENERATED
 
+    # Model a fresh interpreter: only the on-disk provenance proof survives.
+    runner._RTL_SESSION_OWNED = False
+    runner._RTL_SESSION_PROJECT = None
     second = runner._try_phase1_behavioral_fsm_rtl(project, 0.0)
     assert second is not None and second.status == "PASS"
     assert second.extras["idempotent"] is True
+    assert second.extras["rtl_provenance"] == rtl_provenance.GENERATED
 
 
 def test_success_claims_session_with_non_capturing_atexit_callback(

@@ -20,6 +20,7 @@ is absent, but the GENERATE + SKIP-discipline assertions always run.
 """
 import os
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -114,6 +115,29 @@ def _directional_module_prompt():
         "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
         "fixtures", "real_benchmark", "directional_bump_fall_moore_prompt.md")
     return fixture.read_text()
+
+
+def _named_directional_fixture_prompt():
+    """Checked-in Shape-C text with one explicit actor in every noun clause."""
+    prompt = _directional_module_prompt()
+    replacements = (
+        ("for a creature", "for a Lemming"),
+        ("If it is bumped on the left",
+         "In particular, if a Lemming is bumped on the left "
+         "(by receiving a 1 on bump_left)"),
+        ("the creature will fall", "the Lemming will fall"),
+        ("When ground reappears, it will resume",
+         "When the ground reappears (ground=1), the Lemming will resume walking"),
+        ("areset is a\npositive edge triggered asynchronous reset, resetting "
+         "the machine to walk left.",
+         "areset is positive edge triggered asynchronous reseting the Lemming "
+         "machine to walk left."),
+    )
+    for old, new in replacements:
+        assert old in prompt
+        prompt = prompt.replace(old, new)
+    assert bfsm.synth(prompt) is not None
+    return prompt
 
 
 # --------------------------------------------------------------------------- #
@@ -503,6 +527,53 @@ def test_directional_bump_fall_rejects_active_low_support_role():
     assert bfsm.synth(prompt) is None
 
 
+def test_directional_bump_fall_rejects_active_low_reset_name_convention():
+    prompt = _directional_module_prompt().replace("areset", "areset_n")
+    assert prompt != _directional_module_prompt()
+    assert bfsm.synth(prompt) is None
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("input ground,", "input no_ground,"),
+        ("input ground,", "input ground_absent,"),
+        ("input bump_left,", "input no_bump_left,"),
+        ("input bump_left,", "input bump_left_disable,"),
+    ],
+)
+def test_directional_bump_fall_rejects_noncanonical_role_identifiers(old, new):
+    """Role names come from a finite positive grammar, never token containment."""
+    prompt = _directional_module_prompt().replace(old, new)
+    assert prompt != _directional_module_prompt()
+    assert bfsm.synth(prompt) is None
+
+
+_ACTOR_IDENTITY_MUTATIONS = (
+    (r"if a Lemming is bumped", "if a Wall is bumped"),
+    (r"the Lemming will fall", "the Clock will fall"),
+    (r"the Lemming machine\s+to\s+walk\s+left",
+     "the Robot machine to walk left"),
+)
+
+
+@pytest.mark.parametrize("pattern,replacement", _ACTOR_IDENTITY_MUTATIONS)
+def test_directional_bump_fall_binds_one_actor_across_every_clause(
+        pattern, replacement):
+    prompt = _named_directional_fixture_prompt()
+    mutated, count = re.subn(pattern, replacement, prompt, count=1)
+    assert count == 1
+    assert bfsm.synth(mutated) is None
+
+
+def test_directional_bump_fall_rejects_multiple_actor_identity_mutations():
+    prompt = _named_directional_fixture_prompt()
+    for pattern, replacement in _ACTOR_IDENTITY_MUTATIONS:
+        prompt, count = re.subn(pattern, replacement, prompt, count=1)
+        assert count == 1
+    assert bfsm.synth(prompt) is None
+
+
 @pytest.mark.parametrize("role", ["hit_left", "hit_right"])
 def test_directional_bump_fall_rejects_active_low_bump_role_name(role):
     prompt = _directional_prompt().replace(f"input {role}", f"input {role}_n")
@@ -630,21 +701,25 @@ def test_general_directional_shape_with_renamed_ports():
 
 
 def test_general_directional_shape_with_renamed_story_noun():
+    body = _directional_module_prompt()
+    body = body.replace("for a creature", "for a robot")
+    body = body.replace("the creature will fall", "the robot will fall")
+    body = body.replace("resetting the machine to", "resetting the robot to")
     prompt = (
         "The game Robots involves creatures with fairly simple brains. "
         "So simple that we are going to model it using a finite state machine. "
         "In the Robots' 2D world, Robots can be in one of two states: walking "
         "left (walk_left is 1) or walking right (walk_right is 1). "
-        + _directional_module_prompt())
+        + body)
     rtl = bfsm.synth(prompt)
     assert rtl is not None
     assert "module TopModule" in rtl
 
 
 def test_benign_game_preamble_is_not_benchmark_noun_sensitive():
-    """A story noun cannot decide whether the generic FSM shape dispatches."""
-    base = _directional_prompt()
-    for game in ("Lemmings", "Robots"):
+    """A consistently renamed story actor is not benchmark-noun sensitive."""
+    for game, actor in (("Walkers", "walker"), ("Robots", "robot")):
+        base = _directional_prompt().replace("walker", actor)
         prompt = (
             base
             + f" The game {game} involves critters with fairly simple brains."
