@@ -44,6 +44,7 @@ _PROGRAMS = _HERE.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 import hygiene_finding_delta as H  # noqa: E402
+import gate_process_attestation as A  # noqa: E402
 
 _PROG = _PROGRAMS / "hygiene_finding_delta.py"
 _HOST = "host-a"
@@ -62,26 +63,67 @@ def _gate(label, state, corpus=None, expired=False):
     """
     return {"label": label, "state": state, "seconds": 1,
             "exempt_until": None, "exempt_reason": None,
-            "corpus": corpus, "exemption_expired": expired}
+            "corpus": corpus, "exemption_expired": expired, "scope": None}
+
+
+def _attestation(row):
+    """One real helper-shaped process record."""
+    state = row["state"]
+    rc = {"PASS": 0, "FAIL": 1, "NOT_CHECKED": 2,
+          "WROTE_CORPUS": 0}[state]
+    verdict = ("[PASS] checked" if state == "PASS" else
+               "[NOT_CHECKED] unavailable" if state == "NOT_CHECKED" else
+               "[FAIL] named finding")
+    return A.process_attestation(
+        row["label"], verdict + "\n", rc,
+        ["python3", "checker.py", row["label"]])
 
 
 def _record(gates, **over):
+    counts = {state: sum(g["state"] == state for g in gates)
+              for state in H.TERMINAL_STATES}
     doc = {
         "listed_only": False,
         "declared": len(gates),
-        "ran": len(gates),
-        "passed": sum(1 for g in gates if g["state"] == "PASS"),
-        "failed": sum(1 for g in gates if g["state"] == "FAIL"),
-        "not_checked": 0,
-        "not_checked_unexempted": [],
-        "exemptions_expired": [],
+        "ran": sum(counts[state] for state in H.PROCESS_STATES),
+        "decided": counts["PASS"] + counts["FAIL"],
+        "passed": counts["PASS"],
+        "failed": counts["FAIL"],
+        "not_checked": counts["NOT_CHECKED"],
+        "wrote_corpus": counts["WROTE_CORPUS"],
+        "deferred": counts["LISTED"],
+        "other_shard": counts["OTHER_SHARD"],
+        "out_of_scope": counts["OUT_OF_SCOPE"],
+        "not_checked_unexempted": [
+            g["label"] for g in gates if g["state"] == "NOT_CHECKED"
+            and g.get("exempt_until") in (None, "")],
+        "exemptions_expired": [
+            g["label"] for g in gates if g.get("exemption_expired")],
         "wiring_errors": [],
         "corpora": [],
         "shard": None,
         "today": "2026-08-15",
         "gates": gates,
+        "process_attestations": [
+            _attestation(g) for g in gates
+            if g["state"] in H.PROCESS_STATES
+            and not H._legacy_structural_empty(g)],
     }
     doc.update(over)
+    return doc
+
+
+def _refresh(doc, *, attest=True):
+    """Re-derive the dispatcher's redundant counters after an adversarial edit."""
+    gates = doc["gates"]
+    fresh = _record(gates)
+    for key in ("declared", "ran", "decided", "passed", "failed",
+                "not_checked", "wrote_corpus", "deferred", "other_shard",
+                "out_of_scope", "not_checked_unexempted",
+                "exemptions_expired"):
+        doc[key] = fresh[key]
+    if attest:
+        doc["process_attestations"] = fresh["process_attestations"]
     return doc
 
 
@@ -108,6 +150,84 @@ def _run(base, cand, base_host=_HOST, cand_host=_HOST, extra=()):
          "--base-host", base_host, "--candidate-host", cand_host, *extra],
         capture_output=True, text=True, timeout=60)
     return cp.returncode, cp.stdout + cp.stderr
+
+
+_BENCHMARK_SHA = "a" * 40
+
+
+def _transition_pair(*, replacement_state="PASS", benchmark_sha=_BENCHMARK_SHA):
+    """The exact future EMPTY -> external routed-DEF declaration shape."""
+    common = _gate("common hygiene finding", "FAIL")
+    empty = _gate(H.ROUTED_DEF_EMPTY_LABEL, "NOT_CHECKED",
+                  H.ROUTED_DEF_CORPUS)
+    empty.update(corpus_item=0, corpus_items=0)
+    base = _record(
+        [copy.deepcopy(common), empty],
+        corpora=[{"name": H.ROUTED_DEF_CORPUS, "items": 0, "gates": 1,
+                  "expansion": "EXPANDED"}],
+        corpus_inputs={"benchmark_data_sha": benchmark_sha})
+
+    labels = [template.format(design="demo")
+              for template in H.ROUTED_DEF_GATE_LABELS]
+    rows = [_gate(label, replacement_state if i == 0 else "PASS",
+                  H.ROUTED_DEF_CORPUS)
+            for i, label in enumerate(labels)]
+    for row in rows:
+        row.update(corpus_item=1, corpus_items=1)
+    candidate = _record(
+        [copy.deepcopy(common), *rows],
+        corpora=[{"name": H.ROUTED_DEF_CORPUS, "items": 1,
+                  "gates": len(rows), "expansion": "EXPANDED"}],
+        corpus_inputs={"benchmark_data_sha": benchmark_sha})
+    attested = {rec["label"]: rec for rec in candidate["process_attestations"]}
+    manifest_gates = [
+        {"label": row["label"],
+         "argv_sha256": attested[row["label"]]["argv_sha256"]}
+        for row in rows]
+    receipts = []
+    for row in rows:
+        rec = attested[row["label"]]
+        rc = rec["returncode"]
+        receipts.append({
+            "schema": 1, "complete": True, "label": row["label"],
+            "argv_sha256": rec["argv_sha256"], "returncode": rc,
+            "owned": {
+                "protocol": 1, "rc": rc, "body": "independent output\n",
+                "problem": None, "outcome": "natural", "launched": True,
+                "census_ok": True, "final_descendants": [], "observed": [],
+                "capability_error": "",
+            },
+        })
+    evidence = {
+        "schema": 1, "complete": True, "origin": H.BENCHMARK_DATA_ORIGIN,
+        "benchmark_data_sha": benchmark_sha,
+        "corpora": [{
+            "name": H.ROUTED_DEF_CORPUS,
+            "items": [{
+                "ordinal": 1,
+                "path": "ic/demo/v0.3.0/phase3/stage3/pnr/routed.def",
+                "mode": "100644", "blob": "b" * 40,
+                "gates": manifest_gates,
+            }],
+        }],
+        "execution_receipts": receipts,
+    }
+    return base, candidate, evidence
+
+
+def _empty_structural_record(*, attested):
+    """Aggregate form of the measured 116b/cab8 structural protocols."""
+    empty = _gate(H.ROUTED_DEF_EMPTY_LABEL, "NOT_CHECKED",
+                  H.ROUTED_DEF_CORPUS)
+    empty.update(corpus_item=0, corpus_items=0)
+    doc = _record(
+        [*_base_gates(), empty],
+        corpora=[{"name": H.ROUTED_DEF_CORPUS, "items": 0, "gates": 1,
+                  "expansion": "EXPANDED"}],
+        corpus_inputs={"benchmark_data_sha": _BENCHMARK_SHA})
+    if attested:
+        doc["process_attestations"].append(_attestation(empty))
+    return doc
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -147,8 +267,9 @@ def test_the_two_directions_differ_only_in_the_one_flipped_gate():
     """Stated explicitly so a future edit cannot make both arms pass by
     weakening the comparator: the inputs are equal but for one field."""
     a = _record(_base_gates())
-    b = copy.deepcopy(a)
-    b["gates"][0]["state"] = "FAIL"
+    changed = _base_gates()
+    changed[0]["state"] = "FAIL"
+    b = _record(changed)
     diffs = [(x["label"], x["state"], y["state"])
              for x, y in zip(a["gates"], b["gates"]) if x != y]
     assert diffs == [("chip-AGNOSTIC source guard", "PASS", "FAIL")]
@@ -176,7 +297,8 @@ def test_an_expired_exemption_is_a_finding_in_its_own_right():
     """
     base = _record(_base_gates())
     gates = _base_gates()
-    gates[3]["exemption_expired"] = True
+    gates[3].update(exempt_until="2026-08-14", exempt_reason="past promise",
+                    exemption_expired=True)
     cand = _record(gates, exemptions_expired=[gates[3]["label"]])
     d = H.delta(base, cand)
     assert d["status"] == H.INTRODUCED
@@ -187,10 +309,12 @@ def test_a_record_that_disagrees_with_itself_about_expiry_refuses():
     """The paired guard for the case above: the per-gate flag set WITHOUT the
     top-level entry is a record that cannot be used as a denominator."""
     gates = _base_gates()
-    gates[3]["exemption_expired"] = True
+    gates[3].update(exempt_until="2026-08-14", exempt_reason="past promise",
+                    exemption_expired=True)
     with pytest.raises(H.Refusal) as e:
-        H.delta(_record(_base_gates()), _record(gates))   # no `exemptions_expired`
-    assert "disagrees with itself" in str(e.value)
+        H.delta(_record(_base_gates()),
+                _record(gates, exemptions_expired=[]))
+    assert "disagrees with its gates" in str(e.value)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -214,6 +338,26 @@ def test_an_unreadable_record_refuses(tmp_path):
     rc, out = _run(base, bad)
     assert rc == H.RC_REFUSED
     assert "unreadable" in out
+
+
+@pytest.mark.parametrize(
+    ("mutate", "diagnostic"),
+    [
+        (lambda payload: payload[:-1] + ', "gates": []}',
+         "duplicate JSON key"),
+        (lambda payload: payload.replace('"seconds": 1', '"seconds": NaN', 1),
+         "non-finite JSON number"),
+    ],
+)
+def test_summary_json_refuses_ambiguous_numbers_and_keys(
+        tmp_path, mutate, diagnostic):
+    base = _write(tmp_path, "base.json", _record(_base_gates()))
+    candidate = tmp_path / "ambiguous.json"
+    payload = json.dumps(_record(_base_gates()))
+    candidate.write_text(mutate(payload), encoding="utf-8")
+    rc, out = _run(base, candidate)
+    assert rc == H.RC_REFUSED
+    assert diagnostic in out
 
 
 def test_a_document_without_a_gates_array_refuses(tmp_path):
@@ -281,14 +425,14 @@ def test_different_shards_refuse_because_each_covers_a_different_set():
     cand = _record(_base_gates(), shard="2/2")
     with pytest.raises(H.Refusal) as e:
         H.delta(base, cand)
-    assert "shard" in str(e.value)
+    assert "aggregate" in str(e.value)
 
 
 def test_an_empty_gate_list_is_a_run_that_did_not_happen():
     """An empty result is not a zero."""
     with pytest.raises(H.Refusal) as e:
         H.delta(_record([]), _record(_base_gates()))
-    assert "not a zero" in str(e.value)
+    assert "no complete gate array" in str(e.value)
 
 
 def test_a_normalisation_collapse_refuses_rather_than_merging_two_findings():
@@ -305,9 +449,354 @@ def test_a_failed_corpus_producer_refuses(tmp_path):
     base = _write(tmp_path, "b.json", _record(_base_gates()))
     cand = _write(tmp_path, "c.json", _record(
         _base_gates(), corpora=[{"name": "ic-roots", "expansion": "PRODUCER_FAILED",
-                                 "items": 0}]))
+                                 "items": 0, "gates": 0}]))
     rc, out = _run(base, cand)
     assert rc == H.RC_REFUSED
+
+
+def test_whole_record_refuses_a_missing_gate_attestation():
+    base = _record(_base_gates())
+    candidate = _record(_base_gates())
+    candidate["process_attestations"].pop()
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate)
+    assert "exact bijection" in str(e.value)
+
+
+def test_whole_record_refuses_an_extra_process_attestation():
+    base = _record(_base_gates())
+    candidate = _record(_base_gates())
+    candidate["process_attestations"].append(
+        copy.deepcopy(candidate["process_attestations"][0]))
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate)
+    assert "exact bijection" in str(e.value)
+
+
+def test_whole_record_refuses_a_forged_redundant_count():
+    base = _record(_base_gates())
+    candidate = _record(_base_gates(), ran=99)
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate)
+    assert "ran count" in str(e.value)
+
+
+def test_whole_record_does_not_accept_bool_as_an_integer_count():
+    base = _record(_base_gates())
+    candidate = _record(_base_gates(), declared=True)
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate)
+    assert "must be an integer" in str(e.value)
+
+
+def test_whole_record_does_not_accept_integer_as_expiry_boolean():
+    base = _record(_base_gates())
+    candidate = _record(_base_gates())
+    candidate["gates"][0]["exemption_expired"] = 0
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate)
+    assert "boolean expiry verdict" in str(e.value)
+
+
+def test_whole_record_refuses_a_non_terminal_state():
+    gates = _base_gates()
+    gates[0]["state"] = "QUEUED"
+    candidate = _record(gates, process_attestations=[])
+    with pytest.raises(H.Refusal) as e:
+        H.delta(_record(_base_gates()), candidate)
+    assert "non-terminal state" in str(e.value)
+
+
+def test_out_of_scope_is_counted_and_disclosed_without_a_fake_process():
+    gates = _base_gates()
+    gates[0]["state"] = "OUT_OF_SCOPE"
+    base = _record(copy.deepcopy(gates))
+    candidate = _record(copy.deepcopy(gates))
+    d = H.delta(base, candidate)
+    assert d["status"] == H.CLEAN
+    assert d["no_verdict_either_side"] == [gates[0]["label"]]
+    assert all(rec["label"] != gates[0]["label"]
+               for rec in candidate["process_attestations"])
+
+
+@pytest.mark.parametrize("attested", [False, True])
+def test_exact_structural_empty_protocols_self_compare_clean(attested):
+    """116b synthesized no process; cab8 emits one real rc-2 process record."""
+    base = _empty_structural_record(attested=attested)
+    candidate = copy.deepcopy(base)
+    d = H.delta(base, candidate)
+    assert d["status"] == H.CLEAN
+    assert d["no_verdict_either_side"] == [H.ROUTED_DEF_EMPTY_LABEL]
+
+
+def test_structural_empty_refuses_a_forged_rc_zero_attestation():
+    base = _empty_structural_record(attested=True)
+    candidate = copy.deepcopy(base)
+    row = candidate["gates"][-1]
+    candidate["process_attestations"][-1] = A.process_attestation(
+        row["label"], "[PASS] forged\n", 0,
+        ["python3", "structural-empty.py"])
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate)
+    assert "claims NOT_CHECKED over process rc 0" in str(e.value)
+
+
+def test_structural_empty_refuses_a_mismatched_attestation_identity():
+    base = _empty_structural_record(attested=True)
+    candidate = copy.deepcopy(base)
+    candidate["process_attestations"][-1]["label"] = "some other empty row"
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate)
+    assert "exact bijection" in str(e.value)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The one bootstrap declaration transition: exact or refused
+# ══════════════════════════════════════════════════════════════════════
+
+def test_exact_attested_routed_def_empty_to_expanded_transition_is_clean():
+    """Common red is carried; the exact manifest population is introduced."""
+    base, candidate, evidence = _transition_pair()
+    d = H.delta(base, candidate, evidence)
+    assert d["status"] == H.CLEAN
+    assert d["carried"] == [["FAIL", "common hygiene finding", ""]]
+    transition = d["corpus_transitions"][0]
+    assert {key: transition[key] for key in (
+        "corpus", "base_items", "candidate_items", "replacement_gates",
+        "benchmark_data_sha", "bounded_not_checked")} == {
+            "corpus": H.ROUTED_DEF_CORPUS,
+            "base_items": 0,
+            "candidate_items": 1,
+            "replacement_gates": 4,
+            "benchmark_data_sha": _BENCHMARK_SHA,
+            "bounded_not_checked": [],
+        }
+    assert len(transition["parent_evidence_sha256"]) == 64
+
+
+def test_cli_accepts_only_an_explicit_parent_owned_transition_record(tmp_path):
+    base, candidate, evidence = _transition_pair()
+    base_path = _write(tmp_path, "base-transition.json", base)
+    candidate_path = _write(tmp_path, "candidate-transition.json", candidate)
+    evidence_path = _write(tmp_path, "parent-transition.json", evidence)
+    rc, out = _run(
+        base_path, candidate_path,
+        extra=("--trusted-transition-evidence", str(evidence_path)))
+    assert rc == H.RC_OK, out
+    assert "exact corpus transition" in out
+    assert "process-attested replacement gate(s)" in out
+
+
+@pytest.mark.parametrize(
+    ("mutate", "diagnostic"),
+    [
+        (lambda payload: payload[:-1] + ', "schema": 1}',
+         "duplicate JSON key"),
+        (lambda payload: payload.replace('"ordinal": 1', '"ordinal": NaN', 1),
+         "non-finite JSON number"),
+    ],
+)
+def test_parent_evidence_json_refuses_ambiguous_numbers_and_keys(
+        tmp_path, mutate, diagnostic):
+    base, candidate, evidence = _transition_pair()
+    base_path = _write(tmp_path, "base-transition.json", base)
+    candidate_path = _write(tmp_path, "candidate-transition.json", candidate)
+    evidence_path = tmp_path / "ambiguous-parent-transition.json"
+    evidence_path.write_text(mutate(json.dumps(evidence)), encoding="utf-8")
+    rc, out = _run(
+        base_path, candidate_path,
+        extra=("--trusted-transition-evidence", str(evidence_path)))
+    assert rc == H.RC_REFUSED
+    assert diagnostic in out
+
+
+def test_transition_refuses_without_parent_owned_evidence():
+    base, candidate, _evidence = _transition_pair()
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate)
+    assert "parent-owned canonical manifest" in str(e.value)
+
+
+def test_transition_refuses_a_forged_positive_item_count():
+    base, candidate, evidence = _transition_pair()
+    candidate["corpora"][0]["items"] = 2
+    for row in candidate["gates"][1:]:
+        row["corpus_items"] = 2
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "every item ordinal" in str(e.value)
+
+
+def test_transition_refuses_a_forged_gate_count():
+    base, candidate, evidence = _transition_pair()
+    candidate["corpora"][0]["gates"] += 1
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "says" in str(e.value) and "gate(s)" in str(e.value)
+
+
+def test_transition_refuses_a_missing_process_attestation():
+    base, candidate, evidence = _transition_pair()
+    candidate["process_attestations"].pop()
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "exact bijection" in str(e.value)
+
+
+def test_transition_refuses_a_forged_process_attestation():
+    base, candidate, evidence = _transition_pair()
+    candidate["process_attestations"][0]["returncode"] = 7
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "digest mismatch" in str(e.value)
+
+
+def test_transition_refuses_a_self_consistent_candidate_lie_against_parent_rc():
+    """Candidate JSON can agree with itself and still did not own the OS run."""
+    base, candidate, evidence = _transition_pair()
+    candidate["gates"][1]["state"] = "FAIL"
+    _refresh(candidate)  # makes a fully self-consistent rc-1 FAIL attestation
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "OS return-code receipt" in str(e.value)
+
+
+def test_transition_refuses_a_self_consistent_wrong_command_digest():
+    base, candidate, evidence = _transition_pair()
+    row = candidate["gates"][1]
+    forged = A.process_attestation(
+        row["label"], "[PASS] checked\n", 0,
+        ["python3", "different-checker.py", row["label"]])
+    candidate["process_attestations"][1] = forged
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "ordinal, command and OS return-code" in str(e.value)
+
+
+def test_transition_refuses_missing_parent_execution_receipt():
+    base, candidate, evidence = _transition_pair()
+    evidence["execution_receipts"].pop()
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "do not exact-cover" in str(e.value)
+
+
+def test_transition_refuses_nonterminal_parent_execution_receipt():
+    base, candidate, evidence = _transition_pair()
+    evidence["execution_receipts"][0]["owned"]["census_ok"] = False
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "natural owned terminal result" in str(e.value)
+
+
+def test_transition_refuses_bool_as_parent_protocol_integer():
+    base, candidate, evidence = _transition_pair()
+    evidence["execution_receipts"][0]["owned"]["protocol"] = True
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "natural owned terminal result" in str(e.value)
+
+
+def test_transition_refuses_bool_as_evidence_schema_integer():
+    base, candidate, evidence = _transition_pair()
+    evidence["schema"] = True
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "no exact complete parent-owned" in str(e.value)
+
+
+def test_transition_refuses_manifest_identity_not_in_candidate():
+    base, candidate, evidence = _transition_pair()
+    evidence["corpora"][0]["items"][0]["gates"][0]["label"] = \
+        "unrelated label"
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "manifest gate" in str(e.value)
+
+
+def test_transition_refuses_an_unrelated_base_gate_removal():
+    base, candidate, evidence = _transition_pair()
+    candidate["gates"] = candidate["gates"][1:]
+    _refresh(candidate)
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "unrelated removals never transition" in str(e.value)
+
+
+def test_transition_refuses_an_unrelated_candidate_gate_addition():
+    base, candidate, evidence = _transition_pair()
+    candidate["gates"].append(_gate("unrelated new gate", "PASS"))
+    _refresh(candidate)
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "unrelated additions" in str(e.value)
+
+
+def test_transition_refuses_an_unexempted_candidate_not_checked():
+    base, candidate, evidence = _transition_pair(
+        replacement_state="NOT_CHECKED")
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "unexempted NOT_CHECKED" in str(e.value)
+
+
+def test_transition_discloses_a_bounded_candidate_not_checked():
+    base, candidate, evidence = _transition_pair(
+        replacement_state="NOT_CHECKED")
+    row = candidate["gates"][1]
+    row.update(exempt_until="2026-08-16", exempt_reason="known prerequisite",
+               exemption_expired=False)
+    _refresh(candidate)
+    # The independent receipt remains rc 2, as does the refreshed candidate
+    # process attestation; only the bounded exemption metadata changed.
+    d = H.delta(base, candidate, evidence)
+    assert d["status"] == H.CLEAN
+    assert d["corpus_transitions"][0]["bounded_not_checked"] == [row["label"]]
+
+
+@pytest.mark.parametrize("state", ["FAIL", "WROTE_CORPUS"])
+def test_transition_candidate_findings_block(state):
+    base, candidate, evidence = _transition_pair(replacement_state=state)
+    d = H.delta(base, candidate, evidence)
+    assert d["status"] == H.INTRODUCED
+    assert any(finding[0] == state for finding in d["introduced"])
+
+
+def test_transition_candidate_expired_exemption_blocks():
+    base, candidate, evidence = _transition_pair()
+    row = candidate["gates"][1]
+    row.update(exempt_until="2026-08-14", exempt_reason="past promise",
+               exemption_expired=True)
+    _refresh(candidate)
+    d = H.delta(base, candidate, evidence)
+    assert d["status"] == H.INTRODUCED
+    assert [H.EXPIRED_KIND, row["label"], H.ROUTED_DEF_CORPUS] \
+        in d["introduced"]
+
+
+@pytest.mark.parametrize("arm", ["base", "candidate"])
+def test_transition_refuses_a_missing_benchmark_sha(arm):
+    base, candidate, evidence = _transition_pair()
+    {"base": base, "candidate": candidate}[arm]["corpus_inputs"] = {}
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "full Git object id" in str(e.value)
+
+
+def test_transition_refuses_mismatched_benchmark_shas():
+    base, candidate, evidence = _transition_pair()
+    candidate["corpus_inputs"]["benchmark_data_sha"] = "b" * 40
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "do not bind the same immutable" in str(e.value)
+
+
+def test_transition_refuses_a_failed_candidate_corpus_producer():
+    base, candidate, evidence = _transition_pair()
+    candidate["corpora"][0]["expansion"] = "PRODUCER_FAILED"
+    with pytest.raises(H.Refusal) as e:
+        H.delta(base, candidate, evidence)
+    assert "producer FAILED" in str(e.value)
 
 
 # ══════════════════════════════════════════════════════════════════════
