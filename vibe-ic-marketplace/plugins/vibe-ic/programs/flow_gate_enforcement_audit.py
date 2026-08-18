@@ -143,7 +143,16 @@ Exit codes:
                                             printed PASS.
        — or a recorded entry that no longer holds, which must be paid down out
        of its register rather than left standing as permission.
-    2  I/O error, or the flow definition could not be parsed
+    2  NOT_CHECKED — this program could not LOOK, so it declines to report a
+       verdict. Three ways in, all the same class: no flow definition, a flow
+       definition the parser could not read, or (#1705) a ratchet baseline that
+       EXISTS and could not be read — unreadable, not JSON, not an object, or
+       carrying a register of a type whose membership cannot be read. An
+       unreadable baseline used to collapse to `{}` and be reported as "no debt
+       recorded", which passed a tree against a register this program never
+       read and let `--write-baseline` overwrite the recorded debt it had just
+       failed to open. An ABSENT baseline is a different state and still exits
+       0/1: nothing was ever recorded, which the registers report as UNRECORDED.
 """
 from __future__ import annotations
 
@@ -1773,20 +1782,99 @@ def main(argv: Optional[List[str]] = None) -> int:
                    for u in (rep.get("undeclared_audit_only") or []))
     bl_path = Path(a.baseline) if a.baseline else (
         _HERE / "flow_gate_enforcement_baseline.json")
+    # AN UNREADABLE BASELINE IS NOT AN EMPTY ONE (#1705).
+    #
+    # This block used to collapse every failure to read the file into `doc =
+    # {}`. There are three distinct states here and the collapse merged two of
+    # them that mean opposite things:
+    #
+    #     the file is ABSENT          -> nothing was ever recorded. Legitimate
+    #                                    on a first run; `_recorded` returns
+    #                                    None and the registers report
+    #                                    UNRECORDED, which is what that means.
+    #     the file is PRESENT and
+    #     could not be read           -> the debt owed is UNKNOWN. Reporting it
+    #                                    as `{}` states "nothing was owed",
+    #                                    which is a MEASUREMENT this program did
+    #                                    not take.
+    #
+    # What that cost, in both directions:
+    #
+    #   * IT PASSED WHAT IT NEVER READ. On a tree with no findings the read
+    #     path went prev=None / now=[] -> rc 0 and printed "[PASS] no NEW
+    #     enforcement contradiction (0 recorded as debt)" over a baseline it had
+    #     just failed to open. The register could hold 113 entries and the
+    #     verdict line would say 0.
+    #   * IT REDDENED WITH THE WRONG REASON. With findings it printed
+    #     "`known` is UNRECORDED in flow_gate_enforcement_baseline.json" — false
+    #     about a file that is sitting right there — and told the operator to
+    #     run `--write-baseline`, which is
+    #   * THE REMEDY THAT DESTROYS THE EVIDENCE. `--write-baseline` on the same
+    #     unreadable file takes prev=None, so the shrink-only ratchet has
+    #     nothing to compare against and the recorded debt is OVERWRITTEN by
+    #     whatever today's tree happens to show. A ratchet that a truncated
+    #     write can silently reset is not a ratchet.
+    #
+    # So: refuse, rc 2. That is this file's OWN convention for "I could not
+    # look", used twice already in this function for an absent flow definition
+    # and for a flow the parser could not read ("NEVER degrade to a partial
+    # read"), and it is `_gate_dispatch.sh`'s NOT_CHECKED tier. This gate is
+    # wired with plain `run`, which makes rc 2 a loud FAIL rather than a
+    # tolerated non-verdict — correct, because a corrupt ratchet baseline is a
+    # thing to fix, not a thing to skip.
     doc: dict = {}
     if bl_path.is_file():
         try:
-            loaded = json.loads(bl_path.read_text())
-            doc = loaded if isinstance(loaded, dict) else {}
-        except (OSError, ValueError):
-            doc = {}
+            raw = bl_path.read_text()
+        except OSError as exc:
+            print(f"IO_ERROR: the ratchet baseline {bl_path} EXISTS and could "
+                  f"not be read ({exc}). What debt it records is unknown, and "
+                  f"an unknown debt is not a zero debt — refusing rather than "
+                  f"reporting a register this run never read. Nothing was "
+                  f"written; the file is intact.", file=sys.stderr)
+            return 2
+        try:
+            loaded = json.loads(raw)
+        except ValueError as exc:
+            print(f"IO_ERROR: the ratchet baseline {bl_path} EXISTS and is not "
+                  f"readable JSON ({exc}). Treating that as an empty register "
+                  f"would report every entry it records as `paid` and would let "
+                  f"--write-baseline overwrite it with today's set, resetting "
+                  f"the ratchet. Restore or repair the file.", file=sys.stderr)
+            return 2
+        if not isinstance(loaded, dict):
+            print(f"IO_ERROR: the ratchet baseline {bl_path} parses as "
+                  f"{type(loaded).__name__}, not an object, so it carries no "
+                  f"`known` / `undeclared_known` register this program can "
+                  f"read. Refusing rather than reading the absence of a "
+                  f"register as the absence of debt.", file=sys.stderr)
+            return 2
+        doc = loaded
+        # A REGISTER OF THE WRONG TYPE IS ALSO UNREADABLE, and silently so:
+        # `sorted(str(x) for x in "orphan::foo")` iterates CHARACTERS, so a
+        # register corrupted from a list to a string became a 12-entry register
+        # of single letters — every real entry reported `paid`, and 12 invented
+        # ones reported NEW. The read has to reject the shape it cannot honour
+        # at the same place it rejects the file it cannot parse.
+        for key in ("known", "undeclared_known"):
+            if key in doc and not isinstance(doc[key], (list, tuple, type(None))):
+                print(f"IO_ERROR: the ratchet baseline {bl_path} records "
+                      f"`{key}` as {type(doc[key]).__name__}, not a list. Its "
+                      f"membership cannot be read, and a register that cannot "
+                      f"be read is not an empty one.", file=sys.stderr)
+                return 2
 
     def _recorded(key: str) -> Optional[List[str]]:
         """A register that is ABSENT is UNRECORDED, not empty. The two differ:
         an empty register asserts "no debt", an absent one asserts nothing at
         all, and reading absence as emptiness would report every pre-existing
         entry as `paid` the first time a baseline written by an older version
-        of this program is read."""
+        of this program is read.
+
+        A register that is present but UNREADABLE is a third state, and it is
+        refused above with rc 2 rather than reaching here — this function can
+        only ever be asked about a register whose membership was actually
+        read."""
         if key not in doc:
             return None
         return sorted(str(x) for x in (doc.get(key) or []))
