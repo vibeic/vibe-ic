@@ -67,7 +67,9 @@ green testcase XML from erasing a session-level refusal.
 
 PROGRESS SUPERVISION, NOT A RUNTIME GUESS
 =========================================
-pytest-timeout remains a last-resort per-test guard. The outer supervisor does
+There is deliberately no pytest-timeout guard on the landing path. A fixed
+elapsed limit kills the session rather than measuring a test and makes
+healthy-but-slow work indistinguishable from a hang. The outer supervisor does
 not guess how long a file or the aggregate selection should take. A private
 pytest plugin appends completed collection/test lifecycle events to a structured
 sidecar and the supervisor watches ONLY validated, strictly ordered events.
@@ -102,13 +104,12 @@ USAGE
         [--aggregate-check] [--aggregate-only]
         [--aggregate-stall-after SECONDS] [--fallback-jobs N]
         [--fallback-rescue-jobs N]
-        -- <the full pytest command, e.g. python3 -m pytest -q --timeout=180>
+        -- <the full pytest command, e.g. python3 -m pytest -q>
 
 The command after ``--`` is run VERBATIM with ``-o junit_family=xunit1``, a
 per-file ``--junitxml`` and the one file appended. It is passed in rather than
-built here so the harness bound stays declared at ONE site — the caller's line
-in `tools/gatekeeper-land.sh`, which is where `ci_harness_timeout_ceiling_check`
-reads it from.
+built here so callers can pin their pytest environment without granting this
+driver authority to invent a verdict-affecting elapsed-time limit.
 
 With ``--aggregate-check`` the command first runs once over the entire selection.
 Its testcase ids are namespaced under ``pytest_aggregate`` and its exact process
@@ -477,6 +478,81 @@ class _SemanticProgressProbe:
 def read_selection(path: Path) -> List[str]:
     return [l.strip() for l in
             path.read_text(errors="replace").splitlines() if l.strip()]
+
+
+def _file_identity(path: str, cwd: Optional[str]) -> Optional[str]:
+    """Return one lexical/real file identity in the pytest working tree.
+
+    Pytest's xunit1 ``file`` attribute is normally relative to its cwd while a
+    selector is also allowed to emit an absolute path.  Comparing raw strings
+    would therefore call the same file missing (or allow the same file twice)
+    solely because the two producers chose different spellings.  Resolution is
+    used only for identity; pytest still receives the selector's original
+    argument verbatim.
+    """
+    try:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = Path(cwd) / candidate if cwd else Path.cwd() / candidate
+        return os.path.normcase(str(candidate.resolve(strict=False)))
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _selection_identity_problem(selection: Sequence[str],
+                                cwd: Optional[str]) -> str:
+    """Reject an ambiguous selector denominator before launching pytest."""
+    identities: Dict[str, str] = {}
+    for raw in selection:
+        identity = _file_identity(raw, cwd)
+        if identity is None:
+            return f"selected path has no stable identity: {raw!r}"
+        previous = identities.get(identity)
+        if previous is not None:
+            return ("selection names the same file more than once: "
+                    f"{previous!r}, {raw!r}")
+        identities[identity] = raw
+    return ""
+
+
+def _aggregate_coverage_problem(suites: Sequence[ET.Element],
+                                selection: Sequence[str],
+                                cwd: Optional[str]) -> str:
+    """Prove every selected file contributed at least one aggregate testcase.
+
+    A normal rc=0 plus a valid JUnit is insufficient: pytest is also happy when
+    one selected file collects zero items.  That shape used to disappear from
+    the report and let a two-file denominator look like a one-file green run.
+    Extra files are equally invalid because they answer a different selection.
+    """
+    selected: Dict[str, str] = {}
+    for raw in selection:
+        identity = _file_identity(raw, cwd)
+        if identity is None:
+            return f"selected path has no stable identity: {raw!r}"
+        if identity in selected:
+            return ("selection names the same file more than once: "
+                    f"{selected[identity]!r}, {raw!r}")
+        selected[identity] = raw
+
+    reported: Dict[str, str] = {}
+    for suite in suites:
+        for testcase in suite.iter("testcase"):
+            raw = testcase.get("file")
+            if not isinstance(raw, str) or not raw:
+                return "aggregate JUnit contains a testcase with no file identity"
+            identity = _file_identity(raw, cwd)
+            if identity is None:
+                return ("aggregate JUnit testcase has no stable file identity: "
+                        f"{raw!r}")
+            reported[identity] = raw
+
+    missing = [selected[key] for key in sorted(set(selected) - set(reported))]
+    extra = [reported[key] for key in sorted(set(reported) - set(selected))]
+    if missing or extra:
+        return ("aggregate JUnit does not exactly cover the selected files "
+                f"(missing={missing}, extra={extra})")
+    return ""
 
 
 def _count(suite: ET.Element) -> Tuple[int, int]:
@@ -1559,6 +1635,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "was run. An empty corpus is not evidence that anything passed.",
               file=sys.stderr)
         return RC_CANNOT_ASK
+    selection_problem = _selection_identity_problem(selection, a.cwd)
+    if selection_problem:
+        print("[SKIP] pytest_per_file_junit: the selection denominator is "
+              f"ambiguous ({selection_problem}) — nothing was run.",
+              file=sys.stderr)
+        return RC_CANNOT_ASK
     tmp = Path(tempfile.mkdtemp(prefix="perfile_junit_"))
     _install_shutdown_handlers()
     results: List[FileResult] = []
@@ -1586,21 +1668,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if not out.endswith("\n"):
                 sys.stdout.write("\n")
             aggregate_suites = _load_suites(aggregate_path)
+            aggregate_coverage_problem = ""
             if aggregate_suites is not None:
                 for suite in aggregate_suites:
                     cases, red = _count(suite)
                     aggregate_cases += cases
                     aggregate_red += red
+                aggregate_coverage_problem = _aggregate_coverage_problem(
+                    aggregate_suites, selection, a.cwd)
             # rc 0/1 are pytest's complete normal outcomes. Everything else is
             # interrupted/internal/usage/no-collection and cannot certify the
             # whole-selection semantics even if a partial XML happened to parse.
             if (aggregate_killed or aggregate_suites is None
                     or aggregate_cases == 0
-                    or aggregate_rc not in (0, 1)):
+                    or aggregate_rc not in (0, 1)
+                    or aggregate_coverage_problem):
                 aggregate_incomplete = True
-                why = _norecord_reason(
+                why = (aggregate_coverage_problem or _norecord_reason(
                     aggregate_rc, out, aggregate_killed,
-                    a.aggregate_stall_after)
+                    a.aggregate_stall_after))
                 print(f"AGGREGATE_NORECORD  {why} — cross-file/order semantics "
                       "are UNKNOWN, not clean", flush=True)
                 aggregate_suites = None
