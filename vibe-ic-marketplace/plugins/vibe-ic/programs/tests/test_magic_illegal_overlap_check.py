@@ -63,7 +63,7 @@ MAGIC_DUMP_TWO_OVERLAPS = (
 # fixtures
 # --------------------------------------------------------------------------- #
 def _project(tmp_path: Path, *, feedback: str = None,
-             extraction: bool = True) -> Path:
+             extraction: bool = True, transcript: str = None) -> Path:
     """A project root with an extraction, and optionally a feedback dump.
 
     `feedback=None` means the dump is ABSENT; `feedback=""` means it exists and
@@ -75,7 +75,9 @@ def _project(tmp_path: Path, *, feedback: str = None,
     ext.mkdir(parents=True)
     if extraction:
         (ext / "ext2spice_top.tcl").write_text("extract all\next2spice lvs\n")
-        (ext / "ext2spice.log").write_text("MAGIC_EXT2SPICE_DONE top.sp\n")
+        (ext / "ext2spice.log").write_text(
+            transcript if transcript is not None
+            else "MAGIC_EXT2SPICE_DONE top.sp\n")
         (ext / "top_extracted.sp").write_text(".subckt top a b\n.ends\n")
     if feedback is not None:
         (ext / M.FEEDBACK_NAMES[0]).write_text(feedback)
@@ -210,6 +212,72 @@ def test_the_two_counts_disagree_loudly_and_the_larger_decides(tmp_path):
     assert "FEEDBACK_COUNT_DISAGREEMENT" in _rules(r)
     assert r["counts"]["gate_count"] == 1, "the LARGER count decides"
     assert r["passed"] is False
+
+
+def test_the_transcript_is_a_second_channel_and_a_silent_dump_cannot_hide(
+        tmp_path):
+    """The one failure direction the live experiment could not rule out.
+
+    magic's `paint` resolves type conflicts at paint time, so an illegal overlap
+    could not be produced in-image to prove the marker reaches the FEEDBACK
+    list; the real trigger is a GDS read of a conflicting layout. If some build
+    reported it to the transcript only, a feedback-only gate would read the
+    empty dump and PASS. It does not.
+    """
+    proj = _project(
+        tmp_path, feedback="",
+        transcript="Illegal overlap between nwell and pdiff "
+                   "(types do not connect)\n"
+                   "1 problems occurred.  See feedback entries.\n")
+    r = M.check(proj)
+    assert r["passed"] is False
+    assert "CHANNEL_DISAGREEMENT" in _rules(r)
+    assert r["counts"]["string_count"] == 0, "the dump really is empty"
+    assert r["counts"]["transcript_count"] == 1
+    assert r["counts"]["gate_count"] == 1, "the transcript decides here"
+
+
+def test_the_tools_own_area_count_is_the_dumps_denominator(tmp_path):
+    """magic says how many areas it filed; a dump holding fewer is truncated."""
+    proj = _project(
+        tmp_path,
+        feedback='box 0 0 1 1\nfeedback add "ordinary complaint" pale\n',
+        transcript="3 problems occurred.  See feedback entries.\n")
+    r = M.check(proj)
+    assert r["counts"]["areas_reported_by_tool"] == 3
+    assert r["counts"]["records_parsed"] == 1
+    assert "FEEDBACK_DUMP_INCOMPLETE" in _rules(r)
+    assert r["counts"]["determined"] is False
+    assert r["metrics"]["31__drv__magic_illegal_overlap__violation_count"] \
+        is None, "a floor is not a measurement, and must not publish as one"
+
+
+def test_the_area_count_is_a_max_not_a_sum_over_a_hierarchical_extraction(
+        tmp_path):
+    """One `problems occurred` line per cell; summing would over-count.
+
+    The maximum under-claims, which is the safe direction for a number used to
+    accuse a dump of being short.
+    """
+    proj = _project(
+        tmp_path,
+        feedback='box 0 0 1 1\nfeedback add "a" pale\n'
+                 'box 2 2 3 3\nfeedback add "b" pale\n',
+        transcript="2 problems occurred.  See feedback entries.\n"
+                   "1 problems occurred.  See feedback entries.\n")
+    r = M.check(proj)
+    assert r["counts"]["areas_reported_by_tool"] == 2, "max, not the sum of 3"
+    assert "FEEDBACK_DUMP_INCOMPLETE" not in _rules(r)
+    assert r["passed"] is True
+
+
+def test_a_clean_pass_names_both_channels(tmp_path):
+    proj = _project(tmp_path, feedback="",
+                    transcript="0 problems occurred.  See feedback entries.\n")
+    r = M.check(proj)
+    assert r["passed"] is True
+    assert "ext2spice.log" in r["reason"], "a PASS must say what it read"
+    assert "BOTH channels" in r["reason"]
 
 
 def test_a_clean_pass_over_a_partly_unparsed_dump_says_so(tmp_path):
