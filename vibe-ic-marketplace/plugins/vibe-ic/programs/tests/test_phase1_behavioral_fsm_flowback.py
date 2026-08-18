@@ -24,6 +24,22 @@ import design_one_shot_runner as runner  # noqa: E402
 import canonical_primitive_synth as canonical_primitive  # noqa: E402
 import spec_artifact_registry as registry  # noqa: E402
 import rtl_provenance  # noqa: E402
+
+# BIND TO WHAT PRODUCTION CONSULTS, NOT TO WHAT THIS FILE IMPORTED.
+# `design_one_shot_runner` does `import rtl_provenance as _rtl_prov` at its
+# own import time, and `tests/test_rtl_provenance.py` REPLACES the
+# `sys.modules["rtl_provenance"]` entry with a freshly-executed module
+# object. Whenever that file is imported AFTER the runner and BEFORE this
+# one -- e.g. `pytest test_902_sim_toolchain_provenance.py
+# test_rtl_provenance.py test_phase1_behavioral_fsm_flowback.py`, a
+# legitimate order -- the name bound above is a DIFFERENT object from the
+# one the runner calls. Tests that monkeypatch the module then patch
+# something production never consults: the spy is never called, the
+# production path still returns PASS, and the test fails on its own
+# counter while the code under test is correct. The full alphabetical
+# suite happens to import this file first, which is the only reason that
+# was invisible.
+_PROD_RTL_PROV = runner._rtl_prov
 from _hostpaths import require_repo  # noqa: E402
 
 
@@ -172,7 +188,7 @@ def test_step_behavioral_classify_is_bound_across_live_root_swap_restore(
     project = _project(tmp_path / "project")
     displaced = tmp_path / "project.displaced"
     seen = []
-    real_classify = rtl_provenance.classify
+    real_classify = _PROD_RTL_PROV.classify
 
     def _classify_while_live_root_is_replaced(candidate):
         candidate = Path(candidate)
@@ -190,7 +206,7 @@ def test_step_behavioral_classify_is_bound_across_live_root_swap_restore(
             displaced.rename(project)
 
     monkeypatch.setattr(
-        rtl_provenance, "classify", _classify_while_live_root_is_replaced)
+        _PROD_RTL_PROV, "classify", _classify_while_live_root_is_replaced)
 
     result = runner.step_rtl_gen(
         project, "deliberately_unregistered_class")
@@ -237,13 +253,24 @@ def test_rollback_restores_old_before_retrying_0555_new_cleanup(
     project, binding, stage_binding, baseline, final = pair
     real_remove = runner._phase1_remove_owned_entry_fd
     injected = False
+    # OBSERVE HERE, ASSERT IN THE TEST BODY.  `_remove_entry` swallows
+    # FileNotFoundError as "already gone" and retries every other exception,
+    # so an `assert` raised INSIDE this spy is absorbed by production code and
+    # the test still passes.  Re-introducing the destroy-new-before-restore-old
+    # ordering this test is named for therefore shipped green: the spy's read
+    # of the not-yet-restored old tree raised FileNotFoundError, production
+    # read that as success, and every remaining assertion still held.
+    observed = []
 
     def _fail_new_cleanup_once(parent_fd, name):
         nonlocal injected
         if name.startswith("new.") and not injected:
             injected = True
             old = project / "phase2" / "locked" / "deeper" / "state.txt"
-            assert old.read_text() == "old canonical\n"
+            try:
+                observed.append(old.read_text())
+            except OSError as exc:
+                observed.append(f"OLD-TREE-NOT-RESTORED: {exc!r}")
             raise OSError("injected rolled-new cleanup failure")
         return real_remove(parent_fd, name)
 
@@ -255,6 +282,9 @@ def test_rollback_restores_old_before_retrying_0555_new_cleanup(
         errors = transaction.rollback()
 
         assert injected
+        assert observed == ["old canonical\n"], (
+            "rollback destroyed staged-new work before the old canonical tree "
+            f"was restored; the spy saw {observed}")
         assert errors == []
         old = project / "phase2" / "locked" / "deeper"
         assert (old / "state.txt").read_text() == "old canonical\n"
@@ -693,6 +723,83 @@ def test_alias_cleanup_that_succeeds_on_the_final_attempt_is_not_failed(
         stage_binding.close()
         binding.close()
         _unlock_test_tree(project, tmp_path / "stage")
+
+
+def test_returned_alias_error_is_reported_not_only_a_raised_one(
+        tmp_path, monkeypatch):
+    """The production failure mode is a RETURNED string, not an exception.
+
+    `_remove_container_aliases` signals failure by RETURNING `str(last)` after
+    its retries (ENOTEMPTY on an imperfect drain, a foreign file inside the
+    container). The existing seam test injects a RAISE, which exercises only
+    the new inner `except`; a regression that dropped the returned string would
+    orphan a `.vibeic-rtl-txn.*` container in the canonical project with PASS
+    and no warning, and nothing would notice. The symmetric drain case IS
+    covered, so this closes a one-sided gap.
+    """
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        runner._Phase1StagedTreeTransaction, "_remove_container_aliases",
+        lambda _self: "injected returned alias residue")
+
+    result = runner.step_rtl_gen(
+        project, "deliberately_unregistered_class")
+
+    assert result.status == "PASS"
+    assert result.extras["transaction_cleanup_warning"] == (
+        "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: injected returned alias residue")
+    assert (project / "phase2" / "stage1" / "rtl" / "TopModule.v").is_file()
+    for residue in [p for p in project.iterdir()
+                    if p.name.startswith(".vibeic-rtl-txn.")]:
+        shutil.rmtree(residue, ignore_errors=True)
+
+
+def test_both_cleanup_warnings_are_reported_not_only_the_first(
+        tmp_path, monkeypatch):
+    """`"; ".join(warnings)` must actually carry both halves.
+
+    Replacing it with `warnings[0]` kept every suite green, so the second
+    warning was free to disappear.
+    """
+    project = _project(tmp_path)
+    monkeypatch.setattr(
+        runner._Phase1StagedTreeTransaction, "_drain",
+        lambda _self: "injected drain residue")
+    monkeypatch.setattr(
+        runner._Phase1StagedTreeTransaction, "_remove_container_aliases",
+        lambda _self: "injected alias residue")
+
+    result = runner.step_rtl_gen(
+        project, "deliberately_unregistered_class")
+
+    assert result.status == "PASS"
+    assert result.extras["transaction_cleanup_warning"] == (
+        "RTL_TRANSACTION_DRAIN_CLEANUP_FAILED: injected drain residue; "
+        "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: injected alias residue")
+    for residue in [p for p in project.iterdir()
+                    if p.name.startswith(".vibeic-rtl-txn.")]:
+        shutil.rmtree(residue, ignore_errors=True)
+
+
+def test_finalize_on_an_already_closed_transaction_is_a_silent_no_op(
+        tmp_path):
+    """The `if self.closed` guard is load-bearing on the no-delta path.
+
+    A run with no changed tops builds a pre-closed transaction whose
+    container_fd is -1. Without the guard, finalize() would _drain() on fd -1,
+    the retry loop would turn EBADF into a string, and every idempotent run of
+    step_rtl_gen would gain a bogus cleanup warning while still reporting PASS.
+    That branch is hit on ordinary no-change runs; deleting the guard left the
+    whole suite green.
+    """
+    project = _project(tmp_path)
+    first = runner.step_rtl_gen(project, "deliberately_unregistered_class")
+    assert first.status == "PASS"
+
+    second = runner.step_rtl_gen(project, "deliberately_unregistered_class")
+
+    assert second.status == "PASS"
+    assert "transaction_cleanup_warning" not in second.extras
 
 
 def test_stage_temp_cleanup_failure_rolls_back_before_finalize(
@@ -1169,7 +1276,7 @@ def test_deleted_sole_generated_primary_is_digest_bound_and_restored(
     assert evidence["file_count"] == 0
     assert evidence["removed"] == ["TopModule.v"]
 
-    real_load_ledger = rtl_provenance.load_ledger
+    real_load_ledger = _PROD_RTL_PROV.load_ledger
     ledger_reads = 0
 
     def _load_ledger_once(path):
@@ -1177,7 +1284,7 @@ def test_deleted_sole_generated_primary_is_digest_bound_and_restored(
         ledger_reads += 1
         return real_load_ledger(path)
 
-    monkeypatch.setattr(rtl_provenance, "load_ledger", _load_ledger_once)
+    monkeypatch.setattr(_PROD_RTL_PROV, "load_ledger", _load_ledger_once)
 
     restored = runner._try_phase1_behavioral_fsm_rtl(project, 0.0)
 
