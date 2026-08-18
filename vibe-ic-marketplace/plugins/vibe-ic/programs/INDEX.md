@@ -124,7 +124,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `backlog_severity_classify` | any | — | deterministic severity table-lookup for phase1-coverage-loop ORGANIC backlog issues. |
 | `bcd_synth` | any | — | a DETERMINISTIC solver for the CVDP binary-coded-decimal (BCD) family of "code generation" problems. |
 | `behavioral_evidence_per_spec_item_check` | any | v0.100 | v0.100 J1 |
-| `behavioral_fsm_synth` | any | — | deterministic SOLVER for two GENERAL, mechanically- parseable BEHAVIORAL-PROSE Moore-FSM shapes that NO sibling solver covers. |
+| `behavioral_fsm_synth` | any | — | deterministic SOLVER for three GENERAL, mechanically- parseable BEHAVIORAL-PROSE Moore-FSM shapes that NO sibling solver covers. |
 | `benchmark_clean_room_check` | any | — | clean-room run-dir guard (ORGANIC-20260604). |
 | `benchmark_completeness` | any | — | THIN per-benchmark adapters over the GENERAL `spec_complete_extract.assess_spec` engine. |
 | `benchmark_dispatch` | any | — | entry point for /vibe-ic-benchmark. |
@@ -1281,7 +1281,7 @@ _(no programs in this group)_
 - `backlog_severity_classify` — deterministic severity table-lookup for phase1-coverage-loop ORGANIC backlog issues.
 - `bcd_synth` — a DETERMINISTIC solver for the CVDP binary-coded-decimal (BCD) family of "code generation" problems.
 - `behavioral_evidence_per_spec_item_check` — v0.100 J1  _[v0.100]_
-- `behavioral_fsm_synth` — deterministic SOLVER for two GENERAL, mechanically- parseable BEHAVIORAL-PROSE Moore-FSM shapes that NO sibling solver covers.
+- `behavioral_fsm_synth` — deterministic SOLVER for three GENERAL, mechanically- parseable BEHAVIORAL-PROSE Moore-FSM shapes that NO sibling solver covers.
 - `benchmark_clean_room_check` — clean-room run-dir guard (ORGANIC-20260604).
 - `benchmark_completeness` — THIN per-benchmark adapters over the GENERAL `spec_complete_extract.assess_spec` engine.
 - `benchmark_dispatch` — entry point for /vibe-ic-benchmark.
