@@ -89,6 +89,18 @@ yarn-error.log*
 *.rda
 work/
 runs/
+# vibe-ic#1744 — the SAME evidence-vs-noise line the `*.log` block above draws,
+# for a directory name. `runs/` is right for EDA flow output in a project tree
+# and wrong for the ONE run directory that is a tracked test fixture: the
+# external shuttle precheck writes `runs/<tag>/<NN>-<step>/`, and the parser in
+# `tapeout_readiness_check` keys on that structure — specifically on which step
+# dirs carry a `state_out.json`. A fixture that renamed `runs/` to dodge this
+# rule would stop being what the tool emits, which is the only property that
+# makes it worth having. MEASURED: without these two lines `git add -A` stages
+# PROVENANCE.md and silently drops all fourteen evidence files, so the test
+# would import a fixture that is not there.
+!vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/shuttle_precheck_refusal/runs/
+!vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/shuttle_precheck_refusal/runs/**
 
 # Quartus local
 db/

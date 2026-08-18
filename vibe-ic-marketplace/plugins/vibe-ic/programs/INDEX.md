@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1111
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1111)
+- **Total programs (excluding helpers / shims):** 1112
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1112)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1102 |
+| `any` | 1103 |
 
 ## Alphabetical listing
 
@@ -1043,6 +1043,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `synth_wrapper_gen` | any | — | auto-generate synthesis wrapper for inout-port designs. |
 | `table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st... |
 | `tapeout_checklist_gen` | any | — | emit Step 36 (v2.3) reports/audit/tapeout_checklist.json. |
+| `tapeout_readiness_check` | any | — | the EXTERNAL refusal interface, pointed at a shuttle that still exists. |
 | `tapeout_signoff_check` | any | — | Tapeout signoff check — wrapper for signoff_audit --mode tapeout. |
 | `tb_timing_extremes_check` | any | — | LL-6. |
 | `tb_vcs_only_construct_detect` | any | — | detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run. |
@@ -1183,7 +1184,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1102 programs)
+### `any` (1103 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2195,6 +2196,7 @@ _(no programs in this group)_
 - `synth_wrapper_gen` — auto-generate synthesis wrapper for inout-port designs.
 - `table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st...
 - `tapeout_checklist_gen` — emit Step 36 (v2.3) reports/audit/tapeout_checklist.json.
+- `tapeout_readiness_check` — the EXTERNAL refusal interface, pointed at a shuttle that still exists.
 - `tapeout_signoff_check` — Tapeout signoff check — wrapper for signoff_audit --mode tapeout.
 - `tb_timing_extremes_check` — LL-6.
 - `tb_vcs_only_construct_detect` — detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run.

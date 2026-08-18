@@ -242,6 +242,11 @@ _VERSION_READING_PROGRAMS = {
     "signoff_waiver_md_emit",
     "sta_triage_classify",
     "synth_doctor",
+    # #1744 — the live external-refusal gate. It stamps its report with
+    # `_pmd.emitted_by` for the same reason the other emitters do: a verdict
+    # about whether an outside party would accept a layout is worthless without
+    # knowing which build produced it.
+    "tapeout_readiness_check",
 }
 
 # The ONLY whole-file exemption. Every other candidate was checked with
