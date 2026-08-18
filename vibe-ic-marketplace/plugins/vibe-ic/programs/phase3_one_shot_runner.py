@@ -31452,7 +31452,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     lec_post_json = rpt_phase3 / "lec_post_layout.json"
     if primary_def.is_file() and _signoff_regen(lec_post_json, primary_def):
         try:
-            _lec_v = _emit_lec_post_layout(
+            _emit_lec_post_layout(
                 project, top, pdk, container, lec_post_json,
                 rpt_phase3 / "lec_post_layout.rpt", notes)
             if lec_post_json.is_file():
@@ -31476,6 +31476,17 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 f"post-layout LEC emit FAILED (sign-off step): {exc}")
             notes.append(
                 f"post-layout LEC emit FAILED (sign-off step): {exc}")
+
+    # ENFORCE the proof just written. Unconditional: the artefact that ships
+    # governs, whether this round re-emitted it or reused a still-fresh one. A
+    # FAIL / UNPROVEN / VACUOUS post-layout equivalence now makes this step
+    # FAIL, and a FAIL step makes the runner exit non-zero — see the
+    # `signoff_failures` return at the end of this function. Absent artefact ->
+    # no claim.
+    _lec_refusal = _lec_post_layout_refusal(project)
+    if _lec_refusal:
+        signoff_failures.append(_lec_refusal)
+        notes.append(_lec_refusal)
 
     # --- TAPEOUT-SIGNOFF: emit the reports the new sign-off gates consume ----
     # §4.05: every emission is best-effort + disclosed; a tool that cannot run
@@ -34994,6 +35005,69 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         f"post-layout LEC: {doc['verdict']} (gold={gold_kind}, "
         f"proven={doc['proven_points']}, unproven={doc['unproven_points']})")
     return str(doc["verdict"])
+
+
+# --- POST-LAYOUT EQUIVALENCE: the proof must REFUSE, not just report --------
+# `_emit_lec_post_layout` computes a real verdict and writes it to
+# reports/phase3/lec_post_layout.{json,rpt}. Its return value was assigned to a
+# local that nothing read, and the only path that could fail the step was the
+# emitter RAISING. So the two outcomes this proof exists to catch — the routed
+# netlist is NOT equivalent, and equivalence could not be PROVEN — both left the
+# flow at PASS, with the finding sitting in an artefact no runner step consumed.
+#
+# The reference flow does not do this: OpenROAD-flow-scripts runs `run_lec_test`
+# after `repair_timing` mutates the netlist inside CTS, and the stage dies on a
+# difference (`flow/scripts/lec_check.tcl`: `error "Repair timing output failed
+# lec test"`). A logic-changing repair cannot leave the CTS stage there.
+#
+# `lec_post_layout_check.check` is the authority and is already STRONGER than
+# theirs — it treats a VACUOUS or UNPROVEN proof as a FAIL, not a pass. This
+# reads that verdict and converts it into the runner's own refusal channel
+# (`signoff_failures` -> step FAIL -> runner exit 1).
+#
+# Deliberately evaluated OUTSIDE the `_signoff_regen` freshness guard at the
+# call site: when the artefact is still fresh the emitter is correctly skipped,
+# and the verdict that then ships is the one already on disk. A refusal that
+# only fired on the round that re-emitted would let the SECOND run of a
+# non-equivalent design pass.
+#
+# §4.05, in both directions:
+#   * artefact absent            -> no claim (the design is not placed-and-routed,
+#                                   or the emitter honestly SKIPped). NOT a refusal.
+#   * verdict SKIP               -> no claim.
+#   * verdict PASS               -> no claim.
+#   * verdict FAIL               -> REFUSE (NON_EQUIVALENT / UNPROVEN / VACUOUS /
+#                                   RUN_ERROR are each a non-proof, never a pass).
+#   * artefact present but the gate cannot be run over it -> REFUSE. An
+#     equivalence proof that cannot be EVALUATED is not an equivalence proof;
+#     reporting it as clean is the exact demotion this closes.
+def _lec_post_layout_refusal(project: Path) -> Optional[str]:
+    """Return the refusal text when post-layout equivalence must FAIL the flow,
+    else None. Pure over the on-disk artefact — no container, no tools."""
+    artefact = project / "reports" / "phase3" / "lec_post_layout.json"
+    mod = _lec_post_layout_module()
+    if mod is None:
+        if artefact.is_file():
+            return ("post-layout LEC NOT ENFORCEABLE: "
+                    f"{artefact.name} exists but lec_post_layout_check is "
+                    "unavailable, so its verdict could not be evaluated — an "
+                    "equivalence proof that cannot be checked is not a pass")
+        return None
+    try:
+        res = mod.check(project)
+    except Exception as exc:  # pragma: no cover - defensive
+        if artefact.is_file():
+            return (f"post-layout LEC NOT ENFORCEABLE: evaluating "
+                    f"{artefact.name} raised {exc!r} — an equivalence proof "
+                    "that cannot be checked is not a pass")
+        return None
+    if res.get("result") != "FAIL":
+        return None
+    findings = "; ".join(res.get("findings") or []) or "equivalence not proven"
+    return (f"post-layout LEC FAILED (verdict={res.get('verdict')}): "
+            f"{findings}. The FINAL routed/ECO netlist is not a proven "
+            "logical match for the synth/RTL reference — CTS / PnR / ECO / "
+            "fill changed the logic, or the proof did not close.")
 
 
 # Step 29 disclosure table. Maps what `sdf_gate_sim.run()` actually reported to
