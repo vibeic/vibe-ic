@@ -149,8 +149,10 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import errno
 import json
 import os
+import select
 import selectors
 import secrets
 import shutil
@@ -206,6 +208,10 @@ _MAX_DOMAIN_PROGRESS_SCOPES = 64
 _PR_SET_CHILD_SUBREAPER = 36
 _ACTIVE_JOB: Optional[Tuple[int, Set[Tuple[int, int]]]] = None
 _ACTIVE_FALLBACK_BASELINE: Optional[Set[Tuple[int, int]]] = None
+_IN_SHUTDOWN = False
+_CLEANUP_ACTIVE = False
+_KILL_CONFIRM_GRACE_S = 1.0
+_REAPER_POLL_MS = 100
 _FALLBACK_WORKER_FLAG = "--_fallback-worker-spec"
 _FALLBACK_WORKER_ENV = "VIBEIC_PYTEST_FALLBACK_WORKER"
 _COLLECT_WORKER_FLAG = "--_collect-worker-spec"
@@ -727,50 +733,193 @@ class CleanupResult:
     census_ok: bool
 
 
+def _open_identity_pidfd(identity: Tuple[int, int]
+                         ) -> Tuple[Optional[int], bool]:
+    """Open a stable handle and prove it still names ``pid/starttime``.
+
+    A process that vanished before the handle opened is already clean.  A
+    census error or PID reuse is not evidence of cleanliness and makes the
+    returned completeness flag false.
+    """
+    pid, starttime = identity
+    before_snapshot, before_complete = _proc_snapshot_checked()
+    if not before_complete:
+        return None, False
+    before = before_snapshot.get(pid)
+    if before is None:
+        return None, True
+    if before[1] != starttime:
+        return None, False
+    try:
+        pidfd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return None, True
+    except OSError:
+        return None, False
+    after_snapshot, after_complete = _proc_snapshot_checked()
+    if not after_complete:
+        os.close(pidfd)
+        return None, False
+    after = after_snapshot.get(pid)
+    if after is None:
+        os.close(pidfd)
+        return None, True
+    if after[1] != starttime:
+        os.close(pidfd)
+        return None, False
+    return pidfd, True
+
+
+def _open_pidfds(identities: Dict[int, int]
+                  ) -> Tuple[Dict[int, Tuple[int, int]], bool]:
+    handles: Dict[int, Tuple[int, int]] = {}
+    complete = True
+    for identity in sorted(identities.items()):
+        pidfd, ok = _open_identity_pidfd(identity)
+        complete = complete and ok
+        if pidfd is not None:
+            handles[pidfd] = identity
+    return handles, complete
+
+
+def _signal_pidfds(handles: Sequence[int], sig: int) -> bool:
+    complete = True
+    for pidfd in list(handles):
+        try:
+            signal.pidfd_send_signal(pidfd, sig)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            if exc.errno != errno.ESRCH:
+                complete = False
+    return complete
+
+
+def _wait_pidfds_until(
+        handles: Dict[int, Tuple[int, int]], deadline: float
+        ) -> Dict[int, Tuple[int, int]]:
+    """Give SIGTERM a policy grace; return handles still executing."""
+    remaining = dict(handles)
+    poller = select.poll()
+    for pidfd in remaining:
+        poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    while remaining:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        for pidfd, _event in poller.poll(max(1, int(left * 1000))):
+            if pidfd in remaining:
+                poller.unregister(pidfd)
+                remaining.pop(pidfd, None)
+    return remaining
+
+
+def _wait_pidfds(handles: Dict[int, Tuple[int, int]]) -> None:
+    """Wait on kernel exit events with no elapsed-runtime cutoff."""
+    remaining = set(handles)
+    poller = select.poll()
+    for pidfd in remaining:
+        poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    while remaining:
+        for pidfd, _event in poller.poll(_REAPER_POLL_MS):
+            if pidfd in remaining:
+                poller.unregister(pidfd)
+                remaining.remove(pidfd)
+
+
+def _close_pidfds(handles: Sequence[int]) -> None:
+    for pidfd in handles:
+        try:
+            os.close(pidfd)
+        except OSError:
+            pass
+
+
+def _cleanup_job_owned(root_pid: int, baseline: Set[Tuple[int, int]],
+                       *, term_grace_s: float) -> CleanupResult:
+    """Terminate descendants and retain ownership through exact final zero.
+
+    The TERM grace is shutdown policy, not a runtime verdict.  After SIGKILL,
+    this subreaper waits on pidfd exit events without a total elapsed bound,
+    reaps adopted children, and repeats complete censuses until two successive
+    reads prove that no attributable identity remains.  In particular, a slow
+    or D-state descendant cannot outlive a returned arm as an unowned process.
+    """
+    identities, census_ok = _job_processes_checked(root_pid, baseline)
+    observed = set(identities)
+    term_handles, open_ok = _open_pidfds(identities)
+    census_ok = census_ok and open_ok
+    census_ok = _signal_pidfds(
+        list(term_handles), signal.SIGTERM) and census_ok
+    remaining = _wait_pidfds_until(
+        term_handles, time.monotonic() + term_grace_s)
+    census_ok = _signal_pidfds(
+        list(remaining), signal.SIGKILL) and census_ok
+    kill_pending = _wait_pidfds_until(
+        remaining, time.monotonic() + _KILL_CONFIRM_GRACE_S)
+    if kill_pending:
+        # No duration guess can prove when a SIGKILL-pending D-state task will
+        # leave the kernel.  The driver remains its subreaper and waits only on
+        # stable kernel exit events before it is permitted to return.
+        _wait_pidfds(kill_pending)
+    _close_pidfds(list(term_handles))
+    _reap_adopted()
+
+    # watchdog-exempt: each non-empty wave is killed through stable pidfds and
+    # awaited by kernel events; a fixed iteration/time cap would recreate the
+    # exact orphan hole this final-zero loop closes.
+    while True:
+        current, scan_ok = _job_processes_checked(root_pid, baseline)
+        census_ok = census_ok and scan_ok
+        observed.update(current)
+        if not current and scan_ok:
+            final, final_ok = _job_processes_checked(root_pid, baseline)
+            census_ok = census_ok and final_ok
+            observed.update(final)
+            if not final and final_ok:
+                return CleanupResult(observed, set(), census_ok)
+            current = final
+        if not current:
+            time.sleep(_REAPER_POLL_MS / 1000.0)
+            continue
+        handles, open_ok = _open_pidfds(current)
+        census_ok = census_ok and open_ok
+        if not handles:
+            time.sleep(_REAPER_POLL_MS / 1000.0)
+            continue
+        census_ok = _signal_pidfds(
+            list(handles), signal.SIGKILL) and census_ok
+        kill_pending = _wait_pidfds_until(
+            handles, time.monotonic() + _KILL_CONFIRM_GRACE_S)
+        if kill_pending:
+            _wait_pidfds(kill_pending)
+        _close_pidfds(list(handles))
+        _reap_adopted()
+
+
 def _cleanup_job(root_pid: int, baseline: Set[Tuple[int, int]],
                  *, term_grace_s: float = 2.0) -> CleanupResult:
-    """Terminate descendants and return a load-bearing final-zero proof."""
-    identities, census_ok = _job_processes_checked(root_pid, baseline)
-    if not identities:
-        final, final_ok = _job_processes_checked(root_pid, baseline)
-        return CleanupResult(set(), set(final), census_ok and final_ok)
-    observed = set(identities)
-    _signal_identities(identities, signal.SIGTERM)
-    deadline = time.monotonic() + term_grace_s
-    # watchdog-exempt: bounded by the monotonic SIGTERM grace deadline above.
-    while time.monotonic() < deadline:
-        time.sleep(0.05)
-        _reap_adopted()
-        current, scan_ok = _job_processes_checked(root_pid, baseline)
-        census_ok = census_ok and scan_ok
-        observed.update(current)
-        if not current:
-            final, final_ok = _job_processes_checked(root_pid, baseline)
-            return CleanupResult(
-                observed, set(final), census_ok and final_ok)
-        identities.update(current)
-    _signal_identities(identities, signal.SIGKILL)
-    # This short interval verifies teardown; it is not a runtime estimate for
-    # the test. SIGKILL has already been delivered.
-    deadline = time.monotonic() + term_grace_s
-    # watchdog-exempt: bounded by the monotonic post-SIGKILL deadline above.
-    while time.monotonic() < deadline:
-        time.sleep(0.05)
-        _reap_adopted()
-        current, scan_ok = _job_processes_checked(root_pid, baseline)
-        census_ok = census_ok and scan_ok
-        observed.update(current)
-        if not current:
-            break
-        _signal_identities(current, signal.SIGKILL)
-    _reap_adopted()
-    final, final_ok = _job_processes_checked(root_pid, baseline)
-    observed.update(final)
-    return CleanupResult(observed, set(final), census_ok and final_ok)
+    """Non-reentrant entry to the event-driven owned cleanup."""
+    global _CLEANUP_ACTIVE
+    if _CLEANUP_ACTIVE:
+        raise RuntimeError("owned descendant cleanup is already active")
+    _CLEANUP_ACTIVE = True
+    try:
+        return _cleanup_job_owned(
+            root_pid, baseline, term_grace_s=term_grace_s)
+    finally:
+        _CLEANUP_ACTIVE = False
 
 
 def _shutdown_handler(signum, _frame) -> None:
     """On verifier cancellation, clean the active cross-session process tree."""
+    global _IN_SHUTDOWN
+    if _IN_SHUTDOWN or _CLEANUP_ACTIVE:
+        return
+    _IN_SHUTDOWN = True
+    if hasattr(signal, "pthread_sigmask"):
+        signal.pthread_sigmask(
+            signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
     job = _ACTIVE_JOB
     if job is not None:
         _cleanup_job(job[0], job[1])
@@ -818,9 +967,15 @@ def _run_progress_supervised(
         collect_only: bool = False,
         ) -> Tuple[Optional[int], str, bool]:
     """Run until natural completion; stop only after semantic events stall."""
-    global _ACTIVE_JOB
+    global _ACTIVE_JOB, _IN_SHUTDOWN
+    _IN_SHUTDOWN = False
     if not _enable_subreaper():
         return None, "SUBREAPER_UNAVAILABLE: descendant cleanup is not provable\n", True
+    if (not hasattr(os, "pidfd_open")
+            or not hasattr(signal, "pidfd_send_signal")
+            or not hasattr(select, "poll")):
+        return (None, "PIDFD_UNAVAILABLE: event-driven final-zero cleanup "
+                "is not provable\n", True)
 
     snap, initial_census_ok = _proc_snapshot_checked()
     if not initial_census_ok:

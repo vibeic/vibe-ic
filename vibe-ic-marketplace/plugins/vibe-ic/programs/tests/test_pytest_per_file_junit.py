@@ -625,6 +625,44 @@ def test_unproved_final_descendant_census_is_norecord(tmp_path, monkeypatch):
     assert "survivors=[999999]" in out
 
 
+def test_cleanup_retains_subreaper_until_sigkill_pending_identity_is_zero(
+        monkeypatch):
+    """The old post-KILL grace may expire; ownership must not expire with it."""
+    identity = {424242: 73}
+    scans = iter([
+        (dict(identity), True),
+        ({}, True),
+        ({}, True),
+    ])
+    waited = []
+
+    monkeypatch.setattr(
+        D, "_job_processes_checked", lambda _root, _baseline: next(scans))
+    monkeypatch.setattr(
+        D, "_open_pidfds", lambda ids: ({91: (424242, 73)}, True)
+        if ids else ({}, True))
+    monkeypatch.setattr(D, "_signal_pidfds", lambda _fds, _sig: True)
+    # TERM and the finite post-KILL observability interval both expire while
+    # the same kernel identity remains live.
+    monkeypatch.setattr(
+        D, "_wait_pidfds_until", lambda handles, _deadline: dict(handles))
+
+    def final_kernel_event(handles):
+        assert handles == {91: (424242, 73)}
+        waited.append("final-zero")
+
+    monkeypatch.setattr(D, "_wait_pidfds", final_kernel_event)
+    monkeypatch.setattr(D, "_close_pidfds", lambda _handles: None)
+    monkeypatch.setattr(D, "_reap_adopted", lambda: None)
+
+    result = D._cleanup_job(424242, set(), term_grace_s=0)
+
+    assert waited == ["final-zero"]
+    assert result.observed == {424242}
+    assert result.survivors == set()
+    assert result.census_ok is True
+
+
 def test_driver_signal_cleanup_reaps_the_active_detached_descendant(tmp_path):
     """Verifier cancellation reaches the driver, not its new-session child."""
     corpus = tmp_path / "corpus"
