@@ -3,9 +3,21 @@
 
 WHY THIS EXISTS
 ===============
-The published results moved to https://github.com/vibeic/benchmark-data. What stays
-in vibe-ic under `benchmark-data/` is the DESIGN INPUT the flow reads — 542 files —
-and three contract documents. The result cells are no longer here.
+The published results moved to https://github.com/vibeic/benchmark-data.
+
+THIS PARAGRAPH USED TO SAY that what stays in vibe-ic under `benchmark-data/` is the
+DESIGN INPUT the flow reads — 542 files — and three contract documents. That was true
+of the FIRST move and stopped being true at the second: v1.10.56 took the remainder
+too, and `git ls-tree -r HEAD -- benchmark-data` now matches NOTHING. A reader who
+believed this module's own docstring would look for a design input that is not there.
+
+The design input was not lost, which is the part worth stating rather than implying:
+all 542 of those files are accounted for in the published repository — 521 present
+there (55 of them under a renamed prefix), and 21 dropped one commit earlier as
+duplicates of an IC-level input the published tree does carry.
+
+So NOTHING under `benchmark-data/` is in this checkout, cells and input alike, and
+every check over either has to reach the pointer below or say it could not look.
 
 Tests that assert something about a PUBLISHED CELL ("step 30 produced its declared
 outputs", "every published cell is covered by a per-cell gate") were asking about
