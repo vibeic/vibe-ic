@@ -314,9 +314,9 @@ the moment eight rows were added up. See `substitution.py`.
 
 <!-- BEGIN GENERATED CENSUS — tools/gen_matrix_63x8_census.py — DO NOT EDIT BY HAND -->
 
-**504 cells: 428 ENFORCED, 0 ENFORCED-CONTRADICTED, 8 WAIVED, 15 NA, 50 ENFORCED-SKIPPED, 3 WAIVED-SKIPPED.**
+**504 cells: 428 ENFORCED, 6 ENFORCED-CONTRADICTED, 8 WAIVED, 15 NA, 44 ENFORCED-SKIPPED, 3 WAIVED-SKIPPED.**
 
-The 0 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 428: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
+The 6 CONTRADICTED cells are configured as enforcing while their own predicate is currently RED. They are NOT folded into the 428: a cell whose predicate fails is not evidence of enforcement. See vibe-ic#888.
 
 **What these 504 cells measure — and what they do not.** Every cell asks whether a step is declared, wired, and reached by a gate. NO cell reads the CONTENT of the artefact a step produces. A shipped sign-off artefact can violate the very criterion its step is named after and no cell here changes colour. Read this table as COVERAGE SHAPE, never as evidence that a design is correct.
 
@@ -328,17 +328,19 @@ The 0 CONTRADICTED cells are configured as enforcing while their own predicate i
 
 The 8 WAIVED and 15 NA cells are not enforcing anything and enter none of those columns. There is deliberately no single "enforcing" total to quote.
 
-| dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |
-|-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------:|---:|
-| 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 63 | 0 | 0 | 0 |
-| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 60 | 0 | 2 | 1 |
-| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 0 | 0 | 0 | 11 |
-| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 63 | 0 | 0 | 0 |
-| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 62 | 0 | 1 | 0 |
-| 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 1 | 0 |
-| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 57 | 0 | 4 | 1 |
-| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 17 | 44 | 0 | 0 | 0 | 2 |
-| **total** | | **17** | **44** | **367** | **0** | **8** | **15** |
+| dim | question | ENFORCED: own | ENFORCED: substituted | ENFORCED: undeclared | CONTRADICTED | NOT MEASURED | WAIVED | NA |
+|-----|----------|--------------:|----------------------:|---------------------:|-------------:|-------------:|-------:|---:|
+| 1 | `wiring` — Is the gate actually wired — does something real parse and execute it? | 0 | 0 | 63 | 0 | 0 | 0 | 0 |
+| 2 | `falsifiable` — Can the gate fail? Is there a reachable non-zero-exit branch? | 0 | 0 | 60 | 0 | 0 | 2 | 1 |
+| 3 | `outputs_produced` — Are the declared required_outputs genuinely produced? | 0 | 0 | 0 | 6 | 46 | 0 | 11 |
+| 4 | `criteria_match` — Does the gate measure what its name and docstring claim it measures? | 0 | 0 | 63 | 0 | 0 | 0 | 0 |
+| 5 | `deps_correct` — Is blocks_on the true upstream set — no missing and no phantom edge? | 0 | 0 | 62 | 0 | 0 | 1 | 0 |
+| 6 | `skip_discipline` — Is every skip / vacuous-pass disclosed rather than counted as a pass? | 0 | 0 | 62 | 0 | 0 | 1 | 0 |
+| 7 | `outputs_list_complete` — Is required_outputs complete — does the step emit artefacts it never declares? | 0 | 0 | 57 | 0 | 1 | 4 | 1 |
+| 8 | `missing_caught` — When a declared output IS missing, which mechanism catches it? | 17 | 44 | 0 | 0 | 0 | 0 | 2 |
+| **total** | | **17** | **44** | **367** | **6** | **47** | **8** | **15** |
+
+**NOT MEASURED is not a pass and not a defect.** Those 47 cells have a predicate that declined to run, naming a resource it could not reach — most often a published corpus this checkout does not carry. They are counted here so a dimension whose cells could not be driven cannot read as a dimension with nothing to report; read them as UNKNOWN, never as coverage.
 
 Regenerate (never edit this block by hand, and never quote it without re-running):
 
