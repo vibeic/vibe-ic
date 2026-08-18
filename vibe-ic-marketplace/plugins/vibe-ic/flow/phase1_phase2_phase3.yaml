@@ -730,30 +730,86 @@ steps:
         - optional_program_exit_zero:
             command: "rtl_bug_report_schema_check . --json reports/phase2/gates/rtl_bug_schema.json"
             condition_files_exist: ["reports/phase2/rtl_bugs.json"]
+            absent_condition_reason: >-
+              The subject is a CLAIM, not a result. This clause validates the
+              SCHEMA of an RTL-bug report when one is filed; a run that files
+              no bug claim has nothing to schema-check, and the failure mode
+              it exists for -- a malformed claim -- requires the claim to
+              exist. Absence is the normal case here, not the defect.
         # v0.74 Phase 1 gates — generic (any-IC) lints surfaced by the
         # BENCH-A/IC-A fresh-agent bisect. Each fires only when its
         # input document is present; silent no-op otherwise.
         - optional_program_exit_zero:
             command: "internal_vs_external_timing_check phase1/generated_docs/L8_TIMING_WAVEFORM.json --layer phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/int_vs_ext_timing.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. L8_TIMING_WAVEFORM.json is
+              authored by Phase 1 and is not produced by this step, so its
+              absence means the design declared no external timing contract to
+              reconcile against the internal one -- not that a reconciliation
+              was skipped. Whether L8 SHOULD have been authored is the D1
+              layer-completeness gate's question, not this clause's.
         - optional_program_exit_zero:
             command: "threshold_range_contiguity_check phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/threshold_contiguity.json"
             condition_files_exist: ["phase1/generated_docs/L8_RTL_CONSTANTS.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. L8_RTL_CONSTANTS.json is
+              authored by Phase 1 and is not produced by this step; with no
+              declared constant/threshold table there are no ranges whose
+              contiguity could be checked. Whether L8 SHOULD have been
+              authored is the D1 layer-completeness gate's question.
         - optional_program_exit_zero:
             command: "rsp_example_otp_consistency_check phase1/generated_docs/L3_CMD_PROTOCOL.json --otp phase1/generated_docs/L11_OTP_CONTENT.json --json reports/phase2/gates/rsp_otp_consistency.json"
             condition_files_exist: ["phase1/generated_docs/L3_CMD_PROTOCOL.json", "phase1/generated_docs/L11_OTP_CONTENT.json"]
+            absent_condition_reason: >-
+              Cross-layer consistency between two Phase-1 DECLARATIONS. The
+              clause fires when EITHER L3_CMD_PROTOCOL.json or
+              L11_OTP_CONTENT.json is present, so it is skipped only for a
+              design that declares neither a command protocol nor an OTP layer
+              -- in which case there are no two documents to hold against each
+              other.
         - optional_program_exit_zero:
             command: "spec_response_delay_check phase2/stage1/rtl --spec phase1/generated_docs/L8_TIMING_WAVEFORM.json --spec phase1/generated_docs/L8_RTL_CONSTANTS.json --json reports/phase2/gates/spec_response_delay.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. This clause measures the RTL
+              against the response-delay numbers L8 declares; with no
+              L8_TIMING_WAVEFORM.json there is no declared number to measure
+              against. The RTL itself is covered by the unconditional lint
+              clauses at the head of this same gate.
         - optional_program_exit_zero:
             command: "nba_addr_read_race_check phase2/stage1/rtl --json reports/phase2/gates/nba_addr_race.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+            absent_condition_reason: >-
+              Scoped to the presence of an RTL tree. An RTL-free run cannot
+              reach a bare PASS through this clause's silence: step 2's
+              UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+              -- MEASURED on an empty project root, `rom_init_lint: missing
+              file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+              flow_compliance_check reads as a disclosed vacuity, so the step
+              reports VACUOUS_PASS and not PASS.
         - optional_program_exit_zero:
             command: "periodic_timer_vs_rx_activity_check phase2/stage1/rtl --json reports/phase2/gates/periodic_timer.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+            absent_condition_reason: >-
+              Scoped to the presence of an RTL tree. An RTL-free run cannot
+              reach a bare PASS through this clause's silence: step 2's
+              UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+              -- MEASURED on an empty project root, `rom_init_lint: missing
+              file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+              flow_compliance_check reads as a disclosed vacuity, so the step
+              reports VACUOUS_PASS and not PASS.
         - optional_program_exit_zero:
             command: "memory_read_pipeline_check phase2/stage1/rtl --json reports/phase2/gates/memory_read_pipeline.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+            absent_condition_reason: >-
+              Scoped to the presence of an RTL tree. An RTL-free run cannot
+              reach a bare PASS through this clause's silence: step 2's
+              UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+              -- MEASURED on an empty project root, `rom_init_lint: missing
+              file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+              flow_compliance_check reads as a disclosed vacuity, so the step
+              reports VACUOUS_PASS and not PASS.
         # v0.76 FPGA wrapper input-polluter check — generic across protocols.
         # Catches the sim-PASS hardware-FAIL trap where a wrapper ANDs/ORs
         # multiple inout pins to "hedge" against bench-cable uncertainty;
@@ -761,6 +817,14 @@ steps:
         - optional_program_exit_zero:
             command: "fpga_wrapper_input_polluter_check --rtl phase2/stage1/rtl --json reports/phase2/gates/fpga_input_polluter.json"
             condition_files_exist: ["phase2/stage1/rtl"]
+            absent_condition_reason: >-
+              Scoped to the presence of an RTL tree. An RTL-free run cannot
+              reach a bare PASS through this clause's silence: step 2's
+              UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+              -- MEASURED on an empty project root, `rom_init_lint: missing
+              file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+              flow_compliance_check reads as a disclosed vacuity, so the step
+              reports VACUOUS_PASS and not PASS.
         # Slow-corner arithmetic-architecture ADVISORY (a risk predictor from
         # RTL, not a proof). A wide single-cycle ripple add/accumulate/compare
         # chain closes at TT and blows SS, forcing a carry-save / carry-select /
@@ -975,6 +1039,15 @@ steps:
         - optional_program_exit_zero:
             command: "cpu_functional_oracle_waiver_check . --json reports/phase2/gates/cpu_functional_oracle_waiver.json"
             condition_files_exist: ["phase2/stage1/sim/results.xml"]
+            absent_condition_reason: >-
+              Scoped to a run that produced simulation results. This clause
+              judges a WAIVER filed IN PLACE OF a functional PASS; with no
+              phase2/stage1/sim/results.xml there is no waiver claim to judge,
+              and a forged one is impossible because there is nothing to forge
+              it against. The absence of simulation evidence is step 4's own
+              subject and is carried by the UNCONDITIONAL
+              vacuous_testbench_check clause and the coverage clauses beside
+              this one.
         # VACUOUS-TB gate. Unconditional: the program self-reports
         # NOT_APPLICABLE (exit 0) when there is no sim tree or no testbench in
         # it, so it can never raise a false FAIL — and, being unconditional, it
@@ -988,12 +1061,24 @@ steps:
         - optional_program_exit_zero:
             command: "l10_tb_conformance_check --l10 phase1/generated_docs/L10_TEST_CASES.json --tb-dir phase2/stage1/sim/tb --out reports/phase2/gates/l10_tb_conformance.json"
             condition_files_exist: ["phase1/generated_docs/L10_TEST_CASES.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. This clause holds the testbench
+              against the L10 test-case list; a design whose Phase 1 authored
+              no L10_TEST_CASES.json has no declared case list to conform to.
+              Whether L10 SHOULD have been authored is the D1
+              layer-completeness gate's question, not this clause's.
         # L12 tb-coverage: run only when L12_BEHAVIORAL_SEQUENCES.json exists.
         # Agents pointing at a class template gain better candidate matching
         # via the optional --ic-class arg.
         - optional_program_exit_zero:
             command: "l12_tb_coverage_check . --json reports/phase2/gates/l12_tb_coverage.json"
             condition_files_exist: ["phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION. This clause measures testbench
+              coverage against the L12 behavioural sequences; a design whose
+              Phase 1 authored no L12_BEHAVIORAL_SEQUENCES.json has no
+              declared sequence set to cover. Whether L12 SHOULD have been
+              authored is the D1 layer-completeness gate's question.
         # Verilator coverage: UNCONDITIONAL (vibe-ic#220).
         #
         # This gate used to fire only when the project had already produced
@@ -1226,6 +1311,15 @@ steps:
         - optional_program_exit_zero:
             command: "fpga_verification_audit --report reports/fpga_verification_report.md --summary phase2/stage1/sim/work/summary.txt --coverage reports/phase2/coverage/coverage_actual.json --out reports/phase2/gates/fpga_verification_audit.json"
             condition_files_exist: ["reports/fpga_verification_report.md"]
+            absent_condition_reason: >-
+              Scoped to a HUMAN deliverable on a hardware-bearing run. The
+              audit judges the honesty of a hand-authored FPGA verification
+              report; a headless doc-to-GDS run has no board and authors no
+              such report. The board-absent case is carried elsewhere rather
+              than here: --skip-hardware routes the FPGA-board steps to an
+              explicit WAIVED with review_required at board bring-up, and step
+              6 still hard-requires the .sof glob plus the unconditional
+              quartus_map_audit clause.
         # ── vibe-ic#693 — `fpga_led_probe_lint`, wired for the first time ────
         #
         # WHAT IT ASSERTS. The four deterministic anti-patterns of
@@ -1273,6 +1367,15 @@ steps:
         - advisory_program_exit_zero:
             command: "fpga_led_probe_lint phase2/stage1/fpga --qsf phase2/stage1/fpga/*.qsf --json reports/phase2/gates/fpga_led_probe_lint.json"
             condition_files_exist: ["phase2/stage1/fpga/*.qsf"]
+            absent_condition_reason: >-
+              Scoped to a run that Quartus actually built: with no .qsf there
+              is no FPGA top and no LED probe allocation to lint. MEASURED and
+              stated in the skill that owns the lint: over the 28 published
+              run roots this clause executes on 1 and is silent on 27, which
+              is why the silence had to become a NAMED not-applicable rather
+              than nothing at all. The clause RECORDS; it never blocks, so a
+              design with a board is judged on the finding and one without is
+              judged on nothing and says so.
     blocks_on: [2, 4, 5]
 
   - id: 7
@@ -1358,6 +1461,13 @@ steps:
         - optional_program_exit_zero:
             command: "sdc_exception_correlation_check . --json reports/phase2/gates/sdc_exceptions.json"
             condition_files_exist: ["phase2/stage2/constraints"]
+            absent_condition_reason: >-
+              Scoped to the presence of a constraints directory: with no SDC
+              there is no timing EXCEPTION to justify against the design's own
+              CDC/L8 async evidence. A constraints-free run does not pass step
+              8 through this silence -- MEASURED on an empty project root, the
+              step's UNCONDITIONAL sdc_syntax_check clause exits rc 1 and
+              FAILs the step.
         # sdc_validator_check fires only when L8 timing exists.
         # The positional is the PROJECT ROOT — the program resolves
         # `_path_layout.constraints_dir()` (= phase2/stage2/constraints) and
@@ -1378,6 +1488,15 @@ steps:
         - optional_program_exit_zero:
             command: "sdc_validator_check . --l8 phase1/generated_docs/L8_TIMING_WAVEFORM.json --json reports/sdc_validator.json"
             condition_files_exist: ["phase1/generated_docs/L8_TIMING_WAVEFORM.json"]
+            absent_condition_reason: >-
+              Scoped to a Phase-1 DECLARATION: the clause validates the SDC
+              against the L8 timing layer, and with no L8_TIMING_WAVEFORM.json
+              there is no declared timing intent to validate against. Once the
+              condition IS met this clause blocks -- rc 1 fails step 8's
+              all_of -- and every path in the program that reads no file
+              returns rc 2 (NOT CHECKED), which reaches the step as
+              VACUOUS-PASS rather than as a bare PASS indistinguishable from a
+              real read.
         # flow v2.3.2 (review B-1) — manual ICG / register-divided clocks
         # need a create_generated_clock in the SDC; otherwise STA
         # mis-reports every crossing path and CTS will not balance the
@@ -1385,6 +1504,14 @@ steps:
         - optional_program_exit_zero:
             command: "derived_clock_sdc_required_check phase2/stage1/rtl --sdc phase2/stage2/constraints --json reports/phase2/gates/derived_clock_sdc.json"
             condition_files_exist: ["phase2/stage1/rtl", "phase2/stage2/constraints"]
+            absent_condition_reason: >-
+              Scoped to a run that has RTL or constraints to compare: the
+              clause asserts that a manual ICG or register-divided clock in
+              the RTL has a matching create_generated_clock in the SDC, and
+              with neither tree present there is no such pair to reconcile. A
+              constraints-free run is already refused by the step's
+              UNCONDITIONAL sdc_syntax_check clause (MEASURED rc 1 on an empty
+              root).
     # `3` is a DATA dependency, not a stylistic one. `sdc_exception_correlation_check`
     # reads `reports/phase2/cdc/crossing.json` — step 3's declared required_output —
     # to build the known-async clock-pair set every `set_false_path` is justified
@@ -2363,6 +2490,15 @@ steps:
         - optional_program_exit_zero:
             command: "analog_hw_spice_correlation_check . --json reports/phase2/gates/hw_spice_corr.json"
             condition_files_exist: ["phase3/analog/*/hw_measurements.json"]
+            absent_condition_reason: >-
+              Scoped to bench-hardware availability, the analog analogue of
+              --skip-hardware. The clause correlates MEASURED silicon against
+              SPICE; with no lab measurement there are not two things to
+              correlate. Simulation-only closure stays legal and is no longer
+              silent: A9 is in _ANALOG_BENCH_STEP_IDS so --skip-hardware
+              waives it the way it waives step 6, and the same gate runs
+              analog_a9_hw_verify_check, whose rc 2 surfaces a simulation-only
+              close as VACUOUS_PASS rather than PASS.
         # The DISCLOSURE half. analog_a9_hw_verify_check already existed and
         # already judges hw_measurements.json substance correctly — it was just
         # wired only into analog_one_shot_runner, never into this gate, so the
@@ -2461,9 +2597,21 @@ steps:
         - optional_program_exit_zero:
             command: "yosys_hilomap_required_check . --json reports/phase2/gates/yosys_hilomap.json"
             condition_files_exist: ["phase2/stage2/synth"]
+            absent_condition_reason: >-
+              Scoped to the presence of a synthesis directory. Step 14
+              declares phase2/stage2/synth/netlist.v as its SOLE
+              required_outputs pattern, so a run with no synth tree resolves
+              the step MISSING before this clause could hide anything -- the
+              absence is loud one level up, not swallowed here.
         - optional_program_exit_zero:
             command: "yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json"
             condition_files_exist: ["phase2/stage2/synth"]
+            absent_condition_reason: >-
+              Scoped to the presence of a synthesis directory. Step 14
+              declares phase2/stage2/synth/netlist.v as its SOLE
+              required_outputs pattern, so a run with no synth tree resolves
+              the step MISSING before this clause could hide anything -- the
+              absence is loud one level up, not swallowed here.
         # v1.9.62+ — the third tie-cell ordering rule pair, ADVISORY.
         # The two gates above assert hilomap PRESENCE and token presence.
         # Neither checks `setundef -zero` BEFORE hilomap, nor `opt_clean` /
@@ -2484,6 +2632,13 @@ steps:
         - advisory_program_exit_zero:
             command: "yosys_tiecell_recipe_order_check . --json reports/phase2/gates/yosys_tiecell_recipe_order.json"
             condition_files_exist: ["phase2/stage2/synth"]
+            absent_condition_reason: >-
+              Scoped to the presence of a synthesis directory: the rule is
+              about the ORDER of setundef/hilomap/opt_clean inside a yosys
+              script, and with no synth tree there is no script to order. Step
+              14 declares phase2/stage2/synth/netlist.v as its SOLE
+              required_outputs pattern, so a run with no synth tree resolves
+              the step MISSING one level up.
     blocks_on: [9, 13]
 
   - id: 15
@@ -2516,6 +2671,13 @@ steps:
         - optional_program_exit_zero:
             command: "ip_integration_check . --json reports/phase2/gates/ip_integration.json"
             condition_files_exist: ["input/pdk_local", "phase3/analog/hardmacro"]
+            absent_condition_reason: >-
+              Scoped to the presence of hard macros. Both triggers are
+              DECLARATIONS -- a user-supplied local PDK tree and the analog
+              hardmacro handoff -- and a design that integrates no macro has
+              no macro LEF/GDS/Liberty file set, no lib-corner coverage and no
+              L21 power-domain consistency to check. Nothing this step does
+              can delete a declaration that a macro exists.
         - files_exist: ["phase3/stage3/pnr/floorplan.def"]
         - program_exit_zero: "floorplan_pdn_check . --json reports/phase3/pnr/floorplan_pdn.json"
         # vibe-ic — WHAT THE LEF DECLARES vs WHAT A READER CAN LOAD.
@@ -2692,6 +2854,12 @@ steps:
         - optional_program_exit_zero:
             command: "spare_cell_coverage_check . --json reports/phase2/gates/spare_cell_coverage.json"
             condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+            absent_condition_reason: >-
+              The same gate OPENS with a hard `files_exist:
+              [phase3/stage3/pnr/spare_cells.json]` clause, so an absent
+              spare-cell manifest FAILs step 18 at that predicate before this
+              clause is reached. The condition removes a duplicate failure; it
+              hides none.
         # d5 — `spare_cell_preservation_check` USED TO BE WIRED HERE, with the
         # comment "fires only when a final artefact exists so the gate is a
         # no-op mid-flow". It did not: its trigger was `spare_cells.json`, THIS
@@ -3341,6 +3509,15 @@ steps:
         - optional_program_exit_zero:
             command: "post_route_signoff_corner_check . --json reports/phase3/sta/post_route_signoff_corner.json"
             condition_files_exist: ["phase3/stage3/sta/sta_spef_multicorner.rpt"]
+            absent_condition_reason: >-
+              SEMANTIC BACKSTOP, and stated as such. This condition IS the
+              self-disabling shape (#210 instance 1): an absent multicorner
+              report is exactly the defect. It was repaired not by changing
+              this predicate but by adding the UNCONDITIONAL companion
+              sta_corner_record_completeness_check to this same step, which
+              starts from the corners the FLOW declared and FAILs when the
+              record does not account for each of them. Keeping the condition
+              here only avoids a duplicate failure.
         # The timing RECORD-completeness gate. The sub-gate above is
         # `condition_files_exist`-gated on the very report whose ABSENCE is the
         # defect: when no multicorner report exists the condition is false, the
@@ -3589,6 +3766,14 @@ steps:
         - optional_program_exit_zero:
             command: "gds_antenna_deck_check . --json reports/phase2/gates/gate_oxide_geom_deck.json"
             condition_files_exist: ["signoff/gate_oxide_deck.json", "input/pdk/bridge/gate_oxide_deck.json"]
+            absent_condition_reason: >-
+              Both triggers are PDK-PROVIDED sign-off decks -- inputs to this
+              step, not results of it. Without a gate-oxide deck there is no
+              geometry target to measure against and step 26 keeps exactly its
+              previous verdict; no fill of the gap is being claimed. WITH a
+              deck the gate always reports: an unavailable KLayout or deck
+              engine exits 2 with a NAMED disclosure (VACUOUS-PASS), never a
+              bare PASS earned by a checker that did not run.
     blocks_on: [21]
 
   # ── Step 27: Signal Integrity ────────────────────────────
@@ -3724,6 +3909,12 @@ steps:
         - optional_program_exit_zero:
             command: "si_crosstalk_check . --json reports/phase2/gates/si_crosstalk.json"
             condition_files_exist: ["reports/phase3/si_crosstalk.rpt"]
+            absent_condition_reason: >-
+              The same gate OPENS with a hard any-of `files_exist` over
+              reports/phase3/si_crosstalk.rpt and .json, so a run carrying NO
+              crosstalk evidence at all FAILs step 27 at that predicate. This
+              clause is scoped to the .rpt form of the evidence that predicate
+              already requires one of.
         # MCF crosstalk-DELAY axis (complements the noise/glitch axis above):
         # the runner re-runs OpenSTA on an MCF-bounded SPEF (Cc*MCF folded per
         # the aggressor/victim timing-window overlap; setup MCF=2 / hold MCF=0)
@@ -3736,6 +3927,15 @@ steps:
         - optional_program_exit_zero:
             command: "si_mcf_sta_check . --json reports/phase3/si_mcf_sta_check.json"
             condition_files_exist: ["reports/phase3/si_mcf_sta.json"]
+            absent_condition_reason: >-
+              Step 27 declares reports/phase3/si_mcf_sta.json in its
+              required_outputs, so an absent MCF report resolves the step
+              MISSING rather than PASS -- recorded as a measured result in
+              flow_condition_reachability_check's allowlist entry for this
+              same clause. The condition therefore cannot hide the absence it
+              is conditioned on. As a GATE the MCF axis is a documented
+              ADVISORY: it is a conservative BOUND, so it validates the
+              emitted report rather than hard-failing a negative bound.
     blocks_on: [22]
 
   # ── Step 28: PERC / Reliability Sign-off ─────────────────
@@ -4219,6 +4419,13 @@ steps:
             condition_files_exist:
               - "phase3/stage3/eco/eco_log.json"
               - "phase3/stage3/eco/eco_trigger_decision.json"
+            absent_condition_reason: >-
+              Step 32's required_outputs is the single any-of pattern
+              `eco_log.json OR no_eco_needed.flag`, so an ECO that ran and
+              wrote no log leaves NEITHER and the step resolves MISSING,
+              loudly. The condition's false branch therefore coincides with an
+              honestly declared no-ECO run, not with a silent loss of an ECO
+              that happened.
     blocks_on: [23, 24, 25, 26, 27, 29, 30, 31]
 
   - id: 33
@@ -4322,6 +4529,12 @@ steps:
         - optional_program_exit_zero:
             command: "spare_cell_preservation_check . --json reports/phase2/gates/spare_preservation_postfill.json"
             condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
+            absent_condition_reason: >-
+              Scoped to a design that inserted spares at step 18: with no
+              spare_cells.json there is no spare pool for ECO-aware fill to
+              preserve. A design that DID insert spares carries the manifest,
+              because step 18's gate hard-requires it through files_exist, so
+              this clause cannot be silenced on the runs it is about.
         # Density-targeted fill VERDICT. `--verify-only` re-reports what the
         # streamout emitter already wrote — it never re-runs the fill, so
         # auditing a finished project cannot mutate its GDS. PARTIAL (a layer
@@ -4332,6 +4545,13 @@ steps:
         - optional_program_exit_zero:
             command: "metal_fill_emit . --verify-only --json reports/phase2/gates/cmp_fill_emit.json"
             condition_files_exist: ["signoff/cmp_fill_targets.json", "input/pdk/bridge/cmp_fill_targets.json"]
+            absent_condition_reason: >-
+              Both triggers are PDK-PROVIDED fill-target decks -- opt-in
+              inputs, not results of this step: no fill config, no claim. A
+              filled design is still judged without them by the UNCONDITIONAL
+              metal_fill_density_check clause in this same gate. When the deck
+              IS present and the report is missing, this gate exits 2 with a
+              NAMED disclosure (VACUOUS-PASS), never a silent 'filled'.
     blocks_on: [32]
 
   # ── Step 35: DFM screen ──────────────────────────────────────────
