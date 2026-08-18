@@ -463,7 +463,51 @@ run_pytest() {
   # `--timeout=180` stays declared HERE — `ci_harness_timeout_ceiling_check`
   # resolves the binding harness bound from this file (EXTRA_HARNESS_RELS) and a
   # bound moved into Python would vanish from its view.
-  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
+  # ── OPTIONAL: SHARD THIS ARM ACROSS A FLEET (vibe-ic FRONT 1) ──
+  #
+  # `GATEKEEPER_PYTEST_FLEET_HOSTS="user@a user@b …"` routes the SAME selection
+  # and the SAME verbatim pytest command through `pytest_fleet_shard.py`, which
+  # runs each host's share through this very driver's per-file parallel path and
+  # merges the reports back into ONE xunit1 file in GLOBAL SELECTION ORDER.
+  #
+  # MEASURED on this tree at 116bcb5a8, 279 files, MAXFAIL=0:
+  #     this arm, one host, as scheduled today   1548.85 s
+  #     one host, 16-wide work queue              380.52 s
+  #     three hosts, 16-wide each                 251.85 s
+  # with the candidate transfer measured separately at 0.19 s for the whole
+  # fleet (a real one-commit landing bundle is 3429 bytes) plus 0.42 s per host
+  # to `git worktree add`.
+  #
+  # IT IS OFF BY DEFAULT AND IT REFUSES LOUDLY. A shard that does not report
+  # makes every file it held NORECORD, and the layer first proves the hosts are
+  # EQUIVALENT — on this fleet they are not (iverilog on two of four, yosys on
+  # one), and six test outcomes move between `pass` and `skip` purely on which
+  # host draws the file. `AGGREGATE_NOT_ASKED` is printed rather than any
+  # aggregate status, so the `AGGREGATE_*` check below still refuses: sharding
+  # partitions the order space and cannot answer the whole-selection question.
+  local fleet_args=()
+  if [ -n "${GATEKEEPER_PYTEST_FLEET_HOSTS:-}" ]; then
+    for _h in ${GATEKEEPER_PYTEST_FLEET_HOSTS}; do
+      fleet_args+=(--host "$_h")
+    done
+  fi
+  if [ "${#fleet_args[@]}" -gt 0 ]; then
+    out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_fleet_shard.py \
+        --selection "$sel" --junit "$merged" \
+        "${fleet_args[@]}" \
+        --tree "${GATEKEEPER_PYTEST_FLEET_TREE:?fleet sharding needs the candidate tree path on each host}" \
+        --origin "${GATEKEEPER_PYTEST_FLEET_ORIGIN:-}" \
+        --sha "$(git -C "$ROOT" rev-parse HEAD)" \
+        --subdir "${GATEKEEPER_PYTEST_FLEET_SUBDIR:-vibe-ic-marketplace/plugins/vibe-ic}" \
+        --jobs-per-host "${GATEKEEPER_PYTEST_FLEET_JOBS:-16}" \
+        --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+        ${GATEKEEPER_PYTEST_FLEET_EXCLUSIVE_LIST:+--exclusive-list "$GATEKEEPER_PYTEST_FLEET_EXCLUSIVE_LIST"} \
+        ${GATEKEEPER_PYTEST_FLEET_COST_MAP:+--cost-map "$GATEKEEPER_PYTEST_FLEET_COST_MAP"} \
+        -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
+        --timeout=180 --timeout-method=thread 2>&1 )"
+    rc=$?
+  else
+    out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
         --selection "$sel" --junit "$merged" \
         --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
         --aggregate-check \
@@ -472,8 +516,10 @@ run_pytest() {
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
         -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
-        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
-    rc=0
+        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"
+    rc=$?
+  fi
+  if [ "$rc" -eq 0 ]; then
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
     # the write guard from the session would be a false green, and it would look
@@ -485,7 +531,6 @@ run_pytest() {
       FAILED=1
     fi
   else
-    rc=$?
     printf '  FAIL  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # THE FILES WITH NO RECORD, ALWAYS AND FIRST. They are the one thing a
     # reader cannot reconstruct from the tail of a 91-file run, and `tail -6`
