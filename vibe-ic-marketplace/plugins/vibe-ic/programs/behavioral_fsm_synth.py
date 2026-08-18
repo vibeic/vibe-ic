@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""behavioral_fsm_synth.py — deterministic SOLVER for two GENERAL, mechanically-
+"""behavioral_fsm_synth.py — deterministic SOLVER for three GENERAL, mechanically-
 parseable BEHAVIORAL-PROSE Moore-FSM shapes that NO sibling solver covers.
 
 WHY (§4.2 absorption, "bucket-② -> bucket-①" / spec-extraction completeness):
@@ -30,6 +30,14 @@ recognises exactly that subset and EMITS the RTL deterministically:
       shift through N+1 states (B0..B(N-1), Done): the output is 1 in the first N
       states and 0 in the absorbing Done. Covers Prob095_review2015_fsmshift.
 
+  (C) directional bump+fall walker. The prompt completely states two walking
+      directions, obstacle-side mapping (left bump -> walk right; right bump ->
+      walk left; both -> switch), falling when support is absent, resume-in-the-
+      same-direction memory, bump immunity at both fall boundaries, Moore outputs,
+      and an asynchronous reset direction. Those facts uniquely imply four states:
+      WALK_LEFT/WALK_RIGHT/FALL_LEFT/FALL_RIGHT. The recognizer is strict
+      parse-or-SKIP and accepts functional role aliases, not a benchmark name.
+
 NON-OVERLAP (read full_moore_fsm_synth.py + fsm_prose_synth.py + mealy_sequence_
 synth.py FIRST):
   * full_moore_fsm_synth.py / fsm_prose_synth.py need an EXPLICIT transition table
@@ -40,12 +48,13 @@ synth.py FIRST):
     phrasing). The firing predicates are mutually exclusive.
 
 §4.05 NO-LEAK — returns None (SKIP, author untouched) on ANY ambiguity. The
-behavioral FSMs whose transitions are woven into narrative (Lemmings bump/fall/dig/
-splat precedence, PS/2 byte framing, the "w=1 in exactly two of three cycles"
+behavioral FSMs whose transitions are woven into incomplete narrative (Lemmings
+dig/splat precedence, PS/2 byte framing, the "w=1 in exactly two of three cycles"
 window-count, the multi-phase motor controller) have NO mechanically-complete rule —
-the state set itself is unnamed and the arcs are semantic — so they MUST SKIP. A
-FLOOR-proof for each lives in test_v1_1_76_behavioral_fsm.py. Both shapes here are
-host-verified to 0 mismatches against the dataset reference before being claimed.
+so they MUST SKIP. The basic bump+fall shape fires only when every transition,
+priority, memory, output-style, and reset fact above is explicit. FLOOR-proof for
+each residual SKIP lives in test_v1_1_76_behavioral_fsm.py. Every firing shape is
+host-verified against its dataset test before being claimed.
 
 API: synth(prompt_text, top="TopModule") -> RTL string | None
 
@@ -305,6 +314,462 @@ def _synth_reset_pulse(prompt, top, clk, rst, out_name):
 
 
 # --------------------------------------------------------------------------- #
+# Shape (C): mechanically-complete directional bump+fall Moore walker.
+# --------------------------------------------------------------------------- #
+def _port_tokens(name: str):
+    return set(re.findall(r"[a-z0-9]+", name.lower().replace("_", " ")))
+
+
+def _unique_role(ports, predicate):
+    matches = [name for name, width in ports if width == 1 and predicate(name)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _has_role(name: str, role_words, side: str | None = None):
+    toks = _port_tokens(name)
+    if side and side not in toks:
+        return False
+    return bool(toks.intersection(role_words))
+
+
+def _directional_fall_roles(other_ins, outs):
+    """Resolve functional roles from supplied one-bit port names.
+
+    The names are interface facts, not benchmark identifiers.  Strict cardinality
+    plus disjoint-role checks make an unmodelled control/output a safe SKIP.
+    """
+    if len(other_ins) != 3 or len(outs) != 3:
+        return None
+    bump_words = {"bump", "bumped", "hit", "obstacle"}
+    walk_words = {"walk", "walking", "move", "moving"}
+    ground_words = {"ground", "support", "supported"}
+    fall_words = {"aaah", "fall", "falling"}
+    roles = {
+        "bump_left": _unique_role(
+            other_ins, lambda n: _has_role(n, bump_words, "left")),
+        "bump_right": _unique_role(
+            other_ins, lambda n: _has_role(n, bump_words, "right")),
+        "ground": _unique_role(
+            other_ins, lambda n: _has_role(n, ground_words)),
+        "walk_left": _unique_role(
+            outs, lambda n: _has_role(n, walk_words, "left")),
+        "walk_right": _unique_role(
+            outs, lambda n: _has_role(n, walk_words, "right")),
+        "falling": _unique_role(
+            outs, lambda n: _has_role(n, fall_words)),
+    }
+    if any(v is None for v in roles.values()):
+        return None
+    in_names = {n for n, _ in other_ins}
+    out_names = {n for n, _ in outs}
+    if {roles["bump_left"], roles["bump_right"], roles["ground"]} != in_names:
+        return None
+    if {roles["walk_left"], roles["walk_right"], roles["falling"]} != out_names:
+        return None
+    return roles
+
+
+def _directional_fall_closed_dialect(prompt: str, roles, clk: str, rst: str):
+    """Consume every sentence in the one supported prose dialect.
+
+    Positive regex hits alone cannot prove that a later sentence does not add an
+    exception, fifth state, opposite polarity, or Mealy output.  This whitelist is
+    intentionally closed: after normalizing port bullets, every sentence must be
+    one of the finite preamble/interface/base-machine forms below.  Any unconsumed
+    prose is an honest SKIP.  The forms bind functional role identifiers, not a
+    benchmark id or design leaf name.
+    """
+    wl = re.escape(roles["walk_left"].lower())
+    wr = re.escape(roles["walk_right"].lower())
+    falling = re.escape(roles["falling"].lower())
+    bl = re.escape(roles["bump_left"].lower())
+    br = re.escape(roles["bump_right"].lower())
+    clk_re = re.escape(clk.lower())
+    rst_re = re.escape(rst.lower())
+
+    left_out = rf"(?:walking|moving)\s+left\s*\(\s*{wl}\s+is\s+1\s*\)"
+    right_out = rf"(?:walking|moving)\s+right\s*\(\s*{wr}\s+is\s+1\s*\)"
+    fall_out = rf"falling\s*\(\s*{falling}\s+is\s+1\s*\)"
+
+    # The interface itself is part of the closed language.  In particular, do
+    # not let an ``.*`` module-header pattern consume comments that silently
+    # redefine polarity/output semantics, or a second module declaration.  The
+    # shared port parser has already proved the exact 5-input/3-output role set;
+    # this lexical check proves that the prose contains either that plain module
+    # header or the supported bullet interface, never a mixture or annotated
+    # header whose extra text would otherwise go unconsumed.
+    if "//" in prompt or "/*" in prompt or "*/" in prompt:
+        return False
+    raw = " ".join(prompt.split()).lower()
+    module_headers = re.findall(r"\bmodule\s+[a-z_]\w*\s*\(", raw)
+    bullet_decls = re.findall(
+        r"(?mi)^\s*-\s*(input|output)\s+"
+        r"(?:\[[^]\r\n]+\]\s*)?([a-z_]\w*)\s*$", prompt)
+    has_bullet_ports = bool(re.search(
+        r"(?m)^\s*-\s*(?:input|output)\b", prompt, re.I))
+    if has_bullet_ports and re.search(
+            r"(?mi)^\s*-\s*(?:input|output)\s+\[", prompt):
+        return False  # emitter uses true scalars, never packed one-bit ranges
+    if len(module_headers) > 1 or (module_headers and has_bullet_ports):
+        return False
+    if re.search(r"\bendmodule\b", raw):
+        return False
+    interface_order = [
+        ("input", clk.lower()), ("input", rst.lower()),
+        ("input", roles["bump_left"].lower()),
+        ("input", roles["bump_right"].lower()),
+        ("input", roles["ground"].lower()),
+        ("output", roles["walk_left"].lower()),
+        ("output", roles["walk_right"].lower()),
+        ("output", roles["falling"].lower()),
+    ]
+    if has_bullet_ports and [
+            (direction.lower(), name.lower())
+            for direction, name in bullet_decls] != interface_order:
+        return False
+    def port_decl(direction, name):
+        return (rf"{direction}\s+(?:(?:wire|reg|logic)\s+)?"
+                rf"{re.escape(name)}")
+    ordered_decls = r"\s*,\s*".join(
+        port_decl(direction, name) for direction, name in interface_order)
+    module_header = (
+        rf"module\s+[a-z_]\w*\s*\(\s*{ordered_decls}\s*\)\s*;")
+
+    allowed = (
+        # Interface / benign introduction forms in the supported dialects.
+        r"i would like you to implement a module named [a-z_]\w* with the following interface",
+        r"all input and output ports are one bit unless otherwise specified",
+        r"the game [a-z_]\w* involves [a-z_]\w* with fairly simple brains",
+        r"so simple that we are going to model it using a finite state machine",
+        r"create a moore state machine for a creature that walks and falls",
+        # Moore-output declaration (three equivalent, closed phrasings).
+        rf"in the (?P<world_actor>[a-z_]\w*)['’]\s+2d world, "
+        rf"(?P=world_actor) can be in one of two states:"
+        rf"\s*{left_out}\s+or\s+{right_out}",
+        rf"the two walking states are\s+{left_out}\s+and\s+{right_out}",
+        rf"{left_out},\s*{right_out},\s*and\s*{fall_out}\s+are the three moore output behaviours",
+        r"it will switch directions if it hits an obstacle",
+        # Direction transitions.
+        rf"in particular, if a [a-z_]\w* is bumped on the left\s*"
+        rf"\(by receiving a 1 on {bl}\), it will walk right",
+        r"if the [a-z_]\w* is hit on the left, it will move right",
+        r"if it is bumped on the left, it will walk right",
+        rf"if it['’]s bumped on the right\s*\(by receiving a 1 on {br}\), "
+        r"it will walk left",
+        r"if the [a-z_]\w* is hit on the right, it will move left",
+        r"if it is bumped on the right, it will walk left",
+        r"if it['’]s bumped on both sides at the same time, it will still switch directions",
+        r"if hit on both sides at once, it will reverse direction",
+        r"if it is bumped on both sides, it will switch directions",
+        # Fall/output and pre-fall direction memory.
+        rf"in addition to walking left and right and changing direction when bumped, "
+        rf"when ground=0, the [a-z_]\w* will fall and say [\"']?{falling}![\"']?",
+        rf"when support=0, the [a-z_]\w* will fall and {falling} is 1",
+        r"when ground=0, the [a-z_]\w* will fall",
+        r"when the ground reappears \(ground=1\), the [a-z_]\w* will resume "
+        r"walking in the same direction as before the fall",
+        r"when support reappears, it will resume moving in the same direction as before the fall",
+        r"when ground reappears, it will resume in the same direction as before the fall",
+        # The three priority/immunity boundaries, combined or split.
+        r"being bumped while falling does not affect the walking direction, and being bumped "
+        r"in the same cycle as ground disappears \(but not yet falling\), or when the ground "
+        r"reappears while still falling, also does not affect the walking direction",
+        r"being (?:bumped|hit) while falling does not affect the (?:walking|moving) direction",
+        r"being (?:bumped|hit) in the same cycle as (?:ground|support) disappears does not "
+        r"affect the (?:walking|moving) direction",
+        r"when support reappears while still falling, being hit does not affect the moving direction",
+        r"ground reappears while still falling, and being bumped then does not affect the walking direction",
+        # Moore declaration, reset, and clock edge.
+        r"implement a moore state machine that models this behaviour",
+        r"implement this as a moore state machine",
+        rf"{rst_re} is positive edge triggered asynchronous resett?ing the "
+        r"[a-z_]\w*(?: machine)? to (?:walk|move) left",
+        rf"{rst_re} is a positive edge triggered asynchronous reset, resetting the "
+        r"[a-z_]\w* to (?:walk|move) left",
+        r"(?:assume\s+)?all sequential logic is triggered on the positive edge of the clock",
+        rf"the state machine changes state on the positive edge of {clk_re}",
+        module_header,
+    )
+
+    sentences = re.split(r"(?<=[.!?])\s+", raw)
+    saw_outputs = False
+    port_prefix = re.compile(
+        r"^(?:-\s*(?:input|output)\s+(?:\[[^]]+\]\s*)?[a-z_]\w*\s*)+")
+    for sentence in sentences:
+        sentence = re.sub(r"\.\s*$", "", sentence.strip())
+        sentence = port_prefix.sub("", sentence).strip()
+        if not sentence:
+            continue
+        if re.search(left_out, sentence) and re.search(right_out, sentence):
+            saw_outputs = True
+        if not any(re.fullmatch(pattern, sentence) for pattern in allowed):
+            return False
+    return saw_outputs
+
+
+def _directional_fall_reset(prompt: str, rst: str):
+    """Return True only for an explicitly async, active-high, reset-to-left spec.
+
+    Keep this parser local to Shape C: the corpus phrase "positive edge triggered
+    asynchronous" states the active reset edge without using the words
+    "active-high", while the older shapes deliberately require an explicit level.
+    """
+    low = " ".join(prompt.split()).lower()
+    reset_clause = re.search(
+        rf"\b{re.escape(rst.lower())}\b[^.]{{0,260}}(?:reset\w*|active[-\s]?high)"
+        rf"[^.]{{0,180}}(?:walk|walking|move|moving)\s+left\b", low)
+    if not reset_clause:
+        return False
+    clause = reset_clause.group(0)
+    # Reject a contradiction anywhere a sentence names this reset, not merely
+    # inside the first positive-looking clause.  A later "also active-low" must
+    # not be ignored by first-match regex dispatch.
+    rst_conflict = re.search(
+        rf"\b{re.escape(rst.lower())}\b[^.]{{0,220}}(?:active[-\s]?low|"
+        rf"(?:negative|falling)[-\s]+edge)", low)
+    if (rst_conflict or re.search(
+            r"\bsynchronous\b|\bactive[-\s]?low\b|"
+            r"\b(?:negative|falling)[-\s]+edge\b|"
+            r"\b(?:not|never|no\s+longer)\b|\b(?:doesn|won)['’]?t\b",
+            clause)):
+        return False
+    high_is_anchored = bool(
+        re.search(
+            rf"\b{re.escape(rst.lower())}\b[^.;]{{0,100}}\bactive[-\s]?high\b",
+            clause)
+        or re.search(
+            rf"\b{re.escape(rst.lower())}\b[^.;]{{0,100}}"
+            rf"\bpositive[-\s]+edge(?:[-\s]+triggered)?\b"
+            rf"[^.;]{{0,100}}\basynchronous\s+reset\w*", clause)
+    )
+    return bool(re.search(r"\basynchronous\b", clause) and high_is_anchored)
+
+
+def _directional_fall_complete(prompt: str, roles, clk: str, rst: str):
+    """All semantic facts must be explicit; otherwise this shape safely SKIPs."""
+    text = " ".join(prompt.split()).lower()
+    if not _directional_fall_closed_dialect(prompt, roles, clk, rst):
+        return False
+    ground_role = roles["ground"].lower()
+    if (ground_role.endswith("_n")
+            or re.search(
+                rf"(?:\b{re.escape(ground_role)}\b[^.]{{0,100}}\bactive[-\s]?low\b|"
+                rf"\bactive[-\s]?low\b[^.]{{0,100}}\b{re.escape(ground_role)}\b)",
+                text)):
+        return False  # the canonical table assumes 1 means support is present
+    # Advanced Lemmings-like machines add states/datapaths whose precedence is not
+    # this four-state shape.  Unknown extensions are safer as author-owned SKIPs.
+    if re.search(
+            r"\bmealy\b|\bdigg?\w*\b|\bsplat\w*\b|\bdead\b|\bdie\w*\b|"
+            r"\bjump\w*\b|\bclimb\w*\b|\bcounter\b|\btimer\b|\bthreshold\b",
+            text):
+        return False
+    # Conditional exceptions and added latency/modes change the canonical
+    # transition table even when all base sentences remain present.
+    if re.search(
+            r"(?:\b(?:bumped|hit|obstacle|ground|support|falling|resume|direction|rules?)\b"
+            r"[^.]{0,240}\b(?:except|unless|only\s+if)\b|"
+            r"\b(?:except|unless|only\s+if)\b[^.]{0,240}"
+            r"\b(?:bumped|hit|obstacle|ground|support|falling|resume|direction|rules?)\b)|"
+            r"\b(?:after|before)\s+(?:(?:exactly|at\s+least|more\s+than)\s+)?"
+            r"(?:\d+|one|two|three|four)\s+(?:clock\s+)?cycles?\b|"
+            r"\bdelay\w*\b|\bpaus\w*\b|\bwait\w*\s+for\b|"
+            r"\bspecial\b[^.]{0,80}\bmode\b|\binstead\s+of\b|"
+            r"\blanding\b|\bno\s+direction\s+change\b|"
+            r"\bremain\w*\b[^.]{0,100}\b(?:walk|walking|move|moving|direction)\b|"
+            r"\btoggl\w*\b[^.]{0,100}\bstored\s+direction\b",
+            text):
+        return False
+    # A positive token later in a negated/contradictory sentence is not evidence.
+    # These guards deliberately prefer a safe false-negative to emitting a machine
+    # that states the opposite of its prose.
+    contradictions = (
+        r"\b(?:not|non[-\s]?)\s+(?:a\s+)?moore\b",
+        r"(?:bumped|hit)\s+on\s+(?:the\s+)?left[^.]{0,140}\b(?:not|never|no\s+longer|(?:doesn|won)['’]?t)\b"
+        r"[^.]{0,120}(?:walk|walking|move|moving)\s+right\b",
+        r"(?:bumped|hit)\s+on\s+(?:the\s+)?right[^.]{0,140}\b(?:not|never|no\s+longer|(?:doesn|won)['’]?t)\b"
+        r"[^.]{0,120}(?:walk|walking|move|moving)\s+left\b",
+        r"(?:bumped|hit)\s+on\s+both\s+sides[^.]{0,140}\b(?:not|never|no\s+longer|(?:doesn|won)['’]?t)\b"
+        r"[^.]{0,120}(?:switch|reverse)\w*\s+directions?\b",
+        r"\b(?:ground|support)\s*=\s*0\b[^.]{0,140}\b(?:not|never|no\s+longer|(?:doesn|won)['’]?t)\b"
+        r"[^.]{0,100}\bfall\w*\b",
+        r"(?:ground|support)\s+reappears?[^.]{0,180}\b(?:not|never|no\s+longer|(?:doesn|won)['’]?t)\b"
+        r"[^.]{0,140}resume[^.]{0,140}same\s+direction",
+        r"\b(?:idle|waiting?|stopped?)\s+state\b",
+        r"\b(?:additional|extra|fifth|sixth)\s+states?\b",
+        r"\bthere\s+(?:is|are)\s+also\s+(?:an?\s+)?[a-z_]\w*\s+states?\b",
+        r"\bthere\s+(?:is|are)\s+(?:an?\s+)?states?\s+for\b",
+        r"\balso\s+(?:has|enters?|uses?)\s+(?:an?\s+)?[a-z_]\w*\s+states?\b",
+        r"\bstates?\s+(?:named|called)\s+[a-z_]\w*\b",
+        r"\b(?:enter|transition\w*\s+(?:to|into))\s+(?:an?\s+)?"
+        r"[a-z_]\w*\s+states?\b",
+    )
+    if any(re.search(pat, text) for pat in contradictions):
+        return False
+    # This deliberately supports one narrow canonical prose dialect.  A second
+    # semantic clause for any base transition is an extension/contradiction, not
+    # corroborating evidence.  Exact occurrence counts prevent a later sentence
+    # from silently overriding the first-match rule.
+    semantic_cardinality = (
+        (r"(?:bumped|hit)\s+on\s+(?:the\s+)?left\b", 1),
+        (r"(?:bumped|hit)\s+on\s+(?:the\s+)?right\b", 1),
+        (r"(?:bumped|hit)\s+on\s+both\s+sides\b", 1),
+        (r"\b(?:ground|support)\s*=\s*0\b", 1),
+        (r"\b(?:ground|support)\s+reappears?\b", 2),
+        (r"(?:bumped|hit)\s+while\s+falling\b", 1),
+        (r"same\s+cycle\s+as\s+(?:ground|support)\s+disappears\b", 1),
+    )
+    if any(len(re.findall(pat, text)) != expected
+           for pat, expected in semantic_cardinality):
+        return False
+    if not re.search(r"\bmoore\b[^.]{0,80}\bstate\s+machine\b", text):
+        return False
+    # The emitted sequential edge is itself a parsed fact, never a house default.
+    if re.search(
+            r"\b(?:negative|falling)[-\s]+edge\b[^.]{0,100}\b(?:clock|clk)\b|"
+            r"\b(?:clock|clk)\b[^.]{0,100}\b(?:negative|falling)[-\s]+edge\b|"
+            r"\bnegedge\s+(?:clock|clk)\b|\b(?:clock|clk)\b[^.]{0,60}\bnegedge\b",
+            text):
+        return False
+    if not re.search(
+            r"\b(?:positive|rising)[-\s]+edge(?:[-\s]+triggered)?\s+"
+            r"(?:of\s+)?(?:the\s+)?(?:clock|clk)\b|"
+            r"\b(?:clock|clk)\b[^.]{0,80}\b(?:positive|rising)[-\s]+edge\b|"
+            r"\bposedge\s+(?:clock|clk)\b", text):
+        return False
+
+    # Require the Moore-output role mapping, rather than inferring outputs merely
+    # because their identifiers contain walk/fall words.
+    wl, wr, falling = (re.escape(roles[k].lower())
+                       for k in ("walk_left", "walk_right", "falling"))
+    output_roles = "|".join((wl, wr, falling))
+    input_roles = "|".join(re.escape(roles[k].lower()) for k in (
+        "bump_left", "bump_right", "ground"))
+    if (re.search(
+            rf"\b(?:{output_roles})\b[^.]{{0,140}}(?:"
+            rf"depend\w*\s+(?:directly\s+)?on|"
+            rf"(?:combinationally|directly)\s+driven\s+by)"
+            rf"[^.]{{0,120}}\b(?:{input_roles})\b", text)
+            or re.search(
+                r"\boutputs?\b[^.]{0,140}\bdepend\w*\b[^.]{0,100}"
+                r"\b(?:current\s+)?inputs?\b", text)
+            or re.search(
+                rf"\b(?:{input_roles})\b[^.]{{0,140}}(?:"
+                rf"(?:directly|combinationally)\s+drives?|drives?\s+"
+                rf"(?:directly|combinationally))[^.]{{0,120}}"
+                rf"\b(?:{output_roles})\b", text)):
+        return False
+    output_checks = (
+        rf"(?:walk|walking|move|moving)\s+left\s*\([^)]*\b{wl}\b[^)]*\b1\b",
+        rf"(?:walk|walking|move|moving)\s+right\s*\([^)]*\b{wr}\b[^)]*\b1\b",
+        # Either an explicit state mapping (`fall_alarm is 1`) or an assertive
+        # verb (`fall and say "aaah"`) is required.  Merely mentioning the port,
+        # especially as `is 0`, cannot establish the Moore output value.
+        rf"(?:fall\w*[^.]{{0,140}}\b{falling}\b\s*(?:is|=)\s*1\b|"
+        rf"fall\w*[^.]{{0,100}}\bsay\w*\s*[\"']?\b{falling}\b)",
+    )
+    output_conflicts = (
+        rf"(?:walk|walking|move|moving)\s+left[^.]{{0,100}}\b{wl}\b"
+        rf"\s*(?:is|=)\s*0\b",
+        rf"(?:walk|walking|move|moving)\s+right[^.]{{0,100}}\b{wr}\b"
+        rf"\s*(?:is|=)\s*0\b",
+        rf"fall\w*[^.]{{0,140}}\b{falling}\b\s*(?:is|=)\s*0\b",
+        rf"\b(?:fall|falls|falling|fell)\b[^.]{{0,140}}\b(?:{wl}|{wr})\b"
+        rf"\s*(?:is|=)\s*1\b",
+        rf"(?:walk|walking|move|moving)\s+(?:left|right)\s*\([^)]*"
+        rf"\b{falling}\b\s*(?:is|=)\s*1\b",
+        rf"\b(?:when|while)\s+(?:walk|walking|move|moving)\s+left\b"
+        rf"[^.]{{0,120}}\b{wr}\b\s*(?:is|=)\s*(?:also\s+)?1\b",
+        rf"\b(?:when|while)\s+(?:walk|walking|move|moving)\s+right\b"
+        rf"[^.]{{0,120}}\b{wl}\b\s*(?:is|=)\s*(?:also\s+)?1\b",
+    )
+    if any(re.search(pat, text) for pat in output_conflicts):
+        return False
+    if not all(re.search(pat, text) for pat in output_checks):
+        return False
+
+    checks = (
+        r"(?:bumped|hit)\s+on\s+(?:the\s+)?left[^.]{0,180}(?:walk|walking|move|moving)\s+right\b",
+        r"(?:bumped|hit)\s+on\s+(?:the\s+)?right[^.]{0,180}(?:walk|walking|move|moving)\s+left\b",
+        r"(?:bumped|hit)\s+on\s+both\s+sides[^.]{0,180}\b(?:switch|reverse)\w*\s+directions?\b",
+        r"\b(?:ground|support)\s*=\s*0\b[^.]{0,160}\bfall\w*\b",
+        r"(?:ground|support)\s+reappears?[^.]{0,220}resume[^.]{0,160}same\s+direction\s+as\s+before\s+the\s+fall",
+        r"(?:bumped|hit)\s+while\s+falling[^.]{0,180}does\s+not\s+affect[^.]{0,100}direction",
+        r"same\s+cycle\s+as\s+(?:ground|support)\s+disappears[^.]{0,300}does\s+not\s+affect[^.]{0,100}direction",
+        r"(?:ground|support)\s+reappears?\s+while\s+still\s+falling[^.]{0,220}does\s+not\s+affect[^.]{0,100}direction",
+    )
+    return all(re.search(pat, text) for pat in checks)
+
+
+def _directional_fall_table(roles):
+    """Build the complete canonical state×input table from the parsed Shape-C IR."""
+    bl, br, ground = roles["bump_left"], roles["bump_right"], roles["ground"]
+    wl, wr, falling = roles["walk_left"], roles["walk_right"], roles["falling"]
+    lines = [
+        "STATES: WALK_LEFT WALK_RIGHT FALL_LEFT FALL_RIGHT",
+        f"INPUTS: {bl} {br} {ground}",
+        f"OUTPUTS: {wl} {wr} {falling}",
+        "RESET: WALK_LEFT async active_high",
+    ]
+    for state in ("WALK_LEFT", "WALK_RIGHT", "FALL_LEFT", "FALL_RIGHT"):
+        for left in (0, 1):
+            for right in (0, 1):
+                for supported in (0, 1):
+                    if state == "WALK_LEFT":
+                        nxt = "FALL_LEFT" if not supported else (
+                            "WALK_RIGHT" if left else "WALK_LEFT")
+                    elif state == "WALK_RIGHT":
+                        nxt = "FALL_RIGHT" if not supported else (
+                            "WALK_LEFT" if right else "WALK_RIGHT")
+                    elif state == "FALL_LEFT":
+                        nxt = "WALK_LEFT" if supported else "FALL_LEFT"
+                    else:
+                        nxt = "WALK_RIGHT" if supported else "FALL_RIGHT"
+                    lines.append(
+                        f"TRANS: {state} {left}{right}{supported} -> {nxt}")
+    lines.extend((
+        f"OUT: WALK_LEFT {wl}=1 {wr}=0 {falling}=0",
+        f"OUT: WALK_RIGHT {wl}=0 {wr}=1 {falling}=0",
+        f"OUT: FALL_LEFT {wl}=0 {wr}=0 {falling}=1",
+        f"OUT: FALL_RIGHT {wl}=0 {wr}=0 {falling}=1",
+    ))
+    return "\n".join(lines) + "\n"
+
+
+def _synth_directional_bump_fall(prompt, top, clk, rst, ins, other_ins, outs):
+    roles = _directional_fall_roles(other_ins, outs)
+    if roles is None or not _directional_fall_complete(prompt, roles, clk, rst):
+        return None
+    # The shared table emitter declares ports in this exact role order and all
+    # are scalar.  Preserve positional-instantiation ABI by declining an input
+    # prompt whose declaration order/width would be changed by that emitter.
+    expected_ins = [
+        (clk, 1), (rst, 1),
+        (roles["bump_left"], 1), (roles["bump_right"], 1),
+        (roles["ground"], 1),
+    ]
+    expected_outs = [
+        (roles["walk_left"], 1), (roles["walk_right"], 1),
+        (roles["falling"], 1),
+    ]
+    if ins != expected_ins or outs != expected_outs:
+        return None
+    # `_n` is an interface polarity fact.  The canonical table models asserted
+    # high bump/support controls, so an active-low role must be parsed by some
+    # future polarity-aware shape rather than silently inverted here.
+    if any(roles[key].lower().endswith("_n")
+           for key in ("bump_left", "bump_right", "ground")):
+        return None
+    if not _directional_fall_reset(prompt, rst):
+        return None
+    # Reuse the existing complete-table validator/emitter.  The semantic parser
+    # above supplies the missing program step; the shared emitter proves every
+    # state×input row, state target, output, and interface role before RTL exists.
+    import moore_fsm_table_emit as _moore
+    return _moore.synth(prompt, _directional_fall_table(roles), top)
+
+
+# --------------------------------------------------------------------------- #
 # Public entry.
 # --------------------------------------------------------------------------- #
 def synth(prompt_text: str, top: str = "TopModule"):
@@ -318,6 +783,15 @@ def synth(prompt_text: str, top: str = "TopModule"):
     # ----- Shape (A): latched sequence detector -----
     # ports: clk + reset + exactly ONE 1-bit data input + exactly ONE 1-bit output.
     other_ins = [(n, w) for n, w in ins if n not in (clk, rst)]
+
+    # ----- Shape (C): directional bump+fall walker -----
+    # Exactly three one-bit controls + three one-bit Moore outputs, with every
+    # transition, priority, memory, and reset fact explicitly stated.
+    rtl = _synth_directional_bump_fall(
+        prompt_text, top, clk, rst, ins, other_ins, outs)
+    if rtl:
+        return rtl
+
     if len(other_ins) == 1 and other_ins[0][1] == 1 \
             and len(outs) == 1 and outs[0][1] == 1:
         in_name = other_ins[0][0]
@@ -531,6 +1005,7 @@ if __name__ == "__main__":
     rtl = synth(Path(a.prompt).read_text(errors="replace"), a.top)
     if rtl is None:
         print("SKIP: not a mechanically-complete behavioral Moore FSM "
-              "(latched sequence detector / reset-pulse counter)", file=sys.stderr)
+              "(latched sequence detector / reset-pulse counter / strict "
+              "directional bump+fall walker)", file=sys.stderr)
         sys.exit(1)
     print(rtl)

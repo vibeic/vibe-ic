@@ -62,6 +62,16 @@ def test_unknown_when_rtl_present_without_ledger(tmp_path):
     assert "no provenance ledger" in reason
 
 
+def test_unknown_when_vhdl_present_without_ledger(tmp_path):
+    """VHDL is authored RTL too; a Verilog generator must not treat it as empty."""
+    _write(tmp_path, "top.vhd", "entity top is end entity;\n")
+    verdict, reason, ev = rp.classify(tmp_path)
+    assert verdict == rp.UNKNOWN
+    assert ev["file_count"] == 1
+    assert ev["files"] == ["top.vhd"]
+    assert "no provenance ledger" in reason
+
+
 def test_unknown_is_a_preserve_verdict(tmp_path):
     assert rp.UNKNOWN in rp.PRESERVE_VERDICTS
     assert rp.AUTHORED in rp.PRESERVE_VERDICTS
@@ -213,6 +223,14 @@ def test_stamp_records_digests_for_every_rtl_file(tmp_path):
     assert payload["schema"] == rp.SCHEMA_VERSION
     top = _rtl(tmp_path) / "top.v"
     assert payload["files"]["top.v"] == rp.sha256_file(top)
+
+
+def test_stamp_records_vhdl_files(tmp_path):
+    _write(tmp_path, "top.vhd", "entity top is end entity;\n")
+    _write(tmp_path, "sub/unit.vhdl", "entity unit is end entity;\n")
+    payload = rp.stamp(tmp_path)
+    assert set(payload["files"]) == {"top.vhd", "sub/unit.vhdl"}
+    assert rp.classify(tmp_path)[0] == rp.GENERATED
 
 
 def test_load_ledger_returns_none_when_absent(tmp_path):
