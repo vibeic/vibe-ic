@@ -431,7 +431,16 @@ new_progress_nonce() {
 }
 
 validated_arm_exit() {
-  PYTHONDONTWRITEBYTECODE=1 python3 -I - "$1" "$2" <<'PY'
+  # `-B` IS LOAD-BEARING, and `PYTHONDONTWRITEBYTECODE=1` alone is not: `-I`
+  # implies `-E`, so it IGNORES every PYTHON* variable including that one.  The
+  # helper below imports the arm-receipt module OUT OF `$RUNTIME_SNAPSHOT`, so
+  # without `-B` the first call byte-compiles it and leaves
+  # `tools/ci/__pycache__/` inside the runtime tree.  The runtime tree digest is
+  # exactly what every LATER arm's receipt is re-checked against, so the B1 call
+  # made the very next validation refuse with "receipt runtime digest differs
+  # from the current input" -> "B2 arm receipt is NORECORD", on every run, for
+  # every branch.  Measured: runtime files 57 -> 58 across one B1 validation.
+  PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "$1" "$2" <<'PY'
 import importlib.util, pathlib, sys
 helper_path = pathlib.Path(sys.argv[1])
 spec = importlib.util.spec_from_file_location("_trusted_arm_record_exit", helper_path)
