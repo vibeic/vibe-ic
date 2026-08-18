@@ -44,7 +44,19 @@
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-PROGRAMS="$ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
+# The subject and the gate instrument are deliberately separate in verified
+# landings.  The BASE transition manifest chooses one immutable instrument
+# tuple and the hermetic runner mounts it read-only at /runtime for BOTH arms;
+# cwd/Git still identify the subject at /subject.  Ordinary direct use keeps
+# the historical one-tree shape.
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUNTIME_ROOT="${GATEKEEPER_RUNTIME_ROOT:-$SCRIPT_ROOT}"
+if [ "${VIBEIC_REQUIRE_TRUSTED_PYTEST_ENTRY:-0}" = "1" ] \
+   && [ "$RUNTIME_ROOT" != "/runtime" ]; then
+  echo "gatekeeper-land: verified runtime must be mounted at /runtime" >&2
+  exit 2
+fi
+PROGRAMS="$RUNTIME_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
 PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
 PJSON="$PLUGIN/.claude-plugin/plugin.json"
 BASE="${GATEKEEPER_BASE:-origin/main}"
@@ -60,14 +72,65 @@ for _arg in "$@"; do
 done
 
 FAILED=0
+LANDING_RECORD_ENABLED=0
+LANDING_RECORD_TOOL="$RUNTIME_ROOT/tools/ci/landing_completion_record.py"
+LANDING_PROGRESS_TOOL="$RUNTIME_ROOT/tools/ci/hermetic_progress_emit.py"
+LANDING_JOURNAL="${VIBEIC_LANDING_PROGRESS:-}"
+LANDING_COMPLETION="${VIBEIC_LANDING_COMPLETION:-}"
+if [ -n "$LANDING_JOURNAL" ] || [ -n "$LANDING_COMPLETION" ]; then
+  if [ -z "$LANDING_JOURNAL" ] || [ -z "$LANDING_COMPLETION" ] \
+     || { [ "${GATEKEEPER_VERIFY_ARM:-}" != "A2" ] \
+          && [ "${GATEKEEPER_VERIFY_ARM:-}" != "B2" ]; } \
+     || [ "$LANDING_JOURNAL" != "/evidence/landing-progress.jsonl" ] \
+     || [ "$LANDING_COMPLETION" != "/evidence/landing-completion.json" ]; then
+    echo "[NORECORD] landing completion environment is partial or unowned" >&2
+    exit 2
+  fi
+  [ ! -e "$LANDING_JOURNAL" ] && [ ! -L "$LANDING_JOURNAL" ] \
+    && [ ! -e "$LANDING_COMPLETION" ] && [ ! -L "$LANDING_COMPLETION" ] \
+    || { echo "[NORECORD] landing evidence path already exists" >&2; exit 2; }
+  python3 "$LANDING_PROGRESS_TOOL" start \
+    || { echo "[NORECORD] landing progress could not start" >&2; exit 2; }
+  LANDING_RECORD_ENABLED=1
+fi
+
+landing_output_sha() {
+  printf '%s' "$1" | sha256sum | awk '{print $1}'
+}
+
+landing_record() {                  # landing_record <unit> <state> <rc> <output>
+  [ "$LANDING_RECORD_ENABLED" = "1" ] || return 0
+  local unit="$1" state="$2" rc="$3" output="$4" digest
+  digest="$(landing_output_sha "$output")" \
+    || { echo "[NORECORD] cannot digest landing stage $unit" >&2; exit 2; }
+  python3 "$LANDING_RECORD_TOOL" append --journal "$LANDING_JOURNAL" \
+    --label "$unit" --state "$state" --returncode "$rc" \
+    --output-sha256 "$digest" \
+    || { echo "[NORECORD] cannot attest landing stage $unit" >&2; exit 2; }
+  python3 "$LANDING_PROGRESS_TOOL" checkpoint "$unit" \
+    || { echo "[NORECORD] cannot relay landing stage $unit" >&2; exit 2; }
+}
+
+landing_skip() {                    # landing_skip <unit> <message>
+  landing_record "$1" SKIP 0 "$2"
+}
+
+landing_manual_stage() {            # landing_manual_stage <unit> <failed-before>
+  local unit="$1" before="$2"
+  if [ "$FAILED" -gt "$before" ]; then
+    landing_record "$unit" FAIL 1 "FAILED:$before->$FAILED"
+  else
+    landing_record "$unit" PASS 0 "FAILED:$before->$FAILED"
+  fi
+}
 # REPORT, not a gate. Prints what a probe found and NEVER touches FAILED.
 #
 # It exists so that a measurement whose blast radius is not yet a landing bar
 # still EXECUTES against every landing instead of being parked in a flag nobody
 # passes. The distinction is written into the label, so a reader of this log
 # can never mistake a REPORT line for a PASS.
-report() {                           # report <label> <cmd…>
-  local label="$1"; shift
+report() {                           # report <unit> <label> <cmd…>
+  local unit="$1" label="$2"; shift 2
   local out rc
   out="$("$@" 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then
@@ -77,12 +140,15 @@ report() {                           # report <label> <cmd…>
   fi
   printf '%s\n' "$out" | grep -aE 'REPORT|VIOLATION|\[FAIL\]|\[SKIP\]' \
     | head -8 | sed 's/^/            /'
+  landing_record "$unit" REPORT "$rc" "$out"
 }
-run() {                              # run <label> <cmd…>
-  local label="$1"; shift
-  local out
-  if out="$("$@" 2>&1)"; then
+run() {                              # run <unit> <label> <cmd…>
+  local unit="$1" label="$2"; shift 2
+  local out rc state
+  out="$("$@" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
     printf '  PASS  %s\n' "$label"
+    state=PASS
   else
     printf '  FAIL  %s\n' "$label"
     # The FAILING lines first, then the tail — not the tail alone.
@@ -101,7 +167,9 @@ run() {                              # run <label> <cmd…>
       | head -12 | sed 's/^/          /'
     printf '%s\n' "$out" | tail -5 | sed 's/^/          /'
     FAILED=1
+    state=FAIL
   fi
+  landing_record "$unit" "$state" "$rc" "$out"
 }
 
 echo "=== gatekeeper landing gates — base=$BASE ==="
@@ -124,8 +192,8 @@ echo "--- cheap tier (also enforced by the pre-push hook) ---"
 # An empty range means nothing new is being landed; the NDA checkers correctly
 # refuse an empty scan, so the no-op is skipped rather than reported as a pass.
 if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
-  run "NDA — commit messages"   python3 "$PROGRAMS/commit_msg_nda_check.py" --repo "$ROOT" --rev-range "$RANGE"
-  run "NDA — added content/paths" python3 "$PROGRAMS/nda_diff_scan_check.py" --rev-range "$RANGE"
+  run "cheap:nda-messages" "NDA — commit messages"   python3 "$PROGRAMS/commit_msg_nda_check.py" --repo "$ROOT" --rev-range "$RANGE"
+  run "cheap:nda-content" "NDA — added content/paths" python3 "$PROGRAMS/nda_diff_scan_check.py" --rev-range "$RANGE"
   # `GATEKEEPER_VERSION_BY_GATEKEEPER=1` — the VERSION-LESS authoring-PR path,
   # for `tools/gatekeeper-verify-merge.sh` (vibe-ic#1019). The version is
   # assigned AT MERGE by the gatekeeper, so a PR under verification legitimately
@@ -135,11 +203,11 @@ if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   # refused in both directions, so this defers the gate and does not disable it.
   # Unset (the push path) is unchanged: current == previous still FAILs.
   if [ "${GATEKEEPER_VERSION_BY_GATEKEEPER:-0}" = "1" ]; then
-    run "version monotonic (assigned at merge — deferred)" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE" --version-by-gatekeeper
+    run "cheap:version" "version monotonic (assigned at merge — deferred)" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE" --version-by-gatekeeper
   else
-    run "version bumped monotonically" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE"
+    run "cheap:version" "version bumped monotonically" python3 "$PROGRAMS/version_bump_monotonic_check.py" --plugin-json "$PJSON" --base "$BASE"
   fi
-  run "agent check-in scope"    python3 "$PROGRAMS/agent_checkin_scope_guard.py" --role core-agent --base "$BASE"
+  run "cheap:agent-scope" "agent check-in scope"    python3 "$PROGRAMS/agent_checkin_scope_guard.py" --role core-agent --base "$BASE"
   # `--corpus-may-be-absent`: the published corpus lives in vibeic/benchmark-data,
   # so THIS repo legitimately has no `benchmark-data/`. Without the flag the gate
   # correctly reports UNDETERMINED and blocks every push — a gate that refuses
@@ -149,12 +217,21 @@ if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   # scans it and can still fail; with the pointer set and broken it is still
   # UNDETERMINED, flag or no flag. The flag only names the one case it was written
   # for: nothing configured, nothing local, nothing claimed.
-  run "benchmark evidence structure" python3 "$PROGRAMS/benchmark_evidence_structure_check.py" --tree benchmark-data --corpus-may-be-absent --changed-since "$BASE"
+  #
+  # `BASE` is an object in THIS repository.  It cannot be resolved inside the
+  # separately attested benchmark-data repository, so applying --changed-since
+  # there turns a present corpus into a zero-denominator NORECORD.  The external
+  # snapshot is immutable and SHA-bound by the verifier; grade its complete
+  # population.  Preserve change-scoping only for the historical in-tree shape.
+  BENCHMARK_STRUCTURE_SCOPE=()
+  [ -n "${VIBE_IC_BENCHMARK_DATA:-}" ] \
+    || BENCHMARK_STRUCTURE_SCOPE=(--changed-since "$BASE")
+  run "cheap:benchmark-structure" "benchmark evidence structure" python3 "$PROGRAMS/benchmark_evidence_structure_check.py" --tree benchmark-data --corpus-may-be-absent "${BENCHMARK_STRUCTURE_SCOPE[@]}"
   # vibe-ic#635 — a NEW published number must arrive with its composition.
   # Scoped `--changed-since` like the gate above: 20 of the 25 runs already
   # published carry no per-problem name set, and applying this retroactively
   # would fail every landing over work nobody is doing.
-  run "benchmark run manifest" python3 "$PROGRAMS/benchmark_run_manifest.py" check --tree benchmark-data --changed-since "$BASE"
+  run "cheap:benchmark-manifest" "benchmark run manifest" python3 "$PROGRAMS/benchmark_run_manifest.py" check --tree benchmark-data --changed-since "$BASE"
   # PER-RUN, not a fixed name. `tools/gatekeeper-verify-merge.sh` (vibe-ic#1019)
   # runs this script for the BASE and for the CANDIDATE at the same time — two
   # arms of one differential — and a shared `/tmp/gk_*.txt` would have had each
@@ -162,13 +239,13 @@ if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   # tree is the defect this whole file exists to stop.
   MSGFILE="$(mktemp -t gk_commit_text.XXXXXX)"
   git log --format='%B' "$RANGE" > "$MSGFILE" 2>/dev/null
-  run "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" "$MSGFILE"
+  run "cheap:git-prohibition" "git prohibition guard"   python3 "$PROGRAMS/git_prohibition_guard.py" "$MSGFILE"
   rm -f "$MSGFILE"
   # 2026-08-03 — the batch that landed five PRs from a 6.5-hour-stale base and
   # let three of its own commits erase the other two. `gatekeeper_stale_branch_check`
   # said STALE_OVERLAP on all five BEFORE the land; nothing looked at the
   # commits AFTER they existed, which is the artefact this script pushes.
-  run "no collateral revert within the push" \
+  run "cheap:collateral-revert" "no collateral revert within the push" \
       python3 "$PROGRAMS/landing_collateral_revert_check.py" --repo "$ROOT" --rev-range "$RANGE"
   # 2026-08-05 — THE OTHER HALF OF THE SAME QUESTION, and the half nothing here
   # was asking. The gate above reads the commits INSIDE this push; this reads
@@ -185,13 +262,22 @@ if [ "$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)" != "0" ]; then
   # The checker was already blocking in `gatekeeper_review`; it had never been
   # wired HERE, which is the script that writes the stamp the pre-push hook
   # demands — so the landing path had no opinion on the landing method at all.
-  run "tree contains the base it claims as parent" \
+  run "cheap:base-ancestry" "tree contains the base it claims as parent" \
       python3 "$PROGRAMS/gatekeeper_stale_branch_check.py" --repo "$ROOT" \
           --base "$BASE" --head HEAD
 else
   echo "  SKIP  range is empty — nothing new to land"
+  landing_skip "cheap:nda-messages" "range is empty"
+  landing_skip "cheap:nda-content" "range is empty"
+  landing_skip "cheap:version" "range is empty"
+  landing_skip "cheap:agent-scope" "range is empty"
+  landing_skip "cheap:benchmark-structure" "range is empty"
+  landing_skip "cheap:benchmark-manifest" "range is empty"
+  landing_skip "cheap:git-prohibition" "range is empty"
+  landing_skip "cheap:collateral-revert" "range is empty"
+  landing_skip "cheap:base-ancestry" "range is empty"
 fi
-run "marketplace <-> plugin version sync" python3 "$PROGRAMS/marketplace_version_sync_check.py"
+run "cheap:version-sync" "marketplace <-> plugin version sync" python3 "$PROGRAMS/marketplace_version_sync_check.py"
 # A landing is normally ONE commit. A batch is legitimate when several
 # independent changes land together — NO-MIX forces a benchmark-data fix and a
 # plugin change into separate commits, for instance — and the gate accepts that
@@ -209,11 +295,12 @@ run "marketplace <-> plugin version sync" python3 "$PROGRAMS/marketplace_version
 GK_RANGE_N="$(git rev-list --count "$RANGE" 2>/dev/null || echo 0)"
 if [ "$GK_RANGE_N" = "0" ]; then
   echo "  SKIP  landing shape — range is empty, so there is no landing to shape"
+  landing_skip "cheap:landing-shape" "range is empty"
 elif [ "$GK_RANGE_N" -gt 1 ]; then
-  run "landing is a valid batch (version on tip)" \
+  run "cheap:landing-shape" "landing is a valid batch (version on tip)" \
       python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE" --batch
 else
-  run "landing is one commit" \
+  run "cheap:landing-shape" "landing is one commit" \
       python3 "$PROGRAMS/landing_is_one_commit_check.py" --base "$BASE"
 fi
 
@@ -244,8 +331,9 @@ fi
 # that nobody has looked yet.
 if [ "$GK_RANGE_N" = "0" ]; then
   echo "  SKIP  competing claims — range is empty, so there is nothing claimed"
+  landing_skip "cheap:competing-claims-report" "range is empty"
 else
-  report "issues claimed by more than one commit in this landing" \
+  report "cheap:competing-claims-report" "issues claimed by more than one commit in this landing" \
       python3 "$PROGRAMS/competing_pr_claim_groups.py" \
           --repo-root "$ROOT" --rev-range "$RANGE"
 fi
@@ -271,7 +359,7 @@ fi
 # one checkout do not read each other's.
 FP="$(mktemp -t gk_fingerprint.XXXXXX)"
 trap 'rm -f "$FP"' EXIT
-run "worktree carries no uncommitted change" \
+run "cheap:worktree-clean" "worktree carries no uncommitted change" \
     python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
         --emit-fingerprint "$FP"
 
@@ -288,7 +376,7 @@ run "worktree carries no uncommitted change" \
 # BEHIND origin/main. A bar whose one instance is already closed is a bar that
 # only ever fires on somebody's scratch notes. `--worktree-blocking` promotes
 # it when that changes.
-report "untracked scratch paths in this checkout" \
+report "cheap:scratch-report" "untracked scratch paths in this checkout" \
     python3 "$PROGRAMS/gitignore_scratch_guard.py" --root "$ROOT" \
         --include-worktree
 
@@ -315,7 +403,7 @@ echo "--- full tier (minutes; stamps the tree on success) ---"
 # whose family this repo already caught rewriting 77 tracked files.
 WG_BASE="$(mktemp -t gk_writeguard.XXXXXX)"
 trap 'rm -f "$FP" "$WG_BASE"' EXIT
-run "write-guard baseline" \
+run "full:write-guard-baseline" "write-guard baseline" \
     python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --snapshot "$WG_BASE"
 
 # The TARGETED TEST RUN, carried over verbatim from the retired ci.yml:130-132.
@@ -324,10 +412,12 @@ run "write-guard baseline" \
 # `ci_harness_timeout_ceiling_check` lost its input and reported CANNOT
 # DETERMINE rather than passing.
 #
-# `--timeout=180` is load-bearing beyond this run: that check resolves the
-# harness bound from this line and fails any inner subprocess timeout above it,
-# because an inner bound larger than the harness does not fail a test — it
-# outlives the harness and takes the session down.
+# No fixed elapsed-time limit participates in this verdict.  The driver below
+# observes pytest's validated collection/test lifecycle protocol, owns the
+# complete descendant process tree, and has no total runtime ceiling.  A test
+# that keeps completing finite semantic work may therefore take as long as it
+# needs.  A session whose lifecycle stops produces NORECORD, never a fabricated
+# test failure and never a partial green JUnit.
 #
 # `GATEKEEPER_PYTEST_JUNIT=<path>` additionally writes a junit report for this
 # run. It changes NO verdict here — the `if out=…` below still decides — and
@@ -362,7 +452,7 @@ run_pytest() {
   if ! out="$( cd "$PLUGIN" && python3 programs/scratch_root_guard.py 2>&1 )"; then
     echo "  FAIL  the scratch root would falsify this run"
     printf '%s\n' "$out" | sed 's/^/          /'
-    FAILED=1; return
+    FAILED=1; return 1
   fi
   # PER-RUN: see the MSGFILE note above. Two concurrent arms sharing one
   # selection file would each run the other's test list.
@@ -419,10 +509,9 @@ run_pytest() {
   # `gh pr merge` — the bypass vibe-ic#1019/#1036 is about.
   #
   # So the session declares what it loads instead of inheriting it. The suite needs
-  # exactly ONE third-party plugin — `pytest-timeout`, for the `--timeout` flags on
-  # this very line — verified by grepping the whole suite for the fixtures and marks
-  # of every other installed plugin: requests_mock 0 files, typeguard 0, anyio 0,
-  # hydra 0, xdist mentioned only in a README.
+  # no third-party entry-point plugin.  The progress plugin is loaded by the
+  # trusted driver through its explicit module path; pytest-timeout is
+  # deliberately absent because elapsed time is not a test verdict.
   #
   # `suite_write_guard` is UNAFFECTED and must stay that way: conftest.py loads it
   # through `pytest_plugins`, not through an entry point, so disabling autoload does
@@ -432,9 +521,9 @@ run_pytest() {
   #
   # ── ONE WHOLE-SELECTION SESSION ON THE LANDING CRITICAL PATH (#1654) ──
   #
-  # `--timeout-method=thread` cannot interrupt a blocking `waiter.acquire()`. It
-  # dumps every thread's stack and takes the PROCESS down, and a process that
-  # dies never writes its `--junitxml`. So ONE hanging file used to cost the
+  # A fixed pytest timeout cannot interrupt a blocking `waiter.acquire()` as a
+  # test failure. It dumps every thread's stack and takes the PROCESS down, and
+  # a process that dies never writes its `--junitxml`. So ONE hanging file used to cost the
   # WHOLE run's machine-readable record — measured at the #1650 tree with a
   # 91-file selection, where the hang was 1 file and the blast radius was the
   # other 90, on BOTH arms:
@@ -459,10 +548,9 @@ run_pytest() {
   # record it can and naming the file(s) it cannot measure. Recovery cannot make
   # UNKNOWN land and adds no work to the successful critical path.
   #
-  # THE PYTEST COMMAND IS PASSED IN VERBATIM, not built inside the driver, so
-  # `--timeout=180` stays declared HERE — `ci_harness_timeout_ceiling_check`
-  # resolves the binding harness bound from this file (EXTRA_HARNESS_RELS) and a
-  # bound moved into Python would vanish from its view.
+  # THE PYTEST COMMAND IS PASSED IN VERBATIM, not built inside the driver.  It
+  # intentionally carries no fixed timeout: only the driver's strict semantic
+  # lifecycle lease may classify the run NORECORD.
   if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
         --selection "$sel" --junit "$merged" \
         --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
@@ -471,8 +559,9 @@ run_pytest() {
         --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
         --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
         --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}" \
-        -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
-        "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
+        -- python3 -I "$PROGRAMS/trusted_pytest_entry.py" -q \
+        -p no:cacheprovider \
+        "${maxfail[@]+"${maxfail[@]}"}" 2>&1 )"; then
     rc=0
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
@@ -527,8 +616,11 @@ run_pytest() {
 }
 if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
   echo "  SKIP  targeted tests — measured by the independent aggregate test arm"
+  landing_skip "full:targeted-tests" "measured by the aggregate test arm"
 else
+  _landing_before="$FAILED"
   run_pytest
+  landing_manual_stage "full:targeted-tests" "$_landing_before"
 fi
 
 # Merge verification already has enough evidence to refuse once the aggregate
@@ -558,7 +650,7 @@ fi
 # a file is added, and it would go stale silently and in the safe-looking
 # direction: fewer files still reports PASS.
 run_repo_tools_pytest() {
-  local files out rc wg wrc snap
+  local files out rc wg wrc snap list merged
   mapfile -t files < <(cd "$ROOT" && find tools \
       \( -name 'test_*.py' -o -name '*_test.py' \) -type f | sort)
   # An empty corpus is a VACUOUS pass, not a pass. A gate that reports success
@@ -566,7 +658,7 @@ run_repo_tools_pytest() {
   if [ "${#files[@]}" -eq 0 ]; then
     echo "  FAIL  repo tools tests: discovery matched NO files under tools/ —"
     echo "        an empty corpus is not evidence that anything passed."
-    FAILED=1; return
+    FAILED=1; return 1
   fi
   # The in-process `programs/suite_write_guard.py` is loaded by the PLUGIN
   # conftest and is NOT present in this session, so the property it asserts —
@@ -583,30 +675,46 @@ run_repo_tools_pytest() {
   python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
       --snapshot "$snap" >/dev/null 2>&1 || {
     echo "  FAIL  repo tools tests: could not baseline the tree — not a pass"
-    FAILED=1; rm -f "$snap"; return
+    FAILED=1; rm -f "$snap"; return 1
   }
-  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
-        -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-        "${files[@]}" 2>&1 )"
+  list="$(mktemp -t gk_tools_sel.XXXXXX)"
+  merged="$(mktemp -t gk_tools_junit.XXXXXX)"
+  printf '%s\n' "${files[@]}" > "$list"
+  out="$( cd "$ROOT" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+        python3 "$PROGRAMS/pytest_per_file_junit.py" \
+        --selection "$list" --junit "$merged" --cwd "$ROOT" \
+        --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+        --aggregate-check \
+        --aggregate-stall-after "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+        --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+        --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
+        --stop-after-failures 0 \
+        -- python3 -I "$PROGRAMS/trusted_pytest_entry.py" -q \
+        -p no:cacheprovider 2>&1 )"
   rc=$?
   wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
         --compare "$snap" 2>&1)"; wrc=$?
-  rm -f "$snap"
+  rm -f "$snap" "$list" "$merged"
   if [ "$rc" -ne 0 ]; then
     printf '  FAIL  repo tools tests (%s file(s))\n' "${#files[@]}"
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
-    FAILED=1; return
+    FAILED=1; return 1
   fi
   # rc 0 clean / 1 wrote / 2 NOT_CHECKED. 2 is NOT a pass: "I could not look"
   # must never reach a reader as "I looked and it was fine".
   if [ "$wrc" -ne 0 ]; then
     printf '  FAIL  repo tools tests wrote to the tree (write-guard rc=%s)\n' "$wrc"
     printf '%s\n' "$wg" | tail -8 | sed 's/^/          /'
-    FAILED=1; return
+    FAILED=1; return 1
   fi
   printf '  PASS  repo tools tests (%s file(s))\n' "${#files[@]}"
+  return 0
 }
-run_repo_tools_pytest
+if run_repo_tools_pytest; then
+  landing_record "full:repo-tools-tests" PASS 0 "repo tools tests complete"
+else
+  landing_record "full:repo-tools-tests" FAIL 1 "repo tools tests failed"
+fi
 
 # ── EVERY OTHER TREE THE SELECTOR CANNOT REACH ─────────────────────────────
 # vibe-ic#1424. `run_pytest` runs the SELECTOR'S list and the selector is rooted
@@ -644,7 +752,7 @@ run_repo_tools_pytest
 # dir as a bare repo-root-relative path. From $PLUGIN two of these tests fail —
 # vibe-ic#1390, open, a defect in that resolution and not silenced here.
 run_unselectable_pytest() {
-  local files out rc wg wrc snap list lrc
+  local files out rc wg wrc snap list lrc merged
   list="$(mktemp -t gk_unsel.XXXXXX)"
   ( cd "$ROOT" && python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" \
         --repo "$ROOT" > "$list" ) ; lrc=$?
@@ -655,14 +763,14 @@ run_unselectable_pytest() {
     echo "  FAIL  unselectable tests: the corpus could not be enumerated"
     echo "        (landing_unselectable_pytest_corpus.py rc=$lrc) — that is"
     echo "        'I could not look', which is never a pass."
-    FAILED=1; rm -f "$list"; return
+    FAILED=1; rm -f "$list"; return 1
   fi
-  mapfile -t files < "$list"; rm -f "$list"
+  mapfile -t files < "$list"
   if [ "${#files[@]}" -eq 0 ]; then
     echo "  FAIL  unselectable tests: the complement is EMPTY — either every"
     echo "        tree is genuinely covered (say so by declaring it) or the"
     echo "        census broke. A gate over zero items is not a pass."
-    FAILED=1; return
+    FAILED=1; rm -f "$list"; return 1
   fi
   # As in `run_repo_tools_pytest`: the in-process `suite_write_guard` is loaded
   # by the PLUGIN conftest, and this session's rootdir is not guaranteed to be
@@ -672,7 +780,7 @@ run_unselectable_pytest() {
   python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
       --snapshot "$snap" >/dev/null 2>&1 || {
     echo "  FAIL  unselectable tests: could not baseline the tree — not a pass"
-    FAILED=1; rm -f "$snap"; return
+    FAILED=1; rm -f "$snap" "$list"; return 1
   }
   # `PYTHONDONTWRITEBYTECODE=1` IS LOAD-BEARING HERE, and it is the one hazard
   # this stage adds that no existing guard can catch.
@@ -702,13 +810,23 @@ run_unselectable_pytest() {
   # ONE session and it fails. This stage would have been the author, in the
   # landing gate, on every batch — and :213 fails the WHOLE landing when the
   # tree moves under the gates, so the price is the batch.
-  out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
-        -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-        "${files[@]}" 2>&1 )"
+  merged="$(mktemp -t gk_unsel_junit.XXXXXX)"
+  out="$( cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 \
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+        python3 "$PROGRAMS/pytest_per_file_junit.py" \
+        --selection "$list" --junit "$merged" --cwd "$ROOT" \
+        --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
+        --aggregate-check \
+        --aggregate-stall-after "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}" \
+        --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}" \
+        --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}" \
+        --stop-after-failures 0 \
+        -- python3 -I "$PROGRAMS/trusted_pytest_entry.py" -q \
+        -p no:cacheprovider 2>&1 )"
   rc=$?
   wg="$(python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" \
         --compare "$snap" 2>&1)"; wrc=$?
-  rm -f "$snap"
+  rm -f "$snap" "$list" "$merged"
   # THE COUNT IS NOT IN THE LABEL, and that is deliberate. #1431: the two arms
   # of `gatekeeper-verify-merge.sh` subtract gate logs BY PRINTED LABEL, so a
   # label carrying a discovery count renames its own gate whenever a branch adds
@@ -719,22 +837,27 @@ run_unselectable_pytest() {
   if [ "$rc" -ne 0 ]; then
     echo "  FAIL  unselectable tests"
     printf '%s\n' "$out" | tail -6 | sed 's/^/          /'
-    FAILED=1; return
+    FAILED=1; return 1
   fi
   if [ "$wrc" -ne 0 ]; then
     printf '  FAIL  unselectable tests wrote to the tree (write-guard rc=%s)\n' "$wrc"
     printf '%s\n' "$wg" | tail -8 | sed 's/^/          /'
-    FAILED=1; return
+    FAILED=1; return 1
   fi
   echo "  PASS  unselectable tests"
+  return 0
 }
-run_unselectable_pytest
+if run_unselectable_pytest; then
+  landing_record "full:unselectable-tests" PASS 0 "unselectable tests complete"
+else
+  landing_record "full:unselectable-tests" FAIL 1 "unselectable tests failed"
+fi
 
 # The census that decides the stage above must itself be trustworthy: a
 # subtrahend whose stage no longer exists, or an exclusion whose reason no
 # longer describes anything, both shrink the corpus in the direction that still
 # prints PASS. rc=1 on either.
-run "unselectable-test census is not stale" \
+run "full:unselectable-census" "unselectable-test census is not stale" \
     python3 "$PROGRAMS/landing_unselectable_pytest_corpus.py" --repo "$ROOT" --audit
 
 # THE HYGIENE TIER, AND THE RECORD THAT LETS IT BE DIFFERENCED (vibe-ic#1498).
@@ -769,10 +892,11 @@ GK_HYG=()
 GK_HYG_ENV=()
 [ -n "${GATEKEEPER_HYGIENE_PROGRESS:-}" ] \
   && GK_HYG_ENV=(env "GATE_DISPATCH_ATTESTATION_FILE=$GATEKEEPER_HYGIENE_PROGRESS")
-run "repo hygiene gates"      "${GK_HYG_ENV[@]}" \
-    bash "$ROOT/tools/ci/repo_hygiene_gates.sh" \
+run "full:repo-hygiene" "repo hygiene gates"      "${GK_HYG_ENV[@]}" \
+    env "VIBEIC_SUBJECT_ROOT=$ROOT" \
+    bash "$RUNTIME_ROOT/tools/ci/repo_hygiene_gates.sh" \
     "${GK_HYG[@]+"${GK_HYG[@]}"}"
-run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
+run "full:plugin-audit" "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 
 # #1029 — the standing assertion, executed: everything above ran against this
 # tree, so nothing above may have CHANGED it. Names every offending path rather
@@ -780,15 +904,24 @@ run "plugin full audit"       python3 "$PROGRAMS/plugin_full_audit.py" "$PLUGIN"
 # separate accidental discoveries. rc=2 (could not look) fails here too: `run`
 # treats any non-zero as FAIL, which is the point — "I could not measure" must
 # never reach the stamp as "I measured and it was clean".
-run "the full tier wrote nothing into the tree" \
+run "full:write-guard-final" "the full tier wrote nothing into the tree" \
     python3 "$PROGRAMS/suite_write_guard.py" --repo "$ROOT" --compare "$WG_BASE"
 
 # LAST, and after every suite has read the tree. Everything above answers
 # "do the gates pass"; this answers "did they all read the same tree", which is
 # the question the stamp actually asserts.
-run "worktree unchanged since the gates started" \
-    python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
+run "full:worktree-fingerprint-final" "worktree unchanged since the gates started" \
+        python3 "$PROGRAMS/landing_worktree_is_clean_check.py" "$ROOT" \
         --expect-fingerprint "$FP"
+
+if [ "$LANDING_RECORD_ENABLED" = "1" ]; then
+  landing_record "full:completion-record" PASS 0 "completion record publication"
+  python3 "$LANDING_RECORD_TOOL" finish --journal "$LANDING_JOURNAL" \
+    --record "$LANDING_COMPLETION" --failed "$FAILED" \
+    || { echo "[NORECORD] landing completion record is incomplete" >&2; exit 2; }
+  python3 "$LANDING_PROGRESS_TOOL" terminal \
+    || { echo "[NORECORD] landing progress terminal is incomplete" >&2; exit 2; }
+fi
 
 if [ "$FAILED" -eq 0 ] && [ "${GATEKEEPER_NO_STAMP:-0}" = "1" ]; then
   # Merge verification runs the authoritative aggregate test session in its

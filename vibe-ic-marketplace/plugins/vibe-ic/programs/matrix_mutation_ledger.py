@@ -265,7 +265,7 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -2606,10 +2606,31 @@ def replay_plan(mode: Optional[str] = None) -> Tuple[Tuple[str, str], ...]:
 
 
 def replay_many(plan: Sequence[Tuple[str, str]], jobs: int = 8,
-                timeout: int = 900) -> Tuple[ReplayResult, ...]:
+                timeout: int = 900,
+                progress_callback: Optional[Callable[[int, int], None]] = None,
+                ) -> Tuple[ReplayResult, ...]:
+    frozen = tuple(plan)
+    if not frozen:
+        return ()
+    results: List[Optional[ReplayResult]] = [None] * len(frozen)
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        return tuple(pool.map(
-            lambda pair: replay(mutation(pair[0]), pair[1], timeout), plan))
+        pending = {
+            pool.submit(replay, mutation(pair[0]), pair[1], timeout): index
+            for index, pair in enumerate(frozen)
+        }
+        completed = 0
+        try:
+            for future in as_completed(pending):
+                results[pending[future]] = future.result()
+                completed += 1
+                if progress_callback is not None:
+                    progress_callback(completed, len(frozen))
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            raise
+    assert all(result is not None for result in results)
+    return tuple(result for result in results if result is not None)
 
 
 # ══════════════════════════════════════════════════════════════════════

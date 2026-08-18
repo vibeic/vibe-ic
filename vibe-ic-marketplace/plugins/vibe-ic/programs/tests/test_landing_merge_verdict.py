@@ -42,6 +42,8 @@ WHAT THIS FILE REFUSES
 from __future__ import annotations
 
 import json
+import hashlib
+import importlib.util
 import os
 import signal
 import shutil
@@ -62,7 +64,43 @@ _PROG = _PROGRAMS / "landing_merge_verdict.py"
 _REPO_ROOT = _PROGRAMS.parents[3]
 _VERIFY = _REPO_ROOT / "tools" / "gatekeeper-verify-merge.sh"
 _LAND = _REPO_ROOT / "tools" / "gatekeeper-land.sh"
+_PROTECTED_SPEC = importlib.util.spec_from_file_location(
+    "_protected_landing_transition_for_test",
+    _REPO_ROOT / "tools" / "ci" / "protected_landing_transition.py")
+assert _PROTECTED_SPEC and _PROTECTED_SPEC.loader
+_PROTECTED = importlib.util.module_from_spec(_PROTECTED_SPEC)
+_PROTECTED_SPEC.loader.exec_module(_PROTECTED)
 _T = 55
+
+_RUNNER_PROFILE = {
+    "schema": 1,
+    "profile_id": "vibeic-landing-hermetic-v1",
+    "engine": "docker",
+    "image": _PROTECTED.RUNNER_IMAGE,
+    "platform": "linux/amd64",
+    "user": "65534:65534",
+    "network": "none",
+    "read_only": True,
+    "cap_drop": ["ALL"],
+    "security_opt": ["no-new-privileges:true"],
+    "tmpfs": ["/tmp:rw,nosuid,nodev,noexec,size=536870912,mode=1777"],
+    "pull": "never",
+    "workdir": "/subject",
+    "subject_mount": "read-only",
+    "runtime_mount": "read-only",
+    "corpus_mount": "read-only",
+    "input_mounts": "selection-and-progress-plan-read-only",
+    "runtime_overlays": "sorted-exact-files-read-only",
+    "process_environment": "env-i-exact-arm-profile",
+    "progress_protocol": "VIBEIC_PROGRESS/1",
+    "evidence_transport": "private-volume-post-stop-export-and-absence-proof",
+}
+_PROTECTED_SELECT_CONTROL_TESTS = (
+    "programs/tests/test_ci_harness_timeout_ceiling_check.py",
+    "programs/tests/test_gate_process_attestation.py",
+    "programs/tests/test_landing_merge_verdict.py",
+    "programs/tests/test_pytest_per_file_junit.py",
+)
 
 TREE = "a" * 40
 OTHER_TREE = "b" * 40
@@ -84,6 +122,67 @@ _RED_TEST_TIER_LOG = """=== gatekeeper landing gates — base=origin/main ===
   FAIL  targeted tests (21 file(s))
 === FAILURES ABOVE — stamp removed; the pre-push hook will refuse ===
 """
+
+
+def _protected_receipt(tmp_path):
+    paths = sorted(_PROTECTED.REQUIRED_AUTHORITY_PATHS | _PROTECTED.RUNTIME_PATHS)
+    observed = []
+    for index, path in enumerate(paths, 1):
+        roles = []
+        if path in _PROTECTED.REQUIRED_AUTHORITY_PATHS:
+            roles.append("authority")
+        if path in _PROTECTED.RUNTIME_PATHS:
+            roles.append("runtime")
+        observed.append({
+            "path": path,
+            "mode": "100755" if path == "tools/gatekeeper-land.sh" else "100644",
+            "blob_oid": f"{index:040x}",
+            "sha256": f"{index:064x}",
+            "size": index,
+            "roles": roles,
+        })
+    manifest = {
+        "path": _PROTECTED.MANIFEST_PATH,
+        "mode": "100644",
+        "blob_oid": "d" * 40,
+        "sha256": "e" * 64,
+        "size": 123,
+    }
+    payload = {
+        "operation": "STEADY",
+        "base_commit": SHA,
+        "base_tree": TREE,
+        "candidate_commit": SHA,
+        "candidate_tree": TREE,
+        "base_manifest": manifest,
+        "candidate_manifest": dict(manifest),
+        "runner": json.loads(json.dumps(_RUNNER_PROFILE)),
+        "base_transition_id": "landing-semantic-v1",
+        "candidate_transition_id": "landing-semantic-v1",
+        "base_current_state_id": "legacy-timeout-v1",
+        "base_next_state_id": "semantic-progress-v1",
+        "base_state_id": "legacy-timeout-v1",
+        "candidate_state_id": "legacy-timeout-v1",
+        "base_files": observed,
+        "candidate_files": json.loads(json.dumps(observed)),
+        "worktrees": [
+            {"role": "candidate-gates", "commit": SHA,
+             "tree": TREE, "complete": True},
+            {"role": "candidate-tests", "commit": SHA,
+             "tree": TREE, "complete": True},
+        ],
+    }
+    receipt = {
+        "schema": 1,
+        "kind": _PROTECTED.RECEIPT_KIND,
+        "complete": True,
+        "payload": payload,
+        "payload_sha256": hashlib.sha256(
+            _PROTECTED.canonical_bytes(payload)).hexdigest(),
+    }
+    path = tmp_path / "protected-transition.json"
+    path.write_bytes(_PROTECTED.canonical_bytes(receipt))
+    return path
 
 
 def _delta(**kw):
@@ -784,12 +883,14 @@ def _cli(tmp_path, land_text, base_cases, cand_cases, sel, extra=(),
     if candidate_mutator:
         candidate_mutator(cj)
     cmd = [sys.executable, str(_PROG),
-           "--base-sha", SHA, "--head-sha", SHA, "--verified-sha", SHA,
+           "--base-sha", SHA, "--base-tree", TREE,
+           "--head-sha", SHA, "--verified-sha", SHA,
            "--rebase-status", "ok", "--expected-tree", TREE,
            "--verified-tree", TREE, "--github-tree", TREE,
            "--land-log", str(tmp_path / "land.log"),
            "--selection", str(tmp_path / "sel.txt"), *base_sel_arg,
            "--base-junit", str(bj), "--candidate-junit", str(cj),
+           "--protected-transition-receipt", str(_protected_receipt(tmp_path)),
            "--json", str(tmp_path / "v.json"), *extra]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=_T)
     doc = json.loads((tmp_path / "v.json").read_text())
@@ -807,6 +908,31 @@ def test_cli_returns_zero_and_names_the_verified_commit(tmp_path):
     assert "LAND OK" in r.stdout
     assert doc["verdict"] == "LAND_OK"
     assert doc["verified_sha"] == SHA
+    assert doc["protected_landing_transition"]["operation"] == "STEADY"
+    assert doc["protected_transition_receipt"]["complete"] is True
+
+
+def test_cli_refuses_missing_or_tampered_protected_source_receipt(tmp_path):
+    missing = tmp_path / "missing-protected.json"
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        extra=("--protected-transition-receipt", str(missing)))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc["unmeasurable"] is True
+    assert any("PROTECTED LANDING SOURCE TRANSITION" in reason
+               for reason in doc["reasons"])
+
+    receipt_path = _protected_receipt(tmp_path)
+    receipt = json.loads(receipt_path.read_text())
+    receipt["payload"]["candidate_tree"] = OTHER_TREE
+    tampered = tmp_path / "tampered-protected.json"
+    tampered.write_text(json.dumps(receipt))
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_OK, _CASE_OK, _SEL,
+        extra=("--protected-transition-receipt", str(tampered)))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert any("PROTECTED LANDING SOURCE TRANSITION" in reason
+               for reason in doc["reasons"])
 
 
 def test_candidate_aggregate_norecord_is_an_absolute_refusal(tmp_path):
@@ -930,7 +1056,8 @@ def test_a_base_arm_asked_for_files_that_produced_no_report_is_refused(tmp_path)
     cj = _junit(tmp_path, _CASE_SILENCED_CAND, "cand.xml")
     r = subprocess.run(
         [sys.executable, str(_PROG),
-         "--base-sha", SHA, "--head-sha", SHA, "--verified-sha", SHA,
+         "--base-sha", SHA, "--base-tree", TREE,
+         "--head-sha", SHA, "--verified-sha", SHA,
          "--rebase-status", "ok", "--expected-tree", TREE,
          "--verified-tree", TREE, "--github-tree", TREE,
          "--land-log", str(tmp_path / "land.log"),
@@ -938,6 +1065,7 @@ def test_a_base_arm_asked_for_files_that_produced_no_report_is_refused(tmp_path)
          "--base-selection", str(tmp_path / "sel_base.txt"),
          "--base-junit", str(tmp_path / "never_written.xml"),
          "--candidate-junit", str(cj),
+         "--protected-transition-receipt", str(_protected_receipt(tmp_path)),
          "--json", str(tmp_path / "v.json")],
         capture_output=True, text=True, timeout=_T)
     doc = json.loads((tmp_path / "v.json").read_text())
@@ -988,16 +1116,20 @@ def test_the_verify_script_hands_the_verdict_arm_as_own_selection():
     assert body.count(': > "$RUN/selection_base.txt"') >= 1
     assert "--candidate-test-worktree-status" in body
     assert "--base-test-worktree-status" in body
-    assert 'attest_test_worktree()' in body
-    assert 'git -C "$wt" read-tree "$expected_tree"' in body
-    assert 'export GIT_NO_REPLACE_OBJECTS=1' in body
-    assert 'git -C "$wt" diff-files --name-status' in body
-    assert '"$WT_CAND_TESTS" "$VERIFIED_SHA" "$VERIFIED_TREE" candidate_tests' in body
-    assert '"$WT_BASE_TESTS" "$BASE_SHA" "$BASE_TREE" base_tests' in body
-    assert 'gatekeeper-base-test-cache-schema=4-exact-tree' in body
-    assert "grep -qx 'schema=4-exact-tree'" in body
-    assert '[ "$A1_WORKTREE_STATUS" = "clean" ]' in body, \
-        "dirty base-test evidence can still be published into the cache"
+    assert 'materialize_hermetic_git_subject' in body
+    assert '"$REPO" "$VERIFIED_SHA" "$CAND_SUBJECT"' in body
+    assert '"$REPO" "$BASE_SHA" "$BASE_SUBJECT"' in body
+    assert 'hermetic_landing_arm_receipt.py' in body
+    assert 'validate_hermetic_arm_record "$B1_RUNNER_RC"' in body
+    assert 'validate_hermetic_arm_record "$A1_RUNNER_RC"' in body
+    assert 'publish_validated_arm_artifact "$B1_VALIDATION"' in body
+    assert 'publish_validated_arm_artifact "$A1_VALIDATION"' in body
+    assert 'gatekeeper-base-test-cache-schema=4-exact-tree' not in body
+    assert 'B1_WORKTREE_STATUS=clean' in body
+    assert 'A1_WORKTREE_STATUS=clean' in body
+    assert body.index('A1_WORKTREE_STATUS=clean') > body.index(
+        'validate_hermetic_arm_record "$A1_RUNNER_RC"'), \
+        "unvalidated base-test evidence can still reach the verdict"
 
 
 def test_cli_returns_one_on_a_new_failure(tmp_path):
@@ -1014,13 +1146,15 @@ def test_cli_returns_two_when_the_candidate_report_is_absent(tmp_path):
     (tmp_path / "land.log").write_text(_GOOD_LOG)
     (tmp_path / "sel.txt").write_text("programs/tests/test_thing.py\n")
     r = subprocess.run(
-        [sys.executable, str(_PROG), "--base-sha", SHA, "--head-sha", SHA,
+        [sys.executable, str(_PROG), "--base-sha", SHA, "--base-tree", TREE,
+         "--head-sha", SHA,
          "--verified-sha", SHA, "--rebase-status", "ok",
          "--expected-tree", TREE, "--verified-tree", TREE,
          "--land-log", str(tmp_path / "land.log"),
          "--selection", str(tmp_path / "sel.txt"),
          "--base-junit", str(tmp_path / "nope.xml"),
-         "--candidate-junit", str(tmp_path / "nope.xml")],
+         "--candidate-junit", str(tmp_path / "nope.xml"),
+         "--protected-transition-receipt", str(_protected_receipt(tmp_path))],
         capture_output=True, text=True, timeout=_T)
     assert r.returncode == 2, r.stdout + r.stderr
 
@@ -1049,14 +1183,15 @@ def test_the_judge_is_not_supplied_by_the_subject():
     """§4.05, one level up: the oracle may not be readable by the design. A PR can
     change what its GATES check — they ship with the tree and a PR that adds one
     should be covered by it — but it must not be able to change what counts as a
-    REFUSAL. So the verdict program is resolved from THIS repo first, with the
-    candidate's copy only as the fallback for a foreign `--repo`."""
+    REFUSAL. The verifier therefore rematerializes and raw-attests the exact
+    BASE-owned judge after candidate process census reaches zero; no subject or
+    mutable caller-worktree fallback is landing authority."""
     src = _VERIFY.read_text(encoding="utf-8")
     body = [l for l in src.splitlines()
             if "landing_merge_verdict.py" in l and not l.lstrip().startswith("#")]
     assert body, "the script never names the verdict program"
-    assert any("SELF_REPO" in l for l in body), \
-        "the verdict program is not resolved from the gatekeeper's own repo"
+    assert any("TRUSTED_REPO" in l for l in body), \
+        "the verdict program is not resolved from the raw-attested base snapshot"
     # ...and the disclosure exists for the case where the branch edits the gates.
     assert "--gate-edited" in src
 
@@ -1109,35 +1244,31 @@ def test_a_range_scoped_gate_cannot_be_waived_by_a_vacuous_base_failure():
         "the boundary on what the base arm can excuse is not disclosed"
 
 
-def test_the_base_gate_cache_is_keyed_by_the_base_commit():
-    """Measured on this host: one repo-hygiene pass is 19 min, and the gate
-    differential needs two. In a serialized merge queue the base moves once per
-    landing, so arm A2's answer is reusable — but only because the key is the base
-    COMMIT. A cache keyed by anything else would answer a later verification with
-    an earlier tree's gates, and it would answer it permissively."""
+def test_the_base_gate_cache_is_disabled_at_the_adversarial_boundary():
+    """A candidate that learns RUN must not plant baseline evidence in a cache.
+
+    Reuse can return only after cache bundles are authenticated outside the
+    subject's writable lifetime.  Until then the base is intentionally measured
+    after both candidate containers have exited and been removal-proved.
+    """
     src = _VERIFY.read_text(encoding="utf-8")
     body = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
-    assert '"base=$BASE_SHA"' in body, "the cache omits the base commit"
-    assert 'gatekeeper-base-cache-schema=3-green-only' in body
-    assert 'host=$THIS_HOST' in body
-    assert 'CACHE_FINGERPRINT' in body
-    assert 'CACHED_MANIFEST' in body
-    # An empty, unterminated, or half-published log must never be cached: it
-    # would read as "the base fails nothing", which is the permissive direction.
-    assert "grep -q '^=== gatekeeper landing gates'" in body
-    assert "grep -q '^=== ALL GATES PASS'" in body
-    assert '! grep -q \'^  FAIL  \' "$CACHED"' in body
-    assert 'flock -n "$A2_CACHE_LOCK_FD"' in body
-    assert 'mv "$CACHE_TMP.manifest" "$CACHED_MANIFEST"' in body
+    assert 'base-gate cache disabled for adversarial differential ownership' in body
+    assert 'BASE_GATE_CACHE=""' in body
+    assert 'CACHED_MANIFEST' not in body
+    assert 'A2_CACHE_LOCK_FD' not in body
+    assert body.index('wait "$B2_PID"') < body.index('\n  prepare_base_wave\n')
 
 
 def test_the_critical_path_does_not_run_targeted_tests_inside_a2_again():
     src = _VERIFY.read_text(encoding="utf-8")
     body = "\n".join(line for line in src.splitlines()
                      if not line.lstrip().startswith("#"))
-    assert body.count("GATEKEEPER_SKIP_TARGETED_TESTS=1") >= 2
-    assert "GATEKEEPER_NO_STAMP=1" in body
-    assert "gkverify-b1" in body and "gkverify-b2" in body
+    runner = (_REPO_ROOT / "tools/ci/hermetic_candidate_runner.py").read_text()
+    assert '"GATEKEEPER_SKIP_TARGETED_TESTS": "1"' in runner
+    assert '"GATEKEEPER_NO_STAMP": "1"' in runner
+    assert body.count("launch_hermetic_test_arm") >= 3  # definition + A1/B1
+    assert body.count("launch_hermetic_land_arm") >= 3  # definition + A2/B2
 
 
 def test_the_gate_tier_is_compared_against_the_base_not_asserted():
@@ -1182,10 +1313,11 @@ def test_the_candidate_arm_runs_without_a_maxfail_bound():
     assert 'GATEKEEPER_PYTEST_MAXFAIL:-10' in lbody, \
         "the default is no longer 10, so the push path changed"
     assert '"${GATEKEEPER_PYTEST_MAXFAIL:-10}" = "0" ] && maxfail=()' in lbody
-    verify = _VERIFY.read_text(encoding="utf-8")
-    vbody = "\n".join(l for l in verify.splitlines()
-                      if not l.lstrip().startswith("#"))
-    assert "--stop-after-failures 0" in vbody, \
+    entry = (_REPO_ROOT / "tools/ci/hermetic_test_arm_entry.sh").read_text()
+    driver = (_PROGRAMS / "pytest_per_file_junit.py").read_text()
+    assert "--aggregate-only" in entry
+    assert "--stop-after-failures" not in entry
+    assert 'add_argument("--stop-after-failures", type=int, default=0' in driver, \
         "the candidate aggregate arm still truncates, so the differential cannot be computed"
     # ...and a truncated run must remain a refusal, not a pass, for the cases the
     # bound cannot be lifted (a foreign land.sh that predates the hook).
@@ -1224,8 +1356,14 @@ def test_the_version_deferral_still_refuses_a_backwards_version():
 
 
 _STUB_SELECT = """#!/usr/bin/env python3
-import sys
-print("programs/tests/test_thing.py")
+MODE_IMPORT_EDGE = "import-edge"
+
+def select_tests(changed_paths, plugin_root, plugin_rel, *, mode):
+    assert mode == MODE_IMPORT_EDGE
+    return ["programs/tests/test_thing.py"]
+
+if __name__ == "__main__":
+    print("programs/tests/test_thing.py")
 """
 
 _STUB_LAND = r"""#!/usr/bin/env bash
@@ -1238,6 +1376,73 @@ PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
 if [ -n "${GATEKEEPER_CONCURRENCY_PROBE_DIR:-}" ]; then
   mkdir -p "$GATEKEEPER_CONCURRENCY_PROBE_DIR"
   : > "$GATEKEEPER_CONCURRENCY_PROBE_DIR/${GATEKEEPER_VERIFY_ARM:-unknown}.started"
+fi
+if [ -n "${GATEKEEPER_MUTATE_BENCHMARK_ARM:-}" ] \
+   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "$GATEKEEPER_MUTATE_BENCHMARK_ARM" ]; then
+  printf 'MUTATED BY %s\n' "$GATEKEEPER_VERIFY_ARM" >> \
+    "$VIBE_IC_BENCHMARK_DATA/ic/tiny/v1/phase3/stage3/pnr/routed.def"
+fi
+if [ "${GATEKEEPER_PREWRITE_BASE_ARTIFACTS:-0}" = "1" ] \
+   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; then
+  run_dir="$(dirname "$GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD")"
+  printf '%s\n' '{"candidate":"forged-base-summary"}' > \
+    "$run_dir/base_hygiene.json"
+  printf '%s\n' '<testsuites tests="0" failures="0" errors="0"/>' > \
+    "$run_dir/base.xml"
+  printf '%s\n' '  FAIL  candidate planted this base log' > \
+    "$run_dir/base_land.log"
+  mkdir -p "$run_dir/base_hygiene_progress.jsonl"
+fi
+if [ "${GATEKEEPER_RELINK_SELECTION:-0}" = "1" ] \
+   && [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; then
+  run_dir="$(dirname "$GATEKEEPER_BENCHMARK_MEASUREMENT_RECORD")"
+  cp "$run_dir/selection.txt" "$run_dir/selection-copy.txt"
+  rm -f "$run_dir/selection.txt"
+  ln -s "$run_dir/selection-copy.txt" "$run_dir/selection.txt"
+fi
+if [ "${GATEKEEPER_STUB_ROUTED_TRANSITION:-0}" = "1" ] \
+   && { [ "${GATEKEEPER_VERIFY_ARM:-}" = "A2" ] \
+        || [ "${GATEKEEPER_VERIFY_ARM:-}" = "B2" ]; }; then
+  rm -f "${GATEKEEPER_HYGIENE_REPORT}.attest"
+  export GATE_DISPATCH_ATTESTATION_HELPER="$PLUGIN/programs/gate_process_attestation.py"
+  export GATE_DISPATCH_ATTESTATION_FILE="${GATEKEEPER_HYGIENE_REPORT}.attest"
+  (
+    . "$ROOT/tools/ci/_gate_dispatch.sh"
+    gate_dispatch_init --summary-json "$GATEKEEPER_HYGIENE_REPORT"
+    _per_routed() {
+      local def="$1" cell design
+      cell="${def%/phase3/stage3/pnr/routed.def}"
+      design="$(basename "$(dirname "$cell")")"
+      uncheckable_until 2027-02-28 "fixture has no macro LEF"
+      run_tolerating_uncheckable "macro OBS not crossed ($design)" \
+        "$PLUGIN" python3 programs/macro_obs_geometry_intersect_check.py "$cell"
+      uncheckable_until 2027-02-28 "fixture may have no DRC evidence"
+      run_tolerating_uncheckable "DRC PASS is not vacuous ($design)" \
+        "$ROOT" python3 "$PLUGIN/programs/drc_vacuous_pass_check.py" "$cell"
+      uncheckable_until 2027-02-28 "fixture may have no step reports"
+      run_tolerating_uncheckable "inner FAILs reach the verdict ($design)" \
+        "$ROOT" python3 "$PLUGIN/programs/step_internal_fail_bubble_up_check.py" "$cell"
+      uncheckable_until 2027-02-28 "fixture has no preceding same-PDK run"
+      run_tolerating_uncheckable "new tool diagnostic id ($design)" \
+        "$PLUGIN" python3 programs/tool_diagnostic_id_gate.py "$cell"
+    }
+    if [ "$GATEKEEPER_VERIFY_ARM" = "A2" ] \
+       && [ "${GATEKEEPER_STUB_BASE_EXPANDED:-0}" != "1" ]; then
+      gate_dispatch_over "published cells carrying a routed DEF" \
+        _per_routed true
+    else
+      GATE_DISPATCH_ATTEST_POPULATION=1 \
+      gate_dispatch_over "published cells carrying a routed DEF" \
+        _per_routed python3 "$ROOT/tools/ci/routed_def_corpus.py" --repo "$ROOT"
+    fi
+    gate_dispatch_finish
+  ) >/dev/null 2>&1 || true
+  if [ ! -s "${GATEKEEPER_HYGIENE_REPORT:-}" ]; then
+    echo "  FAIL  repo hygiene gates"
+    echo "=== FAILURES ABOVE — no routed transition record ==="
+    exit 2
+  fi
+  echo "  FAIL  repo hygiene gates"
 fi
 echo "=== gatekeeper landing gates — base=${GATEKEEPER_BASE:-origin/main} ==="
 echo "  PASS  a cheap gate"
@@ -1304,15 +1509,98 @@ def _git(repo, *args, **kw):
                           text=True, timeout=_T, **kw)
 
 
+_BENCHMARK_TEST: dict[str, Path] = {}
+
+
+def _fixture_blob(raw):
+    digest = hashlib.sha1()
+    digest.update(f"blob {len(raw)}\0".encode("ascii"))
+    digest.update(raw)
+    return digest.hexdigest()
+
+
+def _write_phasea_manifest(repo):
+    paths = sorted(_PROTECTED.REQUIRED_AUTHORITY_PATHS | _PROTECTED.RUNTIME_PATHS)
+    role_rows = []
+    current = []
+    next_files = []
+    for rel in paths:
+        path = repo / rel
+        raw = path.read_bytes()
+        mode = "100755" if path.stat().st_mode & 0o111 else "100644"
+        roles = []
+        if rel in _PROTECTED.REQUIRED_AUTHORITY_PATHS:
+            roles.append("authority")
+        if rel in _PROTECTED.RUNTIME_PATHS:
+            roles.append("runtime")
+        role_rows.append({"path": rel, "roles": roles})
+        current.append({
+            "path": rel, "mode": mode, "blob_oid": _fixture_blob(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)})
+        future = b"phase-b:" + rel.encode() if rel in _PROTECTED.RUNTIME_PATHS else raw
+        next_files.append({
+            "path": rel, "mode": mode, "blob_oid": _fixture_blob(future),
+            "sha256": hashlib.sha256(future).hexdigest(), "size": len(future)})
+    manifest = {
+        "schema": 1, "kind": _PROTECTED.MANIFEST_KIND,
+        "transition_id": "fixture-phase-b",
+        "manifest_path": _PROTECTED.MANIFEST_PATH,
+        "runner": json.loads(json.dumps(_RUNNER_PROFILE)),
+        "paths": role_rows,
+        "current": {"id": "fixture-current", "files": current},
+        "next": {"id": "fixture-next", "files": next_files},
+    }
+    target = repo / _PROTECTED.MANIFEST_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(_PROTECTED.canonical_bytes(manifest))
+
+
 @pytest.fixture(scope="module")
 def sandbox(tmp_path_factory):
     """A real git repo with the shape `gatekeeper-verify-merge.sh` expects."""
     if shutil.which("git") is None:                       # pragma: no cover
         pytest.skip("no git")
     repo = tmp_path_factory.mktemp("gkverify_repo")
+    benchmark_root = tmp_path_factory.mktemp("gkverify_benchmark")
+    benchmark_remote = benchmark_root / "benchmark-data.git"
+    benchmark_seed = benchmark_root / "seed"
+    benchmark_checkout = benchmark_root / "canonical"
+    _git(benchmark_root, "init", "-q", "--bare", str(benchmark_remote))
+    _git(benchmark_remote, "symbolic-ref", "HEAD", "refs/heads/main")
+    _git(benchmark_root, "init", "-q", "-b", "main", str(benchmark_seed))
+    _git(benchmark_seed, "config", "user.email", "t@localhost")
+    _git(benchmark_seed, "config", "user.name", "t")
+    corpus_file = (benchmark_seed /
+                   "ic/tiny/v1/phase3/stage3/pnr/routed.def")
+    corpus_file.parent.mkdir(parents=True)
+    corpus_file.write_text("VERSION 5.8 ;\nEND DESIGN\n")
+    _git(benchmark_seed, "add", "-A")
+    _git(benchmark_seed, "commit", "-qm", "benchmark fixture")
+    _git(benchmark_seed, "remote", "add", "origin", str(benchmark_remote))
+    _git(benchmark_seed, "push", "-q", "-u", "origin", "main")
+    _git(benchmark_root, "clone", "-q", str(benchmark_remote),
+         str(benchmark_checkout))
+    _BENCHMARK_TEST.update(
+        checkout=benchmark_checkout.resolve(), remote=benchmark_remote.resolve())
     plugin = repo / "vibe-ic-marketplace/plugins/vibe-ic"
     (plugin / "programs/tests").mkdir(parents=True)
-    (repo / "tools").mkdir()
+    (repo / "tools/ci").mkdir(parents=True)
+    # Phase 1's verifier may execute only an exact base-owned judge and process
+    # supervisor.  The miniature repository therefore carries those exact
+    # infrastructure bytes in its base commit; copying only the subject-facing
+    # stub gate would correctly refuse before either arm starts.
+    shutil.copy2(_VERIFY, repo / "tools/gatekeeper-verify-merge.sh")
+    os.chmod(repo / "tools/gatekeeper-verify-merge.sh", 0o755)
+    for name in (
+        "benchmark_data_landing_checkout.py",
+        "owned_command.py",
+        "protected_landing_transition.py",
+        "_gate_dispatch.sh",
+        "routed_def_corpus.py",
+        "trusted_worktree_attest.py",
+    ):
+        shutil.copy2(_REPO_ROOT / "tools/ci" / name,
+                     repo / "tools/ci" / name)
     (repo / "tools/gatekeeper-land.sh").write_text(_STUB_LAND)
     os.chmod(repo / "tools/gatekeeper-land.sh", 0o755)
     (plugin / "programs/ci_targeted_test_select.py").write_text(_STUB_SELECT)
@@ -1323,10 +1611,49 @@ def sandbox(tmp_path_factory):
                  plugin / "programs/_watchdog.py")
     shutil.copy2(_PROGRAMS / "_pytest_progress_plugin.py",
                  plugin / "programs/_pytest_progress_plugin.py")
+    shutil.copy2(_PROGRAMS / "ci_harness_timeout_ceiling_check.py",
+                 plugin / "programs/ci_harness_timeout_ceiling_check.py")
+    for name in (
+        "_atomic_artefact.py",
+        "_crash_safe_scratch.py",
+        "_owned_process_supervisor.py",
+        "_semantic_child_progress.py",
+        "gate_process_attestation.py",
+        "hygiene_finding_delta.py",
+        "hygiene_shard_plan.py",
+        "_corpus_location.py",
+        "_prose_polarity.py",
+        "drc_vacuous_pass_check.py",
+        "macro_obs_geometry_intersect_check.py",
+        "policy_direction_pin_check.py",
+        "repo_hygiene_parallel.py",
+        "step_internal_fail_bubble_up_check.py",
+        "step_metrics.py",
+        "tool_diagnostic_id_gate.py",
+    ):
+        shutil.copy2(_PROGRAMS / name, plugin / "programs" / name)
+    # Keep the fixture's deliberately tiny subject-facing stubs, but copy the
+    # rest of the exact BASE-owned authority closure generically.  A newly
+    # imported authority file must therefore be present before the manifest is
+    # written instead of being silently omitted by this test repository.
+    for rel in sorted(
+            _PROTECTED.REQUIRED_AUTHORITY_PATHS | _PROTECTED.RUNTIME_PATHS):
+        destination = repo / rel
+        if destination.exists():
+            continue
+        source = _REPO_ROOT / rel
+        assert source.is_file(), f"fixture authority source is absent: {rel}"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
     (plugin / "programs/thing.py").write_text(_THING_SRC.format(v=1))
     (plugin / "programs/tests/test_thing.py").write_text(_THING_TEST)
+    for rel in _PROTECTED_SELECT_CONTROL_TESTS:
+        control = plugin / rel
+        control.parent.mkdir(parents=True, exist_ok=True)
+        control.write_text("def test_fixture_control():\n    assert True\n")
     (plugin / "pytest.ini").write_text("[pytest]\ntestpaths = programs/tests\n")
     (repo / "contended.txt").write_text("base\n")
+    _write_phasea_manifest(repo)
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "t@localhost")
     _git(repo, "config", "user.name", "t")
@@ -1360,6 +1687,14 @@ def sandbox(tmp_path_factory):
     (repo / "contended.txt").write_text("theirs\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "theirs")
+
+    # Same gate bytes as phase 1; the fixture-only arm switch above models the
+    # first candidate whose routed producer is activated under the already
+    # trusted verifier/HDF infrastructure.
+    _git(repo, "checkout", "-q", "-b", "routed_transition")
+    (repo / "routed-transition-note.txt").write_text("activate routed corpus\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "activate routed corpus")
     _git(repo, "checkout", "-q", "main")
     return repo
 
@@ -1371,6 +1706,10 @@ def _verify(repo, ref, tmp_path, *extra, env_extra=None):
          "--repo", str(repo), "--no-fetch", "--json", str(out), *extra],
         capture_output=True, text=True, timeout=_T,
         env={**os.environ, "GIT_DIR": "", "GIT_WORK_TREE": "",
+             "VIBE_IC_BENCHMARK_DATA": str(_BENCHMARK_TEST["checkout"]),
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_OVERRIDE": "1",
+             "VIBEIC_BENCHMARK_CHECKOUT_TEST_ORIGIN":
+                 str(_BENCHMARK_TEST["remote"]),
              **(env_extra or {})})
     doc = json.loads(out.read_text()) if out.is_file() else None
     return r, doc
@@ -1403,7 +1742,45 @@ def test_end_to_end_a_known_good_branch_is_allowed(sandbox, tmp_path):
         "arm A2 never ran, so the gate tier was asserted"
     assert any("targeted tests" in label
                for label in doc["base_land"]["skip"]), (
-        "A2 duplicated the targeted suite already measured by A1")
+               "A2 duplicated the targeted suite already measured by A1")
+
+
+def test_end_to_end_trusted_verifier_supplies_the_one_bootstrap_evidence(
+        sandbox, tmp_path):
+    """Verifier -> verdict -> HDF accepts the exact phase-1 EMPTY expansion."""
+    r, doc = _verify(
+        sandbox, "routed_transition", tmp_path,
+        env_extra={"GATEKEEPER_STUB_ROUTED_TRANSITION": "1"})
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verdict"] == "LAND_OK"
+    delta = doc["hygiene_finding_delta"]
+    assert delta["status"] == "CLEAN", delta
+    assert len(delta["corpus_transitions"]) == 1
+    transition = delta["corpus_transitions"][0]
+    assert transition["base_items"] == 0
+    assert transition["candidate_items"] == 1
+    assert transition["replacement_gates"] == 4
+    assert len(transition["parent_evidence_sha256"]) == 64
+    assert "trusted EMPTY→expanded evidence supplied" in r.stdout
+
+
+def test_end_to_end_post_bootstrap_equal_corpus_uses_ordinary_delta(
+        sandbox, tmp_path):
+    """After activation, evidence must not demand another one-use transition."""
+    r, doc = _verify(
+        sandbox, "routed_transition", tmp_path,
+        env_extra={
+            "GATEKEEPER_STUB_ROUTED_TRANSITION": "1",
+            "GATEKEEPER_STUB_BASE_EXPANDED": "1",
+        })
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc["verdict"] == "LAND_OK"
+    delta = doc["hygiene_finding_delta"]
+    assert delta["status"] == "CLEAN", delta
+    assert delta.get("corpus_transitions", []) == []
+    assert "trusted EMPTY→expanded evidence supplied" not in r.stdout
 
 
 def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
@@ -1431,11 +1808,10 @@ def test_end_to_end_a_green_test_cannot_move_b1_to_another_commit(
 
     r, doc = _verify(repo, "wrong_head", tmp_path)
 
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert doc["candidate_test_worktree_status"] == "wrong-head"
-    assert any("MOVED OFF THE VERIFIED COMMIT" in reason
-               for reason in doc["reasons"])
-    assert doc["delta"]["new_failures"] == []
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc is None
+    assert "candidate worktree raw attestation failed" in r.stdout
+    assert "after candidate zero-census" in r.stderr
 
 
 def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
@@ -1467,11 +1843,10 @@ def test_end_to_end_index_flags_cannot_hide_changed_b1_bytes(
 
     r, doc = _verify(repo, "hidden_dirty", tmp_path)
 
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert doc["candidate_test_worktree_status"] == "dirty"
-    assert any("WROTE INTO ITS WORKTREE" in reason
-               for reason in doc["reasons"])
-    assert doc["delta"]["new_failures"] == []
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc is None
+    assert "candidate worktree raw attestation failed" in r.stdout
+    assert "after candidate zero-census" in r.stderr
 
 
 def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
@@ -1519,16 +1894,15 @@ def test_end_to_end_replace_refs_cannot_redefine_the_verified_tree(
         for ref in replace_refs.stdout.splitlines():
             _git(repo, "update-ref", "-d", ref)
 
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert doc["candidate_test_worktree_status"] == "dirty"
-    assert any("WROTE INTO ITS WORKTREE" in reason
-               for reason in doc["reasons"])
-    assert doc["delta"]["new_failures"] == []
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc is None
+    assert "candidate worktree raw attestation failed" in r.stdout
+    assert "after candidate zero-census" in r.stderr
 
 
-def test_end_to_end_base_gate_cache_hits_exactly_and_misses_after_base_moves(
+def test_end_to_end_mutable_base_cache_is_disabled_and_remeasured(
         sandbox, tmp_path):
-    """A reusable baseline must prove both HIT and stale-key MISS."""
+    """Same-uid candidate arms cannot prewrite a reusable base exemption."""
     repo = tmp_path / "cache-repo"
     cloned = subprocess.run(
         ["git", "clone", "-q", str(sandbox), str(repo)],
@@ -1546,11 +1920,9 @@ def test_end_to_end_base_gate_cache_hits_exactly_and_misses_after_base_moves(
         repo, "innocuous_green", first_dir,
         "--base-gate-cache", str(cache))
     assert first.returncode == 0, first.stdout + first.stderr
-    old_base = first_doc["base_sha"]
-    old_manifests = {
-        p for p in cache.glob(f"{old_base}.*.manifest")
-        if not p.name.endswith(".base-tests.manifest")}
-    assert len(old_manifests) == 1
+    assert first_doc["verdict"] == "LAND_OK"
+    assert "base-gate cache disabled" in first.stdout
+    assert not list(cache.glob("*"))
 
     hit_dir = tmp_path / "cache-hit"
     hit_dir.mkdir()
@@ -1558,43 +1930,16 @@ def test_end_to_end_base_gate_cache_hits_exactly_and_misses_after_base_moves(
         repo, "innocuous_green", hit_dir,
         "--base-gate-cache", str(cache))
     assert hit.returncode == 0, hit.stdout + hit.stderr
-    assert hit_doc["base_sha"] == old_base
-    assert "arm A2: reused the gate log" in hit.stdout
-    assert "arm A1: reused aggregate test evidence" in hit.stdout
-
-    _git(repo, "checkout", "-q", "main")
-    (repo / "base_moved.txt").write_text("new base\n")
-    _git(repo, "add", "base_moved.txt")
-    assert _git(repo, "commit", "-qm", "move base").returncode == 0
-    _git(repo, "checkout", "-q", "-b", "green_after_move")
-    (repo / "green_after_move.txt").write_text("candidate\n")
-    _git(repo, "add", "green_after_move.txt")
-    assert _git(repo, "commit", "-qm", "green after move").returncode == 0
-
-    miss_dir = tmp_path / "cache-miss"
-    miss_dir.mkdir()
-    probe = tmp_path / "cache-miss-probe"
-    miss, miss_doc = _verify(
-        repo, "green_after_move", miss_dir,
-        "--base-gate-cache", str(cache),
-        env_extra={"GATEKEEPER_CONCURRENCY_PROBE_DIR": str(probe)})
-    assert miss.returncode == 0, miss.stdout + miss.stderr
-    assert miss_doc["base_sha"] != old_base
-    assert f"base {old_base[:12]}" not in miss.stdout
-    assert (probe / "A2.started").is_file(), "moved base reused stale A2"
-    assert list(cache.glob(f"{miss_doc['base_sha']}.*.manifest"))
+    assert hit_doc["base_sha"] == first_doc["base_sha"]
+    assert "base-gate cache disabled" in hit.stdout
+    assert "reused the gate log" not in hit.stdout
+    assert "reused aggregate test evidence" not in hit.stdout
+    assert not list(cache.glob("*"))
 
 
-def test_end_to_end_a1_a2_and_b_start_in_parallel_isolated_worktrees(
+def test_end_to_end_candidate_wave_precedes_parallel_isolated_base_wave(
         sandbox, tmp_path):
-    """All four expensive merge-verification arms share one critical path.
-
-    A1's real test waits until the A2 and B landing wrappers have both started.
-    The old serial implementation times out in A1 before either marker can
-    exist; the concurrent implementation completes normally.  The ordinary
-    end-to-end assertions also prove that concurrency did not change the
-    verdict or lose either arm's evidence.
-    """
+    """B1/B2 finish before A artifacts exist; A1/A2 then run in parallel."""
     probe = tmp_path / "parallel-arms"
     r, doc = _verify(
         sandbox, "innocuous_green", tmp_path,
@@ -1606,6 +1951,46 @@ def test_end_to_end_a1_a2_and_b_start_in_parallel_isolated_worktrees(
         "A2.started", "B1.started", "B2.started"}
     assert doc["base_land"] is not None
     assert doc["delta"]["new_failures"] == []
+
+
+def test_end_to_end_candidate_cannot_prewrite_base_wave_artifacts(
+        sandbox, tmp_path):
+    r, doc = _verify(
+        sandbox, "innocuous_green", tmp_path,
+        env_extra={"GATEKEEPER_PREWRITE_BASE_ARTIFACTS": "1"},
+    )
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert doc is not None and doc["verdict"] == "LAND_OK"
+    assert "candidate planted this base log" not in r.stdout
+
+
+def test_end_to_end_relinked_parent_selection_is_norecord(
+        sandbox, tmp_path):
+    r, doc = _verify(
+        sandbox, "innocuous_green", tmp_path,
+        env_extra={"GATEKEEPER_RELINK_SELECTION": "1"},
+    )
+
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc is None
+    assert "changed/relinked the parent-owned test selection" in r.stderr
+
+
+def test_end_to_end_b2_corpus_mutation_is_post_attested_and_norecord(
+        sandbox, tmp_path):
+    r, doc = _verify(
+        sandbox, "innocuous_green", tmp_path,
+        env_extra={"GATEKEEPER_MUTATE_BENCHMARK_ARM": "B2"},
+    )
+
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert doc is None
+    assert "snapshot is NORECORD after the arm" in r.stdout
+    assert "changed or could not re-attest" in r.stderr
+    listed = _git(
+        _BENCHMARK_TEST["checkout"], "worktree", "list", "--porcelain").stdout
+    assert "gkverify." not in listed, listed
 
 
 def test_end_to_end_what_is_gated_is_the_squash_and_not_the_branch(
@@ -1688,7 +2073,9 @@ fi
 '''.replace("__HUNG_ARM__", hung_arm)
     assert needle in text
     land.write_text(text.replace(needle, hang + needle))
-    _git(repo, "add", "tools/gatekeeper-land.sh")
+    _write_phasea_manifest(repo)
+    _git(repo, "add", "tools/gatekeeper-land.sh",
+         _PROTECTED.MANIFEST_PATH)
     assert _git(repo, "commit", "-qm", "make interrupt control").returncode == 0
     _git(repo, "checkout", "-q", "-b", "probe")
     (repo / "probe.txt").write_text("candidate\n")

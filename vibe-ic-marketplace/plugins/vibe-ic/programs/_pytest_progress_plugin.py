@@ -16,10 +16,24 @@ import time
 
 _PATH_ENV = "VIBEIC_PYTEST_PROGRESS_FILE"
 _NONCE_ENV = "VIBEIC_PYTEST_PROGRESS_NONCE"
+_IDENTITY_ENV = "VIBEIC_PYTEST_RUNTIME_IDENTITY"
 _SCHEMA = 1
 _seq = 0
 _current_nodeid = None
 _emit_lock = threading.Lock()
+
+
+def _reject_duplicate_keys(pairs):
+    out = {}
+    for key, value in pairs:
+        if not isinstance(key, str) or key in out:
+            raise ValueError("duplicate or non-string runtime identity key")
+        out[key] = value
+    return out
+
+
+def _reject_nonfinite(value):
+    raise ValueError(f"non-finite runtime identity number {value!r}")
 
 
 def _emit(event: str, **fields) -> None:
@@ -54,7 +68,19 @@ def _emit(event: str, **fields) -> None:
 
 
 def pytest_sessionstart(session) -> None:
-    _emit("session_start")
+    fields = {}
+    identity = os.environ.get(_IDENTITY_ENV)
+    if identity is not None:
+        # The parent performs the strict schema and expected-runtime check.  A
+        # decoded object, rather than an opaque string, prevents a second
+        # parser with different duplicate-key/non-finite semantics from being
+        # introduced at the trust boundary.
+        fields["runtime_identity"] = json.loads(
+            identity,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_nonfinite,
+        )
+    _emit("session_start", **fields)
 
 
 def pytest_collectreport(report) -> None:
@@ -71,6 +97,12 @@ def pytest_collection_finish(session) -> None:
     # the parent can validate a legitimate selected subset without treating it
     # as a truncated collection.
     _emit("collection_finish", selected_items=len(session.items))
+
+
+def _is_collect_only(session) -> bool:
+    """Return pytest's own collect-only mode without guessing from argv."""
+    return bool(getattr(getattr(session, "config", None), "option", None)
+                and session.config.option.collectonly)
 
 
 def pytest_runtest_logstart(nodeid, location) -> None:
@@ -98,4 +130,10 @@ def pytest_runtest_logfinish(nodeid, location) -> None:
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:
+    # A collect-only session intentionally runs zero test items, so the normal
+    # ``test_finish == selected_items`` terminal proof cannot apply.  Emit a
+    # distinct terminal transition only after pytest reached session finish;
+    # the parent FSM binds its count to the earlier collection declaration.
+    if _is_collect_only(session):
+        _emit("collection_only_finish", selected_items=len(session.items))
     _emit("session_finish", exitstatus=int(exitstatus))

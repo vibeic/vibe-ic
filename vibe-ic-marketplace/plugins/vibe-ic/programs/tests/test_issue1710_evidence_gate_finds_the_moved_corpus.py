@@ -195,3 +195,8 @@ def test_the_landing_gate_actually_passes_the_flag():
     assert all("--corpus-may-be-absent" in ln for ln in line), (
         f"the landing gate invokes the gate without the flag, so a repo with no "
         f"corpus is still blocked:\n" + "\n".join(line))
+    assert '[ -n "${VIBE_IC_BENCHMARK_DATA:-}" ]' in text
+    assert 'BENCHMARK_STRUCTURE_SCOPE=(--changed-since "$BASE")' in text
+    assert '"${BENCHMARK_STRUCTURE_SCOPE[@]}"' in line[0], (
+        "the landing gate applies the vibe-ic BASE to the external corpus, so "
+        "a present benchmark checkout becomes an unmeasured zero denominator")

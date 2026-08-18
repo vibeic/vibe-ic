@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import concurrent.futures
+import hashlib
 import json
 import os
 import select
@@ -29,15 +30,27 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 import _crash_safe_scratch as _scratch
 import _owned_process_supervisor as _owned
+import _semantic_child_progress as _semantic_progress
+import gate_process_attestation as _gate_attestation
 from _atomic_artefact import write_json, write_text
 from hygiene_shard_plan import load_profile, plan
 from policy_direction_pin_check import acquire_run_lock, recover_all_journals
 
 HOST_LABEL = "gates are host-independent"
+_LEGACY_ROUTED_CORPUS = "published cells carrying a routed DEF"
+_LEGACY_ROUTED_EMPTY_LABEL = (
+    'corpus "published cells carrying a routed DEF" is EMPTY — '
+    'nothing was checked over it')
+_WORKER_GATE_STATES = frozenset({
+    "PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS", "OUT_OF_SCOPE",
+    "OTHER_SHARD",
+})
+_TERMINAL_GATE_STATES = frozenset(
+    {"PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS"})
 # This gate already runs three pytest children concurrently and enforces a
 # 60-second starvation bound.  Co-scheduling it with either the mutation farms
 # or its opposite A/B arm made BOTH copies time out; the exact d6 subprocess
@@ -55,6 +68,44 @@ _PENDING_REAPERS: Dict[
 ] = {}
 _PENDING_REAPERS_LOCK = threading.Lock()
 _ACTIVE_REAPER_SCRATCH: set[Path] = set()
+
+
+def _legacy_empty_without_process(reference: Dict[str, Any],
+                                  label: str) -> bool:
+    """Recognize the one phase-1 bootstrap row that predates attestations.
+
+    This is deliberately not a generic "empty corpus" escape hatch.  It names
+    the existing routed corpus and requires its exact denominator/declaration
+    shape, so a candidate cannot add a new synthetic gate and obtain a
+    process-attestation exemption.  Phase 2 replaces this row with the trusted
+    manifest's non-empty expansion.
+    """
+    if label != _LEGACY_ROUTED_EMPTY_LABEL:
+        return False
+    corpora = reference.get("corpora")
+    gates = reference.get("gates")
+    if not isinstance(corpora, list) or not isinstance(gates, list):
+        return False
+    matches = [row for row in corpora if isinstance(row, dict)
+               and row.get("name") == _LEGACY_ROUTED_CORPUS]
+    rows = [row for row in gates if isinstance(row, dict)
+            and row.get("label") == label]
+    if len(matches) != 1 or len(rows) != 1:
+        return False
+    corpus, gate = matches[0], rows[0]
+    return (corpus == {
+                "name": _LEGACY_ROUTED_CORPUS,
+                "items": 0,
+                "gates": 1,
+                "expansion": "EXPANDED",
+            }
+            and gate.get("state") in {"NOT_CHECKED", "LISTED"}
+            and gate.get("corpus") == _LEGACY_ROUTED_CORPUS
+            and gate.get("corpus_item") == 0
+            and gate.get("corpus_items") == 0
+            and gate.get("exempt_until") is None
+            and gate.get("exempt_reason") is None
+            and gate.get("scope") is None)
 
 
 def _reap_completed_reaper_records() -> None:
@@ -132,11 +183,89 @@ def _release_fresh(res: Any, repo: Path) -> None:
                    capture_output=True, text=True)
 
 
+def _strict_object(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"duplicate JSON key: {key!r}")
+        out[key] = value
+    return out
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def _strict_loads(payload: str) -> Any:
+    return json.loads(payload, object_pairs_hook=_strict_object,
+                      parse_constant=_reject_json_constant)
+
+
 def _load_json(path: Path) -> Dict[str, Any]:
-    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc = _strict_loads(path.read_text(encoding="utf-8"))
     if not isinstance(doc, dict):
         raise ValueError("top-level JSON is not an object")
     return doc
+
+
+def _exact_identity_rows(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    identities = []
+    for row in value:
+        if (not isinstance(row, dict)
+                or set(row) != {"pid", "starttime"}
+                or type(row.get("pid")) is not int or row["pid"] <= 0
+                or type(row.get("starttime")) is not int
+                or row["starttime"] < 0):
+            return False
+        identities.append((row["pid"], row["starttime"]))
+    return len(identities) == len(set(identities))
+
+
+def _owned_final_zero(doc: object) -> bool:
+    """Strict trusted-helper terminal record usable as an atomic proof."""
+    fields = {
+        "protocol", "rc", "body", "problem", "outcome", "launched",
+        "census_ok", "final_descendants", "observed", "capability_error",
+    }
+    return (isinstance(doc, dict) and set(doc) == fields
+            and type(doc.get("protocol")) is int and doc["protocol"] == 1
+            and type(doc.get("rc")) is int
+            and isinstance(doc.get("body"), str)
+            and (doc.get("problem") is None
+                 or isinstance(doc.get("problem"), str))
+            and doc.get("outcome") in {
+                "natural", "stalled", "ceiling", "aborted"}
+            and doc.get("launched") is True
+            and doc.get("census_ok") is True
+            and doc.get("final_descendants") == []
+            and _exact_identity_rows(doc.get("observed"))
+            and isinstance(doc.get("capability_error"), str))
+
+
+def _shutdown_final_zero(doc: object, *, helper_pid: int,
+                         helper_starttime: int | None,
+                         helper_rc: int | None) -> bool:
+    fields = {
+        "protocol", "state", "reaper_pid", "reaper_starttime", "exit_code",
+        "census_ok", "final_descendants", "observed",
+    }
+    return (isinstance(doc, dict) and set(doc) == fields
+            and type(doc.get("protocol")) is int and doc["protocol"] == 1
+            and doc.get("state") == "shutdown_complete"
+            and type(doc.get("reaper_pid")) is int
+            and doc["reaper_pid"] == helper_pid
+            and type(doc.get("reaper_starttime")) is int
+            and doc["reaper_starttime"] >= 0
+            and (helper_starttime is None
+                 or doc["reaper_starttime"] == helper_starttime)
+            and type(doc.get("exit_code")) is int
+            and doc["exit_code"] == 128 + signal.SIGTERM
+            and helper_rc == doc["exit_code"]
+            and doc.get("census_ok") is True
+            and doc.get("final_descendants") == []
+            and _exact_identity_rows(doc.get("observed")))
 
 
 def _load_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -145,7 +274,7 @@ def _load_jsonl(path: Path) -> List[Dict[str, Any]]:
         for lineno, line in enumerate(fh, 1):
             if not line.strip():
                 continue
-            row = json.loads(line)
+            row = _strict_loads(line)
             if not isinstance(row, dict) or row.get("complete") is not True:
                 raise ValueError(f"line {lineno} is not a complete attestation")
             rows.append(row)
@@ -161,22 +290,46 @@ def _write_jsonl(path: Path, rows: Sequence[Dict[str, Any]]) -> None:
 
 def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
          progress_path: Path | None = None,
-         stall_grace_s: int = DEFAULT_STALL_GRACE_S):
+         expected_progress_labels: Sequence[str] | None = None,
+         stall_grace_s: float = DEFAULT_STALL_GRACE_S,
+         atomic: bool = False,
+         owned_result_sink: Dict[str, Any] | None = None,
+         semantic_progress_scope: str | None = None,
+         semantic_progress_units: Sequence[str] | None = None,
+         domain_progress_callback: Callable[[str, int, int], None] | None = None):
     """Run until natural completion while supervising FORWARD PROGRESS.
 
-    There is deliberately no whole-run timeout.  Output growth or a completed
-    gate attestation resets the stall clock, so a slow but progressing shard is
-    allowed to finish however long it needs.  Only a process that is both
-    silent and making no recorded progress for ``stall_grace_s`` is killed.
+    There is deliberately no whole-run timeout. Existing callers retain their
+    explicit output/attestation/atomic policy. Supplying ``semantic_progress_*``
+    selects the stricter issue-1710 mode: only exact parent-manifest checkpoints
+    renew the lease; stdout, CPU and generic log activity cannot. Validated
+    checkpoints are relayed while the direct child is still running.
     """
     # Subreaper state and waitpid(-1) are process-global.  `_run` is called by
     # several dispatcher threads, so each job gets a dedicated one-job helper.
     # The private pipe is the semantic state channel: the outer thread waits on
     # either a helper-exit pidfd event or an explicit termination-pending event,
     # never on an estimated whole-job deadline.
+    semantic_requested = (semantic_progress_scope is not None
+                          or semantic_progress_units is not None)
+    if (semantic_progress_scope is None) != (semantic_progress_units is None):
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: semantic progress scope "
+                "and finite unit manifest must be supplied together")
+    if domain_progress_callback is not None and not semantic_requested:
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: domain progress callback "
+                "has no semantic child channel")
+    if semantic_requested and (progress_path is not None or atomic):
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: semantic progress is "
+                "exclusive with attestation/log or atomic renewal")
     if not hasattr(os, "pidfd_open") or not hasattr(select, "poll"):
         return (2, "", "OWNED_SUPERVISOR_NORECORD: dispatcher pidfd "
                 "exit events are unavailable")
+    if atomic and progress_path is not None:
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: atomic completion-only "
+                "mode cannot accept a progress channel")
+    if (progress_path is None) != (expected_progress_labels is None):
+        return (2, "", "OWNED_SUPERVISOR_NORECORD: semantic progress path "
+                "and assigned-label manifest must be supplied together")
     try:
         probe_pidfd = os.pidfd_open(os.getpid())
     except OSError as exc:
@@ -191,6 +344,7 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
         _ACTIVE_REAPER_SCRATCH.add(scratch)
     result_path = scratch / "owned-result.json"
     status_path = scratch / "reaper-status.json"
+    expected_progress_path = scratch / "expected-progress-labels.json"
     diagnostic_path = scratch / "helper.log"
     event_read = -1
     event_write = -1
@@ -199,6 +353,22 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
     diagnostic_fh = None
     retained = False
     try:
+        semantic_plan = None
+        relay = None
+        helper_env = env
+        if semantic_requested:
+            try:
+                semantic_plan = _semantic_progress.prepare_parent(
+                    scratch, str(semantic_progress_scope),
+                    list(semantic_progress_units or ()), env)
+                relay = _semantic_progress.RelayValidator(
+                    semantic_plan.scope, len(semantic_plan.units),
+                    domain_progress_callback)
+                helper_env = semantic_plan.env
+            except (OSError, ValueError,
+                    _semantic_progress.ProgressProtocolError) as exc:
+                return (2, "", "OWNED_SUPERVISOR_NORECORD: cannot prepare "
+                        f"semantic child progress: {exc}")
         event_read, event_write = os.pipe()
         os.set_blocking(event_read, False)
         diagnostic_fh = diagnostic_path.open("wb")
@@ -212,10 +382,26 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
             "--poll", str(DEFAULT_POLL_S),
         ]
         if progress_path is not None:
-            helper_argv.extend(["--progress", str(progress_path.resolve())])
+            write_json(expected_progress_path, {
+                "schema": 1,
+                "labels": list(expected_progress_labels or ()),
+            }, ensure_ascii=False)
+            expected_progress_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            helper_argv.extend([
+                "--progress", str(progress_path.resolve()),
+                "--expected-progress-labels",
+                str(expected_progress_path.resolve()),
+            ])
+        elif atomic:
+            helper_argv.append("--atomic")
+        if semantic_plan is not None:
+            helper_argv.extend([
+                "--semantic-progress-manifest",
+                str(semantic_plan.manifest_path),
+            ])
         helper_argv.extend(["--", *argv])
         helper = subprocess.Popen(
-            helper_argv, env=env, stdout=diagnostic_fh,
+            helper_argv, env=helper_env, stdout=diagnostic_fh,
             stderr=subprocess.STDOUT, pass_fds=(event_write,),
             start_new_session=True)
         diagnostic_fh.close()
@@ -248,9 +434,10 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
         pending: Dict[str, Any] | None = None
         helper_exited = False
         channel_failed = False
+        channel_failure = ""
 
         def drain_pending_events() -> None:
-            nonlocal event_buffer, pending
+            nonlocal event_buffer, pending, channel_failed, channel_failure
             while True:
                 try:
                     chunk = os.read(event_read, 65536)
@@ -262,15 +449,32 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
                 while b"\n" in event_buffer:
                     raw, event_buffer = event_buffer.split(b"\n", 1)
                     if not raw:
+                        channel_failed = True
+                        channel_failure = "empty private supervisor event"
                         continue
                     try:
-                        candidate = json.loads(raw.decode("ascii"))
-                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        candidate = _semantic_progress.strict_loads(
+                            raw.decode("ascii"))
+                    except (UnicodeDecodeError, ValueError,
+                            json.JSONDecodeError):
                         candidate = {"state": "invalid"}
                     if (isinstance(candidate, dict)
                             and candidate.get("state")
                             == "termination_pending"):
                         pending = candidate
+                    elif (isinstance(candidate, dict)
+                          and candidate.get("state") == "domain_progress"):
+                        if relay is None:
+                            channel_failed = True
+                            channel_failure = "unexpected domain-progress relay"
+                        else:
+                            relay.accept(candidate)
+                            if relay.error:
+                                channel_failed = True
+                                channel_failure = relay.error
+                    else:
+                        channel_failed = True
+                        channel_failure = "invalid private supervisor event"
 
         while not pending and not helper_exited:
             # Both watched objects are kernel events.  There is deliberately no
@@ -280,6 +484,11 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
                            if fd == event_read]
             if pipe_events:
                 drain_pending_events()
+                if event_buffer and any(
+                        event & (select.POLLHUP | select.POLLERR)
+                        for event in pipe_events):
+                    channel_failed = True
+                    channel_failure = "truncated private supervisor event"
                 if pending is None and any(
                         event & (select.POLLHUP | select.POLLERR)
                         for event in pipe_events):
@@ -317,23 +526,86 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
                 drain_pending_events()
                 helper_exited = pending is None
 
-        helper_diagnostic = diagnostic_path.read_text(
-            encoding="utf-8", errors="replace")
+        if helper_exited and event_buffer and not channel_failed:
+            channel_failed = True
+            channel_failure = "truncated private supervisor event"
+
         if channel_failed:
-            helper.send_signal(signal.SIGTERM)
             try:
                 observed = _owned._read_proc_identity(helper.pid)
             except (OSError, ValueError, IndexError):
                 observed = None
-            starttime = observed[1] if observed is not None else -1
-            _retain_pending_reaper(
-                helper, helper_pidfd, scratch, starttime)
-            retained = True
-            helper = None
-            helper_pidfd = None
+            expected_starttime = observed[1] if observed is not None else None
+            if helper.poll() is None:
+                try:
+                    helper.send_signal(signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+            # A semantic callback is part of an enclosing atomic test lease.
+            # On relay failure retain ownership here, drain the helper-only
+            # pipe, and wait only on pidfd exit until the helper has published
+            # a trusted final-zero cleanup record. There is no elapsed bound.
+            pipe_registered = True
+            while helper.poll() is None:
+                for fd, event in poller.poll():
+                    if fd == event_read and pipe_registered:
+                        while True:
+                            try:
+                                chunk = os.read(event_read, 65536)
+                            except BlockingIOError:
+                                break
+                            if not chunk:
+                                break
+                        if event & (select.POLLHUP | select.POLLERR):
+                            poller.unregister(event_read)
+                            pipe_registered = False
+                    if fd == helper_pidfd:
+                        helper.wait()
+                        break
+            helper.wait()
+            helper_diagnostic = diagnostic_path.read_text(
+                encoding="utf-8", errors="replace")
+
+            cleanup_proof = ""
+            cleanup_verified = False
+            try:
+                status_doc = _semantic_progress.strict_loads(
+                    status_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, ValueError,
+                    json.JSONDecodeError) as exc:
+                status_doc = None
+                cleanup_proof = f"unreadable final-zero status: {exc}"
+            if isinstance(status_doc, dict):
+                if _shutdown_final_zero(
+                        status_doc, helper_pid=helper.pid,
+                        helper_starttime=expected_starttime,
+                        helper_rc=helper.returncode):
+                    cleanup_proof = "shutdown_complete/final_descendants=[]"
+                    cleanup_verified = True
+                else:
+                    cleanup_proof = "final-zero status differs"
+            if not cleanup_verified and result_path.is_file():
+                try:
+                    result_doc = _semantic_progress.strict_loads(
+                        result_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, ValueError,
+                        json.JSONDecodeError) as exc:
+                    cleanup_proof = (
+                        f"unreadable natural final-zero result: {exc}")
+                else:
+                    if helper.returncode == 0 and _owned_final_zero(result_doc):
+                        cleanup_proof = "natural/final_descendants=[]"
+                        cleanup_verified = True
+            if not cleanup_verified:
+                cleanup_proof = "UNPROVED: " + (cleanup_proof or "missing")
             return (2, helper_diagnostic,
-                    "OWNED_SUPERVISOR_NORECORD: private termination-state "
-                    "channel closed before a terminal record")
+                    "OWNED_SUPERVISOR_NORECORD: private supervisor channel "
+                    "failed before a terminal record"
+                    + (f": {channel_failure}" if channel_failure else "")
+                    + f"; atomic cleanup={cleanup_proof}")
+        helper_diagnostic = diagnostic_path.read_text(
+            encoding="utf-8", errors="replace")
         if pending is not None:
             try:
                 observed = _owned._read_proc_identity(helper.pid)
@@ -475,6 +747,16 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
     if recorded_problem is not None and not isinstance(recorded_problem, str):
         violations.append("malformed problem record")
         recorded_problem = None
+    if (isinstance(recorded_problem, str)
+            and "SEMANTIC_PROGRESS_NORECORD:" in recorded_problem):
+        violations.append(
+            "semantic child progress did not reach its exact terminal FSM")
+    if relay is not None and (
+            relay.error or relay.completed != relay.total):
+        violations.append(
+            "incomplete domain-progress relay "
+            f"({relay.completed}/{relay.total})"
+            + (f": {relay.error}" if relay.error else ""))
     if (record.get("launched") is False
             and (record.get("rc") == 0 or not recorded_problem)):
         violations.append("helper reported success without launching the job")
@@ -484,29 +766,88 @@ def _run(argv: List[str], cwd: Path, env: Dict[str, str], *,
         [item for item in [recorded_problem, *violations] if item]) or None
     rc = (2 if violations else
           record.get("rc") if isinstance(record.get("rc"), int) else 2)
+    if owned_result_sink is not None:
+        owned_result_sink.clear()
+        owned_result_sink.update(record)
     return rc, body, problem
 
 
 def _validate_declarations(reference: Dict[str, Any], doc: Dict[str, Any],
                            where: str) -> List[str]:
     problems: List[str] = []
-    want = [str(g.get("label")) for g in reference.get("gates") or []]
-    got = [str(g.get("label")) for g in doc.get("gates") or []]
+    reference_gates = reference.get("gates") or []
+    worker_gates = doc.get("gates") or []
+    want = [str(g.get("label")) for g in reference_gates]
+    got = [str(g.get("label")) for g in worker_gates]
     if got != want:
         problems.append(f"{where}: declaration order/set differs from --list")
-    for key in ("corpora", "undisclosed_loops"):
+    for index, (declared, observed) in enumerate(
+            zip(reference_gates, worker_gates)):
+        immutable = lambda row: {
+            key: value for key, value in row.items()
+            if key not in {"state", "seconds"}
+        }
+        if immutable(observed) != immutable(declared):
+            problems.append(
+                f"{where}: gate {index} immutable declaration differs from "
+                "--list")
+    for key in ("corpora", "corpus_inputs", "undisclosed_loops"):
         if doc.get(key) != reference.get(key):
             problems.append(f"{where}: {key} differs from --list declaration")
     if doc.get("listed_only"):
         problems.append(f"{where}: worker reported listed_only instead of running")
     if doc.get("shard") is None:
         problems.append(f"{where}: worker ignored its shard assignment")
+    for index, gate in enumerate(doc.get("gates") or []):
+        state = gate.get("state")
+        if state not in _WORKER_GATE_STATES:
+            problems.append(
+                f"{where}: gate {index} has non-terminal/unknown worker "
+                f"state {state!r}")
+        if state == "OUT_OF_SCOPE":
+            scope = gate.get("scope")
+            changed = os.environ.get("GATEKEEPER_CHANGED_PATHS")
+            if not isinstance(scope, str) or not scope.strip():
+                problems.append(
+                    f"{where}: gate {index} is OUT_OF_SCOPE without a scope")
+            elif not changed or not Path(changed).is_file():
+                problems.append(
+                    f"{where}: gate {index} is OUT_OF_SCOPE without a "
+                    "measurable changed-path set")
+            else:
+                try:
+                    paths = [line for line in Path(changed).read_text(
+                        encoding="utf-8").splitlines() if line]
+                except OSError as exc:
+                    problems.append(
+                        f"{where}: changed-path set is unreadable: {exc}")
+                    paths = []
+                prefixes = scope.split()
+                if not paths:
+                    problems.append(
+                        f"{where}: gate {index} is OUT_OF_SCOPE against an "
+                        "empty changed-path set")
+                elif any(path.startswith(prefix) for path in paths
+                         for prefix in prefixes):
+                    problems.append(
+                        f"{where}: gate {index} is OUT_OF_SCOPE although a "
+                        "changed path intersects its scope")
     return problems
+
+
+def _attestation_problem(row: object) -> str | None:
+    """Validate the complete process record even for direct API callers."""
+    try:
+        _gate_attestation.validate_record(row)
+    except (TypeError, ValueError, KeyError) as exc:
+        return str(exc)
+    return None
 
 
 def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, Any]]],
                   attestations: List[Dict[str, Any]], elapsed: int,
-                  problems: List[str]) -> Dict[str, Any]:
+                  problems: List[str], worker_docs: int | None = None
+                  ) -> Dict[str, Any]:
     """Build the dispatcher's full summary schema from exactly-once shards."""
     labels = [str(g["label"]) for g in reference.get("gates") or []]
     chosen: Dict[str, List[Dict[str, Any]]] = {label: [] for label in labels}
@@ -536,15 +877,50 @@ def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, An
         problems.append("unplanned labels ran: " + ", ".join(extras[:6]))
 
     by_label: Dict[str, List[Dict[str, Any]]] = {}
-    for row in attestations:
+    for index, row in enumerate(attestations):
+        invalid = _attestation_problem(row)
+        if invalid:
+            problems.append(f"process attestation {index}: {invalid}")
+            continue
         by_label.setdefault(str(row.get("label")), []).append(row)
     for label, gate in zip(labels, gates):
-        should_have = gate.get("state") in ("PASS", "FAIL", "NOT_CHECKED",
-                                             "WROTE_CORPUS")
+        legacy_no_process = _legacy_empty_without_process(reference, label)
+        should_have = (gate.get("state") in _TERMINAL_GATE_STATES
+                       and not legacy_no_process)
         count = len(by_label.get(label, []))
         if should_have and count != 1:
             problems.append(
                 f"{label!r}: expected one process attestation, got {count}")
+        if not should_have and count != 0:
+            problems.append(
+                f"{label!r}: skipped/nonterminal gate has {count} process "
+                "attestation(s), expected zero")
+        if should_have and count == 1:
+            attestation = by_label[label][0]
+            state = gate.get("state")
+            rc = attestation["returncode"]
+            recorded_state = attestation.get("state")
+            if recorded_state not in ("", state):
+                problems.append(
+                    f"{label!r}: attestation state {recorded_state!r} "
+                    f"contradicts summary state {state!r}")
+            if ((state == "PASS" and rc != 0)
+                    or (state == "NOT_CHECKED" and rc != 2)):
+                problems.append(
+                    f"{label!r}: summary state {state} contradicts process "
+                    f"returncode {rc}")
+            findings = attestation["finding_identities"]
+            verdict = attestation["verdict_line"]
+            verdict_is_failure = _gate_attestation._is_finding_line(verdict)
+            if state == "PASS" and (findings or verdict_is_failure):
+                problems.append(
+                    f"{label!r}: PASS carries failure semantics in its "
+                    "process attestation")
+            if (state == "FAIL" and rc == 0 and not findings
+                    and not verdict_is_failure):
+                problems.append(
+                    f"{label!r}: FAIL has neither a nonzero return code nor "
+                    "a failure verdict/finding identity")
     att_extra = sorted(set(by_label) - set(labels))
     if att_extra:
         problems.append("unplanned process attestations: "
@@ -556,11 +932,29 @@ def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, An
     today = {str(doc.get("today")) for _, doc in docs}
     if len(today) != 1:
         problems.append("shards disagree on the run date")
+    if worker_docs is None:
+        # Compatibility for direct callers: count documents that do not own
+        # the dependent host-comparison gate.  The main DAG passes the measured
+        # Arm-A document count explicitly, including when the host phase never
+        # launches; `len(docs) - 1` reported seven workers when eight worker
+        # records existed but the host record did not.
+        worker_docs = sum(
+            not any(g.get("label") == HOST_LABEL
+                    and g.get("state") != "OTHER_SHARD"
+                    for g in (doc.get("gates") or []))
+            for _, doc in docs)
+    ran = sum(count(s) for s in _TERMINAL_GATE_STATES)
+    out_of_scope = count("OUT_OF_SCOPE")
+    if ran + out_of_scope != len(gates) or count("OTHER_SHARD"):
+        problems.append(
+            "merged terminal accounting is incomplete: "
+            f"ran={ran}, declared={len(gates)}, "
+            f"out_of_scope={out_of_scope}, "
+            f"other_shard={count('OTHER_SHARD')}")
     return {
         "listed_only": False,
         "declared": len(gates),
-        "ran": sum(count(s) for s in
-                   ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")),
+        "ran": ran,
         "decided": count("PASS") + count("FAIL"),
         "passed": count("PASS"),
         "failed": count("FAIL"),
@@ -575,13 +969,17 @@ def merge_records(reference: Dict[str, Any], docs: List[Tuple[Path, Dict[str, An
         "wrote_corpus": count("WROTE_CORPUS"),
         "deferred": count("LISTED"),
         "other_shard": count("OTHER_SHARD"),
+        "out_of_scope": out_of_scope,
         "shard": None,
         "corpora": reference.get("corpora") or [],
+        "corpus_inputs": reference.get("corpus_inputs") or {
+            "benchmark_data_sha": None,
+        },
         "undisclosed_loops": reference.get("undisclosed_loops") or [],
         "seconds": elapsed,
         "gates": gates,
         "process_attestations": attestations,
-        "parallel": {"workers": len(docs) - 1,
+        "parallel": {"workers": worker_docs,
                      "phases": ["pipelined-a-b", "load-sensitive-wave",
                                 "host-attestation-compare"],
                      "complete": not problems},
@@ -594,6 +992,17 @@ def _summary_rc(doc: Dict[str, Any]) -> int:
     if doc.get("failed") or doc.get("wrote_corpus") \
             or doc.get("exemptions_expired"):
         return 1
+    unexempted = doc.get("not_checked_unexempted")
+    if unexempted:
+        # Preserve the truthful legacy list in the record (and therefore HDF's
+        # strict schema) while keeping phase 1's already-shipped closing rc.
+        # This is not a generic unexempted-NOT_CHECKED waiver: the list must be
+        # exactly the one historical routed EMPTY identity and the complete
+        # corpus/gate shape must prove it is the no-process bootstrap row.
+        if not (unexempted == [_LEGACY_ROUTED_EMPTY_LABEL]
+                and _legacy_empty_without_process(
+                    doc, _LEGACY_ROUTED_EMPTY_LABEL)):
+            return 2
     if not int(doc.get("decided") or 0):
         return 2
     return 0
@@ -710,6 +1119,31 @@ def main(argv=None) -> int:
             progress_path = None
 
         workers = []
+        reference_by_label = {
+            str(g.get("label")): g for g in (reference.get("gates") or [])}
+        changed_path_file = os.environ.get("GATEKEEPER_CHANGED_PATHS")
+        try:
+            changed_paths = ([line for line in Path(changed_path_file).read_text(
+                encoding="utf-8").splitlines() if line]
+                if changed_path_file and Path(changed_path_file).is_file()
+                and Path(changed_path_file).stat().st_size > 0 else None)
+        except OSError:
+            changed_paths = None
+
+        def expected_executed_labels(bucket_labels):
+            expected = []
+            for label in bucket_labels:
+                if _legacy_empty_without_process(reference, label):
+                    continue
+                scope = reference_by_label.get(label, {}).get("scope")
+                if (not isinstance(scope, str) or not scope.strip()
+                        or changed_paths is None
+                        or any(path.startswith(prefix)
+                               for path in changed_paths
+                               for prefix in scope.split())):
+                    expected.append(label)
+            return expected
+
         for i, bucket in enumerate(buckets):
             labels_path = tmp / f"labels-{i}.txt"
             labels_path.write_text("\n".join(bucket) + "\n", encoding="utf-8")
@@ -734,6 +1168,7 @@ def main(argv=None) -> int:
             arm, i, bucket, arm_root, summary, attest, argv_i, env = row
             rc, out, err = _run(
                 argv_i, arm_root, env, progress_path=attest,
+                expected_progress_labels=expected_executed_labels(bucket),
                 stall_grace_s=args.stall_grace)
             return arm, i, bucket, summary, attest, rc, out, err
 
@@ -771,6 +1206,7 @@ def main(argv=None) -> int:
                 results.append(run_worker(row))
 
         docs: List[Tuple[Path, Dict[str, Any]]] = []
+        arm_a_doc_count = 0
         a_attestations: List[Dict[str, Any]] = []
         b_attestations: List[Dict[str, Any]] = []
         for arm, i, bucket, summary, attest, rc, out, err in sorted(results):
@@ -798,6 +1234,7 @@ def main(argv=None) -> int:
                     + "; ".join(str(x) for x in doc["wiring_errors"][:3]))
             if arm == "A":
                 docs.append((summary, doc))
+                arm_a_doc_count += 1
                 a_attestations.extend(rows)
             else:
                 b_attestations.extend(rows)
@@ -809,7 +1246,10 @@ def main(argv=None) -> int:
             a_by_label.setdefault(str(row.get("label")), []).append(row)
         for row in b_attestations:
             b_by_label.setdefault(str(row.get("label")), []).append(row)
-        for label in phase_a_labels:
+        process_labels = [
+            label for label in phase_a_labels
+            if not _legacy_empty_without_process(reference, label)]
+        for label in process_labels:
             if len(a_by_label.get(label, [])) != 1:
                 problems.append(
                     f"Arm A {label!r}: expected one attestation, got "
@@ -818,9 +1258,9 @@ def main(argv=None) -> int:
                 problems.append(
                     f"Arm B {label!r}: expected one attestation, got "
                     f"{len(b_by_label.get(label, []))}")
-        if set(a_by_label) - set(phase_a_labels):
+        if set(a_by_label) - set(process_labels):
             problems.append("Arm A produced unplanned attestations")
-        if set(b_by_label) - set(phase_a_labels):
+        if set(b_by_label) - set(process_labels):
             problems.append("Arm B produced unplanned attestations")
 
         requested_attest = requested_progress
@@ -828,8 +1268,8 @@ def main(argv=None) -> int:
                          else tmp / "merged-attest.jsonl")
         fresh_attest = tmp / "fresh-attest.jsonl"
         if not problems:
-            ordered_a = [a_by_label[label][0] for label in phase_a_labels]
-            ordered_b = [b_by_label[label][0] for label in phase_a_labels]
+            ordered_a = [a_by_label[label][0] for label in process_labels]
+            ordered_b = [b_by_label[label][0] for label in process_labels]
             _write_jsonl(merged_attest, ordered_a)
             _write_jsonl(fresh_attest, ordered_b)
             host_labels = tmp / "labels-host.txt"
@@ -845,6 +1285,7 @@ def main(argv=None) -> int:
                          str(host_labels), "--summary-json", str(host_summary)]
             hrc, hout, herr = _run(
                 host_argv, root, host_env, progress_path=merged_attest,
+                expected_progress_labels=[*process_labels, HOST_LABEL],
                 stall_grace_s=args.stall_grace)
             print(f"=== hygiene dependent shard {host_i}/{total_shards}: "
                   f"1 gate, rc={hrc} ===")
@@ -869,7 +1310,7 @@ def main(argv=None) -> int:
 
         elapsed = int(time.monotonic() - started)
         final = merge_records(reference, docs, all_attestations, elapsed,
-                              problems)
+                              problems, worker_docs=arm_a_doc_count)
         write_json(args.summary_json, final, ensure_ascii=False)
         _release_fresh(fresh_res, root)
         atexit.unregister(cleanup)

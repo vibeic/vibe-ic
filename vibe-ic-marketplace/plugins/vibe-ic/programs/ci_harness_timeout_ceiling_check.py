@@ -176,11 +176,18 @@ EXIT CODES
 ----------
     0 = PASS   1 = FAIL (a bound above the ceiling)
     2 = CANNOT DETERMINE (no workflow bound, or nothing to scan) -- not a pass
+
+When the local landing gate uses ``pytest_per_file_junit.py`` for every pytest
+lane, this program instead validates that semantic-progress contract: no fixed
+pytest timeout, output/CPU activity cannot renew the lease, and the watchdog's
+whole-run ceiling is infinite.  Inner diagnostic subprocess bounds can then
+fire without ever being eclipsed by an outer elapsed-time verdict.
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -219,6 +226,58 @@ EXTRA_HARNESS_RELS = (
 #: on the line after `pytest` is still found.
 _PYTEST_RE = re.compile(r"(?<![\w.-])pytest(?![\w.-])")
 _TIMEOUT_RE = re.compile(r"--timeout[= ](\d+)")
+_ELAPSED_WRAPPER_RE = re.compile(r"(?<![\w.-])timeout(?![\w.-])")
+_DRIVER_COMMAND_RE = {
+    "run_pytest": re.compile(
+        r'^\s*if\s+out="\$\(\s*cd\s+"\$PLUGIN"\s+&&\s+'
+        r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
+        r'programs/pytest_per_file_junit\.py(?=\s)'),
+    "run_repo_tools_pytest": re.compile(
+        r'^\s*out="\$\(\s*cd\s+"\$ROOT"\s+&&\s+'
+        r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
+        r'"\$PROGRAMS/pytest_per_file_junit\.py"(?=\s)'),
+    "run_unselectable_pytest": re.compile(
+        r'^\s*out="\$\(\s*cd\s+"\$ROOT"\s+&&\s+'
+        r'PYTHONDONTWRITEBYTECODE=1\s+'
+        r'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1\s+python3\s+'
+        r'"\$PROGRAMS/pytest_per_file_junit\.py"(?=\s)'),
+}
+# Exact shipped function bodies are the control-flow contract.  A regex can
+# recognize a reassuring command that lives under ``if false``, inside a
+# never-called nested function, or even in heredoc data.  Hashing the complete
+# reviewed bodies turns every such control-flow rewrite into an explicit policy
+# change that the parent-side landing differential can review; there is no
+# permissive "looks command-like" fallback.
+_LANDING_LANE_SHA256 = {
+    "run_pytest":
+        "88d7a00a065528196475254f8dff69d9b9277a37d4208a2e15887ca347217366",
+    "run_repo_tools_pytest":
+        "22768a936c40f31a2167849423f2945c4904962bd7a1b0cf956075a89890e2ea",
+    "run_unselectable_pytest":
+        "70d7764ca0c83843f0b66a4e768c0ca5b874589894f1c688cb2d831b17863e78",
+}
+# Entry-to-last-lane control flow is reviewed as one indivisible contract.
+# Hashing only the three function definitions is insufficient: their exact
+# bodies can remain present while a top-level ``exit``, ``false && call``, or a
+# later function redefinition makes every call a no-op.  This prefix ends at
+# the third and final required invocation, so any executable rewrite that can
+# affect reachability must be reviewed together with a new digest.
+_LANDING_EXECUTION_PREFIX_SHA256 = (
+    "c0b1e3908370859c4f179ff4064cc3a9ef46401e2ce713924fd43e5cc2ed1551"
+)
+# A prefix proves the required calls are reached; the complete script proves a
+# later rewrite cannot erase their verdict (for example ``FAILED=0`` or an
+# early successful exit after the third call).  Gate control-flow changes are
+# intentionally an explicit policy migration, never a heuristic match.
+_LANDING_SCRIPT_SHA256 = (
+    "bf0475d17d6fb8cbb93f60321b229b479790358474eec61a0260c42bf50ae88f"
+)
+# The helper AST is not enough: a counterfeit CLI can define the expected
+# helper and never call it.  Bind the policy to the complete reviewed driver
+# whose functional tests prove selection -> aggregate JUnit coverage.
+_SEMANTIC_DRIVER_SHA256 = (
+    "2555e7c375cbf234bdfc3e8c989cfc1fd9ccf54c4206de79736a76a5cab1b9d5"
+)
 #: `pip install pytest-timeout` names the plugin, not a bound; it carries no
 #: `--timeout=N` and so cannot match, but the negative is stated because a
 #: future looser pattern would pick it up.
@@ -264,13 +323,80 @@ class HarnessBound:
                 "seconds": self.seconds, "command": self.command}
 
 
+def _strip_shell_comment(raw: str) -> str:
+    """Remove an executable Bash comment without touching quoted ``#``.
+
+    The semantic-lane contract is about what Bash executes, not reassuring
+    words after a comment marker.  ``shlex`` is not a Bash parser (notably for
+    command substitutions), so keep this deliberately small and exact: Bash
+    starts a comment at an unquoted ``#`` that begins a shell word.
+    """
+    quote: Optional[str] = None
+    # A command substitution inside double quotes is a fresh shell parse.  Its
+    # comments are executable comments even though the surrounding ``$(...)``
+    # sits inside a quoted assignment (the exact false-green this guards).
+    substitutions: List[Tuple[Optional[str], int]] = []
+    escaped = False
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote != "single":
+            escaped = True
+            index += 1
+            continue
+        if quote == "single":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "'" and quote is None:
+            quote = "single"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == "double" else "double"
+            index += 1
+            continue
+        if (char == "$" and index + 1 < len(raw)
+                and raw[index + 1] == "("):
+            substitutions.append((quote, 1))
+            quote = None
+            index += 2
+            continue
+        if substitutions and quote is None and char == "(":
+            outer, depth = substitutions[-1]
+            substitutions[-1] = (outer, depth + 1)
+            index += 1
+            continue
+        if substitutions and quote is None and char == ")":
+            outer, depth = substitutions[-1]
+            depth -= 1
+            if depth == 0:
+                substitutions.pop()
+                quote = outer
+            else:
+                substitutions[-1] = (outer, depth)
+            index += 1
+            continue
+        if (char == "#" and quote is None
+                and (index == 0 or raw[index - 1].isspace()
+                     or raw[index - 1] in ";|&()")):
+            return raw[:index]
+        index += 1
+    return raw
+
+
 def _logical_lines(text: str) -> Iterable[Tuple[int, str]]:
     """Yield (first_line_number, joined_command) with backslash continuations
     folded, so a flag on a continuation line belongs to its own command."""
     buf: List[str] = []
     start = 0
     for i, raw in enumerate(text.splitlines(), start=1):
-        stripped = raw.rstrip()
+        stripped = _strip_shell_comment(raw).rstrip()
         if not buf:
             start = i
         if stripped.endswith("\\"):
@@ -281,6 +407,273 @@ def _logical_lines(text: str) -> Iterable[Tuple[int, str]]:
         buf = []
     if buf:
         yield start, " ".join(buf)
+
+
+def _semantic_driver_contract_errors(driver: Path) -> List[str]:
+    """Validate the executed supervisor call structurally, not by comments."""
+    try:
+        raw = driver.read_bytes()
+        source = raw.decode("utf-8", errors="strict")
+        tree = ast.parse(source, filename=str(driver))
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        return [f"semantic pytest driver cannot be parsed: {exc}"]
+    errors: List[str] = []
+    observed_digest = hashlib.sha256(raw).hexdigest()
+    if observed_digest != _SEMANTIC_DRIVER_SHA256:
+        errors.append(
+            "semantic pytest driver is not the exact reviewed executable "
+            f"(sha256={observed_digest}, expected="
+            f"{_SEMANTIC_DRIVER_SHA256})")
+    functions = [node for node in tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and node.name == "_run_progress_supervised"]
+    if len(functions) != 1:
+        errors.append("semantic pytest driver must define "
+                      "_run_progress_supervised exactly once")
+        return errors
+    calls = [node for node in ast.walk(functions[0])
+             if isinstance(node, ast.Call)
+             and ((isinstance(node.func, ast.Attribute)
+                   and node.func.attr == "run_supervised")
+                  or (isinstance(node.func, ast.Name)
+                      and node.func.id == "run_supervised"))]
+    if len(calls) != 1:
+        errors.append(
+            "_run_progress_supervised must call run_supervised exactly once")
+        return errors
+    keywords = {kw.arg: kw.value for kw in calls[0].keywords
+                if kw.arg is not None}
+    output = keywords.get("output_progress")
+    if not (isinstance(output, ast.Constant) and output.value is False):
+        errors.append("semantic pytest driver no longer proves: output bytes "
+                      "are not progress")
+    domain = keywords.get("domain_progress_probe")
+    if not (isinstance(domain, ast.Name)
+            and domain.id == "_progress_sample"):
+        errors.append("semantic pytest driver no longer proves: validated "
+                      "lifecycle is the progress source")
+    ceiling = keywords.get("hard_ceiling_s")
+    if not (isinstance(ceiling, ast.Call)
+            and isinstance(ceiling.func, ast.Name)
+            and ceiling.func.id == "float"
+            and len(ceiling.args) == 1
+            and isinstance(ceiling.args[0], ast.Constant)
+            and ceiling.args[0].value == "inf"
+            and not ceiling.keywords):
+        errors.append("semantic pytest driver no longer proves: there is no "
+                      "whole-run elapsed ceiling")
+    return errors
+
+
+def _shell_control_depths(lines: Sequence[str], start: int,
+                          end: int) -> Dict[int, int]:
+    """A deliberately narrow structural model for the three shipped functions.
+
+    Bash has no stdlib AST.  The landing functions use only ordinary
+    ``if/fi``, loops and ``case/esac`` control blocks, so track exactly those
+    block boundaries.  A semantic-driver command is accepted only at function
+    depth zero; putting the reassuring command under ``if false`` therefore
+    cannot satisfy the contract.  ``bash -n`` remains the syntax authority.
+    """
+    depths: Dict[int, int] = {}
+    depth = 0
+    for lineno in range(start + 1, end):
+        stripped = lines[lineno - 1].strip()
+        if not stripped or stripped.startswith("#"):
+            depths[lineno] = depth
+            continue
+        if re.match(r"^(fi|done|esac)\b", stripped):
+            depth = max(0, depth - 1)
+        depths[lineno] = depth
+        if re.match(r"^(if|for|while|until|case)\b", stripped):
+            # One-line controls close themselves and do not contain an
+            # independently accepted canonical driver command.
+            closes = ((stripped.startswith("if ") and re.search(
+                r";\s*fi(?:\s*;|\s*$)", stripped))
+                or (re.match(r"^(for|while|until)\b", stripped)
+                    and re.search(r";\s*done(?:\s*;|\s*$)", stripped))
+                or (stripped.startswith("case ")
+                    and re.search(r";\s*esac(?:\s*;|\s*$)", stripped)))
+            if not closes:
+                depth += 1
+    return depths
+
+
+def landing_semantic_progress_contract(repo_root: Path) -> Dict:
+    """Validate the local landing pytest lanes' no-fixed-timeout contract.
+
+    This deliberately owns only ``gatekeeper-land.sh``.  The A/B verifier has
+    its own two-wave/process-census contract and tests; treating historical
+    disabled workflows or a separate orchestrator as this harness's elapsed
+    bound is how a dead lane used to constrain the live one.
+    """
+    root = Path(repo_root)
+    land = root / "tools" / "gatekeeper-land.sh"
+    driver = (root / "vibe-ic-marketplace" / "plugins" / "vibe-ic" /
+              "programs" / "pytest_per_file_junit.py")
+    errors: List[str] = []
+    lanes: List[Dict] = []
+    try:
+        land_raw = land.read_bytes()
+        land_text = land_raw.decode("utf-8", errors="strict")
+    except (OSError, UnicodeError) as exc:
+        return {"declared": False, "errors": [
+            f"landing script is unreadable: {exc}"], "lanes": []}
+
+    script_digest = hashlib.sha256(land_raw).hexdigest()
+    if script_digest != _LANDING_SCRIPT_SHA256:
+        errors.append(
+            "gatekeeper-land.sh is not the complete reviewed executable "
+            f"(sha256={script_digest}, expected={_LANDING_SCRIPT_SHA256})")
+
+    source_lines = land_text.splitlines()
+    populations = ("run_pytest", "run_repo_tools_pytest",
+                   "run_unselectable_pytest")
+    final_calls = [i for i, line in enumerate(source_lines, 1)
+                   if line in {"run_unselectable_pytest",
+                               "if run_unselectable_pytest; then"}]
+    if len(final_calls) != 1:
+        errors.append(
+            "gatekeeper-land.sh must invoke run_unselectable_pytest exactly "
+            "once at its reviewed top-level call site")
+    else:
+        prefix_bytes = ("\n".join(source_lines[:final_calls[0]]) +
+                        "\n").encode("utf-8")
+        prefix_digest = hashlib.sha256(prefix_bytes).hexdigest()
+        if prefix_digest != _LANDING_EXECUTION_PREFIX_SHA256:
+            errors.append(
+                "gatekeeper-land.sh entry-to-final-pytest execution prefix "
+                "is not the exact reviewed control flow "
+                f"(sha256={prefix_digest}, expected="
+                f"{_LANDING_EXECUTION_PREFIX_SHA256})")
+    ranges: Dict[str, Tuple[int, int]] = {}
+    depths: Dict[str, Dict[int, int]] = {}
+    for population in populations:
+        starts = [i for i, line in enumerate(source_lines, 1)
+                  if line.startswith(f"{population}() {{")]
+        if len(starts) != 1:
+            errors.append(
+                f"gatekeeper-land.sh must define {population} exactly once")
+            continue
+        start = starts[0]
+        ends = [i for i in range(start + 1, len(source_lines) + 1)
+                if source_lines[i - 1] == "}"]
+        if not ends:
+            errors.append(
+                f"gatekeeper-land.sh has no structural end for {population}")
+            continue
+        function_bytes = ("\n".join(
+            source_lines[start - 1:ends[0]]) + "\n").encode("utf-8")
+        observed_digest = hashlib.sha256(function_bytes).hexdigest()
+        if observed_digest != _LANDING_LANE_SHA256[population]:
+            errors.append(
+                f"gatekeeper-land.sh function {population} is not the exact "
+                "reviewed executable body "
+                f"(sha256={observed_digest}, expected="
+                f"{_LANDING_LANE_SHA256[population]})")
+        if any("<<" in source_lines[i - 1]
+               for i in range(start + 1, ends[0])):
+            errors.append(
+                f"gatekeeper-land.sh function {population} contains a "
+                "heredoc; command-shaped data cannot prove lane execution")
+        nested = [i for i in range(start + 1, ends[0])
+                  if (re.match(
+                      r"^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*"
+                      r"\s*(?:\(\s*\))?\s*\{\s*$",
+                      source_lines[i - 1]) is not None)]
+        if nested:
+            errors.append(
+                f"gatekeeper-land.sh:{nested[0]} nests a function inside "
+                f"{population}; a never-called body cannot prove execution")
+        ranges[population] = (start, ends[0])
+        depths[population] = _shell_control_depths(
+            source_lines, start, ends[0])
+
+    for lineno, command in _logical_lines(land_text):
+        stripped = command.lstrip()
+        if stripped.startswith("#"):
+            continue
+        owners = [name for name, (start, end) in ranges.items()
+                  if start < lineno < end]
+        owner = owners[0] if len(owners) == 1 else None
+        driver_invocation = bool(
+            owner and _DRIVER_COMMAND_RE[owner].search(command))
+        # A standalone `pytest` token in executable shell is forbidden unless
+        # this exact logical command invokes the semantic driver.  This catches
+        # env/absolute-path/function/array aliases without pretending to be a
+        # complete shell parser.  The one diagnostic grep is data, not a lane.
+        diagnostic = "grep -qa '^=== pytest junit summary'" in command
+        if ("pytest_per_file_junit.py" in command
+                and not driver_invocation and not stripped.startswith("#")):
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} names the semantic driver "
+                "outside its canonical executable lane")
+        if (_PYTEST_RE.search(command) and not driver_invocation
+                and not diagnostic):
+            errors.append(f"gatekeeper-land.sh:{lineno} mentions executable "
+                          "pytest outside the semantic aggregate driver")
+        if not driver_invocation:
+            lane_already_ran = any(
+                lane["population"] == owner and lane["line"] < lineno
+                for lane in lanes)
+            if (owner and not lane_already_ran
+                    and depths.get(owner, {}).get(lineno) == 0
+                    and re.match(r"^\s*(return|exit)(?:\s|$)", command)):
+                errors.append(
+                    f"gatekeeper-land.sh:{lineno} can leave {owner} before "
+                    "its semantic pytest lane")
+            continue
+        if depths.get(owner, {}).get(lineno) != 0:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} semantic pytest lane is nested "
+                "under conditional control")
+        lanes.append({"population": owner, "line": lineno,
+                      "command": " ".join(command.split())})
+        if "--aggregate-check" not in command:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} does not require the aggregate "
+                "semantic pytest record")
+        trusted_entry = re.search(
+            r"--\s+python3\s+-I\s+"
+            r"\"\$PROGRAMS/trusted_pytest_entry\.py\"(?=\s)",
+            command,
+        )
+        if trusted_entry is None:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} does not execute pytest through "
+                "the isolated trusted entry at the semantic driver's "
+                "subject-command boundary")
+        if re.search(r"(?:^|\s)-p\s+no:cacheprovider(?:\s|$)", command) is None:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} does not disable pytest's cache "
+                "plugin at the trusted entry boundary")
+        if _TIMEOUT_RE.search(command) or "pytest_timeout" in command:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} reintroduces a fixed pytest "
+                "elapsed-time verdict")
+        if _ELAPSED_WRAPPER_RE.search(command):
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} wraps semantic pytest in a "
+                "fixed elapsed-time command")
+        if "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1" not in command:
+            errors.append(
+                f"gatekeeper-land.sh:{lineno} inherits ambient pytest plugins")
+    repository_marker = (root / "vibe-ic-marketplace" / "plugins" /
+                         "vibe-ic" / ".claude-plugin" /
+                         "plugin.json").is_file()
+    required = (driver.is_file() or repository_marker
+                or bool(ranges) or bool(lanes))
+    if required:
+        for population in populations:
+            count = sum(lane["population"] == population for lane in lanes)
+            if count != 1:
+                errors.append(
+                    f"gatekeeper-land.sh must route {population} through "
+                    f"exactly one semantic aggregate lane (found {count})")
+    if not required:
+        return {"declared": False, "errors": [], "lanes": []}
+    errors.extend(_semantic_driver_contract_errors(driver))
+    return {"declared": True, "errors": errors, "lanes": lanes}
 
 
 def harness_bounds(repo_root: Path) -> List[HarnessBound]:
@@ -1210,6 +1603,71 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     bounds = harness_bounds(repo_root) if repo_root else []
     harness = min((b.seconds for b in bounds), default=None)
     roots = _scan_roots(repo_root, args.tests_root)
+    semantic = (landing_semantic_progress_contract(repo_root)
+                if repo_root else {"declared": False, "errors": [],
+                                   "lanes": []})
+
+    # The live landing gate no longer has an elapsed harness bound.  Validate
+    # that stronger contract before entering the legacy finite-bound audit used
+    # by old/fake harness fixtures.  A half migration is a failure, not a reason
+    # to fall back to whichever historical timeout still happens to parse.
+    if semantic["declared"] and args.tests_root is None:
+        if semantic["errors"]:
+            print("[FAIL] ci_harness_timeout_ceiling_check: the landing gate "
+                  "declares semantic pytest supervision but its contract is "
+                  "incomplete:")
+            for error in semantic["errors"]:
+                print(f"   {error}")
+            return 1
+        if not roots:
+            print("[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: "
+                  "semantic landing supervision is present, but no test tree "
+                  f"to scan ({args.tests_root or TESTS_DIR_REL} not found) -- "
+                  "0 files examined, which is NOT a pass.")
+            return 2
+        # A deliberately enormous finite comparison value lets the existing
+        # AST census count readable blocking sites without emitting non-standard
+        # JSON Infinity. Findings are not used in this mode: with no outer
+        # elapsed ceiling, no finite child bound can outlive it.
+        rep = scan_roots(roots, 10 ** 18)
+        if rep["unparseable"]:
+            print("[CANNOT DETERMINE] ci_harness_timeout_ceiling_check: "
+                  "semantic harness is valid, but some test sources could not "
+                  "be parsed, so the population is incomplete:")
+            for path in rep["unparseable"][:20]:
+                print(f"   {path}")
+            return 2
+        print("ci_harness_timeout_ceiling_check: semantic-progress landing "
+              f"harness ({len(semantic['lanes'])} pytest population(s)); "
+              "fixed elapsed ceiling: none")
+        print(f"  scanned {rep['files']} file(s) in {len(rep['roots'])} "
+              f"tree(s), {rep['bounded_sites']} readable inner diagnostic "
+              "bound(s)")
+        for lane in semantic["lanes"]:
+            print(f"   gatekeeper-land.sh:{lane['line']}  "
+                  "aggregate lifecycle-supervised lane")
+        if args.json_out:
+            Path(args.json_out).write_text(json.dumps({
+                "program": "ci_harness_timeout_ceiling_check",
+                "mode": "semantic_progress",
+                "harness_seconds": None,
+                "ceiling_seconds": None,
+                "ceiling_divisor": None,
+                "harness_bounds": [],
+                "semantic_lanes": semantic["lanes"],
+                "roots": rep["roots"],
+                "files": rep["files"],
+                "bounded_sites": rep["bounded_sites"],
+                "findings": [],
+                "unresolved_above_ceiling": [],
+                "marked_items": [],
+                "unparseable": [],
+                "passed": True,
+            }, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        print("[PASS] every landing pytest population is supervised by "
+              "validated lifecycle progress with no total runtime ceiling; "
+              "elapsed time is not a test verdict.")
+        return 0
 
     # Two ways to have nothing to say, and neither of them is a pass. Reported
     # BEFORE the scan so the message names the missing input rather than an
@@ -1284,6 +1742,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.json_out:
         Path(args.json_out).write_text(json.dumps({
             "program": "ci_harness_timeout_ceiling_check",
+            "mode": "fixed_timeout_legacy",
             "harness_seconds": harness,
             "ceiling_seconds": ceiling,
             "ceiling_divisor": CEILING_DIVISOR,

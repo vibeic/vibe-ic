@@ -26,9 +26,18 @@ set -euo pipefail
 # would resolve somewhere else — which would silently fail to find the sourced
 # dispatch library for any caller that does not happen to start at the root.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/../.." && pwd)"
+RUNTIME_ROOT="$(cd "$HERE/../.." && pwd)"
+ROOT="${VIBEIC_SUBJECT_ROOT:-$RUNTIME_ROOT}"
+case "$ROOT" in /*) ;; *)
+  echo "repo_hygiene_gates: VIBEIC_SUBJECT_ROOT must be absolute" >&2
+  exit 2 ;;
+esac
+[ -d "$ROOT" ] || {
+  echo "repo_hygiene_gates: subject root is not a directory: $ROOT" >&2
+  exit 2
+}
 PLUGIN="$ROOT/vibe-ic-marketplace/plugins/vibe-ic"
-PG="$PLUGIN/programs"
+PG="$RUNTIME_ROOT/vibe-ic-marketplace/plugins/vibe-ic/programs"
 cd "$ROOT"
 
 # One machine record per completed gate.  When the caller supplies a path it
@@ -563,10 +572,10 @@ _per_published_cell_gates() {
 # this repo removes from gates one at a time. `gate_dispatch_over` keeps the
 # producer's exit status and says so; an empty result is still not an error and
 # still does not abort the ~70 gates that have nothing to do with this corpus.
-gate_dispatch_over "published cells carrying a routed DEF" \
+GATE_DISPATCH_ATTEST_POPULATION=1 gate_dispatch_over \
+  "published cells carrying a routed DEF" \
   _per_published_cell_gates \
-  git -C "$ROOT" ls-files -- \
-    'benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def'
+  python3 "$HERE/routed_def_corpus.py" --repo "$ROOT"
 # The baseline the gate above maintains records WHY each entry is still there.
 # 24 of 31 notes said the checker "skips without its input" about an input a
 # real run always has — a reason whose premise is false, standing in for the

@@ -67,7 +67,9 @@ green testcase XML from erasing a session-level refusal.
 
 PROGRESS SUPERVISION, NOT A RUNTIME GUESS
 =========================================
-pytest-timeout remains a last-resort per-test guard. The outer supervisor does
+There is deliberately no pytest-timeout guard on the landing path. A fixed
+elapsed limit kills the session rather than measuring a test and makes
+healthy-but-slow work indistinguishable from a hang. The outer supervisor does
 not guess how long a file or the aggregate selection should take. A private
 pytest plugin appends completed collection/test lifecycle events to a structured
 sidecar and the supervisor watches ONLY validated, strictly ordered events.
@@ -102,13 +104,12 @@ USAGE
         [--aggregate-check] [--aggregate-only]
         [--aggregate-stall-after SECONDS] [--fallback-jobs N]
         [--fallback-rescue-jobs N]
-        -- <the full pytest command, e.g. python3 -m pytest -q --timeout=180>
+        -- <the full pytest command, e.g. python3 -m pytest -q>
 
 The command after ``--`` is run VERBATIM with ``-o junit_family=xunit1``, a
 per-file ``--junitxml`` and the one file appended. It is passed in rather than
-built here so the harness bound stays declared at ONE site — the caller's line
-in `tools/gatekeeper-land.sh`, which is where `ci_harness_timeout_ceiling_check`
-reads it from.
+built here so callers can pin their pytest environment without granting this
+driver authority to invent a verdict-affecting elapsed-time limit.
 
 With ``--aggregate-check`` the command first runs once over the entire selection.
 Its testcase ids are namespaced under ``pytest_aggregate`` and its exact process
@@ -148,12 +149,16 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import errno
+import importlib.util
 import json
 import os
+import select
 import selectors
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -161,7 +166,7 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import _watchdog as _wd
 
@@ -193,6 +198,7 @@ _FALLBACK_UNMEASURED_RESOURCE_CAP = 4
 
 _PROGRESS_PATH_ENV = "VIBEIC_PYTEST_PROGRESS_FILE"
 _PROGRESS_NONCE_ENV = "VIBEIC_PYTEST_PROGRESS_NONCE"
+_REQUIRE_RUNTIME_IDENTITY_ENV = "VIBEIC_REQUIRE_TRUSTED_PYTEST_ENTRY"
 _PROGRESS_PLUGIN = "_pytest_progress_plugin"
 _PROGRAMS_DIR = Path(__file__).resolve().parent
 _PROGRESS_SCHEMA = 1
@@ -205,8 +211,16 @@ _MAX_DOMAIN_PROGRESS_SCOPES = 64
 _PR_SET_CHILD_SUBREAPER = 36
 _ACTIVE_JOB: Optional[Tuple[int, Set[Tuple[int, int]]]] = None
 _ACTIVE_FALLBACK_BASELINE: Optional[Set[Tuple[int, int]]] = None
+_IN_SHUTDOWN = False
+_CLEANUP_ACTIVE = False
+_PENDING_SHUTDOWN_SIGNAL: Optional[int] = None
+_SHUTDOWN_SIGNAL_READER: Optional[socket.socket] = None
+_SHUTDOWN_SIGNAL_WRITER: Optional[socket.socket] = None
+_KILL_CONFIRM_GRACE_S = 1.0
+_REAPER_POLL_MS = 100
 _FALLBACK_WORKER_FLAG = "--_fallback-worker-spec"
 _FALLBACK_WORKER_ENV = "VIBEIC_PYTEST_FALLBACK_WORKER"
+_COLLECT_WORKER_FLAG = "--_collect-worker-spec"
 
 #: Outcomes that count toward `--stop-after-failures`, matching what
 #: `landing_merge_verdict.RED` counts.
@@ -216,6 +230,225 @@ _RED_TAGS = ("failure", "error")
 #: IS the deliverable: a run that produced no file at all is indistinguishable
 #: from a run that never happened.
 _ROOT_TAG = "testsuites"
+
+
+def _load_hermetic_progress_emitter():
+    """Load the exact helper from this protected runtime, never the subject."""
+    runtime_root = _PROGRAMS_DIR.parents[3]
+    path = runtime_root / "tools" / "ci" / "hermetic_progress_emit.py"
+    spec = importlib.util.spec_from_file_location(
+        "_vibeic_hermetic_pytest_progress", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("hermetic progress emitter is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_hermetic_progress_planner():
+    """Load the BASE-owned nested-domain plan from this protected runtime."""
+    runtime_root = _PROGRAMS_DIR.parents[3]
+    path = runtime_root / "tools" / "ci" / "trusted_test_selection.py"
+    spec = importlib.util.spec_from_file_location(
+        "_vibeic_hermetic_pytest_plan", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("hermetic pytest progress planner is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class _HermeticAggregateProgress:
+    """Relay only BASE-planned nested domains and completed pytest items."""
+
+    def __init__(self, selection: Sequence[str], emitter=None, planner=None):
+        self.selection = list(selection)
+        self.emitter = emitter or _load_hermetic_progress_emitter()
+        self.planner = planner or _load_hermetic_progress_planner()
+        self.completed: Set[str] = set()
+        self.nodes_by_file: Dict[str, List[str]] = {}
+        self.schedule: List[Tuple[str, str, str, int, str, str, int, int]] = []
+        for test_file in self.selection:
+            spec = self.planner.HERMETIC_TEST_PROGRESS.get(test_file)
+            if spec is not None:
+                by_ordinal: Dict[int, List[Tuple[str, str, int]]] = {}
+                for ordinal, nodeid, scope, total in spec["domains"]:
+                    by_ordinal.setdefault(ordinal, []).append(
+                        (nodeid, scope, total))
+                for ordinal in range(1, spec["items"] + 1):
+                    for nodeid, scope, total in by_ordinal.get(ordinal, ()):
+                        for completed in range(1, total + 1):
+                            self.schedule.append((
+                                "domain",
+                                self.planner.domain_progress_unit(
+                                    test_file, nodeid, scope, completed, total),
+                                test_file, ordinal, nodeid, scope, completed,
+                                total,
+                            ))
+                    self.schedule.append((
+                        "item",
+                        self.planner.test_progress_unit(
+                            test_file, ordinal, spec["items"]),
+                        test_file, ordinal, "", "", 0, spec["items"],
+                    ))
+            self.schedule.append((
+                "file", "pytest:" + test_file, test_file, 0, "", "", 0,
+                0))
+        self.emitted = 0
+        self.problem = ""
+
+    def _emit(self, state: str, unit: Optional[str] = None) -> bool:
+        if self.problem:
+            return False
+        try:
+            sys.stdout.flush()
+            self.emitter.emit(state, unit)
+            sys.stdout.flush()
+            return True
+        except BaseException as exc:
+            self.problem = f"hermetic progress relay refused: {exc}"
+            return False
+
+    def start(self) -> bool:
+        return self._emit("start")
+
+    def observe(self, probe: "_SemanticProgressProbe") -> None:
+        if self.problem or probe.error or probe.declared_items is None:
+            return
+        for test_file in self.selection:
+            spec = self.planner.HERMETIC_TEST_PROGRESS.get(test_file)
+            ordered_nodes = [
+                nodeid for nodeid in probe.item_order
+                if nodeid == test_file or nodeid.startswith(test_file + "::")
+            ]
+            if spec is not None:
+                if len(ordered_nodes) != spec["items"]:
+                    self.problem = (
+                        "parent-owned pytest item denominator differs for "
+                        + test_file)
+                    return
+                for ordinal, nodeid, _scope, _total in spec["domains"]:
+                    if ordered_nodes[ordinal - 1] != nodeid:
+                        self.problem = (
+                            "parent-owned nested domain nodeid/ordinal differs")
+                        return
+                for _ordinal, nodeid, scope, expected_total in spec["domains"]:
+                    observed = probe.domain_progress.get((nodeid, scope))
+                    if (observed is not None
+                            and observed[1] != expected_total):
+                        self.problem = (
+                            "parent-owned nested domain denominator differs")
+                        return
+                self.nodes_by_file[test_file] = ordered_nodes
+            if test_file in self.completed:
+                continue
+            nodes = set(ordered_nodes)
+            if nodes and nodes <= probe.finished:
+                self.completed.add(test_file)
+        # Preserve the exact parent-owned schedule.  A nested checkpoint is
+        # available only after the strict pytest FSM accepted the exact
+        # nodeid/scope/total/+1 transition.  If that test or the whole file
+        # finishes before consuming every optional liveness slot, fill the
+        # unused suffix only then: a fast FAIL remains a complete record, while
+        # those terminal backfills cannot prolong a running process.
+        while self.emitted < len(self.schedule):
+            (kind, unit, test_file, ordinal, nodeid, scope, completed,
+             expected_total) = self.schedule[self.emitted]
+            if kind == "file":
+                ready = test_file in self.completed
+            elif kind == "item":
+                ordered_nodes = self.nodes_by_file.get(test_file, [])
+                ready = bool(
+                    len(ordered_nodes) >= ordinal
+                    and ordered_nodes[ordinal - 1] in probe.finished)
+            elif kind == "domain":
+                observed = probe.domain_progress.get((nodeid, scope))
+                if observed is not None and observed[1] != expected_total:
+                    self.problem = (
+                        "parent-owned nested domain denominator differs")
+                    return
+                ready = bool(
+                    observed is not None and observed[0] >= completed
+                    or nodeid in probe.finished
+                    or test_file in self.completed)
+            else:  # pragma: no cover - schedule is built locally above
+                self.problem = "unknown parent-owned progress schedule kind"
+                return
+            if not ready:
+                break
+            if not self._emit("checkpoint", unit):
+                return
+            self.emitted += 1
+
+    def finish(self) -> bool:
+        if self.problem or self.emitted != len(self.schedule):
+            if not self.problem:
+                self.problem = (
+                    "not every selected file reached a validated test_finish")
+            return False
+        if not self._emit("checkpoint", "pytest:record-published"):
+            return False
+        return self._emit("terminal")
+
+
+def _reject_json_pairs(pairs):
+    out = {}
+    for key, value in pairs:
+        if not isinstance(key, str) or key in out:
+            raise ValueError("duplicate or non-string JSON key")
+        out[key] = value
+    return out
+
+
+def _reject_json_constant(value):
+    raise ValueError(f"non-finite JSON number {value!r}")
+
+
+def _runtime_identity(value: object) -> Optional[dict]:
+    """Return the exact isolated-entry identity or ``None`` on any ambiguity."""
+    if not isinstance(value, dict) or set(value) != {
+            "schema", "python", "entry", "plugin", "modules"}:
+        return None
+    if type(value["schema"]) is not int or value["schema"] != 1:
+        return None
+
+    def file_row(row: object, *, named: bool = False) -> Optional[dict]:
+        keys = {"path", "sha256", "size"} | ({"name"} if named else set())
+        if not isinstance(row, dict) or set(row) != keys:
+            return None
+        path = row.get("path")
+        digest = row.get("sha256")
+        size = row.get("size")
+        if (not isinstance(path, str) or not path.startswith("/")
+                or "\x00" in path or "\n" in path or "\r" in path
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)
+                or type(size) is not int or size < 0):
+            return None
+        result = {"path": path, "sha256": digest, "size": size}
+        if named:
+            name = row.get("name")
+            if not isinstance(name, str):
+                return None
+            result["name"] = name
+        return result
+
+    python = file_row(value["python"])
+    entry = file_row(value["entry"])
+    plugin = file_row(value["plugin"])
+    modules_raw = value["modules"]
+    if (python is None or entry is None or plugin is None
+            or not isinstance(modules_raw, list)):
+        return None
+    modules = [file_row(row, named=True) for row in modules_raw]
+    if (any(row is None for row in modules)
+            or [row["name"] for row in modules if row is not None]
+            != ["pytest", "_pytest", "pluggy"]):
+        return None
+    return {"schema": 1, "python": python, "entry": entry,
+            "plugin": plugin, "modules": modules}
 
 
 class FileResult:
@@ -280,13 +513,15 @@ class _SemanticProgressProbe:
         "collect_report": {"nodeid", "outcome"},
         "item_collected": {"nodeid"},
         "collection_finish": {"selected_items"},
+        "collection_only_finish": {"selected_items"},
         "domain_progress": {"nodeid", "scope", "completed", "total"},
         "test_finish": {"nodeid"},
         "session_finish": {"exitstatus"},
     }
     _COMMON = {"schema", "nonce", "pid", "seq", "event", "monotonic_ns"}
 
-    def __init__(self, path: Path, nonce: str, pid_fn):
+    def __init__(self, path: Path, nonce: str, pid_fn, *, collect_only=False,
+                 require_runtime_identity=False):
         self.path = path
         self.nonce = nonce
         self.pid_fn = pid_fn
@@ -302,9 +537,13 @@ class _SemanticProgressProbe:
         self.error = ""
         self.collect_reports: Set[str] = set()
         self.items: Set[str] = set()
+        self.item_order: List[str] = []
         self.finished: Set[str] = set()
         self.declared_items: Optional[int] = None
         self.domain_progress: Dict[Tuple[str, str], Tuple[int, int]] = {}
+        self.collect_only = bool(collect_only)
+        self.require_runtime_identity = bool(require_runtime_identity)
+        self.runtime_identity: Optional[dict] = None
 
     def close(self) -> None:
         self.file.close()
@@ -321,7 +560,12 @@ class _SemanticProgressProbe:
         if event not in self._FIELDS:
             self._fail(f"unknown event {event!r}")
             return
-        if set(record) != self._COMMON | self._FIELDS[event]:
+        expected_fields = self._COMMON | self._FIELDS[event]
+        actual_fields = set(record)
+        if (event == "session_start"
+                and actual_fields == expected_fields | {"runtime_identity"}):
+            pass
+        elif actual_fields != expected_fields:
             self._fail(f"wrong fields for {event}")
             return
         pid = self.pid_fn()
@@ -344,6 +588,15 @@ class _SemanticProgressProbe:
             if self.stage != "initial":
                 self._fail("duplicate/out-of-order session_start")
                 return
+            identity = record.get("runtime_identity")
+            if identity is not None:
+                self.runtime_identity = _runtime_identity(identity)
+                if self.runtime_identity is None:
+                    self._fail("invalid trusted pytest runtime identity")
+                    return
+            elif self.require_runtime_identity:
+                self._fail("trusted pytest runtime identity is missing")
+                return
             self.stage = "collecting"
         elif event == "collect_report":
             nodeid = record.get("nodeid")
@@ -359,6 +612,7 @@ class _SemanticProgressProbe:
                 self._fail("duplicate/out-of-order item_collected")
                 return
             self.items.add(nodeid)
+            self.item_order.append(nodeid)
         elif event == "collection_finish":
             count = record.get("selected_items")
             if (self.stage != "collecting" or not isinstance(count, int)
@@ -395,20 +649,34 @@ class _SemanticProgressProbe:
                 self._fail("non-monotonic domain_progress")
                 return
             self.domain_progress[key] = (completed, total)
+        elif event == "collection_only_finish":
+            count = record.get("selected_items")
+            if (not self.collect_only or self.stage != "running" or self.finished
+                    or not isinstance(count, int)
+                    or self.declared_items is None
+                    or count != self.declared_items):
+                self._fail("collect-only terminal count/state mismatch")
+                return
+            self.stage = "collection_only_finished"
         elif event == "test_finish":
             nodeid = record.get("nodeid")
-            if (self.stage != "running" or nodeid not in self.items
+            if (self.collect_only or self.stage != "running"
+                    or nodeid not in self.items
                     or nodeid in self.finished):
                 self._fail("unknown/duplicate/out-of-order test_finish")
                 return
             self.finished.add(nodeid)
         elif event == "session_finish":
-            if (self.stage != "running" or not isinstance(
+            expected_stage = (
+                "collection_only_finished" if self.collect_only else "running")
+            if (self.stage != expected_stage
+                    or not isinstance(
                     record.get("exitstatus"), int)
                     or self.declared_items is None):
                 self._fail("out-of-order session_finish")
                 return
-            if len(self.finished) != self.declared_items:
+            if (not self.collect_only
+                    and len(self.finished) != self.declared_items):
                 self._fail(
                     "session finished before every selected item completed "
                     f"({len(self.finished)}/{self.declared_items})")
@@ -454,8 +722,12 @@ class _SemanticProgressProbe:
                 self._fail("empty/oversized event")
                 break
             try:
-                record = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+                record = json.loads(
+                    raw.decode("utf-8"),
+                    object_pairs_hook=_reject_json_pairs,
+                    parse_constant=_reject_json_constant,
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
                 self._fail("malformed event")
                 break
             self._accept(record)
@@ -477,6 +749,81 @@ class _SemanticProgressProbe:
 def read_selection(path: Path) -> List[str]:
     return [l.strip() for l in
             path.read_text(errors="replace").splitlines() if l.strip()]
+
+
+def _file_identity(path: str, cwd: Optional[str]) -> Optional[str]:
+    """Return one lexical/real file identity in the pytest working tree.
+
+    Pytest's xunit1 ``file`` attribute is normally relative to its cwd while a
+    selector is also allowed to emit an absolute path.  Comparing raw strings
+    would therefore call the same file missing (or allow the same file twice)
+    solely because the two producers chose different spellings.  Resolution is
+    used only for identity; pytest still receives the selector's original
+    argument verbatim.
+    """
+    try:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = Path(cwd) / candidate if cwd else Path.cwd() / candidate
+        return os.path.normcase(str(candidate.resolve(strict=False)))
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _selection_identity_problem(selection: Sequence[str],
+                                cwd: Optional[str]) -> str:
+    """Reject an ambiguous selector denominator before launching pytest."""
+    identities: Dict[str, str] = {}
+    for raw in selection:
+        identity = _file_identity(raw, cwd)
+        if identity is None:
+            return f"selected path has no stable identity: {raw!r}"
+        previous = identities.get(identity)
+        if previous is not None:
+            return ("selection names the same file more than once: "
+                    f"{previous!r}, {raw!r}")
+        identities[identity] = raw
+    return ""
+
+
+def _aggregate_coverage_problem(suites: Sequence[ET.Element],
+                                selection: Sequence[str],
+                                cwd: Optional[str]) -> str:
+    """Prove every selected file contributed at least one aggregate testcase.
+
+    A normal rc=0 plus a valid JUnit is insufficient: pytest is also happy when
+    one selected file collects zero items.  That shape used to disappear from
+    the report and let a two-file denominator look like a one-file green run.
+    Extra files are equally invalid because they answer a different selection.
+    """
+    selected: Dict[str, str] = {}
+    for raw in selection:
+        identity = _file_identity(raw, cwd)
+        if identity is None:
+            return f"selected path has no stable identity: {raw!r}"
+        if identity in selected:
+            return ("selection names the same file more than once: "
+                    f"{selected[identity]!r}, {raw!r}")
+        selected[identity] = raw
+
+    reported: Dict[str, str] = {}
+    for suite in suites:
+        for testcase in suite.iter("testcase"):
+            raw = testcase.get("file")
+            if not isinstance(raw, str) or not raw:
+                return "aggregate JUnit contains a testcase with no file identity"
+            identity = _file_identity(raw, cwd)
+            if identity is None:
+                return ("aggregate JUnit testcase has no stable file identity: "
+                        f"{raw!r}")
+            reported[identity] = raw
+
+    missing = [selected[key] for key in sorted(set(selected) - set(reported))]
+    extra = [reported[key] for key in sorted(set(reported) - set(selected))]
+    if missing or extra:
+        return ("aggregate JUnit does not exactly cover the selected files "
+                f"(missing={missing}, extra={extra})")
+    return ""
 
 
 def _count(suite: ET.Element) -> Tuple[int, int]:
@@ -634,50 +981,254 @@ class CleanupResult:
     census_ok: bool
 
 
+def _open_identity_pidfd(identity: Tuple[int, int]
+                         ) -> Tuple[Optional[int], bool]:
+    """Open a stable handle and prove it still names ``pid/starttime``.
+
+    A process that vanished before the handle opened is already clean.  A
+    census error or PID reuse is not evidence of cleanliness and makes the
+    returned completeness flag false.
+    """
+    pid, starttime = identity
+    before_snapshot, before_complete = _proc_snapshot_checked()
+    if not before_complete:
+        return None, False
+    before = before_snapshot.get(pid)
+    if before is None:
+        return None, True
+    if before[1] != starttime:
+        return None, False
+    try:
+        pidfd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return None, True
+    except OSError:
+        return None, False
+    after_snapshot, after_complete = _proc_snapshot_checked()
+    if not after_complete:
+        os.close(pidfd)
+        return None, False
+    after = after_snapshot.get(pid)
+    if after is None:
+        os.close(pidfd)
+        return None, True
+    if after[1] != starttime:
+        os.close(pidfd)
+        return None, False
+    return pidfd, True
+
+
+def _open_pidfds(identities: Dict[int, int]
+                  ) -> Tuple[Dict[int, Tuple[int, int]], bool]:
+    handles: Dict[int, Tuple[int, int]] = {}
+    complete = True
+    for identity in sorted(identities.items()):
+        pidfd, ok = _open_identity_pidfd(identity)
+        complete = complete and ok
+        if pidfd is not None:
+            handles[pidfd] = identity
+    return handles, complete
+
+
+def _signal_pidfds(handles: Sequence[int], sig: int) -> bool:
+    complete = True
+    for pidfd in list(handles):
+        try:
+            signal.pidfd_send_signal(pidfd, sig)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            if exc.errno != errno.ESRCH:
+                complete = False
+    return complete
+
+
+def _wait_pidfds_until(
+        handles: Dict[int, Tuple[int, int]], deadline: float
+        ) -> Dict[int, Tuple[int, int]]:
+    """Give SIGTERM a policy grace; return handles still executing."""
+    remaining = dict(handles)
+    poller = select.poll()
+    for pidfd in remaining:
+        poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    while remaining:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        for pidfd, _event in poller.poll(max(1, int(left * 1000))):
+            if pidfd in remaining:
+                poller.unregister(pidfd)
+                remaining.pop(pidfd, None)
+    return remaining
+
+
+def _wait_pidfds(handles: Dict[int, Tuple[int, int]]) -> None:
+    """Wait on kernel exit events with no elapsed-runtime cutoff."""
+    remaining = set(handles)
+    poller = select.poll()
+    for pidfd in remaining:
+        poller.register(pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+    while remaining:
+        for pidfd, _event in poller.poll(_REAPER_POLL_MS):
+            if pidfd in remaining:
+                poller.unregister(pidfd)
+                remaining.remove(pidfd)
+
+
+def _close_pidfds(handles: Sequence[int]) -> None:
+    for pidfd in handles:
+        try:
+            os.close(pidfd)
+        except OSError:
+            pass
+
+
+def _cleanup_job_owned(root_pid: int, baseline: Set[Tuple[int, int]],
+                       *, term_grace_s: float) -> CleanupResult:
+    """Terminate descendants and retain ownership through exact final zero.
+
+    The TERM grace is shutdown policy, not a runtime verdict.  After SIGKILL,
+    this subreaper waits on pidfd exit events without a total elapsed bound,
+    reaps adopted children, and repeats complete censuses until two successive
+    reads prove that no attributable identity remains.  In particular, a slow
+    or D-state descendant cannot outlive a returned arm as an unowned process.
+    """
+    identities, census_ok = _job_processes_checked(root_pid, baseline)
+    observed = set(identities)
+    term_handles, open_ok = _open_pidfds(identities)
+    census_ok = census_ok and open_ok
+    census_ok = _signal_pidfds(
+        list(term_handles), signal.SIGTERM) and census_ok
+    remaining = _wait_pidfds_until(
+        term_handles, time.monotonic() + term_grace_s)
+    census_ok = _signal_pidfds(
+        list(remaining), signal.SIGKILL) and census_ok
+    kill_pending = _wait_pidfds_until(
+        remaining, time.monotonic() + _KILL_CONFIRM_GRACE_S)
+    if kill_pending:
+        # No duration guess can prove when a SIGKILL-pending D-state task will
+        # leave the kernel.  The driver remains its subreaper and waits only on
+        # stable kernel exit events before it is permitted to return.
+        _wait_pidfds(kill_pending)
+    _close_pidfds(list(term_handles))
+    _reap_adopted()
+
+    # watchdog-exempt: each non-empty wave is killed through stable pidfds and
+    # awaited by kernel events; a fixed iteration/time cap would recreate the
+    # exact orphan hole this final-zero loop closes.
+    while True:
+        current, scan_ok = _job_processes_checked(root_pid, baseline)
+        census_ok = census_ok and scan_ok
+        observed.update(current)
+        if not current and scan_ok:
+            final, final_ok = _job_processes_checked(root_pid, baseline)
+            census_ok = census_ok and final_ok
+            observed.update(final)
+            if not final and final_ok:
+                return CleanupResult(observed, set(), census_ok)
+            current = final
+        if not current:
+            time.sleep(_REAPER_POLL_MS / 1000.0)
+            continue
+        handles, open_ok = _open_pidfds(current)
+        census_ok = census_ok and open_ok
+        if not handles:
+            time.sleep(_REAPER_POLL_MS / 1000.0)
+            continue
+        census_ok = _signal_pidfds(
+            list(handles), signal.SIGKILL) and census_ok
+        kill_pending = _wait_pidfds_until(
+            handles, time.monotonic() + _KILL_CONFIRM_GRACE_S)
+        if kill_pending:
+            _wait_pidfds(kill_pending)
+        _close_pidfds(list(handles))
+        _reap_adopted()
+
+
 def _cleanup_job(root_pid: int, baseline: Set[Tuple[int, int]],
                  *, term_grace_s: float = 2.0) -> CleanupResult:
-    """Terminate descendants and return a load-bearing final-zero proof."""
-    identities, census_ok = _job_processes_checked(root_pid, baseline)
-    if not identities:
-        final, final_ok = _job_processes_checked(root_pid, baseline)
-        return CleanupResult(set(), set(final), census_ok and final_ok)
-    observed = set(identities)
-    _signal_identities(identities, signal.SIGTERM)
-    deadline = time.monotonic() + term_grace_s
-    # watchdog-exempt: bounded by the monotonic SIGTERM grace deadline above.
-    while time.monotonic() < deadline:
-        time.sleep(0.05)
-        _reap_adopted()
-        current, scan_ok = _job_processes_checked(root_pid, baseline)
-        census_ok = census_ok and scan_ok
-        observed.update(current)
-        if not current:
-            final, final_ok = _job_processes_checked(root_pid, baseline)
-            return CleanupResult(
-                observed, set(final), census_ok and final_ok)
-        identities.update(current)
-    _signal_identities(identities, signal.SIGKILL)
-    # This short interval verifies teardown; it is not a runtime estimate for
-    # the test. SIGKILL has already been delivered.
-    deadline = time.monotonic() + term_grace_s
-    # watchdog-exempt: bounded by the monotonic post-SIGKILL deadline above.
-    while time.monotonic() < deadline:
-        time.sleep(0.05)
-        _reap_adopted()
-        current, scan_ok = _job_processes_checked(root_pid, baseline)
-        census_ok = census_ok and scan_ok
-        observed.update(current)
-        if not current:
-            break
-        _signal_identities(current, signal.SIGKILL)
-    _reap_adopted()
-    final, final_ok = _job_processes_checked(root_pid, baseline)
-    observed.update(final)
-    return CleanupResult(observed, set(final), census_ok and final_ok)
+    """Non-reentrant entry to the event-driven owned cleanup."""
+    global _CLEANUP_ACTIVE
+    if _CLEANUP_ACTIVE:
+        raise RuntimeError("owned descendant cleanup is already active")
+    _CLEANUP_ACTIVE = True
+    try:
+        return _cleanup_job_owned(
+            root_pid, baseline, term_grace_s=term_grace_s)
+    finally:
+        _CLEANUP_ACTIVE = False
+        _honor_pending_shutdown()
+
+
+def _block_shutdown_signals() -> Optional[Set[signal.Signals]]:
+    if hasattr(signal, "pthread_sigmask"):
+        return signal.pthread_sigmask(
+            signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+    return None
+
+
+def _restore_signal_mask(previous: Optional[Set[signal.Signals]]) -> None:
+    if previous is not None:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def _first_queued_shutdown_signal(fallback: int) -> int:
+    """Peek the kernel-delivery order before a Python handler can re-enter."""
+    reader = _SHUTDOWN_SIGNAL_READER
+    if reader is not None:
+        try:
+            queued = reader.recv(4096, socket.MSG_PEEK)
+        except BlockingIOError:
+            queued = b""
+        for value in queued:
+            if value in (signal.SIGTERM, signal.SIGINT):
+                return value
+    return int(fallback)
+
+
+def _drain_shutdown_signal_queue() -> None:
+    reader = _SHUTDOWN_SIGNAL_READER
+    if reader is None:
+        return
+    while True:
+        try:
+            if not reader.recv(4096):
+                return
+        except BlockingIOError:
+            return
+
+
+def _honor_pending_shutdown() -> None:
+    """Exit for the first signal latched during an owned final-zero census."""
+    global _IN_SHUTDOWN, _PENDING_SHUTDOWN_SIGNAL
+    previous_mask = _block_shutdown_signals()
+    if _PENDING_SHUTDOWN_SIGNAL is None or _IN_SHUTDOWN:
+        _restore_signal_mask(previous_mask)
+        return
+    signum = _PENDING_SHUTDOWN_SIGNAL
+    _IN_SHUTDOWN = True
+    raise SystemExit(128 + signum)
 
 
 def _shutdown_handler(signum, _frame) -> None:
     """On verifier cancellation, clean the active cross-session process tree."""
+    global _IN_SHUTDOWN, _PENDING_SHUTDOWN_SIGNAL
+    first_signum = _first_queued_shutdown_signal(signum)
+    previous_mask = _block_shutdown_signals()
+    if _IN_SHUTDOWN:
+        _drain_shutdown_signal_queue()
+        _restore_signal_mask(previous_mask)
+        return
+    if _PENDING_SHUTDOWN_SIGNAL is not None:
+        _drain_shutdown_signal_queue()
+        _restore_signal_mask(previous_mask)
+        return
+    _PENDING_SHUTDOWN_SIGNAL = first_signum
+    _drain_shutdown_signal_queue()
+    if _CLEANUP_ACTIVE:
+        _restore_signal_mask(previous_mask)
+        return
+    _IN_SHUTDOWN = True
     job = _ACTIVE_JOB
     if job is not None:
         _cleanup_job(job[0], job[1])
@@ -690,10 +1241,30 @@ def _shutdown_handler(signum, _frame) -> None:
     fallback_baseline = _ACTIVE_FALLBACK_BASELINE
     if fallback_baseline is not None:
         _cleanup_job(-1, fallback_baseline)
-    raise SystemExit(128 + int(signum))
+    raise SystemExit(128 + first_signum)
 
 
 def _install_shutdown_handlers() -> None:
+    global _SHUTDOWN_SIGNAL_READER, _SHUTDOWN_SIGNAL_WRITER
+    if (_SHUTDOWN_SIGNAL_READER is None
+            and hasattr(signal, "set_wakeup_fd")):
+        reader, writer = socket.socketpair()
+        reader.setblocking(False)
+        writer.setblocking(False)
+        try:
+            previous = signal.set_wakeup_fd(
+                writer.fileno(), warn_on_full_buffer=False)
+        except (OSError, ValueError):
+            reader.close()
+            writer.close()
+        else:
+            if previous == -1:
+                _SHUTDOWN_SIGNAL_READER = reader
+                _SHUTDOWN_SIGNAL_WRITER = writer
+            else:
+                signal.set_wakeup_fd(previous)
+                reader.close()
+                writer.close()
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
 
@@ -721,11 +1292,21 @@ def _run_progress_supervised(
         cmd: Sequence[str], stall_after: float,
         cwd: Optional[str], *,
         progress_relay_path: Optional[Path] = None,
+        progress_observer: Optional[
+            Callable[["_SemanticProgressProbe"], None]] = None,
+        poll_s: Optional[float] = None,
+        collect_only: bool = False,
         ) -> Tuple[Optional[int], str, bool]:
     """Run until natural completion; stop only after semantic events stall."""
-    global _ACTIVE_JOB
+    global _ACTIVE_JOB, _IN_SHUTDOWN
+    _IN_SHUTDOWN = False
     if not _enable_subreaper():
         return None, "SUBREAPER_UNAVAILABLE: descendant cleanup is not provable\n", True
+    if (not hasattr(os, "pidfd_open")
+            or not hasattr(signal, "pidfd_send_signal")
+            or not hasattr(select, "poll")):
+        return (None, "PIDFD_UNAVAILABLE: event-driven final-zero cleanup "
+                "is not provable\n", True)
 
     snap, initial_census_ok = _proc_snapshot_checked()
     if not initial_census_ok:
@@ -741,9 +1322,17 @@ def _run_progress_supervised(
     def _popen(argv, **kwargs):
         global _ACTIVE_JOB
         kwargs.pop("stderr", None)
-        proc = subprocess.Popen(
-            argv, cwd=cwd, start_new_session=True,
-            stderr=subprocess.STDOUT, **kwargs)
+        # Publish the frozen pre-launch baseline before fork/exec. Root -1
+        # selects no old process but attributes every process created in the
+        # handoff if cancellation arrives before Popen returns the exact PID.
+        _ACTIVE_JOB = (-1, baseline)
+        try:
+            proc = subprocess.Popen(
+                argv, cwd=cwd, start_new_session=True,
+                stderr=subprocess.STDOUT, **kwargs)
+        except BaseException:
+            _ACTIVE_JOB = None
+            raise
         holder["proc"] = proc
         _ACTIVE_JOB = (proc.pid, baseline)
         return proc
@@ -762,7 +1351,10 @@ def _run_progress_supervised(
     nonce = secrets.token_hex(16)
     probe = _SemanticProgressProbe(
         progress_path, nonce,
-        lambda: holder["proc"].pid if "proc" in holder else None)
+        lambda: holder["proc"].pid if "proc" in holder else None,
+        collect_only=collect_only,
+        require_runtime_identity=(
+            os.environ.get(_REQUIRE_RUNTIME_IDENTITY_ENV) == "1"))
     child_env = os.environ.copy()
     child_env[_PROGRESS_PATH_ENV] = progress_name
     child_env[_PROGRESS_NONCE_ENV] = nonce
@@ -775,13 +1367,24 @@ def _run_progress_supervised(
     def _progress_sample() -> int:
         nonlocal relayed_score
         score = probe.sample()
+        if progress_observer is not None:
+            progress_observer(probe)
         if progress_relay_path is not None and score > relayed_score:
             try:
                 fd = os.open(
                     progress_relay_path,
                     os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0))
                 try:
-                    os.write(fd, f"{score}\n".encode("ascii"))
+                    # One probe sample can consume a burst of lifecycle
+                    # records.  The outer strict domain protocol accepts exact
+                    # +1 transitions, so preserve every finite transition
+                    # rather than collapsing (for example) 2..37 into 37.
+                    payload = "".join(
+                        f"{value}\n"
+                        for value in range(relayed_score + 1, score + 1)
+                    ).encode("ascii")
+                    while payload:
+                        payload = payload[os.write(fd, payload):]
                 finally:
                     os.close(fd)
                 relayed_score = score
@@ -792,12 +1395,21 @@ def _run_progress_supervised(
                 pass
         return score
     try:
+        requested_poll = DEFAULT_POLL_S if poll_s is None else poll_s
+        effective_poll = min(
+            requested_poll, max(0.01, stall_after / 4.0))
         result = _wd.run_supervised(
             list(cmd), output_progress=False,
             domain_progress_probe=_progress_sample,
-            stall_grace_s=stall_after, poll_s=DEFAULT_POLL_S,
+            stall_grace_s=stall_after,
+            poll_s=effective_poll,
             hard_ceiling_s=float("inf"), kill=_kill,
             popen_factory=_popen, env=child_env)
+        # A short natural session can start and exit between watchdog polls.
+        # Consume and relay its terminal protocol before validating it; without
+        # this validator-owned final sample, complete sub-poll work looks like
+        # "no nested progress" to the enclosing semantic lease.
+        _progress_sample()
         protocol_complete, protocol_error = probe.complete()
     finally:
         probe.close()
@@ -867,6 +1479,8 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
                   junit_path: Path, stall_after: float,
                   cwd: Optional[str], *,
                   progress_relay_path: Optional[Path] = None,
+                  progress_observer: Optional[
+                      Callable[["_SemanticProgressProbe"], None]] = None,
                   ) -> Tuple[Optional[int], str, bool]:
     """Run the original whole-selection pytest shape as a semantics canary."""
     cmd = list(pytest_argv) + [
@@ -875,7 +1489,28 @@ def run_aggregate(pytest_argv: Sequence[str], test_files: Sequence[str],
         *test_files,
     ]
     return _run_progress_supervised(
-        cmd, stall_after, cwd, progress_relay_path=progress_relay_path)
+        cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
+        progress_observer=progress_observer)
+
+
+def run_collect(pytest_argv: Sequence[str], test_files: Sequence[str],
+                stall_after: float, cwd: Optional[str], *,
+                progress_relay_path: Optional[Path] = None,
+                poll_s: Optional[float] = None,
+                ) -> Tuple[Optional[int], str, bool]:
+    """Run one collect-only session with the strict lifecycle protocol.
+
+    Collection has its own terminal event because zero ``test_finish`` events
+    are expected.  Natural process exit alone is not enough: the nonce-bound
+    FSM must also observe a count-preserving collect-only terminal followed by
+    ``session_finish``.
+    """
+    cmd = list(pytest_argv) + [
+        "-p", _PROGRESS_PLUGIN, "--collect-only", *test_files,
+    ]
+    return _run_progress_supervised(
+        cmd, stall_after, cwd, progress_relay_path=progress_relay_path,
+        poll_s=poll_s, collect_only=True)
 
 
 def _write_json_atomic(path: Path, payload: object) -> None:
@@ -977,6 +1612,80 @@ def _fallback_worker_main(spec_path: Path) -> int:
     if not has_record:
         return RC_NORECORD
     return RC_RED if red or rc != 0 else RC_OK
+
+
+def _collect_worker_main(spec_path: Path) -> int:
+    """Own one collect-only pytest child and publish its terminal evidence."""
+    try:
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        required = {
+            "schema", "test_files", "meta", "stall_after", "cwd",
+            "poll_s", "progress_relay", "pytest_argv",
+        }
+        if (not isinstance(spec, dict) or set(spec) != required
+                or spec.get("schema") != 1
+                or not isinstance(spec.get("test_files"), list)
+                or not spec.get("test_files")
+                or not all(isinstance(v, str) and v
+                           for v in spec.get("test_files", []))
+                or not isinstance(spec.get("meta"), str)
+                or not isinstance(spec.get("stall_after"), (int, float))
+                or spec.get("stall_after") <= 0
+                or not isinstance(spec.get("poll_s"), (int, float))
+                or spec.get("poll_s") <= 0
+                or spec.get("poll_s") >= spec.get("stall_after")
+                or spec.get("cwd") is not None
+                and not isinstance(spec.get("cwd"), str)
+                or spec.get("progress_relay") is not None
+                and not isinstance(spec.get("progress_relay"), str)
+                or not isinstance(spec.get("pytest_argv"), list)
+                or not all(isinstance(v, str)
+                           for v in spec.get("pytest_argv", []))):
+            raise ValueError("wrong collect worker spec shape")
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        print(f"COLLECT_WORKER_NORECORD: unusable worker spec at "
+              f"{spec_path}: {exc}", file=sys.stderr, flush=True)
+        return RC_CANNOT_ASK
+
+    meta_path = Path(spec["meta"])
+    relay = (Path(spec["progress_relay"])
+             if spec["progress_relay"] is not None else None)
+    _install_shutdown_handlers()
+    rc: Optional[int] = None
+    out = ""
+    incomplete = True
+    try:
+        rc, out, incomplete = run_collect(
+            spec["pytest_argv"], spec["test_files"],
+            float(spec["stall_after"]), spec["cwd"],
+            progress_relay_path=relay, poll_s=float(spec["poll_s"]))
+        sys.stdout.write(out)
+        if out and not out.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+    except Exception as exc:  # fail closed; shutdown signals are SystemExit
+        out += f"\nCOLLECT_WORKER_NORECORD: supervisor raised {exc!r}\n"
+        print(out.splitlines()[-1], file=sys.stderr, flush=True)
+        incomplete = True
+
+    reason = ("" if not incomplete else
+              _norecord_reason(rc, out, incomplete,
+                               float(spec["stall_after"])))
+    try:
+        _write_json_atomic(meta_path, {
+            "schema": 1,
+            "complete": True,
+            "pytest_rc": rc,
+            "semantic_record_complete": not incomplete,
+            "norecord_reason": reason,
+        })
+    except OSError as exc:
+        print(f"COLLECT_WORKER_NORECORD: metadata publish failed: {exc}",
+              file=sys.stderr, flush=True)
+        return RC_NORECORD
+    if incomplete:
+        return RC_NORECORD
+    return RC_OK if rc == 0 else RC_RED
 
 
 def _fallback_no_record(test_file: str, reason: str) -> FileResult:
@@ -1467,6 +2176,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if (len(parsed_argv) == 2
             and parsed_argv[0] == _FALLBACK_WORKER_FLAG):
         return _fallback_worker_main(Path(parsed_argv[1]))
+    if (len(parsed_argv) == 2
+            and parsed_argv[0] == _COLLECT_WORKER_FLAG):
+        return _collect_worker_main(Path(parsed_argv[1]))
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--selection", required=True,
@@ -1518,12 +2230,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="optional append-only semantic score relay for a "
                          "supervising parent; liveness only, never verdict "
                          "evidence")
+    ap.add_argument(
+        "--hermetic-progress", action="store_true",
+        help="relay exact completed selected files and the published JUnit to "
+             "the parent-owned hermetic container progress protocol; requires "
+             "aggregate-check plus aggregate-only")
     ap.add_argument("pytest_argv", nargs=argparse.REMAINDER,
                     help="-- followed by the full pytest command")
     a = ap.parse_args(parsed_argv)
 
     if a.aggregate_only:
         a.aggregate_check = True
+    if a.hermetic_progress and not a.aggregate_only:
+        ap.error("--hermetic-progress requires --aggregate-only")
 
     if a.stall_after <= 0 or a.aggregate_stall_after <= 0:
         ap.error("stall windows must be positive")
@@ -1559,6 +2278,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               "was run. An empty corpus is not evidence that anything passed.",
               file=sys.stderr)
         return RC_CANNOT_ASK
+    selection_problem = _selection_identity_problem(selection, a.cwd)
+    if selection_problem:
+        print("[SKIP] pytest_per_file_junit: the selection denominator is "
+              f"ambiguous ({selection_problem}) — nothing was run.",
+              file=sys.stderr)
+        return RC_CANNOT_ASK
     tmp = Path(tempfile.mkdtemp(prefix="perfile_junit_"))
     _install_shutdown_handlers()
     results: List[FileResult] = []
@@ -1568,6 +2293,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     aggregate_red = 0
     aggregate_cases = 0
     aggregate_incomplete = False
+    hermetic_progress = (
+        _HermeticAggregateProgress(selection) if a.hermetic_progress else None)
+    if hermetic_progress is not None and not hermetic_progress.start():
+        print(f"AGGREGATE_NORECORD  {hermetic_progress.problem}")
+        return RC_NORECORD
     try:
         # Aggregate FIRST. It is the authoritative whole-selection question,
         # and a complete answer avoids N redundant pytest starts. If its record
@@ -1581,26 +2311,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 pytest_argv, selection, aggregate_path,
                 a.aggregate_stall_after, a.cwd,
                 progress_relay_path=(Path(a.progress_relay)
-                                     if a.progress_relay else None))
+                                     if a.progress_relay else None),
+                progress_observer=(hermetic_progress.observe
+                                   if hermetic_progress is not None else None))
             sys.stdout.write(out)
             if not out.endswith("\n"):
                 sys.stdout.write("\n")
             aggregate_suites = _load_suites(aggregate_path)
+            aggregate_coverage_problem = ""
             if aggregate_suites is not None:
                 for suite in aggregate_suites:
                     cases, red = _count(suite)
                     aggregate_cases += cases
                     aggregate_red += red
+                aggregate_coverage_problem = _aggregate_coverage_problem(
+                    aggregate_suites, selection, a.cwd)
             # rc 0/1 are pytest's complete normal outcomes. Everything else is
             # interrupted/internal/usage/no-collection and cannot certify the
             # whole-selection semantics even if a partial XML happened to parse.
             if (aggregate_killed or aggregate_suites is None
                     or aggregate_cases == 0
-                    or aggregate_rc not in (0, 1)):
+                    or aggregate_rc not in (0, 1)
+                    or aggregate_coverage_problem):
                 aggregate_incomplete = True
-                why = _norecord_reason(
+                why = (aggregate_coverage_problem or _norecord_reason(
                     aggregate_rc, out, aggregate_killed,
-                    a.aggregate_stall_after)
+                    a.aggregate_stall_after))
                 print(f"AGGREGATE_NORECORD  {why} — cross-file/order semantics "
                       "are UNKNOWN, not clean", flush=True)
                 aggregate_suites = None
@@ -1760,6 +2496,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"--- {test_file}  rc={rc}  cases={cases}  red={red}  "
                       f"{state}", flush=True)
         total = merge(results, Path(a.junit), aggregate_suites, aggregate_rc)
+        if (hermetic_progress is not None
+                and (aggregate_incomplete or not hermetic_progress.finish())):
+            aggregate_incomplete = True
+            if hermetic_progress.problem:
+                print(f"AGGREGATE_NORECORD  {hermetic_progress.problem}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

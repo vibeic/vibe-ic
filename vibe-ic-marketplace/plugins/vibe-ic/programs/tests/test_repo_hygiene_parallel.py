@@ -42,21 +42,25 @@ def gate(label, state):
 
 
 def fixture():
+    corpus_inputs = {"benchmark_data_sha": "a" * 40}
     reference = {
         "gates": [gate("ordinary", "LISTED"),
                   gate(P.HOST_LABEL, "LISTED")],
-        "corpora": [], "undisclosed_loops": [], "today": "2026-08-16",
+        "corpora": [], "corpus_inputs": corpus_inputs,
+        "undisclosed_loops": [], "today": "2026-08-16",
     }
     a = {"listed_only": False, "shard": "0/2", "gates": [
         gate("ordinary", "PASS"), gate(P.HOST_LABEL, "OTHER_SHARD")],
-         "corpora": [], "undisclosed_loops": [], "today": "2026-08-16",
+         "corpora": [], "corpus_inputs": corpus_inputs,
+         "undisclosed_loops": [], "today": "2026-08-16",
          "wiring_errors": []}
     b = {"listed_only": False, "shard": "1/2", "gates": [
         gate("ordinary", "OTHER_SHARD"), gate(P.HOST_LABEL, "PASS")],
-         "corpora": [], "undisclosed_loops": [], "today": "2026-08-16",
+         "corpora": [], "corpus_inputs": corpus_inputs,
+         "undisclosed_loops": [], "today": "2026-08-16",
          "wiring_errors": []}
-    attest = [{"label": "ordinary", "complete": True},
-              {"label": P.HOST_LABEL, "complete": True}]
+    attest = [process_attestation("ordinary", "", 0, ["true"]),
+              process_attestation(P.HOST_LABEL, "", 0, ["true"])]
     return reference, a, b, attest
 
 
@@ -69,6 +73,7 @@ def test_complete_dag_preserves_full_dispatch_summary():
     assert doc["declared"] == doc["decided"] == doc["passed"] == 2
     assert doc["other_shard"] == 0
     assert doc["parallel"]["complete"] is True
+    assert doc["corpus_inputs"] == {"benchmark_data_sha": "a" * 40}
     assert P._summary_rc(doc) == 0
     assert P._completion_message(doc, 12).startswith("[PASS]")
 
@@ -76,6 +81,7 @@ def test_complete_dag_preserves_full_dispatch_summary():
 def test_complete_coverage_with_a_red_gate_is_reported_as_fail():
     reference, a, b, attest = fixture()
     a["gates"][0] = gate("ordinary", "FAIL")
+    attest[0] = process_attestation("ordinary", "red", 1, ["false"])
     problems = []
     doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
                           attest, 12, problems)
@@ -108,6 +114,18 @@ def test_duplicate_owner_is_named_and_refused():
     assert P._summary_rc(doc) == 2
 
 
+def test_shards_cannot_claim_different_benchmark_commits():
+    reference, a, b, attest = fixture()
+    b["corpus_inputs"] = {"benchmark_data_sha": "b" * 40}
+    problems = []
+
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+
+    assert any("corpus_inputs differs" in problem for problem in problems)
+    assert P._summary_rc(doc) == 2
+
+
 def test_missing_process_attestation_cannot_become_green():
     reference, a, b, attest = fixture()
     problems = []
@@ -116,6 +134,143 @@ def test_missing_process_attestation_cannot_become_green():
     assert any(P.HOST_LABEL in problem and "attestation" in problem
                for problem in problems)
     assert P._summary_rc(doc) == 2
+
+
+@pytest.mark.parametrize("bad_state", ["GARBAGE", "QUEUED", "LISTED", None])
+def test_nonterminal_or_unknown_worker_state_is_coverage_norecord(bad_state):
+    reference, a, b, attest = fixture()
+    a["gates"][0] = gate("ordinary", bad_state)
+    problems = []
+
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+
+    assert any("non-terminal/unknown" in problem for problem in problems)
+    assert doc["parallel"]["complete"] is False
+    assert doc["ran"] != doc["declared"]
+    assert P._summary_rc(doc) == 2
+
+
+def test_out_of_scope_requires_declared_nonintersecting_scope_and_no_process(
+        tmp_path, monkeypatch):
+    reference, a, b, attest = fixture()
+    for doc in (reference, a, b):
+        doc["gates"][0]["scope"] = "tools/"
+    a["gates"][0]["state"] = "OUT_OF_SCOPE"
+    changed = tmp_path / "changed.paths"
+    changed.write_text("docs/only.md\n", encoding="utf-8")
+    monkeypatch.setenv("GATEKEEPER_CHANGED_PATHS", str(changed))
+    problems = []
+
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest[1:], 12, problems)
+
+    assert problems == []
+    assert doc["out_of_scope"] == 1
+    assert doc["ran"] + doc["out_of_scope"] == doc["declared"]
+    assert P._summary_rc(doc) == 0
+
+
+@pytest.mark.parametrize("attack", ["unscoped", "intersects", "attested"])
+def test_out_of_scope_cannot_hide_an_owned_gate(
+        tmp_path, monkeypatch, attack):
+    reference, a, b, attest = fixture()
+    if attack != "unscoped":
+        for doc in (reference, a, b):
+            doc["gates"][0]["scope"] = "tools/"
+    a["gates"][0]["state"] = "OUT_OF_SCOPE"
+    changed = tmp_path / "changed.paths"
+    changed.write_text(
+        "tools/ci/x.py\n" if attack == "intersects" else "docs/only.md\n",
+        encoding="utf-8")
+    monkeypatch.setenv("GATEKEEPER_CHANGED_PATHS", str(changed))
+    supplied = attest if attack == "attested" else attest[1:]
+    problems = []
+
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          supplied, 12, problems)
+
+    assert problems
+    assert doc["parallel"]["complete"] is False
+    assert P._summary_rc(doc) == 2
+
+
+def test_unexempted_not_checked_blocks_even_with_another_verdict():
+    reference, a, b, attest = fixture()
+    a["gates"][0] = gate("ordinary", "NOT_CHECKED")
+    attest[0] = process_attestation("ordinary", "unknown", 2, ["gate"])
+    problems = []
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+
+    assert problems == []
+    assert doc["decided"] == 1, "the host control still reached a verdict"
+    assert doc["not_checked_unexempted"] == ["ordinary"]
+    assert P._summary_rc(doc) == 2
+
+
+def test_exact_legacy_routed_empty_keeps_phase1_aggregate_compatible():
+    """Only main's historical synthetic/no-process row is non-blocking."""
+    reference, a, b, attest = fixture()
+    label = P._LEGACY_ROUTED_EMPTY_LABEL
+    legacy = gate(label, "LISTED")
+    legacy.update({
+        "corpus": P._LEGACY_ROUTED_CORPUS,
+        "corpus_item": 0,
+        "corpus_items": 0,
+        "scope": None,
+    })
+    reference["gates"].insert(1, legacy)
+    reference["corpora"] = [{
+        "name": P._LEGACY_ROUTED_CORPUS,
+        "items": 0,
+        "gates": 1,
+        "expansion": "EXPANDED",
+    }]
+    owned = dict(legacy)
+    owned["state"] = "NOT_CHECKED"
+    other = dict(legacy)
+    other["state"] = "OTHER_SHARD"
+    a["gates"].insert(1, owned)
+    b["gates"].insert(1, other)
+    a["corpora"] = b["corpora"] = reference["corpora"]
+    problems = []
+
+    doc = P.merge_records(reference, [(Path("a"), a), (Path("b"), b)],
+                          attest, 12, problems)
+
+    assert problems == []
+    assert doc["not_checked"] == 1
+    assert doc["not_checked_unexempted"] == [label]
+    assert doc["decided"] == 2
+    assert P._summary_rc(doc) == 0
+    doc["not_checked_unexempted"] = [label, "ordinary"]
+    assert P._summary_rc(doc) == 2, (
+        "the bootstrap exception must not hide a second unexempted refusal")
+
+
+def test_worker_telemetry_does_not_subtract_an_absent_host_document():
+    reference = {
+        "gates": [gate(P.HOST_LABEL, "LISTED")],
+        "corpora": [], "undisclosed_loops": [], "today": "2026-08-16",
+    }
+    docs = []
+    for i in range(8):
+        doc = {
+            "listed_only": False, "shard": f"{i}/9",
+            "gates": [gate(P.HOST_LABEL, "OTHER_SHARD")],
+            "corpora": [], "undisclosed_loops": [], "today": "2026-08-16",
+            "wiring_errors": [],
+        }
+        docs.append((Path(f"worker-{i}.json"), doc))
+    problems = []
+
+    merged = P.merge_records(reference, docs, [], 12, problems)
+
+    assert merged["parallel"]["workers"] == 8, (
+        "all eight worker documents existed; subtracting an assumed host "
+        "document reports seven precisely when the host phase was not run")
+    assert merged["parallel"]["complete"] is False
 
 
 def test_worker_waits_for_completion_while_progress_events_keep_advancing(
@@ -128,20 +283,29 @@ def test_worker_waits_for_completion_while_progress_events_keep_advancing(
     """
     monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.05)
     progress = tmp_path / "live.jsonl"
+    rows = tmp_path / "rows.json"
+    rows.write_text(json.dumps([
+        process_attestation(f"gate-{index}", "", 0, ["true"])
+        for index in range(8)
+    ]), encoding="utf-8")
     child = (
-        "import pathlib,sys,time\n"
+        "import json,pathlib,sys,time\n"
         "p=pathlib.Path(sys.argv[1])\n"
-        "for i in range(8):\n"
-        " p.open('a').write(str(i)+'\\n')\n"
+        "rows=json.loads(pathlib.Path(sys.argv[2]).read_text())\n"
+        "for row in rows:\n"
+        " with p.open('a') as f:\n"
+        "  f.write(json.dumps(row,sort_keys=True)+'\\n'); f.flush()\n"
         " time.sleep(0.12)\n"
     )
     started = time.monotonic()
     rc, out, problem = P._run(
-        [sys.executable, "-c", child, str(progress)], tmp_path,
-        os.environ.copy(), progress_path=progress, stall_grace_s=0.3)
+        [sys.executable, "-c", child, str(progress), str(rows)], tmp_path,
+        os.environ.copy(), progress_path=progress,
+        expected_progress_labels=[f"gate-{index}" for index in range(8)],
+        stall_grace_s=0.3)
     assert time.monotonic() - started > 0.8
     assert (rc, problem) == (0, None), (rc, out, problem)
-    assert progress.read_text().splitlines()[-1] == "7"
+    assert len(progress.read_text().splitlines()) == 8
 
 
 def test_worker_classifies_silent_idle_process_as_stalled_not_timed_out(
@@ -153,6 +317,83 @@ def test_worker_classifies_silent_idle_process_as_stalled_not_timed_out(
     assert rc == W.RC_STALLED
     assert "WATCHDOG_STALLED" in out
     assert problem and "outcome=stalled" in problem
+
+
+@pytest.mark.parametrize("activity", ["chatty", "busy"])
+def test_output_and_cpu_cannot_renew_attestation_progress(
+        tmp_path, monkeypatch, activity):
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.03)
+    progress = tmp_path / "attest.jsonl"
+    progress.touch()
+    if activity == "chatty":
+        child = (
+            "import time\n"
+            "deadline=time.monotonic()+3\n"
+            "while time.monotonic()<deadline:\n"
+            " print('CHATTY_NOT_PROGRESS',flush=True);time.sleep(.02)\n")
+    else:
+        child = (
+            "import time\n"
+            "deadline=time.monotonic()+3\n"
+            "while time.monotonic()<deadline: pass\n")
+    started = time.monotonic()
+
+    rc, out, problem = P._run(
+        [sys.executable, "-c", child], tmp_path, os.environ.copy(),
+        progress_path=progress, expected_progress_labels=["expected"],
+        stall_grace_s=0.25)
+
+    assert time.monotonic() - started < 3
+    assert rc == W.RC_STALLED
+    assert problem and "outcome=stalled" in problem
+    if activity == "chatty":
+        assert "CHATTY_NOT_PROGRESS" in out
+
+
+def test_unassigned_self_hashed_attestations_cannot_renew_progress(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.03)
+    progress = tmp_path / "attest.jsonl"
+    fake = json.dumps(process_attestation(
+        "candidate-invented", "", 0, ["true"]), sort_keys=True)
+    child = (
+        "import pathlib,sys,time\n"
+        "p=pathlib.Path(sys.argv[1]);row=sys.argv[2]+'\\n'\n"
+        "deadline=time.monotonic()+3\n"
+        "while time.monotonic()<deadline:\n"
+        " p.open('a').write(row);time.sleep(.05)\n")
+    started = time.monotonic()
+
+    rc, out, problem = P._run(
+        [sys.executable, "-c", child, str(progress), fake], tmp_path,
+        os.environ.copy(), progress_path=progress,
+        expected_progress_labels=["assigned"], stall_grace_s=0.25)
+
+    assert time.monotonic() - started < 3
+    assert rc == W.RC_STALLED
+    assert problem and "PROGRESS_PROTOCOL_INCOMPLETE" in problem
+    assert "unassigned gate label" in problem
+
+
+def test_inflight_partial_attestation_is_not_permanently_poisoned(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "DEFAULT_POLL_S", 0.02)
+    progress = tmp_path / "attest.jsonl"
+    row = json.dumps(process_attestation(
+        "assigned", "", 0, ["true"]), sort_keys=True) + "\n"
+    child = (
+        "import pathlib,sys,time\n"
+        "p=pathlib.Path(sys.argv[1]);raw=sys.argv[2].encode();cut=len(raw)//2\n"
+        "with p.open('ab') as f: f.write(raw[:cut]);f.flush()\n"
+        "time.sleep(.08)\n"
+        "with p.open('ab') as f: f.write(raw[cut:]);f.flush()\n")
+
+    rc, out, problem = P._run(
+        [sys.executable, "-c", child, str(progress), row], tmp_path,
+        os.environ.copy(), progress_path=progress,
+        expected_progress_labels=["assigned"], stall_grace_s=0.3)
+
+    assert (rc, problem) == (0, None), (rc, out, problem)
 
 
 def test_launch_critical_section_does_not_block_term_in_the_job(

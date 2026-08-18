@@ -199,6 +199,7 @@ chip-AGNOSTIC.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import sys
@@ -410,6 +411,41 @@ class Verdict:
     #: downstream reader can tell a strong verification from a degraded one
     #: without parsing prose. Prose lives in :attr:`notes`; these are the keys.
     disclosures: List[str] = field(default_factory=list)
+
+
+def read_protected_transition_receipt(
+        path: str, *, base_commit: str, candidate_commit: str,
+        base_tree: str, candidate_tree: str
+        ) -> tuple[Optional[dict], Optional[dict], str]:
+    """Load and bind BASE-owned protected-source evidence.
+
+    The validator is resolved by path from this verdict's own raw-attested
+    BASE snapshot.  Importing a same-named candidate module would let the
+    subject redefine the receipt it is meant to satisfy.
+    """
+    if not str(path).strip():
+        return None, None, "no protected landing transition receipt was supplied"
+    repo = Path(__file__).resolve().parents[4]
+    validator_path = repo / "tools" / "ci" / "protected_landing_transition.py"
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_trusted_protected_landing_transition", validator_path)
+        if spec is None or spec.loader is None:
+            raise ImportError("no loader")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        receipt = module.strict_load_receipt(
+            Path(path), oid_len=len(base_commit))
+        summary = module.validate_receipt_binding(
+            receipt,
+            base_commit=base_commit,
+            candidate_commit=candidate_commit,
+            base_tree=base_tree,
+            candidate_tree=candidate_tree,
+        )
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError) as exc:
+        return None, None, str(exc)
+    return receipt, summary, ""
 
 
 # The verification TIERS. `merge-tree` is the strong path; `rebase-replay` is the
@@ -745,7 +781,9 @@ def parse_land_log(text: str) -> LandLog:
 
 
 def read_hygiene_delta(base_path: str, cand_path: str, base_host: str,
-                       cand_host: str) -> Optional[dict]:
+                       cand_host: str,
+                       trusted_transition_evidence: str = ""
+                       ) -> Optional[dict]:
     """The hygiene finding differential, or ``None`` when it was not asked for.
 
     ``None`` is NOT a clean result and `decide` never reads it as one — it is
@@ -778,7 +816,11 @@ def read_hygiene_delta(base_path: str, cand_path: str, base_host: str,
                 f"the two arms' hygiene records were supplied but "
                 f"`hygiene_finding_delta` could not be imported from {here} "
                 f"({exc}), so nothing was differenced"}
-    return _H.compare(Path(base_path), Path(cand_path), base_host, cand_host)
+    evidence = (Path(trusted_transition_evidence)
+                if str(trusted_transition_evidence).strip() else None)
+    return _H.compare(
+        Path(base_path), Path(cand_path), base_host, cand_host,
+        trusted_transition_evidence_path=evidence)
 
 
 # ------------------------------------------------------------------- the gate
@@ -1257,6 +1299,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="the merge-path landing verdict (chip-AGNOSTIC)")
     ap.add_argument("--base-sha", required=True)
+    ap.add_argument("--base-tree", required=True,
+                    help="tree of the exact BASE commit owning the validator")
     ap.add_argument("--head-sha", required=True)
     ap.add_argument("--verified-sha", required=True,
                     help="the local stand-in for the squash commit whose "
@@ -1299,6 +1343,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "findings are host-dependent")
     ap.add_argument("--candidate-hygiene-host", default="",
                     help="the host the candidate record was measured on")
+    ap.add_argument("--trusted-transition-evidence", default="",
+                    help="parent-owned routed-corpus manifest and independent "
+                         "execution receipts; required by the trusted hygiene "
+                         "judge for an EMPTY-to-expanded transition")
+    ap.add_argument("--protected-transition-receipt", default="",
+                    help="BASE-validator pre/post-identical receipt binding the "
+                         "atomic protected landing-runtime tuple")
     ap.add_argument("--maxfail", type=int, default=10,
                     help="the --maxfail gatekeeper-land.sh passes to pytest; "
                          "used only to tell truncation from a real absence")
@@ -1422,7 +1473,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     hygiene = read_hygiene_delta(
         a.base_hygiene, a.candidate_hygiene,
-        a.base_hygiene_host, a.candidate_hygiene_host)
+        a.base_hygiene_host, a.candidate_hygiene_host,
+        a.trusted_transition_evidence)
+
+    protected_receipt, protected_transition, protected_error = (
+        read_protected_transition_receipt(
+            a.protected_transition_receipt,
+            base_commit=a.base_sha,
+            candidate_commit=a.verified_sha,
+            base_tree=a.base_tree,
+            candidate_tree=a.verified_tree,
+        ))
 
     v = decide(rebase_status=a.rebase_status, expected_tree=a.expected_tree,
                verified_tree=a.verified_tree,
@@ -1450,6 +1511,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if a.gate_edited:
         v.notes.append("this branch edits the gate that judges it: "
                        + ", ".join(a.gate_edited))
+    if protected_error:
+        v.ok = False
+        v.unmeasurable = True
+        v.reasons.append(
+            "PROTECTED LANDING SOURCE TRANSITION IS UNMEASURED: "
+            + protected_error)
 
     head = ("[PASS] landing_merge_verdict: LAND OK" if v.ok
             else "[FAIL] landing_merge_verdict: REFUSE")
@@ -1477,6 +1544,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "verdict": "LAND_OK" if v.ok else "REFUSE",
             "unmeasurable": v.unmeasurable,
             "base_sha": a.base_sha,
+            "base_tree": a.base_tree,
             "head_sha": a.head_sha,
             "verified_sha": a.verified_sha,
             "rebase_status": a.rebase_status,
@@ -1500,6 +1568,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # "asked and found nothing", because only one of those two says
             # anything about what this branch did to the hygiene suite.
             "hygiene_finding_delta": hygiene,
+            "protected_landing_transition": protected_transition,
+            "protected_transition_receipt": protected_receipt,
             "selection_size": len(selection),
             "dropped_selected_files": dropped,
             "candidate_run_truncated": truncated,

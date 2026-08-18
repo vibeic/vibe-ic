@@ -187,6 +187,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import stat
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -194,8 +195,74 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _corpus_location as _cloc                    # noqa: E402
+import _routed_checker_progress as _routed_progress  # noqa: E402
+import _semantic_child_progress as _semantic_progress  # noqa: E402
 
 GATE = "step_internal_fail_bubble_up_check"
+PROGRESS_SCOPE = "routed-def:step-internal-fail-bubble-up"
+_ACTIVE_INPUT_PLAN: Optional[_routed_progress.FiniteInputPlan] = None
+_ACTIVE_PROJECT_ROOT: Optional[Path] = None
+_ACTIVE_REPORTS_PRESENT: Optional[bool] = None
+
+
+def _read_input_text(path: Path, *, encoding: str = "utf-8",
+                     errors: str = "strict") -> str:
+    if _ACTIVE_INPUT_PLAN is not None:
+        return _ACTIVE_INPUT_PLAN.text_for(
+            path, encoding=encoding, errors=errors)
+    return Path(path).read_text(encoding=encoding, errors=errors)
+
+
+def _is_project_json(relative: str) -> bool:
+    return (relative == "waivers.json"
+            or (relative.startswith("reports/")
+                and relative.endswith(".json")))
+
+
+def _input_plan(
+        project: Path,
+) -> Tuple[_routed_progress.FiniteInputPlan, bool, Path]:
+    project = Path(project)
+    index = _routed_progress.IndexSnapshot(project)
+    disk: List[Path] = []
+    project = index.root
+    waiver = project / "waivers.json"
+    if waiver.exists():
+        disk.append(waiver)
+    reports = project / "reports"
+    try:
+        reports_stat = reports.lstat()
+    except FileNotFoundError:
+        reports_present = False
+        reports_unit = "reports-state:absent"
+    except OSError as exc:
+        raise _semantic_progress.ProgressProtocolError(
+            f"step FAIL reports directory cannot be inspected: {exc}") from exc
+    else:
+        if stat.S_ISLNK(reports_stat.st_mode):
+            raise _semantic_progress.ProgressProtocolError(
+                f"step FAIL reports directory is a symlink: {reports}")
+        reports_present = stat.S_ISDIR(reports_stat.st_mode)
+        reports_unit = (
+            f"reports-state:{'directory' if reports_present else 'other'}:"
+            f"mode:{stat.S_IFMT(reports_stat.st_mode):o}:"
+            f"dev:{reports_stat.st_dev}:ino:{reports_stat.st_ino}:"
+            f"mtime:{reports_stat.st_mtime_ns}:ctime:{reports_stat.st_ctime_ns}")
+    if reports_present:
+        disk.extend(sorted(reports.rglob("*.json")))
+    inputs = index.select(
+        _is_project_json, disk,
+        population="step FAIL acknowledgement JSON population")
+    plan = _routed_progress.FiniteInputPlan(
+        [index.population_unit("step-fail-bubble-up:git-index"),
+         reports_unit],
+        _routed_progress.planned_reads("project-json", inputs))
+    return plan, reports_present, project
+
+
+def semantic_progress_units(cell: Path) -> List[str]:
+    """Trusted parent's exact finite manifest for the default cell argv."""
+    return _input_plan(Path(cell))[0].units
 
 _FAIL_VERDICTS = {"FAIL", "MISSING"}
 
@@ -251,7 +318,7 @@ def _name_candidates(report_path: Path, project: Path) -> Set[str]:
 
 def _read_json(p: Path) -> Optional[Any]:
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return json.loads(_read_input_text(p, encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -260,7 +327,10 @@ def _waiver_text_corpus(project: Path) -> str:
     """Concatenate searchable text from every waiver entry. Used to
     test name-candidate substring matches."""
     waivers_path = project / "waivers.json"
-    if not waivers_path.is_file():
+    if (_ACTIVE_INPUT_PLAN is not None
+            and not _ACTIVE_INPUT_PLAN.contains(waivers_path)):
+        return ""
+    if (_ACTIVE_INPUT_PLAN is None and not waivers_path.is_file()):
         return ""
     d = _read_json(waivers_path)
     if not isinstance(d, dict):
@@ -288,18 +358,32 @@ def _bubbled_corpus(project: Path) -> str:
     records the failure for the same name."""
     parts: List[str] = []
     candidates: List[Path] = []
-    odir = project / "reports" / "orchestrator"
-    if odir.is_dir():
-        candidates.extend(sorted(odir.rglob("*.json")))
-    audit_dir = project / "reports" / "audit"
-    if audit_dir.is_dir():
-        candidates.extend(sorted(audit_dir.rglob("*.json")))
-    cad = project / "reports" / "phase23_completion_audit.json"
-    if cad.is_file():
-        candidates.append(cad)
+    if _ACTIVE_INPUT_PLAN is not None:
+        for path in _ACTIVE_INPUT_PLAN.paths("project-json"):
+            try:
+                relative = path.relative_to(project)
+            except ValueError:
+                continue
+            if (relative == Path("reports/phase23_completion_audit.json")
+                    or (len(relative.parts) >= 3
+                        and relative.parts[:2]
+                        in (("reports", "orchestrator"),
+                            ("reports", "audit")))):
+                candidates.append(path)
+        candidates.sort()
+    else:
+        odir = project / "reports" / "orchestrator"
+        if odir.is_dir():
+            candidates.extend(sorted(odir.rglob("*.json")))
+        audit_dir = project / "reports" / "audit"
+        if audit_dir.is_dir():
+            candidates.extend(sorted(audit_dir.rglob("*.json")))
+        cad = project / "reports" / "phase23_completion_audit.json"
+        if cad.is_file():
+            candidates.append(cad)
     for p in candidates:
         try:
-            txt = p.read_text(encoding="utf-8")
+            txt = _read_input_text(p, encoding="utf-8")
         except OSError:
             continue
         # Only include lines that look like they reference a FAIL.
@@ -322,6 +406,19 @@ def _iter_report_files(project: Path) -> List[Path]:
     """All reports/**/*.json EXCEPT reports/audit/ (human-authored)
     and reports/orchestrator/ (top-level audit, used for bubble-up
     evidence — not a leaf report we audit)."""
+    if _ACTIVE_INPUT_PLAN is not None:
+        out = []
+        for p in _ACTIVE_INPUT_PLAN.paths("project-json"):
+            try:
+                rel = p.relative_to(project)
+            except ValueError:
+                continue
+            if (not rel.parts or rel.parts[0] != "reports"
+                    or len(rel.parts) < 2
+                    or rel.parts[1] in ("audit", "orchestrator")):
+                continue
+            out.append(p)
+        return sorted(out)
     rdir = project / "reports"
     if not rdir.is_dir():
         return []
@@ -343,9 +440,12 @@ def audit(project: Path) -> Tuple[str, List[BubbleFinding], int]:
     sentence whether a hundred reports were read and all were clean, or the
     step crashed before writing any report at all. The second is the state this
     gate exists to notice, and it was the one that read as a pass."""
-    if not project.is_dir():
+    if _ACTIVE_INPUT_PLAN is None and not project.is_dir():
         return "NOT_EXAMINED", [], 0
-    if not (project / "reports").is_dir():
+    reports_present = (_ACTIVE_REPORTS_PRESENT
+                       if _ACTIVE_INPUT_PLAN is not None else
+                       (project / "reports").is_dir())
+    if not reports_present:
         return "NOT_EXAMINED", [], 0
 
     waiver_text = _waiver_text_corpus(project)
@@ -850,6 +950,37 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "the corpus, and its own arithmetic is still checked.")
     args = ap.parse_args(argv)
 
+    global _ACTIVE_INPUT_PLAN, _ACTIVE_PROJECT_ROOT, _ACTIVE_REPORTS_PRESENT
+    with _semantic_progress.child_progress(PROGRESS_SCOPE) as progress:
+        try:
+            if progress.enabled:
+                if (args.project_dir is None or args.json is not None
+                        or args.strict or args.corpus is not None
+                        or args.baseline is not None or args.write_baseline
+                        or args.corpus_may_be_absent):
+                    raise _semantic_progress.ProgressProtocolError(
+                        "routed parent progress covers the positional project "
+                        "audit only")
+                project = Path(args.project_dir)
+                if not project.is_dir():
+                    raise _semantic_progress.ProgressProtocolError(
+                        "routed parent project input is not a directory")
+                (_ACTIVE_INPUT_PLAN, _ACTIVE_REPORTS_PRESENT,
+                 _ACTIVE_PROJECT_ROOT) = _input_plan(project)
+                _ACTIVE_INPUT_PLAN.materialize(progress)
+            rc = _main_parsed(args)
+            if _ACTIVE_INPUT_PLAN is not None:
+                fresh_plan, _, _ = _input_plan(Path(args.project_dir))
+                _ACTIVE_INPUT_PLAN.checkpoint_decision(fresh_plan=fresh_plan)
+            return rc
+        finally:
+            _ACTIVE_INPUT_PLAN = None
+            _ACTIVE_PROJECT_ROOT = None
+            _ACTIVE_REPORTS_PRESENT = None
+
+
+def _main_parsed(args) -> int:
+
     # A POSITIONAL BESIDE --corpus IS A CONTRADICTION, AND IT USED TO BE SILENT.
     #
     # `project_dir` is `nargs="?"`, so an extra path is absorbed with no error
@@ -1173,8 +1304,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.project_dir is None:
         ap.error("give a project_dir or --corpus")
         return 2
-    proj = Path(args.project_dir).resolve()
-    if not proj.is_dir():
+    proj = (_ACTIVE_PROJECT_ROOT if _ACTIVE_PROJECT_ROOT is not None
+            else Path(args.project_dir).resolve())
+    if _ACTIVE_INPUT_PLAN is None and not proj.is_dir():
         print(f"error: not a directory: {proj}", file=sys.stderr)
         return 2
 
@@ -1193,8 +1325,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.write_text(json.dumps(report, indent=2) + "\n")
 
     if verdict == "NOT_EXAMINED":
+        reports_present = (_ACTIVE_REPORTS_PRESENT
+                           if _ACTIVE_INPUT_PLAN is not None else
+                           (proj / "reports").is_dir())
         why = ("no reports/ tree (pre-output project)"
-               if not (proj / "reports").is_dir()
+               if not reports_present
                else "reports/ exists but no file in it declares a verdict")
         print(f"[CANNOT DETERMINE] step_internal_fail_bubble_up: {why}, so no "
               f"report was examined. NOT a pass — a step that crashed before "

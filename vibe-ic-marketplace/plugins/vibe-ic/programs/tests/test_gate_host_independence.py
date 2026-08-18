@@ -305,6 +305,14 @@ def test_pytest_wall_clock_is_not_mistaken_for_a_different_verdict():
     assert G._verdict_line("107 passed, 1 failed in 15.44s") != a
 
 
+def test_pytest_parenthesized_minute_clock_is_not_semantic_output():
+    """pytest adds this second duration spelling once the suite exceeds 60s."""
+    a = G._verdict_line("108 passed in 64.11s (0:01:04)\n")
+    b = G._verdict_line("108 passed in 66.28s (0:01:06)\n")
+    assert a == b == "108 passed in <TIME>s"
+    assert G._verdict_line("107 passed, 1 failed in 66.28s (0:01:06)") != a
+
+
 def test_539_a_gate_that_needs_the_network_is_EXCLUDED_in_the_real_script():
     """#539. The rule, asserted over the REAL script rather than a fixture: a
     gate that requires a REMOTE cannot be inside a two-invocation determinism

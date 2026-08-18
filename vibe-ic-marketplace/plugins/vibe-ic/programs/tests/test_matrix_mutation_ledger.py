@@ -86,6 +86,13 @@ import matrix_mutation_ledger as L
 from matrix_63x8 import flowref as F
 from matrix_63x8.cells import DIMENSION_NAMES
 
+
+def _domain_progress(scope: str, completed: int, total: int) -> None:
+    plugin = sys.modules.get("_pytest_progress_plugin")
+    progress = getattr(plugin, "domain_progress", None)
+    if callable(progress):
+        progress(scope, completed, total)
+
 # THE ONE CHANNEL WHOSE SUBJECT LEFT THIS REPOSITORY.
 #
 # `L.MUTATIONS` edits the flow yaml or the plugin tree — both are here, and
@@ -864,11 +871,68 @@ def test_control_removing_one_entry_uncovers_the_cells_it_carried(monkeypatch):
         f"{sorted(orphaned - after)} covered")
 
 
+def test_replay_many_reports_only_finite_completed_units_in_result_order(
+        monkeypatch):
+    monkeypatch.setattr(L, "mutation", lambda name: name)
+    monkeypatch.setattr(
+        L, "replay", lambda name, step, timeout: f"{name}:{step}:{timeout}")
+    progress = []
+    result = L.replay_many(
+        [("a", "s1"), ("b", "s2"), ("c", "s3")], jobs=3, timeout=7,
+        progress_callback=lambda completed, total:
+        progress.append((completed, total)),
+    )
+    assert result == ("a:s1:7", "b:s2:7", "c:s3:7")
+    assert progress == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_replay_many_callback_failure_refuses_the_population(monkeypatch):
+    monkeypatch.setattr(L, "mutation", lambda name: name)
+    monkeypatch.setattr(L, "replay", lambda name, step, timeout: name)
+
+    def refuse(completed, total):
+        raise RuntimeError(f"relay refused {completed}/{total}")
+
+    with pytest.raises(RuntimeError, match="relay refused 1/2"):
+        L.replay_many(
+            [("a", "s1"), ("b", "s2")], jobs=2,
+            progress_callback=refuse)
+
+
+def test_witness_replay_relays_the_exact_frozen_plan_denominator(monkeypatch):
+    replay_results.cache_clear()
+    seen = []
+
+    def fake_many(plan, **kwargs):
+        frozen = tuple(plan)
+        callback = kwargs["progress_callback"]
+        for completed in range(1, len(frozen) + 1):
+            callback(completed, len(frozen))
+        return ()
+
+    monkeypatch.setattr(L, "replay_many", fake_many)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_domain_progress",
+        lambda scope, completed, total:
+        seen.append((scope, completed, total)))
+    assert replay_results() == ()
+    assert len(L.replay_plan()) == 24
+    assert seen == [
+        ("matrix-mutation-replays", completed, 24)
+        for completed in range(1, 25)
+    ]
+    replay_results.cache_clear()
+
+
 @lru_cache(maxsize=1)
 def replay_results() -> Tuple[L.ReplayResult, ...]:
     """Run the current mode's replay plan once, in parallel, and cache it."""
     plan = L.replay_plan()
-    return L.replay_many(plan, jobs=8, timeout=REPLAY_TIMEOUT)
+    return L.replay_many(
+        plan, jobs=8, timeout=REPLAY_TIMEOUT,
+        progress_callback=lambda completed, total: _domain_progress(
+            "matrix-mutation-replays", completed, total),
+    )
 
 
 def _lock2_params():
