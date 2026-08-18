@@ -89,8 +89,17 @@ _CHECKLIST_ITEMS = [
     ("foundry_wat_plan",   "phase3/stage4/foundry_handoff/wat_plan.json",  "blocker", None),
     ("foundry_corner_kit", "phase3/stage4/foundry_handoff/corner_test_vectors.json", "blocker", None),
     ("fpga_attestation",   "reports/phase2/fpga/on_board_pass.json",  "blocker",  None),
-    # Caravel / Open-MPW shuttle rows (N/A for non-Caravel designs — absent is
-    # not a failure there). The gate is the authority, not file presence.
+    # THE LIVE SHUTTLE ROW (#1744). This is the one row whose authority is not
+    # ours: the gate runs the operating open-MPW shuttle's OWN precheck
+    # container and fails on its exit code. It is a blocker because a
+    # counterparty that refuses a submission does not care how the inventory
+    # reads. Absent → MISSING, never "no refusals found".
+    ("tapeout_readiness",  "reports/phase3/tapeout_readiness.json",    "blocker",  "tapeout_readiness_check"),
+    # RETIRED shuttle rows. Efabless/chipIgnite ceased operating in 2025, so
+    # this ladder can no longer refuse anything; it is kept, not deleted, so an
+    # existing run directory stays readable and attributable. Its verdict is
+    # NOT DETERMINED when the shuttle cannot be reached — a dead vendor's
+    # silence is not a clean run. The live refusal is the row above.
     ("mpw_precheck",       "**/mpw_precheck/**/*.log",                 "advisory", "mpw_precheck_result_gate"),
     ("layout_xor",         "reports/**/xor_report.json",               "advisory", "xor_layout_check"),
 ]
@@ -109,9 +118,17 @@ _GATE_NOTES = {
     "mbist_wrapper_gen":
         "every writable on-chip RAM needs a March-test MBIST wrapper "
         "(N/A when the design is RAM-less).",
+    "tapeout_readiness_check":
+        "the LIVE open-MPW shuttle's OWN precheck container, pinned by image "
+        "digest and run with no network — its exit code is the verdict, and "
+        "the stages it never reached are reported as never reached. Image "
+        "absent / container failed to start is its own BLOCKED state and FAILS; "
+        "it is never reported as no refusals found.",
     "mpw_precheck_result_gate":
-        "Efabless/chipIgnite shuttle verdict — every required precheck stage "
-        "must carry an explicit PASS (Caravel/Open-MPW only).",
+        "RETIRED (#1744): Efabless/chipIgnite ceased operating in 2025, so this "
+        "shuttle can no longer refuse anything. Kept so an existing run stays "
+        "readable; an unreachable shuttle is NOT DETERMINED, never a pass. The "
+        "live refusal is tapeout_readiness_check.",
     "xor_layout_check":
         "computed GDS-vs-golden XOR with an EXPLICIT blackbox-macro waiver "
         "allow-list — replaces the hardcoded 2/7 floor.",

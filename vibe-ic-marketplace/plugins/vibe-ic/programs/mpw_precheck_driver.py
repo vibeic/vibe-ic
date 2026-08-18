@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """mpw_precheck LIVE DRIVER (TAPEOUT-SIGNOFF P0#2, driver half).
 
+RETIRED SHUTTLE (#1744) — READ THIS FIRST
+=========================================
+Efabless/chipIgnite ceased operating in 2025. This driver still WORKS, and it
+is kept rather than deleted so an existing run directory stays readable and
+attributable — but the counterparty it queries no longer refuses anything, so
+it can no longer be the interface where an outside party's refusal is the
+verdict. When the shuttle cannot be reached this driver returns BLOCKED, which
+is NOT DETERMINED and never a pass: a dead vendor's silence must not read as a
+clean run.
+
+The LIVE submission gate is `tapeout_readiness_check.py`, which runs the
+operating open-MPW shuttle's own precheck container (pinned by digest, no
+network) and fails on its exit code.
+
 Doctrine: the Efabless/chipIgnite sky130 open-MPW shuttle gate is
 `efabless/mpw_precheck` — a Docker suite that runs a fixed ladder of
 license / makefile / default / documentation / consistency / gpio_defines /

@@ -1070,6 +1070,18 @@ def _build_fully_signed_off(root):
                 {"verdict": "PROVEN_EQUIVALENT", "total_points": 128,
                  "proven_points": 128, "unproven_points": 0,
                  "non_equivalent_points": 0, "equivalent": True})    # T_LEC_POST
+    # T_TAPEOUT_READY (#1744) — the LIVE open-MPW shuttle's own precheck.
+    # Added for the same reason the at-speed plan above was: this tier is
+    # release-gating, so a project without it is not "fully signed off" and the
+    # ladder correctly refuses to release. Before this artefact existed here,
+    # seven tests in this file measured exactly that refusal. It is the one row
+    # in the ladder whose verdict is not ours, so a fully-signed-off fixture
+    # that omits it is describing a submission nobody asked the shuttle about.
+    _write_json(d / "reports/phase3/tapeout_readiness.json",
+                {"verdict": "PASS", "stage_summary": "16 of 16",
+                 "stages_never_ran": [], "blocked_reason": "",
+                 "image": "ghcr.io/example/precheck@sha256:" + "0" * 64,
+                 "layout_sha256": "d" * 64})                    # T_TAPEOUT_READY
     return d
 
 

@@ -242,6 +242,10 @@ _VERSION_READING_PROGRAMS = {
     "signoff_waiver_md_emit",
     "sta_triage_classify",
     "synth_doctor",
+    # The LIVE open-MPW submission gate (#1744). Its verdict JSON is read back
+    # by the sign-off ladder, so the release that produced a refusal has to be
+    # recoverable from the artefact rather than from whoever remembers the run.
+    "tapeout_readiness_check",
 }
 
 # The ONLY whole-file exemption. Every other candidate was checked with

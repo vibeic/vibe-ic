@@ -1010,6 +1010,76 @@ def check_tier_mpw_precheck(project_dir: Path) -> TierResult:
         artifact_path=str(rundir), notes=rep.notes)
 
 
+def _find_tapeout_readiness_report(project_dir: Path) -> Optional[Path]:
+    """Locate a completed `tapeout_readiness_check` verdict JSON.
+
+    Prefers the canonical reports/phase3 path, then a conventional rglob. None
+    means the LIVE shuttle precheck was never run against this project's
+    layout — an honest NOT_RUN, never a pass. It deliberately does NOT fall back
+    to an mpw_precheck run directory: that ladder belongs to a shuttle that
+    ceased operating in 2025, and a retired vendor's old artefact must not stand
+    in for the live counterparty's refusal."""
+    return _discover_signoff_report(
+        project_dir,
+        phase3_names=("tapeout_readiness.json",),
+        rglob_pats=("reports/**/tapeout_readiness.json",
+                    "**/tapeout_readiness.json"))
+
+
+def check_tier_tapeout_readiness(project_dir: Path) -> TierResult:
+    """LIVE open-MPW shuttle submission verdict — the one gate in this ladder
+    whose answer is NOT ours (#1744).
+
+    Delegates to `tapeout_readiness_check.read_verdict`, which parses the JSON
+    the gate wrote when it ran the shuttle's own precheck container:
+
+      PASS     -> PASS       (their ladder ran and exited clean)
+      REFUSED  -> FAIL       (their ladder ran and refused — the counterparty
+                  said no, and no edit of ours changes that)
+      BLOCKED  -> INCOMPLETE (image absent / container failed to start /
+                  timeout / no evidence. The check did not reach a verdict, so
+                  neither does the ladder: NON-releasing, and explicitly NOT
+                  read as "no refusals found")
+      absent   -> NOT_RUN    (§4.05 SKIP — nobody ran it)
+
+    INCOMPLETE rather than NOT_RUN for BLOCKED on purpose: NOT_RUN says nobody
+    decided anything, while BLOCKED says somebody tried and the evidence never
+    arrived. Both are non-releasing; keeping them apart is what lets a reader
+    tell "we never asked the shuttle" from "we asked and could not hear back"."""
+    import tapeout_readiness_check as trc
+    rpt = _find_tapeout_readiness_report(project_dir)
+    if rpt is None:
+        return TierResult(
+            "T_TAPEOUT_READY", "Open-MPW shuttle precheck (LIVE)", "NOT_RUN",
+            notes="no tapeout_readiness_check verdict found — §4.05: absent → "
+                  "SKIP. Produce one with `tapeout_readiness_check.py --layout "
+                  "<gds> --out-json reports/phase3/tapeout_readiness.json`.")
+    res = trc.read_verdict(rpt)
+    ladder = {trc.PASS: "PASS", trc.REFUSED: "FAIL",
+              trc.BLOCKED: "INCOMPLETE"}.get(res.get("verdict"), "FAIL")
+    if ladder == "FAIL":
+        notes = (f"the shuttle's precheck REFUSED at "
+                 f"{res.get('stage_summary', trc.NOT_DETERMINED)} stage(s): "
+                 + " ".join((res.get("refusal_text") or "").split())[:300])
+    elif ladder == "INCOMPLETE":
+        notes = (f"BLOCKED ({res.get('blocked_reason')}): "
+                 f"{res.get('blocked_detail', '')} — the precheck reached no "
+                 "verdict; this is NOT a finding of no refusals.")
+    else:
+        notes = (f"the shuttle's own precheck ran "
+                 f"{res.get('stage_summary', trc.NOT_DETERMINED)} stage(s) and "
+                 f"exited clean on image {res.get('image', '?')}")
+    return TierResult(
+        "T_TAPEOUT_READY", "Open-MPW shuttle precheck (LIVE)", ladder,
+        details={"verdict": res.get("verdict"),
+                 "blocked_reason": res.get("blocked_reason"),
+                 "stage_summary": res.get("stage_summary"),
+                 "stages_never_ran": res.get("stages_never_ran"),
+                 "image": res.get("image"),
+                 "layout_sha256": res.get("layout_sha256")},
+        artifact_path=str(rpt), notes=notes)
+
+
 def check_tier_xor(project_dir: Path,
                    allow_macros: Optional[List[str]] = None) -> TierResult:
     """Computed GDS-vs-golden XOR — delegates to `xor_layout_check` (replaces
@@ -1481,7 +1551,8 @@ LADDER_TIER_IDS: Tuple[str, ...] = (
     "T1", "T1.5", "T2_PDN", "T2_IR", "T2_EM", "T3_ANTENNA", "T3_ESD",
     "T4_LVS_DEV", "T4.5_LVS_NET", "T4.5_LVS_TAPEOUT", "T5_LATCHUP",
     "T_STA_RIGOR", "T_MBIST", "T_DYN_IR", "T_METAL_DENSITY", "T_AGING_STA",
-    "T_THERMAL", "T_DFT_SIGNOFF", "T_LEC_POST", "T_MPW_PRECHECK", "T_XOR",
+    "T_THERMAL", "T_DFT_SIGNOFF", "T_LEC_POST", "T_TAPEOUT_READY",
+    "T_MPW_PRECHECK", "T_XOR",
 )
 
 #: The ONLY `verdict_tier` a ladder-tier waiver may carry. A tier with no
@@ -1921,7 +1992,15 @@ def run_ladder(project_dir: Path,
         tiers.append(check_tier_thermal(project_dir))
         tiers.append(check_tier_dft_signoff(project_dir))
         tiers.append(check_tier_lec_post(project_dir))
+        # The LIVE shuttle's own refusal (#1744). Unconditional, because
+        # "would the counterparty accept this?" is a question about any design
+        # that produces a layout — not only Caravel-shaped ones. It is the only
+        # tier here whose verdict is not ultimately ours.
+        tiers.append(check_tier_tapeout_readiness(project_dir))
         if caravel:
+            # RETIRED shuttle. Kept, not deleted, so an old run stays readable —
+            # but it can no longer be the only outside refusal in the ladder,
+            # because the vendor it queries ceased operating in 2025.
             tiers.append(check_tier_mpw_precheck(project_dir))
             tiers.append(check_tier_xor(project_dir,
                                         allow_macros=xor_allow_macros))
