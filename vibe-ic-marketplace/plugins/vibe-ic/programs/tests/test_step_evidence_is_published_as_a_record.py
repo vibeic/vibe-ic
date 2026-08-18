@@ -58,6 +58,8 @@ from pathlib import Path
 import pytest
 
 PROG = Path(__file__).resolve().parent.parent / "benchmark_evidence_publish.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _pdk_revision_fixture as _pdk_fixture  # noqa: E402
 CHECKER = (Path(__file__).resolve().parent.parent
            / "benchmark_evidence_structure_check.py")
 
@@ -97,6 +99,11 @@ def _make_run(base: Path, with_steps: bool = True) -> Path:
     (run / "input" / "docs" / "L1.md").write_text("# spec\n")
     if with_steps:
         _make_steps_view(run)
+    # `benchmark_evidence_publish` REFUSES a run that cannot name the PDK
+    # revision it signed off against (W6). The record is produced by the
+    # REAL resolver over a synthesized tree — never hand-written — so this
+    # fixture cannot drift from the program that writes it in production.
+    _pdk_fixture.write_run_pdk_revision(run)
     return run
 
 
