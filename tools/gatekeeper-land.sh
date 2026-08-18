@@ -63,10 +63,37 @@ BASE="${GATEKEEPER_BASE:-origin/main}"
 RANGE="${BASE}..HEAD"
 CHEAP_ONLY=0
 PREPARE=0
+# --differential (the LANDING GATE, as opposed to the LANDING ARM)
+# ===============================================================
+# Everything below this line judges ABSOLUTELY: "did anything fail", with no
+# reference to what the base tree already does. That is the RIGHT semantics for
+# one ARM of a differential and the WRONG semantics for the whole gate, and the
+# difference is not academic — measured 2026-08-17, `origin/main` (f6b0e77dd)
+# FAILS ITS OWN GATES here (`repo tools tests` 9 red, `repo hygiene gates` 1 of
+# 80), so no stamp is written for main's own tip and `pre-push` refuses it. A
+# commit that FIXES those reds is refused by the same rule. Five rounds, ~2.5
+# hours of gate wall clock, zero landings.
+#
+# REGRESSION means: did THIS change break something that used to work. Asking
+# that needs a second arm at the base, and the second arm is what
+# `tools/gatekeeper-land-differential.sh` adds — using this same script, twice,
+# and `landing_merge_verdict.py` as the single judge, which is exactly what
+# `tools/gatekeeper-verify-merge.sh` has done on the merge path since #1019.
+#
+# It is a separate file rather than a branch inside this one because the
+# differential RUNS this script (twice, concurrently, in throwaway worktrees);
+# a flag handled here would recurse.
 for _arg in "$@"; do
   case "$_arg" in
     --cheap-only) CHEAP_ONLY=1 ;;
     --prepare)    PREPARE=1 ;;
+    --differential)
+      _diff="$(git rev-parse --show-toplevel)/tools/gatekeeper-land-differential.sh"
+      [ -f "$_diff" ] || { echo "gatekeeper-land: no $_diff" >&2; exit 2; }
+      _rest=()
+      for _a in "$@"; do [ "$_a" = "--differential" ] || _rest+=("$_a"); done
+      exec bash "$_diff" "${_rest[@]+"${_rest[@]}"}"
+      ;;
     *) echo "gatekeeper-land: unknown argument '$_arg'" >&2; exit 2 ;;
   esac
 done
@@ -982,5 +1009,15 @@ elif [ "$FAILED" -eq 0 ]; then
 else
   rm -f "$(git rev-parse --absolute-git-dir)/gatekeeper-stamp"
   echo "=== FAILURES ABOVE — stamp removed; the pre-push hook will refuse ==="
+  # AND SAY WHICH QUESTION WAS ASKED. This tier is ABSOLUTE: it refuses on any
+  # red, including one the base tree already carries. On 2026-08-17 that made
+  # main's own tip unpushable to main, so a reader of this line needs to know
+  # that "did I break it" is a DIFFERENT question and that this repo can ask it.
+  if [ "${GATEKEEPER_VERIFY_ARM:-}" = "" ]; then
+    echo "    This run judged ABSOLUTELY — any red refuses, pre-existing or not."
+    echo "    For the REGRESSION question (did THIS change break something that"
+    echo "    used to work), which measures the base as well and reports what it"
+    echo "    inherits by name:  tools/gatekeeper-land.sh --differential"
+  fi
 fi
 exit "$FAILED"
