@@ -214,8 +214,8 @@ def _satisfy_p0_ancestry(project: Path) -> Path:
     FPGA artefacts.
 
     THE SENTENCE ABOVE IS A CLAIM, AND vibe-ic#1446 CAUGHT IT BEING FALSE.
-    D1 declares 18 `required_outputs` and the gate holds ALL of them ("satisfied:
-    17/18 — the gate passed, but every declared output must be produced, not just
+    D1 declares 19 `required_outputs` and the gate holds ALL of them ("satisfied:
+    18/19 — the gate passed, but every declared output must be produced, not just
     one"), so ONE artefact added to that list downgrades D1 to MISSING and this
     helper stops closing the chain — silently, because a stale fixture does not
     fail, it just stops testing anything. That is what happened: #1159 added
@@ -225,6 +225,13 @@ def _satisfy_p0_ancestry(project: Path) -> Path:
     `assert_p0_ancestry_closed` below — the claim is now checked at the point of
     use rather than asserted in prose, so the next output added to D1 reddens a
     test that NAMES the missing artefact instead of quietly hollowing this one.
+
+    AND IT CAUGHT IT A SECOND TIME (vibe-ic#1351). #1348 added
+    `phase1/extraction_patterns.json` to D1's `required_outputs`, so the helper
+    closed 18 of 19 and `assert_p0_ancestry_closed` went red NAMING the missing
+    entry — which is the guard working, not a defect in it. The 19th is staged
+    below. Both times the addition was correct and both times the fixture was
+    the stale side; that is why the precondition is checked rather than trusted.
     """
     gd = project / "phase1" / "generated_docs"
     gd.mkdir(parents=True, exist_ok=True)
@@ -262,7 +269,39 @@ def _satisfy_p0_ancestry(project: Path) -> Path:
         "ai_subtrack": {"status": "SKIPPED-CONDITION"},
         "generated_by": "test fixture",
     }))
+    # The 19th declared output (#1348). Same reason as the 18th above: the
+    # canonical catalogue is seeded by `phase1_doc_one_shot_runner.py`
+    # (`_seed_canonical_from_backfilled_subset`), which RETURNS WITHOUT WRITING
+    # when no auto-discovered literal was backfilled into a typed L doc — and on
+    # a tree with no `input/docs` nothing can be. So a hand-staged Phase 1 has to
+    # stage it like the other 18.
+    #
+    # An object carrying only the provenance key is the seeder's own empty
+    # shape: `canonical_payload` starts as `{"_comment": ...}` and is then
+    # `update()`d with the promoted patterns, so zero promoted patterns is
+    # exactly this file. `extraction_coverage_check._load_explicit_patterns`
+    # requires a top-level object (anything else is WARN + ignored) and skips
+    # non-list values, so this parses as a catalogue with no entries rather than
+    # as MALFORMED — the same distinction the expert-track entry above turns on.
+    (project / "phase1" / "extraction_patterns.json").write_text(json.dumps({
+        "_comment": ("Canonical extraction patterns. No auto-discovered "
+                     "literal was backfilled into a typed L doc on this tree, "
+                     "so the catalogue is empty; staged by test fixture."),
+    }))
     return project
+
+
+#: The step listing abbreviates exactly two of the producer's own status words;
+#: every other label is the word itself. Kept as a rendering map, NOT as a
+#: judgement about done-ness — the judgement below stays derived from
+#: `_flow_verdict_tiers`, the one place a verdict word is classified (#634). A
+#: label that is neither an alias here nor a `PRODUCER_STATUSES` member makes
+#: the precondition REFUSE rather than guess, so a renamed rendering reddens
+#: this file instead of quietly widening what counts as "closed".
+_LABEL_TO_PRODUCER_STATUS = {
+    "WAIVED-DEFERRED": "WAIVED",
+    "PASS-VOIDED": "PASS-VOIDED-BY-DEPENDENCY",
+}
 
 
 def assert_p0_ancestry_closed(out: str) -> None:
@@ -270,22 +309,67 @@ def assert_p0_ancestry_closed(out: str) -> None:
 
     A PRECONDITION, not an assertion about the code under test. Every caller of
     `_satisfy_p0_ancestry` is making a claim about what happens once P0's
-    ancestry is SATISFIED; on a tree where D1 is still MISSING that claim is
+    ancestry is SATISFIED; on a tree where D1 has not completed that claim is
     being made about the opposite input, and the test passes or fails for
     reasons unrelated to what it is named after.
 
     Checks the step listing rather than the ordering-violation block on purpose:
     the violation block is what the guard consumes, so reading it here would
     make the precondition and the assertion share a failure mode.
+
+    WHAT IT MEASURES vs WHAT IT CLAIMED (vibe-ic#1351). Until now the test was
+    `!= "MISSING"`, i.e. it measured one spelling of one way to break the chain
+    while claiming the chain was CLOSED. Measured on this fixture's own tree,
+    removing one artefact each and running the real gate:
+
+        remove phase1/extraction_patterns.json    D1=MISSING  P0=PASS-VOIDED  REJECTED
+        remove reports/phase1/…_report.json       D1=FAIL     P0=PASS-VOIDED  ACCEPTED  <-
+        remove generated_docs/L4_REGMAP.json      D1=FAIL     P0=PASS-VOIDED  ACCEPTED  <-
+        remove reports/audit/phase1/expert_…json  D1=MISSING  P0=PASS-VOIDED  REJECTED
+
+    A D1 that FAILS breaks P0's ancestry exactly as a D1 that is MISSING does —
+    same voided P0, same two ordering violations — and the precondition waved it
+    through. Under `--strict-structural` the run still exits 0 (the violation
+    names D1, which #1429 scopes out), so nothing else in the caller could have
+    noticed: the precondition is the only thing standing between that test and
+    vacuity.
+
+    So the question asked here is now the ordering guard's own: for an ORDINARY
+    PROCESS step, which D1 is, `analyze()` raises no violation unless the
+    ancestor's word is non-green — EXCUSED ancestors and qualified done-claims
+    (VACUOUS-PASS, STRUCTURE-ONLY, INCOMPLETE) both close the chain under one,
+    and only a sign-off / terminal hand-off / stage-5 attestation ancestor is
+    held to full PASS (`_blocks_when_vacuous`). D1 is none of those and cannot
+    become one without a flow change far larger than this file. The predicate is
+    imported from `_flow_verdict_tiers`, which exists precisely so this
+    classification is not re-enumerated per consumer and so a tier invented
+    tomorrow is adjudicated without anyone remembering to come here.
     """
-    m = re.search(r"^\s*\S*\s*\[(\w[\w-]*)\s*\] Step\s+D1:", out, re.M)
+    # Function-local: `programs/` is on `sys.path` via conftest, and a helper
+    # this file's other 30-odd tests do not use should not be able to error the
+    # whole module at collection time if that ever stops being true.
+    import _flow_verdict_tiers as _T
+
+    m = re.search(r"^\s*\S*\s*\[([\w-]+)\s*\] Step\s+D1:", out, re.M)
     assert m, f"precondition: step D1 must appear in the report:\n{out}"
-    assert m.group(1) != "MISSING", (
-        "precondition: `_satisfy_p0_ancestry` no longer closes P0's ancestry — "
-        "D1 is MISSING on the tree it builds, so any claim this test makes "
-        "about a SATISFIED ancestry is being made about the wrong input. "
-        "D1 gained a `required_outputs` entry the fixture does not write; the "
-        "report names it on D1's `required_outputs missing:` line:\n" + out)
+    label = m.group(1)
+    status = _LABEL_TO_PRODUCER_STATUS.get(label, label)
+    assert _T.normalize(status) in _T.PRODUCER_STATUSES, (
+        f"precondition NOT DETERMINED: the step listing rendered D1 as "
+        f"{label!r}, which is neither one of `_flow_verdict_tiers."
+        f"PRODUCER_STATUSES` nor a rendering this file knows how to translate. "
+        f"A precondition that cannot classify the word cannot say the chain is "
+        f"closed, so it refuses instead of guessing. Add the rendering to "
+        f"`_LABEL_TO_PRODUCER_STATUS` (or the word to PRODUCER_STATUSES, where "
+        f"its done-ness is decided):\n" + out)
+    assert not _T.is_non_green(status), (
+        f"precondition: `_satisfy_p0_ancestry` no longer closes P0's ancestry "
+        f"— D1 is {label} on the tree it builds, so any claim this test makes "
+        f"about a SATISFIED ancestry is being made about the wrong input. "
+        f"Either D1 gained a `required_outputs` entry the fixture does not "
+        f"write (the report names it on D1's `required_outputs missing:` "
+        f"line), or one of D1's gate clauses now FAILs on what the fixture "
+        f"stages:\n" + out)
 
 
 def _patch_run(monkeypatch, mod, stub_results: dict[str, tuple[int, str]],
@@ -499,6 +583,90 @@ def test_strict_structural_only_structural_gates(tmp_path,
         "structural-only mode should NOT FAIL on step-level "
         "MISSING/FAIL alone:\n" + out)
     assert rc == 0, out
+
+
+# ── vibe-ic#1351 — the precondition's own falsifiability ─────────────────
+#
+# `assert_p0_ancestry_closed` is the ONLY thing keeping the test above from
+# testing nothing: under `--strict-structural` a broken P0 ancestry still exits
+# 0 (the violation names D1, which #1429 scopes out of the verdict), so a
+# hollowed fixture is green and silent. A guard in that position has to be shown
+# capable of failing, or "it passed" and "it could not tell" are the same
+# reading — which is the defect the guard exists to prevent, one level up.
+#
+# Each arm below breaks the chain a DIFFERENT way and the arm asserts which,
+# because that is the part that decayed: the pre-#1351 form of the precondition
+# tested `!= "MISSING"` and therefore accepted the FAIL arm outright.
+
+_ANCESTRY_BREAKS = (
+    # (artefact removed from the closed tree, the word D1 then reports)
+    # ABSENT — a `required_outputs` entry the fixture stops writing. This is the
+    # break #1159 and #1348 both produced.
+    ("phase1/extraction_patterns.json", "MISSING"),
+    # FAILED — an artefact D1's own gate clause reads and rejects the absence
+    # of. Same voided P0, same two ordering violations, DIFFERENT word; accepted
+    # by the pre-#1351 precondition.
+    ("phase1/generated_docs/L4_REGMAP.json", "FAIL"),
+)
+
+
+def _p0_ancestry_report(tmp_path, monkeypatch, capsys, *, remove=None) -> str:
+    """The real gate's printed report for `_satisfy_p0_ancestry`'s tree, with at
+    most one declared artefact removed first."""
+    project = _satisfy_p0_ancestry(_make_phase2_project(tmp_path, ()))
+    if remove is not None:
+        victim = project / remove
+        assert victim.is_file(), (
+            f"precondition: `_satisfy_p0_ancestry` must stage {remove!r} for "
+            f"removing it to break anything — if it no longer does, this arm "
+            f"is testing an empty operation")
+        victim.unlink()
+    mod = _import_fcc()
+    _patch_run(monkeypatch, mod, {}, passing=2)
+    mod.main([str(project), "--phase", "2", "--strict-structural"])
+    return capsys.readouterr().out
+
+
+def test_the_p0_ancestry_precondition_passes_on_the_intact_tree(
+        tmp_path, monkeypatch, capsys):
+    """Direction 1 of 2: the guard must accept the input it is written for, or
+    the arms below prove only that it rejects everything."""
+    out = _p0_ancestry_report(tmp_path, monkeypatch, capsys)
+    assert_p0_ancestry_closed(out)
+
+
+@pytest.mark.parametrize("removed,expected_word", _ANCESTRY_BREAKS)
+def test_the_p0_ancestry_precondition_catches_a_chain_broken_either_way(
+        tmp_path, monkeypatch, capsys, removed, expected_word):
+    """Direction 2 of 2, once per way the chain breaks."""
+    out = _p0_ancestry_report(tmp_path, monkeypatch, capsys, remove=removed)
+
+    # This arm's premise: removing THIS artefact produces THIS word. Asserted so
+    # that an arm which stops exercising its break mode says so, instead of
+    # passing on a duplicate of the other arm's.
+    m = re.search(r"^\s*\S*\s*\[([\w-]+)\s*\] Step\s+D1:", out, re.M)
+    assert m and m.group(1) == expected_word, (
+        f"precondition: removing {removed!r} was chosen because it makes D1 "
+        f"{expected_word}; it now reports "
+        f"{(m.group(1) if m else 'NO D1 LINE')!r}, so this arm no longer covers "
+        f"that break mode:\n{out}")
+
+    with pytest.raises(AssertionError) as exc:
+        assert_p0_ancestry_closed(out)
+    assert "no longer closes P0's ancestry" in str(exc.value), str(exc.value)
+    assert expected_word in str(exc.value), str(exc.value)
+
+
+def test_the_p0_ancestry_precondition_refuses_a_word_it_cannot_classify():
+    """A precondition that cannot classify the verdict word has NOT looked, so
+    it must refuse rather than fall through to "not MISSING, therefore closed".
+    Planted word, no gate run — the point is the classification, and
+    `_flow_verdict_tiers` is where a real new word gets its home."""
+    planted = "  ? [MOSTLY-FINE      ] Step D1: Phase 1 Doc Extraction  (stage_phase1)\n"
+    with pytest.raises(AssertionError) as exc:
+        assert_p0_ancestry_closed(planted)
+    assert "NOT DETERMINED" in str(exc.value), str(exc.value)
+    assert "MOSTLY-FINE" in str(exc.value), str(exc.value)
 
 
 def test_strict_structural_does_not_excuse_a_broken_p0_ancestry(
