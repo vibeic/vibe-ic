@@ -266,24 +266,75 @@ def _read(paths, root: Path) -> Dict[str, str]:
     return out
 
 
-def _haystacks(plugin: Path, repo_root: Path) -> Dict[str, Dict[str, str]]:
+def _haystack_sources(plugin: Path, repo_root: Path) -> Dict[str, List[Path]]:
+    """The FILE LIST behind each haystack category, before anything is read.
+
+    Split out of `_haystacks` so that the enumeration has exactly ONE
+    definition. `haystack_signature` hashes these same lists to decide whether a
+    previously built haystack is still current; had it re-spelled the globs, the
+    two would drift and the signature would stop noticing a category it no
+    longer covers — a staleness check that cannot fire.
+    """
     programs = plugin / "programs"
     pys = list(programs.rglob("*.py"))
     is_test = lambda p: "/tests/" in str(p) or p.name.startswith("test_")
     return {
-        "CI": _read(list((repo_root / ".github").rglob("*.yml"))
-                    + list((repo_root / ".github").rglob("*.yaml")), repo_root),
-        "FLOW": _read(list((plugin / "flow").rglob("*.yml"))
-                      + list((plugin / "flow").rglob("*.yaml")), repo_root),
-        "TOOLS": _read(list((repo_root / "tools").rglob("*.py"))
-                       + list((repo_root / "tools").rglob("*.sh")), repo_root),
-        "SKILL": _read(list((plugin / "skills").rglob("*.md"))
-                       + list((plugin / "agents").rglob("*.md"))
-                       + list((plugin / "commands").rglob("*.md")), repo_root),
-        "PROG": _read([p for p in pys if not is_test(p)], repo_root),
-        "TEST": _read([p for p in pys if is_test(p)]
-                      + list((plugin / "tests").rglob("*.py")), repo_root),
+        "CI": (list((repo_root / ".github").rglob("*.yml"))
+               + list((repo_root / ".github").rglob("*.yaml"))),
+        "FLOW": (list((plugin / "flow").rglob("*.yml"))
+                 + list((plugin / "flow").rglob("*.yaml"))),
+        "TOOLS": (list((repo_root / "tools").rglob("*.py"))
+                  + list((repo_root / "tools").rglob("*.sh"))),
+        "SKILL": (list((plugin / "skills").rglob("*.md"))
+                  + list((plugin / "agents").rglob("*.md"))
+                  + list((plugin / "commands").rglob("*.md"))),
+        "PROG": [p for p in pys if not is_test(p)],
+        "TEST": ([p for p in pys if is_test(p)]
+                 + list((plugin / "tests").rglob("*.py"))),
     }
+
+
+def _haystacks(plugin: Path, repo_root: Path) -> Dict[str, Dict[str, str]]:
+    return {kind: _read(paths, repo_root)
+            for kind, paths in _haystack_sources(plugin, repo_root).items()}
+
+
+def haystack_signature(plugin: Path, repo_root: Path) -> str:
+    """A CONTENT fingerprint of every input a haystack is built from.
+
+    sha256 over `(category, path, bytes)` for each file `_haystack_sources`
+    names, so two signatures are equal exactly when the reading pass would see
+    the same text. Its only purpose is to let a caller that wants the same
+    haystack twice (`programs/tests/conftest.py::wiring_haystack`) PROVE the
+    tree has not moved underneath it instead of assuming so.
+
+    WHY CONTENT AND NOT `(mtime_ns, size)`. Both were measured on 2026-08-18
+    against this checkout — the stat form 0.034 s, this one 0.10 s, against
+    18.9 s for the rebuild it guards; re-take with
+    `python3 -c "import checker_execution_wiring_audit as w, time, pathlib; ..."`
+    over `_haystacks` and `haystack_signature`. The cheap form buys 0.07 s and
+    pays for it with a hole
+    — an edit preserving both size and mtime is invisible to it — and a
+    staleness check with a blind spot is precisely the failure mode this change
+    must not introduce. 0.5% of a rebuild for a signature that cannot miss.
+
+    Deliberately NOT wired into `audit()` as a memo — see the note on that
+    function.
+    """
+    import hashlib  # noqa: PLC0415
+    acc = hashlib.sha256()
+    for kind, paths in sorted(_haystack_sources(plugin, repo_root).items()):
+        for f in sorted(paths):
+            acc.update(kind.encode())
+            acc.update(b"\0")
+            acc.update(str(f).encode())
+            acc.update(b"\0")
+            try:
+                acc.update(f.read_bytes())
+            except OSError:
+                acc.update(b"<unreadable>")
+            acc.update(b"\0")
+    return acc.hexdigest()
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
@@ -418,10 +469,25 @@ CORPUS_FIGURES = CorpusFigures({
 })
 
 
-def audit(plugin: Path, repo_root: Path) -> dict:
+def audit(plugin: Path, repo_root: Path, hay=None) -> dict:
+    """`hay` — an ALREADY-TOKENISED haystack for this same `(plugin, repo_root)`.
+
+    Optional and additive: passing nothing is byte-for-byte the behaviour this
+    function has always had. It exists because building the haystack was measured
+    at 18.9 s on this checkout on 2026-08-18 and is a PURE function of the tree,
+    so a caller needing several audits of one unchanged checkout may pay once.
+
+    THIS IS NOT A MEMO, AND MUST NOT BECOME ONE. Caching inside this function
+    would silently disarm `test_checker_execution_wiring_audit.py:314-315`, which
+    proves the audit is deterministic by calling it twice and comparing the two
+    results — against a memo the second call returns the first one's answer and
+    the comparison can no longer fail. Re-use is therefore a decision the CALLER
+    makes and states, and every caller that does not ask still re-derives.
+    """
     programs = plugin / "programs"
     checkers = checker_population(programs)
-    hay = _tokenise(_haystacks(plugin, repo_root))
+    if hay is None:
+        hay = _tokenise(_haystacks(plugin, repo_root))
     test_only: List[str] = []
     unrun: List[str] = []
     skill_only: List[str] = []

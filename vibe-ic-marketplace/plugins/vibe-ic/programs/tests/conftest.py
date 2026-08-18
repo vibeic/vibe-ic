@@ -91,6 +91,80 @@ def load_real_fixture(name: str) -> str:
 from _source_pin import func_src  # noqa: E402,F401
 
 
+# The repository root, spelled the way the tests that need it spell it: the
+# first ancestor that CONTAINS `vibe-ic-marketplace/`. Resolved once here so a
+# consumer of `wiring_haystack` cannot ask for one root and be handed another.
+#
+# `None` WHEN THERE IS NO SUCH ANCESTOR, and that matters: this conftest is
+# imported in the FLATTENED install cache too (see the sys.path note above),
+# where the marketplace directory is not on the path to this file. A bare
+# `next(...)` raises StopIteration AT IMPORT there, which does not fail one
+# test — it takes the whole session down before collection, from a default
+# nobody in that layout ever asked for. Tests that pass their own root are
+# unaffected; the one default that cannot be computed refuses when it is USED.
+_REPO_ROOT = next((b for b in _PLUGIN_ROOT.parents
+                   if (b / "vibe-ic-marketplace").is_dir()), None)
+
+
+@pytest.fixture(scope="session")
+def wiring_haystack():
+    """`checker_execution_wiring_audit`'s tokenised whole-repo haystack, built
+    at most ONCE per (session, plugin, repo root) — and re-built the moment the
+    tree it was read from moves.
+
+    WHY IT EXISTS. Building it walks every file `_haystack_sources` names and
+    runs `ast.parse` + `tokenize` over the Python ones. Measured 2026-08-18 on
+    this fleet: 18.93 s a call over 4024 files (3891 Python), of which 11.36 s
+    is `tokenize` and 4.12 s `ast.parse`.
+    `test_issue693_signoff_integrity_wiring.py` asked for the IDENTICAL one six
+    times — four parametrised cases plus two `audit()` calls — and those six
+    rebuilds were 134.19 s of that file's 144.83 s (`--durations=0`, idle host).
+
+    WHY IT CANNOT GO STALE. The tree is not assumed to be still; it is CHECKED.
+    Each hand-out re-reads every file `_haystack_sources` names and compares a
+    sha256 of their CONTENT against the signature the cached haystack was built
+    under, rebuilding on any difference. Measured at 0.10 s, i.e. 0.5% of a
+    rebuild, so verifying is affordable where assuming would not have been —
+    and being content-based it has no blind spot for an edit that keeps a file's
+    size and mtime. A test that mutates the real tree mid-session (there is one:
+    `test_issue1129_gatekeeper_prepare_landing.py` drives the real writers) can
+    therefore not hand the next consumer an answer about the tree as it was.
+
+    WHY IT IS A FIXTURE AND NOT A CACHE IN THE PROGRAM. See the note on
+    `checker_execution_wiring_audit.audit`: that module's own suite proves the
+    audit is deterministic by running it twice and comparing, and an internal
+    memo would make that comparison unable to fail. Here re-use is opt-in, so
+    every test that must re-derive simply does not request this fixture.
+
+    READ-ONLY BY CONTRACT. Consumers look tokens up; nothing writes. A test that
+    needs to MUTATE a haystack builds its own — they all already do, over
+    `tmp_path`.
+    """
+    import checker_execution_wiring_audit as _wiring  # noqa: PLC0415
+
+    cache: dict = {}
+
+    def _get(plugin=None, repo_root=None):
+        plugin = _PLUGIN_ROOT if plugin is None else Path(plugin)
+        if repo_root is None:
+            assert _REPO_ROOT is not None, (
+                "wiring_haystack was asked for the default repo root, and this "
+                f"checkout has no ancestor of {_PLUGIN_ROOT} containing "
+                "vibe-ic-marketplace/ — pass repo_root explicitly")
+            root = _REPO_ROOT
+        else:
+            root = Path(repo_root)
+        key = (str(plugin.resolve()), str(root.resolve()))
+        signature = _wiring.haystack_signature(plugin, root)
+        hit = cache.get(key)
+        if hit is None or hit[0] != signature:
+            cache[key] = (signature,
+                          _wiring._tokenise(_wiring._haystacks(plugin, root)))
+        return cache[key][1]
+
+    return _get
+
+
 # vibe-ic#1037 — a test that claims to examine REAL data must say WHICH file it
 # examined, in the suite's own output, so the next reader sees the premise
 # rather than trusting the test's name. `_real_data.select` records every
