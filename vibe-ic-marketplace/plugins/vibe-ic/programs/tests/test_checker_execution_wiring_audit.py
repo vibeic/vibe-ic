@@ -518,3 +518,44 @@ def test_the_population_never_invents_a_program_this_checkout_lacks(tmp_path):
     programs = Path(__file__).resolve().parents[1]
     assert "no_such_program_anywhere.py" in M.flow_declared_gate_programs(f)
     assert "no_such_program_anywhere.py" not in M.checker_population(programs, f)
+
+
+def test_a_tree_that_moves_during_the_read_is_not_cached(tmp_path,
+                                                         wiring_haystack,
+                                                         monkeypatch):
+    """The re-use guard must BRACKET the read, not merely precede it.
+
+    A signature taken only before the read describes the tree at the start of a
+    ~19 s window and is then stored as the signature of whatever came out of the
+    other end. This drives the exact shape that exposed: a writer that changes a
+    verdict-bearing file WHILE `_haystacks` is running. The haystack produced
+    matches no state the tree was ever in, so the only safe outcome is that it
+    is never filed as the cached answer — otherwise every later hand-out in the
+    session re-certifies it as current.
+    """
+    plugin = _tree(tmp_path, test="import sample_check\n")
+    ci = tmp_path / ".github" / "workflows" / "ci.yml"
+    real_haystacks = M._haystacks
+
+    def _mutating_read(p, r):
+        out = real_haystacks(p, r)
+        # The tree moves after the bytes were read and before the caller can
+        # take a closing signature — the concurrent-writer window, made
+        # deterministic.
+        ci.write_text("name: CI\njobs:\n  a:\n    steps:\n"
+                      "      - run: python3 programs/sample_check.py\n")
+        return out
+
+    monkeypatch.setattr(M, "_haystacks", _mutating_read)
+    stale = wiring_haystack(plugin, tmp_path)
+    monkeypatch.undo()
+
+    target = str(plugin / "programs" / "sample_check.py")
+    assert M.runners("sample_check", stale, target) == {"TEST"}, \
+        "precondition: the mid-read haystack predates the CI runner"
+
+    fresh = wiring_haystack(plugin, tmp_path)
+    assert fresh is not stale, \
+        "a haystack whose closing signature never matched must not be cached"
+    assert "CI" in M.runners("sample_check", fresh, target), \
+        "the next hand-out must describe the tree as it now is"
