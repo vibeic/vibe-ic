@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1111
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1111)
+- **Total programs (excluding helpers / shims):** 1112
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1112)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1102 |
+| `any` | 1103 |
 
 ## Alphabetical listing
 
@@ -422,6 +422,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `gate_evidence_completeness_check` | any | v0.100 | v0.100 L1 |
 | `gate_host_independence_check` | any | — | the same commit must give the same verdict. |
 | `gate_is_wired_check` | any | — | A gate no automatic verdict consults. vibe-ic#693. |
+| `gate_mutation_fixture_check` | any | — | every dispatcher gate must carry a fixture in BOTH directions, and a gate carrying only one of the two is itself a finding. |
 | `gate_netlist_rtl_gen` | any | v0.1.8 | deterministic gate-netlist → RTL generator. |
 | `gate_process_attestation` | any | — | Structured process evidence for repo hygiene gates. |
 | `gate_red_since_check` | any | — | an acknowledged red must EXPIRE. vibe-ic#1025. |
@@ -1183,7 +1184,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1102 programs)
+### `any` (1103 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1577,6 +1578,7 @@ _(no programs in this group)_
 - `gate_evidence_completeness_check` — v0.100 L1  _[v0.100]_
 - `gate_host_independence_check` — the same commit must give the same verdict.
 - `gate_is_wired_check` — A gate no automatic verdict consults. vibe-ic#693.
+- `gate_mutation_fixture_check` — every dispatcher gate must carry a fixture in BOTH directions, and a gate carrying only one of the two is itself a finding.
 - `gate_netlist_rtl_gen` — deterministic gate-netlist → RTL generator.  _[v0.1.8]_
 - `gate_process_attestation` — Structured process evidence for repo hygiene gates.
 - `gate_red_since_check` — an acknowledged red must EXPIRE. vibe-ic#1025.

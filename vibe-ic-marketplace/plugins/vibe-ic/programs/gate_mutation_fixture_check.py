@@ -141,7 +141,37 @@ def _load_baseline(programs_dir: Optional[Path] = None) -> Dict[str, str]:
     except (OSError, ValueError):
         return dict(BASELINE)
     entries = raw.get("gates_without_a_mutation_fixture", {})
-    return {str(k): str(v) for k, v in entries.items()}
+    out: Dict[str, str] = {}
+    for k, v in entries.items():
+        # An entry is either a bare reason or a classified object. Both are
+        # read, because a hand-added entry is written the short way and this
+        # gate must not reward that with a pass it did not earn.
+        out[str(k)] = (str(v.get("reason", "")) if isinstance(v, dict)
+                       else str(v))
+    return out
+
+
+def baseline_classes(programs_dir: Path) -> Dict[str, str]:
+    """label -> class, for the entries that declare one.
+
+    The split between "no fixture is POSSIBLE as declared" (a gate wired
+    ADVISORY exits 0 on every verdict, so nothing can make it reject) and "no
+    fixture has been WRITTEN" is the difference between a number that is work
+    and a number that is not. It is a field rather than a phrase because
+    counting it by grepping the reason text is the same defect this registry
+    exists to retire — and it was: the first count of it here read 2 where the
+    data said 5, because two spellings of "advisory" were in play.
+    """
+    path = programs_dir / FIXTURES_DIRNAME / "baseline.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: Dict[str, str] = {}
+    for k, v in raw.get("gates_without_a_mutation_fixture", {}).items():
+        if isinstance(v, dict) and v.get("class"):
+            out[str(k)] = str(v["class"])
+    return out
 
 
 class Fixture:
@@ -404,7 +434,9 @@ def audit(repo_root: Path, execute: bool = False,
         "executed": [],
         "execution_findings": [],
         "with_both": 0,
+        "baseline_by_class": {},
     }
+    classes = baseline_classes(programs)
     if not decls:
         result["refused"] = (
             f"no gate declaration read from {script} — a requirement that "
@@ -440,6 +472,12 @@ def audit(repo_root: Path, execute: bool = False,
     for label in sorted(baseline):
         if label not in decl_by_label:
             result["stale_baseline"].append(label)
+
+    counts: Dict[str, int] = {}
+    for label in baseline:
+        key = classes.get(label, "unclassified")
+        counts[key] = counts.get(key, 0) + 1
+    result["baseline_by_class"] = counts
 
     if execute:
         for fx in fixtures:
@@ -493,10 +531,12 @@ def _print(result: Dict) -> int:
         print(f"[FAIL] {line}")
         bad = True
 
+    by_class = result.get("baseline_by_class") or {}
+    split = ", ".join(f"{n} {k}" for k, n in sorted(by_class.items()))
     scope = (f"{result['declared']} gate(s) declared; "
              f"{result['with_both']} carry BOTH fixtures; "
              f"{result['baseline_entries']} recorded in the shrink-only "
-             f"baseline")
+             f"baseline" + (f" ({split})" if split else ""))
     if result["executed"]:
         scope += f"; {len(result['executed'])} fixture(s) EXECUTED"
     if bad:
