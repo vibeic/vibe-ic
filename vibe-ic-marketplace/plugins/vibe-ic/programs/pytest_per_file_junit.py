@@ -84,6 +84,19 @@ It removes accidental stdout/CPU false-progress. JUnit and the OS process rc
 remain authoritative for the result, and missing/malformed/incomplete sidecar
 state fails closed as NORECORD.
 
+ONE PROCESS OWNS ONE STREAM.  The sidecar is a parent-owned private directory
+and each emitting process writes its own file in it, so a parallel session
+(pytest-xdist) is N independent streams rather than one interleaved one. Every
+clause -- nonce, pid, strictly ``+1`` sequence, strictly increasing monotonic
+stamp, the lifecycle stage machine, the resource ceilings -- keeps validating
+exactly one process, unchanged.  Two questions the single-process shape could
+answer implicitly are answered explicitly instead: WHICH processes belong to
+this launch (a stream is admitted only if it is the launched process itself or
+a direct child of it), and WHETHER EVERY SELECTED ITEM FINISHED (no worker can
+say, because each runs only the share the controller hands it, so the
+assertion is re-sited to a join over the workers' finished sets).  That join is
+what keeps a ``--maxfail`` prefix a NORECORD instead of a complete failure set.
+
 The driver is also a Linux child subreaper.  After a NATURAL pytest exit it
 first reaps adopted zombies, then performs a fresh pid/starttime census.  Dead
 children that merely awaited their subreaper do not erase a complete verdict.
@@ -153,12 +166,14 @@ import errno
 import importlib.util
 import json
 import os
+import re
 import select
 import selectors
 import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -196,7 +211,7 @@ _FALLBACK_PIDS_PER_JOB = 8
 _FALLBACK_PID_RESERVE = 32
 _FALLBACK_UNMEASURED_RESOURCE_CAP = 4
 
-_PROGRESS_PATH_ENV = "VIBEIC_PYTEST_PROGRESS_FILE"
+_PROGRESS_DIR_ENV = "VIBEIC_PYTEST_PROGRESS_DIR"
 _PROGRESS_NONCE_ENV = "VIBEIC_PYTEST_PROGRESS_NONCE"
 _REQUIRE_RUNTIME_IDENTITY_ENV = "VIBEIC_REQUIRE_TRUSTED_PYTEST_ENTRY"
 _PROGRESS_PLUGIN = "_pytest_progress_plugin"
@@ -207,6 +222,20 @@ _MAX_PROGRESS_EVENTS = 1_000_000
 _MAX_PROGRESS_LINE = 64 * 1024
 _MAX_DOMAIN_PROGRESS_TOTAL = 10_000
 _MAX_DOMAIN_PROGRESS_SCOPES = 64
+#: One stream per emitting process. A parallel pytest session opens one per
+#: worker, so this is a concurrency bound, never an estimate of how many
+#: workers a healthy run may use.
+_MAX_PROGRESS_STREAMS = 256
+#: Absolute ceiling over ALL streams. The per-stream ceiling stays
+#: `_MAX_PROGRESS_BYTES`, so the set's budget is that times the number of
+#: emitters -- N processes legitimately cost N times as much. That scaling is
+#: not a convenience: MEASURED, every xdist worker re-emits `item_collected`
+#: for the WHOLE selection, so the volume is O(workers x selected items) --
+#: 1600 tests cost 0.5 MiB at `-n 0` and 7.7 MiB at `-n 32`. A flat total
+#: would therefore start refusing HEALTHY wide runs on a large selection,
+#: which is a new block rather than a preserved refusal. This absolute cap is
+#: what keeps it a bound at all.
+_MAX_PROGRESS_TOTAL_BYTES = 1024 * 1024 * 1024
 
 _PR_SET_CHILD_SUBREAPER = 36
 _ACTIVE_JOB: Optional[Tuple[int, Set[Tuple[int, int]]]] = None
@@ -521,10 +550,19 @@ class _SemanticProgressProbe:
     _COMMON = {"schema", "nonce", "pid", "seq", "event", "monotonic_ns"}
 
     def __init__(self, path: Path, nonce: str, pid_fn, *, collect_only=False,
-                 require_runtime_identity=False):
+                 require_runtime_identity=False,
+                 partial_session: bool = False):
         self.path = path
         self.nonce = nonce
         self.pid_fn = pid_fn
+        #: A pytest-xdist WORKER legitimately collects the whole selection and
+        #: runs only the share the controller hands it, so its own
+        #: ``session_finish`` cannot assert "every selected item finished".
+        #: That assertion is not dropped -- it is RE-SITED to the session, in
+        #: ``_ProgressStreamSet.complete``, as a join over every worker's
+        #: finished set.  A stream opened with ``partial_session=True`` is only
+        #: ever complete as part of that join.
+        self.partial_session = partial_session
         self.file = path.open("rb", buffering=0)
         st = os.fstat(self.file.fileno())
         self.identity = (st.st_dev, st.st_ino)
@@ -675,8 +713,11 @@ class _SemanticProgressProbe:
                     or self.declared_items is None):
                 self._fail("out-of-order session_finish")
                 return
-            if (not self.collect_only
-                    and len(self.finished) != self.declared_items):
+            complete_enough = (
+                len(self.finished) <= self.declared_items
+                if self.partial_session
+                else len(self.finished) == self.declared_items)
+            if not self.collect_only and not complete_enough:
                 self._fail(
                     "session finished before every selected item completed "
                     f"({len(self.finished)}/{self.declared_items})")
@@ -743,6 +784,214 @@ class _SemanticProgressProbe:
             self._fail(f"terminal event missing (stage={self.stage})")
         if self.error:
             return False, self.error
+        return True, ""
+
+
+class _ProgressStreamSet:
+    """Validate one protocol instance per emitting process, then join them.
+
+    WHY A SET AND NOT A SMARTER VALIDATOR.  Every clause in
+    ``_SemanticProgressProbe`` -- ``seq`` strictly ``+1``, ``monotonic_ns``
+    strictly increasing, the initial->collecting->running->finished stage
+    machine, the per-event resource ceilings -- is a statement about ONE
+    interpreter.  A parallel pytest session does not break any of them; it
+    breaks the assumption that one FILE carries one interpreter.  Giving each
+    process its own file restores that assumption, so the validator is reused
+    unchanged rather than taught to demultiplex.
+
+    WHAT THIS CLASS OWNS, AND ONLY THIS.
+      * ADMISSION -- which files in the parent-owned directory are streams of
+        THIS launch at all.  The pid clause inside the probe still says "every
+        record in this stream came from the one process that owns it"; this
+        class says which processes this launch owns.  Measured on pytest-xdist
+        3.8.0: a ``-n N`` worker is a DIRECT child of the launched process, so
+        the test is local and race-free.
+      * THE SESSION JOIN -- "every selected item finished", which no single
+        worker can assert because each runs only its share.  The assertion is
+        re-sited here, not relaxed: it is what makes a ``--maxfail`` prefix a
+        NORECORD instead of a complete failure set.
+
+    Captured output and CPU activity are still not progress: the score is the
+    sum of per-stream scores, so it advances only when some process completed
+    a validated lifecycle event, and freezes when every process stops.
+    """
+
+    _MAIN_RE = re.compile(r"\Am\.(\d{1,9})\.(\d{1,9})\.jsonl\Z")
+    _WORKER_RE = re.compile(
+        r"\Aw\.([A-Za-z0-9_]{1,32})\.(\d{1,9})\.(\d{1,9})\.jsonl\Z")
+
+    def __init__(self, directory: Path, nonce: str, pid_fn, *,
+                 collect_only: bool = False,
+                 require_runtime_identity: bool = False):
+        # Forwarded UNCHANGED to each per-process probe below. This class
+        # demultiplexes streams; it does not relax any clause the probe
+        # enforces, so every option the probe takes must reach it.
+        self._collect_only = collect_only
+        self._require_runtime_identity = require_runtime_identity
+        self.directory = directory
+        self.nonce = nonce
+        self.pid_fn = pid_fn
+        self.dir_fd = os.open(str(directory), os.O_RDONLY | os.O_DIRECTORY)
+        st = os.fstat(self.dir_fd)
+        self.identity = (st.st_dev, st.st_ino)
+        self.streams: Dict[str, _SemanticProgressProbe] = {}
+        self.kinds: Dict[str, str] = {}
+        self.error = ""
+        self.score = 0
+
+    def close(self) -> None:
+        for probe in self.streams.values():
+            try:
+                probe.close()
+            except OSError:
+                pass
+        try:
+            os.close(self.dir_fd)
+        except OSError:
+            pass
+
+    def _fail(self, reason: str) -> None:
+        if not self.error:
+            self.error = reason
+
+    def _admit(self, name: str, launched: Optional[int]) -> None:
+        """Open one new stream, or refuse the whole set."""
+        worker = self._WORKER_RE.match(name)
+        main = None if worker else self._MAIN_RE.match(name)
+        if not worker and not main:
+            self._fail(f"unexpected file in progress directory: {name!r}")
+            return
+        if launched is None:
+            # The probe's own pid clause refuses anything written before the
+            # child exists; keep that property for the directory too, so a
+            # pre-launch writer cannot seed a stream.
+            self._fail(f"progress stream {name!r} appeared before launch")
+            return
+        if worker:
+            pid = int(worker.group(2))
+            claimed_ppid = int(worker.group(3))
+            if claimed_ppid != launched:
+                self._fail(f"foreign progress stream {name!r}: parent "
+                           f"{claimed_ppid} is not the launched process "
+                           f"{launched}")
+                return
+        else:
+            pid = int(main.group(1))
+            if pid != launched:
+                self._fail(f"foreign progress stream {name!r}: pid {pid} is "
+                           f"not the launched process {launched}")
+                return
+        path = self.directory / name
+        try:
+            lst = os.lstat(path)
+        except OSError as exc:
+            self._fail(f"progress stream {name!r} unavailable: {exc}")
+            return
+        if not stat.S_ISREG(lst.st_mode):
+            self._fail(f"progress stream {name!r} is not a regular file")
+            return
+        try:
+            probe = _SemanticProgressProbe(
+                path, self.nonce, (lambda captured: lambda: captured)(pid),
+                partial_session=worker is not None,
+                collect_only=self._collect_only,
+                require_runtime_identity=self._require_runtime_identity)
+        except OSError as exc:
+            self._fail(f"progress stream {name!r} unavailable: {exc}")
+            return
+        self.streams[name] = probe
+        self.kinds[name] = "worker" if worker else "main"
+
+    def _scan(self) -> None:
+        try:
+            current = os.stat(self.directory)
+            held = os.fstat(self.dir_fd)
+            names = sorted(os.listdir(self.dir_fd))
+        except OSError as exc:
+            self._fail(f"progress directory unavailable: {exc}")
+            return
+        if ((current.st_dev, current.st_ino) != self.identity
+                or (held.st_dev, held.st_ino) != self.identity):
+            self._fail("progress directory inode changed")
+            return
+        launched = self.pid_fn()
+        launched = launched if isinstance(launched, int) else None
+        for name in names:
+            if name in self.streams:
+                continue
+            if len(self.streams) >= _MAX_PROGRESS_STREAMS:
+                self._fail("progress stream resource limit exceeded")
+                return
+            self._admit(name, launched)
+            if self.error:
+                return
+
+    def sample(self) -> int:
+        """Sum of validated per-process progress; frozen once anything fails."""
+        if self.error:
+            return self.score
+        self._scan()
+        if self.error:
+            return self.score
+        total = 0
+        total_bytes = 0
+        for name, probe in self.streams.items():
+            total += probe.sample()
+            if probe.error:
+                self._fail(f"{name}: {probe.error}")
+                return self.score
+            total_bytes += probe.offset
+        budget = min(_MAX_PROGRESS_BYTES * max(1, len(self.streams)),
+                     _MAX_PROGRESS_TOTAL_BYTES)
+        if total_bytes > budget:
+            self._fail("progress streams exceeded the total byte limit")
+            return self.score
+        self.score = total
+        return self.score
+
+    def complete(self) -> Tuple[bool, str]:
+        self.sample()
+        for name, probe in self.streams.items():
+            ok, why = probe.complete()
+            if not ok:
+                self._fail(f"{name}: {why}")
+        if self.error:
+            return False, self.error
+        workers = [p for n, p in self.streams.items()
+                   if self.kinds[n] == "worker"]
+        mains = [p for n, p in self.streams.items()
+                 if self.kinds[n] == "main"]
+        if not self.streams:
+            return False, "no pytest progress stream was produced"
+        if workers and mains:
+            return False, ("conflicting progress stream shapes: "
+                           f"{len(mains)} main and {len(workers)} worker")
+        if mains:
+            if len(mains) != 1:
+                return False, f"{len(mains)} main progress streams, expected 1"
+            # A single-process session already asserted finished == declared
+            # inside its own session_finish clause.
+            return True, ""
+        # SESSION JOIN. Each worker collected the same selection and finished
+        # only its share; the session is complete only if their shares cover
+        # the whole declared selection exactly once over.
+        declared = {p.declared_items for p in workers}
+        if len(declared) != 1 or None in declared:
+            return False, ("workers disagree on the selected item count "
+                           f"{sorted(d for d in declared if d is not None)}")
+        expected = declared.pop()
+        items = workers[0].items
+        for probe in workers[1:]:
+            if probe.items != items:
+                return False, "workers disagree on the collected item set"
+        finished: Set[str] = set()
+        for probe in workers:
+            finished |= probe.finished
+        if not finished <= items:
+            return False, "a worker finished an item nobody collected"
+        if len(finished) != expected:
+            return False, ("session finished before every selected item "
+                           f"completed ({len(finished)}/{expected})")
         return True, ""
 
 
@@ -1344,19 +1593,20 @@ def _run_progress_supervised(
         cleanup_census_ok = cleanup_census_ok and cleanup.census_ok
         cleanup_survivors.update(cleanup.survivors)
 
-    progress_fd, progress_name = tempfile.mkstemp(
-        prefix="vibeic-pytest-progress-", suffix=".jsonl")
-    os.close(progress_fd)
+    # A private 0700 directory, not a file: one emitting process owns one
+    # stream inside it. Created before the child exists and removed in the
+    # `finally` below, so a stream from any other run cannot appear in it.
+    progress_name = tempfile.mkdtemp(prefix="vibeic-pytest-progress-")
     progress_path = Path(progress_name)
     nonce = secrets.token_hex(16)
-    probe = _SemanticProgressProbe(
+    probe = _ProgressStreamSet(
         progress_path, nonce,
         lambda: holder["proc"].pid if "proc" in holder else None,
         collect_only=collect_only,
         require_runtime_identity=(
             os.environ.get(_REQUIRE_RUNTIME_IDENTITY_ENV) == "1"))
     child_env = os.environ.copy()
-    child_env[_PROGRESS_PATH_ENV] = progress_name
+    child_env[_PROGRESS_DIR_ENV] = progress_name
     child_env[_PROGRESS_NONCE_ENV] = nonce
     old_pythonpath = child_env.get("PYTHONPATH")
     child_env["PYTHONPATH"] = (
@@ -1413,10 +1663,7 @@ def _run_progress_supervised(
         protocol_complete, protocol_error = probe.complete()
     finally:
         probe.close()
-        try:
-            progress_path.unlink()
-        except OSError:
-            pass
+        shutil.rmtree(progress_path, ignore_errors=True)
     proc = holder.get("proc")
     leaked: Set[int] = set()
     post_exit_cleanup_ok = cleanup_census_ok and not cleanup_survivors
