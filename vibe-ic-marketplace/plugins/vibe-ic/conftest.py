@@ -20,6 +20,51 @@ from pathlib import Path
 
 import pytest
 
+# vibe-ic#1417 — the half of that issue no source-shape check could ever fix,
+# because the writer is not a test module.
+#
+# `test_issue1417_no_test_bytecompiles_the_shipped_tree.py` enforces that no
+# byte-code appears under `skills/`, and EVERY test module in this tree obeys
+# it. The guard was red anyway in any session that collects a skills tier,
+# because the writer is PYTEST'S OWN assertion-rewrite cache, deposited at
+# COLLECTION time — before a single test in the session has run:
+#
+#     pytest skills/ams-sim/tests/test_compliance.py <the guard>
+#       -> byte-code is present in the shipped skills/ tree:
+#          ['skills/ams-sim/tests/__pycache__/
+#            test_compliance.cpython-310-pytest-9.0.3.pyc']
+#     the same guard ALONE: passes
+#
+# `run_tests.sh:96` hands every tier — `skills/*/tests` among them — to ONE
+# `python3 -m pytest`, so THE FULL SUITE IS GUARANTEED to write into the tree
+# it ships, and so is any targeted selection that happens to include one of
+# those files. Nothing was ever committed: `git ls-files -- '*.pyc'` is empty.
+# The gate was telling the truth about the working tree, and the defect it was
+# reporting lived in the runner, not in it — so the check is not narrowed and
+# not skipped; the write is stopped.
+#
+# IT BELONGS HERE for the reason this file already gives twice below: the
+# rootdir conftest rides EVERY pytest invocation rooted at the plugin —
+# `run_tests.sh`, a bare `pytest`, and the targeted subset
+# `tools/gatekeeper-land.sh` runs on every landing — so it cannot be missed by
+# choosing a path filter, and it executes before collection, which is when the
+# write happens. It is also the setting the hermetic landing runner ALREADY
+# imposes on its whole session via `PYTHONDONTWRITEBYTECODE=1`, so this closes
+# a split between the landing lane and every other lane rather than inventing a
+# rule. MEASURED COST — one worktree, one 72-file selection (4 programs/tests
+# files + all 68 `skills/*/tests`), caches cleared before each arm, this LINE
+# the only difference: 39.22 s without it, 39.68 s with it, and the second arm
+# also runs to completion two tests the first fails early. Inside the noise.
+#
+# ONE RESIDUE, STATED rather than glossed: a conftest cannot suppress the
+# caching of ITSELF — pytest rewrites and caches `conftest.py` in order to
+# import it, before its body can set the flag — so `__pycache__/conftest.*.pyc`
+# still appears at this directory. It is one file, it is outside every shipped
+# tier, `git status --porcelain` stays empty over it, and
+# `test_this_session_cannot_cache_byte_code_beside_a_shipped_source` pins it so
+# its disappearance is something somebody has to look at.
+sys.dont_write_bytecode = True
+
 _HERE = Path(__file__).resolve().parent
 _PROGRAMS = _HERE / "programs"
 if _PROGRAMS.is_dir() and str(_PROGRAMS) not in sys.path:

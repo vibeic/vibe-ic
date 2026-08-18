@@ -179,6 +179,25 @@ _EMPTY_CORPUS_LABEL_RE = re.compile(
     r'\Acorpus "(?P<name>.+)" is EMPTY — nothing was checked over it\Z')
 
 
+#: `gate_dispatch_over` in COMMAND POSITION, read off the RAW text by a means
+#: `declared_corpora` does not share — no logical-line folding, no assignment
+#: stripping, no quote reader. It exists to give the corpus reader a
+#: DENOMINATOR it cannot supply itself: a reader that has gone blind returns
+#: `[]`, and `[]` is also what a script with no corpora returns, so without a
+#: second instrument the two are the same answer. Comment lines are excluded by
+#: `[^#\n]*` (the script discusses `gate_dispatch_over` in prose three lines
+#: above every use of it).
+_DISPATCH_IN_COMMAND_POSITION_RE = re.compile(
+    r'^[^#\n]*\bgate_dispatch_over\b', re.M)
+
+#: The shape that made the corpus reader blind (v1.10.69): a POSIX assignment
+#: word in front of the command name. Also raw-text, also independent of the
+#: reader — used to prove the guard below is not passing over a script that no
+#: longer exercises the shape.
+_DISPATCH_BEHIND_ASSIGNMENT_RE = re.compile(
+    r'^[ \t]*[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+gate_dispatch_over\b', re.M)
+
+
 def declared_corpora(script: Path):
     """Every corpus name the script hands to `gate_dispatch_over`, by PARSING.
 
@@ -186,10 +205,21 @@ def declared_corpora(script: Path):
     `corpora` list: this file's whole design is that one side EXECUTES the
     script and the other PARSES it, and letting the record vouch for its own
     synthetic rows would collapse that into the document explaining itself.
+
+    IT USED TO ANCHOR THE COMMAND NAME AT THE START OF THE LINE, and a POSIX
+    simple command may carry `NAME=VALUE` assignment words in front of the
+    command name. `7c376e3481` (v1.10.69) wrote one — `GATE_DISPATCH_ATTEST_
+    POPULATION=1 gate_dispatch_over \\` — and this reader went from one corpus
+    to ZERO, which is the value it also returns for a script that declares
+    none. The caller then subtracted an empty set from the dispatcher's
+    synthetic empty-corpus rows and reported the SCRIPT as fabricating a gate.
+    The script was right; the reader could not look. `strip_assignment_prefix`
+    is imported from the parser rather than re-written here so this file does
+    not become a third copy of it.
     """
     out = []
     for _lineno, line in GD._logical_lines(script.read_text(errors="replace")):
-        stripped = line.strip()
+        stripped = GD.strip_assignment_prefix(line.strip()).strip()
         if not stripped.startswith("gate_dispatch_over"):
             continue
         got = GD._read_quoted(stripped[len("gate_dispatch_over"):].strip())
@@ -359,7 +389,24 @@ def test_the_scripts_own_record_enumerates_every_gate_a_parser_finds():
     # must be one the script DECLARES, so a synthetic-looking label the script
     # never asked for is still a fabricated gate and still red.
     invocations, empty_corpora = split_empty_corpus_records(recorded)
-    fabricated = sorted(set(empty_corpora) - set(declared_corpora(_SCRIPT)))
+
+    # THE FLOOR UNDER THE MINUEND, and it is not decoration. `declared_corpora`
+    # is subtracted FROM the synthetic rows, so a reader that cannot look
+    # contributes an EMPTY set and every synthetic row comes out labelled
+    # "fabricated" — the script is convicted of the reader's blindness. That is
+    # exactly what v1.10.69 produced. The denominator is derived a SECOND way,
+    # off the raw text, so the two cannot go blind together.
+    corpora = declared_corpora(_SCRIPT)
+    mentions = _DISPATCH_IN_COMMAND_POSITION_RE.findall(_SCRIPT.read_text())
+    assert len(corpora) == len(mentions), (
+        f"the corpus reader found {len(corpora)} `gate_dispatch_over` "
+        f"declaration(s) in {_SCRIPT} while a raw-text read of the same file "
+        f"finds {len(mentions)} in command position. The READER is failing to "
+        "look, and its empty result is about to be subtracted from the "
+        "dispatcher's synthetic rows — which convicts the SCRIPT of "
+        "fabricating a gate it correctly declared.")
+
+    fabricated = sorted(set(empty_corpora) - set(corpora))
     assert not fabricated, (
         "the dispatcher recorded an EMPTY-corpus row for a corpus no "
         f"`gate_dispatch_over` line in the script declares: {fabricated}")
@@ -478,6 +525,94 @@ def test_an_EMPTY_corpus_reconciles_and_a_FABRICATED_one_still_does_not():
     # …and a record that is not the synthetic shape at all is untouched by the
     # partition and reaches `reconcile` as before.
     assert split_empty_corpus_records(["something else"]) == (["something else"], [])
+
+
+#: Both arms for `strip_assignment_prefix`. `(text, expected)`; `expected is
+#: None` means "must come back UNCHANGED". The must-NOT arm is the one that
+#: matters: a stripper that is too eager MANUFACTURES commands out of lines
+#: bash never runs as such, which would put fabricated gates into the
+#: denominator of every reader in this repo derived from this parser.
+_ASSIGNMENT_PREFIX_CASES = (
+    ("the live shape",
+     'GATE_DISPATCH_ATTEST_POPULATION=1 gate_dispatch_over "x"',
+     'gate_dispatch_over "x"'),
+    ("two assignment words",
+     'A=1 B=2 run "x" "$ROOT" cmd', 'run "x" "$ROOT" cmd'),
+    ("a quoted value containing a space is ONE word",
+     'A="a b" run "x"', 'run "x"'),
+    ("an empty value",
+     'A= run "x"', 'run "x"'),
+    ("indentation is preserved",
+     '  A=1 run "x"', '  run "x"'),
+    # --- and everything below must come back untouched ---
+    ("a plain command", 'run "x" "$ROOT" cmd', None),
+    ("an assignment that is not in command position",
+     'echo A=1 run "x"', None),
+    ("a bare assignment with no command after it", 'A=1', None),
+    ("a comment that happens to contain one", '# A=1 run "x"', None),
+    ("a shell test, not an assignment", '[ "$x" = y ] && run "x"', None),
+    ("a leading name with no `=` at all", 'A_1 run "x"', None),
+    ("a name that is not a shell name", '1A=1 run "x"', None),
+)
+
+
+def test_a_command_behind_an_env_assignment_word_is_still_read():
+    """vibe-ic#538 regression, v1.10.69: the reader, not the script, was wrong.
+
+    A POSIX simple command may carry `NAME=VALUE` assignment words before the
+    command name. `declared_corpora` matched `startswith("gate_dispatch_over")`
+    on the whole logical line, so `GATE_DISPATCH_ATTEST_POPULATION=1
+    gate_dispatch_over …` was not mis-read — it was INVISIBLE, and the reader
+    returned `[]`, the same value it returns for a script that declares no
+    corpora at all. Subtracted from the dispatcher's synthetic rows, that empty
+    set convicted the script of fabricating the one gate it had correctly
+    declared.
+
+    Three clauses, and the second is what stops the first passing over nothing:
+
+      1. driven over the LIVE script, the reader finds every
+         `gate_dispatch_over` a raw-text read finds in command position —
+         two instruments, neither able to make the other agree;
+      2. the live script still CARRIES the assignment-word shape. If it ever
+         stops, clause 1 becomes a statement about a shape that no longer
+         occurs, and this dies loudly rather than passing vacuously;
+      3. the stripper is read both ways over `_ASSIGNMENT_PREFIX_CASES`. A
+         control that only proves it can strip cannot tell you it does not
+         strip a line bash would never treat as an assignment prefix — and
+         inventing a command is how a repaired reader would start fabricating
+         the gates it was repaired for failing to see.
+    """
+    text = _SCRIPT.read_text()
+
+    # 2. FIRST, because clause 1 is only worth reading if this holds.
+    behind = _DISPATCH_BEHIND_ASSIGNMENT_RE.findall(text)
+    assert behind, (
+        "no `gate_dispatch_over` in the live hygiene script is written behind "
+        "a `NAME=VALUE` assignment word any more, so this guard now asserts "
+        f"over a shape {_SCRIPT} no longer has. Restore the shape or delete "
+        "this test deliberately — do not leave it passing over nothing.")
+
+    # 1. the reader sees what the raw text says is there.
+    corpora = declared_corpora(_SCRIPT)
+    mentions = _DISPATCH_IN_COMMAND_POSITION_RE.findall(text)
+    assert len(corpora) == len(mentions) and corpora, (
+        f"the corpus reader found {len(corpora)} declaration(s) where a raw "
+        f"read of {_SCRIPT} finds {len(mentions)} `gate_dispatch_over` in "
+        f"command position, {len(behind)} of them behind an assignment word. "
+        "The reader is blind to the shape again.")
+
+    # 3. both arms over the stripper itself.
+    wrong = []
+    for label, line, expected in _ASSIGNMENT_PREFIX_CASES:
+        got = GD.strip_assignment_prefix(line)
+        want = line if expected is None else expected
+        if got != want:
+            wrong.append(f"{label}: {line!r} -> {got!r}, expected {want!r}")
+    assert not wrong, (
+        "`strip_assignment_prefix` no longer removes exactly the leading "
+        "POSIX assignment words. A case that stopped stripping puts the "
+        "v1.10.69 blindness back; a case that STARTED stripping manufactures "
+        f"a command bash never runs. Wrong: {wrong}")
 
 
 def test_a_continued_run_line_is_read_as_the_one_command_bash_runs():

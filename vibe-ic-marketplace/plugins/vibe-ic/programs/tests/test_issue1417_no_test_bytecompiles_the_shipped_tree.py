@@ -129,6 +129,9 @@ could not see that writer at all.
 from __future__ import annotations
 
 import ast
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 _TESTS = Path(__file__).resolve().parent
@@ -615,6 +618,119 @@ def test_the_shipped_tree_carries_no_committed_bytecode():
                    for p in _SKILLS.rglob("*.pyc"))
     assert not stray, (
         f"byte-code is present in the shipped skills/ tree: {stray[:10]}")
+
+
+#: A stand-in shipped module: a test file pytest WILL assertion-rewrite, alone
+#: in its own directory so nothing else can account for what appears next to it.
+#: The directory is deliberately NOT named after the shipped tier — the corpus
+#: walk above reads argv, and a spawn whose path expands to that name is one it
+#: is right to demand a suppression from.
+_STANDIN_TEST = "def test_two():\n    assert 1 + 1 == 2\n"
+
+#: The fix under guard, in the smallest form that carries it, and its control.
+#: BOTH arms ship a conftest and they differ by ONE LINE, because a rootdir
+#: conftest cannot suppress the caching of ITSELF: pytest rewrites and caches
+#: `conftest.py` in order to import it, which happens before its body can set
+#: the flag. MEASURED — the suppressed arm still leaves
+#: `__pycache__/conftest.cpython-310-pytest-9.0.3.pyc` behind, and so does the
+#: live plugin at its own root. That residue is real, it is one file, it is
+#: outside every shipped tier, and `git status --porcelain` stays empty over
+#: it. Making it a CONSTANT across both arms is what keeps this test measuring
+#: the difference the fix makes instead of the artefact it cannot remove.
+_STANDIN_CONFTEST = "import sys\n"
+_STANDIN_CONFTEST_SUPPRESSING = "import sys\nsys.dont_write_bytecode = True\n"
+
+
+def _cached_module_stems(root: Path):
+    """The module NAMES a session cached under *root*, tag stripped.
+
+    `__pycache__/test_standin.cpython-310-pytest-9.0.3.pyc` -> `test_standin`,
+    so the assertion below does not have to name an interpreter or a pytest
+    version to say which source was written next to.
+    """
+    return {p.name.split(".")[0] for p in root.rglob("*.pyc")}
+
+
+def _child_pytest_over(root: Path):
+    """One pytest session over *root*, with byte-code suppression NOT handed to
+    it by any route except whatever *root* itself contains.
+
+    `PYTHONDONTWRITEBYTECODE` is removed from the child's environment and `-B`
+    is not passed, on purpose: if either reached the child, the control arm
+    below would report zero `.pyc` for a reason that has nothing to do with
+    what is being measured, and an instrument that cannot see the write cannot
+    testify that the write stopped.
+    """
+    env = {k: v for k, v in os.environ.items() if k != _ENV_SUPPRESSOR}
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         str(root)],
+        cwd=str(root), env=env, capture_output=True, text=True, timeout=300)
+
+
+def test_this_session_cannot_cache_byte_code_beside_a_shipped_source(tmp_path):
+    """The guard on the repair for the red above, and NOT a substring check.
+
+    `test_the_shipped_tree_carries_no_committed_bytecode` was red on main in
+    every session that collected a `skills/*/tests/` file, and the gate was
+    RIGHT: the shipped tree really did carry byte-code. The writer was no test
+    module — it was pytest's own assertion-rewrite cache, written at COLLECTION
+    time — and `run_tests.sh:96` puts every tier, skills included, into ONE
+    pytest session, so the full suite was guaranteed to write into the tree it
+    ships. The repair is that the plugin's rootdir conftest sets
+    `sys.dont_write_bytecode` before collection.
+
+    Two clauses, and NEITHER of them reads conftest.py:
+
+      1. the RUNTIME property, however it was obtained. `-B` and
+         `PYTHONDONTWRITEBYTECODE=1` satisfy it exactly as well as the conftest
+         line does — the hermetic landing runner already uses the env var — and
+         a guard that insisted on one spelling would go red on a lane that is
+         doing the right thing by another route;
+      2. that the flag still BUYS what clause 1 is being trusted for. A flag
+         asserted and never exercised is a token, so the mechanism is driven
+         end to end over a stand-in laid out like a shipped module. The two
+         arms differ by ONE LINE of one conftest; the collected test module is
+         byte-identical in both. Without the flag its byte-code is cached
+         beside it, with the flag it is not, and asserting BOTH is what stops
+         this passing over an instrument that could not see a `.pyc` either
+         way.
+    """
+    assert sys.dont_write_bytecode, (
+        "this pytest session is caching byte-code beside the sources it "
+        "collects. Collecting any `skills/*/tests/` file therefore writes into "
+        "the shipped tree — which `run_tests.sh` does on every full run — and "
+        "`test_the_shipped_tree_carries_no_committed_bytecode` is right to go "
+        "red about it. Set `sys.dont_write_bytecode` in the plugin's rootdir "
+        "conftest (or run with `-B` / `PYTHONDONTWRITEBYTECODE=1`).")
+
+    arms = {}
+    for arm, conftest in (("unsuppressed", _STANDIN_CONFTEST),
+                          ("suppressed", _STANDIN_CONFTEST_SUPPRESSING)):
+        root = tmp_path / arm
+        root.mkdir()
+        (root / "test_standin.py").write_text(_STANDIN_TEST)
+        (root / "conftest.py").write_text(conftest)
+        out = _child_pytest_over(root)
+        assert out.returncode == 0, (arm, out.stdout, out.stderr)
+        arms[arm] = _cached_module_stems(root)
+
+    assert "test_standin" in arms["unsuppressed"], (
+        "the control arm cached NO byte-code for a freshly collected test "
+        "module, so this check cannot see the write it exists to prove was "
+        "stopped, and its other arm proves nothing. Something suppressed "
+        f"byte-code in that child by a route this test did not intend: {arms}")
+    assert "test_standin" not in arms["suppressed"], (
+        "`sys.dont_write_bytecode` set in a rootdir conftest no longer stops "
+        "pytest caching byte-code beside the sources it collects, so clause 1 "
+        "above is asserting a flag that buys nothing and the plugin's conftest "
+        f"is not the repair it claims to be: {arms}")
+    # The residue, PINNED rather than glossed: a conftest cannot suppress the
+    # caching of itself, so it is cached in both arms. Stated here so that its
+    # disappearance is a change somebody has to look at rather than a silent
+    # improvement in an assertion that would then be measuring something else.
+    assert arms["suppressed"] == {"conftest"}, arms
 
 
 #: Modules built to be JUDGED, not run. Each is the smallest thing that carries

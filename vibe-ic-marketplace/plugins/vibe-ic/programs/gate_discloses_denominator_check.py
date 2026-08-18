@@ -348,6 +348,59 @@ HOST_INDEPENDENCE_EXCLUDE_RE = re.compile(
 _RESOLVABLE_VARS = frozenset({"ROOT", "PLUGIN", "PG", "PJSON"})
 _VAR_RE = re.compile(r'\$\{?([A-Za-z_]\w*)\}?')
 
+#: A POSIX *simple command* may carry `NAME=VALUE` assignment words BEFORE the
+#: command name; bash still runs the command name that follows them. Every
+#: reader over this script anchored the command name at the START of the
+#: logical line, so an assignment word in front of it did not make the command
+#: mis-read — it made the command INVISIBLE. That is this repo's recurring
+#: defect class: an instrument reporting "not present" for something it cannot
+#: distinguish from absent, with no floor to catch the difference.
+#:
+#: MEASURED, not argued. `7c376e3481` (v1.10.69) wrote one into the live
+#: hygiene script::
+#:
+#:     GATE_DISPATCH_ATTEST_POPULATION=1 gate_dispatch_over \
+#:       "published cells carrying a routed DEF" \
+#:       _per_published_cell_gates \
+#:       python3 "$HERE/routed_def_corpus.py" --repo "$ROOT"
+#:
+#: and the corpus reader in `test_issue538_merge_gate_covers_ci_hygiene.py::
+#: declared_corpora`, which matched `startswith("gate_dispatch_over")`, went
+#: from one declaration to ZERO. The dispatcher's synthetic empty-corpus row
+#: then had nothing to trace back to and
+#: `test_the_scripts_own_record_enumerates_every_gate_a_parser_finds` reported
+#: the SCRIPT as fabricating a gate. The script was correct throughout; the
+#: reader could not see a line bash reads without difficulty.
+#:
+#: `parse_declarations` had the identical blindness on `run` lines. No live
+#: `run` line carries an assignment word today, so repairing it is INERT on
+#: this checkout (83 declarations before and after, byte-identical list) — it
+#: closes the same hole in the reader every denominator gate in this repo is
+#: derived from, before something lands in it.
+_ASSIGNMENT_WORD_RE = re.compile(
+    r'''^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s'"]*)\s+''')
+
+
+def strip_assignment_prefix(line: str) -> str:
+    """`line` with any leading POSIX `NAME=VALUE` assignment words removed.
+
+    `FOO=1 BAR=2 run "x" …` -> `run "x" …`. Leading indentation is preserved,
+    and a line with no assignment prefix is returned UNCHANGED (identical
+    object contents), so every caller can strip unconditionally.
+
+    It removes assignment WORDS only. `echo FOO=1 run …` keeps its `echo`,
+    because the assignment is not in command-name position; a value that is
+    itself quoted (`FOO="a b" run …`) is one word and is removed as one.
+    """
+    lead = line[:len(line) - len(line.lstrip())]
+    rest = line.lstrip()
+    while True:
+        m = _ASSIGNMENT_WORD_RE.match(rest)
+        if not m:
+            break
+        rest = rest[m.end():]
+    return lead + rest
+
 
 class GateDecl(NamedTuple):
     """One `run` line as the hygiene script DECLARES it.
@@ -442,7 +495,8 @@ def parse_declarations(script: Path) -> List[GateDecl]:
     physical = text.splitlines()
     out: List[GateDecl] = []
     for lineno, line in _logical_lines(text):
-        m = _RUN_HEAD_RE.match(line)
+        # `FOO=1 run "…"` IS a `run` line — see `strip_assignment_prefix`.
+        m = _RUN_HEAD_RE.match(strip_assignment_prefix(line))
         if not m:
             continue
         got = _read_quoted(m.group(2).strip())
