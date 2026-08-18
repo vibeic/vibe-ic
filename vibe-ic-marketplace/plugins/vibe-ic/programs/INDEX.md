@@ -631,6 +631,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `macro_obs_geometry_intersect_check` | any | — | Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686. |
 | `macro_obs_load_parity_check` | any | — | The obstructions the LEF DECLARES vs the obstructions the tool can LOAD. |
 | `magic_extract_spice_emit` | any | — | Magic parasitic-RC extraction TCL emitter + validator. |
+| `magic_illegal_overlap_check` | any | — | read the EXTRACTION tool's own error channel and gate it at zero, before LVS. |
 | `magic_port_extract_emit` | any | v0.1.114 | Magic port-labeled GDS-extraction TCL generator. |
 | `manifest_leak_check` | any | v0.47.6 | Detect benchmark-value leaks in fact manifests. |
 | `manufacturing_fab_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 35 -> 36; v1.6.15 Wave 91: Step 36 -> 37; Step 40 in the phase1_phase2_phase3.... |
@@ -1788,6 +1789,7 @@ _(no programs in this group)_
 - `macro_obs_geometry_intersect_check` — Emitted metal that crosses a placed macro's declared obstruction. vibe-ic#686.
 - `macro_obs_load_parity_check` — The obstructions the LEF DECLARES vs the obstructions the tool can LOAD.
 - `magic_extract_spice_emit` — Magic parasitic-RC extraction TCL emitter + validator.
+- `magic_illegal_overlap_check` — read the EXTRACTION tool's own error channel and gate it at zero, before LVS.
 - `magic_port_extract_emit` — Magic port-labeled GDS-extraction TCL generator.  _[v0.1.114]_
 - `manifest_leak_check` — Detect benchmark-value leaks in fact manifests.  _[v0.47.6]_
 - `manufacturing_fab_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 35 -> 36; v1.6.15 Wave 91: Step 36 -> 37; Step 40 in the phase1_phase2_phase3....  _[Wave 88]_

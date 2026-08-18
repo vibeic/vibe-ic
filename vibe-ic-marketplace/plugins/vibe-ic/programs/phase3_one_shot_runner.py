@@ -74,6 +74,7 @@ import extraction_input_capability_check as _eicap  # extraction-input precondit
 import lvs_netgen_setup_emit as _lvs_setup  # GAP-E2E-9 — power-net globalisation
 import lvs_power_aware_netlist_emit as _lvs_pa  # GAP-E2E-9 ROOT — power-aware netlist
 import lvs_power_aware_extract_tcl as _lvs_paext  # LVS ROOT (extract side) — power-aware DEF extraction
+import magic_illegal_overlap_check as _mio  # W2.3 — magic's extraction feedback channel, gated at 0
 import sdc_constraints as _sdc  # #554 — shared staged-SDC ground-truth helpers
 import eco_trigger_decision as _eco_dec  # ECO auto-trigger multi-corner-OCV gate
 import metal_layer_density_check as _mld  # metal-layer NAME authority (producer/consumer parity)
@@ -26876,6 +26877,8 @@ extract do local
 extract all
 ext2spice lvs
 ext2spice -o $env(SPICE_OUT)
+feedback save $env(FEEDBACK_OUT)
+puts "MAGIC_EXT2SPICE_FEEDBACK $env(FEEDBACK_OUT) [feedback count]"
 puts "MAGIC_EXT2SPICE_DONE $env(SPICE_OUT)"
 quit -noprompt
 """
@@ -27938,6 +27941,46 @@ def _strip_nonlayer_blockages(def_text: str) -> Tuple[str, List[str]]:
         + tail, dropped
 
 
+#: How long the illegal-overlap gate may take. It reads one small text file;
+#: this is a hang ceiling, not a budget.
+_ILLEGAL_OVERLAP_GATE_TIMEOUT = 120
+
+
+def _run_illegal_overlap_gate(project: Path, out_json: Path
+                              ) -> Tuple[int, str]:
+    """Spawn `magic_illegal_overlap_check` and return ``(rc, one-line reason)``.
+
+    Spawned as a SUBPROCESS rather than called in-process on purpose. The gate
+    declares ``ENFORCEMENT: blocking``, and `flow_gate_enforcement_audit` grades
+    that claim by whether a runner spawns the program AND lets the exit status
+    reach a control-flow decision. An in-process call would do the same work and
+    leave the declaration unverifiable — the #884 shape, one layer over.
+
+    Every non-zero rc is returned as-is so the caller can say WHICH failure it
+    was. A gate that could not be spawned at all returns rc 2 with a reason
+    saying nothing was examined: the flow declares this gate, so its absence is
+    an incomplete deployment, not an exemption (the same rule
+    `_run_declared_signoff_gate` applies to the step-23/25 gates).
+    """
+    prog = PROGRAMS_DIR / "magic_illegal_overlap_check.py"
+    if not prog.is_file():
+        return 2, (f"NOT CHECKED — the illegal-overlap gate is not present in "
+                   f"this deployment ({prog}); the extraction feedback channel "
+                   f"was never read.")
+    try:
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return 2, f"NOT CHECKED — cannot create {out_json.parent}: {exc}"
+    cmd = [sys.executable, str(prog), str(project), "--json", str(out_json)]
+    try:
+        cp = subprocess.run(cmd, timeout=_ILLEGAL_OVERLAP_GATE_TIMEOUT,
+                            check=False, capture_output=True, text=True)
+    except Exception as exc:                                   # noqa: BLE001
+        return 2, f"NOT CHECKED — the illegal-overlap gate could not run: {exc}"
+    return cp.returncode, _gate_detail(out_json, cp.stdout or "",
+                                       cp.stderr or "")
+
+
 def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
                         container: str, def_file: Path, netlist: Path,
                         magicrc: str, netgen_setup: str,
@@ -27959,6 +28002,16 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     ext_dir.mkdir(parents=True, exist_ok=True)
     spice_out = ext_dir / f"{top}_extracted.sp"
     tcl = ext_dir / f"ext2spice_{top}.tcl"
+    # W2.3 — magic's ERROR channel. The extractor files every rectangle it
+    # refused to connect ("Illegal overlap between <a> and <b> (types do not
+    # connect)") as a FEEDBACK AREA and then says only `N problems occurred.
+    # See feedback entries.` — it points at a channel. Until this line the
+    # recipe never dumped that channel, so nothing downstream could read it and
+    # an extraction that told us it did not understand the layout still handed
+    # netgen a netlist to bless. `feedback save` writes an EMPTY file when there
+    # are no areas (verified against the image's magic 8.3.681), which is what
+    # makes the ABSENCE of this file a distinguishable fault rather than a zero.
+    feedback_out = ext_dir / _mio.FEEDBACK_NAMES[0]
     # ── LVS ROOT FIX (extract side) — POWER-AWARE DEF extraction (§4.05-safe). ──
     # The plain recipe collapses the four sky130 power nets onto ~2 MIS-named
     # nodes (the ground rail + its VNB taps → the substrate node `VSUBS`; the
@@ -28034,7 +28087,8 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
         f"MACRO_LEF_READS={shlex.quote(macro_lef_reads)} "
         f"DEF={_to_container_path(str(extract_def), container)} "
         f"TOP={top} "
-        f"SPICE_OUT={_to_container_path(str(spice_out), container)} && "
+        f"SPICE_OUT={_to_container_path(str(spice_out), container)} "
+        f"FEEDBACK_OUT={_to_container_path(str(feedback_out), container)} && "
         f"cd {_to_container_path(str(ext_dir), container)} && ")
     _magic_tcl_c = _to_container_path(str(tcl), container)
     cmd = (env_prefix +
@@ -28201,6 +28255,45 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
             f"warning(s)/error(s) (below the {_LVS_EXT_ERROR_FAIL_CEILING:,} "
             f"FAIL ceiling) — extracted netlist usable but review "
             f"ext2spice.log (#477).")
+    # ── W2.3 — THE EXTRACTOR'S OWN ERROR CHANNEL, GATED AT ZERO, BEFORE
+    # NETGEN EVER RUNS. ────────────────────────────────────────────────────
+    # The #477 guard above asks "did the extraction COLLAPSE" — from the
+    # transcript's `N errors` summary, at a ceiling of 1000. This asks a
+    # different question off a different channel at a different threshold:
+    # "did the extractor REFUSE a rectangle", from the feedback areas, at 0.
+    # An illegal overlap is magic saying it could not decide what the layout
+    # means at that rectangle; the `.subckt` it wrote anyway describes a design
+    # the layout does not, and netgen can report `Circuits match uniquely` over
+    # it. That is a dead chip with a clean report, and one occurrence is enough
+    # — which is why the threshold is 0 and not a tunable.
+    #
+    # SPAWNED INLINE and the status reaches this `if`, so the gate's
+    # `ENFORCEMENT: blocking` docstring is a claim `flow_gate_enforcement_audit`
+    # can check. rc 0 continues; EVERY other outcome stops the step, including
+    # rc 2 — a gate reporting "nothing to examine" immediately after this
+    # function extracted is itself the defect, not an exemption.
+    _mio_json = _pl.reports_phase3_dir(project) / "magic_illegal_overlap.json"
+    _mio_rc, _mio_detail = _run_illegal_overlap_gate(project, _mio_json)
+    if _mio_rc != 0:
+        verdict = _write_lvs_verdict(
+            project, "FAIL", "LVS_EXTRACTION_ILLEGAL_OVERLAP",
+            f"Magic's extraction feedback channel did not clear the "
+            f"zero-illegal-overlap gate (rc={_mio_rc}): {_mio_detail} netgen "
+            f"was NOT run — a compare against a netlist the extractor could "
+            f"not decide is not evidence about this design.",
+            extras={"illegal_overlap_gate_rc": _mio_rc,
+                    "illegal_overlap_report":
+                        "reports/phase3/magic_illegal_overlap.json",
+                    "extraction_feedback":
+                        f"phase3/stage3/extracted/{_mio.FEEDBACK_NAMES[0]}"})
+        return StepResult(
+            "lvs", "FAIL", time.time() - t0,
+            f"LVS aborted before netgen: {_mio_detail} (see "
+            f"reports/phase3/magic_illegal_overlap.json)",
+            extras={"finding": "LVS_EXTRACTION_ILLEGAL_OVERLAP",
+                    "illegal_overlap_gate_rc": _mio_rc,
+                    "lvs_verdict": verdict})
+
     # Magic may emit the top subckt as `<top>` or `<top>_flat` — feed
     # netgen the name that actually exists in the extracted netlist.
     sub_txt = spice_out.read_text(errors="replace")
