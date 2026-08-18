@@ -2085,6 +2085,105 @@ def audit_step(step_id) -> Tuple[List[str], List[str]]:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# The one class of citation the corpus skip may NOT cover
+# ──────────────────────────────────────────────────────────────────────
+# WHAT THE CORPUS SKIP PROMISES, AND WHERE THAT PROMISE IS FALSE.
+#
+# `SKIP_REASON` tells the reader the result cells live in another repository
+# and that pointing the corpus pointer at a clone runs this check against them.
+# That is true for every entry whose recorded run root is a kind this module
+# SEARCHES: those roots were `benchmark-data/<...>` here, `_corpus_candidate`
+# rewrites them into the clone, and the cell answers live again.
+#
+# It is FALSE for an entry whose recorded root is any OTHER kind. #527 removed
+# every off-repository search from this dimension, so such a root is consulted
+# on no host, with or without the pointer — and MEASURED against a clone of the
+# published-corpus repository at its own HEAD, neither those roots nor the
+# artefacts they cite resolve there under any root either. Setting the pointer
+# does not move these entries: they come back unevidenced with the corpus
+# present, exactly as they do without it.
+#
+# So for those entries the absent corpus is not the reason the answer is
+# missing, and letting the skip cover them drops them out of the denominator
+# altogether: on a fresh checkout the whole dimension reported no failure while
+# these citations went unexamined, which reads as a clean run over a population
+# nobody looked at. A check that could not look has not looked — but a citation
+# NOTHING can look at is a stronger statement than that, and it has to be made
+# here rather than deferred to a corpus that cannot settle it.
+#
+# The carve-out only ever NARROWS the skip. It adds no evidence, admits no new
+# root, and changes nothing at all when the corpus is present.
+
+
+def unanswerable_citations(step_id) -> Tuple[Tuple[str, str, str], ...]:
+    """``(entry, cited run root, the path the citation wanted)`` for the
+    declared entries of *step_id* that NO corpus can answer.
+
+    An entry is unanswerable when the run root it records is outside
+    :data:`_ADMISSIBILITY` — either the manifest gives that root a ``kind`` this
+    module never searches, or the manifest registers no such root at all. Both
+    are properties of the RECORD, decided without opening a file, which is what
+    makes the answer identical on a host that has a corpus and on one that does
+    not.
+
+    An entry that records NO root is not unanswerable: it cites nothing, so a
+    corpus carrying the artefact resolves it and the skip is the honest verdict.
+    """
+    recorded = (step_record(step_id).get("entries") or {})
+    roots = manifest()["run_roots"]
+    out: List[Tuple[str, str, str]] = []
+    for entry in F.required_outputs(step_id):
+        er = recorded.get(entry)
+        if not er:
+            continue
+        for field in ("run", "base_run"):
+            label = er.get(field)
+            if not label:
+                continue
+            meta = roots.get(label)
+            if meta is not None and meta.get("kind") in _ADMISSIBILITY:
+                continue
+            out.append((entry, label,
+                        str(er.get("path") or er.get("writes") or entry)))
+    return tuple(out)
+
+
+def _corpus_skip_would_hide(step_id, cites: Tuple[Tuple[str, str, str], ...]) -> str:
+    """The NOT DETERMINED message for citations the skip would have swallowed.
+
+    It names, per entry, the path the record wanted and the root it wanted it
+    from, because "not determined" without those two is a shrug rather than a
+    finding.
+    """
+    roots = manifest()["run_roots"]
+    lines = [
+        f"{entry!r}: NOT DETERMINED — the record wants {wanted!r} from run "
+        f"root {label!r} (kind "
+        f"{(roots.get(label) or {}).get('kind', 'NOT REGISTERED')!r}), which "
+        f"this dimension searches on no host"
+        for entry, label, wanted in cites
+    ]
+    return (
+        f"step {step_id} ({F.step_name(step_id)}): {len(cites)} declared "
+        f"output(s) cite a run root NO corpus can supply, so the corpus-absent "
+        f"skip must not cover them:\n  " + "\n  ".join(lines) + "\n\n"
+        f"The skip says the result cells live in another repository and that "
+        f"the corpus pointer reaches them. That holds for a record whose root "
+        f"is one of the kinds this module searches "
+        f"({sorted(_ADMISSIBILITY)}); it does not hold for these. Setting the "
+        f"pointer leaves them exactly as they are, so they are NOT DETERMINED "
+        f"rather than not-yet-looked-at, and they may not leave the "
+        f"denominator in silence.\n"
+        f"This is NOT a claim that the flow fails to produce these artefacts — "
+        f"nothing here measured that. It is a refusal to report a clean run "
+        f"over a citation nothing can resolve. Close it by re-pointing the "
+        f"record at a root that carries the artefact, by publishing a run tree "
+        f"that does, or by waiving the cell through the one waiver registry "
+        f"with the disclosure — never by widening the skip."
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Waivers — ONE registry, the one that is consumed
 # ──────────────────────────────────────────────────────────────────────
 # This module used to carry a `_LOCAL_WAIVERS` mirror of its four dimension-3
@@ -2200,6 +2299,13 @@ def test_d3_required_outputs_are_produced(cell):
     # emptied `run_roots()` while the corpus IS present must still redden here,
     # and `test_d3_run_root_discovery_is_live` is the test that says so.
     if not run_roots() and corpus_root() is None:
+        # ...and only over the entries an absent corpus can explain. A record
+        # citing a root this module searches on no host is not waiting on the
+        # pointer, so it is REFUSED here by name instead of leaving the
+        # denominator with the rest of the cell (see the section above
+        # `unanswerable_citations`).
+        cites = unanswerable_citations(sid)
+        assert not cites, _corpus_skip_would_hide(sid, cites)
         pytest.skip(SKIP_REASON)
 
     missing, details = audit_step(sid)
@@ -2987,6 +3093,206 @@ def test_d3_no_record_cites_an_absent_run_this_commit_can_answer():
           "The manifest is the only record of WHERE an artefact came from, and "
           "a citation a reader cannot follow is not evidence of anything "
           "(vibe-ic#1266)."
+    )
+
+
+@dataclass(frozen=True)
+class _Cell:
+    """The one attribute the cell test reads, so the guards below can call it
+    directly instead of going through the parametrisation."""
+    step_id: str
+
+
+def _synthetic_citation_world(monkeypatch, entries: Dict[str, Dict]) -> str:
+    """Drive the cell predicate over a manifest written HERE, corpus absent.
+
+    The population this guard is about is expected to shrink as records are
+    repaired, and a guard pinned to today's records would go vacuous the moment
+    it did — passing loudest exactly when it has stopped checking anything. So
+    the substrate is synthesised: two run roots, one of a kind this module
+    searches and one of a kind it never will, and whichever entries the caller
+    wants recorded against them. Returns the synthetic step id.
+    """
+    sid = "SYNTHETIC"
+    searched, never = "root-this-module-searches", "root-on-one-machine-only"
+    monkeypatch.setattr(sys.modules[__name__], "manifest", lambda: {
+        "run_roots": {
+            searched: {"kind": _IN_REPO_KIND, "rel": "benchmark-data/probe"},
+            never: {"kind": "home", "rel": "somewhere/off/this/repository"},
+        },
+        "steps": {},
+    })
+    monkeypatch.setattr(sys.modules[__name__], "step_record",
+                        lambda _sid: {"verdict": "ENFORCED", "entries": entries})
+    monkeypatch.setattr(F, "required_outputs", lambda _sid: tuple(entries))
+    monkeypatch.setattr(F, "step_name", lambda _sid: "synthetic step")
+    # The corpus-absent world is FORCED, not inherited from the host: with a
+    # clone present the cell would never reach the skip branch at all and this
+    # guard would pass without exercising the thing it is named for.
+    monkeypatch.setattr(sys.modules[__name__], "run_roots", lambda: {})
+    monkeypatch.setattr(sys.modules[__name__], "corpus_root", lambda: None)
+    return sid
+
+
+def _cite(root: str, path: str) -> Dict:
+    return {"status": "PRODUCED_BY_RUN", "run": root, "alternative": path,
+            "path": path, "size_bytes": 1}
+
+
+def test_d3_a_citation_no_corpus_can_answer_is_not_dropped_by_the_corpus_skip(
+        monkeypatch):
+    """vibe-ic#1266 — THE CARVE-OUT, both ways, end to end.
+
+    WHAT WENT WRONG. When the result cells moved to their own repository this
+    cell test gained a corpus-absent skip, and the skip is right for what it was
+    written for: an entry whose recorded run root is one this module searches
+    lives in the corpus now, so reporting it "NOT produced" here would charge
+    the flow with a defect whose evidence is simply in another repository.
+
+    It was applied to the whole cell. Entries recording a root of a kind this
+    module searches on NO host went with it — and those are not waiting on the
+    pointer. #527 removed every off-repository search from this dimension, and
+    the published corpus does not carry those trees either, so the pointer moves
+    them not at all. Measured on a fresh checkout of this commit before the
+    carve-out: the dimension reported no failure at all while seven such
+    citations across six cells went unexamined, which is a clean run over a
+    population nobody looked at — the silent-omission shape this repository
+    exists to refuse.
+
+    BOTH DIRECTIONS, because a carve-out that fires on everything is not a
+    carve-out and would simply have deleted the skip:
+
+    * a record citing a root this module SEARCHES still SKIPS. This is the one
+      that fails if the fix over-fires, and it is why the skip's own rationale
+      survives intact.
+    * a record citing a root it never searches REFUSES, naming the path the
+      record wanted. This is the one that fails if the fix is reverted.
+
+    Both run against a manifest synthesised in the test, so neither direction
+    can go vacuous when the real records are repaired — which is the whole
+    intent of #1266.
+    """
+    SEARCHED, NEVER = "root-this-module-searches", "root-on-one-machine-only"
+    ANSWERABLE = "phase3/stage3/probe/answerable.json"
+    UNANSWERABLE = "phase3/stage3/probe/unanswerable.json"
+
+    # ---- the predicate itself, on a record carrying one of each -------
+    sid = _synthetic_citation_world(monkeypatch, {
+        ANSWERABLE: _cite(SEARCHED, ANSWERABLE),
+        UNANSWERABLE: _cite(NEVER, UNANSWERABLE),
+    })
+    cites = unanswerable_citations(sid)
+    assert [c[0] for c in cites] == [UNANSWERABLE], (
+        f"the predicate must select exactly the citation no corpus can answer, "
+        f"and it selected {[c[0] for c in cites]}. Selecting the answerable one "
+        f"too would turn the corpus skip off wholesale and report the moved "
+        f"cells as a flow defect; selecting neither is the omission this guard "
+        f"exists for.")
+    assert cites[0][1] == NEVER and cites[0][2] == UNANSWERABLE, (
+        f"the finding must carry the root it wanted and the path it wanted, or "
+        f"nobody can act on it: {cites[0]}")
+
+    # ---- REVERSE: only answerable citations, the skip is untouched ----
+    sid = _synthetic_citation_world(monkeypatch,
+                                    {ANSWERABLE: _cite(SEARCHED, ANSWERABLE)})
+    assert unanswerable_citations(sid) == ()
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        test_d3_required_outputs_are_produced(_Cell(sid))
+    assert str(skipped.value) == SKIP_REASON, (
+        f"a cell whose every citation the corpus could answer must still skip "
+        f"with the corpus reason, not refuse: {skipped.value}")
+
+    # ---- FORWARD: the unanswerable citation refuses, by name ---------
+    #
+    # NOT `pytest.raises`. The behaviour this guard exists to catch is the cell
+    # SKIPPING, and `Skipped` derives from `BaseException`, so it escapes
+    # `pytest.raises(AssertionError)` and skips this guard instead of failing
+    # it. MEASURED on the reverted tree: the guard reported `1 skipped` — a
+    # guard that answers the revert by going silent is the same silent-omission
+    # defect it was written against, one level up. So the outcome is classified
+    # here and every branch that is not a refusal is raised as one.
+    sid = _synthetic_citation_world(monkeypatch, {
+        ANSWERABLE: _cite(SEARCHED, ANSWERABLE),
+        UNANSWERABLE: _cite(NEVER, UNANSWERABLE),
+    })
+    try:
+        test_d3_required_outputs_are_produced(_Cell(sid))
+    except pytest.skip.Exception:
+        raise AssertionError(
+            f"the cell SKIPPED over a citation no corpus can answer: it "
+            f"records {UNANSWERABLE!r} against run root {NEVER!r}, which this "
+            f"module searches on no host, so the corpus pointer cannot settle "
+            f"it and the skip's reason is not true of it. The entry left the "
+            f"denominator in silence — vibe-ic#1266."
+        ) from None
+    except AssertionError as exc:
+        msg = str(exc)
+    else:
+        raise AssertionError(
+            f"the cell PASSED over a citation no corpus can answer "
+            f"({UNANSWERABLE!r} from {NEVER!r}) — a clean run over a "
+            f"population nothing looked at."
+        )
+    for want in ("NOT DETERMINED", UNANSWERABLE, NEVER):
+        assert want in msg, (
+            f"the refusal must say NOT DETERMINED and name the path and the "
+            f"root the record wanted; {want!r} is missing from:\n{msg}")
+    assert ANSWERABLE not in msg, (
+        f"the refusal named an entry the corpus CAN answer, so it is reporting "
+        f"the moved cells as a defect rather than carving out the citations "
+        f"nothing can settle:\n{msg}")
+
+
+def test_d3_the_corpus_skip_covers_exactly_the_cells_it_can_explain():
+    """The same property over the REAL manifest, as a property not a pin.
+
+    :func:`unanswerable_citations` decides from the RECORD and the cell decides
+    from the record plus the tree, so the two could drift apart without either
+    being obviously wrong. This asserts they cannot: over every live cell, a
+    non-empty finding and a refusal-instead-of-skip are the same set.
+
+    Deliberately not a pinned population. A count would have to be edited every
+    time a record is repaired, and #1266's whole direction of travel is that
+    the population shrinks — nineteen when it was filed, seven on this commit.
+    A property neither goes stale as they are repaired nor goes vacuous if they
+    all are.
+    """
+    disagree = []
+    for cell in cells_for(DIM):
+        sid = cell.step_id
+        if step_record(sid)["verdict"].startswith("NA_"):
+            continue
+        cites = unanswerable_citations(sid)
+        if cites:
+            # The message must be constructible and must name every path it
+            # found, or the refusal degrades to a bare count.
+            msg = _corpus_skip_would_hide(sid, cites)
+            for _entry, label, wanted in cites:
+                if wanted not in msg or label not in msg:
+                    disagree.append(
+                        f"step {sid}: the NOT DETERMINED message drops "
+                        f"{wanted!r} from {label!r}")
+        if run_roots() or corpus_root() is not None:
+            # The skip branch is not reached here, so there is nothing to
+            # cross-check against; the predicate half above still ran.
+            continue
+        try:
+            test_d3_required_outputs_are_produced(_Cell(sid))
+        except pytest.skip.Exception:
+            refused = False
+        except AssertionError:
+            refused = True
+        else:
+            refused = False
+        if refused != bool(cites):
+            disagree.append(
+                f"step {sid}: unanswerable_citations() found {len(cites)} but "
+                f"the cell {'refused' if refused else 'did not refuse'} — the "
+                f"predicate and the cell disagree about whether the corpus "
+                f"skip can explain this cell")
+    assert not disagree, (
+        f"{len(disagree)} disagreement(s) between the citations no corpus can "
+        f"answer and the cells that refuse for them:\n  " + "\n  ".join(disagree)
     )
 
 
