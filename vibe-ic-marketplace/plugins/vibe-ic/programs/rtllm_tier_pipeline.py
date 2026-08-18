@@ -71,6 +71,7 @@ if str(_HERE) not in sys.path:
 # Reused (import, read — NOT modified) — the shipped pieces this pipeline composes.
 import rtllm_port_bridge as _bridge          # noqa: E402  RTLLM prose -> bullet ports
 import spec_artifact_registry as _registry   # noqa: E402  deterministic emit chain
+import harness_verdict_forgery_check as _forgery  # noqa: E402  vibe-ic#1745
 try:
     import rtllm_iface_recover as _iface      # noqa: E402  header-dialect recoverer
 except Exception:                              # pragma: no cover
@@ -193,6 +194,20 @@ def testbench_verdict(out: str, returncode: Optional[int] = None) -> Tuple[bool,
 
     # (4) FAIL-SAFE — no verdict the contract recognises.
     return False, "no recognisable testbench verdict in transcript"
+# The PASS DIRECTION of the contract above, as patterns (vibe-ic#1745). The DUT
+# shares stdout with the testbench, so a submission can PRINT any of these and be
+# scored a pass on logic it never implemented. Derived from the SAME four forms
+# testbench_verdict() reads, so the reader and the forgery gate cannot drift:
+# the counted line with a ZERO count, the pass banner, and a whole-line pass
+# token. The failure forms are deliberately absent — a candidate that prints a
+# FAILURE token can only score itself worse, and flagging that would reject
+# honest debug output for no gain.
+PASS_DIRECTION_PATTERNS = (
+    r"Test\s+completed\s+with\s+0+\s*(?:/\s*\d+\s*)?(?:failure|error)s?",
+    _BANNER_PASS_RE.pattern,
+    _LINE_PASS_RE.pattern,
+)
+
 # data files a testbench may $readmemh / $readmemb at runtime (copied into the
 # scratch build dir so relative paths resolve — the cwd=design rule).
 _DATA_EXT = (".txt", ".hex", ".dat", ".mem", ".data", ".list", ".bin")
@@ -261,7 +276,8 @@ def required_module_name(design_dir: str) -> Optional[str]:
 # (0) the iverilog scorer — RTLLM's pass/fail oracle (VCS -> iverilog disclosed)
 # --------------------------------------------------------------------------- #
 def iverilog_score(design_dir: str, rtl_text: str, top: str,
-                   timeout_run: int = 30) -> Tuple[bool, bool, str]:
+                   timeout_run: int = 30,
+                   forgery_check: bool = True) -> Tuple[bool, bool, str]:
     """Compile `rtl_text` (defining module `top`) together with the design's
     testbench.v in a SCRATCH COPY of the design dir (so relative $readmemh data
     files resolve — the cwd=design rule), run it under vvp, and apply RTLLM's
@@ -275,6 +291,16 @@ def iverilog_score(design_dir: str, rtl_text: str, top: str,
     tb = os.path.join(design_dir, "testbench.v")
     if not os.path.exists(tb):
         return False, False, "no testbench.v"
+    # vibe-ic#1745 — the DUT shares stdout with the testbench, so a candidate can
+    # PRINT the very verdict statement testbench_verdict() reads back. Refuse to
+    # score such a candidate: it answered the question about the SCORER, not the
+    # question about the circuit. `forgery_check=False` is for the FLOOR prover,
+    # which feeds the GOLDEN here — the golden is not a submission, and a
+    # floor claim must not be manufactured out of this gate.
+    if forgery_check:
+        _forged = _forgery.forgery_reason(rtl_text or "", PASS_DIRECTION_PATTERNS)
+        if _forged is not None:
+            return True, False, _forged
     with tempfile.TemporaryDirectory() as td:
         for f in os.listdir(design_dir):
             src = os.path.join(design_dir, f)
@@ -346,7 +372,8 @@ def golden_floor_evidence(design_dir: str) -> Optional[str]:
     if target is None:
         target = top if top in gmods else gmods[0]
     renamed = re.sub(rf"\bmodule\s+{re.escape(target)}\b", f"module {top}", gtext)
-    compiled, passed, log = iverilog_score(design_dir, renamed, top)
+    compiled, passed, log = iverilog_score(design_dir, renamed, top,
+                                          forgery_check=False)
     if passed:
         return None
     if not compiled:

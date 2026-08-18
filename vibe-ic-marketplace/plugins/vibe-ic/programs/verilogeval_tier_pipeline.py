@@ -77,6 +77,7 @@ from _specrtl_common import (                     # noqa: E402  the spec contrac
     extract_spec_contract, parse_rtl_ports, strip_comments,
 )
 import semantic_spec_floor_check as _semfloor     # noqa: E402  golden-vs-prompt semantic floor
+import harness_verdict_forgery_check as _forgery  # noqa: E402  vibe-ic#1745 DUT-verdict forgery
 
 # Extra deterministic emitters tried AFTER the shipped registry (so they can never
 # hijack a problem an existing registry solver already handles). Each keys on
@@ -97,6 +98,10 @@ TIER_FLOOR = 5     # genuine floor: golden ref FAILS its own test under iverilog
 # drove a comparison — e.g. an elaboration that produced no stimulus) is NOT read
 # as a pass.
 _MISMATCH_RE = re.compile(r"Mismatches:\s*(\d+)\s+in\s+(\d+)\s+samples")
+# The PASS DIRECTION of that same line, as a pattern — what a forger has to print
+# to be scored a pass (vibe-ic#1745). Kept beside _MISMATCH_RE so the verdict
+# reader and the forgery gate can never drift apart.
+_PASS_DIRECTION_RE = r"Mismatches:\s*0+\s+in\s+[1-9]\d*\s+samples"
 _TOPMODULE = "TopModule"
 
 
@@ -311,7 +316,8 @@ def gate_check(gate: dict, candidate_rtl: str) -> dict:
 # (3) iverilog verification — score a candidate against the official test
 # --------------------------------------------------------------------------- #
 def iverilog_score(prob: Problem, candidate_rtl: str,
-                   timeout: int = 60) -> Tuple[bool, str]:
+                   timeout: int = 60,
+                   forgery_check: bool = True) -> Tuple[bool, str]:
     """Compile `candidate_rtl` (renamed to TopModule) + the golden ref (RefModule)
     + the official testbench and run vvp. Return (passed, detail) where passed is
     True iff the test reports `Mismatches: 0 in N samples`. The golden ref is used
@@ -320,6 +326,19 @@ def iverilog_score(prob: Problem, candidate_rtl: str,
     """
     if not candidate_rtl or not candidate_rtl.strip():
         return False, "no candidate RTL"
+    # vibe-ic#1745 — the DUT shares stdout with the testbench, so a candidate can
+    # PRINT the `Mismatches: 0 in N samples` line this function reads. Measured:
+    # two candidates with identical wrong logic, the second adding only
+    # `initial $display("Mismatches: 0 in 20 samples");`, scored FAIL and PASS
+    # while the simulation reported `Mismatches: 10 in 20` for both. A candidate
+    # that can print the verdict is not scoreable on the transcript the verdict
+    # is read from. `forgery_check=False` is for the FLOOR prover only, which
+    # feeds the GOLDEN here — the golden is not a submission, and a floor claim
+    # must not be manufactured out of this gate.
+    if forgery_check:
+        _forged = _forgery.forgery_reason(candidate_rtl, [_PASS_DIRECTION_RE])
+        if _forged is not None:
+            return False, _forged
     # Defend against a candidate that named its module something other than
     # TopModule: the harness binds `TopModule`. We DO NOT rename — a Tier1 emit
     # already targets TopModule; if it doesn't, that is a real failure to surface.
@@ -397,7 +416,8 @@ def floor_evidence(prob: Problem, timeout: int = 60) -> Optional[str]:
     ref_text = prob.ref_path.read_text(errors="replace")
     # (1) structural: rename golden RefModule -> TopModule and run its own test.
     golden_as_top = re.sub(r"\bRefModule\b", "TopModule", ref_text)
-    ok, detail = iverilog_score(prob, golden_as_top, timeout=timeout)
+    ok, detail = iverilog_score(prob, golden_as_top, timeout=timeout,
+                                forgery_check=False)
     if not ok:
         return (f"golden _ref.sv fails its OWN _test.sv under iverilog "
                 f"(golden-as-TopModule -> {detail}); no candidate can ever score")

@@ -65,6 +65,46 @@ if _PROGRAMS_DIR.is_dir() and str(_PROGRAMS_DIR) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS_DIR))
 
 
+# vibe-ic#1745 — the functional verdict is read off a transcript the DUT SHARES
+# with the harness testbench, so a submission that simply PRINTS the pass line is
+# recorded as a PASS. Measured at head 397b3f25f: two candidates with IDENTICAL
+# wrong logic, the second adding only `initial $display("Mismatches: 0 in 20
+# samples");` — the simulation reported `Mismatches: 10 in 20` for BOTH, and this
+# scorer recorded FAIL, PASS. Refuse to score a candidate that can print THIS
+# scorer's own `pass_regex`. Guarded import: a missing programs/ dir must not
+# break scoring, but it must not silently un-check it either — absence is
+# DISCLOSED in pass_at_1.json and on stdout (see main()).
+try:
+    import harness_verdict_forgery_check as _forgery  # noqa: E402
+except Exception:                                     # pragma: no cover - broken checkout
+    _forgery = None
+
+
+def _forgery_verdict(ident: str, name: str, rtl_path, args: dict) -> Optional[dict]:
+    """A FAIL result iff the candidate can emit this scorer's own pass verdict.
+
+    FAIL, not SKIP: the submission was ATTEMPTED, so it stays in the denominator
+    (a forged answer that left the denominator would be the favourable state
+    disappearing, the same defect one layer along)."""
+    if _forgery is None:
+        return None
+    pat = args.get("pass_regex")
+    if not pat:
+        return None
+    try:
+        text = Path(rtl_path).read_text(errors="replace")
+    except OSError:
+        return None
+    try:
+        reason = _forgery.forgery_reason(text, [pat])
+    except re.error:
+        return None
+    if reason is None:
+        return None
+    return {ident: name, "verdict": "FAIL", "reason": "verdict_forgery",
+            "forgery_detail": reason}
+
+
 def _registry_path() -> Path:
     return Path(__file__).resolve().parent / "BENCHMARK_REGISTRY.json"
 
@@ -1705,6 +1745,9 @@ def _score_shape_b_impl(design: str, samples: Path, dataset: Path,
         return {"design": design, "verdict": "FAIL", "reason": "no_sample"}
     if not tb.is_file():
         return {"design": design, "verdict": "FAIL", "reason": "no_testbench"}
+    forged = _forgery_verdict("design", design, sample, args)
+    if forged is not None:
+        return forged
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "bin")
         sample_c = _power_up_fixed(sample, td)  # canonical power-up gate
@@ -2012,6 +2055,9 @@ def _score_shape_c_impl(prob: str, samples: Path, dataset: Path,
     ref = dataset / f"{prob}{layout['ref_suffix']}" if layout.get("ref_suffix") else None
     if not sample.is_file():
         return {"problem": prob, "verdict": "FAIL", "reason": "no_sample"}
+    forged = _forgery_verdict("problem", prob, sample, args)
+    if forged is not None:
+        return forged
     with tempfile.TemporaryDirectory() as td:
         binp = os.path.join(td, "bin")
         sample_c = _power_up_fixed(sample, td)  # canonical power-up gate
@@ -2247,6 +2293,8 @@ def main():
     n_nosamp, nosamp_problems, pct_authored, partially = \
         no_sample_disclosure(results, n, npass, ident)
     n_authored = n - n_nosamp
+    forged_rows = [r for r in results if r.get("reason") == "verdict_forgery"]
+    n_forged = len(forged_rows)
     summary = {
         "benchmark": entry["title"],
         "shape": shape,
@@ -2275,6 +2323,19 @@ def main():
         "no_sample_count": n_nosamp,
         "no_sample_problems": nosamp_problems,
         "pass_at_1_excluding_no_sample_pct": pct_authored,
+        # vibe-ic#1745 — candidates refused because they can PRINT this scorer's
+        # own pass verdict. They are counted FAIL and stay in the denominator;
+        # the count travels with the number so a reader can see that a forgery
+        # was attempted rather than only that a design failed. `check` names the
+        # state of the instrument itself: a scorer that could not load the gate
+        # must say so, never quietly score without it.
+        "verdict_forgery_check": ("RAN" if _forgery is not None else
+                                  "NOT CHECKED (programs/"
+                                  "harness_verdict_forgery_check.py not importable)"),
+        "verdict_forgery_count": n_forged,
+        "verdict_forgery_problems": [
+            {"problem": r[ident].split('/')[-1],
+             "detail": r.get("forgery_detail", "")} for r in forged_rows],
         # The one bit a reader most needs and currently has to reconstruct by
         # counting the `results` array by hand.
         "partially_authored": partially,
@@ -2296,6 +2357,16 @@ def main():
               f"Of the {n_authored} authored: "
               f"{summary['pass_at_1_excluding_no_sample_pct']}%. "
               f"Missing: {summary['no_sample_problems']}")
+    if _forgery is None:
+        print("  ⚠ VERDICT-FORGERY CHECK NOT CHECKED — programs/"
+              "harness_verdict_forgery_check.py could not be imported, so no "
+              "candidate was scanned for the scorer's own pass verdict "
+              "(vibe-ic#1745). This number is not forgery-guarded.")
+    if n_forged:
+        print(f"  ⚠ VERDICT FORGERY — {n_forged} candidate(s) can PRINT this "
+              f"scorer's own pass verdict and were refused (counted FAIL, kept "
+              f"in the denominator): "
+              f"{[d['problem'] for d in summary['verdict_forgery_problems']]}")
     if nd_pass:
         print(f"  ⚠ discriminating-TB audit: {nd_pass} PASS have a NON-DISCRIMINATING TB "
               f"(a constant-0 stub also passes — benchmark TB defect, counted under the "
