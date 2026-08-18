@@ -4575,6 +4575,12 @@ def test_d3_the_publish_scope_is_what_the_publisher_actually_stages(tmp_path):
         p = run / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
+    # `benchmark_evidence_publish` REFUSES a run that cannot name the PDK
+    # revision it signed off against (W6); this probe needs a STAGED cell to
+    # read the contract off, so the run has to be publishable.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _pdk_revision_fixture as _pdk_fixture
+    _pdk_fixture.write_run_pdk_revision(run)
 
     dest_root = tmp_path / "benchmark-data"
     proc = subprocess.run(
