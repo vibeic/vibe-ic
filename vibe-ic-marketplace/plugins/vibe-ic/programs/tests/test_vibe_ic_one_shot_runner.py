@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,70 @@ PROG = Path(__file__).resolve().parent.parent / \
 #: this default: `ci_harness_timeout_ceiling_check` could not read a bound
 #: spelled as a parameter default until vibe-ic#1277, so nothing in the repo
 #: could see that one of the ten really takes 111.9-211.3 s.
+#: THE ONE LAUNCH IN THIS FILE THAT CANNOT FIT THE WINDOW, and vibe-ic#1734
+#: is why it is a poll loop rather than a bigger number.
+#:
+#: The landing driver has no total runtime ceiling, but it does classify a lane
+#: NORECORD when no VALIDATED pytest lifecycle event arrives for its 300 s
+#: stall window, and NORECORD refuses the landing. Captured output and CPU
+#: activity are deliberately not progress. A test blocked inside one
+#: `subprocess.run(...)` completes no item, so it advances nothing for the
+#: whole of that call -- and this launch was MEASURED at 111.9 / 169.3 /
+#: 211.3 s on this box, under a bound of 400 s. A run reaching that bound
+#: would have cost this file its record, which is the exact "loses its verdict"
+#: outcome `ci_harness_timeout_ceiling_check` exists to prevent. It read
+#: `@pytest.mark.timeout(1200)` as authority to allow it; that marker was an
+#: Unknown mark on the landing path all along.
+#:
+#: So the lease is RENEWED instead of claimed. `proc.wait(timeout=...)` returns
+#: every 5 s at the latest, and each expiry publishes one finite, strictly +1
+#: `domain_progress` checkpoint against a fixed total -- the protocol the
+#: supervisor validates, and the same shape `test_matrix_63x8_coverage.py`
+#: already uses for its 124.76 s nested run. The longest no-progress gap this
+#: launch can now produce is one slice, so the bound the gate judges is 5 s and
+#: the work may honestly take as long as it takes.
+_RELAY_SLICE_S = 5
+_RELAY_TOTAL_SLICES = 240
+
+
+def _domain_progress(scope: str, completed: int, total: int) -> None:
+    """Emit one finite semantic checkpoint when the landing plugin is loaded.
+
+    A no-op outside the landing driver, where nothing is watching for one.
+    """
+    plugin = sys.modules.get("_pytest_progress_plugin")
+    progress = getattr(plugin, "domain_progress", None)
+    if progress is not None:
+        progress(scope, completed, total)
+
+
+def _run_relaying_progress(argv: list, scope: str, log: Path) -> str:
+    """Run `argv` to completion, renewing the landing lease every slice.
+
+    Returns the merged stdout/stderr. Output goes to a file rather than a pipe
+    because a poll loop that never drains a pipe deadlocks on a chatty child --
+    the failure this shape is otherwise prone to.
+    """
+    with log.open("w+", encoding="utf-8") as sink:
+        proc = subprocess.Popen(argv, stdout=sink, stderr=subprocess.STDOUT,
+                                text=True)
+        for slice_index in range(1, _RELAY_TOTAL_SLICES + 1):
+            try:
+                proc.wait(timeout=_RELAY_SLICE_S)
+                break
+            except subprocess.TimeoutExpired:
+                _domain_progress(scope, slice_index, _RELAY_TOTAL_SLICES)
+        else:
+            proc.kill()
+            proc.wait(timeout=_RELAY_SLICE_S)
+            raise AssertionError(
+                f"{scope}: still running after "
+                f"{_RELAY_SLICE_S * _RELAY_TOTAL_SLICES}s "
+                f"({_RELAY_TOTAL_SLICES} relayed slices) -- that is a hang, "
+                f"not slow work:\n{log.read_text(errors='replace')[-4000:]}")
+    return log.read_text(errors="replace")
+
+
 def _run(args: list, timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(PROG)] + args,
@@ -106,8 +171,7 @@ def test_integration_aggregate_report_shape(tmp_path):
         assert "name" in p and "verdict" in p
 
 
-#: THE ONE TEST IN THIS FILE THAT DOES NOT FIT THE 180 s ITEM BOUND, and until
-#: vibe-ic#1277 nothing in the repo could say so.
+#: THE ONE TEST IN THIS FILE THAT CANNOT BE MADE TO FIT A SINGLE BOUND.
 #:
 #: Staging `input/phase1_prompt.md` is what makes phase1 RUN, and phase1 then
 #: hands real L-docs to phase2, so this is the only test here that drives the
@@ -115,27 +179,20 @@ def test_integration_aggregate_report_shape(tmp_path):
 #:
 #:     111.9 s   169.3 s   211.3 s      (phase1 ~75 s PASS, phase2 ~128 s FAIL)
 #:
-#: against a 180 s item bound. It straddles it, so this test is a coin-flip
-#: SESSION KILL on main today — the failure mode with no summary line and no
-#: `FAILED` line, which greps as a clean sweep. Its 180 s inner bound was
-#: irrelevant to that: the item bound is what it exceeds.
+#: There is no `--skip-phase2`, so the work cannot be squeezed into the 100 s
+#: per-call ceiling; doing that would convert a lost record into a false red,
+#: which `test_matrix_63x8_census_freshness.py` already rejected for the same
+#: reason. It previously carried `@pytest.mark.timeout(1200)` and a 400 s inner
+#: bound, on the reasoning that `1200 // 3 = 400` was the ceiling the gate then
+#: held the launch to. vibe-ic#1734 removed that lever: the marker was never
+#: honoured on the landing path (Unknown mark), and 400 s exceeded the 300 s
+#: no-progress window that CAN still end the lane.
 #:
-#: WHY A MARKER AND AN INLINE LAUNCH RATHER THAN A SMALLER BOUND, which is the
-#: gate's first remedy: there is no `--skip-phase2`, so the work cannot be made
-#: to fit 60 s — squeezing the bound would convert a session kill into a false
-#: red, which `test_matrix_63x8_census_freshness.py` already rejected for the
-#: same reason. The marker is the gate's SECOND remedy ("move the test out of
-#: the targeted subset if it genuinely needs longer") and the mechanism is
-#: pinned in this tree by `test_issue1181_probe_budget_and_summary.py::
-#: test_a_bound_the_work_fits_restores_the_summary` — a marked test under
-#: `--timeout=2 --timeout-method=thread` yields `2 passed`, not a dead session.
-#:
-#: 1200 = a CEILING, not a target: 5.7x the worst run measured above, and
-#: `1200 // 3 = 400` is the ceiling the gate then holds the launch to, itself
-#: 1.9x that worst run. The launch is INLINE rather than through `_run` on
-#: purpose — a marker governs the item it decorates, so a bound inside a
-#: module-level helper shared with nine other tests could not be covered by it.
-@pytest.mark.timeout(1200)
+#: The launch therefore RELAYS instead of claiming a ceiling. See
+#: `_run_relaying_progress`: the longest gap with no validated pytest event is
+#: one 5 s slice, so the lease is genuinely renewed and the run may take the
+#: 211 s it takes. It stays INLINE rather than going through `_run` because
+#: `_run` is shared with nine other tests that must keep their ordinary bound.
 def test_need_phase1_auto_detects_prompt_input(tmp_path):
     """Staging input/phase1_prompt.md → phase1 attempts to run.
 
@@ -148,17 +205,69 @@ def test_need_phase1_auto_detects_prompt_input(tmp_path):
     inp.mkdir(parents=True)
     (inp / "phase1_prompt.md").write_text(
         "Design a generic test chip TST_CHIP for orchestrator coverage.\n")
-    cp = subprocess.run(
+    out = _run_relaying_progress(
         [sys.executable, str(PROG), str(project), "--skip-phase3",
          "--skip-analog", "--ic-name", "TST_CHIP"],
-        capture_output=True, text=True, timeout=400,
-    )
-    body = json.loads(
-        (project / "reports" / "orchestrator" / "vibe_ic_one_shot.json").read_text())
+        "one-shot-phase1-autodetect", tmp_path / "run.log")
+    report = project / "reports" / "orchestrator" / "vibe_ic_one_shot.json"
+    assert report.is_file(), out[-4000:]
+    body = json.loads(report.read_text())
     p_phase1 = next(p for p in body["phases"] if p["name"] == "phase1")
     # phase1 attempted → not SKIPPED at the top dispatcher level.
     # (Inside phase1, individual steps may be SKIP/WAIVED — that's fine.)
     assert p_phase1["verdict"] != "SKIPPED"
+
+
+def test_the_relay_renews_the_lease_instead_of_claiming_a_ceiling(tmp_path):
+    """The launch above is only safe because this really emits.
+
+    A relay that silently no-ops would look exactly like the fixed bound it
+    replaced: the lane would go the whole run with no validated event and be
+    classified NORECORD. So the checkpoints are observed, and observed to have
+    the shape the supervisor validates — strictly `+1` against a FIXED total,
+    which is what makes an accidental duplicate unable to keep a stuck item
+    alive.
+    """
+    seen = []
+    stub = types.ModuleType("_pytest_progress_plugin")
+    stub.domain_progress = lambda scope, c, t: seen.append((scope, c, t))
+    saved = sys.modules.get("_pytest_progress_plugin")
+    sys.modules["_pytest_progress_plugin"] = stub
+    try:
+        out = _run_relaying_progress(
+            [sys.executable, "-c",
+             "import time, sys; print('alive'); sys.stdout.flush(); "
+             f"time.sleep({_RELAY_SLICE_S * 3 + 2})"],
+            "relay-probe", tmp_path / "probe.log")
+    finally:
+        if saved is None:
+            del sys.modules["_pytest_progress_plugin"]
+        else:
+            sys.modules["_pytest_progress_plugin"] = saved
+
+    assert "alive" in out, out
+    assert len(seen) >= 3, (
+        f"a child outliving three {_RELAY_SLICE_S}s slices must publish at "
+        f"least three checkpoints; got {seen}")
+    assert [c for _s, c, _t in seen] == list(range(1, len(seen) + 1)), seen
+    assert {t for _s, _c, t in seen} == {_RELAY_TOTAL_SLICES}, seen
+    assert {sc for sc, _c, _t in seen} == {"relay-probe"}, seen
+
+
+def test_a_child_that_never_finishes_is_refused_rather_than_relayed_forever(
+        tmp_path, monkeypatch):
+    """The relay must not become the silencer it replaced.
+
+    Renewing a lease forever would turn a genuine hang into a run that never
+    ends and never reports — worse than the bound it replaced, not better. The
+    budget is finite, and reaching it is an ASSERTION, not a quiet return.
+    """
+    monkeypatch.setattr(sys.modules[__name__], "_RELAY_SLICE_S", 1)
+    monkeypatch.setattr(sys.modules[__name__], "_RELAY_TOTAL_SLICES", 2)
+    with pytest.raises(AssertionError, match="that is a hang, not slow work"):
+        _run_relaying_progress(
+            [sys.executable, "-c", "import time; time.sleep(600)"],
+            "hang-probe", tmp_path / "hang.log")
 
 
 def test_edge_top_name_forwarded(tmp_path):

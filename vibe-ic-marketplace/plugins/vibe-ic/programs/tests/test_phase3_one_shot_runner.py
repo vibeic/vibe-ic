@@ -66,13 +66,21 @@ PROG = Path(__file__).resolve().parent.parent / \
 _ACK_OSS = "--allow-oss-pdk-fallback"
 
 
-#: 150 s against the 600 s item bound `pytestmark` declares above (ceiling
-#: 600 // 3 = 200). The old 90 s was measured against the wrong denominator:
-#: it was chosen when the item bound was the harness's 180 s, where 90 s is
-#: half the budget and two calls in one test would end the SESSION.
-#: Invisible to `ci_harness_timeout_ceiling_check` until vibe-ic#1277 --
-#: the bound is a parameter default, which the gate could not read.
-def _run(args: list, timeout: int = 150) -> subprocess.CompletedProcess:
+#: 90 s, and vibe-ic#1734 is why the number moved back down. The 150 s it
+#: replaces was argued from "the 600 s item bound `pytestmark` declares above
+#: (ceiling 600 // 3 = 200)" -- a denominator that does not exist. The landing
+#: lanes run pytest with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and no
+#: `-p pytest_timeout`, so the marker above is an Unknown mark that bounds
+#: nothing; what can still end a lane is the driver's 300 s NO-PROGRESS window,
+#: whose ceiling is 300 // 3 = 100.
+#:
+#: MEASURED on this box rather than argued: the whole file is 6 items in
+#: 77.27 s and its slowest single call is 16.96 s (the next four are 13.40 /
+#: 13.10 / 12.83 / 12.75 s). 90 s is 5.3x that worst call, so this is a
+#: CEILING and not a target -- it is not the 60 s the file previously refused
+#: as a false red under contention, and it leaves the window a third in
+#: reserve.
+def _run(args: list, timeout: int = 90) -> subprocess.CompletedProcess:
     if args and not args[0].startswith("-") and _ACK_OSS not in args:
         args = args + [_ACK_OSS]
     return subprocess.run(
