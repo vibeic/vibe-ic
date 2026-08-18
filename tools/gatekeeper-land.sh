@@ -403,6 +403,68 @@ run_pytest() {
     echo "  FAIL  targeted test selection produced no files — not a clean result"
     FAILED=1; rm -f "$sel"; return
   fi
+  # ── DO NOT RUN WHAT CANNOT HAVE CHANGED (opt-in, OFF by default) ──────────
+  #
+  # `GATEKEEPER_TARGETED_CACHE=<dir>` lets an EXACT REPEAT of this arm replay a
+  # recorded GREEN measurement instead of paying for it again. Exact means
+  # exact: `programs/targeted_arm_cache.py` keys on the byte content of every
+  # tracked, untracked and non-regenerable-ignored path in the tree, on this
+  # selection, on the verbatim driver and pytest argv, on the instrument
+  # (harness, driver, selector, watchdog, progress plugin, write guard, scratch
+  # guard, every conftest.py, pytest.ini, plugin.json, and the cache program
+  # itself), on the interpreter and its bytes, on every installed
+  # distribution's RECORD, on the full content of the six packages this arm
+  # loads, on the whole environment, and on host+boot identity. Read its
+  # docstring before touching this: the per-file variant was designed, measured
+  # and REFUSED, and the reasons are recorded there.
+  #
+  # OFF BY DEFAULT, and a hit is only ever granted for a record that was GREEN
+  # and complete for EVERY selected file. The cache can therefore never turn a
+  # red into a pass, and it cannot hand this round a failure exemption.
+  #
+  # WHAT A HIT COSTS, SAID PLAINLY: the `suite_write_guard:` line the block
+  # below insists on is then a RECORDED line, not a live one. The live
+  # write-guard baseline/compare around the whole full tier is unaffected and
+  # still runs.
+  local cache_hit=0 cache_rc=0
+  local cache_log="" cache_msg=""
+  local RS drv_argv pyt_argv
+  RS="$(printf '\037')"
+  local -a drv_parts=(--selection "$sel" --junit "$merged"
+      --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}"
+      --aggregate-check
+      --aggregate-stall-after "${GATEKEEPER_PYTEST_AGGREGATE_STALL_AFTER:-300}"
+      --fallback-jobs "${GATEKEEPER_PYTEST_FALLBACK_JOBS:-8}"
+      --fallback-rescue-jobs "${GATEKEEPER_PYTEST_RESCUE_JOBS:-32}"
+      --stop-after-failures "${GATEKEEPER_PYTEST_MAXFAIL:-10}")
+  local -a pyt_parts=(python3 -m pytest -q -p pytest_timeout -p no:cacheprovider
+      "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread)
+  drv_argv="$(printf "%s${RS}" "${drv_parts[@]}")"; drv_argv="${drv_argv%$RS}"
+  pyt_argv="$(printf "%s${RS}" "${pyt_parts[@]}")"; pyt_argv="${pyt_argv%$RS}"
+  local cache_key=""
+  if [ -n "${GATEKEEPER_TARGETED_CACHE:-}" ]; then
+    cache_log="$(mktemp -t gk_cachelog.XXXXXX)"
+    cache_key="$(mktemp -t gk_cachekey.XXXXXX)"
+    # PRE-RUN key first: the arm can write into its own subject where nothing
+    # blocking can see it. MEASURED on this tree — a 279-file arm left 31
+    # git-IGNORED, non-regenerable files behind (`scratch_geom_signoff_tests/**`,
+    # `reports/phase3/antenna.json`), which `git status --porcelain` does not
+    # show, so neither the write guard nor the closing fingerprint gate reports
+    # them. A key recomputed after the arm therefore names a different tree, and
+    # publishing under it would file the answer against the wrong question.
+    python3 "$PROGRAMS/targeted_arm_cache.py" \
+      --repo "$ROOT" --plugin "$PLUGIN" --selection "$sel" \
+      --pytest-argv="$pyt_argv" --driver-argv="$drv_argv" \
+      prepare --key-out "$cache_key" >/dev/null 2>&1 || true
+    cache_msg="$(python3 "$PROGRAMS/targeted_arm_cache.py" \
+         --repo "$ROOT" --plugin "$PLUGIN" --selection "$sel" \
+         --cache "$GATEKEEPER_TARGETED_CACHE" \
+         --pytest-argv="$pyt_argv" --driver-argv="$drv_argv" \
+         lookup --out-junit "$merged" --out-log "$cache_log" 2>&1)"
+    cache_rc=$?
+    printf '%s\n' "$cache_msg" | sed 's/^/          /'
+    [ "$cache_rc" -eq 0 ] && cache_hit=1
+  fi
   # THIS SESSION'S ENVIRONMENT IS PART OF THE GATE (vibe-ic#1047, one level up).
   #
   # #1047 fixed the environment of a pytest this suite SPAWNS. The same defect was
@@ -463,7 +525,12 @@ run_pytest() {
   # `--timeout=180` stays declared HERE — `ci_harness_timeout_ceiling_check`
   # resolves the binding harness bound from this file (EXTRA_HARNESS_RELS) and a
   # bound moved into Python would vanish from its view.
-  if out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
+  if [ "$cache_hit" = "1" ] && out="$(cat "$cache_log")"; then
+    rc=0
+    printf '  REPORT  targeted tests REPLAYED from an exact-repeat cache hit — '
+    printf 'nothing ran\n'
+  elif [ "$cache_hit" != "1" ] \
+     && out="$( cd "$PLUGIN" && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 programs/pytest_per_file_junit.py \
         --selection "$sel" --junit "$merged" \
         --stall-after "${GATEKEEPER_PYTEST_FILE_STALL_AFTER:-300}" \
         --aggregate-check \
@@ -474,6 +541,20 @@ run_pytest() {
         -- python3 -m pytest -q -p pytest_timeout -p no:cacheprovider \
         "${maxfail[@]+"${maxfail[@]}"}" --timeout=180 --timeout-method=thread 2>&1 )"; then
     rc=0
+    # PUBLISH only after a REAL, green, complete measurement of THIS tree, and
+    # under the PRE-RUN key, because the tree at the END of the arm is not
+    # always the tree the arm was ASKED about. The program still validates the
+    # record itself — complete for every selected file, and green — and stores
+    # nothing that is not.
+    if [ -n "${GATEKEEPER_TARGETED_CACHE:-}" ]; then
+      printf '%s\n' "$out" > "$cache_log"
+      python3 "$PROGRAMS/targeted_arm_cache.py" \
+        --repo "$ROOT" --plugin "$PLUGIN" --selection "$sel" \
+        --cache "$GATEKEEPER_TARGETED_CACHE" \
+        --pytest-argv="$pyt_argv" --driver-argv="$drv_argv" \
+        publish --junit "$merged" --log "$cache_log" --rc 0 \
+        --key-in "$cache_key" 2>&1 | sed 's/^/          /'
+    fi
     printf '  PASS  targeted tests (%s file(s))\n' "$(wc -l < "$sel")"
     # PAIRED GUARD for the autoload pin above. A green bought by quietly removing
     # the write guard from the session would be a false green, and it would look
@@ -523,6 +604,8 @@ run_pytest() {
     FAILED=1
   fi
   rm -f "$sel"
+  if [ -n "$cache_log" ]; then rm -f "$cache_log"; fi
+  if [ -n "$cache_key" ]; then rm -f "$cache_key"; fi
   if [ -n "$merged_tmp" ]; then rm -f "$merged_tmp"; fi
 }
 if [ "${GATEKEEPER_SKIP_TARGETED_TESTS:-0}" = "1" ]; then
