@@ -33,6 +33,12 @@ WHAT THIS FILE LOCKS
 3. The substituted cells are published as their own column and are NEVER inside
    a figure presented as enforcement. This is the assertion that fails on the
    unfixed tree.
+4. The published columns PARTITION the matrix — every cell is in exactly one.
+   The table had six columns and ``_join_axes`` emits nine labels, so the three
+   ``-SKIPPED`` ones were printed nowhere. Measured on 7c376e348: the total row
+   published 451 of 504 cells and dimension 3 published 11 of its 63, because
+   52 of its predicates could not run at all. Nothing was red about that row;
+   it simply did not mention the cells nobody had looked at.
 
 Run::
 
@@ -75,20 +81,28 @@ def _block() -> str:
 
 
 def _total_row(block: str):
-    """``(own, substituted, undeclared, contradicted, waived, na)``.
+    """``(own, substituted, undeclared, contradicted, not_measured, waived, na)``.
 
-    Six figures, not five. CONTRADICTED became a column of its own when the
-    three ENFORCED columns were moved onto the enforcement axis: they now span
-    the ENFORCED cells only, so without a column of its own a contradicted cell
-    would appear in no column at all and the row would silently drop 28 cells.
+    Seven figures, not six, and not five. Each column was added for the same
+    reason: a label the row had no column for is a cell printed nowhere.
+
+    * CONTRADICTED became a column when the three ENFORCED columns were moved
+      onto the enforcement axis: they now span the ENFORCED cells only, so
+      without a column of its own a contradicted cell would appear in no
+      column at all and the row would silently drop 28 cells.
+    * NOT MEASURED became a column when ``_join_axes`` started emitting
+      ``-SKIPPED``. MEASURED on 7c376e348 from the committed block: the total
+      row read ``17 44 367 0 8 15`` = 451 while the headline directly above it
+      read 504, and dimension 3 published ELEVEN of its 63 cells — its other 52
+      predicates could not run at all, and the row that dropped them looked
+      exactly like a dimension with nothing wrong in it.
     """
     m = re.search(
         r"\|\s*\*\*total\*\*\s*\|[^|]*\|"
-        r"\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|"
-        r"\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|",
+        + r"\s*\*\*(\d+)\*\*\s*\|" * 7,
         block)
     assert m, (
-        f"no ``**total**`` row with six bold figures found in the generated "
+        f"no ``**total**`` row with seven bold figures found in the generated "
         f"census block. The published total is the number people quote; if it "
         f"cannot be parsed it cannot be checked.\n{block[:1200]}"
     )
@@ -340,14 +354,21 @@ def test_the_published_total_equals_the_live_census():
     A second opinion taken from the same mistaken premise is not a second
     opinion.
     """
-    own, substituted, undeclared, contradicted, waived, na = _total_row(_block())
+    (own, substituted, undeclared, contradicted, not_measured,
+     waived, na) = _total_row(_block())
     states = {k: v.label for k, v in CV.enforcement_census().items()}
     subs = {k: v for k, v in CV.substitution_census().items()
             if states.get(k) == "ENFORCED"}
     live = {
         "ENFORCED": sum(1 for v in states.values() if v == "ENFORCED"),
         "CONTRADICTED": sum(
-            1 for v in states.values() if v == "ENFORCED-CONTRADICTED"),
+            1 for v in states.values() if v.endswith("-CONTRADICTED")),
+        # RECOMPUTED FROM THE LABEL, not from a list of the labels that happen
+        # to exist today. `_join_axes` mints `<STATE>-SKIPPED` for every state,
+        # so enumerating them here would reopen the hole this column closes the
+        # first time a new state appears.
+        "NOT_MEASURED": sum(
+            1 for v in states.values() if v.endswith("-SKIPPED")),
         "WAIVED": sum(1 for v in states.values() if v == "WAIVED"),
         "NA": sum(1 for v in states.values() if v == "NA"),
     }
@@ -366,6 +387,12 @@ def test_the_published_total_equals_the_live_census():
     assert contradicted == live["CONTRADICTED"], (
         f"the published CONTRADICTED ({contradicted}) does not reproduce; the "
         f"tree says {live['CONTRADICTED']}")
+    assert not_measured == live["NOT_MEASURED"], (
+        f"the published NOT MEASURED ({not_measured}) does not reproduce; the "
+        f"tree says {live['NOT_MEASURED']} cell(s) whose predicate could not "
+        f"run. This column is the one that is invisible when it is wrong: a "
+        f"cell nothing could look at, published as though it had been looked "
+        f"at, is indistinguishable from a clean cell.")
     assert own + substituted + undeclared == live["ENFORCED"], (
         f"the three ENFORCED columns sum to "
         f"{own + substituted + undeclared}, but {live['ENFORCED']} cells are "
@@ -373,14 +400,19 @@ def test_the_published_total_equals_the_live_census():
     # THE ONE THAT WOULD HAVE CAUGHT THE FOLD. Every assertion above compares a
     # published figure to a live figure, so all of them stayed green while the
     # headline said 453 and the row said 481: no single one of them spans both
-    # the headline and the row. This does -- the six columns must account for
-    # every cell exactly once.
-    assert own + substituted + undeclared + contradicted + waived + na == len(states), (
-        f"the published columns account for "
-        f"{own + substituted + undeclared + contradicted + waived + na} cells "
-        f"but the matrix has {len(states)}. A published row that does not "
-        f"partition is how a contradicted cell hides inside an enforcement "
-        f"figure.")
+    # the headline and the row. This does -- the seven columns must account for
+    # every cell exactly once. It was SIX until 7c376e348, and that is exactly
+    # how 53 unmeasured cells left the table while every other assertion here
+    # stayed green: each of them compared a column to the live count of the
+    # label it prints, and a label with no column is compared to nothing.
+    published = (own + substituted + undeclared + contradicted
+                 + not_measured + waived + na)
+    assert published == len(states), (
+        f"the published columns account for {published} cells but the matrix "
+        f"has {len(states)}. A published row that does not partition is how a "
+        f"contradicted cell hides inside an enforcement figure — and how, on "
+        f"7c376e348, 53 cells that nothing could measure left the table "
+        f"altogether while the total row read a confident 451.")
 
 
 def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
@@ -415,7 +447,7 @@ def test_no_substituted_cell_is_inside_a_figure_presented_as_enforcement():
     )
 
     block = _block()
-    own, substituted_n, undeclared, _, _, _ = _total_row(block)
+    own, substituted_n, undeclared, _, _, _, _ = _total_row(block)
     assert substituted_n == len(substituted), (
         f"the block publishes {substituted_n} substituted cells; the tree "
         f"measures {len(substituted)}")

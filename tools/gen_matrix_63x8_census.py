@@ -49,6 +49,14 @@ the ENFORCED column is printed SPLIT, always, and the headline states the
 genuinely-enforcing figure as a FLOOR with the undeclared remainder named
 beside it rather than absorbed into it.
 
+It refuses to print a row that does not account for every cell of its
+dimension. The table published SIX columns while ``_join_axes`` emits nine
+labels, so the three ``-SKIPPED`` ones were printed nowhere: measured on
+``7c376e348``, dimension 3 published 11 of its 63 cells and the total row 451
+of 504, and neither figure was flagged, because a column that does not exist
+is compared to nothing. Columns are now derived from ``_COLUMN_OF_LABEL`` and
+every row is checked against its own denominator.
+
 It also refuses to stamp a timestamp into the block. A generated artefact that
 changes on every run cannot be diffed for drift, so ``--check`` would be
 meaningless the day it was needed.
@@ -777,6 +785,71 @@ _LABEL_KEYS = ("enforced", "contradicted", "waived", "na",
                "waived_contradicted", "na_contradicted",
                "enforced_skipped", "waived_skipped", "na_skipped")
 
+#: WHICH PUBLISHED COLUMN EACH LABEL IS PRINTED IN. The headline partitioned
+#: over `_LABEL_KEYS` and the TABLE did not — it enumerated six columns by hand
+#: and every label outside that six was printed nowhere.
+#:
+#: MEASURED on 7c376e348, from the committed block itself: the headline read
+#: `504 cells: 428 ENFORCED, 0 ENFORCED-CONTRADICTED, 8 WAIVED, 15 NA,
+#: 50 ENFORCED-SKIPPED, 3 WAIVED-SKIPPED`, and eleven lines below it the table
+#: read
+#:
+#:     | 3 | `outputs_produced` … | 0 | 0 | 0 | 0 | 0 | 11 |
+#:     | **total** | | **17** | **44** | **367** | **0** | **8** | **15** |
+#:
+#: 17+44+367+0+8+15 = 451, not 504. Dimension 3 published ELEVEN of its 63
+#: cells; the other 52 — every one of them a predicate that could not run
+#: because the published corpus is not in this checkout — appeared in no
+#: column at all. A reader saw a d3 row of all-zeroes-and-an-11 and read it as
+#: a dimension with nothing wrong in it, when in truth nothing in it had been
+#: looked at. That is a check that could not look being dropped out of the
+#: denominator rather than reported, which is the exact erasure the comment
+#: above the table already claims to have closed for CONTRADICTED.
+#:
+#: So the columns are DERIVED from this map instead of typed. A label with no
+#: entry here is refused by name (`_row_columns`) rather than dropped.
+_COLUMN_OF_LABEL = {
+    "enforced": "enforced",
+    "contradicted": "contradicted",
+    "waived_contradicted": "contradicted",
+    "na_contradicted": "contradicted",
+    "enforced_skipped": "not_measured",
+    "waived_skipped": "not_measured",
+    "na_skipped": "not_measured",
+    "waived": "waived",
+    "na": "na",
+}
+
+#: The table's cell-bearing columns, in print order. `enforced` is printed as
+#: the three-way split (own / substituted / undeclared) rather than as one
+#: figure — see WHAT IT REFUSES — so it is not named here.
+_TABLE_COLUMNS = ("contradicted", "not_measured", "waived", "na")
+
+
+def _not_measured_total(rows: List[Dict]) -> int:
+    """Cells whose predicate could not run, over the whole matrix."""
+    return sum(_row_columns(r)["not_measured"] for r in rows)
+
+
+def _row_columns(row: Dict) -> Dict[str, int]:
+    """Fold a row's per-label counts into the published columns.
+
+    Refuses rather than guesses. A label in `_LABEL_KEYS` with no column is the
+    defect this function exists for, and returning a partial fold would rebuild
+    it one level down.
+    """
+    unmapped = [k for k in _LABEL_KEYS if k not in _COLUMN_OF_LABEL]
+    if unmapped:
+        raise SystemExit(
+            f"census table has no column for label(s) {sorted(unmapped)} — a "
+            f"cell carrying one would be printed in no column and silently "
+            f"leave the row. Add it to _COLUMN_OF_LABEL rather than letting "
+            f"the row under-report.")
+    cols = {c: 0 for c in ("enforced",) + _TABLE_COLUMNS}
+    for key, column in _COLUMN_OF_LABEL.items():
+        cols[column] += row.get(key, 0)
+    return cols
+
 
 def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
     """``([per-dimension row], totals)`` recomputed from the live suite."""
@@ -817,6 +890,10 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
             "dim": dim,
             "name": NAMES[dim],
             "question": QUESTIONS[dim],
+            # The row's DENOMINATOR, carried explicitly so `render` can prove
+            # each row accounts for every cell of its dimension instead of
+            # trusting that the columns it happens to print add up.
+            "cells": len(per),
             "own": buckets.count(SUB.OWN_MECHANISM),
             "substituted": buckets.count(SUB.SUBSTITUTED),
             "undeclared": buckets.count(SUB.UNDECLARED_BUCKET),
@@ -824,9 +901,12 @@ def census_rows() -> Tuple[List[Dict], Dict[str, int]]:
             "contradicted": per.count("ENFORCED-CONTRADICTED"),
             "waived": per.count("WAIVED"),
             "na": per.count("NA"),
-            # The labels `_join_axes` can emit that this table had no column for.
-            # They were counted NOWHERE, so any non-zero one fell straight out of
-            # the partition and aborted the generator with a bare subtraction.
+            # The other labels `_join_axes` can emit. Until 7c376e348 the table
+            # had no column for any of them: they were counted NOWHERE, so a
+            # non-zero one fell straight out of the printed row. `-SKIPPED` then
+            # became non-zero on 53 cells and the total row published 451 of
+            # 504 without a word. They now fold into the columns named by
+            # `_COLUMN_OF_LABEL`, which `_row_columns` proves is total.
             "waived_contradicted": per.count("WAIVED-CONTRADICTED"),
             "na_contradicted": per.count("NA-CONTRADICTED"),
             "enforced_skipped": per.count("ENFORCED-SKIPPED"),
@@ -904,11 +984,30 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
         f"{totals['waived']} WAIVED, {totals['na']} NA"
         + _extra_labels(totals) + ".**")
     out.append("")
+    # The table's columns, folded once, here, so the PROSE quotes the same
+    # numbers the table prints. Quoting `totals['contradicted']` in the prose
+    # while the column below folded three labels would be two figures under one
+    # word — the drift this whole file exists to remove.
+    per_row = [_row_columns(r) for r in rows]
+    col_totals = {c: sum(cols[c] for cols in per_row)
+                  for c in ("enforced",) + _TABLE_COLUMNS}
     out.append(
-        f"The {totals['contradicted']} CONTRADICTED cells are configured as "
-        f"enforcing while their own predicate is currently RED. They are NOT "
-        f"folded into the {totals['enforced']}: a cell whose predicate fails is "
-        f"not evidence of enforcement. See vibe-ic#888.")
+        f"The {col_totals['contradicted']} CONTRADICTED cells ran their "
+        f"predicate and it refuted the state they are configured in. They are "
+        f"NOT folded into the {totals['enforced']}: a cell whose predicate "
+        f"fails is not evidence of enforcement. See vibe-ic#888.")
+    out.append("")
+    # THE COLUMN THE TABLE DID NOT HAVE. Printed unconditionally, including
+    # when it is zero: a reader who cannot see the column cannot tell a matrix
+    # that was fully measured from one where an axis went dark, and on
+    # 7c376e348 an entire dimension had gone dark without the table moving.
+    out.append(
+        f"The {col_totals['not_measured']} NOT MEASURED cells are cells whose "
+        f"predicate could not run at all — an absent published corpus, an "
+        f"absent tool. A check that could not look has not looked: they are "
+        f"neither enforcement nor a contradiction, and they are counted here "
+        f"rather than dropped, so a dimension that measured nothing cannot "
+        f"read as a dimension with nothing wrong in it.")
     out.append("")
     # WHAT THIS MATRIX MEASURES, printed with the number rather than filed in a
     # doc nobody re-reads. Adversarial round 2 (2026-08-10) established that NO
@@ -953,24 +1052,50 @@ def render(rows: List[Dict], totals: Dict[str, int]) -> str:
         f"enforcing anything and enter none of those columns. There is "
         f"deliberately no single \"enforcing\" total to quote.")
     out.append("")
-    # CONTRADICTED gets a column. Filtering the three ENFORCED columns onto the
-    # enforcement axis (see census_rows) is only half the repair: without a
-    # column of its own, a contradicted cell would appear in NO column, and a
-    # row that silently drops cells is the erasure-by-omission this file warns
-    # about six lines from here. Every one of the 504 is now in exactly one.
+    # CONTRADICTED and NOT MEASURED get columns, and EVERY ROW IS PROVED TOTAL.
+    # Filtering the three ENFORCED columns onto the enforcement axis (see
+    # census_rows) is only half the repair: without a column of its own, a
+    # cell would appear in NO column, and a row that silently drops cells is
+    # the erasure-by-omission this file warns about six lines from here.
+    #
+    # That claim used to be made in a comment and nowhere else, and it went
+    # false the moment `-SKIPPED` became non-zero: the d3 row published 11 of
+    # 63 and the total row 451 of 504. The columns are now DERIVED from
+    # `_COLUMN_OF_LABEL` and each row is checked against its own denominator,
+    # so the sentence is enforced instead of asserted.
     out.append("| dim | question | ENFORCED: own | ENFORCED: substituted "
-               "| ENFORCED: undeclared | CONTRADICTED | WAIVED | NA |")
+               "| ENFORCED: undeclared | CONTRADICTED | NOT MEASURED "
+               "| WAIVED | NA |")
     out.append("|-----|----------|--------------:|----------------------:"
-               "|---------------------:|-------------:|-------:|---:|")
-    for r in rows:
+               "|---------------------:|-------------:|-------------:"
+               "|-------:|---:|")
+    for r, cols in zip(rows, per_row):
+        split = r['own'] + r['substituted'] + r['undeclared']
+        printed = split + sum(cols[c] for c in _TABLE_COLUMNS)
+        if printed != r['cells']:
+            raise SystemExit(
+                f"dimension {r['dim']} row does not partition: the printed "
+                f"columns account for {printed} of its {r['cells']} cells. "
+                f"A row that under-reports its own dimension is how a whole "
+                f"axis going dark reads as a clean row of zeroes.")
         out.append(
             f"| {r['dim']} | `{r['name']}` — {r['question']} "
             f"| {r['own']} | {r['substituted']} | {r['undeclared']} "
-            f"| {r['contradicted']} | {r['waived']} | {r['na']} |")
+            f"| {cols['contradicted']} | {cols['not_measured']} "
+            f"| {cols['waived']} | {cols['na']} |")
+    printed_total = (totals['own'] + totals['substituted']
+                     + totals['undeclared']
+                     + sum(col_totals[c] for c in _TABLE_COLUMNS))
+    if printed_total != totals['cells']:
+        raise SystemExit(
+            f"the total row does not partition: {printed_total} != "
+            f"{totals['cells']}. The published total is the number people "
+            f"quote; it may not be smaller than the matrix it totals.")
     out.append(
         f"| **total** | | **{totals['own']}** | **{totals['substituted']}** "
-        f"| **{totals['undeclared']}** | **{totals['contradicted']}** "
-        f"| **{totals['waived']}** | **{totals['na']}** |")
+        f"| **{totals['undeclared']}** | **{col_totals['contradicted']}** "
+        f"| **{col_totals['not_measured']}** "
+        f"| **{col_totals['waived']}** | **{col_totals['na']}** |")
     out.append("")
     out.append("Regenerate (never edit this block by hand, and never quote it "
                "without re-running):")
@@ -1222,11 +1347,16 @@ def _run(args: argparse.Namespace) -> int:
             return 1
         if fig_rc:
             return fig_rc
+        # NOT_MEASURED travels with the verdict. A [PASS] line that names the
+        # ENFORCED split and omits the cells nothing could look at reports the
+        # census as fully measured; on 7c376e348 that line was printed over 53
+        # unmeasured cells and said nothing about them.
         print(f"[PASS] 63x8 census fresh: {totals['cells']} cells over "
               f"{len(rows)} dimensions; ENFORCED own={totals['own']} "
               f"substituted={totals['substituted']} "
               f"undeclared={totals['undeclared']}; "
-              f"WAIVED={totals['waived']} NA={totals['na']}.")
+              f"WAIVED={totals['waived']} NA={totals['na']} "
+              f"NOT_MEASURED={_not_measured_total(rows)}.")
         return 0
 
     # The block is written FIRST and the figure verdict returned after, so a
