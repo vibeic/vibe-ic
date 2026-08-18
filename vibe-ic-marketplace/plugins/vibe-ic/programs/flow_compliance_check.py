@@ -1658,6 +1658,14 @@ class StepResult:
     # channel cannot DELETE a `PASS voided: dependency ...` line that origin/main
     # would have printed. Never read as a tier.
     json_vacuity_promoted: bool = False
+    # W4 - one entry per `optional_program_exit_zero` clause on this step whose
+    # `condition_files_exist` matched NO path, so the program never ran and the
+    # clause concluded nothing. Each entry carries the command and the reason
+    # the clause DECLARED for why an absent input is a genuine not-applicable;
+    # a clause that declares none is a FAIL and never reaches this list. Empty
+    # on a step where every declared clause was executed, which is the only
+    # state in which a bare PASS means what it says.
+    declared_not_applicable: List[str] = field(default_factory=list)
     # #497 step 1 — the STRUCTURED per-gate payload, emitted ALONGSIDE
     # `reasons` and read by nothing yet.
     #
@@ -3576,6 +3584,63 @@ _RAN_HINT_PREFIX = "__RAN_HINT__: "
 # count says every clause that dispatched a program examined nothing. It can
 # never take a step OUT of a tier origin/main gave it.
 _JSON_VACUOUS_HINT_PREFIX = "__JSON_VACUOUS_HINT__: "
+
+# vibe-ic W4 - AN UNMET OPTIONAL CONDITION IS A NON-VERDICT, AND IT MUST BUY IT.
+#
+# `optional_program_exit_zero` runs its program only when at least one
+# `condition_files_exist` glob matches. When none match, this file returned
+# `True, reasons` — no marker, no reason, no record — and the clause became
+# indistinguishable from one that ran and found nothing. The comment above the
+# OPTIONAL branch stated the intent honestly ("no inputs -> N/A -> pass") and
+# the intent is the defect: an absent input means the gate CONCLUDED NOTHING,
+# and the whole of #539/#584/#1025 is the same sentence one layer up — "I could
+# not look" must not reach a reader as "I looked and it was clean".
+#
+# THE OPPOSITE IDIOM, FOR CONTRAST. OpenROAD-flow-scripts' `util/checkMetadata.py`
+# reads a rule set and exits 1 on `len(rules) == 0` ("No rules"), and exits 1
+# again for a rule whose metric is absent from `metadata.json`
+# ("[ERROR] Value not found for {field}"). Absent input is its FAILURE case. It
+# is why a stage skipped with `SKIP_DETAILED_ROUTE=1` — which still produces a
+# GDS and still lets `make finish` succeed — is caught: the missing
+# `detailedroute__route__drc_errors` fails `make metadata-check`. This repo's
+# default was the mirror image of that, and the same skipped stage would pass.
+#
+# WHAT REPLACES IT. An unmet condition now FAILS unless the clause DECLARES,
+# at its own wiring site in the flow YAML, why an absent input is a genuine
+# not-applicable:
+#
+#     optional_program_exit_zero:
+#       command: "..."
+#       condition_files_exist: ["..."]
+#       absent_condition_reason: "<why nothing to check is legitimate here>"
+#
+# DECLARED AT THE WIRING SITE AND NOT IN A REGISTRY, for the reason
+# `tools/ci/_gate_dispatch.sh` writes out at length for `uncheckable_until`: a
+# separate list keyed by step id and program name desynchronises silently — a
+# renamed program loses its entry, a deleted clause leaves a rotting one.
+# Deleting the clause deletes its exemption with it.
+#
+# NOT THE SAME QUESTION AS `flow_condition_reachability_check`. That program
+# asks whether a condition can be false EXACTLY WHEN the defect it guards
+# occurs (the self-disabling shape). This asks what the RUN learned when the
+# condition was in fact false, and demands that the answer be written down and
+# visible in the record. A condition can be perfectly reachable and still leave
+# a silent hole in every run where it does not fire.
+#
+# VISIBLE, NOT TIER-CHANGING. A declared not-applicable is held out of
+# `non_hint_reasons` and re-appended after the tier resolves, exactly like
+# `_ADVISORY_HINT_PREFIX`. It cannot promote or demote a step; it makes the
+# non-verdict readable. Whether a step every one of whose clauses was skipped
+# should leave the PASS tier is a separate decision with a corpus sweep in
+# front of it, and this change deliberately does not take it.
+_NOT_APPLICABLE_HINT_PREFIX = "__NA_HINT__: "
+
+#: An `absent_condition_reason` shorter than this is refused. A one-word
+#: "N/A" / "optional" is a declaration nobody can check, which is the hole
+#: with a label on it rather than the hole closed. The number is a floor on
+#: EFFORT, not a claim that length is truth; the shortest reason shipped in
+#: `flow/phase1_phase2_phase3.yaml` is well above it.
+_MIN_ABSENT_CONDITION_REASON = 40
 
 
 def _stdout_signals_waiver(snippet: str) -> bool:
@@ -7653,6 +7718,31 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
 
     # `files_exist` - top-level (any_of / all_of via flag)
     if "files_exist" in gate:
+        # W4 — `len(rules) == 0` IS THE FAILURE CASE, and it was the pass case.
+        # MEASURED on origin/main (397b3f25f) against an empty project tree:
+        #
+        #     _evaluate_gate(p, {"files_exist": []})  -> (True, [])
+        #     _evaluate_gate(p, {"all_of": []})       -> (True, [])
+        #     _evaluate_gate(p, {"any_of": []})       -> (False, ['no sub-gate
+        #                                                 passed in any_of'])
+        #
+        # Two of the three empty predicates certified a tree they had not
+        # looked at, and `any_of` — the one that got it right — shows the
+        # convention was already available. This is the same sentence
+        # `util/checkMetadata.py` writes as `if len(rules) == 0: exit(1)`.
+        #
+        # LANDING WITH NO DEBT: the shipped `flow/phase1_phase2_phase3.yaml`
+        # declares ZERO empty `files_exist` / `all_of` / `any_of` lists
+        # (measured over every step gate, step condition and the final gate),
+        # so the ratchet costs nothing today and refuses the first author who
+        # writes one tomorrow.
+        if not gate["files_exist"]:
+            reasons.append(
+                "files_exist: the required-file list is EMPTY, so this "
+                "predicate examined nothing and concluded nothing. An empty "
+                "corpus is a FAIL, not a pass — name the files this gate is "
+                "about, or delete the predicate.")
+            return False, reasons
         any_of = gate.get("any_of", False)
         all_of = gate.get("all_of", True) and not any_of
         passed, found, missing = _check_files_exist(
@@ -7774,8 +7864,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
     # when one or more `condition_files_exist` paths exist. Used for
     # gates that apply to a subset of projects (e.g. L10/L12 conformance
     # only when L10/L12 docs exist; FPGA verification audit only when
-    # the human report exists). Skipping returns True so the gate
-    # doesn't block projects that legitimately don't ship the input.
+    # the human report exists). Skipping no longer returns a bare True: since
+    # W4 it returns True only for a clause that DECLARED why an absent input
+    # is a genuine not-applicable, and it says so in the record. See
+    # `_NOT_APPLICABLE_HINT_PREFIX` for what that costs and why.
     if "optional_program_exit_zero" in gate:
         spec = gate["optional_program_exit_zero"]
         if not isinstance(spec, dict):
@@ -7797,7 +7889,30 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
         for pat in cond_files:
             present.extend(project.glob(pat))
         if not present:
-            return True, reasons  # no inputs -> N/A -> pass
+            # NOTHING TO CHECK IS NOT A PASS. The condition matched no path,
+            # so `cmd` did not run and this clause concluded nothing about its
+            # subject. That is a legitimate state — and it has to be BOUGHT at
+            # the wiring site, not assumed, or it is indistinguishable from a
+            # gate that quietly stopped covering anything.
+            why = spec.get("absent_condition_reason")
+            why = why.strip() if isinstance(why, str) else ""
+            if len(why) < _MIN_ABSENT_CONDITION_REASON:
+                reasons.append(
+                    f"optional_program_exit_zero: condition_files_exist "
+                    f"{cond_files} matched 0 path(s) under {project}, so "
+                    f"`{cmd}` did NOT run and this clause examined nothing — "
+                    f"and the clause declares no usable "
+                    f"`absent_condition_reason` "
+                    f"({'absent' if not why else f'only {len(why)} char(s)'}; "
+                    f"{_MIN_ABSENT_CONDITION_REASON} required). Nothing to "
+                    f"check is a FAIL, not a pass; declare at the clause why "
+                    f"an absent input is a genuine not-applicable here.")
+                return False, reasons
+            reasons.append(
+                f"{_NOT_APPLICABLE_HINT_PREFIX}{cmd} — condition_files_exist "
+                f"{cond_files} matched 0 path(s), so the program did not run "
+                f"and nothing was checked. Declared not-applicable: {why}")
+            return True, reasons
         # GAP-B (#789) — forward --skip-analog (+ reviewable --analog-anchor)
         # when the run defers the analog track AND this optional gate's program
         # declares the flag (e.g. l10/l12 tb-conformance, #773). Verbatim
@@ -7880,7 +7995,42 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
             for pat in cond_files:
                 present.extend(project.glob(pat))
             if not present:
-                return True, reasons  # no inputs -> not applicable -> silent
+                # W4 — SILENT was the word, and it was the defect. Three lines
+                # below, this same branch refuses to let an rc-2 disclosed skip
+                # read as a clean result because "recorded nothing must never
+                # be indistinguishable from found nothing"; an unmet condition
+                # records nothing AT ALL, which is the same substitution with
+                # the program not even started. `fpga_led_probe_lint`'s own
+                # SKILL.md states the exposure in the shipped flow: "over the
+                # 28 published run roots it executes on 1 and is silent on 27".
+                #
+                # A MISSING DECLARATION IS A FAIL HERE TOO, advisory tier
+                # notwithstanding — this branch already treats a malformed
+                # advisory spec as "a real gate-authoring FAIL, not an advisory
+                # one", and an undeclared not-applicable is the same class of
+                # authoring defect. What the tier protects is the gate's
+                # FINDINGS, not its wiring.
+                why = spec.get("absent_condition_reason")
+                why = why.strip() if isinstance(why, str) else ""
+                if len(why) < _MIN_ABSENT_CONDITION_REASON:
+                    reasons.append(
+                        f"advisory_program_exit_zero: condition_files_exist "
+                        f"{cond_files} matched 0 path(s) under {project}, so "
+                        f"`{cmd}` did NOT run and recorded nothing — and the "
+                        f"clause declares no usable `absent_condition_reason` "
+                        f"({'absent' if not why else f'only {len(why)} char(s)'}"
+                        f"; {_MIN_ABSENT_CONDITION_REASON} required). An "
+                        f"advisory slot never blocks on a FINDING; it does not "
+                        f"get to be silent about not having looked.")
+                    return False, reasons
+                # Recorded on the slot's OWN channel, which the `all_of`
+                # whitelist already carries, so the disclosure cannot be
+                # dropped one level up.
+                reasons.append(
+                    f"{_ADVISORY_HINT_PREFIX}n/a (declared; condition "
+                    f"{cond_files} matched 0 path(s), so it did not run): "
+                    f"{cmd} — {why}")
+                return True, reasons
         cmd = _maybe_forward_skip_analog(project, cmd, skip_analog)
         ok, out = _check_program_exit_zero(project, cmd)
         if ok and out.startswith(_VACUOUS_HINT_PREFIX):
@@ -7899,6 +8049,17 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
 
     # `all_of` - list of sub-gates, all must pass
     if "all_of" in gate and isinstance(gate["all_of"], list):
+        # W4 — an empty conjunction is vacuously true in logic and vacuously
+        # CERTIFYING here, which is the difference that matters: `all_of: []`
+        # is a step declaring a gate and running none of it. Refused for the
+        # same reason as the empty `files_exist` list above, and with the same
+        # measured zero debt on the shipped flow.
+        if not gate["all_of"]:
+            reasons.append(
+                "all_of: the sub-gate list is EMPTY, so this gate dispatched "
+                "nothing and concluded nothing. A gate that ran no sub-gate "
+                "is a FAIL, not a pass.")
+            return False, reasons
         # Wave 93 — preserve VACUOUS_HINT reasons from passing sub-gates so
         # the step-level handler can promote a step whose every executed
         # sub-gate was vacuously satisfied.
@@ -7967,6 +8128,18 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     reasons.append(hint)
                 elif hint.startswith(_SUBSTANTIVE_HINT_PREFIX):
                     reasons.append(hint)
+                elif hint.startswith(_NOT_APPLICABLE_HINT_PREFIX):
+                    # W4 — the whitelist's own warning, come true a THIRD time.
+                    # MEASURED before this branch existed, on a tree carrying
+                    # step 2's required_outputs and an RTL directory but none
+                    # of the Phase-1 documents its optional clauses read: five
+                    # of the nine clauses did not run, each emitted its
+                    # declared not-applicable record, and every one of the five
+                    # was dropped at this line. `check_step` then reported
+                    # `declared_not_applicable: 0` and a bare PASS — the
+                    # disclosure dying one level below the line meant to carry
+                    # it, which is the shape the comment above predicts.
+                    reasons.append(hint)
                 elif hint.startswith(_INCOMPLETE_HINT_PREFIX):
                     # The whitelist's own warning, come true. #599 added these
                     # two tiers to `program_exit_zero` and did NOT add them
@@ -7998,8 +8171,18 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     "consulted. Put the advisory gate in an `all_of` "
                     "alongside them instead (#306).")
                 return False, reasons
-            p, _ = _evaluate_gate(project, sub, skip_analog=skip_analog)
+            p, r = _evaluate_gate(project, sub, skip_analog=skip_analog)
             if p:
+                # W4 — an `any_of` satisfied by a branch that DID NOT RUN is
+                # the group's whole verdict resting on a non-verdict. The
+                # branch still passes (a declared not-applicable is a legal
+                # pass), but the record has to say which branch carried the
+                # group and that it examined nothing; otherwise this is the
+                # dropped-disclosure shape of the `all_of` whitelist above,
+                # one branch over.
+                reasons.extend(
+                    h for h in r
+                    if h.startswith(_NOT_APPLICABLE_HINT_PREFIX))
                 return True, reasons
         reasons.append(f"no sub-gate passed in any_of")
         return False, reasons
@@ -9776,6 +9959,14 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
         # after the status is decided.
         advisory_hints = [r for r in reasons
                           if r.startswith(_ADVISORY_HINT_PREFIX)]
+        # W4 — a clause whose `condition_files_exist` matched nothing, which
+        # therefore ran no program and concluded nothing, and which DECLARED
+        # why that is a genuine not-applicable. Held out here and re-appended
+        # visibly below, exactly like `advisory_hints`: it must not become a
+        # reason a step failed, and it must not silently vanish either. It
+        # deliberately does not move the tier — see `_NOT_APPLICABLE_HINT_PREFIX`.
+        na_hints = [r for r in reasons
+                    if r.startswith(_NOT_APPLICABLE_HINT_PREFIX)]
         # The structure-only disclosure is NOT a reason the step failed and
         # NOT a reason it passed; it says what the step produced. It is read
         # on both paths and never suppresses another verdict.
@@ -9819,7 +10010,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                             and not r.startswith(_STRUCTURE_ONLY_HINT_PREFIX)
                             and not r.startswith(_ADVISORY_HINT_PREFIX)
                             and not r.startswith(_SUBSTANTIVE_HINT_PREFIX)
-                            and not r.startswith(_INCOMPLETE_HINT_PREFIX)]
+                            and not r.startswith(_INCOMPLETE_HINT_PREFIX)
+                            and not r.startswith(_NOT_APPLICABLE_HINT_PREFIX)]
         if (passed and waiver_hints and not non_hint_reasons
                 and not skip_hints and not vacuous_hints):
             # WAIVED here means "DEFERRED via waiver": it leaves the required
@@ -9939,6 +10131,20 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                     f"{max(len(ran_hints), len(all_vacuous_cmds))} gate "
                     f"clause(s) examined nothing): "
                     f"{h[len(_JSON_VACUOUS_HINT_PREFIX):]}")
+        # W4 — whatever tier was chosen, every clause that did NOT run because
+        # its condition matched nothing is named on the step line and carried
+        # into the JSON report, with the reason its wiring site declared. A
+        # step whose gate list is half unexecuted must not read as a step whose
+        # gate list was executed; the count is stated so a reader can see how
+        # much of the declared gate actually spoke.
+        if na_hints:
+            result.declared_not_applicable = [
+                h[len(_NOT_APPLICABLE_HINT_PREFIX):] for h in na_hints]
+            for h in na_hints:
+                result.reasons.append(
+                    f"NOT-APPLICABLE (declared, {len(na_hints)} of "
+                    f"{len(na_hints) + len(ran_hints)} gate clause(s) here "
+                    f"examined nothing): {h[len(_NOT_APPLICABLE_HINT_PREFIX):]}")
         # #306 — whatever tier was chosen, the advisory verdicts are printed
         # on the step line and carried into the JSON report. An advisory gate
         # that ran and said nothing would make the run LOOK audited while
@@ -11802,11 +12008,26 @@ def main(argv: Optional[List[str]] = None) -> int:
                           if getattr(r, "partial_vacuity_disclosed", False))
     pv_str = (f"  ({partial_vacuous} step(s) PARTIALLY-VACUOUS: a gate clause "
               f"ran and examined nothing)" if partial_vacuous else "")
+    # W4 — the SAME kind of annotation for the clauses that never ran at all,
+    # and kept apart from PARTIALLY-VACUOUS because they are a different fact:
+    # that one is a clause that ran and found nothing to look at, this one is a
+    # clause that was not dispatched because its input was absent. Both leave
+    # the tier alone (an ANNOTATION over the buckets, never a bucket, so the
+    # parts still sum to the total); without this line the only trace of an
+    # unexecuted clause is the per-step reason, and the number a reviewer reads
+    # is the tally.
+    na_steps = sum(1 for r in results
+                   if getattr(r, "declared_not_applicable", None))
+    na_clauses = sum(len(getattr(r, "declared_not_applicable", ()) or ())
+                     for r in results)
+    na_str = (f"  ({na_clauses} gate clause(s) across {na_steps} step(s) "
+              f"NOT-APPLICABLE: the declared input was absent, so the clause "
+              f"did not run)" if na_clauses else "")
     print(
         f"  PASS={counts['PASS']}  {fail_str}  "
         f"{missing_str}  WAIVED-DEFERRED={counts['WAIVED']}"
         f"{dbu_str}{skipped_str}{vacuous_str}{voided_str}{so_str}"
-        f"{incomplete_str}{pv_str}\n"
+        f"{incomplete_str}{pv_str}{na_str}\n"
     )
     if p0_subgate_waivers:
         # vibe-ic#924 — ITS OWN LINE, deliberately not a token on the tally
