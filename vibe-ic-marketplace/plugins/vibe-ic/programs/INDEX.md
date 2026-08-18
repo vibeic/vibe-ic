@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1116
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1112)
+- **Total programs (excluding helpers / shims):** 1117
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1117)
 
 ### Per-class applicability counts
 
@@ -15,14 +15,11 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 |---|---|
 | `aid_class_half_duplex` | 9 |
 | `digital_cmd_driven` | 7 |
-| `gen_program_inventory` | any | — | Generate the program-population inventory; every stated count must be read from it, never hand-typed. |
-| `magic_illegal_overlap_check` | any | — | Read the extraction tool's own feedback channel and gate illegal overlaps at zero, BEFORE the LVS verdict. |
 | `mixed_signal_otp` | 7 |
-| `pdk_revision_resolve` | any | — | Resolve the PDK revision a run actually signed off against, so a sign-off can be re-derived. |
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1103 |
+| `any` | 1108 |
 
 ## Alphabetical listing
 
@@ -718,6 +715,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `output_latency_advisor` | any | — | output sampling/latency advisor. |
 | `p0_disposition_backing_check` | any | — | A P0 disposition that names a home the tree does not have. |
 | `p0_gate_invocability_drift_check` | any | — | A gate registered in the P0 umbrella that the umbrella cannot invoke. |
+| `package_invariants_check` | any | — | the rule lives NEXT TO the code it binds. |
 | `packaging_intake_check` | any | Wave 88 | gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3.... |
 | `packet_length_check_present` | any | — | Static audit for packet-length sanity checks in any module that dispatches on a received command. |
 | `pad_drive_high_active_check` | any | v0.114 | v0.114 (BACKLOG-v6 P1). |
@@ -1191,7 +1189,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1103 programs)
+### `any` (1108 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1877,6 +1875,7 @@ _(no programs in this group)_
 - `output_latency_advisor` — output sampling/latency advisor.
 - `p0_disposition_backing_check` — A P0 disposition that names a home the tree does not have.
 - `p0_gate_invocability_drift_check` — A gate registered in the P0 umbrella that the umbrella cannot invoke.
+- `package_invariants_check` — the rule lives NEXT TO the code it binds.
 - `packaging_intake_check` — gate (v1.6.13 Wave 88, renumbered in v1.6.14 Wave 90: Step 37 -> 38; v1.6.15 Wave 91: Step 38 -> 39; Step 42 in the phase1_phase2_phase3....  _[Wave 88]_
 - `packet_length_check_present` — Static audit for packet-length sanity checks in any module that dispatches on a received command.
 - `pad_drive_high_active_check` — v0.114 (BACKLOG-v6 P1).  _[v0.114]_
