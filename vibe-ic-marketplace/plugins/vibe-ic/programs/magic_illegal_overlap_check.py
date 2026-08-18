@@ -161,6 +161,20 @@ EXTRACTION_EVIDENCE_GLOBS: Tuple[str, ...] = (
     "ext2spice.log", "ext2spice_*.tcl", "*_extracted.sp", "*_extracted.spice",
 )
 
+#: A PUBLISHED LVS VERDICT IS ALSO EVIDENCE THAT AN EXTRACTION RAN, and closes
+#: the one way an rc-2 vacuous pass could otherwise be manufactured: delete the
+#: extraction directory and the gate has "nothing to be about" while
+#: `reports/phase3/lvs.rpt` still certifies a match. The implication runs one
+#: way and is not arguable — an LVS report means a netlist was compared, that
+#: netlist came from an extraction, and that extraction had a feedback channel.
+#: If the channel cannot be found, the illegal-overlap count for a design that
+#: already holds an LVS certificate is NOT DETERMINED, which is the exact shape
+#: this gate exists to refuse. Project-relative, not extraction-relative.
+LVS_VERDICT_RELS: Tuple[str, ...] = (
+    "reports/phase3/lvs.rpt", "reports/phase3/lvs.json",
+    "reports/phase3/lvs_verdict.json",
+)
+
 _BOX_RE = re.compile(r"^\s*box\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*$")
 _FEEDBACK_RE = re.compile(r'^\s*feedback\s+add\s+"((?:[^"\\]|\\.)*)"(?:\s+(\S+))?\s*$')
 
@@ -254,15 +268,22 @@ def find_feedback_files(ext_dir: Path) -> List[Path]:
             if p.is_file()]
 
 
-def extraction_evidence(ext_dir: Path) -> List[str]:
-    """Files proving an extraction RAN here. Empty means nothing to be about."""
-    if not ext_dir.is_dir():
-        return []
+def extraction_evidence(project: Path, ext_dir: Path) -> List[str]:
+    """Artefacts proving an extraction RAN. Empty means nothing to be about.
+
+    Two independent sources, and the second is the one that cannot be removed
+    by deleting a directory: the extraction's own leavings under `ext_dir`, and
+    any LVS verdict the project already published (see `LVS_VERDICT_RELS`).
+    """
     seen: List[str] = []
-    for pattern in EXTRACTION_EVIDENCE_GLOBS:
-        for p in sorted(ext_dir.glob(pattern)):
-            if p.is_file() and p.name not in FEEDBACK_NAMES:
-                seen.append(p.name)
+    if ext_dir.is_dir():
+        for pattern in EXTRACTION_EVIDENCE_GLOBS:
+            for p in sorted(ext_dir.glob(pattern)):
+                if p.is_file() and p.name not in FEEDBACK_NAMES:
+                    seen.append(p.name)
+    for rel in LVS_VERDICT_RELS:
+        if (project / rel).is_file():
+            seen.append(rel)
     return sorted(set(seen))
 
 
@@ -277,7 +298,7 @@ def check(project: Path, under: Optional[str] = None) -> Dict[str, Any]:
     """
     ext_dir = extraction_dir(project, under)
     rel_dir = under or EXTRACTED_REL
-    evidence = extraction_evidence(ext_dir)
+    evidence = extraction_evidence(project, ext_dir)
     files = find_feedback_files(ext_dir)
 
     base: Dict[str, Any] = {
@@ -311,8 +332,12 @@ def check(project: Path, under: Optional[str] = None) -> Dict[str, Any]:
         base["findings"].append({
             "rule": "EXTRACTION_FEEDBACK_ABSENT", "severity": "ERROR",
             "message": (
-                f"an extraction RAN under {rel_dir} (evidence: "
-                f"{', '.join(evidence)}) but none of "
+                f"an extraction RAN for this project (evidence: "
+                f"{', '.join(evidence)}"
+                + ("; note that an LVS verdict is itself proof a netlist was "
+                   "extracted and compared" if any(
+                       e in LVS_VERDICT_RELS for e in evidence) else "")
+                + f") but under {rel_dir} none of "
                 f"{', '.join(FEEDBACK_NAMES)} is present, so magic's feedback "
                 f"channel was never dumped or was lost. `feedback save` writes "
                 f"an EMPTY file when there are no feedback areas, so a clean "

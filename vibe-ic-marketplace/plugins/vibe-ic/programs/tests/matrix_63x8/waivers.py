@@ -1142,11 +1142,11 @@ WAIVERS: Tuple[Waiver, ...] = (
             "`rep = Path(report) if report else (project / _REPORT_REL)`, so "
             "the constant is reached only when --json is absent; the runner "
             "invocation that reaches it is "
-            "programs/phase3_one_shot_runner.py:22551 "
-            "(`\"--cell\", top, \"--in-place\"],` — the last argv element, so "
+            "programs/phase3_one_shot_runner.py::"
+            "`\"--cell\", top, \"--in-place\"],` (the last argv element, so "
             "the whole argv is visible and carries no --json), guarded by the "
             "two early returns at "
-            "programs/phase3_one_shot_runner.py:22525-22527 "
+            "programs/phase3_one_shot_runner.py:22526-22528 "
             "(\"no GDS to fill\" / \"metal_fill_density config has no "
             "layers\"). The competing path the gate really reads is "
             "flow/phase1_phase2_phase3.yaml::\"metal_fill_emit . "
@@ -1188,6 +1188,19 @@ WAIVERS: Tuple[Waiver, ...] = (
             # phase3_one_shot_runner.py. Both would be refused as AMBIGUOUS by
             # this registry's own rule, so the line form is the only form
             # available there.
+            #
+            # 2026-08-19 — AND THE ROT ARRIVED AGAIN, on schedule. Adding ONE
+            # import line to phase3_one_shot_runner.py (the W2.3
+            # illegal-overlap gate) shifted every line in that file by one:
+            # :22551 stopped resolving outright, and the :22525-22527 range
+            # silently lost `metal_fill_density config has no layers` off its
+            # bottom edge while still validating on its other anchor — the
+            # quieter of the two failures. The argv citation IS convertible and
+            # is now converted: MEASURED on this tree, `grep -c '"--cell",
+            # top, "--in-place"],'` returns 1, so the content anchor is
+            # unambiguous and cannot rot. The range stays line-form for the
+            # reason above, re-based to 22526-22528, which is the same three
+            # lines it always named.
             "MEASURED 2026-08-14 on the rebased tree: "
             "`grep -rn cmp_fill_emit flow/ programs/*.py` names "
             "reports/phase3/cmp_fill_emit.json in metal_fill_emit.py alone, "
