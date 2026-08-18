@@ -1231,9 +1231,14 @@ class MarkedItem:
                 f"against {self.ceiling}s")
 
 
-def item_timeout_marker(fn: ast.AST, consts: Dict[str, Tuple[float, int]]
+def item_timeout_marker(fn: ast.AST, consts: Dict[str, Tuple[float, int]],
+                        base_ceiling: int, stall: Optional[int]
                         ) -> Optional[float]:
     """Seconds from a `@pytest.mark.timeout(N)` on `fn`, or None.
+
+    SEVERAL marks on one item resolve through `_tightest_marker`, never by
+    taking the first one written. See that function for why "first" and
+    "smallest" are both the wrong rule once `0` is in the set.
 
     WHY THE GATE MUST READ THIS. The ceiling is `harness // 3` because the
     harness bounds every ITEM at `--timeout=180`. That is not true of an item
@@ -1255,6 +1260,7 @@ def item_timeout_marker(fn: ast.AST, consts: Dict[str, Tuple[float, int]]
     the unmarked one does. A marker SMALLER than the harness bound therefore
     tightens the ceiling rather than loosening it.
     """
+    marks: List[Tuple[float, int]] = []
     for dec in getattr(fn, "decorator_list", []):
         if not isinstance(dec, ast.Call):
             continue
@@ -1273,8 +1279,9 @@ def item_timeout_marker(fn: ast.AST, consts: Dict[str, Tuple[float, int]]
             continue
         got = _numeric(val, consts)
         if got is not None:
-            return got[0]
-    return None
+            marks.append((got[0], getattr(dec, "lineno", 0)))
+    tightest = _tightest_marker(marks, base_ceiling, stall)
+    return None if tightest is None else tightest[0]
 
 
 def _is_fixture_function(fn: ast.AST) -> bool:
@@ -1312,7 +1319,8 @@ def pytest_item_functions(tree: ast.Module) -> Set[int]:
     return items
 
 
-def module_item_marker(tree: ast.AST, consts: Dict[str, Tuple[float, int]]
+def module_item_marker(tree: ast.AST, consts: Dict[str, Tuple[float, int]],
+                       base_ceiling: int, stall: Optional[int]
                        ) -> Optional[Tuple[float, int]]:
     """`(seconds, line)` from a module-level `pytestmark`, or None.
 
@@ -1328,11 +1336,13 @@ def module_item_marker(tree: ast.AST, consts: Dict[str, Tuple[float, int]]
     module is bounded at N, every call in it does run inside an item bounded at
     N, so N is the honest ceiling for the file.
 
-    Several timeout marks resolve to the SMALLEST, not the last: a ceiling
-    argued from the widest of several declarations would be the one number in
-    this file a reader could not check by eye.
+    Several timeout marks resolve through `_tightest_marker` — the one whose
+    RESULTING CEILING is smallest, which is not the same as the smallest mark
+    (vibe-ic#1734, defect 4). A ceiling argued from the widest of several
+    declarations would be the one number in this file a reader could not check
+    by eye.
     """
-    best: Optional[Tuple[float, int]] = None
+    marks: List[Tuple[float, int]] = []
     for node in getattr(tree, "body", []):
         target = value = None
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
@@ -1355,10 +1365,48 @@ def module_item_marker(tree: ast.AST, consts: Dict[str, Tuple[float, int]]
                     if kw.arg in ("timeout", "seconds"):
                         val = kw.value
             got = _numeric(val, consts) if val is not None else None
-            if got is not None and (best is None or got[0] < best[0]):
-                best = (got[0], node.lineno)
-    return best
+            if got is not None:
+                marks.append((got[0], node.lineno))
+    return _tightest_marker(marks, base_ceiling, stall)
 
+
+
+def _tightest_marker(marks: Sequence[Tuple[float, int]], base_ceiling: int,
+                     stall: Optional[int]) -> Optional[Tuple[float, int]]:
+    """The `(seconds, line)` among `marks` that yields the TIGHTEST ceiling.
+
+    WHY THIS IS NOT `min()` OVER THE SECONDS (vibe-ic#1734, defect 4).
+
+    "Take the smallest mark" was justified in this file as taking the tightest
+    ceiling, and while every mark was a positive bound the two were the same
+    sentence. `timeout(0)` broke that identity and the justification was not
+    re-read: 0 is not a bound of zero, it means there is NO item clock, so it
+    resolves to the stall window -- the LOOSEST ceiling this gate will grant.
+    `min()` over the raw seconds therefore picked the most permissive mark, and
+    the docstring two lines above it still called that the tightest.
+
+    MEASURED on origin/main before this fix, harness 180 / stall 300::
+
+        pytestmark = pytest.mark.timeout(30)                    ceiling  10  FAIL
+        pytestmark = [pytest.mark.timeout(0),                   ceiling 100  PASS
+                      pytest.mark.timeout(30)]
+
+    One ADDED mark turned a finding into a pass over the identical call. The
+    round-2 review checked `[timeout(0), timeout(300)]`, where both marks cap to
+    the same 100 s and the defect is invisible; it is only visible against a mark
+    BELOW the stall window.
+
+    So the reduction runs over the OUTPUT of `marker_ceiling`, not over its
+    input, and no spelling of a mark can be looser than the tightest mark
+    present. Ties resolve to the smaller mark so the printed disclosure names a
+    number a reader can check by eye.
+    """
+    best: Optional[Tuple[Tuple[int, float], Tuple[float, int]]] = None
+    for seconds, line in marks:
+        key = (marker_ceiling(seconds, base_ceiling, stall), seconds)
+        if best is None or key < best[0]:
+            best = (key, (seconds, line))
+    return None if best is None else best[1]
 
 
 def marker_ceiling(marker_seconds: float, base_ceiling: int,
@@ -1434,7 +1482,7 @@ def scan_source_report(text: str, rel_path: str, ceiling: int,
     # nobody can see.
     fn_marker: Dict[int, float] = {}
     marked: List[MarkedItem] = []
-    mod_marker = module_item_marker(tree, consts)
+    mod_marker = module_item_marker(tree, consts, ceiling, stall)
     collectable_items = pytest_item_functions(tree)
     file_ceiling = ceiling
     if mod_marker is not None:
@@ -1445,7 +1493,7 @@ def scan_source_report(text: str, rel_path: str, ceiling: int,
     for fn in funcs:
         if id(fn) not in collectable_items:
             continue
-        mk = item_timeout_marker(fn, consts)
+        mk = item_timeout_marker(fn, consts, ceiling, stall)
         if mk is not None:
             fn_marker[id(fn)] = mk
             marked.append(MarkedItem(rel_path, fn.lineno, fn.name, mk,
@@ -1506,12 +1554,40 @@ def scan_source_report(text: str, rel_path: str, ceiling: int,
                 const_name = val.id
                 const_kind = VIA_PARAMETER_DEFAULT
             total += 1
-            if seconds <= call_ceiling:
+            # TWO THRESHOLDS, BECAUSE THEY ANSWER TWO QUESTIONS (vibe-ic#1734).
+            #
+            # `call_ceiling` is what this call is JUDGED against: a marker can
+            # raise it, bounded by the stall window, and that is the exemption
+            # this gate deliberately grants.
+            #
+            # `advisory_floor` is what an UNJUDGEABLE call is RECORDED against,
+            # and a marker may not raise it. An advisory is not a verdict, it is
+            # a DEBT -- this gate saying it could not resolve the callee and a
+            # reader must look. Whether the contributor also wrote a marker has
+            # no bearing on whether the callee is resolvable, so letting the
+            # marker retire the entry erases a debt nobody agreed to pay off.
+            # MEASURED on origin/main before this fix, harness 180 / stall 300::
+            #
+            #     mystery.launch(timeout=90)                 advisory  1
+            #     + pytestmark = pytest.mark.timeout(300)    advisory  0
+            #
+            # One added line retired a RECORDED advisory. The floor is the
+            # `min` of the two so a marker that TIGHTENS the ceiling still adds
+            # advisories -- the exemption may only ever cost the reader less
+            # information than no exemption, never more.
+            advisory_floor = min(call_ceiling, ceiling)
+            if seconds <= advisory_floor:
                 continue
             if forwarders is None:
                 forwarders = _forwarding_helpers(tree, mods, names, funcs)
             why = _classify_callee(node.func, mods, names, forwarders)
             if why is NOT_A_BOUND:
+                continue
+            if why and seconds <= call_ceiling:
+                # Resolvable, and inside the ceiling its own marker earns it.
+                # Not a finding, and not an advisory either: the callee IS
+                # resolved, so there is no debt -- the raise itself is disclosed
+                # by the `marked_items` census.
                 continue
             rec = Finding(rel_path, val.lineno, _dotted(node.func), kw_name,
                           seconds, why or "not resolvable from this file",
@@ -1677,6 +1753,121 @@ def _scan_roots(repo_root: Optional[Path], explicit: Optional[str]
     return roots
 
 
+# --- the gate's own doors, checked before it judges anyone else -------------
+
+#: Harness / stall pair the self-check reasons against. Deliberately NOT the
+#: live tree's numbers: these cases pin the SHAPE of the exemption, and a case
+#: that moved with the tree it polices could not fail when the tree changed.
+_SELF_HARNESS, _SELF_STALL = 180, 300
+
+
+def _self_check_cases() -> List[Tuple[str, bool, str]]:
+    """`(door, ok, detail)` for each way the exemption can become a silencer.
+
+    ONE CASE PER DOOR, NOT PER NUMBER (vibe-ic#1734).
+
+    This is the discipline the withheld v1.10.62 fix did not have. Its own
+    self-check advertised coverage of `timeout(0)` BY NAME and returned rc 0
+    while `timeout(2700)` walked a 900 s bound through the positive-marker door
+    on the same file with the same advisory. Every case below names the
+    MECHANISM it closes -- a raised ceiling, a retired finding, a retired
+    advisory, a mark set that loosens -- so a future spelling of the same door
+    fails here rather than needing a seventh round to notice.
+
+    Run before every scan, on the always-run path, because the layer that
+    selects this gate's own test is not the layer that runs the gate.
+    """
+    base = _SELF_HARNESS // CEILING_DIVISOR
+    stall = _SELF_STALL
+    cap = stall // CEILING_DIVISOR
+    cases: List[Tuple[str, bool, str]] = []
+
+    def report(rel_src: str) -> Dict:
+        return scan_source_report(rel_src, "selfcheck.py", base, stall)
+
+    # DOOR 1 -- a marker is a dial. No value a contributor writes may buy a
+    # ceiling above the bound they cannot write.
+    worst = max(marker_ceiling(n, base, stall)
+                for n in (0, 1, base, stall, 2700, 10 ** 9))
+    cases.append((
+        "a marker raises the ceiling past the driver stall window",
+        worst <= cap,
+        f"largest marker-derived ceiling {worst}s, cap {cap}s "
+        f"(= {stall}s stall // {CEILING_DIVISOR})"))
+
+    # DOOR 2 -- a FINDING retired by a marker. The bound is over the cap, so no
+    # spelling of a marker may take it out of the findings.
+    src = ("import subprocess, pytest\n"
+           "pytestmark = pytest.mark.timeout(2700)\n"
+           "def test_x():\n"
+           "    subprocess.run(['x'], timeout=900)\n")
+    got = [f.seconds for f in report(src)["findings"]]
+    cases.append((
+        "a marker retires a finding over the cap",
+        got == [900],
+        f"findings {got}, expected [900]"))
+
+    # DOOR 3 -- an ADVISORY retired by a marker. An advisory is a debt, not a
+    # verdict; the callee is no more resolvable for the marker being there.
+    unmarked = ("import mystery\n"
+                "def test_x():\n"
+                "    mystery.launch(['x'], timeout=90)\n")
+    marked = ("import mystery, pytest\n"
+              "pytestmark = pytest.mark.timeout(300)\n"
+              "def test_x():\n"
+              "    mystery.launch(['x'], timeout=90)\n")
+    n_un = len(report(unmarked)["unresolved_above_ceiling"])
+    n_mk = len(report(marked)["unresolved_above_ceiling"])
+    cases.append((
+        "a marker retires a recorded advisory",
+        n_un == 1 and n_mk == n_un,
+        f"advisories unmarked {n_un}, under a 300s marker {n_mk}"))
+
+    # DOOR 4 -- a mark SET that is looser than its tightest member. `min()` over
+    # the raw seconds picks `timeout(0)`, which is the loosest ceiling of all.
+    tight = marker_ceiling(30, base, stall)
+    pair = _tightest_marker([(0, 1), (30, 2)], base, stall)
+    cases.append((
+        "an added mark loosens a mark set",
+        pair is not None and marker_ceiling(pair[0], base, stall) <= tight,
+        f"[timeout(0), timeout(30)] -> "
+        f"{marker_ceiling(pair[0], base, stall) if pair else None}s, "
+        f"timeout(30) alone -> {tight}s"))
+
+    # DOOR 5 -- zero read as a bound of zero. The opposite error, and it is the
+    # one that blocked landing on main: every inner timeout becomes a violation.
+    zero = marker_ceiling(0, base, stall)
+    cases.append((
+        "a zero marker is read as a bound of zero seconds",
+        zero == cap,
+        f"timeout(0) -> {zero}s, expected the {cap}s stall-derived ceiling"))
+
+    # DOOR 6 -- the cap LOOSENS. Every other door asks whether some spelling
+    # gets past the cap; this one asks whether the cap itself still points the
+    # right way. Capping is only ever allowed to TIGHTEN, so for a positive
+    # marker the capped ceiling may never exceed either the marker's own
+    # `N // divisor` or the uncapped answer. A future edit that reached for
+    # `max`, or added a floor "so a marked test is not judged too harshly",
+    # opens the mechanism without touching any number the other cases read.
+    # (`0` is excluded because it is not a bound of N seconds -- that is DOOR 5.)
+    loosened = [n for n in (1, 30, base, stall, 900, 2700, 10 ** 9)
+                if marker_ceiling(n, base, stall) > min(
+                    int(n) // CEILING_DIVISOR, marker_ceiling(n, base, None))]
+    cases.append((
+        "the cap loosens a marker-derived ceiling instead of tightening it",
+        not loosened,
+        f"marker(s) whose capped ceiling exceeds their uncapped one: "
+        f"{loosened or 'none'}"))
+
+    return cases
+
+
+def self_check() -> List[str]:
+    """Names of the doors that are open. Empty means every one is closed."""
+    return [f"{door}: {detail}"
+            for door, ok, detail in _self_check_cases() if not ok]
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("root", nargs="?", default=None,
@@ -1686,12 +1877,42 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--tests-root", dest="tests_root", default=None,
                     help="directory to scan (default: the plugin's "
                          "programs/tests)")
+    ap.add_argument("--self-check-only", dest="self_check_only",
+                    action="store_true",
+                    help="run the gate's own door cases and exit; prints one "
+                         "line per door so a reader can see WHICH mechanisms "
+                         "are covered rather than a bare count")
     ap.add_argument("--table", action="store_true",
                     help="print the bounded-calls-per-test-function census "
                          "the ceiling divisor is chosen against")
     ap.add_argument("--json", dest="json_out", default=None,
                     help="write the machine record to this path")
     args = ap.parse_args(argv)
+
+    # BEFORE ANY SCAN, AND BEFORE EITHER LANE (vibe-ic#1734, defect 3).
+    #
+    # The layer that selects this gate's own test is not the layer that runs the
+    # gate: `ci_targeted_test_select.py` builds its pytest list from the changed
+    # files, and the PR that reopens an exemption is a one-line edit to a test
+    # file, which selects the test named after THAT file. The roster entry in
+    # `SMOKE_BASENAMES` closes that, and this closes the independent half -- the
+    # gate refuses to judge anyone else while one of its own doors is open, on
+    # every invocation `repo_hygiene_gates.sh` makes.
+    open_doors = self_check()
+    if args.self_check_only or open_doors:
+        for door, ok, detail in _self_check_cases():
+            print(f"  [{'closed' if ok else 'OPEN'}] {door} -- {detail}")
+    if open_doors:
+        print("[FAIL] ci_harness_timeout_ceiling_check: the exemption "
+              f"mechanism has {len(open_doors)} open door(s), so this run "
+              "cannot judge anything else:")
+        for d in open_doors:
+            print(f"   {d}")
+        return 1
+    if args.self_check_only:
+        print(f"[PASS] {len(_self_check_cases())} door(s) closed: no spelling "
+              "of a timeout marker exempts a bound from this gate.")
+        return 0
 
     repo_root = find_repo_root(Path(args.root)) if args.root else \
         find_repo_root()
