@@ -41,6 +41,63 @@ _T = 55
 _CORPUS_GATE_T = 55
 
 
+#: EVERY file the hygiene script executes, not just the two it used to.
+#:
+#: `repo_hygiene_gates.sh` no longer holds the routed-DEF glob: it shells out to
+#: `tools/ci/routed_def_corpus.py`, which in turn imports `_corpus_location`
+#: from the plugin's `programs/` tree. A scratch clone missing either one gets
+#: rc 2 and an EMPTY population from the producer, and every per-cell count read
+#: out of that clone is a fact about the clone.
+#:
+#: Keep this list derived from what the script RUNS. A new indirection added to
+#: the lane and not added here reappears as a coverage assertion in the two
+#: tests below, which is the exact confusion this list exists to prevent —
+#: `test_the_fixture_clone_carries_everything_the_hygiene_script_executes` is
+#: the test that catches it.
+_CLONE_FILES = (
+    "tools/ci/_gate_dispatch.sh",
+    "tools/ci/repo_hygiene_gates.sh",
+    "tools/ci/routed_def_corpus.py",
+    "vibe-ic-marketplace/plugins/vibe-ic/programs/_corpus_location.py",
+)
+
+
+def _hygiene_clone(clone: Path, designs) -> Path:
+    """A scratch git repo that can run the REAL hygiene lane over planted cells.
+
+    `designs` names one published cell each. The layout is the PUBLISHED
+    identity — `ic/<design>/v<version>_<pdk>/phase3/stage3/pnr/routed.def` —
+    because `routed_def_corpus.py` reads exactly that shape and REFUSES (rc 2)
+    when one design directory carries two versions. The old fixture put both
+    cells under a single `fam/` design, which is that refusal.
+    """
+    import shutil
+    subprocess.run(["git", "init", "-q", str(clone)], check=True)
+    for rel in _CLONE_FILES:
+        (clone / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_REPO / rel, clone / rel)
+    for design in designs:
+        cell = (clone / "benchmark-data" / "ic" / design / "v0_fixture"
+                / "phase3" / "stage3" / "pnr")
+        cell.mkdir(parents=True)
+        (cell / "routed.def").write_text("DESIGN t ;\nEND DESIGN\n")
+    for k, v in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(clone), "config", k, v], check=True)
+    subprocess.run(["git", "-C", str(clone), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(clone), "commit", "-qm", "b"], check=True)
+    return clone
+
+
+def _percell_rows(clone: Path) -> int:
+    """How many per-cell gates the lane declares in `clone`."""
+    out = subprocess.run(
+        ["bash", str(clone / "tools/ci/repo_hygiene_gates.sh"), "--list"],
+        cwd=str(clone), capture_output=True, text=True, timeout=_T)
+    assert out.returncode == 0, out.stderr
+    return sum(1 for ln in out.stdout.splitlines()
+               if ln.startswith("macro OBS not crossed"))
+
+
 def _corpus_repo(tmp_path: Path, *, gitignore: str = "") -> Path:
     """A throwaway repo with a `benchmark-data/` corpus and one tracked file."""
     r = tmp_path / "repo"
@@ -253,19 +310,7 @@ def test_the_hygiene_lane_declares_a_host_independent_number_of_gates():
     import shutil
     import tempfile
     with tempfile.TemporaryDirectory() as td:
-        clone = Path(td) / "c"
-        subprocess.run(["git", "init", "-q", str(clone)], check=True)
-        for rel in ("tools/ci/_gate_dispatch.sh", "tools/ci/repo_hygiene_gates.sh"):
-            (clone / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(_REPO / rel, clone / rel)
-        cell = clone / "benchmark-data/ic/fam/tracked/phase3/stage3/pnr"
-        cell.mkdir(parents=True)
-        (cell / "routed.def").write_text("DESIGN t ;\nEND DESIGN\n")
-        for k, v in (("user.email", "t@t"), ("user.name", "t")):
-            subprocess.run(["git", "-C", str(clone), "config", k, v], check=True)
-        subprocess.run(["git", "-C", str(clone), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(clone), "commit", "-qm", "b"],
-                       check=True)
+        clone = _hygiene_clone(Path(td) / "c", ("tracked",))
 
         def declared() -> int:
             rec = Path(td) / "rec.json"
@@ -276,8 +321,21 @@ def test_the_hygiene_lane_declares_a_host_independent_number_of_gates():
             return json.loads(rec.read_text())["declared"]
 
         base = declared()
+        # THE FIXTURE MUST BE REACHING ITS TRACKED CELL, or `base` and `after`
+        # are the same number about nothing. This clone once carried only
+        # `_gate_dispatch.sh` and `repo_hygiene_gates.sh`; when the routed-DEF
+        # producer moved into `tools/ci/routed_def_corpus.py` the loop expanded
+        # over ZERO items in here and `after == base` stayed true by being
+        # 0 == 0. `_hygiene_clone` copies the producer, and this line is what
+        # says so out loud.
+        assert _percell_rows(clone) == 1, (
+            "the fixture declares no per-cell gate over its ONE tracked cell, "
+            "so the before/after comparison below is 0 == 0 and would hold "
+            "however badly the fan-out were broken")
+
         # An UNTRACKED leftover cell — the shape 1078 of them had.
-        leftover = clone / "benchmark-data/ic/fam/leftover/phase3/stage3/pnr"
+        leftover = (clone
+                    / "benchmark-data/ic/leftover/v0_fixture/phase3/stage3/pnr")
         leftover.mkdir(parents=True)
         (leftover / "routed.def").write_text("DESIGN l ;\nEND DESIGN\n")
         after = declared()
@@ -306,31 +364,29 @@ def test_the_tracked_cells_are_still_reached():
     test chose and the expected count is a number rather than a hope. The
     untracked half — a leftover on the disk must NOT add a gate — is the
     sibling test above; together they pin both directions.
+
+    WHY IT WAS RED ON `main`, AND WHAT THAT WAS NOT
+    ==============================================
+    It was NOT a coverage cut and NOT a consequence of the corpus move. The
+    fixture built a two-file clone — `_gate_dispatch.sh` and
+    `repo_hygiene_gates.sh` — at a time when the script's own `git ls-files`
+    glob WAS the corpus producer. The producer has since moved into
+    `tools/ci/routed_def_corpus.py`, which the clone did not carry, so
+    `python3 "$HERE/routed_def_corpus.py"` exited 2 with "No such file or
+    directory": rc 2, zero items, zero per-cell gates, `0 == 2`. The clone was
+    measuring a script it had not finished assembling.
+
+    The producer also stopped accepting the fixture's LAYOUT. It reads the
+    published identity `ic/<design>/<version>/phase3/stage3/pnr/routed.def` and
+    REFUSES (rc 2, "publishes more than one routed-DEF version") when one design
+    directory holds two versions — which is exactly what `fam/alpha` and
+    `fam/beta` were. Both had to be repaired for this fixture to reach the
+    fan-out again; either one alone still yields zero.
     """
-    import shutil
     import tempfile
     with tempfile.TemporaryDirectory() as td:
-        clone = Path(td) / "c"
-        (clone / "tools" / "ci").mkdir(parents=True)
-        subprocess.run(["git", "init", "-q", str(clone)], check=True)
-        shutil.copy2(_LIB, clone / "tools/ci/_gate_dispatch.sh")
-        shutil.copy2(_HYGIENE, clone / "tools/ci/repo_hygiene_gates.sh")
-        for name in ("alpha", "beta"):
-            cell = clone / f"benchmark-data/ic/fam/{name}/phase3/stage3/pnr"
-            cell.mkdir(parents=True)
-            (cell / "routed.def").write_text("DESIGN t ;\nEND DESIGN\n")
-        for k, v in (("user.email", "t@t"), ("user.name", "t")):
-            subprocess.run(["git", "-C", str(clone), "config", k, v], check=True)
-        subprocess.run(["git", "-C", str(clone), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(clone), "commit", "-qm", "b"],
-                       check=True)
-
-        out = subprocess.run(
-            ["bash", str(clone / "tools/ci/repo_hygiene_gates.sh"), "--list"],
-            cwd=str(clone), capture_output=True, text=True, timeout=_T)
-        assert out.returncode == 0, out.stderr
-        percell = [ln for ln in out.stdout.splitlines()
-                   if ln.startswith("macro OBS not crossed")]
+        clone = _hygiene_clone(Path(td) / "c", ("alpha", "beta"))
+        percell = _percell_rows(clone)
         tracked = subprocess.run(
             ["git", "-C", str(clone), "ls-files", "--",
              "benchmark-data/ic/*/*/phase3/stage3/pnr/routed.def"],
@@ -339,9 +395,44 @@ def test_the_tracked_cells_are_still_reached():
     assert len(tracked) == 2, (
         "the fixture did not track the two cells it planted, so the assertion "
         f"below would be about nothing: {tracked}")
-    assert len(percell) == len(tracked), (
+    assert percell == len(tracked), (
         "the per-cell gates no longer cover every TRACKED cell: %d gate(s) "
-        "for %d tracked routed.def" % (len(percell), len(tracked)))
+        "for %d tracked routed.def" % (percell, len(tracked)))
+
+
+def test_the_fixture_clone_carries_everything_the_hygiene_script_executes():
+    """THE GUARD ON THE FIXTURE.
+
+    The failure above was a fixture that did not carry the program the script
+    it was testing invokes, and it reported that gap as a coverage cut in the
+    product. Nothing in the two tests above can tell those apart on its own:
+    both read a gate count out of a clone, and an incomplete clone lowers that
+    count exactly the way a real regression would.
+
+    So this test reads the clone's OWN stderr. `gate_dispatch_over` announces a
+    producer that failed — "CORPUS PRODUCER FAILED (rc N)" — and
+    `routed_def_corpus.py` announces every refusal as "[routed-def corpus]
+    UNDETERMINED:". Either sentence in a fixture run means the number the
+    sibling tests read is not about the fan-out, and this test says so by name
+    instead of letting it arrive as a coverage assertion.
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        clone = _hygiene_clone(Path(td) / "c", ("alpha", "beta"))
+        out = subprocess.run(
+            ["bash", str(clone / "tools/ci/repo_hygiene_gates.sh"), "--list"],
+            cwd=str(clone), capture_output=True, text=True, timeout=_T)
+        rows = _percell_rows(clone)
+    assert out.returncode == 0, out.stderr
+    for sentence in ("CORPUS PRODUCER FAILED", "UNDETERMINED"):
+        assert sentence not in out.stderr, (
+            f"the fixture clone cannot run the hygiene script's own corpus "
+            f"producer — {sentence!r} in its stderr. Every per-cell count read "
+            f"out of this clone is about the fixture, not about the "
+            f"fan-out:\n{out.stderr}")
+    assert rows == 2, (
+        "the fixture clone reached no per-cell gate over the two cells it "
+        "planted, with no diagnostic to explain it")
 
 
 # ==========================================================================

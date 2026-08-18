@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -647,17 +648,129 @@ def test_gatekeeper_review_counts_the_gate_as_blocking(tmp_path):
     assert honest != _git(r, "rev-parse", "pr").strip()
 
 
+#: The dispatch verbs `tools/gatekeeper-land.sh` defines. `run` increments
+#: FAILED; `report` is documented in that file as "REPORT, not a gate … NEVER
+#: touches FAILED", so a gate wired through it is printed and not counted.
+_BLOCKING_VERB = "run"
+_NON_BLOCKING_VERBS = ("report",)
+
+#: `<verb> [<unit>] "<label>" <cmd…>` — the unit id is OPTIONAL here on
+#: purpose. The call shape gained a leading unit argument
+#: (`run "cheap:base-ancestry" "tree contains …"`) and the assertion below used
+#: to be `'run "tree contains the base it claims as parent"' in script`, a
+#: byte-exact match on the OLD shape. That check could not tell "the gate was
+#: unwired" from "an argument was inserted in front of the label", and it
+#: reported the second as the first. What follows matches either shape and then
+#: states the property.
+_DISPATCH_RE = re.compile(
+    r"^\s*(?P<verb>[A-Za-z_][A-Za-z0-9_]*)\s+"
+    r'(?:"(?P<unit>[^"]*)"\s+)?'
+    r'"(?P<label>[^"]*)"'
+    r"(?P<rest>.*?)(?:\\\s*\n(?:.*?(?:\\\s*\n))*.*)?$",
+    re.MULTILINE,
+)
+
+#: The label the landing script gives the base-ancestry gate.
+_BASE_ANCESTRY_LABEL = "tree contains the base it claims as parent"
+#: The program whose invocation IS the gate. The label is prose; this is not.
+_BASE_ANCESTRY_PROGRAM = "gatekeeper_stale_branch_check.py"
+
+
+def _dispatch_verb_for(script: str, program: str) -> str:
+    """The verb `program` is dispatched through, or a sentence saying why not.
+
+    Returns the verb (`run`, `report`, …) on success. Every other outcome is a
+    STRING NAMING WHAT WAS OBSERVED rather than a bare False, because "not
+    wired" and "wired through a verb this test does not know" are different
+    findings and the caller has to be able to print which one happened.
+    """
+    lines = script.splitlines()
+    hits = [i for i, line in enumerate(lines)
+            if program in line and not line.lstrip().startswith("#")]
+    if not hits:
+        return f"NOT INVOKED: no non-comment line runs {program}"
+    verbs = set()
+    for index in hits:
+        # A dispatch may continue over `\`-terminated lines, so walk BACK to
+        # the first line of the logical command.
+        start = index
+        while start > 0 and lines[start - 1].rstrip().endswith("\\"):
+            start -= 1
+        match = _DISPATCH_RE.match(lines[start])
+        if match is None:
+            return (f"UNPARSEABLE: {program} is invoked at line {start + 1} by "
+                    f"a command this test cannot classify: {lines[start]!r}")
+        verbs.add((match.group("verb"), match.group("label")))
+    if len(verbs) != 1:
+        return f"AMBIGUOUS: {program} is dispatched more than one way: {verbs}"
+    verb, label = verbs.pop()
+    if label != _BASE_ANCESTRY_LABEL:
+        return (f"RELABELLED: {program} is dispatched as {label!r}, not "
+                f"{_BASE_ANCESTRY_LABEL!r}")
+    return verb
+
+
 def test_landing_script_wires_the_gate_blocking(tmp_path):
     """`tools/gatekeeper-land.sh` is the script whose success writes the
     `.git/gatekeeper-stamp` the pre-push hook demands, so a push to `main`
     cannot happen without it. The checker was blocking in `gatekeeper_review`
     and had never been wired HERE — which is why nothing in the landing path
     had an opinion on the landing method at all.
+
+    WHAT THIS ASSERTS, AND WHAT IT USED TO: the property is "the base-ancestry
+    checker is dispatched through the BLOCKING verb". The old assertion was a
+    literal substring of one particular spelling of that call, and it went red
+    the day a unit id was inserted between the verb and the label — reporting
+    an unwired gate over a gate that is wired, blocking, and unchanged in
+    behaviour. The gate's own reachability is pinned by the fixture tests above;
+    this one pins only that the landing path invokes it and counts its rc.
     """
     script = (_REPO_ROOT / "tools" / "gatekeeper-land.sh").read_text(
         encoding="utf-8")
-    assert 'run "tree contains the base it claims as parent"' in script
-    assert 'gatekeeper_stale_branch_check.py' in script
-    # `run`, not `report`: `report` never touches FAILED, so a gate wired
-    # through it is printed and not counted.
-    assert 'report "tree contains the base it claims as parent"' not in script
+    verb = _dispatch_verb_for(script, _BASE_ANCESTRY_PROGRAM)
+    assert verb == _BLOCKING_VERB, (
+        f"tools/gatekeeper-land.sh must dispatch {_BASE_ANCESTRY_PROGRAM} "
+        f"through `{_BLOCKING_VERB}`, the verb that increments FAILED; "
+        f"observed: {verb}")
+
+
+def test_the_wiring_check_still_catches_an_unwired_or_downgraded_gate():
+    """THE GUARD ON THE GUARD.
+
+    A property check is only worth more than the substring it replaced if it
+    still fails on the two things the substring could catch: the gate deleted,
+    and the gate demoted to a non-blocking `report`. Both are driven here on
+    MUTATED COPIES of the real script text, so this test fails the moment
+    `_dispatch_verb_for` starts returning `run` for a landing path that does
+    not block.
+    """
+    script = (_REPO_ROOT / "tools" / "gatekeeper-land.sh").read_text(
+        encoding="utf-8")
+    # CONTROL — the unmutated script is wired and blocking.
+    assert _dispatch_verb_for(script, _BASE_ANCESTRY_PROGRAM) == "run"
+
+    # MUTATION 1 — demoted to a verb that never touches FAILED.
+    for verb in _NON_BLOCKING_VERBS:
+        demoted = script.replace(
+            f'run "cheap:base-ancestry" "{_BASE_ANCESTRY_LABEL}"',
+            f'{verb} "cheap:base-ancestry" "{_BASE_ANCESTRY_LABEL}"')
+        assert demoted != script, (
+            "the mutation did not apply, so the assertion below is about "
+            "nothing")
+        assert _dispatch_verb_for(demoted, _BASE_ANCESTRY_PROGRAM) == verb
+
+    # MUTATION 2 — the invocation deleted outright.
+    unwired = "\n".join(
+        line for line in script.splitlines()
+        if _BASE_ANCESTRY_PROGRAM not in line or line.lstrip().startswith("#"))
+    assert unwired != script
+    assert _dispatch_verb_for(unwired, _BASE_ANCESTRY_PROGRAM).startswith(
+        "NOT INVOKED")
+
+    # MUTATION 3 — the OLD call shape, with no unit id. The repair must accept
+    # it: this test says the check follows the call shape, it does not pin one.
+    old_shape = script.replace(
+        f'run "cheap:base-ancestry" "{_BASE_ANCESTRY_LABEL}"',
+        f'run "{_BASE_ANCESTRY_LABEL}"')
+    assert old_shape != script
+    assert _dispatch_verb_for(old_shape, _BASE_ANCESTRY_PROGRAM) == "run"

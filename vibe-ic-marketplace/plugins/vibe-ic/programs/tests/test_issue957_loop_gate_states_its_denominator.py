@@ -122,25 +122,58 @@ _538 = _load(_TESTS, "test_issue538_merge_gate_covers_ci_hygiene")
 
 
 # ── what the script's corpus IS, discovered rather than declared ────────────
+#: The producer the hygiene script's loop actually runs. SCRAPED from the
+#: script, not typed here, for the same reason the glob used to be: this file
+#: must not be able to disagree with the script about what the corpus is.
+_PRODUCER_RE = re.compile(r'python3\s+"\$HERE/([A-Za-z0-9_]+\.py)"')
+
+
+def _corpus_producer() -> Path:
+    """The `tools/ci/…` program `gate_dispatch_over` calls for the population.
+
+    THE GLOB IS NO LONGER IN THE SCRIPT. `_published_corpus` used to scrape the
+    single quoted `benchmark-data/…*…` pattern out of `repo_hygiene_gates.sh`
+    and re-run it as `git ls-files`. That pattern moved into
+    `tools/ci/routed_def_corpus.py`, so the scrape found ZERO globs and this
+    file's five real-script tests failed on `0 == 1` — a discovery failure
+    inside the test, reported in the shape of a statement about the corpus.
+
+    The producer is the right subject anyway: it is what the loop runs, it
+    honours `VIBE_IC_BENCHMARK_DATA`, and it distinguishes an EMPTY population
+    (rc 0, no lines) from an UNDETERMINED one (rc 2) — a distinction
+    `git ls-files` on a scraped glob could not make.
+    """
+    text = _SCRIPT.read_text(errors="replace")
+    names = sorted(set(_PRODUCER_RE.findall(text)))
+    assert len(names) == 1, (
+        "the hygiene script no longer names exactly one `$HERE/<producer>.py` "
+        f"corpus producer, so this test cannot know what the loop expands "
+        f"over: {names}")
+    producer = _REPO / "tools" / "ci" / names[0]
+    assert producer.is_file(), f"corpus producer {producer} does not exist"
+    return producer
+
+
 def _published_corpus() -> list:
     """The items the gate script's own producer selects, run for real.
 
-    The glob is SCRAPED from the script — the single quoted pattern under
-    `benchmark-data` — so this test cannot disagree with the script about what
-    the corpus is, and cannot go stale when the layout moves. Present in the
-    script both before and after #957, so the discovery works in both arms and
-    only the disclosure assertions can fail.
+    THREE OUTCOMES, KEPT APART. rc 0 with lines is a population. rc 0 with no
+    lines is an EMPTY corpus, which is a legitimate answer in a checkout that
+    does not carry the published cells — and is why every caller below is
+    `@needs_corpus`, so an empty answer arrives as "I could not look" rather
+    than as a coverage certificate over nothing. Any other rc is UNDETERMINED:
+    the producer refused, the denominator is unknown, and reading that as zero
+    is the vacuous pass this whole file is about.
     """
-    text = _SCRIPT.read_text(errors="replace")
-    globs = sorted({m.group(1) for m in
-                    re.finditer(r"'(benchmark-data/[^']*\*[^']*)'", text)})
-    assert len(globs) == 1, (
-        "the hygiene script no longer names exactly one published-corpus "
-        f"glob, so this test cannot know what the loop expands over: {globs}")
-    out = subprocess.run(["git", "-C", str(_REPO), "ls-files", "--", globs[0]],
-                         capture_output=True, text=True, timeout=_T)
-    assert out.returncode == 0, out.stderr
-    return [p for p in out.stdout.split() if p]
+    producer = _corpus_producer()
+    out = subprocess.run(
+        [sys.executable, str(producer), "--repo", str(_REPO)],
+        capture_output=True, text=True, timeout=_T)
+    assert out.returncode == 0, (
+        f"the corpus producer {producer.name} REFUSED (rc {out.returncode}); "
+        f"the denominator is UNKNOWN, not zero, so nothing below may be read "
+        f"as coverage:\n{out.stderr}")
+    return [p for p in out.stdout.splitlines() if p.strip()]
 
 
 def _templated_decls():
@@ -423,6 +456,7 @@ def test_the_record_still_carries_the_gate_LABEL_as_its_identity():
     assert not silent, silent
 
 
+@needs_corpus
 def test_every_published_cell_is_still_covered_by_every_per_cell_gate():
     """The other half: a disclosure that was achieved by dropping a gate, or by
     narrowing the corpus, would be a coverage cut wearing a fix's clothes.
@@ -433,8 +467,24 @@ def test_every_published_cell_is_still_covered_by_every_per_cell_gate():
     marked for that reason, not for a failure: the skip says "I could not look",
     which is what was true, and the green said "every published cell is
     covered", which was not.
+
+    THE MARKER WAS CLAIMED BY THE MODULE DOCSTRING AND NEVER APPLIED. That is
+    why this test was red on `main` and its four marked siblings were not: it
+    ran, and `_published_corpus()` failed inside its own discovery step. The
+    discovery is repaired above; without the marker the repair would have
+    turned the red into exactly the 0 == 0 green the docstring calls worse than
+    a red. Both halves are needed and neither is sufficient.
+
+    The floor below is what keeps the marker from becoming the hole. Where a
+    corpus IS offered, an EMPTY population is refused rather than certified:
+    somebody named a corpus, and "every published cell is covered" over zero
+    published cells is the sentence this file exists to stop.
     """
     items = _published_corpus()
+    assert items, (
+        "a corpus is present but its routed-DEF population is EMPTY, so "
+        "'every published cell is covered by every per-cell gate' would be a "
+        "statement about no cell at all")
     stdout, _, _ = _list_run(_SCRIPT, _REPO)
     rows = [ln for ln in stdout.splitlines() if ln.strip()]
     for d in _templated_decls():
