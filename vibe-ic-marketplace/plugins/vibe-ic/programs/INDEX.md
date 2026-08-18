@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1109
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1109)
+- **Total programs (excluding helpers / shims):** 1110
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1110)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1100 |
+| `any` | 1101 |
 
 ## Alphabetical listing
 
@@ -1043,6 +1043,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `table_lut_synth` | any | — | a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st... |
 | `tapeout_checklist_gen` | any | — | emit Step 36 (v2.3) reports/audit/tapeout_checklist.json. |
 | `tapeout_signoff_check` | any | — | Tapeout signoff check — wrapper for signoff_audit --mode tapeout. |
+| `targeted_arm_cache` | any | — | content-addressed reuse for the LANDING gate's targeted pytest arm, keyed on EVERYTHING that can change its verdict. |
 | `tb_timing_extremes_check` | any | — | LL-6. |
 | `tb_vcs_only_construct_detect` | any | — | detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run. |
 | `tb_vcs_only_construct_remediate` | any | — | ORGANIC #717 |
@@ -1181,7 +1182,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1100 programs)
+### `any` (1101 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -2193,6 +2194,7 @@ _(no programs in this group)_
 - `table_lut_synth` — a DETERMINISTIC solver for the CVDP TABLE-DRIVEN COMBINATIONAL family: a combinational function FULLY specified by an enumerated table st...
 - `tapeout_checklist_gen` — emit Step 36 (v2.3) reports/audit/tapeout_checklist.json.
 - `tapeout_signoff_check` — Tapeout signoff check — wrapper for signoff_audit --mode tapeout.
+- `targeted_arm_cache` — content-addressed reuse for the LANDING gate's targeted pytest arm, keyed on EVERYTHING that can change its verdict.
 - `tb_timing_extremes_check` — LL-6.
 - `tb_vcs_only_construct_detect` — detect VCS/Xcelium-only SystemVerilog testbench constructs that iverilog cannot run.
 - `tb_vcs_only_construct_remediate` — ORGANIC #717
