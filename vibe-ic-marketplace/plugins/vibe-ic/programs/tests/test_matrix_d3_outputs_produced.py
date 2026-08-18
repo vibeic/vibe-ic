@@ -471,6 +471,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -1310,16 +1311,104 @@ class Rejected:
         the ledger does not record THIS STEP as having written that path. "A
         file matching this pattern exists somewhere in the project" and "this
         step produced it" are different claims; this is where they separate.
+
+    And one that is about the BYTES rather than about the directory entry:
+
+    ``malformed``
+        the match is present, non-empty, no symlink, tracked at HEAD and
+        attributed to this step by the ledger — and it does not PARSE as the
+        kind its own declared path names. Every rule above this one asks a
+        question a directory listing can answer. This is the first that reads
+        the file. See :func:`kind_conformance`.
     """
     empty: Tuple[str, ...] = ()
     symlinked: Tuple[str, ...] = ()
     untracked: Tuple[str, ...] = ()
     unwritten: Tuple[str, ...] = ()
     unattributed: Tuple[str, ...] = ()
+    malformed: Tuple[str, ...] = ()
 
     def __bool__(self) -> bool:
         return bool(self.empty or self.symlinked or self.untracked
-                    or self.unwritten or self.unattributed)
+                    or self.unwritten or self.unattributed or self.malformed)
+
+
+#: Suffix -> the parser whose SUCCESS is that format's own definition of
+#: well-formedness. Nothing here encodes a schema, a field name, a design, a
+#: PDK or a vendor: a `.json` that `json.loads` refuses is not JSON in any
+#: reading of the word, and neither is an `.xml` that `ElementTree` refuses.
+#:
+#: DELIBERATELY SHORT, and the shortness is the argument. The temptation is to
+#: add `.rpt`, `.v`, `.def`, `.lef` and grade them on a keyword; every one of
+#: those would be a rule about what a PARTICULAR tool writes, and the first
+#: run that used a different writer would go red for a reason that is not a
+#: defect. `.gds` is left out for a different reason and not by oversight —
+#: `gds_substance_check` and `gds_topcell_name_check` already SHIP as blocking
+#: gates over exactly those bytes, and this module imports both
+#: (`parse_structures`, `_gds_geometry_count`). A second, weaker opinion about
+#: GDS here would be a duplicate ruler that can only disagree with the shipped
+#: one.
+#:
+#: MEASURED before it was wired in, over the published corpus reachable through
+#: `VIBE_IC_BENCHMARK_DATA` (3 admissible run roots, 99 entries resolved by
+#: `resolve_anywhere`): 62 `.json` + 1 `.xml` hits, 63 of 63 conformant. So the
+#: rule is GREEN on every artefact this repository can point at today and is
+#: exercised only by the mutation controls below — which is the state a new
+#: rule has to be in before it can be believed.
+_KIND_PARSERS = {
+    ".json": ("JSON", lambda p: json.loads(p.read_text(encoding="utf-8"))),
+    ".xml": ("XML", lambda p: ET.parse(p)),
+}
+
+
+def kind_conformance(path: Path) -> Optional[str]:
+    """``None`` when *path*'s bytes parse as the kind its suffix names.
+
+    Otherwise the reason, in one line, naming the kind and the parser's own
+    complaint.
+
+    WHY THIS EXISTS
+    ---------------
+    Every other rule in :func:`resolve` — non-empty, non-symlink, tracked at
+    HEAD, attributed by the write ledger — is answerable from a directory
+    listing plus `git ls-files`. Not one of them opens the file. So dimension 3
+    reddened when a declared artefact was ABSENT and stayed green when it was
+    PRESENT AND WRONG, which makes it an existence check wearing the clothes of
+    a correctness check: `phase2/gates/cdc_crossing.json` containing the four
+    bytes `oops` was, until this predicate, indistinguishable here from the
+    real report, and both read as "produced".
+
+    A SUFFIX THIS TABLE DOES NOT KNOW RETURNS ``None`` — no opinion, not a
+    pass. The distinction matters and is published: `content_undecidable()`
+    counts the entries no parser here can grade, so "63 cells green" is never
+    read as "63 artefacts were parsed". A rule that silently graded `.rpt` as
+    conformant because nothing looked at it would be the same defect one level
+    down.
+
+    IT CAN ONLY EVER SUBTRACT. A malformed file is refused; nothing here can
+    promote a match that failed an earlier rule, in the same way the write
+    ledger can only subtract. That ordering is why this check runs LAST: an
+    untracked malformed file is still reported as untracked, because
+    trackedness is the older and more specific finding about it.
+    """
+    kind = _KIND_PARSERS.get(path.suffix.lower())
+    if kind is None:
+        return None
+    name, parse = kind
+    try:
+        parse(path)
+    except Exception as exc:                      # noqa: BLE001 — any refusal
+        return f"does not parse as {name}: {type(exc).__name__}: {exc}"
+    return None
+
+
+def content_undecidable(entry_paths) -> Tuple[str, ...]:
+    """The subset of *entry_paths* whose suffix :func:`kind_conformance` cannot
+    grade — published, never inferred from silence.
+    """
+    return tuple(sorted(
+        str(p) for p in entry_paths
+        if Path(p).suffix.lower() not in _KIND_PARSERS))
 
 
 def resolve(root: Path, entry: str,
@@ -1369,6 +1458,7 @@ def resolve(root: Path, entry: str,
     empty: List[str] = []
     symlinked: List[str] = []
     untracked: List[str] = []
+    malformed: List[str] = []
     for alt in F.split_any_of(entry):
         for rel in _GLOB_FIRST(root, alt):
             p = root / rel
@@ -1386,6 +1476,16 @@ def resolve(root: Path, entry: str,
                 continue
             if not is_tracked(root, rel):
                 untracked.append(f"{rel} ({size} B)")
+                continue
+            # THE FIRST RULE HERE THAT OPENS THE FILE. Everything above is
+            # answerable from a directory listing; a step that wrote 4 bytes of
+            # garbage to its declared `.json` output satisfied all of it. See
+            # `kind_conformance` — a suffix the table does not know returns
+            # None and this branch is not taken, so the rule can only ever
+            # subtract, never widen what counts as produced.
+            why = kind_conformance(p)
+            if why is not None:
+                malformed.append(f"{rel} ({size} B) {why}")
                 continue
             if best is None or size > best.size_bytes:
                 best = Hit(root="", alternative=alt, path=rel, size_bytes=size)
@@ -1413,7 +1513,8 @@ def resolve(root: Path, entry: str,
                 f"it'.")
             best = None
     return best, Rejected(tuple(empty), tuple(symlinked), tuple(untracked),
-                          tuple(unwritten), tuple(unattributed))
+                          tuple(unwritten), tuple(unattributed),
+                          tuple(malformed))
 
 
 def resolve_anywhere(entry: str,
@@ -1436,7 +1537,7 @@ def resolve_anywhere(entry: str,
 
 
 def _rejected_note(rejected: Dict[str, Rejected]) -> str:
-    """The five near-miss categories, named rather than folded into "missing"."""
+    """The six near-miss categories, named rather than folded into "missing"."""
     bits = []
     for field, label in (("empty", "0-byte matches"),
                          ("symlinked", "symlinked (not produced here)"),
@@ -1446,7 +1547,10 @@ def _rejected_note(rejected: Dict[str, Rejected]) -> str:
                                        "STEP never wrote it"),
                          ("unattributed", "matched, but the run's write ledger "
                                           "attributes that path to no write by "
-                                          "this step")):
+                                          "this step"),
+                         ("malformed", "PRESENT AND WRONG — the bytes do not "
+                                       "parse as the kind the declared path "
+                                       "names")):
         per_root = {k: list(getattr(v, field)) for k, v in rejected.items()
                     if getattr(v, field)}
         if per_root:
@@ -4895,6 +4999,195 @@ def test_d3_a_directory_outside_any_repository_yields_no_evidence():
         assert rej.untracked == ("reports/drc.rpt (512 B)",), rej
 
 
+# ──────────────────────────────────────────────────────────────────────
+# PRESENT AND WRONG — the mutation controls for `kind_conformance`
+#
+# Every rule above is answerable from a directory listing. These three are the
+# only ones in this module that depend on what is INSIDE the file, so they are
+# also the only ones that can tell an existence check from a correctness one.
+# All three drive the mutation in BOTH directions on ONE path: the same name,
+# the same run root, the same commit, non-empty and tracked in both arms, and
+# only the bytes different. A rule that reddened on the second arm for any
+# other reason would be a rule about something else.
+# ──────────────────────────────────────────────────────────────────────
+def test_d3_a_present_but_unparseable_artefact_is_not_counted_as_produced():
+    """THE RESOLVER-LEVEL control: present, non-empty, tracked, and not JSON.
+
+    Sibling of ``test_d3_zero_byte_artefacts_are_not_counted_as_produced`` and
+    ``test_d3_symlinked_artefacts_are_not_counted_as_produced``, and it exists
+    for the same reason at one level deeper. Those two refuse a match that a
+    DIRECTORY LISTING can see is wrong. Neither of them — nor any other rule in
+    :func:`resolve` — opens the file, so a step that wrote four bytes of prose
+    to its declared ``.json`` output satisfied all of them and read as
+    produced.
+
+    BOTH DIRECTIONS ON ONE PATH. The first arm is the same file with valid
+    JSON in it and must be ACCEPTED, so what the second arm refuses is the
+    bytes and not the fixture.
+    """
+    with _probe_run_root("d3_malformed_") as (probe, commit):
+        (probe / "reports").mkdir()
+        art = probe / "reports" / "sdc_check.json"
+
+        # ARM A — a real report. Present, non-empty, tracked, parseable.
+        art.write_text(json.dumps({"status": "PASS", "violations": []}),
+                       encoding="utf-8")
+        commit("reports/sdc_check.json")
+        hit, rej = resolve(probe, "reports/sdc_check.json")
+        assert hit is not None, (
+            f"a committed, non-empty, well-formed JSON report was refused: "
+            f"{rej}. The mutation below would then be measuring the fixture, "
+            f"not the rule.")
+        assert rej.malformed == (), rej
+        good_size = hit.size_bytes
+
+        # ARM C — SAME path, SAME name, still present, still non-empty, still
+        # tracked, still larger than zero. Only the bytes are wrong.
+        art.write_text("sdc check: PASS\n", encoding="utf-8")
+        commit("reports/sdc_check.json")
+        assert art.stat().st_size > 0 and is_tracked(probe, "reports/sdc_check.json"), (
+            "the mutated arm must remain present, non-empty and tracked — "
+            "otherwise an older rule refuses it and this control proves nothing")
+
+        hit, rej = resolve(probe, "reports/sdc_check.json")
+        assert hit is None, (
+            f"a file whose declared path says JSON and whose bytes are not "
+            f"JSON was accepted as a produced artefact: {hit}. Dimension 3 "
+            f"then reddens on absence and stays green on garbage, which is an "
+            f"existence check wearing the clothes of a correctness check.")
+        assert rej.empty == () and rej.symlinked == () and rej.untracked == (), (
+            f"the refusal must be attributable to the CONTENT rule; an older "
+            f"rule fired instead: {rej}")
+        assert len(rej.malformed) == 1, rej
+        assert "does not parse as JSON" in rej.malformed[0], rej
+        assert "reports/sdc_check.json" in rej.malformed[0], rej
+
+        # ...and the note a reader sees names the class rather than folding it
+        # into "missing", which is the whole difference this rule makes.
+        note = _rejected_note({"probe": rej})
+        assert "PRESENT AND WRONG" in note, note
+
+        # ARM A again — the rule refuses the bytes, not the path.
+        art.write_text(json.dumps({"status": "PASS", "violations": []}),
+                       encoding="utf-8")
+        commit("reports/sdc_check.json")
+        hit, rej = resolve(probe, "reports/sdc_check.json")
+        assert hit is not None and hit.size_bytes == good_size, (hit, rej)
+
+
+def test_d3_the_cell_reddens_on_a_corrupt_declared_output(monkeypatch):
+    """THE CELL-LEVEL mutation. This is the assertion the brief is about.
+
+    ``test_d3_required_outputs_are_produced`` reduces to ``audit_step``, so
+    driving ``audit_step`` against a probe root IS driving the cell. Step 8 is
+    the subject because its declared set is exactly one entry, literal (no
+    glob, no ``" OR "``), and ``.json`` — so a mutation of that one file cannot
+    be absorbed by a sibling alternative and the cell's verdict is a function
+    of those bytes alone.
+
+    WHAT THIS DOES NOT CLAIM. ``kind_conformance`` grades WELL-FORMEDNESS, not
+    meaning: a ``sdc_check.json`` that parses and says ``{"status": "FAIL"}``
+    still reads as produced here, and should — "did the step emit its declared
+    artefact" and "does the artefact say the design is good" are different
+    questions, and dimension 3 asks the first. The class this closes is the one
+    where the bytes are not the declared kind at all, which no reading of
+    "produced" covers.
+    """
+    sid, entry = "8", "reports/phase2/sdc_check.json"
+    assert list(F.required_outputs(sid)) == [entry], (
+        f"control is stale: step {sid} now declares "
+        f"{list(F.required_outputs(sid))}")
+    rec = dict(step_record(sid)["entries"][entry])
+
+    with _probe_run_root("d3_cell_malformed_") as (probe, commit):
+        (probe / "reports" / "orchestrator").mkdir(parents=True)
+        target = probe / entry
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        # ARM A — the cell is GREEN on a real artefact in an admissible root.
+        target.write_text(json.dumps({"status": "PASS", "checks": []}),
+                          encoding="utf-8")
+        commit(entry)
+        _probe_only(monkeypatch, "probe", probe)
+        v = check_entry(sid, entry, rec)
+        assert v.produced is True, (
+            f"the unmutated arm is already red ({v}); the mutation below would "
+            f"prove nothing")
+        missing, _details = audit_step(sid)
+        assert not missing, f"step {sid} is red before the mutation: {missing}"
+
+        # ARM C — present, parseable AS A FILE, tracked, non-empty, WRONG KIND.
+        target.write_text("status: PASS\n", encoding="utf-8")
+        commit(entry)
+        assert target.stat().st_size > 0 and is_tracked(probe, entry)
+
+        v = check_entry(sid, entry, rec)
+        assert v.produced is False, (
+            f"step {sid}'s declared output is present, tracked and non-empty "
+            f"and its bytes are not JSON, and the cell still reads it as "
+            f"produced: {v}")
+        missing, _details = audit_step(sid)
+        assert missing and any(entry in m for m in missing), (
+            f"the cell did not redden on a corrupt declared output: "
+            f"missing={missing}")
+        assert any("does not parse as JSON" in m for m in missing), (
+            f"the cell reddened but the reason does not name the content "
+            f"defect, so a reader cannot tell it from an absence: {missing}")
+
+
+def test_d3_the_kind_table_is_live_and_the_ungraded_remainder_is_published():
+    """ANTI-VACUITY. A content rule that grades nothing is worse than none.
+
+    Three ways this rule could go quietly hollow, all asserted:
+
+    * the table empties, so every artefact is "conformant" by never being
+      looked at;
+    * ``kind_conformance`` starts returning ``None`` for a kind it owns, i.e.
+      the parser stops being able to refuse anything;
+    * the ungraded remainder becomes invisible, so "63 cells green" is read as
+      "63 artefacts were parsed".
+
+    The third is the one this campaign keeps finding, so the remainder is a
+    NUMBER this test computes from the live flow and attaches to the run,
+    never a silence a reader has to interpret.
+    """
+    assert _KIND_PARSERS, (
+        "the kind table is empty — kind_conformance would return None for "
+        "every artefact and the content rule would be inert")
+
+    with _probe_run_root("d3_kindtable_") as (probe, commit):
+        for suffix, (name, _parse) in sorted(_KIND_PARSERS.items()):
+            bad = probe / f"probe{suffix}"
+            bad.write_text("<<< this is not a document of any kind >>>",
+                           encoding="utf-8")
+            why = kind_conformance(bad)
+            assert why is not None and name in why, (
+                f"the {suffix} parser accepted bytes that are not {name}: "
+                f"kind_conformance returned {why!r} — this half of the table "
+                f"cannot refuse anything")
+        unknown = probe / "probe.rpt"
+        unknown.write_text("anything at all", encoding="utf-8")
+        assert kind_conformance(unknown) is None, (
+            "a suffix the table does not know must be NO OPINION, not a "
+            "refusal — otherwise the rule reds artefacts nobody graded")
+        commit()
+
+    # The remainder, measured over every alternative of every declared entry.
+    alts = [a.strip() for sid in F.step_ids()
+            for e in F.required_outputs(sid)
+            for a in F.split_any_of(e) if a.strip()]
+    assert alts, "no declared outputs at all — the census is vacuous"
+    ungraded = content_undecidable(alts)
+    graded = len(alts) - len(ungraded)
+    assert graded, (
+        f"not one of the {len(alts)} declared output alternatives has a "
+        f"suffix this rule can grade; the content predicate is unreachable "
+        f"from the flow as declared")
+    print(f"[d3 content coverage] {graded}/{len(alts)} declared output "
+          f"alternatives have a gradeable kind; {len(ungraded)} do not "
+          f"({sorted({Path(u).suffix.lower() or '(none)' for u in ungraded})})")
+
+
 def test_d3_symlinked_artefacts_are_not_counted_as_produced():
     """The companion rule, exercised the same way.
 
@@ -5610,7 +5903,14 @@ def test_d3_a_committed_ledger_can_be_refuted_by_its_own_commit():
         # module applies BEFORE the ledger accepts it.
         landed = probe / entry
         landed.parent.mkdir(parents=True, exist_ok=True)
-        landed.write_text(json.dumps({"landed": "by a later commit"}) * 20)
+        # Valid JSON, deliberately. The declared path says `.json` and
+        # `resolve` now refuses a `.json` whose bytes are not JSON
+        # (`kind_conformance`), so the old fixture — the same object
+        # concatenated 20 times, which is not a JSON document — would be
+        # refused for its CONTENT and this control would report no staleness
+        # for a reason that has nothing to do with the ledger.
+        landed.write_text(json.dumps(
+            {"landed": "by a later commit", "pad": ["x"] * 20}))
         commit(entry)
         assert not landed.is_symlink() and landed.stat().st_size > 0 \
             and is_tracked(probe, entry)
@@ -5690,7 +5990,14 @@ def test_d3_the_stale_ledger_message_names_a_remedy_the_emitter_can_deliver():
         # The staleness, made real: a later commit lands the declared path.
         landed = probe / _LEDGER_PROBE_ENTRY
         landed.parent.mkdir(parents=True, exist_ok=True)
-        landed.write_text(json.dumps({"landed": "by a later commit"}) * 20)
+        # Valid JSON, deliberately. The declared path says `.json` and
+        # `resolve` now refuses a `.json` whose bytes are not JSON
+        # (`kind_conformance`), so the old fixture — the same object
+        # concatenated 20 times, which is not a JSON document — would be
+        # refused for its CONTENT and this control would report no staleness
+        # for a reason that has nothing to do with the ledger.
+        landed.write_text(json.dumps(
+            {"landed": "by a later commit", "pad": ["x"] * 20}))
         commit(_LEDGER_PROBE_ENTRY)
 
         stale = ledger_staleness(probe)
