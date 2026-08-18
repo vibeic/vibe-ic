@@ -161,6 +161,30 @@ EXTRACTION_EVIDENCE_GLOBS: Tuple[str, ...] = (
     "ext2spice.log", "ext2spice_*.tcl", "*_extracted.sp", "*_extracted.spice",
 )
 
+#: THE SECOND CHANNEL, and the reason it is here rather than left implicit.
+#: What is MEASURED about magic 8.3.681 in this image: the binary carries the
+#: exact format string `Illegal overlap between %s and %s (types do not
+#: connect)`, it reports `%d problems occurred.  See feedback entries.`, and
+#: `feedback save` writes the areas in the `box` + `feedback add` pairs this
+#: module parses. What is NOT measured here: a LIVE reproduction of an illegal
+#: overlap landing in the feedback list, because magic's `paint` resolves type
+#: conflicts at paint time — five deliberately contradictory pairs (ndiff/pdiff,
+#: ndiffc/pdiffc, poly/ndiff, ntap/ptap, nwell/pwell) all extracted with
+#: `feedback count` 0 — and the real trigger is a GDS/CIF read of a conflicting
+#: layout, which needs a design this repo does not carry.
+#:
+#: That gap has ONE failure direction: if a magic build ever reported illegal
+#: overlaps to the transcript and NOT to the feedback list, a feedback-only gate
+#: would read an empty dump and PASS. So the transcript is read too, as an
+#: independent channel, and a marker in one that is missing from the other is a
+#: loud disagreement rather than a quiet zero.
+TRANSCRIPT_NAMES: Tuple[str, ...] = ("ext2spice.log", "extract.log")
+
+#: Magic's own statement of how many feedback areas it filed. This is the TOOL'S
+#: denominator for the dump we are about to read, and it is what turns "the dump
+#: is empty" from an assumption into a comparison.
+_PROBLEMS_RE = re.compile(r"^\s*(\d+)\s+problems?\s+occurred\b", re.M)
+
 #: A PUBLISHED LVS VERDICT IS ALSO EVIDENCE THAT AN EXTRACTION RAN, and closes
 #: the one way an rc-2 vacuous pass could otherwise be manufactured: delete the
 #: extraction directory and the gate has "nothing to be about" while
@@ -266,6 +290,36 @@ def extraction_dir(project: Path, under: Optional[str] = None) -> Path:
 def find_feedback_files(ext_dir: Path) -> List[Path]:
     return [p for p in (ext_dir / name for name in FEEDBACK_NAMES)
             if p.is_file()]
+
+
+def read_transcripts(ext_dir: Path) -> Tuple[int, Optional[int], List[str]]:
+    """``(marker_occurrences, areas_magic_says_it_filed, files_read)``.
+
+    The area count is the MAXIMUM over the `N problems occurred` lines, not the
+    sum: a hierarchical extraction emits one line per cell and summing them
+    would over-count a total that is then compared against one flat dump. The
+    maximum is a LOWER BOUND on what the dump must contain, which is the safe
+    direction — it under-claims rather than raising a false alarm, and it still
+    catches the case that matters (magic filed areas, the dump has fewer).
+    """
+    marker = 0
+    areas: Optional[int] = None
+    read: List[str] = []
+    if not ext_dir.is_dir():
+        return marker, areas, read
+    for name in TRANSCRIPT_NAMES:
+        path = ext_dir / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        read.append(name)
+        marker += text.count(MARKER)
+        for m in _PROBLEMS_RE.finditer(text):
+            areas = max(areas or 0, int(m.group(1)))
+    return marker, areas, read
 
 
 def extraction_evidence(project: Path, ext_dir: Path) -> List[str]:
@@ -463,6 +517,36 @@ def check(project: Path, under: Optional[str] = None) -> Dict[str, Any]:
                 f"string arm alone."),
         })
 
+    # ── CHANNEL 2: the transcript, and the tool's own count of its areas. ───
+    transcript_count, areas_reported, transcripts_read = read_transcripts(
+        ext_dir)
+    records_parsed = sum(p["records_parsed"] for p in per_file)
+    base["transcripts_read"] = transcripts_read
+
+    if transcript_count > 0 and string_count == 0:
+        base["findings"].append({
+            "rule": "CHANNEL_DISAGREEMENT", "severity": "ERROR",
+            "message": (
+                f"the extraction TRANSCRIPT carries {transcript_count} "
+                f"occurrence(s) of {MARKER!r} ({', '.join(transcripts_read)}) "
+                f"while the feedback dump carries none. The two channels "
+                f"disagree about the same extraction, so the dump did not "
+                f"capture what the tool said. Counted from the transcript."),
+        })
+    if areas_reported is not None and records_parsed < areas_reported:
+        base["findings"].append({
+            "rule": "FEEDBACK_DUMP_INCOMPLETE", "severity": "ERROR",
+            "message": (
+                f"magic reported `{areas_reported} problems occurred.  See "
+                f"feedback entries.` but the dump this gate read holds only "
+                f"{records_parsed} feedback record(s). The tool's own count of "
+                f"what it filed exceeds what was saved, so the dump is "
+                f"truncated, stale, or was written before the areas were — the "
+                f"illegal-overlap count taken from it is a floor, not a "
+                f"measurement, and a 0 from it would be meaningless."),
+        })
+        determined = False
+
     if ci_count != string_count:
         base["findings"].append({
             "rule": "MARKER_CASE_DRIFT", "severity": "WARNING",
@@ -474,12 +558,15 @@ def check(project: Path, under: Optional[str] = None) -> Dict[str, Any]:
                 f"rather than silently absorbed."),
         })
 
-    count = max(string_count, structural_count)
+    count = max(string_count, structural_count, transcript_count)
     base["counts"] = {
         "string_count": string_count,
         "structural_count": structural_count,
         "record_count": record_count,
         "case_insensitive_count": ci_count,
+        "transcript_count": transcript_count,
+        "areas_reported_by_tool": areas_reported,
+        "records_parsed": records_parsed,
         "gate_count": count,
         "determined": determined,
     }
@@ -523,11 +610,17 @@ def check(project: Path, under: Optional[str] = None) -> Dict[str, Any]:
     base["summary"] = {"skipped": False, "reason": "clean",
                        "files_found": len(per_file)}
     base["reason"] = (
-        f"0 illegal overlap(s) over {len(per_file)} feedback file(s) "
-        f"({', '.join(p['file'] for p in per_file)}, "
-        f"{sum(p['records_parsed'] for p in per_file)} feedback record(s) "
-        f"parsed); the raw and structural counts agree at 0. This is a "
-        f"MEASURED zero — the dump exists and was read.")
+        f"0 illegal overlap(s) across BOTH channels: {len(per_file)} feedback "
+        f"file(s) ({', '.join(p['file'] for p in per_file)}, {records_parsed} "
+        f"record(s) parsed, raw and structural counts agreeing at 0) and "
+        + (f"{len(transcripts_read)} transcript(s) "
+           f"({', '.join(transcripts_read)}, 0 marker occurrences"
+           + (f", tool reported {areas_reported} feedback area(s) and the dump "
+              f"holds {records_parsed}" if areas_reported is not None else "")
+           + ")" if transcripts_read else
+           "NO transcript in scope, so that channel is silent here rather than "
+           "clean")
+        + ". This is a MEASURED zero — the dump exists and was read.")
     return base
 
 
