@@ -967,6 +967,10 @@ def test_aggregate_only_attestations_are_sufficient_on_both_arms(tmp_path):
     assert doc["missing_candidate_process_files"] == []
     assert doc["dropped_base_selected_files"] == []
     assert doc["missing_base_process_files"] == []
+    # ...and the record says the per-file question was NOT PUT, rather than
+    # leaving an empty list to be read as "asked and nothing was missing".
+    assert doc["candidate_per_file_records_checked"] is False
+    assert doc["base_per_file_records_checked"] is False
 
 
 _SEL2 = ["programs/tests/test_alpha.py", "programs/tests/test_beta.py"]
@@ -984,6 +988,157 @@ _CASE_BASE_WHOLE = [
 _CASE_BASE_PARTIAL = [
     ("programs.tests.test_beta", "t_ok", "passed", "programs/tests/test_beta.py"),
 ]
+
+
+# ============================ PER-FILE NORECORD, FROM THE REPORT (vibe-ic#1709)
+#
+# `pytest_per_file_junit.py` keeps a file whose session died ABSENT from the
+# merged report and names it on stdout as NORECORD. Until #1709 the ONLY thing
+# carrying that fact to this verdict was `gatekeeper-land.sh`'s
+# `grep -qa '^NORECORD'` over the driver's combined driver/subject stdout —
+# `missing_process_files` was declared in `decide`, initialised to `[]` in
+# `main`, and never populated, and `junit_per_file_process_files` had no caller.
+#
+# These tests hold the structured path in BOTH directions: a complete candidate
+# must LAND (the fix is not a ban) and an incomplete one must REFUSE and NAME
+# the file (the fix is not a check that cannot fail).
+
+
+def _drop_per_file_attestation(file_name):
+    """A candidate report whose per-file record for *file_name* was LOST."""
+    def mutate(path):
+        root = ET.parse(str(path)).getroot()
+        for suite in list(root):
+            if suite.get("name") == f"{file_name}::process_exit":
+                root.remove(suite)
+        ET.ElementTree(root).write(str(path), encoding="utf-8",
+                                   xml_declaration=True)
+    return mutate
+
+
+_PER_FILE_NORECORD_LOG = _GOOD_LOG.replace(
+    "=== ALL GATES PASS",
+    "  FAIL  targeted per-file session produced no complete record\n"
+    "=== ALL GATES PASS")
+
+
+def test_a_candidate_per_file_norecord_is_named_from_structured_junit(tmp_path):
+    """THE PAIRED GUARD FOR #1709, as one test so neither half can rot alone.
+
+    Same land log, same selection, same trees, same base arm. The ONE
+    difference is whether the candidate report carries a per-file record for
+    every selected file.
+
+    MEASURED on 7c376e348, before the structured path was connected:
+
+        complete   -> rc=0  LAND OK
+        one lost   -> rc=0  LAND OK    <-- and `missing_candidate_process_files`
+                                           was `[]`, so nothing named the file
+    """
+    complete_dir = tmp_path / "complete"
+    complete_dir.mkdir()
+    r_ok, doc_ok = _cli(complete_dir, _GOOD_LOG, _CASE_BASE_WHOLE,
+                        _CASE_BASE_WHOLE, _SEL2, base_sel=_SEL2)
+    assert r_ok.returncode == 0, r_ok.stdout + r_ok.stderr
+    assert doc_ok["verdict"] == "LAND_OK"
+
+    lost_dir = tmp_path / "lost"
+    lost_dir.mkdir()
+    r_bad, doc_bad = _cli(
+        lost_dir, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE, _SEL2,
+        base_sel=_SEL2,
+        candidate_mutator=_drop_per_file_attestation(_SEL2[0]))
+    # THE DECISION FIRST. On a tree where the structured path is not connected
+    # this is the assertion that fires, and it names the defect rather than a
+    # missing record key.
+    assert r_bad.returncode == 1, r_bad.stdout + r_bad.stderr
+    assert doc_bad["verdict"] == "REFUSE"
+    # NAMED, not merely refused. A refusal that cannot say what is missing
+    # sends the next reader looking in the wrong place.
+    assert any(_SEL2[0] in reason and "PER-FILE SESSION RECORD" in reason
+               for reason in doc_bad["reasons"]), doc_bad["reasons"]
+    assert doc_bad["missing_candidate_process_files"] == [_SEL2[0]]
+    # ...and the same evidence machine-readably, on both halves.
+    assert doc_ok["candidate_per_file_records_checked"] is True
+    assert doc_ok["missing_candidate_process_files"] == []
+    assert doc_ok["test_evidence_mode"] == "aggregate+per-file"
+
+
+def test_a_per_file_norecord_is_not_excused_by_the_same_gate_label_on_the_base(
+        tmp_path):
+    """THE WORSE HALF, and the reason this is a REASON and not a gate label.
+
+    `gatekeeper-land.sh` prints `FAIL targeted per-file session produced no
+    complete record` from a grep over the driver's stdout. That is a LABEL, so
+    it goes through the per-label base differential — and a hang that fires on
+    BOTH arms is exactly the shape `pytest_per_file_junit.py` was written for.
+
+    MEASURED on 7c376e348 with that label on both land logs:
+
+        rc=0  LAND OK  — "gate fails on the base too, so it is not this
+                          branch's"
+
+    which is the pre-existing/false-clean the driver's own docstring rejects a
+    synthetic red testcase to avoid. The structured refusal is absolute.
+    """
+    (tmp_path / "base_land.log").write_text(_PER_FILE_NORECORD_LOG)
+    r, doc = _cli(
+        tmp_path, _PER_FILE_NORECORD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE,
+        _SEL2, base_sel=_SEL2,
+        candidate_mutator=_drop_per_file_attestation(_SEL2[0]),
+        extra=("--base-land-log", str(tmp_path / "base_land.log")))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["missing_candidate_process_files"] == [_SEL2[0]]
+    assert any(_SEL2[0] in reason for reason in doc["reasons"]), doc["reasons"]
+    # The label itself IS excused as pre-existing — that is the point. The
+    # refusal must survive that, from evidence the console cannot forge.
+    assert not any("targeted per-file session" in reason
+                   for reason in doc["reasons"]), doc["reasons"]
+
+
+def test_a_base_per_file_norecord_is_named_and_refused(tmp_path):
+    """#1443's law, applied to the arm that is allowed to excuse things.
+
+    `silenced` and `weakened` are read off what was RED (or passing) ON THE
+    BASE, so a base file with no record is a base failure the branch may delete
+    for free. The candidate here is complete: only the baseline lost a record.
+    """
+    r, doc = _cli(
+        tmp_path, _GOOD_LOG, _CASE_BASE_WHOLE, _CASE_BASE_WHOLE, _SEL2,
+        base_sel=_SEL2,
+        base_mutator=_drop_per_file_attestation(_SEL2[1]))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert doc["missing_base_process_files"] == [_SEL2[1]]
+    assert doc["missing_candidate_process_files"] == []
+    assert any(_SEL2[1] in reason and "ON THE BASE" in reason
+               for reason in doc["reasons"]), doc["reasons"]
+
+
+def test_the_per_file_question_is_only_asked_of_a_report_that_claims_it(
+        tmp_path):
+    """THE FALSE-POSITIVE CONTROL. Per-file sessions are diagnostic recovery,
+    so a healthy landing carries NO per-file evidence. Demanding one
+    attestation per selected file unconditionally — which is what the
+    superseded #1689 did, on a driver that ran per-file sessions every time —
+    would refuse every landing on this driver. A gate that refuses every
+    landing is a ban, and a ban teaches the operator to bypass it.
+    """
+    p = tmp_path / "aggregate-only.xml"
+    _junit(tmp_path, _CASE_BASE_WHOLE, "aggregate-only.xml")
+    _attest_junit(p, _CASE_BASE_WHOLE, _SEL2, per_file=False)
+    assert V.per_file_record_gaps(p, _SEL2, True) is None
+
+    complete = tmp_path / "both.xml"
+    _junit(tmp_path, _CASE_BASE_WHOLE, "both.xml")
+    _attest_junit(complete, _CASE_BASE_WHOLE, _SEL2)
+    assert V.per_file_record_gaps(complete, _SEL2, True) == []
+
+    _drop_per_file_attestation(_SEL2[0])(complete)
+    assert V.per_file_record_gaps(complete, _SEL2, True) == [_SEL2[0]]
+    # A LOST AGGREGATE ASKS TOO, even with no per-file evidence at all: that is
+    # the recovery path, and it is the one that has files to name.
+    assert V.per_file_record_gaps(p, _SEL2, False) == sorted(_SEL2)
+
 
 
 def test_a_partial_base_arm_cannot_clear_a_silenced_failure(tmp_path):
