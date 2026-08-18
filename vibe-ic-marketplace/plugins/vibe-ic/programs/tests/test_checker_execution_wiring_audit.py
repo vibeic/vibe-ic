@@ -441,3 +441,211 @@ def test_the_population_never_invents_a_program_this_checkout_lacks(tmp_path):
     programs = Path(__file__).resolve().parents[1]
     assert "no_such_program_anywhere.py" in M.flow_declared_gate_programs(f)
     assert "no_such_program_anywhere.py" not in M.checker_population(programs, f)
+
+
+# ==========================================================================
+# vibe-ic#1347 — an INVOCATION is not a MENTION, and neither is a guess
+# ==========================================================================
+# The gate could see "this string occurs in this file" and reported "this
+# program is invoked". Four checkers nothing has ever run were counted as
+# wired, each held up solely by another program's MESSAGE TEXT naming it.
+#
+# Every case below is paired, per this file's opening note: the mention half
+# must FIRE and the invocation half must stay CLEAN, because trading a false
+# PASS for a false accusation is not a repair. The v1 attempt at this rule
+# required a literal `<stem>.py` and accused ~195 checkers that
+# `flow_compliance_check.py` genuinely runs.
+
+
+def test_a_name_inside_an_error_MESSAGE_is_not_a_runner(tmp_path):
+    """THE #1347 DEFECT. `_strip_prose` drops docstrings and comments and keeps
+    string literals, because a subprocess argv is a string literal. A sentence
+    in an error message is one too, and that was the whole of the gap."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='def f():\n'
+               '    return "no report on disk; sample_check owns that case."\n')
+    assert "sample_check.py" in _run(tmp_path)["test_only"]
+
+
+def test_implicit_concatenation_reads_as_the_sentence_it_is(tmp_path):
+    """`"... that trips " "eda_log_check)"` looks like a bare fragment on its
+    own line and is one constant to the parser. Deciding on the RAW tree is
+    what makes the sentence visible; deciding on `_strip_prose`'s output
+    cannot, because that output is tokenize's — ONE TOKEN PER LINE."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='def f():\n'
+               '    return ("the long name still works but emits a warning "\n'
+               '            "that trips sample_check)")\n')
+    assert "sample_check.py" in _run(tmp_path)["test_only"]
+
+
+def test_the_paired_half_a_real_argv_is_still_a_runner(tmp_path):
+    """The invocation half of the two above: the suffix is what makes it an
+    argv rather than a sentence."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='import subprocess\n'
+               'subprocess.run(["python3", "sample_check.py"])\n')
+    assert _run(tmp_path)["test_only"] == []
+    assert _run(tmp_path)["not_determined"] == []
+
+
+def test_an_import_is_a_runner(tmp_path):
+    _tree(tmp_path, test="import sample_check\n",
+          prog="import sample_check\nsample_check.main()\n")
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_import_module_by_name_is_a_runner(tmp_path):
+    """v2/v3 of this rule would have reported `gds_streamout_layermap_check`
+    unwired while it is explicitly imported: `import_module("x")` is three
+    separate lines in `_strip_prose`'s output, so no multi-token shape can
+    ever match it there."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='from importlib import import_module\n'
+               'import_module("sample_check")\n')
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_a_dispatcher_that_builds_the_filename_runs_the_names_it_holds(tmp_path):
+    """`PROGRAMS_DIR / f"{prog_name}.py"` over a registry of bare names. A
+    registry a dispatcher executes IS an execution path — forgetting that is
+    what made the first attempt at this rule produce 203 findings of which
+    ~195 were false."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='from pathlib import Path\n'
+               'GATES = ["sample_check"]\n'
+               'for g in GATES:\n'
+               '    p = Path("programs") / f"{g}.py"\n')
+    assert _run(tmp_path)["test_only"] == []
+    assert _run(tmp_path)["not_determined"] == []
+
+
+def test_import_module_over_a_TABLE_of_names_is_a_dispatcher(tmp_path):
+    """`pdk_table_coverage_check` reads `analog_tb_supply_pdk_check.PDK_FLAVORS`
+    by looping `importlib.import_module(mod)` over a table. There is no
+    filename anywhere, and it is a real execution path."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='import importlib\n'
+               'TABLE = [("sample_check", "FLAVORS")]\n'
+               'for mod, attr in TABLE:\n'
+               '    importlib.import_module(mod)\n')
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_a_SHELL_dispatcher_runs_the_names_it_holds(tmp_path):
+    """The same trap one language over. `tools/ci/run_plugin_self_audit.sh`
+    holds six gates in a `GATES=(...)` array and runs
+    `python3 "$PROGRAMS/${gate}.py"`. Requiring a literal `<stem>.py` there
+    accuses every one of them — measured, before this test existed."""
+    plugin = _tree(tmp_path, test="import sample_check\n")
+    (tmp_path / "tools" / "self_audit.sh").write_text(
+        'GATES=(\n'
+        '    "sample_check"\n'
+        ')\n'
+        'for gate in "${GATES[@]}"; do\n'
+        '    python3 "$PROGRAMS/${gate}.py" "$PLUGIN_ROOT"\n'
+        'done\n')
+    assert _run(tmp_path)["test_only"] == []
+    assert plugin.is_dir()
+
+
+def test_a_shell_that_only_NAMES_a_gate_is_not_a_dispatcher(tmp_path):
+    """The paired half: no filename is ever built from the value, so the array
+    is a list and not a runner."""
+    _tree(tmp_path, test="import sample_check\n")
+    (tmp_path / "tools" / "notes.sh").write_text(
+        'GATES=(\n'
+        '    "sample_check"\n'
+        ')\n'
+        'echo "the gates we have not wired yet: ${GATES[@]}"\n')
+    assert "sample_check.py" in _run(tmp_path)["test_only"]
+
+
+# ── NOT DETERMINED: the third answer ────────────────────────────────────────
+# An accusation this gate cannot support is the same defect it exists to find,
+# and so is a clean bill of health it cannot support. Where the shape is
+# unreadable it says so instead of picking one.
+
+def test_a_bare_name_outside_a_dispatcher_is_NOT_DETERMINED(tmp_path):
+    """#1347's own reproduction: binding a checker's name to an unused
+    variable flipped the audit rc=1 -> rc=0. It must no longer BUY a runner —
+    and it must not be turned into an accusation either, because a lone
+    identifier in a string is a registry key or a log tag and nothing here
+    can tell which."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='_UNUSED_NAME = "sample_check"\n')
+    rep = _run(tmp_path)
+    assert rep["not_determined"] == ["sample_check.py"]
+    assert "sample_check.py" not in rep["test_only"]
+    assert "sample_check.py" not in rep["no_runner_at_all"]
+    assert rep["machine_runners"]["sample_check.py"] == []
+
+
+def test_a_dict_key_control_is_also_NOT_DETERMINED(tmp_path):
+    """The issue's control line, `"sample_check": 1,` — same shape, and it
+    must land in the same place as the variable binding above."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='COUNTS = {"sample_check": 1}\n')
+    assert _run(tmp_path)["not_determined"] == ["sample_check.py"]
+
+
+def test_an_unparseable_source_is_NOT_DETERMINED_not_a_verdict(tmp_path):
+    """Nothing was parsed, so nothing there is a shape. Reading the file as
+    prose would accuse; reading it as an invocation would absolve."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='def broken(:\n    sample_check\n')
+    rep = _run(tmp_path)
+    assert rep["not_determined"] == ["sample_check.py"]
+    assert rep["test_only"] == []
+
+
+def test_NOT_DETERMINED_never_blocks(tmp_path):
+    """It is REPORTED. Blocking on it would state the verdict the gate just
+    said it could not reach."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='_UNUSED_NAME = "sample_check"\n')
+    # Its own empty baseline, so the only thing that could redden this run is
+    # the finding under test.
+    bl = tmp_path / "baseline.json"
+    bl.write_text(json.dumps({"known": []}))
+    p = _cli(tmp_path, "--baseline", str(bl))
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "not-determined 1" in p.stdout, p.stdout
+
+
+def test_the_not_determined_count_is_STATED_even_at_zero(tmp_path):
+    """#1130 again, for the population this change adds: a count that appears
+    only when it is non-zero cannot be told apart from a check that did not
+    run."""
+    _tree(tmp_path, test="import sample_check\n")
+    p = _cli(tmp_path)
+    assert "not-determined 0" in p.stdout, p.stdout
+
+
+def test_a_mention_is_not_promoted_by_a_SECOND_mention(tmp_path):
+    """Two files naming it in prose is still nothing running it."""
+    plugin = _tree(tmp_path, test="import sample_check\n",
+                   prog='X = "see sample_check for the other half"\n')
+    (plugin / "programs" / "third.py").write_text(
+        'Y = "sample_check also owns this failure mode"\n')
+    assert "sample_check.py" in _run(tmp_path)["test_only"]
+
+
+def test_the_1347_findings_are_pinned_in_the_baseline():
+    """REGRESSION PIN. These three are held up by nothing but another
+    program's message text; each takes a project/RTL directory, so
+    `repo_hygiene_gates.sh` is the wrong home (it runs repo-wide and none of
+    them can answer without a design) and `flow_compliance_check.py`'s
+    registry is the right one. Until that per-design wiring lands they are
+    recorded, WITH the measurement that decided each, and the register may
+    only shrink."""
+    bl = PROG.parent / "checker_execution_wiring_baseline.json"
+    if not bl.is_file():
+        pytest.skip("no baseline in this checkout")
+    data = json.loads(bl.read_text())
+    known, triage = set(data["known"]), data.get("triage") or {}
+    for name in ("agent_report_presence_check.py", "eda_log_check.py",
+                 "sv_compat_check.py"):
+        assert name in known, f"{name} lost its #1347 record"
+        assert "1347" in (triage.get(name) or ""), \
+            f"{name} is recorded without the measurement that decided it"
