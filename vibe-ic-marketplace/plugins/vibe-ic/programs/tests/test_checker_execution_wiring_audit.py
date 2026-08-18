@@ -366,6 +366,83 @@ def test_a_nested_worktree_copy_inside_the_repo_is_still_skipped(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# RE-USING ONE HAYSTACK — and the guard that stops re-use becoming staleness.
+#
+# Building a haystack of THIS repository is 18.93 s (4024 files; `ast.parse` +
+# `tokenize` over 3891 of them), and it is a pure function of the tree, so a
+# session that wants several audits of one unchanged checkout should pay once.
+# Two things make that safe rather than merely fast, and both are pinned here
+# because an unpinned "optimisation" that silently answers about a tree that has
+# since moved is worse than the 18.93 s it saved:
+#
+#   1. `haystack_signature` must MOVE when any input file's content moves.
+#   2. `wiring_haystack` (conftest) must REBUILD when it does.
+#
+# Note what is deliberately absent: no memo inside `audit()`. That would disarm
+# `test_real_repo_runs_and_is_deterministic` above, which proves the audit is
+# deterministic by deriving it twice and comparing — against a memo the second
+# derivation is the first one's stored answer and the comparison cannot fail.
+# ---------------------------------------------------------------------------
+def test_the_haystack_signature_moves_when_an_input_file_moves(tmp_path):
+    plugin = _tree(tmp_path, ci="name: CI\n")
+    before = M.haystack_signature(plugin, tmp_path)
+    assert before == M.haystack_signature(plugin, tmp_path), \
+        "an unchanged tree must produce the same signature"
+
+    # Edited in place, SAME LENGTH: a signature keyed on (size, mtime) can miss
+    # this, and missing it is how a re-used haystack goes quietly stale.
+    ci = tmp_path / ".github" / "workflows" / "ci.yml"
+    original = ci.read_text()
+    replacement = "name: cI\n"
+    assert len(replacement) == len(original) and replacement != original
+    ci.write_text(replacement)
+    assert M.haystack_signature(plugin, tmp_path) != before, \
+        "a same-length in-place edit of an input file must move the signature"
+
+    # …and a file APPEARING in a scanned directory moves it too.
+    ci.write_text(original)
+    assert M.haystack_signature(plugin, tmp_path) == before
+    (tmp_path / "tools" / "runner.sh").write_text("python3 sample_check.py\n")
+    assert M.haystack_signature(plugin, tmp_path) != before, \
+        "a new file in a scanned directory must move the signature"
+
+
+def test_the_shared_haystack_is_rebuilt_when_the_tree_moves(tmp_path,
+                                                            wiring_haystack):
+    """The re-use guard, end to end, over a verdict that actually changes.
+
+    `sample_check.py` starts wired only from its own test; the second hand-out
+    must see the CI runner that appeared in between. A fixture that returned its
+    cached answer would report `test_only` here and be WRONG about the tree it
+    was asked about.
+    """
+    plugin = _tree(tmp_path, test="import sample_check\n")
+    first = wiring_haystack(plugin, tmp_path)
+    assert M.runners("sample_check", first,
+                     str(plugin / "programs" / "sample_check.py")) == {"TEST"}
+
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text(
+        "name: CI\njobs:\n  a:\n    steps:\n"
+        "      - run: python3 programs/sample_check.py\n")
+    second = wiring_haystack(plugin, tmp_path)
+    assert "CI" in M.runners("sample_check", second,
+                             str(plugin / "programs" / "sample_check.py")), \
+        "the shared haystack answered about the tree as it was, not as it is"
+
+    # And an UNCHANGED tree is served from the cache: same object, not a rebuild.
+    assert wiring_haystack(plugin, tmp_path) is second
+
+
+def test_audit_with_a_supplied_haystack_equals_the_derived_one(tmp_path):
+    """The optional `hay=` argument is a shortcut, never a different answer."""
+    plugin = _tree(tmp_path, test="import sample_check\n")
+    derived = M.audit(plugin, tmp_path)
+    supplied = M.audit(plugin, tmp_path,
+                       hay=M._tokenise(M._haystacks(plugin, tmp_path)))
+    assert derived == supplied
+
+
+# ---------------------------------------------------------------------------
 # vibe-ic#1130 — the population was a NAME LIST, and a gate could leave it by
 # being renamed.
 #
