@@ -94,6 +94,35 @@ def test_wrong_schema_ledger_degrades_to_unknown(tmp_path):
     assert rp.classify(tmp_path)[0] == rp.UNKNOWN
 
 
+def test_symlinked_ledger_cannot_assert_generator_ownership(
+        tmp_path):
+    top = _write(tmp_path, "top.v", "module top(); endmodule\n")
+    external = tmp_path / "external-ledger.json"
+    external.write_text(json.dumps({
+        "schema": rp.SCHEMA_VERSION,
+        "files": {"top.v": rp.sha256_file(top)},
+    }))
+    rp.ledger_path(tmp_path).symlink_to(external)
+
+    assert rp.load_ledger(tmp_path) is None
+    assert rp.classify(tmp_path)[0] == rp.UNKNOWN
+
+
+def test_malformed_removed_only_digest_does_not_claim_generated(tmp_path):
+    _rtl(tmp_path)
+    rp.ledger_path(tmp_path).write_text(json.dumps({
+        "schema": rp.SCHEMA_VERSION,
+        "files": {"top.v": "not-a-sha256"},
+    }))
+
+    assert rp.load_ledger(tmp_path) is None
+    verdict, reason, evidence = rp.classify(tmp_path)
+    assert verdict == rp.UNKNOWN
+    assert evidence == {"file_count": 0, "ledger_present": True,
+                        "ledger_valid": False}
+    assert "unavailable digests" in reason
+
+
 # ---- GENERATED — stamped and untouched ---------------------------------
 def test_generated_after_stamp(tmp_path):
     _write(tmp_path, "top.v", "module top(); endmodule\n")
@@ -153,6 +182,22 @@ def test_deletion_alone_is_not_authorship(tmp_path):
     verdict, _, ev = rp.classify(tmp_path)
     assert verdict == rp.GENERATED
     assert ev["removed"] == ["alu.v"]
+
+
+def test_deletion_of_the_only_generated_file_retains_ledger_ownership(
+        tmp_path):
+    """Removed-only is GENERATED even when no sibling RTL remains on disk."""
+    _write(tmp_path, "top.v", "module top(); endmodule\n")
+    rp.stamp(tmp_path, generator="unit-test")
+    (_rtl(tmp_path) / "top.v").unlink()
+
+    verdict, reason, ev = rp.classify(tmp_path)
+
+    assert verdict == rp.GENERATED
+    assert ev["file_count"] == 0
+    assert ev["removed"] == ["top.v"]
+    assert ev["ledger_generator"] == "unit-test"
+    assert "digest-bound restoration" in reason
 
 
 def test_non_rtl_file_does_not_fake_authorship(tmp_path):
