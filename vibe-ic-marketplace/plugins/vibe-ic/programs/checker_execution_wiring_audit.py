@@ -136,6 +136,53 @@ matcher reported 12 checkers as wired NOWHERE when every one of them was
 in fact wired — a false accusation produced entirely by the matcher's own
 assumption. Match the stem on WORD BOUNDARIES and nothing else.
 
+A NAME IN A SENTENCE IS NOT AN EXECUTION PATH (vibe-ic#1347)
+-----------------------------------------------------------
+The rule above -- match the stem on WORD BOUNDARIES and nothing else -- is
+right about the flow and wrong about a PROGRAM. It cannot tell an INVOCATION
+from a MENTION, and a checker's own error message naming a sibling promoted
+that sibling to "wired": `_strip_prose` drops comments and docstrings but
+keeps string LITERALS, because a literal is where a real `subprocess.run(
+[..., "foo_check.py"])` argv lives. So a sentence in a live string counted.
+
+Measured on 397b3f25f: SIX checkers had no runner but another program's
+MESSAGE TEXT naming them --
+
+    agent_report_presence_check   a sentence in agent_report_sha256_attestation_check
+    analog_block_list_emit_check  a sentence in analog_flow_compliance_check
+    eda_log_check                 the fragment "eda_log_check)" in openroad_tcl_deprecation_check
+    sv_compat_check               three sentences in yosys_script_template_check
+    ir_drop_budget_check          a "budget_basis" string in phase3_one_shot_runner
+    otp_image_check               a STEP LABEL in design_one_shot_runner, whose
+                                  step actually runs otp_image_nonzero_check.py
+
+The last one is the shape at its sharpest: `StepResult("otp_image_check", ...)`
+is the label of a step that runs a DIFFERENT program.
+
+So membership stays the question for CI / FLOW / SKILL, and PROG / TOOLS must
+additionally show an INVOCATION SHAPE -- see `_invocation_shaped`. Three
+narrower rules were measured and rejected BEFORE this one, each by its output
+rather than by review:
+
+  * requiring a literal `<stem>.py`                -> 203 findings, ~195 false.
+    Most are named BARE in `flow_compliance_check`'s registry, which builds the
+    filename dynamically and runs it. A registry a dispatcher executes IS an
+    execution path, so dispatchers are detected and their registries counted.
+  * testing shape against this file's own STRIPPED text -> cannot work.
+    `_strip_prose` returns tokenize output for `.py`, ONE TOKEN PER LINE, so
+    `import_module("gds_streamout_layermap_check")` is three lines and no
+    multi-token pattern matches it. Shape is tested against the RAW file;
+    membership stays on the stripped text.
+  * counting only literal imports -> accuses `analog_tb_supply_pdk_check`,
+    which `pdk_table_coverage_check._load_tables` genuinely runs by
+    `importlib.import_module(mod)` over a tuple of bare names.
+
+WHAT THIS DELIBERATELY DOES NOT DO. It does not add a NOT-DETERMINED bucket.
+The one ambiguous case -- a bare name inside a file that IS a dispatcher -- is
+resolved as INVOKED, the direction that cannot manufacture a false accusation
+(`_strip_prose` states that policy for the same reason). A gate whose output
+needs triage gets ignored, and this file says so about SKILL already.
+
 chip-AGNOSTIC: operates on this repo's own layout. No design, PDK or
 vendor literal appears here.
 
@@ -163,7 +210,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -257,7 +304,15 @@ def _rel_parts(f: Path, root: Path):
         return set(f.parts)
 
 
-def _read(paths, root: Path) -> Dict[str, str]:
+def _read(paths, root: Path, strip: bool = True) -> Dict[str, str]:
+    """Text of each readable path. `strip=False` returns the RAW source.
+
+    Both forms are needed and they answer different questions: membership is
+    asked of the STRIPPED text (prose must not name a runner into existence),
+    while invocation SHAPE is asked of the RAW text, because stripping a `.py`
+    source returns one token per line and destroys every multi-token pattern
+    an invocation is made of. See `_invocation_shaped` (#1347).
+    """
     root = root.resolve()
     out: Dict[str, str] = {}
     for f in paths:
@@ -265,52 +320,142 @@ def _read(paths, root: Path) -> Dict[str, str]:
         if _SKIP_PARTS & _rel_parts(f, root):
             continue
         try:
-            out[s] = _strip_prose(f, f.read_text(errors="replace"))
+            text = f.read_text(errors="replace")
         except OSError:
             continue
+        out[s] = _strip_prose(f, text) if strip else text
     return out
 
 
-def _haystacks(plugin: Path, repo_root: Path) -> Dict[str, Dict[str, str]]:
+def _haystack_paths(plugin: Path, repo_root: Path) -> Dict[str, List[Path]]:
+    """The files each runner category is made of, walked ONCE.
+
+    Split out from `_haystacks` so the stripped and RAW views are built from
+    the SAME file list rather than from two walks that could disagree.
+    """
     programs = plugin / "programs"
     pys = list(programs.rglob("*.py"))
     is_test = lambda p: "/tests/" in str(p) or p.name.startswith("test_")
     return {
-        "CI": _read(list((repo_root / ".github").rglob("*.yml"))
-                    + list((repo_root / ".github").rglob("*.yaml")), repo_root),
-        "FLOW": _read(list((plugin / "flow").rglob("*.yml"))
-                      + list((plugin / "flow").rglob("*.yaml")), repo_root),
-        "TOOLS": _read(list((repo_root / "tools").rglob("*.py"))
-                       + list((repo_root / "tools").rglob("*.sh")), repo_root),
-        "SKILL": _read(list((plugin / "skills").rglob("*.md"))
-                       + list((plugin / "agents").rglob("*.md"))
-                       + list((plugin / "commands").rglob("*.md")), repo_root),
-        "PROG": _read([p for p in pys if not is_test(p)], repo_root),
-        "TEST": _read([p for p in pys if is_test(p)]
-                      + list((plugin / "tests").rglob("*.py")), repo_root),
+        "CI": list((repo_root / ".github").rglob("*.yml"))
+              + list((repo_root / ".github").rglob("*.yaml")),
+        "FLOW": list((plugin / "flow").rglob("*.yml"))
+                + list((plugin / "flow").rglob("*.yaml")),
+        "TOOLS": list((repo_root / "tools").rglob("*.py"))
+                 + list((repo_root / "tools").rglob("*.sh")),
+        "SKILL": list((plugin / "skills").rglob("*.md"))
+                 + list((plugin / "agents").rglob("*.md"))
+                 + list((plugin / "commands").rglob("*.md")),
+        "PROG": [p for p in pys if not is_test(p)],
+        "TEST": [p for p in pys if is_test(p)]
+                + list((plugin / "tests").rglob("*.py")),
     }
+
+
+def _haystacks(plugin: Path, repo_root: Path) -> Dict[str, Dict[str, str]]:
+    return {k: _read(v, repo_root)
+            for k, v in _haystack_paths(plugin, repo_root).items()}
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
+#: Categories where a bare NAME is not enough and an INVOCATION SHAPE is also
+#: required — #1347. CI and FLOW are deliberately ABSENT: the flow definition
+#: writes gate names bare and `test_bare_unquoted_flow_reference_counts` pins
+#: that. SKILL is absent because a skill document is PROSE BY CONSTRUCTION —
+#: an agent reading "run foo_check" does run it, which is exactly why #693
+#: counts SKILL as a runner at all.
+_SHAPE_REQUIRED = frozenset(("PROG", "TOOLS"))
 
-def runners(stem: str, hay: Dict[str, Dict[str, str]], self_path: str) -> Set[str]:
-    """Which categories contain a WORD-BOUNDARY reference to `stem`.
+#: A file that BUILDS a program filename out of a variable — or imports a
+#: module named by one — executes whatever its registry holds, so a bare name
+#: in it IS an execution path. The three real forms in this repo:
+#:   `flow_compliance_check`      PROGRAMS_DIR / f"{gate_name}.py"   (~520 checkers)
+#:   `run_plugin_self_audit.sh`   python3 "$PROGRAMS/${gate}.py"
+#:   `pdk_table_coverage_check`   importlib.import_module(mod)
+_DISPATCHER_RE = re.compile(
+    r'f"[^"]*\{[^}"]*\}\.py"'            # f"{gate}.py"
+    r"|f'[^']*\{[^}']*\}\.py'"
+    r'|\+\s*["\']\.py["\']'               # name + ".py"
+    r'|with_suffix\(\s*["\']\.py["\']\s*\)'
+    r'|%s\.py'                            # "%s.py" % name
+    r'|\$\{?\w+\}?\.py'                   # shell: "$PROGRAMS/${gate}.py"
+    r'|import_module\(\s*(?!["\'])'        # import_module(<variable>)
+)
 
-    Word boundaries only — never assume the reference is quoted or carries
-    the `.py` suffix (the flow definition writes gate names bare).
 
-    Implemented by tokenising each file into maximal `[A-Za-z0-9_]+` runs
-    and testing membership. That is EQUIVALENT to the word-boundary regex —
-    `stem` is such a token exactly when it is surrounded by characters
-    outside the class — and it turns 485 x ~2900 searches into one pass.
+def _is_dispatcher(text: str) -> bool:
+    """Does this file build a program name at runtime and execute it?"""
+    return _DISPATCHER_RE.search(text) is not None
+
+
+def _invocation_shaped(stem: str, text: str) -> bool:
+    """Does `text` reference `stem` in a shape that can EXECUTE it? (#1347)
+
+    Asked of the RAW source, never of `_strip_prose` output, and that is not
+    a detail: stripping a `.py` file returns tokenize output, ONE TOKEN PER
+    LINE, so `import_module("gds_streamout_layermap_check")` reads as three
+    separate lines and no multi-token pattern can ever match it. Testing
+    shape against the stripped text reports an explicitly imported checker
+    as unwired — measured, on that exact checker.
+    """
+    q = re.escape(stem)
+    if stem + ".py" in text:                    # argv, path build, filename
+        return True
+    if re.search(rf"^\s*import\s+\.?{q}\b", text, re.M):
+        return True
+    if re.search(rf"^\s*from\s+\.?{q}\s+import\b", text, re.M):
+        return True
+    if re.search(rf'import_module\(\s*["\']{q}["\']', text):
+        return True
+    if _is_dispatcher(text) and re.search(rf"\b{q}\b", text):
+        # A registry a dispatcher executes IS an execution path. This branch
+        # deliberately OVER-counts: a dispatcher file that also DISCUSSES an
+        # unrelated checker in a live string credits it. Over-counting a
+        # reference is the safe direction for an ACCUSATION — `_strip_prose`
+        # states that policy for the same reason — and the tighter variant
+        # was measured rather than assumed: restricting this branch to an
+        # EXACT quoted literal (`"stem"`, registry shape) yields the SAME six
+        # findings on this corpus, so the looser rule costs no finding and
+        # accuses less.
+        return True
+    return False
+
+
+def runners(stem: str, hay: Dict[str, Dict[str, str]], self_path: str,
+            raw: Optional[Dict[str, Dict[str, str]]] = None) -> Set[str]:
+    """Which categories contain a reference to `stem` that can RUN it.
+
+    Membership is tested by tokenising each file into maximal `[A-Za-z0-9_]+`
+    runs — EQUIVALENT to a word-boundary regex, and it turns 604 x ~2900
+    searches into one pass. Word boundaries only: never assume the reference
+    is quoted or carries the `.py` suffix, because the flow definition writes
+    gate names bare.
+
+    For `_SHAPE_REQUIRED` categories membership is necessary and NOT
+    sufficient — a name in a sentence is not an execution path (#1347) — so
+    the RAW text of that same file must also show an invocation shape.
+
+    `raw` is the unstripped view of the same haystack. It is optional so the
+    three-argument call in existing tests keeps working; when it is absent
+    the raw text is read from disk on demand.
     """
     found: Set[str] = set()
     for kind, files in hay.items():
         for path, tokens in files.items():
-            if path != self_path and stem in tokens:
-                found.add(kind)
-                break
+            if path == self_path or stem not in tokens:
+                continue
+            if kind in _SHAPE_REQUIRED:
+                text = (raw or {}).get(kind, {}).get(path)
+                if text is None:
+                    try:
+                        text = Path(path).read_text(errors="replace")
+                    except OSError:
+                        text = ""
+                if not _invocation_shaped(stem, text):
+                    continue
+            found.add(kind)
+            break
     return found
 
 
@@ -426,7 +571,10 @@ CORPUS_FIGURES = CorpusFigures({
 def audit(plugin: Path, repo_root: Path) -> dict:
     programs = plugin / "programs"
     checkers = checker_population(programs)
-    hay = _tokenise(_haystacks(plugin, repo_root))
+    paths = _haystack_paths(plugin, repo_root)
+    hay = _tokenise({k: _read(v, repo_root) for k, v in paths.items()})
+    # The SAME files unstripped; only the invocation-SHAPE test reads these.
+    raw = {k: _read(v, repo_root, strip=False) for k, v in paths.items()}
     test_only: List[str] = []
     unrun: List[str] = []
     skill_only: List[str] = []
@@ -436,7 +584,7 @@ def audit(plugin: Path, repo_root: Path) -> dict:
     # above is unchanged, so this adds no finding to the existing ratchet.
     machine_runners: Dict[str, List[str]] = {}
     for name in checkers:
-        r = runners(name[:-3], hay, str(programs / name))
+        r = runners(name[:-3], hay, str(programs / name), raw)
         machine_runners[name] = sorted(r - {"TEST", "SKILL"})
         if not r:
             unrun.append(name)

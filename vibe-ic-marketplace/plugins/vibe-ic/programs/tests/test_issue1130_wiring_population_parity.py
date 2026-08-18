@@ -212,6 +212,13 @@ def test_the_wiring_gates_state_their_denominator_on_a_clean_run(prog, args, nee
     #: MEASURED, 3 runs each on a loaded host: `gate_is_wired_check` 14.3-14.7s,
     #: `checker_execution_wiring_audit` 18.9-20.3s. 55s is ~2.7x the slowest
     #: observed and still inside the ceiling.
+    #: RE-MEASURED at vibe-ic#1347, which made the audit read each haystack
+    #: file a second time UNSTRIPPED to test invocation shape: same host, 3
+    #: runs each, origin/main 21.0-21.3s and the tightened audit 24.0-25.0s
+    #: (+15%). 55s is now ~2.2x the slowest observed, still inside the 60s
+    #: ceiling. Recorded rather than left standing: a bound whose stated
+    #: margin has drifted from the thing it bounds is the shape this suite
+    #: exists to find.
     p = subprocess.run([sys.executable, str(_PROGRAMS / prog), *args],
                        capture_output=True, text=True, timeout=55)
     out = p.stdout + p.stderr

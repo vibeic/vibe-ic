@@ -449,3 +449,164 @@ def test_the_population_never_invents_a_program_this_checkout_lacks(tmp_path):
     programs = Path(__file__).resolve().parents[1]
     assert "no_such_program_anywhere.py" in M.flow_declared_gate_programs(f)
     assert "no_such_program_anywhere.py" not in M.checker_population(programs, f)
+
+
+# ---------------------------------------------------------------------------
+# vibe-ic#1347 — a NAME IN A SENTENCE is not an EXECUTION PATH.
+#
+# `_strip_prose` drops comments and docstrings but KEEPS string literals, and
+# it must: `subprocess.run([..., "foo_check.py"])` is a real invocation. So a
+# checker's own error message naming a SIBLING promoted that sibling to
+# "wired". Six checkers nothing runs were hidden behind that on 397b3f25f.
+#
+# Every one of these is paired, because the three narrower rules that were
+# tried first were each killed by their own output rather than by review:
+# requiring a literal `<stem>.py` accused ~195 checkers a dispatcher really
+# runs, and counting only literal imports accused one that `import_module`
+# genuinely loads. Over-tightening here manufactures false accusations at a
+# scale the original defect never had.
+# ---------------------------------------------------------------------------
+
+
+def test_a_name_in_a_message_string_is_not_a_runner(tmp_path):
+    """THE #1347 DEFECT. A live string is not stripped — and must not count.
+
+    This is the exact shape of `openroad_tcl_deprecation_check` holding up
+    `eda_log_check` with the fragment `"eda_log_check)"`, and of
+    `yosys_script_template_check` holding up `sv_compat_check` with three
+    sentences of advice. Neither program runs the checker it names.
+    """
+    _tree(tmp_path, test="import sample_check\n",
+          prog='def explain(x):\n'
+               '    return x + "; run sample_check first to see why"\n')
+    assert "sample_check.py" in _run(tmp_path)["test_only"]
+
+
+def test_a_step_label_that_happens_to_be_a_checker_name_is_not_a_runner(tmp_path):
+    """The sharpest instance: `design_one_shot_runner` returns
+    `StepResult("otp_image_check", ...)` from a step that actually runs
+    `otp_image_nonzero_check.py` — a DIFFERENT program. The label is a name,
+    and the name was read as evidence of the thing it names.
+    """
+    _tree(tmp_path, test="import sample_check\n",
+          prog='import subprocess\n'
+               'def step():\n'
+               '    subprocess.run(["python3", "sample_check_extra.py"])\n'
+               '    return ("sample_check", "PASS")\n')
+    assert "sample_check.py" in _run(tmp_path)["test_only"]
+
+
+def test_a_subprocess_argv_is_still_a_runner(tmp_path):
+    """PAIRED: the shape the defect had to keep working."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog='import subprocess\n'
+               'subprocess.run(["python3", "sample_check.py"])\n')
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_a_real_import_is_still_a_runner(tmp_path):
+    """PAIRED: an import followed by use is an execution path."""
+    _tree(tmp_path, test="import sample_check\n",
+          prog="import sample_check\nsample_check.main()\n")
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_a_dispatcher_registry_holding_a_BARE_name_is_an_execution_path(tmp_path):
+    """PAIRED, and the reason rule v1 was thrown away.
+
+    `flow_compliance_check` holds ~520 checker names BARE and builds
+    `PROGRAMS_DIR / f"{gate_name}.py"` to run them. Requiring a literal
+    `<stem>.py` reported 203 checkers as unwired, ~195 of them exactly this.
+    A registry a dispatcher executes IS an execution path.
+    """
+    _tree(tmp_path, test="import sample_check\n",
+          prog='import subprocess\n'
+               'from pathlib import Path\n'
+               'GATES = ["sample_check"]\n'
+               'for g in GATES:\n'
+               '    subprocess.run(["python3", str(Path("programs") / f"{g}.py")])\n')
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_a_dynamically_imported_registry_entry_is_an_execution_path(tmp_path):
+    """PAIRED, and the reason rule v4 was corrected before landing.
+
+    `pdk_table_coverage_check._load_tables` runs
+    `importlib.import_module(mod)` over a tuple of bare module names. A rule
+    that counts only LITERAL imports accuses `analog_tb_supply_pdk_check`,
+    which that loader genuinely loads to read `PDK_FLAVORS`.
+    """
+    _tree(tmp_path, test="import sample_check\n",
+          prog='import importlib\n'
+               '_TABLES = (("sample_check", "FLAVORS"),)\n'
+               'for mod, attr in _TABLES:\n'
+               '    getattr(importlib.import_module(mod), attr)\n')
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_a_shell_dispatcher_is_an_execution_path(tmp_path):
+    """PAIRED: `tools/ci/run_plugin_self_audit.sh` holds six gate names bare
+    in `GATES=(...)` and runs `python3 "$PROGRAMS/${gate}.py"`. Requiring the
+    literal filename in the shell script accuses all six.
+    """
+    _tree(tmp_path, test="import sample_check\n")
+    (tmp_path / "tools" / "run.sh").write_text(
+        'GATES=(\n    "sample_check"\n)\n'
+        'for gate in "${GATES[@]}"; do\n'
+        '    python3 "$PROGRAMS/${gate}.py" || exit 1\n'
+        'done\n')
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_a_skill_document_may_still_name_the_checker_in_PROSE(tmp_path):
+    """SKILL is deliberately OUTSIDE `_SHAPE_REQUIRED`.
+
+    A skill document is prose by construction, and an agent that reads "run
+    sample_check" does run it — which is precisely why #693 counts SKILL as
+    a runner. Tightening it would turn the weakest runner into no runner and
+    manufacture findings against every skill-driven gate in the repo.
+    """
+    _tree(tmp_path, test="import sample_check\n",
+          skill="# skill\nWhen triaging, run sample_check and read its output.\n")
+    rep = _run(tmp_path)
+    assert rep["test_only"] == []
+    assert "sample_check.py" in rep["skill_only"]
+
+
+def test_the_flow_may_still_write_gate_names_BARE(tmp_path):
+    """FLOW is deliberately outside `_SHAPE_REQUIRED` too — the flow
+    definition writes gate names bare, and a matcher that forgot it once
+    reported 12 wired gates as wired nowhere."""
+    _tree(tmp_path, test="import sample_check\n",
+          flow="steps:\n  - gate: sample_check\n")
+    assert _run(tmp_path)["test_only"] == []
+
+
+def test_shape_is_read_from_the_RAW_source_not_the_stripped_text():
+    """Rules v2/v3 could not work and this pins why.
+
+    `_strip_prose` returns tokenize output for `.py` — ONE TOKEN PER LINE —
+    so `import_module("x")` becomes three lines and no multi-token pattern
+    can match it. A shape test run against the stripped text reports an
+    explicitly imported checker as unwired.
+    """
+    src = 'import_module("gds_streamout_layermap_check")\n'
+    stripped = M._strip_prose(Path("x.py"), src)
+    assert not M._invocation_shaped("gds_streamout_layermap_check", stripped), \
+        "the stripped text cannot carry an invocation shape — that is the point"
+    assert M._invocation_shaped("gds_streamout_layermap_check", src)
+
+
+def test_the_repo_instance_that_opened_1347_is_still_prose():
+    """Pinned against the real files, not a fixture.
+
+    `agent_report_sha256_attestation_check` names `agent_report_presence_check`
+    in a live message string and runs it nowhere. If that ever becomes a real
+    invocation this test should be updated deliberately, not silently.
+    """
+    holder = PROG.parent / "agent_report_sha256_attestation_check.py"
+    assert holder.is_file()
+    text = holder.read_text(errors="replace")
+    assert "agent_report_presence_check" in text, "the mention must still be there"
+    assert not M._invocation_shaped("agent_report_presence_check", text), \
+        "a sentence naming a checker is not an execution path"
