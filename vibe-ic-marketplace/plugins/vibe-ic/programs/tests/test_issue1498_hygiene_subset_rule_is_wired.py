@@ -53,6 +53,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import landing_merge_verdict as V  # noqa: E402
+import gate_process_attestation as A  # noqa: E402
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 _PROG = _PROGRAMS / "landing_merge_verdict.py"
@@ -89,17 +90,37 @@ def _gate(label, state, corpus=None, expired=False):
     """One gate as `repo_hygiene_gates.sh --summary-json` writes it."""
     return {"label": label, "state": state, "seconds": 1,
             "exempt_until": None, "exempt_reason": None,
-            "corpus": corpus, "exemption_expired": expired}
+            "corpus": corpus, "exemption_expired": expired, "scope": None}
+
+
+def _attestation(gate):
+    rc = {"PASS": 0, "FAIL": 1, "NOT_CHECKED": 2,
+          "WROTE_CORPUS": 0}[gate["state"]]
+    return A.process_attestation(
+        gate["label"], "[PASS] checked\n" if rc == 0 else "[FAIL] named\n",
+        rc, ["python3", "checker.py", gate["label"]])
 
 
 def _record(gates):
+    count = lambda state: sum(g["state"] == state for g in gates)
     return {
-        "listed_only": False, "declared": len(gates), "ran": len(gates),
-        "passed": sum(1 for g in gates if g["state"] == "PASS"),
-        "failed": sum(1 for g in gates if g["state"] == "FAIL"),
-        "not_checked": 0, "not_checked_unexempted": [],
+        "listed_only": False, "declared": len(gates),
+        "ran": sum(count(s) for s in
+                   ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")),
+        "decided": count("PASS") + count("FAIL"),
+        "passed": count("PASS"), "failed": count("FAIL"),
+        "not_checked": count("NOT_CHECKED"),
+        "wrote_corpus": count("WROTE_CORPUS"),
+        "deferred": count("LISTED"), "other_shard": count("OTHER_SHARD"),
+        "out_of_scope": count("OUT_OF_SCOPE"),
+        "not_checked_unexempted": [
+            g["label"] for g in gates if g["state"] == "NOT_CHECKED"
+            and not g.get("exempt_until")],
         "exemptions_expired": [], "wiring_errors": [], "corpora": [],
         "shard": None, "today": "2026-08-15", "gates": gates,
+        "process_attestations": [
+            _attestation(g) for g in gates if g["state"] in
+            ("PASS", "FAIL", "NOT_CHECKED", "WROTE_CORPUS")],
     }
 
 

@@ -14,7 +14,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 SCHEMA = 1
 
@@ -97,10 +97,67 @@ def append_private_jsonl(path: Path, record: Dict) -> None:
         os.chmod(path, 0o600)
         data = (json.dumps(record, sort_keys=True, ensure_ascii=False)
                 + "\n").encode("utf-8")
-        os.write(fd, data)
+        while data:
+            written = os.write(fd, data)
+            if written <= 0:
+                raise OSError("short write while appending process attestation")
+            data = data[written:]
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _strict_object(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"duplicate JSON key: {key!r}")
+        out[key] = value
+    return out
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON number: {value}")
+
+
+def strict_loads(payload: str) -> Any:
+    """Decode one unambiguous RFC-JSON value."""
+    return json.loads(payload, object_pairs_hook=_strict_object,
+                      parse_constant=_reject_json_constant)
+
+
+def validate_record(rec: object, lineno: int = 0) -> Dict:
+    """Return one complete record or raise; shared by file/live consumers."""
+    where = f" at line {lineno}" if lineno else ""
+    required = {"schema", "complete", "label", "state", "argv_sha256",
+                "returncode", "verdict_line", "finding_identities",
+                "semantic_sha256"}
+    if (not isinstance(rec, dict) or set(rec) != required
+            or rec.get("schema") != SCHEMA or rec.get("complete") is not True):
+        raise ValueError(f"invalid process attestation{where}")
+    if (not isinstance(rec["label"], str)
+            or not isinstance(rec["state"], str)
+            or type(rec["returncode"]) is not int
+            or not isinstance(rec["verdict_line"], str)
+            or not isinstance(rec["finding_identities"], list) or not all(
+            isinstance(item, str) for item in rec["finding_identities"])):
+        raise ValueError(f"invalid process attestation field types{where}")
+    for key in ("argv_sha256", "semantic_sha256"):
+        value = rec[key]
+        if (not isinstance(value, str) or len(value) != 64
+                or any(ch not in "0123456789abcdef" for ch in value)):
+            raise ValueError(f"invalid {key}{where}")
+    semantic = {
+        "returncode": rec["returncode"],
+        "verdict_line": rec["verdict_line"],
+        "finding_identities": rec["finding_identities"],
+    }
+    expected = hashlib.sha256(json.dumps(
+        semantic, sort_keys=True, ensure_ascii=False,
+        separators=(",", ":")).encode("utf-8")).hexdigest()
+    if rec["semantic_sha256"] != expected:
+        raise ValueError(f"process attestation digest mismatch{where}")
+    return rec
 
 
 def load_jsonl(path: Path) -> List[Dict]:
@@ -110,29 +167,7 @@ def load_jsonl(path: Path) -> List[Dict]:
                                   start=1):
         if not line.strip():
             continue
-        rec = json.loads(line)
-        required = {"schema", "complete", "label", "argv_sha256",
-                    "returncode", "verdict_line", "finding_identities",
-                    "semantic_sha256"}
-        if rec.get("schema") != SCHEMA or rec.get("complete") is not True \
-                or not required <= set(rec):
-            raise ValueError(f"invalid process attestation at line {lineno}")
-        if not isinstance(rec["finding_identities"], list) or not all(
-                isinstance(item, str) for item in rec["finding_identities"]):
-            raise ValueError(
-                f"invalid finding identity set at line {lineno}")
-        semantic = {
-            "returncode": int(rec["returncode"]),
-            "verdict_line": rec["verdict_line"],
-            "finding_identities": rec["finding_identities"],
-        }
-        expected = hashlib.sha256(json.dumps(
-            semantic, sort_keys=True, ensure_ascii=False,
-            separators=(",", ":")).encode("utf-8")).hexdigest()
-        if rec["semantic_sha256"] != expected:
-            raise ValueError(
-                f"process attestation digest mismatch at line {lineno}")
-        records.append(rec)
+        records.append(validate_record(strict_loads(line), lineno))
     return records
 
 

@@ -333,6 +333,27 @@ def test_nested_validated_progress_is_relayed_to_the_outer_session(
     assert sum(D._count(s)[0] for s in suites) == 1
 
 
+def test_nested_collect_progress_is_relayed_to_the_outer_session(
+        tmp_path, monkeypatch):
+    """The live matrix collection cannot be silent until its child exits."""
+    target = (_PROGRAMS / "tests" / "test_matrix_63x8_coverage.py")
+    node = (str(target)
+            + "::test_live_collection_relays_finite_semantic_progress_past_old_bound")
+    merged = tmp_path / "outer-collect.xml"
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.05)
+    started = time.monotonic()
+    rc, out, incomplete = D.run_one(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"],
+        node, merged, 0.8, str(_PROGRAMS.parent))
+    elapsed = time.monotonic() - started
+    assert rc == 0 and not incomplete, out
+    assert elapsed > 0.8, elapsed
+    suites = D._load_suites(merged)
+    assert suites is not None
+    assert sum(D._count(s)[0] for s in suites) == 1
+
+
 def test_pytest_deselection_is_a_complete_selected_subset(tmp_path):
     """pytest_itemcollected precedes legal -k/-m deselection."""
     corpus = _tree(tmp_path, {
@@ -349,6 +370,98 @@ def test_pytest_deselection_is_a_complete_selected_subset(tmp_path):
     suites = D._load_suites(merged)
     assert suites is not None
     assert sum(D._count(s)[0] for s in suites) == 1
+
+
+def test_collect_only_has_its_own_complete_terminal_protocol(
+        tmp_path, monkeypatch):
+    """Zero test_finish events are valid only with the collect terminal."""
+    corpus = _tree(tmp_path, {
+        "test_collect_a.py": "def test_a(): assert True\n",
+        "test_collect_b.py": "def test_b(): assert True\n",
+    })
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.03)
+    rc, out, incomplete = D.run_collect(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"],
+        ["test_collect_a.py", "test_collect_b.py"], 0.5, str(corpus))
+    assert rc == 0 and not incomplete, out
+
+
+def test_short_natural_collect_relays_its_terminal_protocol(tmp_path):
+    """A session that exits before the first poll still relays every event."""
+    corpus = _tree(tmp_path, {
+        "test_short_collect.py": "def test_short(): assert True\n",
+    })
+    relay = tmp_path / "collect.relay"
+    relay.touch(mode=0o600)
+    rc, out, incomplete = D.run_collect(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"],
+        ["test_short_collect.py"], 1, str(corpus),
+        progress_relay_path=relay, poll_s=0.9)
+    assert rc == 0 and not incomplete, out
+    scores = [int(line) for line in relay.read_text().splitlines()]
+    assert scores == list(range(1, len(scores) + 1))
+    assert len(scores) >= 6, scores
+
+
+def test_progressing_collection_may_outlive_many_stall_windows(
+        tmp_path, monkeypatch):
+    """Completed file collections, not a total duration, renew the lease."""
+    corpus = tmp_path / "slow-collect"
+    corpus.mkdir()
+    paths = []
+    for index in range(7):
+        path = corpus / f"test_slow_collect_{index}.py"
+        path.write_text(
+            "import time\ntime.sleep(0.14)\n\n"
+            f"def test_{index}(): assert True\n", encoding="utf-8")
+        paths.append(path.name)
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.03)
+    started = time.monotonic()
+    rc, out, incomplete = D.run_collect(
+        [sys.executable, "-m", "pytest", "-p", "no:terminal",
+         "-p", "no:cacheprovider"], paths, 0.3, str(corpus))
+    elapsed = time.monotonic() - started
+    assert elapsed > 0.8, elapsed
+    assert rc == 0 and not incomplete, out
+
+
+@pytest.mark.parametrize("body,sentinel", [
+    (
+        "import time\n"
+        "deadline=time.monotonic()+3\n"
+        "while time.monotonic() < deadline:\n"
+        "    print('COLLECT_CHATTER', flush=True)\n"
+        "    time.sleep(.02)\n"
+        "def test_never(): assert True\n",
+        "COLLECT_CHATTER",
+    ),
+    (
+        "import time\n"
+        "deadline=time.monotonic()+3\n"
+        "while time.monotonic() < deadline: pass\n"
+        "def test_never(): assert True\n",
+        None,
+    ),
+])
+def test_collect_import_activity_without_semantic_transition_is_norecord(
+        tmp_path, monkeypatch, body, sentinel):
+    """Captured output and CPU cannot renew the strict collection lease."""
+    corpus = tmp_path / "chatty-collect"
+    corpus.mkdir()
+    (corpus / "test_active.py").write_text(body, encoding="utf-8")
+    monkeypatch.setattr(D, "DEFAULT_POLL_S", 0.03)
+    started = time.monotonic()
+    _rc, out, incomplete = D.run_collect(
+        [sys.executable, "-m", "pytest", "-s", "-q",
+         "-p", "no:cacheprovider"], ["test_active.py"], 0.25, str(corpus))
+    elapsed = time.monotonic() - started
+    assert elapsed < 3, elapsed
+    assert incomplete
+    if sentinel is not None:
+        assert sentinel in out
+    assert "WATCHDOG_STALLED:" in out
 
 
 def test_maxfail_prefix_is_norecord_not_a_complete_failure_set(tmp_path):
@@ -620,6 +733,38 @@ def test_complete_aggregate_check_does_not_launch_per_file_sessions(
                 if tc.get("classname") == "pytest_per_file_process"]
     assert len([tc for tc in root.iter("testcase")
                 if tc.get("classname") == "pytest_aggregate_process"]) == 1
+
+
+def test_aggregate_refuses_a_selected_file_that_collected_no_tests(tmp_path):
+    """rc=0 and one green case cannot shrink a two-file denominator."""
+    corpus = _tree(tmp_path, {
+        "test_empty.py": "# selected, but contains no pytest item\n",
+        "test_green.py": _GREEN,
+    })
+    merged = tmp_path / "aggregate-missing-file.xml"
+
+    proc = _run_driver(
+        corpus, merged, "--aggregate-check", "--aggregate-only",
+        "--aggregate-stall-after", str(_STALL))
+
+    assert proc.returncode == D.RC_NORECORD, proc.stdout + proc.stderr
+    assert "AGGREGATE_NORECORD" in proc.stdout
+    assert "does not exactly cover the selected files" in proc.stdout
+    assert "test_empty.py" in proc.stdout
+    assert _files_in(merged) == []
+
+
+def test_duplicate_selected_file_is_refused_before_pytest_runs(tmp_path):
+    corpus = _tree(tmp_path, {"test_green.py": _GREEN})
+    (corpus / "selection.txt").write_text(
+        "test_green.py\n./test_green.py\n", encoding="utf-8")
+    merged = tmp_path / "duplicate-selection.xml"
+
+    proc = _run_driver(corpus, merged, "--aggregate-check")
+
+    assert proc.returncode == D.RC_CANNOT_ASK, proc.stdout + proc.stderr
+    assert "same file more than once" in proc.stderr
+    assert not merged.exists()
 
 
 def test_aggregate_norecord_runs_diagnostic_fallback_and_stays_unknown(
@@ -1214,7 +1359,8 @@ def test_invalid_domain_progress_freezes_the_semantic_score(tmp_path, bad):
                 "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
                 "event": event, "monotonic_ns": seq, **fields,
             }) + "\n")
-    probe = D._SemanticProgressProbe(sidecar, nonce, lambda: pid)
+    probe = D._SemanticProgressProbe(
+        sidecar, nonce, lambda: pid, collect_only=True)
     try:
         score = probe.sample()
         again = probe.sample()
@@ -1223,6 +1369,64 @@ def test_invalid_domain_progress_freezes_the_semantic_score(tmp_path, bad):
         probe.close()
     assert score == again == 4
     assert not ok and "domain_progress" in reason
+
+
+@pytest.mark.parametrize("terminal", [
+    {"selected_items": 0},
+    {"selected_items": 2},
+])
+def test_collect_only_terminal_must_preserve_declared_count(tmp_path, terminal):
+    sidecar = tmp_path / "collect-progress.jsonl"
+    nonce = "nonce"
+    pid = os.getpid()
+    records = [
+        ("session_start", {}),
+        ("item_collected", {"nodeid": "test_a.py::test_a"}),
+        ("collection_finish", {"selected_items": 1}),
+        ("collection_only_finish", terminal),
+        ("session_finish", {"exitstatus": 0}),
+    ]
+    with sidecar.open("w", encoding="utf-8") as fh:
+        for seq, (event, fields) in enumerate(records, start=1):
+            fh.write(json.dumps({
+                "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
+                "event": event, "monotonic_ns": seq, **fields,
+            }) + "\n")
+    probe = D._SemanticProgressProbe(sidecar, nonce, lambda: pid)
+    try:
+        assert probe.sample() == 3
+        ok, reason = probe.complete()
+    finally:
+        probe.close()
+    assert not ok
+    assert "collect-only terminal count/state mismatch" in reason
+
+
+def test_zero_selection_collect_requires_its_distinct_terminal(tmp_path):
+    """A normal zero-test session_finish cannot certify --collect-only."""
+    sidecar = tmp_path / "zero-collect-progress.jsonl"
+    nonce = "nonce"
+    pid = os.getpid()
+    records = [
+        ("session_start", {}),
+        ("collection_finish", {"selected_items": 0}),
+        ("session_finish", {"exitstatus": 0}),
+    ]
+    with sidecar.open("w", encoding="utf-8") as fh:
+        for seq, (event, fields) in enumerate(records, start=1):
+            fh.write(json.dumps({
+                "schema": 1, "nonce": nonce, "pid": pid, "seq": seq,
+                "event": event, "monotonic_ns": seq, **fields,
+            }) + "\n")
+    probe = D._SemanticProgressProbe(
+        sidecar, nonce, lambda: pid, collect_only=True)
+    try:
+        assert probe.sample() == 2
+        ok, reason = probe.complete()
+    finally:
+        probe.close()
+    assert not ok
+    assert "out-of-order session_finish" in reason
 
 
 def test_the_merge_omits_files_that_have_no_record(tmp_path):
@@ -1324,21 +1528,16 @@ def test_both_landing_arms_run_through_this_driver():
         "the single-session `xargs` invocation is still in run_pytest")
 
 
-def test_the_harness_bound_is_still_declared_where_the_gate_reads_it():
-    """The pytest command is passed to the driver VERBATIM so `--timeout=180`
-    stays in `tools/gatekeeper-land.sh`, which `ci_harness_timeout_ceiling_check`
-    lists in `EXTRA_HARNESS_RELS`. A bound moved into Python would vanish from
-    that resolver and the ceiling would come from a different file."""
+def test_the_landing_harness_declares_semantic_progress_not_elapsed_time():
+    """All landing populations use the driver's no-ceiling contract."""
     import ci_harness_timeout_ceiling_check as C
     root = _repo_root()
     if not (root / "tools" / "gatekeeper-land.sh").is_file():
         pytest.skip("the landing scripts are not shipped in this tree")
-    bounds = [b for b in C.harness_bounds(root)
-              if b.workflow == "gatekeeper-land.sh"]
-    assert bounds, (
-        "gatekeeper-land.sh no longer declares any pytest harness bound the "
-        "ceiling gate can read")
-    assert min(b.seconds for b in bounds) == 180, [b.as_dict() for b in bounds]
+    contract = C.landing_semantic_progress_contract(root)
+    assert contract["declared"] is True, contract
+    assert contract["errors"] == [], contract
+    assert len(contract["lanes"]) >= 3, contract
 
 
 def test_this_files_final_test_safety_bound_is_inside_the_ceiling():

@@ -187,10 +187,12 @@ _COLLECTOR_PLUGIN = '''
 import json
 import os
 
+_ROWS = []
 
-def pytest_collection_modifyitems(session, config, items):
+def pytest_collection_finish(session):
+    global _ROWS
     rows = []
-    for it in items:
+    for it in session.items:
         name = it.name
         param = name.split("[", 1)[1][:-1] if "[" in name else None
         marks = []
@@ -207,9 +209,24 @@ def pytest_collection_modifyitems(session, config, items):
             "param": param,
             "marks": marks,
         })
+    _ROWS = rows
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if int(exitstatus) != 0:
+        return
     out = os.environ["MATRIX_CELL_COLLECT_OUT"]
-    with open(out, "w", encoding="utf-8") as fh:
-        json.dump(rows, fh)
+    temporary = out + ".tmp." + str(os.getpid())
+    with open(temporary, "w", encoding="utf-8") as fh:
+        json.dump({
+            "schema": 1,
+            "complete": True,
+            "selected_items": len(session.items),
+            "rows": _ROWS,
+        }, fh, sort_keys=True)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(temporary, out)
 '''
 
 #: The OUTCOME collector. Same discipline as the plugin above and for the same
@@ -283,42 +300,230 @@ def dimension_modules() -> Dict[int, object]:
 # ══════════════════════════════════════════════════════════════════════
 # Live collection through pytest's own machinery
 # ══════════════════════════════════════════════════════════════════════
-@lru_cache(maxsize=1)
-def collect_items() -> Tuple[Dict, ...]:
-    """Every item pytest really collects from the eight dimension modules."""
-    paths = dimension_module_paths()
-    assert paths, f"no dimension module matched {DIMENSION_MODULE_GLOB!r}"
+_COLLECTION_PROGRESS_STALL_S = 60
+_COLLECTION_PROGRESS_POLL_S = 0.1
+_collection_invocation = 0
+
+
+def _collect_items_from_paths(paths: Tuple[Path, ...],
+                              cwd: Path) -> Tuple[Dict, ...]:
+    """Collect paths through the nonce/FSM supervisor and complete manifest."""
+    global _collection_invocation
+    assert paths, "the collection question has an empty path selection"
+    _collection_invocation += 1
+    progress_scope = f"matrix-live-collection-{_collection_invocation}"
     scratch = Path(tempfile.mkdtemp(prefix="matrix_cov_collect_"))
     try:
         plugin = scratch / "matrix_cell_collector.py"
         plugin.write_text(_COLLECTOR_PLUGIN, encoding="utf-8")
         out = scratch / "collected.json"
+        meta = scratch / "collect-supervisor.json"
+        spec = scratch / "collect-spec.json"
+        relay = scratch / "semantic-progress.relay"
+        relay.touch(mode=0o600)
         env = dict(os.environ)
         env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["MATRIX_CELL_COLLECT_OUT"] = str(out)
         env["PYTHONPATH"] = os.pathsep.join(
             [str(scratch)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", *[str(p) for p in paths],
-             "--collect-only", "-q", "-p", "no:randomly",
-             "-p", "matrix_cell_collector"],
-            cwd=str(PLUGIN_ROOT), capture_output=True, text=True, timeout=60,
-            env=env,
-        )
+        spec.write_text(json.dumps({
+            "schema": 1,
+            "test_files": [str(path) for path in paths],
+            "meta": str(meta),
+            "stall_after": _COLLECTION_PROGRESS_STALL_S,
+            "poll_s": min(
+                _COLLECTION_PROGRESS_POLL_S,
+                _COLLECTION_PROGRESS_STALL_S / 4),
+            "cwd": str(cwd),
+            "progress_relay": str(relay),
+            "pytest_argv": [
+                sys.executable, "-m", "pytest", "-q", "--tb=no",
+                "-p", "no:randomly", "-p", "no:cacheprovider",
+                "-p", "matrix_cell_collector",
+                "--basetemp", str(scratch / "pytest_tmp"),
+            ],
+        }, sort_keys=True) + "\n", encoding="utf-8")
+        driver = TESTS_DIR.parent / "pytest_per_file_junit.py"
+        log = scratch / "collect-supervisor.log"
+        relay_offset = 0
+        relay_tail = b""
+        last_score = 0
+        relay_error = ""
+
+        def publish_relay(*, final: bool = False) -> None:
+            nonlocal relay_offset, relay_tail, last_score, relay_error
+            if relay_error:
+                return
+            try:
+                size = relay.stat().st_size
+                if size < relay_offset:
+                    relay_error = "relay truncated"
+                    return
+                with relay.open("rb") as relay_file:
+                    relay_file.seek(relay_offset)
+                    chunk = relay_file.read()
+            except OSError as exc:
+                relay_error = f"relay unreadable: {exc}"
+                return
+            relay_offset += len(chunk)
+            records = (relay_tail + chunk).split(b"\n")
+            relay_tail = records.pop()
+            for payload in records:
+                if not payload:
+                    relay_error = "empty relay score"
+                    return
+                try:
+                    score = int(payload.decode("ascii"))
+                except (UnicodeDecodeError, ValueError):
+                    relay_error = f"malformed relay score {payload!r}"
+                    return
+                if not last_score < score <= _NESTED_PROGRESS_RELAY_TOTAL:
+                    relay_error = (
+                        f"non-monotonic relay {last_score} -> {score}")
+                    return
+                last_score = score
+                _domain_progress(
+                    progress_scope, score, _NESTED_PROGRESS_RELAY_TOTAL)
+            if final and relay_tail:
+                relay_error = "truncated final relay score"
+
+        with log.open("w+", encoding="utf-8") as log_file:
+            proc = subprocess.Popen(
+                [sys.executable, str(driver), "--_collect-worker-spec",
+                 str(spec)],
+                cwd=str(cwd), stdout=log_file, stderr=subprocess.STDOUT,
+                text=True, env=env)
+            while proc.poll() is None:
+                publish_relay()
+                time.sleep(0.1)
+            publish_relay(final=True)
+            log_file.flush()
+            log_file.seek(0)
+            diagnostic = log_file.read()
+        assert not relay_error, (
+            f"collection semantic relay is invalid: {relay_error}\n"
+            f"{diagnostic[-5000:]}")
+        try:
+            worker = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AssertionError(
+                "collection supervisor published no usable terminal metadata "
+                f"(worker rc={proc.returncode}): {exc}\n"
+                f"{diagnostic[-5000:]}") from exc
+        assert (isinstance(worker, dict)
+                and set(worker) == {
+                    "schema", "complete", "pytest_rc",
+                    "semantic_record_complete", "norecord_reason",
+                }
+                and worker.get("schema") == 1
+                and worker.get("complete") is True
+                and isinstance(worker.get("semantic_record_complete"), bool)
+                and isinstance(worker.get("norecord_reason"), str)), (
+            f"collection supervisor metadata has the wrong shape: {worker!r}")
+        assert proc.returncode == 0 and worker["pytest_rc"] == 0 \
+            and worker["semantic_record_complete"], (
+                "pytest collection produced no complete nonce-bound lifecycle "
+                f"record (worker rc={proc.returncode}, pytest "
+                f"rc={worker['pytest_rc']}): "
+                f"{worker['norecord_reason']}\n{diagnostic[-5000:]}")
         assert out.is_file(), (
-            f"pytest collection produced no manifest (rc={proc.returncode}).\n"
+            f"pytest collection produced no complete manifest (worker "
+            f"rc={proc.returncode}).\n"
             f"A dimension module that fails to IMPORT contributes zero cells "
             f"and would otherwise look like a tidy green.\n"
-            f"stdout tail:\n{proc.stdout[-3000:]}\n"
-            f"stderr tail:\n{proc.stderr[-2000:]}"
+            f"diagnostic tail:\n{diagnostic[-5000:]}"
         )
-        assert proc.returncode == 0, (
-            f"collection exited {proc.returncode}; a collection ERROR silently "
-            f"removes every cell in the failing module.\n{proc.stdout[-3000:]}"
-        )
-        return tuple(json.loads(out.read_text(encoding="utf-8")))
+        try:
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AssertionError(
+                f"collection manifest is unreadable/truncated: {exc}") from exc
+        assert (isinstance(manifest, dict)
+                and set(manifest) == {
+                    "schema", "complete", "selected_items", "rows"}
+                and manifest.get("schema") == 1
+                and manifest.get("complete") is True
+                and isinstance(manifest.get("selected_items"), int)
+                and isinstance(manifest.get("rows"), list)
+                and manifest["selected_items"] == len(manifest["rows"])), (
+            f"collection manifest has no exact completion/count proof: "
+            f"{manifest!r}")
+        assert manifest["rows"], (
+            "pytest collected zero items; an empty live census is not proof "
+            "that every matrix cell exists")
+        return tuple(manifest["rows"])
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+@lru_cache(maxsize=1)
+def collect_items() -> Tuple[Dict, ...]:
+    """Every item pytest really collects from the eight dimension modules."""
+    paths = dimension_module_paths()
+    assert paths, f"no dimension module matched {DIMENSION_MODULE_GLOB!r}"
+    return _collect_items_from_paths(paths, PLUGIN_ROOT)
+
+
+def test_live_collection_relays_finite_semantic_progress_past_old_bound(
+        monkeypatch, tmp_path):
+    """Several completed collections may outlive a former total deadline."""
+    old_fixed_bound = 0.3
+    monkeypatch.setattr(
+        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S",
+        old_fixed_bound)
+    paths = []
+    for index in range(7):
+        path = tmp_path / f"test_collect_progress_{index}.py"
+        path.write_text(
+            "import time\ntime.sleep(.14)\n\n"
+            f"def test_{index}(): assert True\n", encoding="utf-8")
+        paths.append(path)
+
+    started = time.monotonic()
+    rows = _collect_items_from_paths(tuple(paths), tmp_path)
+    elapsed = time.monotonic() - started
+
+    assert elapsed > 0.8, elapsed
+    assert {row["file"] for row in rows} == {path.name for path in paths}
+
+
+def test_live_collection_chatty_import_without_events_fails_closed(
+        monkeypatch, tmp_path):
+    """Collection stdout cannot impersonate a nonce-bound FSM transition."""
+    monkeypatch.setattr(
+        sys.modules[__name__], "_COLLECTION_PROGRESS_STALL_S", 0.25)
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-s")
+    path = tmp_path / "test_chatty_collect.py"
+    path.write_text(
+        "import time\n"
+        "deadline=time.monotonic()+3\n"
+        "while time.monotonic() < deadline:\n"
+        "    print('COLLECT_CHATTER', flush=True)\n"
+        "    time.sleep(.02)\n"
+        "def test_never(): assert True\n", encoding="utf-8")
+
+    started = time.monotonic()
+    with pytest.raises(AssertionError) as caught:
+        _collect_items_from_paths((path,), tmp_path)
+    elapsed = time.monotonic() - started
+    message = str(caught.value)
+    assert elapsed < 3, elapsed
+    assert "WATCHDOG_STALLED:" in message
+    assert "COLLECT_CHATTER" in message
+
+
+def test_live_collection_refuses_missing_complete_manifest(
+        monkeypatch, tmp_path):
+    """A complete lifecycle cannot substitute for the collector's record."""
+    path = tmp_path / "test_green_collect.py"
+    path.write_text("def test_green(): assert True\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sys.modules[__name__], "_COLLECTOR_PLUGIN",
+        "def pytest_collection_modifyitems(session, config, items): pass\n")
+
+    with pytest.raises(AssertionError, match="no complete manifest"):
+        _collect_items_from_paths((path,), tmp_path)
 
 
 @lru_cache(maxsize=1)

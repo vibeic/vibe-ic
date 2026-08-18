@@ -53,6 +53,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,35 @@ EVIDENCE = PROGRAMS / "evidence_citation_resolves_check.py"
 ROUTING = PROGRAMS / "citation_routing_is_true_check.py"
 L4 = PROGRAMS / "l4_systemrdl_export.py"
 ENV = "VIBE_IC_BENCHMARK_DATA"
+OWNED = PROGRAMS / "_owned_process_supervisor.py"
+
+# These tests assert the child process' COMPLETE exit-code/output contract.
+# A wall-clock expiry is not a correctness result. Each finite checker below is
+# one atomic pytest-domain operation: the outer strict pytest lifecycle owns
+# liveness, while the inner owned-process helper waits for natural exit without
+# an elapsed cutoff and proves a final zero PID/starttime census.
+pytestmark = pytest.mark.timeout(0)
+
+
+def _domain_progress(scope: str, completed: int, total: int) -> None:
+    """Relay a completed finite child step to the enclosing pytest lease."""
+    plugin = sys.modules.get("_pytest_progress_plugin")
+    progress = getattr(plugin, "domain_progress", None)
+    if progress is not None:
+        progress(scope, completed, total)
+
+
+def _atomic_owned(argv, *, env):
+    """Return one child's rc/body only with complete owned-process evidence."""
+    if str(PROGRAMS) not in sys.path:
+        sys.path.insert(0, str(PROGRAMS))
+    import repo_hygiene_parallel as supervisor  # noqa: PLC0415
+    rc, body, problem = supervisor._run(
+        list(argv), REPO, env, stall_grace_s=float("inf"), atomic=True)
+    if problem:
+        raise AssertionError(
+            "OWNED_CHILD_NORECORD: " + problem + "\n" + body[-5000:])
+    return rc, body
 
 
 def _run(prog: Path, *args: str, env_tree: str | None = None):
@@ -78,22 +108,106 @@ def _run(prog: Path, *args: str, env_tree: str | None = None):
     env.pop(ENV, None)                      # never inherit the developer's own
     if env_tree is not None:
         env[ENV] = env_tree
-    r = subprocess.run([sys.executable, str(prog), *args], env=env,
-                       capture_output=True, text=True, timeout=300)
-    return r.returncode, (r.stdout + r.stderr)
+    result = _atomic_owned([sys.executable, str(prog), *args], env=env)
+    _domain_progress("issue1710-gate-child", 1, 1)
+    return result
 
 
-def _git(cwd: Path, *a: str) -> None:
-    subprocess.run(["git", "-C", str(cwd), *a], check=True, timeout=120,
-                   capture_output=True)
+def _git(cwd: Path, completed: int, total: int, *a: str) -> None:
+    # A git command is one indivisible fixture transition.  Natural exit and a
+    # final zero descendant census prove it; a semantic stall is NORECORD.
+    rc, body = _atomic_owned(
+        ["git", "-C", str(cwd), *a], env=dict(os.environ))
+    assert rc == 0, f"git {' '.join(a)} exited {rc}:\n{body[-3000:]}"
+    _domain_progress("issue1710-git-fixture", completed, total)
 
 
 def _commit(root: Path) -> None:
-    _git(root, "init", "-q")
-    _git(root, "config", "user.email", "t@t")
-    _git(root, "config", "user.name", "t")
-    _git(root, "add", "-Af")
-    _git(root, "commit", "-qm", "corpus")
+    commands = (
+        ("init", "-q"),
+        ("config", "user.email", "t@t"),
+        ("config", "user.name", "t"),
+        ("add", "-Af"),
+        ("commit", "-qm", "corpus"),
+    )
+    for completed, command in enumerate(commands, 1):
+        _git(root, completed, len(commands), *command)
+
+
+def test_atomic_child_preserves_a_natural_nonzero_result():
+    """A complete owned record carries the child's exact verdict."""
+    rc, body = _atomic_owned(
+        [sys.executable, "-c",
+         "import sys; print('MEASURED_CHILD_RED'); sys.exit(7)"],
+        env=dict(os.environ))
+    assert rc == 7
+    assert "MEASURED_CHILD_RED" in body
+
+
+def test_atomic_child_has_no_elapsed_completion_cutoff():
+    """A finite child may outlive the old test-scale window and stay natural."""
+    old_window = 0.25
+    started = time.monotonic()
+    rc, _body = _atomic_owned(
+        [sys.executable, "-c", "import time; time.sleep(.6)"],
+        env=dict(os.environ))
+    elapsed = time.monotonic() - started
+    assert rc == 0
+    assert elapsed > old_window * 2, elapsed
+
+
+def test_atomic_child_with_live_descendant_is_norecord_after_cleanup(tmp_path):
+    """Natural root exit cannot erase unfinished owned work."""
+    pid_file = tmp_path / "escaped.pid"
+    grandchild = "import time; time.sleep(30)"
+    child = (
+        "import pathlib,subprocess,sys\n"
+        f"p=subprocess.Popen([sys.executable,'-c',{grandchild!r}], "
+        "start_new_session=True)\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))\n")
+    with pytest.raises(AssertionError, match="OWNED_CHILD_NORECORD"):
+        _atomic_owned([sys.executable, "-c", child], env=dict(os.environ))
+    escaped_pid = int(pid_file.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(escaped_pid, 0)
+
+
+def test_atomic_policy_rejects_a_progress_log_before_launch(tmp_path):
+    """Completion-only and log-renewed leases cannot both be true."""
+    marker = tmp_path / "child-launched"
+    result_path = tmp_path / "owned-result.json"
+    progress_path = tmp_path / "progress.log"
+    progress_path.touch()
+    proc = subprocess.run(
+        [sys.executable, str(OWNED), "--result", str(result_path),
+         "--cwd", str(REPO), "--stall-grace", "1", "--poll", ".1",
+         "--atomic", "--progress", str(progress_path), "--",
+         sys.executable, "-c",
+         f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+        cwd=str(REPO), capture_output=True, text=True)
+    assert proc.returncode == 2
+    assert "not allowed with argument" in proc.stderr
+    assert not marker.exists() and not result_path.exists()
+
+
+def test_atomic_api_rejects_a_progress_log_before_launch(tmp_path):
+    """Non-CLI callers receive an explicit rc2 policy refusal too."""
+    sys.path.insert(0, str(PROGRAMS))
+    import _owned_process_supervisor as owned  # noqa: PLC0415
+
+    marker = tmp_path / "api-child-launched"
+    progress_path = tmp_path / "progress.log"
+    progress_path.touch()
+    record = owned.run_owned(
+        [sys.executable, "-c",
+         f"from pathlib import Path; Path({str(marker)!r}).touch()"],
+        REPO, dict(os.environ), progress_path=progress_path,
+        stall_grace_s=1, poll_s=.1, output_progress=False)
+    assert record.rc == 2
+    assert record.launched is False
+    assert record.outcome == "policy_refused"
+    assert "INVALID_PROGRESS_POLICY" in str(record.problem)
+    assert not marker.exists()
 
 
 def _empty_register(tmp_path: Path) -> str:

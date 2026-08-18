@@ -73,6 +73,12 @@ def pytest_collection_finish(session) -> None:
     _emit("collection_finish", selected_items=len(session.items))
 
 
+def _is_collect_only(session) -> bool:
+    """Return pytest's own collect-only mode without guessing from argv."""
+    return bool(getattr(getattr(session, "config", None), "option", None)
+                and session.config.option.collectonly)
+
+
 def pytest_runtest_logstart(nodeid, location) -> None:
     global _current_nodeid
     _current_nodeid = str(nodeid)
@@ -98,4 +104,10 @@ def pytest_runtest_logfinish(nodeid, location) -> None:
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:
+    # A collect-only session intentionally runs zero test items, so the normal
+    # ``test_finish == selected_items`` terminal proof cannot apply.  Emit a
+    # distinct terminal transition only after pytest reached session finish;
+    # the parent FSM binds its count to the earlier collection declaration.
+    if _is_collect_only(session):
+        _emit("collection_only_finish", selected_items=len(session.items))
     _emit("session_finish", exitstatus=int(exitstatus))

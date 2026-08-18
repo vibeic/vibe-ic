@@ -745,7 +745,9 @@ def parse_land_log(text: str) -> LandLog:
 
 
 def read_hygiene_delta(base_path: str, cand_path: str, base_host: str,
-                       cand_host: str) -> Optional[dict]:
+                       cand_host: str,
+                       trusted_transition_evidence: str = ""
+                       ) -> Optional[dict]:
     """The hygiene finding differential, or ``None`` when it was not asked for.
 
     ``None`` is NOT a clean result and `decide` never reads it as one — it is
@@ -778,7 +780,11 @@ def read_hygiene_delta(base_path: str, cand_path: str, base_host: str,
                 f"the two arms' hygiene records were supplied but "
                 f"`hygiene_finding_delta` could not be imported from {here} "
                 f"({exc}), so nothing was differenced"}
-    return _H.compare(Path(base_path), Path(cand_path), base_host, cand_host)
+    evidence = (Path(trusted_transition_evidence)
+                if str(trusted_transition_evidence).strip() else None)
+    return _H.compare(
+        Path(base_path), Path(cand_path), base_host, cand_host,
+        trusted_transition_evidence_path=evidence)
 
 
 # ------------------------------------------------------------------- the gate
@@ -1299,6 +1305,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "findings are host-dependent")
     ap.add_argument("--candidate-hygiene-host", default="",
                     help="the host the candidate record was measured on")
+    ap.add_argument("--trusted-transition-evidence", default="",
+                    help="parent-owned routed-corpus manifest and independent "
+                         "execution receipts; required by the trusted hygiene "
+                         "judge for an EMPTY-to-expanded transition")
     ap.add_argument("--maxfail", type=int, default=10,
                     help="the --maxfail gatekeeper-land.sh passes to pytest; "
                          "used only to tell truncation from a real absence")
@@ -1422,7 +1432,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     hygiene = read_hygiene_delta(
         a.base_hygiene, a.candidate_hygiene,
-        a.base_hygiene_host, a.candidate_hygiene_host)
+        a.base_hygiene_host, a.candidate_hygiene_host,
+        a.trusted_transition_evidence)
 
     v = decide(rebase_status=a.rebase_status, expected_tree=a.expected_tree,
                verified_tree=a.verified_tree,

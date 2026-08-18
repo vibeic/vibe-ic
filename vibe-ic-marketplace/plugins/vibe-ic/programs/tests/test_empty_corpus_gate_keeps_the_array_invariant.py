@@ -4,13 +4,14 @@ THE DEFECT, MEASURED ON `75776dbbb`
 ===================================
 `gate_dispatch_over` over a corpus that expands to zero items appends a
 synthetic NOT_CHECKED gate (vibe-ic#1075), so that a corpus which silently
-emptied leaves a verdict instead of no gate at all. That site is the ONLY gate
-in the file that does not go through `_dispatch`, and `_dispatch` is where the
-eight per-gate arrays are pushed in lockstep.
+emptied leaves a verdict instead of no gate at all. That site was the ONLY gate
+in the file that did not go through `_dispatch`, and `_dispatch` is where the
+nine per-gate arrays are pushed in lockstep.
 
 #1075 pushed the six arrays that existed when it was written. #584 landed
 separately and made the invariant EIGHT, adding `GATE_EX_UNTIL` /
-`GATE_EX_WHY`. From that point `gate_dispatch_finish` read `GATE_EX_UNTIL[$i]`
+`GATE_EX_WHY`; #1729 made it nine by adding `GATE_SCOPES`. From that point
+`gate_dispatch_finish` read `GATE_EX_UNTIL[$i]`
 for every `i < declared` — and for the synthetic gate there was no entry::
 
     $ bash gates.sh --summary-json rec.json
@@ -29,16 +30,17 @@ it was the one state that destroyed the report.
 
 WHY THIS IS A CLASS AND NOT A TYPO. The file's own header promises that "every
 `run*` wrapper funnels through ONE `_dispatch`, and a third wrapper added later
-cannot accidentally skip the recording". The synthetic gate is a recording site
-that does not funnel through it, so it has to restate the invariant by hand,
-and a hand-maintained parallel list is the drift shape #527/#530/#534/#538 each
-spent a version removing. The first test below therefore pins the INVARIANT
-over every gate the dispatcher can produce, not just the empty-corpus one, so
-a ninth array or a second synthetic gate is covered the day it appears.
+cannot accidentally skip the recording". The synthetic gate was a recording
+site that did not funnel through it, so it restated the invariant by hand, and
+a hand-maintained parallel list is the drift shape #527/#530/#534/#538 each
+spent a version removing. It now traverses `_dispatch`; the first test below
+still pins the INVARIANT over every gate the dispatcher can produce, so a tenth
+array or a second structural gate is covered the day it appears.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import textwrap
@@ -50,14 +52,13 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 _REPO = _PROGRAMS.parents[3]
 _LIB = _REPO / "tools" / "ci" / "_gate_dispatch.sh"
 
-#: Inner bound. The harness runs `--timeout=180 --timeout-method=thread`, and a
-#: thread-based timeout cannot interrupt a subprocess wait, so a bound at or
-#: above it would take the SESSION down rather than fail one test. Every
-#: fixture here is `true` and a `printf`; measured well under 2s.
-_BOUND_S = 60
+# Natural completion is the evidence these tests inspect.  A clock expiry would
+# neither prove that the structural gate ran nor produce its attestation.
+pytestmark = pytest.mark.timeout(0)
 
 
-def _run(root: Path, body: str, *args: str):
+def _run(root: Path, body: str, *args: str,
+         attest_population: bool = True):
     (root / "tools" / "ci").mkdir(parents=True, exist_ok=True)
     script = root / "tools" / "ci" / "gates.sh"
     script.write_text(textwrap.dedent(f"""\
@@ -67,9 +68,14 @@ def _run(root: Path, body: str, *args: str):
         gate_dispatch_init "$@"
         """) + body + "\ngate_dispatch_finish\n")
     rec = root / "record.json"
+    env = os.environ.copy()
+    if attest_population:
+        env["GATE_DISPATCH_ATTEST_POPULATION"] = "1"
+    else:
+        env.pop("GATE_DISPATCH_ATTEST_POPULATION", None)
     proc = subprocess.run(["bash", str(script), "--summary-json", str(rec), *args],
-                          cwd=str(root), capture_output=True, text=True,
-                          timeout=_BOUND_S)
+                          cwd=str(root), env=env,
+                          capture_output=True, text=True)
     doc = json.loads(rec.read_text()) if rec.is_file() and rec.stat().st_size else None
     return proc, doc
 
@@ -88,7 +94,9 @@ def test_an_empty_corpus_does_not_kill_the_sweep(tmp_path):
     assert "unbound variable" not in text, (
         f"the sweep DIED on its own array invariant over an empty corpus — "
         f"the one state the synthetic gate exists to report:\n{text}")
-    assert proc.returncode == 0, text
+    assert proc.returncode == 2, (
+        "the empty population was recorded but did not block the sweep; an "
+        f"unexempted NOT_CHECKED is incomplete evidence:\n{text}")
     assert doc is not None, (
         "no summary record was written at all. A consumer cannot tell this "
         "from a run that never happened, which is strictly worse than a "
@@ -132,13 +140,15 @@ def test_the_rollup_does_not_claim_an_exemption_that_does_not_exist(tmp_path):
     refusal from an unbought one, so it is the last place that may imply one.
     """
     proc, _ = _run(tmp_path, _EMPTY_LOOP)
-    rollup = [ln for ln in proc.stdout.splitlines()
-              if ln.startswith("repo_hygiene_gates:") and "NOT a pass" in ln]
+    text = proc.stdout + proc.stderr
+    rollup = [ln for ln in text.splitlines()
+              if ln.startswith("repo_hygiene_gates:")
+              and "UNEXEMPTED NOT_CHECKED" in ln]
 
-    assert len(rollup) == 1, proc.stdout
+    assert len(rollup) == 1, text
     assert "exempt until )" not in rollup[0], (
         f"the roll-up claims an exemption with a blank date:\n{rollup[0]}")
-    assert "NO EXEMPTION DECLARED" in rollup[0], rollup[0]
+    assert "block this run" in rollup[0], rollup[0]
 
 
 def test_a_genuinely_exempted_refusal_still_names_its_date(tmp_path):
@@ -164,8 +174,8 @@ def test_a_genuinely_exempted_refusal_still_names_its_date(tmp_path):
 # THE INVARIANT ITSELF — not just today's instance of breaking it
 # ==========================================================================
 def test_every_per_gate_array_is_pushed_the_same_number_of_times(tmp_path):
-    """The eight arrays are indexed by ONE gate index; a site that pushes
-    seven of them is a latent `set -u` death at whichever index it skipped.
+    """The ten arrays are indexed by ONE gate index; a site that pushes
+    nine of them is a latent `set -u` death at whichever index it skipped.
 
     Driven through the REAL dispatcher over a run containing every gate shape
     the file can produce — a plain gate, a tolerated refusal, a failure, and
@@ -186,16 +196,17 @@ def test_every_per_gate_array_is_pushed_the_same_number_of_times(tmp_path):
         _body() {{ run "per item ($1)" "$ROOT" true; }}
         gate_dispatch_over "an empty corpus" _body printf ""
         for _a in GATE_LABELS GATE_STATES GATE_SECONDS GATE_ITEM_CORPUS \\
-                  GATE_ITEM_IDX GATE_ITEM_TOTAL GATE_EX_UNTIL GATE_EX_WHY; do
+                  GATE_ITEM_IDX GATE_ITEM_TOTAL GATE_EX_UNTIL GATE_EX_WHY \\
+                  GATE_SCOPES GATE_BLOCKING_REFUSAL; do
           eval "printf 'LEN %s %s\\n' \\"$_a\\" \\"\\${{#$_a[@]}}\\""
         done
         """))
     proc = subprocess.run(["bash", str(script)], cwd=str(root),
-                          capture_output=True, text=True, timeout=_BOUND_S)
+                          capture_output=True, text=True)
 
     lens = dict((m.group(1), int(m.group(2))) for m in
                 re.finditer(r"^LEN (\S+) (\d+)$", proc.stdout, re.M))
-    assert len(lens) == 8, f"could not read all eight lengths:\n{proc.stdout}\n{proc.stderr}"
+    assert len(lens) == 10, f"could not read all ten lengths:\n{proc.stdout}\n{proc.stderr}"
     assert len(set(lens.values())) == 1, (
         f"the per-gate arrays are NOT parallel, so some gate index is a "
         f"`set -u` death waiting to be read: {lens}")

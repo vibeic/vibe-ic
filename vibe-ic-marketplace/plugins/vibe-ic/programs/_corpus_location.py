@@ -83,6 +83,7 @@ from typing import Optional, Tuple
 #: thing. Gates that disagree about where the corpus lives will disagree about
 #: whether it was checked.
 CORPUS_ENV = "VIBE_IC_BENCHMARK_DATA"
+BOUND_SHA_ENV = "GATEKEEPER_BENCHMARK_DATA_SHA"
 
 #: What the published corpus tree was CALLED while it lived in this repository.
 #: The pointer names a clone whose ROOT is that tree, so a population recorded
@@ -95,6 +96,16 @@ CANONICAL_CORPUS_NAME = "benchmark-data"
 #: Origins returned by :func:`resolve`.
 NAMED = "named"          #: the path the caller/CI named, in this repository
 ENV = "env"              #: `$VIBE_IC_BENCHMARK_DATA` supplied it
+REFUSED = "refused"      #: a bound landing omitted its mandatory checkout
+
+# ``resolve`` historically returns a path even when resolution fails, and its
+# callers uniformly ask ``is_dir()`` before delegating to :func:`refuse`.  A
+# bound SHA without its pointer must therefore return a path which can never be
+# supplied by the candidate.  A child below the platform null device cannot be
+# a directory; unlike a repository-relative sentinel, the subject cannot create
+# it and turn a configuration refusal into a scan of its own bytes.
+_UNSCANNABLE_BOUND_PATH = Path(os.devnull) / \
+    ".vibeic-bound-corpus-pointer-missing"
 
 
 def env_pointer() -> Optional[str]:
@@ -119,6 +130,26 @@ def resolve(named: Path, subdir: Optional[str] = None, gate: str = "",
     """
     env = env_pointer()
     tag = f"[{gate}] " if gate else ""
+    if os.environ.get(BOUND_SHA_ENV):
+        # Landing has already byte-attested one immutable external checkout.
+        # Letting a candidate-local `benchmark-data/` win here would scan a
+        # different tree while every summary still names the external SHA.
+        # Outside that bound protocol the historical named-root precedence is
+        # unchanged for developer/test callers.
+        if env:
+            target = Path(env) / subdir if subdir else Path(env)
+            if announce:
+                print(
+                    f"{tag}note: {BOUND_SHA_ENV} binds the landing corpus; "
+                    f"forcing {CORPUS_ENV}={env} -> {target} and refusing any "
+                    f"candidate-local {named} shadow.", file=sys.stderr)
+            return target, ENV
+        if announce:
+            print(
+                f"{tag}UNDETERMINED: {BOUND_SHA_ENV} is set without "
+                f"{CORPUS_ENV}; no bound checkout can be resolved.",
+                file=sys.stderr)
+        return _UNSCANNABLE_BOUND_PATH, REFUSED
     if named.is_dir():
         if env and announce:
             # Declining the pointer is announced too: a reader who has it set
@@ -175,6 +206,13 @@ def refuse(gate: str, named: Path, resolved: Path, origin: str,
     1: "the corpus is not here" is not a finding against anything.
     """
     env = env_pointer()
+    if origin == REFUSED:
+        print(
+            f"[{gate}] UNDETERMINED: {BOUND_SHA_ENV} is set but "
+            f"{CORPUS_ENV} is unset, so no byte-attested checkout is bound to "
+            "that SHA. Candidate-local corpus bytes are not an acceptable "
+            "substitute; nothing was scanned.", file=sys.stderr)
+        return 2
     if origin == ENV:
         # SET AND WRONG IS NOT ABSENT. Laundering it as NO_CORPUS would turn a
         # mistyped path, a failed clone or a no-op CI fetch step into a green
