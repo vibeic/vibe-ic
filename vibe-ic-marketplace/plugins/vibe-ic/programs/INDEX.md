@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1109
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1109)
+- **Total programs (excluding helpers / shims):** 1111
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1111)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1100 |
+| `any` | 1102 |
 
 ## Alphabetical listing
 
@@ -593,6 +593,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `landing_collateral_revert_check` | any | — | a squash must not silently revert work that landed alongside it in the same push. |
 | `landing_is_one_commit_check` | any | — | a landing is ONE commit, not two. |
 | `landing_merge_verdict` | any | — | the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all. |
+| `landing_pytest_runtime_preflight` | any | — | can this host RUN the protected landing test runtime at all?  Asked ONCE, before the arms, attributably. |
 | `landing_unselectable_pytest_corpus` | any | — | the tracked pytest files NO landing stage can reach, enumerated so a stage can run them. |
 | `landing_worktree_is_clean_check` | any | — | the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has. |
 | `latchup_esd_spacing_check` | any | v0.2.30 | the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN... |
@@ -1075,6 +1076,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tristate_bus_check` | any | — | Generate general tristate / open-drain bus assertions. |
 | `tristate_pullup_assertion_check` | any | v0.116 | Verify that every `inout` port driven `1'bz` somewhere in the RTL has a |
 | `tristate_self_rx_mask_check` | any | — | Self-RX masking audit for tristate/open-drain tristate bus pins. |
+| `trusted_pytest_entry` | any | — | Isolated pytest entry for the protected landing runtime. |
 | `truth_table_rtl_gen` | any | v0.1.7 | deterministic truth-table → combinational RTL generator. |
 | `tx_abort_during_transmission_check` | any | v0.108 | Verify TX modules do not abort/reset during active bit-serial transmission. |
 | `tx_bit_timing_units_check` | any | v0.119.29 | verify TX bit-cell constants in rtl/**/tx_phy*.{v,sv} match L8/L11 microsecond targets at the clock the TX_PHY is actually bound to. |
@@ -1181,7 +1183,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1100 programs)
+### `any` (1102 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `acceptance_control_check` — the control a change is measured against must be the state BEFORE the feature, not an earlier commit on the same branch.
@@ -1745,6 +1747,7 @@ _(no programs in this group)_
 - `landing_collateral_revert_check` — a squash must not silently revert work that landed alongside it in the same push.
 - `landing_is_one_commit_check` — a landing is ONE commit, not two.
 - `landing_merge_verdict` — the REFUSAL DECISION for the merge path, in one function, because `gh pr merge` runs no gate at all.
+- `landing_pytest_runtime_preflight` — can this host RUN the protected landing test runtime at all?  Asked ONCE, before the arms, attributably.
 - `landing_unselectable_pytest_corpus` — the tracked pytest files NO landing stage can reach, enumerated so a stage can run them.
 - `landing_worktree_is_clean_check` — the gate verifies COMMITS; a tracked file still modified in the worktree means what was verified is not what the author has.
 - `latchup_esd_spacing_check` — the OPEN-SOURCE GEOMETRY-LAYER half of PERC latch-up / ESD sign-off (v0.2.30), built from the routed DEF, deterministic + pure + chip-AGN...  _[v0.2.30]_
@@ -2225,6 +2228,7 @@ _(no programs in this group)_
 - `tristate_bus_check` — Generate general tristate / open-drain bus assertions.
 - `tristate_pullup_assertion_check` — Verify that every `inout` port driven `1'bz` somewhere in the RTL has a  _[v0.116]_
 - `tristate_self_rx_mask_check` — Self-RX masking audit for tristate/open-drain tristate bus pins.
+- `trusted_pytest_entry` — Isolated pytest entry for the protected landing runtime.
 - `truth_table_rtl_gen` — deterministic truth-table → combinational RTL generator.  _[v0.1.7]_
 - `tx_abort_during_transmission_check` — Verify TX modules do not abort/reset during active bit-serial transmission.  _[v0.108]_
 - `tx_bit_timing_units_check` — verify TX bit-cell constants in rtl/**/tx_phy*.{v,sv} match L8/L11 microsecond targets at the clock the TX_PHY is actually bound to.  _[v0.119.29]_

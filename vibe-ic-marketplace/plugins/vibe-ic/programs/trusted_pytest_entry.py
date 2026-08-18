@@ -6,6 +6,42 @@ from the digest-pinned runner image, then loads the protected progress plugin
 by exact path.  The subject cwd never participates in either import.  A
 canonical identity record travels through the plugin's private semantic stream
 so the parent can prove what actually executed, not merely what argv named.
+
+THE HOST LANE
+=============
+``-I`` implies ``-s``, so the USER site directory is suppressed.  That is the
+property this file exists for on a pinned-image host, and it is fatal on a host
+whose pytest lives only there: ``import pytest`` raises, this entry refuses, and
+the child dies before emitting one lifecycle event.  Measured on the landing
+host at 7c376e348, the repo-tools arm alone: ``asked 40 recorded 0 NORECORD
+40``, aggregate INCOMPLETE, zero junit cases.  Landing was impossible on any
+host of the fleet.
+
+``VIBEIC_TRUSTED_PYTEST_SITE`` opens ONE explicitly-named directory for that
+host, and nothing else changes:
+
+  * it is OPT-IN, never derived by default.  A silent fallback to the host's
+    own site directory would dissolve the digest-pinned guarantee on every host
+    at once, which is making the check pass by deleting what it checks.  The
+    value ``auto`` asks for the non-isolated interpreter's user site directory
+    to be DERIVED, and is still an explicit act by the caller.
+  * it is resolved strict and refused by the SAME ``_under(resolved, subject)``
+    / ``_under(resolved, programs)`` checks the module identities go through, so
+    the subject checkout cannot become the runtime by naming itself.
+  * every file it resolves is still raw-attested below.  ``sys.flags.isolated``
+    still keeps the subject cwd off ``sys.path``, so the property this entry
+    exists to guarantee survives the lane.
+
+INSERTED AT POSITION 0, NOT APPENDED.  Measured: appending mixes user-site
+pure-Python packages against the system's C extensions and dies in the mismatch
+(cffi 2.0.0 against _cffi_backend 1.15.0).  Position 0 makes the named
+directory answer first and consistently for its whole dependency closure.
+
+``PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`` IS REQUIRED WITH THE LANE.  Restoring the
+user site directory restores its ``pytest11`` entry points too, and on this
+fleet one of them takes the session down at collection, which is the defect
+``gatekeeper-land.sh:520-528`` documents.  The lane therefore REFUSES without
+the token rather than trusting a caller to have set it.
 """
 from __future__ import annotations
 
@@ -22,6 +58,9 @@ from typing import Sequence
 
 IDENTITY_ENV = "VIBEIC_PYTEST_RUNTIME_IDENTITY"
 PROGRESS_PLUGIN_NAME = "_vibeic_protected_pytest_progress"
+HOST_SITE_ENV = "VIBEIC_TRUSTED_PYTEST_SITE"
+HOST_SITE_AUTO = "auto"
+AUTOLOAD_ENV = "PYTEST_DISABLE_PLUGIN_AUTOLOAD"
 
 
 class Refusal(RuntimeError):
@@ -98,6 +137,59 @@ def _strip_progress_plugin(argv: Sequence[str]) -> list[str]:
     return out
 
 
+def _derived_user_site() -> str:
+    """The NON-isolated interpreter's user site directory.
+
+    ``site`` is importable under ``-I`` and still computes this path; what
+    ``-I`` removes is the path's PRESENCE on ``sys.path``, not the ability to
+    name it.  So the derivation needs no second interpreter and cannot pick up
+    a different one than the caller meant.
+    """
+    import site  # stdlib; the isolated interpreter still owns it
+
+    derived = site.getusersitepackages()
+    if isinstance(derived, (list, tuple)):
+        derived = derived[0] if derived else ""
+    if not isinstance(derived, str) or not derived:
+        raise Refusal("the interpreter reports no user site directory to derive")
+    return derived
+
+
+def _host_lane(subject: Path, programs: Path) -> Path | None:
+    """Resolve, refuse and return the opted-in host site directory, or None.
+
+    Returning None is the pinned-image lane and the default: an unset variable
+    changes nothing about this entry's behaviour.
+    """
+    requested = os.environ.get(HOST_SITE_ENV)
+    if requested is None or not requested.strip():
+        return None
+    requested = requested.strip()
+    if requested == HOST_SITE_AUTO:
+        requested = _derived_user_site()
+    lane = Path(requested)
+    if not lane.is_absolute():
+        raise Refusal(f"{HOST_SITE_ENV} must name an absolute directory")
+    try:
+        resolved = lane.resolve(strict=True)
+    except OSError as exc:
+        raise Refusal(f"{HOST_SITE_ENV} does not resolve: {exc}") from exc
+    if not resolved.is_dir():
+        raise Refusal(f"{HOST_SITE_ENV} is not a directory: {resolved}")
+    # The same two refusals the module identities go through, for the same
+    # reason: a runtime the subject can name is a runtime the subject controls.
+    if _under(resolved, subject) or _under(resolved, programs):
+        raise Refusal(f"{HOST_SITE_ENV} resolved inside the subject checkout")
+    # ASSERTED, NOT ASSUMED. The lane restores this directory's pytest11 entry
+    # points; on this fleet one of them raises at import and takes the whole
+    # session down at collection, so the token is load-bearing exactly here.
+    if os.environ.get(AUTOLOAD_ENV) != "1":
+        raise Refusal(
+            f"{HOST_SITE_ENV} requires {AUTOLOAD_ENV}=1 on the child: the lane "
+            "restores this directory's entry-point plugins")
+    return resolved
+
+
 def run(argv: Sequence[str]) -> int:
     if not sys.flags.isolated or not sys.flags.ignore_environment:
         raise Refusal("trusted pytest entry requires python3 -I")
@@ -105,6 +197,10 @@ def run(argv: Sequence[str]) -> int:
     subject = Path.cwd().resolve(strict=True)
     if any(item in {"", "."} for item in sys.path):
         raise Refusal("isolated interpreter still exposes the subject cwd")
+
+    lane = _host_lane(subject, programs)
+    if lane is not None:
+        sys.path.insert(0, str(lane))
 
     import pytest  # type: ignore[import-not-found]  # image-owned dependency
     import _pytest  # type: ignore[import-not-found]
@@ -137,6 +233,17 @@ def run(argv: Sequence[str]) -> int:
         "plugin": plugin_identity,
         "modules": dependency_rows,
     }
+    # THE LANE IS NOT ADDED TO THIS RECORD, and the reason is worth stating
+    # because the first attempt did add it. `pytest_per_file_junit._runtime_identity`
+    # validates the key set EXACTLY, so a new field is not extra information —
+    # it is an invalid record. MEASURED: `asked 41 recorded 0 NORECORD 41`, every
+    # file "invalid trusted pytest runtime identity". The same defect shape this
+    # whole repair is about, produced by the repair.
+    #
+    # Nothing is lost. `dependency_rows` above already carries the RESOLVED
+    # absolute path and sha256 of pytest, _pytest and pluggy, so which lane
+    # answered is a fact the receipt states rather than asserts, and the landing
+    # log carries the preflight's own one-line lane report as well.
     os.environ[IDENTITY_ENV] = json.dumps(
         identity, sort_keys=True, separators=(",", ":"),
         ensure_ascii=True, allow_nan=False)
