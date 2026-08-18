@@ -1223,8 +1223,30 @@ def _run_fallback_batch(
         pytest_argv: Sequence[str], indexed_files: Sequence[Tuple[int, str]],
         tmp: Path, stall_after: float, cwd: Optional[str], *,
         progress_relay_path: Optional[Path] = None,
+        width: Optional[int] = None,
         ) -> List[_FallbackOutcome]:
-    """Recover one fixed-width batch in independent supervisor processes."""
+    """Recover files in independent supervisor processes.
+
+    `width=None` keeps the historical FIXED-WIDTH BATCH: every file in
+    `indexed_files` is launched at once and the call returns when the last of
+    them exits.  Callers that slice their corpus into consecutive batches
+    therefore pay `max(batch)` per batch — a WAVE BARRIER.
+
+    `width=N` runs the SAME workers as a WORK QUEUE instead: at most N
+    supervisors are live at any moment, and a free slot is refilled the instant
+    one exits.  Nothing about a worker changes — same spec, same private
+    supervisor process, same progress protocol instance, same metadata sidecar.
+    Only the moment of launch moves.  This matters because the barrier is the
+    dominant scheduling cost, not the parallel width: modelled over one round's
+    own per-file seconds, the same 8 jobs cost 1168.8 s as barriers and 270.1 s
+    as a queue.
+
+    The descendant-census proof is UNWEAKENED by queueing.  The baseline is
+    taken once before the first launch and the census is asserted once after the
+    last exit, so a process leaked by ANY file in the queue — not merely one in
+    the final wave — is still caught and still turns the whole call into
+    NORECORD.
+    """
     global _ACTIVE_FALLBACK_BASELINE
     if not _enable_subreaper():
         return [_FallbackOutcome(
@@ -1249,61 +1271,83 @@ def _run_fallback_batch(
         selector = selectors.DefaultSelector()
     outcomes: Dict[int, _FallbackOutcome] = {}
     normal_completion = False
-    try:
-        for index, test_file in indexed_files:
-            stem = f"fallback-{index:05d}"
-            junit_path = tmp / f"{stem}.xml"
-            meta_path = tmp / f"{stem}.json"
-            log_path = tmp / f"{stem}.log"
-            spec_path = tmp / f"{stem}.spec.json"
-            _write_json_atomic(spec_path, {
-                "schema": 1,
-                "test_file": test_file,
-                "junit": str(junit_path),
-                "meta": str(meta_path),
-                "stall_after": stall_after,
-                "cwd": cwd,
-                "progress_relay": (str(progress_relay_path)
-                                   if progress_relay_path is not None else None),
-                "pytest_argv": list(pytest_argv),
-            })
-            child_env = os.environ.copy()
-            child_env[_FALLBACK_WORKER_ENV] = "1"
-            try:
-                with log_path.open("wb") as log_file:
-                    proc = subprocess.Popen(
-                        [sys.executable, str(Path(__file__).resolve()),
-                         _FALLBACK_WORKER_FLAG, str(spec_path)],
-                        stdout=log_file, stderr=subprocess.STDOUT,
-                        start_new_session=True, env=child_env)
-            except OSError as exc:
-                outcomes[index] = _FallbackOutcome(
-                    _fallback_no_record(
-                        test_file,
-                        f"fallback supervisor could not start: {exc}"),
-                    f"FALLBACK_WORKER_NORECORD: could not start: {exc}\n")
-                continue
-            job = _FallbackJob(index, test_file, junit_path, meta_path,
-                               log_path, proc)
-            jobs[proc.pid] = job
-            if selector is not None:
-                try:
-                    job.pidfd = os.pidfd_open(proc.pid, 0)
-                    selector.register(job.pidfd, selectors.EVENT_READ, proc.pid)
-                except OSError:
-                    use_pidfds = False
-                    continue
+    queue: List[Tuple[int, str]] = list(indexed_files)
+    slots = len(queue) if width is None else max(1, int(width))
+    next_launch = 0
+    pending: Set[int] = set()
 
-        if not use_pidfds and selector is not None:
-            selector.close()
-            selector = None
+    def _drop_pidfds() -> None:
+        """Abandon pidfd readiness for POLLING, without losing any job."""
+        nonlocal selector, use_pidfds
+        use_pidfds = False
+        if selector is not None:
             for job in jobs.values():
                 if job.pidfd is not None:
-                    os.close(job.pidfd)
+                    try:
+                        selector.unregister(job.pidfd)
+                    except (KeyError, ValueError, OSError):
+                        pass
+                    try:
+                        os.close(job.pidfd)
+                    except OSError:
+                        pass
                     job.pidfd = None
+            selector.close()
+            selector = None
 
-        pending = set(jobs)
-        while pending:
+    def _launch_one(index: int, test_file: str) -> None:
+        stem = f"fallback-{index:05d}"
+        junit_path = tmp / f"{stem}.xml"
+        meta_path = tmp / f"{stem}.json"
+        log_path = tmp / f"{stem}.log"
+        spec_path = tmp / f"{stem}.spec.json"
+        _write_json_atomic(spec_path, {
+            "schema": 1,
+            "test_file": test_file,
+            "junit": str(junit_path),
+            "meta": str(meta_path),
+            "stall_after": stall_after,
+            "cwd": cwd,
+            "progress_relay": (str(progress_relay_path)
+                               if progress_relay_path is not None else None),
+            "pytest_argv": list(pytest_argv),
+        })
+        child_env = os.environ.copy()
+        child_env[_FALLBACK_WORKER_ENV] = "1"
+        try:
+            with log_path.open("wb") as log_file:
+                proc = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).resolve()),
+                     _FALLBACK_WORKER_FLAG, str(spec_path)],
+                    stdout=log_file, stderr=subprocess.STDOUT,
+                    start_new_session=True, env=child_env)
+        except OSError as exc:
+            outcomes[index] = _FallbackOutcome(
+                _fallback_no_record(
+                    test_file,
+                    f"fallback supervisor could not start: {exc}"),
+                f"FALLBACK_WORKER_NORECORD: could not start: {exc}\n")
+            return
+        job = _FallbackJob(index, test_file, junit_path, meta_path,
+                           log_path, proc)
+        jobs[proc.pid] = job
+        pending.add(proc.pid)
+        if selector is not None:
+            try:
+                job.pidfd = os.pidfd_open(proc.pid, 0)
+                selector.register(job.pidfd, selectors.EVENT_READ, proc.pid)
+            except OSError:
+                _drop_pidfds()
+
+    try:
+        while next_launch < len(queue) or pending:
+            while next_launch < len(queue) and len(pending) < slots:
+                index, test_file = queue[next_launch]
+                next_launch += 1
+                _launch_one(index, test_file)
+            if not pending:
+                # Every remaining launch failed at exec; nothing to wait for.
+                continue
             finished: List[int] = []
             if selector is not None:
                 for key, _mask in selector.select():
@@ -1512,6 +1556,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          "when the initial probe recovered zero complete records "
                          f"(default {DEFAULT_FALLBACK_RESCUE_JOBS}); CPU, memory, "
                          "PID and absolute hard caps still apply")
+    ap.add_argument("--parallel-per-file", action="store_true",
+                    help="run EVERY selected file in its own supervisor "
+                         "process from the start, as a work queue of width "
+                         "--fallback-jobs, with no whole-selection aggregate "
+                         "session. Each file keeps its own progress-protocol "
+                         "instance, so this is protocol-correct by "
+                         "construction and is NOT xdist. It DROPS the "
+                         "cross-file/order semantics the aggregate session "
+                         "asks; a caller that needs those must ask them "
+                         "elsewhere. Mutually exclusive with --aggregate-check "
+                         "and --aggregate-only, and requires "
+                         "--stop-after-failures 0 because a work queue has no "
+                         "deterministic stop point")
     ap.add_argument("--cwd", default=None,
                     help="run each pytest session from here")
     ap.add_argument("--progress-relay", default=None,
@@ -1524,6 +1581,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if a.aggregate_only:
         a.aggregate_check = True
+
+    if a.parallel_per_file:
+        # A mode that cannot be silently combined with the aggregate one. The
+        # two answer DIFFERENT questions and the caller must say which it is
+        # asking, because "it ran fast and green" must never be able to mean
+        # "the whole-selection question was quietly dropped".
+        if a.aggregate_check or a.aggregate_only:
+            ap.error("--parallel-per-file runs no whole-selection session, so "
+                     "it cannot be combined with --aggregate-check/"
+                     "--aggregate-only")
+        if a.stop_after_failures:
+            ap.error("--parallel-per-file requires --stop-after-failures 0: a "
+                     "work queue's stop point depends on completion order, and "
+                     "a landing verdict whose denominator moves between runs "
+                     "is not a verdict")
 
     if a.stall_after <= 0 or a.aggregate_stall_after <= 0:
         ap.error("stall windows must be positive")
@@ -1720,6 +1792,52 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"--- {test_file}  rc={result.rc}  "
                       f"cases={result.cases}  red={result.red}  {state}",
                       flush=True)
+        elif a.parallel_per_file:
+            # THE SAME WORKERS THE RECOVERY PATH USES, asked up front instead of
+            # after a refusal. Nothing here relaxes the progress protocol: each
+            # file still gets its own supervisor process and therefore its own
+            # protocol instance, whose (schema, nonce, pid, seq) triple is
+            # checked exactly as in a single-file run. That is why this is a
+            # legal parallel shape and `-p xdist -n N` is not — xdist workers
+            # are CHILDREN of one session emitting into ONE stream, which the
+            # protocol refuses by construction.
+            capacity = _fallback_capacity(a.fallback_jobs, len(selection))
+            _print_fallback_capacity("parallel-per-file", capacity)
+            print(f"=== [parallel-per-file] {len(selection)} file(s), work "
+                  f"queue of width {capacity.jobs}", flush=True)
+            indexed = list(enumerate(selection, start=1))
+            try:
+                outcomes = _run_fallback_batch(
+                    pytest_argv, indexed, tmp, a.stall_after, a.cwd,
+                    progress_relay_path=(Path(a.progress_relay)
+                                         if a.progress_relay else None),
+                    width=capacity.jobs)
+            except Exception as exc:
+                # Queue orchestration failing is a NAMED NORECORD for every
+                # file, never an uncaught traceback that leaves no report.
+                detail = f"parallel queue orchestration failed: {exc!r}"
+                print(f"FALLBACK_BATCH_NORECORD  {detail}", flush=True)
+                outcomes = [_FallbackOutcome(
+                    _fallback_no_record(test_file, detail),
+                    f"FALLBACK_WORKER_NORECORD: {detail}\n")
+                            for _i, test_file in indexed]
+            # SELECTION ORDER IS THE DURABLE CONTRACT. Workers finish in
+            # scheduler order; neither stdout nor the JUnit may reveal that as
+            # the semantic result order.
+            for (i, test_file), outcome in zip(indexed, outcomes):
+                result = outcome.result
+                results.append(result)
+                red_total += result.red
+                print(f"=== [{i}/{len(selection)}] {test_file} "
+                      "[parallel worker]", flush=True)
+                sys.stdout.write(outcome.log)
+                if outcome.log and not outcome.log.endswith("\n"):
+                    sys.stdout.write("\n")
+                state = ("NORECORD" if not result.has_record else
+                         ("red" if result.red or result.rc != 0 else "ok"))
+                print(f"--- {test_file}  rc={result.rc}  "
+                      f"cases={result.cases}  red={result.red}  {state}",
+                      flush=True)
         elif not a.aggregate_only and not a.aggregate_check:
             for i, test_file in enumerate(selection, start=1):
                 if a.stop_after_failures and red_total >= a.stop_after_failures:
@@ -1789,9 +1907,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"EMPTY     {r.path}  rc={r.rc}: a report was written and it "
                   f"carries no test case")
 
+    if a.parallel_per_file:
+        # NOT a status line for the aggregate question — deliberately spelled so
+        # that neither `^AGGREGATE_NORECORD` nor `^AGGREGATE_COMPLETE` matches
+        # it. A caller that greps for an aggregate verdict finds NEITHER and
+        # must refuse, which is the correct default: this mode never asked.
+        print("AGGREGATE_NOT_ASKED  --parallel-per-file ran no whole-selection "
+              "session; cross-file/order semantics were NOT measured here")
     print("=== pytest junit summary")
     mode = ("aggregate-only" if a.aggregate_only else
-            ("aggregate-first" if a.aggregate_check else "per-file"))
+            ("aggregate-first" if a.aggregate_check else
+             ("parallel-per-file" if a.parallel_per_file else "per-file")))
     print(f"  mode       {mode}")
     print(f"  asked      {len(selection)}")
     print(f"  recorded   {len(recorded)}")
