@@ -839,6 +839,67 @@ class _ProgressStreamSet:
         self.error = ""
         self.score = 0
 
+    # THE READ SIDE OF THE JOIN.  `_HermeticProgressRelay.observe` is written
+    # against ONE interpreter's probe: it reads `declared_items`, `item_order`,
+    # `finished` and `domain_progress`.  Substituting this set for that probe
+    # without these four accessors raised AttributeError inside the watchdog
+    # sample, which the relay never sees as its own refusal — the arm simply
+    # died with no terminal progress record and the hermetic runner reported
+    # "candidate ended without the exact semantic terminal record".
+    #
+    # THE JOIN IS CONSERVATIVE, NEVER OPTIMISTIC.  `declared_items` is the
+    # relay's own gate: it stays None (relay silent) until EVERY admitted
+    # stream has declared the same collected selection in the same order, so a
+    # half-collected or disagreeing session cannot make the relay compute a
+    # denominator from a partial view.  `complete()` below is unchanged and is
+    # still the only thing that decides whether the session finished.
+    def _declared_streams(self) -> Optional[List["_SemanticProgressProbe"]]:
+        probes = list(self.streams.values())
+        if self.error or not probes:
+            return None
+        first = probes[0]
+        if first.declared_items is None:
+            return None
+        for probe in probes[1:]:
+            if (probe.declared_items != first.declared_items
+                    or probe.item_order != first.item_order):
+                return None
+        return probes
+
+    @property
+    def declared_items(self) -> Optional[int]:
+        probes = self._declared_streams()
+        return None if probes is None else probes[0].declared_items
+
+    @property
+    def item_order(self) -> List[str]:
+        probes = self._declared_streams()
+        return [] if probes is None else list(probes[0].item_order)
+
+    @property
+    def finished(self) -> Set[str]:
+        # Each worker runs only its share; the set of items this SESSION has
+        # finished is their union.  A single-main session degenerates to that
+        # main's own set.
+        out: Set[str] = set()
+        for probe in self.streams.values():
+            out |= probe.finished
+        return out
+
+    @property
+    def domain_progress(self) -> Dict[Tuple[str, str], Tuple[int, int]]:
+        # A nested domain belongs to whichever process ran that item, so at
+        # most one stream carries a given key in a distributed session.  Keep
+        # the furthest-advanced observation if two ever report the same key;
+        # the enclosing relay only ever compares it forward.
+        merged: Dict[Tuple[str, str], Tuple[int, int]] = {}
+        for probe in self.streams.values():
+            for key, value in probe.domain_progress.items():
+                current = merged.get(key)
+                if current is None or value[0] > current[0]:
+                    merged[key] = value
+        return merged
+
     def close(self) -> None:
         for probe in self.streams.values():
             try:
