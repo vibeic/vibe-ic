@@ -105,7 +105,12 @@ def _run(tmp_path: Path, *, base: str | None, cand: str | None,
     (tmp_path / "sel.txt").write_text(FILE + "\n")
     (tmp_path / "selb.txt").write_text(FILE + "\n" if base_selection else "")
     argv = [sys.executable, str(VERDICT),
-            "--base-sha", "a" * 40, "--head-sha", "b" * 40,
+            # `--base-tree` is REQUIRED (`landing_merge_verdict.py:1475`).
+            # Without it argparse exits before `--json` is ever written and
+            # every case here dies on a missing verdict.json — a fixture
+            # failure that reads like a program one.
+            "--base-sha", "a" * 40, "--base-tree", "c" * 40,
+            "--head-sha", "b" * 40,
             "--verified-sha", "b" * 40, "--rebase-status", "ok",
             "--expected-tree", "t" * 40, "--verified-tree", "t" * 40,
             "--land-log", str(tmp_path / "land.log"),
