@@ -1391,6 +1391,120 @@ def _unbind() -> None:
     G.clear_flow_caches()
 
 
+@contextlib.contextmanager
+def _corpus_shaped_clone():
+    """A throwaway clone shaped like `vibeic/benchmark-data`, carrying a record.
+
+    Real git, and the cell path really is `ic/<design>/v<version>_<PDK>/` —
+    both are load-bearing. `_published_corpus.corpus_root` refuses a pointer
+    that names no cell of that shape, and `record_roots` admits a record only
+    when `git ls-tree -r HEAD` carries it, so a plain directory of files would
+    let this control pass without exercising either rule.
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="d7corpus_"))
+    try:
+        env = {**os.environ, **_GIT_ENV}
+
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=str(tmp), check=True,
+                                  capture_output=True, env=env)
+
+        cell = tmp / "ic" / "probe_design" / "v0.0.0_probe"
+        rec = cell / R.RECORD_REL
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        rec.write_text(json.dumps({"schema": SWL.SCHEMA}) + "\n")
+        git("init", "-q")
+        git("add", "--", str(rec.relative_to(tmp)))
+        git("commit", "-q", "-m", "corpus probe")
+        yield tmp, "ic/probe_design/v0.0.0_probe"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_the_record_reader_searches_where_the_records_NOW_LIVE(monkeypatch):
+    """THE GUARD for the corpus move, which silently emptied this binding.
+
+    Every root that carries a ``reports/write_ledger.json`` is a PUBLISHED
+    CELL, and v1.10.56 moved the published cells to ``vibeic/benchmark-data``.
+    :func:`matrix_d7_write_record.record_roots` went on searching the plugin
+    repository ALONE, so on every checkout of main it returned ``()``: W2's
+    OBSERVED producer oracle was dead, and the sentence published onto every
+    dimension-7 cell said
+
+        no run root in this commit carries a tracked reports/write_ledger.json,
+        so W2's producer oracle is the AST alone — exactly as it was before
+        this binding
+
+    which a reader can only take as a fact about THE FLOW. It was a fact about
+    where the records had been moved to, and nothing said so.
+
+    WHY THIS IS NOT BOOKKEEPING. MEASURED on the shipped corpus: with it
+    searched, ``benchmark-data/ic/spm/v1.9.96_gf180mcuD``'s record promotes
+    ``reports/phase3/cmp_fill_emit.json`` — the exact finding the ``34/d7``
+    waiver names, and the reason that cell is waived. With the corpus
+    unsearched the finding vanishes, the strict xfail XPASSes, and
+    ``test_waivers_meet_the_registry_standard`` reports "waivers whose step has
+    no findings — remove them: ['34/d7']". Deleting it on that evidence would
+    have retired a live waiver because nobody could read the evidence for it,
+    which is the precise failure the three-state rule exists to prevent.
+
+    THE POINTER CHANGES WHICH COMMIT IS READ, NEVER WHETHER TRACKEDNESS
+    DECIDES. The probe carries the record COMMITTED; the negative half below
+    carries the identical bytes UNCOMMITTED and must not be admitted. #527's
+    rule — a cell's colour may not be a property of the host — survives
+    intact, because what is admissible inside the pointed-at tree is still
+    decided by ``git ls-tree``.
+    """
+    with _corpus_shaped_clone() as (clone, cell_rel):
+        monkeypatch.setenv("VIBE_IC_BENCHMARK_DATA", str(clone))
+        _unbind()
+        labels = [r.label for r in R.record_roots()]
+        assert labels == [f"benchmark-data/{cell_rel}"], (
+            f"the record reader did not find the record in the corpus it was "
+            f"pointed at: {labels}. The published cells left this repository "
+            f"in v1.10.56; a reader that searches only the plugin tree reports "
+            f"the flow as recordless on every checkout of main.")
+
+        # ONE SPELLING. The pin, the docstrings and every promotion count are
+        # written `benchmark-data/ic/...`; inside the clone the same root is
+        # `ic/...`. Reconciled in the reader, once, or a root would read as two.
+        assert all(x.startswith("benchmark-data/") for x in labels), labels
+
+        # NEGATIVE HALF — trackedness still decides, so the pointer cannot be
+        # used to smuggle an uncommitted record into a cell's colour.
+        stray = clone / "ic" / "probe_design" / "v0.0.0_probe2" / R.RECORD_REL
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text(json.dumps({"schema": SWL.SCHEMA}) + "\n")
+        _unbind()
+        assert [r.label for r in R.record_roots()] == [
+            f"benchmark-data/{cell_rel}"], (
+            "an UNCOMMITTED record in the pointed-at corpus was admitted; "
+            "`git clean -xdf` must not be able to change a cell's colour")
+    _unbind()
+
+
+def test_an_unoffered_corpus_and_a_recordless_flow_are_DIFFERENT_sentences(
+        monkeypatch):
+    """The degrade note a reader acts on must name which absence happened.
+
+    "The flow leaves no record" is answered by publishing one. "No corpus was
+    offered" is answered by setting a pointer. Until the corpus was searched at
+    all these came out as ONE sentence — the first one — and it was the wrong
+    one on every checkout of main. A reader who believed it would have gone
+    looking for a missing emitter.
+    """
+    monkeypatch.delenv("VIBE_IC_BENCHMARK_DATA", raising=False)
+    _unbind()
+    if R.record_roots():
+        pytest.skip(
+            "this checkout carries published cells in-tree, so the unoffered-"
+            "corpus branch is not reachable here")
+    notes = " ".join(R.binding_notes())
+    assert "no corpus was offered" in notes, notes
+    assert "NOT because the flow leaves no record" in notes, notes
+    _unbind()
+
+
 def test_d7_a_run_record_promotes_a_write_the_ast_cannot_see(monkeypatch):
     """THE CONTROL for "no Python program writes it" == "the flow does not".
 

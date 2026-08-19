@@ -254,6 +254,10 @@ from typing import Dict, List, Optional, Tuple
 from matrix_63x8 import flowref as F
 
 import _plugin_tree
+#: Where the published cells went (v1.10.56). Imported for
+#: :func:`corpus_root` alone — the ONE spelling of
+#: `$VIBE_IC_BENCHMARK_DATA` this suite uses. See :func:`_search_bases`.
+import _published_corpus
 
 if str(F.PROGRAMS_DIR) not in sys.path:
     sys.path.insert(0, str(F.PROGRAMS_DIR))
@@ -381,34 +385,93 @@ def tracked_at_head(root: Path) -> frozenset:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Discovery — from the commit, never from the machine
+# Discovery — from A commit, never from the machine
 # ──────────────────────────────────────────────────────────────────────
+#: What the published corpus was CALLED while it lived in this repository.
+#: Spelled the same as :data:`_corpus_location.CANONICAL_CORPUS_NAME`, and for
+#: the reason stated there: the pointer names a clone whose ROOT is that tree,
+#: so a root recorded as ``benchmark-data/ic/<design>/<cell>`` before v1.10.56
+#: is ``ic/<design>/<cell>`` inside the clone. The two spellings are reconciled
+#: HERE, once, so a label never depends on which side of the move produced it.
+CANONICAL_CORPUS_NAME = "benchmark-data"
+
+
+def _search_bases() -> Tuple[Tuple[Path, str], ...]:
+    """``(tree, label prefix)`` for every tree whose COMMIT may carry a record.
+
+    TWO TREES, BECAUSE THE RECORDS LEFT THIS ONE
+    ============================================
+    Every root that carries a ``reports/write_ledger.json`` is a PUBLISHED
+    CELL, and v1.10.56 moved the published cells to ``vibeic/benchmark-data``.
+    Searching only :func:`_plugin_tree.repo_root` therefore returns ``()`` on
+    every checkout of main FOR A REASON THAT IS NOT A FACT ABOUT THE FLOW —
+    the records exist, they are tracked, they are simply tracked in the other
+    repository. That silent emptying is what this function exists to end: it
+    left W2's OBSERVED producer oracle dead while
+    :func:`binding_notes` reported "no run root in this commit carries a
+    tracked record ... exactly as it was before this binding", a sentence a
+    reader can only read as a property of the flow.
+
+    THIS IS NOT THE ``$HOME`` SEARCH #527 REMOVED. The corpus tree is named by
+    ``$VIBE_IC_BENCHMARK_DATA`` through :func:`_published_corpus.corpus_root`,
+    the one spelling the rest of the suite uses, and what is admissible inside
+    it is still decided by ``git ls-tree`` — so the population remains a
+    property of A COMMIT (the corpus repository's) rather than of a directory
+    walk, and two checkouts of the same pair of commits still agree. What a
+    pointer can change is WHICH corpus commit is read, never whether an
+    untracked file counts.
+
+    A BROKEN POINTER STILL RAISES. ``corpus_root()`` raises
+    ``CorpusPointerBroken`` when somebody named a corpus and was wrong, and
+    that is deliberately not caught here: "you said where it is and it is not
+    there" must never be rendered as "there is no corpus".
+    """
+    bases: List[Tuple[Path, str]] = []
+    repo = _plugin_tree.repo_root()
+    if repo is not None:
+        bases.append((repo, ""))
+    corpus = _published_corpus.corpus_root()
+    if corpus is not None:
+        bases.append((Path(corpus), CANONICAL_CORPUS_NAME + "/"))
+    return tuple(bases)
+
+
 @lru_cache(maxsize=1)
 def record_roots() -> Tuple[RecordRoot, ...]:
     """Every run root whose ``reports/write_ledger.json`` is TRACKED AT HEAD.
 
-    Derived from ``git ls-tree``, so the population is a property of the
-    commit and is identical on every checkout. There is no ``$HOME`` search,
-    no env-var override and no manifest of machine paths — #527 removed all
-    three from dimension 3 and re-introducing any of them here would make a
-    dimension-7 cell's colour a property of the host.
+    Derived from ``git ls-tree`` over each of :func:`_search_bases`, so the
+    population is a property of the commits involved and is identical on every
+    checkout of them. There is no ``$HOME`` search and no manifest of machine
+    paths — #527 removed both from dimension 3 and re-introducing either here
+    would make a dimension-7 cell's colour a property of the host.
 
-    Empty on a flattened install cache (no repo root, no git work tree), which
-    is the correct answer there: nothing is admissible, everything degrades.
+    Empty on a flattened install cache (no repo root, no git work tree) with no
+    corpus pointed at, which is the correct answer there: nothing is
+    admissible, everything degrades.
+
+    DE-DUPLICATED BY LABEL, because the two bases can be the same tree. A
+    checkout predating v1.10.56 carries the corpus in-tree AND may have the
+    pointer aimed at that same directory; without this the root would be
+    consulted twice and every observation it carries would be counted twice.
     """
-    repo = _plugin_tree.repo_root()
-    if repo is None:
-        return ()
     out: List[RecordRoot] = []
-    for rel in sorted(tracked_at_head(repo)):
-        if not rel.endswith("/" + RECORD_REL):
-            continue
-        root_rel = rel[: -(len(RECORD_REL) + 1)]
-        if not root_rel:
-            continue
-        cand = repo / root_rel
-        if cand.is_dir():
-            out.append(RecordRoot(rel=root_rel, path=cand))
+    seen: set = set()
+    for base, prefix in _search_bases():
+        for rel in sorted(tracked_at_head(base)):
+            if not rel.endswith("/" + RECORD_REL):
+                continue
+            root_rel = rel[: -(len(RECORD_REL) + 1)]
+            if not root_rel:
+                continue
+            cand = base / root_rel
+            if not cand.is_dir():
+                continue
+            label = prefix + root_rel
+            if label in seen:
+                continue
+            seen.add(label)
+            out.append(RecordRoot(rel=label, path=cand))
     return tuple(out)
 
 
@@ -531,10 +594,28 @@ def _index() -> Tuple[Dict[str, Tuple[Observation, ...]],
 
     roots = record_roots()
     if not roots:
-        notes.append(
-            "no run root in this commit carries a tracked "
-            f"{RECORD_REL}, so W2's producer oracle is the AST alone — "
-            "exactly as it was before this binding")
+        # TWO ABSENCES, AND COLLAPSING THEM IS THE DEFECT THIS SENTENCE FIXES.
+        # Until the corpus was searched at all, both came out as "no run root
+        # in this commit carries a tracked record ... exactly as it was before
+        # this binding" — a sentence about the FLOW, published on every cell,
+        # while the true fact was that the records had moved to another
+        # repository and nobody had pointed at it. A reader cannot act on the
+        # first without knowing which one it is: one is answered by publishing
+        # a record, the other by setting a pointer.
+        searched = [str(b) for b, _ in _search_bases()]
+        if _published_corpus.corpus_root() is None:
+            notes.append(
+                f"no {RECORD_REL} was READABLE: the published cells that carry "
+                f"one live in vibeic/benchmark-data and no corpus was offered "
+                f"({_published_corpus.CORPUS_ENV} is unset and this checkout "
+                f"carries no cell). W2's producer oracle is the AST alone — "
+                f"NOT because the flow leaves no record, but because none was "
+                f"in reach. Searched: {searched}")
+        else:
+            notes.append(
+                f"no run root in the commits searched carries a tracked "
+                f"{RECORD_REL}, so W2's producer oracle is the AST alone — "
+                f"exactly as it was before this binding. Searched: {searched}")
         return {}, tuple(notes), rejections
 
     for root in roots:
