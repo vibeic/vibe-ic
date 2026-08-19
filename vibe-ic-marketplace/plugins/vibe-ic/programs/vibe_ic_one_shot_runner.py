@@ -161,24 +161,35 @@ def _capture_pdk_revision(project: Path, container: str) -> Dict[str, Any]:
     try:
         import pdk_revision_resolve as _prr
         fs = _prr.Fs(container)
-        trees, scanned = _prr.candidate_trees_from_run(project, fs)
+        ev = _prr.run_pdk_evidence(project, fs)
+        trees, scanned = ev["trees"], ev["logs_scanned"]
         resolved = [_prr.resolve_tree(fs, t) for t in trees]
         rec = _prr.build_record(
             resolved, f"container:{container}", "run tool logs",
             note=(f"derived from {scanned} tool log(s) under {project}; "
-                  f"{len(trees)} tree(s) offered a declared-revision artefact"))
+                  f"{ev['libraries_loaded']} absolute library path(s) loaded; "
+                  f"{len(trees)} tree(s) offered a declared-revision artefact"),
+            evidence=ev)
         if not trees:
             rec["reason"] = (
                 f"no PDK tree was derivable from this run: {scanned} tool "
-                f"log(s) scanned, none naming an absolute library path under a "
-                f"tree that declares a revision. A run with no physical "
-                f"implementation is in this state legitimately; a run that "
-                f"placed and routed is not.")
+                f"log(s) scanned, {ev['libraries_loaded']} absolute library "
+                f"path(s) named, none under a tree that declares a revision. A "
+                f"run with no physical implementation is in this state "
+                f"legitimately; a run that placed and routed is not. The "
+                f"record's `determination` says which of the two this is.")
     except Exception as exc:                                # noqa: BLE001
+        # The except path carries the SAME machine fields as the happy path.
+        # A record missing `evidence`/`determination` would read to a gate as a
+        # record whose numbers are simply absent, which is the state this
+        # program is here to stop being ambiguous about.
         rec = {"schema": 1,
                "resolved": False,
                "revision": None,
                "trees": [],
+               "evidence": {"logs_scanned": None, "libraries_loaded": None,
+                            "trees_offered": 0},
+               "determination": "NOT_DETERMINED",
                "read_in": f"container:{container}",
                "derived_from": "run tool logs",
                "reason": f"the PDK revision could not be resolved: "

@@ -52,10 +52,45 @@ WHAT A MANIFEST RECORDS, from the issue's own list:
                     different total is otherwise indistinguishable from a drop
     plugin_version  what was measured
     image           the image reference actually measured, not the one intended
+    pdk_revision    the PROCESS half of the claim `image` half-makes — see below
     scorer_argv     verbatim, so the invocation can be repeated
 
-Exit codes: 0 PASS, 1 the run is missing what a later comparison needs, 2 the
-question could not be put (unreadable path, no scorer output supplied).
+THE PDK REVISION — BLOCKING (LibreLane GAP 5, and ours)
+=======================================================
+`image` records WHICH TOOLS ran. Nothing recorded WHICH PROCESS DATA they ran
+against, and a benchmark number is a claim about both. MEASURED before the
+field was added, over the published evaluation corpus as checked out on the
+host this was written on (a snapshot taken before the corpus moved to its own
+repository, so it is a lower bound on the population, not the current total):
+
+    62 evaluation run directories   0 carry a PDK-revision record
+    62 of those                     kept no tool log at all, so the question
+                                    cannot even be asked of the archive
+    62 of those                     carry no RUN_MANIFEST.json either
+    a manifest with no PDK field    `check` returned rc=0 PASS
+
+That last line is the defect. `tools/gatekeeper-land.sh` runs this program's
+`check` over `benchmark-data` on every landing, and it is the ONLY gate on that
+path that reads a scored run's own record — so a number could reach the
+published corpus with its toolchain named and its process anonymous, and the
+gate said PASS. (The sign-off-cell channel is guarded separately, by
+`benchmark_evidence_publish`; the scored-run channel was not guarded at all.)
+
+The value is READ FROM THE RUN, never from a flag — `resolve_run_pdk_revision`
+says why at length, and there is deliberately no option that supplies one.
+"Could not determine" makes `emit` REFUSE TO WRITE and makes `check` exit 1; it
+is never written as `unknown`, which would pass every structural check while
+re-creating the gap one layer up.
+
+Scoped like the rest of this program: a NEW number must arrive attributable.
+Nothing is applied retroactively to the corpus already published — every one of
+those 62 runs already fails `check` for carrying no manifest at all (measured:
+0 PASS / 62 FAIL on the pre-change program), so this adds no refusal to any of
+them. The refusals it adds are to manifests that would otherwise have passed.
+
+Exit codes: 0 PASS, 1 the run is missing what a later comparison needs
+(including a PDK revision it cannot name), 2 the question could not be put
+(unreadable path, no scorer output supplied).
 """
 from __future__ import annotations
 
@@ -180,7 +215,9 @@ def build_manifest(verdicts: Dict[str, str],
                    plugin_version: str = "",
                    image: str = "",
                    scorer_argv: Optional[List[str]] = None,
-                   scorer_output: Optional[Path] = None) -> Dict[str, Any]:
+                   scorer_output: Optional[Path] = None,
+                   pdk_revision: Optional[Dict[str, Any]] = None
+                   ) -> Dict[str, Any]:
     counts: Dict[str, int] = {}
     for v in verdicts.values():
         counts[v] = counts.get(v, 0) + 1
@@ -199,6 +236,15 @@ def build_manifest(verdicts: Dict[str, str],
         },
         "plugin_version": plugin_version,
         "image": image,
+        # THE PROCESS HALF OF THE SAME CLAIM `image` MAKES. `image` is the
+        # toolchain digest and it has been here since the beginning; the PDK
+        # revision sits beside it because a number is a claim about a design
+        # measured with THOSE TOOLS against THAT PROCESS, and half a claim
+        # cannot be re-derived. Carried verbatim from the resolver's own
+        # record — never re-rendered, never summarised to a bare string — so a
+        # reader gets the trees, the artefact each revision came from, the
+        # content anchors and the evidence counts, not just a token to trust.
+        "pdk_revision": pdk_revision,
         "scorer_argv": list(scorer_argv or []),
         "scorer_output": str(scorer_output) if scorer_output else None,
     }
@@ -207,7 +253,99 @@ def build_manifest(verdicts: Dict[str, str],
 #: Every field a later comparison needs. Named here so the checker and the
 #: emitter cannot drift into different notions of "complete".
 REQUIRED_FIELDS = ("verdicts", "dataset", "plugin_version", "image",
-                   "scorer_argv")
+                   "pdk_revision", "scorer_argv")
+
+
+def _prr():
+    """The resolver module. Imported lazily and by path so this program keeps
+    working as a script from any cwd."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import pdk_revision_resolve as mod
+    return mod
+
+
+def resolve_run_pdk_revision(run_dir: Path, container: Optional[str] = None
+                             ) -> Dict[str, Any]:
+    """The run's PDK-revision record, READ from the run and never from a flag.
+
+    THERE IS NO `--pdk-revision` OPTION ON THIS PROGRAM AND THERE MUST NOT BE.
+    A revision typed on the command line is a record of what the operator
+    believed, which is the same class of artefact as `--pdk <name>`,
+    `env_PDK_ROOT` and the cell's own directory name — every one of which this
+    repo already had, and none of which says which revision the tools opened.
+    So the value comes from one of exactly two places, both of them the run:
+
+      run record   `<run>/reports/pdk_revision.json`, written at finalize by
+                   `vibe_ic_one_shot_runner` while the tree was still live.
+                   PREFERRED, because that is the moment the evidence exists.
+      derived      recomputed here from the run's own tool logs when the run
+                   left no record. Sound only while the run tree is intact,
+                   and that caveat is why it is second rather than first.
+
+    Which one was used is recorded in the returned record as `source`, because
+    "read from the run's own record" and "recomputed by the publisher" are
+    different strengths of evidence and a reader is owed the difference.
+    """
+    prr = _prr()
+    rec, err = prr.load_record(Path(run_dir))
+    if rec is not None:
+        rec = dict(rec)
+        rec["source"] = f"run record ({prr.RECORD_REL})"
+        return rec
+    fs = prr.Fs(container)
+    ev = prr.run_pdk_evidence(Path(run_dir), fs)
+    resolved = [prr.resolve_tree(fs, t) for t in ev["trees"]]
+    rec = prr.build_record(
+        resolved,
+        f"container:{container}" if container else "host",
+        "run tool logs",
+        note=(f"{prr.RECORD_REL} absent ({err}); derived at manifest-emit "
+              f"time from {ev['logs_scanned']} tool log(s) under {run_dir}"),
+        evidence=ev)
+    rec["source"] = "derived at manifest-emit time from the run's tool logs"
+    return rec
+
+
+def pdk_gaps(man: Any) -> List[str]:
+    """The PDK half of :func:`manifest_gaps`. **BLOCKING** — a non-empty return
+    makes `check` exit 1 and the landing gate that runs it refuse the push.
+
+    `record_gaps` is IMPORTED from the program that writes the record, so the
+    writer and this reader cannot drift into two different notions of
+    "recorded" — the same rule `benchmark_evidence_publish` follows.
+
+    `no_pdk_read_ok=True`, AND THE REASON IS A MEASURED PROPERTY OF THIS
+    POPULATION rather than a softening. A scored benchmark run is not a
+    sign-off cell: some runs synthesise against a library and some are pure RTL
+    simulation that opens no process data at all. Demanding a revision from the
+    second kind refuses a run for a property it correctly does not have. What
+    is admitted is narrow and evidence-bound — the run's tools were observed
+    (`logs_scanned > 0`) and were observed to open nothing. "Nobody looked"
+    (`logs_scanned == 0`) is admitted by no flag and is the gap this exists to
+    stop.
+
+    If the resolver ever stops carrying `record_gaps`, this returns a gap
+    rather than passing: a checker that could not put its question has not
+    passed it.
+    """
+    if not isinstance(man, dict):
+        return []
+    rec = man.get("pdk_revision")
+    if rec is None:
+        return ["pdk_revision: the run names no PDK revision, so the numbers "
+                "in it cannot be re-derived against the process data they were "
+                "measured on. `image` already records the toolchain half of "
+                "the same claim; this is the other half."]
+    try:
+        prr = _prr()
+    except Exception as exc:                                # noqa: BLE001
+        return [f"pdk_revision: could not load pdk_revision_resolve to check "
+                f"the record ({type(exc).__name__}: {exc}) — a check that "
+                f"could not look has not passed"]
+    gaps = prr.record_gaps(rec, no_pdk_read_ok=True)
+    return [f"pdk_revision.{g}" for g in gaps]
 
 
 def manifest_gaps(man: Any) -> List[str]:
@@ -227,6 +365,7 @@ def manifest_gaps(man: Any) -> List[str]:
         gaps.append("plugin_version: the measurement names no subject")
     if not man.get("image"):
         gaps.append("image: the toolchain actually measured is unrecorded")
+    gaps.extend(pdk_gaps(man))
     if not man.get("scorer_argv"):
         gaps.append("scorer_argv: the invocation cannot be repeated")
     if isinstance(v, dict) and v:
@@ -252,9 +391,11 @@ def check_run(run_dir: Path) -> Tuple[int, str]:
     if gaps:
         return 1, f"{man_path}: incomplete\n  - " + "\n  - ".join(gaps)
     n = len(man["verdicts"])
+    rec = man.get("pdk_revision") or {}
+    pdk = rec.get("revision") or rec.get("determination") or "?"
     return 0, (f"{man_path}: PASS — {n} per-problem verdict(s), dataset "
                f"sha256:{man['dataset']['sha256'][:12]}, "
-               f"plugin {man['plugin_version']}")
+               f"plugin {man['plugin_version']}, pdk {pdk}")
 
 
 #: A run directory PUBLISHES A NUMBER when it carries an aggregate someone can
@@ -334,6 +475,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     e.add_argument("--image", default="")
     e.add_argument("--scorer-argv", default="",
                    help="the invocation, verbatim")
+    e.add_argument("--container",
+                   help="resolve the run's PDK tree inside this container, "
+                        "when the record has to be derived because the run "
+                        "left none. There is deliberately no flag that SUPPLIES "
+                        "a revision: see resolve_run_pdk_revision.")
 
     c = sub.add_parser("check", help="does this run leave a name set behind?")
     c.add_argument("run_dir", nargs="?")
@@ -396,6 +542,7 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"to another empty one, so two unrelated runs would look "
               f"identical.", file=sys.stderr)
         return 2
+    pdk_rec = resolve_run_pdk_revision(run_dir, a.container)
     man = build_manifest(
         verdicts,
         dataset=Path(a.dataset) if a.dataset else None,
@@ -403,13 +550,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         image=a.image,
         scorer_argv=a.scorer_argv.split() if a.scorer_argv else [],
         scorer_output=so,
+        pdk_revision=pdk_rec,
     )
+    # REFUSE TO WRITE, rather than write a manifest that says "unknown" where
+    # the revision goes. The two are not close: a manifest carrying the word
+    # `unknown` in this field passes every structural check, travels into the
+    # published corpus, and re-creates the exact gap one layer up while looking
+    # closed. A run that cannot say which process it was measured against gets
+    # no manifest at all, and the reason is printed here where the operator can
+    # still act on it — the run tree is intact at emit time and gone later.
+    gaps = pdk_gaps(man)
+    if gaps:
+        print(f"REFUSED: {run_dir} cannot record which PDK revision it was "
+              f"measured against, so no manifest was written.\n  - "
+              + "\n  - ".join(gaps)
+              + f"\n  Determination: {pdk_rec.get('determination')}. "
+                f"{pdk_rec.get('reason') or ''}".rstrip()
+              + "\n  This is NOT waivable: there is no flag that supplies a "
+                "revision, because a revision that came from a flag is a "
+                "record of the REQUEST — which is what every other PDK field "
+                "in this repo already was.", file=sys.stderr)
+        return 1
     run_dir.mkdir(parents=True, exist_ok=True)
     out = run_dir / MANIFEST_NAME
     out.write_text(json.dumps(man, indent=2, ensure_ascii=False) + "\n",
                    encoding="utf-8")
     counts = ", ".join(f"{k}={v}" for k, v in sorted(man["counts"].items()))
     print(f"wrote {out} — {man['total']} problem(s) ({counts})")
+    print(f"  pdk revision: {pdk_rec.get('revision')} "
+          f"[{pdk_rec.get('determination')}] via {pdk_rec.get('source')}")
     return 0
 
 

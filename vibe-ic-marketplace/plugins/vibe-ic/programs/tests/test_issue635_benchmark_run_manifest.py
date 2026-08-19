@@ -100,9 +100,20 @@ def test_a_missing_dataset_digests_to_None_not_to_a_hash_of_nothing():
 
 # ── the checker names what is missing ──────────────────────────────────────
 def _man(**over):
+    # `pdk_revision` joined the definition of "complete" when the manifest
+    # started carrying the PROCESS half of the claim `image` half-made. The
+    # value here is the shape the resolver emits for a run whose tools were
+    # observed and opened no process data — the admissible third state, which
+    # is what a pure-RTL scored run legitimately is. See
+    # test_w6_the_run_manifest_names_its_process.py.
     base = {"verdicts": {"a": "pass", "b": "fail"}, "total": 2,
             "dataset": {"path": "d.jsonl", "sha256": "0" * 64},
             "plugin_version": "1.9.51", "image": "ghcr.io/x:1",
+            "pdk_revision": {"schema": 1, "resolved": False, "revision": None,
+                             "trees": [], "determination": "NO_PDK_READ",
+                             "evidence": {"logs_scanned": 2,
+                                          "libraries_loaded": 0,
+                                          "trees_offered": 0}},
             "scorer_argv": ["run_benchmark.py", "--all"]}
     base.update(over)
     return base
@@ -236,6 +247,13 @@ def test_the_same_run_PASSES_once_it_carries_the_name_set(tmp_path):
     so.write_text(_j.dumps({"total": 302, "passed": 202,
                             "detail": {f"p{i:03d}": {"pass": i < 202}
                                        for i in range(302)}}), encoding="utf-8")
+    # A RUN THAT RAN LEAVES A TOOL LOG. This fixture had none, and `emit` now
+    # refuses a run whose process cannot be determined — with no log there is
+    # no way to tell "this scored pure RTL simulation" from "the evidence was
+    # thrown away", and writing the friendlier of the two would be the gap.
+    # A simulation log names no library, which is what a CVDP-shaped run is.
+    (d / "sim.log").write_text("simulation finished; 302 designs\n",
+                               encoding="utf-8")
     cwd = os.getcwd()
     try:
         os.chdir(tmp_path)

@@ -156,6 +156,27 @@ RECORD_REL = "reports/pdk_revision.json"
 
 SCHEMA = 1
 
+# --- determination ----------------------------------------------------------
+#: The THREE states a run's PDK question can end in, as a MACHINE field on the
+#: record. Before this they existed only inside a prose `note` and a `reason`
+#: sentence, and two of them rendered identically to any reader that gates on
+#: the record: `resolved: false`, `revision: null`, `trees: []`.
+#:
+#: They are not the same fact, and the difference is the whole point of this
+#: program one layer up. A run whose tools loaded NO library from any tree read
+#: no process data — there is no revision to name and none is owed. A run that
+#: kept no tool log read something and threw away the only evidence of what.
+#: Collapsing the second into the first is this repo's named failure mode: an
+#: unmeasured thing reading as a measured zero.
+#:
+#: MEASURED, and this is why the distinction had to become a field: over the 62
+#: published evaluation run directories in the corpus, **62 kept no tool log at
+#: all**. Every one of them is `NOT_DETERMINED`, and a rule that read "no
+#: library found" as "no PDK used" would have signed off all 62 as PDK-free.
+RESOLVED = "RESOLVED"
+NO_PDK_READ = "NO_PDK_READ"
+NOT_DETERMINED = "NOT_DETERMINED"
+
 # --- source ids -------------------------------------------------------------
 TREE_PATH = "TREE_PATH"
 SOURCES_FILE = "SOURCES_FILE"
@@ -526,14 +547,26 @@ def _has_file_source(fs: "Fs", d: str) -> bool:
     return False
 
 
-def candidate_trees_from_run(run: Path, fs: Fs, cap: int = 400
-                             ) -> Tuple[List[str], int]:
-    """PDK tree roots derived from the libraries the run's tools actually read.
+def run_pdk_evidence(run: Path, fs: Fs, cap: int = 400) -> Dict[str, Any]:
+    """What this run's own artefacts say about the PDK it read.
 
-    Returns `(trees, logs_scanned)`. From each loaded library the walk goes UP
-    to the first directory carrying a FILE-based declared source; failing that
-    it takes the content-addressed install root the path itself names. A
-    library under neither yields no tree — better than naming the wrong one.
+    Returns `{"trees", "logs_scanned", "libraries_loaded"}`. From each loaded
+    library the walk goes UP to the first directory carrying a FILE-based
+    declared source; failing that it takes the content-addressed install root
+    the path itself names. A library under neither yields no tree — better than
+    naming the wrong one.
+
+    `libraries_loaded` IS THE FIELD THAT SEPARATES TWO STATES THAT USED TO LOOK
+    IDENTICAL, and it is why this function exists rather than the two-value
+    `candidate_trees_from_run` it replaces. `trees == []` was reported the same
+    way whether the run loaded no library at all (nothing to name) or loaded
+    libraries from a tree that declares no revision (the gap). Only the second
+    is a finding, and only the first can ever be allowed to satisfy a gate.
+
+    `logs_scanned == 0` is a THIRD state and the one that must never be read as
+    either: a run that kept no tool log did not answer the question, it
+    destroyed the evidence. Measured over the published corpus, that is 62 of
+    62 evaluation run directories.
     """
     libs: List[str] = []
     scanned = 0
@@ -587,16 +620,46 @@ def candidate_trees_from_run(run: Path, fs: Fs, cap: int = 400
         chosen = found or stop_at
         if chosen and chosen not in trees:
             trees.append(chosen)
-    return trees, scanned
+    return {"trees": trees, "logs_scanned": scanned,
+            "libraries_loaded": len(libs)}
+
+
+def candidate_trees_from_run(run: Path, fs: Fs, cap: int = 400
+                             ) -> Tuple[List[str], int]:
+    """`(trees, logs_scanned)` — the two-value view of :func:`run_pdk_evidence`.
+
+    Kept because callers that only want the trees should not have to care that
+    the evidence grew a third field.
+    """
+    ev = run_pdk_evidence(run, fs, cap)
+    return ev["trees"], ev["logs_scanned"]
 
 
 # ---------------------------------------------------------------------------
 # Record.
 # ---------------------------------------------------------------------------
 
+def determination_of(rec: Dict[str, Any]) -> str:
+    """Which of the three states this record is in. Derived, never asserted.
+
+    Read from the record's OWN numbers so a hand-edited `determination` cannot
+    make a record say something its evidence does not: every reader recomputes
+    this and compares.
+    """
+    if rec.get("resolved") is True:
+        return RESOLVED
+    ev = rec.get("evidence") or {}
+    if (ev.get("logs_scanned") or 0) > 0 and not ev.get("libraries_loaded") \
+            and not rec.get("trees"):
+        return NO_PDK_READ
+    return NOT_DETERMINED
+
+
 def build_record(trees: Sequence[Dict[str, Any]], read_in: str,
-                 derived_from: str, note: str = "") -> Dict[str, Any]:
+                 derived_from: str, note: str = "",
+                 evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     resolved = [t for t in trees if t.get("resolved")]
+    ev = dict(evidence or {})
     rec: Dict[str, Any] = {
         "_comment": ("The PDK revision this run signed off against, read from "
                      "the resolved tree rather than from the request. The "
@@ -606,6 +669,14 @@ def build_record(trees: Sequence[Dict[str, Any]], read_in: str,
         "resolved": bool(resolved) and len(resolved) == len(trees),
         "read_in": read_in,
         "derived_from": derived_from,
+        # WHAT WAS LOOKED AT, as numbers rather than as a sentence. A reader
+        # that gates on this record cannot otherwise tell "the run's tools
+        # opened no library" from "the run kept no log to say".
+        "evidence": {
+            "logs_scanned": ev.get("logs_scanned"),
+            "libraries_loaded": ev.get("libraries_loaded"),
+            "trees_offered": len(trees),
+        },
         "trees": list(trees),
     }
     if note:
@@ -621,10 +692,11 @@ def build_record(trees: Sequence[Dict[str, Any]], read_in: str,
         rec["reason"] = ("; ".join(
             f"{t.get('tree')}: {t.get('reason')}" for t in unresolved)
             or "no PDK tree could be identified for this run")
+    rec["determination"] = determination_of(rec)
     return rec
 
 
-def record_gaps(rec: Any) -> List[str]:
+def record_gaps(rec: Any, *, no_pdk_read_ok: bool = False) -> List[str]:
     """What is missing from a PDK-revision record. Empty means complete.
 
     Shared by the writer and by every reader that gates on it, so the two
@@ -632,9 +704,31 @@ def record_gaps(rec: Any) -> List[str]:
     `resolved: false`, or carries no revision, or carries a revision that is
     not a revision token, is INCOMPLETE — there is no spelling of "we could
     not tell" that satisfies this.
+
+    `no_pdk_read_ok` — DEFAULT FALSE, AND THE DEFAULT IS THE LOAD-BEARING PART.
+    A sign-off cell is a claim about a design measured against a process; it
+    ran a physical implementation and it owes a revision, so
+    `benchmark_evidence_publish` calls this with the default and nothing about
+    its behaviour changes. A SCORED BENCHMARK RUN is a different population:
+    some of its runs synthesise against a library and some are pure RTL
+    simulation that opens no process data at all, and demanding a revision from
+    the second kind would refuse a run for a property it correctly does not
+    have. Those callers pass True, which admits ONE extra state and only when
+    the record's OWN NUMBERS establish it:
+
+        logs_scanned > 0  and  libraries_loaded == 0  and  trees_offered == 0
+
+    i.e. the run's tools were observed, and were observed to open nothing. A
+    record that merely SAYS `determination: NO_PDK_READ` does not qualify —
+    :func:`determination_of` recomputes the state from the evidence, so the
+    word in the file is a rendering and never the authority. `logs_scanned == 0`
+    is never admitted under any flag: it is "nobody looked", which is the gap
+    this whole program exists to stop being written as a pass.
     """
     if not isinstance(rec, dict):
         return ["the PDK revision record is not an object"]
+    if no_pdk_read_ok and determination_of(rec) == NO_PDK_READ:
+        return []
     gaps: List[str] = []
     if rec.get("resolved") is not True:
         gaps.append("resolved is not true — "
@@ -690,14 +784,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     trees: List[str] = list(args.tree)
     derived_from = "--tree"
     note = ""
+    evidence: Optional[Dict[str, Any]] = None
     if args.from_run:
         run = Path(args.from_run)
         if not run.is_dir():
             print(f"pdk_revision_resolve: not a run directory: {run}",
                   file=sys.stderr)
             return 2
-        derived, scanned = candidate_trees_from_run(run, fs)
+        ev = run_pdk_evidence(run, fs)
+        derived, scanned = ev["trees"], ev["logs_scanned"]
+        evidence = ev
         note = (f"derived from {scanned} tool log(s) in {run}; "
+                f"{ev['libraries_loaded']} absolute library path(s) loaded; "
                 f"{len(derived)} tree(s) offered a declared-revision artefact")
         for t in derived:
             if t not in trees:
@@ -706,23 +804,33 @@ def main(argv: Optional[List[str]] = None) -> int:
             "run tool logs + --tree"
 
     if not trees:
-        rec = build_record([], read_in, derived_from, note)
-        rec["reason"] = (
-            "NOT DETERMINED — no PDK tree was given or derivable. "
-            + (note + ". " if note else "")
-            + "Either this run loaded no library from a tree that states its "
-              "own revision, or it kept no tool log. REMEDY: a staged PDK "
-              "under <run>/input/pdk/ is read as a tree, so give that tree a "
-              "root revision file of its own (`<component> <revision>`); a "
-              "revision typed into a config is the REQUEST again and is "
-              "deliberately not accepted here.")
+        rec = build_record([], read_in, derived_from, note, evidence)
+        # THE DISJUNCTION THIS USED TO PRINT IS NOW DECIDED. "Either the run
+        # loaded no library or it kept no log" is two different facts and the
+        # evidence separates them, so say which one happened.
+        if rec["determination"] == NO_PDK_READ:
+            rec["reason"] = (
+                f"NO PDK READ — {evidence['logs_scanned']} tool log(s) were "
+                f"scanned and none names an absolute library path, so this "
+                f"run opened no process data and owes no revision. This is a "
+                f"MEASURED absence, not a missing measurement.")
+        else:
+            rec["reason"] = (
+                "NOT DETERMINED — no PDK tree was given or derivable. "
+                + (note + ". " if note else "")
+                + "Either this run loaded a library from a tree that states no "
+                  "revision, or it kept no tool log to say. REMEDY: a staged "
+                  "PDK under <run>/input/pdk/ is read as a tree, so give that "
+                  "tree a root revision file of its own "
+                  "(`<component> <revision>`); a revision typed into a config "
+                  "is the REQUEST again and is deliberately not accepted here.")
         _emit(args.json, rec)
-        print("pdk_revision_resolve: rc=2 COULD NOT LOOK — " + rec["reason"],
-              file=sys.stderr)
+        print(f"pdk_revision_resolve: rc=2 {rec['determination']} — "
+              + rec["reason"], file=sys.stderr)
         return 2
 
     resolved = [resolve_tree(fs, t) for t in trees]
-    rec = build_record(resolved, read_in, derived_from, note)
+    rec = build_record(resolved, read_in, derived_from, note, evidence)
     _emit(args.json, rec)
 
     for t in resolved:
