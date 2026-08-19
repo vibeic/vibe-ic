@@ -334,6 +334,16 @@ _CP_VIOLATIONS_RE = re.compile(
 _CP_WARN_RE = re.compile(
     r"\b([A-Z0-9_]+?)_CHECK_PLACEMENT_WARN\b\s*:?[ \t]*(.*)")
 _CP_PASS_RE = re.compile(r"\b([A-Z0-9_]+?)_CHECK_PLACEMENT_PASS\b")
+# The two ship-time sites spelled their WARN differently before the count
+# existed: `SHIP_CP_WARN` / `SHIP_CVG_CP_WARN`, not `<SITE>_CHECK_PLACEMENT_WARN`.
+# Both were printed ONLY from inside `if {[catch {check_placement} e]}`, so the
+# line is present exactly when the call THREW — which is the placer refusing.
+# An ARCHIVED log can still carry that spelling, and reading it as "no verdict
+# recorded" would be a silent false NEGATIVE of the same shape this gate exists
+# to refuse. It is read like any other count-less WARN: NOT_DETERMINED, never
+# zero. MEASURED across the published run roots: no log carries this spelling,
+# so recognising it flips nothing today and only covers the archive.
+_CP_LEGACY_WARN_RE = re.compile(r"\b([A-Z0-9_]+?)_CP_WARN\b\s*:?[ \t]*(.*)")
 _COUNT_NOT_DETERMINED = "NOT_DETERMINED"
 
 
@@ -386,7 +396,8 @@ def _check_placement_verdicts(lines) -> dict:
             # READING of its own for a log that carries no count at all.
             if rec["readings"] == 0:
                 rec["count"] = "0"
-        for m in _CP_WARN_RE.finditer(line):
+        for m in list(_CP_WARN_RE.finditer(line)) + list(
+                _CP_LEGACY_WARN_RE.finditer(line)):
             site, detail = m.group(1), m.group(2).strip()
             rec = _rec(log, site)
             # Likewise: the WARN accompanies its own count line. It becomes the

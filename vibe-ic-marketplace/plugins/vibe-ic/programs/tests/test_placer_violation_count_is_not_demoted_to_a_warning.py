@@ -176,6 +176,48 @@ def test_a_legacy_bare_warn_with_no_count_still_fails(tmp_path):
     assert "DPL-0033" in _msg(tmp_path, "PLACER_REPORTED_VIOLATIONS")
 
 
+@pytest.mark.parametrize("marker,site", [
+    # the ship-time signoff repair...
+    ("SHIP_CP_WARN", "SHIP"),
+    # ...and the post-route convergence loop. Both spelled their WARN this way
+    # before the count existed, and neither spelling contains
+    # `_CHECK_PLACEMENT_WARN`, so a reader that keys only on the new grammar
+    # sees an archived log of either shape as "no verdict recorded".
+    ("SHIP_CVG_CP_WARN", "SHIP_CVG"),
+])
+def test_the_runners_older_ship_time_warn_spelling_is_not_read_as_silence(
+        tmp_path, marker, site):
+    """An ARCHIVED log may carry the ship-time sites' PREVIOUS marker names.
+
+    Both were printed only from inside `if {[catch {check_placement} e]}`, so
+    the line exists exactly when the call THREW -- the placer refusing. Reading
+    that as "this run records no placer verdict" would be a silent false
+    NEGATIVE of the very shape this gate exists to refuse, so it is read like
+    any other count-less WARN: NOT_DETERMINED, never zero.
+    """
+    _mk(tmp_path, [f"{marker}: DPL-0033 detailed placement checks failed"])
+    verdict, rc, rules, summary = _run(tmp_path)
+    assert (verdict, rc) == ("FAIL", 1)
+    assert "PLACER_REPORTED_VIOLATIONS" in rules
+    # the SITE must survive the parse -- a verdict attributed to the wrong site
+    # is not the tool's verdict either
+    assert summary["check_placement_sites"] == {site: "NOT_DETERMINED"}
+    assert summary["check_placement_violations"] == "NOT_DETERMINED"
+    assert "DPL-0033" in _msg(tmp_path, "PLACER_REPORTED_VIOLATIONS")
+
+
+def test_the_older_spelling_does_not_fire_on_a_clean_run(tmp_path):
+    """The positive control for the line above: recognising the old spelling
+    must not turn a run that never printed it red. MEASURED across the
+    published run roots -- no log carries the old spelling, so this widening
+    flips nothing today and covers only the archive."""
+    _mk(tmp_path, ["SHIP_CHECK_PLACEMENT_VIOLATIONS 0",
+                   "SHIP_CVG_CHECK_PLACEMENT_VIOLATIONS 0"])
+    verdict, rc, _rules, summary = _run(tmp_path)
+    assert (verdict, rc) == ("PASS", 0)
+    assert summary["check_placement_sites"] == {"SHIP": "0", "SHIP_CVG": "0"}
+
+
 def test_not_determined_is_never_reported_as_zero(tmp_path):
     _mk(tmp_path, ["SHIP_CHECK_PLACEMENT_VIOLATIONS NOT_DETERMINED"])
     verdict, rc, _rules, summary = _run(tmp_path)
