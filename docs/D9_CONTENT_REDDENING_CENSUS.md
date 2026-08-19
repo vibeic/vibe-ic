@@ -194,8 +194,16 @@ It is in `_DEFERRED_L7_UNREAD_CONTENT` with the same paired guards
 stops describing a live defect reddens until it is deleted, and a separate test
 recomputes the charge WITHOUT the register so the leg cannot quietly stop
 charging while the register still looks like it is tracking a hole. Emptying
-the register turns `test_d6_skip_discipline[step38]` red and nothing else:
-`1 failed, 61 passed, 16 deselected, 1 xfailed`.
+the register in a throwaway copy reddens BOTH, over the whole module and with
+no `-k` selection: `2 failed, 76 passed, 1 xfailed in 58.23s`, the reds being
+`test_d6_skip_discipline[step38]` — the cell itself — and
+`test_d6_l7_the_register_is_the_only_thing_holding_that_cell_green`, which
+recomputes the charge from the live flow and reports
+`measured ['38'], registered []`. An earlier draft of this document quoted
+`1 failed, 61 passed, 16 deselected, 1 xfailed` and said "and nothing else";
+that figure was taken under a narrower selection and UNDERSTATES the
+mechanism — the second red is the paired guard doing exactly the job it is
+there for, and a reader who expects one red would read its firing as noise.
 
 Row 6 of the table above previously read NOT DETERMINED with the note that
 forcing a content question onto D6 would "put two rulers on one fact". That
@@ -256,6 +264,87 @@ artefact that is present, is that kind, and is semantically wrong still does
 not, and closing that needs the flow to declare what each output should
 contain — which is a declaration change, not a check.
 
+## Re-verified 2026-08-19 at `origin/main` = `74ac9fa78`
+
+This branch's base IS current `origin/main`, so nothing below is a rebase
+claim. Every run was in the `vibeic-eda` container with `USER=designer` and
+`PYTHONDONTWRITEBYTECODE=1`, and each is quoted by its own SUMMARY LINE — a
+run that printed no summary is reported as DID NOT RUN, never as a pass.
+
+| run | result |
+|---|---|
+| D6 module, whole file, no selection | `78 passed, 1 xfailed in 58.00s` |
+| D9 instrument tests, `tools/test_d9_flow_gate_reality.py` | `18 passed in 0.31s` |
+| D3 module against the corpus clone `beb3bd5` | `23 failed, 90 passed, 1 skipped, 2 xfailed in 24.64s` |
+| D3 module, SAME command, unmodified base `74ac9fa78` | `23 failed, 87 passed, 1 skipped, 2 xfailed in 23.73s` |
+
+**THE 23 D3 REDS ARE PRE-EXISTING ON `74ac9fa78` AND ARE NOT THIS CHANGE.**
+They are the corpus-resolution and unevidenced-cell family
+(`test_d3_run_root_discovery_is_live`, `..._unevidenced_cells_are_named_cell_
+by_cell`, and 15 `test_d3_required_outputs_are_produced[step*]` rows). Counts
+alone would not settle that, so the node sets were compared rather than the
+totals: the FAILED node lists at base and at head are **byte-identical**
+(`diff` is empty), and `--collect-only` differs by exactly the three tests this
+branch adds, with **none removed**:
+
+```
+base collected: 115      head collected: 118
+NEW at head:
+  test_d3_a_present_but_unparseable_artefact_is_not_counted_as_produced
+  test_d3_the_cell_reddens_on_a_corrupt_declared_output
+  test_d3_the_kind_table_is_live_and_the_ungraded_remainder_is_published
+REMOVED at head: (none)
+```
+
+### The guards discriminate — three reverts, quoted verbatim
+
+A guard that cannot fail proves nothing, so each was reverted in a throwaway
+worktree cut at this commit and watched to fail.
+
+**1. `kind_conformance` made a no-op** (`return None` first, i.e. the pre-fix
+cell that opens no file) — all three new tests fail, `3 failed, 113 deselected
+in 1.41s`:
+
+```
+AssertionError: the .def parser accepted bytes that are not DEF:
+  kind_conformance returned None — this half of the table cannot refuse anything
+assert True is False
+ +  where True = EntryVerdict(produced=True, mode='LIVE',
+      detail="reports/phase2/sdc_check.json (13 B) in 'probe' ...").produced
+FAILED ...::test_d3_a_present_but_unparseable_artefact_is_not_counted_as_produced
+FAILED ...::test_d3_the_cell_reddens_on_a_corrupt_declared_output
+FAILED ...::test_d3_the_kind_table_is_live_and_the_ungraded_remainder_is_published
+```
+
+**2. the `.json` object-or-array clause removed**, leaving bare `json.loads`
+— the branch that makes `1234` acceptable. Only arm D fails, which is the
+point: the clause is load-bearing and not decorative. `1 failed, 2 passed, 113
+deselected in 1.15s`:
+
+```
+target.write_text("1234\n", encoding="utf-8")
+assert json.loads(target.read_text()) == 1234
+assert target.stat().st_size > 0 and is_tracked(probe, entry)
+>           assert v.produced is False
+E           assert True is False
+FAILED ...::test_d3_the_cell_reddens_on_a_corrupt_declared_output
+```
+
+**3. `_DEFERRED_L7_UNREAD_CONTENT` emptied** — `2 failed, 76 passed, 1 xfailed
+in 58.23s`:
+
+```
+>       assert charged == set(_DEFERRED_L7_UNREAD_CONTENT)
+E       AssertionError: the L7 register and the live measurement disagree:
+E         measured ['38'], registered []
+E       assert {'38'} == set()
+FAILED ...::test_d6_skip_discipline[step38]
+FAILED ...::test_d6_l7_the_register_is_the_only_thing_holding_that_cell_green
+```
+
+`tools/ci/protected_landing_transition.json` lists 47 paths; the intersection
+with this branch's seven changed files is EMPTY, so no protected blob moves.
+
 ## Reproduce
 
 ```sh
@@ -279,8 +368,10 @@ docker exec vibeic-eda bash -lc '
     programs/tests/test_matrix_d6_skip_discipline.py -q -p no:randomly'
 
 # D6 — the discrimination proof: empty `_DEFERRED_L7_UNREAD_CONTENT` in a
-# throwaway copy and exactly step 38 goes red
-#   -> 1 failed, 61 passed, 16 deselected, 1 xfailed
+# throwaway copy; step 38's cell AND the register's own guard go red
+#   -> 2 failed, 76 passed, 1 xfailed
+#      test_d6_skip_discipline[step38]
+#      test_d6_l7_the_register_is_the_only_thing_holding_that_cell_green
 
 # D9 — the content census over 63 steps
 docker exec vibeic-eda bash -lc '
