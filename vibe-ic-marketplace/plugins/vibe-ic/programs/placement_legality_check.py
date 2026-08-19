@@ -88,6 +88,29 @@ Verdicts
 * SKIP  (rc=2) — project dir not found (operational, not a placement
                  result).
 
+BLOCKING, not advisory
+----------------------
+A FAIL here STOPS the flow. This program is wired into Step 17's
+``gate.all_of`` as ``program_exit_zero: "placement_legality_check . --json
+reports/phase3/placement_legality.json"``, so rc=1 fails the step and every
+step that ``blocks_on`` it is reported blocked-by-upstream. Stated here rather
+than left to the reader, because an unstated default reads as advisory and a
+gate that fails without blocking differs from no gate only in being auditable
+afterwards.
+
+PROVED BY RUN, not inferred from the wiring. On the acceptance fixture -- one
+instance moved onto its neighbour's site, every component still carrying
+``+ PLACED`` -- ``flow_compliance_check --stage 3`` reports:
+
+    origin/main   PASS=0  FAIL=0  MISSING=17  VACUOUS-PASS=1
+                  o [VACUOUS-PASS] Step 17: Placement (global + detailed)
+    with this fix PASS=0  FAIL=1  MISSING=17 (15 blocked-by-upstream of step 17)
+                  x [FAIL] Step 17: Placement (global + detailed)
+                       program failed: placement_legality_check .
+
+i.e. the flow ran on through an illegal placement before, and stops on it now,
+taking the 15 downstream steps with it.
+
 chip-AGNOSTIC. No vendor / IC / tool-specific data hard-coded.
 
 Usage

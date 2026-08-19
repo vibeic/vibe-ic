@@ -122,6 +122,38 @@ def _msg(tmp_path, rule):
     return next(f["message"] for f in findings if f["rule"] == rule)
 
 
+# ====================================================== BLOCKING, DECLARED ===
+# A gate that FAILs without STOPPING anything differs from no gate only in
+# being auditable afterwards, and an unstated default reads as advisory. The
+# two assertions below keep the declaration and the wiring married: the
+# docstring must SAY blocking, and the flow must actually wire it as a
+# `program_exit_zero` in Step 17's `gate.all_of` -- so demoting the gate in the
+# YAML while leaving the prose boasting would fail here rather than pass
+# quietly.
+
+def test_the_gate_declares_that_it_blocks():
+    doc = P.__doc__ or ""
+    assert "BLOCKING" in doc, (
+        "the gate must state whether a FAIL stops the flow or records and "
+        "continues; silence is read as advisory")
+    assert "ADVISORY" not in doc.split("BLOCKING", 1)[1].split("\n\n", 1)[0]
+
+
+def test_the_flow_really_wires_this_gate_as_a_blocking_predicate():
+    """The declaration is only true while the YAML still says so."""
+    import yaml  # noqa: PLC0415 -- optional dep, only needed for this check
+    flow = yaml.safe_load(
+        (PLUGIN / "flow" / "phase1_phase2_phase3.yaml").read_text())
+    steps = [s for s in flow["steps"] if s.get("id") == 17]
+    assert len(steps) == 1, "Step 17 must exist exactly once"
+    allof = steps[0].get("gate", {}).get("all_of", [])
+    predicates = [p["program_exit_zero"] for p in allof
+                  if isinstance(p, dict) and "program_exit_zero" in p]
+    assert any(q.startswith("placement_legality_check ") for q in predicates), (
+        "placement_legality_check must be an all_of program_exit_zero of "
+        "Step 17's gate, or its rc=1 stops nothing: %r" % (predicates,))
+
+
 # ================================================================ THE GATE ===
 # ------------------------------------------------------------ POSITIVE ------
 
