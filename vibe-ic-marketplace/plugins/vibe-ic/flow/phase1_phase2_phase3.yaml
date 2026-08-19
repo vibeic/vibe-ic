@@ -616,7 +616,6 @@ steps:
   - id: 0.5ic
     name: "Submission Template Ingest — the operator's slot geometry and fixtures (chip/IC path only)"
     stage: stage_phase1
-    flow_path: ic
     # WHY A STEP AND NOT A CALCULATION. Two independent investigations landed on
     # the same missing input rather than a missing formula:
     #   * docs/research/wafer_space_id_cells.md — the four gf180mcu_ws_ip__* die-id
@@ -2767,7 +2766,8 @@ steps:
   - id: 15.5ic
     name: "Pad Ring (chip/IC path only)"
     stage: stage3
-    flow_path: ic
+    condition:
+      files_exist: ["input/submission_template/slots/*.yaml"]
     required_inputs:
       - from: 15
         path: "phase3/stage3/pnr/floorplan.def"
@@ -3867,7 +3867,8 @@ steps:
   - id: 26.5ic
     name: "Die Finishing — seal ring + die identification (chip/IC path only)"
     stage: stage3
-    flow_path: ic
+    condition:
+      files_exist: ["input/submission_template/slots/*.yaml"]
     required_inputs:
       - from: 21
         path: "phase3/stage3/pnr/routed.def"
@@ -5135,7 +5136,8 @@ steps:
   - id: 37.5ip
     name: "Digital Hardmacro Generation — LEF + Liberty + GDS + Verilog (cell/IP path TERMINAL)"
     stage: stage4
-    flow_path: ip
+    condition:
+      files_exist: ["input/submission_template/NO_TEMPLATE.txt"]
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
@@ -5160,7 +5162,8 @@ steps:
   - id: 37.5ic
     name: "Shuttle Precheck — the operator's own refusal (chip/IC path only)"
     stage: stage4
-    flow_path: ic
+    condition:
+      files_exist: ["input/submission_template/slots/*.yaml"]
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
