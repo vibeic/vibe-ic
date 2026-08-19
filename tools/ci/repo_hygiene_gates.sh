@@ -970,11 +970,29 @@ run "no gate is left neutered"          "$PLUGIN" python3 programs/neutered_gate
 # this consolidation at 25 s and 137 s on the same tree -- the mutation
 # probes dominate and vary with machine load, so budget for the high one.
 # Every subprocess this file starts is bounded at 55 s or less, strictly under
-# the 180 s `--timeout-method=thread` session bound below, so a hang fails
-# ONE test here instead of killing the run and losing every other result.
-run "liar census controls still fire"   "$ROOT" env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
-    python3 -m pytest -q -p pytest_timeout --timeout=180 --timeout-method=thread \
-    "$ROOT/tools/test_liar_census.py"
+# the 180 s per-test bound below, so a hang fails ONE test here instead of
+# killing the run and losing every other result.
+#
+# WHICH BOUND IS AVAILABLE IS ASKED, NOT ASSUMED (main-red, 2026-08-19).
+# `pytest_timeout` is a third-party plugin and it is NOT in the pinned runner
+# image. `-p pytest_timeout` on a pytest that cannot import it does not degrade:
+# it raises `ImportError: Error importing plugin "pytest_timeout"` during
+# pre-parse and exits 1 before collecting a single test. This gate was therefore
+# red on clean main for a reason that had nothing to do with the liar census —
+# and `tools/liar_census.py` named the same plugin for its own mutation arms, so
+# every arm died on arrival, every mutation probe scored N/A, and seven of that
+# file's tests were red too. One missing package, two red gates.
+#
+# The branch that picks the bound lives in `liar_census_bounded.sh`, and it
+# lives there rather than here for a measured reason: deciding it inline puts a
+# shell variable into this declaration, and `gate_host_independence_check` reads
+# these declarations as TEXT — an unresolvable variable makes the gate NOT
+# PROBED. The first attempt at this fix did exactly that and quietly took the
+# census gate out of that probe's 72. The command below stays fully drivable by
+# a reader; the wrapper states which of the two bounds it imposed and why they
+# are not interchangeable.
+run "liar census controls still fire"   "$ROOT" \
+    bash "$ROOT/tools/ci/liar_census_bounded.sh" "$ROOT/tools/test_liar_census.py"
 run "argparse help format"              "$PLUGIN" python3 programs/argparse_help_format_check.py
 run "dead plugin path"                  "$PLUGIN" python3 programs/dead_plugin_path_check.py
 run "ic_expert_db health"               "$PLUGIN" python3 programs/ic_expert_db_health_audit.py

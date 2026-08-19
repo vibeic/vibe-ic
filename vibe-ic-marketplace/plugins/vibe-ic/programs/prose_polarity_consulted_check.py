@@ -142,6 +142,24 @@ _NOT_PROSE: Dict[str, str] = {
         "would not import. Contrast the two defects this gate was built from "
         "(#706 pdk_target, #711 die_area_budget_um): both read English design "
         "documents, where denial is spellable and was spelled.",
+    "pytest_per_file_junit::_admit":
+        "FILENAMES in the driver's own progress directory, matched by two "
+        "fully anchored grammars this same class defines: `\\Am\\.(\\d{1,9})"
+        "\\.(\\d{1,9})\\.jsonl\\Z` and `\\Aw\\.([A-Za-z0-9_]{1,32})\\."
+        "(\\d{1,9})\\.(\\d{1,9})\\.jsonl\\Z`. The values written are the "
+        "pid and the claimed parent pid, read out of those digit groups and "
+        "immediately compared against the pid the driver actually launched -- "
+        "a filename cannot deny them, because the grammar is anchored at both "
+        "ends over digits and word characters and has no form in which "
+        "anything can be spelled at all beyond what it matches. A stream is "
+        "admitted or it is refused, and refusal is already how this function "
+        "reports every other way a name can be wrong (`_fail`, which freezes "
+        "the whole directory's score rather than skipping the file). "
+        "Consulting `_prose_polarity` on an anchored filename would add a "
+        "branch that can never fire, and a call that can never fire is a "
+        "green light rather than a check. Contrast the two defects this gate "
+        "was built from (#706 pdk_target, #711 die_area_budget_um): both read "
+        "English design documents, where denial is spellable and was spelled.",
 }
 
 
