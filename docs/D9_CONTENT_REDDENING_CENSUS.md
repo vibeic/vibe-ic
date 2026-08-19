@@ -1,7 +1,9 @@
 # Can the 63 x 9 matrix redden on CONTENT, or only on ABSENCE?
 
-Measured 2026-08-19 against `origin/main` at `397b3f25f`, in the
-`vibeic-eda` container. The published corpus is not in this checkout
+Measured 2026-08-19 against `origin/main` at `397b3f25f` and RE-MEASURED at
+`74ac9fa78` after a rebase, in the `vibeic-eda` container. Every figure below
+was re-taken at `74ac9fa78`; where the two commits disagree the later one is
+quoted and the change is named (only row 8 moved — see it). The published corpus is not in this checkout
 (vibe-ic#1723); every corpus figure below was read from a clone of
 `vibeic/benchmark-data` at `beb3bd57f` pointed at by
 `VIBE_IC_BENCHMARK_DATA`, and the command that produced it is quoted beside it.
@@ -14,7 +16,7 @@ wrong** — present at the declared path, non-empty, tracked, and carrying bytes
 that are not what the declaration means. A check that cannot tell those apart
 is an existence check wearing the clothes of a correctness check.
 
-Line numbers below are an aid, measured at `397b3f25f`; the SYMBOL is the
+Line numbers below are an aid, measured at `74ac9fa78`; the SYMBOL is the
 citation, because a line-moving commit rots the number and not the name.
 
 ## The nine rows
@@ -28,7 +30,7 @@ citation, because a line-moving commit rots the number and not the name.
 | 5 | `deps_correct` | `test_d5_blocks_on_covers_the_real_dependency_graph` (`test_matrix_d5_deps_correct.py:900`) -> `d5_problems` (:631): unresolved / duplicate / self / forward `blocks_on` edges, missing or phantom producer edges. | **N/A — not its subject.** Purely a graph over the flow yaml and the gate programs' AST. No run artefact is opened at any point. | nothing further. |
 | 6 | `skip_discipline` | `test_d6_skip_discipline` (`test_matrix_d6_skip_discipline.py:1581`): legs L1..L6 over an EMPTY and a SEEDED synthetic project, each asserting a skip / vacuous-pass surface is conditioned on a runtime fact and reported at a tier that is not the plain PASS bucket. | **NO, and it is the wrong lever.** D6 grades the TIER a verdict is reported at, not the bytes that produced it. Its analogous defect — a `VACUOUS_PASS` folded into `pass_count` — is already leg L3c. A content mutation would change which tier the gate lands on and D6 would grade the new tier correctly either way. | **NOT DETERMINED as a content question.** To notice a corrupt artefact D6 would have to acquire an opinion about correctness, which is D9's question and not this one. Forcing it here would put two rulers on one fact. |
 | 7 | `outputs_list_complete` | `test_d7_required_outputs_list_is_complete` (`test_matrix_d7_outputs_list_complete.py:303`) -> `G.findings_for`: rules W1/W2 over the step's own AST plus the observed write record — an artefact the step writes unconditionally and never declares. | **N/A — not its subject.** The subject is the step's SOURCE and its write record, i.e. which paths get written, never what is in them. | nothing further. |
-| 8 | `missing_caught` | `test_d8_missing_caught` (`test_matrix_d8_missing_caught.py:696`): `probe_positive` (:517) requires a PASS-tier verdict with every declared output synthesized, and `probe_negative` (:538) requires `check_step` to return `MISSING` naming the entry once exactly one is removed. | **NO, and the fixture says so out loud.** `_materialize` seeds each output with `fixture_body`, which is `"d8 fixture artefact\n"` for every suffix outside `{.json,.jsonl,.v,.sv}`, and `check_step` returns PASS-tier on it. The dimension's own question is about ABSENCE by construction — "when a declared output IS missing, which mechanism catches it" — so a present-but-wrong artefact is out of its scope by definition, not by oversight. | **NOT DETERMINED — deliberately not attempted here.** A third arm ("all outputs present, one of them corrupt, and `check_step` must not certify") reddens on `flow_compliance_check.check_step` on day one, because the `required_outputs` layer there (`_resolve_required_output`) is a glob-and-stat with no byte read. That is a FLOW-level change reaching all 63 steps and every user project; it is measured and named here rather than half-landed. |
+| 8 | `missing_caught` | `test_d8_missing_caught` (`test_matrix_d8_missing_caught.py:773`): `probe_positive` (:594) requires a PASS-tier verdict with every declared output synthesized, and `probe_negative` (:615) requires `check_step` to return `MISSING` naming the entry once exactly one is removed. | **NO, and the fixture says so out loud.** `_materialize` seeds each output with `fixture_body`, which is `"d8 fixture artefact\n"` for every suffix outside `{.json,.jsonl,.v,.sv}`, and `check_step` returns PASS-tier on it. The dimension's own question is about ABSENCE by construction — "when a declared output IS missing, which mechanism catches it". The present-but-wrong case is no longer unasked here: `d4136c305` added `wrong_body` (:342) beside `fixture_body` (:274) and swept both. It reports the blindness; the CELL still reddens only on absence. | **STILL NOT DETERMINED AS A CELL PREDICATE — and since `d4136c305` the fact is INSTRUMENTED on main.** That commit landed `_content_arm_sweep` + `CONTENT_ARM_AS_MEASURED` (:1602): two trees differing in the bytes of ONE declared output and nothing else, compared on `check_step`'s whole verdict signature. **Absence moves the verdict 16 of 16; content moves it 0 of 16**, twelve of them by disclosing `VACUOUS_PASS` and four (steps 1, 32, 35, 38) by answering a plain PASS. So the row is now a PINNED measurement rather than an untested claim — but the pin RECORDS the blindness, it does not redden the cell on it. Making it redden is still the third arm named here: it fires on `flow_compliance_check.check_step` on day one, because the `required_outputs` layer there (`_resolve_required_output`) is a glob-and-stat with no byte read. That is a FLOW-level change reaching all 63 steps and every user project; it is measured and named here rather than half-landed. |
 | 9 | `output_is_correct` (not shipped) | Two instruments, no flow gate. `tools/d9_flow_gate_reality.py` decides MOVES/DARK by a two-arm mutation whose arm B **deletes** the declared outputs. `tools/d9_content_census.py` adds arm C, which **corrupts** them in place. | **YES via arm C — and until this change nobody could run it.** Both instruments resolved the corpus from `REPO/benchmark-data`, which left the repository at v1.10.56 (#1723), so at `397b3f25f` both exit rc=2 without measuring. | done — see *What changed*. The absence/content gap is now a measured number, below. |
 
 ### Dimension 8's NOT DETERMINED, measured rather than asserted
@@ -50,6 +52,17 @@ Three different files, one verdict. The declared artefact discharges the
 declaration by existing. That is the flow-level shape of the same defect d3
 carried, and closing it there is a change to `_resolve_required_output` that
 reaches all 63 steps and every user project — named here, not half-landed.
+
+Re-run at `74ac9fa78` (`scratch/probe_d8.py`): the three lines above reproduce
+verbatim. It now sits beside an independent measurement of the same claim that
+landed on main in the meantime — `d4136c305`'s `_content_arm_sweep`, which
+drives each step's OWN gate instead of substituting `PASS_GATE`, and reports
+content moving the verdict **0 of 16** against absence moving it 16 of 16. The
+two do not overlap: **step 8 is not in that population of 16**
+(`CONTENT_ARM_AS_MEASURED`, :1602), because its own gate never reaches a
+PASS-tier verdict on the synthetic tree, so the sweep cannot ask it anything.
+Substituting `PASS_GATE` is what makes the outputs layer answerable for a step
+in that state, and the answer is the same one: PASS on all three bodies.
 
 ## What the ninth dimension measures once it can run
 
@@ -136,6 +149,29 @@ regression; the committed report is left as it was rather than replaced by a
 shallower measurement of a corpus that has itself moved on (91 runs here
 against the 107 it was taken over).
 
+## Where dimension 3's predicate STOPS, and the three candidate rules measured and refused
+
+`kind_conformance` grades WELL-FORMEDNESS. It refuses a `.json` that is not
+JSON. It does NOT refuse a `.json` that parses and says the wrong thing, so the
+brief's strictest reading — "corrupt the CONTENT while keeping it present and
+**well-formed**, and show the cell goes red" — is answered for the malformed
+class and **NOT DETERMINED for the semantic class**. That is a measured limit,
+not an omission; three candidate rules were built as probes and each was
+refused by what the corpus actually contains. Measured at `74ac9fa78` over the
+3 admissible run roots, 62 resolved `.json` + 1 `.xml`:
+
+| candidate rule | what it would refuse | measurement | verdict |
+|---|---|---|---|
+| **empty document** — a parsed doc carrying nothing (`null`, `{}`, `[]`) | the parsed-level analogue of the existing 0-byte rule | 60 non-empty, `null` 0, `{}` 0, **`[]` 2** — `reports/phase2/lint/rtl_hygiene.json` and `reports/phase2/lint/rom_init_lint.json`, both written by the two `rtl_hygiene_lint` / `rom_init_lint` clauses at flow yaml :724-725, where the empty list IS the clean result | **REFUSED.** The rule would redden two artefacts that are correct, and "no findings" is the outcome a lint report exists to be able to state. |
+| **self-attribution** — the artefact's own bytes name who emitted it, and it is not this step | a valid report sitting at another step's declared path | 30 of 60 carry a self-identifying key (`program` 20, `tool` 13, `gate` 2, `emitted_by` 1, `_pmd` 0); of the 20 carrying `program`, only **7 name a program this step's gate invokes** and **13 name the PRODUCER instead** — `reports/lec.json` says `lec_run` where the gate is `lec_equivalence_check`, `reports/phase3/lvs.json` says `eda_report_audit:lvs` where the gate is `lvs_report_check` | **REFUSED — 13 false positives out of 20 gradeable.** The field records the WRITER; the flow declares the CHECKER. Comparing them reddens correct artefacts. Which step wrote a path is D7's subject and the write ledger's, not a byte this rule can read. |
+| **schema conformance** — validate the parsed doc against a declared schema | a well-formed report with the wrong fields | the flow declares no schema per `required_outputs` entry. Where a schema exists it already SHIPS as its own gate — `rtl_bug_report_schema_check` (flow yaml :731 — `optional_program_exit_zero` inside the step's `all_of`, so blocking whenever the claim it grades exists) and `analog_hil_report_schema_check` (:2547, advisory); `json_schema_check.py` is driven from `skills/phase1/compliance.yaml`, not from the flow | **DUPLICATE RULER where it applies, no declaration where it does not.** Same reasoning that keeps `.gds` out of the kind table. |
+
+So the honest statement of what changed in dimension 3 is: an artefact that is
+present and is not the KIND its declared path names now reddens the cell; an
+artefact that is present, is that kind, and is semantically wrong still does
+not, and closing that needs the flow to declare what each output should
+contain — which is a declaration change, not a check.
+
 ## Reproduce
 
 ```sh
@@ -157,3 +193,56 @@ docker exec vibeic-eda bash -lc '
   cd <repo> && PYTHONDONTWRITEBYTECODE=1 VIBE_IC_BENCHMARK_DATA=<clone> \
   python3 tools/d9_content_census.py --out /tmp/d9_content.json --limit-per-step 1'
 ```
+
+The first two refused candidate rules above are ONE probe, run against the
+same corpus pointer; the third is a claim about the flow yaml and is read
+there. The probe imports the dimension's own module, so the population is
+exactly the artefacts the cell accepts today — no second resolver:
+
+```python
+# python3, from <repo>, with VIBE_IC_BENCHMARK_DATA set
+import json, importlib.util, sys, collections
+from pathlib import Path
+PLUG = Path("vibe-ic-marketplace/plugins/vibe-ic").resolve()
+sys.path[:0] = [str(PLUG), str(PLUG/"programs"), str(PLUG/"programs/tests")]
+spec = importlib.util.spec_from_file_location(
+    "d3", PLUG/"programs/tests/test_matrix_d3_outputs_produced.py")
+m = importlib.util.module_from_spec(spec)
+sys.modules["d3"] = m          # the module's dataclasses need it registered
+spec.loader.exec_module(m)
+roots, tally = m.run_roots(), collections.Counter()
+for sid in m.F.step_ids():
+    gate_programs = {c.command.split()[0]
+                     for c in m.F.gate_clauses(sid) if getattr(c, "command", None)}
+    for entry in m.F.required_outputs(sid):
+        hit, _ = m.resolve_anywhere(entry, sid)
+        if hit is None or not hit.path.lower().endswith(".json"):
+            continue
+        doc = json.loads((roots[hit.root].path / hit.path).read_text())
+        tally["EMPTY " + type(doc).__name__ if doc in (None, {}, [])
+              else "non-empty"] += 1
+        if not isinstance(doc, dict):
+            continue
+        tally["self-identifying" if any(
+            k in doc for k in ("_pmd", "emitted_by", "program", "tool", "gate"))
+            else "anonymous"] += 1
+        writer = doc.get("program")
+        if isinstance(writer, str) and writer.strip():
+            tally["program field names THIS step's gate"
+                  if writer.split(":")[0] in gate_programs
+                  else "program field names the PRODUCER, not the gate"] += 1
+for k, v in sorted(tally.items()):
+    print(f"{v:4d}  {k}")
+```
+
+At `74ac9fa78`, against the clone at `beb3bd57f`, it prints:
+
+```
+   2  EMPTY list
+  30  anonymous
+  60  non-empty
+   7  program field names THIS step's gate
+  13  program field names the PRODUCER, not the gate
+  30  self-identifying
+```
+
