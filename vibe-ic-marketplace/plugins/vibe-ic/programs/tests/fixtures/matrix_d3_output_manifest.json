@@ -1052,6 +1052,14 @@
           "alternative": "reports/phase2/gates/erc_density.json",
           "path": "reports/phase2/gates/erc_density.json",
           "size_bytes": 1188
+        },
+        "reports/phase3/lvs_verdict.json": {
+          "status": "PRODUCED_BY_RUN",
+          "provenance_note": "the ONE entry on this step whose recorded copy is NOT its own gate's output: `phase3_one_shot_runner:_run_extraction_lvs` writes it (#477 — so an incomplete or aborted compare is never silent) and step 31's gate `eda_report_audit` reads it back, so it carries none of the self-certification caveat the two notes above do. Declared 2026-08-19 after the dimension-7 write-record binding was repaired: the published cells carrying the run ledgers had moved to vibeic/benchmark-data and `record_roots()` still searched this repository alone, so W2's OBSERVED producer oracle had been dead on every checkout of main and no `programs/*.py` write position resolves this path for the AST half to see. Present in 9 of the 13 tracked benchmark roots that have a `reports/phase3/` — more than the already declared lvs.rpt (8/13).",
+          "run": "benchmark-data/ic/spm/v1.9.96_gf180mcuD",
+          "alternative": "reports/phase3/lvs_verdict.json",
+          "path": "reports/phase3/lvs_verdict.json",
+          "size_bytes": 1131
         }
       }
     },

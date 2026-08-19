@@ -4122,6 +4122,30 @@ steps:
       # only under `flow_compliance_check --strict-audit-evidence`.
       - "reports/phase3/lvs.json"
       - "reports/phase2/gates/erc_density.json"
+      # The RUNNER'S OWN machine-readable LVS verdict, and the one artefact in
+      # this list that is NOT its own gate's `--json` target — which is why it
+      # carries none of the self-certification caveat above.
+      # `phase3_one_shot_runner._write_lvs_verdict` writes it (#477, "persist a
+      # machine-readable LVS verdict artifact so an incomplete / aborted
+      # compare is NEVER silent"), and `eda_report_audit` — this step's gate —
+      # reads it back by name to confirm PASS/FAIL independently of the netgen
+      # transcript. Produced by the flow, read by this step's gate, declared by
+      # no step: dimension 7's W2 rule exactly.
+      #
+      # It became visible only when the write-record binding was repaired: the
+      # published cells that carry the run ledgers moved to
+      # vibeic/benchmark-data in v1.10.56 and `record_roots()` kept searching
+      # this repository alone, so W2's OBSERVED producer oracle had been dead
+      # on every checkout of main. An artefact no `programs/*.py` write
+      # position resolves is invisible to the AST half by construction, so
+      # nothing else could have found it.
+      #
+      # EVIDENCE, measured over the tracked benchmark roots that have a
+      # `reports/phase3/`: lvs_verdict.json 9/13 — MORE than the already
+      # declared lvs.rpt (8/13) and one fewer than lvs.json (10/13). Declaring
+      # it therefore asks dimension 3 for no evidence the neighbouring entries
+      # do not already supply.
+      - "reports/phase3/lvs_verdict.json"
     gate:
       all_of:
         # vibe-ic#584 — SCOPED to the subtree this step DECLARES.

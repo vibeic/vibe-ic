@@ -716,7 +716,21 @@ EXTERNALLY_ATTESTED_STEPS: Tuple[str, ...] = (
 # NINE of the ten admissible run roots before the record was written -- the
 # per-path check this pin exists to force (#527). Its verdict is therefore LIVE
 # and it adds no fixture attestation: fixture stays at 7, as it was.
-_LIVE_ENTRY_COUNT = 134
+# 2026-08-19: 134 -> 135. Step 31 `reports/phase3/lvs_verdict.json`, declared in
+# the flow yaml on the step that PRODUCES it. Same reading as every move above:
+# one fewer entry decided by nothing, not one more artefact found. It is the
+# W2 promotion that became visible when the dimension-7 write-record binding was
+# repaired -- the published cells carrying the run ledgers had moved to
+# vibeic/benchmark-data while `matrix_d7_write_record.record_roots()` still
+# searched this repository alone, so W2's OBSERVED producer oracle had been dead
+# on every checkout of main, and no `programs/*.py` write position resolves this
+# path for the AST half to have seen it either.
+# It is recorded PRODUCED_BY_RUN at `benchmark-data/ic/spm/v1.9.96_gf180mcuD`
+# (1131 B), and it was checked `git ls-files`-TRACKED at HEAD, non-empty and not
+# a symlink in SIX of the ten admissible run roots before the record was written
+# -- the per-path check this pin exists to force (#527). Its verdict is
+# therefore LIVE and it adds no fixture attestation: fixture stays at 7.
+_LIVE_ENTRY_COUNT = 135
 
 #: Run roots the compliance-audit self-certification probe drives, and the
 #: declared ``required_outputs`` each audit CREATES in the tree it audits.
