@@ -460,6 +460,26 @@ run "checker execution wiring"          "$ROOT" python3 "$PG/checker_execution_w
 # coverage. A gate nothing runs produces no verdict, and the tree looks the same
 # either way.
 run "gates are wired to something"      "$ROOT" python3 "$PG/gate_is_wired_check.py"
+# The same question one level down, and about the OTHER half of the rules: not
+# "is this gate wired" but "is this package's rule written where the code that
+# must obey it lives". Ours are central, so a contributor editing a module
+# cannot see the rule that binds it without going somewhere else; a per-package
+# `INVARIANTS.yaml` puts it in the directory they are already in, and this gate
+# is what keeps it from decaying into a comment.
+#
+# It belongs in THIS file by this file's own admission rule — a repo-wide
+# invariant needing no PR context. The suite alone is not enough:
+# `ci_targeted_test_select` reports the declaration files as UNMAPPED ("map to
+# NO test set", so their selection is the smoke floor), which means a
+# patch-cadence PR that violates a declared invariant would run nothing that
+# could see it.
+#
+# `run`, not `run_tolerating_uncheckable`: rc 2 means ZERO declarations were
+# discovered, and on this tree the population is six packages, so an empty one
+# means discovery broke. Tolerating it would reproduce the exact defect the
+# upstream study measured — an empty glob printing "0 companion(s) conform"
+# and exiting 0.
+run "package invariants"                "$ROOT" python3 "$PG/package_invariants_check.py" "$ROOT"
 # vibe-ic#712 — a prose extractor that reads a value out of a sentence without
 # asking whether the sentence DENIES it publishes a denied value as a
 # declaration. Twice in one day, in two fields, and each fix grew its OWN copy
