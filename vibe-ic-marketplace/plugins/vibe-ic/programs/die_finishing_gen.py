@@ -116,6 +116,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from _atomic_artefact import write_json as atomic_write_json  # vibe-ic#1082
+from _atomic_artefact import write_text as atomic_write_text
+
 try:
     from . import _klayout_launch as _kl                     # type: ignore
 except ImportError:                                          # standalone gate
@@ -455,7 +458,7 @@ def write_finished_def(routed: Path, out: Path,
                   + text[at:])
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(merged)
+        atomic_write_text(out, merged)
     except OSError as exc:
         return False, f"cannot write the finished-die DEF: {exc}"
     return True, f"{len(rects)} seal-ring placement blockage(s)"
@@ -620,7 +623,7 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         res["artefacts"] = artefacts
         try:
             rep.parent.mkdir(parents=True, exist_ok=True)
-            rep.write_text(json.dumps(res, indent=2))
+            atomic_write_json(rep, res)
         except OSError as exc:                               # noqa: BLE001
             res.setdefault("report_unwritable", str(exc))
         return res
@@ -732,7 +735,7 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
     # report makes the SAME container that already runs DRC/LVS able to run it.
     if not runner.covers(engine):
         materialised = rep.parent / Path(engine).name
-        materialised.write_text(Path(engine).read_text())
+        atomic_write_text(materialised, Path(engine).read_text())
         engine = materialised
     for label, pth in (("GDS", gds_path), ("engine", engine),
                        ("output", staged.parent), ("report dir", rep.parent)):
@@ -898,7 +901,7 @@ def main(argv=None) -> int:
         if not o.is_absolute():
             o = project / o
         o.parent.mkdir(parents=True, exist_ok=True)
-        o.write_text(json.dumps(res, indent=2))
+        atomic_write_json(o, res)
 
     print(json.dumps(res, indent=2))
     state = (res.get("seal_ring") or {}).get("state")

@@ -2768,6 +2768,17 @@ steps:
     stage: stage3
     condition:
       files_exist: ["input/submission_template/slots/*.yaml"]
+    # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
+    # condition tests WHICH PATH the design is on, and step 0.5ic's
+    # required_outputs is the OR of exactly these two artefacts, so on any run
+    # where 0.5ic itself passed, precisely one of them exists. A chip
+    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
+    # seal ring or shuttle precheck — a silent skip is the correct reading. The
+    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
+    # having run, which its own gate refuses as NEVER_LOOKED rather than
+    # leaving to be inferred from a downstream skip. Stated rather than left to
+    # the default so the reading is the step's, not the consumer's fallback.
+    condition_kind: design_dependent
     required_inputs:
       - from: 15
         path: "phase3/stage3/pnr/floorplan.def"
@@ -3869,6 +3880,17 @@ steps:
     stage: stage3
     condition:
       files_exist: ["input/submission_template/slots/*.yaml"]
+    # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
+    # condition tests WHICH PATH the design is on, and step 0.5ic's
+    # required_outputs is the OR of exactly these two artefacts, so on any run
+    # where 0.5ic itself passed, precisely one of them exists. A chip
+    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
+    # seal ring or shuttle precheck — a silent skip is the correct reading. The
+    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
+    # having run, which its own gate refuses as NEVER_LOOKED rather than
+    # leaving to be inferred from a downstream skip. Stated rather than left to
+    # the default so the reading is the step's, not the consumer's fallback.
+    condition_kind: design_dependent
     required_inputs:
       - from: 21
         path: "phase3/stage3/pnr/routed.def"
@@ -5138,6 +5160,17 @@ steps:
     stage: stage4
     condition:
       files_exist: ["input/submission_template/NO_TEMPLATE.txt"]
+    # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
+    # condition tests WHICH PATH the design is on, and step 0.5ic's
+    # required_outputs is the OR of exactly these two artefacts, so on any run
+    # where 0.5ic itself passed, precisely one of them exists. A chip
+    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
+    # seal ring or shuttle precheck — a silent skip is the correct reading. The
+    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
+    # having run, which its own gate refuses as NEVER_LOOKED rather than
+    # leaving to be inferred from a downstream skip. Stated rather than left to
+    # the default so the reading is the step's, not the consumer's fallback.
+    condition_kind: design_dependent
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
@@ -5164,6 +5197,17 @@ steps:
     stage: stage4
     condition:
       files_exist: ["input/submission_template/slots/*.yaml"]
+    # D6 (vibe-ic#1744). `design_dependent`, not `setup_required`: this
+    # condition tests WHICH PATH the design is on, and step 0.5ic's
+    # required_outputs is the OR of exactly these two artefacts, so on any run
+    # where 0.5ic itself passed, precisely one of them exists. A chip
+    # legitimately has no hardmacro kit and an IP legitimately has no pad ring,
+    # seal ring or shuttle precheck — a silent skip is the correct reading. The
+    # "someone forgot" case is NOT lost to this default: it is 0.5ic never
+    # having run, which its own gate refuses as NEVER_LOOKED rather than
+    # leaving to be inferred from a downstream skip. Stated rather than left to
+    # the default so the reading is the step's, not the consumer's fallback.
+    condition_kind: design_dependent
     required_inputs:
       - from: 37
         path: "phase3/stage4/gds/*.gds"
