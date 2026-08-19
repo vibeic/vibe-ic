@@ -4019,12 +4019,17 @@ steps:
         # finds NO run rescans the whole project and fails with
         # SCOPE_MISSES_EXTRACTION if an extraction exists outside the scope.
         #
-        # BLAST RADIUS: 0. `git ls-files benchmark-data | grep -ci feedback`
-        # is 0 and no tracked tree carries `cif_scale.txt` or a `.ext`, so no
-        # published run holds a Magic SPICE-extraction run today and every one
-        # of them takes the disclosed rc-2 path. The gate becomes load-bearing
-        # the first time a run actually extracts — which is why it has to be
-        # wired before that run, not after it.
+        # BLAST RADIUS over what is IN this repository: 0. `git ls-files`
+        # matches 0 `feedback.txt`, 0 `cif_scale.txt` and 0 `*.ext`, and
+        # `git ls-files benchmark-data` returns 0 — the run corpus older
+        # docstrings sweep against is not here, so the claim is about the
+        # tracked tree and nothing else. Swept as the broadest available
+        # false-positive test: the program pointed at the repo root and at the
+        # plugin root, with and without this `--under`, returns rc 2
+        # NOT_CHECKED with extraction_run_count 0 in all four — the tracked
+        # `.spice` / `.spef` fixtures are not mistaken for a Magic run. The
+        # gate becomes load-bearing the first time a run actually extracts,
+        # which is why it is wired before that run and not after it.
         - program_exit_zero: "magic_extract_feedback_check . --under phase3/stage3 --json reports/phase3/magic_illegal_overlap.json"
         - program_exit_zero: "lvs_report_check . --mode lvs --json reports/phase3/lvs.json"
         # vibe-ic#693 — the LVS counterpart, and a DIFFERENT question from the

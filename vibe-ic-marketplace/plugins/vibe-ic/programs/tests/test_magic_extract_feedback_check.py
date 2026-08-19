@@ -399,3 +399,79 @@ def test_the_wired_invocation_is_the_one_the_program_supports():
     assert cp.returncode == 0
     for flag in [a for a in args if a.startswith("--")]:
         assert flag in cp.stdout, f"{flag} is not a flag this program accepts"
+
+
+def test_the_flow_engine_itself_fails_the_step_on_a_dirty_extraction(tmp_path):
+    """Prove-by-run, through `flow_compliance_check`'s OWN gate evaluator.
+
+    The tests above measure the program. This one measures the WIRING: it
+    takes the clause verbatim out of the flow definition and hands it to the
+    function the flow engine uses to decide whether a `program_exit_zero`
+    clause passed. A gate that fails on its own but is credited by the engine
+    is a gate that stops nothing.
+
+    All four states are asserted, because the pass side is what proves the
+    fail side is not simply "this clause always fails":
+
+        dirty extraction  -> FAIL
+        clean extraction  -> PASS
+        feedback deleted  -> FAIL, on a DIFFERENT finding
+        no extraction     -> PASS, disclosed vacuous (rc 2)
+    """
+    yaml = pytest.importorskip("yaml")
+    sys.path.insert(0, str(PLUGIN_ROOT / "programs"))
+    fcc = pytest.importorskip("flow_compliance_check")
+
+    flow = yaml.safe_load(
+        (PLUGIN_ROOT / "flow/phase1_phase2_phase3.yaml").read_text())
+    steps = flow["steps"] if isinstance(flow, dict) else flow
+    step31 = [s for s in steps if str(s.get("id")) == "31"][0]
+    clauses = [c for c in step31["gate"]["all_of"] if isinstance(c, dict)]
+    mine = [c["program_exit_zero"] for c in clauses
+            if "magic_extract_feedback_check" in str(
+                c.get("program_exit_zero", ""))]
+    assert len(mine) == 1, mine
+    cmd = mine[0]
+
+    dirty = tmp_path / "dirty"
+    clean = tmp_path / "clean"
+    nofb = tmp_path / "nofb"
+    norun = tmp_path / "norun"
+    _extraction_run(dirty, FEEDBACK_TWO_OVERLAPS)
+    _extraction_run(clean, FEEDBACK_CLEAN)
+    _extraction_run(nofb, None)
+    (norun / "phase3/stage3").mkdir(parents=True)
+
+    ok_dirty, why_dirty = fcc._check_program_exit_zero(dirty, cmd)
+    ok_clean, _ = fcc._check_program_exit_zero(clean, cmd)
+    ok_nofb, why_nofb = fcc._check_program_exit_zero(nofb, cmd)
+    ok_norun, why_norun = fcc._check_program_exit_zero(norun, cmd)
+
+    assert ok_dirty is False, "the flow engine credited an extraction with overlaps"
+    assert ok_clean is True, "the clause fails a clean extraction too — it gates nothing"
+    assert ok_nofb is False, "a deleted error channel was credited as clean"
+    assert ok_norun is True, "a project that never extracted must not be failed"
+
+    assert "ILLEGAL_OVERLAP" in why_dirty
+    assert "FEEDBACK_ABSENT" in why_nofb
+    assert "ILLEGAL_OVERLAP" not in why_nofb, (
+        "the two failures must be distinguishable in what the engine records")
+    assert "VACUOUS" in why_norun.upper(), (
+        "an rc-2 pass must be disclosed as vacuous, not recorded as a clean "
+        "extraction")
+
+
+def test_the_clause_runs_before_the_lvs_clause_in_the_declared_order(tmp_path):
+    """The same ordering claim as the textual test above, read out of the
+    parsed gate list rather than out of the file's bytes."""
+    yaml = pytest.importorskip("yaml")
+    flow = yaml.safe_load(
+        (PLUGIN_ROOT / "flow/phase1_phase2_phase3.yaml").read_text())
+    steps = flow["steps"] if isinstance(flow, dict) else flow
+    step31 = [s for s in steps if str(s.get("id")) == "31"][0]
+    names = [str(c.get("program_exit_zero", "")).split()[0]
+             for c in step31["gate"]["all_of"] if isinstance(c, dict)]
+    names = [n for n in names if n]
+    assert "magic_extract_feedback_check" in names
+    assert (names.index("magic_extract_feedback_check")
+            < names.index("lvs_report_check"))

@@ -29,6 +29,37 @@ its one `overlap` is a PDN comment). So an extraction that produced illegal
 overlaps reached a clean LVS sign-off report with nothing in the flow ever
 having opened the file that said so.
 
+ENFORCEMENT: advisory
+=====================
+That declaration is about ONE thing — whether `phase3_one_shot_runner` spawns
+this gate INLINE and lets its exit status reach a control-flow decision. It
+does not, so `flow_gate_enforcement_audit` would classify it AUDIT_ONLY no
+matter what this docstring said, and declaring `blocking` would be a
+contradiction the audit correctly rejects. Silence is not a decision here
+(#886), so the decision is stated.
+
+The gate is NOT inert: `flow_compliance_check` runs step 31's `gate.all_of`
+and a non-zero exit fails that step, which is exactly the enforcement level of
+the LVS sign-off gate standing immediately behind it. Parity with the gate it
+protects is the point — an extraction error channel read less seriously than
+the LVS verdict it precedes would not close the hole.
+
+WHY IT IS NOT IN `_DECLARED_SIGNOFF_GATES`. That table is the inline, genuinely
+blocking one, and `_run_declared_signoff_gate` routes rc 2 to `BLOCKED` —
+non-green — by design (#544: a declared sign-off that returned no verdict is
+not neutral). Every input this program can be pointed at in this repository
+takes the rc-2 NOT-CHECKED path (see BLAST RADIUS below), so adding the row
+today would move runs to BLOCKED over an extraction they never performed — a
+false alarm bought with no detection. The row belongs there once a run
+actually extracts; until then the honest wiring is the one declared above.
+
+The count of runs that would flip is NOT DETERMINED here. `phase3_one_shot_
+runner` documents a blast-radius sweep over "14 published phase-3 run-roots
+under benchmark-data/ic"; `git ls-files benchmark-data` returns 0 files at
+this head, so that corpus is not in this repository and the sweep could not be
+re-run. What is measured is stated below; the number of externally-published
+runs affected is not, and is not guessed.
+
 WHAT UPSTREAM DOES, AND THE ONE THING IT DOES NOT
 =================================================
 LibreLane (@ bf8cc13c; corroborated line-for-line against the installed
@@ -110,11 +141,22 @@ extraction that happened elsewhere.
 
 BLAST RADIUS, MEASURED RATHER THAN ASSERTED
 ===========================================
-``git ls-files benchmark-data | grep -ci feedback`` -> 0, and no tracked tree
-carries ``cif_scale.txt`` or a ``.ext``. So no published run holds a Magic
-SPICE-extraction run today: every one of them takes the rc 2 NOT-CHECKED path
-and this gate moves no existing verdict. It becomes load-bearing the moment a
-run actually extracts, which is the point at which it must already be wired.
+Over the tracked tree at this head: ``git ls-files`` matches 0 files named
+``feedback.txt``, 0 named ``cif_scale.txt`` and 0 with a ``.ext`` suffix, and
+``git ls-files benchmark-data`` returns 0 — the run corpus that older
+docstrings sweep against is not in this repository, so "no run changes
+verdict" is asserted about what is HERE and about nothing else.
+
+What is here was swept, as the broadest available false-positive test: the
+program was pointed at the repository root and at the plugin root as if each
+were a project, with and without the ``--under phase3/stage3`` the flow wires.
+All four invocations return rc 2 NOT_CHECKED with ``extraction_run_count: 0``
+— including over the tracked ``.spice`` and ``.spef`` fixtures under
+``programs/tests/fixtures``, none of which is mistaken for a Magic extraction
+run. Zero false positives, and zero verdicts moved.
+
+The gate becomes load-bearing the moment a run actually extracts, which is the
+point at which it must already be wired.
 
 WHY rc 2 IS TOLERABLE HERE AND IS NOT ELSEWHERE
 ===============================================
