@@ -78,6 +78,10 @@ import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
 
 
 # Import the sibling parser gate the same way caravel_integration_runner imports
@@ -282,7 +286,7 @@ def build_docker_command(
     precheck_src = precheck_src.resolve()
     rundir = rundir.resolve()
 
-    cmd: List[str] = [docker_bin, "run", "--rm"]
+    cmd: List[str] = [docker_bin, "run", "--rm", *_dmem.docker_memory_flags()]
     uidgid = _uid_gid()
     if uidgid:
         cmd += ["-u", uidgid]

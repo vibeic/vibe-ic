@@ -99,6 +99,10 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 import _path_layout as _pl  # noqa: E402
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
 
 
 # ───────────── what this gate REGENERATES inside the project ────────────
@@ -925,7 +929,8 @@ def run_injection_iverilog(project: Path,
     run_cmd = f"vvp /work/{vvp_out}"
     full = _ENV_PREAMBLE + compile_cmd + " && " + run_cmd
     docker_cmd = [
-        "docker", "run", "--rm", "--entrypoint", "bash",
+        "docker", "run", "--rm", *_dmem.docker_memory_flags(),
+        "--entrypoint", "bash",
         "-v", f"{project}:/work", img, "-c", full,
     ]
     try:

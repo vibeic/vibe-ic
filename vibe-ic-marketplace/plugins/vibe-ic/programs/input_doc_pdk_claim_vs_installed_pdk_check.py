@@ -240,6 +240,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _container_exec  # noqa: E402
+import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
 import _vacuous_exit  # noqa: E402
 
 GATE = "input_doc_pdk_claim_vs_installed_pdk"
@@ -726,7 +727,8 @@ def start_pinned_container(explicit_image: Optional[str] = None
             f"multi-gigabyte download is the operator's call, not a gate's")
     try:
         r = subprocess.run(
-            ["docker", "run", "-d", "--pull", "never", "--entrypoint", "sleep",
+            ["docker", "run", "-d", *_dmem.docker_memory_flags(),
+             "--pull", "never", "--entrypoint", "sleep",
              image, str(_IMAGE_CONTAINER_TTL_S)],
             capture_output=True, text=True, timeout=_IMAGE_START_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as exc:

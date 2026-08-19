@@ -168,6 +168,11 @@ if str(_HERE) not in sys.path:
 import plugin_manifest_discovery as _pmd  # noqa: E402
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402  vibe-ic#1082 (helper from PR #1094)
 
+try:  # sibling module; programs/ is on sys.path when run as a script
+    import _docker_memory as _dmem
+except ImportError:  # pragma: no cover - packaged/flattened layouts
+    from . import _docker_memory as _dmem  # type: ignore
+
 ATTRIBUTION = "tapeout_readiness_check"
 
 #: The only three verdicts. See "THE THREE VERDICTS" above.
@@ -549,7 +554,8 @@ def build_command(
     """
     layout = layout.resolve()
     rundir = rundir.resolve()
-    cmd: List[str] = [docker_bin, "run", "--rm", "--network=none"]
+    cmd: List[str] = [docker_bin, "run", "--rm", "--network=none",
+                      *_dmem.docker_memory_flags()]
     cmd += ["-v", f"{layout.parent}:{_C_DESIGN}:ro"]
     cmd += ["-v", f"{rundir}:{_C_RUNDIR}"]
     cmd += [image]

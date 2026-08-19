@@ -108,6 +108,9 @@ from typing import List, Optional, Tuple
 from _pdk_via_analyzer import (_routing_index, parse_tech_lef,
                                patch_extents)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
+
 #: The EDA image whose PDK trees this checker reads with `--from-image`. A LIVE
 #: pointer: registered in `tools/vibeic-eda/sync_image_version.py`'s
 #: `INSTALL_DOC_CANDIDATES`, so `--set` rewrites it and `--check` catches drift.
@@ -254,7 +257,8 @@ def stage_from_image(image: str, dest: Path) -> Tuple[List[Path], str]:
               f' | while read -r f; do echo "###LEF $f"; cat "$f"; done')
     try:
         r = subprocess.run(
-            ["docker", "run", "--rm", "--entrypoint", "bash", image,
+            ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+             "--entrypoint", "bash", image,
              "-lc", script],
             capture_output=True, text=True, timeout=600)
     except (OSError, subprocess.SubprocessError) as exc:
