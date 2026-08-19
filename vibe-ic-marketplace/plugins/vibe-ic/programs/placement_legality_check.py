@@ -22,7 +22,28 @@ This program parses the REAL OpenROAD/Innovus DEF and verifies SUBSTANCE:
      exactly the shape of a pre-placement floorplan.def) — is UNPLACED
      and is a hard FAIL. (LEF/DEF 5.8 §COMPONENTS: a component is placed
      only if it states PLACED, FIXED, or COVER with a location.)
-  4. Placement density (occupied-site-area / core-area) is verified to be
+  4. THE PLACER'S OWN LEGALITY VERDICT. Checks 1-3 read the DEF status
+     TOKEN, and that token is written for an overlapping or off-site
+     instance exactly as it is for a legal one — so no amount of DEF
+     parsing can decide legality. OpenROAD's `check_placement` is the
+     verdict that can: it RETURNS the violation count, and without
+     `-no_abort` a non-zero count raises DPL-33 rather than returning, so
+     "an illegal placement can never be mistaken for a legal one by a
+     caller that ignores the result" (the tool's own words, `info body
+     check_placement`). The runner records that verdict at every site it
+     asks — the legalization ladder (`<SITE>_LEGALIZE_OK` /
+     `<SITE>_LEGALIZE_FAILED`) and, with the count, after spare
+     insertion / in the ECO repair / twice in the ship-time repair
+     (`<SITE>_CHECK_PLACEMENT_VIOLATIONS <n>`). This gate refuses on a
+     non-zero count and quotes it. A count that could not be obtained is
+     recorded as NOT_DETERMINED and refused too — it is reached only via a
+     call that threw, so it means "not clean, size unknown", never zero.
+     A site asked repeatedly (the ship-time loop asks once per pass) is
+     judged on its LAST reading — the state it left behind — so a loop
+     that converged is not called illegal; an earlier non-zero that a
+     later pass cleared is DISCLOSED rather than scored or dropped.
+
+  5. Placement density (occupied-site-area / core-area) is verified to be
      in the universal sanity range (0, 100]% — but ONLY when it is
      derivable from an artefact the flow actually produced (an OpenROAD
      placement/density report JSON, or a ``DENSITY`` / utilization
@@ -43,14 +64,18 @@ No PDK/IC/tool-specific threshold is invented.
 Verdicts
 --------
 * PASS  (rc=0) — placed.def parses; COMPONENTS > 0; declared count ==
-                 parsed count; zero UNPLACED instances; any derivable
-                 density in (0, 100]%.
+                 parsed count; zero UNPLACED instances; the placer
+                 reported no violation and no legalization failure; any
+                 derivable density in (0, 100]%.
 * FAIL  (rc=1) — placed.def absent / empty / unparseable, OR COMPONENTS
                  missing/zero, OR declared-vs-parsed count mismatch, OR
-                 >= 1 UNPLACED instance, OR a derivable density out of
-                 (0, 100]%. (Step 17's precondition — placement was run —
-                 means an absent placed.def is a real failure, never a
-                 vacuous pass.)
+                 >= 1 UNPLACED instance, OR the placer reported a NON-ZERO
+                 `check_placement` violation count (or a count it could
+                 not determine) at any site, OR a `*_LEGALIZE_FAILED`
+                 marker, OR a derivable density out of (0, 100]%.
+                 (Step 17's precondition — placement was run — means an
+                 absent placed.def is a real failure, never a vacuous
+                 pass.)
 * WAIVED (rc=0) — ``waivers.json`` declares this step waived.
 * SKIP  (rc=2) — project dir not found (operational, not a placement
                  result).
@@ -255,7 +280,125 @@ _LEGALIZE_MARKER_RE = re.compile(
     r"\b([A-Z0-9_]+_LEGALIZE_(?:OK|FAILED))\b")
 
 
-def _legalizer_markers(project: Path) -> tuple[List[str], List[str]]:
+def _iter_pnr_log_lines(project: Path):
+    """Yield (log_name, line) for every line of every PnR log.
+
+    One traversal shared by every log-derived check below, so the marker read
+    and the violation-count read can never disagree about which files they saw.
+    """
+    pnr_dir = project / "phase3" / "stage3" / "pnr"
+    if not pnr_dir.is_dir():
+        return
+    for log in sorted(pnr_dir.rglob("*.log")):
+        try:
+            with log.open(errors="replace") as fh:
+                for line in fh:
+                    yield log.name, line
+        except OSError:
+            continue
+
+
+# --- The placer's OWN violation COUNT --------------------------------------
+# `check_placement` RETURNS the number of violations; without `-no_abort` a
+# non-zero count raises DPL-33 instead. The runner asks for the verdict at
+# several sites beyond the legalization ladder (after spare insertion, in the
+# ECO repair, and twice in the ship-time repair). Each of those sites used to
+# wrap the call in `catch` and print the EXCEPTION TEXT:
+#
+#     SPARE_CHECK_PLACEMENT_WARN: DPL-0033
+#
+# The count never left the call, and this gate — the one named for placement
+# legality — did not read even the warning. MEASURED on a published project
+# already in the corpus: its PnR log carries
+# `[WARNING DPL-0006] Site aligned check failed (1).` followed by
+# `[ERROR DPL-0033]` and that WARN line, and this gate returned PASS.
+#
+# The runner now emits the measured count at every one of those sites:
+#     <SITE>_CHECK_PLACEMENT_VIOLATIONS <n>     n = integer, or NOT_DETERMINED
+#     <SITE>_CHECK_PLACEMENT_PASS               n == 0
+#     <SITE>_CHECK_PLACEMENT_WARN: ...          n != 0 (the placer refused)
+#
+# A non-zero count is a FAIL and is quoted. NOT_DETERMINED is reached only
+# through a call that THREW, i.e. the placer did not return clean and the size
+# of the violation is unknown — that is also a FAIL, stated as NOT DETERMINED
+# rather than guessed as zero. A bare `_WARN` with no count line is a log from
+# a runner that predates the count and is read the same way.
+#
+# chip-AGNOSTIC: the runner's own marker grammar; no chip, PDK or tool literal.
+_CP_VIOLATIONS_RE = re.compile(
+    r"\b([A-Z0-9_]+?)_CHECK_PLACEMENT_VIOLATIONS\s+(\d+|NOT_DETERMINED)\b")
+_CP_WARN_RE = re.compile(
+    r"\b([A-Z0-9_]+?)_CHECK_PLACEMENT_WARN\b\s*:?[ \t]*(.*)")
+_CP_PASS_RE = re.compile(r"\b([A-Z0-9_]+?)_CHECK_PLACEMENT_PASS\b")
+_COUNT_NOT_DETERMINED = "NOT_DETERMINED"
+
+
+def _check_placement_verdicts(lines) -> dict:
+    """Return {site: {"count", "worst", "detail"}} from the PnR log lines.
+
+    A site is asked more than once — the ship-time convergence loop asks once
+    per pass — so a site has a SEQUENCE of readings, and the two useful facts
+    about that sequence are different questions:
+
+    * ``count``  the LAST reading. That is the state this site left behind and
+                 it is what the verdict keys on. A loop whose first pass had 3
+                 violations and whose last pass has 0 converged; calling that
+                 illegal would be a false alarm about a placement that is legal.
+    * ``worst``  the first NON-ZERO reading, when a later one cleared it. It is
+                 not scored, and it is not dropped either — it is DISCLOSED, so
+                 "the placer objected and the next pass fixed it" never reads
+                 the same as "the placer never objected".
+
+    Both are the decimal string the placer returned, or NOT_DETERMINED. Never
+    fabricates a count: a site seen only through a bare WARN (a log from a
+    runner that predates the count) reads NOT_DETERMINED, which the caller
+    treats as illegal-with-unknown-size — never as zero.
+    """
+    sites: dict = {}
+
+    def _rec(site):
+        return sites.setdefault(
+            site, {"count": None, "worst": None, "detail": "",
+                   "readings": 0})
+
+    for _log, line in lines:
+        for m in _CP_VIOLATIONS_RE.finditer(line):
+            rec = _rec(m.group(1))
+            rec["count"] = m.group(2)
+            rec["readings"] += 1
+            if m.group(2) != "0" and rec["worst"] is None:
+                rec["worst"] = m.group(2)
+        for m in _CP_PASS_RE.finditer(line):
+            rec = _rec(m.group(1))
+            # The PASS line accompanies its own VIOLATIONS 0 line; it is only a
+            # READING of its own for a log that carries no count at all.
+            if rec["readings"] == 0:
+                rec["count"] = "0"
+        for m in _CP_WARN_RE.finditer(line):
+            site, detail = m.group(1), m.group(2).strip()
+            rec = _rec(site)
+            # Likewise: the WARN accompanies its own count line. It becomes the
+            # reading itself only in a log with no count line for this site.
+            if rec["readings"] == 0:
+                rec["count"] = _COUNT_NOT_DETERMINED
+                if rec["worst"] is None:
+                    rec["worst"] = _COUNT_NOT_DETERMINED
+            if detail and not rec["detail"]:
+                rec["detail"] = detail
+
+    for rec in sites.values():
+        if rec["count"] is None:
+            rec["count"] = _COUNT_NOT_DETERMINED
+        rec.pop("readings", None)
+    return sites
+
+
+def _count_is_illegal(count: str) -> bool:
+    """True unless the placer returned a measured ZERO violations."""
+    return count != "0"
+
+
+def _legalizer_markers(lines) -> tuple[List[str], List[str]]:
     """Return (failed_markers, ok_markers) found in the PnR logs.
 
     Chip-AGNOSTIC: the markers are the runner's own structural output, not a
@@ -263,23 +406,15 @@ def _legalizer_markers(project: Path) -> tuple[List[str], List[str]]:
     """
     failed: List[str] = []
     ok: List[str] = []
-    pnr_dir = project / "phase3" / "stage3" / "pnr"
-    if not pnr_dir.is_dir():
-        return failed, ok
-    for log in sorted(pnr_dir.rglob("*.log")):
-        try:
-            with log.open(errors="replace") as fh:
-                for line in fh:
-                    for m in _LEGALIZE_MARKER_RE.finditer(line):
-                        tok = m.group(1)
-                        if tok.endswith(_LEGALIZE_FAILED_SUFFIX):
-                            if tok not in failed:
-                                failed.append(tok)
-                        elif tok.endswith(_LEGALIZE_OK_SUFFIX):
-                            if tok not in ok:
-                                ok.append(tok)
-        except OSError:
-            continue
+    for _log, line in lines:
+        for m in _LEGALIZE_MARKER_RE.finditer(line):
+            tok = m.group(1)
+            if tok.endswith(_LEGALIZE_FAILED_SUFFIX):
+                if tok not in failed:
+                    failed.append(tok)
+            elif tok.endswith(_LEGALIZE_OK_SUFFIX):
+                if tok not in ok:
+                    ok.append(tok)
     return failed, ok
 
 
@@ -290,6 +425,9 @@ def inspect(project: Path):
         "placed_def": _PLACED_DEF_REL,
         "legalizer_failed_markers": [],
         "legalizer_ok_markers": [],
+        "check_placement_sites": {},
+        "check_placement_violations": None,
+        "check_placement_recovered": {},
         "declared_components": None,
         "parsed_components": None,
         "placed": None,
@@ -400,9 +538,80 @@ def inspect(project: Path):
     #     legalize at all.
     # OpenROAD's `check_placement` is the verdict that does see it, the runner
     # already runs it, and its result is in the log. Read it.
-    failed_markers, ok_markers = _legalizer_markers(project)
+    log_lines = list(_iter_pnr_log_lines(project))
+    failed_markers, ok_markers = _legalizer_markers(log_lines)
     summary["legalizer_failed_markers"] = failed_markers
     summary["legalizer_ok_markers"] = ok_markers
+
+    # (a) The COUNT. `check_placement` returns the number of violations and
+    #     the runner records it at every site it asks. A non-zero count is the
+    #     placer stating that this placement is illegal; it is a FAIL and the
+    #     number is quoted. This is the reading that catches the sites OUTSIDE
+    #     the legalization ladder, where a DPL-0033 abort used to be demoted to
+    #     a WARN line no gate read.
+    cp_sites = _check_placement_verdicts(log_lines)
+    summary["check_placement_sites"] = {
+        s: r["count"] for s, r in sorted(cp_sites.items())}
+    illegal = {s: r for s, r in sorted(cp_sites.items())
+               if _count_is_illegal(r["count"])}
+    if illegal:
+        measured = [int(r["count"]) for r in illegal.values()
+                    if r["count"].isdigit()]
+        summary["check_placement_violations"] = (
+            sum(measured) if len(measured) == len(illegal)
+            else _COUNT_NOT_DETERMINED)
+        quoted = "; ".join(
+            f"{s}={r['count']}" + (f" ({r['detail']})" if r["detail"] else "")
+            for s, r in illegal.items())
+        findings.append({
+            "severity": "FAIL", "rule": "PLACER_REPORTED_VIOLATIONS",
+            "message": (
+                f"the placer's own `check_placement` reported a NON-ZERO "
+                f"violation count in this run: {quoted}. "
+                f"`check_placement` returns the violation count and, without "
+                f"`-no_abort`, raises DPL-33 on a non-zero one precisely so an "
+                f"illegal placement cannot be mistaken for a legal one by a "
+                f"caller that ignores the result. That verdict is the "
+                f"legality of this design; the DEF checks above report "
+                f"{placed_n} placed / {unplaced_n} unplaced and are correct "
+                f"about the file they read, but a `+ PLACED ( x y )` token is "
+                f"written for an overlapping or off-site instance too, so it "
+                f"cannot express this failure. "
+                f"({_COUNT_NOT_DETERMINED} means the placer did not return a "
+                f"clean verdict and the size of the violation could not be "
+                f"obtained — it is not zero and is not reported as zero.)"),
+        })
+        verdict, rc = "FAIL", 1
+    elif cp_sites:
+        summary["check_placement_violations"] = 0
+        findings.append({
+            "severity": "INFO", "rule": "PLACER_REPORTED_ZERO_VIOLATIONS",
+            "message": (
+                "the placer's own `check_placement` returned 0 violations at "
+                "every site it was asked: "
+                + ", ".join(f"{s}={r['count']}"
+                            for s, r in sorted(cp_sites.items()))),
+        })
+
+    # A violation the NEXT pass cleared is not scored — the design that site
+    # left behind is legal — but it is not dropped either. Disclosed, so
+    # "objected once and was fixed" never reads as "never objected".
+    recovered = {s: r["worst"] for s, r in sorted(cp_sites.items())
+                 if r["worst"] is not None and not _count_is_illegal(r["count"])}
+    if recovered:
+        summary["check_placement_recovered"] = recovered
+        findings.append({
+            "severity": "INFO", "rule": "PLACER_VIOLATIONS_RECOVERED",
+            "message": (
+                "the placer reported violations at "
+                + ", ".join(f"{s}={c}" for s, c in recovered.items())
+                + " and a later pass at the same site returned 0. Not scored "
+                  "— the state the site left behind is legal — but recorded, "
+                  "because a run that had to converge is not the same as a "
+                  "run that never objected."),
+        })
+
+    # (b) The legalization LADDER's own terminal verdict.
     if failed_markers:
         findings.append({
             "severity": "FAIL", "rule": "LEGALIZER_REPORTED_FAILURE",
@@ -425,14 +634,15 @@ def inspect(project: Path):
             "severity": "INFO", "rule": "LEGALIZER_REPORTED_OK",
             "message": f"the placer's own legality check passed: {ok_markers}",
         })
-    else:
+    elif not cp_sites:
         findings.append({
             "severity": "INFO", "rule": "LEGALIZER_VERDICT_ABSENT",
             "message": (
-                "no `*_LEGALIZE_OK` / `*_LEGALIZE_FAILED` marker in the PnR "
-                "log — this run records no placer legality verdict, so the "
-                "status-token checks above stand alone. Not fabricated as a "
-                "pass."),
+                "no `*_LEGALIZE_OK` / `*_LEGALIZE_FAILED` marker and no "
+                "`*_CHECK_PLACEMENT_VIOLATIONS` line in the PnR log — this "
+                "run records no placer legality verdict at all, so the "
+                "status-token checks above stand alone. Stated, not "
+                "fabricated as a pass, and NOT counted as a legal placement."),
         })
 
     # ---- Placement density (only if derivable; never fabricated) --------
@@ -490,6 +700,13 @@ def _emit(args, project, verdict, summary, findings, waiver):
         "unplaced": summary["unplaced"],
         "density_pct": summary["density_pct"],
         "density_source": summary["density_source"],
+        "check_placement_sites": summary.get("check_placement_sites", {}),
+        "check_placement_violations":
+            summary.get("check_placement_violations"),
+        "check_placement_recovered":
+            summary.get("check_placement_recovered", {}),
+        "legalizer_failed_markers": summary.get("legalizer_failed_markers", []),
+        "legalizer_ok_markers": summary.get("legalizer_ok_markers", []),
         "waiver": waiver,
         "findings": findings,
     }
@@ -506,6 +723,10 @@ def _emit(args, project, verdict, summary, findings, waiver):
     if summary["density_pct"] is not None:
         print(f"  density: {summary['density_pct']}% "
               f"({summary['density_source']})")
+    if summary.get("check_placement_sites"):
+        print("  check_placement violations: "
+              + ", ".join(f"{s}={c}" for s, c
+                          in summary["check_placement_sites"].items()))
     for f in findings:
         if f["severity"] in ("FAIL", "WAIVED"):
             print(f"  [{f['severity']}] {f['rule']}: {f['message']}")
@@ -540,6 +761,9 @@ def main(argv=None) -> int:
             "placed_def": _PLACED_DEF_REL, "declared_components": None,
             "parsed_components": None, "placed": None, "unplaced": None,
             "density_pct": None, "density_source": None,
+            "check_placement_sites": {}, "check_placement_violations": None,
+            "check_placement_recovered": {},
+            "legalizer_failed_markers": [], "legalizer_ok_markers": [],
         }
         _emit(args, project, "WAIVED", summary, findings, waiver)
         return 0
